@@ -11,7 +11,9 @@ export interface RepIdUpdateInput {
     | 'CHALLENGE_WIN'|'CHALLENGE_LOSS'|'CHALLENGE_DRAW'
     | 'EPISTEMIC_VIOLATION'|'CONSTITUTIONAL_VIOLATION'
     | 'PREDICTION_RESOLVE'
-    | 'STAKE'|'GENESIS'|'REFERRAL'|'PEACEMAKER'|'SELF_MONITOR';
+    | 'STAKE'|'GENESIS'|'REFERRAL'|'PEACEMAKER'|'SELF_MONITOR'
+    | 'CODE_CONTRIBUTION' | 'WORKFLOW_CONTRIBUTION' | 'TOOL_PIONEER'
+    | 'AGENT_TEACHING' | 'AUDIT_CONTRIBUTION';
   certaintyAtClaim?: number;
   pStated?: number;
   pCorrect?: number;
@@ -60,6 +62,8 @@ export function computeTier(repId: number): string {
 
 const FIXED_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
   STAKE: 5, GENESIS: 0, REFERRAL: 20, PEACEMAKER: 15, SELF_MONITOR: 10,
+  CODE_CONTRIBUTION: 25, WORKFLOW_CONTRIBUTION: 20, TOOL_PIONEER: 12,
+  AGENT_TEACHING: 15, AUDIT_CONTRIBUTION: 15,
 };
 
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
