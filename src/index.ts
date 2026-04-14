@@ -16,8 +16,9 @@ app.use(agentsRouter);
 app.use(scoreRouter);
 app.use(referendumRouter);
 
-app.listen(config.port, () => {
-  console.log(`[repid-engine] v${config.version} running on port ${config.port}`);
+const port = parseInt(process.env.PORT || '3000', 10);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
   console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
 });
 
