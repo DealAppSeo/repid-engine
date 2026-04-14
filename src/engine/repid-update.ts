@@ -143,7 +143,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // eas_attestation_id links every event to an EAS attestation
   // via ERC-8004 ValidationRegistry (stub until Sprint 3)
   // mirror_test_triggered = ZKP-auditable proof of ideological neutrality (P-023/P-024)
-  await db.from('repid_events').insert({
+  await db.from('repid_score_events').insert({
     agent_id: input.agentId,
     event_type: input.eventType,
     delta: finalDelta,
@@ -211,7 +211,7 @@ export async function registerAgent(params: {
   if (error || !newAgent)
     throw new Error(`[repid-engine] Registration failed: ${error?.message}`);
 
-  await db.from('repid_events').insert({
+  await db.from('repid_score_events').insert({
     agent_id: newAgent.id, event_type: 'GENESIS',
     delta: 0, repid_before: 1000, repid_after: 1000,
     ecosystem_need_weight: 1.0,

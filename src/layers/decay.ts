@@ -32,13 +32,13 @@ export async function computeRedemptionModifier(agentId: string): Promise<number
   try {
     const ninetyDaysAgo = new Date(Date.now() - 90*24*60*60*1000).toISOString();
     const windowStart = new Date(Date.now() - REDEMPTION_WINDOW_DAYS*24*60*60*1000).toISOString();
-    const { count: violations } = await db.from('repid_events')
+    const { count: violations } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true })
       .eq('agent_id', agentId)
       .in('event_type', ['EPISTEMIC_VIOLATION','CONSTITUTIONAL_VIOLATION'])
       .gte('created_at', ninetyDaysAgo);
     if (!violations || violations === 0) return 1.0;
-    const { count: prosocial } = await db.from('repid_events')
+    const { count: prosocial } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true })
       .eq('agent_id', agentId)
       .in('event_type', ['CHALLENGE_WIN','PEACEMAKER','SELF_MONITOR',

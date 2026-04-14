@@ -35,7 +35,7 @@ router.get('/agents/:id', async (req: Request, res: Response) => {
 });
 
 router.get('/agents/:id/history', async (req: Request, res: Response) => {
-  const { data, error } = await db.from('repid_events').select('*')
+  const { data, error } = await db.from('repid_score_events').select('*')
     .eq('agent_id', req.params.id)
     .order('created_at', { ascending: false }).limit(50);
   if (error) return res.status(500).json({ error: error.message });
@@ -63,12 +63,12 @@ router.get('/agents/:id/zkp/:proofType', async (req: Request, res: Response) => 
   });
 
   if (pt === 'ENVELOPE') {
-    const { count: decisions } = await db.from('repid_events')
+    const { count: decisions } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true }).eq('agent_id', id);
-    const { count: wins } = await db.from('repid_events')
+    const { count: wins } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true })
       .eq('agent_id', id).eq('event_type', 'CHALLENGE_WIN');
-    const { count: constPasses } = await db.from('repid_events')
+    const { count: constPasses } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true })
       .eq('agent_id', id).eq('event_type', 'CONSTITUTIONAL_PASS');
     return res.json({
