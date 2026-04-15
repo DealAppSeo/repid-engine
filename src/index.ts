@@ -8,6 +8,7 @@ import referendumRouter from './routes/referendum';
 import bountiesRouter from './routes/bounties';
 import hashkeyRouter from './routes/hashkey';
 import mirrorTestRouter from './routes/mirror-test';
+import challengeRouter from './routes/challenge';
 
 const app = express();
 
@@ -21,6 +22,7 @@ app.use(referendumRouter);
 app.use(bountiesRouter);
 app.use(hashkeyRouter);
 app.use(mirrorTestRouter);
+app.use(challengeRouter);
 
 const port = parseInt(process.env.PORT || '3000', 10);
 app.listen(port, '0.0.0.0', () => {
