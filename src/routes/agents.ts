@@ -81,14 +81,25 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       },
     });
 
+    // Genesis badge for human DBTs
+    await db.from('repid_badges').insert({
+      agent_id: newAgent.id,
+      badge_name: 'Genesis',
+      badge_rarity: 'COMMON',
+      badge_description: 'First step on HyperDAG Protocol',
+      metadata: { type: 'HUMAN', date: new Date().toISOString() },
+    });
+
     return res.status(201).json({
       privateId: anonymousId,
       agentId: newAgent.id,
       repId: 1000,
       tier: 'CUSTODIED_DBT',
+      badges: ['Genesis'],
       message: 'Save your privateId — it is your only credential. We do not store your identity.',
       zkpCommitment,
-      warning: 'IMPORTANT: Save privateId and agentId now. They cannot be recovered.',
+      warning: 'CRITICAL: Save your privateId now. We do not store it. It cannot be recovered.',
+      nextStep: `Visit repid.dev/check?id=${newAgent.id} to see your profile.`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -129,6 +140,7 @@ router.get('/agents/by-name/:name', async (req: Request, res: Response) => {
     .from('repid_agents')
     .select('id, agent_name, current_repid, tier')
     .ilike('agent_name', String(req.params.name))
+    .neq('agent_name', 'HUMAN')
     .limit(1)
     .single();
   if (error || !data) return res.status(404).json({ error: 'Agent not found' });
@@ -247,6 +259,70 @@ router.post('/agents/:id/x402-gate', async (req: Request, res: Response) => {
     x402RequestId: x402RequestId ?? null,
     easAttestation: easCheck,
   });
+});
+
+// GET /agents/:id/badges — list earned badges
+router.get('/agents/:id/badges', async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from('repid_badges')
+    .select('*')
+    .eq('agent_id', req.params.id)
+    .order('earned_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data ?? []);
+});
+
+// GET /agents/:id/card — shareable anonymous ZKP score card (SVG)
+router.get('/agents/:id/card', async (req: Request, res: Response) => {
+  const { data: agent } = await db
+    .from('repid_agents').select('*').eq('id', req.params.id).single();
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const { data: badges } = await db
+    .from('repid_badges').select('badge_name, badge_rarity')
+    .eq('agent_id', req.params.id);
+
+  const isHuman = agent.constitution?.type === 'HUMAN' || agent.constitution?.anonymous;
+  const tierColors: Record<string, string> = {
+    AUTONOMOUS: '#F59E0B',
+    EARNING_AUTONOMY: '#3B82F6',
+    CUSTODIED_DBT: '#6B7280',
+  };
+  const tierColor = tierColors[agent.tier] ?? '#6B7280';
+  const badgeCount = badges?.length ?? 0;
+  const displayName = isHuman ? 'Anonymous Human' : agent.agent_name;
+  const rawAddr: string = agent.erc8004_address ?? '';
+  const displayAddress = isHuman
+    ? '[ZKP — private]'
+    : (rawAddr.slice(0, 10) + '...');
+
+  const ethicsScore = Math.min(100, Math.round((agent.current_repid / 10000) * 100));
+  const tierLabel = String(agent.tier).replace(/_/g, ' ');
+  const repIdStr = Number(agent.current_repid).toLocaleString();
+  const today = new Date().toISOString().split('T')[0];
+
+  const svg = `<svg width="400" height="220" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
+  <rect width="400" height="220" rx="16" fill="#111827"/>
+  <rect x="1" y="1" width="398" height="218" rx="15" fill="none" stroke="${tierColor}" stroke-width="1.5" stroke-opacity="0.6"/>
+  <text x="20" y="32" fill="#9CA3AF" font-size="11" font-weight="bold" letter-spacing="2">HYPERDAG PROTOCOL · REPID</text>
+  <circle cx="370" cy="26" r="5" fill="#22C55E"/>
+  <text x="20" y="90" fill="${tierColor}" font-size="52" font-weight="bold">${repIdStr}</text>
+  <text x="20" y="112" fill="#6B7280" font-size="11">REPID SCORE</text>
+  <rect x="20" y="125" width="160" height="24" rx="6" fill="${tierColor}" fill-opacity="0.15" stroke="${tierColor}" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="100" y="141" fill="${tierColor}" font-size="10" font-weight="bold" text-anchor="middle" letter-spacing="1">${tierLabel}</text>
+  <text x="240" y="80" fill="#9CA3AF" font-size="10">ETHICS SCORE</text>
+  <text x="240" y="108" fill="#22C55E" font-size="36" font-weight="bold">${ethicsScore}</text>
+  <text x="240" y="135" fill="#9CA3AF" font-size="10">BADGES</text>
+  <text x="240" y="155" fill="#F3F4F6" font-size="24" font-weight="bold">${badgeCount}</text>
+  <text x="20" y="175" fill="#4B5563" font-size="10">${displayName}</text>
+  <text x="20" y="190" fill="#374151" font-size="9">${displayAddress}</text>
+  <text x="20" y="210" fill="#374151" font-size="9">ZKP-verified · repid.dev · hyperdag.dev</text>
+  <text x="380" y="210" fill="#374151" font-size="9" text-anchor="end">${today}</text>
+</svg>`;
+
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.send(svg);
 });
 
 export default router;

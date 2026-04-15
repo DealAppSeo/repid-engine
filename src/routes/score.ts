@@ -44,4 +44,19 @@ router.post('/challenge', async (req: Request, res: Response) => {
   }
 });
 
+// POST /mcp-call — constitutional MCP tool wrapper
+router.post('/mcp-call', async (req: Request, res: Response) => {
+  const { agentId, toolName, params } = req.body ?? {};
+  if (!agentId || !toolName)
+    return res.status(400).json({ error: 'agentId and toolName required' });
+  try {
+    const { callMCPWithGuardrails } = await import('../engine/mcp.js');
+    return res.json(
+      await callMCPWithGuardrails({ agentId, toolName, params: params ?? {} })
+    );
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

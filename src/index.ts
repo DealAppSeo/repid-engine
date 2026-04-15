@@ -5,6 +5,7 @@ import healthRouter from './routes/health';
 import agentsRouter from './routes/agents';
 import scoreRouter from './routes/score';
 import referendumRouter from './routes/referendum';
+import bountiesRouter from './routes/bounties';
 
 const app = express();
 
@@ -15,6 +16,7 @@ app.use(healthRouter);
 app.use(agentsRouter);
 app.use(scoreRouter);
 app.use(referendumRouter);
+app.use(bountiesRouter);
 
 const port = parseInt(process.env.PORT || '3000', 10);
 app.listen(port, '0.0.0.0', () => {
