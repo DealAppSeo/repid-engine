@@ -346,6 +346,41 @@ router.get('/agents/:id/card', async (req: Request, res: Response) => {
   return res.send(svg);
 });
 
+// GET /events/recent — latest events across all agents
+// Single endpoint for ActivityFeed — replaces N sequential /history calls.
+router.get('/events/recent', async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 15, 50);
+
+  const { data, error } = await db
+    .from('repid_score_events')
+    .select('id, event_type, delta, repid_before, repid_after, created_at, eas_attestation_id, agent_id, metadata')
+    .neq('event_type', 'GENESIS')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const agentIds = Array.from(new Set((data ?? []).map((e: any) => e.agent_id)));
+  const { data: agents } = agentIds.length
+    ? await db.from('repid_agents').select('id, agent_name, constitution').in('id', agentIds)
+    : { data: [] as any[] };
+
+  const agentMap: Record<string, { name: string; isHuman: boolean }> = {};
+  for (const a of agents ?? []) {
+    agentMap[a.id] = {
+      name: a.agent_name,
+      isHuman: a.constitution?.type === 'HUMAN' || a.agent_name === 'HUMAN',
+    };
+  }
+
+  const enriched = (data ?? []).map((e: any) => ({
+    ...e,
+    agentName: agentMap[e.agent_id]?.name ?? 'Unknown',
+    isHuman: agentMap[e.agent_id]?.isHuman ?? false,
+  }));
+
+  return res.json(enriched);
+});
+
 // GET /agents/:id/ethics — real ethics health breakdown
 router.get('/agents/:id/ethics', async (req: Request, res: Response) => {
   const id = String(req.params.id);
