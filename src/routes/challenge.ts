@@ -6,18 +6,65 @@ import { HASHKEY_CONFIG } from './hashkey';
 
 const router = Router();
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Simple in-memory rate limiter (resets on Railway restart — acceptable for demo)
+const challengeRateLimit = new Map<string, { count: number; resetAt: number }>();
+
 // POST /challenge — file a constitutional challenge between two agents/humans.
-// This is the core Sprint 5 demo endpoint for April 22.
+// This is the core demo endpoint for April 22.
 router.post('/challenge', async (req: Request, res: Response) => {
   const { challengerId, defenderId, claim, evidenceText, certaintyAtClaim } = req.body ?? {};
 
   if (!challengerId || !defenderId || !claim) {
     return res.status(400).json({
       error: 'challengerId, defenderId, and claim are required',
+      hint: 'Register at repid.dev/join to get your agentId',
+    });
+  }
+  if (!UUID_REGEX.test(String(challengerId))) {
+    return res.status(400).json({
+      error: 'Invalid challengerId format — must be a valid UUID from your DBT registration',
+      hint: 'Register at repid.dev/join to get your agentId',
+    });
+  }
+  if (!UUID_REGEX.test(String(defenderId))) {
+    return res.status(400).json({
+      error: 'Invalid defenderId format',
+      hint: 'Select a defender from the agent list',
     });
   }
   if (challengerId === defenderId) {
-    return res.status(400).json({ error: 'challenger and defender must differ' });
+    return res.status(400).json({
+      error: 'Cannot challenge yourself',
+      hint: 'Select a different agent as your defender',
+    });
+  }
+  const claimStr = String(claim).trim();
+  if (claimStr.length < 10) {
+    return res.status(400).json({
+      error: 'Claim must be at least 10 characters',
+      hint: 'State your claim clearly and factually',
+    });
+  }
+  if (claimStr.length > 500) {
+    return res.status(400).json({ error: 'Claim must be under 500 characters' });
+  }
+
+  // Rate limit: 5 challenges per 60 seconds per agent
+  const rateNow = Date.now();
+  const rateData = challengeRateLimit.get(challengerId);
+  if (rateData && rateNow < rateData.resetAt) {
+    if (rateData.count >= 5) {
+      return res.status(429).json({
+        error: 'Too many challenges. Wait 60 seconds before challenging again.',
+        hint: 'Epistemic humility means knowing when to pause.',
+        retryAfter: Math.ceil((rateData.resetAt - rateNow) / 1000),
+      });
+    }
+    rateData.count++;
+  } else {
+    challengeRateLimit.set(challengerId, { count: 1, resetAt: rateNow + 60000 });
   }
 
   const { data: challenger } = await db
@@ -259,6 +306,52 @@ router.get('/challenge/agents', async (_req: Request, res: Response) => {
     erc8004Address: a.erc8004_address,
   }));
   return res.json(agents);
+});
+
+// GET /challenge/:id — look up a specific challenge result by challengeId
+// Note: must be defined AFTER /challenge/agents to avoid conflict with the literal path.
+router.get('/challenge/:id', async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (id === 'agents') return res.status(400).json({ error: 'use GET /challenge/agents' });
+
+  const { data, error } = await db
+    .from('repid_score_events')
+    .select('*')
+    .contains('metadata', { challengeId: id })
+    .order('created_at', { ascending: true });
+
+  if (error || !data || data.length === 0) {
+    return res.status(404).json({ error: 'Challenge not found' });
+  }
+
+  const challengerEvent = data[0];
+  const defenderEvent = data[1];
+
+  return res.json({
+    challengeId: id,
+    verdict: challengerEvent.metadata?.verdict ?? null,
+    halMode: challengerEvent.metadata?.halMode ?? null,
+    reasoning: challengerEvent.metadata?.reasoning ?? null,
+    easAttestationId: challengerEvent.eas_attestation_id,
+    hashkeyExplorerUrl: `${HASHKEY_CONFIG.explorerBase}/address/${HASHKEY_CONFIG.contractAddress}`,
+    challenger: {
+      agentId: challengerEvent.agent_id,
+      repIdBefore: challengerEvent.repid_before,
+      repIdAfter: challengerEvent.repid_after,
+      delta: challengerEvent.delta,
+      eventType: challengerEvent.event_type,
+    },
+    defender: defenderEvent
+      ? {
+          agentId: defenderEvent.agent_id,
+          repIdBefore: defenderEvent.repid_before,
+          repIdAfter: defenderEvent.repid_after,
+          delta: defenderEvent.delta,
+          eventType: defenderEvent.event_type,
+        }
+      : null,
+    createdAt: challengerEvent.created_at,
+  });
 });
 
 export default router;

@@ -184,11 +184,32 @@ router.get('/agents/:id', async (req: Request, res: Response) => {
 });
 
 router.get('/agents/:id/history', async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
   const { data, error } = await db.from('repid_score_events').select('*')
     .eq('agent_id', req.params.id)
-    .order('created_at', { ascending: false }).limit(50);
+    .order('created_at', { ascending: false }).limit(limit);
   if (error) return res.status(500).json({ error: error.message });
-  return res.json(data);
+  const enriched = (data ?? []).map((e: any) => ({
+    id: e.id,
+    event_type: e.event_type,
+    eventType: e.event_type,
+    delta: e.delta,
+    repid_before: e.repid_before,
+    repid_after: e.repid_after,
+    repIdBefore: e.repid_before,
+    repIdAfter: e.repid_after,
+    certaintyAtClaim: e.certainty_at_claim,
+    easAttestationId: e.eas_attestation_id,
+    eas_attestation_id: e.eas_attestation_id,
+    claim: e.metadata?.claim ?? null,
+    verdict: e.metadata?.verdict ?? null,
+    halMode: e.metadata?.halMode ?? null,
+    challengeId: e.metadata?.challengeId ?? null,
+    created_at: e.created_at,
+    createdAt: e.created_at,
+    metadata: e.metadata,
+  }));
+  return res.json(enriched);
 });
 
 // ZKP tiered disclosure — EAS attestation via ERC-8004 ValidationRegistry
