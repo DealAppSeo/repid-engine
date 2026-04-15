@@ -200,8 +200,19 @@ export async function computeEthics(agentId: string): Promise<EthicsBreakdown> {
     .eq('id', agentId)
     .single();
 
-  if (total === 0) {
-    // Fallback for agents with no event history: derivative of current RepID
+  let posSumPre = 0;
+  let absSumPre = 0;
+  for (const e of list) {
+    if (typeof e.delta === 'number') {
+      if (e.delta > 0) posSumPre += e.delta;
+      absSumPre += Math.abs(e.delta);
+    }
+  }
+  void posSumPre;
+
+  // Fallback when there's no measurable delta history (e.g. only GENESIS events).
+  // Use the agent's current RepID as a tier-derivative score.
+  if (total === 0 || absSumPre === 0) {
     const fallbackScore = agent
       ? Math.min(100, Math.round((agent.current_repid / 10000) * 100))
       : 0;
@@ -215,13 +226,16 @@ export async function computeEthics(agentId: string): Promise<EthicsBreakdown> {
         mirrorTestPassRate: 1,
       },
       counts: {
-        totalEvents: 0,
+        totalEvents: total,
         violations: 0,
         selfMonitors: 0,
         peacemakers: 0,
         mirrorTestsTriggered: 0,
       },
-      interpretation: 'No event history yet — score reflects current RepID tier only.',
+      interpretation:
+        total === 0
+          ? 'No event history yet — score reflects current RepID tier only.'
+          : 'Not enough scored events yet — showing RepID-tier derivative.',
     };
   }
 
