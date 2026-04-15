@@ -17,12 +17,12 @@ app.use(express.json());
 
 app.use(healthRouter);
 app.use(agentsRouter);
+app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
 app.use(scoreRouter);
 app.use(referendumRouter);
 app.use(bountiesRouter);
 app.use(hashkeyRouter);
 app.use(mirrorTestRouter);
-app.use(challengeRouter);
 
 const port = parseInt(process.env.PORT || '3000', 10);
 app.listen(port, '0.0.0.0', () => {
