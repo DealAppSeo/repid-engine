@@ -7,7 +7,7 @@ export const config = {
   port: parseInt(process.env.PORT || '3000'),
   version: process.env.REPID_ENGINE_VERSION || '1.0.0',
   nodeEnv: process.env.NODE_ENV || 'development',
-  hashkeyRpc: process.env.HASHKEY_RPC_URL || 'https://rpc.hsk.xyz',
+  hashkeyRpc: process.env.HASHKEY_RPC_URL || 'https://testnet.hsk.xyz',
   hashkeyChainId: parseInt(process.env.HSK_CHAIN_ID || '133'),
   hashkeyContract:
     process.env.HSK_CONTRACT_ADDRESS ||

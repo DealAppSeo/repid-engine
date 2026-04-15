@@ -8,7 +8,7 @@ import { config } from '../config';
 export const HASHKEY_CONFIG = {
   chainId: 133,
   chainName: 'HashKey Chain Testnet',
-  rpcUrl: 'https://rpc.hsk.xyz',
+  rpcUrl: 'https://testnet.hsk.xyz',
   contractAddress: '0xE3b55a00445dEE1e330f81d113da2E4F28131B69',
   contractName: 'HyperDAGRepID',
   explorerBase: 'https://hashkeychain-testnet-explorer.alt.technology',

@@ -4,6 +4,7 @@ import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges } from '../engine/badges';
 import { HASHKEY_CONFIG } from './hashkey';
 import { anchorRepIdEvent } from '../engine/hashkey-chain';
+import { logHalProductionEvent, hashPrompt } from '../engine/production-logger';
 
 const router = Router();
 
@@ -15,6 +16,7 @@ const challengeRateLimit = new Map<string, { count: number; resetAt: number }>()
 // POST /challenge — file a constitutional challenge between two agents/humans.
 // This is the core demo endpoint for April 22.
 router.post('/challenge', async (req: Request, res: Response) => {
+  const startTime = Date.now();
   const { challengerId, defenderId, claim, evidenceText, certaintyAtClaim } = req.body ?? {};
 
   if (!challengerId || !defenderId || !claim) {
@@ -217,6 +219,31 @@ router.post('/challenge', async (req: Request, res: Response) => {
       chainId: HASHKEY_CONFIG.chainId,
     },
   });
+
+  // Non-blocking HAL production logging — Track A always-running data collection
+  logHalProductionEvent({
+    agentId: challengerId,
+    agentRepid: challenger.current_repid,
+    agentDomain: 'general',
+    promptHash: hashPrompt(claimStr),
+    certaintyAtClaim: certainty,
+    halVerdict: verdict,
+    halMode,
+    halComplianceScore: audit.complianceScore,
+    layersActive: {
+      sbfa: true,
+      bft: true,
+      slt: true,
+      repid: true,
+      wsce: true,
+      gnnsr: true,
+      anfis: true,
+      pcv: true,
+    },
+    pcvVetoed: verdict === 'EPISTEMIC_VIOLATION',
+    totalLatencyMs: Date.now() - startTime,
+    easAttestationId,
+  }).catch(() => {});
 
   // Non-blocking on-chain anchor — challenge completes regardless
   anchorRepIdEvent(

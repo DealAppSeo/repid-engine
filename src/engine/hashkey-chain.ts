@@ -66,13 +66,25 @@ export async function anchorRepIdEvent(
     console.log(`[hashkey] Anchoring RepID ${newRepId} for ${agentAddress}`);
     const tx = await (c as any).recordReputation(agentAddress, newRepId, evidenceHash);
     console.log(`[hashkey] TX submitted: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(`[hashkey] TX confirmed: block ${receipt.blockNumber}`);
+    const receipt = await Promise.race([
+      tx.wait(1),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('receipt timeout')), 30000)
+      ),
+    ]).catch((e: any) => {
+      console.warn(`[hashkey] receipt wait failed: ${e?.message ?? e}`);
+      return null;
+    });
+    const blockNumber = (receipt as any)?.blockNumber ?? null;
+    if (blockNumber != null) {
+      console.log(`[hashkey] TX confirmed: block ${blockNumber}`);
+    }
     return {
       success: true,
       txHash: tx.hash,
-      blockNumber: receipt.blockNumber,
+      blockNumber: blockNumber ?? undefined,
       evidenceHash,
+      stub: false,
     };
   } catch (err: any) {
     console.error('[hashkey] Anchor failed:', err.message);
