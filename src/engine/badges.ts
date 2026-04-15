@@ -299,14 +299,64 @@ export async function computeEthics(agentId: string): Promise<EthicsBreakdown> {
   };
 }
 
-// Constitutional rule suggestion — stubbed for Sprint 4.
-// In Sprint 5 this calls Cerebras Fast Inference for real suggestions.
-// Returns 3 candidate rules scoped to the agent's role/context.
+// Constitutional rule suggestion.
+// Sprint 5: calls Cerebras Fast Inference when CEREBRAS_API_KEY is set.
+// Falls back to the curated stub library on any error or missing key.
 export async function suggestConstitutionalRules(
   context: { role?: string; domain?: string } = {}
 ): Promise<Array<{ rule: string; reasoning: string; source: string }>> {
   const role = context.role ?? 'general';
   const domain = context.domain ?? 'generic';
+
+  // Attempt real Cerebras call first if key is configured
+  const apiKey = process.env.CEREBRAS_API_KEY;
+  if (apiKey) {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 5000);
+      const cb = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b',
+          max_tokens: 400,
+          temperature: 0.3,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are HAL, the Hallucination Assurance Layer. Suggest 3 constitutional behavior rules for an AI agent. Each rule must prevent epistemic violations (stating opinion as fact). Return strict JSON: {"rules":[{"rule":"...","reasoning":"..."},...]}',
+            },
+            {
+              role: 'user',
+              content: `Generate 3 constitutional rules for role="${role}" domain="${domain}". Rules must be concrete, enforceable, and prevent overconfident claims.`,
+            },
+          ],
+        }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timeout);
+      if (cb.ok) {
+        const json: any = await cb.json();
+        const content: string = json?.choices?.[0]?.message?.content ?? '';
+        // Cerebras often returns fenced JSON — strip fences
+        const cleaned = content.replace(/```json\s*|\s*```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        if (Array.isArray(parsed?.rules) && parsed.rules.length > 0) {
+          return parsed.rules.slice(0, 3).map((r: any) => ({
+            rule: String(r.rule ?? ''),
+            reasoning: String(r.reasoning ?? ''),
+            source: `cerebras:llama-3.3-70b:${role}:${domain}`,
+          }));
+        }
+      }
+    } catch {
+      // Fall through to library stub — never break registration flow
+    }
+  }
 
   // Stub library — Sprint 5 replaces with Cerebras call
   const LIBRARY: Record<string, Array<{ rule: string; reasoning: string }>> = {
