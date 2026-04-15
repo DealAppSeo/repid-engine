@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
+import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
 
 const router = Router();
 
@@ -90,12 +91,17 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       metadata: { type: 'HUMAN', date: new Date().toISOString() },
     });
 
+    const suggestedRules = await suggestConstitutionalRules({
+      role: (req.body?.role as string) ?? 'general',
+    });
+
     return res.status(201).json({
       privateId: anonymousId,
       agentId: newAgent.id,
       repId: 1000,
       tier: 'CUSTODIED_DBT',
       badges: ['Genesis'],
+      suggestedRules,
       message: 'Save your privateId — it is your only credential. We do not store your identity.',
       zkpCommitment,
       warning: 'CRITICAL: Save your privateId now. We do not store it. It cannot be recovered.',
@@ -296,7 +302,8 @@ router.get('/agents/:id/card', async (req: Request, res: Response) => {
     ? '[ZKP — private]'
     : (rawAddr.slice(0, 10) + '...');
 
-  const ethicsScore = Math.min(100, Math.round((agent.current_repid / 10000) * 100));
+  const ethics = await computeEthics(String(req.params.id));
+  const ethicsScore = ethics.overallScore;
   const tierLabel = String(agent.tier).replace(/_/g, ' ');
   const repIdStr = Number(agent.current_repid).toLocaleString();
   const today = new Date().toISOString().split('T')[0];
@@ -323,6 +330,30 @@ router.get('/agents/:id/card', async (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'image/svg+xml');
   res.setHeader('Cache-Control', 'no-cache');
   return res.send(svg);
+});
+
+// GET /agents/:id/ethics — real ethics health breakdown
+router.get('/agents/:id/ethics', async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const { data: agent } = await db
+    .from('repid_agents').select('id').eq('id', id).single();
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  const ethics = await computeEthics(id);
+  return res.json(ethics);
+});
+
+// GET /suggested-rules?role=trading — constitutional rule suggestions (Cerebras stub)
+router.get('/suggested-rules', async (req: Request, res: Response) => {
+  const role = (req.query.role as string) ?? 'general';
+  const domain = (req.query.domain as string) ?? 'generic';
+  const rules = await suggestConstitutionalRules({ role, domain });
+  return res.json({
+    role,
+    domain,
+    suggestedRules: rules,
+    source: 'stub-library',
+    note: 'Sprint 5: real Cerebras Fast Inference call. Sprint 4: library stub.',
+  });
 });
 
 export default router;

@@ -4,6 +4,7 @@ import { scoreChallengeOutcome } from '../layers/challenge-scoring';
 import { scorePrediction } from '../layers/prediction-scoring';
 import { applyDecay, computeRedemptionModifier } from '../layers/decay';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
+import { checkAndAwardBadges, BadgeAward } from './badges';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -52,6 +53,7 @@ export interface RepIdUpdateResult {
     easSchema: string;
     processingMs: number;
   };
+  newBadges?: BadgeAward[];
 }
 
 export function computeTier(repId: number): string {
@@ -173,6 +175,14 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // 10 — Update supply rate
   await updateSupplyRate(input.eventType);
 
+  // 11 — Badge milestone check (non-blocking — never fails score flow)
+  let newBadges: BadgeAward[] = [];
+  try {
+    newBadges = await checkAndAwardBadges(input.agentId, agent.current_repid, newRepId);
+  } catch {
+    newBadges = [];
+  }
+
   return {
     agentId: input.agentId, agentName: agent.agent_name,
     repIdBefore: agent.current_repid, repIdAfter: newRepId,
@@ -186,6 +196,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       easSchema: audit.easSchema,
       processingMs: audit.processingMs,
     },
+    newBadges,
   };
 }
 
