@@ -18,6 +18,96 @@ router.post('/agents', async (req: Request, res: Response) => {
   }
 });
 
+// POST /agents/human — anonymous human DBT registration
+// ZKP-anonymous: no name, no real address stored
+// Returns a private UUID the human keeps — their only credential
+// The system stores only a ZKP commitment, never their identity
+router.post('/agents/human', async (req: Request, res: Response) => {
+  const { commitment, constitution } = req.body ?? {};
+
+  const anonymousId = `human-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const zkpCommitment = commitment ||
+    `zkp-commitment-${Date.now()}-${Math.random().toString(36).slice(2, 16)}`;
+
+  const humanConstitution = constitution || {
+    version: '1.0',
+    type: 'HUMAN',
+    eas_schema: 'constitutional-compliance-v1',
+    rules: {
+      rule_1: 'Act justly, love mercy, walk humbly (Micah 6:8)',
+      rule_2: 'Never state an opinion as a certain fact',
+      rule_3: 'Treat others as you wish to be treated (Matthew 7:12)',
+    },
+    governing_bodies: ['HyperDAG Protocol'],
+    anonymous: true,
+    version_date: new Date().toISOString().split('T')[0],
+  };
+
+  try {
+    const { data: newAgent, error } = await db
+      .from('repid_agents')
+      .insert({
+        erc8004_address: zkpCommitment,
+        agent_name: 'HUMAN',
+        current_repid: 1000,
+        tier: 'CUSTODIED_DBT',
+        constitution: {
+          ...humanConstitution,
+          type: 'HUMAN',
+          anonymous: true,
+          privateId: anonymousId,
+        },
+      })
+      .select('id')
+      .single();
+
+    if (error || !newAgent) {
+      return res.status(500).json({ error: error?.message ?? 'insert failed' });
+    }
+
+    await db.from('repid_score_events').insert({
+      agent_id: newAgent.id,
+      event_type: 'GENESIS',
+      delta: 0,
+      repid_before: 1000,
+      repid_after: 1000,
+      ecosystem_need_weight: 1.0,
+      eas_attestation_id: `eas-stub-genesis-${String(newAgent.id).slice(0, 8)}`,
+      metadata: {
+        type: 'HUMAN_ANONYMOUS',
+        zkpCommitment,
+        easSchema: 'constitutional-compliance-v1',
+        note: 'Human identity — ZKP anonymous. No PII stored.',
+      },
+    });
+
+    return res.status(201).json({
+      privateId: anonymousId,
+      agentId: newAgent.id,
+      repId: 1000,
+      tier: 'CUSTODIED_DBT',
+      message: 'Save your privateId — it is your only credential. We do not store your identity.',
+      zkpCommitment,
+      warning: 'IMPORTANT: Save privateId and agentId now. They cannot be recovered.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /agents/by-name/:name — find agent UUID by name (case-insensitive)
+// Used by TrustTrader challenge system to sync events
+router.get('/agents/by-name/:name', async (req: Request, res: Response) => {
+  const { data, error } = await db
+    .from('repid_agents')
+    .select('id, agent_name, current_repid, tier')
+    .ilike('agent_name', String(req.params.name))
+    .limit(1)
+    .single();
+  if (error || !data) return res.status(404).json({ error: 'Agent not found' });
+  return res.json(data);
+});
+
 router.get('/agents', async (req: Request, res: Response) => {
   const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
   const { data, error } = await db.from('repid_agents')
@@ -52,11 +142,16 @@ router.get('/agents/:id/zkp/:proofType', async (req: Request, res: Response) => 
   const { data: agent } = await db.from('repid_agents').select('*').eq('id', id).single();
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
+  const isHuman = agent.constitution?.type === 'HUMAN' ||
+                  agent.constitution?.anonymous === true;
+
   if (pt === 'POSTCARD') return res.json({
     proofType: 'POSTCARD',
-    agentName: agent.agent_name, tier: agent.tier,
-    erc8004Address: agent.erc8004_address,
-    constitutionVersion: agent.constitution?.version ?? null,
+    agentType: isHuman ? 'HUMAN' : 'AGENT',
+    tier: agent.tier,
+    agentName: isHuman ? '[ZKP — anonymous human]' : agent.agent_name,
+    erc8004Address: isHuman ? '[ZKP — private]' : agent.erc8004_address,
+    constitutionVersion: isHuman ? '[ZKP — private]' : (agent.constitution?.version ?? null),
     easSchema: agent.constitution?.eas_schema ?? 'constitutional-compliance-v1',
     repIdScore: '[ZKP — not revealed at POSTCARD tier]',
     decisionHistory: '[ZKP — not revealed at POSTCARD tier]',
