@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { createHash } from 'crypto';
 import { db } from '../db';
+import { testHashKeyConnection } from '../engine/hashkey-chain';
+import { config } from '../config';
 
 // HashKey Chain testnet config — canonical from GMPD v4.3
 export const HASHKEY_CONFIG = {
@@ -17,6 +19,32 @@ const router = Router();
 // GET /hashkey/config — public chain/contract metadata for judges and clients
 router.get('/hashkey/config', (_req: Request, res: Response) => {
   return res.json(HASHKEY_CONFIG);
+});
+
+// GET /hashkey — live chain status + full ERC-8004/EAS context
+router.get('/hashkey', async (_req: Request, res: Response) => {
+  const connection = await testHashKeyConnection();
+  return res.json({
+    chain: 'HashKey Chain',
+    chainId: config.hashkeyChainId,
+    rpc: config.hashkeyRpc,
+    contract: config.hashkeyContract,
+    contractName: HASHKEY_CONFIG.contractName,
+    explorerUrl: `${HASHKEY_CONFIG.explorerBase}/address/${config.hashkeyContract}`,
+    connection,
+    deployerConfigured: !!config.deployerPrivateKey,
+    eas: {
+      schema: 'constitutional-compliance-v1',
+      fields: ['ruleReference', 'complianceScore', 'evidenceMerkleRoot', 'mirrorTestPassed', 'revocable'],
+    },
+    erc8004: {
+      identityRegistry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+      reputationRegistry: '0x8004B663ab8E2E50e93DffD45A2dDfDaC1355Aca',
+      validationRegistry: '0x8004Cb1B1741F3C476fE7bE11A5a5639bB8A21c7',
+      chain: 'Base Sepolia',
+    },
+    note: 'On-chain anchoring: every challenge verdict writes an evidence hash to HashKey Chain. Stubs when DEPLOYER_PRIVATE_KEY not set.',
+  });
 });
 
 // GET /hashkey/anchor/:agentId — generate on-chain anchor metadata for an agent's

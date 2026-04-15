@@ -3,6 +3,7 @@ import { db } from '../db';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges } from '../engine/badges';
 import { HASHKEY_CONFIG } from './hashkey';
+import { anchorRepIdEvent } from '../engine/hashkey-chain';
 
 const router = Router();
 
@@ -216,6 +217,46 @@ router.post('/challenge', async (req: Request, res: Response) => {
       chainId: HASHKEY_CONFIG.chainId,
     },
   });
+
+  // Non-blocking on-chain anchor — challenge completes regardless
+  anchorRepIdEvent(
+    challenger.erc8004_address,
+    challengerNewRepId,
+    {
+      challengeId,
+      verdict,
+      halMode,
+      claim: claimStr,
+      certaintyAtClaim: certainty,
+      challengerId,
+      defenderId,
+      repIdBefore: challenger.current_repid,
+      repIdAfter: challengerNewRepId,
+      timestamp: new Date().toISOString(),
+      easSchema: 'constitutional-compliance-v1',
+    }
+  ).then(anchor => {
+    if (anchor.txHash) {
+      // Best-effort metadata update — do not block
+      db.from('repid_score_events')
+        .update({
+          metadata: {
+            challengeId, claim: claimStr, verdict, halMode, reasoning,
+            defenderId, defenderName: defender.agent_name,
+            easSchema: 'constitutional-compliance-v1',
+            hashkeyContract: HASHKEY_CONFIG.contractAddress,
+            chainId: HASHKEY_CONFIG.chainId,
+            hashkeyTxHash: anchor.txHash,
+            hashkeyBlockNumber: anchor.blockNumber ?? null,
+            hashkeyEvidenceHash: anchor.evidenceHash,
+            onChain: !anchor.stub,
+          },
+        })
+        .eq('eas_attestation_id', easAttestationId)
+        .eq('agent_id', challengerId)
+        .then(() => {});
+    }
+  }).catch(() => {});
 
   // Run badge check on both parties after challenge
   const [challengerBadges, defenderBadges] = await Promise.all([

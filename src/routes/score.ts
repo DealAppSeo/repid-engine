@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express';
 import { updateRepId } from '../engine/repid-update';
-import { fileConstitutionalChallenge } from '../layers/constitutional-audit';
 
 const router = Router();
 const VALID_TYPES = [
@@ -26,23 +25,8 @@ router.post('/score', async (req: Request, res: Response) => {
   }
 });
 
-// Adversarial constitutional challenge
-// Full LASSO + ANFIS + EAS attestation pipeline in Sprint 3
-router.post('/challenge', async (req: Request, res: Response) => {
-  const { challengerId, targetAgentId, allegedRuleReference, evidenceEventIds, certainty } = req.body;
-  if (!challengerId || !targetAgentId || !allegedRuleReference)
-    return res.status(400).json({
-      error: 'challengerId, targetAgentId, allegedRuleReference required'
-    });
-  try {
-    return res.json(await fileConstitutionalChallenge({
-      challengerId, targetAgentId, allegedRuleReference,
-      evidenceEventIds: evidenceEventIds ?? [], certainty: certainty ?? 0.5,
-    }));
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+// Sprint 9: Sprint 3 /challenge stub removed. The live /challenge handler
+// is src/routes/challenge.ts (mounted before scoreRouter in index.ts).
 
 // POST /mcp-call — constitutional MCP tool wrapper
 router.post('/mcp-call', async (req: Request, res: Response) => {
