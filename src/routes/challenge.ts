@@ -239,15 +239,26 @@ router.post('/challenge', async (req: Request, res: Response) => {
   });
 });
 
-// GET /challenge/agents — list all challengeable named agents (excludes anonymous humans)
+// GET /challenge/agents — list challengeable named agents (excludes anonymous humans)
+// Returns camelCase shape with bio and personality for the Challenge Arena UI.
 router.get('/challenge/agents', async (_req: Request, res: Response) => {
   const { data, error } = await db
     .from('repid_agents')
-    .select('id, agent_name, current_repid, tier, erc8004_address')
+    .select('id, agent_name, current_repid, tier, constitution, erc8004_address')
     .neq('agent_name', 'HUMAN')
     .order('current_repid', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
-  return res.json(data ?? []);
+  const agents = (data ?? []).map((a: any) => ({
+    id: a.id,
+    agentName: a.agent_name,
+    currentRepId: a.current_repid,
+    tier: a.tier,
+    bio: a.constitution?.bio ?? 'No bio available',
+    personality: a.constitution?.personality ?? 'unknown',
+    ruleCount: Object.keys(a.constitution?.rules ?? {}).length,
+    erc8004Address: a.erc8004_address,
+  }));
+  return res.json(agents);
 });
 
 export default router;

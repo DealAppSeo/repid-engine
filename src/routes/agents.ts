@@ -154,12 +154,26 @@ router.get('/agents/by-name/:name', async (req: Request, res: Response) => {
 });
 
 router.get('/agents', async (req: Request, res: Response) => {
-  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
   const { data, error } = await db.from('repid_agents')
-    .select('id,agent_name,current_repid,tier,activity_30d,last_updated,erc8004_address')
+    .select('id,agent_name,current_repid,tier,activity_30d,last_updated,erc8004_address,constitution')
     .order('current_repid', { ascending: false }).limit(limit);
   if (error) return res.status(500).json({ error: error.message });
-  return res.json(data);
+  const agents = (data ?? []).map((a: any) => ({
+    id: a.id,
+    agent_name: a.agent_name,
+    current_repid: a.current_repid,
+    tier: a.tier,
+    activity_30d: a.activity_30d,
+    last_updated: a.last_updated,
+    erc8004_address: a.erc8004_address,
+    constitution: a.constitution,
+    bio: a.constitution?.bio ?? null,
+    personality: a.constitution?.personality ?? null,
+    isHuman: a.constitution?.type === 'HUMAN' || a.agent_name === 'HUMAN',
+    ruleCount: Object.keys(a.constitution?.rules ?? {}).length,
+  }));
+  return res.json(agents);
 });
 
 router.get('/agents/:id', async (req: Request, res: Response) => {
