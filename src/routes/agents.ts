@@ -95,6 +95,33 @@ router.post('/agents/human', async (req: Request, res: Response) => {
   }
 });
 
+// POST /agents/:id/mark-human — flag an existing agent as an anonymous human
+// Used to upgrade pre-existing records (e.g. founder DBT #1) so POSTCARD
+// renders them as ZKP-anonymous humans.
+router.post('/agents/:id/mark-human', async (req: Request, res: Response) => {
+  const { data: agent, error: readErr } = await db
+    .from('repid_agents')
+    .select('constitution')
+    .eq('id', req.params.id)
+    .single();
+  if (readErr || !agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const nextConstitution = {
+    ...(agent.constitution || {}),
+    type: 'HUMAN',
+    anonymous: true,
+    eas_schema: 'constitutional-compliance-v1',
+  };
+
+  const { error: upErr } = await db
+    .from('repid_agents')
+    .update({ constitution: nextConstitution })
+    .eq('id', req.params.id);
+  if (upErr) return res.status(500).json({ error: upErr.message });
+
+  return res.json({ ok: true, agentId: req.params.id, markedHuman: true });
+});
+
 // GET /agents/by-name/:name — find agent UUID by name (case-insensitive)
 // Used by TrustTrader challenge system to sync events
 router.get('/agents/by-name/:name', async (req: Request, res: Response) => {
