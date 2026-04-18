@@ -29,7 +29,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   }
 
   // Best effort log to Supabase
-  db.from('trinity_agent_logs').insert({
+  const { error } = await db.from('trinity_agent_logs').insert({
     action: 'api_auth_attempt',
     metadata: {
       success: valid,
@@ -38,7 +38,8 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       method: req.method,
       ip: req.ip
     }
-  }).then(() => {}).catch(() => {});
+  });
+    if (error) console.error(error);
 
   if (!valid) {
     return res.status(403).json({ error: 'Forbidden: Invalid API key' });

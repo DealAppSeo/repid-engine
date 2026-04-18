@@ -1,12 +1,12 @@
 import { createHash } from 'crypto';
 import { db } from '../db';
 
-export function generateProofStub(agentId: string, requesterPubkey: string, tier: string) {
+export async function generateProofStub(agentId: string, requesterPubkey: string, tier: string) {
   const timestamp = new Date().toISOString();
   const dataToHash = `${agentId}${requesterPubkey}${tier}${timestamp}`;
   const proof = createHash('sha256').update(dataToHash).digest('hex');
 
-  db.from('trinity_agent_logs').insert({
+  const { error } = await db.from('trinity_agent_logs').insert({
     action: 'zkp_proof_generated',
     metadata: {
       agent_id: agentId,
@@ -15,7 +15,8 @@ export function generateProofStub(agentId: string, requesterPubkey: string, tier
       timestamp,
       proof
     }
-  }).then(() => {}).catch(() => {});
+  });
+    if (error) console.error(error);
 
   return { proof, timestamp };
 }

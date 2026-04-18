@@ -37,7 +37,7 @@ router.post('/prove-repid', async (req: Request, res: Response) => {
     basePayload.full_behavioral_record = { checks_passed: agent.activity_30d || 0, faults: 0 };
   }
 
-  const { proof, timestamp } = generateProofReal(agent_id, requester_pubkey, requested_tier);
+  const { proof, timestamp } = await generateProofReal(agent_id, requester_pubkey, requested_tier);
 
   res.json({ tier: requested_tier, proof, proofFormat: "plonky3-babybear-stub-v1", proofVersion: "1.0", payload: basePayload });
 });
@@ -49,13 +49,14 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const { proof: computedHash } = generateProofReal(agent_id, requester_pubkey, tier, timestamp);
+  const { proof: computedHash } = await generateProofReal(agent_id, requester_pubkey, tier, timestamp);
   const valid = proof === computedHash;
 
-  db.from('trinity_agent_logs').insert({
+  const { error } = await db.from('trinity_agent_logs').insert({
     action: 'zkp_proof_verified',
     metadata: { valid, agent_id, requester_pubkey, tier, timestamp, proof }
-  }).then(() => {}).catch(() => {});
+  });
+    if (error) console.error(error);
 
   fireWebhook('proof.verified', { valid, agent_id, requester_pubkey, tier, timestamp, proof });
 
@@ -80,11 +81,13 @@ router.post('/dag/verify-node', async (req: Request, res: Response) => {
   const { node_id, parent_hash, agent_id, payload } = req.body;
   if (!node_id || !parent_hash || !agent_id || !payload) return res.status(400).json({ error: 'Missing req fields' });
   
-  db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS hyperdag_nodes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), node_id TEXT, parent_hash TEXT, agent_id TEXT, payload JSONB, created_at TIMESTAMP DEFAULT NOW());' }).catch(() => {});
+  const { error: rpcError } = await db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS hyperdag_nodes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), node_id TEXT, parent_hash TEXT, agent_id TEXT, payload JSONB, created_at TIMESTAMP DEFAULT NOW());' });
+    if (rpcError) console.error(rpcError);
 
   const node_hash = createHash('sha256').update(`${node_id}${parent_hash}${agent_id}${JSON.stringify(payload)}`).digest('hex');
   
-  db.from('trinity_agent_logs').insert({ action: 'dag_node_verified', metadata: { node_id, parent_hash, agent_id } }).then(() => {}).catch(() => {});
+  const { error } = await db.from('trinity_agent_logs').insert({ action: 'dag_node_verified', metadata: { node_id, parent_hash, agent_id } });
+    if (error) console.error(error);
   fireWebhook('dag.node_verified', { node_id, parent_hash, agent_id, node_hash });
 
   res.json({ node_hash, valid: true, dag_depth: 1, verified_at: new Date().toISOString() });
@@ -102,7 +105,7 @@ router.get('/erc8004/validate/:agent_id', async (req: Request, res: Response) =>
   res.json({
     erc8004_version: "1.0",
     agent_id,
-    identity_hash: createHash('sha256').update(agent_id).digest('hex'),
+    identity_hash: createHash('sha256').update(String(agent_id)).digest('hex'),
     reputation_score: agent.current_repid,
     validation_status: "verified",
     tier,
@@ -117,12 +120,13 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
   const max = max_batch_size || 100;
   if (requests.length > max || requests.length > 100) return res.status(400).json({ error: 'max_batch_size exceeded limit 100' });
 
-  const proofs = requests.map(r => {
-    const p = generateProofReal(r.agent_id, r.requester_pubkey, r.tier);
+  const proofs = await Promise.all(requests.map(async (r: any) => {
+    const p = await generateProofReal(r.agent_id, r.requester_pubkey, r.tier);
     return { ...r, proof: p.proof, timestamp: p.timestamp };
-  });
+  }));
 
-  db.from('trinity_agent_logs').insert({ action: 'zkp_batch_generated', metadata: { batch_size: requests.length } }).then(() => {}).catch(() => {});
+  const { error } = await db.from('trinity_agent_logs').insert({ action: 'zkp_batch_generated', metadata: { batch_size: requests.length } });
+    if (error) console.error(error);
 
   res.json({ batch_id: `batch_${Date.now()}`, proofs, processed_at: new Date().toISOString(), total: proofs.length });
 });
@@ -131,7 +135,8 @@ router.post('/webhooks/register', async (req: Request, res: Response) => {
   const { url, events, api_key } = req.body;
   if (!url || !events) return res.status(400).json({ error: 'url and events required' });
 
-  db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS repid_webhooks (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), url TEXT NOT NULL, events TEXT[], api_key TEXT, created_at TIMESTAMP DEFAULT NOW(), active BOOLEAN DEFAULT true);' }).catch(() => {});
+  const { error: rpcError } = await db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS repid_webhooks (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), url TEXT NOT NULL, events TEXT[], api_key TEXT, created_at TIMESTAMP DEFAULT NOW(), active BOOLEAN DEFAULT true);' });
+    if (rpcError) console.error(rpcError);
 
   const { data, error } = await db.from('repid_webhooks').insert({ url, events, api_key }).select().single();
   if (error) return res.status(500).json({ error: 'Failed' });

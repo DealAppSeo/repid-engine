@@ -12,16 +12,17 @@ export const versioningMiddleware = async (req: Request, res: Response, next: Ne
   // Ensure table exists on first run
   if (!(global as any)._api_key_versions_table_checked) {
     (global as any)._api_key_versions_table_checked = true;
-    db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS api_key_versions (api_key TEXT PRIMARY KEY, version TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW());' })
-      .catch(() => {});
+    const { error: rpcError } = await db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS api_key_versions (api_key TEXT PRIMARY KEY, version TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW());' });
+    if (rpcError) console.error(rpcError);
   }
 
   // Best effort log to Supabase logic
-  db.from('api_key_versions').upsert({
+  const { error } = await db.from('api_key_versions').upsert({
     api_key: key,
     version: resolvedVersion,
     created_at: new Date().toISOString()
-  }, { onConflict: 'api_key' }).then(() => {}).catch(() => {});
+  }, { onConflict: 'api_key' });
+  if (error) console.error(error);
 
   next();
 };
