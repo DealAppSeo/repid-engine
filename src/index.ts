@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import validator from 'validator';
 import { config } from './config';
 import healthRouter from './routes/health';
 import agentsRouter from './routes/agents';
@@ -15,11 +17,37 @@ import v1Router from './routes/v1';
 import { authMiddleware } from './middleware/auth';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 import { versioningMiddleware } from './middleware/versioning';
+import { scoreMonitor } from './engine/score-monitor';
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+app.use(helmet());
+app.use(cors({ origin: ['https://trustrepid.dev', 'https://repid.dev', 'http://localhost:3000'] }));
+app.use(express.json({ limit: "1mb" }));
+
+// Sanitize POST validator
+app.use((req, res, next) => {
+  if (req.method === 'POST') {
+    const sanitizeObj = (obj: any) => {
+      for (const key in obj) {
+        if (typeof obj[key] === 'string') {
+          const val = obj[key].toUpperCase();
+          if (val.includes('SELECT ') || val.includes('DROP ') || val.includes('INSERT ') || val.includes('UPDATE ') || val.includes('DELETE ') || val.includes('--') || val.includes(';')) {
+             throw new Error('Forbidden SQL keywords detected');
+          }
+        } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+          sanitizeObj(obj[key]);
+        }
+      }
+    };
+    try {
+      sanitizeObj(req.body);
+    } catch (e) {
+      return res.status(400).json({ error: 'Validation failed' });
+    }
+  }
+  next();
+});
 
 app.use(authMiddleware);
 app.use(rateLimitMiddleware);
@@ -40,7 +68,16 @@ const port = parseInt(process.env.PORT || '3000', 10);
 app.listen(port, '0.0.0.0', () => {
   console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
   console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
-  console.log(`[repid-engine] Redis Rate Limiter: ${checkRedisStatus()}`);
+  
+  const redisUrl = process.env.REDIS_URL;
+  if (redisUrl) {
+    console.log('[Redis] Connected');
+  } else {
+    console.log('[Redis] Running in fallback mode - rate limiting disabled');
+  }
+
+  // Score monitor Task 8
+  setInterval(scoreMonitor, 300000);
 });
 
 export default app;

@@ -2,8 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
-  // Expose repid score lookup as public
-  if (req.method === 'GET' && req.path.startsWith('/api/v1/repid/')) {
+  if (req.method === 'GET' && (req.path.startsWith('/api/v1/repid/') || req.path.startsWith('/api/v1/erc8004/validate/'))) {
     return next();
   }
 
