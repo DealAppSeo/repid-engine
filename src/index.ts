@@ -12,10 +12,18 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import v1Router from './routes/v1';
 
+import { authMiddleware } from './middleware/auth';
+import { rateLimitMiddleware } from './middleware/rateLimit';
+import { versioningMiddleware } from './middleware/versioning';
+
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+app.use(authMiddleware);
+app.use(rateLimitMiddleware);
+app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
 app.use(healthRouter);

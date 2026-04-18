@@ -8,6 +8,41 @@ router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
 });
 
+router.get('/openapi.json', (req: Request, res: Response) => {
+  res.json({
+    openapi: "3.1.0",
+    info: { title: "RepID Engine API", version: "1.0.0" },
+    paths: {
+      "/api/v1/health": {
+        get: {
+          summary: "Health Check",
+          responses: {
+            "200": {
+              description: "OK",
+              content: { "application/json": { schema: { type: "object", properties: { status: { type: "string" }, version: { type: "string" }, service: { type: "string" } } } } }
+            }
+          }
+        }
+      },
+      "/api/v1/prove-repid": {
+        post: {
+          summary: "Prove RepID",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", required: ["agent_id", "requester_pubkey", "requested_tier"], properties: { agent_id: { type: "string" }, requester_pubkey: { type: "string" }, requested_tier: { type: "string", enum: ["postcard", "envelope", "package"] } } } } }
+          },
+          responses: {
+            "200": { description: "Successful proof generation" },
+            "400": { description: "Bad Request" },
+            "403": { description: "Forbidden" },
+            "404": { description: "Agent Not Found" }
+          }
+        }
+      }
+    }
+  });
+});
+
 router.post('/prove-repid', async (req: Request, res: Response) => {
   const { agent_id, requester_pubkey, requested_tier } = req.body;
 
