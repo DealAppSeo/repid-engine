@@ -10,12 +10,14 @@ import hashkeyRouter from './routes/hashkey';
 import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
+import v1Router from './routes/v1';
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
+app.use('/api/v1', v1Router);
 app.use(healthRouter);
 app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
