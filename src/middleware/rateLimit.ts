@@ -10,6 +10,11 @@ if (redisUrl) {
   });
 }
 
+export const checkRedisStatus = () => {
+  if (!redis) return 'fallback (no REDIS_URL configured)';
+  return redis.status === 'ready' ? 'connected' : `fallback (${redis.status})`;
+};
+
 export const rateLimitMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   if (!redis || redis.status !== 'ready') {
     return next(); // Fail open if no redis

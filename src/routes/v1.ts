@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
-
 import { db } from '../db';
+import { generateProofStub } from '../zkp/plonky3-stub';
+import { createHash } from 'crypto';
 
 const router = Router();
 
@@ -35,6 +36,29 @@ router.get('/openapi.json', (req: Request, res: Response) => {
             "200": { description: "Successful proof generation" },
             "400": { description: "Bad Request" },
             "403": { description: "Forbidden" },
+            "404": { description: "Agent Not Found" }
+          }
+        }
+      },
+      "/api/v1/verify-proof": {
+        post: {
+          summary: "Verify Proof",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", required: ["proof", "agent_id", "requester_pubkey", "tier", "timestamp"], properties: { proof: { type: "string" }, agent_id: { type: "string" }, requester_pubkey: { type: "string" }, tier: { type: "string" }, timestamp: { type: "string" } } } } }
+          },
+          responses: {
+            "200": { description: "Verification successful (includes valid boolean flag)" },
+            "400": { description: "Bad Request" }
+          }
+        }
+      },
+      "/api/v1/repid/{agent_id}": {
+        get: {
+          summary: "Get RepID Score",
+          parameters: [{ name: "agent_id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { description: "RepID retrieved" },
             "404": { description: "Agent Not Found" }
           }
         }
@@ -84,10 +108,66 @@ router.post('/prove-repid', async (req: Request, res: Response) => {
     basePayload.full_behavioral_record = { checks_passed: agent.activity_30d || 0, faults: 0 };
   }
 
+  const { proof, timestamp } = generateProofStub(agent_id, requester_pubkey, requested_tier);
+
   res.json({
     tier: requested_tier,
-    proof: "<plonky3-stub-base64>",
+    proof,
+    proofFormat: "plonky3-babybear-stub-v1",
+    proofVersion: "1.0",
     payload: basePayload
+  });
+});
+
+router.post('/verify-proof', async (req: Request, res: Response) => {
+  const { proof, agent_id, requester_pubkey, tier, timestamp } = req.body;
+
+  if (!proof || !agent_id || !requester_pubkey || !tier || !timestamp) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const dataToHash = `${agent_id}${requester_pubkey}${tier}${timestamp}`;
+  const computedHash = createHash('sha256').update(dataToHash).digest('hex');
+  const valid = proof === computedHash;
+
+  db.from('trinity_agent_logs').insert({
+    action: 'zkp_proof_verified',
+    metadata: { valid, agent_id, requester_pubkey, tier, timestamp, proof }
+  }).then(() => {}).catch(() => {});
+
+  res.json({
+    valid,
+    tier,
+    agent_id,
+    verified_at: new Date().toISOString(),
+    proof_version: "1.0"
+  });
+});
+
+router.get('/repid/:agent_id', async (req: Request, res: Response) => {
+  const { agent_id } = req.params;
+
+  const { data: agent, error } = await db
+    .from('repid_agents')
+    .select('*')
+    .eq('id', agent_id)
+    .single();
+
+  if (error || !agent) {
+    return res.status(404).json({ error: 'Agent not found' });
+  }
+
+  const score = agent.current_repid;
+  let tier_level = 'CUSTODIED_DBT';
+  if (score >= 5000) tier_level = 'AUTONOMOUS';
+  else if (score >= 1000) tier_level = 'EARNING_AUTONOMY';
+
+  res.json({
+    agent_id,
+    repid_score: score,
+    tier_level,
+    activity_30d: agent.activity_30d || 0,
+    created_at: agent.created_at
   });
 });
 

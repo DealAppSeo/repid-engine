@@ -9,6 +9,13 @@ export const versioningMiddleware = async (req: Request, res: Response, next: Ne
   const resolvedVersion = providedVersion || '2026-04-17';
   (req as any).apiVersion = resolvedVersion;
 
+  // Ensure table exists on first run
+  if (!(global as any)._api_key_versions_table_checked) {
+    (global as any)._api_key_versions_table_checked = true;
+    db.rpc('run_sql', { sql: 'CREATE TABLE IF NOT EXISTS api_key_versions (api_key TEXT PRIMARY KEY, version TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW());' })
+      .catch(() => {});
+  }
+
   // Best effort log to Supabase logic
   db.from('api_key_versions').upsert({
     api_key: key,

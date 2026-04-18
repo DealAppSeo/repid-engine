@@ -13,7 +13,7 @@ import halStatsRouter from './routes/hal-stats';
 import v1Router from './routes/v1';
 
 import { authMiddleware } from './middleware/auth';
-import { rateLimitMiddleware } from './middleware/rateLimit';
+import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 import { versioningMiddleware } from './middleware/versioning';
 
 const app = express();
@@ -40,6 +40,7 @@ const port = parseInt(process.env.PORT || '3000', 10);
 app.listen(port, '0.0.0.0', () => {
   console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
   console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
+  console.log(`[repid-engine] Redis Rate Limiter: ${checkRedisStatus()}`);
 });
 
 export default app;

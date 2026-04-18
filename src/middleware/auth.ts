@@ -2,6 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  // Expose repid score lookup as public
+  if (req.method === 'GET' && req.path.startsWith('/api/v1/repid/')) {
+    return next();
+  }
+
   const apiKey = (req.headers['authorization']?.replace('Bearer ', '') || req.headers['x-api-key']) as string;
 
   if (!apiKey) {
