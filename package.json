@@ -10,7 +10,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "jest --testPathPattern=tests/"
+    "test": "jest --config jest.config.js"
   },
   "keywords": [],
   "author": "",
