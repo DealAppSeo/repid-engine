@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
-import { generateProofReal } from '../zkp/plonky3-real';
+import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash } from 'crypto';
 import { fireWebhook } from '../services/webhook';
 
@@ -37,7 +37,10 @@ router.post('/prove-repid', async (req: Request, res: Response) => {
     basePayload.full_behavioral_record = { checks_passed: agent.activity_30d || 0, faults: 0 };
   }
 
-  const { proof, timestamp } = await generateProofReal(agent_id, requester_pubkey, requested_tier);
+  const timestamp = new Date().toISOString();
+  const proof = generateProofReal(agent_id, requester_pubkey, requested_tier, timestamp);
+  await logProofGeneration(db, agent_id, requested_tier);
+  fireWebhook('proof.generated', { proof, agent_id, requester_pubkey, tier: requested_tier, timestamp });
 
   res.json({ tier: requested_tier, proof, proofFormat: "plonky3-babybear-stub-v1", proofVersion: "1.0", payload: basePayload });
 });
@@ -49,7 +52,7 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const { proof: computedHash } = await generateProofReal(agent_id, requester_pubkey, tier, timestamp);
+  const computedHash = generateProofReal(agent_id, requester_pubkey, tier, timestamp);
   const valid = proof === computedHash;
 
   const { error } = await db.from('trinity_agent_logs').insert({
@@ -121,8 +124,10 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
   if (requests.length > max || requests.length > 100) return res.status(400).json({ error: 'max_batch_size exceeded limit 100' });
 
   const proofs = await Promise.all(requests.map(async (r: any) => {
-    const p = await generateProofReal(r.agent_id, r.requester_pubkey, r.tier);
-    return { ...r, proof: p.proof, timestamp: p.timestamp };
+    const timestamp = new Date().toISOString();
+    const proof = generateProofReal(r.agent_id, r.requester_pubkey, r.tier, timestamp);
+    await logProofGeneration(db, r.agent_id, r.tier);
+    return { ...r, proof, timestamp };
   }));
 
   const { error } = await db.from('trinity_agent_logs').insert({ action: 'zkp_batch_generated', metadata: { batch_size: requests.length } });

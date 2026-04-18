@@ -1,23 +1,19 @@
-import { hmac } from '@noble/hashes/hmac';
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex } from '@noble/hashes/utils';
-import { db } from '../db';
-import { fireWebhook } from '../services/webhook';
+import { createHmac } from 'crypto';
 
-export async function generateProofReal(agentId: string, requesterPubkey: string, tier: string, timestamp?: string) {
-  const ts = timestamp || new Date().toISOString();
-  const secretKey = new TextEncoder().encode(process.env.PROOF_SECRET || 'default_secret');
-  const message = new TextEncoder().encode(`${agentId}${requesterPubkey}${tier}${ts}`);
-  const proofBytes = hmac(sha256, secretKey, message);
-  const proof = bytesToHex(proofBytes);
+const secret = process.env.PROOF_SECRET || 'repid-default-secret';
 
-  const { error } = await db.from('trinity_agent_logs').insert({
+export function generateProofReal(agentId: string, requesterPubkey: string, tier: string, timestamp: string): string {
+  return createHmac('sha256', secret)
+    .update(`${agentId}:${requesterPubkey}:${tier}:${timestamp}`)
+    .digest('base64');
+}
+
+export async function logProofGeneration(supabase: any, agentId: string, tier: string): Promise<void> {
+  const { error } = await supabase.from('trinity_agent_logs').insert([{
+    agent_name: 'repid-engine',
     action: 'zkp_proof_generated',
-    metadata: { agent_id: agentId, requester_pubkey: requesterPubkey, tier, timestamp: ts, proof }
-  });
-    if (error) console.error(error);
-
-  fireWebhook('proof.generated', { proof, agent_id: agentId, requester_pubkey: requesterPubkey, tier, timestamp: ts });
-
-  return { proof, timestamp: ts };
+    message: `Proof generated for agent ${agentId} at tier ${tier}`,
+    created_at: new Date().toISOString()
+  }]);
+  if (error) console.error('[zkp] Log error:', error);
 }
