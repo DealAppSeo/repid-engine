@@ -6,7 +6,7 @@ import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-
 const router = Router();
 
 const PYTHAGOREAN_COMMA = 531441 / 524288;
-const HAL_APPROVE_THRESHOLD = 0.0195;
+// bft_veto_threshold (0.0195) is TrustTrader-only; general HAL veto uses repid_config.hal_veto_threshold
 const HAL_CONSTITUTIONAL_BLOCK = 0.48;
 const PHI_FALLBACK = 1.618033988749895;
 const IMPACT_CAP_FALLBACK = 5.0;
@@ -181,9 +181,9 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     const epistemicScore = certainty < 0.5 ? 0.8 : 
                            certainty < 0.7 ? 0.5 :
                            certainty < 0.85 ? 0.3 : 0.1;
-    const evidenceScore = certainty > 0.8 ? 0.15 :
-                          certainty > 0.6 ? 0.3 : 0.5;
-    const scopeScore = certainty > 0.8 ? 0.15 :
+    const evidenceScore = certainty > 0.8 ? 0.1 :
+                          certainty > 0.6 ? 0.25 : 0.5;
+    const scopeScore = certainty > 0.8 ? 0.1 :
                        certainty > 0.6 ? 0.2 : 0.3;
     const dissonance =
       (0.4 * harmScore + 0.3 * epistemicScore + 0.2 * evidenceScore + 0.1 * scopeScore) *
