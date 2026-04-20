@@ -14,6 +14,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import v1Router from './routes/v1';
 import agentsExternalRouter from './routes/agents-external';
+import telegramRouter, { sendTelegramAlert } from './routes/telegram';
 import { db } from './db';
 
 import { authMiddleware } from './middleware/auth';
@@ -77,6 +78,7 @@ app.use('/api/v1', v1Router);
 app.use('/api/v1/agents/register', registrationLimiter);
 app.use('/api/v1/agents/:id/score-event', scoreLimiter);
 app.use('/api/v1/agents', agentsExternalRouter);
+app.use('/api/v1/telegram', telegramRouter);
 
 // v11 LLM trust leaderboard (public)
 app.get('/api/v1/llm-trust', async (_req, res) => {
@@ -109,5 +111,49 @@ app.listen(port, '0.0.0.0', () => {
   // Score monitor Task 8
   setInterval(scoreMonitor, 300000);
 });
+
+// Stalled task monitor — runs every hour
+async function checkStalledAndAlert() {
+  const supabase = db;
+  const { data: stalled } = await supabase
+    .from('trinity_tasks')
+    .select('id,title,agent_assigned')
+    .in('status',['in_progress','doing'])
+    .lt('updated_at', new Date(Date.now()-4*60*60*1000).toISOString());
+  if (stalled && stalled.length > 0) {
+    await supabase.from('trinity_tasks')
+      .update({status:'pending', updated_at: new Date().toISOString()})
+      .in('id', stalled.map((t:any)=>t.id));
+    await sendTelegramAlert(
+      `⚠️ <b>AUTO-RESET: ${stalled.length} STALLED TASKS</b>\n`
+      + stalled.map((t:any)=>`• ${t.agent_assigned}: ${t.title.substring(0,50)}`).join('\n')
+      + '\n\nReset to pending automatically.'
+    );
+  }
+}
+setInterval(checkStalledAndAlert, 60*60*1000);
+checkStalledAndAlert();
+
+// Daily health check at 6am UTC
+async function dailyHealthAlert() {
+  const supabase = db;
+  const { data } = await supabase.rpc('daily_system_health_check');
+  const alerts = (data||[]).filter((r:any)=>r.action_required);
+  const summary = (data||[]).find((r:any)=>r.check_name==='system_summary');
+  await sendTelegramAlert(
+    alerts.length === 0
+      ? `✅ <b>DAILY HEALTH: ALL OK</b>\n${summary?.detail}`
+      : `⚠️ <b>DAILY HEALTH: ${alerts.length} ALERTS</b>\n`
+        + alerts.map((a:any)=>`❌ ${a.check_name}: ${a.detail}`).join('\n')
+  );
+}
+const now = new Date();
+const next6am = new Date(now);
+next6am.setUTCHours(6,0,0,0);
+if (next6am <= now) next6am.setUTCDate(next6am.getUTCDate()+1);
+setTimeout(()=>{
+  dailyHealthAlert();
+  setInterval(dailyHealthAlert, 24*60*60*1000);
+}, next6am.getTime()-now.getTime());
 
 export default app;
