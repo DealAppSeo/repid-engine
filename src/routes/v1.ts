@@ -10,6 +10,28 @@ router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
 });
 
+router.post('/hal/signals', (req: Request, res: Response) => {
+  const { text, domain, certainty } = req.body;
+  if (!text) return res.status(400).json({ error: 'text required' });
+  const { extractHALSignals } = require('../services/hal-signals');
+  const signals = extractHALSignals(
+    text, domain || 'finance', certainty || 0.85
+  );
+  const halScore = (
+    0.4 * signals.harm_probability +
+    0.3 * signals.epistemic_uncertainty +
+    0.2 * (1 - signals.evidence_quality) +
+    0.1 * (1 - signals.scope_appropriateness)
+  ) * (531441 / 524288);
+  res.json({
+    signals,
+    hal_score: Math.round(halScore * 10000) / 10000,
+    vetoed: halScore >= 0.25,
+    formula: '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)'
+  });
+});
+
+
 router.get('/metrics', async (req: Request, res: Response) => {
   const { count: agentCount } = await db.from('repid_agents').select('*', { count: 'exact', head: true });
   const { data: vdrData } = await db.from('repid_verified_decisions').select('vdr_count');
