@@ -68,25 +68,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(authMiddleware);
-app.use(rateLimitMiddleware);
-app.use(versioningMiddleware);
-
-app.use('/api/v1', v1Router);
-
-// v11 external agent endpoints
-app.use('/api/v1/agents/register', registrationLimiter);
-app.use('/api/v1/agents/:id/score-event', scoreLimiter);
-app.use('/api/v1/agents', agentsExternalRouter);
+// Public routes
 app.use('/api/v1/telegram', telegramRouter);
-
-// v11 LLM trust leaderboard (public)
-app.get('/api/v1/llm-trust', async (_req, res) => {
-  const { data, error } = await db.from('llm_trust_leaderboard').select('*');
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json(data ?? []);
-});
-
 app.get('/api/v1/metrics', async (_req, res) => {
   const supabase = db;
   const [agents, decisions, hallucinations] = await Promise.all([
@@ -105,6 +88,25 @@ app.get('/api/v1/metrics', async (_req, res) => {
     hal_approval_rate: 99.4
   });
 });
+
+app.use(authMiddleware);
+app.use(rateLimitMiddleware);
+app.use(versioningMiddleware);
+
+app.use('/api/v1', v1Router);
+
+// v11 external agent endpoints
+app.use('/api/v1/agents/register', registrationLimiter);
+app.use('/api/v1/agents/:id/score-event', scoreLimiter);
+app.use('/api/v1/agents', agentsExternalRouter);
+
+// v11 LLM trust leaderboard (public)
+app.get('/api/v1/llm-trust', async (_req, res) => {
+  const { data, error } = await db.from('llm_trust_leaderboard').select('*');
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data ?? []);
+});
+
 app.use(healthRouter);
 app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
