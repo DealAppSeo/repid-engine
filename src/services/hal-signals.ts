@@ -91,8 +91,13 @@ export function extractHALSignals(
   const hedgeCount = EPISTEMIC_HEDGES
     .filter(k => text.includes(k)).length;
   const hedgeDensity = hedgeCount / Math.max(wordCount / 8, 1);
-  const certaintyHedgeMismatch =
+  let certaintyHedgeMismatch =
     certainty > 0.88 && hedgeCount === 0 ? 0.35 : 0;
+  
+  if (domain === 'mathematics' || domain === 'cryptography') {
+    certaintyHedgeMismatch *= 0.30;
+  }
+
   const epistemic_uncertainty = Math.min(1, Math.max(0,
     0.45 - (hedgeDensity * 0.25) + certaintyHedgeMismatch
   ));
