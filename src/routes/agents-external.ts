@@ -176,14 +176,19 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
 
   try {
     // 2. HAL dissonance
+    const halApproveThreshold = await getConfigNumber('hal_veto_threshold', 0.25);
     const harmScore = 1 - certainty;
-    const epistemicScore = certainty < 0.5 ? 0.8 : 0.2;
-    const evidenceScore = 0.5;
-    const scopeScore = 0.3;
+    const epistemicScore = certainty < 0.5 ? 0.8 : 
+                           certainty < 0.7 ? 0.5 :
+                           certainty < 0.85 ? 0.3 : 0.1;
+    const evidenceScore = certainty > 0.8 ? 0.15 :
+                          certainty > 0.6 ? 0.3 : 0.5;
+    const scopeScore = certainty > 0.8 ? 0.15 :
+                       certainty > 0.6 ? 0.2 : 0.3;
     const dissonance =
       (0.4 * harmScore + 0.3 * epistemicScore + 0.2 * evidenceScore + 0.1 * scopeScore) *
       PYTHAGOREAN_COMMA;
-    const halApproved = dissonance <= HAL_APPROVE_THRESHOLD;
+    const halApproved = dissonance <= halApproveThreshold;
     const constitutionalBlock = dissonance > HAL_CONSTITUTIONAL_BLOCK;
 
     if (constitutionalBlock) {
