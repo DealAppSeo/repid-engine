@@ -134,31 +134,21 @@ async function run() {
   }
 
   for (const ev of events) {
-    const { data: agent } = await supabase.from('repid_agents').select('api_key').eq('id', ev.agent_id).single();
-    await fetch(`https://repid-engine-production.up.railway.app/api/v1/agents/${ev.agent_id}/score-event`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
-      },
-      body: JSON.stringify({
-        task_domain: ev.task_domain,
-        alignment_category: ev.alignment_category,
-        decision_hash: ev.decision_hash,
-        decision_text: ev.decision_text,
-        ai_certainty: ev.ai_certainty,
-        model_used: ev.llm_provider
-      })
+    await supabase.from('repid_score_events').insert({
+      agent_id: ev.agent_id,
+      task_domain: ev.task_domain,
+      alignment_category: ev.alignment_category,
+      decision_hash: ev.decision_hash,
+      decision_text: ev.decision_text,
+      ai_certainty: ev.ai_certainty,
+      hal_score: ev.hal_score,
+      hallucination_caught: ev.hallucination_caught,
+      truth_consensus: ev.truth_consensus,
+      llm_provider: ev.llm_provider
     });
-    // Wait for the score to map. We force set HAL score directly to bypass the LLM checks
-    await supabase.from('repid_score_events').update({
-       hal_score: ev.hal_score,
-       hallucination_caught: ev.hallucination_caught,
-       llm_provider: ev.llm_provider
-    }).eq('decision_hash', ev.decision_hash);
-    
-    // Update repid_agents VDR directly for speed because the engine does it asynchronously via cron sometimes
-    await supabase.rpc('increment_vdr', { agent_uid: ev.agent_id });
+
+    const { data: a } = await supabase.from('repid_agents').select('vdr_count').eq('id', ev.agent_id).single();
+    await supabase.from('repid_agents').update({ vdr_count: (a.vdr_count || 0) + 1 }).eq('id', ev.agent_id);
   }
 
   console.log(`Sent ${events.length} events!`);

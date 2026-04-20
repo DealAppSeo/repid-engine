@@ -1,0 +1,602 @@
+[
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "run_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "snapshot_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "config_id",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "config_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "active_layers",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "layer_order",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "provider",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "model_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "model_size_category",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "temperature",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "prompt_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "prompt_category",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "certainty_level",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "hal_verdict",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "hal_mode",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "pcv_dissonance",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "hal_compliance_score",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "sbfa_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "sbfa_score",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "sbfa_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "bft_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "bft_consensus_pct",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "bft_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "slt_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "slt_uncertainty",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "slt_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "repid_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "repid_weight",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "repid_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "wsce_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "wsce_coherence",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "wsce_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "gnnsr_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "gnnsr_contradictions",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "gnnsr_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "anfis_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "anfis_adjustment",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "anfis_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "pcv_triggered",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "pcv_vetoed",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "pcv_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "total_latency_ms",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "is_hallucination",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "hallucination_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "hallucination_severity",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "was_caught",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "false_positive",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "evaluator_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "evaluator_blind_score",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "evaluation_notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "study_a",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "study_b",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "study_c",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_ablation_results",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "snapshot_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "snapshot_version",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "snapshot_hash",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "merkle_root",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "hashkey_tx_hash",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "hashkey_block_number",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "anfis_weights",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "anfis_membership_functions",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "anfis_rule_weights",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "wsce_parameters",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "network_agents_active",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "production_events_since_last",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "domains_active",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "hallucination_types_encountered",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "is_milestone",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "milestone_description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "is_pre_registration",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "ablation_battery_run",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "ablation_battery_results_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "live_catch_rate",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "frozen_catch_rate",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "antifragility_delta",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_anfis_snapshots",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "snapshot_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "compared_to_snapshot_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "days_between",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "hallucination_rate_delta",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "hallucination_rate_target_met",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "adaptation_speed_batches",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "adaptation_speed_target_met",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "false_positive_reduction_pct",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "false_positive_target_met",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "wsce_variance_decrease_pct",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "wsce_target_met",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "early_exit_efficiency_gain_pct",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "early_exit_target_met",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "new_type_robustness_pct",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "new_type_target_met",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "metrics_at_target",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "is_antifragile",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "domain_metrics",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "shap_main_effects",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "shap_interaction_matrix",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "synergistic_pairs",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_antifragility_metrics",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "test_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "signal_set",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "expected_decision",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "actual_decision",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "dissonance_score",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "passed",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "tester",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hal_veto_test_results",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "test_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "input_data",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "expected_outcome",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "actual_outcome",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "passed",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "hallucination_test_log",
+    "column_name": "tested_at",
+    "data_type": "timestamp with time zone"
+  }
+]
