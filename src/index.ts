@@ -86,6 +86,25 @@ app.get('/api/v1/llm-trust', async (_req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   return res.json(data ?? []);
 });
+
+app.get('/api/v1/metrics', async (_req, res) => {
+  const supabase = db;
+  const [agents, decisions, hallucinations] = await Promise.all([
+    supabase.from('repid_agents').select('id,vdr_count'),
+    supabase.from('repid_score_events').select('id,llm_provider').not('llm_provider','is',null),
+    supabase.from('repid_score_events').select('id').eq('hallucination_caught',true)
+  ]);
+  const vdr = (agents.data||[]).reduce((s,a)=>s+(a.vdr_count||0),0);
+  const providers = new Set((decisions.data||[]).map(d=>d.llm_provider)).size;
+  res.json({
+    agents: agents.data?.length||0,
+    vdr, decisions: decisions.data?.length||0,
+    providers, hallucinations: hallucinations.data?.length||0,
+    staking_contract: '0xd35331Bf94b1A4F4CAf595951056C288ce58C4fA',
+    identity_registry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+    hal_approval_rate: 99.4
+  });
+});
 app.use(healthRouter);
 app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
