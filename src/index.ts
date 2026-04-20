@@ -21,8 +21,24 @@ import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 import { versioningMiddleware } from './middleware/versioning';
 import { scoreMonitor } from './engine/score-monitor';
 
+import rateLimit from 'express-rate-limit';
+
 const app = express();
 
+const registrationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,  // 1 hour
+  max: 10,                     // 10 registrations/hour/IP
+  message: { error: 'Too many registrations' },
+  skip: (req) => {
+    return req.headers['x-enterprise-key'] === process.env.ENTERPRISE_API_KEY;
+  }
+});
+
+const scoreLimiter = rateLimit({
+  windowMs: 60 * 1000,         // 1 minute
+  max: 100,                    // 100 score events/min
+  keyGenerator: (req) => req.params.id || req.ip || '',
+});
 app.use(helmet());
 app.use(cors({ origin: ['https://trustrepid.dev', 'https://repid.dev', 'http://localhost:3000'] }));
 app.use(express.json({ limit: "1mb" }));
@@ -58,6 +74,8 @@ app.use(versioningMiddleware);
 app.use('/api/v1', v1Router);
 
 // v11 external agent endpoints
+app.use('/api/v1/agents/register', registrationLimiter);
+app.use('/api/v1/agents/:id/score-event', scoreLimiter);
 app.use('/api/v1/agents', agentsExternalRouter);
 
 // v11 LLM trust leaderboard (public)
