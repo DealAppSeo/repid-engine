@@ -174,6 +174,12 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'certainty must be in [0,1]' });
   }
 
+  let halSignals = null;
+  if (decision_text) {
+    const { extractHALSignals } = require('../services/hal-signals');
+    halSignals = extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
+  }
+
   try {
     // 2. HAL dissonance
     const halApproveThreshold = await getConfigNumber('hal_veto_threshold', 0.25);
@@ -294,6 +300,7 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
         vdr_count_at_event: vdrCount,
         metadata: {
           decision_text,
+          hal_signals: halSignals,
           hal_approved: halApproved,
           challenge_mode: challenge_mode ?? 'immediate',
           challenge_opens_at: challenge_mode === 'time_locked' ? resolution_at ?? null : null,
