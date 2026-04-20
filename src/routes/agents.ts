@@ -155,9 +155,20 @@ router.get('/agents/by-name/:name', async (req: Request, res: Response) => {
 
 router.get('/agents', async (req: Request, res: Response) => {
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-  const { data, error } = await db.from('repid_agents')
+  const page = Math.max(parseInt(req.query.page as string) || 1, 1);
+  const offset = (page - 1) * limit;
+  const tier = req.query.tier as string;
+
+  let query = db.from('repid_agents')
     .select('id,agent_name,current_repid,tier,activity_30d,last_updated,erc8004_address,constitution')
-    .order('current_repid', { ascending: false }).limit(limit);
+    .order('current_repid', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (tier) {
+    query = query.eq('tier', tier);
+  }
+
+  const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   const agents = (data ?? []).map((a: any) => ({
     id: a.id,

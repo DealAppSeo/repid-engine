@@ -356,6 +356,45 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     };
     await db.from('repid_agents').update(agentUpdate).eq('id', agentId);
 
+    // Async proof generation stub
+    const proof_job_id = crypto.randomUUID();
+    await db.from('repid_proof_queue').insert({
+      job_id: proof_job_id,
+      agent_id: agentId,
+      event_id: eventRow?.id,
+      status: 'pending',
+      zkp_service_url: process.env.ZKP_SERVICE_URL || 'http://localhost:8080'
+    });
+    
+    fetch(`${process.env.ZKP_SERVICE_URL || 'http://localhost:8080'}/prove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        agent_id: agentId, 
+        repid_score: newScore,
+        job_id: proof_job_id 
+      })
+    }).catch(err => console.error('Proof queue error:', err));
+
+    // Webhook stub
+    if ((agent as any).webhook_url && ((agent as any).webhook_events || []).includes('score_event')) {
+      const payload = {
+        event: 'score_event',
+        agent_id: agentId,
+        timestamp: new Date().toISOString(),
+        delta: rawDelta,
+        new_score: newScore,
+        hal_approved: halApproved,
+        vdr_count: vdrCount + 1
+      };
+      const sig = crypto.createHmac('sha256', (agent as any).webhook_secret || '').update(JSON.stringify(payload)).digest('hex');
+      fetch((agent as any).webhook_url, {
+        method: 'POST',
+        headers: { 'X-RepID-Signature': sig, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(console.error);
+    }
+
     return res.json({
       new_score: newScore,
       vested_repid: newVested,
@@ -369,6 +408,7 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
       vdr_count: vdrCount + 1,
       hallucination_training_case_id: trainingCaseId,
       llm_trust_updated: true,
+      proof_job_id,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -446,6 +486,20 @@ router.get('/:id/vdr', async (req: Request, res: Response) => {
     .eq('agent_id', agentId)
     .single();
   if (error || !data) return res.status(404).json({ error: 'VDR record not found' });
+  return res.json(data);
+});
+
+// GET /:id/proof/:job_id — public proof status
+router.get('/:id/proof/:job_id', async (req: Request, res: Response) => {
+  const job_id = String(req.params.job_id);
+  const agentId = String(req.params.id);
+  const { data, error } = await db
+    .from('repid_proof_queue')
+    .select('job_id,status,proof_hash,created_at,completed_at')
+    .eq('job_id', job_id)
+    .eq('agent_id', agentId)
+    .single();
+  if (error || !data) return res.status(404).json({ error: 'Proof job not found' });
   return res.json(data);
 });
 
