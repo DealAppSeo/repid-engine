@@ -6,6 +6,13 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // v11 external endpoints — per-agent bearer auth handled inside the route,
+  // or fully public (register / RepID card / VDR / LLM trust leaderboard).
+  if (req.path === '/api/v1/agents/register' && req.method === 'POST') return next();
+  if (req.method === 'POST' && /^\/api\/v1\/agents\/[^/]+\/score-event$/.test(req.path)) return next();
+  if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/(repid|vdr)$/.test(req.path)) return next();
+  if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
+
   const apiKey = (req.headers['authorization']?.replace('Bearer ', '') || req.headers['x-api-key']) as string;
 
   if (!apiKey) {

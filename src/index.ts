@@ -13,6 +13,8 @@ import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import v1Router from './routes/v1';
+import agentsExternalRouter from './routes/agents-external';
+import { db } from './db';
 
 import { authMiddleware } from './middleware/auth';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
@@ -54,6 +56,16 @@ app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
+
+// v11 external agent endpoints
+app.use('/api/v1/agents', agentsExternalRouter);
+
+// v11 LLM trust leaderboard (public)
+app.get('/api/v1/llm-trust', async (_req, res) => {
+  const { data, error } = await db.from('llm_trust_leaderboard').select('*');
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data ?? []);
+});
 app.use(healthRouter);
 app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
