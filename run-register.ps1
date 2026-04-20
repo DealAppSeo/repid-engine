@@ -1,0 +1,2 @@
+node scripts/register-base-sepolia.js
+0x53baf8310afbbcc6f496514fb4ff2d011125bb9eba6d4d2964dcd7d95251b172

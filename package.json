@@ -28,6 +28,7 @@
     "express-rate-limit": "^8.3.2",
     "helmet": "^8.1.0",
     "ioredis": "^5.10.1",
+    "solc": "^0.8.34",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",
     "validator": "^13.15.35"
