@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
+import { extractHALSignals } from '../services/hal-signals';
 
 const router = Router();
 
@@ -176,7 +177,6 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
 
   let halSignals = null;
   if (decision_text) {
-    const { extractHALSignals } = require('../services/hal-signals');
     halSignals = extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
   }
 
