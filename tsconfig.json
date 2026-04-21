@@ -43,5 +43,6 @@
 
     "esModuleInterop": true
   },
+  "include": ["src/**/*"],
   "exclude": ["tests", "node_modules"]
 }
