@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import validator from 'validator';
 import { config } from './config';
 import healthRouter from './routes/health';
 import agentsRouter from './routes/agents';
