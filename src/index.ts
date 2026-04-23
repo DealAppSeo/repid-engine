@@ -24,7 +24,7 @@ import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 import { versioningMiddleware } from './middleware/versioning';
 import { scoreMonitor } from './engine/score-monitor';
 
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const app = express();
 
@@ -40,7 +40,7 @@ const registrationLimiter = rateLimit({
 const scoreLimiter = rateLimit({
   windowMs: 60 * 1000,         // 1 minute
   max: 100,                    // 100 score events/min
-  keyGenerator: (req): string => String(req.params.id || req.ip || ''),
+  keyGenerator: (req): string => String(req.params.id || ipKeyGenerator(req.ip ?? '')),
 });
 app.use(helmet());
 app.use(cors({ origin: ['https://trustrepid.dev', 'https://repid.dev', 'http://localhost:3000'] }));
