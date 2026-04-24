@@ -76,24 +76,80 @@ router.post('/prove-repid', async (req: Request, res: Response) => {
     return res.status(403).json({ error: "RepID too low for package tier" });
   }
 
-  const basePayload: any = { basic_validation: true, repid_score, proof_version: "1.0" };
-  if (requested_tier === 'envelope' || requested_tier === 'package') {
-    basePayload.constitutional_compliance = true;
-    basePayload.challenge_outcomes = agent.activity_30d || 0;
-    basePayload.decay_factor = 0.95;
-  }
-  if (requested_tier === 'package') {
-    basePayload.anfis_weights = { trust: 0.8, consistency: 0.9, volume: 0.5 };
-    basePayload.pythagorean_veto_status = false;
-    basePayload.full_behavioral_record = { checks_passed: agent.activity_30d || 0, faults: 0 };
+  const zkpUrl = process.env.ZKP_POSTCARD_URL;
+  if (!zkpUrl) {
+    console.error('[zkp] ZKP_POSTCARD_URL env var not set');
+    return res.status(502).json({ error: 'zkp-postcard service not configured', fallback: false });
   }
 
-  const timestamp = new Date().toISOString();
-  const proof = generateProofReal(agent_id, requester_pubkey, requested_tier, timestamp);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  const started = Date.now();
+  let zkpBody: any;
+  try {
+    const zkpResp = await fetch(`${zkpUrl}/zkp/repid-proof`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rep_id: repid_score }),
+      signal: controller.signal
+    });
+    if (!zkpResp.ok) {
+      const elapsed = Date.now() - started;
+      const errBody = await zkpResp.text().catch(() => '');
+      console.error('[zkp] zkp-postcard non-200', { status: zkpResp.status, body: errBody, elapsed_ms: elapsed });
+      return res.status(502).json({
+        error: 'zkp-postcard service unavailable',
+        fallback: false,
+        details: { reason: 'non_200', status: zkpResp.status, elapsed_ms: elapsed }
+      });
+    }
+    zkpBody = await zkpResp.json();
+  } catch (err: any) {
+    const elapsed = Date.now() - started;
+    console.error('[zkp] zkp-postcard call failed', { elapsed_ms: elapsed, name: err?.name, message: err?.message });
+    return res.status(502).json({
+      error: 'zkp-postcard service unavailable',
+      fallback: false,
+      details: { reason: err?.name === 'AbortError' ? 'timeout' : 'network', elapsed_ms: elapsed }
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const { commitment, proof_type, verified, tier, proving_time_ms, proof_size_bytes, erc8004_token_id } = zkpBody;
+
   await logProofGeneration(db, agent_id, requested_tier);
-  fireWebhook('proof.generated', { proof, agent_id, requester_pubkey, tier: requested_tier, timestamp });
+  const { error: scoreEventErr } = await db.from('repid_score_events').insert({
+    agent_id,
+    event_type: 'ZKP_PROOF_GENERATED',
+    delta: 0,
+    repid_before: repid_score,
+    repid_after: repid_score,
+    metadata: {
+      proof_commitment: commitment,
+      proof_type,
+      verified,
+      tier,
+      proving_time_ms,
+      proof_size_bytes,
+      erc8004_token_id,
+      requested_tier,
+      source: 'zkp-postcard'
+    }
+  });
+  if (scoreEventErr) console.error('[zkp] repid_score_events insert error', scoreEventErr);
 
-  res.json({ tier: requested_tier, proof, proofFormat: "plonky3-babybear-stub-v1", proofVersion: "1.0", payload: basePayload });
+  fireWebhook('proof.generated', { commitment, proof_type, agent_id, requester_pubkey, tier, requested_tier });
+
+  res.json({
+    commitment,
+    proof_type,
+    verified,
+    tier,
+    proving_time_ms,
+    proof_size_bytes,
+    protocol: 'HyperDAG Trust Protocol v1'
+  });
 });
 
 router.post('/verify-proof', async (req: Request, res: Response) => {
