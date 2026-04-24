@@ -16,7 +16,7 @@ Protocol: hyperdag.dev
 
 ### Middleware
 - **Authentication**: All API requests must be accompanied by an API key injected via `Authorization` (Bearer) or `x-api-key` header.
-- **Versioning**: Provide an `X-RepID-Version` header to pin your schema implementation (default is `2026-04-17`).
+- **Versioning**: Provide an `X-RepID (Reputation Identity Credential)-Version` header to pin your schema implementation (default is `2026-04-17`).
 - **Rate Limits**: 
   - *Free Tier*: 100 requests / hour
   - *Pro Tier*: 10,000 requests / hour
@@ -25,4 +25,4 @@ Protocol: hyperdag.dev
 ### Endpoints
 - `GET /api/v1/openapi.json`: Retrieve OpenAPI 3.1 specifications.
 - `GET /api/v1/health`: Connection and liveness checks.
-- `POST /api/v1/prove-repid`: Fetch tiered ZKP verification stubs based on agent `repid_score`.
+- `POST /api/v1/prove-repid`: Fetch tiered ZKP (Zero-Knowledge Proof) verification stubs based on agent `repid_score`.
