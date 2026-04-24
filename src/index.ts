@@ -16,6 +16,7 @@ import v1Router from './routes/v1';
 import agentsExternalRouter from './routes/agents-external';
 import telegramRouter, { sendTelegramAlert } from './routes/telegram';
 import halTestRouter from './routes/hal-test';
+import auditRouter from './routes/audit';
 import { runTier1Benchmark } from './services/hal-tester';
 import { db } from './db';
 
@@ -73,6 +74,7 @@ app.use((req, res, next) => {
 // Public routes
 app.use('/api/v1/telegram', telegramRouter);
 app.use('/api/v1/hal-benchmark', halTestRouter);
+app.use('/api/v1/audit', auditRouter);
 app.get('/api/v1/metrics', async (_req, res) => {
   const supabase = db;
   const [agents, decisions, hallucinations] = await Promise.all([
