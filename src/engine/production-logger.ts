@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { appendToAuditChain } from '../services/auditChainWriter';
 
 // djb2 hash — never store raw prompt text. Returns "prompt_<hex>".
 export function hashPrompt(text: string): string {
@@ -90,9 +91,26 @@ export async function logHalProductionEvent(
       eas_attestation_id: event.easAttestationId ?? null,
       hashkey_tx_hash: event.hashkeyTxHash ?? null,
     };
-    const { error } = await db.from('hal_production_events').insert(row);
+    const { data: inserted, error } = await db
+      .from('hal_production_events')
+      .insert(row)
+      .select('id')
+      .single();
     if (error) {
       console.error('[hal-logger] insert failed:', error.message);
+      return;
+    }
+
+    // Append to hal_audit_chain. The chain is supplementary — if it fails we
+    // log and continue. Rolling back the HAL event would lose observability
+    // data for a problem in the audit layer, which is worse than a gap in
+    // the chain; /audit/verify will surface any gap on the next walk.
+    if (inserted?.id) {
+      try {
+        await appendToAuditChain('hal_production_events', String(inserted.id), row);
+      } catch (chainErr: any) {
+        console.error('[hal-logger] audit chain append failed:', chainErr?.message ?? chainErr);
+      }
     }
   } catch (err: any) {
     console.error('[hal-logger] unexpected error:', err?.message ?? err);
