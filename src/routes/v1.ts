@@ -3,31 +3,166 @@ import { db } from '../db';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash } from 'crypto';
 import { fireWebhook } from '../services/webhook';
+import {
+  tieredConsensusCheck, ConsensusResult,
+} from '../services/hal-tiered-consensus';
+import { classifyQuery } from '../services/hal-query-classifier';
 
 const router = Router();
+
+// HAL v2 cross-check stats — in-memory, resets per process. Persistent
+// stats would require a Supabase table; treat this as a quick read-out.
+interface CrossCheckStats {
+  total_checks: number;
+  by_tier_reached: { '0': number; '1': number; '2': number; '3': number };
+  by_verdict: Record<string, number>;
+  total_cost_usd: number;
+  total_latency_ms: number;
+  recent: Array<{ at: string; tier: number; verdict: string; cost_usd: number; latency_ms: number }>;
+}
+const crossCheckStats: CrossCheckStats = {
+  total_checks: 0,
+  by_tier_reached: { '0': 0, '1': 0, '2': 0, '3': 0 },
+  by_verdict: {},
+  total_cost_usd: 0,
+  total_latency_ms: 0,
+  recent: [],
+};
+function recordStats(r: ConsensusResult) {
+  crossCheckStats.total_checks += 1;
+  const tk = String(r.tier_reached) as '0' | '1' | '2' | '3';
+  crossCheckStats.by_tier_reached[tk] = (crossCheckStats.by_tier_reached[tk] ?? 0) + 1;
+  crossCheckStats.by_verdict[r.final_verdict] = (crossCheckStats.by_verdict[r.final_verdict] ?? 0) + 1;
+  crossCheckStats.total_cost_usd += r.total_cost_usd;
+  crossCheckStats.total_latency_ms += r.total_latency_ms;
+  crossCheckStats.recent.push({
+    at: r.audit_trail.finished_at,
+    tier: r.tier_reached,
+    verdict: r.final_verdict,
+    cost_usd: r.total_cost_usd,
+    latency_ms: r.total_latency_ms,
+  });
+  if (crossCheckStats.recent.length > 50) crossCheckStats.recent.shift();
+}
 
 router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
 });
 
-router.post('/hal/signals', (req: Request, res: Response) => {
-  const { text, domain, certainty } = req.body;
-  if (!text) return res.status(400).json({ error: 'text required' });
-  const { extractHALSignals } = require('../services/hal-signals');
-  const signals = extractHALSignals(
-    text, domain || 'finance', certainty || 0.85
-  );
-  const halScore = (
-    0.4 * signals.harm_probability +
-    0.3 * signals.epistemic_uncertainty +
-    0.2 * (1 - signals.evidence_quality) +
-    0.1 * (1 - signals.scope_appropriateness)
-  ) * (531441 / 524288);
-  res.json({
-    signals,
-    hal_score: Math.round(halScore * 10000) / 10000,
-    vetoed: halScore >= 0.25,
-    formula: '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)'
+router.post('/hal/signals', async (req: Request, res: Response) => {
+  const { text, domain, certainty, mode, query, claim, user_repid_tier, allow_tier3 } = req.body;
+  const halMode: 'v1' | 'v2-tiered' | 'v2-formula-then-tiered' = mode || 'v1';
+
+  // v1 path — formula-only. Default behaviour. Backwards-compatible.
+  if (halMode === 'v1' || halMode === 'v2-formula-then-tiered') {
+    if (!text) return res.status(400).json({ error: 'text required' });
+    const { extractHALSignals } = require('../services/hal-signals');
+    const signals = extractHALSignals(
+      text, domain || 'finance', certainty || 0.85
+    );
+    const halScore = (
+      0.4 * signals.harm_probability +
+      0.3 * signals.epistemic_uncertainty +
+      0.2 * (1 - signals.evidence_quality) +
+      0.1 * (1 - signals.scope_appropriateness)
+    ) * (531441 / 524288);
+
+    if (halMode === 'v1') {
+      return res.json({
+        mode: 'v1',
+        signals,
+        hal_score: Math.round(halScore * 10000) / 10000,
+        vetoed: halScore >= 0.25,
+        formula: '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)'
+      });
+    }
+
+    // v2-formula-then-tiered: invoke tiered consensus only when v1 score is in
+    // the uncertain band (0.20–0.50). Outside that band, the formula's
+    // verdict stands and we don't burn LLM cost.
+    if (halScore < 0.20 || halScore > 0.50) {
+      return res.json({
+        mode: 'v2-formula-then-tiered',
+        signals,
+        hal_score: Math.round(halScore * 10000) / 10000,
+        vetoed: halScore >= 0.25,
+        consensus_invoked: false,
+        formula: '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)'
+      });
+    }
+    const consensus = await tieredConsensusCheck(query || text, claim || text, {
+      user_repid_tier, allow_tier3: !!allow_tier3,
+    });
+    recordStats(consensus);
+    return res.json({
+      mode: 'v2-formula-then-tiered',
+      signals,
+      hal_score: Math.round(halScore * 10000) / 10000,
+      vetoed: consensus.final_verdict === 'HALLUCINATION_DETECTED',
+      consensus_invoked: true,
+      consensus_result: consensus,
+      formula: '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)'
+    });
+  }
+
+  // v2-tiered: skip the formula entirely; tiered consensus is the verdict.
+  if (!query && !text) return res.status(400).json({ error: 'query or text required' });
+  if (!claim && !text) return res.status(400).json({ error: 'claim required' });
+  const consensus = await tieredConsensusCheck(query || text, claim || text, {
+    user_repid_tier, allow_tier3: !!allow_tier3,
+  });
+  recordStats(consensus);
+  return res.json({
+    mode: 'v2-tiered',
+    vetoed: consensus.final_verdict === 'HALLUCINATION_DETECTED',
+    final_verdict: consensus.final_verdict,
+    consensus_result: consensus,
+  });
+});
+
+// HAL v2: dedicated cross-check endpoint. Bypasses the formula entirely.
+//
+// Note: the global SQL-keyword sanitizer in src/index.ts rejects POST bodies
+// containing SELECT/DROP/INSERT/UPDATE/DELETE/--/;. If you want to fact-check
+// claims that contain those words verbatim, the sanitizer needs a route-
+// scoped bypass — out of scope for this v2 sprint.
+router.post('/hal/cross-check', async (req: Request, res: Response) => {
+  const { query, claim, starting_tier, max_tier, user_repid_tier, allow_tier3 } = req.body;
+  if (!query) return res.status(400).json({ error: 'query required' });
+  if (!claim) return res.status(400).json({ error: 'claim required' });
+  try {
+    const result = await tieredConsensusCheck(query, claim, {
+      starting_tier, max_tier, user_repid_tier, allow_tier3: !!allow_tier3,
+    });
+    recordStats(result);
+    return res.json(result);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message || 'cross-check failed' });
+  }
+});
+
+router.post('/hal/classify', async (req: Request, res: Response) => {
+  const { query, claim } = req.body;
+  if (!query) return res.status(400).json({ error: 'query required' });
+  if (!claim) return res.status(400).json({ error: 'claim required' });
+  try {
+    const classification = await classifyQuery(query, claim);
+    return res.json(classification);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message || 'classify failed' });
+  }
+});
+
+router.get('/hal/cross-check/stats', (_req: Request, res: Response) => {
+  const n = crossCheckStats.total_checks;
+  return res.json({
+    total_checks: n,
+    avg_cost_usd:    n ? crossCheckStats.total_cost_usd    / n : 0,
+    avg_latency_ms: n ? crossCheckStats.total_latency_ms / n : 0,
+    by_tier_reached: crossCheckStats.by_tier_reached,
+    by_verdict:      crossCheckStats.by_verdict,
+    recent:          crossCheckStats.recent,
+    note: 'in-memory only; resets per process',
   });
 });
 
