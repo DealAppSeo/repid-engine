@@ -87,13 +87,24 @@ export function extractHALSignals(
   );
 
   // Signal 2: epistemic_uncertainty
-  // Mismatch between stated certainty and expressed hedging
+  // Mismatch between stated certainty and expressed hedging.
+  //
+  // Calibration fix (2026-04-25): the unconditional +0.35 boost on
+  // (certainty > 0.88 && no hedges) over-fired on confident-correct
+  // statements ("Paris is the capital of France") because confident-and-
+  // unhedged correlates with truth as much as with overreach. We now
+  // require an *additional* style marker that independently predicts
+  // overreach — overconfident language ("definitely", "guaranteed",
+  // "100%", …) OR a specific quantitative claim with units (X%, X bps,
+  // X billion, …). Plain confident factual assertions no longer trip
+  // the penalty.
   const hedgeCount = EPISTEMIC_HEDGES
     .filter(k => text.includes(k)).length;
   const hedgeDensity = hedgeCount / Math.max(wordCount / 8, 1);
+  const overreachStyleSignal = overconfidenceCount > 0 || specificNumbers > 0;
   let certaintyHedgeMismatch =
-    certainty > 0.88 && hedgeCount === 0 ? 0.35 : 0;
-  
+    certainty > 0.88 && hedgeCount === 0 && overreachStyleSignal ? 0.35 : 0;
+
   if (domain === 'mathematics' || domain === 'cryptography') {
     certaintyHedgeMismatch *= 0.30;
   }
