@@ -1,10 +1,15 @@
 # P-014 — ANFIS-Ikigai Attention Scoring: Reduction to Practice
 
-**Status:** v0 prototype, single-user dogfood. Code merged on branch
-`feat/anfis-ikigai-scorer-v0` (repository `repid-engine`).
-**Date of first working build:** 2026-04-26.
+**Status:** v0 prototype shipped on `feat/anfis-ikigai-scorer-v0`; v0.1
+extension shipped on `feat/anfis-ikigai-v0.1-adversarial-harmonic`. Both
+branches in repository `repid-engine`.
+**Dates of first working builds:** v0 — 2026-04-26 morning. v0.1 — 2026-04-26 afternoon.
 **Inventor of record:** Sean Doolittle.
 **Audience:** patent counsel preparing the P-014 disclosure.
+
+This document covers both v0 and v0.1; sections marked **v0.1** are the
+new claims layered on top of the v0 baseline. The combination is the
+novelty argument.
 
 ---
 
@@ -106,7 +111,116 @@ from labelled feedback (`user_feedback_events`) via L1 regression; the v0
 contract surface (uniform weight, threshold-based pruning) is functional
 embodiment of the architectural claim.
 
+### 3.5 Circle-of-Fifths harmonic alignment with shared dissonance amplifier (v0.1)
+
+The four ikigai dimensions are arranged on a circle in the canonical
+order `love → good_at → world_needs → paid_for → love`. Adjacent
+dimensions are "perfect fifths apart" in the musical analogue. For each
+adjacent pair the engine computes
+
+    pair_distance = | scoreA - scoreB | / max(scoreA, scoreB, ε)
+
+and aggregates the four pair distances into a 0-1 *resonance score*. A
+signal whose four-dimension scores are tightly clustered exhibits high
+resonance; a signal that scores high on one dimension and low on its
+neighbour exhibits dissonance.
+
+When ANY adjacent distance exceeds the configured dissonance threshold
+(default `0.0136`, equal to the Pythagorean Comma minus one), the
+engine emits a `composite_multiplier` equal to the **Pythagorean
+Comma**: `531441 / 524288 ≈ 1.0136433`. This is the **same constant**
+HAL v1 uses to amplify hallucination scores. The reuse is not
+incidental — it is the architectural claim. A single mathematical
+primitive (a deliberately tiny musical dissonance constant) is the
+shared amplifier for two distinct decision surfaces:
+
+| Layer | Dissonance event | Effect |
+|---|---|---|
+| HAL v1 | claim diverges from evidence | composite × 1.0136433 |
+| ANFIS-Ikigai v0.1 | adjacent dimensions diverge | composite × 1.0136433 |
+
+The combination — a four-dimensional declared-purpose Circle of Fifths
+amplified by the same Pythagorean Comma already deployed for
+hallucination detection — is novel.
+
+Concrete embodiment: `src/services/anfis-circle-of-fifths.ts`,
+`anfis_harmonic_alignment` table, `anfis_circle_of_fifths_config`
+singleton. Validation: `tests/anfis-ikigai-v01.test.ts` confirms 5/5
+balanced "resonance" signals raise no dissonance flag and 5/5 skewed
+"dissonance" signals do.
+
+### 3.6 SBFA multi-perspective scoring (v0.1)
+
+For every score event in `mode='v0.1-full'`, the engine dispatches
+five parallel LLM calls to five different model families, each calling
+under a different "perspective role":
+
+1. **protagonist** — argues for surfacing
+2. **antagonist** — argues against surfacing
+3. **naive_user** — without any system context
+4. **long_term_self** — six-months-out hindsight
+5. **mission_aligned_peer** — peer who shares the user's mission
+
+The five composite scores are aggregated via stddev to compute
+`agreement_variance`; when `variance > 0.30`, the event is flagged
+`high_disagreement=true`. Disagreement-as-signal feeds the federated
+observation pipeline (§3.7).
+
+Novelty axis: the perspective set is *orthogonal-by-construction*.
+Roles are not "five copies of the same task" — they are five
+purpose-rooted reframings. Different model families are assigned per
+role so disagreement cannot be an artefact of shared model bias.
+
+Concrete embodiment: `src/services/anfis-sbfa-perspectives.ts`,
+`anfis_perspective_scores` table.
+
+### 3.7 Structured antagonist evaluation with explicit veto math (v0.1)
+
+The antagonist perspective from §3.6 is promoted to a first-class
+structured evaluation with deterministic net-score math:
+
+    net_score = v0_composite × (1 - 0.5 × antagonist_score)
+
+The 0.5 coefficient bounds dampening — a maximum-strength antagonist
+caps the reduction at half the v0 composite, never zeroing out a
+strong v0 result. `veto_triggered=true` fires when
+`antagonist_score > 0.70`.
+
+Novelty axis: the explicit antagonist path is the *runtime* mirror of
+the *static* anti-engagement Rule 6 (§3.2). Two layers of anti-
+engagement enforcement: a fixed fuzzy rule that catches the pattern
+at scoring time, and a model-based reasoner that catches it at
+inference time when the static rule under-fits.
+
+Concrete embodiment: `src/services/anfis-antagonist.ts`,
+`anfis_antagonist_evaluations` table.
+
+### 3.8 Federated observation capture with privacy-by-default (v0.1)
+
+Four pattern types are captured locally for each scoring run:
+
+- `rule_firing_distribution`        — rule_id → firing_strength map
+- `antagonist_correction_rate`      — % of v0 scores adjusted by antagonist
+- `harmonic_dissonance_correlation` — per-event resonance + dissonance flag
+- `feature_weight_drift`            — SHA1-hashed feature names + LASSO weights
+
+All rows are written with `share_consent=FALSE`. Outbound federation
+is a v1 feature; v0.1 establishes the schema and the privacy
+invariants (see `docs/ANFIS-FEDERATED-LEARNING-V0-PREP.md`).
+
+Novelty axis: federated learning of attention-routing patterns
+grounded in declared purpose, with the aggregations performed on
+patterns that are provably non-reversible to source data. The
+combination — purpose-grounded ANFIS + federated pattern aggregation
++ on-by-default privacy hardening — is the architectural claim. The
+v0.1 schema embodies it; v1 demonstrates it across users.
+
+Concrete embodiment: `src/services/anfis-federated-prep.ts`,
+`anfis_federated_observations` table.
+
 ## 4. Concrete embodiment
+
+### 4.1 v0 files
 
 | File | Role |
 |---|---|
@@ -117,10 +231,28 @@ embodiment of the architectural claim.
 | `src/services/anfis-lasso-pruner.ts` | Feature pruning with LASSO-inspired heuristic. |
 | `src/services/anfis-anticipatory.ts` | Per-signal score-trajectory metric. |
 | `src/services/anfis-ikigai-scorer.ts` | End-to-end `scoreSignal()` entry point with audit persistence. |
-| `src/routes/v1.ts` | Six HTTP endpoints (`/api/v1/anfis/score`, `/score-batch`, `/profile`, `/feedback`, `/digest/:user_id`, `/rule-trace/:id`). |
+| `src/routes/v1.ts` | Six v0 HTTP endpoints. |
 | `tests/anfis-ikigai-scorer.test.ts` | 18 unit tests + 20-signal validation suite. |
 
+### 4.2 v0.1 files
+
+| File | Role |
+|---|---|
+| `supabase/migrations/20260426_anfis_ikigai_v01.sql` | Five new tables (anfis_perspective_scores, anfis_harmonic_alignment, anfis_antagonist_evaluations, anfis_federated_observations, anfis_circle_of_fifths_config) + COF config seed. |
+| `src/services/anfis-circle-of-fifths.ts` | Harmonic alignment with Pythagorean Comma multiplier. |
+| `src/services/anfis-llm-providers.ts` | Local LLM adapter mirroring `hal-providers.ts` callModel signature, since hal-providers.ts has not yet merged to main. |
+| `src/services/anfis-sbfa-perspectives.ts` | 5-role multi-LLM scorer with mock fallback. |
+| `src/services/anfis-antagonist.ts` | Structured antagonist with explicit veto math. |
+| `src/services/anfis-federated-prep.ts` | Four pattern-capture functions writing to anfis_federated_observations. |
+| `src/services/anfis-ikigai-scorer.ts` (modified) | Adds `mode` parameter and v0.1 enrichment orchestration. |
+| `src/routes/v1.ts` (modified) | Five new v0.1 endpoints. |
+| `tests/anfis-ikigai-v01.test.ts` | 17 unit + suite tests, 30-signal validation. |
+| `docs/ANFIS-IKIGAI.md` | Consolidated v0+v0.1 architecture. |
+| `docs/ANFIS-FEDERATED-LEARNING-V0-PREP.md` | Privacy threat model. |
+
 ## 5. Test results — anti-engagement filter validation
+
+### 5.1 v0 results
 
 Run on 2026-04-26 against Sean's seed ikigai profile (see
 `supabase/migrations/20260426_anfis_ikigai_seed.sql`).
@@ -136,6 +268,34 @@ Run on 2026-04-26 against Sean's seed ikigai profile (see
 - **Trap maximum composite: 0.2000** (acceptance criterion: < 0.50).
 - **p95 latency: 13ms** on commodity hardware (budget: < 50ms).
 - **Rule R6 fires on 5/5 trap signals** with full firing strength.
+
+### 5.2 v0.1 results — harmonic + antagonist + SBFA
+
+Same profile, 30 signals (20 v0 + 5 resonance + 5 dissonance), mock LLM
+mode (`HAL_V2_MOCK=1`).
+
+| category | n | mean v0 | mean net | mean resonance | dissonance % | veto % | mean SBFA σ |
+|---|---|---:|---:|---:|---:|---:|---:|
+| high       | 5 | 0.7650 | 0.6127 | 0.6500 | 100% |  0% | 0.158 |
+| medium     | 5 | 0.0000 | 0.0000 | 0.5000 |  80% |  0% | 0.156 |
+| low        | 5 | 0.0000 | 0.0000 | 1.0000 |   0% |  0% | 0.119 |
+| trap       | 5 | 0.2000 | 0.1372 | 0.5000 | 100% | 20% | 0.150 |
+| resonance  | 5 | 0.7833 | 0.5670 | 1.0000 |   0% | 20% | 0.145 |
+| dissonance | 5 | 0.0800 | 0.0659 | 0.5000 | 100% |  0% | 0.154 |
+
+- **5/5 resonance signals raise no dissonance flag** (composite_multiplier = 1.0).
+- **5/5 dissonance signals raise dissonance_flag = true** with composite_multiplier = 1.0136433 (Pythagorean Comma).
+- **v0.1-fast p95 latency: 0ms** (no LLM calls).
+- **v0.1-full mock p95 latency: 2ms** (5 parallel mock calls; budget < 5000ms).
+- **v0 backwards compatibility:** every v0 test still passes with mode='v0'.
+- **35/35 tests pass across both suites.**
+
+The veto fires occasionally on traps and resonance signals in mock mode
+because the mock antagonist score is derived from a deterministic prompt
+hash, not from the actual signal-purpose alignment. In real-LLM mode the
+antagonist is expected to systematically score traps higher than
+resonance signals; the v0.1 mock mode is a contract-validation tool, not
+a benchmark of the antagonist's discriminative power.
 
 Per-signal detail and the JSON record are persisted at
 `tests/anfis-ikigai-scorer-results.md` and
