@@ -46,6 +46,20 @@ import {
   AnticipatoryResult,
 } from './anfis-anticipatory';
 import { IkigaiDimension } from './anfis-ikigai-mfs';
+import {
+  computeHarmonicAlignment,
+  HarmonicAlignment,
+} from './anfis-circle-of-fifths';
+import {
+  scoreFromPerspectives,
+  SbfaResult,
+  PerspectiveScore,
+  SbfaOptions,
+} from './anfis-sbfa-perspectives';
+import {
+  evaluateAntagonist,
+  AntagonistEvaluation,
+} from './anfis-antagonist';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -95,6 +109,18 @@ export interface AnfisScoreEvent {
   lasso_features_used: string[];
   audit_chain_hash?: string | null;
   scored_at?: string;
+  // -- v0.1 enrichments — only populated when mode !== 'v0' --
+  /** Harmonic alignment record. Present when mode is 'v0.1-fast' or 'v0.1-full'. */
+  harmonic?: HarmonicAlignment;
+  /** Multi-perspective scoring result. Present only when mode is 'v0.1-full'. */
+  perspectives?: SbfaResult;
+  /** Structured antagonist evaluation. Present only when mode is 'v0.1-full'. */
+  antagonist?: AntagonistEvaluation;
+  /** Final score after harmonic multiplier and antagonist correction.
+   *  Present whenever harmonic or antagonist enrichment is present. */
+  final_net_score?: number;
+  /** Echo of the mode the engine ran in. Useful for downstream filters. */
+  mode?: ScoreSignalMode;
 }
 
 /**
@@ -118,6 +144,8 @@ export interface RuleTraceEntry {
 // Scoring options
 // ---------------------------------------------------------------------------
 
+export type ScoreSignalMode = 'v0' | 'v0.1-fast' | 'v0.1-full';
+
 export interface ScoreSignalOptions {
   /** When false, the engine does not write to anfis_score_events. Used by
    *  tests and by the in-memory /score endpoint variant. */
@@ -128,6 +156,15 @@ export interface ScoreSignalOptions {
   /** Override the rule base — useful for ablation studies. v0 callers should
    *  leave this undefined. */
   rules?: typeof V0_RULE_BASE;
+  /** v0.1 mode selector. Default 'v0' preserves the existing contract. */
+  mode?: ScoreSignalMode;
+  /** Forwarded to the SBFA orchestrator when mode === 'v0.1-full'. */
+  sbfa?: SbfaOptions;
+  /** v0.1: when true and the score event is persisted, also write the
+   *  v0.1 enrichment rows to anfis_perspective_scores /
+   *  anfis_harmonic_alignment / anfis_antagonist_evaluations. Default true
+   *  whenever options.persist is true and mode !== 'v0'. */
+  persist_enrichments?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +360,142 @@ export async function scoreSignal(
     }
   }
 
+  // 7. v0.1 enrichments. Default mode is 'v0' which short-circuits here so
+  // existing v0 callers see the exact same return shape and behaviour.
+  const mode: ScoreSignalMode = options.mode ?? 'v0';
+  if (mode !== 'v0') {
+    event.mode = mode;
+    await applyV01Enrichments(event, signal, profile, options);
+  }
+
   return event;
+}
+
+// ---------------------------------------------------------------------------
+// v0.1 — Harmonic / SBFA / Antagonist orchestration
+// ---------------------------------------------------------------------------
+
+async function applyV01Enrichments(
+  event: AnfisScoreEvent,
+  signal: AttentionSignal,
+  profile: IkigaiProfile,
+  options: ScoreSignalOptions,
+): Promise<void> {
+  const mode: ScoreSignalMode = options.mode ?? 'v0';
+  const persistEnrichments = options.persist_enrichments ?? !!options.persist;
+
+  // Harmonic alignment runs in both v0.1-fast and v0.1-full. No LLM calls.
+  const harmonic = computeHarmonicAlignment({
+    love:        event.love_alignment,
+    good_at:     event.good_at_alignment,
+    world_needs: event.world_needs_alignment,
+    paid_for:    event.paid_for_alignment,
+  });
+  event.harmonic = harmonic;
+
+  let perspectives: SbfaResult | undefined;
+  let antagonist: AntagonistEvaluation | undefined;
+  if (mode === 'v0.1-full') {
+    // SBFA — five parallel LLM calls with mock fallback.
+    perspectives = await scoreFromPerspectives(signal, profile, event.composite_score, options.sbfa ?? {});
+    event.perspectives = perspectives;
+
+    // Promote the antagonist perspective to the structured veto path.
+    const antagonistVoice = perspectives.scores.find(s => s.perspective_role === 'antagonist');
+    const antagonistScore = antagonistVoice?.composite_score ?? 0;
+    const optionsForEval = antagonistVoice?.rationale
+      ? { rationale: antagonistVoice.rationale }
+      : {};
+    antagonist = evaluateAntagonist(
+      signal,
+      profile,
+      event.composite_score,
+      antagonistScore,
+      optionsForEval,
+    );
+    event.antagonist = antagonist;
+  }
+
+  // Final net score:
+  //   v0.1-fast:    composite × harmonic_multiplier
+  //   v0.1-full:    composite × harmonic_multiplier × (1 - 0.5 × antagonist)
+  let net = event.composite_score * harmonic.composite_multiplier;
+  if (antagonist) {
+    net = net * (1 - 0.5 * antagonist.antagonist_score);
+  }
+  event.final_net_score = round4(clamp01(net));
+
+  if (persistEnrichments && event.id) {
+    await persistEnrichmentRows(event, perspectives, antagonist, harmonic);
+  }
+}
+
+async function persistEnrichmentRows(
+  event: AnfisScoreEvent,
+  perspectives: SbfaResult | undefined,
+  antagonist: AntagonistEvaluation | undefined,
+  harmonic: HarmonicAlignment,
+): Promise<void> {
+  if (!event.id) return;
+  // Harmonic — always when v0.1.
+  try {
+    await db.from('anfis_harmonic_alignment').insert({
+      score_event_id: event.id,
+      love_good_at_distance:        harmonic.love_good_at_distance,
+      good_at_world_needs_distance: harmonic.good_at_world_needs_distance,
+      world_needs_paid_for_distance: harmonic.world_needs_paid_for_distance,
+      paid_for_love_distance:       harmonic.paid_for_love_distance,
+      resonance_score:              harmonic.resonance_score,
+      dissonance_flag:              harmonic.dissonance_flag,
+      pythagorean_comma_multiplier: harmonic.pythagorean_comma_multiplier,
+    });
+  } catch (e: any) {
+    console.warn('[anfis-ikigai-scorer] harmonic persist failed:', e?.message ?? String(e));
+  }
+
+  if (perspectives) {
+    try {
+      const rows = perspectives.scores.map((p: PerspectiveScore) => ({
+        score_event_id: event.id,
+        perspective_role: p.perspective_role,
+        model_used:       p.model_used,
+        composite_score:  round4(p.composite_score),
+        rationale:        p.rationale,
+        latency_ms:       p.latency_ms,
+        cost_usd:         round8(p.cost_usd),
+      }));
+      await db.from('anfis_perspective_scores').insert(rows);
+    } catch (e: any) {
+      console.warn('[anfis-ikigai-scorer] perspectives persist failed:', e?.message ?? String(e));
+    }
+  }
+
+  if (antagonist) {
+    try {
+      await db.from('anfis_antagonist_evaluations').insert({
+        score_event_id: event.id,
+        argument_against: antagonist.argument_against,
+        counter_evidence_keywords: antagonist.counter_evidence_keywords,
+        antagonist_score: antagonist.antagonist_score,
+        protagonist_score: antagonist.protagonist_score,
+        net_score: antagonist.net_score,
+        veto_triggered: antagonist.veto_triggered,
+      });
+    } catch (e: any) {
+      console.warn('[anfis-ikigai-scorer] antagonist persist failed:', e?.message ?? String(e));
+    }
+  }
+}
+
+function clamp01(x: number): number {
+  if (Number.isNaN(x)) return 0;
+  if (x < 0) return 0;
+  if (x > 1) return 1;
+  return x;
+}
+
+function round8(x: number): number {
+  return Math.round(x * 1e8) / 1e8;
 }
 
 function round4(x: number): number {
