@@ -9,6 +9,12 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // Fleet status — public read endpoints. Marco / Vitto / Leonard / anyone
+  // can verify the 12 fleet agents on-chain without an API key.
+  if (req.method === 'GET' && req.path.startsWith('/api/v1/fleet/')) {
+    return next();
+  }
+
   // v11 external endpoints — per-agent bearer auth handled inside the route,
   // or fully public (register / RepID card / VDR / LLM trust leaderboard).
   if (req.path === '/api/v1/agents/register' && req.method === 'POST') return next();
