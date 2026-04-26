@@ -1,0 +1,323 @@
+[
+  {
+    "id": "h1",
+    "category": "high",
+    "description": "Patent strategy + agent reputation + ZKP — vocation match",
+    "composite": 0.8,
+    "love": 1,
+    "good_at": 1,
+    "world_needs": 0.5,
+    "paid_for": 0.5,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R2_vocation"
+    ],
+    "features_extracted": 8,
+    "features_retained": 8,
+    "latency_ms": 4
+  },
+  {
+    "id": "h2",
+    "category": "high",
+    "description": "TrustMarket fees + multi-agent systems + RepID licensing",
+    "composite": 0.725,
+    "love": 1,
+    "good_at": 1,
+    "world_needs": 0.5,
+    "paid_for": 1,
+    "rules_fired": 2,
+    "rule_ids": [
+      "R2_vocation",
+      "R4_profession"
+    ],
+    "features_extracted": 8,
+    "features_retained": 8,
+    "latency_ms": 6
+  },
+  {
+    "id": "h3",
+    "category": "high",
+    "description": "Trivergence + multi-agent systems + blockchain + accountability",
+    "composite": 0.75,
+    "love": 1,
+    "good_at": 1,
+    "world_needs": 1,
+    "paid_for": 0,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R3_mission"
+    ],
+    "features_extracted": 7,
+    "features_retained": 7,
+    "latency_ms": 1
+  },
+  {
+    "id": "h4",
+    "category": "high",
+    "description": "Constitutional AI + ANFIS + agent reputation + creator economy",
+    "composite": 0.8,
+    "love": 1,
+    "good_at": 1,
+    "world_needs": 0.5,
+    "paid_for": 0.5,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R2_vocation"
+    ],
+    "features_extracted": 6,
+    "features_retained": 6,
+    "latency_ms": 0
+  },
+  {
+    "id": "h5",
+    "category": "high",
+    "description": "x402 + ZKP + multi-agent systems + financial inclusion",
+    "composite": 0.75,
+    "love": 1,
+    "good_at": 0,
+    "world_needs": 1,
+    "paid_for": 1,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R3_mission"
+    ],
+    "features_extracted": 7,
+    "features_retained": 7,
+    "latency_ms": 0
+  },
+  {
+    "id": "m1",
+    "category": "medium",
+    "description": "AI safety news, tangentially related",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0,
+    "world_needs": 0.5,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 1,
+    "features_retained": 1,
+    "latency_ms": 1
+  },
+  {
+    "id": "m2",
+    "category": "medium",
+    "description": "Generic blockchain news",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0.5,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 1,
+    "features_retained": 1,
+    "latency_ms": 0
+  },
+  {
+    "id": "m3",
+    "category": "medium",
+    "description": "AI consulting opportunity",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0.5,
+    "world_needs": 0,
+    "paid_for": 0.5,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 2,
+    "features_retained": 2,
+    "latency_ms": 1
+  },
+  {
+    "id": "m4",
+    "category": "medium",
+    "description": "Crypto regulation think-piece",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0.5,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 1,
+    "features_retained": 1,
+    "latency_ms": 0
+  },
+  {
+    "id": "m5",
+    "category": "medium",
+    "description": "Quarterly OKR review draft",
+    "composite": 0,
+    "love": 1,
+    "good_at": 1,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 4,
+    "features_retained": 4,
+    "latency_ms": 0
+  },
+  {
+    "id": "l1",
+    "category": "low",
+    "description": "Local sports news",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 0,
+    "features_retained": 0,
+    "latency_ms": 0
+  },
+  {
+    "id": "l2",
+    "category": "low",
+    "description": "Restaurant recommendation",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 0,
+    "features_retained": 0,
+    "latency_ms": 0
+  },
+  {
+    "id": "l3",
+    "category": "low",
+    "description": "Gardening tip",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 0,
+    "features_retained": 0,
+    "latency_ms": 0
+  },
+  {
+    "id": "l4",
+    "category": "low",
+    "description": "Celebrity gossip",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 0,
+    "features_retained": 0,
+    "latency_ms": 0
+  },
+  {
+    "id": "l5",
+    "category": "low",
+    "description": "Travel piece",
+    "composite": 0,
+    "love": 0,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 0,
+    "rule_ids": [],
+    "features_extracted": 0,
+    "features_retained": 0,
+    "latency_ms": 1
+  },
+  {
+    "id": "t1",
+    "category": "trap",
+    "description": "Trivergence + ZKP clickbait",
+    "composite": 0.2,
+    "love": 1,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R6_engagement_trap"
+    ],
+    "features_extracted": 2,
+    "features_retained": 2,
+    "latency_ms": 0
+  },
+  {
+    "id": "t2",
+    "category": "trap",
+    "description": "Biblical exegesis + constitutional AI culture-war thread",
+    "composite": 0.2,
+    "love": 1,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R6_engagement_trap"
+    ],
+    "features_extracted": 2,
+    "features_retained": 2,
+    "latency_ms": 0
+  },
+  {
+    "id": "t3",
+    "category": "trap",
+    "description": "ZKP + multi-agent systems shitpost",
+    "composite": 0.2,
+    "love": 1,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R6_engagement_trap"
+    ],
+    "features_extracted": 2,
+    "features_retained": 2,
+    "latency_ms": 0
+  },
+  {
+    "id": "t4",
+    "category": "trap",
+    "description": "Constitutional AI + agent reputation hype reel",
+    "composite": 0.2,
+    "love": 1,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R6_engagement_trap"
+    ],
+    "features_extracted": 2,
+    "features_retained": 2,
+    "latency_ms": 0
+  },
+  {
+    "id": "t5",
+    "category": "trap",
+    "description": "Multi-agent systems + Trivergence drama tweet",
+    "composite": 0.2,
+    "love": 1,
+    "good_at": 0,
+    "world_needs": 0,
+    "paid_for": 0,
+    "rules_fired": 1,
+    "rule_ids": [
+      "R6_engagement_trap"
+    ],
+    "features_extracted": 2,
+    "features_retained": 2,
+    "latency_ms": 0
+  }
+]
