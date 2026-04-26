@@ -8,7 +8,9 @@ import {
   AttentionSignal,
   IkigaiProfile,
   IkigaiDimensionPayload,
+  ScoreSignalMode,
 } from '../services/anfis-ikigai-scorer';
+import { summariseFederatedObservations } from '../services/anfis-federated-prep';
 
 const router = Router();
 
@@ -485,6 +487,113 @@ router.get('/anfis/rule-trace/:score_event_id', async (req: Request, res: Respon
     .single();
   if (error || !data) return res.status(404).json({ error: 'score event not found' });
   return res.json(data);
+});
+
+// ===========================================================================
+// ANFIS-Ikigai v0.1 endpoints
+//
+// Same SQL-keyword sanitizer caveat as v0. v0.1-full triggers five LLM
+// calls per request — set HAL_V2_MOCK=1 to short-circuit them in any
+// environment without provider keys.
+// ===========================================================================
+
+router.post('/anfis/score-v01', async (req: Request, res: Response) => {
+  const { signal_id, profile_id, signal: inlineSignal, profile: inlineProfile, mode } = req.body;
+
+  let signal: AttentionSignal | null = null;
+  let profile: IkigaiProfile | null = null;
+
+  if (signal_id) {
+    signal = await loadSignalById(signal_id);
+    if (!signal) return res.status(404).json({ error: 'signal not found' });
+  } else if (inlineSignal) {
+    signal = {
+      source_type: inlineSignal.source_type ?? 'manual',
+      source_id: inlineSignal.source_id,
+      content: String(inlineSignal.content ?? ''),
+      context: inlineSignal.context ?? {},
+    };
+  } else {
+    return res.status(400).json({ error: 'signal_id or inline signal required' });
+  }
+
+  if (profile_id) {
+    profile = await loadProfileById(profile_id);
+    if (!profile) return res.status(404).json({ error: 'profile not found' });
+  } else if (inlineProfile) {
+    profile = {
+      user_id: inlineProfile.user_id ?? 'inline',
+      profile_version: inlineProfile.profile_version ?? 1,
+      love_dimension:        buildDimensionPayload(inlineProfile.love_dimension),
+      good_at_dimension:     buildDimensionPayload(inlineProfile.good_at_dimension),
+      world_needs_dimension: buildDimensionPayload(inlineProfile.world_needs_dimension),
+      paid_for_dimension:    buildDimensionPayload(inlineProfile.paid_for_dimension),
+    };
+  } else {
+    return res.status(400).json({ error: 'profile_id or inline profile required' });
+  }
+
+  const allowed: ScoreSignalMode[] = ['v0', 'v0.1-fast', 'v0.1-full'];
+  const requested: ScoreSignalMode = allowed.includes(mode) ? mode : 'v0.1-fast';
+  const persist = !!(signal.id && profile.id);
+  const event = await scoreSignal(signal, profile, { mode: requested, persist });
+  return res.json(event);
+});
+
+router.get('/anfis/perspectives/:score_event_id', async (req: Request, res: Response) => {
+  const eventId = String(req.params.score_event_id ?? '');
+  if (!eventId) return res.status(400).json({ error: 'score_event_id required' });
+  const { data, error } = await db
+    .from('anfis_perspective_scores')
+    .select('*')
+    .eq('score_event_id', eventId)
+    .order('perspective_role', { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ score_event_id: eventId, perspectives: data ?? [] });
+});
+
+router.get('/anfis/antagonist/:score_event_id', async (req: Request, res: Response) => {
+  const eventId = String(req.params.score_event_id ?? '');
+  if (!eventId) return res.status(400).json({ error: 'score_event_id required' });
+  const { data, error } = await db
+    .from('anfis_antagonist_evaluations')
+    .select('*')
+    .eq('score_event_id', eventId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'no antagonist evaluation found' });
+  return res.json(data);
+});
+
+router.get('/anfis/harmonic/:score_event_id', async (req: Request, res: Response) => {
+  const eventId = String(req.params.score_event_id ?? '');
+  if (!eventId) return res.status(400).json({ error: 'score_event_id required' });
+  const { data, error } = await db
+    .from('anfis_harmonic_alignment')
+    .select('*')
+    .eq('score_event_id', eventId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'no harmonic alignment found' });
+  return res.json(data);
+});
+
+router.get('/anfis/federated-stats/:user_id', async (req: Request, res: Response) => {
+  const userId = String(req.params.user_id ?? '');
+  if (!userId) return res.status(400).json({ error: 'user_id required' });
+  const profile = await loadActiveProfileByUser(userId);
+  if (!profile || !profile.id) return res.status(404).json({ error: 'no active profile for user' });
+  const summary = await summariseFederatedObservations(profile.id);
+  return res.json({
+    user_id: userId,
+    profile_id: profile.id,
+    summary,
+    notice: 'share_consent is FALSE on every observation by default; outbound federation is a v1 feature.',
+  });
 });
 
 export default router;
