@@ -3,6 +3,7 @@ import { db } from '../db';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash } from 'crypto';
 import { fireWebhook } from '../services/webhook';
+import { getFleetStatus, getAgentStatus, FLEET_NAMES } from '../services/fleet-status';
 
 const router = Router();
 
@@ -198,6 +199,35 @@ router.post('/webhooks/register', async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: 'Failed' });
 
   res.json(data);
+});
+
+// ===========================================================================
+// Fleet status — public, unauthenticated. Marco / Vitto / Leonard / anyone
+// can hit these to verify the on-chain state of the 12 fleet agents without
+// trusting our DB cache. Live RPC query against the ERC-8004 registry on
+// Base Sepolia.
+// ===========================================================================
+
+router.get('/fleet/status', async (_req: Request, res: Response) => {
+  try {
+    const report = await getFleetStatus();
+    return res.json(report);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'fleet status failed' });
+  }
+});
+
+router.get('/fleet/agent/:name', async (req: Request, res: Response) => {
+  const raw = String(req.params.name ?? '').toUpperCase();
+  if (!FLEET_NAMES.includes(raw)) {
+    return res.status(404).json({ error: `unknown fleet agent: ${raw}` });
+  }
+  try {
+    const agent = await getAgentStatus(raw);
+    return res.json(agent);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'agent status failed' });
+  }
 });
 
 export default router;
