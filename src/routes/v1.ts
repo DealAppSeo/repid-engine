@@ -3,6 +3,12 @@ import { db } from '../db';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash } from 'crypto';
 import { fireWebhook } from '../services/webhook';
+import {
+  scoreSignal,
+  AttentionSignal,
+  IkigaiProfile,
+  IkigaiDimensionPayload,
+} from '../services/anfis-ikigai-scorer';
 
 const router = Router();
 
@@ -198,6 +204,287 @@ router.post('/webhooks/register', async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: 'Failed' });
 
   res.json(data);
+});
+
+// ===========================================================================
+// ANFIS-Ikigai endpoints (v0)
+//
+// All POST bodies still pass through src/index.ts's SQL-keyword sanitizer.
+// Signals or keywords containing SELECT / DROP / INSERT / UPDATE / DELETE / ;
+// or `--` will be rejected with 400 — this is the same constraint the HAL
+// signals endpoint lives under. Tests bypass it by calling scoreSignal()
+// directly.
+// ===========================================================================
+
+const ANFIS_DIM_KEYS = ['love', 'good_at', 'world_needs', 'paid_for'] as const;
+
+interface DimensionInput {
+  keywords?: string[];
+  weight_features?: Array<{ feature_name: string; weight: number }>;
+}
+
+function buildDimensionPayload(input: DimensionInput | undefined): IkigaiDimensionPayload {
+  return {
+    keywords: Array.isArray(input?.keywords) ? input!.keywords : [],
+    weight_features: Array.isArray(input?.weight_features) ? input!.weight_features : [],
+  };
+}
+
+async function loadProfileById(profileId: string): Promise<IkigaiProfile | null> {
+  const { data, error } = await db
+    .from('ikigai_profiles')
+    .select('*')
+    .eq('id', profileId)
+    .single();
+  if (error || !data) return null;
+  return {
+    id: data.id,
+    user_id: data.user_id,
+    profile_version: data.profile_version,
+    love_dimension:        buildDimensionPayload(data.love_dimension),
+    good_at_dimension:     buildDimensionPayload(data.good_at_dimension),
+    world_needs_dimension: buildDimensionPayload(data.world_needs_dimension),
+    paid_for_dimension:    buildDimensionPayload(data.paid_for_dimension),
+    active: data.active,
+  };
+}
+
+async function loadActiveProfileByUser(userId: string): Promise<IkigaiProfile | null> {
+  const { data, error } = await db
+    .from('ikigai_profiles')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('active', true)
+    .order('profile_version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return {
+    id: data.id,
+    user_id: data.user_id,
+    profile_version: data.profile_version,
+    love_dimension:        buildDimensionPayload(data.love_dimension),
+    good_at_dimension:     buildDimensionPayload(data.good_at_dimension),
+    world_needs_dimension: buildDimensionPayload(data.world_needs_dimension),
+    paid_for_dimension:    buildDimensionPayload(data.paid_for_dimension),
+    active: data.active,
+  };
+}
+
+async function loadSignalById(signalId: string): Promise<AttentionSignal | null> {
+  const { data, error } = await db
+    .from('attention_signals')
+    .select('*')
+    .eq('id', signalId)
+    .single();
+  if (error || !data) return null;
+  return {
+    id: data.id,
+    source_type: data.source_type,
+    source_id: data.source_id ?? undefined,
+    content: data.content,
+    context: data.context ?? {},
+  };
+}
+
+router.post('/anfis/score', async (req: Request, res: Response) => {
+  const { signal_id, profile_id, signal: inlineSignal, profile: inlineProfile } = req.body;
+
+  let signal: AttentionSignal | null = null;
+  let profile: IkigaiProfile | null = null;
+
+  if (signal_id) {
+    signal = await loadSignalById(signal_id);
+    if (!signal) return res.status(404).json({ error: 'signal not found' });
+  } else if (inlineSignal) {
+    signal = {
+      source_type: inlineSignal.source_type ?? 'manual',
+      source_id: inlineSignal.source_id,
+      content: String(inlineSignal.content ?? ''),
+      context: inlineSignal.context ?? {},
+    };
+  } else {
+    return res.status(400).json({ error: 'signal_id or inline signal required' });
+  }
+
+  if (profile_id) {
+    profile = await loadProfileById(profile_id);
+    if (!profile) return res.status(404).json({ error: 'profile not found' });
+  } else if (inlineProfile) {
+    profile = {
+      user_id: inlineProfile.user_id ?? 'inline',
+      profile_version: inlineProfile.profile_version ?? 1,
+      love_dimension:        buildDimensionPayload(inlineProfile.love_dimension),
+      good_at_dimension:     buildDimensionPayload(inlineProfile.good_at_dimension),
+      world_needs_dimension: buildDimensionPayload(inlineProfile.world_needs_dimension),
+      paid_for_dimension:    buildDimensionPayload(inlineProfile.paid_for_dimension),
+    };
+  } else {
+    return res.status(400).json({ error: 'profile_id or inline profile required' });
+  }
+
+  const persist = !!(signal.id && profile.id);
+  const event = await scoreSignal(signal, profile, { persist });
+  return res.json(event);
+});
+
+router.post('/anfis/score-batch', async (req: Request, res: Response) => {
+  const { signal_ids, profile_id } = req.body;
+  if (!Array.isArray(signal_ids) || signal_ids.length === 0) {
+    return res.status(400).json({ error: 'signal_ids array required' });
+  }
+  if (!profile_id) return res.status(400).json({ error: 'profile_id required' });
+  if (signal_ids.length > 100) return res.status(400).json({ error: 'max 100 signals per batch' });
+
+  const profile = await loadProfileById(profile_id);
+  if (!profile) return res.status(404).json({ error: 'profile not found' });
+
+  const events = [] as any[];
+  for (const sid of signal_ids) {
+    const signal = await loadSignalById(sid);
+    if (!signal) {
+      events.push({ signal_id: sid, error: 'signal not found' });
+      continue;
+    }
+    const ev = await scoreSignal(signal, profile, { persist: true });
+    events.push(ev);
+  }
+
+  return res.json({ batch_size: signal_ids.length, results: events });
+});
+
+router.get('/anfis/profile/:user_id', async (req: Request, res: Response) => {
+  const userId = String(req.params.user_id ?? '');
+  if (!userId) return res.status(400).json({ error: 'user_id required' });
+  const profile = await loadActiveProfileByUser(userId);
+  if (!profile) return res.status(404).json({ error: 'no active profile for user' });
+  return res.json(profile);
+});
+
+router.post('/anfis/profile', async (req: Request, res: Response) => {
+  const { user_id, love, good_at, world_needs, paid_for } = req.body;
+  if (!user_id) return res.status(400).json({ error: 'user_id required' });
+
+  const wrap = (kws: any): IkigaiDimensionPayload => buildDimensionPayload({
+    keywords: Array.isArray(kws) ? kws : [],
+  });
+
+  const { data: existing } = await db
+    .from('ikigai_profiles')
+    .select('profile_version')
+    .eq('user_id', user_id)
+    .order('profile_version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextVersion = (existing?.profile_version ?? 0) + 1;
+
+  // Deactivate any prior active profiles so only one is active at a time.
+  await db.from('ikigai_profiles').update({ active: false }).eq('user_id', user_id);
+
+  const { data, error } = await db
+    .from('ikigai_profiles')
+    .insert({
+      user_id,
+      profile_version: nextVersion,
+      love_dimension:        wrap(love),
+      good_at_dimension:     wrap(good_at),
+      world_needs_dimension: wrap(world_needs),
+      paid_for_dimension:    wrap(paid_for),
+      active: true,
+    })
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data);
+});
+
+router.post('/anfis/feedback', async (req: Request, res: Response) => {
+  const { signal_id, feedback_type, notes, reweight_target_dimension } = req.body;
+  if (!signal_id) return res.status(400).json({ error: 'signal_id required' });
+  if (!feedback_type) return res.status(400).json({ error: 'feedback_type required' });
+
+  const allowed = new Set([
+    'surfaced_and_acted',
+    'surfaced_and_dismissed',
+    'should_have_surfaced',
+    'should_not_have_surfaced',
+  ]);
+  if (!allowed.has(feedback_type)) {
+    return res.status(400).json({ error: 'invalid feedback_type' });
+  }
+  if (
+    reweight_target_dimension &&
+    !ANFIS_DIM_KEYS.includes(reweight_target_dimension)
+  ) {
+    return res.status(400).json({ error: 'invalid reweight_target_dimension' });
+  }
+
+  const { data, error } = await db
+    .from('user_feedback_events')
+    .insert({
+      signal_id,
+      feedback_type,
+      notes: notes ?? null,
+      reweight_target_dimension: reweight_target_dimension ?? null,
+    })
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data);
+});
+
+router.get('/anfis/digest/:user_id', async (req: Request, res: Response) => {
+  const userId = String(req.params.user_id ?? '');
+  if (!userId) return res.status(400).json({ error: 'user_id required' });
+  const profile = await loadActiveProfileByUser(userId);
+  if (!profile) return res.status(404).json({ error: 'no active profile for user' });
+
+  const limit = Math.min(parseInt(String(req.query.limit ?? '5'), 10) || 5, 50);
+  const threshold = parseFloat(String(req.query.threshold ?? '0.6')) || 0.6;
+
+  // Latest score per signal for this profile, above threshold. We pull a
+  // wider set then collapse client-side because Supabase REST has no DISTINCT
+  // ON. v1 candidate: a Postgres view that returns latest-per-signal.
+  const { data, error } = await db
+    .from('anfis_score_events')
+    .select('id, signal_id, composite_score, anticipatory_delta, scored_at')
+    .eq('profile_id', profile.id)
+    .gte('composite_score', threshold)
+    .order('scored_at', { ascending: false })
+    .limit(limit * 5);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const seen = new Set<string>();
+  const top = [] as any[];
+  for (const row of data ?? []) {
+    if (seen.has(row.signal_id)) continue;
+    seen.add(row.signal_id);
+    top.push(row);
+    if (top.length >= limit) break;
+  }
+  top.sort((a, b) => Number(b.composite_score) - Number(a.composite_score));
+
+  return res.json({
+    user_id: req.params.user_id,
+    profile_id: profile.id,
+    threshold,
+    surfaced: top,
+  });
+});
+
+router.get('/anfis/rule-trace/:score_event_id', async (req: Request, res: Response) => {
+  const eventId = String(req.params.score_event_id ?? '');
+  if (!eventId) return res.status(400).json({ error: 'score_event_id required' });
+  const { data, error } = await db
+    .from('anfis_score_events')
+    .select('id, signal_id, profile_id, composite_score, rule_trace, scored_at')
+    .eq('id', eventId)
+    .single();
+  if (error || !data) return res.status(404).json({ error: 'score event not found' });
+  return res.json(data);
 });
 
 export default router;
