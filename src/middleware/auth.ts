@@ -9,6 +9,15 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // E2E demo track — public endpoints. Marco / Vitto / Leonard / public
+  // can hit these without an API key. All endpoints are read-only or
+  // signature-gated (SBT mint requires the holder's wallet signature on
+  // a server-issued challenge).
+  if (req.path.startsWith('/api/v1/sbt/')) return next();
+  if (req.path === '/api/v1/repid/prove-threshold' && req.method === 'POST') return next();
+  if (req.path === '/api/v1/repid/verify-threshold' && req.method === 'POST') return next();
+  if (req.method === 'GET' && req.path.startsWith('/api/v1/audit-chain/')) return next();
+
   // v11 external endpoints — per-agent bearer auth handled inside the route,
   // or fully public (register / RepID card / VDR / LLM trust leaderboard).
   if (req.path === '/api/v1/agents/register' && req.method === 'POST') return next();
