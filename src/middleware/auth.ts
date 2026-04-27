@@ -9,6 +9,18 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // Reponomics demo endpoints — public per sprint Phase 8.
+  if (req.method === 'GET' && req.path.startsWith('/api/v1/builder/')) return next();
+  if (req.method === 'GET' && req.path.startsWith('/api/v1/trader/')) return next();
+  if (req.method === 'GET' && req.path.startsWith('/api/v1/demo/')) return next();
+  if (req.method === 'POST' && req.path === '/api/v1/tip/request') return next();
+  if (req.method === 'POST' && /^\/api\/v1\/tip\/deliver\/[^/]+$/.test(req.path)) return next();
+  if (req.method === 'POST' && req.path === '/api/v1/bet/place') return next();
+  if (req.method === 'POST' && req.path === '/api/v1/bet/resolve') return next();
+  // /trader/round/start is gated by Sean-signature (not API key) — handled in the route.
+  if (req.method === 'POST' && req.path === '/api/v1/trader/round/start') return next();
+  if (req.method === 'POST' && req.path === '/api/v1/trader/round/resolve-open') return next();
+
   // v11 external endpoints — per-agent bearer auth handled inside the route,
   // or fully public (register / RepID card / VDR / LLM trust leaderboard).
   if (req.path === '/api/v1/agents/register' && req.method === 'POST') return next();
