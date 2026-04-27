@@ -12,8 +12,13 @@ import { db } from '../db';
 import { snapshotAuthority, getCurrentStake, computeAuthority, BUILDER_FLOOR } from './stake-vault';
 import { recomputeBuilderRepID } from './builder-registry';
 
-const BUILDER_W_ID = '00000000-0000-0000-0000-000000000001';
-const BUILDER_M_ID = '00000000-0000-0000-0000-000000000002';
+const BUILDER_W_ADDRESS = '0x0000000000000000000000000000000000000W01';
+const BUILDER_M_ADDRESS = '0x0000000000000000000000000000000000000M01';
+
+async function resolveBuilderId(address: string): Promise<string> {
+  const { data } = await db.from('builders').select('id').ilike('address', address).maybeSingle();
+  return data?.id ?? '';
+}
 
 interface BuilderSnapshot {
   id: string;
@@ -84,9 +89,11 @@ export interface TwoBuilderSnapshot {
 }
 
 export async function getTwoBuilderSnapshot(): Promise<TwoBuilderSnapshot> {
+  const wId = await resolveBuilderId(BUILDER_W_ADDRESS);
+  const mId = await resolveBuilderId(BUILDER_M_ADDRESS);
   const [w, m] = await Promise.all([
-    snapshotBuilder(BUILDER_W_ID),
-    snapshotBuilder(BUILDER_M_ID),
+    snapshotBuilder(wId),
+    snapshotBuilder(mId),
   ]);
   const wA = BigInt(w?.authority ?? '0');
   const mA = BigInt(m?.authority ?? '0');
@@ -111,18 +118,20 @@ export interface TimeseriesPoint {
 }
 
 export async function getTimeseries(limit: number = 100): Promise<TimeseriesPoint[]> {
+  const wId = await resolveBuilderId(BUILDER_W_ADDRESS);
+  const mId = await resolveBuilderId(BUILDER_M_ADDRESS);
   const { data: snaps } = await db
     .from('stake_authority_snapshots')
     .select('builder_id, computed_authority, basis, computed_at')
-    .in('builder_id', [BUILDER_W_ID, BUILDER_M_ID])
+    .in('builder_id', [wId, mId])
     .order('computed_at', { ascending: false })
     .limit(limit * 2);
 
   // Group by computed_at minute (so W and M snapshots taken close in time
   // get aligned). Simplest approach: latest N for each, zip.
   const list = snaps ?? [];
-  const wAll = list.filter(s => s.builder_id === BUILDER_W_ID).sort((a, b) => a.computed_at < b.computed_at ? -1 : 1);
-  const mAll = list.filter(s => s.builder_id === BUILDER_M_ID).sort((a, b) => a.computed_at < b.computed_at ? -1 : 1);
+  const wAll = list.filter(s => s.builder_id === wId).sort((a, b) => a.computed_at < b.computed_at ? -1 : 1);
+  const mAll = list.filter(s => s.builder_id === mId).sort((a, b) => a.computed_at < b.computed_at ? -1 : 1);
   const n = Math.min(wAll.length, mAll.length);
   const out: TimeseriesPoint[] = [];
   for (let i = 0; i < n; i++) {
@@ -142,10 +151,12 @@ export async function getTimeseries(limit: number = 100): Promise<TimeseriesPoin
 // Convenience seed-snapshot trigger (used by demo to bootstrap a chart point
 // even before any rounds have run).
 export async function bootstrapDemoSnapshots(): Promise<{ w: string; m: string }> {
-  const wStake = await getCurrentStake(BUILDER_W_ID);
-  const mStake = await getCurrentStake(BUILDER_M_ID);
-  const wAuth = await snapshotAuthority(BUILDER_W_ID, wStake);
-  const mAuth = await snapshotAuthority(BUILDER_M_ID, mStake);
+  const wId = await resolveBuilderId(BUILDER_W_ADDRESS);
+  const mId = await resolveBuilderId(BUILDER_M_ADDRESS);
+  const wStake = await getCurrentStake(wId);
+  const mStake = await getCurrentStake(mId);
+  const wAuth = await snapshotAuthority(wId, wStake);
+  const mAuth = await snapshotAuthority(mId, mStake);
   return { w: wAuth.authority.toString(), m: mAuth.authority.toString() };
 }
 
