@@ -161,7 +161,8 @@ export async function bootstrapDemoSnapshots(): Promise<{ w: string; m: string }
 }
 
 export const _internals = {
-  BUILDER_W_ID,
-  BUILDER_M_ID,
+  BUILDER_W_ADDRESS,
+  BUILDER_M_ADDRESS,
+  resolveBuilderId,
   computeAuthority,
 };
