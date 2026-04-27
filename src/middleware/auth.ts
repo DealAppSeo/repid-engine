@@ -1,4 +1,4 @@
-﻿import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
@@ -14,6 +14,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && req.path.startsWith('/api/v1/trader/')) return next();
   if (req.method === 'GET' && req.path.startsWith('/api/v1/demo/')) return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
+  if (req.method === 'POST' && req.path === '/api/v1/stake/deposit') return next();
   if (req.method === 'POST' && req.path === '/api/v1/tip/request') return next();
   if (req.method === 'POST' && /^\/api\/v1\/tip\/deliver\/[^/]+$/.test(req.path)) return next();
   if (req.method === 'POST' && req.path === '/api/v1/bet/place') return next();
