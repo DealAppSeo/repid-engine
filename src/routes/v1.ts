@@ -1,8 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
-import { createHash } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { fireWebhook } from '../services/webhook';
+import { getBuilderProfile, registerBuilder } from '../services/builder-registry';
+import { depositStake, withdrawStake, snapshotAuthority, getCurrentStake } from '../services/stake-vault';
+import { createTipRequest, deliverTip } from '../services/x402-server';
+import { placeBet, resolveBet, signOracleOutcome } from '../services/linked-bet-resolver';
+import { startTradingRound, resolveOpenRounds, getTraderState } from '../services/agent-trader';
+import { getTwoBuilderSnapshot, getTimeseries, bootstrapDemoSnapshots } from '../services/two-builder-demo';
 
 const router = Router();
 
@@ -185,6 +191,187 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
     if (error) console.error(error);
 
   res.json({ batch_id: `batch_${Date.now()}`, proofs, processed_at: new Date().toISOString(), total: proofs.length });
+});
+
+// ===========================================================================
+// Reponomics demo endpoints — public per sprint Phase 8 (auth bypass added).
+// ===========================================================================
+
+const SEAN_SIG_SECRET = process.env.SEAN_SIG_SECRET || 'reponomics-default-sean-secret';
+
+function checkSeanSignature(req: Request): boolean {
+  const sig = (req.headers['x-sean-signature'] as string) || '';
+  if (!sig) return false;
+  const expected = createHmac('sha256', SEAN_SIG_SECRET).update('start-trading-round').digest('hex');
+  if (sig.length !== expected.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+// --- Builder ---------------------------------------------------------------
+
+router.get('/builder/:address', async (req: Request, res: Response) => {
+  const addr = String(req.params.address ?? '');
+  if (!addr) return res.status(400).json({ error: 'address required' });
+  const profile = await getBuilderProfile(addr);
+  if (!profile) return res.status(404).json({ error: 'builder not found' });
+  return res.json(profile);
+});
+
+router.post('/builder/register', async (req: Request, res: Response) => {
+  const { address, erc7231_token_id } = req.body ?? {};
+  if (!address) return res.status(400).json({ error: 'address required' });
+  const r = await registerBuilder(address, erc7231_token_id);
+  return res.json(r);
+});
+
+// --- Stake -----------------------------------------------------------------
+
+router.post('/stake/deposit', async (req: Request, res: Response) => {
+  const { builder_address, amount, tx_hash } = req.body ?? {};
+  if (!builder_address || !amount) return res.status(400).json({ error: 'builder_address and amount required' });
+  try {
+    const r = await depositStake(builder_address, BigInt(String(amount)), tx_hash);
+    if (!r.ok) return res.status(400).json(r);
+    return res.json(r);
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message ?? 'deposit failed' });
+  }
+});
+
+router.post('/stake/withdraw', async (req: Request, res: Response) => {
+  const { builder_id, amount } = req.body ?? {};
+  if (!builder_id || !amount) return res.status(400).json({ error: 'builder_id and amount required' });
+  try {
+    const r = await withdrawStake(String(builder_id), BigInt(String(amount)));
+    if (!r.ok) return res.status(400).json(r);
+    return res.json(r);
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message ?? 'withdraw failed' });
+  }
+});
+
+router.get('/stake/authority/:builder_id', async (req: Request, res: Response) => {
+  const builderId = String(req.params.builder_id ?? '');
+  if (!builderId) return res.status(400).json({ error: 'builder_id required' });
+  try {
+    const stake = await getCurrentStake(builderId);
+    const auth = await snapshotAuthority(builderId, stake);
+    return res.json({ builder_id: builderId, stake_total: stake.toString(), authority: auth.authority.toString(), basis: auth.basis });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'authority compute failed' });
+  }
+});
+
+// --- x402 tip flow ---------------------------------------------------------
+
+router.post('/tip/request', async (req: Request, res: Response) => {
+  const { requestor_agent_id, provider_agent_id, prediction_topic } = req.body ?? {};
+  if (!requestor_agent_id || !provider_agent_id || !prediction_topic) {
+    return res.status(400).json({ error: 'requestor_agent_id, provider_agent_id, prediction_topic required' });
+  }
+  const r = await createTipRequest({ requestor_agent_id, provider_agent_id, prediction_topic });
+  return res.status(r.status).json(r.body);
+});
+
+router.post('/tip/deliver/:tipId', async (req: Request, res: Response) => {
+  const tipId = String(req.params.tipId ?? '');
+  const xPayment = String(req.headers['x-payment'] ?? '');
+  if (!xPayment) return res.status(402).json({ error: 'X-PAYMENT header required' });
+  const payerAddress = req.body?.payer_address;
+  const r = await deliverTip({ tipId, xPaymentHeader: xPayment, payerAddress });
+  if (!r.ok) {
+    return res.status(r.error?.includes('not found') ? 404 : 402).json(r);
+  }
+  return res.json(r);
+});
+
+// --- Bet placement / resolution -------------------------------------------
+
+router.post('/bet/place', async (req: Request, res: Response) => {
+  const { agent_id, bet_amount, claimed_confidence, prediction_payload, oracle_endpoint, expected_resolution_time } = req.body ?? {};
+  if (!agent_id || !bet_amount || claimed_confidence === undefined) {
+    return res.status(400).json({ error: 'agent_id, bet_amount, claimed_confidence required' });
+  }
+  try {
+    const r = await placeBet({
+      agentId: String(agent_id),
+      betAmount: BigInt(String(bet_amount)),
+      claimedConfidence: Number(claimed_confidence),
+      predictionPayload: prediction_payload ?? {},
+      oracleEndpoint: String(oracle_endpoint ?? ''),
+      expectedResolutionTime: new Date(expected_resolution_time ?? Date.now() + 60 * 60 * 1000),
+    });
+    return res.json(r);
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message ?? 'placeBet failed' });
+  }
+});
+
+router.post('/bet/resolve', async (req: Request, res: Response) => {
+  const { bet_id, oracle_outcome, oracle_signature } = req.body ?? {};
+  if (!bet_id || oracle_outcome === undefined || !oracle_signature) {
+    return res.status(400).json({ error: 'bet_id, oracle_outcome, oracle_signature required' });
+  }
+  const r = await resolveBet(String(bet_id), Boolean(oracle_outcome), String(oracle_signature));
+  if (!r.ok) return res.status(400).json(r);
+  return res.json(r);
+});
+
+// --- Trader (APM/VERITAS) -------------------------------------------------
+
+router.post('/trader/round/start', async (req: Request, res: Response) => {
+  if (!checkSeanSignature(req)) {
+    return res.status(401).json({ error: 'X-SEAN-SIGNATURE required' });
+  }
+  const r = await startTradingRound();
+  if (!r.ok) return res.status(400).json(r);
+  return res.json(r);
+});
+
+router.post('/trader/round/resolve-open', async (req: Request, res: Response) => {
+  if (!checkSeanSignature(req)) {
+    return res.status(401).json({ error: 'X-SEAN-SIGNATURE required' });
+  }
+  const force = !!req.body?.force;
+  const r = await resolveOpenRounds({ force });
+  return res.json(r);
+});
+
+router.get('/trader/state', async (_req: Request, res: Response) => {
+  const r = await getTraderState();
+  return res.json(r);
+});
+
+router.get('/trader/oracle-sign/:bet_id/:outcome', async (req: Request, res: Response) => {
+  // Convenience for the demo — returns the HMAC oracle signature for
+  // a bet+outcome pair so a tester can call /bet/resolve without
+  // needing the secret. Hidden by the Sean signature header.
+  if (!checkSeanSignature(req)) return res.status(401).json({ error: 'X-SEAN-SIGNATURE required' });
+  const betId = String(req.params.bet_id ?? '');
+  const outcome = String(req.params.outcome) === 'true';
+  return res.json({ bet_id: betId, outcome, signature: signOracleOutcome(betId, outcome) });
+});
+
+// --- Two-builder demo -----------------------------------------------------
+
+router.get('/demo/two-builder/snapshot', async (_req: Request, res: Response) => {
+  const r = await getTwoBuilderSnapshot();
+  return res.json(r);
+});
+
+router.get('/demo/two-builder/timeseries', async (req: Request, res: Response) => {
+  const limit = Math.max(1, Math.min(500, parseInt(String(req.query.limit ?? '100'), 10) || 100));
+  const r = await getTimeseries(limit);
+  return res.json({ count: r.length, points: r });
+});
+
+router.post('/demo/two-builder/bootstrap', async (_req: Request, res: Response) => {
+  const r = await bootstrapDemoSnapshots();
+  return res.json({ ok: true, ...r });
 });
 
 router.post('/webhooks/register', async (req: Request, res: Response) => {
