@@ -3,6 +3,9 @@ import { db } from '../db';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash } from 'crypto';
 import { fireWebhook } from '../services/webhook';
+import { issueChallenge, mintSBT, listMintsByHolder } from '../services/sbt-mint';
+import { proveThreshold, verifyThreshold } from '../services/repid-zkp-threshold';
+import { getRecent, getEvent, verifyRange, getStats } from '../services/audit-chain-public';
 
 const router = Router();
 
@@ -185,6 +188,113 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
     if (error) console.error(error);
 
   res.json({ batch_id: `batch_${Date.now()}`, proofs, processed_at: new Date().toISOString(), total: proofs.length });
+});
+
+// ===========================================================================
+// E2E demo track — SBT mint, ZKP threshold proof, audit chain public reads.
+// Public endpoints (auth bypass added in src/middleware/auth.ts).
+// ===========================================================================
+
+router.get('/sbt/challenge', async (req: Request, res: Response) => {
+  const holder = String(req.query.holder ?? '');
+  if (!holder) return res.status(400).json({ error: 'holder query param required' });
+  try {
+    const ch = issueChallenge(holder);
+    return res.json(ch);
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message ?? 'challenge failed' });
+  }
+});
+
+router.post('/sbt/mint', async (req: Request, res: Response) => {
+  const { holder_address, signed_challenge, contact_email_optional } = req.body ?? {};
+  if (!holder_address || !signed_challenge) {
+    return res.status(400).json({ error: 'holder_address and signed_challenge required' });
+  }
+  try {
+    const result = await mintSBT({ holder_address, signed_challenge, contact_email_optional });
+    if (!result.ok) return res.status(400).json(result);
+    return res.json(result);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'mint failed' });
+  }
+});
+
+router.get('/sbt/by-holder/:address', async (req: Request, res: Response) => {
+  const addr = String(req.params.address ?? '');
+  if (!addr) return res.status(400).json({ error: 'address required' });
+  const limit = Math.max(1, Math.min(50, parseInt(String(req.query.limit ?? '10'), 10) || 10));
+  const rows = await listMintsByHolder(addr, limit);
+  return res.json({ holder: addr, mints: rows });
+});
+
+router.post('/repid/prove-threshold', async (req: Request, res: Response) => {
+  const { holder, threshold, nonce } = req.body ?? {};
+  if (!holder || threshold === undefined) {
+    return res.status(400).json({ error: 'holder and threshold required' });
+  }
+  try {
+    const out = await proveThreshold({ holder, threshold: Number(threshold), nonce });
+    if (!out.ok) return res.status(400).json(out);
+    return res.json(out);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'prove failed' });
+  }
+});
+
+router.post('/repid/verify-threshold', async (req: Request, res: Response) => {
+  const { proof_bytes, public_signals, _witness } = req.body ?? {};
+  if (!proof_bytes || !public_signals) {
+    return res.status(400).json({ error: 'proof_bytes and public_signals required' });
+  }
+  try {
+    const out = await verifyThreshold({ proof_bytes, public_signals, _witness });
+    return res.json(out);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'verify failed' });
+  }
+});
+
+router.get('/audit-chain/recent', async (req: Request, res: Response) => {
+  const limit = Math.max(1, Math.min(100, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+  try {
+    const rows = await getRecent(limit);
+    return res.json({ count: rows.length, entries: rows });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'recent failed' });
+  }
+});
+
+router.get('/audit-chain/event/:event_id', async (req: Request, res: Response) => {
+  const id = parseInt(String(req.params.event_id ?? ''), 10);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'event_id must be a positive integer' });
+  try {
+    const row = await getEvent(id);
+    if (!row) return res.status(404).json({ error: 'event not found' });
+    return res.json(row);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'event lookup failed' });
+  }
+});
+
+router.get('/audit-chain/verify', async (req: Request, res: Response) => {
+  const fromId = parseInt(String(req.query.from_id ?? '1'), 10) || 1;
+  const toId = parseInt(String(req.query.to_id ?? fromId), 10) || fromId;
+  try {
+    const r = await verifyRange(fromId, toId);
+    return res.json(r);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'verify failed' });
+  }
+});
+
+router.get('/audit-chain/stats', async (_req: Request, res: Response) => {
+  try {
+    const s = await getStats();
+    return res.json(s);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'stats failed' });
+  }
 });
 
 router.post('/webhooks/register', async (req: Request, res: Response) => {
