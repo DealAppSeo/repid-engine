@@ -19,7 +19,7 @@ import bcrypt from 'bcryptjs';
 import { createHash } from 'crypto';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
-import { issueLoginToken } from './full-account-token';
+import { issueFullAccountToken } from './auth-token';
 
 const STARTING_REPID = 5000; // AUTONOMOUS tier floor
 const BCRYPT_COST = 10;
@@ -99,7 +99,7 @@ export async function createFullBuilder(input: FullSignupInput): Promise<FullSig
     return { ok: false, error: error?.message ?? 'insert failed' };
   }
 
-  const token = issueLoginToken(data.id, emailLower);
+  const token = issueFullAccountToken(data.id, emailLower);
 
   await emitAuditEvent({
     event_type: 'full_account_builder_created',

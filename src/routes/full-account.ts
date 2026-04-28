@@ -26,7 +26,7 @@
 
 import { Router, Request, Response } from 'express';
 import { createFullBuilder, verifyPassword } from '../services/full-account-signup';
-import { issueLoginToken } from '../services/full-account-token';
+import { issueFullAccountToken } from '../services/auth-token';
 import { requireFullAccount, getFullAccountContext } from '../middleware/full-account-auth';
 import { mintErc7231ForBuilder } from '../services/erc7231-mint';
 import { createBuilderAgent } from '../services/agent-creation';
@@ -51,7 +51,7 @@ router.post('/builder/login', async (req: Request, res: Response) => {
   const { email, password } = req.body ?? {};
   const r = await verifyPassword(email, password);
   if (!r.ok) return res.status(401).json({ ok: false, error: r.error ?? 'invalid credentials' });
-  const token = issueLoginToken(r.builder_id!, email);
+  const token = issueFullAccountToken(r.builder_id!, email);
   return res.json({ ok: true, builder_id: r.builder_id, login_token: token });
 });
 
