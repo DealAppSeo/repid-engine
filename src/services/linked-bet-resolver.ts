@@ -128,6 +128,62 @@ export function verifyOracleSignature(betId: string, outcome: boolean, signature
   return signOracleOutcome(betId, outcome) === signature;
 }
 
+/**
+ * Derive an oracle outcome AND its signature in one call. Tries the
+ * Base Sepolia block-hash oracle first; falls back to a deterministic
+ * HMAC over the betId on RPC failure. Never throws.
+ *
+ * Returns { outcome, signature, oracle_source, block_number?,
+ * block_hash?, basescan_url? } so the caller can persist the
+ * provenance alongside the bet resolution.
+ *
+ * agent-trader.resolveOpenRounds calls signOracleOutcome directly
+ * with a deterministic mock outcome; this NEW helper is the path for
+ * any caller that wants real-chain provenance. Backward-compatible
+ * by addition.
+ */
+export async function deriveAndSignOracleOutcome(betId: string): Promise<{
+  outcome: boolean;
+  signature: string;
+  oracle_source: 'onchain_blockhash' | 'fallback_hmac';
+  block_number: number;
+  block_hash: string;
+  basescan_url: string;
+}> {
+  // Lazy require so existing sync callers of this module aren't forced
+  // to load ethers + the RPC stack at module-load time. (Using require
+  // because ts-jest doesn't support dynamic import() without
+  // --experimental-vm-modules.)
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { deriveOutcomeFromChain } = require('./onchain-oracle') as typeof import('./onchain-oracle');
+  try {
+    const r = await deriveOutcomeFromChain(betId);
+    const outcome = r.outcome === 1;
+    return {
+      outcome,
+      signature: signOracleOutcome(betId, outcome),
+      oracle_source: r.oracle_source,
+      block_number: r.block_number,
+      block_hash: r.block_hash,
+      basescan_url: r.basescan_url,
+    };
+  } catch (e: any) {
+    // Last-line catch — deriveOutcomeFromChain itself never throws,
+    // but if a future change made it throw we still keep the resolver
+    // alive with a deterministic HMAC fallback on the betId.
+    const seed = createHmac('sha256', ORACLE_HMAC_SECRET).update(betId).digest('hex');
+    const outcome = parseInt(seed.slice(-2), 16) % 2 === 1;
+    return {
+      outcome,
+      signature: signOracleOutcome(betId, outcome),
+      oracle_source: 'fallback_hmac',
+      block_number: 0,
+      block_hash: '0x' + seed,
+      basescan_url: '',
+    };
+  }
+}
+
 export interface ResolveBetResult {
   ok: boolean;
   bet_id: string;
