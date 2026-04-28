@@ -21,6 +21,7 @@
 import { db } from '../db';
 import { startTradingRound, resolveOpenRounds, APM_AGENT_NAME, VERITAS_AGENT_NAME } from './agent-trader';
 import { emitAuditEvent } from './audit-emit';
+import { writeRepIDCanonical } from './erc8004-canonical-writer';
 
 export interface AnonRoundAgentSnapshot {
   agent_id: string;
@@ -30,6 +31,8 @@ export interface AnonRoundAgentSnapshot {
   delta: number;
   wisdom_after: number;
   character_after: number;
+  basescan_url?: string;
+  onchain_status?: string;
 }
 
 export interface AnonRoundAuditEntry {
@@ -153,6 +156,26 @@ export async function runRoundAnonymous(opts: RunRoundAnonymousOptions = {}): Pr
   const apmAfter = await fetchAgent(APM_AGENT_NAME);
   const veritasAfter = await fetchAgent(VERITAS_AGENT_NAME);
 
+  // Call canonical writer concurrently
+  const apmPromise = apmAfter ? writeRepIDCanonical('APM', apmAfter.current_repid).catch(e => ({ status: 'failed', error: String(e) })) : Promise.resolve(null);
+  const veritasPromise = veritasAfter ? writeRepIDCanonical('VERITAS', veritasAfter.current_repid).catch(e => ({ status: 'failed', error: String(e) })) : Promise.resolve(null);
+  
+  const [apmCanonical, veritasCanonical] = await Promise.all([apmPromise, veritasPromise]);
+
+  if (apmCanonical && apmAfter) {
+    await db.from('repid_agents').update({
+      last_canonical_tx: (apmCanonical as any).tx_hash || null,
+      last_canonical_status: (apmCanonical as any).status
+    }).eq('id', apmAfter.id);
+  }
+
+  if (veritasCanonical && veritasAfter) {
+    await db.from('repid_agents').update({
+      last_canonical_tx: (veritasCanonical as any).tx_hash || null,
+      last_canonical_status: (veritasCanonical as any).status
+    }).eq('id', veritasAfter.id);
+  }
+
   const audit_entries = await fetchRecentAuditForRound(round.round_id, startedAtIso);
 
   await emitAuditEvent({
@@ -167,13 +190,25 @@ export async function runRoundAnonymous(opts: RunRoundAnonymousOptions = {}): Pr
     },
   });
 
+  const apmSnap = makeSnapshot(apmBefore, apmAfter);
+  if (apmSnap && apmCanonical) {
+    apmSnap.basescan_url = (apmCanonical as any).basescan_url;
+    apmSnap.onchain_status = (apmCanonical as any).status;
+  }
+
+  const veritasSnap = makeSnapshot(veritasBefore, veritasAfter);
+  if (veritasSnap && veritasCanonical) {
+    veritasSnap.basescan_url = (veritasCanonical as any).basescan_url;
+    veritasSnap.onchain_status = (veritasCanonical as any).status;
+  }
+
   return {
     ok: true,
     round_id: round.round_id,
-    apm: makeSnapshot(apmBefore, apmAfter),
-    veritas: makeSnapshot(veritasBefore, veritasAfter),
+    apm: apmSnap,
+    veritas: veritasSnap,
     audit_entries,
     is_simulated: true,
-    notes: 'SIMULATED: oracle outcome is deterministic mock; Plonky3 proof is HMAC stub; on-chain settlement is off-chain DB updates.',
+    notes: 'SIMULATED: oracle outcome is deterministic mock; Plonky3 proof is HMAC stub; on-chain settlement is off-chain DB updates. Canonical writer fired.',
   };
 }
