@@ -44,7 +44,26 @@ const scoreLimiter = rateLimit({
   keyGenerator: (req): string => String(req.params.id || ipKeyGenerator(req.ip ?? '')),
 });
 app.use(helmet());
-app.use(cors({ origin: ['https://trustrepid.dev', 'https://repid.dev', 'http://localhost:3000'] }));
+// CORS — permit trustrepid.dev and localhost for development.
+// Public demo endpoints (token-signup, run-round-anonymous, stake/deposit)
+// need to be reachable from trustrepid.dev's frontend without auth headers.
+const allowedOrigins = [
+  'https://trustrepid.dev',
+  'https://www.trustrepid.dev',
+  'http://localhost:3000',
+  'http://localhost:3001',
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow no-origin requests (server-to-server, curl, mobile apps).
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'X-RepID-Version'],
+}));
 app.use(express.json({ limit: "1mb" }));
 
 // Full-account routes (signup/login/mint/agent/trade/dashboard) are mounted
