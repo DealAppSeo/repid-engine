@@ -9,6 +9,8 @@ import { createTipRequest, deliverTip } from '../services/x402-server';
 import { placeBet, resolveBet, signOracleOutcome } from '../services/linked-bet-resolver';
 import { startTradingRound, resolveOpenRounds, getTraderState } from '../services/agent-trader';
 import { getTwoBuilderSnapshot, getTimeseries, bootstrapDemoSnapshots } from '../services/two-builder-demo';
+import { createAnonymousBuilder } from '../services/anonymous-signup';
+import { runRoundAnonymous } from '../services/anonymous-round-runner';
 
 const router = Router();
 
@@ -228,6 +230,19 @@ router.post('/builder/register', async (req: Request, res: Response) => {
   return res.json(r);
 });
 
+// Live demo — token-only anonymous signup. No wallet required.
+// Returns { token, builder_id, builder_address, repid_rewards_eligible: false, message }.
+// See src/services/anonymous-signup.ts.
+router.post('/builder/token-signup', async (_req: Request, res: Response) => {
+  try {
+    const r = await createAnonymousBuilder();
+    if (!r.ok) return res.status(500).json(r);
+    return res.json(r);
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message ?? 'token signup failed' });
+  }
+});
+
 // --- Stake -----------------------------------------------------------------
 
 router.post('/stake/deposit', async (req: Request, res: Response) => {
@@ -372,6 +387,22 @@ router.get('/demo/two-builder/timeseries', async (req: Request, res: Response) =
 router.post('/demo/two-builder/bootstrap', async (_req: Request, res: Response) => {
   const r = await bootstrapDemoSnapshots();
   return res.json({ ok: true, ...r });
+});
+
+// Live demo — anonymous round runner. Wraps startTradingRound + force-resolve
+// so a visitor can press one button and see APM/VERITAS RepID move. The
+// Sean-signature gate on /trader/round/start is preserved at the route layer
+// for direct callers; this wrapper is a server-side composition.
+router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => {
+  const waitMsRaw = Number(req.body?.wait_ms);
+  const waitMs = Number.isFinite(waitMsRaw) ? Math.max(0, Math.min(10000, Math.floor(waitMsRaw))) : undefined;
+  try {
+    const r = await runRoundAnonymous(waitMs !== undefined ? { waitMs } : {});
+    if (!r.ok) return res.status(400).json(r);
+    return res.json(r);
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message ?? 'run-round-anonymous failed' });
+  }
 });
 
 router.post('/webhooks/register', async (req: Request, res: Response) => {
