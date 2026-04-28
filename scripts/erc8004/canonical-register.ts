@@ -15,14 +15,27 @@ async function run() {
   
   const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!);
   
-  const agents = [
-    { name: 'APM', pk: process.env.APM_PRIVATE_KEY },
-    { name: 'VERITAS', pk: process.env.VERITAS_PRIVATE_KEY }
+  const agentNames = [
+    'TORCH', 'GCM', 'CHESED', 'MEL', 'SOPHIA', 
+    'NEXUS', 'HDM', 'ORCH', 'W3C', 'SHOFET'
   ];
+  
+  const agents = agentNames.map(name => ({
+    name,
+    pk: process.env[`${name}_PRIVATE_KEY`]
+  }));
+  
+  const logFile = 'canonical-register-all-output-2026-04-28.log';
+  fs.writeFileSync(logFile, `Canonical Registration Log - ${new Date().toISOString()}\n\n`);
+  
+  function logOutput(msg: string) {
+    console.log(msg);
+    fs.appendFileSync(logFile, msg + '\n');
+  }
   
   for (const agent of agents) {
     if (!agent.pk) {
-      console.log(`${agent.name} canonical registration failed: Missing private key`);
+      logOutput(`${agent.name} canonical registration failed: Missing private key`);
       continue;
     }
     
@@ -30,7 +43,7 @@ async function run() {
       const wallet = new ethers.Wallet(agent.pk, provider);
       const contract = new ethers.Contract(registryAddress, abi, wallet);
       
-      console.log(`Registering ${agent.name}...`);
+      logOutput(`Registering ${agent.name}...`);
       const tx = await contract['register()']();
       const receipt = await tx.wait();
       
@@ -62,15 +75,15 @@ async function run() {
       }
       
       if (!agentId) {
-         console.log(`${agent.name} registration failed: Could not find agentId in logs`);
+         logOutput(`${agent.name} registration failed: Could not find agentId in logs`);
          continue;
       }
 
       await db.from('repid_agents').update({ canonical_agent_id: agentId }).eq('agent_name', agent.name);
-      console.log(`${agent.name} canonical agentId: ${agentId}, tx: ${tx.hash}`);
+      logOutput(`${agent.name} canonical agentId: ${agentId}, tx: ${tx.hash}`);
       
     } catch (err: any) {
-      console.log(`${agent.name} canonical registration failed: ${err.message}`);
+      logOutput(`${agent.name} canonical registration failed: ${err.message}`);
     }
   }
 }
