@@ -10,7 +10,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { verifyLoginToken } from '../services/full-account-token';
+import { verifyFullAccountToken } from '../services/auth-token';
 
 export interface FullAccountContext {
   builder_id: string;
@@ -24,14 +24,14 @@ export function requireFullAccount(req: Request, res: Response, next: NextFuncti
     return;
   }
   const token = header.slice(7).trim();
-  const r = verifyLoginToken(token);
-  if (!r.ok || !r.payload) {
-    res.status(401).json({ error: r.error ?? 'invalid login_token' });
+  const payload = verifyFullAccountToken(token);
+  if (!payload) {
+    res.status(401).json({ error: 'invalid login_token' });
     return;
   }
   (req as any).fullAccountBuilder = {
-    builder_id: r.payload.builder_id,
-    email: r.payload.email,
+    builder_id: payload.builder_id,
+    email: payload.email,
   } as FullAccountContext;
   next();
 }
