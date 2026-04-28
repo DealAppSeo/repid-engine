@@ -82,7 +82,8 @@ export async function writeRepIDCanonical(
 
     const executeTx = async () => {
       // 30s timeout on the transaction promise
-      const txPromise = contract.giveFeedback(agentId, value, decimals, tag1, tag2, endpoint, feedbackURI, feedbackHash);
+      const contractAny = contract as any;
+      const txPromise = contractAny.giveFeedback(agentId, value, decimals, tag1, tag2, endpoint, feedbackURI, feedbackHash);
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30000));
       const tx = await Promise.race([txPromise, timeoutPromise]) as ethers.ContractTransactionResponse;
       await tx.wait();
