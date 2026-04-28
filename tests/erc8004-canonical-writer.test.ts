@@ -9,8 +9,11 @@ describe('ERC-8004 Canonical Writer', () => {
   let mockDb: any;
   let mockContract: any;
   let mockWait: jest.Mock;
+  let originalNodeEnv: string | undefined;
   
   beforeEach(() => {
+    originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
     process.env.APM_PRIVATE_KEY = '0x1234';
     
     mockWait = jest.fn().mockResolvedValue({ status: 1 });
@@ -38,6 +41,7 @@ describe('ERC-8004 Canonical Writer', () => {
   });
   
   afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
     jest.clearAllMocks();
   });
   

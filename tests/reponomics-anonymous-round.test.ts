@@ -30,6 +30,7 @@ jest.mock('../src/db', () => {
   const builder: any = {
     _name: '',
     select() { return this; },
+    update() { return this; },
     eq(field: string, value: any) {
       this._name = field === 'agent_name' ? String(value) : this._name;
       return this;
@@ -46,8 +47,8 @@ jest.mock('../src/db', () => {
     async single() {
       return this.maybeSingle();
     },
-    // For the audit-chain fetch (no .eq on agent_name)
-    then() { /* not used */ },
+    // For the audit-chain fetch and updates
+    then(resolve: any) { resolve({ data: null, error: null }); },
   };
 
   // Override `select('id, source_table, event_payload, created_at')` to return audit list
