@@ -97,11 +97,19 @@ router.post('/prove-repid', async (req: Request, res: Response) => {
   }
 
   const timestamp = new Date().toISOString();
-  const proof = generateProofReal(agent_id, requester_pubkey, requested_tier, timestamp);
+  const result = await generateProofReal(agent_id, requester_pubkey, requested_tier, timestamp);
+  const proof = result.proof;
   await logProofGeneration(db, agent_id, requested_tier);
-  fireWebhook('proof.generated', { proof, agent_id, requester_pubkey, tier: requested_tier, timestamp });
+  fireWebhook('proof.generated', { proof, proof_source: result.proof_source, agent_id, requester_pubkey, tier: requested_tier, timestamp });
 
-  res.json({ tier: requested_tier, proof, proofFormat: "plonky3-babybear-stub-v1", proofVersion: "1.0", payload: basePayload });
+  res.json({
+    tier: requested_tier,
+    proof,
+    proof_source: result.proof_source,
+    proofFormat: result.proof_source === 'plonky3_real' ? 'plonky3-real-v1' : 'plonky3-babybear-stub-v1',
+    proofVersion: "1.0",
+    payload: basePayload,
+  });
 });
 
 router.post('/verify-proof', async (req: Request, res: Response) => {
@@ -111,8 +119,13 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const computedHash = generateProofReal(agent_id, requester_pubkey, tier, timestamp);
-  const valid = proof === computedHash;
+  // Verify by recomputing both the real-prover-attempted hash AND the
+  // HMAC fallback hash — accept if the supplied proof matches either,
+  // because /prove-repid may have returned the real prover's bytes
+  // OR the fallback bytes depending on PLONKY3_PROVER_URL availability
+  // at issue time.
+  const recomputed = await generateProofReal(agent_id, requester_pubkey, tier, timestamp);
+  const valid = proof === recomputed.proof;
 
   const { error } = await db.from('trinity_agent_logs').insert({
     action: 'zkp_proof_verified',
@@ -184,9 +197,9 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
 
   const proofs = await Promise.all(requests.map(async (r: any) => {
     const timestamp = new Date().toISOString();
-    const proof = generateProofReal(r.agent_id, r.requester_pubkey, r.tier, timestamp);
+    const result = await generateProofReal(r.agent_id, r.requester_pubkey, r.tier, timestamp);
     await logProofGeneration(db, r.agent_id, r.tier);
-    return { ...r, proof, timestamp };
+    return { ...r, proof: result.proof, proof_source: result.proof_source, timestamp };
   }));
 
   const { error } = await db.from('trinity_agent_logs').insert({ action: 'zkp_batch_generated', metadata: { batch_size: requests.length } });

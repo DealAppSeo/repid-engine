@@ -13,7 +13,7 @@
  * row.
  */
 
-import { generateProofReal } from '../zkp/plonky3-real';
+import { generateProofRealSync } from '../zkp/plonky3-real';
 
 export interface TradeAuthProofInput {
   agentId: string;          // UUID
@@ -30,9 +30,10 @@ export interface TradeAuthProofResult {
 }
 
 export function generateTradeAuthProof(input: TradeAuthProofInput): TradeAuthProofResult {
-  // Stub path: HMAC over the inputs. Output is base64 from generateProofReal;
-  // we hex-encode for the linked_bets.plonky3_proof_bytes column.
-  const stubBase64 = generateProofReal(
+  // Stub path: HMAC over the inputs. Output is base64 from
+  // generateProofRealSync; we hex-encode for the
+  // linked_bets.plonky3_proof_bytes column.
+  const stubBase64 = generateProofRealSync(
     `${input.agentId}|${input.builderId}|${input.tradeAmount.toString()}|${input.thresholdCombinedScore}`,
     'reponomics-trade-auth',
     'v0.1',
