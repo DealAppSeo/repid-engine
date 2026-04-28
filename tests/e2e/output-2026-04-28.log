@@ -1,0 +1,54 @@
+
+> repid-engine@1.0.0 test:e2e
+> jest --config tests/e2e/jest.e2e.config.js --runInBand --forceExit
+
+  console.log
+    [e2e] target = https://repid-engine-production.up.railway.app
+
+      at Object.<anonymous> (tests/e2e/reponomics-live-flow.e2e.ts:64:13)
+
+  console.warn
+    [e2e] /builder/token-signup returned 401 — public endpoint not deployed yet. SKIPPING.
+
+    [0m [90m 80 |[39m     [36mif[39m (r[33m.[39mstatus [33m===[39m [35m401[39m [33m||[39m r[33m.[39mstatus [33m===[39m [35m404[39m) {
+     [90m 81 |[39m       [90m// eslint-disable-next-line no-console[39m
+    [31m[1m>[22m[39m[90m 82 |[39m       console[33m.[39mwarn([32m`[e2e] /builder/token-signup returned ${r.status} — public endpoint not deployed yet. SKIPPING.`[39m)[33m;[39m
+     [90m    |[39m               [31m[1m^[22m[39m
+     [90m 83 |[39m       [36mreturn[39m[33m;[39m
+     [90m 84 |[39m     }
+     [90m 85 |[39m     expect(r[33m.[39mstatus)[33m.[39mtoBe([35m200[39m)[33m;[39m[0m
+
+      at Object.<anonymous> (tests/e2e/reponomics-live-flow.e2e.ts:82:15)
+
+  console.warn
+    [e2e] no builder_address from step 2 — SKIPPING deposit step.
+
+    [0m [90m  99 |[39m     [36mif[39m ([33m![39mctx[33m.[39mbuilder_address) {
+     [90m 100 |[39m       [90m// eslint-disable-next-line no-console[39m
+    [31m[1m>[22m[39m[90m 101 |[39m       console[33m.[39mwarn([32m'[e2e] no builder_address from step 2 — SKIPPING deposit step.'[39m)[33m;[39m
+     [90m     |[39m               [31m[1m^[22m[39m
+     [90m 102 |[39m       [36mreturn[39m[33m;[39m
+     [90m 103 |[39m     }
+     [90m 104 |[39m     [36mconst[39m r [33m=[39m [36mawait[39m liveFetch([32m'/api/v1/stake/deposit'[39m[33m,[39m {[0m
+
+      at Object.<anonymous> (tests/e2e/reponomics-live-flow.e2e.ts:101:15)
+
+  console.warn
+    [e2e] /demo/run-round-anonymous returned 404 — endpoint not deployed yet. SKIPPING.
+
+    [0m [90m 130 |[39m     [36mif[39m (r[33m.[39mstatus [33m===[39m [35m404[39m) {
+     [90m 131 |[39m       [90m// eslint-disable-next-line no-console[39m
+    [31m[1m>[22m[39m[90m 132 |[39m       console[33m.[39mwarn([32m'[e2e] /demo/run-round-anonymous returned 404 — endpoint not deployed yet. SKIPPING.'[39m)[33m;[39m
+     [90m     |[39m               [31m[1m^[22m[39m
+     [90m 133 |[39m       [36mreturn[39m[33m;[39m
+     [90m 134 |[39m     }
+     [90m 135 |[39m     expect(r[33m.[39mstatus)[33m.[39mtoBe([35m200[39m)[33m;[39m[0m
+
+      at Object.<anonymous> (tests/e2e/reponomics-live-flow.e2e.ts:132:15)
+
+Test Suites: 1 passed, 1 total
+Tests:       6 passed, 6 total
+Snapshots:   0 total
+Time:        3.01 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
