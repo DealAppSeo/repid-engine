@@ -1,0 +1,3 @@
+◇ injected env (14) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+APM canonical registration failed: Missing private key
+VERITAS canonical registration failed: Missing private key
