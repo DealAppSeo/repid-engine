@@ -16,6 +16,7 @@ import agentsExternalRouter from './routes/agents-external';
 import telegramRouter, { sendTelegramAlert } from './routes/telegram';
 import halTestRouter from './routes/hal-test';
 import auditRouter from './routes/audit';
+import fullAccountRouter from './routes/full-account';
 import { runTier1Benchmark } from './services/hal-tester';
 import { db } from './db';
 
@@ -45,6 +46,14 @@ const scoreLimiter = rateLimit({
 app.use(helmet());
 app.use(cors({ origin: ['https://trustrepid.dev', 'https://repid.dev', 'http://localhost:3000'] }));
 app.use(express.json({ limit: "1mb" }));
+
+// Full-account routes (signup/login/mint/agent/trade/dashboard) are mounted
+// BEFORE the SQL-keyword sanitizer because passwords and trade rationales
+// can legitimately contain ';' / SQL keywords. The router enforces its own
+// per-field validation (see src/routes/full-account.ts). All Supabase calls
+// downstream are parameterized, so the sanitizer's blanket protection is
+// not load-bearing here.
+app.use('/api/v1', fullAccountRouter);
 
 // Sanitize POST validator
 app.use((req, res, next) => {
