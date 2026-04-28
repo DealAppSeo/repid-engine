@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
-  const publicPaths = ['/health', '/healthz', '/'];
+  const publicPaths = ['/health', '/healthz', '/', '/api/v1/health'];
   if (publicPaths.includes(req.path)) return next();
 
   if (req.method === 'GET' && (req.path.startsWith('/api/v1/repid/') || req.path.startsWith('/api/v1/erc8004/validate/'))) {
