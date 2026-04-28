@@ -131,20 +131,28 @@ app.use(mirrorTestRouter);
 app.use(halStatsRouter);
 
 const port = parseInt(process.env.PORT || '3000', 10);
-app.listen(port, '0.0.0.0', () => {
-  console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
-  console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
-  
-  const redisUrl = process.env.REDIS_URL;
-  if (redisUrl) {
-    console.log('[Redis] Connected');
-  } else {
-    console.log('[Redis] Running in fallback mode - rate limiting disabled');
-  }
+// Skip side-effects (server bind, score-monitor cron, stalled-task cron, daily
+// health alert, HAEE epoch loop) when imported by Jest. supertest mounts the
+// app directly and does not need .listen(); these timers and the open server
+// socket otherwise keep the test runner from exiting cleanly.
+const IS_TEST = process.env.NODE_ENV === 'test';
 
-  // Score monitor Task 8
-  setInterval(scoreMonitor, 300000);
-});
+if (!IS_TEST) {
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
+    console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
+
+    const redisUrl = process.env.REDIS_URL;
+    if (redisUrl) {
+      console.log('[Redis] Connected');
+    } else {
+      console.log('[Redis] Running in fallback mode - rate limiting disabled');
+    }
+
+    // Score monitor Task 8
+    setInterval(scoreMonitor, 300000);
+  });
+}
 
 // Stalled task monitor — runs every hour
 async function checkStalledAndAlert() {
@@ -165,8 +173,10 @@ async function checkStalledAndAlert() {
     );
   }
 }
-setInterval(checkStalledAndAlert, 60*60*1000);
-checkStalledAndAlert();
+if (!IS_TEST) {
+  setInterval(checkStalledAndAlert, 60*60*1000);
+  checkStalledAndAlert();
+}
 
 // Daily health check at 6am UTC
 async function dailyHealthAlert() {
@@ -181,14 +191,16 @@ async function dailyHealthAlert() {
         + alerts.map((a:any)=>`❌ ${a.check_name}: ${a.detail}`).join('\n')
   );
 }
-const now = new Date();
-const next6am = new Date(now);
-next6am.setUTCHours(6,0,0,0);
-if (next6am <= now) next6am.setUTCDate(next6am.getUTCDate()+1);
-setTimeout(()=>{
-  dailyHealthAlert();
-  setInterval(dailyHealthAlert, 24*60*60*1000);
-}, next6am.getTime()-now.getTime());
+if (!IS_TEST) {
+  const now = new Date();
+  const next6am = new Date(now);
+  next6am.setUTCHours(6,0,0,0);
+  if (next6am <= now) next6am.setUTCDate(next6am.getUTCDate()+1);
+  setTimeout(()=>{
+    dailyHealthAlert();
+    setInterval(dailyHealthAlert, 24*60*60*1000);
+  }, next6am.getTime()-now.getTime());
+}
 
 // HAEE Epoch: runs HAL benchmark every 24 hours
 async function runHAEEEpoch() {
@@ -251,7 +263,9 @@ async function runHAEEEpoch() {
 }
 
 // Schedule: run immediately, then every 24 hours
-runHAEEEpoch();
-setInterval(runHAEEEpoch, 24 * 60 * 60 * 1000);
+if (!IS_TEST) {
+  runHAEEEpoch();
+  setInterval(runHAEEEpoch, 24 * 60 * 60 * 1000);
+}
 
 export default app;

@@ -1,9 +1,10 @@
 /**
  * Reponomics — full-account (email + password) signup tests.
  *
- * Helper-only path (validateEmail, deriveAddressFromEmail, validatePassword,
- * issueLoginToken/verifyLoginToken) is tested directly. createFullBuilder
- * + verifyPassword exercised against a stub db that records the insert.
+ * Helper-only path (validateEmail, deriveAddressFromEmail, validatePassword)
+ * is tested directly. createFullBuilder + verifyPassword exercised against
+ * a stub db that records the insert. JWT token issue/verify tests live in
+ * tests/auth-token.test.ts since the implementation moved to src/services/auth-token.ts.
  */
 
 let inserted: any = null;
@@ -55,7 +56,11 @@ import {
   validateEmail,
   validatePassword,
 } from '../src/services/full-account-signup';
-import { issueLoginToken, verifyLoginToken } from '../src/services/full-account-token';
+
+beforeAll(() => {
+  // auth-token now requires FULL_ACCOUNT_JWT_SECRET to be set (no default fallback).
+  process.env.FULL_ACCOUNT_JWT_SECRET ||= 'test-full-signup-secret';
+});
 
 beforeEach(() => {
   inserted = null;
@@ -125,7 +130,8 @@ describe('full-account-signup — createFullBuilder', () => {
     expect(r.ok).toBe(true);
     expect(r.builder_id).toBeTruthy();
     expect(r.repid_rewards_eligible).toBe(true);
-    expect(r.login_token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    // JWT shape: three dot-separated base64url segments.
+    expect(r.login_token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(inserted).toBeTruthy();
     expect(inserted.auth_method).toBe('email');
     expect(inserted.earns_repid_rewards).toBe(true);
@@ -142,32 +148,3 @@ describe('full-account-signup — verifyPassword', () => {
   });
 });
 
-describe('full-account-token — issue + verify', () => {
-  it('round-trips a payload', () => {
-    const t = issueLoginToken('builder-1', 'me@example.com');
-    const r = verifyLoginToken(t);
-    expect(r.ok).toBe(true);
-    expect(r.payload?.builder_id).toBe('builder-1');
-    expect(r.payload?.email).toBe('me@example.com');
-  });
-
-  it('rejects tampering', () => {
-    const t = issueLoginToken('builder-1', 'me@example.com');
-    const tampered = t.replace(/[A-Za-z]/, 'x');
-    const r = verifyLoginToken(tampered);
-    expect(r.ok).toBe(false);
-  });
-
-  it('rejects expired tokens', () => {
-    const t = issueLoginToken('builder-1', 'me@example.com', -10);
-    const r = verifyLoginToken(t);
-    expect(r.ok).toBe(false);
-    expect(r.error).toMatch(/expired/i);
-  });
-
-  it('rejects malformed', () => {
-    expect(verifyLoginToken('').ok).toBe(false);
-    expect(verifyLoginToken('one-part').ok).toBe(false);
-    expect(verifyLoginToken('a.b.c').ok).toBe(false);
-  });
-});
