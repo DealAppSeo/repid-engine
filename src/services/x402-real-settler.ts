@@ -52,7 +52,7 @@ export async function settleX402Payment(
     // Check balance
     const decimals = 6; // USDC on Base Sepolia is 6 decimals usually
     const parsedAmount = Math.floor(amountUSDC * Math.pow(10, decimals));
-    const balance = await usdcContract.balanceOf(wallet.address);
+    const balance = await (usdcContract as any).balanceOf(wallet.address);
     
     if (balance < BigInt(parsedAmount)) {
       return { settlement_source: 'pending_funding' };
