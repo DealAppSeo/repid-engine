@@ -12,8 +12,25 @@
 import { createHmac } from 'crypto';
 
 const HMAC_SECRET = process.env.PROOF_SECRET || 'repid-default-secret';
-const PROVER_URL = process.env.PLONKY3_PROVER_URL || '';
 const PROVER_TIMEOUT_MS = 5000;
+const HEALTH_TIMEOUT_MS = 1000;
+const HEALTH_CACHE_TTL_MS = 60_000;
+
+// Lazy — read PLONKY3_PROVER_URL on every call so tests can mutate
+// process.env between cases without re-importing the module.
+function proverUrl(): string {
+  return process.env.PLONKY3_PROVER_URL || '';
+}
+
+interface HealthCacheEntry {
+  healthy: boolean;
+  checkedAt: number;
+}
+let healthCache: HealthCacheEntry | null = null;
+
+export function _resetProverHealthCacheForTest(): void {
+  healthCache = null;
+}
 
 export type ProofSource = 'plonky3_real' | 'hmac_fallback';
 
@@ -47,6 +64,42 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 }
 
 /**
+ * GET ${PLONKY3_PROVER_URL}/health with a 1s timeout.
+ *
+ * Returns true only when status code is 200 AND the JSON body has
+ * `status: "ok"` (the schema added in the Axum service's
+ * feat/plonky3-observability-2026-04-28). Any other shape, any
+ * non-200, or any transport failure → false.
+ *
+ * Result is cached for 60s so high-frequency proof callers don't
+ * pay the round-trip every time. Test harnesses can flush the cache
+ * via _resetProverHealthCacheForTest().
+ */
+export async function checkProverHealth(): Promise<boolean> {
+  const base = proverUrl();
+  if (!base) return false;
+
+  const now = Date.now();
+  if (healthCache && now - healthCache.checkedAt < HEALTH_CACHE_TTL_MS) {
+    return healthCache.healthy;
+  }
+
+  const url = base.replace(/\/$/, '') + '/health';
+  let healthy = false;
+  try {
+    const r = await fetchWithTimeout(url, { method: 'GET' }, HEALTH_TIMEOUT_MS);
+    if (r.ok) {
+      const j = (await r.json().catch(() => null)) as { status?: string } | null;
+      healthy = j?.status === 'ok';
+    }
+  } catch {
+    healthy = false;
+  }
+  healthCache = { healthy, checkedAt: now };
+  return healthy;
+}
+
+/**
  * Async — calls the real prover first, falls back to HMAC.
  *
  * Tries once, retries once on timeout/network error, then falls back.
@@ -65,11 +118,18 @@ export async function generateProofReal(
     timestamp,
   };
 
-  if (!PROVER_URL) {
+  const base = proverUrl();
+  if (!base) {
     return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
   }
 
-  const url = PROVER_URL.replace(/\/$/, '') + '/prove/trade_auth';
+  // Pre-flight: skip the 5s proof timeout when /health says down. Cached 60s.
+  const healthy = await checkProverHealth();
+  if (!healthy) {
+    return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
+  }
+
+  const url = base.replace(/\/$/, '') + '/prove/trade_auth';
   const init: RequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
