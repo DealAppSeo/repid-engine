@@ -150,10 +150,11 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
 
   const { data: builder } = await db
     .from('builders')
-    .select('id, current_repid')
+    .select('id, current_repid, auth_method')
     .eq('id', builderId)
     .single();
   const builderRepId = Number(builder?.current_repid ?? 0);
+  const isDemoBuilder = builder?.auth_method === 'token_only';
 
   const { data: agents } = await db
     .from('repid_agents')
@@ -181,6 +182,7 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
     agentWisdom: meanW,
     agentCharacter: meanC,
     builderRepId,
+    isDemoBuilder,
   });
 
   await db.from('stake_authority_snapshots').insert({

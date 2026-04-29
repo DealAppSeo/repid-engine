@@ -486,9 +486,10 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
     }
   }
 
+  let b;
+
   if (!betAmountOverride) {
     const tokenOrId = String(token ?? '');
-    let b;
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
       b = (await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle()).data;
     }
@@ -503,12 +504,22 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
       // Safe fallback if token missing or invalid
       betAmountOverride = 1000000n;
     }
+  } else {
+    // If betAmountOverride was provided, we still need b to pass builderId
+    const tokenOrId = String(token ?? '');
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
+      b = (await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle()).data;
+    }
+    if (!b && tokenOrId) {
+      b = (await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle()).data;
+    }
   }
 
   try {
     const opts: any = {};
     if (waitMs !== undefined) opts.waitMs = waitMs;
     if (betAmountOverride !== undefined) opts.betAmount = betAmountOverride;
+    if (b && b.id) opts.builderId = b.id;
     
     const r = await runRoundAnonymous(opts);
     if (!r.ok) {

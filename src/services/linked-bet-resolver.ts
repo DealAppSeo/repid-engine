@@ -35,6 +35,7 @@ export interface PlaceBetInput {
   predictionPayload: Record<string, unknown>;
   oracleEndpoint: string;
   expectedResolutionTime: Date;
+  demoBuilderId?: string;
 }
 
 export interface PlaceBetResult {
@@ -56,13 +57,34 @@ export async function placeBet(input: PlaceBetInput): Promise<PlaceBetResult> {
   const builder = await getBuilderForAgent(input.agentId);
   if (!builder) throw new Error(`agent ${input.agentId} has no builder`);
 
+  let authBuilder = builder;
+  let isDemoBuilder = false;
+  if (input.demoBuilderId) {
+    const { data: bData } = await db.from('builders').select('id, current_repid, auth_method').eq('id', input.demoBuilderId).single();
+    if (bData) {
+      const { getCurrentStake } = require('./stake-vault');
+      const demoStake = await getCurrentStake(input.demoBuilderId);
+      authBuilder = {
+        builderId: bData.id,
+        builderRepId: Number(bData.current_repid ?? 0),
+        agentRepId: builder.agentRepId,
+        agentWisdom: builder.agentWisdom,
+        agentCharacter: builder.agentCharacter,
+        stake: demoStake,
+      };
+      isDemoBuilder = bData.auth_method === 'token_only';
+    }
+  }
+
   const authority = computeAuthority({
-    stakeAmount: builder.stake,
-    agentRepId: builder.agentRepId,
-    agentWisdom: builder.agentWisdom,
-    agentCharacter: builder.agentCharacter,
-    builderRepId: builder.builderRepId,
+    stakeAmount: authBuilder.stake,
+    agentRepId: authBuilder.agentRepId,
+    agentWisdom: authBuilder.agentWisdom,
+    agentCharacter: authBuilder.agentCharacter,
+    builderRepId: authBuilder.builderRepId,
+    isDemoBuilder,
   });
+
   if (input.betAmount > authority.authority) {
     const errorJson = JSON.stringify({
       error: 'BET_EXCEEDS_AUTHORITY',
@@ -98,8 +120,6 @@ export async function placeBet(input: PlaceBetInput): Promise<PlaceBetResult> {
     oracle_endpoint: input.oracleEndpoint,
     expected_resolution_time: input.expectedResolutionTime.toISOString(),
     status: 'open',
-    plonky3_proof_bytes: proof.proofBytesHex,
-    is_simulated: proof.isSimulated,
   });
   if (error) throw new Error(`linked_bets insert failed: ${error.message}`);
 

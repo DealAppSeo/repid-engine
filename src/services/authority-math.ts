@@ -6,6 +6,7 @@ export interface AuthorityInput {
   agentWisdom: number;
   agentCharacter: number;
   builderRepId: number;
+  isDemoBuilder?: boolean;
 }
 
 export interface AuthorityResult {
@@ -20,6 +21,22 @@ export interface AuthorityResult {
 }
 
 export function computeAuthority(args: AuthorityInput): AuthorityResult {
+  // Demo builders use the Flywheel (Gyroscope) math (round-numbers progression).
+  // See docs/FLYWHEEL_SPEC.md for the eventual full three-input rewrite.
+  if (args.isDemoBuilder) {
+    const repidOverBase = Math.max(0, args.builderRepId - 100);
+    const authority = 50_000_000n + BigInt(repidOverBase) * 62_500n;
+    return {
+      authority,
+      breakdown: {
+        stakeAmount: args.stakeAmount.toString(),
+        stakeSqrt: '0',
+        combinedScore: '0',
+        builderFloorPassed: true,
+      }
+    };
+  }
+
   // If builder is below floor, they get 0 authority, UNLESS they are a fresh demo builder
   // (we assume a fresh demo builder with 0 RepID and no agents is bootstrapping).
   const isFreshDemo = args.builderRepId === 0 && args.agentRepId === 0;

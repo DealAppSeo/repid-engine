@@ -62,7 +62,7 @@ export async function createAnonymousBuilder(): Promise<AnonymousBuilderResult> 
     .from('builders')
     .insert({
       address: address.toLowerCase(),
-      current_repid: 0,
+      current_repid: 100,
       ghost_cohort_count: 0,
       display_name: 'Demo Builder (token-only)',
       earns_repid_rewards: false,

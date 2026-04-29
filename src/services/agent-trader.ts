@@ -131,7 +131,7 @@ export interface StartRoundResult {
   error?: string;
 }
 
-export async function startTradingRound(opts: { betAmountOverride?: bigint } = {}): Promise<StartRoundResult> {
+export async function startTradingRound(opts: { betAmountOverride?: bigint, demoBuilderId?: string } = {}): Promise<StartRoundResult> {
   const apm = await getFleetAgent(APM_AGENT_NAME);
   const veritas = await getFleetAgent(VERITAS_AGENT_NAME);
   if (!apm || !veritas) {
@@ -164,6 +164,8 @@ export async function startTradingRound(opts: { betAmountOverride?: bigint } = {
       },
       oracleEndpoint: `sports/${game.id}`,
       expectedResolutionTime: expectedRes,
+      demoBuilderId: opts.demoBuilderId,
+      demoBuilderId: opts.demoBuilderId,
     });
     apmBet = a.betId;
 
@@ -179,6 +181,7 @@ export async function startTradingRound(opts: { betAmountOverride?: bigint } = {
       },
       oracleEndpoint: `sports/${game.id}`,
       expectedResolutionTime: expectedRes,
+      demoBuilderId: opts.demoBuilderId,
     });
     veritasBet = v.betId;
   } catch (e: any) {

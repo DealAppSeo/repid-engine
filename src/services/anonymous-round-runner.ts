@@ -108,6 +108,7 @@ export interface RunRoundAnonymousOptions {
   /** Wait between start + resolve so the demo page can show "running…". v0.1 default 2s; tests inject 0. */
   waitMs?: number;
   betAmount?: bigint;
+  builderId?: string;
 }
 
 export async function runRoundAnonymous(opts: RunRoundAnonymousOptions = {}): Promise<RunRoundAnonymousResult> {
@@ -132,7 +133,7 @@ export async function runRoundAnonymous(opts: RunRoundAnonymousOptions = {}): Pr
 
   // Start the round. startTradingRound bypasses the Sean-signature gate
   // because we call it directly server-side.
-  const round = await startTradingRound({ betAmountOverride: opts.betAmount });
+  const round = await startTradingRound({ betAmountOverride: opts.betAmount, demoBuilderId: opts.builderId });
   if (!round.ok || !round.round_id) {
     return {
       ok: false,
@@ -156,6 +157,16 @@ export async function runRoundAnonymous(opts: RunRoundAnonymousOptions = {}): Pr
   // Snapshot AFTER.
   const apmAfter = await fetchAgent(APM_AGENT_NAME);
   const veritasAfter = await fetchAgent(VERITAS_AGENT_NAME);
+
+  // Update demo builder RepID manually for the guided tour round-numbers progression.
+  if (opts.builderId && apmBefore && apmAfter) {
+    const isWin = (apmAfter.current_repid ?? 0) >= (apmBefore.current_repid ?? 0);
+    const { data: bData } = await db.from('builders').select('current_repid').eq('id', opts.builderId).single();
+    if (bData) {
+      const newRepid = Math.max(0, Number(bData.current_repid) + (isWin ? 50 : -25));
+      await db.from('builders').update({ current_repid: newRepid }).eq('id', opts.builderId);
+    }
+  }
 
   // Call canonical writer concurrently
   const apmPromise = apmAfter ? writeRepIDCanonical('APM', apmAfter.current_repid).catch(e => ({ status: 'failed', error: String(e) })) : Promise.resolve(null);
