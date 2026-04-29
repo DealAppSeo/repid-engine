@@ -12,6 +12,8 @@
 
 import { db } from '../db';
 import { getCurrentStake, snapshotAuthority } from './stake-vault';
+import { tradeCountByAgent } from '../db/query-helpers';
+import { timed } from '../utils/perf-timing';
 
 export interface DashboardSnapshot {
   builder: {
@@ -66,6 +68,7 @@ export interface DashboardSnapshot {
 }
 
 export async function getBuilderDashboard(builderId: string): Promise<DashboardSnapshot | null> {
+  return timed({ service: 'builder-dashboard', op: 'getBuilderDashboard', builderId }, async () => {
   const { data: builder } = await db
     .from('builders')
     .select('id, email, address, current_repid, erc7231_token_id, auth_method, earns_repid_rewards, agent_count, trading_provider, trading_paper_account_id, notification_prefs')
@@ -96,14 +99,9 @@ export async function getBuilderDashboard(builderId: string): Promise<DashboardS
     .order('created_at', { ascending: false })
     .limit(20);
 
-  const tradeCountByAgent = new Map<string, number>();
-  for (const a of agents ?? []) {
-    const { count } = await db
-      .from('paper_trade_orders')
-      .select('id', { count: 'exact', head: true })
-      .eq('agent_id', a.id);
-    tradeCountByAgent.set(a.id, Number(count ?? 0));
-  }
+  // Replaces a per-agent count loop (N+1) with one batched query.
+  const agentIds = (agents ?? []).map(a => a.id);
+  const tradeCounts = await tradeCountByAgent(db, agentIds);
 
   // Audit: combine builder-keyed rows with payload->builder_id matches.
   // Two-step: query by source_id (builder.id is a UUID string) + agent ids.
@@ -135,7 +133,7 @@ export async function getBuilderDashboard(builderId: string): Promise<DashboardS
       wisdom_score: Number(a.wisdom_score ?? 1000),
       character_score: Number(a.character_score ?? 1000),
       last_active_at: a.last_active_at,
-      recent_trades_count: tradeCountByAgent.get(a.id) ?? 0,
+      recent_trades_count: tradeCounts.get(a.id) ?? 0,
     })),
     stake: {
       total: stake.toString(),
@@ -168,4 +166,5 @@ export async function getBuilderDashboard(builderId: string): Promise<DashboardS
       created_at: t.created_at,
     })),
   };
+  });
 }
