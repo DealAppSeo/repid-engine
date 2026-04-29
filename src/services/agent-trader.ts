@@ -131,7 +131,7 @@ export interface StartRoundResult {
   error?: string;
 }
 
-export async function startTradingRound(): Promise<StartRoundResult> {
+export async function startTradingRound(opts: { betAmountOverride?: bigint } = {}): Promise<StartRoundResult> {
   const apm = await getFleetAgent(APM_AGENT_NAME);
   const veritas = await getFleetAgent(VERITAS_AGENT_NAME);
   if (!apm || !veritas) {
@@ -142,7 +142,7 @@ export async function startTradingRound(): Promise<StartRoundResult> {
   const apmPrediction = generateApmPrediction(game);
   const veritasPrediction = generateVeritasPrediction(game, apmPrediction);
 
-  const tipPrice = computeTipPrice(apmPrediction.claimed_confidence);
+  const tipPrice = opts.betAmountOverride ?? computeTipPrice(apmPrediction.claimed_confidence);
   const expectedRes = new Date(game.start_time_ms + 4 * 60 * 60 * 1000);   // +4h after start
   const roundId = `round_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 

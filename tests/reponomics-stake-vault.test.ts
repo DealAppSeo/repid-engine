@@ -7,7 +7,8 @@
  * the two-builder snapshot test.
  */
 
-import { computeAuthority, babylonianSqrt, BUILDER_FLOOR } from '../src/services/stake-vault';
+import { BUILDER_FLOOR } from '../src/services/stake-vault';
+import { computeAuthority, babylonianSqrt } from '../src/services/authority-math';
 
 describe('stake-vault — babylonian sqrt', () => {
   it('zero', () => expect(babylonianSqrt(0n)).toBe(0n));
@@ -39,12 +40,12 @@ describe('stake-vault — computeAuthority math', () => {
       agentCharacter: 600,
       builderRepId: 5500,
     });
-    // combinedScore = (5500 * 900 * 600) / 1_000_000 = 2970
-    // stakeSqrt ≈ 31_623 → authority ≈ 31_623 * 2970 / 10000 ≈ 9_392
-    expect(r.authority).toBeGreaterThanOrEqual(9_300n);
-    expect(r.authority).toBeLessThanOrEqual(9_500n);
+    // combinedScore = (5500 * 900 * 600) = 2,970,000,000
+    // stakeSqrt ≈ 31_622 → authority ≈ 31_622 * 2970000000 / 500000 ≈ 187,834,680
+    expect(r.authority).toBeGreaterThanOrEqual(187_000_000n);
+    expect(r.authority).toBeLessThanOrEqual(188_000_000n);
     expect(r.breakdown.builderFloorPassed).toBe(true);
-    expect(r.breakdown.combinedScore).toBe('2970');
+    expect(r.breakdown.combinedScore).toBe('2970000000');
   });
 
   it('Builder M (mission, $50, mission-aligned agent)', () => {
@@ -55,11 +56,11 @@ describe('stake-vault — computeAuthority math', () => {
       agentCharacter: 1700,
       builderRepId: 7000,
     });
-    // combinedScore = (7000 * 1500 * 1700) / 1_000_000 = 17850
-    // stakeSqrt ≈ 7_071 → authority ≈ 7_071 * 17850 / 10000 ≈ 12_622
-    expect(r.authority).toBeGreaterThanOrEqual(12_500n);
-    expect(r.authority).toBeLessThanOrEqual(12_700n);
-    expect(r.breakdown.combinedScore).toBe('17850');
+    // combinedScore = (7000 * 1500 * 1700) = 17,850,000,000
+    // stakeSqrt ≈ 7_071 → authority ≈ 7_071 * 17850000000 / 500000 ≈ 252,434,700
+    expect(r.authority).toBeGreaterThanOrEqual(252_000_000n);
+    expect(r.authority).toBeLessThanOrEqual(253_000_000n);
+    expect(r.breakdown.combinedScore).toBe('17850000000');
   });
 
   it('crossover: Builder M (less stake) outperforms Builder W (more stake)', () => {

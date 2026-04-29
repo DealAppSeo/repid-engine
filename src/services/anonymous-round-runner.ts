@@ -107,6 +107,7 @@ async function fetchRecentAuditForRound(roundId: string, sinceIso: string, limit
 export interface RunRoundAnonymousOptions {
   /** Wait between start + resolve so the demo page can show "running…". v0.1 default 2s; tests inject 0. */
   waitMs?: number;
+  betAmount?: bigint;
 }
 
 export async function runRoundAnonymous(opts: RunRoundAnonymousOptions = {}): Promise<RunRoundAnonymousResult> {
@@ -131,7 +132,7 @@ export async function runRoundAnonymous(opts: RunRoundAnonymousOptions = {}): Pr
 
   // Start the round. startTradingRound bypasses the Sean-signature gate
   // because we call it directly server-side.
-  const round = await startTradingRound();
+  const round = await startTradingRound({ betAmountOverride: opts.betAmount });
   if (!round.ok || !round.round_id) {
     return {
       ok: false,
