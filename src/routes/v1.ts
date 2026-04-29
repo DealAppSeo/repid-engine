@@ -414,6 +414,9 @@ router.get('/demo/builder/:tokenOrId/snapshot', async (req: Request, res: Respon
   const recommended_bet_human_usdc = recommended_bet_raw / 1_000_000;
   const max_safe_bet_human_usdc = max_safe_bet_raw / 1_000_000;
   
+  const { getTierForRepId } = require('../config/tier-limits');
+  const { current: currentTier, next: nextTier } = getTierForRepId(Number(b.current_repid ?? 0));
+  
   return res.json({
     builder_id: b.id,
     session_token: b.session_token || tokenOrId,
@@ -426,7 +429,12 @@ router.get('/demo/builder/:tokenOrId/snapshot', async (req: Request, res: Respon
     max_safe_bet_raw,
     max_safe_bet_human_usdc,
     explanation: `Your agent has earned authority for bets up to $${authority_human_usdc.toFixed(2)}. We recommend $${recommended_bet_human_usdc.toFixed(2)} for guaranteed success.`,
-    is_simulated: true
+    is_simulated: true,
+    tier: currentTier.name.toLowerCase(),
+    tier_pct: currentTier.pctOfStake,
+    authority_dollars: authority_human_usdc,
+    next_tier_at_repid: nextTier ? nextTier.minRepId : null,
+    next_tier_pct: nextTier ? nextTier.pctOfStake : null
   });
 });
 
@@ -486,15 +494,16 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
     }
   }
 
+  const tokenOrId = String(token ?? '');
+  let b;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
+    b = (await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle()).data;
+  }
+  if (!b && tokenOrId) {
+    b = (await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle()).data;
+  }
+
   if (!betAmountOverride) {
-    const tokenOrId = String(token ?? '');
-    let b;
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
-      b = (await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle()).data;
-    }
-    if (!b && tokenOrId) {
-      b = (await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle()).data;
-    }
     if (b) {
       const authRes = await snapshotAuthority(b.id);
       const authority_raw = Number(authRes.authority);
@@ -509,7 +518,7 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
     const opts: any = {};
     if (waitMs !== undefined) opts.waitMs = waitMs;
     if (betAmountOverride !== undefined) opts.betAmount = betAmountOverride;
-    
+    if (b && b.id) opts.builderId = b.id;
     const r = await runRoundAnonymous(opts);
     if (!r.ok) {
       if (r.error && r.error.startsWith('{')) {
