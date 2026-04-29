@@ -20,7 +20,7 @@
 import { createHmac } from 'crypto';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
-import { computeAuthority } from './stake-vault';
+import { snapshotAuthority } from './stake-vault';
 import { getBuilderForAgent, recomputeBuilderRepID } from './builder-registry';
 import { generateTradeAuthProof } from './plonky3-bridge';
 import { updateWisdomScore } from './wisdom-score';
@@ -35,6 +35,7 @@ export interface PlaceBetInput {
   predictionPayload: Record<string, unknown>;
   oracleEndpoint: string;
   expectedResolutionTime: Date;
+  demoBuilderId?: string;
 }
 
 export interface PlaceBetResult {
@@ -56,17 +57,21 @@ export async function placeBet(input: PlaceBetInput): Promise<PlaceBetResult> {
   const builder = await getBuilderForAgent(input.agentId);
   if (!builder) throw new Error(`agent ${input.agentId} has no builder`);
 
-  const authority = computeAuthority({
-    stakeAmount: builder.stake,
-    agentRepId: builder.agentRepId,
-    agentWisdom: builder.agentWisdom,
-    agentCharacter: builder.agentCharacter,
-    builderRepId: builder.builderRepId,
-  });
+  const authority = await snapshotAuthority(input.demoBuilderId ?? builder.builderId);
   if (input.betAmount > authority.authority) {
+    let human_message = `Your agent tried to bet $${(Number(input.betAmount) / 1_000_000).toFixed(2)} but its authority limit is $${(Number(authority.authority) / 1_000_000).toFixed(3)}. The system stopped it.`;
+    
+    if (input.demoBuilderId) {
+      const { getTierForRepId } = require('../config/tier-limits');
+      const { current: currentTier } = getTierForRepId(authority.basis.builder_repid);
+      const authDollars = (Number(authority.authority) / 1_000_000).toFixed(0);
+      const pct = Math.floor(currentTier.pctOfStake * 100);
+      human_message = `Your agent can bet up to $${authDollars} right now — ${pct}% of what you staked. As your agent earns a higher RepID, that percentage goes up. Try an amount between $1 and $${authDollars}.`;
+    }
+
     const errorJson = JSON.stringify({
       error: 'BET_EXCEEDS_AUTHORITY',
-      human_message: `Your agent tried to bet $${(Number(input.betAmount) / 1_000_000).toFixed(2)} but its authority limit is $${(Number(authority.authority) / 1_000_000).toFixed(3)}. The system stopped it.`,
+      human_message,
       details: {
         attempted_bet_raw: Number(input.betAmount),
         attempted_bet_human_usdc: Number(input.betAmount) / 1_000_000,

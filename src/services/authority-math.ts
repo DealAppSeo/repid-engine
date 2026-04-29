@@ -1,3 +1,5 @@
+import { getTierForRepId } from '../config/tier-limits';
+
 export const BUILDER_FLOOR = 5000;
 
 export interface AuthorityInput {
@@ -6,6 +8,7 @@ export interface AuthorityInput {
   agentWisdom: number;
   agentCharacter: number;
   builderRepId: number;
+  isDemoBuilder?: boolean;
 }
 
 export interface AuthorityResult {
@@ -20,6 +23,22 @@ export interface AuthorityResult {
 }
 
 export function computeAuthority(args: AuthorityInput): AuthorityResult {
+  if (args.isDemoBuilder) {
+    const { current } = getTierForRepId(args.builderRepId);
+    // authority = stakeAmount * pctOfStake
+    // e.g. 100_000_000n * 0.5 = 50_000_000n
+    const authority = (args.stakeAmount * BigInt(Math.floor(current.pctOfStake * 100))) / 100n;
+    return {
+      authority,
+      breakdown: {
+        stakeAmount: args.stakeAmount.toString(),
+        stakeSqrt: '0',
+        combinedScore: '0',
+        builderFloorPassed: true,
+      },
+    };
+  }
+
   // If builder is below floor, they get 0 authority, UNLESS they are a fresh demo builder
   // (we assume a fresh demo builder with 0 RepID and no agents is bootstrapping).
   const isFreshDemo = args.builderRepId === 0 && args.agentRepId === 0;
