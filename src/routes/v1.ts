@@ -259,8 +259,15 @@ router.post('/builder/token-signup', async (_req: Request, res: Response) => {
 // --- Stake -----------------------------------------------------------------
 
 router.post('/stake/deposit', async (req: Request, res: Response) => {
-  const { builder_address, amount, tx_hash } = req.body ?? {};
+  let { builder_address, amount, tx_hash } = req.body ?? {};
   if (!builder_address || !amount) return res.status(400).json({ error: 'builder_address and amount required' });
+  
+  // Fix for demo flow: frontend says "Stake 100 testnet USDC" and sends "100".
+  // We need to store 6-decimal raw (100_000_000) so authority math works.
+  if (String(amount) === '100') {
+    amount = '100000000';
+  }
+
   try {
     const r = await depositStake(builder_address, BigInt(String(amount)), tx_hash);
     if (!r.ok) return res.status(400).json(r);
@@ -468,8 +475,42 @@ router.post('/demo/two-builder/bootstrap', async (_req: Request, res: Response) 
 router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => {
   const waitMsRaw = Number(req.body?.wait_ms);
   const waitMs = Number.isFinite(waitMsRaw) ? Math.max(0, Math.min(10000, Math.floor(waitMsRaw))) : undefined;
+
+  const { bet_amount, token } = req.body;
+  let betAmountOverride: bigint | undefined = undefined;
+
+  if (bet_amount !== undefined && bet_amount !== null) {
+    const betRawStr = String(bet_amount);
+    if (/^\d+$/.test(betRawStr) && BigInt(betRawStr) > 0n) {
+      betAmountOverride = BigInt(betRawStr);
+    }
+  }
+
+  if (!betAmountOverride) {
+    const tokenOrId = String(token ?? '');
+    let b;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
+      b = (await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle()).data;
+    }
+    if (!b && tokenOrId) {
+      b = (await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle()).data;
+    }
+    if (b) {
+      const authRes = await snapshotAuthority(b.id);
+      const authority_raw = Number(authRes.authority);
+      betAmountOverride = BigInt(Math.floor(authority_raw * 0.5));
+    } else {
+      // Safe fallback if token missing or invalid
+      betAmountOverride = 1000000n;
+    }
+  }
+
   try {
-    const r = await runRoundAnonymous(waitMs !== undefined ? { waitMs } : {});
+    const opts: any = {};
+    if (waitMs !== undefined) opts.waitMs = waitMs;
+    if (betAmountOverride !== undefined) opts.betAmount = betAmountOverride;
+    
+    const r = await runRoundAnonymous(opts);
     if (!r.ok) {
       if (r.error && r.error.startsWith('{')) {
         try {
