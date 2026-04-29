@@ -120,6 +120,8 @@ export async function placeBet(input: PlaceBetInput): Promise<PlaceBetResult> {
     oracle_endpoint: input.oracleEndpoint,
     expected_resolution_time: input.expectedResolutionTime.toISOString(),
     status: 'open',
+    plonky3_proof_bytes: proof.proofBytesHex,
+    is_simulated: proof.isSimulated,
   });
   if (error) throw new Error(`linked_bets insert failed: ${error.message}`);
 

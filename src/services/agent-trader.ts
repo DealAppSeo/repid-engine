@@ -165,7 +165,6 @@ export async function startTradingRound(opts: { betAmountOverride?: bigint, demo
       oracleEndpoint: `sports/${game.id}`,
       expectedResolutionTime: expectedRes,
       demoBuilderId: opts.demoBuilderId,
-      demoBuilderId: opts.demoBuilderId,
     });
     apmBet = a.betId;
 

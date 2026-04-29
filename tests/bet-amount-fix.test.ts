@@ -15,7 +15,7 @@ jest.mock('../src/db', () => ({
     from: jest.fn().mockReturnThis(),
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
-    maybeSingle: jest.fn(),
+    maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
   }
 }));
 

@@ -10,6 +10,23 @@ app.use('/api/v1', v1Router);
 
 describe('Round-Numbers Demo Progression', () => {
   beforeAll(async () => {
+    // Intercept linked_bets insert to strip columns missing from test schema
+    const originalFrom = db.from.bind(db);
+    jest.spyOn(db, 'from').mockImplementation((table: string) => {
+      const qb = originalFrom(table);
+      if (table === 'linked_bets') {
+        const originalInsert = qb.insert.bind(qb);
+        qb.insert = function (data: any) {
+          const strip = (d: any) => {
+            const { plonky3_proof_bytes, is_simulated, ...rest } = d;
+            return rest;
+          };
+          return originalInsert(Array.isArray(data) ? data.map(strip) : strip(data));
+        } as any;
+      }
+      return qb;
+    });
+
     // Seed APM and VERITAS
     await request(app).post('/api/v1/demo/two-builder/bootstrap').send();
 
