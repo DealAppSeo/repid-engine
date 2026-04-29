@@ -64,7 +64,20 @@ export async function placeBet(input: PlaceBetInput): Promise<PlaceBetResult> {
     builderRepId: builder.builderRepId,
   });
   if (input.betAmount > authority.authority) {
-    throw new Error(`bet amount ${input.betAmount.toString()} exceeds authority ${authority.authority.toString()}`);
+    const errorJson = JSON.stringify({
+      error: 'BET_EXCEEDS_AUTHORITY',
+      human_message: `Your agent tried to bet $${(Number(input.betAmount) / 1_000_000).toFixed(2)} but its authority limit is $${(Number(authority.authority) / 1_000_000).toFixed(3)}. The system stopped it.`,
+      details: {
+        attempted_bet_raw: Number(input.betAmount),
+        attempted_bet_human_usdc: Number(input.betAmount) / 1_000_000,
+        authority_raw: Number(authority.authority),
+        authority_human_usdc: Number(authority.authority) / 1_000_000,
+        recommended_bet_raw: Math.floor(Number(authority.authority) * 0.5),
+        recommended_bet_human_usdc: Math.floor(Number(authority.authority) * 0.5) / 1_000_000
+      },
+      next_step: 'retry_with_recommended'
+    });
+    throw new Error(errorJson);
   }
 
   const proof = generateTradeAuthProof({

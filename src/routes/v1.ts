@@ -384,6 +384,65 @@ router.get('/trader/oracle-sign/:bet_id/:outcome', async (req: Request, res: Res
   return res.json({ bet_id: betId, outcome, signature: signOracleOutcome(betId, outcome) });
 });
 
+// --- Guided Tour -----------------------------------------------------------
+
+router.get('/demo/builder/:tokenOrId/snapshot', async (req: Request, res: Response) => {
+  const tokenOrId = String(req.params.tokenOrId ?? '');
+  let b;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
+    const { data } = await db.from('builders').select('id, current_repid, session_token').eq('id', tokenOrId).maybeSingle();
+    b = data;
+  }
+  if (!b) {
+    const { data } = await db.from('builders').select('id, current_repid, session_token').eq('session_token', tokenOrId).maybeSingle();
+    b = data;
+  }
+  if (!b) return res.status(404).json({ error: 'builder not found' });
+  
+  const authRes = await snapshotAuthority(b.id);
+  const authority_raw = Number(authRes.authority);
+  const recommended_bet_raw = Math.floor(authority_raw * 0.5);
+  const max_safe_bet_raw = Math.floor(authority_raw * 0.95);
+  const authority_human_usdc = authority_raw / 1_000_000;
+  const recommended_bet_human_usdc = recommended_bet_raw / 1_000_000;
+  const max_safe_bet_human_usdc = max_safe_bet_raw / 1_000_000;
+  
+  return res.json({
+    builder_id: b.id,
+    session_token: b.session_token || tokenOrId,
+    current_repid: Number(b.current_repid ?? 0),
+    stake_total_usdc: Number(authRes.basis.stake) / 1_000_000,
+    authority_raw,
+    authority_human_usdc,
+    recommended_bet_raw,
+    recommended_bet_human_usdc,
+    max_safe_bet_raw,
+    max_safe_bet_human_usdc,
+    explanation: `Your agent has earned authority for bets up to $${authority_human_usdc.toFixed(2)}. We recommend $${recommended_bet_human_usdc.toFixed(2)} for guaranteed success.`,
+    is_simulated: true
+  });
+});
+
+router.get('/demo/recommended-bet/:tokenOrId', async (req: Request, res: Response) => {
+  const tokenOrId = String(req.params.tokenOrId ?? '');
+  let b;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
+    const { data } = await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle();
+    b = data;
+  }
+  if (!b) {
+    const { data } = await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle();
+    b = data;
+  }
+  if (!b) return res.status(404).json({ error: 'builder not found' });
+  
+  const authRes = await snapshotAuthority(b.id);
+  const authority_raw = Number(authRes.authority);
+  const recommended_bet_raw = Math.floor(authority_raw * 0.5);
+  const max_safe_bet_raw = Math.floor(authority_raw * 0.95);
+  return res.json({ authority_raw, recommended_bet_raw, max_safe_bet_raw });
+});
+
 // --- Two-builder demo -----------------------------------------------------
 
 router.get('/demo/two-builder/snapshot', async (_req: Request, res: Response) => {
@@ -411,7 +470,15 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
   const waitMs = Number.isFinite(waitMsRaw) ? Math.max(0, Math.min(10000, Math.floor(waitMsRaw))) : undefined;
   try {
     const r = await runRoundAnonymous(waitMs !== undefined ? { waitMs } : {});
-    if (!r.ok) return res.status(400).json(r);
+    if (!r.ok) {
+      if (r.error && r.error.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(r.error);
+          return res.status(400).json(parsed);
+        } catch {}
+      }
+      return res.status(400).json(r);
+    }
     return res.json(r);
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message ?? 'run-round-anonymous failed' });
