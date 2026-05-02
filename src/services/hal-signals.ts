@@ -68,6 +68,12 @@ export interface HALSignals {
   agreement_score?: number | null;
   // Phase 1.5 — Layer 0 prompt category classifier output.
   prompt_category?: string | null;
+  // Phase 1.5 ext (CC1 sprint) — Pythagorean Comma BFT (P-003).
+  // Only meaningful when 3+ providers responded. comma_veto = critical
+  // severity = hard constitutional block in the HAL combiner.
+  comma_veto?: boolean | null;
+  comma_gap?: number | null;
+  comma_severity?: 'none' | 'minor' | 'major' | 'critical' | null;
 }
 
 export function extractHALSignals(
@@ -215,6 +221,9 @@ export async function extractHALSignalsWithCrossLLM(
   const { checkCrossLLM } = require('../hal/cross-llm-client');
   let category: string | null = null;
   let agreement: number | null = null;
+  let comma_veto: boolean | null = null;
+  let comma_gap: number | null = null;
+  let comma_severity: 'none' | 'minor' | 'major' | 'critical' | null = null;
   try {
     const cls = await classify(prompt);
     category = cls?.category ?? null;
@@ -222,6 +231,9 @@ export async function extractHALSignalsWithCrossLLM(
       const cmp = await checkCrossLLM(prompt);
       if (cmp && typeof cmp.agreement_score === 'number') {
         agreement = cmp.agreement_score;
+        comma_veto = typeof cmp.comma_veto === 'boolean' ? cmp.comma_veto : null;
+        comma_gap = typeof cmp.comma_gap === 'number' ? cmp.comma_gap : null;
+        comma_severity = cmp.comma_severity ?? null;
       }
     }
   } catch (e: any) {
@@ -231,6 +243,9 @@ export async function extractHALSignalsWithCrossLLM(
     ...baseSignals,
     agreement_score: agreement,
     prompt_category: category,
+    comma_veto,
+    comma_gap,
+    comma_severity,
   };
 }
 
