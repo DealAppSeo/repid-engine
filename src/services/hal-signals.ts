@@ -62,6 +62,12 @@ export interface HALSignals {
   evidence_quality: number;
   scope_appropriateness: number;
   certainty_at_claim: number;
+  // Phase 1.5 — Layer 1 cross-LLM agreement on the source prompt.
+  // null when the prompt is non-factual / non-time-sensitive (no
+  // disagreement check needed) or when the prompt was not supplied.
+  agreement_score?: number | null;
+  // Phase 1.5 — Layer 0 prompt category classifier output.
+  prompt_category?: string | null;
 }
 
 export function extractHALSignals(
@@ -98,9 +104,13 @@ export function extractHALSignals(
     certaintyHedgeMismatch *= 0.30;
   }
 
-  const epistemic_uncertainty = Math.min(1, Math.max(0,
+  let epistemic_uncertainty = Math.min(1, Math.max(0,
     0.45 - (hedgeDensity * 0.25) + certaintyHedgeMismatch
   ));
+
+  if (domain === 'mathematics' || domain === 'cryptography') {
+    epistemic_uncertainty *= 0.15; // Math dampening
+  }
 
   // Signal 3: evidence_quality
   // Specificity and verifiability of the claim
@@ -177,6 +187,51 @@ export function runValidation() {
     console.log(`  harm=${signals.harm_probability.toFixed(3)} epistemic=${signals.epistemic_uncertainty.toFixed(3)} evidence=${signals.evidence_quality.toFixed(3)} scope=${signals.scope_appropriateness.toFixed(3)}`);
     console.log(`  HAL score: ${halScore.toFixed(4)} | Vetoed: ${halScore >= 0.25}\n`);
   });
+}
+
+/**
+ * Phase 1.5 — async extension that wraps the sync 5-signal extractor with
+ * Layer 0 (prompt classifier) + Layer 1 (cross-LLM agreement).
+ *
+ * Behavior:
+ *   - If `prompt` is missing → returns the 5-signal result unchanged
+ *     (agreement_score null, prompt_category null).
+ *   - Otherwise: classify(prompt). If category in {factual, time-sensitive},
+ *     also run cross-LLM checkCrossLLM(prompt) in parallel with the sync
+ *     extraction. Set agreement_score on the returned signals.
+ *   - On classifier or cross-LLM failure: fall back to 5-signal mode.
+ */
+export async function extractHALSignalsWithCrossLLM(
+  claimText: string,
+  domain: string,
+  certainty: number,
+  prompt?: string,
+): Promise<HALSignals> {
+  const baseSignals = extractHALSignals(claimText, domain, certainty);
+  if (!prompt || !prompt.trim()) {
+    return { ...baseSignals, agreement_score: null, prompt_category: null };
+  }
+  const { classify } = require('../hal/classifier');
+  const { checkCrossLLM } = require('../hal/cross-llm-client');
+  let category: string | null = null;
+  let agreement: number | null = null;
+  try {
+    const cls = await classify(prompt);
+    category = cls?.category ?? null;
+    if (category === 'factual' || category === 'time-sensitive') {
+      const cmp = await checkCrossLLM(prompt);
+      if (cmp && typeof cmp.agreement_score === 'number') {
+        agreement = cmp.agreement_score;
+      }
+    }
+  } catch (e: any) {
+    console.error('[hal-signals] cross-LLM extension failed:', e?.message ?? e);
+  }
+  return {
+    ...baseSignals,
+    agreement_score: agreement,
+    prompt_category: category,
+  };
 }
 
 if (require.main === module) { runValidation(); }

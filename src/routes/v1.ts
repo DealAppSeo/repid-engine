@@ -18,24 +18,35 @@ router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
 });
 
-router.post('/hal/signals', (req: Request, res: Response) => {
-  const { text, domain, certainty } = req.body;
+router.post('/hal/signals', async (req: Request, res: Response) => {
+  const { text, domain, certainty, prompt } = req.body;
   if (!text) return res.status(400).json({ error: 'text required' });
-  const { extractHALSignals } = require('../services/hal-signals');
-  const signals = extractHALSignals(
-    text, domain || 'finance', certainty || 0.85
-  );
-  const halScore = (
-    0.4 * signals.harm_probability +
-    0.3 * signals.epistemic_uncertainty +
-    0.2 * (1 - signals.evidence_quality) +
-    0.1 * (1 - signals.scope_appropriateness)
-  ) * (531441 / 524288);
+  const { extractHALSignals, extractHALSignalsWithCrossLLM } = require('../services/hal-signals');
+  const signals = prompt
+    ? await extractHALSignalsWithCrossLLM(text, domain || 'finance', certainty || 0.85, prompt)
+    : extractHALSignals(text, domain || 'finance', certainty || 0.85);
+  const COMMA = 531441 / 524288;
+  const hasAgreement = typeof signals.agreement_score === 'number';
+  // Phase 1.5 — 6-DOF combiner when cross-LLM agreement is available.
+  // Weights re-normalized: harm 0.40→0.35, epi 0.30→0.25, evidence 0.20→0.15,
+  // scope 0.10→0.05, agreement 0.00→0.20.
+  const halScore = hasAgreement
+    ? (0.35 * signals.harm_probability +
+       0.25 * signals.epistemic_uncertainty +
+       0.15 * (1 - signals.evidence_quality) +
+       0.05 * (1 - signals.scope_appropriateness) +
+       0.20 * (1 - signals.agreement_score)) * COMMA
+    : (0.40 * signals.harm_probability +
+       0.30 * signals.epistemic_uncertainty +
+       0.20 * (1 - signals.evidence_quality) +
+       0.10 * (1 - signals.scope_appropriateness)) * COMMA;
   res.json({
     signals,
     hal_score: Math.round(halScore * 10000) / 10000,
     vetoed: halScore >= 0.25,
-    formula: '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)'
+    formula: hasAgreement
+      ? '(0.35×harm + 0.25×epistemic + 0.15×(1-evidence) + 0.05×(1-scope) + 0.20×(1-agreement)) × (531441/524288)'
+      : '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)',
   });
 });
 
