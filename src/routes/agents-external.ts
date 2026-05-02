@@ -8,7 +8,6 @@ const router = Router();
 
 const PYTHAGOREAN_COMMA = 531441 / 524288;
 // bft_veto_threshold (0.0195) is TrustTrader-only; general HAL veto uses repid_config.hal_veto_threshold
-const HAL_CONSTITUTIONAL_BLOCK = 0.48;
 const PHI_FALLBACK = 1.618033988749895;
 const IMPACT_CAP_FALLBACK = 5.0;
 
@@ -201,8 +200,9 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
          0.2 * (1 - halSignals.evidence_quality) +
          0.1 * (1 - halSignals.scope_appropriateness)) *
         PYTHAGOREAN_COMMA;
+    const halBlockThreshold = await getConfigNumber('hal_block_threshold', 0.48);
     const halApproved = dissonance <= halApproveThreshold;
-    const constitutionalBlock = dissonance > HAL_CONSTITUTIONAL_BLOCK;
+    const constitutionalBlock = dissonance > halBlockThreshold;
 
     if (constitutionalBlock) {
       return res.status(403).json({
