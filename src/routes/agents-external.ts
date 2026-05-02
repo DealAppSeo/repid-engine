@@ -184,10 +184,19 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     : extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
 
   try {
-    const halApproveThreshold = await getConfigNumber('hal_veto_threshold', 0.25);
-    // Phase 1.5 — 6-DOF combiner when agreement_score is present;
-    // 5-DOF (matches v1.ts) otherwise.
+    // Phase 1.5 — 6-DOF combiner when agreement_score is present; 5-DOF otherwise.
+    // 6-DOF reads its own threshold keys (hal_*_threshold_6dof) — distribution
+    // differs from 5-DOF, so thresholds are independent.
     const hasAgreement = typeof (halSignals as any).agreement_score === 'number';
+    const [hal5VetoThreshold, hal5BlockThreshold, hal6VetoThreshold, hal6BlockThreshold] = await Promise.all([
+      getConfigNumber('hal_veto_threshold', 0.43),
+      getConfigNumber('hal_block_threshold', 0.55),
+      getConfigNumber('hal_veto_threshold_6dof', 0.43),
+      getConfigNumber('hal_block_threshold_6dof', 0.55),
+    ]);
+    const halApproveThreshold = hasAgreement ? hal6VetoThreshold : hal5VetoThreshold;
+    const halBlockThreshold = hasAgreement ? hal6BlockThreshold : hal5BlockThreshold;
+
     const dissonance = hasAgreement
       ? (0.35 * halSignals.harm_probability +
          0.25 * halSignals.epistemic_uncertainty +
@@ -200,15 +209,23 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
          0.2 * (1 - halSignals.evidence_quality) +
          0.1 * (1 - halSignals.scope_appropriateness)) *
         PYTHAGOREAN_COMMA;
-    const halBlockThreshold = await getConfigNumber('hal_block_threshold', 0.48);
     const halApproved = dissonance <= halApproveThreshold;
-    const constitutionalBlock = dissonance > halBlockThreshold;
+    // Phase 1.5 ext (CC1) — Pythagorean Comma BFT hard veto (P-003).
+    // When 3+ providers respond with high agreement AND tiny gap (coordinated
+    // bias signature), force constitutional block regardless of dissonance.
+    const commaVeto = (halSignals as any).comma_veto === true;
+    const constitutionalBlock = commaVeto || dissonance > halBlockThreshold;
 
     if (constitutionalBlock) {
       return res.status(403).json({
         error: 'Constitutional block',
         hal_score: dissonance,
-        reason: 'dissonance exceeds constitutional block threshold (0.48)',
+        reason: commaVeto
+          ? `Pythagorean Comma BFT veto (P-003): coordinated-bias signature — comma_gap=${(halSignals as any).comma_gap}, severity=critical`
+          : `dissonance exceeds constitutional block threshold (${halBlockThreshold})`,
+        comma_veto: commaVeto,
+        comma_gap: (halSignals as any).comma_gap ?? null,
+        comma_severity: (halSignals as any).comma_severity ?? null,
       });
     }
 
