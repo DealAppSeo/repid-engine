@@ -175,24 +175,16 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'certainty must be in [0,1]' });
   }
 
-  let halSignals = null;
-  if (decision_text) {
-    halSignals = extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
-  }
+  const halSignals = extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
 
   try {
-    // 2. HAL dissonance
+    // 2. HAL dissonance — canonical 5-signal combiner (matches v1.ts:28-33)
     const halApproveThreshold = await getConfigNumber('hal_veto_threshold', 0.25);
-    const harmScore = 1 - certainty;
-    const epistemicScore = certainty < 0.5 ? 0.8 : 
-                           certainty < 0.7 ? 0.5 :
-                           certainty < 0.85 ? 0.3 : 0.1;
-    const evidenceScore = certainty > 0.8 ? 0.1 :
-                          certainty > 0.6 ? 0.25 : 0.5;
-    const scopeScore = certainty > 0.8 ? 0.1 :
-                       certainty > 0.6 ? 0.2 : 0.3;
     const dissonance =
-      (0.4 * harmScore + 0.3 * epistemicScore + 0.2 * evidenceScore + 0.1 * scopeScore) *
+      (0.4 * halSignals.harm_probability +
+       0.3 * halSignals.epistemic_uncertainty +
+       0.2 * (1 - halSignals.evidence_quality) +
+       0.1 * (1 - halSignals.scope_appropriateness)) *
       PYTHAGOREAN_COMMA;
     const halApproved = dissonance <= halApproveThreshold;
     const constitutionalBlock = dissonance > HAL_CONSTITUTIONAL_BLOCK;
