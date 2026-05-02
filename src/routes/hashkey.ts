@@ -39,7 +39,7 @@ router.get('/hashkey', async (_req: Request, res: Response) => {
     },
     erc8004: {
       identityRegistry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
-      reputationRegistry: '0x8004B663ab8E2E50e93DffD45A2dDfDaC1355Aca',
+      reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
       validationRegistry: '0x8004Cb1B1741F3C476fE7bE11A5a5639bB8A21c7',
       chain: 'Base Sepolia',
     },
