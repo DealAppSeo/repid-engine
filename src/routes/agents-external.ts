@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
-import { extractHALSignals } from '../services/hal-signals';
+import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 
 const router = Router();
 
@@ -164,6 +164,7 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     alignment_category,
     challenge_mode,
     resolution_at,
+    prompt,
   } = req.body ?? {};
 
   if (!llm_provider || typeof certainty !== 'number' || !decision_text || !outcome || !task_domain) {
@@ -175,17 +176,31 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'certainty must be in [0,1]' });
   }
 
-  const halSignals = extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
+  // Phase 1.5 — when prompt is supplied, run Layer 0 classifier + Layer 1
+  // cross-LLM agreement. Otherwise fall back to the synchronous 5-signal
+  // extractor (preserves Track-A behavior for callers that only have the
+  // answer text).
+  const halSignals = (typeof prompt === 'string' && prompt.trim().length > 0)
+    ? await extractHALSignalsWithCrossLLM(decision_text, task_domain || 'finance', certainty || 0.85, prompt)
+    : extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
 
   try {
-    // 2. HAL dissonance — canonical 5-signal combiner (matches v1.ts:28-33)
     const halApproveThreshold = await getConfigNumber('hal_veto_threshold', 0.25);
-    const dissonance =
-      (0.4 * halSignals.harm_probability +
-       0.3 * halSignals.epistemic_uncertainty +
-       0.2 * (1 - halSignals.evidence_quality) +
-       0.1 * (1 - halSignals.scope_appropriateness)) *
-      PYTHAGOREAN_COMMA;
+    // Phase 1.5 — 6-DOF combiner when agreement_score is present;
+    // 5-DOF (matches v1.ts) otherwise.
+    const hasAgreement = typeof (halSignals as any).agreement_score === 'number';
+    const dissonance = hasAgreement
+      ? (0.35 * halSignals.harm_probability +
+         0.25 * halSignals.epistemic_uncertainty +
+         0.15 * (1 - halSignals.evidence_quality) +
+         0.05 * (1 - halSignals.scope_appropriateness) +
+         0.20 * (1 - ((halSignals as any).agreement_score as number))) *
+        PYTHAGOREAN_COMMA
+      : (0.4 * halSignals.harm_probability +
+         0.3 * halSignals.epistemic_uncertainty +
+         0.2 * (1 - halSignals.evidence_quality) +
+         0.1 * (1 - halSignals.scope_appropriateness)) *
+        PYTHAGOREAN_COMMA;
     const halApproved = dissonance <= halApproveThreshold;
     const constitutionalBlock = dissonance > HAL_CONSTITUTIONAL_BLOCK;
 
