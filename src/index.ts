@@ -17,6 +17,7 @@ import telegramRouter, { sendTelegramAlert } from './routes/telegram';
 import halTestRouter from './routes/hal-test';
 import auditRouter from './routes/audit';
 import fullAccountRouter from './routes/full-account';
+import receiptsRouter from './routes/receipts';
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
@@ -127,6 +128,7 @@ app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
+app.use('/api/v1', receiptsRouter);
 
 // v11 external agent endpoints
 app.use('/api/v1/agents/register', registrationLimiter);
