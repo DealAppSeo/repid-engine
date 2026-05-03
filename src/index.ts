@@ -18,6 +18,7 @@ import halTestRouter from './routes/hal-test';
 import auditRouter from './routes/audit';
 import fullAccountRouter from './routes/full-account';
 import { runTier1Benchmark } from './services/hal-tester';
+import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
 
 import { authMiddleware } from './middleware/auth';
@@ -285,6 +286,42 @@ async function runHAEEEpoch() {
 if (!IS_TEST) {
   runHAEEEpoch();
   setInterval(runHAEEEpoch, 24 * 60 * 60 * 1000);
+}
+
+// Daily Merkle anchor — fires at 02:00 UTC, anchors yesterday's
+// hal_audit_chain rows on Base Sepolia. Idempotent per anchor_date
+// (audit_merkle_anchors UNIQUE constraint), so a missed run + manual
+// re-trigger just upserts.
+async function runDailyAuditAnchor(): Promise<void> {
+  try {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const r = await anchorDailyRoot(yesterday);
+    console.log(`[audit-anchor] ${r.date} status=${r.status} entries=${r.entry_count} root=${r.root.slice(0, 18)}...`
+      + (r.tx_hash ? ` tx=${r.tx_hash}` : ''));
+    if (r.status === 'sent') {
+      await sendTelegramAlert(
+        `⛓️ <b>AUDIT ROOT ANCHORED</b>\n`
+        + `Date: ${r.date}\n`
+        + `Entries: ${r.entry_count}\n`
+        + `Root: <code>${r.root}</code>\n`
+        + `Tx: ${r.basescan_url}`
+      );
+    }
+  } catch (e: any) {
+    console.error('[audit-anchor] cron failed:', e?.message ?? e);
+  }
+}
+
+if (!IS_TEST) {
+  // Schedule for next 02:00 UTC, then every 24h.
+  const nowAnchor = new Date();
+  const next2amUtc = new Date(nowAnchor);
+  next2amUtc.setUTCHours(2, 0, 0, 0);
+  if (next2amUtc <= nowAnchor) next2amUtc.setUTCDate(next2amUtc.getUTCDate() + 1);
+  setTimeout(() => {
+    runDailyAuditAnchor();
+    setInterval(runDailyAuditAnchor, 24 * 60 * 60 * 1000);
+  }, next2amUtc.getTime() - nowAnchor.getTime());
 }
 
 export default app;
