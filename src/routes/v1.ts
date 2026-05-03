@@ -18,24 +18,56 @@ router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
 });
 
-router.post('/hal/signals', (req: Request, res: Response) => {
-  const { text, domain, certainty } = req.body;
+async function getHalConfigNumber(key: string, fallback: number): Promise<number> {
+  const { data } = await db.from('repid_config').select('value').eq('key', key).single();
+  const value = (data as any)?.value;
+  if (value === null || value === undefined) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+router.post('/hal/signals', async (req: Request, res: Response) => {
+  const { text, domain, certainty, prompt } = req.body;
   if (!text) return res.status(400).json({ error: 'text required' });
-  const { extractHALSignals } = require('../services/hal-signals');
-  const signals = extractHALSignals(
-    text, domain || 'finance', certainty || 0.85
-  );
-  const halScore = (
-    0.4 * signals.harm_probability +
-    0.3 * signals.epistemic_uncertainty +
-    0.2 * (1 - signals.evidence_quality) +
-    0.1 * (1 - signals.scope_appropriateness)
-  ) * (531441 / 524288);
+  const { extractHALSignals, extractHALSignalsWithCrossLLM } = require('../services/hal-signals');
+  const signals = prompt
+    ? await extractHALSignalsWithCrossLLM(text, domain || 'finance', certainty || 0.85, prompt)
+    : extractHALSignals(text, domain || 'finance', certainty || 0.85);
+  const COMMA = 531441 / 524288;
+  const hasAgreement = typeof signals.agreement_score === 'number';
+  // Phase 1.5 — 6-DOF combiner when cross-LLM agreement is available.
+  // Weights re-normalized: harm 0.40→0.35, epi 0.30→0.25, evidence 0.20→0.15,
+  // scope 0.10→0.05, agreement 0.00→0.20.
+  const halScore = hasAgreement
+    ? (0.35 * signals.harm_probability +
+       0.25 * signals.epistemic_uncertainty +
+       0.15 * (1 - signals.evidence_quality) +
+       0.05 * (1 - signals.scope_appropriateness) +
+       0.20 * (1 - signals.agreement_score)) * COMMA
+    : (0.40 * signals.harm_probability +
+       0.30 * signals.epistemic_uncertainty +
+       0.20 * (1 - signals.evidence_quality) +
+       0.10 * (1 - signals.scope_appropriateness)) * COMMA;
+  // Read live thresholds — 6-DOF distribution differs from 5-DOF, so each branch reads its own keys.
+  const vetoThreshold = hasAgreement
+    ? await getHalConfigNumber('hal_veto_threshold_6dof', 0.43)
+    : await getHalConfigNumber('hal_veto_threshold', 0.43);
+  // Phase 1.5 ext (CC1) — Pythagorean Comma BFT hard veto (P-003).
+  const commaVeto = signals.comma_veto === true;
   res.json({
     signals,
     hal_score: Math.round(halScore * 10000) / 10000,
-    vetoed: halScore >= 0.25,
-    formula: '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)'
+    vetoed: commaVeto || halScore >= vetoThreshold,
+    veto_reason: commaVeto
+      ? `pythagorean-comma-bft (P-003): comma_gap=${signals.comma_gap}, severity=critical`
+      : (halScore >= vetoThreshold ? `hal-score>=${vetoThreshold}` : null),
+    veto_threshold: vetoThreshold,
+    comma_veto: commaVeto,
+    comma_gap: signals.comma_gap ?? null,
+    comma_severity: signals.comma_severity ?? null,
+    formula: hasAgreement
+      ? '(0.35×harm + 0.25×epistemic + 0.15×(1-evidence) + 0.05×(1-scope) + 0.20×(1-agreement)) × (531441/524288)'
+      : '(0.4×harm + 0.3×epistemic + 0.2×(1-evidence) + 0.1×(1-scope)) × (531441/524288)',
   });
 });
 
