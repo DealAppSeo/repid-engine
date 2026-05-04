@@ -9,6 +9,9 @@
       "Bash(railway variables *)",
       "Bash(railway deployment *)",
       "Bash(railway whoami)",
+      "Bash(railway whoami *)",
+      "Bash(railway list *)",
+      "Bash(npm pack --dry-run)",
       "mcp__claude_ai_Vercel__list_deployments",
       "mcp__railway__project_list",
       "mcp__claude_ai_Supabase__list_tables"

@@ -21,7 +21,10 @@
       "Read(//c/Users/Cash4/repos/hyperdag-protocol/**)",
       "Read(//c/Users/Cash4/OneDrive/Desktop/sprints/2026-05-03/**)",
       "Bash(grep -E \"\\\\.ts$\")",
-      "Bash(npx hardhat *)"
+      "Bash(npx hardhat *)",
+      "Bash(cat)",
+      "Bash(python3 /tmp/extract-tools.py /tmp/recent-transcripts.txt)",
+      "Bash(python *)"
     ]
   }
 }
