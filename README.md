@@ -13,6 +13,7 @@ Protocol: hyperdag.dev
 ### Environment configuration
 - `REPID_API_KEYS`: A comma-separated list of API keys in the format `key:tier` (e.g. `secret123:pro,mykey:free,corp_key:enterprise`).
 - `REDIS_URL`: The url for the Redis-backed rate limiter infrastructure.
+- `REPID_ENGINE_PUBLIC_URL`: The public canonical URL where this API is hosted (used for ERC-8004 feedback endpoints).
 
 ### Middleware
 - **Authentication**: All API requests must be accompanied by an API key injected via `Authorization` (Bearer) or `x-api-key` header.

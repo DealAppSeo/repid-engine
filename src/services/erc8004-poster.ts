@@ -5,6 +5,10 @@ import fs from 'fs';
 
 dotenv.config();
 
+// ENV requirements:
+// REPID_ENGINE_PUBLIC_URL - The canonical public URL for this instance (e.g. https://repid-engine-production.up.railway.app)
+
+
 const REPUTATION_REGISTRY = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
 
@@ -54,7 +58,8 @@ export async function postReputationSignal(input: {
   const tag2 = input.tags && input.tags.length > 1 ? input.tags[1] : "";
   
   // Endpoint links back to our receipt API
-  const endpoint = `https://api.repid.engine/receipts/${input.receiptId}`;
+  const baseUrl = process.env.REPID_ENGINE_PUBLIC_URL || 'https://repid-engine-production.up.railway.app';
+  const endpoint = `${baseUrl}/receipts/${input.receiptId}`;
 
   const contractAny = contract as any;
   const tx = await contractAny.giveFeedback(
