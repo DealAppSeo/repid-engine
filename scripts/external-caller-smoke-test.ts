@@ -144,14 +144,10 @@ function buildProviders(): HALProviderConfig[] {
   return providers;
 }
 
+import { createDefaultEmbeddingClient } from '../src/hal/lib/cross-llm/embedding-client';
+
 function buildEmbeddingClient(): HALEmbeddingClient | null {
-  if (!process.env.OPENAI_API_KEY) return null;
-  return {
-    endpoint: 'https://api.openai.com/v1/embeddings',
-    apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.SMOKE_EMBEDDING_MODEL ?? 'text-embedding-3-small',
-    timeoutMs: 10_000,
-  };
+  return createDefaultEmbeddingClient(process.env.VOYAGE_API_KEY, process.env.VOYAGE_API_KEY ? 'voyage' : undefined);
 }
 
 function buildClassifier(): HALProviderConfig | null {
@@ -233,7 +229,7 @@ async function main(): Promise<number> {
   );
   console.log(`Classifier: ${classifier ? `${classifier.provider}/${classifier.model}` : 'NONE'}`);
   console.log(
-    `Embedding: ${embeddingClient ? embeddingClient.model : 'NONE (Jaccard fallback)'}`,
+    `Embedding: ${embeddingClient ? 'Configured' : 'NONE (Jaccard fallback)'}`,
   );
 
   if (providers.length < 2) {
