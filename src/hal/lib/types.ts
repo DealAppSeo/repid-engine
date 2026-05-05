@@ -8,6 +8,37 @@
 
 export type CommaSeverity = 'none' | 'minor' | 'major' | 'critical';
 
+/**
+ * Strictness level. Default is 4 (product MVP gate — what users would
+ * expect to be caught is caught out of the box).
+ *
+ *   1 — Fast: extractor only, no cross-LLM. Drafts/brainstorms.
+ *   2 — Light: cross-LLM with loose threshold. Internal docs.
+ *   3 — Balanced: current production behavior (gap-based COMMA_BFT).
+ *       Byte-identical to pre-Wave-5 production HAL.
+ *   4 — Strict (DEFAULT): adds three-zone band classification AND
+ *       consensus-vs-claim semantic comparison. Catches HAL-T1-003 class
+ *       fabrications. Customer-facing/professional use.
+ *   5 — Maximum: adds tampering-suspected flag when consensus collapses
+ *       too tightly. Legal/medical/financial.
+ */
+export type StrictnessLevel = 1 | 2 | 3 | 4 | 5;
+
+/** Three-zone classification of cross-LLM agreement around the Pythagorean Comma. */
+export type AgreementZone = 'too-tight' | 'in-band' | 'too-loose';
+
+/**
+ * Tampering signal — populated only at strictness level 5 when the
+ * consensus zone is 'too-tight' (suspiciously perfect agreement). Does
+ * NOT auto-veto in this version; it's an informational flag for human
+ * review or downstream policy.
+ */
+export interface HALTamperingSignal {
+  similarity: number;
+  responses: string[];
+  reason: string;
+}
+
 export interface HALSignals {
   harm_probability: number;       // [0, 1] — higher = riskier
   epistemic_uncertainty: number;  // [0, 1] — higher = more mismatch
@@ -29,6 +60,19 @@ export interface HALResult {
   formula: string;
   /** Optional cross-LLM consensus output, present iff context.providers was non-empty. */
   cross_llm?: CrossLLMSummary | null;
+  /** Strictness level used for this evaluation. */
+  strictness: StrictnessLevel;
+  /** Three-zone classification of agreement (level 4+ only; null otherwise). */
+  agreement_zone?: AgreementZone | null;
+  /** Aggregated consensus answer (level 4+ when in-band; null otherwise). */
+  consensus_answer?: string | null;
+  /** Cosine similarity of user claim vs consensus answer (level 4+; null otherwise). */
+  claim_vs_consensus_similarity?: number | null;
+  /** True when claim contradicts consensus (level 4+; null otherwise). */
+  claim_contradicts_consensus?: boolean | null;
+  /** Tampering signal — populated only at level 5 when zone='too-tight'. */
+  tampering_suspected?: boolean | null;
+  tampering_signal?: HALTamperingSignal | null;
 }
 
 export interface CrossLLMSummary {
@@ -70,10 +114,8 @@ export interface HALProviderConfig {
  * similarity between provider answers. If null, falls back to Jaccard.
  */
 export interface HALEmbeddingClient {
-  endpoint: string;
-  apiKey: string;
-  model: string;
-  timeoutMs?: number;
+  embed(text: string): Promise<number[]>;
+  embedMany(texts: string[]): Promise<number[][]>;
 }
 
 /**
@@ -90,6 +132,7 @@ export interface HALEmbeddingClient {
  * - `supabase`: opt-in logging. null/undefined ⇒ library is silent.
  * - `threshold`: overrides HAL_DEFAULT_VETO_THRESHOLD (0.25).
  * - `domainOntologies`: extra domains beyond the 5 baked-in ones.
+ * - `strictness`: 1-5 scale. Default 4. See StrictnessLevel docs.
  */
 export interface HALContext {
   domain: string;
@@ -101,6 +144,7 @@ export interface HALContext {
   supabase?: unknown | null; // typed as `unknown` to avoid coupling to @supabase/supabase-js in this file
   threshold?: number;
   domainOntologies?: Record<string, string[]>;
+  strictness?: StrictnessLevel;
 }
 
 export interface ExtractInput {

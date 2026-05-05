@@ -149,5 +149,5 @@ export async function checkCrossLLM(
 }
 
 // Re-export pure helpers so consumers can compose without importing internals.
-export { computeAgreement, checkPythagoreanComma, cosineSimilarity, jaccardSimilarity, getEmbedding } from './agreement';
+export { computeAgreement, checkPythagoreanComma, cosineSimilarity, jaccardSimilarity } from './agreement';
 export type { ProviderAnswer } from './providers';

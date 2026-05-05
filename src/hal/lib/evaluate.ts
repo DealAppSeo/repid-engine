@@ -37,15 +37,26 @@ import type {
   HALContext,
   HALResult,
   HALSignals,
+  StrictnessLevel,
 } from './types';
 
 const LAYER_1_GATE_CATEGORIES = new Set(['factual', 'time-sensitive', 'math']);
+
+/** Default strictness level when caller does not specify. */
+export const DEFAULT_STRICTNESS: StrictnessLevel = 4;
+
+function normalizeStrictness(s: unknown): StrictnessLevel {
+  if (s === 1 || s === 2 || s === 3 || s === 4 || s === 5) return s;
+  return DEFAULT_STRICTNESS;
+}
 
 export async function evaluate(
   claimText: string,
   output: string,
   context: HALContext,
 ): Promise<HALResult> {
+  const strictness = normalizeStrictness(context.strictness);
+
   const baseSignals = extractHALSignals({
     text: claimText,
     domain: context.domain,
@@ -56,7 +67,9 @@ export async function evaluate(
   let cross: CrossLLMSummary | null = null;
   let promptCategory: string | null = null;
 
+  // Strictness L1 (Fast) skips cross-LLM entirely — extractor + score only.
   const wantsLayer1 =
+    strictness >= 2 &&
     Array.isArray(context.providers) &&
     context.providers.length > 0 &&
     typeof context.prompt === 'string' &&
@@ -123,5 +136,12 @@ export async function evaluate(
     threshold: score.threshold,
     formula: score.formula,
     cross_llm: cross,
+    strictness,
+    agreement_zone: null,
+    consensus_answer: null,
+    claim_vs_consensus_similarity: null,
+    claim_contradicts_consensus: null,
+    tampering_suspected: null,
+    tampering_signal: null,
   };
 }
