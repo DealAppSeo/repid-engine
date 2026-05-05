@@ -48,7 +48,7 @@ export function jaccardSimilarity(a: string, b: string): number {
  *
  * Veto requires >= 3 beliefs; with 2 the gap is meaningless.
  */
-export function checkPythagoreanComma(beliefs: number[]): {
+export function checkPythagoreanComma(beliefs: number[], commaOverride?: number): {
   severity: CommaSeverity;
   comma_gap: number | null;
   comma_veto: boolean;
@@ -56,7 +56,14 @@ export function checkPythagoreanComma(beliefs: number[]): {
   if (beliefs.length < 3) {
     return { severity: 'none', comma_gap: null, comma_veto: false };
   }
-  const t = COMMA_BFT_THRESHOLDS;
+  const t = { ...COMMA_BFT_THRESHOLDS };
+  if (commaOverride !== undefined) {
+    const originalNormalized = 1 / 1.0136433;
+    const newNormalized = 1 / commaOverride;
+    const diff = newNormalized - originalNormalized;
+    t.vetoAvg += diff;
+    t.majorAvg += diff;
+  }
   const gap = Math.max(...beliefs) - Math.min(...beliefs);
   const avg = beliefs.reduce((s, b) => s + b, 0) / beliefs.length;
   if (gap < t.vetoGap && avg > t.vetoAvg) {

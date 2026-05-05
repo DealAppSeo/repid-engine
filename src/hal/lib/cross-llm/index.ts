@@ -29,6 +29,7 @@ export interface CrossLLMOptions {
   timeoutMs?: number;
   /** Default true — set false to skip Supabase writes even when supabase is provided. */
   persist?: boolean;
+  commaOverride?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -129,7 +130,7 @@ export async function checkCrossLLM(
   const { beliefs, meanAgreement, methodology } = await computeAgreement(
     answered, options.embeddingClient,
   );
-  const { severity, comma_gap, comma_veto } = checkPythagoreanComma(beliefs);
+  const { severity, comma_gap, comma_veto } = checkPythagoreanComma(beliefs, options.commaOverride);
 
   const agreement_score = Math.max(0, Math.min(1, meanAgreement));
   const result: CrossLLMSummary = {
