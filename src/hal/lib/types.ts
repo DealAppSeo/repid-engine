@@ -81,6 +81,10 @@ export interface HALEmbeddingClient {
  * and `certainty` which the extractor reads.
  *
  * - `providers`: cross-LLM consensus runs only when this has ≥1 entry.
+ * - `classifierProvider`: optional Layer 0 classifier provider. When set
+ *   AND `prompt` is set, evaluate() classifies the prompt first and
+ *   only runs cross-LLM for categories ∈ {factual, time-sensitive}.
+ *   When omitted, cross-LLM runs unconditionally if `providers` + `prompt`.
  * - `embeddingClient`: required for embedding-cosine similarity; without
  *   it, agreement falls back to Jaccard token overlap.
  * - `supabase`: opt-in logging. null/undefined ⇒ library is silent.
@@ -92,6 +96,7 @@ export interface HALContext {
   certainty: number;
   prompt?: string;
   providers?: HALProviderConfig[];
+  classifierProvider?: HALProviderConfig | null;
   embeddingClient?: HALEmbeddingClient | null;
   supabase?: unknown | null; // typed as `unknown` to avoid coupling to @supabase/supabase-js in this file
   threshold?: number;
