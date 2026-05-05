@@ -131,7 +131,11 @@ export async function extractHALSignalsWithCrossLLM(
   try {
     const cls = await classify(prompt);
     category = cls?.category ?? null;
-    if (category === 'factual' || category === 'time-sensitive') {
+    if (category === 'factual' || category === 'time-sensitive' || category === 'math') {
+      // P5-A (2026-05-04): 'math' added so Pythagorean Comma BFT can fire on
+      // math fabrications (HAL-T1-003: 256/243 ≠ Pythagorean Comma). Without
+      // this, the *0.15 mathematics dampening lands hal_score below 0.25 and
+      // there's no Layer 1 path to catch the mis-stated foundational ratio.
       const cmp = await checkCrossLLM(prompt);
       if (cmp && typeof cmp.agreement_score === 'number') {
         agreement = cmp.agreement_score;

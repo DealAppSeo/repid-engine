@@ -30,6 +30,7 @@ import {
   evaluate,
   HAL_PYTHAGOREAN_COMMA,
   HAL_DEFAULT_VETO_THRESHOLD,
+  type HALEmbeddingClient,
   type HALProviderConfig,
   type HALResult,
 } from '../src/hal/lib';
@@ -93,7 +94,10 @@ function buildProviders(): HALProviderConfig[] {
     providers.push({
       provider: 'cerebras',
       squad: 'beta',
-      model: process.env.SMOKE_CEREBRAS_MODEL ?? 'llama-3.3-70b',
+      // The Cerebras free tier currently only exposes llama3.1-8b — larger
+      // models 404 with "model not found". Override with SMOKE_CEREBRAS_MODEL
+      // when an upgraded plan is available.
+      model: process.env.SMOKE_CEREBRAS_MODEL ?? 'llama3.1-8b',
       endpoint: 'https://api.cerebras.ai/v1/chat/completions',
       apiKey: process.env.CEREBRAS_API_KEY,
       callType: 'openai-compat',
@@ -101,10 +105,22 @@ function buildProviders(): HALProviderConfig[] {
     });
   }
 
+  if (process.env.OPENAI_API_KEY) {
+    providers.push({
+      provider: 'openai',
+      squad: 'gamma',
+      model: process.env.SMOKE_OPENAI_MODEL ?? 'gpt-4o-mini',
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+      apiKey: process.env.OPENAI_API_KEY,
+      callType: 'openai-compat',
+      timeoutMs: 15_000,
+    });
+  }
+
   if (process.env.ANTHROPIC_API_KEY) {
     providers.push({
       provider: 'anthropic',
-      squad: 'gamma',
+      squad: 'delta',
       model: process.env.SMOKE_ANTHROPIC_MODEL ?? 'claude-haiku-4-5-20251001',
       endpoint: 'https://api.anthropic.com/v1/messages',
       apiKey: process.env.ANTHROPIC_API_KEY,
@@ -116,7 +132,7 @@ function buildProviders(): HALProviderConfig[] {
   if (process.env.DEEPSEEK_API_KEY) {
     providers.push({
       provider: 'deepseek',
-      squad: 'delta',
+      squad: 'epsilon',
       model: process.env.SMOKE_DEEPSEEK_MODEL ?? 'deepseek-chat',
       endpoint: 'https://api.deepseek.com/v1/chat/completions',
       apiKey: process.env.DEEPSEEK_API_KEY,
@@ -126,6 +142,16 @@ function buildProviders(): HALProviderConfig[] {
   }
 
   return providers;
+}
+
+function buildEmbeddingClient(): HALEmbeddingClient | null {
+  if (!process.env.OPENAI_API_KEY) return null;
+  return {
+    endpoint: 'https://api.openai.com/v1/embeddings',
+    apiKey: process.env.OPENAI_API_KEY,
+    model: process.env.SMOKE_EMBEDDING_MODEL ?? 'text-embedding-3-small',
+    timeoutMs: 10_000,
+  };
 }
 
 function buildClassifier(): HALProviderConfig | null {
@@ -196,6 +222,7 @@ function summarize(c: SmokeCase, r: HALResult): void {
 async function main(): Promise<number> {
   const providers = buildProviders();
   const classifier = buildClassifier();
+  const embeddingClient = buildEmbeddingClient();
 
   console.log('=== HAL Library External-Caller Smoke Test (Phase 5) ===');
   console.log(`PYTHAGOREAN_COMMA: ${HAL_PYTHAGOREAN_COMMA}`);
@@ -205,6 +232,9 @@ async function main(): Promise<number> {
       providers.map(p => `${p.provider}/${p.model}`).join(', '),
   );
   console.log(`Classifier: ${classifier ? `${classifier.provider}/${classifier.model}` : 'NONE'}`);
+  console.log(
+    `Embedding: ${embeddingClient ? embeddingClient.model : 'NONE (Jaccard fallback)'}`,
+  );
 
   if (providers.length < 2) {
     console.error(
@@ -227,6 +257,7 @@ async function main(): Promise<number> {
         prompt: c.prompt,
         providers,
         classifierProvider: classifier,
+        embeddingClient,
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
