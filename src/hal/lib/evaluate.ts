@@ -10,7 +10,12 @@
  * Layer 1 (cross-LLM) only runs when:
  *   - context.providers has ≥1 entry, AND
  *   - context.prompt is provided, AND
- *   - the classifier returns category ∈ {factual, time-sensitive}.
+ *   - the classifier returns category ∈ {factual, time-sensitive, math}.
+ *
+ * The 'math' category was added in P5-A (2026-05-04) so the Pythagorean
+ * Comma BFT can fire on math fabrications (HAL-T1-003). Production
+ * src/services/hal-signals.ts mirrors the same gate — the two paths must
+ * stay byte-identical.
  *
  * If context.classifierProvider is omitted but providers and prompt are
  * present, Layer 1 still runs (caller has opted into cross-LLM, the
@@ -34,7 +39,7 @@ import type {
   HALSignals,
 } from './types';
 
-const LAYER_1_GATE_CATEGORIES = new Set(['factual', 'time-sensitive']);
+const LAYER_1_GATE_CATEGORIES = new Set(['factual', 'time-sensitive', 'math']);
 
 export async function evaluate(
   claimText: string,
