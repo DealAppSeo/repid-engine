@@ -1,0 +1,978 @@
+[
+  {
+    "id": "cre-overconfident-high",
+    "description": "CRE overconfident specific claim, high certainty",
+    "input": {
+      "text": "LA industrial cap rates definitely compressed 4.8% in 2024, proven fact.",
+      "domain": "cre-underwriting",
+      "certainty": 0.95
+    },
+    "expected": {
+      "harm_probability": 0.64,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.56,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.95
+    }
+  },
+  {
+    "id": "cre-hedged-high",
+    "description": "CRE hedged claim with evidence, high certainty",
+    "input": {
+      "text": "Based on CBRE data, industrial cap rates in LA may have compressed approximately 0.5-1.2% in Q3 2024.",
+      "domain": "cre-underwriting",
+      "certainty": 0.82
+    },
+    "expected": {
+      "harm_probability": 0.08,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.62,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.82
+    }
+  },
+  {
+    "id": "cre-overconfident-mid",
+    "description": "CRE overconfident, mid certainty",
+    "input": {
+      "text": "NOI is guaranteed to grow 15% next year for all multifamily.",
+      "domain": "cre-underwriting",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0.26,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.36,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "cre-hedged-low",
+    "description": "CRE hedged, low certainty",
+    "input": {
+      "text": "Cap rates may slightly tighten, but DSCR could vary.",
+      "domain": "cre-underwriting",
+      "certainty": 0.4
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.005555555555555591,
+      "evidence_quality": 0.29000000000000004,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.4
+    }
+  },
+  {
+    "id": "cre-empty",
+    "description": "empty text in CRE domain",
+    "input": {
+      "text": "",
+      "domain": "cre-underwriting",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "cre-numbers-no-hedges",
+    "description": "CRE specific numbers, no hedges, high certainty",
+    "input": {
+      "text": "Cap rate is 5.2%, NOI grew 8.4% in Q4.",
+      "domain": "cre-underwriting",
+      "certainty": 0.9
+    },
+    "expected": {
+      "harm_probability": 0.16,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.54,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.9
+    }
+  },
+  {
+    "id": "cre-long-evidence",
+    "description": "CRE long verbose evidence-rich claim",
+    "input": {
+      "text": "According to CoStar Q3 2024 data, industrial vacancy in the LA-Long Beach corridor declined 30 basis points to 4.1% while average asking rents rose 6% year-over-year, suggesting underwritten rent growth assumptions of 3-4% appear conservative for class A product.",
+      "domain": "cre-underwriting",
+      "certainty": 0.78
+    },
+    "expected": {
+      "harm_probability": 0.32,
+      "epistemic_uncertainty": 0.2448717948717949,
+      "evidence_quality": 0.99,
+      "scope_appropriateness": 0.8,
+      "certainty_at_claim": 0.78
+    }
+  },
+  {
+    "id": "compliance-overconfident",
+    "description": "compliance overconfident",
+    "input": {
+      "text": "GDPR definitely does not apply to US-only data, no risk whatsoever.",
+      "domain": "compliance",
+      "certainty": 0.9
+    },
+    "expected": {
+      "harm_probability": 0.18,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.11000000000000001,
+      "scope_appropriateness": 0.23529411764705882,
+      "certainty_at_claim": 0.9
+    }
+  },
+  {
+    "id": "compliance-hedged",
+    "description": "compliance hedged",
+    "input": {
+      "text": "SEC enforcement may indicate increased scrutiny, according to recent filings.",
+      "domain": "compliance",
+      "certainty": 0.65
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.30000000000000004,
+      "scope_appropriateness": 0.47058823529411764,
+      "certainty_at_claim": 0.65
+    }
+  },
+  {
+    "id": "compliance-mid",
+    "description": "compliance neutral, mid certainty",
+    "input": {
+      "text": "AI Act compliance requires risk assessment and disclosure.",
+      "domain": "compliance",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.08000000000000002,
+      "scope_appropriateness": 0.7058823529411765,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "compliance-evidence-rich",
+    "description": "compliance evidence-rich",
+    "input": {
+      "text": "Per SEC Rule 10b-5 enforcement actions Q2 2024, Bank of America paid $250 million in penalties for disclosure violations.",
+      "domain": "compliance",
+      "certainty": 0.88
+    },
+    "expected": {
+      "harm_probability": 0.08,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.64,
+      "scope_appropriateness": 0.9411764705882353,
+      "certainty_at_claim": 0.88
+    }
+  },
+  {
+    "id": "compliance-empty",
+    "description": "empty text in compliance domain",
+    "input": {
+      "text": "",
+      "domain": "compliance",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "finance-overconfident",
+    "description": "finance overconfident specific number",
+    "input": {
+      "text": "EBITDA margins will absolutely hit 25%, guaranteed.",
+      "domain": "finance",
+      "certainty": 0.95
+    },
+    "expected": {
+      "harm_probability": 0.46,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.32,
+      "scope_appropriateness": 0.4444444444444444,
+      "certainty_at_claim": 0.95
+    }
+  },
+  {
+    "id": "finance-hedged",
+    "description": "finance hedged with reference",
+    "input": {
+      "text": "Based on Bloomberg consensus, revenue growth could approximately reach 12% in FY2025.",
+      "domain": "finance",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0.08,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.37,
+      "scope_appropriateness": 0.2222222222222222,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "finance-low-cert",
+    "description": "finance low certainty hedged",
+    "input": {
+      "text": "Yields might trend slightly lower, perhaps.",
+      "domain": "finance",
+      "certainty": 0.3
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.06,
+      "scope_appropriateness": 0.2222222222222222,
+      "certainty_at_claim": 0.3
+    }
+  },
+  {
+    "id": "finance-mid",
+    "description": "finance neutral mid certainty",
+    "input": {
+      "text": "Portfolio returns averaged 7.2% over 2020-2023.",
+      "domain": "finance",
+      "certainty": 0.8
+    },
+    "expected": {
+      "harm_probability": 0.08,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.51,
+      "scope_appropriateness": 0.4444444444444444,
+      "certainty_at_claim": 0.8
+    }
+  },
+  {
+    "id": "finance-empty",
+    "description": "empty text in finance domain",
+    "input": {
+      "text": "",
+      "domain": "finance",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "finance-very-short",
+    "description": "finance very short",
+    "input": {
+      "text": "EBITDA up.",
+      "domain": "finance",
+      "certainty": 0.75
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.020000000000000004,
+      "scope_appropriateness": 0.2222222222222222,
+      "certainty_at_claim": 0.75
+    }
+  },
+  {
+    "id": "tech-overconfident-high",
+    "description": "technical overconfident, high cert",
+    "input": {
+      "text": "Plonky3 definitely uses BN254 elliptic curve with Groth16, absolutely requires trusted setup.",
+      "domain": "technical",
+      "certainty": 0.92
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.37,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.92
+    }
+  },
+  {
+    "id": "tech-verifiable",
+    "description": "technical verifiable mathematical truth",
+    "input": {
+      "text": "The Pythagorean Comma ratio is exactly 531441/524288, approximately 1.01364, representing the gap between twelve perfect fifths and seven octaves.",
+      "domain": "technical",
+      "certainty": 0.99
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.23947368421052634,
+      "evidence_quality": 0.5900000000000001,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.99
+    }
+  },
+  {
+    "id": "tech-hedged",
+    "description": "technical hedged with year reference",
+    "input": {
+      "text": "According to the 2023 STARK paper, recursive proofs may reduce verification cost approximately by 100x.",
+      "domain": "technical",
+      "certainty": 0.78
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.6000000000000001,
+      "scope_appropriateness": 0.23529411764705882,
+      "certainty_at_claim": 0.78
+    }
+  },
+  {
+    "id": "tech-mid",
+    "description": "technical neutral",
+    "input": {
+      "text": "The protocol uses keccak256 hashes for the Merkle tree.",
+      "domain": "technical",
+      "certainty": 0.85
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.34,
+      "scope_appropriateness": 0.47058823529411764,
+      "certainty_at_claim": 0.85
+    }
+  },
+  {
+    "id": "tech-empty",
+    "description": "empty text in technical domain",
+    "input": {
+      "text": "",
+      "domain": "technical",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "legal-overconfident",
+    "description": "legal overconfident",
+    "input": {
+      "text": "This NDA is definitively unenforceable in California, undeniably so.",
+      "domain": "legal",
+      "certainty": 0.92
+    },
+    "expected": {
+      "harm_probability": 0.36,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.09000000000000001,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.92
+    }
+  },
+  {
+    "id": "legal-hedged",
+    "description": "legal hedged with case reference",
+    "input": {
+      "text": "Per recent appellate precedent, indemnification clauses appear to require explicit consideration in most jurisdictions.",
+      "domain": "legal",
+      "certainty": 0.68
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.30714285714285716,
+      "evidence_quality": 0.13999999999999999,
+      "scope_appropriateness": 1,
+      "certainty_at_claim": 0.68
+    }
+  },
+  {
+    "id": "legal-mid",
+    "description": "legal neutral",
+    "input": {
+      "text": "The covenant runs with the land per the 2018 deed.",
+      "domain": "legal",
+      "certainty": 0.85
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.55,
+      "scope_appropriateness": 0.3333333333333333,
+      "certainty_at_claim": 0.85
+    }
+  },
+  {
+    "id": "legal-empty",
+    "description": "empty text in legal domain",
+    "input": {
+      "text": "",
+      "domain": "legal",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "math-confident-no-hedge",
+    "description": "math confident no hedges (dampening kicks in)",
+    "input": {
+      "text": "The integral of e^x is e^x plus a constant.",
+      "domain": "mathematics",
+      "certainty": 0.99
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.08325,
+      "evidence_quality": 0.09000000000000001,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.99
+    }
+  },
+  {
+    "id": "math-hedged",
+    "description": "math hedged",
+    "input": {
+      "text": "The integral might evaluate to roughly e^x + C, approximately.",
+      "domain": "mathematics",
+      "certainty": 0.92
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.1,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.92
+    }
+  },
+  {
+    "id": "math-overconfident",
+    "description": "math overconfident",
+    "input": {
+      "text": "Pi is exactly 3.14, definitely, no doubt.",
+      "domain": "mathematics",
+      "certainty": 0.99
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.08325,
+      "evidence_quality": 0.32,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.99
+    }
+  },
+  {
+    "id": "math-empty",
+    "description": "empty text math",
+    "input": {
+      "text": "",
+      "domain": "mathematics",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.0675,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "crypto-confident-no-hedge",
+    "description": "crypto confident no hedges (dampened)",
+    "input": {
+      "text": "AES-256 has a 256-bit key and uses Rijndael cipher.",
+      "domain": "cryptography",
+      "certainty": 0.99
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.08325,
+      "evidence_quality": 0.34,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.99
+    }
+  },
+  {
+    "id": "crypto-overconfident",
+    "description": "crypto overconfident",
+    "input": {
+      "text": "SHA-256 is 100% unbreakable, guaranteed forever.",
+      "domain": "cryptography",
+      "certainty": 0.95
+    },
+    "expected": {
+      "harm_probability": 0.64,
+      "epistemic_uncertainty": 0.08325,
+      "evidence_quality": 0.31,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.95
+    }
+  },
+  {
+    "id": "crypto-hedged",
+    "description": "crypto hedged with year ref",
+    "input": {
+      "text": "Per the 2018 NIST analysis, SHA-3 may offer reduced collision risk.",
+      "domain": "cryptography",
+      "certainty": 0.8
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.04022727272727273,
+      "evidence_quality": 0.56,
+      "scope_appropriateness": 0.2222222222222222,
+      "certainty_at_claim": 0.8
+    }
+  },
+  {
+    "id": "unknown-domain",
+    "description": "unknown domain falls back to finance",
+    "input": {
+      "text": "Quantum entanglement applies to portfolio risk.",
+      "domain": "biology",
+      "certainty": 0.6
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.06,
+      "scope_appropriateness": 0.4444444444444444,
+      "certainty_at_claim": 0.6
+    }
+  },
+  {
+    "id": "unknown-domain-finance-overlap",
+    "description": "unknown domain with finance terms",
+    "input": {
+      "text": "EBITDA margin and portfolio yield are key metrics.",
+      "domain": "astrology",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.08000000000000002,
+      "scope_appropriateness": 0.8888888888888888,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "cert-sweep-01",
+    "description": "mid-quality CRE claim, certainty 0.10",
+    "input": {
+      "text": "Cap rates on industrial may compress modestly.",
+      "domain": "cre-underwriting",
+      "certainty": 0.1
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.27,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.1
+    }
+  },
+  {
+    "id": "cert-sweep-30",
+    "description": "mid-quality CRE claim, certainty 0.30",
+    "input": {
+      "text": "Cap rates on industrial may compress modestly.",
+      "domain": "cre-underwriting",
+      "certainty": 0.3
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.27,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.3
+    }
+  },
+  {
+    "id": "cert-sweep-50",
+    "description": "mid-quality CRE claim, certainty 0.50",
+    "input": {
+      "text": "Cap rates on industrial may compress modestly.",
+      "domain": "cre-underwriting",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.27,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "cert-sweep-70",
+    "description": "mid-quality CRE claim, certainty 0.70",
+    "input": {
+      "text": "Cap rates on industrial may compress modestly.",
+      "domain": "cre-underwriting",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.27,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "cert-sweep-85",
+    "description": "mid-quality CRE claim, certainty 0.85",
+    "input": {
+      "text": "Cap rates on industrial may compress modestly.",
+      "domain": "cre-underwriting",
+      "certainty": 0.85
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.27,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.85
+    }
+  },
+  {
+    "id": "cert-sweep-92",
+    "description": "mid-quality CRE claim, certainty 0.92",
+    "input": {
+      "text": "Cap rates on industrial may compress modestly.",
+      "domain": "cre-underwriting",
+      "certainty": 0.92
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.27,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.92
+    }
+  },
+  {
+    "id": "cert-sweep-99",
+    "description": "mid-quality CRE claim, certainty 0.99",
+    "input": {
+      "text": "Cap rates on industrial may compress modestly.",
+      "domain": "cre-underwriting",
+      "certainty": 0.99
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.27,
+      "scope_appropriateness": 0.4,
+      "certainty_at_claim": 0.99
+    }
+  },
+  {
+    "id": "edge-empty-finance",
+    "description": "empty string in finance",
+    "input": {
+      "text": "",
+      "domain": "finance",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "edge-single-word",
+    "description": "one-word claim",
+    "input": {
+      "text": "Bullish.",
+      "domain": "finance",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "edge-single-overconfidence",
+    "description": "single overconfidence marker",
+    "input": {
+      "text": "guaranteed",
+      "domain": "finance",
+      "certainty": 0.95
+    },
+    "expected": {
+      "harm_probability": 0.38,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.95
+    }
+  },
+  {
+    "id": "edge-single-hedge",
+    "description": "single hedge",
+    "input": {
+      "text": "maybe",
+      "domain": "finance",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.010000000000000002,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "edge-all-hedges",
+    "description": "all hedges no content",
+    "input": {
+      "text": "might could perhaps maybe approximately probably likely",
+      "domain": "finance",
+      "certainty": 0.5
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.06999999999999999,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.5
+    }
+  },
+  {
+    "id": "edge-all-overconf",
+    "description": "all overconfidence markers no content",
+    "input": {
+      "text": "guaranteed certain definitive proven fact always",
+      "domain": "finance",
+      "certainty": 0.99
+    },
+    "expected": {
+      "harm_probability": 1,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.06,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.99
+    }
+  },
+  {
+    "id": "edge-very-long",
+    "description": "very long verbose claim",
+    "input": {
+      "text": "In examining the historical performance of class A office product across the LA-Long Beach corridor between Q1 2018 and Q4 2023, transactional cap rates as reported by CoStar, JLL, and CBRE indicate a compression cycle followed by re-expansion driven by Federal Reserve policy normalization, with average asking rents rising approximately 14% cumulatively over the period and vacancy oscillating between 6.2% and 11.8%, suggesting that underwriting assumptions of 3-4% annual rent growth and stable 5-6% cap rates appear reasonable for institutional-grade product in submarkets with industrial and creative-office tenant demand.",
+      "domain": "cre-underwriting",
+      "certainty": 0.81
+    },
+    "expected": {
+      "harm_probability": 0.4,
+      "epistemic_uncertainty": 0.29269662921348316,
+      "evidence_quality": 1,
+      "scope_appropriateness": 1,
+      "certainty_at_claim": 0.81
+    }
+  },
+  {
+    "id": "edge-all-numbers",
+    "description": "all numbers and percentages",
+    "input": {
+      "text": "5.2% 8.1% 12.3% 0.45% 100bps",
+      "domain": "finance",
+      "certainty": 0.85
+    },
+    "expected": {
+      "harm_probability": 0.4,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.3,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.85
+    }
+  },
+  {
+    "id": "edge-proper-nouns",
+    "description": "rich in proper nouns",
+    "input": {
+      "text": "Bank of America, JPMorgan Chase, Goldman Sachs all reported gains in Q3 2024.",
+      "domain": "finance",
+      "certainty": 0.85
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.29615384615384616,
+      "evidence_quality": 0.73,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.85
+    }
+  },
+  {
+    "id": "edge-temporal-marker",
+    "description": "temporal markers",
+    "input": {
+      "text": "In Q3 2024 and January 2023, performance varied.",
+      "domain": "finance",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.53,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "edge-no-temporal-no-numbers",
+    "description": "no numbers no temporal",
+    "input": {
+      "text": "Performance has improved according to recent trends.",
+      "domain": "finance",
+      "certainty": 0.7
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.2,
+      "evidence_quality": 0.06999999999999999,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.7
+    }
+  },
+  {
+    "id": "edge-mixed",
+    "description": "mix of overconfidence + hedge (rare in real text)",
+    "input": {
+      "text": "It is guaranteed that perhaps the result may definitely vary approximately.",
+      "domain": "finance",
+      "certainty": 0.85
+    },
+    "expected": {
+      "harm_probability": 0.18,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.31000000000000005,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.85
+    }
+  },
+  {
+    "id": "bonus-just-below",
+    "description": "overconfidence with cert 0.92 (boundary, no bonus)",
+    "input": {
+      "text": "Definitely guaranteed.",
+      "domain": "finance",
+      "certainty": 0.92
+    },
+    "expected": {
+      "harm_probability": 0.18,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.020000000000000004,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.92
+    }
+  },
+  {
+    "id": "bonus-just-above",
+    "description": "overconfidence with cert 0.93 (bonus fires)",
+    "input": {
+      "text": "Definitely guaranteed.",
+      "domain": "finance",
+      "certainty": 0.93
+    },
+    "expected": {
+      "harm_probability": 0.38,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.020000000000000004,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.93
+    }
+  },
+  {
+    "id": "bonus-no-overconf",
+    "description": "cert 0.99 no overconfidence (no bonus)",
+    "input": {
+      "text": "Performance varied across periods.",
+      "domain": "finance",
+      "certainty": 0.99
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.04000000000000001,
+      "scope_appropriateness": 0,
+      "certainty_at_claim": 0.99
+    }
+  },
+  {
+    "id": "mismatch-boundary-just-below",
+    "description": "cert 0.88 zero hedges (no mismatch)",
+    "input": {
+      "text": "EBITDA grew steadily.",
+      "domain": "finance",
+      "certainty": 0.88
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.45,
+      "evidence_quality": 0.03,
+      "scope_appropriateness": 0.2222222222222222,
+      "certainty_at_claim": 0.88
+    }
+  },
+  {
+    "id": "mismatch-boundary-just-above",
+    "description": "cert 0.89 zero hedges (mismatch fires)",
+    "input": {
+      "text": "EBITDA grew steadily.",
+      "domain": "finance",
+      "certainty": 0.89
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0.8,
+      "evidence_quality": 0.03,
+      "scope_appropriateness": 0.2222222222222222,
+      "certainty_at_claim": 0.89
+    }
+  },
+  {
+    "id": "mismatch-with-hedges",
+    "description": "cert 0.95 plenty of hedges (no mismatch)",
+    "input": {
+      "text": "EBITDA may have grown approximately, perhaps.",
+      "domain": "finance",
+      "certainty": 0.95
+    },
+    "expected": {
+      "harm_probability": 0,
+      "epistemic_uncertainty": 0,
+      "evidence_quality": 0.26,
+      "scope_appropriateness": 0.2222222222222222,
+      "certainty_at_claim": 0.95
+    }
+  }
+]
