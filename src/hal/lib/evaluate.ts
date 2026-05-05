@@ -26,17 +26,24 @@
  * verbatim from src/services/hal-signals.ts:extractHALSignalsWithCrossLLM
  * + the consumer-side veto compose at /score-event and /api/v1/hal/signals.
  */
+import { compareConsensusToClaim } from './claim-comparison';
 import { checkCrossLLM } from './cross-llm';
 import { classify } from './classifier';
-import { HAL_DEFAULT_VETO_THRESHOLD } from './constants';
+import {
+  COMMA_BAND_TIGHT_THRESHOLD,
+  HAL_DEFAULT_VETO_THRESHOLD,
+} from './constants';
 import { extractHALSignals } from './extract';
 import { computeHALScore } from './score';
+import { classifyAgreementZone } from './zones';
 import type {
+  AgreementZone,
   CommaSeverity,
   CrossLLMSummary,
   HALContext,
   HALResult,
   HALSignals,
+  HALTamperingSignal,
   StrictnessLevel,
 } from './types';
 
@@ -123,7 +130,64 @@ export async function evaluate(
   const score = computeHALScore(enrichedSignals, threshold);
 
   const severity: CommaSeverity | null = cross ? cross.comma_severity : null;
-  const vetoed = score.vetoed || severity === 'critical';
+  let vetoed = score.vetoed || severity === 'critical';
+
+  // ---- Phase 4 zone classification (level 4+ acts on it) ----------------
+  let agreementZone: AgreementZone | null = null;
+  if (strictness >= 4 && cross) {
+    agreementZone = classifyAgreementZone(cross.agreement_score);
+  }
+
+  // ---- Phase 3 consensus-vs-claim comparison (level 4+) -----------------
+  let consensusAnswer: string | null = null;
+  let claimVsConsensusSim: number | null = null;
+  let claimContradicts: boolean | null = null;
+  if (
+    strictness >= 4 &&
+    cross &&
+    Array.isArray(cross.answers_per_provider) &&
+    agreementZone === 'in-band'
+  ) {
+    const answers = cross.answers_per_provider
+      .filter(a => !a.error && typeof a.answer === 'string' && a.answer.trim().length > 0)
+      .map(a => a.answer);
+    if (answers.length >= 2) {
+      try {
+        const cmp = await compareConsensusToClaim({
+          claim: claimText,
+          responses: answers,
+          embeddingClient: context.embeddingClient ?? null,
+        });
+        if (cmp) {
+          consensusAnswer = cmp.consensus_answer;
+          claimVsConsensusSim = cmp.similarity;
+          claimContradicts = cmp.contradicts;
+          if (cmp.contradicts) vetoed = true;
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error('[hal/lib/evaluate] claim-comparison failed:', msg);
+      }
+    }
+  }
+
+  // ---- Phase 5 tampering detection (level 5 only) -----------------------
+  let tamperingSuspected: boolean | null = null;
+  let tamperingSignal: HALTamperingSignal | null = null;
+  if (strictness >= 5 && cross && agreementZone === 'too-tight') {
+    tamperingSuspected = true;
+    tamperingSignal = {
+      similarity: cross.agreement_score,
+      responses: cross.answers_per_provider
+        .filter(a => !a.error && a.answer)
+        .map(a => a.answer),
+      reason:
+        `Agreement ${cross.agreement_score.toFixed(3)} above ` +
+        `${COMMA_BAND_TIGHT_THRESHOLD} threshold — suspiciously tight ` +
+        `consensus collapse (potential tampering, training-data ` +
+        `contamination, or coordinated prompt injection).`,
+    };
+  }
 
   // void output — kept in signature for forward-compat with separate
   // claim/output evaluations; the Path A extractor scores claimText.
@@ -137,11 +201,11 @@ export async function evaluate(
     formula: score.formula,
     cross_llm: cross,
     strictness,
-    agreement_zone: null,
-    consensus_answer: null,
-    claim_vs_consensus_similarity: null,
-    claim_contradicts_consensus: null,
-    tampering_suspected: null,
-    tampering_signal: null,
+    agreement_zone: agreementZone,
+    consensus_answer: consensusAnswer,
+    claim_vs_consensus_similarity: claimVsConsensusSim,
+    claim_contradicts_consensus: claimContradicts,
+    tampering_suspected: tamperingSuspected,
+    tampering_signal: tamperingSignal,
   };
 }

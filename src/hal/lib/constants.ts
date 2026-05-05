@@ -48,6 +48,28 @@ export const COMMA_BFT_THRESHOLDS = {
 } as const;
 
 /**
+ * Wave 5 — Pythagorean Comma BAND classification (level 4+).
+ *
+ * The Pythagorean Comma defines the principled CENTER of the agreement
+ * band. Agreement TIGHTER than the band = suspicious (potential
+ * tampering / training-data contamination). Agreement WITHIN the band
+ * = trusted consensus. Agreement LOOSER than the band = uncertainty.
+ *
+ * Initial calibration (refined by federated learning, v0.2-0.3):
+ *   - Comma value: 1.0136433 (531441/524288, sacred — never modify)
+ *   - Normalized to similarity scale: ~0.987 (1 / 1.0136433)
+ *   - Band width: ±0.05 around the comma normalized value
+ *   - Too-tight zone:  similarity > 0.99  (suspiciously perfect)
+ *   - In-band zone:    0.95 < similarity ≤ 0.99  (trusted consensus)
+ *   - Too-loose zone:  similarity ≤ 0.95  (uncertainty)
+ *
+ * These zone boundaries are calibratable. The Pythagorean Comma
+ * constant itself is fixed (patent-load-bearing, hard-rule #2).
+ */
+export const COMMA_BAND_TIGHT_THRESHOLD: number = 0.99;
+export const COMMA_BAND_LOOSE_THRESHOLD: number = 0.95;
+
+/**
  * Domain ontology vocabularies. High-level definition only — caller can
  * supply additional/custom ontologies via context.
  */
