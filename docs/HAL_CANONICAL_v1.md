@@ -239,3 +239,17 @@ Do not treat any of them as live logic.
 - Benchmark / antifragility pipeline (`src/services/hal-tester.ts`, `src/index.ts:184-245`) assumes an `hal_test_prompts` table exists in Supabase. Schema is not managed from this repo (see `CLAUDE.md` — migrations live externally).
 
 - Rate limiting at `src/index.ts:40-44` (scoreLimiter) uses `ipKeyGenerator(req.ip ?? '')` as an IPv6-safe fallback — added in commit `36226dc` to fix the Railway `ERR_ERL_KEY_GEN_IPV6` crash.
+
+---
+
+## Wave 5 update (2026-05-04) — strictness scale
+
+The library at `src/hal/lib/` now exposes a 5-level strictness scale (default 4). Layer behavior is gated by level:
+
+- **L1 Fast** — extractor only.
+- **L2 Light** — adds cross-LLM with semantic (cosine on embeddings) similarity.
+- **L3 Balanced** — adds Pythagorean Comma BFT critical-veto. **Byte-identical to pre-Wave-5 production behavior.**
+- **L4 Strict (DEFAULT)** — adds three-zone band classification (`COMMA_BAND_TIGHT_THRESHOLD=0.99`, `COMMA_BAND_LOOSE_THRESHOLD=0.95`) and consensus-vs-claim comparison (catches HAL-T1-003 class fabrications).
+- **L5 Maximum** — adds tampering signal when zone is `too-tight`.
+
+The Pythagorean Comma constant (`531441/524288`) remains fixed and patent-load-bearing. Zone boundaries and the claim-contradiction threshold are calibratable around it. See [HAL_LIBRARY_API.md](./HAL_LIBRARY_API.md) for the full spec and [HAL_TAMPERING_DETECTION.md](./HAL_TAMPERING_DETECTION.md) for the level-5 tampering signal.

@@ -287,3 +287,28 @@ Per CLAUDE-RULE-3 (code discipline) + sprint hard rule #5 (production safety):
 
 Sprint Phase 1 task #1 mentions querying "agent_logs (or whatever table HAL writes evaluation records to)" for production case examples. **Need to locate the table.** Candidates from prior sessions: `hal_production_events`, `cross_llm_comparisons` (used by HAL's persist), `trinity_truth_log`. Will check schema in Phase 1.
 
+
+---
+
+## Wave 5 update (2026-05-04)
+
+The library structure has grown beyond the original Phase 3 inventory. Files added by Wave 5 sprint:
+
+| File | Purpose |
+|---|---|
+| `src/hal/lib/semantic.ts` | `semanticPairSimilarity`, `computeSemanticSimilarity` — pair/set cosine on embeddings, Jaccard fallback |
+| `src/hal/lib/claim-comparison.ts` | `compareConsensusToClaim` — picks consensus answer, compares against user claim, returns contradicts boolean |
+| `src/hal/lib/zones.ts` | `classifyAgreementZone` — three-zone Pythagorean Comma band (too-tight/in-band/too-loose) |
+| `src/hal/lib/cross-llm/embedding-client.ts` | `XenovaEmbeddingClient`, `OpenAIEmbeddingClient`, `VoyageEmbeddingClient`, `FallbackEmbeddingClient`, `createDefaultEmbeddingClient` — embedding-backend factories |
+| `src/hal/lib/clients/embedding.ts` | Alternative factory functions (xenova-local, openai) — both shapes coexist |
+| `docs/HAL_TAMPERING_DETECTION.md` | Spec for level-5 tampering signal |
+
+Files modified by Wave 5:
+
+| File | Change |
+|---|---|
+| `src/hal/lib/types.ts` | Added `StrictnessLevel`, `AgreementZone`, `HALTamperingSignal` types; `HALResult` extended with `agreement_zone`, `consensus_answer`, `claim_vs_consensus_similarity`, `claim_contradicts_consensus`, `tampering_suspected`, `tampering_signal`, `strictness`; `HALContext` accepts optional `strictness` (default 4) |
+| `src/hal/lib/constants.ts` | Added `COMMA_BAND_TIGHT_THRESHOLD = 0.99`, `COMMA_BAND_LOOSE_THRESHOLD = 0.95` |
+| `src/hal/lib/evaluate.ts` | Added strictness routing: L1 skips cross-LLM, L4+ runs zone classification + claim-vs-consensus, L5 sets tampering flag |
+
+The Pythagorean Comma constant remains `531441/524288` — never modified (hard-rule #2).
