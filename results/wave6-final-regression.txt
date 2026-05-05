@@ -1,0 +1,40 @@
+# Wave 6 Final Regression Suite — 2026-05-05
+
+## Branch / commit
+- Branch: feat/embedding-provider-swap-2026-05-04
+- Commit at run time: 09ab73b (Wave 6 Phase 1+2+3 — morning report polish + attorney summary + publish readiness)
+- Parent: 5d5a730 (Wave 5 Phase 8)
+
+## HAL test suites (Wave 5 final state preserved)
+Test Suites: 1 skipped, 6 passed, 6 of 7 total
+Tests:       1 skipped, 410 passed, 411 total
+Time:        5.703 s
+
+Suites:
+- tests/hal-regression.test.ts                 369/369 PASS
+- tests/hal-lib-cross-llm.test.ts              18/18 PASS
+- tests/hal-semantic-similarity.test.ts (NEW)  9/9 PASS
+- tests/hal-claim-comparison.test.ts (NEW)     8/8 PASS
+- tests/hal-comma-zones.test.ts (NEW)          3/3 PASS
+- tests/hal-tampering.test.ts (NEW)            3/3 PASS
+- tests/haleventWiring.test.ts                 passes (1 environmental skip)
+
+HAL total: 410/410 PASS — unchanged from Wave 5 close.
+
+## Full-repo `npm test`
+Test Suites: 2 failed, 1 skipped, 37 passed, 39 of 40 total
+Tests:       2 failed, 5 skipped, 597 passed, 604 total
+Time:        14.818 s
+
+Failures (PRE-WAVE-5, NOT caused by HAL extraction or Wave 5/6 work):
+- tests/receipt-issuer.test.ts   ENOENT on schema-file path read
+- tests/bet-amount-fix.test.ts   HTTP 500 vs expected 400 from invalid bet amount
+
+Verified failing on parent commit d8b616b before sprint started.
+
+## TypeScript strict check
+npx tsc --noEmit  — clean (exit 0)
+
+## Verdict
+Wave 6 documentation sprint did not regress any tests. 410/410 HAL tests
+green sustained through Wave 6 Phase 1+2+3 documentation commits.
