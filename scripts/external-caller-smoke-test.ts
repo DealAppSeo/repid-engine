@@ -34,6 +34,7 @@ import {
   type HALProviderConfig,
   type HALResult,
 } from '../src/hal/lib';
+import { createDefaultEmbeddingClient } from '../src/hal/lib/cross-llm/embedding-client';
 
 interface SmokeCase {
   id: string;
@@ -143,11 +144,18 @@ function buildProviders(): HALProviderConfig[] {
 
   return providers;
 }
-
-import { createDefaultEmbeddingClient } from '../src/hal/lib/cross-llm/embedding-client';
-
-function buildEmbeddingClient(): HALEmbeddingClient | null {
-  return createDefaultEmbeddingClient(process.env.VOYAGE_API_KEY, process.env.VOYAGE_API_KEY ? 'voyage' : undefined);
+function buildEmbeddingClient(): HALEmbeddingClient {
+  // Voyage when VOYAGE_API_KEY is set (free-tier embedding alternative
+  // to OpenAI), OpenAI when OPENAI_API_KEY+endpoint set, otherwise local
+  // Xenova-only via FallbackEmbeddingClient. Always returns a client —
+  // never null — because Xenova works offline.
+  if (process.env.VOYAGE_API_KEY) {
+    return createDefaultEmbeddingClient(process.env.VOYAGE_API_KEY, 'voyage');
+  }
+  if (process.env.OPENAI_API_KEY) {
+    return createDefaultEmbeddingClient(process.env.OPENAI_API_KEY, 'openai');
+  }
+  return createDefaultEmbeddingClient();
 }
 
 function buildClassifier(): HALProviderConfig | null {
