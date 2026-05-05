@@ -71,35 +71,7 @@ export function checkPythagoreanComma(beliefs: number[]): {
   return { severity: 'none', comma_gap: gap, comma_veto: false };
 }
 
-export async function getEmbedding(
-  text: string, client: HALEmbeddingClient,
-): Promise<number[]> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), client.timeoutMs ?? 10000);
-  try {
-    const res = await fetch(client.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${client.apiKey}`,
-      },
-      body: JSON.stringify({ model: client.model, input: text }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`embedding ${res.status}: ${body.slice(0, 200)}`);
-    }
-    const data: any = await res.json();
-    const vec: number[] = data?.data?.[0]?.embedding;
-    if (!Array.isArray(vec) || vec.length === 0) {
-      throw new Error('empty embedding vector');
-    }
-    return vec;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+
 
 export interface AgreementResult {
   beliefs: number[];
@@ -130,9 +102,7 @@ export async function computeAgreement(
 
   if (embeddingClient) {
     try {
-      embeddings = await Promise.all(
-        answered.map(a => getEmbedding(a.text, embeddingClient)),
-      );
+      embeddings = await embeddingClient.embedMany(answered.map(a => a.text));
       methodology = 'embedding-cosine';
     } catch (e: any) {
       console.error('[hal/lib/cross-llm] embedding fallback:', e?.message ?? e);

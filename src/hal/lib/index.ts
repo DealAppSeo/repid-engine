@@ -31,6 +31,9 @@ export type {
   CommaSeverity,
   CrossLLMSummary,
   ExtractInput,
+  StrictnessLevel,
+  AgreementZone,
+  HALTamperingSignal,
 } from './types';
 
 // Score (real, no stub)
@@ -48,5 +51,5 @@ export type { Category, Confidence, ClassificationResult, ClassifyOptions } from
 export { checkCrossLLM } from './cross-llm';
 export type { CrossLLMOptions } from './cross-llm';
 
-// Top-level evaluate (Phase 5 stub)
-export { evaluate } from './evaluate';
+// Top-level evaluate
+export { evaluate, DEFAULT_STRICTNESS } from './evaluate';

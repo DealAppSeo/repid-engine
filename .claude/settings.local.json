@@ -21,7 +21,15 @@
       "Read(//c/Users/Cash4/repos/hyperdag-protocol/**)",
       "Read(//c/Users/Cash4/OneDrive/Desktop/sprints/2026-05-03/**)",
       "Bash(grep -E \"\\\\.ts$\")",
-      "Bash(npx hardhat *)"
+      "Bash(npx hardhat *)",
+      "Bash(python *)",
+      "Bash(npx ts-node *)",
+      "Bash(INDEXER_START_BLOCK=41080500 PORT=8090 npx ts-node scripts/start-indexer-service.ts)",
+      "Bash(railway --version)",
+      "Bash(railway link *)",
+      "Bash(railway --help)",
+      "Bash(railway add *)",
+      "Bash(xargs grep *)"
     ]
   }
 }

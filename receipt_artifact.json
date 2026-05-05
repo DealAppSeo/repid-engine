@@ -1,0 +1,52 @@
+{
+  "hal": {
+    "dofVersion": 5,
+    "outputHash": "0x5d8bdc408fc310c3bce27392b4c603ddf6f1c62a8648229dbbdbe9805eb7e1f7",
+    "boundedScore": 95,
+    "dimensionsHash": "0x62fe9cd7c26de27da05b788f391ac9885a50f13c0b2144bfb2e0cb1052867ad1",
+    "commaBftVerdict": "pass",
+    "pythagoreanCommaConstant": "531441/524288"
+  },
+  "type": "hyperdag.repid.receipt.v1",
+  "work": {
+    "taskHash": "0xde00e8c55913a0691ac34db04439534de1ae6d0c2581dde57a7e46fe2630c17d",
+    "resultHash": "0x6c9da55f1cf47b8b867e5ddd1c2225bbd93d57f0831d952f28ea2b91bdebe802"
+  },
+  "agent": {
+    "agentId": "3749",
+    "standard": "ERC-8004",
+    "agentWallet": "0x0000000000000000000000000000000000000000",
+    "agentRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+  },
+  "payment": {
+    "amount": "0.0001",
+    "network": "base-sepolia",
+    "currency": "ETH",
+    "standard": "x402",
+    "paymentHash": "0x1234567890123456789012345678901234567890123456789012345678901234",
+    "resourceHash": "0x1633798fcbd6cd8a25aac0d164a7d94f3d52c7a43fed0d3333afcbacb5122ec4"
+  },
+  "privacy": {
+    "mode": "commitment-only"
+  },
+  "identity": {
+    "repIdCommitment": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "humanIdentityRoot": null
+  },
+  "receiptId": "0x6db1f5f464e9ae8fde8004c403fbae265049091f7ffb71dbd3f83cbd8ee1f63e",
+  "reputation": {
+    "score": 0,
+    "scoreVersion": 5,
+    "formulaVersion": "repid-2026-04-17"
+  },
+  "timestamps": {
+    "createdAt": "2026-05-04T04:26:36.582Z"
+  },
+  "validators": [
+    {
+      "role": "primary",
+      "type": "self",
+      "attestationHash": "0x5d8bdc408fc310c3bce27392b4c603ddf6f1c62a8648229dbbdbe9805eb7e1f7"
+    }
+  ]
+}

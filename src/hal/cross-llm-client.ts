@@ -34,6 +34,7 @@
 
 import crypto from 'crypto';
 import { db } from '../db';
+import { createDefaultEmbeddingClient } from './lib/cross-llm/embedding-client';
 
 export type Squad = 'alpha' | 'beta' | 'gamma';
 export type CommaSeverity = 'none' | 'minor' | 'major' | 'critical';
@@ -224,36 +225,6 @@ async function queryProvider(
   }
 }
 
-async function getEmbedding(
-  text: string, apiKey: string, model: string, timeoutMs: number,
-): Promise<number[]> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(OPENAI_EMBEDDING_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ model, input: text }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`embedding ${res.status}: ${body.slice(0, 200)}`);
-    }
-    const data: any = await res.json();
-    const vec: number[] = data?.data?.[0]?.embedding;
-    if (!Array.isArray(vec) || vec.length === 0) {
-      throw new Error('empty embedding vector');
-    }
-    return vec;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0;
   let dot = 0, na = 0, nb = 0;
@@ -333,16 +304,13 @@ async function computeAgreement(
   let methodology: 'embedding-cosine' | 'fallback-jaccard' = 'fallback-jaccard';
   let embeddings: number[][] | null = null;
 
-  if (openaiKey) {
-    try {
-      embeddings = await Promise.all(
-        answered.map(a => getEmbedding(a.text, openaiKey, EMBEDDING_MODEL, timeoutMs))
-      );
-      methodology = 'embedding-cosine';
-    } catch (e: any) {
-      console.error('[cross-llm-client] embedding fallback:', e?.message ?? e);
-      embeddings = null;
-    }
+  try {
+    const client = createDefaultEmbeddingClient(openaiKey, process.env.VOYAGE_API_KEY ? 'voyage' : undefined);
+    embeddings = await client.embedMany(answered.map(a => a.text));
+    methodology = 'embedding-cosine';
+  } catch (e: any) {
+    console.error('[cross-llm-client] embedding fallback:', e?.message ?? e);
+    embeddings = null;
   }
 
   // Pairwise sim matrix (symmetric); compute upper triangle, mirror.
