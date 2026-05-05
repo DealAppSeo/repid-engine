@@ -26,3 +26,16 @@ Protocol: hyperdag.dev
 - `GET /api/v1/openapi.json`: Retrieve OpenAPI 3.1 specifications.
 - `GET /api/v1/health`: Connection and liveness checks.
 - `POST /api/v1/prove-repid`: Fetch tiered ZKP verification stubs based on agent `repid_score`.
+
+## HAL Library
+
+`src/hal/lib/` is the extracted, callable Hallucination Auditor Layer used internally and intended for external consumption (Gemini benchmarks, `@hyperdag/protocol`).
+
+The library exposes a 5-level **strictness scale** (1 Fast → 5 Maximum, default 4) controlling which veto layers run: extractor only, cross-LLM with semantic similarity, three-zone Pythagorean Comma band, consensus-vs-claim comparison, tampering detection.
+
+```ts
+import { evaluate } from './hal/lib';
+const r = await evaluate(claim, output, { domain, certainty, prompt, providers, embeddingClient });
+```
+
+See [docs/HAL_LIBRARY_API.md](docs/HAL_LIBRARY_API.md) for the full API and [docs/HAL_TAMPERING_DETECTION.md](docs/HAL_TAMPERING_DETECTION.md) for the level-5 tampering signal spec.

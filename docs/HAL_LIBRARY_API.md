@@ -134,6 +134,134 @@ _Section to be filled in Phase 6 after `npm pack --dry-run` succeeds._
 
 ## Versioning
 
-- `0.1.0-alpha` — initial extraction (this sprint).
+- `0.1.0-alpha` — initial extraction.
+- `0.2.0-alpha` — **Wave 5 (2026-05-04)**: strictness scale, semantic similarity, consensus-vs-claim comparison, three-zone Pythagorean Comma band, tampering detection at level 5. See "Strictness Scale" below.
 - Breaking changes require: (a) coordinated update of all in-repo consumers, (b) update of any external consumers (Gemini, @hyperdag/protocol), (c) bump major version.
 - New optional fields on `HALSignals` or `HALContext` may be added without a major bump as long as defaults preserve prior behavior.
+
+---
+
+## Strictness Scale (Wave 5)
+
+```typescript
+type StrictnessLevel = 1 | 2 | 3 | 4 | 5;
+
+interface HALContext {
+  // ... existing fields
+  strictness?: StrictnessLevel;  // default: 4
+}
+```
+
+| Level | Cross-LLM | Similarity | Threshold | Consensus-vs-Claim | Tampering | Use Case |
+|---|---|---|---|---|---|---|
+| **1 — Fast** | OFF | n/a | score-only | OFF | OFF | Brainstorming, drafts |
+| **2 — Light** | ON | semantic (cosine) | loose | OFF | OFF | Internal docs, casual Q&A |
+| **3 — Balanced** | ON | semantic (cosine) | comma BFT | OFF | OFF | Default-equivalent of pre-Wave-5 production |
+| **4 — Strict (DEFAULT)** | ON | semantic (cosine) | comma BFT | ON | OFF | Customer-facing, professional |
+| **5 — Maximum** | ON | semantic (cosine) | comma BFT | ON | ON | Legal, medical, financial, regulatory |
+
+### Default reasoning
+
+Default level is **4** (not 3) because the product MVP must catch what users would expect to be caught out of the box. HAL-T1-003 ("Pythagorean Comma equals 1.5 cents from 256/243") only vetoes when consensus-vs-claim comparison is wired (level 4+); defaulting to 4 means the headline use case works without explicit configuration.
+
+Level 3 preserves byte-identical pre-Wave-5 production behavior (gap-based COMMA_BFT critical-veto, no zone classification, no claim comparison) and is the right pin when a caller needs strict back-compat with anything that existed before 2026-05-04.
+
+### What runs at each level
+
+```ts
+import { evaluate } from '@hyperdag/hal'; // or src/hal/lib in-repo
+
+// Level 1 — extract + score only
+const r1 = await evaluate(claim, output, { domain, certainty, strictness: 1 });
+
+// Level 2 — adds cross-LLM with semantic similarity
+const r2 = await evaluate(claim, output, {
+  domain, certainty, prompt, providers, embeddingClient,
+  strictness: 2,
+});
+
+// Level 3 — adds Pythagorean Comma BFT critical-veto (current production behavior)
+const r3 = await evaluate(claim, output, {
+  domain, certainty, prompt, providers, embeddingClient,
+  strictness: 3,
+});
+
+// Level 4 (DEFAULT) — adds three-zone band classification + claim-vs-consensus comparison
+const r4 = await evaluate(claim, output, {
+  domain, certainty, prompt, providers, embeddingClient,
+  strictness: 4,                                 // or omit (default)
+});
+
+// Level 5 — adds tampering detection (informational flag only)
+const r5 = await evaluate(claim, output, {
+  domain, certainty, prompt, providers, embeddingClient,
+  strictness: 5,
+});
+if (r5.tampering_suspected) {
+  // Review responses, escalate, or apply policy.
+  console.warn(r5.tampering_signal!.reason);
+}
+```
+
+### Three-zone Pythagorean Comma band (level 4+)
+
+```typescript
+type AgreementZone = 'too-tight' | 'in-band' | 'too-loose';
+```
+
+The cross-LLM `agreement_score` (mean pairwise similarity) is classified relative to the Pythagorean Comma normalized value (`1 / 1.0136433 ≈ 0.987`):
+
+- **`too-tight`** (`> 0.99`): suspiciously perfect agreement — at level 5, populates `tampering_signal`.
+- **`in-band`** (`0.95 – 0.99`): trusted consensus — at level 4+, triggers the consensus-vs-claim comparison.
+- **`too-loose`** (`≤ 0.95`): uncertainty — caller may treat as a low-confidence answer.
+
+Boundaries (`COMMA_BAND_TIGHT_THRESHOLD = 0.99`, `COMMA_BAND_LOOSE_THRESHOLD = 0.95`) are calibratable. The Pythagorean Comma constant (`531441/524288`) is fixed and patent-load-bearing.
+
+### Consensus-vs-claim comparison (level 4+)
+
+When the consensus zone is `in-band`, HAL picks a representative consensus answer (median-embedding when embeddings are available, longest-text fallback) and compares it against the user's claim text via cosine on embeddings (or Jaccard fallback). When `similarity < 0.4`, the claim is considered to contradict the consensus and `vetoed` is set to `true`.
+
+```ts
+const r = await evaluate(claim, output, {
+  domain, certainty, prompt, providers, embeddingClient,
+  strictness: 4,
+});
+console.log(r.agreement_zone);                    // 'too-tight' | 'in-band' | 'too-loose' | null
+console.log(r.consensus_answer);                  // string | null (set only when zone='in-band')
+console.log(r.claim_vs_consensus_similarity);     // number | null
+console.log(r.claim_contradicts_consensus);       // boolean | null
+```
+
+### Tampering detection (level 5)
+
+When the consensus zone is `too-tight` AND strictness is 5, HAL populates `tampering_suspected = true` and `tampering_signal`. The flag is **informational** in v0.2 — it does NOT auto-veto. See [HAL_TAMPERING_DETECTION.md](./HAL_TAMPERING_DETECTION.md) for the full spec, four-cause taxonomy, and inspection patterns.
+
+### Federated-learning calibration (forward-looking)
+
+The zone boundaries (0.95 / 0.99), claim-contradiction threshold (0.4), and strictness-level routing are initial values. The federated learning loop (v0.3+) refines them from production data while keeping the Pythagorean Comma constant fixed. Until then, callers can override:
+
+- `context.threshold` — the `hal_score` veto threshold (default 0.25)
+- `compareConsensusToClaim({ contradictionThreshold })` — the claim-vs-consensus contradiction threshold (default 0.4) — useful for ablation studies in benchmarks
+
+### Updated module layout (Wave 5)
+
+```
+src/hal/lib/
+├── index.ts                     public exports
+├── constants.ts                 + COMMA_BAND_TIGHT_THRESHOLD/LOOSE_THRESHOLD
+├── types.ts                     + StrictnessLevel, AgreementZone, HALTamperingSignal
+├── score.ts                     computeHALScore (real)
+├── extract.ts                   extractHALSignals (real)
+├── classifier.ts                classify (real)
+├── cross-llm/
+│   ├── index.ts                 checkCrossLLM (real)
+│   ├── agreement.ts             cosineSimilarity, jaccardSimilarity, BFT
+│   ├── providers.ts             provider HTTP wrappers
+│   └── embedding-client.ts      Xenova / OpenAI / Voyage / Fallback
+├── clients/
+│   └── embedding.ts             alternative factory (xenova-local, openai)
+├── semantic.ts                  computeSemanticSimilarity, semanticPairSimilarity (Wave 5)
+├── claim-comparison.ts          compareConsensusToClaim (Wave 5)
+├── zones.ts                     classifyAgreementZone (Wave 5)
+└── evaluate.ts                  top-level evaluate(claim, output, context)
+```
