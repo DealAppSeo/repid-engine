@@ -1,5 +1,10 @@
 /**
  * HAL constants — centralized, dependency-free.
+ * SACRED CONSTANTS — DO NOT MUTATE PROGRAMMATICALLY.
+ * Hard Rule #2: Pythagorean Comma must remain expressed as 531441/524288.
+ * Threshold ablation must use HALClient({commaOverride: x}), not file edits.
+ * Cross-repo file writes to this file are a known anti-pattern (see
+ * GEMINI_DRIFT_FIX_REPORT.md, 2026-05-05).
  *
  * Patent-load-bearing: HAL_PYTHAGOREAN_COMMA preserves the exact ratio
  * 531441/524288. The decimal approximation 1.0136433 is informational

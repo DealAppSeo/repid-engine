@@ -145,6 +145,7 @@ export interface HALContext {
   threshold?: number;
   domainOntologies?: Record<string, string[]>;
   strictness?: StrictnessLevel;
+  commaOverride?: number;
 }
 
 export interface ExtractInput {

@@ -105,6 +105,7 @@ export async function evaluate(
           providers: context.providers!,
           embeddingClient: context.embeddingClient ?? null,
           supabase: context.supabase ?? null,
+          commaOverride: context.commaOverride,
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -127,7 +128,7 @@ export async function evaluate(
       ? context.threshold
       : HAL_DEFAULT_VETO_THRESHOLD;
 
-  const score = computeHALScore(enrichedSignals, threshold);
+  const score = computeHALScore(enrichedSignals, threshold, context.commaOverride);
 
   const severity: CommaSeverity | null = cross ? cross.comma_severity : null;
   let vetoed = score.vetoed || severity === 'critical';
@@ -135,7 +136,7 @@ export async function evaluate(
   // ---- Phase 4 zone classification (level 4+ acts on it) ----------------
   let agreementZone: AgreementZone | null = null;
   if (strictness >= 4 && cross) {
-    agreementZone = classifyAgreementZone(cross.agreement_score);
+    agreementZone = classifyAgreementZone(cross.agreement_score, context.commaOverride);
   }
 
   // ---- Phase 3 consensus-vs-claim comparison (level 4+) -----------------

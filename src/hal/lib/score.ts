@@ -39,15 +39,17 @@ export interface HALScoreOutput {
 export function computeHALScore(
   signals: HALSignals,
   threshold: number = HAL_DEFAULT_VETO_THRESHOLD,
+  commaOverride?: number
 ): HALScoreOutput {
   const w = HAL_FORMULA_WEIGHTS;
+  const comma = commaOverride !== undefined ? commaOverride : HAL_PYTHAGOREAN_COMMA;
   const hal_score =
     (
       w.harm * signals.harm_probability +
       w.epistemic * signals.epistemic_uncertainty +
       w.evidence * (1 - signals.evidence_quality) +
       w.scope * (1 - signals.scope_appropriateness)
-    ) * HAL_PYTHAGOREAN_COMMA;
+    ) * comma;
 
   return {
     hal_score,
