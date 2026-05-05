@@ -86,9 +86,18 @@ export const OVERCONFIDENCE_MARKERS: readonly string[] = [
   'everyone knows', 'obviously', 'clearly', 'undeniably',
 ];
 
+/**
+ * Note the duplicate `approximately` at index 0 and again at the tail.
+ * This is preserved verbatim from the pre-extraction implementation
+ * (`src/services/hal-signals.ts:52-57` at HEAD `204cfcb`). The duplicate
+ * causes texts containing "approximately" to count twice toward hedge
+ * density. Per sprint hard rule #7 (no semantic changes to HAL behavior),
+ * this is preserved as-is. Parking-lot item: decide whether to dedupe
+ * intentionally in a future tuning sprint.
+ */
 export const EPISTEMIC_HEDGES: readonly string[] = [
   'approximately', 'roughly', 'around', 'may', 'might', 'could',
   'likely', 'probably', 'suggest', 'indicate', 'appear', 'seem',
   'estimate', 'projection', 'forecast', 'assumption', 'according to',
-  'based on', 'as of', 'reported',
+  'based on', 'as of', 'reported', 'approximately',
 ];
