@@ -1,9 +1,9 @@
 interface Agent { agentId: string; displayName: string; repidScore: number; }
 interface User { userId: string; displayName: string; }
 interface Stake { stakeId: string; userId: string; agentId: string; amountUSD: number; status: 'active' | 'withdrawn'; createdAt: string; withdrawnAt?: string; }
-interface TradeAttempt { attemptId: string; agentId: string; userId: string; tradeSizeUSD: number; repidAtDecision: number; fractionUsed: number; totalStakeBackingUSD: number; maxAllowedUSD: number; decision: 'approved' | 'rejected_size' | 'rejected_no_stake' | 'rejected_repid_too_low'; reason: string; createdAt: string; }
+interface TradeAttempt { attemptId: string; agentId: string; userId: string; stakeId: string | null; tradeSizeUSD: number; repidAtDecision: number; fractionUsed: number; totalStakeBackingUSD: number; maxAllowedUSD: number; decision: 'approved' | 'rejected_size' | 'rejected_no_stake' | 'rejected_repid_too_low'; reason: string; createdAt: string; }
 
-const state = { users: new Map<string, User>(), agents: new Map<string, Agent>(), stakes: [] as Stake[], tradeAttempts: [] as TradeAttempt[] };
+export const state = { users: new Map<string, User>(), agents: new Map<string, Agent>(), stakes: [] as Stake[], tradeAttempts: [] as TradeAttempt[] };
 
 const REPID_TIERS = [
   { min: 0, max: 0, fraction: 0.00, label: 'banned' },
@@ -24,13 +24,13 @@ function fractionForRepID(repid: number) {
   return { fraction: tier.fraction, label: tier.label };
 }
 
-function createUser(name: string): User {
+export function createUser(name: string): User {
   const u: User = { userId: `user-${name}-${Date.now()}`, displayName: name };
   state.users.set(u.userId, u);
   return u;
 }
 
-function seedAgents() {
+export function seedAgents() {
   [
     { agentId: 'sophia', displayName: 'SOPHIA', repidScore: 10000 },
     { agentId: 'veritas', displayName: 'VERITAS', repidScore: 8500 },
@@ -40,7 +40,7 @@ function seedAgents() {
   ].forEach(a => state.agents.set(a.agentId, a));
 }
 
-function stakeAndBind(userId: string, agentId: string, amountUSD: number): Stake {
+export function stakeAndBind(userId: string, agentId: string, amountUSD: number): Stake {
   if (amountUSD <= 0) throw new Error('amount must be positive');
   if (!state.users.has(userId)) throw new Error('unknown user');
   if (!state.agents.has(agentId)) throw new Error('unknown agent');
@@ -67,12 +67,13 @@ function getUserPosition(userId: string) {
   return { user, stakes, totalActiveStakeUSD: active.reduce((sum, s) => sum + s.amountUSD, 0) };
 }
 
-function decideTrade(input: { agentId: string; tradeSizeUSD: number; userId?: string }): TradeAttempt {
+export function decideTrade(input: { agentId: string; tradeSizeUSD: number; userId?: string }): TradeAttempt {
   const agent = state.agents.get(input.agentId)!;
   const { fraction } = fractionForRepID(agent.repidScore);
   const backing = state.stakes.filter(s => s.agentId === input.agentId && s.status === 'active' && (input.userId === undefined || s.userId === input.userId));
   const totalBacking = backing.reduce((sum, s) => sum + s.amountUSD, 0);
   const userId = input.userId ?? backing[0]?.userId ?? 'no-user';
+  const stakeId = backing[0]?.stakeId ?? null;
   const maxAllowed = totalBacking * fraction;
   let decision: TradeAttempt['decision'];
   let reason: string;
@@ -80,7 +81,7 @@ function decideTrade(input: { agentId: string; tradeSizeUSD: number; userId?: st
   else if (totalBacking <= 0) { decision = 'rejected_no_stake'; reason = `No active stakes backing ${agent.agentId}`; }
   else if (input.tradeSizeUSD > maxAllowed) { decision = 'rejected_size'; reason = `$${input.tradeSizeUSD} exceeds max $${maxAllowed.toFixed(2)} (${(fraction*100).toFixed(0)}% of $${totalBacking})`; }
   else { decision = 'approved'; reason = `$${input.tradeSizeUSD} within max $${maxAllowed.toFixed(2)} (${(fraction*100).toFixed(0)}% of $${totalBacking})`; }
-  const attempt: TradeAttempt = { attemptId: `att-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, agentId: input.agentId, userId, tradeSizeUSD: input.tradeSizeUSD, repidAtDecision: agent.repidScore, fractionUsed: fraction, totalStakeBackingUSD: totalBacking, maxAllowedUSD: maxAllowed, decision, reason, createdAt: new Date().toISOString() };
+  const attempt: TradeAttempt = { attemptId: `att-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, agentId: input.agentId, userId, stakeId, tradeSizeUSD: input.tradeSizeUSD, repidAtDecision: agent.repidScore, fractionUsed: fraction, totalStakeBackingUSD: totalBacking, maxAllowedUSD: maxAllowed, decision, reason, createdAt: new Date().toISOString() };
   state.tradeAttempts.push(attempt);
   return attempt;
 }
@@ -89,6 +90,7 @@ function header(n: number, t: string) { console.log('\n' + '='.repeat(72) + `\nS
 function showPos(uid: string) { const p = getUserPosition(uid); console.log(`\n  ${p.user.displayName} | total: $${p.totalActiveStakeUSD}`); if (p.stakes.length === 0) console.log('  (no active stakes)'); else p.stakes.forEach(s => console.log(`  -> ${s.agent.displayName.padEnd(12)} | RepID ${String(s.agent.repidScore).padEnd(6)} | tier "${s.label}" | ${(s.fraction*100).toFixed(0)}% | stake $${s.stake.amountUSD} | max $${s.maxAllowedTradeUSD}`)); }
 function showAtt(a: TradeAttempt) { const tag = a.decision === 'approved' ? '[APPROVED]' : `[${a.decision.toUpperCase()}]`; console.log(`  ${tag}: ${a.reason}`); }
 
+if (require.main === module) {
 console.log('\nRepID Weighted Staking - Local MVP Demo\n========================================');
 seedAgents();
 
@@ -141,3 +143,4 @@ console.log(`  Total: ${state.tradeAttempts.length}`);
 state.tradeAttempts.forEach(a => console.log(`  [${a.decision === 'approved' ? 'OK' : 'NO'}] ${a.agentId.padEnd(12)} | $${String(a.tradeSizeUSD).padEnd(5)} | ${a.decision}`));
 
 console.log('\n' + '='.repeat(72) + '\nDEMO COMPLETE\n' + '='.repeat(72) + '\n');
+}
