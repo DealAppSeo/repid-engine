@@ -20,6 +20,7 @@ import fullAccountRouter from './routes/full-account';
 import receiptsRouter from './routes/receipts';
 import { repidPublicRouter, repidAdminRouter } from './routes/repid';
 import stakeRouter from './routes/stake';
+import { llmRouter } from './routes/route';
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
@@ -128,6 +129,7 @@ app.get('/api/v1/metrics', async (_req, res) => {
 });
 
 app.use('/api', stakeRouter);
+app.use('/api', llmRouter);
 
 app.use(authMiddleware);
 app.use(rateLimitMiddleware);
