@@ -18,6 +18,8 @@ import halTestRouter from './routes/hal-test';
 import auditRouter from './routes/audit';
 import fullAccountRouter from './routes/full-account';
 import receiptsRouter from './routes/receipts';
+import { repidPublicRouter, repidAdminRouter } from './routes/repid';
+import stakeRouter from './routes/stake';
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
@@ -104,6 +106,8 @@ app.use((req, res, next) => {
 app.use('/api/v1/telegram', telegramRouter);
 app.use('/api/v1/hal-benchmark', halTestRouter);
 app.use('/api/v1/audit', auditRouter);
+// Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
+app.use('/api/v1', repidPublicRouter);
 app.get('/api/v1/metrics', async (_req, res) => {
   const supabase = db;
   const [agents, decisions, hallucinations] = await Promise.all([
@@ -129,6 +133,8 @@ app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
 app.use('/api/v1', receiptsRouter);
+// Sprint R-C: RepID admin endpoints (attest) — auth required
+app.use('/api/v1', repidAdminRouter);
 
 // v11 external agent endpoints
 app.use('/api/v1/agents/register', registrationLimiter);
@@ -141,6 +147,8 @@ app.get('/api/v1/llm-trust', async (_req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   return res.json(data ?? []);
 });
+
+app.use('/api', stakeRouter);
 
 app.use(healthRouter);
 app.use(agentsRouter);
