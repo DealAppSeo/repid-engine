@@ -34,6 +34,11 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       temperature
     };
 
+    // Redact from req.body immediately to ensure downstream error loggers never see it
+    if (req.body.user_paid_keys) {
+      req.body.user_paid_keys = '[REDACTED]';
+    }
+
     let attempts = 0;
     const maxAttempts = 3;
     let excludeProviders: string[] = [];
