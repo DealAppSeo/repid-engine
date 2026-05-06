@@ -36,8 +36,13 @@ stakeRouter.post('/stake/attempt-trade', stakeLimiter, async (req: Request, res:
       res.status(400).json({ decision: 'rejected_no_stake', reason: `No active stakes backing ${agent_id}` });
       return;
     }
+    const firstStake = stakes[0];
+    if (!firstStake) {
+      res.status(400).json({ decision: 'rejected_no_stake', reason: `No active stakes backing ${agent_id}` });
+      return;
+    }
     const totalBacking = stakes.reduce((sum: number, s: any) => sum + Number(s.stake_amount_usd), 0);
-    const stake_id = stakes[0].id;
+    const stake_id = firstStake.id;
 
     // Read agent repid
     const { data: agentData, error: agentErr } = await supabase
