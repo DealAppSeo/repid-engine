@@ -127,6 +127,8 @@ app.get('/api/v1/metrics', async (_req, res) => {
   });
 });
 
+app.use('/api', stakeRouter);
+
 app.use(authMiddleware);
 app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
@@ -147,8 +149,6 @@ app.get('/api/v1/llm-trust', async (_req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   return res.json(data ?? []);
 });
-
-app.use('/api', stakeRouter);
 
 app.use(healthRouter);
 app.use(agentsRouter);
