@@ -57,7 +57,7 @@ export async function getRepIDForAgent(agentId: string): Promise<RepIDLookup> {
 
   const { data, error } = await db
     .from('repid_agents')
-    .select('id, current_repid, tier, updated_at, created_at')
+    .select('id, current_repid, tier, last_updated, created_at')
     .eq('id', agentId)
     .maybeSingle();
 
@@ -75,7 +75,7 @@ export async function getRepIDForAgent(agentId: string): Promise<RepIDLookup> {
   const score = typeof data.current_repid === 'number' ? data.current_repid : null;
   const source: RepIDSource = score !== null && score >= AUTONOMOUS_CAP ? 'autonomous_cap' : 'cached';
   const lastUpdated =
-    (data as any).updated_at ?? (data as any).created_at ?? null;
+    (data as any).last_updated ?? (data as any).created_at ?? null;
 
   return {
     agent_id: data.id,
