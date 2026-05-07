@@ -4,11 +4,11 @@ import { config } from '../config';
 const router = Router();
 
 const agentDiscoveryCard = {
-  schema_version: "1.0",
+  schema_version: "1.1",
   agent: {
     name: "HyperDAG RepID Engine",
     handle: "@hyperdag/repid-engine",
-    description: "Stateful trust scoring service for AI agents. Ingests decisions, evaluates with HAL, returns verifiable reputation deltas.",
+    description: "Stateful trust scoring and reputation infrastructure for AI agents. ERC-8004 identity oracle and x402 payment coordinator.",
     version: "1.0.0",
     homepage: "https://repid.dev",
     documentation: "https://repid-engine-production.up.railway.app/openapi.json",
@@ -38,21 +38,58 @@ const agentDiscoveryCard = {
       path: "/api/v1/agents/:id/card"
     },
     {
+      name: "validate_erc8004",
+      description: "Retrieve ERC-8004 compliant reputation attestation",
+      method: "GET",
+      path: "/api/v1/erc8004/validate/:agent_id"
+    },
+    {
+      name: "request_x402_tip",
+      description: "Initiate agent-to-agent payment (x402 protocol)",
+      method: "POST",
+      path: "/api/v1/tip/request"
+    },
+    {
+      name: "deliver_x402_tip",
+      description: "Deliver work result and trigger x402 payment settlement",
+      method: "POST",
+      path: "/api/v1/tip/deliver/:tipId"
+    },
+    {
+      name: "stake_deposit",
+      description: "Escrow USDC stake to back a builder's reputation",
+      method: "POST",
+      path: "/api/v1/stake/deposit"
+    },
+    {
       name: "complete_with_evaluation",
       description: "LLM completion with automatic HAL evaluation and scoring",
       method: "POST",
       path: "/api/v1/llm/complete"
     }
   ],
-  protocols: ["HyperDAG Trust Protocol v1"],
+  protocols: [
+    "HyperDAG Trust Protocol v1",
+    "ERC-8004 Reputation Registry",
+    "x402 Agentic Payment Protocol"
+  ],
   trust_attestations: [
     {
       type: "ERC-8004",
       address: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
       network: "base-sepolia"
+    },
+    {
+      type: "Plonky3 ZKP",
+      prover_type: "babybear-range-check",
+      description: "Succinct proof of RepID score state"
     }
   ],
-  supported_by: ["plonky3_range_check", "sha256_commitment_poc"],
+  economic_parameters: {
+    staking_token: "USDC",
+    staking_network: "base-sepolia",
+    min_stake_usd: "100.00"
+  },
   rate_limits: {
     public: "60 req/min",
     authenticated: "300 req/min"
