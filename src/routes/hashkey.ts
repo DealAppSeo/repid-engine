@@ -52,7 +52,7 @@ router.get('/hashkey', async (_req: Request, res: Response) => {
 // demo /challenge page reads. Sprint 6 replaces mockTxHash with a real signed tx
 // against the HyperDAGRepID contract via viem.
 router.get('/hashkey/anchor/:agentId', async (req: Request, res: Response) => {
-  const id = String(req.params.id);
+  const id = String(req.params.agentId);
   const { data: agent } = await db
     .from('repid_agents')
     .select('id, agent_name, current_repid, tier, erc8004_address')
