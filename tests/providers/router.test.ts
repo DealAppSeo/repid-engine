@@ -11,7 +11,7 @@ describe('Router', () => {
     const req: RouteRequest = { prompt: 'test', tier_preference: 'tier0_first' };
     const { adapter, decision } = await routeRequest(req);
     expect(adapter?.name).toBe('groq');
-    expect(decision.chosen_tier).toBe(0);
+    expect(decision.chosen_tier).toBe('0a');
     expect(decision.reason).toBe('priority_healthy');
   });
 
@@ -33,7 +33,7 @@ describe('Router', () => {
     };
     const { adapter, decision } = await routeRequest(req);
     expect(adapter?.name).toBe('anthropic');
-    expect(decision.chosen_tier).toBe(1);
+    expect(decision.chosen_tier).toBe('1');
     expect(decision.reason).toBe('fallback_after_failure');
   });
 

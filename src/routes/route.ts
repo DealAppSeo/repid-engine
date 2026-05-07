@@ -13,12 +13,66 @@ const llmLimiter = rateLimit({
 });
 
 llmRouter.get('/v1/llm/providers', (req: Request, res: Response) => {
-  res.json(getAllHealthStates());
+  const healths = getAllHealthStates();
+  
+  const tier0a = [
+    { name: "groq", healthy: healths.groq ? healths.groq.state !== 'down' : true, default_model: "llama-3.1-8b-instant", last_success: healths.groq?.lastSuccess || null },
+    { name: "cerebras", healthy: healths.cerebras ? healths.cerebras.state !== 'down' : true, default_model: "llama3.1-8b", last_success: healths.cerebras?.lastSuccess || null },
+    { name: "gemini", healthy: healths.gemini ? healths.gemini.state !== 'down' : true, default_model: "gemini-2.0-flash", last_success: healths.gemini?.lastSuccess || null },
+    { name: "cohere", healthy: healths.cohere ? healths.cohere.state !== 'down' : true, default_model: "command-r", last_success: healths.cohere?.lastSuccess || null },
+    { name: "deepseek", healthy: healths.deepseek ? healths.deepseek.state !== 'down' : true, default_model: "deepseek-chat", last_success: healths.deepseek?.lastSuccess || null }
+  ];
+
+  const tier1 = [
+    { name: "anthropic", healthy: healths.anthropic ? healths.anthropic.state !== 'down' : true, requires_user_key: true, default_model: "claude-haiku-4-5", last_success: healths.anthropic?.lastSuccess || null },
+    { name: "openai", healthy: healths.openai ? healths.openai.state !== 'down' : true, requires_user_key: true, default_model: "gpt-4o-mini", last_success: healths.openai?.lastSuccess || null }
+  ];
+
+  res.json({
+    tier0a,
+    tier1,
+    summary: {
+      tier0a_healthy: tier0a.filter(p => p.healthy).length,
+      tier0a_total: 5,
+      tier1_total: 2
+    }
+  });
+});
+
+llmRouter.post('/v1/llm/route-debug', llmLimiter, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { prompt, tier_preference = 'auto', task_hint, user_paid_keys } = req.body;
+    
+    if (!prompt || typeof prompt !== 'string') {
+      res.status(400).json({ error: 'Missing or invalid prompt string' });
+      return;
+    }
+
+    const routeReq: RouteRequest = {
+      prompt,
+      tier_preference,
+      task_hint,
+      user_paid_keys
+    };
+
+    const { adapter, decision } = await routeRequest(routeReq, []);
+    
+    res.json({
+      chosen_provider: decision.chosen_provider,
+      chosen_tier: decision.chosen_tier,
+      reason: decision.reason,
+      candidates_tried: decision.tried,
+      current_health: getAllHealthStates()
+    });
+
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { prompt, tier_preference = 'tier0_first', task_hint, user_paid_keys, max_tokens, temperature } = req.body;
+    const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature } = req.body;
     
     if (!prompt || typeof prompt !== 'string') {
       res.status(400).json({ error: 'Missing or invalid prompt string' });
@@ -83,6 +137,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           answer: result.answer,
           provider: result.provider,
           tier: adapter.tier,
+          tier_used: decision.chosen_tier,
           tokens_in: result.tokensIn,
           tokens_out: result.tokensOut,
           latency_ms: result.latencyMs,

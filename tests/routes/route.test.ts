@@ -28,7 +28,7 @@ describe('LLM Route', () => {
 
     jest.spyOn(router, 'routeRequest').mockResolvedValue({
       adapter: mockAdapter,
-      decision: { chosen_provider: 'groq', chosen_tier: 0, reason: 'priority_healthy', tried: [] }
+      decision: { chosen_provider: 'groq', chosen_tier: '0a', reason: 'priority_healthy', tried: [] }
     });
 
     // Mock env var
@@ -53,9 +53,9 @@ describe('LLM Route', () => {
     jest.spyOn(router, 'routeRequest').mockImplementation(async () => {
       routeCalls++;
       if (routeCalls === 1) {
-        return { adapter: groqAdapter, decision: { chosen_provider: 'groq', chosen_tier: 0, reason: 'priority_healthy', tried: [] } };
+        return { adapter: groqAdapter, decision: { chosen_provider: 'groq', chosen_tier: '0a', reason: 'priority_healthy', tried: [] } };
       }
-      return { adapter: geminiAdapter, decision: { chosen_provider: 'gemini', chosen_tier: 0, reason: 'fallback_after_failure', tried: ['groq'] } };
+      return { adapter: geminiAdapter, decision: { chosen_provider: 'gemini', chosen_tier: '0a', reason: 'fallback_after_failure', tried: ['groq'] } };
     });
 
     jest.spyOn(groqAdapter, 'complete').mockRejectedValue(new RateLimitError('Rate limited'));
