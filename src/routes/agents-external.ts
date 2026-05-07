@@ -580,16 +580,16 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       agent_id: agentId,
       event_id: eventRow?.id,
       status: 'pending',
-      zkp_service_url: process.env.ZKP_SERVICE_URL || 'http://localhost:8080'
+      zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'
     });
     
-    fetch(`${process.env.ZKP_SERVICE_URL || 'http://localhost:8080'}/prove`, {
+    fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         agent_id: agentId, 
-        repid_score: newScore,
-        job_id: proof_job_id 
+        score: newScore,
+        metadata: { job_id: proof_job_id }
       })
     }).catch(err => console.error('Proof queue error:', err));
 

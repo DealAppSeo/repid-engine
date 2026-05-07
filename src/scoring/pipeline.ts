@@ -260,10 +260,20 @@ export async function runScoreEvent(
         agent_id: input.agent_id,
         event_id: score_event_id,
         status: 'pending',
-        zkp_service_url: process.env.ZKP_SERVICE_URL || 'http://localhost:8080',
+        zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app',
       })
       .then(
-        () => {},
+        () => {
+          fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              agent_id: input.agent_id, 
+              score: Math.round(new_repid),
+              metadata: { job_id: zk_proof_id }
+            })
+          }).catch(err => console.error('[scoring/pipeline] proof service call failed:', err));
+        },
         (err: unknown) => console.error('[scoring/pipeline] proof queue insert failed:', err)
       );
   }

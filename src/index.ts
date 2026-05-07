@@ -24,6 +24,9 @@ import { repidPublicRouter, repidAdminRouter } from './routes/repid';
 import stakeRouter from './routes/stake';
 import { llmRouter } from './routes/route';
 import { adminCapsRouter } from './routes/admin-caps';
+import discoveryRouter from './routes/discovery';
+import agentCardRouter from './routes/agent-card';
+
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
@@ -168,7 +171,11 @@ const externalScoreLimiter = rateLimit({
 app.use('/api/v1/agents-external/:id/score-event', externalScoreLimiter);
 app.use('/api/v1/agents-external', agentsExternalScoreRouter);
 
+app.use('/', discoveryRouter);
+app.use('/', agentCardRouter);
+
 app.use(authMiddleware);
+
 app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
 
