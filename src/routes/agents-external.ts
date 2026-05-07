@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
+import { deriveHalDecision } from '../scoring/pipeline';
 import { issueAgentApiKey } from '../auth/api-keys';
 import { requireApiKey } from '../middleware/auth-api-key';
 
@@ -474,6 +475,13 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
 
     // 10. Tier
     const newTier = computeTierFromRepid(newScore);
+    
+    // Calculate hal_decision
+    const hal_decision = deriveHalDecision(
+      dissonance,
+      constitutionalBlock,
+      (halSignals as any).comma_severity ?? null
+    );
 
     // 11. Insert score event
     const { data: eventRow, error: evErr } = await db
@@ -490,6 +498,7 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
         llm_provider,
         llm_model: llm_model ?? null,
         hal_score: dissonance,
+        hal_decision,
         decision_outcome: outcome,
         task_domain,
         hallucination_caught: !!hallucination_caught,

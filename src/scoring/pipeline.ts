@@ -65,11 +65,16 @@ export class NotFoundError extends Error {
   }
 }
 
-function classifyDecision(hal_score: number, vetoed: boolean): HALDecision {
-  if (vetoed) return 'vetoed';
-  // Block-threshold = 0.48 (constitutional block); veto-threshold = 0.25.
-  // Above veto-threshold but below block → "flagged" (still recorded, mild penalty).
-  if (hal_score >= HAL_DEFAULT_VETO_THRESHOLD) return 'flagged';
+export function deriveHalDecision(hal_score: number, vetoed: boolean, comma_severity?: string | null): HALDecision {
+  // vetoed boolean OR critical Comma BFT severity → 'vetoed'
+  if (vetoed || comma_severity === 'critical') {
+    return 'vetoed';
+  }
+  // borderline (no penalty applied, but flagged for monitoring)
+  if (hal_score >= 0.40) {
+    return 'flagged';
+  }
+  // clean (positive RepID delta)
   return 'clean';
 }
 
@@ -172,7 +177,7 @@ export async function runScoreEvent(
     vetoed = false;
   }
 
-  const decision: HALDecision = halError ? 'flagged' : classifyDecision(hal_score, vetoed);
+  const decision: HALDecision = halError ? 'flagged' : deriveHalDecision(hal_score, vetoed, signals.comma_severity as string | null);
 
   // 4. Compute delta.
   const delta = computeDelta({
