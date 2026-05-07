@@ -7,6 +7,7 @@ import { CohereAdapter } from './cohere';
 import { AnthropicAdapter } from './anthropic';
 import { OpenAIAdapter } from './openai';
 import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
+import { checkCap } from '../billing/caps';
 
 export interface RouteRequest {
   prompt: string;
@@ -21,7 +22,7 @@ export interface RouteRequest {
 export interface RouteDecision {
   chosen_provider: string;
   chosen_tier: '0a' | '1' | 'none';
-  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted';
+  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit';
   tried: string[];
 }
 
@@ -44,17 +45,28 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   const tryTier0 = req.tier_preference !== 'tier1_only';
   const tryTier1 = req.tier_preference !== 'tier0_only';
 
+  let capHit = false;
+
   if (tryTier0) {
     for (const adapter of tier0aAdapters) {
       if (excludeProviders.includes(adapter.name)) continue;
       
       if (isHealthy(adapter.name)) {
+        const cap = await checkCap(adapter.name);
+        if (!cap.allowed) {
+          markFailure(adapter.name, new Error('Cap hit'));
+          excludeProviders.push(adapter.name);
+          tried.push(adapter.name);
+          capHit = true;
+          continue;
+        }
+
         return {
           adapter,
           decision: {
             chosen_provider: adapter.name,
             chosen_tier: '0a',
-            reason: tried.length === 0 ? 'priority_healthy' : 'fallback_after_failure',
+            reason: tried.length === 0 ? 'priority_healthy' : (capHit ? 'cap_hit' : 'fallback_after_failure'),
             tried
           }
         };
@@ -72,12 +84,21 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
       if (!key) continue;
 
       if (isHealthy(adapter.name)) {
+        const cap = await checkCap(adapter.name);
+        if (!cap.allowed) {
+          markFailure(adapter.name, new Error('Cap hit'));
+          excludeProviders.push(adapter.name);
+          tried.push(adapter.name);
+          capHit = true;
+          continue;
+        }
+
         return {
           adapter,
           decision: {
             chosen_provider: adapter.name,
             chosen_tier: '1',
-            reason: (req.tier_preference === 'tier1_only' || !tryTier0) ? 'tier1_required' : 'fallback_after_failure',
+            reason: (req.tier_preference === 'tier1_only' || !tryTier0) ? 'tier1_required' : (capHit ? 'cap_hit' : 'fallback_after_failure'),
             tried
           }
         };
