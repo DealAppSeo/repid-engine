@@ -21,6 +21,7 @@ import receiptsRouter from './routes/receipts';
 import { repidPublicRouter, repidAdminRouter } from './routes/repid';
 import stakeRouter from './routes/stake';
 import { llmRouter } from './routes/route';
+import { adminCapsRouter } from './routes/admin-caps';
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
@@ -139,6 +140,7 @@ app.use('/api/v1', v1Router);
 app.use('/api/v1', receiptsRouter);
 // Sprint R-C: RepID admin endpoints (attest) — auth required
 app.use('/api/v1', repidAdminRouter);
+app.use('/api/v1/admin/caps', adminCapsRouter);
 
 // v11 external agent endpoints
 app.use('/api/v1/agents/register', registrationLimiter);

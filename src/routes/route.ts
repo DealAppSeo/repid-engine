@@ -3,6 +3,10 @@ import rateLimit from 'express-rate-limit';
 import { routeRequest, RouteRequest } from '../providers/router';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
 import { RateLimitError, AuthError } from '../providers/types';
+import { logLlmCall } from '../billing/log-call';
+import { calculateCost } from '../billing/pricing';
+import { incrementSpend } from '../billing/caps';
+import crypto from 'crypto';
 
 export const llmRouter = Router();
 
@@ -71,6 +75,7 @@ llmRouter.post('/v1/llm/route-debug', llmLimiter, async (req: Request, res: Resp
 });
 
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
+  const call_id = crypto.randomUUID();
   try {
     const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature } = req.body;
     
@@ -131,7 +136,23 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           apiKey
         });
 
+        const cost_usd = calculateCost(adapter.name, result.model || 'default', result.tokensIn, result.tokensOut);
+        
         markSuccess(adapter.name);
+        incrementSpend(adapter.name, cost_usd).catch(console.error);
+
+        logLlmCall({
+          call_id,
+          provider: adapter.name,
+          tier: adapter.tier === 0 ? '0a' : '1', // Or chosen_tier
+          model: result.model || 'unknown',
+          prompt_tokens: result.tokensIn,
+          completion_tokens: result.tokensOut,
+          cost_usd,
+          latency_ms: result.latencyMs,
+          status: 'success',
+          task_hint
+        });
 
         res.json({
           answer: result.answer,
@@ -141,22 +162,36 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           tokens_in: result.tokensIn,
           tokens_out: result.tokensOut,
           latency_ms: result.latencyMs,
-          cost_estimate_usd: adapter.tier === 0 ? 0 : 0.001,
+          cost_estimate_usd: cost_usd,
           router_decision: decision
         });
         return;
 
       } catch (error: any) {
+        let status: 'failed' | 'rate_limited' | 'cap_hit' = 'failed';
         if (error instanceof RateLimitError) {
           markRateLimit(adapter.name, error.retryAfterMs || 10000);
-          excludeProviders.push(adapter.name);
+          status = 'rate_limited';
         } else if (error instanceof AuthError) {
           markFailure(adapter.name, error);
-          excludeProviders.push(adapter.name);
         } else {
           markFailure(adapter.name, error);
-          excludeProviders.push(adapter.name);
         }
+        excludeProviders.push(adapter.name);
+
+        logLlmCall({
+          call_id,
+          provider: adapter.name,
+          tier: adapter.tier === 0 ? '0a' : '1',
+          model: 'unknown',
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cost_usd: 0,
+          latency_ms: 0,
+          status,
+          error_message: error.message,
+          task_hint
+        });
       }
     }
 
