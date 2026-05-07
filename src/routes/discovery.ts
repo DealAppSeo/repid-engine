@@ -25,4 +25,9 @@ router.get('/.well-known/ai-plugin.json', (_req: Request, res: Response) => {
   });
 });
 
+// Root-level alias for discovery
+router.get('/ai-plugin.json', (_req: Request, res: Response) => {
+  res.redirect(301, '/.well-known/ai-plugin.json');
+});
+
 export default router;
