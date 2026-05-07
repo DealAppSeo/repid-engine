@@ -10,26 +10,27 @@ import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
 
 export interface RouteRequest {
   prompt: string;
-  tier_preference: 'tier0_only' | 'tier1_only' | 'tier0_first' | 'auto';
+  tier_preference: 'tier0_only' | 'tier0_first' | 'tier1_only' | 'auto';
   user_paid_keys?: { openai?: string; anthropic?: string };
-  task_hint?: 'chat' | 'reasoning' | 'classification' | 'creative';
+  task_hint?: string;
+  model_override?: string;
   maxTokens?: number;
   temperature?: number;
 }
 
 export interface RouteDecision {
   chosen_provider: string;
-  chosen_tier: 0 | 1;
+  chosen_tier: '0a' | '1' | 'none';
   reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted';
   tried: string[];
 }
 
-const tier0Adapters: ProviderAdapter[] = [
+const tier0aAdapters: ProviderAdapter[] = [
   new GroqAdapter(),
-  new GeminiAdapter(),
   new CerebrasAdapter(),
-  new DeepSeekAdapter(),
-  new CohereAdapter()
+  new GeminiAdapter(),
+  new CohereAdapter(),
+  new DeepSeekAdapter()
 ];
 
 const tier1Adapters: ProviderAdapter[] = [
@@ -44,7 +45,7 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   const tryTier1 = req.tier_preference !== 'tier0_only';
 
   if (tryTier0) {
-    for (const adapter of tier0Adapters) {
+    for (const adapter of tier0aAdapters) {
       if (excludeProviders.includes(adapter.name)) continue;
       
       if (isHealthy(adapter.name)) {
@@ -52,7 +53,7 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
           adapter,
           decision: {
             chosen_provider: adapter.name,
-            chosen_tier: 0,
+            chosen_tier: '0a',
             reason: tried.length === 0 ? 'priority_healthy' : 'fallback_after_failure',
             tried
           }
@@ -75,8 +76,8 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
           adapter,
           decision: {
             chosen_provider: adapter.name,
-            chosen_tier: 1,
-            reason: (req.tier_preference === 'tier1_only' || req.tier_preference === 'auto' && !tryTier0) ? 'tier1_required' : 'fallback_after_failure',
+            chosen_tier: '1',
+            reason: (req.tier_preference === 'tier1_only' || !tryTier0) ? 'tier1_required' : 'fallback_after_failure',
             tried
           }
         };
@@ -90,7 +91,7 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     adapter: null,
     decision: {
       chosen_provider: 'none',
-      chosen_tier: 0,
+      chosen_tier: 'none',
       reason: 'all_exhausted',
       tried
     }
