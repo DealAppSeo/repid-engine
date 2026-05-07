@@ -12,6 +12,7 @@ export const stakeRouter = Router();
 
 const stakeLimiter = rateLimit({
   windowMs: 60 * 1000,
+
   max: 5,
   message: { error: 'Too many requests' }
 });
@@ -31,7 +32,7 @@ stakeRouter.post('/stake/attempt-trade', stakeLimiter, async (req: Request, res:
       .eq('user_id', user_id)
       .eq('agent_id', agent_id)
       .eq('status', 'active');
-      
+
     if (stakeErr || !stakes || stakes.length === 0) {
       res.status(400).json({ decision: 'rejected_no_stake', reason: `No active stakes backing ${agent_id}` });
       return;
@@ -50,7 +51,7 @@ stakeRouter.post('/stake/attempt-trade', stakeLimiter, async (req: Request, res:
       .select('repid_score')
       .eq('id', agent_id)
       .single();
-      
+
     if (agentErr || !agentData) {
       res.status(404).json({ error: 'Agent not found' });
       return;
@@ -112,7 +113,7 @@ stakeRouter.get('/stake/recent', async (req: Request, res: Response) => {
     `)
     .order('created_at', { ascending: false })
     .limit(10);
-    
+
   if (error) {
     res.status(500).json({ error: error.message });
     return;
@@ -131,7 +132,7 @@ stakeRouter.get('/stake/seeded', async (req: Request, res: Response) => {
       repid_mvp_agents!inner(id, display_name, repid_score)
     `)
     .eq('status', 'active');
-    
+
   if (error) {
     res.status(500).json({ error: error.message });
     return;
