@@ -263,16 +263,41 @@ export async function runScoreEvent(
         zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app',
       })
       .then(
-        () => {
-          fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              agent_id: input.agent_id, 
-              score: Math.round(new_repid),
-              metadata: { job_id: zk_proof_id }
-            })
-          }).catch(err => console.error('[scoring/pipeline] proof service call failed:', err));
+        async (insertRes) => {
+          try {
+            const res = await fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                agent_id: input.agent_id, 
+                repid_score: Math.round(new_repid),
+                threshold: 5000
+              })
+            });
+            if (res.ok) {
+              const proof = await res.json() as any;
+              await db.from('repid_proof_queue').update({
+                status: 'completed',
+                proof_hash: proof.commitment,
+                proof_size_bytes: proof.proof_size_bytes,
+                completed_at: new Date().toISOString(),
+                attempts: 1
+              }).eq('job_id', zk_proof_id);
+            } else {
+              const text = await res.text();
+              console.error('[scoring/pipeline] proof service returned error:', text);
+              await db.from('repid_proof_queue').update({
+                attempts: 1,
+                error_message: `ZKP service error: ${res.status} ${text}`
+              }).eq('job_id', zk_proof_id);
+            }
+          } catch (err) {
+            console.error('[scoring/pipeline] proof service call failed:', err);
+            await db.from('repid_proof_queue').update({
+              attempts: 1,
+              error_message: String(err)
+            }).eq('job_id', zk_proof_id);
+          }
         },
         (err: unknown) => console.error('[scoring/pipeline] proof queue insert failed:', err)
       );
