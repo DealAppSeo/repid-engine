@@ -152,6 +152,8 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     repid_before: agent.current_repid,
     repid_after: newRepId,
     certainty_at_claim: input.certaintyAtClaim ?? null,
+    hal_score: 0.0,
+    hal_decision: 'clean',
     ecosystem_need_weight: ecosystemNeedWeight,
     mirror_test_triggered: input.mirrorTestTriggered ?? !audit.mirrorTestPassed,
     eas_attestation_id: audit.easAttestationId,
