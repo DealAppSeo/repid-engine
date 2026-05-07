@@ -13,6 +13,8 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import v1Router from './routes/v1';
 import agentsExternalRouter from './routes/agents-external';
+import agentsExternalScoreRouter from './routes/agents-external-score';
+import keysRouter from './routes/key-management';
 import telegramRouter, { sendTelegramAlert } from './routes/telegram';
 import halTestRouter from './routes/hal-test';
 import auditRouter from './routes/audit';
@@ -97,6 +99,13 @@ app.use((req, res, next) => {
   // and all downstream Supabase calls are parameterized, so the blanket
   // protection isn't load-bearing here.
   if (req.path === '/api/v1/agents/register') return next();
+  // Sprint A7: free-form prompt/answer text legitimately contains SQL keywords
+  // ("select carefully", "INSERT a comma", etc.) and sentence-ending ';'.
+  // The downstream Supabase calls are parameterized.
+  if (/^\/api\/v1\/agents-external\/[^/]+\/score-event$/.test(req.path)) return next();
+  // Sprint A7: /api/v1/llm/complete also accepts free-form prompts that may
+  // contain SQL-shaped tokens; same parameterized-DB rationale.
+  if (req.path === '/api/v1/llm/complete') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -145,6 +154,20 @@ app.get('/api/v1/metrics', async (_req, res) => {
 app.use('/api', stakeRouter);
 app.use('/api', llmRouter);
 
+// Sprint A7 — public score-event endpoint. Mounted BEFORE authMiddleware so
+// it stays unauthenticated; the scoreLimiter (60 req/IP/min) defined below
+// is the only gate. Path /api/v1/agents-external/:id/score-event is distinct
+// from the legacy bearer-auth /api/v1/agents/:id/score-event in
+// src/routes/agents-external.ts.
+const externalScoreLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: 'Too many score requests' },
+  keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+});
+app.use('/api/v1/agents-external/:id/score-event', externalScoreLimiter);
+app.use('/api/v1/agents-external', agentsExternalScoreRouter);
+
 app.use(authMiddleware);
 app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
@@ -159,6 +182,7 @@ app.use('/api/v1/admin/caps', adminCapsRouter);
 app.use('/api/v1/agents/register', registrationLimiter);
 app.use('/api/v1/agents/:id/score-event', scoreLimiter);
 app.use('/api/v1/agents/:id/card', cardLimiter); // Sprint A5: 60 req/IP/min on public card
+app.use('/api/v1/agents', keysRouter);
 app.use('/api/v1/agents', agentsExternalRouter);
 
 // v11 LLM trust leaderboard (public)

@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
+import { issueAgentApiKey } from '../auth/api-keys';
+import { requireApiKey } from '../middleware/auth-api-key';
 
 const router = Router();
 
@@ -151,7 +153,6 @@ router.post('/register', async (req: Request, res: Response) => {
     });
   }
 
-  const apiKey = crypto.randomUUID();
   const vestingCliff = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const erc8004 = wallet_address || `external:${crypto.randomUUID()}`;
   const createdAt = new Date().toISOString();
@@ -160,7 +161,6 @@ router.post('/register', async (req: Request, res: Response) => {
     version: '11.0',
     type: is_human ? 'HUMAN' : 'EXTERNAL_AGENT',
     anonymous: is_human ? true : false,
-    api_key: apiKey,
     llm_provider: resolvedProvider,
     llm_model: llm_model ?? null,
     byok_provider: byok_provider ?? null,
@@ -198,6 +198,8 @@ router.post('/register', async (req: Request, res: Response) => {
 
     const agentId = newAgent.id as string;
 
+    const { key: rawKey } = await issueAgentApiKey(agentId, 'default', ['score_event', 'llm_complete', 'read_card', 'admin']);
+
     await db.from('repid_verified_decisions').insert({
       agent_id: agentId, vdr_count: 0,
     });
@@ -215,7 +217,7 @@ router.post('/register', async (req: Request, res: Response) => {
     return res.status(201).json({
       // Existing v11 fields (unchanged for legacy callers)
       agent_id: agentId,
-      api_key: apiKey,
+      api_key: rawKey, // Shown ONCE; SDK clients must save it.
       starting_score: 1000,
       tier: 'CUSTODIED_DBT',
       vesting_cliff_ends_at: vestingCliff,
@@ -257,6 +259,40 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     .select('id', { count: 'exact', head: true })
     .eq('agent_id', agentId);
 
+  // Sprint A7 — score-event aggregates. All best-effort; failures default to 0/null.
+  const [
+    cleanRes,
+    flaggedRes,
+    vetoedRes,
+    last100Res,
+    lastEventRes,
+  ] = await Promise.all([
+    db.from('repid_score_events').select('id', { count: 'exact', head: true })
+      .eq('agent_id', agentId).eq('hal_decision', 'clean'),
+    db.from('repid_score_events').select('id', { count: 'exact', head: true })
+      .eq('agent_id', agentId).eq('hal_decision', 'flagged'),
+    db.from('repid_score_events').select('id', { count: 'exact', head: true })
+      .eq('agent_id', agentId).eq('hal_decision', 'vetoed'),
+    db.from('repid_score_events').select('hal_score')
+      .eq('agent_id', agentId).not('hal_score', 'is', null)
+      .order('created_at', { ascending: false }).limit(100),
+    db.from('repid_score_events').select('created_at')
+      .eq('agent_id', agentId).order('created_at', { ascending: false }).limit(1),
+  ]);
+
+  const last100Rows = (last100Res.data ?? []) as Array<{ hal_score: number | string | null }>;
+  let avgHalScore: number | null = null;
+  if (last100Rows.length > 0) {
+    const nums = last100Rows
+      .map(r => Number(r.hal_score))
+      .filter(n => Number.isFinite(n));
+    if (nums.length > 0) {
+      avgHalScore = nums.reduce((a, b) => a + b, 0) / nums.length;
+    }
+  }
+  const lastEventRows = (lastEventRes.data ?? []) as Array<{ created_at: string | null }>;
+  const lastEventAt = lastEventRows[0]?.created_at ?? null;
+
   const tokenId = (agent as any).erc8004_token_id ?? null;
   const explorerUrl = tokenId
     ? `https://sepolia.basescan.org/token/0x8004A818BFB912233c491871b3d84c89A494BD9e?a=${tokenId}`
@@ -272,14 +308,25 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     base_sepolia_explorer_url: explorerUrl,
     created_at: (agent as any).created_at ?? null,
     last_active_at: (agent as any).last_active_at ?? null,
+    // Sprint A7 — score-event aggregates.
+    total_score_events: decisionCount ?? 0,
+    total_clean: cleanRes.count ?? 0,
+    total_flagged: flaggedRes.count ?? 0,
+    total_vetoed: vetoedRes.count ?? 0,
+    avg_hal_score: avgHalScore,
+    last_event_at: lastEventAt,
   });
 });
 
 // POST /:id/score-event — per-agent bearer auth, full v11 reward pipeline
-router.post('/:id/score-event', async (req: Request, res: Response) => {
+router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Request, res: Response) => {
   const agentId = String(req.params.id);
-  const agent = await authAgent(req, res, agentId);
-  if (!agent) return;
+  if ((req as any).agent_id !== agentId) {
+    return res.status(403).json({ error: 'API key agent_id mismatch' });
+  }
+
+  const { data: agent, error } = await db.from('repid_agents').select('*').eq('id', agentId).single();
+  if (error || !agent) return res.status(404).json({ error: 'Agent not found' });
 
   const {
     llm_provider,

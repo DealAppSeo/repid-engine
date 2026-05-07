@@ -6,7 +6,9 @@ import { RateLimitError, AuthError } from '../providers/types';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { incrementSpend } from '../billing/caps';
+import { runScoreEvent, NotFoundError } from '../scoring/pipeline';
 import crypto from 'crypto';
+import { validateAgentApiKey } from '../auth/api-keys';
 
 export const llmRouter = Router();
 
@@ -77,11 +79,33 @@ llmRouter.post('/v1/llm/route-debug', llmLimiter, async (req: Request, res: Resp
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
   const call_id = crypto.randomUUID();
   try {
-    const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature } = req.body;
-    
+    const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature, agent_id, idempotency_key } = req.body;
+
     if (!prompt || typeof prompt !== 'string') {
       res.status(400).json({ error: 'Missing or invalid prompt string' });
       return;
+    }
+
+    if (agent_id) {
+      const header = req.headers['authorization'];
+      const token = typeof header === 'string' ? header.replace(/^Bearer\s+/i, '').trim() : '';
+      if (!token) {
+        res.status(401).json({ error: 'Missing API key for agent_id' });
+        return;
+      }
+      const validKey = await validateAgentApiKey(token);
+      if (!validKey) {
+        res.status(401).json({ error: 'Invalid or revoked API key' });
+        return;
+      }
+      if (!validKey.scopes.includes('llm_complete')) {
+        res.status(403).json({ error: 'Insufficient scopes (missing llm_complete)' });
+        return;
+      }
+      if (validKey.agent_id !== agent_id) {
+        res.status(403).json({ error: 'API key agent_id mismatch' });
+        return;
+      }
     }
 
     const routeReq: RouteRequest = {
@@ -154,6 +178,38 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           task_hint
         });
 
+        // Sprint A7 — HAL evaluation + RepID scoring. Only runs when caller
+        // supplies agent_id. Score-event failures are logged but never block
+        // the LLM response (preserves backward compat for callers that don't
+        // care about scoring).
+        let hal_evaluation: Record<string, unknown> | null = null;
+        if (typeof agent_id === 'string' && agent_id.length > 0) {
+          try {
+            const scoreResult = await runScoreEvent({
+              agent_id,
+              prompt,
+              answer: result.answer,
+              provider_used: adapter.name,
+              tier_used: String(decision.chosen_tier),
+              model_used: result.model || 'unknown',
+              llm_call_id: call_id,
+              idempotency_key: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+            });
+            hal_evaluation = {
+              score_event_id: scoreResult.score_event_id,
+              hal_score: scoreResult.hal_score,
+              hal_decision: scoreResult.hal_decision,
+              repid_delta: scoreResult.repid_delta_applied,
+              new_repid: scoreResult.new_repid,
+              zk_proof_triggered: scoreResult.zk_proof_triggered,
+            };
+          } catch (scoreErr: any) {
+            const status = scoreErr instanceof NotFoundError ? 'agent_not_found' : 'score_event_failed';
+            console.error(`[llm/complete] ${status}:`, scoreErr?.message ?? scoreErr);
+            hal_evaluation = { error: status, message: scoreErr?.message ?? 'unknown' };
+          }
+        }
+
         res.json({
           answer: result.answer,
           provider: result.provider,
@@ -163,7 +219,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           tokens_out: result.tokensOut,
           latency_ms: result.latencyMs,
           cost_estimate_usd: cost_usd,
-          router_decision: decision
+          router_decision: decision,
+          hal_evaluation
         });
         return;
 

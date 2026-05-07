@@ -116,7 +116,7 @@ export async function evaluate(
 
   const enrichedSignals: HALSignals = {
     ...baseSignals,
-    agreement_score: cross ? cross.agreement_score : null,
+    agreement_score: cross && typeof cross.agreement_score === 'number' ? cross.agreement_score : 1.0,
     prompt_category: promptCategory,
     comma_veto: cross ? cross.comma_veto : null,
     comma_gap: cross ? cross.comma_gap : null,
@@ -208,5 +208,6 @@ export async function evaluate(
     claim_contradicts_consensus: claimContradicts,
     tampering_suspected: tamperingSuspected,
     tampering_signal: tamperingSignal,
+    generated_answer: output,
   };
 }
