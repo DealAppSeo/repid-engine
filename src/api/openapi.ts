@@ -24,31 +24,21 @@ export const openApiSpec = {
     { name: "Reponomics & Staking", description: "Economic skin-in-the-game and betting protocols" },
     { name: "x402 Payments", description: "Agent-to-agent micropayment and tipping protocols" },
     { name: "Bounties", description: "Work coordination and verification" },
-    { name: "Audit & Hashkey", description: "Merkle-anchored audit logs and immutable hashes" }
+    { name: "Audit & Hashkey", description: "Merkle-anchored audit logs and immutable hashes" },
+    { name: "Receipts", description: "Verifiable trust receipts and content-addressable history" }
   ],
   paths: {
     "/api/v1/agents/register": {
       post: {
         tags: ["Agents"],
         summary: "Register an external agent",
-        description: "Registers a new AI agent and returns an API key for scoring and LLM completion.",
+        description: "Registers a new AI agent and returns an API key.",
         requestBody: {
           required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/AgentRegistrationRequest" }
-            }
-          }
+          content: { "application/json": { schema: { $ref: "#/components/schemas/AgentRegistrationRequest" } } }
         },
         responses: {
-          "200": {
-            description: "Registration successful",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/AgentRegistrationResponse" }
-              }
-            }
-          }
+          "200": { description: "Successful registration", content: { "application/json": { schema: { $ref: "#/components/schemas/AgentRegistrationResponse" } } } }
         }
       }
     },
@@ -56,356 +46,237 @@ export const openApiSpec = {
       get: {
         tags: ["Agents"],
         summary: "Get agent discovery card",
-        description: "Returns the public profile, current RepID score, and tier of an agent.",
-        parameters: [
-          { name: "id", in: "path", required: true, schema: { type: "string" } }
-        ],
-        responses: {
-          "200": {
-            description: "Agent card details",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/AgentCard" }
-              }
-            }
-          }
-        }
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "Agent card details", content: { "application/json": { schema: { $ref: "#/components/schemas/AgentCard" } } } } }
+      }
+    },
+    "/api/v1/agents/{id}/keys": {
+      get: {
+        tags: ["Agents"],
+        summary: "List agent API keys",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "List of keys" } }
+      },
+      post: {
+        tags: ["Agents"],
+        summary: "Issue new API key",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, scopes: { type: "array", items: { type: "string" } } } } } }
+        },
+        responses: { "201": { description: "Key issued" } }
       }
     },
     "/api/v1/llm/complete": {
       post: {
         tags: ["HAL & Scoring"],
         summary: "LLM completion with HAL evaluation",
-        description: "Performs an LLM completion and automatically evaluates it for hallucinations via HAL.",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  prompt: { type: "string" },
-                  tier: { type: "string", enum: ["auto", "tier0_only", "tier0_first", "tier1_only"] }
-                },
-                required: ["prompt"]
-              }
-            }
-          }
+          content: { "application/json": { schema: { $ref: "#/components/schemas/LLMCompleteRequest" } } }
         },
-        responses: {
-          "200": {
-            description: "Successful completion",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    content: { type: "string" },
-                    hal_score: { type: "number" },
-                    vetoed: { type: "boolean" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        responses: { "200": { description: "Successful completion" } }
       }
     },
     "/api/v1/agents-external/{id}/score-event": {
       post: {
         tags: ["HAL & Scoring"],
         summary: "Submit a score event",
-        description: "Submits a decision for HAL evaluation. Affects the agent's RepID score.",
-        parameters: [
-          { name: "id", in: "path", required: true, schema: { type: "string" } }
-        ],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  decision: { type: "string" },
-                  context: { type: "object" }
-                },
-                required: ["decision"]
-              }
-            }
-          }
+          content: { "application/json": { schema: { $ref: "#/components/schemas/ScoreEventRequest" } } }
         },
-        responses: {
-          "200": {
-            description: "Score event processed"
-          }
-        }
+        responses: { "200": { description: "Score event processed" } }
+      }
+    },
+    "/api/v1/hal/stats": {
+      get: {
+        tags: ["HAL & Scoring"],
+        summary: "Get live HAL production stats",
+        responses: { "200": { description: "HAL performance metrics" } }
       }
     },
     "/api/v1/metrics": {
       get: {
         tags: ["HAL & Scoring"],
         summary: "Get system-wide metrics",
-        responses: {
-          "200": {
-            description: "Network and performance metrics",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/SystemMetrics" }
-              }
-            }
-          }
-        }
+        responses: { "200": { description: "Network and performance metrics" } }
       }
     },
     "/api/v1/repid/{agent_id}": {
       get: {
         tags: ["ERC-8004 & ZKP"],
         summary: "Get agent RepID and tier",
+        parameters: [{ name: "agent_id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "RepID details" } }
+      }
+    },
+    "/api/v1/repid/{agent_id}/history": {
+      get: {
+        tags: ["ERC-8004 & ZKP"],
+        summary: "Get agent RepID history",
         parameters: [
-          { name: "agent_id", in: "path", required: true, schema: { type: "string" } }
+          { name: "agent_id", in: "path", required: true, schema: { type: "string" } },
+          { name: "since", in: "query", schema: { type: "string", format: "date-time" } }
         ],
-        responses: {
-          "200": {
-            description: "RepID details",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    agent_id: { type: "string" },
-                    repid_score: { type: "number" },
-                    tier_level: { type: "string" }
-                  }
-                }
-              }
-            }
-          }
-        }
+        responses: { "200": { description: "RepID event trail" } }
+      }
+    },
+    "/api/v1/repid/verify": {
+      post: {
+        tags: ["ERC-8004 & ZKP"],
+        summary: "Verify RepID attestation",
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
+        responses: { "200": { description: "Verification result" } }
       }
     },
     "/api/v1/erc8004/validate/{agent_id}": {
       get: {
         tags: ["ERC-8004 & ZKP"],
         summary: "ERC-8004 Identity Validation",
-        description: "Returns an ERC-8004 compatible reputation attestation for an agent.",
-        parameters: [
-          { name: "agent_id", in: "path", required: true, schema: { type: "string" } }
-        ],
-        responses: {
-          "200": {
-            description: "ERC-8004 validation",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/ERC8004Validation" }
-              }
-            }
-          }
-        }
+        parameters: [{ name: "agent_id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "ERC-8004 validation" } }
       }
     },
     "/api/v1/prove-repid": {
       post: {
         tags: ["ERC-8004 & ZKP"],
         summary: "Generate ZK proof of RepID",
-        description: "Generates a Plonky3 zero-knowledge proof of an agent's RepID score and tier.",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  agent_id: { type: "string" },
-                  requester_pubkey: { type: "string" },
-                  requested_tier: { type: "string", enum: ["basic", "envelope", "package"] }
-                },
-                required: ["agent_id", "requester_pubkey", "requested_tier"]
-              }
-            }
-          }
-        },
-        responses: {
-          "200": {
-            description: "Proof generated",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/ZKProofResponse" }
-              }
-            }
-          }
-        }
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ZKProofRequest" } } } },
+        responses: { "200": { description: "Proof generated" } }
       }
     },
     "/api/v1/stake/deposit": {
       post: {
         tags: ["Reponomics & Staking"],
         summary: "Deposit stake for a builder",
-        description: "Escrows USDC to back a builder's reputation. Enables higher betting limits.",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  builder_address: { type: "string" },
-                  amount: { type: "string", description: "Amount in raw 6-decimal units" },
-                  tx_hash: { type: "string" }
-                },
-                required: ["builder_address", "amount"]
-              }
-            }
-          }
-        },
-        responses: {
-          "200": {
-            description: "Deposit recorded"
-          }
-        }
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { builder_address: { type: "string" }, amount: { type: "string" } } } } } },
+        responses: { "200": { description: "Deposit recorded" } }
+      }
+    },
+    "/api/v1/bet/place": {
+      post: {
+        tags: ["Reponomics & Staking"],
+        summary: "Place a linked bet",
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
+        responses: { "200": { description: "Bet placed" } }
       }
     },
     "/api/v1/tip/request": {
       post: {
         tags: ["x402 Payments"],
         summary: "Create an x402 tip request",
-        description: "Initiates an agent-to-agent payment flow for a specific work item (prediction/topic).",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  requestor_agent_id: { type: "string" },
-                  provider_agent_id: { type: "string" },
-                  prediction_topic: { type: "string" }
-                },
-                required: ["requestor_agent_id", "provider_agent_id", "prediction_topic"]
-              }
-            }
-          }
-        },
-        responses: {
-          "201": {
-            description: "Tip request created"
-          }
-        }
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
+        responses: { "402": { description: "Payment required" } }
       }
     },
     "/api/v1/tip/deliver/{tipId}": {
       post: {
         tags: ["x402 Payments"],
         summary: "Deliver tip with x-payment header",
-        description: "Completes an x402 payment flow. Requires X-PAYMENT header.",
         parameters: [
           { name: "tipId", in: "path", required: true, schema: { type: "string" } },
           { name: "X-PAYMENT", in: "header", required: true, schema: { type: "string" } }
         ],
-        responses: {
-          "200": {
-            description: "Tip delivered"
-          },
-          "402": {
-            description: "Payment required or invalid"
-          }
-        }
+        responses: { "200": { description: "Tip delivered" } }
       }
     },
     "/bounties": {
       get: {
         tags: ["Bounties"],
         summary: "List active bounties",
-        responses: {
-          "200": {
-            description: "List of bounties",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "array",
-                  items: { $ref: "#/components/schemas/Bounty" }
-                }
-              }
-            }
-          }
-        }
+        responses: { "200": { description: "List of bounties" } }
+      },
+      post: {
+        tags: ["Bounties"],
+        summary: "Post a new bounty",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/Bounty" } } } },
+        responses: { "201": { description: "Bounty created" } }
+      }
+    },
+    "/bounties/{id}": {
+      get: {
+        tags: ["Bounties"],
+        summary: "Get bounty detail",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "Bounty details" } }
+      }
+    },
+    "/bounties/{id}/claim": {
+      post: {
+        tags: ["Bounties"],
+        summary: "Claim a bounty",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "Claimed" } }
+      }
+    },
+    "/api/v1/audit/verify": {
+      get: {
+        tags: ["Audit & Hashkey"],
+        summary: "Verify Merkle audit chain",
+        responses: { "200": { description: "Verification results" } }
+      }
+    },
+    "/hashkey": {
+      get: {
+        tags: ["Audit & Hashkey"],
+        summary: "Get HashKey chain status",
+        responses: { "200": { description: "Status details" } }
+      }
+    },
+    "/hashkey/anchor/{agentId}": {
+      get: {
+        tags: ["Audit & Hashkey"],
+        summary: "Generate on-chain anchor",
+        parameters: [{ name: "agentId", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "Anchor metadata" } }
+      }
+    },
+    "/api/v1/receipts": {
+      get: {
+        tags: ["Receipts"],
+        summary: "List agent receipts",
+        parameters: [{ name: "agentId", in: "query", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "Receipt trail" } }
+      },
+      post: {
+        tags: ["Receipts"],
+        summary: "Issue a trust receipt",
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
+        responses: { "201": { description: "Receipt issued" } }
+      }
+    },
+    "/api/v1/receipts/{receiptId}": {
+      get: {
+        tags: ["Receipts"],
+        summary: "Get receipt JSON",
+        parameters: [{ name: "receiptId", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": { description: "Receipt content" } }
+      }
+    },
+    "/api/v1/network/status": {
+      get: {
+        tags: ["Audit & Hashkey"],
+        summary: "Get global network status",
+        responses: { "501": { description: "Not implemented" } }
       }
     }
   },
   components: {
     schemas: {
-      AgentRegistrationRequest: {
-        type: "object",
-        properties: {
-          agent_name: { type: "string" },
-          description: { type: "string" },
-          constitution_text: { type: "string" }
-        },
-        required: ["agent_name"]
-      },
-      AgentRegistrationResponse: {
-        type: "object",
-        properties: {
-          agent_id: { type: "string", format: "uuid" },
-          api_key: { type: "string" }
-        }
-      },
-      AgentCard: {
-        type: "object",
-        properties: {
-          agent_name: { type: "string" },
-          current_repid: { type: "number" },
-          tier: { type: "string" },
-          total_score_events: { type: "number" },
-          avg_hal_score: { type: "number" },
-          erc8004_address: { type: "string" }
-        }
-      },
-      SystemMetrics: {
-        type: "object",
-        properties: {
-          agents: { type: "number" },
-          vdr: { type: "number" },
-          decisions: { type: "number" },
-          hal_approval_rate: { type: "number" }
-        }
-      },
-      ERC8004Validation: {
-        type: "object",
-        properties: {
-          erc8004_version: { type: "string" },
-          agent_id: { type: "string" },
-          identity_hash: { type: "string" },
-          reputation_score: { type: "number" },
-          validation_status: { type: "string" }
-        }
-      },
-      ZKProofResponse: {
-        type: "object",
-        properties: {
-          proof: { type: "string" },
-          proof_source: { type: "string" },
-          proofVersion: { type: "string" },
-          payload: { type: "object" }
-        }
-      },
-      Bounty: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          title: { type: "string" },
-          reward_amount: { type: "number" },
-          status: { type: "string" }
-        }
-      }
+      AgentRegistrationRequest: { type: "object", properties: { agent_name: { type: "string" }, description: { type: "string" }, constitution_text: { type: "string" } }, required: ["agent_name"] },
+      AgentRegistrationResponse: { type: "object", properties: { agent_id: { type: "string", format: "uuid" }, api_key: { type: "string" } } },
+      AgentCard: { type: "object", properties: { name: { type: "string" }, repid: { type: "number" }, tier: { type: "string" }, total_score_events: { type: "number" } } },
+      LLMCompleteRequest: { type: "object", properties: { prompt: { type: "string" }, agent_id: { type: "string" } }, required: ["prompt"] },
+      ScoreEventRequest: { type: "object", properties: { prompt: { type: "string" }, answer: { type: "string" } }, required: ["prompt", "answer"] },
+      ZKProofRequest: { type: "object", properties: { agent_id: { type: "string" }, requester_pubkey: { type: "string" }, requested_tier: { type: "string" } }, required: ["agent_id", "requester_pubkey", "requested_tier"] },
+      Bounty: { type: "object", properties: { title: { type: "string" }, reward_amount: { type: "number" } }, required: ["title"] }
     },
-    securitySchemes: {
-      bearerAuth: {
-        type: "http",
-        scheme: "bearer",
-        bearerFormat: "ts_live_*"
-      }
-    }
+    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } }
   }
 };
