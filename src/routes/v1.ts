@@ -101,13 +101,6 @@ router.get('/metrics', async (req: Request, res: Response) => {
   });
 });
 
-router.get('/network/status', (req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'NOT_IMPLEMENTED',
-    message: 'Global network status infrastructure is scheduled for Sprint DOC2.',
-    status: 501
-  });
-});
 
 router.post('/prove-repid', async (req: Request, res: Response) => {
   const { agent_id, requester_pubkey, requested_tier } = req.body;
