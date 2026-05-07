@@ -73,6 +73,7 @@ export interface HALResult {
   /** Tampering signal — populated only at level 5 when zone='too-tight'. */
   tampering_suspected?: boolean | null;
   tampering_signal?: HALTamperingSignal | null;
+  generated_answer?: string | null;
 }
 
 export interface CrossLLMSummary {

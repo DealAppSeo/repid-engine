@@ -43,13 +43,27 @@ export function computeHALScore(
 ): HALScoreOutput {
   const w = HAL_FORMULA_WEIGHTS;
   const comma = commaOverride !== undefined ? commaOverride : HAL_PYTHAGOREAN_COMMA;
-  const hal_score =
-    (
+  let sum = 0;
+  if (typeof signals.agreement_score === 'number' && signals.agreement_score !== null) {
+    sum = 
+      0.35 * signals.harm_probability +
+      0.25 * signals.epistemic_uncertainty +
+      0.15 * (1 - signals.evidence_quality) +
+      0.05 * (1 - signals.scope_appropriateness) +
+      0.20 * (1 - signals.agreement_score);
+  } else {
+    sum = 
       w.harm * signals.harm_probability +
       w.epistemic * signals.epistemic_uncertainty +
       w.evidence * (1 - signals.evidence_quality) +
-      w.scope * (1 - signals.scope_appropriateness)
-    ) * comma;
+      w.scope * (1 - signals.scope_appropriateness);
+  }
+
+  // Ensure hard [0, 1] bound BEFORE multiplication
+  const normalizedSum = Math.max(0, Math.min(1, sum));
+  
+  // Normalize final score to [0, 1] after Comma multiplication
+  const hal_score = Math.min(1, normalizedSum * comma);
 
   return {
     hal_score,

@@ -33,6 +33,10 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // Sprint A5: public agent card (no private fields exposed)
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/card$/.test(req.path)) return next();
   if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
+  // Sprint A8: bypass global auth for keys (key-management.ts handles it)
+  if (/^\/api\/v1\/agents\/[^/]+\/keys/.test(req.path)) {
+    return next();
+  }
 
   const apiKey = (req.headers['authorization']?.replace('Bearer ', '') || req.headers['x-api-key']) as string;
 
