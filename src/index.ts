@@ -154,6 +154,14 @@ app.get('/api/v1/metrics', async (_req, res) => {
   });
 });
 
+app.get('/api/v1/network/status', (req, res) => {
+  res.status(501).json({
+    error: 'NOT_IMPLEMENTED',
+    message: 'Global network status infrastructure is scheduled for Sprint DOC2.',
+    status: 501
+  });
+});
+
 app.use('/api', stakeRouter);
 app.use('/api', llmRouter);
 

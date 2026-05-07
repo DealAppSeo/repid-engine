@@ -21,13 +21,6 @@ import {
 
 export const repidPublicRouter = Router();
 
-repidPublicRouter.get('/network/status', (req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'NOT_IMPLEMENTED',
-    message: 'Global network status infrastructure is scheduled for Sprint DOC2.',
-    status: 501
-  });
-});
 
 export const repidAdminRouter = Router();
 
