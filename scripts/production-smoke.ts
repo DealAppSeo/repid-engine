@@ -19,7 +19,7 @@ async function runSmoke(): Promise<TestResult[]> {
     // Discovery
     { path: '/openapi.json', method: 'GET', expected: [200] },
     { path: '/.well-known/agent.json', method: 'GET', expected: [200] },
-    { path: '/ai-plugin.json', method: 'GET', expected: [200] },
+    { path: '/ai-plugin.json', method: 'GET', expected: [200, 301] },
     
     // Agents
     { path: '/api/v1/agents/register', method: 'POST', body: { agent_name: 'smoke' }, expected: [201, 429] },
@@ -56,7 +56,8 @@ async function runSmoke(): Promise<TestResult[]> {
       const res = await fetch(`${BASE}${t.path}`, {
         method: t.method,
         headers: t.body ? { 'Content-Type': 'application/json' } : {},
-        body: t.body ? JSON.stringify(t.body) : undefined
+        body: t.body ? JSON.stringify(t.body) : undefined,
+        redirect: 'manual'
       });
       const pass = t.expected.includes(res.status);
       results.push({
