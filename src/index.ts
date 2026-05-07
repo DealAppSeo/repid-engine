@@ -39,6 +39,7 @@ import { scoreMonitor } from './engine/score-monitor';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const app = express();
+app.set('trust proxy', 1);
 
 const registrationLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,  // 1 hour
@@ -163,7 +164,6 @@ app.get('/api/v1/network/status', (req, res) => {
 });
 
 app.use('/api', stakeRouter);
-app.use('/api', llmRouter);
 
 // Sprint A7 — public score-event endpoint. Mounted BEFORE authMiddleware so
 // it stays unauthenticated; the scoreLimiter (60 req/IP/min) defined below
@@ -182,7 +182,12 @@ app.use('/api/v1/agents-external', agentsExternalScoreRouter);
 app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 
+app.use('/', bountiesRouter);
+app.use('/api/v1', halStatsRouter);
+
 app.use(authMiddleware);
+
+app.use('/api', llmRouter);
 
 app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
@@ -212,10 +217,7 @@ app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
 app.use(scoreRouter);
 app.use(referendumRouter);
-app.use(bountiesRouter);
-app.use(hashkeyRouter);
 app.use(mirrorTestRouter);
-app.use(halStatsRouter);
 
 const port = parseInt(process.env.PORT || '3000', 10);
 // Skip side-effects (server bind, score-monitor cron, stalled-task cron, daily
