@@ -56,10 +56,51 @@ async function authAgent(req: Request, res: Response, agentId: string): Promise<
   return agent;
 }
 
-// POST /register — public agent onboarding (v11)
+// Sprint A5: sanitize free-form text — strip script/javascript/data URIs, null bytes.
+function sanitizeFreeText(s: string): string {
+  return s
+    .replace(/\0/g, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<\/?script[^>]*>/gi, '')
+    .replace(/javascript:/gi, '')
+    .replace(/\bdata:[^\s;,]+/gi, '');
+}
+
+// Sprint A5: in-memory IP+name dedup window. 24h. Resets on process restart;
+// production hardening sprint will move this to Redis.
+const ipNameDedup: Map<string, number> = new Map();
+const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
+function dedupKey(ip: string, name: string): string {
+  return `${ip}::${name.toLowerCase()}`;
+}
+function checkAndRecordDedup(ip: string, name: string): { duplicate: boolean } {
+  const now = Date.now();
+  // Lazy cleanup: every call sweeps a small slice.
+  if (ipNameDedup.size > 1000) {
+    for (const [k, ts] of ipNameDedup) {
+      if (now - ts > DEDUP_WINDOW_MS) ipNameDedup.delete(k);
+    }
+  }
+  const key = dedupKey(ip, name);
+  const last = ipNameDedup.get(key);
+  if (last !== undefined && now - last < DEDUP_WINDOW_MS) {
+    return { duplicate: true };
+  }
+  ipNameDedup.set(key, now);
+  return { duplicate: false };
+}
+// Test-only reset hook so jest cases can start with an empty dedup window.
+export function __resetDedupForTests() {
+  ipNameDedup.clear();
+}
+
+// POST /register — public agent onboarding (v11 + Sprint A5 Maya-shape)
 router.post('/register', async (req: Request, res: Response) => {
   const {
     agent_name,
+    name, // Sprint A5: Maya alias for agent_name. agent_name wins if both provided.
+    description,
+    constitution_text,
     llm_provider,
     llm_model,
     wallet_address,
@@ -69,20 +110,58 @@ router.post('/register', async (req: Request, res: Response) => {
     conservator_address,
   } = req.body ?? {};
 
-  if (!agent_name || !llm_provider) {
-    return res.status(400).json({ error: 'agent_name and llm_provider are required' });
+  // agent_name wins; fall back to name alias.
+  const resolvedName: string | undefined = agent_name || name;
+
+  if (!resolvedName) {
+    return res.status(400).json({ error: 'agent_name (or name) is required' });
+  }
+  // Maya-shape allows registration without llm_provider; fall back to 'unknown'
+  // so legacy clients still get the same behavior when they pass it.
+  const resolvedProvider: string = llm_provider || 'unknown';
+
+  // Sprint A5: bounds-check additive Maya fields.
+  if (description !== undefined && description !== null) {
+    if (typeof description !== 'string') {
+      return res.status(400).json({ error: 'description must be a string' });
+    }
+    if (description.length > 200) {
+      return res.status(400).json({ error: 'description max 200 chars' });
+    }
+  }
+  if (constitution_text !== undefined && constitution_text !== null) {
+    if (typeof constitution_text !== 'string') {
+      return res.status(400).json({ error: 'constitution_text must be a string' });
+    }
+    if (constitution_text.length > 5000) {
+      return res.status(400).json({ error: 'constitution_text max 5000 chars' });
+    }
+  }
+
+  const cleanDescription = typeof description === 'string' ? sanitizeFreeText(description) : null;
+  const cleanConstitutionText = typeof constitution_text === 'string' ? sanitizeFreeText(constitution_text) : null;
+
+  // Sprint A5 anti-spam: same name from same IP within 24h → 429.
+  const ip = (req.ip || (req.headers['x-forwarded-for'] as string) || 'unknown').toString();
+  const dedup = checkAndRecordDedup(ip, resolvedName);
+  if (dedup.duplicate) {
+    return res.status(429).json({
+      error: 'Duplicate registration: same agent name from this IP within last 24h',
+      hint: 'Try a unique name (e.g. add a numeric or environment suffix).',
+    });
   }
 
   const apiKey = crypto.randomUUID();
   const vestingCliff = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const erc8004 = wallet_address || `external:${crypto.randomUUID()}`;
+  const createdAt = new Date().toISOString();
 
   const constitution: Record<string, any> = {
     version: '11.0',
     type: is_human ? 'HUMAN' : 'EXTERNAL_AGENT',
     anonymous: is_human ? true : false,
     api_key: apiKey,
-    llm_provider,
+    llm_provider: resolvedProvider,
     llm_model: llm_model ?? null,
     byok_provider: byok_provider ?? null,
     email_hash: email_hash ?? null,
@@ -95,7 +174,9 @@ router.post('/register', async (req: Request, res: Response) => {
       .from('repid_agents')
       .insert({
         erc8004_address: erc8004,
-        agent_name,
+        agent_name: resolvedName,
+        description: cleanDescription,
+        constitution_text: cleanConstitutionText,
         current_repid: 1000,
         tier: 'CUSTODIED_DBT',
         activity_30d: 0,
@@ -108,7 +189,7 @@ router.post('/register', async (req: Request, res: Response) => {
         byok_acknowledged_at: byok_provider ? new Date().toISOString() : null,
         constitution,
       })
-      .select('id')
+      .select('id, created_at, erc8004_token_id')
       .single();
 
     if (insertErr || !newAgent) {
@@ -132,6 +213,7 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     return res.status(201).json({
+      // Existing v11 fields (unchanged for legacy callers)
       agent_id: agentId,
       api_key: apiKey,
       starting_score: 1000,
@@ -139,10 +221,58 @@ router.post('/register', async (req: Request, res: Response) => {
       vesting_cliff_ends_at: vestingCliff,
       vesting_info: 'First 500 RepID vests over 30 days',
       repid_url: `https://trustrepid.dev/agent/${agentId}`,
+      // Sprint A5 Maya-shape additive fields (no breaking change)
+      name: resolvedName,
+      description: cleanDescription,
+      repid: 1000, // alias for starting_score
+      erc8004_token_id: (newAgent as any).erc8004_token_id ?? null,
+      created_at: (newAgent as any).created_at ?? createdAt,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
+});
+
+// Sprint A5: GET /:id/card — public profile, no private fields.
+// Mounted at /api/v1/agents/:id/card (auth-bypassed in middleware/auth.ts).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+router.get('/:id/card', async (req: Request, res: Response) => {
+  const agentId = String(req.params.id);
+  if (!UUID_RE.test(agentId)) {
+    return res.status(400).json({ error: 'invalid agent id (expected UUID)' });
+  }
+
+  const { data: agent, error } = await db
+    .from('repid_agents')
+    .select('id, agent_name, description, current_repid, erc8004_token_id, created_at, last_active_at')
+    .eq('id', agentId)
+    .single();
+  if (error || !agent) {
+    return res.status(404).json({ error: 'Agent not found' });
+  }
+
+  // Decision count (best-effort; failures default to 0).
+  const { count: decisionCount } = await db
+    .from('repid_score_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('agent_id', agentId);
+
+  const tokenId = (agent as any).erc8004_token_id ?? null;
+  const explorerUrl = tokenId
+    ? `https://sepolia.basescan.org/token/0x8004A818BFB912233c491871b3d84c89A494BD9e?a=${tokenId}`
+    : null;
+
+  return res.json({
+    agent_id: (agent as any).id,
+    name: (agent as any).agent_name,
+    description: (agent as any).description ?? null,
+    repid: (agent as any).current_repid ?? 1000,
+    erc8004_token_id: tokenId,
+    total_decisions: decisionCount ?? 0,
+    base_sepolia_explorer_url: explorerUrl,
+    created_at: (agent as any).created_at ?? null,
+    last_active_at: (agent as any).last_active_at ?? null,
+  });
 });
 
 // POST /:id/score-event — per-agent bearer auth, full v11 reward pipeline

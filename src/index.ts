@@ -36,11 +36,18 @@ const app = express();
 
 const registrationLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,  // 1 hour
-  max: 10,                     // 10 registrations/hour/IP
+  max: 5,                     // Sprint A5: tightened from 10 → 5 per public-alpha brief
   message: { error: 'Too many registrations' },
   skip: (req) => {
     return req.headers['x-enterprise-key'] === process.env.ENTERPRISE_API_KEY;
   }
+});
+
+// Sprint A5: public card route gets generous rate limit (60/min/IP)
+const cardLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: 'Too many card requests' },
 });
 
 const scoreLimiter = rateLimit({
@@ -81,24 +88,30 @@ app.use('/api/v1', fullAccountRouter);
 
 // Sanitize POST validator
 app.use((req, res, next) => {
-  if (req.method === 'POST') {
-    const sanitizeObj = (obj: any) => {
-      for (const key in obj) {
-        if (typeof obj[key] === 'string') {
-          const val = obj[key].toUpperCase();
-          if (val.includes('SELECT ') || val.includes('DROP ') || val.includes('INSERT ') || val.includes('UPDATE ') || val.includes('DELETE ') || val.includes('--') || val.includes(';')) {
-             throw new Error('Forbidden SQL keywords detected');
-          }
-        } else if (typeof obj[key] === 'object' && obj[key] !== null) {
-          sanitizeObj(obj[key]);
+  if (req.method !== 'POST') return next();
+  // Sprint A5: /api/v1/agents/register accepts free-form English text in
+  // description and constitution_text, so the SQL-keyword scan false-positives
+  // on common words ("select carefully", "do not delete safeguards") and on
+  // sentences ending with ';'. Per-field validation runs in the route handler
+  // and all downstream Supabase calls are parameterized, so the blanket
+  // protection isn't load-bearing here.
+  if (req.path === '/api/v1/agents/register') return next();
+  const sanitizeObj = (obj: any) => {
+    for (const key in obj) {
+      if (typeof obj[key] === 'string') {
+        const val = obj[key].toUpperCase();
+        if (val.includes('SELECT ') || val.includes('DROP ') || val.includes('INSERT ') || val.includes('UPDATE ') || val.includes('DELETE ') || val.includes('--') || val.includes(';')) {
+           throw new Error('Forbidden SQL keywords detected');
         }
+      } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+        sanitizeObj(obj[key]);
       }
-    };
-    try {
-      sanitizeObj(req.body);
-    } catch (e) {
-      return res.status(400).json({ error: 'Validation failed' });
     }
+  };
+  try {
+    sanitizeObj(req.body);
+  } catch (e) {
+    return res.status(400).json({ error: 'Validation failed' });
   }
   next();
 });
@@ -143,6 +156,7 @@ app.use('/api/v1', repidAdminRouter);
 // v11 external agent endpoints
 app.use('/api/v1/agents/register', registrationLimiter);
 app.use('/api/v1/agents/:id/score-event', scoreLimiter);
+app.use('/api/v1/agents/:id/card', cardLimiter); // Sprint A5: 60 req/IP/min on public card
 app.use('/api/v1/agents', agentsExternalRouter);
 
 // v11 LLM trust leaderboard (public)
