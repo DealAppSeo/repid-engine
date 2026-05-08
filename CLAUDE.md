@@ -55,7 +55,7 @@ helmet → cors (allowlist) → express.json (1mb) → SQL-keyword body sanitize
 4. **Ecosystem need weight** (`src/layers/ecosystem-need.ts`) — multiplier from `repid_ecosystem_supply`.
 5. **Delta** — challenge events go through `scoreChallengeOutcome`, predictions through `scorePrediction`, everything else uses the `FIXED_DELTAS` table (STAKE=5, REFERRAL=20, PEACEMAKER=15, CODE_CONTRIBUTION=25, etc.).
 6. **Redemption modifier** (`src/layers/decay.ts`) — only applied when delta is negative; dampens punishments for prosocial agents.
-7. Compute new RepID, **clamped to [10, 10000]**, then derive tier via `computeTier`: `< 1000 → CUSTODIED_DBT`, `1000–4999 → EARNING_AUTONOMY`, `≥ 5000 → AUTONOMOUS`.
+7. Compute new RepID, **clamped to [10, 10000]**, then derive tier via `computeTier`: `0–499 → PROBATIONARY`, `500-999 → EARNING`, `1000–4999 → ESTABLISHED`, `5000-7999 → AUTONOMOUS`, `8000-10000 → VETERAN`.
 8. Write back to `repid_agents`, append a row to `repid_score_events` (full audit trail including EAS attestation id, mirror-test flag, decay/redemption metadata).
 9. `updateSupplyRate` — bumps `repid_ecosystem_supply` counters.
 10. `checkAndAwardBadges` — non-blocking; failures are swallowed so badges never break scoring.
@@ -110,10 +110,41 @@ The server binds `0.0.0.0:$PORT` (default 3000).
 ### Canonical data facts
 - Supabase project: qnnpjhlxljtqyigedwkb (AITrinitySymphony)
 - SOPHIA RepID: 10,000 AUTONOMOUS (cap). repid_earned: 19,157
-- Canonical tier names: CUSTODIED_DBT (0-999) / EARNING_AUTONOMY (1000-4999) / AUTONOMOUS (5000-10000)
+- Canonical tier names: PROBATIONARY (0-499) / EARNING (500-999) / ESTABLISHED (1000-4999) / AUTONOMOUS (5000-7999) / VETERAN (8000-10000)
 - Pythagorean Comma: 531441/524288 ≈ 1.013643
 - φ = 1.61803398875, ε = 1e-8, BFT_THRESHOLD = 0.618
 - REPID_HITL_GATE = 70, CONFIDENCE_GATE = 0.8
+
+### Tier is database-derived (do NOT treat as a bug)
+
+`repid_agents.tier` is overwritten on every INSERT/UPDATE by the Postgres
+trigger `trg_sync_tier`, which calls `compute_tier(current_repid)`. The
+application code in `src/engine/repid-update.ts` and elsewhere writes `tier`
+in its UPDATE payloads, but that value is immediately replaced by the trigger.
+The database is the source of truth for tier; app-side writes are theater
+that the trigger overrides.
+
+This is intentional architecture, not a bug. It guarantees `tier` can never
+drift from `current_repid`.
+
+To change tier names or thresholds you MUST update both together in one
+migration:
+
+1. The `compute_tier(integer)` Postgres function (returns the tier string)
+2. The `repid_agents_tier_check` CHECK constraint (whitelist of allowed strings)
+
+Updating only one will break every INSERT/UPDATE with a 23514 check_violation
+because the trigger will produce a string the constraint rejects, or the
+constraint will reject a value the trigger never produces.
+
+Current canonical 5-tier scheme (as of 2026-05-08):
+- PROBATIONARY (0–499)
+- EARNING (500–999)
+- ESTABLISHED (1000–4999)
+- AUTONOMOUS (5000–7999)
+- VETERAN (8000–10000)
+
+Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regprocedure);`
 
 ### Table rules (CLAUDE-RULE-5)
 - Canonical agent table: repid_agents (NOT agent_repid — that is stale)
