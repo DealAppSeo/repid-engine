@@ -150,6 +150,10 @@ app.use('/api/v1/hal-benchmark', halTestRouter);
 app.use('/api/v1/audit', auditRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
+app.use('/', discoveryRouter);
+app.use('/', agentCardRouter);
+app.use('/', bountiesRouter);
+app.use('/api/v1', halStatsRouter);
 app.get('/api/v1/metrics', async (_req, res) => {
   const supabase = db;
   const [agents, decisions, hallucinations] = await Promise.all([
@@ -193,11 +197,6 @@ const externalScoreLimiter = rateLimit({
 app.use('/api/v1/agents-external/:id/score-event', externalScoreLimiter);
 app.use('/api/v1/agents-external', agentsExternalScoreRouter);
 
-app.use('/', discoveryRouter);
-app.use('/', agentCardRouter);
-
-app.use('/', bountiesRouter);
-app.use('/api/v1', halStatsRouter);
 
 app.use(authMiddleware);
 
