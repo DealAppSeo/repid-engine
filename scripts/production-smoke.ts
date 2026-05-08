@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+// Using native fetch in Node 22+
 
 const BASE = process.env.SMOKE_BASE_URL || 'https://repid-engine-production.up.railway.app';
 const TEST_AGENT = process.env.SMOKE_TEST_AGENT || 'c2aab664-2c47-4418-bda5-e274098738d1';
