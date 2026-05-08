@@ -85,6 +85,20 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "1mb" }));
 
+// HYGIENE-1: silence JSON parse stack traces. Malformed bodies still 
+// return 400; just log a single-line structured warning instead of 
+// a multi-line trace to stderr.
+app.use((err: any, req: any, res: any, next: any) => {
+  if (err && err.type === 'entity.parse.failed') {
+    console.warn(
+      `[body-parser] malformed JSON ${req.method} ${req.path} ` +
+      `from ${req.ip} content-length=${req.get('content-length') || 0}`
+    );
+    return res.status(400).json({ error: 'Invalid JSON in request body' });
+  }
+  next(err);
+});
+
 // Full-account routes (signup/login/mint/agent/trade/dashboard) are mounted
 // BEFORE the SQL-keyword sanitizer because passwords and trade rationales
 // can legitimately contain ';' / SQL keywords. The router enforces its own
@@ -352,9 +366,15 @@ async function runHAEEEpoch() {
 }
 
 // Schedule: run immediately, then every 24 hours
-if (!IS_TEST) {
+// HYGIENE-1: HAL Tier 1 Benchmark logged 0% F1 every container restart 
+// because thresholds need recalibration (OPEN_QUESTIONS Q22). Gate 
+// behind explicit env var so log noise is opt-in.
+const RUN_HAL_BENCHMARK = process.env.RUN_HAL_BENCHMARK_ON_STARTUP === 'true';
+if (!IS_TEST && RUN_HAL_BENCHMARK) {
   runHAEEEpoch();
   setInterval(runHAEEEpoch, 24 * 60 * 60 * 1000);
+} else if (!IS_TEST) {
+  console.log('[HAEE] Startup benchmark gated off (set RUN_HAL_BENCHMARK_ON_STARTUP=true to enable). Live HAL evaluation unchanged.');
 }
 
 // Daily Merkle anchor — fires at 02:00 UTC, anchors yesterday's
