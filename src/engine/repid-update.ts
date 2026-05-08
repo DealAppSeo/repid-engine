@@ -57,9 +57,11 @@ export interface RepIdUpdateResult {
 }
 
 export function computeTier(repId: number): string {
+  if (repId >= 8000) return 'VETERAN';
   if (repId >= 5000) return 'AUTONOMOUS';
-  if (repId >= 1000) return 'EARNING_AUTONOMY';
-  return 'CUSTODIED_DBT';
+  if (repId >= 1000) return 'ESTABLISHED';
+  if (repId >= 500) return 'EARNING';
+  return 'PROBATIONARY';
 }
 
 const FIXED_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
@@ -218,7 +220,7 @@ export async function registerAgent(params: {
     agent_name: params.agentName,
     conservator_address: params.conservatorAddress ?? null,
     constitution: params.constitution ?? {},
-    current_repid: 1000, tier: 'CUSTODIED_DBT',
+    current_repid: 200, tier: 'PROBATIONARY',
   }).select('id').single();
 
   if (error || !newAgent)
@@ -226,7 +228,7 @@ export async function registerAgent(params: {
 
   await db.from('repid_score_events').insert({
     agent_id: newAgent.id, event_type: 'GENESIS',
-    delta: 0, repid_before: 1000, repid_after: 1000,
+    delta: 0, repid_before: 200, repid_after: 200,
     ecosystem_need_weight: 1.0,
     eas_attestation_id: `eas-stub-genesis-${newAgent.id.slice(0,8)}`,
     metadata: {
@@ -237,5 +239,5 @@ export async function registerAgent(params: {
     },
   });
 
-  return { agentId: newAgent.id, repId: 1000, tier: 'CUSTODIED_DBT' };
+  return { agentId: newAgent.id, repId: 200, tier: 'PROBATIONARY' };
 }
