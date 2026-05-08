@@ -15,9 +15,11 @@ const PHI_FALLBACK = 1.618033988749895;
 const IMPACT_CAP_FALLBACK = 5.0;
 
 function computeTierFromRepid(repid: number): string {
+  if (repid >= 8000) return 'VETERAN';
   if (repid >= 5000) return 'AUTONOMOUS';
-  if (repid >= 1000) return 'EARNING_AUTONOMY';
-  return 'CUSTODIED_DBT';
+  if (repid >= 1000) return 'ESTABLISHED';
+  if (repid >= 500) return 'EARNING';
+  return 'PROBATIONARY';
 }
 
 function alignmentExponentFor(category: string): number {
@@ -178,8 +180,8 @@ router.post('/register', async (req: Request, res: Response) => {
         agent_name: resolvedName,
         description: cleanDescription,
         constitution_text: cleanConstitutionText,
-        current_repid: 1000,
-        tier: 'CUSTODIED_DBT',
+        current_repid: 200,
+        tier: 'PROBATIONARY',
         activity_30d: 0,
         decay_rate: 0.0015,
         is_human: !!is_human,
@@ -219,15 +221,15 @@ router.post('/register', async (req: Request, res: Response) => {
       // Existing v11 fields (unchanged for legacy callers)
       agent_id: agentId,
       api_key: rawKey, // Shown ONCE; SDK clients must save it.
-      starting_score: 1000,
-      tier: 'CUSTODIED_DBT',
+      starting_score: 200,
+      tier: 'PROBATIONARY',
       vesting_cliff_ends_at: vestingCliff,
       vesting_info: 'First 500 RepID vests over 30 days',
       repid_url: `https://trustrepid.dev/agent/${agentId}`,
       // Sprint A5 Maya-shape additive fields (no breaking change)
       name: resolvedName,
       description: cleanDescription,
-      repid: 1000, // alias for starting_score
+      repid: 200, // alias for starting_score
       erc8004_token_id: (newAgent as any).erc8004_token_id ?? null,
       created_at: (newAgent as any).created_at ?? createdAt,
     });
