@@ -84,14 +84,14 @@ describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () 
     // Existing v11 fields preserved
     expect(res.body.agent_id).toBeTruthy();
     expect(res.body.api_key).toBeTruthy();
-    expect(res.body.starting_score).toBe(1000);
-    expect(res.body.tier).toBe('CUSTODIED_DBT');
+    expect(res.body.starting_score).toBe(200);
+    expect(res.body.tier).toBe('PROBATIONARY');
     expect(res.body.vesting_cliff_ends_at).toBeTruthy();
     expect(res.body.repid_url).toMatch(/^https:\/\/trustrepid\.dev\/agent\//);
     // New Maya-shape additive fields
     expect(res.body.name).toBe('MayaUnitTest1');
     expect(res.body.description).toBe('tester');
-    expect(res.body.repid).toBe(1000);
+    expect(res.body.repid).toBe(200);
     expect(res.body.created_at).toBeTruthy();
     expect(res.body).toHaveProperty('erc8004_token_id');
   });
@@ -172,12 +172,12 @@ describe('POST /api/v1/agents/register — legacy v11 contract (no regression)',
     expect(res.status).toBe(201);
     expect(res.body.agent_id).toBeTruthy();
     expect(res.body.api_key).toBeTruthy();
-    expect(res.body.starting_score).toBe(1000);
+    expect(res.body.starting_score).toBe(200);
     expect(res.body.vesting_info).toMatch(/vests over 30 days/);
     // Additive fields are still present (default-null for legacy callers).
     expect(res.body.name).toBe('LegacyAgentZ');
     expect(res.body.description).toBeNull();
-    expect(res.body.repid).toBe(1000);
+    expect(res.body.repid).toBe(200);
   });
 });
 

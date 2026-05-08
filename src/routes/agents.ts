@@ -50,8 +50,8 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       .insert({
         erc8004_address: zkpCommitment,
         agent_name: 'HUMAN',
-        current_repid: 1000,
-        tier: 'CUSTODIED_DBT',
+        current_repid: 200,
+        tier: 'PROBATIONARY',
         constitution: {
           ...humanConstitution,
           type: 'HUMAN',
@@ -70,8 +70,8 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       agent_id: newAgent.id,
       event_type: 'GENESIS',
       delta: 0,
-      repid_before: 1000,
-      repid_after: 1000,
+      repid_before: 200,
+      repid_after: 200,
       ecosystem_need_weight: 1.0,
       eas_attestation_id: `eas-stub-genesis-${String(newAgent.id).slice(0, 8)}`,
       metadata: {
@@ -98,8 +98,8 @@ router.post('/agents/human', async (req: Request, res: Response) => {
     return res.status(201).json({
       privateId: anonymousId,
       agentId: newAgent.id,
-      repId: 1000,
-      tier: 'CUSTODIED_DBT',
+      repId: 200,
+      tier: 'PROBATIONARY',
       badges: ['Genesis'],
       suggestedRules,
       message: 'Save your privateId — it is your only credential. We do not store your identity.',
@@ -291,7 +291,11 @@ router.post('/agents/:id/x402-gate', async (req: Request, res: Response) => {
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
   const tierLimits: Record<string, number> = {
-    CUSTODIED_DBT: 0, EARNING_AUTONOMY: 1000, AUTONOMOUS: Infinity,
+    PROBATIONARY: 0,
+    EARNING: 0,
+    ESTABLISHED: 1000,
+    AUTONOMOUS: Infinity,
+    VETERAN: Infinity,
   };
   const limit = tierLimits[agent.tier] ?? 0;
   const tierAllowed = amount <= limit;
@@ -306,7 +310,7 @@ router.post('/agents/:id/x402-gate', async (req: Request, res: Response) => {
     requestedAmount: amount, currency,
     tierLimit: limit === Infinity ? 'unlimited' : limit,
     reason: !allowed
-      ? `tier_limit_${limit === 0 ? 'zero_CUSTODIED_DBT' : limit}`
+      ? `tier_limit_${limit === 0 ? 'zero_EARNING' : limit}`
       : undefined,
     x402RequestId: x402RequestId ?? null,
     easAttestation: easCheck,
@@ -336,9 +340,11 @@ router.get('/agents/:id/card', async (req: Request, res: Response) => {
 
   const isHuman = agent.constitution?.type === 'HUMAN' || agent.constitution?.anonymous;
   const tierColors: Record<string, string> = {
+    VETERAN: '#F59E0B',
     AUTONOMOUS: '#F59E0B',
-    EARNING_AUTONOMY: '#3B82F6',
-    CUSTODIED_DBT: '#6B7280',
+    ESTABLISHED: '#3B82F6',
+    EARNING: '#6B7280',
+    PROBATIONARY: '#6B7280',
   };
   const tierColor = tierColors[agent.tier] ?? '#6B7280';
   const badgeCount = badges?.length ?? 0;
