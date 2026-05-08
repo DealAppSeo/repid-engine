@@ -292,7 +292,7 @@ router.post('/challenge', async (req: Request, res: Response) => {
   ]);
 
   const computeTier = (r: number) =>
-    r >= 5000 ? 'AUTONOMOUS' : r >= 1000 ? 'EARNING_AUTONOMY' : 'CUSTODIED_DBT';
+    r >= 8000 ? 'VETERAN' : r >= 5000 ? 'AUTONOMOUS' : r >= 1000 ? 'ESTABLISHED' : r >= 500 ? 'EARNING' : 'PROBATIONARY';
   const challengerTierAfter = computeTier(challengerNewRepId);
   const defenderTierAfter = computeTier(defenderNewRepId);
 

@@ -96,7 +96,7 @@ async function loadAgent(agentId: string): Promise<{
   return {
     id: (data as any).id,
     current_repid: Number((data as any).current_repid ?? 1000),
-    tier: String((data as any).tier ?? 'CUSTODIED_DBT'),
+    tier: String((data as any).tier ?? 'PROBATIONARY'),
     vesting_cliff_active,
   };
 }

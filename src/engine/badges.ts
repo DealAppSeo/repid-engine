@@ -57,9 +57,15 @@ const BADGE_CATALOG: Array<{
     check: async ctx => ctx.hasRedemption,
   },
   {
-    name: 'Earning Autonomy',
+    name: 'Earning',
+    rarity: 'COMMON',
+    description: 'Crossed into EARNING tier (500 RepID)',
+    check: async ctx => ctx.currentRepId >= 500 && ctx.previousRepId < 500,
+  },
+  {
+    name: 'Established',
     rarity: 'RARE',
-    description: 'Crossed into EARNING_AUTONOMY tier (1,000 RepID)',
+    description: 'Crossed into ESTABLISHED tier (1,000 RepID)',
     check: async ctx => ctx.currentRepId >= 1000 && ctx.previousRepId < 1000,
   },
   {
@@ -67,6 +73,12 @@ const BADGE_CATALOG: Array<{
     rarity: 'LEGENDARY',
     description: 'Crossed into AUTONOMOUS tier (5,000 RepID)',
     check: async ctx => ctx.currentRepId >= 5000 && ctx.previousRepId < 5000,
+  },
+  {
+    name: 'Veteran',
+    rarity: 'LEGENDARY',
+    description: 'Crossed into VETERAN tier (8,000 RepID)',
+    check: async ctx => ctx.currentRepId >= 8000 && ctx.previousRepId < 8000,
   },
   {
     name: 'Apex',

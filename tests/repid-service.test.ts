@@ -54,14 +54,14 @@ describe('RepID service (Sprint R-C Phase B1)', () => {
     setMaybeSingleResponse({
       id: 'agent-A',
       current_repid: 4500,
-      tier: 'EARNING_AUTONOMY',
-      updated_at: '2026-05-05T10:00:00.000Z',
+      tier: 'ESTABLISHED',
+      last_updated: '2026-05-05T10:00:00.000Z',
       created_at: '2026-04-01T00:00:00.000Z',
     });
     const r = await getRepIDForAgent('agent-A');
     expect(r.agent_id).toBe('agent-A');
     expect(r.repid_score).toBe(4500);
-    expect(r.tier).toBe('EARNING_AUTONOMY');
+    expect(r.tier).toBe('ESTABLISHED');
     expect(r.last_updated).toBe('2026-05-05T10:00:00.000Z');
     expect(r.source).toBe('cached');
   });

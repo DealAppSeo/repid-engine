@@ -5,11 +5,12 @@ export interface TierConfig {
 }
 
 export const BUILDER_TIERS: TierConfig[] = [
-  { name: 'New', minRepId: 0, pctOfStake: 0.50 },
-  { name: 'Tier 2', minRepId: 500, pctOfStake: 0.65 },
-  { name: 'Tier 3', minRepId: 1000, pctOfStake: 0.80 },
-  { name: 'Master', minRepId: 5000, pctOfStake: 0.95 },
-  { name: 'Super', minRepId: 10000, pctOfStake: 1.00 },
+  { name: 'PROBATIONARY', minRepId: 0, pctOfStake: 0.50 },
+  { name: 'EARNING', minRepId: 500, pctOfStake: 0.65 },
+  { name: 'ESTABLISHED', minRepId: 1000, pctOfStake: 0.80 },
+  { name: 'AUTONOMOUS', minRepId: 5000, pctOfStake: 0.95 },
+  { name: 'VETERAN', minRepId: 8000, pctOfStake: 1.00 },
+  { name: 'APEX', minRepId: 10000, pctOfStake: 1.00 },
 ];
 
 export function getTierForRepId(repid: number): { current: TierConfig; next: TierConfig | null } {

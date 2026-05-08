@@ -136,9 +136,11 @@ router.get('/repid/:agent_id', async (req: Request, res: Response) => {
   if (error || !agent) return res.status(404).json({ error: 'Agent not found' });
 
   const score = agent.current_repid;
-  let tier_level = 'CUSTODIED_DBT';
-  if (score >= 5000) tier_level = 'AUTONOMOUS';
-  else if (score >= 1000) tier_level = 'EARNING_AUTONOMY';
+  let tier_level = 'PROBATIONARY';
+  if (score >= 8000) tier_level = 'VETERAN';
+  else if (score >= 5000) tier_level = 'AUTONOMOUS';
+  else if (score >= 1000) tier_level = 'ESTABLISHED';
+  else if (score >= 500) tier_level = 'EARNING';
 
   res.json({ agent_id, repid_score: score, tier_level, activity_30d: agent.activity_30d || 0, created_at: agent.created_at });
 });
@@ -164,9 +166,11 @@ router.get('/erc8004/validate/:agent_id', async (req: Request, res: Response) =>
   const { data: agent, error } = await db.from('repid_agents').select('*').eq('id', agent_id).single();
   if (error || !agent) return res.status(404).json({ error: 'Agent not found' });
 
-  let tier = 'CUSTODIED_DBT';
-  if (agent.current_repid >= 5000) tier = 'AUTONOMOUS';
-  else if (agent.current_repid >= 1000) tier = 'EARNING_AUTONOMY';
+  let tier = 'PROBATIONARY';
+  if (agent.current_repid >= 8000) tier = 'VETERAN';
+  else if (agent.current_repid >= 5000) tier = 'AUTONOMOUS';
+  else if (agent.current_repid >= 1000) tier = 'ESTABLISHED';
+  else if (agent.current_repid >= 500) tier = 'EARNING';
 
   res.json({
     erc8004_version: "1.0",
@@ -433,11 +437,11 @@ router.get('/demo/recommended-bet/:tokenOrId', async (req: Request, res: Respons
   const tokenOrId = String(req.params.tokenOrId ?? '');
   let b;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
-    const { data } = await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle();
+    const { data } = await db.from('builders').select('id, current_repid, session_token').eq('id', tokenOrId).maybeSingle();
     b = data;
   }
   if (!b) {
-    const { data } = await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle();
+    const { data } = await db.from('builders').select('id, current_repid, session_token').eq('session_token', tokenOrId).maybeSingle();
     b = data;
   }
   if (!b) return res.status(404).json({ error: 'builder not found' });
@@ -488,10 +492,12 @@ router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => 
   const tokenOrId = String(token ?? '');
   let b;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tokenOrId)) {
-    b = (await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle()).data;
+    const { data: bData } = await db.from('builders').select('id').eq('id', tokenOrId).maybeSingle();
+    b = bData;
   }
   if (!b && tokenOrId) {
-    b = (await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle()).data;
+    const { data: bData } = await db.from('builders').select('id').eq('session_token', tokenOrId).maybeSingle();
+    b = bData;
   }
 
   if (!betAmountOverride) {

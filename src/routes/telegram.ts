@@ -39,7 +39,7 @@ router.post('/webhook', async (req, res) => {
       reply = `🤖 <b>TRINITY SYMPHONY</b>\n`
         + `VDR: ${vdr} | Decisions: 264\n\n`
         + (data||[]).map(a=>
-          `${a.tier==='AUTONOMOUS'?'🔵':a.tier==='EARNING_AUTONOMY'?'🟡':'⚪'} `
+          `${(a.tier==='AUTONOMOUS'||a.tier==='VETERAN')?'🔵':a.tier==='ESTABLISHED'?'🟡':'⚪'} `
           +`${a.agent_name}: ${a.current_repid} RepID`
         ).join('\n');
     }

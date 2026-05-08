@@ -2,7 +2,7 @@
  * Builder-owned agent creation.
  *
  * Creates a new repid_agents row with builder_id linked, starting RepID
- * 1000 (EARNING_AUTONOMY tier floor) and wisdom/character at 1000.
+ * 1000 (ESTABLISHED tier floor) and wisdom/character at 1000.
  *
  * erc8004_address is deterministic-ish: '0xAGENT_' + first 34 hex of
  * sha256(agent_name || builder_id || timestamp). Same shape rule as the
@@ -70,6 +70,7 @@ export async function createBuilderAgent(input: CreateAgentInput): Promise<Creat
       wisdom_score: STARTING_WISDOM,
       character_score: STARTING_CHARACTER,
       erc8004_address: erc8004,
+      tier: 'ESTABLISHED',
       last_active_at: new Date().toISOString(),
     })
     .select('id')

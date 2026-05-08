@@ -15,7 +15,7 @@ export interface DeltaInput {
   hal_score: number;          // 0..1 (post-A6); pre-A6 may emit dissonance scale
   hal_decision: HALDecision;
   current_repid: number;
-  agent_tier: string;         // CUSTODIED_DBT | EARNING_AUTONOMY | AUTONOMOUS
+  agent_tier: string;         // PROBATIONARY | EARNING | ESTABLISHED | AUTONOMOUS | VETERAN
   vesting_cliff_active: boolean;
   task_complexity?: number;   // 0..1, optional (reserved for D2)
 }
