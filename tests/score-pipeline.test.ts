@@ -109,7 +109,7 @@ describe('runScoreEvent', () => {
     (global as any).__pipAgentRow = {
       id: AGENT_ID,
       current_repid: 1000,
-      tier: 'EARNING_AUTONOMY',
+      tier: 'ESTABLISHED',
       vesting_cliff_ends_at: null,
     };
 
@@ -141,7 +141,7 @@ describe('runScoreEvent', () => {
     (global as any).__pipAgentRow = {
       id: AGENT_ID,
       current_repid: 1000,
-      tier: 'EARNING_AUTONOMY',
+      tier: 'ESTABLISHED',
       vesting_cliff_ends_at: null,
     };
     (global as any).__pipExistingByKey = {
@@ -180,7 +180,7 @@ describe('runScoreEvent', () => {
     (global as any).__pipAgentRow = {
       id: AGENT_ID,
       current_repid: 1000,
-      tier: 'CUSTODIED_DBT',
+      tier: 'ESTABLISHED',
       vesting_cliff_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     };
     const result = await runScoreEvent({
@@ -202,7 +202,7 @@ describe('runScoreEvent', () => {
     (global as any).__pipAgentRow = {
       id: AGENT_ID,
       current_repid: 1000,
-      tier: 'EARNING_AUTONOMY',
+      tier: 'ESTABLISHED',
       vesting_cliff_ends_at: null,
     };
     (global as any).__pipForceInsertError = { message: 'simulated db failure' };
@@ -215,7 +215,7 @@ describe('runScoreEvent', () => {
     (global as any).__pipAgentRow = {
       id: AGENT_ID,
       current_repid: 1000,
-      tier: 'EARNING_AUTONOMY',
+      tier: 'ESTABLISHED',
       vesting_cliff_ends_at: null,
     };
     await runScoreEvent({

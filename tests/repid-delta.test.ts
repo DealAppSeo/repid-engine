@@ -10,7 +10,7 @@ describe('computeDelta', () => {
       hal_score: 0.1,
       hal_decision: 'vetoed',
       current_repid: 1000,
-      agent_tier: 'CUSTODIED_DBT',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: true,
     });
     expect(r.delta_calculated).toBe(-10);
@@ -23,7 +23,7 @@ describe('computeDelta', () => {
       hal_score: 0.05,
       hal_decision: 'vetoed',
       current_repid: 1000,
-      agent_tier: 'EARNING_AUTONOMY',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: false,
     });
     expect(r.delta_calculated).toBe(-10);
@@ -35,7 +35,7 @@ describe('computeDelta', () => {
       hal_score: 0.95,
       hal_decision: 'clean',
       current_repid: 1000,
-      agent_tier: 'EARNING_AUTONOMY',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: false,
     });
     expect(r.delta_calculated).toBeCloseTo(2.8, 1);
@@ -48,7 +48,7 @@ describe('computeDelta', () => {
       hal_score: 1.0,
       hal_decision: 'clean',
       current_repid: 1000,
-      agent_tier: 'EARNING_AUTONOMY',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: false,
     });
     expect(r.delta_calculated).toBe(3);
@@ -59,7 +59,7 @@ describe('computeDelta', () => {
       hal_score: 0.10,
       hal_decision: 'clean',
       current_repid: 1000,
-      agent_tier: 'EARNING_AUTONOMY',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: false,
     });
     expect(r.delta_calculated).toBeCloseTo(-0.6, 1);
@@ -71,7 +71,7 @@ describe('computeDelta', () => {
       hal_score: 0.05,
       hal_decision: 'vetoed',
       current_repid: 2,
-      agent_tier: 'CUSTODIED_DBT',
+      agent_tier: 'PROBATIONARY',
       vesting_cliff_active: false,
     });
     expect(r.delta_calculated).toBe(-10);
@@ -84,7 +84,7 @@ describe('computeDelta', () => {
       hal_score: 0.4,
       hal_decision: 'flagged',
       current_repid: 1000,
-      agent_tier: 'CUSTODIED_DBT',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: true,
     });
     expect(r.delta_calculated).toBe(-2);
@@ -96,7 +96,7 @@ describe('computeDelta', () => {
       hal_score: 0.95,
       hal_decision: 'clean',
       current_repid: 1000,
-      agent_tier: 'CUSTODIED_DBT',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: true,
     });
     expect(r.delta_applied).toBeCloseTo(2.8, 1);
@@ -110,7 +110,7 @@ describe('computeDelta', () => {
       hal_score: 2.0, // outside spec but tests clamp
       hal_decision: 'clean',
       current_repid: 1000,
-      agent_tier: 'EARNING_AUTONOMY',
+      agent_tier: 'ESTABLISHED',
       vesting_cliff_active: false,
     });
     expect(r.delta_calculated).toBeLessThanOrEqual(5);

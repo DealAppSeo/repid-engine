@@ -60,14 +60,14 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     setMaybeSingle({
       id: 'agent-int-1',
       current_repid: 4500,
-      tier: 'EARNING_AUTONOMY',
+      tier: 'ESTABLISHED',
       updated_at: '2026-05-05T10:00:00.000Z',
     });
     const r = await request(buildApp()).get('/api/v1/repid/agent-int-1');
     expect(r.status).toBe(200);
     expect(r.body.agent_id).toBe('agent-int-1');
     expect(r.body.repid_score).toBe(4500);
-    expect(r.body.tier).toBe('EARNING_AUTONOMY');
+    expect(r.body.tier).toBe('ESTABLISHED');
     expect(r.body.source).toBe('cached');
   });
 
