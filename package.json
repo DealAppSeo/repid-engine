@@ -15,7 +15,8 @@
     "test:e2e": "jest --config tests/e2e/jest.e2e.config.js --runInBand --forceExit",
     "smoke:hal-external": "ts-node scripts/external-caller-smoke-test.ts",
     "smoke:prod": "tsx scripts/production-smoke.ts",
-    "indexer": "ts-node src/services/receipt-indexer/index.ts"
+    "indexer": "ts-node src/services/receipt-indexer/index.ts",
+    "worker": "ts-node src/services/proof-worker/index.ts"
   },
   "keywords": [],
   "author": "",
