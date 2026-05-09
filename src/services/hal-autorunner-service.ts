@@ -101,6 +101,7 @@ export class HALAutorunnerService {
         
         const context: HALContext = {
           domain: prompt.domain,
+          certainty: prompt.certainty_levels_to_test?.[0] || 0.88,
           strictness: 4 as StrictnessLevel,
           prompt: prompt.prompt_text,
           supabase: this.supabase,
