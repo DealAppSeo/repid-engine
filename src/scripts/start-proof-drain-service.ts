@@ -51,10 +51,20 @@ async function main(): Promise<void> {
     const s = service.getStatus();
     const now = Date.now();
     const lastTickMs = s.lastTickAt ? now - new Date(s.lastTickAt).getTime() : null;
-    const tickStale = lastTickMs !== null && lastTickMs > Math.max(idleSleepMs * 3, 60000);
-    const recentError = s.lastError && now - new Date(s.lastError.at).getTime() < idleSleepMs * 2;
-    const ok = s.status === 'running' && !tickStale && !recentError;
-    res.status(ok ? 200 : 503).json({ ok, ...s });
+    
+    // Improved robustness for Railway:
+    // Allow service to remain 'healthy' even with recent errors to prevent restart loops.
+    // Only 503 if we've completely stalled for 10 minutes.
+    
+    const stallThresholdMs = 10 * 60 * 1000;
+    const extremeStall = lastTickMs !== null && lastTickMs > stallThresholdMs;
+    const ok = (s.status === 'running' || s.status === 'starting') && !extremeStall;
+    
+    res.status(ok ? 200 : 503).json({ 
+      ok, 
+      last_tick_age_ms: lastTickMs,
+      ...s 
+    });
   });
 
   app.get('/status', (_req: Request, res: Response) => {
