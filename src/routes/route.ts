@@ -185,6 +185,12 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         let hal_evaluation: Record<string, unknown> | null = null;
         if (typeof agent_id === 'string' && agent_id.length > 0) {
           try {
+            // Forward the validated bearer token so runScoreEvent's
+            // hal_evaluations hook can hash it as api_key_hash.
+            const fwdAuth = req.headers['authorization'];
+            const fwdKey = typeof fwdAuth === 'string'
+              ? fwdAuth.replace(/^Bearer\s+/i, '').trim() || undefined
+              : undefined;
             const scoreResult = await runScoreEvent({
               agent_id,
               prompt,
@@ -194,6 +200,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
               model_used: result.model || 'unknown',
               llm_call_id: call_id,
               idempotency_key: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+              api_key: fwdKey,
             });
             hal_evaluation = {
               score_event_id: scoreResult.score_event_id,
