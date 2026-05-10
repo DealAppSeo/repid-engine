@@ -12,7 +12,10 @@ export interface IndexerServiceConfig {
   tipLagBlocks?: number;
   bftPollIntervalMs?: number;
   startBlockFallback?: number;
+  stallThresholdMs?: number;
 }
+
+export const DEFAULT_STALL_THRESHOLD_MS = 10 * 60 * 1000;
 
 export interface IndexerServiceStatus {
   status: 'starting' | 'running' | 'stopped' | 'error';
@@ -58,6 +61,7 @@ export function createIndexerService(config: IndexerServiceConfig): IndexerServi
   const blockWindow = config.blockWindow ?? 100;
   const tipLagBlocks = config.tipLagBlocks ?? 1;
   const bftPollIntervalMs = config.bftPollIntervalMs ?? 5000;
+  const stallThresholdMs = config.stallThresholdMs ?? DEFAULT_STALL_THRESHOLD_MS;
 
   const provider = new ethers.JsonRpcProvider(config.rpcUrl);
   const cursorKey = `receipt_indexer_cursor:chain-${config.chainId}:${config.contractAddress.toLowerCase()}`;
@@ -79,6 +83,35 @@ export function createIndexerService(config: IndexerServiceConfig): IndexerServi
   let bftTimer: NodeJS.Timeout | null = null;
   let mainTickInFlight = false;
   let bftTickInFlight = false;
+
+  let lastAdvanceAt = Date.now();
+  let stallNotified = false;
+
+  async function emitStallHitl(lastBlockSeen: number | null, elapsedMs: number): Promise<void> {
+    try {
+      const { error } = await config.supabase.from('trinity_hitl_requests').insert({
+        agent_id: 'service:receipt-indexer',
+        reason: 'indexer_stalled',
+        status: 'pending',
+        context: {
+          cursorKey,
+          contractAddress: config.contractAddress,
+          chainId: config.chainId,
+          lastBlock: lastBlockSeen,
+          stallThresholdMs,
+          elapsedMs,
+          detectedAt: new Date().toISOString()
+        }
+      });
+      if (error) {
+        console.error('[Indexer] failed to write stall HITL request:', error.message);
+        return;
+      }
+      console.warn(`[Indexer] STALL detected — cursor unchanged for ${elapsedMs}ms; HITL request raised`);
+    } catch (err) {
+      console.error('[Indexer] stall HITL emit threw:', err instanceof Error ? err.message : err);
+    }
+  }
 
   async function readCursor(): Promise<number | null> {
     const { data, error } = await config.supabase
@@ -125,6 +158,7 @@ export function createIndexerService(config: IndexerServiceConfig): IndexerServi
   async function tick(): Promise<void> {
     if (mainTickInFlight) return;
     mainTickInFlight = true;
+    const prevLastBlock = state.lastBlock;
     try {
       const tip = await withRetry('eth_blockNumber', () => provider.getBlockNumber());
       const safeTip = Math.max(0, tip - tipLagBlocks);
@@ -165,6 +199,14 @@ export function createIndexerService(config: IndexerServiceConfig): IndexerServi
       console.error('[Indexer] tick failed (cursor un-advanced; will retry next interval):', message);
     } finally {
       mainTickInFlight = false;
+      const now = Date.now();
+      if (state.lastBlock !== null && state.lastBlock !== prevLastBlock) {
+        lastAdvanceAt = now;
+        stallNotified = false;
+      } else if (!stallNotified && now - lastAdvanceAt > stallThresholdMs) {
+        stallNotified = true;
+        await emitStallHitl(state.lastBlock, now - lastAdvanceAt);
+      }
     }
   }
 
