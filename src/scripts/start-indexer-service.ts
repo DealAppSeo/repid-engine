@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import express, { type Request, type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { createIndexerService } from '../src/services/receipt-indexer-service';
+import { createIndexerService } from '../services/receipt-indexer-service';
 
 dotenv.config();
 
