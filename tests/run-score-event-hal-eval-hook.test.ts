@@ -18,6 +18,8 @@
 (global as any).__hookAgentRow = null;
 (global as any).__hookHalEvalInsert = null;
 (global as any).__hookScoreEventInsert = null;
+(global as any).__hookExistingByKey = null;
+(global as any).__hookHalEvalInsertCount = 0;
 
 jest.mock('../src/db', () => ({
   db: {
@@ -41,7 +43,12 @@ jest.mock('../src/db', () => ({
             const isHead = !!(opts && opts.head);
             return {
               eq: () => ({
-                limit: () => ({ maybeSingle: async () => ({ data: null, error: null }) }),
+                limit: () => ({
+                  maybeSingle: async () => ({
+                    data: (global as any).__hookExistingByKey ?? null,
+                    error: null,
+                  }),
+                }),
                 _count: true,
                 then: (resolve: any) =>
                   resolve({ data: null, error: null, count: isHead ? 0 : null }),
@@ -62,6 +69,8 @@ jest.mock('../src/db', () => ({
         return {
           insert: async (payload: any) => {
             (global as any).__hookHalEvalInsert = payload;
+            (global as any).__hookHalEvalInsertCount =
+              ((global as any).__hookHalEvalInsertCount ?? 0) + 1;
             return { error: null };
           },
         };
@@ -106,6 +115,8 @@ describe('runScoreEvent hal_evaluations hook (Phase 4 verification)', () => {
     };
     (global as any).__hookHalEvalInsert = null;
     (global as any).__hookScoreEventInsert = null;
+    (global as any).__hookExistingByKey = null;
+    (global as any).__hookHalEvalInsertCount = 0;
   });
 
   test('SDK-style call writes a hal_evaluations row with all promised fields', async () => {
@@ -186,5 +197,54 @@ describe('runScoreEvent hal_evaluations hook (Phase 4 verification)', () => {
     expect(halEval).not.toBeNull();
     expect(halEval.api_key_hash).toBeUndefined();
     expect(halEval.agent_id).toBe(AGENT_ID); // identity still captured via agent_id
+  });
+
+  // Phase 6 — idempotent replay must NOT double-write to hal_evaluations.
+  // The early-return in runScoreEvent for an existing idempotency_key
+  // happens BEFORE the hook, so a replay must produce zero hal_eval rows.
+  test('idempotent replay does not fire the hal_evaluations hook', async () => {
+    (global as any).__hookExistingByKey = {
+      id: 99999,
+      hal_score: 0.2,
+      hal_decision: 'clean',
+      metadata: { hal_signals: { harm_probability: 0.1 } },
+      repid_delta_calculated: 1,
+      repid_delta_applied: 1,
+      repid_before: 1000,
+      repid_after: 1001,
+      zk_proof_triggered: false,
+      zk_proof_id: null,
+    };
+    const { runScoreEvent } = require('../src/scoring/pipeline');
+
+    const result = await runScoreEvent({
+      agent_id: AGENT_ID,
+      prompt: PROMPT,
+      answer: 'sample',
+      api_key: API_KEY,
+      idempotency_key: 'replay-key-1',
+    });
+
+    expect(result.idempotent_replay).toBe(true);
+    expect(result.score_event_id).toBe(99999);
+    expect((global as any).__hookHalEvalInsertCount).toBe(0);
+    expect((global as any).__hookHalEvalInsert).toBeNull();
+  });
+
+  // Phase 6 — when tier_used is omitted, notes contains 'tier=unknown'
+  // (pins the ?? 'unknown' fallback in pipeline.ts).
+  test('hook notes carry tier=unknown when tier_used is omitted', async () => {
+    const { runScoreEvent } = require('../src/scoring/pipeline');
+
+    await runScoreEvent({
+      agent_id: AGENT_ID,
+      prompt: PROMPT,
+      answer: 'sample',
+      // tier_used omitted
+    });
+
+    const halEval = (global as any).__hookHalEvalInsert;
+    expect(halEval).not.toBeNull();
+    expect(halEval.notes).toContain('tier=unknown');
   });
 });

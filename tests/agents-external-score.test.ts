@@ -114,4 +114,35 @@ describe('POST /api/v1/agents-external/:id/score-event', () => {
       .send({ prompt: 'p', answer: 'a' });
     expect(res.status).toBe(404);
   });
+
+  // BACKEND-HARDENING-FOLLOWUP Phase 6 — pin the Authorization-header
+  // threading added in commit 16631c6 so future refactors can't
+  // silently drop the api_key from the runScoreEvent call.
+  it('forwards Authorization Bearer header into runScoreEvent as api_key', async () => {
+    const { runScoreEvent } = require('../src/scoring/pipeline');
+    (runScoreEvent as jest.Mock).mockClear();
+
+    await request(app)
+      .post(`/api/v1/agents-external/${VALID_UUID}/score-event`)
+      .set('Authorization', 'Bearer secret-test-key-123')
+      .send({ prompt: 'p', answer: 'a', idempotency_key: 'auth-fwd-test' });
+
+    expect((runScoreEvent as jest.Mock)).toHaveBeenCalledTimes(1);
+    const passed = (runScoreEvent as jest.Mock).mock.calls[0][0];
+    expect(passed.api_key).toBe('secret-test-key-123');
+    expect(passed.agent_id).toBe(VALID_UUID);
+  });
+
+  it('falls back to x-api-key header when no Authorization is set', async () => {
+    const { runScoreEvent } = require('../src/scoring/pipeline');
+    (runScoreEvent as jest.Mock).mockClear();
+
+    await request(app)
+      .post(`/api/v1/agents-external/${VALID_UUID}/score-event`)
+      .set('x-api-key', 'fallback-key-xyz')
+      .send({ prompt: 'p', answer: 'a', idempotency_key: 'xkey-fwd-test' });
+
+    expect((runScoreEvent as jest.Mock)).toHaveBeenCalledTimes(1);
+    expect((runScoreEvent as jest.Mock).mock.calls[0][0].api_key).toBe('fallback-key-xyz');
+  });
 });
