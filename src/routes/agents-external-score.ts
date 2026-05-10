@@ -47,6 +47,15 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'answer is required' });
   }
 
+  // Best-effort api_key extraction so runScoreEvent's hal_evaluations
+  // hook can record api_key_hash. Route is unauthenticated for v1 alpha,
+  // so the header may be absent — that's fine, the helper accepts undefined.
+  const authHeader = req.headers['authorization'];
+  const xApiKey = req.headers['x-api-key'];
+  const apiKey = typeof authHeader === 'string'
+    ? authHeader.replace(/^Bearer\s+/i, '').trim() || undefined
+    : (typeof xApiKey === 'string' ? xApiKey : undefined);
+
   try {
     const result = await runScoreEvent({
       agent_id: agentId,
@@ -59,6 +68,7 @@ router.post('/:id/score-event', async (req: Request, res: Response) => {
       task_domain: typeof task_domain === 'string' ? task_domain : undefined,
       certainty: typeof certainty === 'number' ? certainty : undefined,
       idempotency_key: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+      api_key: apiKey,
     });
 
     return res.json({

@@ -41,6 +41,19 @@ export interface ScoreEventInput {
   task_domain?: string;
   certainty?: number;
   idempotency_key?: string;
+  // Optional caller API key. Threaded from request handlers so the
+  // hal_evaluations dual-write hook can record api_key_hash (sha256 of
+  // this value, applied inside writeHalEvaluation). Never stored raw.
+  api_key?: string;
+}
+
+// HALDecision (clean/flagged/vetoed) → hal_evaluations.decision CHECK
+// constraint values (APPROVE/HITL/BLOCK/VETO). Kept here so the
+// downstream taxonomy is centralized.
+function mapDecisionForHalEvaluations(d: HALDecision): 'APPROVE' | 'HITL' | 'VETO' {
+  if (d === 'vetoed') return 'VETO';
+  if (d === 'flagged') return 'HITL';
+  return 'APPROVE';
 }
 
 export interface ScoreEventResult {
@@ -241,6 +254,39 @@ export async function runScoreEvent(
     throw new Error(`score event insert failed: ${evErr?.message ?? 'unknown'}`);
   }
   const score_event_id = Number((eventRow as any).id);
+
+  // 6b. Dual-write to hal_evaluations (unified evaluation table).
+  // Gated by HAL_EVALUATIONS_DUAL_WRITE inside the helper. Fire-and-forget
+  // — helper handles its own errors. This is the runScoreEvent-side hook
+  // that captures real SDK traffic (the strictness=1 path that bypasses
+  // classify() and therefore the two existing classify-side hooks).
+  // Refs: MVP_BACKEND_READINESS_REPORT 2026-05-09 Phase 3 finding.
+  try {
+    const { writeHalEvaluation } = require('../services/hal-evaluations-writer');
+    const commaGap = typeof (signals as any)?.comma_gap === 'number'
+      ? (signals as any).comma_gap as number
+      : undefined;
+    void writeHalEvaluation({
+      mode: 'production',
+      prompt_text: input.prompt,
+      prompt_source: 'production_traffic',
+      agent_id: input.agent_id,
+      api_key: input.api_key,
+      gen_provider: input.provider_used,
+      gen_model: input.model_used,
+      hal_signals: signals,
+      certainty_used: typeof input.certainty === 'number' ? input.certainty : undefined,
+      hal_score,
+      comma_gap: commaGap,
+      hal_vetoed: vetoed,
+      decision: halError ? undefined : mapDecisionForHalEvaluations(decision),
+      repid_delta: delta.delta_applied,
+      notes: `runScoreEvent strictness=1 score_event_id=${score_event_id} tier=${input.tier_used ?? 'unknown'}`,
+    });
+  } catch (e) {
+    // writer helper handles its own internal errors; this catch is for require/params errors
+    console.warn('[scoring/pipeline] hal_evaluations dual-write hook failed:', e);
+  }
 
   // 7. Update agent state.
   await db
