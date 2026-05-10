@@ -163,6 +163,20 @@ export async function executePaperTrade(input: ExecutePaperTradeInput): Promise<
   const allowedNotional = Number(auth.authority) * (capPct / 100);
 
   if (notional > allowedNotional) {
+    // Paper trade gated by stake authority cap; record as BLOCK in unified eval table.
+    try {
+      const { writeHalEvaluation } = require('./hal-evaluations-writer');
+      void writeHalEvaluation({
+        mode: 'production',
+        prompt_text: input.rationale,
+        prompt_source: 'production_traffic',
+        agent_id: input.agentId,
+        decision: 'BLOCK',
+        notes: `Paper trade BLOCKED by stake-authority cap: ${input.side} ${input.qty} ${input.symbol} via TrustTrader (notional≈${notional.toFixed(2)}, allowed≈${allowedNotional.toFixed(2)}, authority=${auth.authority.toString()}, cap=${capPct}%)`,
+      });
+    } catch (e) {
+      console.warn('[paper-trade-execution] hal_evaluations write failed:', e);
+    }
     return {
       ok: false,
       authority: auth.authority.toString(),
@@ -268,6 +282,24 @@ export async function executePaperTrade(input: ExecutePaperTradeInput): Promise<
       provider,
     },
   });
+
+  // Paper trade APPROVED by stake-authority cap; record in unified eval table.
+  // Note: paper trades are not HAL-evaluated (no signals, no comma_gap, no
+  // cross-LLM agreement). The "decision" captured here is the cap-gate
+  // verdict, not a HAL veto verdict.
+  try {
+    const { writeHalEvaluation } = require('./hal-evaluations-writer');
+    void writeHalEvaluation({
+      mode: 'production',
+      prompt_text: input.rationale,
+      prompt_source: 'production_traffic',
+      agent_id: input.agentId,
+      decision: 'APPROVE',
+      notes: `Paper trade APPROVED: ${input.side} ${input.qty} ${input.symbol} via TrustTrader (notional≈${notional.toFixed(2)}, authority=${auth.authority.toString()}, cap=${capPct}%, bet_id=${betId})`,
+    });
+  } catch (e) {
+    console.warn('[paper-trade-execution] hal_evaluations write failed:', e);
+  }
 
   return {
     ok: true,
