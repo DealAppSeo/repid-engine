@@ -200,9 +200,11 @@ export async function classify(
             gen_model: model,
             gen_latency_ms: result.latency_ms,
             hal_signals: result,
-            hal_score: 0,
-            decision: 'APPROVE',
-            notes: 'Legacy Layer 0 Prompt Classification'
+            // Layer 0 classifier produces a category, not a numeric hal_score.
+            hal_score: undefined,
+            // Layer 0 classifier categorizes prompts; it does not render APPROVE/HITL/BLOCK verdicts.
+            decision: undefined,
+            notes: `Legacy Layer 0 classification: category=${result.category} confidence=${result.confidence}`
           });
         } catch (e) {
           console.warn('[classifier] dual-write hook failed:', e);

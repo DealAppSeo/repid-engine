@@ -192,9 +192,11 @@ export async function classify(
             gen_model: result.model,
             gen_latency_ms: result.latency_ms,
             hal_signals: result,
-            hal_score: 0, // category classification doesn't have a numeric hal_score
-            decision: 'APPROVE',
-            notes: 'Layer 0 Prompt Classification'
+            // Layer 0 classifier produces a category, not a numeric hal_score.
+            hal_score: undefined,
+            // Layer 0 classifier categorizes prompts; it does not render APPROVE/HITL/BLOCK verdicts.
+            decision: undefined,
+            notes: `Layer 0 classification: category=${result.category} confidence=${result.confidence}`
           });
         } catch (e) {
           // writer helper handles its own internal errors; this catch is for require/params errors
