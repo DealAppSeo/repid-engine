@@ -14,7 +14,9 @@
     "verify:alpaca": "ts-node scripts/verify/alpaca-paper-flow.ts",
     "test:e2e": "jest --config tests/e2e/jest.e2e.config.js --runInBand --forceExit",
     "smoke:hal-external": "ts-node scripts/external-caller-smoke-test.ts",
-    "smoke:prod": "tsx scripts/production-smoke.ts"
+    "smoke:prod": "tsx scripts/production-smoke.ts",
+    "indexer": "node dist/scripts/start-indexer-service.js",
+    "worker": "node dist/scripts/start-proof-drain-service.js"
   },
   "keywords": [],
   "author": "",

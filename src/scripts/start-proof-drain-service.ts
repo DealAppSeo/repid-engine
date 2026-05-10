@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import express, { type Request, type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { createProofDrainService } from '../src/services/proof-drain-service';
+import { createProofDrainService } from '../services/proof-drain-service';
 
 dotenv.config();
 
