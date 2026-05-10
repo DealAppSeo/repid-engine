@@ -180,6 +180,26 @@ export async function classify(
       if (persist && opts.supabase) {
         const promptHash = hashPrompt(prompt);
         void persistClassification(opts.supabase, promptHash, result);
+
+        // NEW: Dual-write to hal_evaluations (unified architecture)
+        try {
+          const { writeHalEvaluation } = require('../../services/hal-evaluations-writer');
+          void writeHalEvaluation({
+            mode: 'production',
+            prompt_text: prompt,
+            prompt_source: 'production_traffic',
+            gen_provider: result.provider,
+            gen_model: result.model,
+            gen_latency_ms: result.latency_ms,
+            hal_signals: result,
+            hal_score: 0, // category classification doesn't have a numeric hal_score
+            decision: 'APPROVE',
+            notes: 'Layer 0 Prompt Classification'
+          });
+        } catch (e) {
+          // writer helper handles its own internal errors; this catch is for require/params errors
+          console.warn('[hal/lib/classifier] dual-write hook failed:', e);
+        }
       }
       return result;
     } catch (e: any) {

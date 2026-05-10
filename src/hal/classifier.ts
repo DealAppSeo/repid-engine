@@ -188,6 +188,25 @@ export async function classify(
       if (persist) {
         const promptHash = hashPrompt(prompt);
         void persistClassification(promptHash, result);
+
+        // NEW: Dual-write to hal_evaluations (unified architecture)
+        try {
+          const { writeHalEvaluation } = require('../services/hal-evaluations-writer');
+          void writeHalEvaluation({
+            mode: 'production',
+            prompt_text: prompt,
+            prompt_source: 'production_traffic',
+            gen_provider: 'groq',
+            gen_model: model,
+            gen_latency_ms: result.latency_ms,
+            hal_signals: result,
+            hal_score: 0,
+            decision: 'APPROVE',
+            notes: 'Legacy Layer 0 Prompt Classification'
+          });
+        } catch (e) {
+          console.warn('[classifier] dual-write hook failed:', e);
+        }
       }
       return result;
     } catch (e: any) {
