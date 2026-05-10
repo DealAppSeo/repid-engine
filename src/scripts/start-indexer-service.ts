@@ -59,10 +59,22 @@ async function main(): Promise<void> {
     const s = service.getStatus();
     const now = Date.now();
     const lastTickMs = s.lastTickAt ? now - new Date(s.lastTickAt).getTime() : null;
-    const tickStale = lastTickMs !== null && lastTickMs > pollIntervalMs * 2;
-    const recentError = s.lastError && now - new Date(s.lastError.at).getTime() < pollIntervalMs * 2;
-    const ok = s.status === 'running' && !tickStale && !recentError;
-    res.status(ok ? 200 : 503).json({ ok, ...s });
+    
+    // Improved robustness for Railway:
+    // 1. Report 200 as long as status is 'running' or 'starting' to prevent restart loops.
+    // 2. Only 503 if we've completely stalled for 10 minutes (DEFAULT_STALL_THRESHOLD_MS).
+    // 3. Continue reporting full status details so dashboard can show lag/errors.
+    
+    const stallThresholdMs = 10 * 60 * 1000;
+    const extremeStall = lastTickMs !== null && lastTickMs > stallThresholdMs;
+    const ok = (s.status === 'running' || s.status === 'starting') && !extremeStall;
+    
+    res.status(ok ? 200 : 503).json({ 
+      ok, 
+      poll_interval_ms: pollIntervalMs,
+      last_tick_age_ms: lastTickMs,
+      ...s 
+    });
   });
 
   app.get('/status', (_req: Request, res: Response) => {
