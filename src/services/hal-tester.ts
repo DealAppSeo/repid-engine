@@ -13,7 +13,7 @@ const TEST_AGENT_KEY = '675599f8-95ee-42df-bc8f-4f8b59243aa8';
 // Score a prompt through HAL and record result
 async function scorePrompt(prompt: any) {
   const isHallucination = prompt.category === 'factual_error';
-  const certainty = prompt.certainty_levels_to_test?.[0] || 0.88;
+  const certainty = prompt.certainty_levels_to_test?.test?.[0] ?? 0.88;
   
   const res = await fetch(
     `${ENGINE}/api/v1/agents/${TEST_AGENT_ID}/score-event`,
