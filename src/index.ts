@@ -28,6 +28,8 @@ import discoveryRouter from './routes/discovery';
 import agentCardRouter from './routes/agent-card';
 import { createAgentsOnchainRouter } from './routes/agents-onchain';
 import { createAgentRecallRouter } from './routes/agent-recall';
+import { createAgentRegistrationRouter } from './routes/agents-registration';
+import { createAgentsReputationRouter } from './routes/agents-reputation';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -225,6 +227,10 @@ app.use('/api/v1/agents', createAgentsOnchainRouter(db));
 // Sprint 12 (megasprint): Graph RAG recall surface — public reads. Bypass
 // added in middleware/auth.ts for /recall and /memory/recent.
 app.use('/api/v1', createAgentRecallRouter(db));
+// Wave 6: ERC-8004 spec compliance — agent registration file + reputation
+// feedback writes. Public reads bypassed in middleware/auth.ts.
+app.use('/api/v1', createAgentRegistrationRouter(db));
+app.use('/api/v1', createAgentsReputationRouter(db));
 
 // v11 LLM trust leaderboard (public)
 app.get('/api/v1/llm-trust', async (_req, res) => {
