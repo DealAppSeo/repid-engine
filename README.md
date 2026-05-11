@@ -8,6 +8,11 @@ Not for public distribution.
 Docs: trustrepid.dev
 Protocol: hyperdag.dev
 
+- [Identity vs. Worker](docs/IDENTITY_VS_WORKER.md) — Architectural core
+- [Roadmap](docs/ROADMAP.md) — v0.1 to v1.0 path
+- [Governance](docs/GOVERNANCE.md) — The math of trust in decision making
+- [HAL_CANONICAL_v1.md](docs/HAL_CANONICAL_v1.md) — Hallucination detection spec
+
 ## API Documentation
 
 ### Environment configuration
