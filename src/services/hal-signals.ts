@@ -23,6 +23,8 @@
 import {
   extractHALSignals as libExtractHALSignals,
 } from '../hal/lib/extract';
+import { db } from '../db';
+
 import type {
   HALSignals as LibHALSignals,
 } from '../hal/lib/types';
@@ -128,6 +130,40 @@ export async function extractHALSignalsWithCrossLLM(
   let comma_veto: boolean | null = null;
   let comma_gap: number | null = null;
   let comma_severity: 'none' | 'minor' | 'major' | 'critical' | null = null;
+  
+  // Phase 3: Pre-LLM Graph RAG injection
+  let enrichedPrompt = prompt;
+  try {
+    const { RetrievalService } = require('./graph-rag/retrieval-service');
+    const retriever = new RetrievalService(db);
+    
+    const spokespersonIds = [
+      '550e8400-e29b-41d4-a716-446655440000', // ALPHA_SQUAD_REP
+      '550e8400-e29b-41d4-a716-446655440001', // BETA_SQUAD_REP
+      '550e8400-e29b-41d4-a716-446655440002'  // GAMMA_SQUAD_REP
+    ];
+
+    const allMemories = await Promise.all(spokespersonIds.map(id => 
+      retriever.retrieve({
+        query: prompt,
+        agent_id: id,
+        top_k: 1,
+        similarity_threshold: 0.5
+      })
+    ));
+
+    const flatMemories = allMemories.flat();
+    if (flatMemories.length > 0) {
+      const memoryText = flatMemories.map(m => `- ${m.node.content}`).join('\n');
+      enrichedPrompt = `Context from squad memory:\n${memoryText}\n\nQuestion: ${prompt}`;
+      // console.log(`[hal-signals] Injected ${flatMemories.length} memories into prompt`);
+    }
+
+
+  } catch (e: any) {
+    console.warn('[hal-signals] Graph RAG injection failed:', e.message);
+  }
+
   try {
     const cls = await classify(prompt);
     category = cls?.category ?? null;
@@ -136,7 +172,8 @@ export async function extractHALSignalsWithCrossLLM(
       // math fabrications (HAL-T1-003: 256/243 ≠ Pythagorean Comma). Without
       // this, the *0.15 mathematics dampening lands hal_score below 0.25 and
       // there's no Layer 1 path to catch the mis-stated foundational ratio.
-      const cmp = await checkCrossLLM(prompt);
+      const cmp = await checkCrossLLM(enrichedPrompt);
+
       if (cmp && typeof cmp.agreement_score === 'number') {
         agreement = cmp.agreement_score;
         comma_veto = typeof cmp.comma_veto === 'boolean' ? cmp.comma_veto : null;

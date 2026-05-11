@@ -41,6 +41,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/registration\.json$/.test(req.path)) return next();
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/reputation\/(payload\.json|onchain)$/.test(req.path)) return next();
   if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
+  // Sprint 1: x402 inbound demo bypass
+  if (req.method === 'POST' && /^\/api\/v1\/agents\/[^/]+\/trade-analysis$/.test(req.path)) return next();
+
   // Sprint A8: bypass global auth for keys (key-management.ts handles it)
   if (/^\/api\/v1\/agents\/[^/]+\/keys/.test(req.path)) {
     return next();
