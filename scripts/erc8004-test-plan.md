@@ -174,3 +174,147 @@ If response is `drift=true reason=ownerOf reverted: ...`, token #1585 doesn't ex
 
 Optimistic: **15 minutes** end-to-end (Steps 1–6, assuming Railway env is ready).
 Realistic: **30–45 minutes** including Railway env-var entry, faucet topup, and on-chain confirmation delays.
+
+---
+
+# SECTION B — Mass Backfill (19 named agents + ATLAS)
+
+**Prerequisite:** Section A complete (or at minimum, the dry-run gas estimates work). Trinity Deployer wallet `0xdf6b8215...` funded.
+
+## B0 — APM reconciliation decision (BEFORE mass mint)
+
+Mega-sprint Phase A1 ran `scripts/apm-investigation.ts` against the canonical IdentityRegistry. Findings (2026-05-10):
+
+- APM's stored `erc8004_address` (`0xceD17F65E03e7b3a77D5321A2d3715840317199C`) is an **EOA (wallet)**, not a contract.
+- Canonical `IdentityRegistry.ownerOf(1585)` returned `0xceD17F65E03e7b3a77D5321A2d3715840317199C` — i.e. **token #1585 IS real on the canonical registry, and APM's wallet IS the on-chain owner**.
+- Classification: **Case Z** — APM's `erc8004_address` is being used to store the owner wallet, not the contract address. The mint history is genuine.
+
+Apply this repair SQL in Supabase Studio (one row):
+
+```sql
+UPDATE repid_agents
+   SET erc8004_address     = '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+       conservator_address = COALESCE(conservator_address, '0xceD17F65E03e7b3a77D5321A2d3715840317199C'),
+       mint_chain_id       = 84532
+ WHERE agent_name = 'APM' AND erc8004_token_id = '1585';
+```
+
+After this UPDATE, APM's row reads correctly. Token #1585 stays the same; only the field semantics are fixed. **No re-mint required.** Note: `mint_tx_hash` and `mint_block_number` will remain NULL — those would require digging the original mint transaction out of Base Sepolia history. That's a separate cleanup task; leave NULL for now.
+
+## B1 — Mass-backfill dry run (LOCAL)
+
+```powershell
+cd C:\Users\Cash4\repos\repid-engine
+
+# With ATLAS (if not yet minted in Section A Step 3)
+npm run backfill:erc8004:mass -- --dry-run
+
+# Without ATLAS (typical, ATLAS minted in Section A first)
+npm run backfill:erc8004:mass -- --dry-run --skip-atlas
+```
+
+Expected stdout: 19 (or 20) gas estimates, each ~120k–180k gas, plus a total. Verify the wallet has enough ETH:
+- ~150k gas × 19 mints × 1 gwei = 0.00285 ETH (typical Base Sepolia)
+- Hold 0.01 ETH for buffer.
+
+If any estimate fails or exceeds 500k gas, **halt and investigate before live mint.**
+
+## B2 — Live mass backfill (CHECKPOINTED)
+
+```powershell
+npm run backfill:erc8004:mass -- --skip-atlas
+```
+
+The script processes agents in this order:
+
+```
+[ 1]  SOPHIA       (VETERAN)         ← Batch 1 (5 mints)
+[ 2]  SAGE         (AUTONOMOUS)
+[ 3]  SYBIL_W01    (AUTONOMOUS)
+[ 4]  SYBIL_W02    (AUTONOMOUS)
+[ 5]  SYBIL_W03    (AUTONOMOUS)
+       ── CHECKPOINT ── verify all 5 on Basescan, press Enter
+[ 6]  SYBIL_W04    (AUTONOMOUS)      ← Batch 2 (5 mints)
+[ 7]  VERITAS      (AUTONOMOUS)
+[ 8]  SYBIL_W05    (AUTONOMOUS)
+[ 9]  MENTOR       (ESTABLISHED)
+[10]  RAVEN        (ESTABLISHED)
+       ── CHECKPOINT ── verify, press Enter
+[11]  ORACLE       (ESTABLISHED)     ← Batch 3 (5 mints)
+[12]  NEXUS        (ESTABLISHED)
+[13]  SHOFET       (ESTABLISHED)
+[14]  MEDIATOR     (ESTABLISHED)
+[15]  CHESED       (ESTABLISHED)
+       ── CHECKPOINT ── verify, press Enter
+[16]  MEL          (ESTABLISHED)     ← Batch 4 (4 mints, end)
+[17]  RESEARCHER   (ESTABLISHED)
+[18]  TORCH        (ESTABLISHED)
+[19]  GUARDIAN     (ESTABLISHED)
+```
+
+Each mint takes ~10–20 s on Base Sepolia (1 confirmation). Expected wall-clock for 19 mints: **20–40 minutes** with 3 checkpoint pauses for review.
+
+**State persistence:** every successful mint appends one JSON line to `scripts/.erc8004-backfill-state.json`. If the script halts due to a single failure, the state file shows exactly where it stopped.
+
+**Resume after failure:**
+```powershell
+# e.g. if it failed on index 13:
+npm run backfill:erc8004:mass -- --skip-atlas --resume-from 13
+```
+
+**Skip the checkpoint prompts** (e.g. for unattended run from a watched terminal):
+```powershell
+npm run backfill:erc8004:mass -- --skip-atlas --no-checkpoint
+```
+
+## B3 — Final state verification
+
+Supabase Studio query:
+
+```sql
+-- Headline 4 + APM + the 19 named agents
+SELECT agent_name, tier, current_repid, erc8004_token_id, mint_tx_hash, minted_at, mint_chain_id
+  FROM repid_agents
+ WHERE agent_name IN (
+   'SOPHIA','RAVEN','GUARDIAN','ATLAS','APM',
+   'SAGE','SYBIL_W01','SYBIL_W02','SYBIL_W03','SYBIL_W04','SYBIL_W05','VERITAS',
+   'MENTOR','ORACLE','NEXUS','SHOFET','MEDIATOR','CHESED','MEL','RESEARCHER','TORCH'
+ )
+ ORDER BY current_repid DESC;
+```
+
+Expected after successful run: **20 rows with non-NULL `erc8004_token_id`** (the 19 named + ATLAS), plus APM with its existing token #1585.
+
+Aggregate query:
+
+```sql
+SELECT tier,
+       COUNT(*) FILTER (WHERE erc8004_token_id IS NOT NULL) AS minted,
+       COUNT(*) AS total
+  FROM repid_agents
+ WHERE tier IN ('VETERAN','AUTONOMOUS','ESTABLISHED','EARNING')
+ GROUP BY tier
+ ORDER BY tier;
+```
+
+Expected (after both Section A and B complete):
+- `VETERAN`:     1 of 2 minted (SOPHIA)
+- `AUTONOMOUS`:  8 of N minted (SAGE + 5× SYBIL + VERITAS + APM)
+- `ESTABLISHED`: 11 of N minted
+- `EARNING`:     1 of N minted (ATLAS only)
+
+## B4 — Basescan spot-check (LinkedIn-ready)
+
+Open 3 random tx hashes from `mint_tx_hash` on `https://sepolia.basescan.org/tx/{hash}`. Verify each shows:
+- A `Transfer(0x0, 0xdf6b8215..., tokenId)` event
+- A `Registered(agentId, agentURI, owner)` event  
+- The agentURI resolves to `https://repid.dev/agents/{uuid}/metadata`
+
+If `repid.dev/agents/{uuid}/metadata` returns 404, **that's a separate problem** — the mint itself is valid; the agent metadata page is what's missing. Build that page as a follow-up (sprint candidate).
+
+## Rollback notes (mass backfill specifics)
+
+Same as Section A's rollback: tokens cannot be un-minted; DB can be reverted via the migration's ROLLBACK block. Plus:
+- `scripts/.erc8004-backfill-state.json` is local — safe to delete after Sean is satisfied (or keep as an audit log).
+- If a SINGLE mint went wrong (e.g. wrong UUID typo), find the affected row, clear its `erc8004_token_id` + `mint_tx_hash` + `mint_block_number` + `minted_at` + `mint_chain_id`. The orphan token sits in the deployer wallet but doesn't affect anything else.
+
