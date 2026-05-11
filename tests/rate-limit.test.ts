@@ -1,0 +1,122 @@
+/**
+ * Unit tests for the token-bucket rate limiter in src/middleware/rate-limit.ts
+ *
+ * Covers:
+ *   - Token-bucket math (capacity, decrement, refuse-when-empty, refill)
+ *   - Tier limit constants
+ *   - Hash function determinism
+ *
+ * Integration tests (real Express server + supertest) are deferred — the
+ * BYOK bypass branch requires the migration to be applied + a seeded
+ * user_api_keys row + a real DB connection. The pure bucket math here
+ * gives us confidence the algorithm is correct.
+ */
+
+import { bucketStore, __test } from '../src/middleware/rate-limit';
+
+describe('BucketStore — token bucket math', () => {
+  beforeEach(() => bucketStore.__reset());
+
+  it('starts at full capacity', () => {
+    const r = bucketStore.consume('k1', 10);
+    expect(r.allowed).toBe(true);
+    expect(r.remaining).toBe(9);
+  });
+
+  it('decrements one token per consume', () => {
+    bucketStore.consume('k2', 10);
+    bucketStore.consume('k2', 10);
+    const r = bucketStore.consume('k2', 10);
+    expect(r.allowed).toBe(true);
+    expect(r.remaining).toBe(7);
+  });
+
+  it('refuses when exhausted', () => {
+    for (let i = 0; i < 5; i++) bucketStore.consume('k3', 5);
+    const r = bucketStore.consume('k3', 5);
+    expect(r.allowed).toBe(false);
+    expect(r.remaining).toBe(0);
+    expect(r.retryAfterSec).toBeGreaterThanOrEqual(1);
+  });
+
+  it('separate keys have independent buckets', () => {
+    for (let i = 0; i < 5; i++) bucketStore.consume('a', 5);
+    const ra = bucketStore.consume('a', 5);
+    expect(ra.allowed).toBe(false);
+    const rb = bucketStore.consume('b', 5);
+    expect(rb.allowed).toBe(true);
+  });
+
+  it('refills proportionally over time', async () => {
+    // Capacity 60/min = 1 per second. Drain to 0, wait ~1100ms, expect 1 token back.
+    for (let i = 0; i < 60; i++) bucketStore.consume('refill', 60);
+    expect(bucketStore.consume('refill', 60).allowed).toBe(false);
+    await new Promise((res) => setTimeout(res, 1100));
+    const r = bucketStore.consume('refill', 60);
+    expect(r.allowed).toBe(true);
+  });
+
+  it('respects new capacity if route override changes limit', () => {
+    // Initial 5 limit; drain to 2 remaining
+    bucketStore.consume('over', 5);
+    bucketStore.consume('over', 5);
+    bucketStore.consume('over', 5);
+    // Now same bucket consumed under tighter limit of 2 — should still allow once
+    // because tokens=2 from prior, capacity adjusts down. Behavior: allow once more,
+    // then refuse.
+    const r1 = bucketStore.consume('over', 2);
+    expect(r1.allowed).toBe(true);
+    const r2 = bucketStore.consume('over', 2);
+    expect(r2.allowed).toBe(true);
+    const r3 = bucketStore.consume('over', 2);
+    expect(r3.allowed).toBe(false);
+  });
+});
+
+describe('Tier limits — constants are explicit', () => {
+  it('declares all five canonical tiers + IP default', () => {
+    const { TIER_LIMITS } = __test;
+    expect(TIER_LIMITS.IP_DEFAULT).toBe(60);
+    expect(TIER_LIMITS.PROBATIONARY).toBe(120);
+    expect(TIER_LIMITS.EARNING).toBe(300);
+    expect(TIER_LIMITS.ESTABLISHED).toBe(600);
+    expect(TIER_LIMITS.AUTONOMOUS).toBe(1200);
+    expect(TIER_LIMITS.VETERAN).toBe(1200);
+  });
+
+  it('limits ascend monotonically by tier', () => {
+    const { TIER_LIMITS } = __test;
+    expect(TIER_LIMITS.PROBATIONARY!).toBeGreaterThan(TIER_LIMITS.IP_DEFAULT!);
+    expect(TIER_LIMITS.EARNING!).toBeGreaterThan(TIER_LIMITS.PROBATIONARY!);
+    expect(TIER_LIMITS.ESTABLISHED!).toBeGreaterThan(TIER_LIMITS.EARNING!);
+    expect(TIER_LIMITS.AUTONOMOUS!).toBeGreaterThan(TIER_LIMITS.ESTABLISHED!);
+  });
+});
+
+describe('hashByokKey — deterministic SHA-256', () => {
+  it('produces stable hex output', () => {
+    const { hashByokKey } = __test;
+    const a = hashByokKey('test-key-abc');
+    const b = hashByokKey('test-key-abc');
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('different inputs produce different hashes', () => {
+    const { hashByokKey } = __test;
+    expect(hashByokKey('a')).not.toBe(hashByokKey('b'));
+  });
+});
+
+describe('Route overrides — match patterns', () => {
+  it('halves recall route, triples registration.json', () => {
+    const { ROUTE_OVERRIDES } = __test;
+    const recall = ROUTE_OVERRIDES.find((r) => r.description === 'recall-semantic-search');
+    expect(recall?.multiplier).toBe(0.5);
+    expect('/api/v1/agents/f3ef0bf8-5cdc-4fad-bce8-5144f01dc271/recall').toMatch(recall!.match);
+
+    const reg = ROUTE_OVERRIDES.find((r) => r.description === 'registration-json-cache');
+    expect(reg?.multiplier).toBe(3);
+    expect('/api/v1/agents/f3ef0bf8-5cdc-4fad-bce8-5144f01dc271/registration.json').toMatch(reg!.match);
+  });
+});

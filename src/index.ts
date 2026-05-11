@@ -30,6 +30,8 @@ import { createAgentsOnchainRouter } from './routes/agents-onchain';
 import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
+import x402InboundRouter from './routes/x402-inbound';
+
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -37,6 +39,8 @@ import { db } from './db';
 
 import { authMiddleware } from './middleware/auth';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
+// CC Sprint 2: global token-bucket rate limiter (BYOK bypass + tier-based)
+import { rateLimitMiddleware as globalRateLimit } from './middleware/rate-limit';
 import { versioningMiddleware } from './middleware/versioning';
 import { scoreMonitor } from './engine/score-monitor';
 
@@ -88,6 +92,13 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'X-RepID-Version'],
 }));
 app.use(express.json({ limit: "1mb" }));
+
+// CC Sprint 2: global rate limiter on /api/v1/*. Order matters — must run
+// AFTER express.json (so we can bypass-fast on BYOK before doing any work)
+// and BEFORE route handlers + the existing express-rate-limit per-route
+// limiters (which act as additional stricter caps, not replacements). BYOK
+// keys with valid hashes in user_api_keys bypass entirely.
+app.use(globalRateLimit());
 
 // HYGIENE-1: silence JSON parse stack traces. Malformed bodies still 
 // return 400; just log a single-line structured warning instead of 
@@ -231,6 +242,8 @@ app.use('/api/v1', createAgentRecallRouter(db));
 // feedback writes. Public reads bypassed in middleware/auth.ts.
 app.use('/api/v1', createAgentRegistrationRouter(db));
 app.use('/api/v1', createAgentsReputationRouter(db));
+app.use('/api/v1/agents', x402InboundRouter);
+
 
 // v11 LLM trust leaderboard (public)
 app.get('/api/v1/llm-trust', async (_req, res) => {
