@@ -17,7 +17,8 @@
     "smoke:prod": "tsx scripts/production-smoke.ts",
     "indexer": "node dist/scripts/start-indexer-service.js",
     "worker": "node dist/scripts/start-proof-drain-service.js",
-    "smoke:graph-rag": "ts-node scripts/graph-rag-smoke.ts"
+    "smoke:graph-rag": "ts-node scripts/graph-rag-smoke.ts",
+    "backfill:erc8004:headline-4": "ts-node scripts/erc8004-backfill-headline-4.ts"
   },
   "keywords": [],
   "author": "",
