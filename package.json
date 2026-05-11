@@ -19,7 +19,9 @@
     "worker": "node dist/scripts/start-proof-drain-service.js",
     "smoke:graph-rag": "ts-node scripts/graph-rag-smoke.ts",
     "backfill:erc8004:headline-4": "ts-node scripts/erc8004-backfill-headline-4.ts",
-    "backfill:erc8004:mass": "ts-node scripts/erc8004-backfill-mass-19plus1.ts"
+    "backfill:erc8004:mass": "ts-node scripts/erc8004-backfill-mass-19plus1.ts",
+    "reputation:backfill:spokespersons": "ts-node scripts/erc8004-reputation-backfill-spokespersons.ts",
+    "probe:reputation": "ts-node scripts/erc8004-reputation-probe.ts"
   },
   "keywords": [],
   "author": "",

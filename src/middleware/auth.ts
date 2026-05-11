@@ -37,6 +37,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // Sprint 12 (megasprint): public Graph RAG recall surface
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/recall$/.test(req.path)) return next();
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/memory\/recent$/.test(req.path)) return next();
+  // Wave 6: ERC-8004 spec — public registration file + reputation reads
+  if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/registration\.json$/.test(req.path)) return next();
+  if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/reputation\/(payload\.json|onchain)$/.test(req.path)) return next();
   if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
   // Sprint A8: bypass global auth for keys (key-management.ts handles it)
   if (/^\/api\/v1\/agents\/[^/]+\/keys/.test(req.path)) {
