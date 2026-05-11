@@ -26,6 +26,7 @@ import { llmRouter } from './routes/route';
 import { adminCapsRouter } from './routes/admin-caps';
 import discoveryRouter from './routes/discovery';
 import agentCardRouter from './routes/agent-card';
+import agentVerifyRouter from './routes/agent-verify';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -215,6 +216,7 @@ app.use('/api/v1/admin/caps', adminCapsRouter);
 app.use('/api/v1/agents/register', registrationLimiter);
 app.use('/api/v1/agents/:id/score-event', scoreLimiter);
 app.use('/api/v1/agents/:id/card', cardLimiter); // Sprint A5: 60 req/IP/min on public card
+app.use('/api/v1/agents', agentVerifyRouter); // Sprint 7: public verify page
 app.use('/api/v1/agents', keysRouter);
 app.use('/api/v1/agents', agentsExternalRouter);
 

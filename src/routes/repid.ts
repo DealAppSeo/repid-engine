@@ -117,6 +117,73 @@ repidPublicRouter.post('/prove-repid', async (req: Request, res: Response) => {
   });
 });
 
+// GET /api/v1/repid/proof/:jobId — retrieve a completed proof for local verification
+repidPublicRouter.get('/repid/proof/:jobId', async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+
+    // 1. Fetch proof job
+    const { data: job, error: jobErr } = await db
+      .from('repid_proof_queue')
+      .select('*')
+      .eq('job_id', jobId)
+      .single();
+
+    if (jobErr || !job) {
+      return res.status(404).json({ error: 'PROOF_JOB_NOT_FOUND', detail: `Job ${jobId} not found` });
+    }
+
+    if (job.status !== 'completed') {
+      return res.status(202).json({
+        status: job.status,
+        job_id: jobId,
+        message: 'Proof generation in progress',
+        created_at: job.created_at
+      });
+    }
+
+    // 2. Fetch agent state (to build the statement)
+    const { data: agent, error: agentErr } = await db
+      .from('repid_agents')
+      .select('id, current_repid, tier')
+      .eq('id', job.agent_id)
+      .single();
+
+    if (agentErr || !agent) {
+      return res.status(404).json({ error: 'AGENT_NOT_FOUND', detail: `Agent ${job.agent_id} not found` });
+    }
+
+    // 3. Map tier to threshold (mirrors zkp-postcard logic)
+    const tier = agent.tier as string;
+    const TIER_THRESHOLD: Record<string, number> = {
+      PROBATIONARY: 0,
+      EARNING: 499,
+      ESTABLISHED: 999,
+      AUTONOMOUS: 4999,
+      VETERAN: 7999,
+    };
+    const threshold = TIER_THRESHOLD[tier] ?? 0;
+
+    // 4. Return verifier-standard shape
+    return res.json({
+      proof_bytes: job.proof_bytes, // base64 string
+      statement: {
+        agent_id: agent.id,
+        repid_score: agent.current_repid,
+        threshold: threshold,
+        tier: tier
+      },
+      proof_hash: job.proof_hash,
+      proof_size_bytes: job.proof_size_bytes,
+      verified_server_side: true,
+      generated_at: job.completed_at
+    });
+  } catch (e: any) {
+    console.error(`[repid] proof retrieval error: ${e.message}`);
+    res.status(500).json({ error: 'INTERNAL', detail: e.message });
+  }
+});
+
 /* ------------------------ Admin routes ------------------------------ */
 
 // POST /api/v1/repid/:agentId/attest — sign a fresh attestation (auth required)
