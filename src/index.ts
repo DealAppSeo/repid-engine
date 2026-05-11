@@ -26,6 +26,7 @@ import { llmRouter } from './routes/route';
 import { adminCapsRouter } from './routes/admin-caps';
 import discoveryRouter from './routes/discovery';
 import agentCardRouter from './routes/agent-card';
+import { createAgentsOnchainRouter } from './routes/agents-onchain';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -217,6 +218,9 @@ app.use('/api/v1/agents/:id/score-event', scoreLimiter);
 app.use('/api/v1/agents/:id/card', cardLimiter); // Sprint A5: 60 req/IP/min on public card
 app.use('/api/v1/agents', keysRouter);
 app.use('/api/v1/agents', agentsExternalRouter);
+// Sprint 6: ERC-8004 mint/status/onchain. POST /:id/mint is bearer-gated by
+// the global authMiddleware; the two GETs are bypassed in middleware/auth.ts.
+app.use('/api/v1/agents', createAgentsOnchainRouter(db));
 
 // v11 LLM trust leaderboard (public)
 app.get('/api/v1/llm-trust', async (_req, res) => {
