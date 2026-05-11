@@ -6,6 +6,7 @@ import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/ha
 import { deriveHalDecision } from '../scoring/pipeline';
 import { issueAgentApiKey } from '../auth/api-keys';
 import { requireApiKey } from '../middleware/auth-api-key';
+import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 
 const router = Router();
 
@@ -613,6 +614,22 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
         body: JSON.stringify(payload)
       }).catch(console.error);
     }
+
+    // Sprint 12 (megasprint): fire-and-forget Graph RAG memory write.
+    // Writes observation + decision (+ reflection on veto) nodes for this
+    // agent. NEVER blocks the response — internal errors are logged but
+    // swallowed inside writeDecisionMemory.
+    void writeDecisionMemory(db, {
+      agentId,
+      prompt: typeof prompt === 'string' ? prompt : '',
+      decisionText: typeof decision_text === 'string' ? decision_text : '',
+      halScore: dissonance,
+      repidDelta: rawDelta,
+      newRepid: newScore,
+      // commaVeto is narrowed to false here — the veto path returned early at line ~400.
+      commaVeto: commaVeto,
+      sourceEventId: typeof (eventRow as any)?.id === 'number' ? (eventRow as any).id : undefined,
+    });
 
     return res.json({
       new_score: newScore,

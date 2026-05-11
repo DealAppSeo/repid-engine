@@ -34,6 +34,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/card$/.test(req.path)) return next();
   // Sprint 6: public ERC-8004 verification surface (mint-status, onchain)
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/(mint-status|onchain)$/.test(req.path)) return next();
+  // Sprint 12 (megasprint): public Graph RAG recall surface
+  if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/recall$/.test(req.path)) return next();
+  if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/memory\/recent$/.test(req.path)) return next();
   if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
   // Sprint A8: bypass global auth for keys (key-management.ts handles it)
   if (/^\/api\/v1\/agents\/[^/]+\/keys/.test(req.path)) {
