@@ -178,7 +178,7 @@ export class RepIdEarningService {
       .from('repid_score_events')
       .insert({
         agent_id: agent.id,
-        event_type: 'paper_trade_outcome',
+        event_type: 'PAPER_TRADE_OUTCOME',
         delta: appliedDelta,
         repid_before: before,
         repid_after: after,
