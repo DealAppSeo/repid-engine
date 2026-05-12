@@ -1,0 +1,9 @@
+source_table,source_id,is_hallucination,ground_truth_confidence,labeled_by,rationale
+# Valid source_table values: hal_runner_results | hal_evaluations | hal_classifications
+# is_hallucination: true | false
+# ground_truth_confidence: 0.0 .. 1.0
+# labeled_by: short identifier (e.g., sean, gpt4-judge, automated-spot-check)
+# rationale: free-text optional
+# Example rows below — delete the # to enable:
+# hal_runner_results,abc-123,true,0.95,sean,"Made up a fake API endpoint"
+# hal_runner_results,def-456,false,0.80,sean,"Statement matches public knowledge"

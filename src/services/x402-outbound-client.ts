@@ -40,7 +40,12 @@ export class X402OutboundClient {
       }
 
       // 3. Construct EIP-3009 signed payment
-      const { data: agent } = await db.from('repid_agents').select('agent_name').eq('id', opts.agentId).single();
+      const { data: agent } = await db.from('repid_agents').select('agent_name, x402_circuit_breaker_tripped').eq('id', opts.agentId).single();
+      
+      if (agent?.x402_circuit_breaker_tripped) {
+        throw new Error('X402_CIRCUIT_BREAKER_ACTIVE');
+      }
+      
       const agentName = agent?.agent_name || '';
       const pk = process.env[`${agentName.toUpperCase()}_PRIVATE_KEY`];
       
@@ -49,6 +54,46 @@ export class X402OutboundClient {
       }
 
       const wallet = new ethers.Wallet(pk);
+
+      // --- GOVERNOR CHECK BEFORE NEW PAYMENT ---
+      const { data: configRows } = await db.from('repid_config')
+        .select('key, value')
+        .in('key', ['x402_max_usdc_per_hour', 'x402_max_tx_per_hour']);
+        
+      const maxUsdcStr = configRows?.find((r: any) => r.key === 'x402_max_usdc_per_hour')?.value || '1.00';
+      const maxTxStr = configRows?.find((r: any) => r.key === 'x402_max_tx_per_hour')?.value || '50';
+      const maxUsdcLimit = parseFloat(maxUsdcStr);
+      const maxTxLimit = parseInt(maxTxStr, 10);
+      
+      const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
+      const { data: recentEvents } = await db.from('repid_events')
+        .select('event_data')
+        .eq('subject_id', opts.agentId)
+        .eq('event_type', 'x402_outbound_settled')
+        .gte('created_at', oneHourAgo);
+
+      if (recentEvents) {
+        const txCount = recentEvents.length;
+        let totalUsdc = 0;
+        
+        for (const ev of recentEvents) {
+          if (ev.event_data?.amount) {
+            // value is in 6-decimal USDC
+            const usdcVal = parseFloat(ethers.formatUnits(ev.event_data.amount, 6));
+            totalUsdc += usdcVal;
+          }
+        }
+
+        // Add current offer amount to the sum
+        const currentUsdcVal = parseFloat(ethers.formatUnits(offer.maxAmountRequired, 6));
+
+        if (txCount >= maxTxLimit) {
+          throw new Error('X402_GOVERNOR_TRIPPED: max_tx_per_hour exceeded');
+        }
+        if (totalUsdc + currentUsdcVal > maxUsdcLimit) {
+          throw new Error('X402_GOVERNOR_TRIPPED: max_usdc_per_hour exceeded');
+        }
+      }
 
       // --- IDEMPOTENCY CHECK BEFORE NEW PAYMENT ---
       const hashInput = `${opts.agentId}:${opts.providerAgentId}:${opts.tipId}:${offer.maxAmountRequired}:${offer.asset}:${wallet.address}`;
@@ -63,6 +108,14 @@ export class X402OutboundClient {
         if (existingSettlement.status === 'pending' || existingSettlement.status === 'confirmed' || existingSettlement.status === 'settled') {
           return { data: existingSettlement, txHash: existingSettlement.tx_hash, idempotencyKey };
         } else if (existingSettlement.status === 'failed') {
+          if (existingSettlement.settlement_attempt_count >= 5) {
+            await db.from('repid_agents').update({
+              x402_circuit_breaker_tripped: true,
+              x402_circuit_breaker_reason: 'Failed settlement max attempts reached'
+            }).eq('id', opts.agentId);
+            throw new Error('X402_CIRCUIT_BREAKER_TRIPPED');
+          }
+
           await db.from('x402_settlements')
             .update({ settlement_attempt_count: existingSettlement.settlement_attempt_count + 1 })
             .eq('id', existingSettlement.id);

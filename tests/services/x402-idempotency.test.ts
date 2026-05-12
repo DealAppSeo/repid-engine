@@ -53,6 +53,12 @@ describe('X402OutboundClient Idempotency', () => {
           single: jest.fn().mockResolvedValue({ data: { agent_name: 'sophia' } })
         };
       }
+      if (table === 'repid_config') {
+        return {
+          select: jest.fn().mockReturnThis(),
+          in: jest.fn().mockResolvedValue({ data: [] })
+        };
+      }
       if (table === 'x402_settlements') {
         const updateMock = jest.fn().mockReturnThis();
         return {
@@ -63,8 +69,20 @@ describe('X402OutboundClient Idempotency', () => {
           _getUpdateMock: () => updateMock
         };
       }
+      if (table === 'x402_settlement_failures') {
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          gte: jest.fn().mockResolvedValue({ data: [] })
+        };
+      }
       if (table === 'repid_events') {
-        return { insert: jest.fn().mockResolvedValue({}) };
+        return { 
+          insert: jest.fn().mockResolvedValue({}),
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          gte: jest.fn().mockResolvedValue({ data: [] })
+        };
       }
       return {};
     });
