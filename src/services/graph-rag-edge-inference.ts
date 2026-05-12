@@ -8,12 +8,15 @@
  * edge_type in the CHECK whitelist. The inference output is a list of
  * InferredEdge objects; persisting is a separate explicit step (so we can dry-run).
  *
- * Two RAG metrics tables co-exist:
+ * Two RAG metrics tables co-exist — they answer DIFFERENT questions, do not merge:
  *   - `graph_rag_retrieval_metrics` (Gemini Sprint 3.5) — measures whether RAG
- *     retrieval improved downstream HAL signal quality.
- *   - `graph_rag_edge_inference_metrics` (CC Sprint 10) — operational telemetry
- *     on the inference RUN itself (how many edges inferred, persisted, deduped,
- *     rejected). Different concern. See Phase 4 of CC Sprint 10.
+ *     RETRIEVAL improved downstream HAL signal quality (was the retrieved context
+ *     useful for the task?). Schema: agent_id, query, latency_ms, nodes_retrieved,
+ *     relevance_score.
+ *   - `graph_rag_edge_inference_metrics` (CC Sprint 10) — operational telemetry on
+ *     the INFERENCE RUN itself (how many edges proposed/persisted/deduped/rejected,
+ *     by type). Schema: run_id, agent_id, edges_inferred, edges_persisted,
+ *     edges_deduplicated, edges_rejected_check, edge_type_distribution, dry_run.
  *
  * Heuristics (each carries its own confidence 0..1):
  *   - mentions:    B contains a 6+-char alpha token from A
