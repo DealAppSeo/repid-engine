@@ -42,6 +42,18 @@ const REPID_MAX = 10000;
 /**
  * Score a single trade row's outcome.
  * Pure function over the row shape — easy to unit test.
+ *
+ * Sprint 3 amendment: the original Sprint 2 implementation tested the
+ * decision string against `'veto'/'reject'/'no_action'/'hal_block'` —
+ * but production data (verified via Supabase MCP 2026-05-11) uses
+ * `'REFUSED'` (2,519 rows from trinity-ecosystem trade_pipeline.ts) and
+ * `'EXECUTE'/'EXECUTED'` (15 rows from various paths). We now recognize
+ * these explicitly and score them per the existing-architecture reality:
+ *   - REFUSED  → constitutional refusal → +2 (same as HAL veto)
+ *   - EXECUTE/EXECUTED with no pnl → intent signed but not settled → +1
+ *     (small earn — agent decided decisively; settlement is a separate
+ *     pipeline stage that doesn't exist for v1, see Sprint 3 report)
+ *   - null pnl with no recognizable decision → -5 (timeout / lost signal)
  */
 export function scoreTrade(row: {
   pnl_realized: number | null;
@@ -50,17 +62,32 @@ export function scoreTrade(row: {
   executed_at: string | null;
   execution_mode?: string | null;
 }): ScoreOutcome {
-  // HAL veto / no-execute heuristic — agent learned without taking real loss
   const dec = (row.decision ?? '').toLowerCase();
-  const noExec =
-    row.pnl_realized == null &&
-    (dec.includes('veto') || dec.includes('reject') || dec.includes('no_action') || dec.includes('hal_block'));
 
-  if (noExec) {
-    return { delta: +2, reason: 'hal_veto_no_execution', pnlPct: null };
+  // 1. Constitutional refusal / HAL veto — agent declined to trade
+  // Matches the trinity-sophia trade_pipeline.ts dominant pattern (REFUSED),
+  // plus the older 'veto'/'reject'/'hal_block' shapes we saw earlier.
+  const isRefusal =
+    row.pnl_realized == null &&
+    (dec === 'refused' || dec.includes('veto') || dec.includes('reject') ||
+     dec.includes('no_action') || dec.includes('hal_block'));
+  if (isRefusal) {
+    return { delta: +2, reason: 'constitutional_refusal_or_hal_veto', pnlPct: null };
   }
 
-  // Trade closed without P&L: treat as timeout / unrecorded outcome
+  // 2. EXECUTE/EXECUTED intent with no settlement data — small earn for
+  // decisiveness. The current architecture (trade_pipeline.ts) signs an
+  // intent but does not place a real order; pnl_realized is null by
+  // design. When/if a fill resolver lands (see Sprint 3 trade-resolver
+  // proposal), this branch becomes unreachable for resolved trades.
+  const isUnresolvedExecute =
+    row.pnl_realized == null &&
+    (dec === 'execute' || dec === 'executed');
+  if (isUnresolvedExecute) {
+    return { delta: +1, reason: 'execute_intent_signed_unresolved', pnlPct: null };
+  }
+
+  // 3. Trade closed without P&L AND no recognizable decision context: log + dock
   if (row.pnl_realized == null) {
     return { delta: -5, reason: 'no_pnl_recorded', pnlPct: null };
   }
