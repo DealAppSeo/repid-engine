@@ -4,3 +4,6 @@ dist/
 *.js.map
 .DS_Store
 .claude/worktrees/
+
+# Generated artifacts (regenerable via npm scripts)
+hal-ground-truth-template.csv
