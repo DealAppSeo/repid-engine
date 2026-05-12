@@ -25,7 +25,9 @@
     "graph-rag:infer-edges": "ts-node scripts/graph-rag/infer-edges.ts",
     "hal:seed-ground-truth": "ts-node scripts/hal/seed-ground-truth.ts",
     "hal:ground-truth-stats": "ts-node scripts/hal/seed-ground-truth.ts --stats",
-    "hal:ground-truth-template": "ts-node scripts/hal/seed-ground-truth.ts --export-template ./hal-ground-truth-template.csv"
+    "hal:ground-truth-template": "ts-node scripts/hal/seed-ground-truth.ts --export-template ./hal-ground-truth-template.csv",
+    "types:gen": "npx supabase gen types typescript --project-id qnnpjhlxljtqyigedwkb --schema public > src/types/database.types.ts",
+    "types:check": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -58,6 +60,7 @@
     "@types/supertest": "^7.2.0",
     "@types/validator": "^13.15.10",
     "jest": "^30.3.0",
+    "supabase": "^2.98.2",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.9"
   },
