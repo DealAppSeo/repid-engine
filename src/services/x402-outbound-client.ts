@@ -2,8 +2,10 @@ import { repIdAttestationService, ZkpRepIdAttestation } from './repid-attestatio
 import { db } from '../db';
 import { ethers } from 'ethers';
 
+import crypto from 'crypto';
+
 export class X402OutboundClient {
-  async get(url: string, opts: { agentId: string, maxBudgetUsdc?: string }): Promise<{ data: any, txHash?: string, responseAttestation?: ZkpRepIdAttestation }> {
+  async get(url: string, opts: { agentId: string, providerAgentId: string, tipId: string, maxBudgetUsdc?: string }): Promise<{ data: any, txHash?: string, responseAttestation?: ZkpRepIdAttestation, idempotencyKey?: string }> {
     const maxBudget = opts.maxBudgetUsdc || "50000"; // 0.05 USDC (50,000 units of 6-decimal USDC)
 
     // 1. Generate HyperDAG agent's attestation
@@ -20,6 +22,7 @@ export class X402OutboundClient {
 
     let txHash: string | undefined;
     let counterpartyAttestation: ZkpRepIdAttestation | undefined;
+    let idempotencyKey: string | undefined;
 
     let offer: any;
     if (response.status === 402) {
@@ -46,6 +49,25 @@ export class X402OutboundClient {
       }
 
       const wallet = new ethers.Wallet(pk);
+
+      // --- IDEMPOTENCY CHECK BEFORE NEW PAYMENT ---
+      const hashInput = `${opts.agentId}:${opts.providerAgentId}:${opts.tipId}:${offer.maxAmountRequired}:${offer.asset}:${wallet.address}`;
+      idempotencyKey = crypto.createHash('sha256').update(hashInput).digest('hex');
+
+      const { data: existingSettlement } = await db.from('x402_settlements')
+        .select('*')
+        .eq('idempotency_key', idempotencyKey)
+        .single();
+
+      if (existingSettlement) {
+        if (existingSettlement.status === 'pending' || existingSettlement.status === 'confirmed' || existingSettlement.status === 'settled') {
+          return { data: existingSettlement, txHash: existingSettlement.tx_hash, idempotencyKey };
+        } else if (existingSettlement.status === 'failed') {
+          await db.from('x402_settlements')
+            .update({ settlement_attempt_count: existingSettlement.settlement_attempt_count + 1 })
+            .eq('id', existingSettlement.id);
+        }
+      }
       
       const nonce = ethers.hexlify(ethers.randomBytes(32));
       const validAfter = 0;
@@ -160,7 +182,8 @@ export class X402OutboundClient {
     return {
       data,
       txHash,
-      responseAttestation: counterpartyAttestation
+      responseAttestation: counterpartyAttestation,
+      idempotencyKey
     };
   }
 }
