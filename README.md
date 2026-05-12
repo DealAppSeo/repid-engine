@@ -39,3 +39,28 @@ const r = await evaluate(claim, output, { domain, certainty, prompt, providers, 
 ```
 
 See [docs/HAL_LIBRARY_API.md](docs/HAL_LIBRARY_API.md) for the full API and [docs/HAL_TAMPERING_DETECTION.md](docs/HAL_TAMPERING_DETECTION.md) for the level-5 tampering signal spec.
+
+## Sprint Discipline: pre-commit hook
+
+This repo uses a Git pre-commit hook to prevent the HEAD-drift contamination pattern that caused 5 incidents in the May 6-11 sprint window (see `IDEAS_LOG` I-15 + I-17 in living-docs). Multi-agent sprints in shared working trees can silently land commits on the wrong branch; the hook blocks that.
+
+**Install once per clone:**
+
+```bash
+npm run install:hooks
+```
+
+**At the start of every sprint, set your expected branch:**
+
+```bash
+echo "feat/your-sprint-branch-name" > .git/EXPECTED_BRANCH
+```
+
+**Behavior:**
+- Match → commit proceeds silently.
+- Mismatch → commit aborts with a loud error showing `Expected:` vs `Current:` and recovery steps.
+- `.git/EXPECTED_BRANCH` missing → warning printed but commit allowed (graceful for old workflows).
+
+**Bypass for emergencies:** `git commit --no-verify`.
+
+The hook source lives in `scripts/git-hooks/pre-commit.sh`; the installer in `scripts/git-hooks/install.sh` copies it into `.git/hooks/pre-commit`. Tests are in `tests/git-hooks.test.ts` (6/6 passing as of CC Sprint 7).
