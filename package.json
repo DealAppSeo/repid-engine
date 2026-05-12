@@ -21,7 +21,8 @@
     "backfill:erc8004:headline-4": "ts-node scripts/erc8004-backfill-headline-4.ts",
     "backfill:erc8004:mass": "ts-node scripts/erc8004-backfill-mass-19plus1.ts",
     "reputation:backfill:spokespersons": "ts-node scripts/erc8004-reputation-backfill-spokespersons.ts",
-    "probe:reputation": "ts-node scripts/erc8004-reputation-probe.ts"
+    "probe:reputation": "ts-node scripts/erc8004-reputation-probe.ts",
+    "x402:recovery-worker": "tsx scripts/x402/run-recovery-worker.ts"
   },
   "keywords": [],
   "author": "",
