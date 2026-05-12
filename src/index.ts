@@ -30,8 +30,6 @@ import { createAgentsOnchainRouter } from './routes/agents-onchain';
 import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
-import x402InboundRouter from './routes/x402-inbound';
-
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -242,8 +240,6 @@ app.use('/api/v1', createAgentRecallRouter(db));
 // feedback writes. Public reads bypassed in middleware/auth.ts.
 app.use('/api/v1', createAgentRegistrationRouter(db));
 app.use('/api/v1', createAgentsReputationRouter(db));
-app.use('/api/v1/agents', x402InboundRouter);
-
 
 // v11 LLM trust leaderboard (public)
 app.get('/api/v1/llm-trust', async (_req, res) => {
