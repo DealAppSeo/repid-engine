@@ -51,6 +51,25 @@ async function checkHealth() {
   console.log(`Unresolved failures currently in queue: ${unresolvedCount || 0}`);
   console.log(`Abandoned failures (attempt_count >= 5): ${abandonedCount || 0}`);
 
+  console.log('\n--- X402 PATENT WAKEUP READINESS ---');
+  console.log(`Circuit Breaker: ${dashboard.circuit_breaker_tripped}`);
+  console.log(`Unresolved Failures: ${unresolvedCount || 0}`);
+  try {
+    const { runPreflight } = require('./x402/preflight-real-microtx');
+    const checks = await runPreflight();
+    const hasRed = checks.some((c: any) => c.status === 'RED');
+    const hasAmber = checks.some((c: any) => c.status === 'AMBER');
+    if (hasRed) {
+      console.log('Preflight Checks Passed: No (RED found)');
+    } else if (hasAmber) {
+      console.log('Preflight Checks Passed: Warnings (AMBER found)');
+    } else {
+      console.log('Preflight Checks Passed: Yes (All GREEN)');
+    }
+  } catch (e: any) {
+    console.log(`Preflight Checks Passed: Error (${e.message})`);
+  }
+
   if (dashboard.circuit_breaker_tripped === 'true' || Number(abandonedCount) > 0) {
     console.error('\nHEALTH CHECK FAILED: Circuit breaker tripped OR abandoned failures exist.');
     process.exit(1);
