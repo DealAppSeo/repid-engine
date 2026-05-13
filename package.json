@@ -48,7 +48,11 @@
     "demo:full-loop:real": "ts-node -e \"process.env.MOCK_FACILITATOR='false';require('./scripts/mock-harness/full-loop-demo.ts')\"",
     "cb:kill": "ts-node scripts/circuit-breaker-controls.ts kill",
     "cb:resume": "ts-node scripts/circuit-breaker-controls.ts resume",
-    "cb:status": "ts-node scripts/circuit-breaker-controls.ts status"
+    "cb:status": "ts-node scripts/circuit-breaker-controls.ts status",
+    "graph-rag:infer-edges": "ts-node scripts/graph-rag/infer-edges.ts",
+    "hal:seed-ground-truth": "ts-node scripts/hal/seed-ground-truth.ts",
+    "hal:ground-truth-stats": "ts-node scripts/hal/seed-ground-truth.ts --stats",
+    "hal:ground-truth-template": "ts-node scripts/hal/seed-ground-truth.ts --export-template ./hal-ground-truth-template.csv"
   },
   "keywords": [],
   "author": "",
