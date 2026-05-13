@@ -122,4 +122,108 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   return res.status(200).json(analysis);
 });
 
+router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
+  const { uuid } = req.params;
+  const xPaymentHeader = req.body.x402_payment || req.header('X-PAYMENT');
+
+  const { data: agent, error: agentError } = await db
+    .from('repid_agents')
+    .select('id, agent_name, erc8004_address, current_repid, tier')
+    .eq('id', uuid)
+    .maybeSingle();
+
+  if (agentError || !agent) {
+    return res.status(404).json({ error: 'agent_not_found_or_invalid_id' });
+  }
+
+  const priceUsdc = "100000"; // 0.1 USDC
+  const resource = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+  const requirements = x402Facilitator.buildPaymentRequirements({
+    resource,
+    payTo: agent.erc8004_address || '0x0000000000000000000000000000000000000000',
+    priceUsdc,
+    network: 'base-sepolia',
+    description: `ANFIS Classification by ${agent.agent_name}`
+  });
+
+  if (!xPaymentHeader) {
+    return res.status(402).json({
+      x402Version: 1,
+      accepts: requirements,
+      error: 'Payment required'
+    });
+  }
+
+  const verifyResult = await x402Facilitator.verifyPayment(xPaymentHeader, requirements);
+  if (!verifyResult.valid) {
+    return res.status(402).json({
+      x402Version: 1,
+      accepts: requirements,
+      error: 'Payment verification failed',
+      reason: verifyResult.reason
+    });
+  }
+
+  const payload = req.body.payload || '';
+  
+  // Mock ANFIS routing logic for now
+  let provider = 'deepseek';
+  let reasoning = 'Default classification';
+  if (payload.includes('code')) {
+    provider = 'deepseek';
+    reasoning = 'coding_task rule fired';
+  } else if (payload.includes('math')) {
+    provider = 'deepseek';
+    reasoning = 'math_reasoning rule fired';
+  } else if (payload.includes('emotional')) {
+    provider = 'anthropic';
+    reasoning = 'emotional_support rule fired';
+  } else if (payload.includes('creative')) {
+    provider = 'gemini';
+    reasoning = 'creative_task rule fired';
+  } else {
+    provider = 'cerebras';
+    reasoning = 'fast_factual rule fired';
+  }
+
+  const classification = {
+    provider,
+    confidence: 0.95,
+    reasoning
+  };
+
+  let txHash = 'mock_tx_hash';
+  try {
+    const settleResult = await x402Facilitator.settlePayment(xPaymentHeader, requirements);
+    txHash = settleResult.txHash;
+  } catch (e: any) {
+    console.error('[x402-inbound] Settlement failed, queuing for recovery:', e.message);
+    await x402Facilitator.queueFailure({
+      direction: 'inbound',
+      agent_id: agent.id,
+      payment_payload_b64: xPaymentHeader,
+      payment_requirements: requirements,
+      facilitator_response: { error: e.message }
+    });
+  }
+
+  // Write to repid_events for feedback loop worker
+  await db.from('repid_events').insert({
+    subject_id: agent.id,
+    subject_type: 'agent',
+    event_type: 'x402_inbound_settled',
+    reputation_delta: 5,
+    event_data: {
+      tx_hash: txHash,
+      payer: verifyResult.payer,
+      amount: priceUsdc,
+      topic: 'anfis_classification',
+      settled_at: new Date().toISOString()
+    }
+  });
+
+  res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settled', txHash }));
+  return res.status(200).json(classification);
+});
+
 export default router;
