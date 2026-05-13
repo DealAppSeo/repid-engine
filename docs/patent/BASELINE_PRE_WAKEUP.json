@@ -1,0 +1,81 @@
+{
+  "timestamp": "2026-05-13T03:52:59.363Z",
+  "config": {
+    "base_score": "1000",
+    "min_score": "10",
+    "max_score": "10000",
+    "rotation_minutes": "20",
+    "certainty_threshold": "0.80",
+    "correct_challenge_reward": "12",
+    "error_penalty": "3",
+    "wrong_challenge_penalty": "3",
+    "vindication_bonus": "3",
+    "free_challenges_per_day": "3",
+    "consensus_multiplier": "1.5",
+    "abstention_bonus": "3",
+    "daily_decay_rate": "0.005",
+    "active_agent_count": "5",
+    "reward_scale_factor": "1.0",
+    "auto_tune_false_positive_threshold": "0.15",
+    "auto_tune_challenge_rate_min": "0.05",
+    "phi": "1.618033988749895",
+    "grace_pool_pct": "0.20",
+    "hal_mandatory": "1",
+    "min_stake_floor_pct": "0.05",
+    "jubilee_forgiveness_pct": "0.30",
+    "jubilee_trim_pct": "0.02",
+    "jubilee_frequency_days": "365",
+    "collusion_window_days": "14",
+    "decay_base_rate": "0.0015",
+    "vesting_cliff_repid": "500",
+    "vesting_cliff_days": "30",
+    "autonomy_lockup_days": "14",
+    "drawdown_cure_hours": "72",
+    "claim_auto_threshold_usdc": "100",
+    "claim_conservator_max_usdc": "1000",
+    "claim_peer_court_min_usdc": "1000",
+    "confession_cooldown_days": "30",
+    "phase_transition_ratio": "1.5",
+    "impact_factor_cap": "5.0",
+    "genesis_bonus_days": "30",
+    "genesis_multiplier": "1.5",
+    "autonomy_min_stake_usdc": "100",
+    "bft_veto_threshold": "0.0195",
+    "tgn_confidence_threshold": "0.6",
+    "tgn_bootstrap_events": "50",
+    "enterprise_api_key": "495150b8-4373-4f24-a81f-53483eee2725",
+    "max_agents_standard": "10000",
+    "proof_batching_enabled": "true",
+    "wisdom_bootstrap_label": "true",
+    "staking_contract_address": "0xd35331Bf94b1A4F4CAf595951056C288ce58C4fA",
+    "zkp_service_url": "https://zkp-postcard-production.up.railway.app",
+    "hal_veto_threshold": "0.43",
+    "hal_block_threshold": "0.55",
+    "hal_veto_threshold_6dof": "0.43",
+    "hal_block_threshold_6dof": "0.55",
+    "cb_disable_zkp_proofs": "false",
+    "cb_disable_onchain_writes": "true",
+    "cb_disable_trade_execution": "true",
+    "cb_disable_x402_settlements": "false",
+    "cb_disable_score_writes": "false",
+    "cb_freeze_swarm_responses": "false",
+    "x402_max_usdc_per_hour": "1.00",
+    "x402_max_tx_per_hour": "50"
+  },
+  "mvp_agents": [
+    {
+      "current_repid": 10000
+    },
+    {
+      "current_repid": 8500
+    },
+    {
+      "current_repid": 7200
+    },
+    {
+      "current_repid": 100
+    }
+  ],
+  "x402_settlements_count": 0,
+  "x402_failures_count": 0
+}

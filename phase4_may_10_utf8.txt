@@ -1,0 +1,443 @@
+﻿=== hyperdag-core ===
+COMMIT: 89ce48b | 2026-05-10 11:40:33 -0700 | Sean Goodwin | feat(zkp-postcard): STARK Phase 3 ΓÇö server-side RepID lookup
+.gitignore
+services/zkp-postcard/.gitignore
+services/zkp-postcard/Cargo.lock
+services/zkp-postcard/Cargo.toml
+services/zkp-postcard/src/main.rs
+=== hyperdag-proof-verifier ===
+COMMIT: 34b02fe | 2026-05-10 18:07:36 -0700 | Sean Goodwin | \feat: initial verifier crate + wasm-pack pipeline + e2e test
+.gitignore
+Cargo.toml
+LICENSE-APACHE
+LICENSE-MIT
+README.md
+js/index.js
+package-lock.json
+package.json
+src/lib.rs
+tests/e2e-real-proof.test.mjs
+=== repid-engine ===
+COMMIT: a77f3cc | 2026-05-11 21:51:18 -0700 | Sean Goodwin | feat(sprint-6): trinity_swarm_health view + heartbeat interval tracking
+migrations/2026-05-11-heartbeat-interval-tracking.sql
+migrations/2026-05-11-trinity-swarm-health-view.sql
+scripts/preflight-cc-sprint-6.ts
+tests/trinity-swarm-health.test.ts
+
+COMMIT: 2f0b76c | 2026-05-11 17:41:06 -0700 | Sean Goodwin | feat(sprint-4): hal_accuracy_summary view + housekeeping
+migrations/2026-05-11-hal-accuracy-summary-view.sql
+tests/hal-accuracy-summary.test.ts
+
+COMMIT: 13dd321 | 2026-05-11 17:07:36 -0700 | Sean Goodwin | feat(sprint-3): pnl_realized investigation + scoreTrade reality alignment
+scripts/preflight-cc-sprint-3.ts
+src/index.ts
+src/services/repid-earning.ts
+tests/repid-earning.test.ts
+
+COMMIT: 1a497c6 | 2026-05-11 16:57:58 -0700 | Sean Goodwin | Merge branch 'main' into feat/x402-mesh-bidirectional-2026-05-11
+COMMIT: f61960e | 2026-05-11 16:57:45 -0700 | Sean Goodwin | Gemini Sprint 1: x402 bidirectional mesh and RepID attestation
+migrations/2026-05-11-repid-events-constraint-fix.sql
+migrations/2026-05-11-repid-events-processed-at.sql
+migrations/2026-05-11-repid-events-subject-fix.sql
+migrations/2026-05-11-x402-recovery-queue.sql
+scripts/preflight-cc-sprint-3.ts
+scripts/preflight-x402-mesh.ts
+scripts/seed-squad-memories.ts
+scripts/test-feedback-loop.ts
+scripts/test-graph-rag-injection.ts
+scripts/test-repid-attestation.ts
+src/middleware/auth.ts
+src/routes/x402-inbound.ts
+src/services/hal-signals.ts
+src/services/repid-attestation.ts
+src/services/x402-facilitator.ts
+src/services/x402-outbound-client.ts
+src/workers/feedback-loop-worker.ts
+
+COMMIT: 072b0d5 | 2026-05-11 15:26:27 -0700 | Sean Goodwin | feat(sprint-2): RepID earning + rate limiter + V1 gap inventory
+migrations/2026-05-11-feedback-events-prep.sql
+migrations/2026-05-11-user-api-keys.sql
+scripts/preflight-cc-sprint-2.ts
+scripts/repid-earning-backfill.ts
+src/index.ts
+src/middleware/rate-limit.ts
+src/services/repid-earning.ts
+tests/rate-limit.test.ts
+tests/repid-earning.test.ts
+
+COMMIT: 1df9ce9 | 2026-05-10 21:48:04 -0700 | Sean Goodwin | feat: graph-rag end-to-end verification harness
+package.json
+scripts/graph-rag-verify-plan.md
+scripts/graph-rag-verify.ts
+
+COMMIT: 101884b | 2026-05-10 21:44:26 -0700 | Sean Goodwin | Merge megasprint (51c365f) ΓÇö Sprint 4 graph-rag + megasprint hal-memory-hook deps
+COMMIT: 13fb2c9 | 2026-05-10 21:40:48 -0700 | Sean Goodwin | feat(byok): user-side encrypted key storage MVP + Public Docs
+README.md
+docs/GOVERNANCE.md
+docs/IDENTITY_VS_WORKER.md
+docs/ROADMAP.md
+package.json
+scripts/graph-rag-verify-plan.md
+scripts/graph-rag-verify.ts
+
+COMMIT: 588843f | 2026-05-10 21:33:43 -0700 | Sean Goodwin | Merge megasprint (51c365f) into verification ΓÇö pulls in Sprint 4 graph-rag + megasprint hal-memory-hook
+COMMIT: 2acd449 | 2026-05-10 19:47:13 -0700 | Sean Goodwin | feat(erc8004): full spec compliance ΓÇö ReputationRegistry + registration files
+migrations/2026-05-10-erc8004-reputation-tracking.sql
+package.json
+scripts/erc8004-reputation-backfill-spokespersons.ts
+scripts/erc8004-reputation-probe.ts
+scripts/erc8004-reputation-test-plan.md
+src/config/squad-architecture.ts
+src/contracts/IdentityRegistry.abi.json
+src/contracts/ReputationRegistry.abi.json
+src/index.ts
+src/middleware/auth.ts
+src/routes/agents-registration.ts
+src/routes/agents-reputation.ts
+src/services/agent-registration-file.ts
+src/services/erc8004-reputation.ts
+
+COMMIT: 51c365f | 2026-05-10 18:54:48 -0700 | Sean Goodwin | feat(megasprint): mass-mint backfill + Graph RAG HAL wiring + canon
+package.json
+scripts/apm-investigation.ts
+scripts/erc8004-backfill-mass-19plus1.ts
+scripts/erc8004-test-plan.md
+src/index.ts
+src/middleware/auth.ts
+src/routes/agent-recall.ts
+src/routes/agents-external.ts
+src/services/graph-rag/hal-memory-hook.ts
+
+COMMIT: d193960 | 2026-05-10 18:42:14 -0700 | Sean Goodwin | Merge feat/erc8004-minting-flow-2026-05-10 into megasprint (Sprint 6 dependency)
+COMMIT: 4d9f62b | 2026-05-10 18:41:36 -0700 | Sean Goodwin | Merge feat/graph-rag-foundation-2026-05-10 into megasprint (Sprint 4 dependency)
+COMMIT: f68f4c9 | 2026-05-10 18:33:49 -0700 | Sean Goodwin | feat(engine): public verification page + STARK proof retrieval
+src/index.ts
+src/routes/agent-verify.ts
+src/routes/repid.ts
+
+COMMIT: b5adcd1 | 2026-05-10 18:21:27 -0700 | Sean Goodwin | feat(erc8004): minter + HTTP routes + backfill for 4 headline agents
+migrations/2026-05-10-erc8004-mint-tracking.sql
+package.json
+scripts/erc8004-backfill-headline-4.ts
+scripts/erc8004-test-plan.md
+src/contracts/IdentityRegistry.abi.json
+src/index.ts
+src/middleware/auth.ts
+src/routes/agents-onchain.ts
+src/services/erc8004-minter.ts
+
+COMMIT: 43917dd | 2026-05-10 17:52:57 -0700 | Sean Goodwin | feat(graph-rag): foundation ΓÇö embedded memory nodes + edges
+migrations/2026-05-10-graph-rag-foundation.sql
+package.json
+scripts/graph-rag-smoke.ts
+src/services/graph-rag/embedding-service.ts
+src/services/graph-rag/graph-rag-store.ts
+src/services/graph-rag/retrieval-service.ts
+src/types/graph-rag.ts
+
+COMMIT: afbe0d4 | 2026-05-10 16:02:54 -0700 | Sean Goodwin | fix(worker): improve healthcheck robustness
+src/scripts/start-proof-drain-service.ts
+
+COMMIT: bdc9ef0 | 2026-05-10 16:02:39 -0700 | Sean Goodwin | fix(indexer): improve healthcheck robustness + document block window limit
+src/scripts/start-indexer-service.ts
+
+COMMIT: 5676fe7 | 2026-05-10 15:37:53 -0700 | Sean Goodwin | fix(deploy): remove global startCommand override in railway.toml
+railway.toml
+
+COMMIT: c07a413 | 2026-05-10 14:26:58 -0700 | Sean Goodwin | fix(deploy): move service entry points to src/scripts/ + add npm scripts
+package.json
+src/scripts/start-indexer-service.ts
+src/scripts/start-proof-drain-service.ts
+
+COMMIT: 0e9fde1 | 2026-05-10 09:45:06 -0700 | Sean Goodwin | feat(indexer,worker): retry + stall detection hardening
+scripts/start-proof-drain-service.ts
+src/services/proof-drain-service.ts
+src/services/receipt-indexer-service.ts
+tests/proof-drain-service.test.ts
+=== repid-engine-gemini ===
+COMMIT: a77f3cc | 2026-05-11 21:51:18 -0700 | Sean Goodwin | feat(sprint-6): trinity_swarm_health view + heartbeat interval tracking
+migrations/2026-05-11-heartbeat-interval-tracking.sql
+migrations/2026-05-11-trinity-swarm-health-view.sql
+scripts/preflight-cc-sprint-6.ts
+tests/trinity-swarm-health.test.ts
+
+COMMIT: 2f0b76c | 2026-05-11 17:41:06 -0700 | Sean Goodwin | feat(sprint-4): hal_accuracy_summary view + housekeeping
+migrations/2026-05-11-hal-accuracy-summary-view.sql
+tests/hal-accuracy-summary.test.ts
+
+COMMIT: 13dd321 | 2026-05-11 17:07:36 -0700 | Sean Goodwin | feat(sprint-3): pnl_realized investigation + scoreTrade reality alignment
+scripts/preflight-cc-sprint-3.ts
+src/index.ts
+src/services/repid-earning.ts
+tests/repid-earning.test.ts
+
+COMMIT: 1a497c6 | 2026-05-11 16:57:58 -0700 | Sean Goodwin | Merge branch 'main' into feat/x402-mesh-bidirectional-2026-05-11
+COMMIT: f61960e | 2026-05-11 16:57:45 -0700 | Sean Goodwin | Gemini Sprint 1: x402 bidirectional mesh and RepID attestation
+migrations/2026-05-11-repid-events-constraint-fix.sql
+migrations/2026-05-11-repid-events-processed-at.sql
+migrations/2026-05-11-repid-events-subject-fix.sql
+migrations/2026-05-11-x402-recovery-queue.sql
+scripts/preflight-cc-sprint-3.ts
+scripts/preflight-x402-mesh.ts
+scripts/seed-squad-memories.ts
+scripts/test-feedback-loop.ts
+scripts/test-graph-rag-injection.ts
+scripts/test-repid-attestation.ts
+src/middleware/auth.ts
+src/routes/x402-inbound.ts
+src/services/hal-signals.ts
+src/services/repid-attestation.ts
+src/services/x402-facilitator.ts
+src/services/x402-outbound-client.ts
+src/workers/feedback-loop-worker.ts
+
+COMMIT: 072b0d5 | 2026-05-11 15:26:27 -0700 | Sean Goodwin | feat(sprint-2): RepID earning + rate limiter + V1 gap inventory
+migrations/2026-05-11-feedback-events-prep.sql
+migrations/2026-05-11-user-api-keys.sql
+scripts/preflight-cc-sprint-2.ts
+scripts/repid-earning-backfill.ts
+src/index.ts
+src/middleware/rate-limit.ts
+src/services/repid-earning.ts
+tests/rate-limit.test.ts
+tests/repid-earning.test.ts
+
+COMMIT: 1df9ce9 | 2026-05-10 21:48:04 -0700 | Sean Goodwin | feat: graph-rag end-to-end verification harness
+package.json
+scripts/graph-rag-verify-plan.md
+scripts/graph-rag-verify.ts
+
+COMMIT: 101884b | 2026-05-10 21:44:26 -0700 | Sean Goodwin | Merge megasprint (51c365f) ΓÇö Sprint 4 graph-rag + megasprint hal-memory-hook deps
+COMMIT: 13fb2c9 | 2026-05-10 21:40:48 -0700 | Sean Goodwin | feat(byok): user-side encrypted key storage MVP + Public Docs
+README.md
+docs/GOVERNANCE.md
+docs/IDENTITY_VS_WORKER.md
+docs/ROADMAP.md
+package.json
+scripts/graph-rag-verify-plan.md
+scripts/graph-rag-verify.ts
+
+COMMIT: 588843f | 2026-05-10 21:33:43 -0700 | Sean Goodwin | Merge megasprint (51c365f) into verification ΓÇö pulls in Sprint 4 graph-rag + megasprint hal-memory-hook
+COMMIT: 2acd449 | 2026-05-10 19:47:13 -0700 | Sean Goodwin | feat(erc8004): full spec compliance ΓÇö ReputationRegistry + registration files
+migrations/2026-05-10-erc8004-reputation-tracking.sql
+package.json
+scripts/erc8004-reputation-backfill-spokespersons.ts
+scripts/erc8004-reputation-probe.ts
+scripts/erc8004-reputation-test-plan.md
+src/config/squad-architecture.ts
+src/contracts/IdentityRegistry.abi.json
+src/contracts/ReputationRegistry.abi.json
+src/index.ts
+src/middleware/auth.ts
+src/routes/agents-registration.ts
+src/routes/agents-reputation.ts
+src/services/agent-registration-file.ts
+src/services/erc8004-reputation.ts
+
+COMMIT: 51c365f | 2026-05-10 18:54:48 -0700 | Sean Goodwin | feat(megasprint): mass-mint backfill + Graph RAG HAL wiring + canon
+package.json
+scripts/apm-investigation.ts
+scripts/erc8004-backfill-mass-19plus1.ts
+scripts/erc8004-test-plan.md
+src/index.ts
+src/middleware/auth.ts
+src/routes/agent-recall.ts
+src/routes/agents-external.ts
+src/services/graph-rag/hal-memory-hook.ts
+
+COMMIT: d193960 | 2026-05-10 18:42:14 -0700 | Sean Goodwin | Merge feat/erc8004-minting-flow-2026-05-10 into megasprint (Sprint 6 dependency)
+COMMIT: 4d9f62b | 2026-05-10 18:41:36 -0700 | Sean Goodwin | Merge feat/graph-rag-foundation-2026-05-10 into megasprint (Sprint 4 dependency)
+COMMIT: f68f4c9 | 2026-05-10 18:33:49 -0700 | Sean Goodwin | feat(engine): public verification page + STARK proof retrieval
+src/index.ts
+src/routes/agent-verify.ts
+src/routes/repid.ts
+
+COMMIT: b5adcd1 | 2026-05-10 18:21:27 -0700 | Sean Goodwin | feat(erc8004): minter + HTTP routes + backfill for 4 headline agents
+migrations/2026-05-10-erc8004-mint-tracking.sql
+package.json
+scripts/erc8004-backfill-headline-4.ts
+scripts/erc8004-test-plan.md
+src/contracts/IdentityRegistry.abi.json
+src/index.ts
+src/middleware/auth.ts
+src/routes/agents-onchain.ts
+src/services/erc8004-minter.ts
+
+COMMIT: 43917dd | 2026-05-10 17:52:57 -0700 | Sean Goodwin | feat(graph-rag): foundation ΓÇö embedded memory nodes + edges
+migrations/2026-05-10-graph-rag-foundation.sql
+package.json
+scripts/graph-rag-smoke.ts
+src/services/graph-rag/embedding-service.ts
+src/services/graph-rag/graph-rag-store.ts
+src/services/graph-rag/retrieval-service.ts
+src/types/graph-rag.ts
+
+COMMIT: afbe0d4 | 2026-05-10 16:02:54 -0700 | Sean Goodwin | fix(worker): improve healthcheck robustness
+src/scripts/start-proof-drain-service.ts
+
+COMMIT: bdc9ef0 | 2026-05-10 16:02:39 -0700 | Sean Goodwin | fix(indexer): improve healthcheck robustness + document block window limit
+src/scripts/start-indexer-service.ts
+
+COMMIT: 5676fe7 | 2026-05-10 15:37:53 -0700 | Sean Goodwin | fix(deploy): remove global startCommand override in railway.toml
+railway.toml
+
+COMMIT: c07a413 | 2026-05-10 14:26:58 -0700 | Sean Goodwin | fix(deploy): move service entry points to src/scripts/ + add npm scripts
+package.json
+src/scripts/start-indexer-service.ts
+src/scripts/start-proof-drain-service.ts
+
+COMMIT: 0e9fde1 | 2026-05-10 09:45:06 -0700 | Sean Goodwin | feat(indexer,worker): retry + stall detection hardening
+scripts/start-proof-drain-service.ts
+src/services/proof-drain-service.ts
+src/services/receipt-indexer-service.ts
+tests/proof-drain-service.test.ts
+=== repid-engine-merges ===
+COMMIT: a77f3cc | 2026-05-11 21:51:18 -0700 | Sean Goodwin | feat(sprint-6): trinity_swarm_health view + heartbeat interval tracking
+migrations/2026-05-11-heartbeat-interval-tracking.sql
+migrations/2026-05-11-trinity-swarm-health-view.sql
+scripts/preflight-cc-sprint-6.ts
+tests/trinity-swarm-health.test.ts
+
+COMMIT: 2f0b76c | 2026-05-11 17:41:06 -0700 | Sean Goodwin | feat(sprint-4): hal_accuracy_summary view + housekeeping
+migrations/2026-05-11-hal-accuracy-summary-view.sql
+tests/hal-accuracy-summary.test.ts
+
+COMMIT: 13dd321 | 2026-05-11 17:07:36 -0700 | Sean Goodwin | feat(sprint-3): pnl_realized investigation + scoreTrade reality alignment
+scripts/preflight-cc-sprint-3.ts
+src/index.ts
+src/services/repid-earning.ts
+tests/repid-earning.test.ts
+
+COMMIT: 1a497c6 | 2026-05-11 16:57:58 -0700 | Sean Goodwin | Merge branch 'main' into feat/x402-mesh-bidirectional-2026-05-11
+COMMIT: f61960e | 2026-05-11 16:57:45 -0700 | Sean Goodwin | Gemini Sprint 1: x402 bidirectional mesh and RepID attestation
+migrations/2026-05-11-repid-events-constraint-fix.sql
+migrations/2026-05-11-repid-events-processed-at.sql
+migrations/2026-05-11-repid-events-subject-fix.sql
+migrations/2026-05-11-x402-recovery-queue.sql
+scripts/preflight-cc-sprint-3.ts
+scripts/preflight-x402-mesh.ts
+scripts/seed-squad-memories.ts
+scripts/test-feedback-loop.ts
+scripts/test-graph-rag-injection.ts
+scripts/test-repid-attestation.ts
+src/middleware/auth.ts
+src/routes/x402-inbound.ts
+src/services/hal-signals.ts
+src/services/repid-attestation.ts
+src/services/x402-facilitator.ts
+src/services/x402-outbound-client.ts
+src/workers/feedback-loop-worker.ts
+
+COMMIT: 072b0d5 | 2026-05-11 15:26:27 -0700 | Sean Goodwin | feat(sprint-2): RepID earning + rate limiter + V1 gap inventory
+migrations/2026-05-11-feedback-events-prep.sql
+migrations/2026-05-11-user-api-keys.sql
+scripts/preflight-cc-sprint-2.ts
+scripts/repid-earning-backfill.ts
+src/index.ts
+src/middleware/rate-limit.ts
+src/services/repid-earning.ts
+tests/rate-limit.test.ts
+tests/repid-earning.test.ts
+
+COMMIT: 1df9ce9 | 2026-05-10 21:48:04 -0700 | Sean Goodwin | feat: graph-rag end-to-end verification harness
+package.json
+scripts/graph-rag-verify-plan.md
+scripts/graph-rag-verify.ts
+
+COMMIT: 101884b | 2026-05-10 21:44:26 -0700 | Sean Goodwin | Merge megasprint (51c365f) ΓÇö Sprint 4 graph-rag + megasprint hal-memory-hook deps
+COMMIT: 13fb2c9 | 2026-05-10 21:40:48 -0700 | Sean Goodwin | feat(byok): user-side encrypted key storage MVP + Public Docs
+README.md
+docs/GOVERNANCE.md
+docs/IDENTITY_VS_WORKER.md
+docs/ROADMAP.md
+package.json
+scripts/graph-rag-verify-plan.md
+scripts/graph-rag-verify.ts
+
+COMMIT: 588843f | 2026-05-10 21:33:43 -0700 | Sean Goodwin | Merge megasprint (51c365f) into verification ΓÇö pulls in Sprint 4 graph-rag + megasprint hal-memory-hook
+COMMIT: 2acd449 | 2026-05-10 19:47:13 -0700 | Sean Goodwin | feat(erc8004): full spec compliance ΓÇö ReputationRegistry + registration files
+migrations/2026-05-10-erc8004-reputation-tracking.sql
+package.json
+scripts/erc8004-reputation-backfill-spokespersons.ts
+scripts/erc8004-reputation-probe.ts
+scripts/erc8004-reputation-test-plan.md
+src/config/squad-architecture.ts
+src/contracts/IdentityRegistry.abi.json
+src/contracts/ReputationRegistry.abi.json
+src/index.ts
+src/middleware/auth.ts
+src/routes/agents-registration.ts
+src/routes/agents-reputation.ts
+src/services/agent-registration-file.ts
+src/services/erc8004-reputation.ts
+
+COMMIT: 51c365f | 2026-05-10 18:54:48 -0700 | Sean Goodwin | feat(megasprint): mass-mint backfill + Graph RAG HAL wiring + canon
+package.json
+scripts/apm-investigation.ts
+scripts/erc8004-backfill-mass-19plus1.ts
+scripts/erc8004-test-plan.md
+src/index.ts
+src/middleware/auth.ts
+src/routes/agent-recall.ts
+src/routes/agents-external.ts
+src/services/graph-rag/hal-memory-hook.ts
+
+COMMIT: d193960 | 2026-05-10 18:42:14 -0700 | Sean Goodwin | Merge feat/erc8004-minting-flow-2026-05-10 into megasprint (Sprint 6 dependency)
+COMMIT: 4d9f62b | 2026-05-10 18:41:36 -0700 | Sean Goodwin | Merge feat/graph-rag-foundation-2026-05-10 into megasprint (Sprint 4 dependency)
+COMMIT: f68f4c9 | 2026-05-10 18:33:49 -0700 | Sean Goodwin | feat(engine): public verification page + STARK proof retrieval
+src/index.ts
+src/routes/agent-verify.ts
+src/routes/repid.ts
+
+COMMIT: b5adcd1 | 2026-05-10 18:21:27 -0700 | Sean Goodwin | feat(erc8004): minter + HTTP routes + backfill for 4 headline agents
+migrations/2026-05-10-erc8004-mint-tracking.sql
+package.json
+scripts/erc8004-backfill-headline-4.ts
+scripts/erc8004-test-plan.md
+src/contracts/IdentityRegistry.abi.json
+src/index.ts
+src/middleware/auth.ts
+src/routes/agents-onchain.ts
+src/services/erc8004-minter.ts
+
+COMMIT: 43917dd | 2026-05-10 17:52:57 -0700 | Sean Goodwin | feat(graph-rag): foundation ΓÇö embedded memory nodes + edges
+migrations/2026-05-10-graph-rag-foundation.sql
+package.json
+scripts/graph-rag-smoke.ts
+src/services/graph-rag/embedding-service.ts
+src/services/graph-rag/graph-rag-store.ts
+src/services/graph-rag/retrieval-service.ts
+src/types/graph-rag.ts
+
+COMMIT: afbe0d4 | 2026-05-10 16:02:54 -0700 | Sean Goodwin | fix(worker): improve healthcheck robustness
+src/scripts/start-proof-drain-service.ts
+
+COMMIT: bdc9ef0 | 2026-05-10 16:02:39 -0700 | Sean Goodwin | fix(indexer): improve healthcheck robustness + document block window limit
+src/scripts/start-indexer-service.ts
+
+COMMIT: 5676fe7 | 2026-05-10 15:37:53 -0700 | Sean Goodwin | fix(deploy): remove global startCommand override in railway.toml
+railway.toml
+
+COMMIT: c07a413 | 2026-05-10 14:26:58 -0700 | Sean Goodwin | fix(deploy): move service entry points to src/scripts/ + add npm scripts
+package.json
+src/scripts/start-indexer-service.ts
+src/scripts/start-proof-drain-service.ts
+
+COMMIT: 0e9fde1 | 2026-05-10 09:45:06 -0700 | Sean Goodwin | feat(indexer,worker): retry + stall detection hardening
+scripts/start-proof-drain-service.ts
+src/services/proof-drain-service.ts
+src/services/receipt-indexer-service.ts
+tests/proof-drain-service.test.ts
+=== trustshell ===
+COMMIT: ebd5ecc | 2026-05-10 18:33:30 -0700 | Sean Goodwin | feat(sdk): v0.3.0 ΓÇö local STARK verification support
+CHANGELOG.md
+README.md
+package-lock.json
+package.json
+src/cli/verify-demo.ts
+src/index.ts
+src/local-verify.ts
+src/types.ts
+tmp/smoke-test/package-lock.json
+tmp/smoke-test/package.json
+tsconfig.tsbuildinfo

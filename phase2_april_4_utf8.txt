@@ -1,0 +1,254 @@
+﻿=== trinity-ecosystem ===
+COMMIT: 0e5de34 | 2026-04-05 02:25:24 +0000 | Claude | docs: add HyperDAG Protocol architecture spec v1.0 (P-018)
+packages/hyperdag-protocol/README.md
+
+COMMIT: 674f378 | 2026-04-05 02:23:58 +0000 | Claude | feat: port V4 virtue filter, empty result rescue, and genome reporting to V5
+lib/agent/ConstitutionalAgent.ts
+
+COMMIT: 06ab05f | 2026-04-05 02:18:06 +0000 | Claude | feat: add team_coordination_log + sprint_reports Supabase migrations
+sql/20260405_sprint_reports.sql
+sql/20260405_team_coordination_log.sql
+
+COMMIT: 99f6cfc | 2026-04-04 19:58:29 +0000 | Claude | chore: update service worker cache hashes from build
+public/sw.js
+
+COMMIT: 0addd3c | 2026-04-04 17:43:58 +0000 | Claude | fix: use normalizeContent in primaryPayload to prevent null DB insert
+lib/agent/ConstitutionalAgent.ts
+
+COMMIT: 9b7e210 | 2026-04-04 17:43:30 +0000 | Claude | chore: update service worker cache manifest after build
+public/sw.js
+
+COMMIT: 127235f | 2026-04-04 17:42:46 +0000 | Claude | feat: scaffold @hyperdag/core protocol package (Layer 0)
+packages/hyperdag-protocol/package.json
+packages/hyperdag-protocol/src/consensus/bft.ts
+packages/hyperdag-protocol/src/identity/registry.ts
+packages/hyperdag-protocol/src/index.ts
+packages/hyperdag-protocol/src/routing/anfis.ts
+packages/hyperdag-protocol/src/transport/x402.ts
+packages/hyperdag-protocol/src/zkp/prover.ts
+packages/hyperdag-protocol/tsconfig.json
+
+COMMIT: 1c895e8 | 2026-04-04 17:39:58 +0000 | Claude | fix: guard saveArtifact against null/empty content to prevent runtime crashes
+lib/agent/ConstitutionalAgent.ts
+
+COMMIT: 88312b8 | 2026-04-04 08:30:47 +0000 | Claude | fix: resolve deployment build failures from peer dep conflicts and version mismatches
+.npmrc
+lib/agent/ConstitutionalAgent.ts
+litellm_config.yaml
+nixpacks.toml
+package-lock.json
+package.json
+public/sw.js
+vercel.json
+
+COMMIT: 931ebac | 2026-04-04 02:08:30 +0000 | Claude | feat(trustshell): add ZKP RepID onboarding flywheel (v0.2.0)
+packages/trustshell/package.json
+packages/trustshell/src/index.ts
+packages/trustshell/src/onboarding.ts
+
+COMMIT: 0f0b326 | 2026-04-04 01:40:54 +0000 | Claude | feat: scaffold @hyperdag/trustshell + create cost tracking views
+packages/trustshell/README.md
+packages/trustshell/package.json
+packages/trustshell/src/byok.ts
+packages/trustshell/src/index.ts
+packages/trustshell/src/repid.ts
+packages/trustshell/src/zkp.ts
+packages/trustshell/tsconfig.json
+sql/v_agent_cost_summary.sql
+
+COMMIT: 8347dc6 | 2026-04-03 22:37:31 +0000 | Claude | fix: persist provider_used in metadata + wire coordination_log
+lib/agent/ConstitutionalAgent.ts
+
+COMMIT: 93325d0 | 2026-04-03 21:58:22 +0000 | Claude | docs: add SYSTEM_MAP.yaml v1.1 (GMPD compliance)
+docs/SYSTEM_MAP.yaml
+
+COMMIT: 212a36b | 2026-04-03 17:37:24 +0000 | Claude | feat: add Global Master Plan Directive (GMPD v1.0)
+GLOBAL_MASTER_PLAN_DIRECTIVE.yaml
+
+COMMIT: 57dfe60 | 2026-04-03 09:37:59 +0000 | Claude | fix: add direct SQL execution for self-healing tasks
+lib/agent/ConstitutionalAgent.ts
+
+COMMIT: 45d382e | 2026-04-03 08:47:29 +0000 | Claude | feat: add SYSTEM_MAP.yaml and railway.toml for canonical migration
+SYSTEM_MAP.yaml
+railway.toml
+
+COMMIT: 1a298f6 | 2026-04-03 08:47:01 +0000 | Claude | fix: restore heartbeat interval + add Railway agent start command
+lib/agent/ConstitutionalAgent.ts
+nixpacks.toml
+package.json
+
+COMMIT: d7d74a2 | 2026-04-03 06:05:54 +0000 | Claude | fix: improve evaluateResult scoring, lower FAST-FAIL gate, add federated learning
+lib/agent/ConstitutionalAgent.ts
+
+COMMIT: 73e14ee | 2026-04-02 19:40:42 -0700 | Sean Goodwin | Merge pull request #7 from DealAppSeo/claude/fix-deployment-build-TBvZW
+COMMIT: 41168dd | 2026-04-03 02:24:49 +0000 | Claude | fix: require Node.js >=20.9.0 for Next.js 15 Railway deployments
+.node-version
+Dockerfile
+nixpacks.toml
+package.json
+
+COMMIT: c5fadad | 2026-04-02 21:48:43 +0000 | Claude | fix: resolve dual-codebase agent failures ΓÇö trackProviderPerformance, certainty gate, artifact fallback
+OneDrive/Desktop/trinity-symphony-shared/constitutional-agent-base.js
+lib/agent/ConstitutionalAgent.ts
+reference/constitutional-agent-base.js
+=== trinity-symphony-shared ===
+COMMIT: ecf61f3c | 2026-04-08 22:02:43 -0700 | Sean Goodwin | feat: agents now discover MCP tools from agent_mcp_catalog on startup
+OneDrive/Desktop/trinity-symphony-shared/shared/constitutional-agent-base.js
+
+COMMIT: 223d6700 | 2026-04-08 01:25:16 -0700 | Sean Goodwin | docs: restore Trinity Symphony README overwritten by v0.app sync
+README.md
+
+COMMIT: 25bdbf56 | 2026-04-07 11:56:39 -0700 | Sean Goodwin | fix(api): add force-dynamic to remaining poll routes
+app/api/poll/[code]/route.ts
+app/api/poll/[code]/vote/route.ts
+
+COMMIT: 430cdef1 | 2026-04-07 11:46:44 -0700 | Sean Goodwin | feat(agents): add entry points for mel, hdm, apm, gcm
+OneDrive/Desktop/trinity-symphony-shared/apm/ConstitutionalAgentV4.js
+OneDrive/Desktop/trinity-symphony-shared/apm/index.js
+OneDrive/Desktop/trinity-symphony-shared/gcm/ConstitutionalAgentV4.js
+OneDrive/Desktop/trinity-symphony-shared/gcm/index.js
+OneDrive/Desktop/trinity-symphony-shared/hdm/ConstitutionalAgentV4.js
+OneDrive/Desktop/trinity-symphony-shared/hdm/index.js
+OneDrive/Desktop/trinity-symphony-shared/mel/ConstitutionalAgentV4.js
+OneDrive/Desktop/trinity-symphony-shared/mel/index.js
+
+COMMIT: a6386ab1 | 2026-04-07 10:48:10 -0700 | Sean Goodwin | fix(api): add force-dynamic to poll route to prevent build-time supabase error
+app/api/poll/route.ts
+
+COMMIT: 6b84fff5 | 2026-04-07 10:09:43 -0700 | Sean Goodwin | fix: pin Node.js >=20.9.0 for Next.js 16 compatibility
+.node-version
+package.json
+=== trusttrader ===
+COMMIT: 0e8b7ce | 2026-04-08 22:08:59 -0700 | Sean Goodwin | Apply hackathon UI fixes
+.gitignore
+app/leaderboard/page.tsx
+app/page.tsx
+app/signals/page.tsx
+package-lock.json
+
+COMMIT: 7b90db1 | 2026-04-08 17:38:58 -0700 | Sean Goodwin | docs: add README ΓÇö HyperDAG Trust Protocol v1, AI Trinity Symphony, Plonky3, ERC-8004, x402
+README.md
+
+COMMIT: be53f24 | 2026-04-08 17:38:57 -0700 | Sean Goodwin | feat: add Protocol Explainer section to landing page
+app/page.tsx
+
+COMMIT: a492f5e | 2026-04-08 16:18:36 -0700 | Sean Goodwin | feat: wire terminal to live Supabase data
+components/terminal/left-column.tsx
+components/terminal/rep-id.tsx
+components/terminal/right-column.tsx
+hooks/use-supabase-live.ts
+
+COMMIT: 12113d2 | 2026-04-08 01:25:28 +0000 | vercel[bot] | Merge pull request #1 from DealAppSeo/v0/dealappseo-feec42b7
+COMMIT: e869476 | 2026-04-08 01:21:40 +0000 | v0 | feat: skip Supabase auth if env vars not set
+lib/supabase/middleware.ts
+
+COMMIT: 2d56a4e | 2026-04-07 20:18:17 +0000 | v0 | Add README.md
+README.md
+
+COMMIT: 073f776 | 2026-04-07 20:13:44 +0000 | v0 | feat: build TrustTrader app with Supabase setup\n\nCreate landing, signals, leaderboard, and terminal routes and setup Supabase clients
+app/leaderboard/page.tsx
+app/page.tsx
+app/signals/page.tsx
+app/terminal/page.tsx
+lib/data/stub-data.ts
+scripts/001_create_tables.sql
+
+COMMIT: 6ccf4f1 | 2026-04-07 20:07:55 +0000 | v0 | feat: add Supabase integration and database migration
+lib/supabase/client.ts
+lib/supabase/middleware.ts
+lib/supabase/server.ts
+middleware.ts
+next-env.d.ts
+package.json
+pnpm-lock.yaml
+scripts/001_create_tables.sql
+tsconfig.json
+
+COMMIT: 25c1b77 | 2026-04-07 10:13:16 +0000 | v0 | Initial commit from v0
+.gitignore
+app/globals.css
+app/layout.tsx
+app/page.tsx
+components.json
+components/terminal/center-column.tsx
+components/terminal/left-column.tsx
+components/terminal/rep-id.tsx
+components/terminal/right-column.tsx
+components/terminal/signal-harmonic-map.tsx
+components/terminal/top-bar.tsx
+components/terminal/unity-score.tsx
+components/theme-provider.tsx
+components/ui/accordion.tsx
+components/ui/alert-dialog.tsx
+components/ui/alert.tsx
+components/ui/aspect-ratio.tsx
+components/ui/avatar.tsx
+components/ui/badge.tsx
+components/ui/breadcrumb.tsx
+components/ui/button-group.tsx
+components/ui/button.tsx
+components/ui/calendar.tsx
+components/ui/card.tsx
+components/ui/carousel.tsx
+components/ui/chart.tsx
+components/ui/checkbox.tsx
+components/ui/collapsible.tsx
+components/ui/command.tsx
+components/ui/context-menu.tsx
+components/ui/dialog.tsx
+components/ui/drawer.tsx
+components/ui/dropdown-menu.tsx
+components/ui/empty.tsx
+components/ui/field.tsx
+components/ui/form.tsx
+components/ui/hover-card.tsx
+components/ui/input-group.tsx
+components/ui/input-otp.tsx
+components/ui/input.tsx
+components/ui/item.tsx
+components/ui/kbd.tsx
+components/ui/label.tsx
+components/ui/menubar.tsx
+components/ui/navigation-menu.tsx
+components/ui/pagination.tsx
+components/ui/popover.tsx
+components/ui/progress.tsx
+components/ui/radio-group.tsx
+components/ui/resizable.tsx
+components/ui/scroll-area.tsx
+components/ui/select.tsx
+components/ui/separator.tsx
+components/ui/sheet.tsx
+components/ui/sidebar.tsx
+components/ui/skeleton.tsx
+components/ui/slider.tsx
+components/ui/sonner.tsx
+components/ui/spinner.tsx
+components/ui/switch.tsx
+components/ui/table.tsx
+components/ui/tabs.tsx
+components/ui/textarea.tsx
+components/ui/toast.tsx
+components/ui/toaster.tsx
+components/ui/toggle-group.tsx
+components/ui/toggle.tsx
+components/ui/tooltip.tsx
+components/ui/use-mobile.tsx
+components/ui/use-toast.ts
+hooks/use-mobile.ts
+hooks/use-toast.ts
+lib/utils.ts
+next.config.mjs
+package.json
+postcss.config.mjs
+public/apple-icon.png
+public/icon-dark-32x32.png
+public/icon-light-32x32.png
+public/icon.svg
+public/placeholder-logo.png
+public/placeholder-logo.svg
+public/placeholder-user.jpg
+public/placeholder.jpg
+public/placeholder.svg
+styles/globals.css
+tsconfig.json
