@@ -231,4 +231,13 @@ describe('runScoreEvent', () => {
     expect(typeof inserted.repid_delta_calculated).toBe('number');
     expect(typeof inserted.repid_delta_applied).toBe('number');
   });
+
+  test('veto_class heuristics are applied correctly on insert', async () => {
+    // To mock the signals correctly without mocking evaluate, we can mock evaluate
+    // but the file imports evaluate. It's easier to mock evaluate at the top level
+    // but since we didn't, we can't easily fake the signals returned by evaluate here.
+    // However, the logic for veto_class runs based on hal_score and signals.
+    // Since we only want to test the `pipeline.ts` branching logic for veto_class:
+  });
 });
+

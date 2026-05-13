@@ -179,6 +179,24 @@ export async function runScoreEvent(
 
   const decision: HALDecision = halError ? 'flagged' : deriveHalDecision(hal_score, vetoed, signals.comma_severity as string | null);
 
+  let veto_class: string | null = null;
+  if (decision === 'vetoed' || decision === 'flagged') {
+    const agreement = signals.agreement_score as number | undefined;
+    const evidence = signals.evidence_quality as number | undefined;
+    if (typeof agreement === 'number' && agreement < 0.4) {
+      veto_class = 'BFT_CONTRADICTION';
+    } else if (typeof evidence === 'number' && evidence < 0.35) {
+      veto_class = 'FACTUAL_ERROR';
+    } else {
+      veto_class = 'UNKNOWN';
+      db.from('trinity_agent_logs').insert({
+        agent_id: input.agent_id,
+        action: 'veto_class_unknown_at_write',
+        message: 'Unable to determine veto_class for HAL decision'
+      }).then().catch(() => {});
+    }
+  }
+
   // 4. Compute delta.
   const delta = computeDelta({
     hal_score,
@@ -222,6 +240,7 @@ export async function runScoreEvent(
     zk_proof_triggered: triggerProof,
     zk_proof_id,
     idempotency_key: input.idempotency_key ?? null,
+    veto_class,
     metadata: {
       hal_signals: signals,
       hal_error: halError,
