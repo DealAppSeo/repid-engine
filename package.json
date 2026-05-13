@@ -23,11 +23,16 @@
     "reputation:backfill:spokespersons": "ts-node scripts/erc8004-reputation-backfill-spokespersons.ts",
     "probe:reputation": "ts-node scripts/erc8004-reputation-probe.ts",
 <<<<<<< HEAD
+<<<<<<< HEAD
     "x402:health": "ts-node scripts/x402-health.ts"
 =======
     "install:hooks": "bash scripts/git-hooks/install.sh",
     "verify:hal-dual-write": "ts-node scripts/verify-hal-dual-write.ts"
 >>>>>>> origin/feat/gap-closure-and-distribution-2026-05-12
+=======
+    "test:integration": "jest --config jest.integration.config.js --runInBand --forceExit",
+    "smoke:full": "npm run smoke:prod && npm run test:integration"
+>>>>>>> origin/feat/rls-wave-1-and-integration-tests-2026-05-12
   },
   "keywords": [],
   "author": "",

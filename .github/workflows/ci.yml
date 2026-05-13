@@ -1,0 +1,56 @@
+# CC Sprint 8 — CI workflow gating PRs to main.
+#
+# Steps:
+#   1. Type-check (always runs; no secrets needed)
+#   2. Unit tests (always runs; no live DB)
+#   3. Integration tests (skipped per-test if SUPABASE secrets absent;
+#      runs full when secrets are present)
+#
+# Sean action items:
+#   - In GitHub repo settings → Secrets and variables → Actions, add:
+#       SUPABASE_URL                     (project-public URL)
+#       SUPABASE_SERVICE_KEY             (service-role key — never log)
+#       SMOKE_BASE_URL                   (https://repid-engine-production.up.railway.app)
+#   - Enable Actions in the repo if not already on
+#   - Make this workflow a required check on the main branch in
+#     Settings → Branches → branch protection rule
+#
+# Without those secrets the workflow still runs typecheck + unit tests,
+# which catch most regressions. Integration tests skip gracefully via
+# the env-guard pattern in tests/integration/*.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install (legacy peer deps per nixpacks.toml)
+        run: npm install --legacy-peer-deps
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Integration tests
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
+        run: npm run test:integration
+        # Tests in tests/integration/* skip gracefully when env unset,
+        # so this step won't fail on PRs from forks without secrets access.
