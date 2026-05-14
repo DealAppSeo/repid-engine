@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { x402Facilitator } from '../services/x402-facilitator';
 import { repIdAttestationService } from '../services/repid-attestation';
 import { db } from '../db';
+import { eip712Signer } from '../services/eip712-signer';
+import { ethers } from 'ethers';
 
 const router = Router();
 
@@ -76,6 +78,40 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
     is_verified_by_hyperdag: true
   };
 
+  const queryHash = ethers.keccak256(ethers.toUtf8Bytes("trade-analysis"));
+  const analysisDigest = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(analysis)));
+
+  const receipt = {
+    buyerAddress: verifyResult.payer || '0x0000000000000000000000000000000000000000',
+    spokespersonTokenId: BigInt(agent.erc8004_token_id || 0),
+    spokespersonName: agent.agent_name,
+    queryHash,
+    analysisDigest,
+    sentiment: 'Bullish',
+    repidLeverageFactor: BigInt(agent.current_repid),
+    priceUsdc: BigInt(priceUsdc),
+    paymentMode: process.env.X402_FACILITATOR_MODE === 'real' ? 'usdc' : 'eip712-only',
+    timestamp: BigInt(Math.floor(Date.now() / 1000))
+  };
+
+  let signedReceipt: any = null;
+  try {
+    const { signature, signerAddress } = await eip712Signer.signTradeReceipt(agent.agent_name, receipt);
+    signedReceipt = {
+      receipt: {
+        ...receipt,
+        spokespersonTokenId: receipt.spokespersonTokenId.toString(),
+        repidLeverageFactor: receipt.repidLeverageFactor.toString(),
+        priceUsdc: receipt.priceUsdc.toString(),
+        timestamp: receipt.timestamp.toString()
+      },
+      signature,
+      signerAddress
+    };
+  } catch (e: any) {
+    console.warn(`[trade-analysis] Could not sign receipt: ${e.message}`);
+  }
+
   // 6. Settle payment
   let txHash = '';
   try {
@@ -119,7 +155,11 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settled', txHash }));
   res.setHeader('X-HYPERDAG-REPID-ATTESTATION', myAttestationB64);
 
-  return res.status(200).json(analysis);
+  const response: any = { ...analysis };
+  if (signedReceipt) {
+    response.signedReceipt = signedReceipt;
+  }
+  return res.status(200).json(response);
 });
 
 router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
@@ -192,6 +232,37 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
     reasoning
   };
 
+  const promptHash = ethers.keccak256(ethers.toUtf8Bytes(payload));
+  const receipt = {
+    buyerAddress: verifyResult.payer || '0x0000000000000000000000000000000000000000',
+    spokespersonTokenId: BigInt(agent.erc8004_token_id || 0),
+    spokespersonName: agent.agent_name,
+    promptHash,
+    routedProvider: classification.provider,
+    confidence: Math.round(classification.confidence * 100),
+    reasoning: classification.reasoning,
+    priceUsdc: BigInt(priceUsdc),
+    paymentMode: process.env.X402_FACILITATOR_MODE === 'real' ? 'usdc' : 'eip712-only',
+    timestamp: BigInt(Math.floor(Date.now() / 1000))
+  };
+
+  let signedReceipt: any = null;
+  try {
+    const { signature, signerAddress } = await eip712Signer.signAnfisReceipt(agent.agent_name, receipt);
+    signedReceipt = {
+      receipt: {
+        ...receipt,
+        spokespersonTokenId: receipt.spokespersonTokenId.toString(),
+        priceUsdc: receipt.priceUsdc.toString(),
+        timestamp: receipt.timestamp.toString()
+      },
+      signature,
+      signerAddress
+    };
+  } catch (e: any) {
+    console.warn(`[anfis-classify] Could not sign receipt: ${e.message}`);
+  }
+
   let txHash = 'mock_tx_hash';
   try {
     const settleResult = await x402Facilitator.settlePayment(xPaymentHeader, requirements);
@@ -223,7 +294,11 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
   });
 
   res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settled', txHash }));
-  return res.status(200).json(classification);
+  const response: any = { ...classification };
+  if (signedReceipt) {
+    response.signedReceipt = signedReceipt;
+  }
+  return res.status(200).json(response);
 });
 
 export default router;
