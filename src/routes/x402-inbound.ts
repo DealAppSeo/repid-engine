@@ -4,6 +4,7 @@ import { repIdAttestationService } from '../services/repid-attestation';
 import { db } from '../db';
 import { eip712Signer } from '../services/eip712-signer';
 import { ethers } from 'ethers';
+import { classifyPrompt } from '../services/anfis-classifier';
 
 const router = Router();
 
@@ -206,31 +207,7 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
 
   const payload = req.body.payload || '';
   
-  // Mock ANFIS routing logic for now
-  let provider = 'deepseek';
-  let reasoning = 'Default classification';
-  if (payload.includes('code')) {
-    provider = 'deepseek';
-    reasoning = 'coding_task rule fired';
-  } else if (payload.includes('math')) {
-    provider = 'deepseek';
-    reasoning = 'math_reasoning rule fired';
-  } else if (payload.includes('emotional')) {
-    provider = 'anthropic';
-    reasoning = 'emotional_support rule fired';
-  } else if (payload.includes('creative')) {
-    provider = 'gemini';
-    reasoning = 'creative_task rule fired';
-  } else {
-    provider = 'cerebras';
-    reasoning = 'fast_factual rule fired';
-  }
-
-  const classification = {
-    provider,
-    confidence: 0.95,
-    reasoning
-  };
+  const classification = await classifyPrompt(payload);
 
   const promptHash = ethers.keccak256(ethers.toUtf8Bytes(payload));
   const receipt = {
