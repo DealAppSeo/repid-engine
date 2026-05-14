@@ -1,5 +1,4 @@
 import { ethers } from 'ethers';
-import fetch from 'node-fetch';
 
 const FACILITATOR_URL = process.env.X402_FACILITATOR_URL || 'https://x402.org/facilitator';
 const USDC_ADDRESS_BASE_SEPOLIA = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -34,7 +33,8 @@ export class X402Facilitator {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          paymentHeader: xPaymentHeader,
+          version: 1,
+          paymentPayload: xPaymentHeader,
           paymentRequirements: requirements[0]
         })
       });
@@ -60,7 +60,8 @@ export class X402Facilitator {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        paymentHeader: xPaymentHeader,
+        version: 1,
+        paymentPayload: xPaymentHeader,
         paymentRequirements: requirements[0]
       })
     });

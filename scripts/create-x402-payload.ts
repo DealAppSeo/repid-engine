@@ -40,7 +40,7 @@ export async function createX402Payment(
   const sig = ethers.Signature.from(signature);
   
   const payload = {
-    x402Version: 1,
+    version: "1",
     scheme: 'exact',
     network: 'base-sepolia',
     payload: {

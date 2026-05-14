@@ -3,14 +3,26 @@ dotenv.config();
 import { ethers } from 'ethers';
 import { createX402Payment } from './create-x402-payload';
 
+import express from 'express';
+import bodyParser from 'body-parser';
+import inboundRouter from '../src/routes/x402-inbound';
+
+const app = express();
+app.use(bodyParser.json());
+app.use('/x402', inboundRouter);
+
 const SHOFET_UUID = '32e0e809-c1c4-4405-913f-135c8a2d6626';
 const SHOFET_ADDRESS = '0x15eB9A7427f1B54486926465d5895cD51eB8b052';
-const SERVICE_URL = 'http://localhost:3000'; // Make sure the server is running
+const SERVICE_URL = 'http://localhost:3010'; 
 
 async function main() {
+  const server = app.listen(3010);
   console.log(`\n========== ANFIS x402 LIVE SETTLEMENT ==========\n`);
 
-  const buyerKey = process.env.BUYER_PRIVATE_KEY || process.env.TRINITY_DEPLOYER_PRIVATE_KEY;
+  let buyerKey = process.env.BUYER_PRIVATE_KEY || process.env.TRINITY_DEPLOYER_PRIVATE_KEY;
+  if (!buyerKey || buyerKey.length < 64) {
+    buyerKey = process.env.NEXUS_PRIVATE_KEY;
+  }
   if (!buyerKey) {
     console.error('Missing BUYER_PRIVATE_KEY in environment');
     process.exit(1);
@@ -33,6 +45,7 @@ async function main() {
     console.error(`✗ Expected 402, got ${res1.status}`);
     const text = await res1.text();
     console.error(text);
+    server.close();
     process.exit(1);
   }
 
@@ -58,6 +71,7 @@ async function main() {
     console.error(`✗ Expected 200, got ${res2.status}`);
     const text = await res2.text();
     console.error(text);
+    server.close();
     process.exit(1);
   }
 
@@ -76,6 +90,7 @@ async function main() {
   }
 
   console.log('\nLive Settlement Loop Complete!');
+  server.close();
 }
 
 main().catch(console.error);
