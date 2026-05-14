@@ -17,7 +17,7 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   // Use maybeSingle() to handle non-UUID strings gracefully (though auth-bypass check might already filter)
   const { data: agent, error: agentError } = await db
     .from('repid_agents')
-    .select('id, agent_name, wallet_address, current_repid, tier')
+    .select('id, agent_name, wallet_address, erc8004_token_id, current_repid, tier')
     .eq('id', uuid)
     .maybeSingle();
 
@@ -129,6 +129,29 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
     });
   }
 
+  // 6.5 Write to x402_settlements
+  const idempotencyKey = `${agent.id}:${queryHash.substring(0,16)}:${verifyResult.payer}:${Math.floor(Date.now()/3600000)}`;
+  
+  const { error: settlementError } = await db.from('x402_settlements').insert({
+    tip_id: `trade:${txHash}`,
+    requestor_agent_id: null,
+    provider_agent_id: agent.id,
+    prediction_topic: 'trade_analysis',
+    amount: parseInt(priceUsdc),
+    asset: 'USDC',
+    payer_address: verifyResult.payer,
+    x_payment_header: xPaymentHeader,
+    is_simulated: process.env.X402_FACILITATOR_MODE !== 'real',
+    status: txHash && txHash !== 'mock_tx_hash' ? 'settled' : 'pending_settlement',
+    delivered_at: new Date().toISOString(),
+    idempotency_key: idempotencyKey,
+    settlement_attempt_count: 1
+  });
+  
+  if (settlementError && settlementError.code !== '23505') { // Ignore unique constraint violation
+    console.error('[x402-inbound] Failed to insert x402_settlements:', settlementError.message);
+  }
+
   // 7. Write to repid_events for reputation tracking
   await db.from('repid_events').insert({
     subject_id: agent.id,
@@ -169,7 +192,7 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
 
   const { data: agent, error: agentError } = await db
     .from('repid_agents')
-    .select('id, agent_name, erc8004_address, current_repid, tier')
+    .select('id, agent_name, wallet_address, erc8004_token_id, current_repid, tier')
     .eq('id', uuid)
     .maybeSingle();
 
@@ -181,7 +204,7 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
   const resource = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
   const requirements = x402Facilitator.buildPaymentRequirements({
     resource,
-    payTo: agent.erc8004_address || '0x0000000000000000000000000000000000000000',
+    payTo: agent.wallet_address || '0x0000000000000000000000000000000000000000',
     priceUsdc,
     network: 'base-sepolia',
     description: `ANFIS Classification by ${agent.agent_name}`
@@ -253,6 +276,29 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
       payment_requirements: requirements,
       facilitator_response: { error: e.message }
     });
+  }
+
+  // 6.5 Write to x402_settlements
+  const idempotencyKey = `${agent.id}:${promptHash.substring(0,16)}:${verifyResult.payer}:${Math.floor(Date.now()/3600000)}`;
+  
+  const { error: settlementError } = await db.from('x402_settlements').insert({
+    tip_id: `anfis:${txHash}`,
+    requestor_agent_id: null,
+    provider_agent_id: agent.id,
+    prediction_topic: 'anfis_classification',
+    amount: parseInt(priceUsdc),
+    asset: 'USDC',
+    payer_address: verifyResult.payer,
+    x_payment_header: xPaymentHeader,
+    is_simulated: process.env.X402_FACILITATOR_MODE !== 'real',
+    status: txHash && txHash !== 'mock_tx_hash' ? 'settled' : 'pending_settlement',
+    delivered_at: new Date().toISOString(),
+    idempotency_key: idempotencyKey,
+    settlement_attempt_count: 1
+  });
+
+  if (settlementError && settlementError.code !== '23505') {
+    console.error('[x402-inbound] Failed to insert x402_settlements:', settlementError.message);
   }
 
   // Write to repid_events for feedback loop worker
