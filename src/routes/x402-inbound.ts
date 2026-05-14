@@ -5,6 +5,8 @@ import { db } from '../db';
 import { eip712Signer } from '../services/eip712-signer';
 import { ethers } from 'ethers';
 import { classifyPrompt } from '../services/anfis-classifier';
+import { computeHalVerdict } from '../services/hal-evaluator';
+import crypto from 'crypto';
 
 const router = Router();
 
@@ -200,14 +202,16 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
     return res.status(404).json({ error: 'agent_not_found_or_invalid_id' });
   }
 
-  const priceUsdc = "100000"; // 0.1 USDC
+  const includeHalCheck = req.body.include_hal_check === true;
+  const priceUsdc = includeHalCheck ? "500000" : "100000"; // 0.5 USDC vs 0.1 USDC
+
   const resource = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
   const requirements = x402Facilitator.buildPaymentRequirements({
     resource,
     payTo: agent.wallet_address || '0x0000000000000000000000000000000000000000',
     priceUsdc,
     network: 'base-sepolia',
-    description: `ANFIS Classification by ${agent.agent_name}`
+    description: includeHalCheck ? `ANFIS+HAL Classification by ${agent.agent_name}` : `ANFIS Classification by ${agent.agent_name}`
   });
 
   if (!xPaymentHeader) {
@@ -229,10 +233,22 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
   }
 
   const payload = req.body.payload || '';
-  
   const classification = await classifyPrompt(payload);
-
   const promptHash = ethers.keccak256(ethers.toUtf8Bytes(payload));
+
+  let halVerdict: any = null;
+  if (includeHalCheck) {
+    halVerdict = await computeHalVerdict(payload, classification.category);
+    
+    if (halVerdict.status === 'BLOCK') {
+      return res.status(451).json({
+        error: 'Unavailable For Legal Reasons',
+        reason: 'HAL vetoed the prompt',
+        veto_class: halVerdict.veto_class
+      });
+    }
+  }
+
   const receipt = {
     buyerAddress: verifyResult.payer || '0x0000000000000000000000000000000000000000',
     spokespersonTokenId: BigInt(agent.erc8004_token_id || 0),
@@ -316,8 +332,33 @@ router.post('/:uuid/anfis-classify', async (req: Request, res: Response) => {
     }
   });
 
+  if (includeHalCheck && halVerdict) {
+    const { error: halErr } = await db.from('hal_evaluations').insert({
+      id: crypto.randomUUID(),
+      ts: new Date().toISOString(),
+      mode: 'production',
+      hal_mode: 'anfis_gateway',
+      prompt_text_hash: promptHash.substring(0, 16),
+      agent_id: agent.id,
+      gen_provider: classification.provider,
+      hal_signals: halVerdict.signals,
+      hal_vetoed: halVerdict.status === 'BLOCK',
+      decision: halVerdict.status,
+      veto_class: halVerdict.veto_class,
+      notes: halVerdict.notes,
+      cost_usd: parseFloat(ethers.formatUnits(priceUsdc, 6))
+    });
+    
+    if (halErr) {
+      console.error('[x402-inbound] Failed to record hal_evaluations:', halErr.message);
+    }
+  }
+
   res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settled', txHash }));
   const response: any = { ...classification };
+  if (includeHalCheck) {
+    response.hal_status = halVerdict.status;
+  }
   if (signedReceipt) {
     response.signedReceipt = signedReceipt;
   }
