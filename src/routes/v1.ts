@@ -11,6 +11,7 @@ import { startTradingRound, resolveOpenRounds, getTraderState } from '../service
 import { getTwoBuilderSnapshot, getTimeseries, bootstrapDemoSnapshots } from '../services/two-builder-demo';
 import { createAnonymousBuilder } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
+import { inheritProvenance } from '../services/provenance';
 
 const router = Router();
 
@@ -120,7 +121,7 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
 
   const { error } = await db.from('trinity_agent_logs').insert({
     action: 'zkp_proof_verified',
-    metadata: { valid, agent_id, requester_pubkey, tier, timestamp, proof }
+    metadata: { valid, agent_id, requester_pubkey, tier, timestamp, proof, ...inheritProvenance({}, 'trinity_agent_logs') }
   });
     if (error) console.error(error);
 
@@ -154,7 +155,7 @@ router.post('/dag/verify-node', async (req: Request, res: Response) => {
 
   const node_hash = createHash('sha256').update(`${node_id}${parent_hash}${agent_id}${JSON.stringify(payload)}`).digest('hex');
   
-  const { error } = await db.from('trinity_agent_logs').insert({ action: 'dag_node_verified', metadata: { node_id, parent_hash, agent_id } });
+  const { error } = await db.from('trinity_agent_logs').insert({ action: 'dag_node_verified', metadata: { node_id, parent_hash, agent_id, ...inheritProvenance({}, 'trinity_agent_logs') } });
     if (error) console.error(error);
   fireWebhook('dag.node_verified', { node_id, parent_hash, agent_id, node_hash });
 
@@ -197,7 +198,7 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
     return { ...r, proof: result.proof, proof_source: result.proof_source, timestamp };
   }));
 
-  const { error } = await db.from('trinity_agent_logs').insert({ action: 'zkp_batch_generated', metadata: { batch_size: requests.length } });
+  const { error } = await db.from('trinity_agent_logs').insert({ action: 'zkp_batch_generated', metadata: { batch_size: requests.length, ...inheritProvenance({}, 'trinity_agent_logs') } });
     if (error) console.error(error);
 
   res.json({ batch_id: `batch_${Date.now()}`, proofs, processed_at: new Date().toISOString(), total: proofs.length });

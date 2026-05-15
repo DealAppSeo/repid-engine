@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { fireWebhook } from '../services/webhook';
+import { inheritProvenance } from '../services/provenance';
 
 const lastScores = new Map<string, number>();
 
@@ -14,7 +15,7 @@ export async function scoreMonitor() {
         fireWebhook('repid.score_changed', { agent_id: agent.id, old_score: oldScore, new_score: agent.current_repid, delta });
         const { error } = await db.from('trinity_agent_logs').insert({
           action: 'repid_score_changed',
-          metadata: { agent_id: agent.id, old_score: oldScore, new_score: agent.current_repid, delta }
+          metadata: { agent_id: agent.id, old_score: oldScore, new_score: agent.current_repid, delta, ...inheritProvenance({}, 'trinity_agent_logs') }
         });
     if (error) console.error(error);
       }
