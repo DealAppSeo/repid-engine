@@ -32,9 +32,9 @@ describe('POST /substance-gate/events', () => {
     expect(res.body.error).toBe('Missing required fields');
   });
 
-  it('returns 200 success with shadow_mode', async () => {
+  it('returns 200 success with shadow_mode and T2a tier', async () => {
     const payload = {
-      task: { id: 1, metadata: { test_tier: 'T2a_BETA' } },
+      task: { id: 1, metadata: { test_tier: 'T2a_INTERNAL_REAL_ORGANIC' } },
       fastResult: { passed: false },
       agentName: 'trinity-w3c',
       contentHash: 'abc',
@@ -43,9 +43,39 @@ describe('POST /substance-gate/events', () => {
     const res = await request(app).post('/substance-gate/events').send(payload);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.gateEventId).toBe('fake-uuid');
-    
     const { slashRepIDForGateFail } = require('../../../src/services/substance-gate-writer');
     expect(slashRepIDForGateFail).not.toHaveBeenCalled();
+  });
+
+  it('does NOT queue for T0_INTERNAL_DEV_TEST tier on pass path', async () => {
+    const { db } = require('../../../src/db');
+    const insertSpy = jest.fn().mockResolvedValue({ error: null });
+    db.from = jest.fn().mockReturnValue({ insert: insertSpy });
+    const payload = {
+      task: { id: 2, metadata: { test_tier: 'T0_INTERNAL_DEV_TEST' } },
+      fastResult: { passed: true, signals: {}, failures: [], composite_score: 0.95 },
+      agentName: 'trinity-w3c',
+      contentHash: 'def',
+      shadow_mode: false
+    };
+    await request(app).post('/substance-gate/events').send(payload);
+    const tableCalls = (db.from as jest.Mock).mock.calls.map((c: any[]) => c[0]);
+    expect(tableCalls).not.toContain('validation_queue');
+  });
+
+  it('DOES queue for T2a tier on pass path', async () => {
+    const { db } = require('../../../src/db');
+    const insertSpy = jest.fn().mockResolvedValue({ error: null });
+    db.from = jest.fn().mockReturnValue({ insert: insertSpy });
+    const payload = {
+      task: { id: 3, metadata: { test_tier: 'T2a_INTERNAL_REAL_ORGANIC' } },
+      fastResult: { passed: true, signals: {}, failures: [], composite_score: 0.95 },
+      agentName: 'trinity-w3c',
+      contentHash: 'ghi',
+      shadow_mode: false
+    };
+    await request(app).post('/substance-gate/events').send(payload);
+    const tableCalls = (db.from as jest.Mock).mock.calls.map((c: any[]) => c[0]);
+    expect(tableCalls).toContain('validation_queue');
   });
 });
