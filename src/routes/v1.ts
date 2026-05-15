@@ -13,8 +13,10 @@ import { createAnonymousBuilder } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
 import { generateCard } from '../services/zkp-card-generator';
 import { renderCardHtml } from '../services/zkp-card-renderer';
+import substanceGateRouter from './v1/substance-gate';
 
 const router = Router();
+router.use(substanceGateRouter);
 
 router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
@@ -216,7 +218,7 @@ router.post('/cards/generate', async (req: Request, res: Response) => {
 });
 
 router.get('/cards/:card_id', async (req: Request, res: Response) => {
-  const html = await renderCardHtml(req.params.card_id);
+  const html = await renderCardHtml(req.params.card_id as string);
   if (!html) return res.status(404).send('Card not found');
   res.setHeader('Content-Type', 'text/html');
   res.send(html);
