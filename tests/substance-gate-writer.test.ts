@@ -1,4 +1,4 @@
-import { slashRepIDForGateFail } from '../src/services/substance-gate-writer';
+import { slashRepIDForGateFail, clearAgentUuidCache } from '../src/services/substance-gate-writer';
 
 describe('slashRepIDForGateFail with real schema constraints', () => {
   test('Looks up correct UUID from agent_name', async () => {
@@ -26,7 +26,7 @@ describe('slashRepIDForGateFail with real schema constraints', () => {
         })
       })
     };
-    await slashRepIDForGateFail(mockDb, 'trinity-w3c', 1, 0, 'gate-id-1');
+    await slashRepIDForGateFail(mockDb, 'trinity-w3c', { id: 1 }, 0, 'gate-id-1');
     expect(selectedAgentName).toBe('trinity-w3c');
   });
   
@@ -53,7 +53,7 @@ describe('slashRepIDForGateFail with real schema constraints', () => {
         })
       })
     };
-    await slashRepIDForGateFail(mockDb, 'trinity-nexus', 1, 0, 'gate-id-2');
+    await slashRepIDForGateFail(mockDb, 'trinity-nexus', { id: 1 }, 0, 'gate-id-2');
     expect(insertPayload.repid_before).toBe(1000);
     expect(insertPayload.repid_after).toBe(950);
   });
@@ -82,7 +82,7 @@ describe('slashRepIDForGateFail with real schema constraints', () => {
         }
       })
     };
-    await slashRepIDForGateFail(mockDb, 'trinity-apm', 1, 4, 'gate-id-3');
+    await slashRepIDForGateFail(mockDb, 'trinity-apm', { id: 1 }, 4, 'gate-id-3');
     // reap count > 3 means delta is -150
     expect(updatePayload.current_repid).toBe(850);
     expect(updatePayload.last_updated).toBeDefined();
@@ -109,7 +109,7 @@ describe('slashRepIDForGateFail with real schema constraints', () => {
     const origError = console.error;
     console.error = jest.fn();
     
-    const delta = await slashRepIDForGateFail(mockDb, 'trinity-missing', 1, 0, 'gate-id-4');
+    const delta = await slashRepIDForGateFail(mockDb, 'trinity-missing', { id: 1 }, 0, 'gate-id-4');
     expect(delta).toBe(-50);
     expect(mockDb.from('repid_score_events').insert).not.toHaveBeenCalled();
     
@@ -129,5 +129,53 @@ describe('slashRepIDForGateFail with real schema constraints', () => {
     // exactly what Strategy Claude requested.
     expect(agentNames).toHaveLength(12);
     expect(agentNames.every(name => name.startsWith('trinity-'))).toBe(true);
+  });
+
+  test('idempotency_key is set to gateEventId in score event insert', async () => {
+    let insertPayload: any;
+    const mockDb: any = {
+      from: () => ({
+        select: () => ({ eq: () => ({ single: async () => ({
+          data: { id: 'uuid-x', current_repid: 1000 }, error: null
+        })})}),
+        insert: (payload: any) => {
+          insertPayload = payload;
+          return { error: null };
+        },
+        update: () => ({ eq: () => ({ error: null }) })
+      })
+    };
+    await slashRepIDForGateFail(mockDb, 'trinity-test', { id: 1 }, 0, 'gate-event-id-abc');
+    expect(insertPayload.idempotency_key).toBe('gate-event-id-abc');
+  });
+
+  test('UUID cache reduces redundant DB queries', async () => {
+    let selectCalls = 0;
+    const mockDb: any = {
+      from: (table: string) => ({
+        select: () => ({
+          eq: () => ({
+            single: async () => {
+              if (table === 'repid_agents') selectCalls++;
+              return { data: { id: 'uuid-x', current_repid: 1000 }, error: null };
+            }
+          })
+        }),
+        insert: () => ({ error: null }),
+        update: () => ({ eq: () => ({ error: null }) })
+      })
+    };
+    
+    clearAgentUuidCache();
+    
+    // First call: 2 selects (UUID lookup + current_repid)
+    await slashRepIDForGateFail(mockDb, 'trinity-cache-test', { id: 1 }, 0, 'event-1');
+    const firstCallCount = selectCalls;
+    
+    // Second call: 1 select (UUID is cached, current_repid still queried)
+    await slashRepIDForGateFail(mockDb, 'trinity-cache-test', { id: 2 }, 0, 'event-2');
+    const secondCallCount = selectCalls - firstCallCount;
+    
+    expect(secondCallCount).toBeLessThan(firstCallCount);
   });
 });
