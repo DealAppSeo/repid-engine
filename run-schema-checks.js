@@ -25,8 +25,12 @@ async function run() {
   const { data: q3, error: e3 } = await supabase.rpc('run_sql', { sql: "SELECT agent_name FROM repid_agents WHERE agent_name LIKE 'trinity-%' ORDER BY agent_name" });
   console.log('3. repid_agents:', e3 ? e3.message : q3);
   // 4. Query constraints
-  const { data: q4, error: e4 } = await supabase.rpc('run_sql', { sql: "SELECT constraint_name, pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_class t ON c.conrelid = t.oid WHERE t.relname = 'trinity_tasks' AND contype = 'c'" });
+  const { data: q4, error: e4 } = await supabase.rpc('run_sql', { sql: "SELECT pg_get_constraintdef(c.oid) AS check_constraint FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid WHERE t.relname = 'trinity_tasks' AND c.contype = 'c' AND pg_get_constraintdef(c.oid) ILIKE '%status%'" });
   console.log('4. constraints:', e4 ? e4.message : q4);
+
+  // 5. Query columns of repid_score_events
+  const { data: q5, error: e5 } = await supabase.rpc('run_sql', { sql: "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'repid_score_events' AND column_name IN ('agent_id', 'repid_before', 'repid_after', 'event_type', 'delta') ORDER BY column_name" });
+  console.log('5. columns:', e5 ? e5.message : q5);
 }
 
 run();
