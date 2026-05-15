@@ -5,7 +5,7 @@
 CREATE TABLE IF NOT EXISTS substance_gate_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id BIGINT NOT NULL REFERENCES trinity_tasks(id) ON DELETE CASCADE,
-  agent_name TEXT NOT NULL,
+  agent_name TEXT NOT NULL REFERENCES repid_agents(agent_name),
   
   -- Result text characteristics
   char_count INTEGER NOT NULL,
