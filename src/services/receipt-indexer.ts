@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { provenance } from './provenance';
 
 /**
  * HyperDAGReceiptAdapter event ABI fragment — must match the deployed contract's
@@ -172,7 +173,8 @@ async function handleReceiptRevealed(
       receiptUri,
       agentId,
       txHash: log.transactionHash,
-      blockNumber: log.blockNumber
+      blockNumber: log.blockNumber,
+      ...provenance('T4_EXTERNAL_REAL_PRODUCTION', 'receipt_indexer')
     }
   });
 
