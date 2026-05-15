@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
+import { inheritProvenance } from '../services/provenance';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   const publicPaths = ['/health', '/healthz', '/', '/api/v1/health'];
@@ -79,7 +80,8 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       tier,
       path: req.path,
       method: req.method,
-      ip: req.ip
+      ip: req.ip,
+      ...inheritProvenance({}, 'trinity_agent_logs')
     }
   });
     if (error) console.error(error);

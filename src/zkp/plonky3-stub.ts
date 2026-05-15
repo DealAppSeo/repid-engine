@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { db } from '../db';
+import { inheritProvenance } from '../services/provenance';
 
 export async function generateProofStub(agentId: string, requesterPubkey: string, tier: string) {
   const timestamp = new Date().toISOString();
@@ -13,7 +14,8 @@ export async function generateProofStub(agentId: string, requesterPubkey: string
       requester_pubkey: requesterPubkey,
       tier,
       timestamp,
-      proof
+      proof,
+      ...inheritProvenance({}, 'trinity_agent_logs')
     }
   });
     if (error) console.error(error);

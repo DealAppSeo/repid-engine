@@ -10,6 +10,7 @@
  */
 
 import { createHmac } from 'crypto';
+import { inheritProvenance } from '../services/provenance';
 
 const HMAC_SECRET = process.env.PROOF_SECRET || 'repid-default-secret';
 const PROVER_URL = process.env.PLONKY3_PROVER_URL || '';
@@ -118,6 +119,7 @@ export async function logProofGeneration(supabase: any, agentId: string, tier: s
     agent_name: 'repid-engine',
     action: 'zkp_proof_generated',
     message: `Proof generated for agent ${agentId} at tier ${tier}`,
+    metadata: inheritProvenance({}, 'trinity_agent_logs'),
     created_at: new Date().toISOString(),
   }]);
   if (error) console.error('[zkp] Log error:', error);
