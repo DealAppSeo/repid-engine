@@ -21,6 +21,12 @@ async function run() {
   // 2. Check trinity_tasks status enum
   const { data: q2, error: e2 } = await supabase.rpc('run_sql', { sql: "SELECT data_type FROM information_schema.columns WHERE table_name = 'trinity_tasks' AND column_name = 'status'" });
   console.log('2. trinity_tasks status type:', e2 ? e2.message : q2);
+  // 3. Query repid_agents
+  const { data: q3, error: e3 } = await supabase.rpc('run_sql', { sql: "SELECT agent_name FROM repid_agents WHERE agent_name LIKE 'trinity-%' ORDER BY agent_name" });
+  console.log('3. repid_agents:', e3 ? e3.message : q3);
+  // 4. Query constraints
+  const { data: q4, error: e4 } = await supabase.rpc('run_sql', { sql: "SELECT constraint_name, pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_class t ON c.conrelid = t.oid WHERE t.relname = 'trinity_tasks' AND contype = 'c'" });
+  console.log('4. constraints:', e4 ? e4.message : q4);
 }
 
 run();
