@@ -2,6 +2,14 @@ import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { recordGateEvent, slashRepIDForGateFail, appendGateAuditChain } from '../../services/substance-gate-writer';
 
+const VALIDATION_QUEUE_TIERS = new Set([
+  'T2a_INTERNAL_REAL_ORGANIC',
+  'T2b_INTERNAL_REAL_ADVERSARIAL',
+  'T3a_EXTERNAL_TEST_PRIVATE',
+  'T3b_EXTERNAL_TEST_PUBLIC',
+  'T4_EXTERNAL_REAL_PRODUCTION'
+]);
+
 const router = Router();
 
 router.post('/substance-gate/events', async (req: Request, res: Response) => {
@@ -27,10 +35,11 @@ router.post('/substance-gate/events', async (req: Request, res: Response) => {
 
       // 4. Validation queue (on pass + T2a+ tier)
       const tier = task.metadata?.test_tier || 'T0_INTERNAL_DEV_TEST';
-      if (fastResult.passed && tier >= 'T2a' && tier !== 'T0_INTERNAL_DEV_TEST' && tier !== 'T1_INTERNAL_INTEGRATION') {
+      if (fastResult.passed && VALIDATION_QUEUE_TIERS.has(tier)) {
         const { error } = await db.from('validation_queue').insert({
-          gate_event_id: gateEventId,
-          status: 'pending'
+          task_id: task.id,
+          substance_gate_event_id: gateEventId,
+          fast_path_passed: fastResult.passed
         });
         if (error) {
           console.error('[substance-gate] validation_queue insert error:', error.message);
