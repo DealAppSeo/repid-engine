@@ -5,7 +5,12 @@
 CREATE TABLE IF NOT EXISTS substance_gate_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id BIGINT NOT NULL REFERENCES trinity_tasks(id) ON DELETE CASCADE,
-  agent_name TEXT NOT NULL REFERENCES repid_agents(agent_name),
+  -- Soft reference to repid_agents.agent_name (no FK). 
+  -- repid_agents.agent_name lacks UNIQUE constraint due to duplicate test data 
+  -- (HalTester6, smoke, HUMAN, test_integration_agent). Adding UNIQUE would require 
+  -- test data cleanup which is out of scope. Application code uses 
+  -- .eq('agent_name', ...) lookups which work fine without FK.
+  agent_name TEXT NOT NULL,
   
   -- Result text characteristics
   char_count INTEGER NOT NULL,
