@@ -364,7 +364,7 @@ export async function applyValidationEvent(
             metadata: { job_id: zk_proof_id }
           })
         }).catch((err: any) => console.error('[scoring/pipeline] proof service call failed:', err));
-      }).catch((err: any) => console.error('[scoring/pipeline] proof queue insert failed:', err));
+      }).then(undefined, (err: any) => console.error('[scoring/pipeline] proof queue insert failed:', err));
   }
 
   return { old_repid, new_repid, delta_applied: Math.round(new_repid - old_repid) };

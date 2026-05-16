@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth } from '../../middleware/auth';
+import { authMiddleware } from '../../middleware/auth';
 import {
   getValidationQueueStatus,
   getSubstanceGateStatus,
@@ -9,11 +9,11 @@ import {
 } from '../../services/observability-queries';
 
 const router = Router();
-const REQUIRE_AUTH = process.env.OBSERVABILITY_REQUIRE_AUTH === 'true';
+const requireAuthIfEnabled = process.env.OBSERVABILITY_REQUIRE_AUTH === 'true' 
+  ? authMiddleware 
+  : (req: any, res: any, next: any) => next();
 
-if (REQUIRE_AUTH) {
-  router.use(requireAuth);
-}
+router.use(requireAuthIfEnabled);
 
 const buildResponse = (data: any) => ({
   data,

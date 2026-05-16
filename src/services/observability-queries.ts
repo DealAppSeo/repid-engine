@@ -82,7 +82,7 @@ export async function getValidationQueueStatus(): Promise<ValidationQueueStatus>
 export async function getSubstanceGateStatus(): Promise<SubstanceGateStatus> {
   const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
   const { data } = await db.from('substance_gate_events')
-    .select('passed, gate_type, status')
+    .select('passed, failure_reasons')
     .gte('created_at', oneDayAgo)
     .limit(10000);
     
@@ -90,15 +90,18 @@ export async function getSubstanceGateStatus(): Promise<SubstanceGateStatus> {
     eventsLast24h: data?.length || 0,
     passRate: 0,
     failBySubtype: {},
-    shadowRejectCount: 0
+    shadowRejectCount: 0 // Stubbed: 'status' column does not exist on substance_gate_events
   };
   
   if (data && data.length > 0) {
     const passed = data.filter(d => d.passed).length;
     status.passRate = passed / data.length;
-    status.shadowRejectCount = data.filter(d => d.status === 'shadow_reject').length;
     data.filter(d => !d.passed).forEach(d => {
-      status.failBySubtype[d.gate_type] = (status.failBySubtype[d.gate_type] || 0) + 1;
+      // Assuming failure_reasons is an array of strings
+      const reasons = d.failure_reasons as string[] || ['unknown'];
+      reasons.forEach(r => {
+        status.failBySubtype[r] = (status.failBySubtype[r] || 0) + 1;
+      });
     });
   }
   return status;
@@ -111,7 +114,7 @@ export async function getHitlStatus(): Promise<HitlStatusSummary> {
   const [active, resolved, expired] = await Promise.all([
     db.from('hitl_requests').select('status, request_reason').in('status', ['pending', 'assigned', 'reviewing']),
     db.from('hitl_requests').select('created_at, resolved_at').eq('status', 'resolved').gte('resolved_at', oneDayAgo),
-    db.from('hitl_requests').select('id').eq('status', 'expired').gte('updated_at', sevenDaysAgo) // Assuming standard updated_at exists or we can just count
+    db.from('hitl_requests').select('id').eq('status', 'expired').gte('expires_at', sevenDaysAgo)
   ]);
 
   const status: HitlStatusSummary = {
