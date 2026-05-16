@@ -133,6 +133,59 @@ async function run() {
     console.log(`     trinity_tasks.status = ${finalTaskState?.status}`);
     console.log(`     repid_score_events rows for task = ${repidEventCount}`);
     console.log(`     hal_audit_chain rows for vq_id = ${auditChainCount}`);
+    
+    // After loop closure verification, check the deltas landed correctly
+    const { data: events } = await db.from('repid_score_events')
+      .select('event_type, delta, metadata')
+      .filter('metadata->>task_id', 'eq', taskId.toString())
+      .gte('created_at', new Date(startedAt).toISOString());
+
+    const claimerEvent = events?.find(e =>
+      e.event_type === 'VALIDATION_FAILED' || e.event_type === 'VALIDATION_PASSED'
+    );
+    const validatorEvent = events?.find(e =>
+      e.event_type === 'VALIDATOR_REWARD' || e.event_type === 'VALIDATOR_PENALTY'
+    );
+
+    // For challenge_claimer with tier 0 (T2a-equivalent band):
+    // Expected: VALIDATION_FAILED delta = -250
+    // Expected: VALIDATOR_REWARD delta in [40, 120, 300] range
+    if (claimerEvent) {
+      const expectedClaimer = claimerEvent.event_type === 'VALIDATION_FAILED' ? -250 : 80;
+      if (claimerEvent.delta !== expectedClaimer) {
+        console.error(
+          `❌ DELTA WRONG: ${claimerEvent.event_type} delta = ${claimerEvent.delta}; ` +
+          `expected exactly ${expectedClaimer} for T2a band`
+        );
+        process.exit(1);
+      }
+      console.log(`  ✅ Claimer delta correct: ${claimerEvent.delta}`);
+    }
+
+    if (validatorEvent) {
+      const acceptable = validatorEvent.event_type === 'VALIDATOR_REWARD'
+        ? [40, 120, 300]
+        : [-300, -500];
+      if (!acceptable.includes(validatorEvent.delta)) {
+        console.error(
+          `❌ DELTA WRONG: ${validatorEvent.event_type} delta = ${validatorEvent.delta}; ` +
+          `expected one of ${acceptable.join(', ')}`
+        );
+        process.exit(1);
+      }
+      console.log(`  ✅ Validator delta correct: ${validatorEvent.delta}`);
+    }
+
+    // Also assert validation_queue_id is in metadata
+    if (!claimerEvent?.metadata?.validation_queue_id && claimerEvent) {
+      console.error(`❌ Missing validation_queue_id in claimer event metadata`);
+      process.exit(1);
+    }
+
+    if (claimerEvent) {
+      console.log(`  ✅ validation_queue_id present`);
+    }
+
   } else {
     console.error(`  ❌ LOOP DID NOT CLOSE within ${elapsedSec}s`);
     console.error(`     Final state:`);
