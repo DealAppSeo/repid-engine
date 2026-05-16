@@ -21,7 +21,7 @@ export async function applyValidationDeltas(
   }
 
   if (claimerDelta !== 0 && taskData.claimed_by) {
-    const { data: claimerInfo } = await db.from('repid_agents').select('id').eq('name', taskData.claimed_by).single();
+    const { data: claimerInfo } = await db.from('repid_agents').select('id').eq('agent_name', taskData.claimed_by).single();
     if (claimerInfo) {
       await applyValidationEvent(claimerInfo.id, eventType, claimerDelta, {
         task_id: taskData.id,
@@ -38,7 +38,7 @@ export async function applyValidationDeltas(
   // Otherwise penalty -4.
   // Since we don't have per-validator vote mapped easily, we distribute flat for now based on workerVerdict.
   for (const validatorName of validators) {
-    const { data: validatorInfo } = await db.from('repid_agents').select('id').eq('name', validatorName).single();
+    const { data: validatorInfo } = await db.from('repid_agents').select('id').eq('agent_name', validatorName).single();
     if (validatorInfo) {
       let valDelta = 4;
       let valType: 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY' = 'VALIDATOR_REWARD';

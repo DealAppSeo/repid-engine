@@ -37,12 +37,12 @@ async function run() {
     }).select('id').single();
     if (taskErr) throw new Error(`Task insert failed: ${taskErr.message}`);
     taskId = task.id;
-
     const { data: vq, error: vqErr } = await db.from('validation_queue').insert({
       task_id: task.id,
       status: 'processing',
       worker_verdict: 'escalated',
-      fast_path_passed: true
+      fast_path_passed: true,
+      validator_agents: ['trinity-veritas']
     }).select('id').single();
     if (vqErr) throw new Error(`VQ insert failed: ${vqErr.message}`);
     vqId = vq.id;
@@ -69,10 +69,10 @@ async function run() {
     
     // Test the sync trigger
     const { data: vqAfter } = await db.from('validation_queue').select('worker_verdict').eq('id', vq.id).single();
-    if (vqAfter.worker_verdict === 'challenged') {
+    if (vqAfter?.worker_verdict === 'challenged') {
       console.log(`  -> Sync trigger verified: validation_queue worker_verdict = challenged`);
     } else {
-      console.error(`  -> Sync trigger failed: expected challenged, got ${vqAfter.worker_verdict}`);
+      console.error(`  -> Sync trigger failed: expected challenged, got ${vqAfter?.worker_verdict}`);
     }
   } catch (e: any) {
     console.error('HITL Cycle failed:', e.message);
@@ -109,8 +109,12 @@ async function run() {
     const deltaApplied = finalVqState?.metadata?.hitl_delta_applied === true;
     const vqTerminal = ['completed', 'failed'].includes(finalVqState?.status);
     const processedAtSet = finalVqState?.processed_at !== null;
+    const fullyFinalized = finalVqState?.metadata?.hitl_finalized === true;
+    const taskTerminal = ['verified', 'failed', 'done', 'pending'].includes(finalTaskState?.status);
+    const auditChainWritten = auditChainCount >= 1;
+    const repidEventsWritten = repidEventCount >= 1;
     
-    if (deltaApplied && vqTerminal && processedAtSet) {
+    if (deltaApplied && vqTerminal && processedAtSet && fullyFinalized && taskTerminal && auditChainWritten && repidEventsWritten) {
       loopClosed = true;
       break;
     }
@@ -125,16 +129,10 @@ async function run() {
     console.log(`     validation_queue.status = ${finalVqState.status}`);
     console.log(`     validation_queue.processed_at = ${finalVqState.processed_at}`);
     console.log(`     validation_queue.metadata.hitl_delta_applied = ${finalVqState.metadata?.hitl_delta_applied}`);
+    console.log(`     validation_queue.metadata.hitl_finalized = ${finalVqState.metadata?.hitl_finalized}`);
     console.log(`     trinity_tasks.status = ${finalTaskState?.status}`);
     console.log(`     repid_score_events rows for task = ${repidEventCount}`);
     console.log(`     hal_audit_chain rows for vq_id = ${auditChainCount}`);
-    
-    if (repidEventCount === 0) {
-      console.warn(`  ⚠️  Loop closed but no repid_score_events written — investigate pipeline.applyValidationEvent`);
-    }
-    if (auditChainCount === 0) {
-      console.warn(`  ⚠️  Loop closed but no hal_audit_chain entries — investigate append_hal_audit_chain call`);
-    }
   } else {
     console.error(`  ❌ LOOP DID NOT CLOSE within ${elapsedSec}s`);
     console.error(`     Final state:`);

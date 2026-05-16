@@ -220,48 +220,137 @@ async function checkTimeouts() {
 }
 
 async function pollResolvedHitlEntries(): Promise<void> {
-  const { data } = await db.from('validation_queue')
+  const { data: entries, error } = await db.from('validation_queue')
     .select('*')
-    .eq('status', 'processing')
+    .in('status', ['processing', 'completed'])
     .filter('metadata->>hitl_resolved', 'eq', 'true')
-    .is('metadata->>hitl_delta_applied', null)
+    .is('metadata->>hitl_finalized', null)
     .limit(BATCH_SIZE);
 
-  for (const entry of (data ?? [])) {
-    const resolution = entry.metadata.hitl_resolution as HitlResolution;
-    await applyHitlResolutionDelta(entry, resolution);
+  if (error) {
+    console.error('[ValidationWorker] pollResolvedHitlEntries select failed:', error);
+    return;
+  }
+
+  for (const entry of (entries ?? [])) {
+    try {
+      await finalizeHitlResolvedEntry(entry);
+    } catch (e: any) {
+      console.error(`[ValidationWorker] finalizeHitlResolvedEntry failed for ${entry.id}:`, e?.message ?? e);
+    }
   }
 }
 
-async function applyHitlResolutionDelta(entry: any, resolution: HitlResolution): Promise<void> {
-  switch (resolution) {
-    case 'approve_claimer':
-      await applyValidationDeltas(entry.id, { id: entry.task_id }, 'verified', entry.validator_agents || [], entry.judge_verdict || 'APPROVE');
-      break;
-    case 'challenge_claimer':
-      await applyValidationDeltas(entry.id, { id: entry.task_id }, 'challenged', entry.validator_agents || [], entry.judge_verdict || 'CHALLENGE');
-      break;
-    case 'rework_required':
-      await db.from('trinity_tasks')
-        .update({ status: 'pending', claimed_by: null }) // simplified without cooldown if column missing
-        .eq('id', entry.task_id);
-      break;
-    case 'no_action':
-      await db.from('trinity_tasks').update({ status: 'done' }).eq('id', entry.task_id);
-      break;
+async function finalizeHitlResolvedEntry(entry: any): Promise<void> {
+  const { data: task, error: taskErr } = await db.from('trinity_tasks')
+    .select('*')
+    .eq('id', entry.task_id)
+    .single();
+
+  if (taskErr || !task) {
+    throw new Error(`Task ${entry.task_id} not found for validation_queue ${entry.id}: ${taskErr?.message ?? 'no row'}`);
   }
 
-  // Mark delta applied
+  const resolution = entry.metadata?.hitl_resolution as
+    | 'approve_claimer' | 'challenge_claimer' | 'rework_required' | 'no_action';
+
+  await applyValidationDeltas(
+    entry.id,
+    task,
+    mapResolutionToOutcome(resolution),
+    entry.validator_agents ?? [],
+    entry.judge_verdict ?? null
+  );
+
+  await writeHitlResolutionAuditEntry(entry, task, resolution);
+  await updateTaskStatusFromResolution(task, resolution);
+
   await db.from('validation_queue').update({
     status: 'completed',
     processed_at: new Date().toISOString(),
-    metadata: { ...entry.metadata, hitl_delta_applied: true, hitl_delta_applied_at: new Date().toISOString() },
+    metadata: {
+      ...entry.metadata,
+      hitl_delta_applied: true,
+      hitl_delta_applied_at: entry.metadata?.hitl_delta_applied_at || new Date().toISOString(),
+      hitl_finalized: true,
+      hitl_finalized_at: new Date().toISOString(),
+    },
   }).eq('id', entry.id);
 
-  // Audit chain
-  await db.rpc('append_hal_audit_chain', {
-    source_table: 'validation_queue',
-    source_id: entry.id,
-    event_payload: { resolution, task_id: entry.task_id, hitl_delta_applied: true }
+  console.log(`[ValidationWorker] Finalized HITL-resolved entry ${entry.id} (task ${task.id}, resolution=${resolution})`);
+}
+
+function mapResolutionToOutcome(resolution: string): string {
+  switch (resolution) {
+    case 'approve_claimer':   return 'verified';
+    case 'challenge_claimer': return 'challenged';
+    case 'rework_required':   return 'rework';
+    case 'no_action':         return 'no_action';
+    default: throw new Error(`Unknown HITL resolution: ${resolution}`);
+  }
+}
+
+async function writeHitlResolutionAuditEntry(
+  entry: any,
+  task: any,
+  resolution: string
+): Promise<void> {
+  const payload = {
+    event_type: 'HITL_RESOLUTION_APPLIED',
+    validation_queue_id: entry.id,
+    task_id: task.id,
+    claimed_by: task.claimed_by,
+    resolution,
+    worker_verdict: entry.worker_verdict,
+    pcp_score: entry.pcp_score,
+    judge_verdict: entry.judge_verdict,
+    judge_confidence: entry.judge_confidence,
+    validator_agents: entry.validator_agents,
+    hitl_request_id: entry.metadata?.hitl_request_id,
+    hitl_resolver: entry.metadata?.hitl_resolver,
+    hitl_resolved_at: entry.metadata?.hitl_resolved_at,
+  };
+
+  const canonical = JSON.stringify(payload, Object.keys(payload).sort());
+
+  const { error } = await db.rpc('append_hal_audit_chain', {
+    p_source_table: 'validation_queue',
+    p_source_id: entry.id,
+    p_event_payload: payload,
+    p_canonical_json_text: canonical,
   });
+
+  if (error) {
+    throw new Error(`append_hal_audit_chain failed: ${error.message}`);
+  }
+}
+
+async function updateTaskStatusFromResolution(task: any, resolution: string): Promise<void> {
+  let newStatus: string;
+  let claimedByUpdate: string | null | undefined = undefined;
+
+  switch (resolution) {
+    case 'approve_claimer':   newStatus = 'verified'; break;
+    case 'challenge_claimer': newStatus = 'failed'; break;
+    case 'rework_required':
+      newStatus = 'pending';
+      claimedByUpdate = null;
+      break;
+    case 'no_action':         newStatus = 'done'; break;
+    default: throw new Error(`Unknown HITL resolution for task status update: ${resolution}`);
+  }
+
+  const update: any = { status: newStatus };
+  if (claimedByUpdate !== undefined) {
+    update.claimed_by = claimedByUpdate;
+  }
+
+  const { error } = await db.from('trinity_tasks')
+    .update(update)
+    .eq('id', task.id)
+    .in('status', ['doing', 'in_progress', 'pending_clarification', 'pending_validation', 'done']);
+
+  if (error) {
+    throw new Error(`trinity_tasks status update failed for task ${task.id}: ${error.message}`);
+  }
 }
