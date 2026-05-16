@@ -2,6 +2,7 @@ import { db } from '../db';
 import { runPCP } from './pcp-validator';
 import { runAdversarialJudge } from './adversarial-judge';
 import { applyValidationDeltas } from './validation-repid-delta';
+import { HitlReason, HitlResolution, hitlService } from './hitl-service';
 
 const POLL_INTERVAL_MS = parseInt(process.env.VALIDATION_WORKER_POLL_MS || '30000', 10);
 const BATCH_SIZE = parseInt(process.env.VALIDATION_BATCH_SIZE || '5', 10);
@@ -15,6 +16,7 @@ export async function startValidationWorker() {
   }
   console.log('[ValidationWorker] Starting poll loop');
   setInterval(processQueue, POLL_INTERVAL_MS);
+  setInterval(pollResolvedHitlEntries, POLL_INTERVAL_MS);
   
   // Also start a timeout watcher
   setInterval(checkTimeouts, 60_000);
@@ -99,57 +101,83 @@ async function processSingleTask(claim: any) {
     }
 
     // 4. Update validation_queue
-    const statusMap: Record<string, string> = {
-      'verified': 'completed',
-      'challenged': 'completed',
-      'escalated': 'escalated'
-    };
+    if (workerVerdict === 'escalated') {
+      const reason: HitlReason =
+        pcpConfidence < 0.5 ? 'pcp_low_confidence' :
+        judgeVerdict === 'ESCALATE' ? 'judge_escalated' :
+        (pcpScore >= passThreshold && judgeVerdict === 'CHALLENGE') ? 'judge_pcp_disagreement' :
+        'judge_escalated';
 
-    const finalStatus = statusMap[workerVerdict] || 'escalated';
+      const { id: hitlRequestId } = await hitlService.createRequest({
+        taskId: taskData.id,
+        validationQueueId: claim.id,
+        reason,
+        context: {
+          pcpScore,
+          pcpConfidence,
+          judgeVerdict,
+          judgeConfidence: judgeResult.confidence,
+          validatorAgents: pcpResult.validators,
+          taskSnapshot: { prompt: taskData.prompt, result: taskData.result, claimed_by: taskData.claimed_by, tier: taskData.tier },
+          workerVerdictPreHitl: 'escalated',
+        },
+      });
 
-    await db.from('validation_queue').update({
-      status: finalStatus,
-      pcp_score: pcpScore,
-      judge_verdict: judgeVerdict,
-      judge_confidence: judgeResult.confidence,
-      validator_agents: pcpResult.validators,
-      worker_verdict: workerVerdict
-    }).eq('id', claim.id);
-
-    // 5. Update trinity_tasks
-    let taskStatus = 'pending_clarification';
-    if (workerVerdict === 'verified') taskStatus = 'verified';
-    if (workerVerdict === 'challenged') taskStatus = 'challenged';
-
-    await db.from('trinity_tasks').update({
-      status: taskStatus
-    }).eq('id', claim.task_id);
-
-    // Apply RepID Deltas
-    if (workerVerdict !== 'escalated') {
-      await applyValidationDeltas(claim.id, taskData, workerVerdict, pcpResult.validators, judgeVerdict);
-    }
-
-    // 6. Append hal_audit_chain entry
-    await db.rpc('append_hal_audit_chain', {
-      source_table: 'validation_queue',
-      source_id: claim.id,
-      event_payload: {
-        task_id: claim.task_id,
-        worker_verdict: workerVerdict,
+      // Update validation_queue to reflect pending HITL state (keep status processing)
+      await db.from('validation_queue').update({
+        status: 'processing',
+        worker_verdict: 'escalated',
         pcp_score: pcpScore,
         judge_verdict: judgeVerdict,
         judge_confidence: judgeResult.confidence,
         validator_agents: pcpResult.validators,
-        claimer_delta: workerVerdict === 'verified' ? 200 : -500, // simplified, real delta logged in pipeline
-        phase_2_6_signature: true,
-        provenance: taskData.metadata?._provenance_source || null
-      }
-    });
+        metadata: { ...claim.metadata, hitl_request_id: hitlRequestId },
+      }).eq('id', claim.id);
+
+      // Update trinity_tasks status — DO NOT apply RepID deltas yet
+      await db.from('trinity_tasks').update({
+        status: 'pending_clarification',
+      }).eq('id', taskData.id);
+
+    } else {
+      await db.from('validation_queue').update({
+        status: 'completed',
+        processed_at: new Date().toISOString(),
+        pcp_score: pcpScore,
+        judge_verdict: judgeVerdict,
+        judge_confidence: judgeResult.confidence,
+        validator_agents: pcpResult.validators,
+        worker_verdict: workerVerdict
+      }).eq('id', claim.id);
+
+      let taskStatus = workerVerdict === 'verified' ? 'verified' : 'challenged';
+      await db.from('trinity_tasks').update({
+        status: taskStatus
+      }).eq('id', claim.task_id);
+
+      await applyValidationDeltas(claim.id, taskData, workerVerdict, pcpResult.validators, judgeVerdict);
+
+      // Append hal_audit_chain entry
+      await db.rpc('append_hal_audit_chain', {
+        source_table: 'validation_queue',
+        source_id: claim.id,
+        event_payload: {
+          task_id: claim.task_id,
+          worker_verdict: workerVerdict,
+          pcp_score: pcpScore,
+          judge_verdict: judgeVerdict,
+          judge_confidence: judgeResult.confidence,
+          validator_agents: pcpResult.validators,
+          claimer_delta: workerVerdict === 'verified' ? 200 : -500,
+          phase_2_6_signature: true,
+          provenance: taskData.metadata?._provenance_source || null
+        }
+      });
+    }
 
   } catch (err: any) {
     console.error(`[ValidationWorker] Error processing claim ${claim.id}:`, err.message);
-    await db.from('validation_queue').update({ status: 'failed' }).eq('id', claim.id);
+    await db.from('validation_queue').update({ status: 'failed', processed_at: new Date().toISOString() }).eq('id', claim.id);
   }
 }
 
@@ -160,17 +188,80 @@ async function checkTimeouts() {
 
     const { data: oldClaims } = await db
       .from('validation_queue')
-      .select('id, task_id')
+      .select('id, task_id, metadata')
       .eq('status', 'processing')
       .lt('processed_at', cutoffDate);
 
     if (oldClaims && oldClaims.length > 0) {
       for (const claim of oldClaims) {
-        await db.from('validation_queue').update({ status: 'escalated', worker_verdict: 'escalated' }).eq('id', claim.id);
+        // Create HITL request for timeout
+        const { id: hitlRequestId } = await hitlService.createRequest({
+          taskId: claim.task_id,
+          validationQueueId: claim.id,
+          reason: 'timeout_escalation',
+          context: {
+            taskSnapshot: {}, // Not loaded in this simplified loop
+            workerVerdictPreHitl: 'escalated'
+          }
+        });
+
+        await db.from('validation_queue').update({
+          status: 'processing',
+          worker_verdict: 'escalated',
+          metadata: { ...claim.metadata, hitl_request_id: hitlRequestId }
+        }).eq('id', claim.id);
+
         await db.from('trinity_tasks').update({ status: 'pending_clarification' }).eq('id', claim.task_id);
       }
     }
   } catch (err: any) {
     console.error('[ValidationWorker] Timeout checker error:', err.message);
   }
+}
+
+async function pollResolvedHitlEntries(): Promise<void> {
+  const { data } = await db.from('validation_queue')
+    .select('*')
+    .eq('status', 'processing')
+    .filter('metadata->>hitl_resolved', 'eq', 'true')
+    .is('metadata->>hitl_delta_applied', null)
+    .limit(BATCH_SIZE);
+
+  for (const entry of (data ?? [])) {
+    const resolution = entry.metadata.hitl_resolution as HitlResolution;
+    await applyHitlResolutionDelta(entry, resolution);
+  }
+}
+
+async function applyHitlResolutionDelta(entry: any, resolution: HitlResolution): Promise<void> {
+  switch (resolution) {
+    case 'approve_claimer':
+      await applyValidationDeltas(entry.id, { id: entry.task_id }, 'verified', entry.validator_agents || [], entry.judge_verdict || 'APPROVE');
+      break;
+    case 'challenge_claimer':
+      await applyValidationDeltas(entry.id, { id: entry.task_id }, 'challenged', entry.validator_agents || [], entry.judge_verdict || 'CHALLENGE');
+      break;
+    case 'rework_required':
+      await db.from('trinity_tasks')
+        .update({ status: 'pending', claimed_by: null }) // simplified without cooldown if column missing
+        .eq('id', entry.task_id);
+      break;
+    case 'no_action':
+      await db.from('trinity_tasks').update({ status: 'done' }).eq('id', entry.task_id);
+      break;
+  }
+
+  // Mark delta applied
+  await db.from('validation_queue').update({
+    status: 'completed',
+    processed_at: new Date().toISOString(),
+    metadata: { ...entry.metadata, hitl_delta_applied: true, hitl_delta_applied_at: new Date().toISOString() },
+  }).eq('id', entry.id);
+
+  // Audit chain
+  await db.rpc('append_hal_audit_chain', {
+    source_table: 'validation_queue',
+    source_id: entry.id,
+    event_payload: { resolution, task_id: entry.task_id, hitl_delta_applied: true }
+  });
 }

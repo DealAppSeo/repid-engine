@@ -436,6 +436,9 @@ if (!IS_TEST) {
   }, next2amUtc.getTime() - nowAnchor.getTime());
 }
 
+import { startHitlExpirationJob } from './services/hitl-expiration-job';
+
 startValidationWorker();
+startHitlExpirationJob();
 
 export default app;
