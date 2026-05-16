@@ -1,11 +1,15 @@
 import { Router } from 'express';
 import { hitlService, HitlReason, HitlResolution } from '../../services/hitl-service';
-import { requireAuth } from '../../middleware/auth'; // Ensure this matches actual auth middleware path
+import { authMiddleware } from '../../middleware/auth'; 
 
 const router = Router();
 
-// Require auth if OBSERVABILITY_REQUIRE_AUTH is set (or implicitly for hitl routes)
-router.use(requireAuth);
+// Wrap in a conditional middleware layer controlled by env var
+const requireAuthIfEnabled = process.env.OBSERVABILITY_REQUIRE_AUTH === 'true' 
+  ? authMiddleware 
+  : (req: any, res: any, next: any) => next();
+
+router.use(requireAuthIfEnabled);
 
 router.get('/requests', async (req, res) => {
   try {
