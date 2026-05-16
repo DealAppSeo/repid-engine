@@ -295,3 +295,77 @@ export async function runScoreEvent(
     reason: delta.reason,
   };
 }
+
+export async function applyValidationEvent(
+  agent_id: string,
+  event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY',
+  delta: number,
+  metadata: Record<string, any> = {}
+) {
+  const agent = await loadAgent(agent_id);
+  if (!agent) throw new Error(`Agent not found: ${agent_id}`);
+
+  const old_repid = agent.current_repid;
+  const new_repid = Math.max(0, old_repid + delta); // simple floor 0
+
+  const triggerProof = await shouldTriggerProof(agent_id, Math.abs(delta));
+  const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
+
+  const insertPayload = {
+    agent_id,
+    event_type,
+    delta: Math.round(delta),
+    repid_before: old_repid,
+    repid_after: Math.round(new_repid),
+    hal_score: 0.5,
+    hal_decision: 'clean',
+    repid_delta_calculated: Math.round(delta),
+    repid_delta_applied: Math.round(new_repid - old_repid),
+    zk_proof_triggered: triggerProof,
+    zk_proof_id,
+    decision_outcome: 'clean',
+    metadata
+  };
+
+  const { data: eventRow, error: evErr } = await db
+    .from('repid_score_events')
+    .insert(insertPayload)
+    .select('id')
+    .single();
+
+  if (evErr) throw new Error(`score event insert failed: ${evErr.message}`);
+
+  await db
+    .from('repid_agents')
+    .update({
+      current_repid: Math.round(new_repid),
+      last_active_at: new Date().toISOString(),
+      last_updated: new Date().toISOString(),
+    })
+    .eq('id', agent_id);
+
+  if (triggerProof && zk_proof_id) {
+    db.from('repid_proof_queue')
+      .insert({
+        job_id: zk_proof_id,
+        agent_id,
+        event_id: (eventRow as any).id,
+        status: 'pending',
+        zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app',
+      })
+      .then(() => {
+        const fetch = require('node-fetch');
+        fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            agent_id, 
+            score: Math.round(new_repid),
+            metadata: { job_id: zk_proof_id }
+          })
+        }).catch((err: any) => console.error('[scoring/pipeline] proof service call failed:', err));
+      }).catch((err: any) => console.error('[scoring/pipeline] proof queue insert failed:', err));
+  }
+
+  return { old_repid, new_repid, delta_applied: Math.round(new_repid - old_repid) };
+}
