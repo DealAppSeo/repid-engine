@@ -11,8 +11,16 @@ import { startTradingRound, resolveOpenRounds, getTraderState } from '../service
 import { getTwoBuilderSnapshot, getTimeseries, bootstrapDemoSnapshots } from '../services/two-builder-demo';
 import { createAnonymousBuilder } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
+import { generateCard } from '../services/zkp-card-generator';
+import { renderCardHtml } from '../services/zkp-card-renderer';
+import substanceGateRouter from './v1/substance-gate';
+import hitlRouter from './v1/hitl';
+import observabilityRouter from './v1/observability';
 
 const router = Router();
+router.use(substanceGateRouter);
+router.use('/hitl', hitlRouter);
+router.use('/status', observabilityRouter);
 
 router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
@@ -201,6 +209,29 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
     if (error) console.error(error);
 
   res.json({ batch_id: `batch_${Date.now()}`, proofs, processed_at: new Date().toISOString(), total: proofs.length });
+});
+
+// --- ZKP Cards -------------------------------------------------------------
+
+router.post('/cards/generate', async (req: Request, res: Response) => {
+  const { agent_name, task_id, task_title, event_type } = req.body;
+  if (!agent_name || !event_type) return res.status(400).json({ error: 'agent_name and event_type required' });
+  const cardId = await generateCard({ agent_name, task_id, task_title, event_type });
+  if (!cardId) return res.status(500).json({ error: 'Card generation failed or disabled' });
+  res.json({ card_id: cardId, url: `https://trustshell.dev/verify/${cardId}` });
+});
+
+router.get('/cards/:card_id', async (req: Request, res: Response) => {
+  const html = await renderCardHtml(req.params.card_id as string);
+  if (!html) return res.status(404).send('Card not found');
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
+});
+
+router.get('/cards/:card_id/json', async (req: Request, res: Response) => {
+  const { data: card, error } = await db.from('zkp_cards').select('*').eq('card_id', req.params.card_id).maybeSingle();
+  if (error || !card) return res.status(404).json({ error: 'Card not found' });
+  res.json(card);
 });
 
 // ===========================================================================

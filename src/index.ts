@@ -1,4 +1,5 @@
 import express from 'express';
+import { startValidationWorker } from './services/validation-queue-worker';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
@@ -434,5 +435,10 @@ if (!IS_TEST) {
     setInterval(runDailyAuditAnchor, 24 * 60 * 60 * 1000);
   }, next2amUtc.getTime() - nowAnchor.getTime());
 }
+
+import { startHitlExpirationJob } from './services/hitl-expiration-job';
+
+startValidationWorker();
+startHitlExpirationJob();
 
 export default app;
