@@ -3,46 +3,30 @@ require('dotenv').config({ path: '.env' });
 
 const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
-async function run() {
-  console.log('--- Q0.1 ---');
-  const ids = [
-    '015a8fd7-3c45-48eb-90ea-51021c703efe',
-    'df1738cb-6fd2-4d15-a4f4-260d35c581b4',
-    '496a4ec7-1fb7-48db-a3ee-09e5720fe8cb'
-  ];
-  const q1 = await db.from('validation_queue')
-    .select(`
-      id, task_id, status, metadata,
-      validator_agents, pcp_score, judge_verdict, judge_confidence,
-      trinity_tasks!inner(status, claimed_by)
-    `)
-    .in('id', ids)
-    .order('created_at');
-  
-  if (q1.error) console.error(q1.error);
-  else {
-    for (const row of q1.data) {
-        console.log({
-            vq_id: row.id,
-            task_id: row.task_id,
-            status: row.status,
-            delta_applied: row.metadata?.hitl_delta_applied,
-            resolution: row.metadata?.hitl_resolution,
-            task_status: row.trinity_tasks?.status,
-            claimed_by: row.trinity_tasks?.claimed_by,
-            validator_agents: row.validator_agents,
-        });
+async function check() {
+  console.log("=== Q0.1: Latest VALIDATION events ===");
+  const { data: events, error: e1 } = await db.from('repid_score_events')
+    .select('event_type, delta, metadata, created_at')
+    .in('event_type', ['VALIDATION_PASSED', 'VALIDATION_FAILED', 'VALIDATOR_REWARD', 'VALIDATOR_PENALTY'])
+    .order('created_at', { ascending: false })
+    .limit(10);
+  console.log(e1 ? e1 : events);
+
+  console.log("\n=== Q0.2: trinity_tasks.tier distribution ===");
+  const { data: tiers, error: e2 } = await db.rpc('run_sql', { query: `
+    SELECT tier, COUNT(*) AS count
+    FROM trinity_tasks GROUP BY tier ORDER BY count DESC LIMIT 10;
+  `});
+  if (e2 && e2.code === 'PGRST202') {
+    // try direct group by using JS since rpc is missing
+    const { data: allTasks } = await db.from('trinity_tasks').select('tier');
+    const counts = {};
+    for (const t of allTasks || []) {
+      counts[t.tier] = (counts[t.tier] || 0) + 1;
     }
+    console.log(counts);
+  } else {
+    console.log(e2 ? e2 : tiers);
   }
-
-  for (const row of q1.data || []) {
-      const { count: eventsCount } = await db.from('repid_score_events').select('*', { count: 'exact', head: true }).eq('metadata->>task_id', String(row.task_id));
-      const { count: auditCount } = await db.from('hal_audit_chain').select('*', { count: 'exact', head: true }).eq('source_table', 'validation_queue').eq('source_id', String(row.id));
-      console.log(`Counts for task ${row.task_id}: repid_events=${eventsCount}, audit_entries=${auditCount}`);
-  }
-
-  console.log('--- Q0.2 ---');
-  console.log('p_source_table text, p_source_id text, p_event_payload jsonb, p_canonical_json_text text');
 }
-
-run().catch(console.error);
+check();
