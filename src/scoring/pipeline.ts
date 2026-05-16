@@ -354,7 +354,6 @@ export async function applyValidationEvent(
         zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app',
       })
       .then(() => {
-        const fetch = require('node-fetch');
         fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
