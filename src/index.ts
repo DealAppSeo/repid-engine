@@ -138,6 +138,12 @@ app.use((req, res, next) => {
   // Sprint A7: /api/v1/llm/complete also accepts free-form prompts that may
   // contain SQL-shaped tokens; same parameterized-DB rationale.
   if (req.path === '/api/v1/llm/complete') return next();
+  // Phase 2.8: /api/v1/substance-gate/events carries the agent's raw LLM
+  // result/task text (code, prose, lists) which legitimately contains ';',
+  // '--' and SQL keywords. Without this bypass the blanket scan 400s nearly
+  // every gate POST, so substance_gate_events never accumulates. The route's
+  // downstream Supabase writes (substance-gate-writer) are all parameterized.
+  if (req.path === '/api/v1/substance-gate/events') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
