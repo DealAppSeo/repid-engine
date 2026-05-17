@@ -137,3 +137,115 @@ export async function applyValidationDeltas(
     }
   }
 }
+
+// === Service Contract Deltas (Phase 2.9 — locked in roadmap Architecture Decision #8) ===
+//
+// TWO events per contract for v1/v2 economic clarity:
+//   Event 1 (SERVICE_FULFILLED): clean transaction occurred, regardless of quality
+//   Event 2 (SERVICE_SATISFIED): buyer assessed quality and was satisfied
+//
+// This rewards both throughput (do work) and quality (do work well).
+
+const SERVICE_FULFILLED_DELTAS = {
+  provider: 10,
+  buyer: 5,
+} as const;
+
+const SERVICE_SATISFIED_DELTA_BASE = {
+  provider: 30,  // multiplied by satisfaction_score
+  buyer: 15,
+} as const;
+
+const SERVICE_DISPUTE_DELTAS = {
+  provider_at_fault: { provider: -100, buyer: 20 },   // BFT verdict caught provider failure
+  buyer_at_fault:    { provider: 20, buyer: -50 },    // BFT verdict caught false dispute
+  no_fault:          { provider: 0, buyer: 0 },
+} as const;
+
+export async function applyServiceFulfilledDeltas(
+  contract: { id: string, service_id: string, provider_agent_id: string, buyer_agent_id: string }
+): Promise<void> {
+  await applyValidationEvent(
+    contract.provider_agent_id,
+    'SERVICE_FULFILLED',
+    SERVICE_FULFILLED_DELTAS.provider,
+    {
+      contract_id: contract.id,
+      service_id: contract.service_id,
+      role: 'provider',
+    }
+  );
+  await applyValidationEvent(
+    contract.buyer_agent_id,
+    'SERVICE_FULFILLED',
+    SERVICE_FULFILLED_DELTAS.buyer,
+    {
+      contract_id: contract.id,
+      service_id: contract.service_id,
+      role: 'buyer',
+    }
+  );
+}
+
+export async function applyServiceSatisfiedDeltas(
+  contract: { id: string, provider_agent_id: string, buyer_agent_id: string },
+  satisfactionScore: number
+): Promise<void> {
+  const providerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * satisfactionScore);
+  const buyerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * satisfactionScore);
+
+  await applyValidationEvent(
+    contract.provider_agent_id,
+    'SERVICE_SATISFIED',
+    providerDelta,
+    {
+      contract_id: contract.id,
+      satisfaction_score: satisfactionScore,
+      role: 'provider',
+    }
+  );
+  await applyValidationEvent(
+    contract.buyer_agent_id,
+    'SERVICE_SATISFIED',
+    buyerDelta,
+    {
+      contract_id: contract.id,
+      satisfaction_score: satisfactionScore,
+      role: 'buyer',
+    }
+  );
+}
+
+
+export async function applyServiceDisputeResolution(
+  contract: { id: string, provider_agent_id: string, buyer_agent_id: string },
+  verdict: 'provider_at_fault' | 'buyer_at_fault' | 'no_fault'
+): Promise<void> {
+  const deltas = SERVICE_DISPUTE_DELTAS[verdict];
+  
+  if (deltas.provider !== 0) {
+    await applyValidationEvent(
+      contract.provider_agent_id,
+      deltas.provider > 0 ? 'SERVICE_FULFILLED' : 'VALIDATION_FAILED',
+      deltas.provider,
+      {
+        contract_id: contract.id,
+        verdict,
+        role: 'provider',
+      }
+    );
+  }
+  
+  if (deltas.buyer !== 0) {
+    await applyValidationEvent(
+      contract.buyer_agent_id,
+      deltas.buyer > 0 ? 'SERVICE_FULFILLED' : 'VALIDATION_FAILED',
+      deltas.buyer,
+      {
+        contract_id: contract.id,
+        verdict,
+        role: 'buyer',
+      }
+    );
+  }
+}
