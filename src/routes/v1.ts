@@ -18,9 +18,11 @@ import hitlRouter from './v1/hitl';
 import observabilityRouter from './v1/observability';
 import servicesRouter from './v1/services';
 import contractsRouter from './v1/contracts';
+import agentRouter from './v1/agent';
 
 const router = Router();
 router.use(substanceGateRouter);
+router.use(agentRouter); // Phase 2.10 — /api/v1/agent/process-contracts (router declares full sub-path)
 router.use('/hitl', hitlRouter);
 router.use('/status', observabilityRouter);
 router.use('/services', servicesRouter);

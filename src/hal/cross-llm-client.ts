@@ -265,7 +265,9 @@ function jaccardSimilarity(a: string, b: string): number {
  *
  * Veto requires >= 3 providers responding — gap is meaningless with 2.
  */
-function checkPythagoreanComma(beliefs: number[]): {
+// Phase 2.10: exported (was module-private) for CrossValidationServiceHandler.
+// Public-export change only — behavior unchanged.
+export function checkPythagoreanComma(beliefs: number[]): {
   severity: CommaSeverity;
   comma_gap: number | null;
   comma_veto: boolean;
