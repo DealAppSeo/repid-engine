@@ -16,11 +16,15 @@ import { renderCardHtml } from '../services/zkp-card-renderer';
 import substanceGateRouter from './v1/substance-gate';
 import hitlRouter from './v1/hitl';
 import observabilityRouter from './v1/observability';
+import servicesRouter from './v1/services';
+import contractsRouter from './v1/contracts';
 
 const router = Router();
 router.use(substanceGateRouter);
 router.use('/hitl', hitlRouter);
 router.use('/status', observabilityRouter);
+router.use('/services', servicesRouter);
+router.use('/contracts', contractsRouter);
 
 router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });

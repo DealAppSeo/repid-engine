@@ -92,7 +92,7 @@ describe('Phase 2.6: Validation Worker End-to-End Suites', () => {
   });
 
   describe('Suite 4: Delta Computation & Application', () => {
-    it('should apply VALIDATION_PASSED (+8) for verified', async () => {
+    it('should apply VALIDATION_PASSED (+80) for verified', async () => {
       const localChain: any = {};
       localChain.select = jest.fn().mockReturnValue(localChain);
       localChain.eq = jest.fn().mockReturnValue(localChain);
@@ -105,7 +105,7 @@ describe('Phase 2.6: Validation Worker End-to-End Suites', () => {
       expect(applyValidationEvent).toHaveBeenCalledWith(
         'agent-123',
         'VALIDATION_PASSED',
-        8,
+        80,
         expect.any(Object)
       );
     });
