@@ -298,7 +298,7 @@ export async function runScoreEvent(
 
 export async function applyValidationEvent(
   agent_id: string,
-  event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY',
+  event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY' | 'SERVICE_FULFILLED' | 'SERVICE_SATISFIED',
   delta: number,
   metadata: Record<string, any> = {}
 ) {
