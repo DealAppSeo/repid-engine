@@ -5,7 +5,7 @@ export async function runPCP(taskData: any) {
   // 1. Select Validators
   const { data: agents, error } = await db
     .from('repid_agents')
-    .select('name, current_repid, metadata');
+    .select('agent_name, current_repid');
 
   if (error || !agents) {
     console.error('[runPCP] Failed to fetch agents:', error);
@@ -13,7 +13,7 @@ export async function runPCP(taskData: any) {
   }
 
   // Filter: exclude claimer, exclude repid < 500
-  const eligible = agents.filter(a => a.name !== taskData.claimed_by && a.current_repid >= 500);
+  const eligible = agents.filter(a => a.agent_name !== taskData.claimed_by && a.current_repid >= 500);
 
   // Random sample weighted by RepID. Diversity logic is a plus.
   const selectedValidators = selectWeightedValidators(eligible, 3);
@@ -65,13 +65,13 @@ ${taskData.result}`;
         parsed = { validity: 0, confidence: 0 };
       }
       return {
-        name: agent.name,
+        name: agent.agent_name,
         validity: Number(parsed.validity) || 0,
         confidence: Number(parsed.confidence) || 0
       };
     } catch (e) {
-      console.error(`[runPCP] Validator ${agent.name} failed:`, e);
-      return { name: agent.name, validity: 0, confidence: 0 };
+      console.error(`[runPCP] Validator ${agent.agent_name} failed:`, e);
+      return { name: agent.agent_name, validity: 0, confidence: 0 };
     }
   }));
 
