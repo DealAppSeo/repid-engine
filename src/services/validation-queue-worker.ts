@@ -298,7 +298,7 @@ function mapResolutionToOutcome(resolution: string): string {
   switch (resolution) {
     case 'approve_claimer':   return 'verified';
     case 'challenge_claimer': return 'challenged';
-    case 'rework_required':   return 'rework';
+    case 'rework_required':   return 'rework_required';
     case 'no_action':         return 'no_action';
     default: throw new Error(`Unknown HITL resolution: ${resolution}`);
   }
