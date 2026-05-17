@@ -40,10 +40,14 @@ async function processQueue() {
     if (!claims || claims.length === 0) return;
 
     for (const claim of claims) {
-      // Atomic claim approximation
+      // Atomic claim approximation.
+      // NOTE: do NOT set processed_at here. The validation_queue_processed_check
+      // constraint enforces (status IN completed/failed/skipped) == (processed_at
+      // IS NOT NULL); a 'processing' row must keep processed_at NULL. processed_at
+      // is set only by the terminal (completed/failed) branches below.
       const { data: updated, error: updateErr } = await db
         .from('validation_queue')
-        .update({ status: 'processing', processed_at: new Date().toISOString() })
+        .update({ status: 'processing' })
         .eq('id', claim.id)
         .eq('status', 'pending')
         .select('id');
