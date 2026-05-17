@@ -94,7 +94,7 @@ ${taskData.result}`;
   };
 }
 
-function selectWeightedValidators(agents: any[], count: number) {
+export function selectWeightedValidators(agents: any[], count: number) {
   const selected: any[] = [];
   const pool = [...agents];
 
