@@ -3,6 +3,7 @@ import { runPCP } from './pcp-validator';
 import { runAdversarialJudge } from './adversarial-judge';
 import { applyValidationDeltas } from './validation-repid-delta';
 import { HitlReason, HitlResolution, hitlService } from './hitl-service';
+import { appendToAuditChain } from './auditChainWriter';
 
 const POLL_INTERVAL_MS = parseInt(process.env.VALIDATION_WORKER_POLL_MS || '30000', 10);
 const BATCH_SIZE = parseInt(process.env.VALIDATION_BATCH_SIZE || '5', 10);
@@ -161,11 +162,14 @@ async function processSingleTask(claim: any) {
 
       await applyValidationDeltas(claim.id, taskData, workerVerdict, pcpResult.validators, judgeVerdict);
 
-      // Append hal_audit_chain entry
-      await db.rpc('append_hal_audit_chain', {
-        source_table: 'validation_queue',
-        source_id: claim.id,
-        event_payload: {
+      // Append hal_audit_chain entry. Correct 4-arg p_-prefixed RPC via the
+      // shared appendToAuditChain helper (the prior raw 3-arg unprefixed call
+      // matched no function and silently no-op'd). Isolated try/catch: an
+      // audit-anchor failure must NOT bubble to processSingleTask's outer
+      // catch (which would mark this already-completed row 'failed'). Patent
+      // surface — fail LOUDLY (stack), never silently.
+      try {
+        await appendToAuditChain('validation_queue', claim.id, {
           task_id: claim.task_id,
           worker_verdict: workerVerdict,
           pcp_score: pcpScore,
@@ -175,8 +179,14 @@ async function processSingleTask(claim: any) {
           claimer_delta: workerVerdict === 'verified' ? 200 : -500,
           phase_2_6_signature: true,
           provenance: taskData.metadata?._provenance_source || null
-        }
-      });
+        });
+      } catch (auditErr: any) {
+        console.error(
+          `[ValidationWorker] hal_audit_chain append FAILED for validation_queue ${claim.id} ` +
+          `(verdict recorded but NOT anchored — patent-surface gap):`,
+          auditErr?.stack ?? auditErr
+        );
+      }
     }
 
   } catch (err: any) {
