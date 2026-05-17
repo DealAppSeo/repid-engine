@@ -144,6 +144,10 @@ app.use((req, res, next) => {
   // every gate POST, so substance_gate_events never accumulates. The route's
   // downstream Supabase writes (substance-gate-writer) are all parameterized.
   if (req.path === '/api/v1/substance-gate/events') return next();
+  // Phase 2.9: /api/v1/services and /api/v1/contracts accept free-form text
+  // in descriptions, payloads, and results which may contain SQL-like syntax.
+  // All downstream Supabase writes are parameterized.
+  if (req.path.startsWith('/api/v1/services') || req.path.startsWith('/api/v1/contracts')) return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -443,8 +447,13 @@ if (!IS_TEST) {
 }
 
 import { startHitlExpirationJob } from './services/hitl-expiration-job';
+import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 
 startValidationWorker();
 startHitlExpirationJob();
+
+// Phase 2.11 — Dispute Resolution Worker
+const disputeWorker = new DisputeResolutionWorker();
+disputeWorker.start();
 
 export default app;
