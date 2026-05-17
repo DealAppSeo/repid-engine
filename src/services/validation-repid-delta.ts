@@ -111,6 +111,8 @@ export async function applyValidationDeltas(
         tier_provenance: tierToProvenance(taskData.tier),
         judgeVerdict
       });
+    } else {
+      console.error(`[applyValidationDeltas] CRITICAL: Claimer agent not found for task ${taskData.id}: ${taskData.claimed_by}`);
     }
   }
 
@@ -134,6 +136,8 @@ export async function applyValidationDeltas(
         tier_provenance: tierToProvenance(taskData.tier),
         consensus_reached: workerVerdict !== 'escalated'
       });
+    } else {
+      console.error(`[applyValidationDeltas] CRITICAL: Validator agent not found for task ${taskData.id}: ${validatorName}`);
     }
   }
 }
