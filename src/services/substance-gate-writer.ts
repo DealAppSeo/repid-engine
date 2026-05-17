@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { appendToAuditChain } from './auditChainWriter';
 
 /**
  * Extract provenance tags from a task for propagation to derivative events.
@@ -193,14 +194,18 @@ export async function appendGateAuditChain(db: SupabaseClient, gateEventId: stri
   };
 
   try {
-    const { error } = await db.rpc('append_hal_audit_chain', {
-      source_table: 'substance_gate_events',
-      source_id: gateEventId,
-      event_payload: payload
-    });
-
-    if (error) throw error;
+    // Correct 4-arg p_-prefixed RPC via the shared helper (which also
+    // computes canonicalJson). The prior raw 3-arg unprefixed call matched
+    // no function and was silently swallowed → 0 gate events anchored.
+    await appendToAuditChain('substance_gate_events', gateEventId, payload);
   } catch (error: any) {
-    console.error('[GateWriter] Error appending hal_audit_chain:', error.message);
+    // Keep gate recording resilient, but FAIL LOUDLY (stack). This is
+    // patent surface (P-001/P-003) — a silent swallow here means the gate
+    // event is never anchored. Never let signature drift be invisible again.
+    console.error(
+      `[GateWriter] hal_audit_chain append FAILED for substance_gate_events ${gateEventId} ` +
+      `(gate event NOT anchored — patent-surface gap):`,
+      error?.stack ?? error
+    );
   }
 }
