@@ -1,0 +1,137 @@
+import { db } from '../db';
+import { runPCP } from '../services/pcp-validator';
+import { runAdversarialJudge } from '../services/adversarial-judge';
+import { applyServiceDisputeResolution } from '../services/validation-repid-delta';
+
+const POLL_INTERVAL_MS = parseInt(process.env.DISPUTE_WORKER_POLL_INTERVAL_MS ?? '15000', 10);
+
+export class DisputeResolutionWorker {
+  private running = false;
+
+  async start() {
+    if (process.env.DISPUTE_WORKER_ENABLED !== 'true') {
+      console.log('[DisputeWorker] Disabled via env flag, skipping');
+      return;
+    }
+    this.running = true;
+    console.log('[DisputeWorker] Starting poll loop');
+    this.pollLoop();
+  }
+
+  stop() {
+    this.running = false;
+  }
+
+  private async pollLoop() {
+    while (this.running) {
+      try {
+        const handled = await this.processOne();
+        if (!handled) {
+          await this.sleep(POLL_INTERVAL_MS);
+        }
+      } catch (e: any) {
+        console.error('[DisputeWorker] poll error:', e?.message, e?.stack);
+        await this.sleep(POLL_INTERVAL_MS);
+      }
+    }
+  }
+
+  private async processOne(): Promise<boolean> {
+    // Claim next pending dispute (atomic)
+    const { data: candidate } = await db
+      .from('dispute_validation_queue')
+      .select('*, service_contracts!inner(*)')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (!candidate) return false;
+
+    // Atomic claim
+    const { data: claimed } = await db
+      .from('dispute_validation_queue')
+      .update({ status: 'processing' })
+      .eq('id', candidate.id)
+      .eq('status', 'pending')
+      .select()
+      .maybeSingle();
+
+    if (!claimed) return false;  // lost race
+
+    const contract = candidate.service_contracts;
+    console.log(`[DisputeWorker] processing dispute for contract ${contract.id}`);
+
+    try {
+      // Run BFT panel: PCP over the disputed result + judge
+      const syntheticTask = {
+        id: -1 as const,
+        claimed_by: contract.provider_agent_id,  // exclude provider from validation
+        title: `dispute-${contract.id}`,
+        description: `dispute reason: ${candidate.metadata?.dispute_reason ?? 'unspecified'}`,
+        result: JSON.stringify(contract.result),
+        tier: 4,  // T3+ for disputes — higher stakes
+      };
+
+      const pcpResult = await runPCP(syntheticTask);
+      const judgeResult = await runAdversarialJudge({
+        content: JSON.stringify(contract.result),
+        claimer_provider: undefined,
+        pcp_result: pcpResult,
+      });
+
+      // Verdict:
+      //   PCP confidence high + judge APPROVE → buyer_at_fault (provider was correct)
+      //   PCP confidence low OR judge REJECT → provider_at_fault
+      //   Mixed → no_fault
+      let verdict: 'provider_at_fault' | 'buyer_at_fault' | 'no_fault';
+      if (pcpResult.confidence >= 0.7 && judgeResult.verdict === 'APPROVE') {
+        verdict = 'buyer_at_fault';
+      } else if (pcpResult.confidence < 0.3 || judgeResult.verdict === 'REJECT') {
+        verdict = 'provider_at_fault';
+      } else {
+        verdict = 'no_fault';
+      }
+
+      // Update dispute queue
+      await db.from('dispute_validation_queue').update({
+        status: 'completed',
+        worker_verdict: verdict,
+        pcp_score: pcpResult.confidence,
+        judge_verdict: judgeResult.verdict,
+        judge_confidence: judgeResult.confidence,
+        processed_at: new Date().toISOString(),
+      }).eq('id', candidate.id);
+
+      // Update service contract status
+      await db.from('service_contracts').update({
+        status: 'resolved',
+        dispute_verdict: verdict,
+        resolved_at: new Date().toISOString(),
+      }).eq('id', contract.id);
+
+      // Apply dispute deltas
+      await applyServiceDisputeResolution(contract, verdict);
+
+      console.log(`[DisputeWorker] resolved contract ${contract.id} → ${verdict}`);
+      return true;
+
+    } catch (e: any) {
+      console.error(`[DisputeWorker] failed for dispute ${candidate.id}:`, e?.message, e?.stack);
+      await db.from('dispute_validation_queue').update({
+        status: 'failed',
+        processed_at: new Date().toISOString(),
+        metadata: {
+          ...(candidate.metadata ?? {}),
+          last_error: e?.message,
+          last_error_at: new Date().toISOString(),
+        },
+      }).eq('id', candidate.id);
+      return false;
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
