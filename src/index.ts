@@ -148,6 +148,9 @@ app.use((req, res, next) => {
   // in descriptions, payloads, and results which may contain SQL-like syntax.
   // All downstream Supabase writes are parameterized.
   if (req.path.startsWith('/api/v1/services') || req.path.startsWith('/api/v1/contracts')) return next();
+  // Phase 2.10: /api/v1/agent/process-contracts carries buyer payload content
+  // (free-form prose/code) processed by PCP/judge; downstream writes parameterized.
+  if (req.path === '/api/v1/agent/process-contracts') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
