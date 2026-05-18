@@ -19,6 +19,37 @@ router.get('/health', async (req: Request, res: Response) => {
     ),
   ]).catch(() => ({ connected: false, error: 'error' }));
 
+  const timeoutMs = 15 * 60 * 1000;
+  const cutoffDate = new Date(Date.now() - timeoutMs).toISOString();
+
+  let processing_total = 0;
+  let processing_hitl_pending = 0;
+  let processing_stuck = 0;
+
+  try {
+    const { data: processingRows, count } = await db
+      .from('validation_queue')
+      .select('metadata, created_at', { count: 'exact' })
+      .eq('status', 'processing');
+
+    if (processingRows) {
+      processing_total = count ?? processingRows.length;
+      for (const row of processingRows) {
+        const isHitl = row.metadata?.hitl_request_id != null && row.metadata?.hitl_resolved !== 'true';
+        if (isHitl) {
+          processing_hitl_pending++;
+        } else {
+          const isStuck = new Date(row.created_at).getTime() < Date.now() - timeoutMs;
+          if (isStuck) {
+            processing_stuck++;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch validation_queue metrics', err);
+  }
+
   res.json({
     status: 'ok',
     version: config.version,
@@ -30,6 +61,11 @@ router.get('/health', async (req: Request, res: Response) => {
     deployerConfigured: !!config.deployerPrivateKey,
     engine: 'HyperDAG RepID Scoring Engine',
     protocol: 'hyperdag.dev',
+    validation_queue: {
+      processing_total,
+      processing_hitl_pending,
+      processing_stuck
+    }
   });
 });
 
