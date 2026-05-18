@@ -5,7 +5,14 @@ import { testHashKeyConnection } from '../engine/hashkey-chain';
 
 const router = Router();
 
+let cachedHealth: any = null;
+let cachedHealthTime = 0;
+
 router.get('/health', async (req: Request, res: Response) => {
+  if (Date.now() - cachedHealthTime < 5000 && cachedHealth) {
+    return res.json(cachedHealth);
+  }
+
   let supabaseConnected = false;
   try {
     const { error } = await db.from('repid_agents').select('id').limit(1);
@@ -19,7 +26,51 @@ router.get('/health', async (req: Request, res: Response) => {
     ),
   ]).catch(() => ({ connected: false, error: 'error' }));
 
-  res.json({
+  const timeoutMs = 15 * 60 * 1000;
+  
+  let processing_total = 0;
+  let processing_hitl_pending = 0;
+  let processing_stuck = 0;
+  let processing_hitl_pending_over_24h = 0;
+  let pending_count = 0;
+  let last_processed_at: string | null = null;
+  let last_created_at: string | null = null;
+
+  try {
+    const { data: queueRows } = await db
+      .from('validation_queue')
+      .select('metadata, created_at, status')
+      .in('status', ['processing', 'pending']);
+      
+    if (queueRows) {
+      for (const row of queueRows) {
+        if (row.status === 'pending') {
+          pending_count++;
+          continue;
+        }
+        processing_total++;
+        const isHitl = row.metadata?.hitl_request_id != null;
+        const ageMs = Date.now() - new Date(row.created_at).getTime();
+        if (isHitl) {
+          processing_hitl_pending++;
+          if (ageMs > 24 * 60 * 60 * 1000) processing_hitl_pending_over_24h++;
+        } else {
+          if (ageMs > timeoutMs) processing_stuck++;
+        }
+      }
+    }
+
+    const { data: lastProcessed } = await db.from('validation_queue').select('processed_at').not('processed_at', 'is', null).order('processed_at', { ascending: false }).limit(1);
+    if (lastProcessed && lastProcessed.length > 0) last_processed_at = lastProcessed[0].processed_at;
+
+    const { data: lastCreated } = await db.from('validation_queue').select('created_at').order('created_at', { ascending: false }).limit(1);
+    if (lastCreated && lastCreated.length > 0) last_created_at = lastCreated[0].created_at;
+
+  } catch (err) {
+    console.error('Failed to fetch validation_queue metrics', err);
+  }
+
+  const responseBody = {
     status: 'ok',
     version: config.version,
     timestamp: new Date().toISOString(),
@@ -30,7 +81,21 @@ router.get('/health', async (req: Request, res: Response) => {
     deployerConfigured: !!config.deployerPrivateKey,
     engine: 'HyperDAG RepID Scoring Engine',
     protocol: 'hyperdag.dev',
-  });
+    validation_queue: {
+      processing_total,
+      processing_hitl_pending,
+      processing_stuck,
+      processing_hitl_pending_over_24h,
+      last_processed_at,
+      last_created_at,
+      pending_count
+    }
+  };
+
+  cachedHealth = responseBody;
+  cachedHealthTime = Date.now();
+  
+  res.json(responseBody);
 });
 
 export default router;
