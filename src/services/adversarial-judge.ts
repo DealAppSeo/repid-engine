@@ -11,7 +11,7 @@ export async function runAdversarialJudge(taskData: any) {
 
   // 2. Select Adversarial Provider
   let judgeProvider = 'anthropic';
-  let model = 'claude-3-haiku-20240307';
+  let model = 'claude-haiku-4-5-20251001';
   
   if (claimerProvider.toLowerCase() === 'anthropic') {
     judgeProvider = 'openai';
