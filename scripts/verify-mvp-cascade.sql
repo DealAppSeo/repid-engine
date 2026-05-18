@@ -101,3 +101,21 @@ FROM (SELECT 1) dummy
 LEFT JOIN base ON true
 LEFT JOIN events ON true
 LEFT JOIN anchors ON true;
+
+\echo '=== Section H: Across-Time Health View (Last 24h) ==='
+SELECT 
+  date_trunc('hour', created_at) as window_hour,
+  count(*) as total_cascades,
+  sum(case when status='fulfilled' then 1 else 0 end) as fulfilled,
+  sum(case when status='escrowed' then 1 else 0 end) as stuck_escrowed,
+  avg(EXTRACT(EPOCH FROM (fulfilled_at - escrowed_at))) as avg_latency_sec
+FROM service_contracts
+WHERE created_at > NOW() - INTERVAL '24 HOURS'
+GROUP BY window_hour
+ORDER BY window_hour DESC;
+
+\echo '=== Section I: Defect 3 Detector ==='
+SELECT id, result->>'verdict' as verdict, status, fulfilled_at 
+FROM service_contracts 
+WHERE result->>'verdict' = 'VETO' AND status = 'fulfilled'
+ORDER BY fulfilled_at DESC;
