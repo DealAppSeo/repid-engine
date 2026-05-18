@@ -61,10 +61,10 @@ router.get('/health', async (req: Request, res: Response) => {
     }
 
     const { data: lastProcessed } = await db.from('validation_queue').select('processed_at').not('processed_at', 'is', null).order('processed_at', { ascending: false }).limit(1);
-    if (lastProcessed && lastProcessed.length > 0) last_processed_at = lastProcessed[0].processed_at;
+    const lp = lastProcessed?.[0]; if (lp) last_processed_at = lp.processed_at;
 
     const { data: lastCreated } = await db.from('validation_queue').select('created_at').order('created_at', { ascending: false }).limit(1);
-    if (lastCreated && lastCreated.length > 0) last_created_at = lastCreated[0].created_at;
+    const lc = lastCreated?.[0]; if (lc) last_created_at = lc.created_at;
 
   } catch (err) {
     console.error('Failed to fetch validation_queue metrics', err);
