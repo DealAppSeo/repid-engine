@@ -195,37 +195,42 @@ async function processSingleTask(claim: any) {
   }
 }
 
-async function checkTimeouts() {
+export async function checkTimeouts() {
   try {
-    const timeoutMs = TIMEOUT_HOURS * 60 * 60 * 1000;
+    // Default timeout to 15 minutes if TIMEOUT_HOURS is missing or invalid
+    const TIMEOUT_MINUTES = typeof TIMEOUT_HOURS !== 'undefined' ? TIMEOUT_HOURS * 60 : 15;
+    const timeoutMs = TIMEOUT_MINUTES * 60 * 1000;
     const cutoffDate = new Date(Date.now() - timeoutMs).toISOString();
 
-    const { data: oldClaims } = await db
+    const { data: stuckClaims } = await db
       .from('validation_queue')
-      .select('id, task_id, metadata')
+      .select('id, task_id, metadata, created_at')
       .eq('status', 'processing')
-      .lt('processed_at', cutoffDate);
+      .lt('created_at', cutoffDate); // Use created_at since claimed_at is not on the schema and processed_at is NULL
 
-    if (oldClaims && oldClaims.length > 0) {
-      for (const claim of oldClaims) {
-        // Create HITL request for timeout
-        const { id: hitlRequestId } = await hitlService.createRequest({
-          taskId: claim.task_id,
-          validationQueueId: claim.id,
-          reason: 'timeout_escalation',
-          context: {
-            taskSnapshot: {}, // Not loaded in this simplified loop
-            workerVerdictPreHitl: 'escalated'
+    if (stuckClaims && stuckClaims.length > 0) {
+      for (const claim of stuckClaims) {
+        const isHitlPending = claim.metadata?.hitl_request_id != null;
+        
+        if (isHitlPending) {
+          const ageMs = Date.now() - new Date(claim.created_at).getTime();
+          // HITL-pending past 24 hours alert (N=24h) - configure this elsewhere later
+          if (ageMs > 24 * 60 * 60 * 1000) {
+            console.warn(`[ValidationWorker] HITL-pending ALERT: task ${claim.task_id} (queue ${claim.id}) pending > 24h.`);
+          } else {
+            console.info(`[ValidationWorker] HITL-pending: task ${claim.task_id} (queue ${claim.id}) is waiting on HITL.`);
           }
-        });
-
-        await db.from('validation_queue').update({
-          status: 'processing',
-          worker_verdict: 'escalated',
-          metadata: { ...claim.metadata, hitl_request_id: hitlRequestId }
-        }).eq('id', claim.id);
-
-        await db.from('trinity_tasks').update({ status: 'pending_clarification' }).eq('id', claim.task_id);
+        } else {
+          // Genuine stuck row
+          const ageMins = Math.round((Date.now() - new Date(claim.created_at).getTime()) / 60000);
+          console.error(`[ValidationWorker] Genuine stuck processing row detected: id=${claim.id}, task_id=${claim.task_id}, created_at=${claim.created_at}, age=${ageMins}m. Resetting to pending.`);
+          
+          await db.from('validation_queue').update({
+            status: 'pending',
+            processed_at: null,
+            metadata: { ...claim.metadata, worker_reset_at: new Date().toISOString() }
+          }).eq('id', claim.id);
+        }
       }
     }
   } catch (err: any) {
