@@ -109,6 +109,81 @@ export abstract class ServiceHandlerBase {
     try {
       const result = await this.fulfill(contract);
 
+      // Defect 3 fix (2026-05-18): the composite verdict GATES settlement.
+      // Prior behaviour fulfilled unconditionally — a Pythagorean-Comma BFT
+      // VETO (or FAIL) still reached status='fulfilled' and emitted the
+      // SERVICE_FULFILLED economy, corrupting the ledger (12/12 repro in
+      // Gemini's variety run). Now VETO/FAIL routes to the dispute panel:
+      // NOT fulfilled, NO SERVICE_FULFILLED deltas, NO audit anchor. Only
+      // PASS/APPROVE — or a handler that returns no `verdict` at all (the
+      // Phase 2.11 storage/reputation handlers) — takes the fulfilled path,
+      // so there is zero regression for verdict-less handlers.
+      const verdict =
+        typeof (result as any)?.verdict === 'string'
+          ? ((result as any).verdict as string).toUpperCase()
+          : undefined;
+
+      if (verdict === 'VETO' || verdict === 'FAIL') {
+        const { data: dq, error: dqErr } = await db
+          .from('dispute_validation_queue')
+          .insert({
+            contract_id: contract.id,
+            status: 'pending',
+            pcp_score: (result as any)?.pcp_score ?? null,
+            judge_verdict: (result as any)?.judge_verdict ?? null,
+            judge_confidence: (result as any)?.judge_confidence ?? null,
+            validator_agents: (result as any)?.pcp_validators ?? null,
+            metadata: {
+              composite_verdict: verdict,
+              comma_severity: (result as any)?.comma_severity ?? null,
+              patent_marker: (result as any)?.patent_marker ?? null,
+              routed_by: this.serviceType,
+              routed_at: new Date().toISOString(),
+              fulfill_result: result,
+            },
+          })
+          .select('id')
+          .single();
+
+        if (dqErr || !dq) {
+          console.error(
+            `[${this.serviceType}] dispute_validation_queue insert failed for contract ${contract.id}:`,
+            dqErr?.message ?? dqErr,
+            (dqErr as any)?.stack ?? new Error().stack
+          );
+          throw new Error(
+            `dispute_validation_queue insert failed: ${dqErr?.message ?? 'no row returned'}`
+          );
+        }
+
+        const { error: dispErr } = await db
+          .from('service_contracts')
+          .update({
+            status: 'disputed',
+            result,
+            disputed_at: new Date().toISOString(),
+            dispute_panel_validation_queue_id: (dq as any).id,
+          })
+          .eq('id', contract.id);
+
+        if (dispErr) {
+          console.error(
+            `[${this.serviceType}] disputed-transition failed for contract ${contract.id}:`,
+            dispErr?.message ?? dispErr,
+            (dispErr as any)?.stack ?? new Error().stack
+          );
+          throw new Error(`Disputed status transition failed: ${dispErr.message}`);
+        }
+
+        console.log(
+          `[${this.serviceType}] contract ${contract.id} verdict=${verdict} ` +
+            `→ routed to dispute_validation_queue ${(dq as any).id} ` +
+            `(NOT fulfilled, no SERVICE_FULFILLED deltas)`
+        );
+        return { processed: true, contract_id: contract.id };
+      }
+
+      // PASS / APPROVE / verdict-less handler → existing fulfilled path.
       const { error: updateErr } = await db
         .from('service_contracts')
         .update({
