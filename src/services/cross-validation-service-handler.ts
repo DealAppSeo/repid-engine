@@ -95,6 +95,8 @@ export class CrossValidationServiceHandler extends ServiceHandlerBase {
       judge_verdict: judgeResult.verdict,
       judge_confidence: judgeResult.confidence,
       judge_critique: judgeResult.critique,
+      judge_provider: judgeResult.judge_provider,
+      judge_attempts: judgeResult.judge_attempts,
       comma_veto,
       comma_gap,
       comma_severity,
