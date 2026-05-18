@@ -156,13 +156,16 @@ export abstract class ServiceHandlerBase {
           );
         }
 
+        // NB: do NOT write dispute_panel_validation_queue_id here — that
+        // column's FK references validation_queue(id), NOT
+        // dispute_validation_queue. The contract↔dispute link is preserved
+        // by dispute_validation_queue.contract_id (set above).
         const { error: dispErr } = await db
           .from('service_contracts')
           .update({
             status: 'disputed',
             result,
             disputed_at: new Date().toISOString(),
-            dispute_panel_validation_queue_id: (dq as any).id,
           })
           .eq('id', contract.id);
 
