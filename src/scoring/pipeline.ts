@@ -29,6 +29,7 @@ import {
   HAL_CONSTITUTIONAL_BLOCK_THRESHOLD,
 } from '../hal/lib/constants';
 import { computeDelta, HALDecision } from './repid-delta';
+import { appendToAuditChain } from '../services/auditChainWriter';
 
 export interface ScoreEventInput {
   agent_id: string;
@@ -335,6 +336,8 @@ export async function applyValidationEvent(
 
   if (evErr) throw new Error(`score event insert failed: ${evErr.message}`);
 
+  const score_event_id = (eventRow as any).id;
+
   await db
     .from('repid_agents')
     .update({
@@ -343,6 +346,40 @@ export async function applyValidationEvent(
       last_updated: new Date().toISOString(),
     })
     .eq('id', agent_id);
+
+  // Patent-evidence audit anchor for service-contract fulfilment. The
+  // validation_queue path anchors at the queue level (validation-queue-
+  // worker.ts); SERVICE_FULFILLED events flow through the service-contract
+  // path (applyServiceFulfilledDeltas) which has no queue row, so the
+  // anchor MUST happen here or hal_audit_chain has zero anchors for them.
+  // Gated strictly to SERVICE_FULFILLED so the validation_queue events are
+  // not double-anchored. Isolated try/catch: the score event is already
+  // persisted; an anchor failure must NOT rethrow and falsely fail the
+  // delta — but it is a patent surface, so it fails LOUDLY with a stack
+  // (RULE-11), never silently. Mirrors validation-queue-worker.ts:171-189.
+  if (event_type === 'SERVICE_FULFILLED') {
+    try {
+      await appendToAuditChain('repid_score_events', String(score_event_id), {
+        event_type: 'SERVICE_FULFILLED',
+        score_event_id,
+        agent_id,
+        role: metadata.role ?? null,
+        contract_id: metadata.contract_id ?? null,
+        service_id: metadata.service_id ?? null,
+        delta: Math.round(delta),
+        repid_before: old_repid,
+        repid_after: Math.round(new_repid),
+        phase_2_7_4_signature: true,
+      });
+    } catch (auditErr: any) {
+      console.error(
+        `[scoring/pipeline] hal_audit_chain append FAILED for repid_score_events ` +
+          `${score_event_id} (SERVICE_FULFILLED recorded but NOT anchored — ` +
+          `patent-surface gap):`,
+        auditErr?.stack ?? auditErr
+      );
+    }
+  }
 
   if (triggerProof && zk_proof_id) {
     db.from('repid_proof_queue')
