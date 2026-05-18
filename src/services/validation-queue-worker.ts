@@ -195,37 +195,34 @@ async function processSingleTask(claim: any) {
   }
 }
 
-async function checkTimeouts() {
+export async function checkTimeouts() {
   try {
     const timeoutMs = TIMEOUT_HOURS * 60 * 60 * 1000;
     const cutoffDate = new Date(Date.now() - timeoutMs).toISOString();
 
-    const { data: oldClaims } = await db
+    const { data: stuckClaims } = await db
       .from('validation_queue')
-      .select('id, task_id, metadata')
+      .select('id, task_id, metadata, created_at')
       .eq('status', 'processing')
-      .lt('processed_at', cutoffDate);
+      .lt('created_at', cutoffDate);
 
-    if (oldClaims && oldClaims.length > 0) {
-      for (const claim of oldClaims) {
-        // Create HITL request for timeout
-        const { id: hitlRequestId } = await hitlService.createRequest({
-          taskId: claim.task_id,
-          validationQueueId: claim.id,
-          reason: 'timeout_escalation',
-          context: {
-            taskSnapshot: {}, // Not loaded in this simplified loop
-            workerVerdictPreHitl: 'escalated'
+    if (stuckClaims && stuckClaims.length > 0) {
+      for (const claim of stuckClaims) {
+        const isHitlPending = claim.metadata?.hitl_request_id != null && claim.metadata?.hitl_resolved !== 'true';
+
+        if (isHitlPending) {
+          const hitlAgeMs = Date.now() - new Date(claim.created_at).getTime();
+          if (hitlAgeMs > 24 * 60 * 60 * 1000) {
+            console.warn(`[ValidationWorker] HITL-pending ALERT: task ${claim.task_id} (queue ${claim.id}) has been pending > 24h. Manual intervention required.`);
           }
-        });
-
-        await db.from('validation_queue').update({
-          status: 'processing',
-          worker_verdict: 'escalated',
-          metadata: { ...claim.metadata, hitl_request_id: hitlRequestId }
-        }).eq('id', claim.id);
-
-        await db.from('trinity_tasks').update({ status: 'pending_clarification' }).eq('id', claim.task_id);
+        } else {
+          console.error(`[ValidationWorker] Genuine stuck processing row detected: queue ${claim.id} for task ${claim.task_id}. Resetting to pending.`);
+          await db.from('validation_queue').update({
+            status: 'pending',
+            processed_at: null,
+            metadata: { ...claim.metadata, worker_reset_at: new Date().toISOString() }
+          }).eq('id', claim.id);
+        }
       }
     }
   } catch (err: any) {

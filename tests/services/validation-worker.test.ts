@@ -118,4 +118,87 @@ describe('Phase 2.6: Validation Worker End-to-End Suites', () => {
       expect(db.rpc).toBeDefined();
     });
   });
+
+  describe('Suite 6: checkTimeouts Recovery Logic', () => {
+    let mockConsoleError: any;
+    let mockConsoleWarn: any;
+    beforeAll(() => {
+      mockConsoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockConsoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterAll(() => {
+      mockConsoleError.mockRestore();
+      mockConsoleWarn.mockRestore();
+    });
+
+    it('should correctly reset genuine stuck rows', async () => {
+      const { checkTimeouts } = require('../../src/services/validation-queue-worker');
+      const localChain: any = {};
+      localChain.select = jest.fn().mockReturnValue(localChain);
+      localChain.eq = jest.fn().mockReturnValue(localChain);
+      localChain.lt = jest.fn().mockResolvedValue({
+        data: [{
+          id: 'queue-stuck', task_id: 'task-stuck',
+          created_at: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+          metadata: {}
+        }], error: null
+      });
+      localChain.update = jest.fn().mockReturnValue(localChain);
+      (db.from as jest.Mock).mockReturnValue(localChain);
+
+      await checkTimeouts();
+
+      expect(localChain.update).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'pending',
+        processed_at: null
+      }));
+    });
+
+    it('should NOT reset HITL-pending rows but warn if > 24h', async () => {
+      const { checkTimeouts } = require('../../src/services/validation-queue-worker');
+      const localChain: any = {};
+      localChain.select = jest.fn().mockReturnValue(localChain);
+      localChain.eq = jest.fn().mockReturnValue(localChain);
+      localChain.lt = jest.fn().mockResolvedValue({
+        data: [{
+          id: 'queue-hitl', task_id: 'task-hitl',
+          created_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+          metadata: { hitl_request_id: 'req-1' }
+        }], error: null
+      });
+      localChain.update = jest.fn().mockReturnValue(localChain);
+      (db.from as jest.Mock).mockReturnValue(localChain);
+
+      await checkTimeouts();
+
+      expect(localChain.update).not.toHaveBeenCalled();
+      expect(mockConsoleWarn).toHaveBeenCalledWith(expect.stringContaining('pending > 24h'));
+    });
+  });
+
+  describe('Suite 7: /health metrics', () => {
+    it('/health endpoint returns correct counts', async () => {
+      const request = require('supertest');
+      const express = require('express');
+      const healthRouter = require('../../src/routes/health').default;
+      const app = express();
+      app.use(healthRouter);
+
+      const localChain: any = {};
+      localChain.select = jest.fn().mockReturnValue(localChain);
+      localChain.eq = jest.fn().mockResolvedValue({
+        data: [
+          { metadata: {}, created_at: new Date(Date.now() - 20 * 60 * 1000).toISOString() }, // stuck
+          { metadata: { hitl_request_id: '1' }, created_at: new Date().toISOString() } // hitl
+        ], count: 2, error: null
+      });
+      (db.from as jest.Mock).mockReturnValue(localChain);
+
+      const res = await request(app).get('/health');
+      expect(res.status).toBe(200);
+      expect(res.body.validation_queue.processing_total).toBe(2);
+      expect(res.body.validation_queue.processing_hitl_pending).toBe(1);
+      expect(res.body.validation_queue.processing_stuck).toBe(1);
+    });
+  });
 });
