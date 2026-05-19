@@ -5,6 +5,12 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   const publicPaths = ['/health', '/healthz', '/', '/api/v1/health'];
   if (publicPaths.includes(req.path)) return next();
 
+  // Sprint 14 R-6 — swarm + per-agent runLoop liveness must be public so
+  // UptimeRobot (and any external monitor) can ping without an API key.
+  if (req.method === 'GET' && (req.path === '/api/v1/runloop-liveness' || req.path.startsWith('/api/v1/runloop-liveness/'))) {
+    return next();
+  }
+
   if (req.method === 'GET' && (req.path.startsWith('/api/v1/repid/') || req.path.startsWith('/api/v1/erc8004/validate/'))) {
     return next();
   }

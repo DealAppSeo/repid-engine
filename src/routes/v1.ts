@@ -19,10 +19,12 @@ import observabilityRouter from './v1/observability';
 import servicesRouter from './v1/services';
 import contractsRouter from './v1/contracts';
 import agentRouter from './v1/agent';
+import runloopLivenessRouter from './v1/runloop-liveness';
 
 const router = Router();
 router.use(substanceGateRouter);
 router.use(agentRouter); // Phase 2.10 — /api/v1/agent/process-contracts (router declares full sub-path)
+router.use(runloopLivenessRouter); // Sprint 14 R-6 — /api/v1/runloop-liveness (+ /:agent_name)
 router.use('/hitl', hitlRouter);
 router.use('/status', observabilityRouter);
 router.use('/services', servicesRouter);
