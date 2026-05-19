@@ -1,6 +1,10 @@
-# Agent runLoop Liveness Instrumentation — SPEC ONLY
+# Agent runLoop Liveness Instrumentation — SPEC + Sprint 14 IMPLEMENTATION
 
-**Authored:** CC, Sprint 13 v2 (2026-05-19). Branch `diag/worker-liveness-instrumentation-2026-05-19`. **Not implemented. Not merged. Spec for Sean's review.**
+**Authored:** CC, Sprint 13 v2 (2026-05-19). Branch `diag/worker-liveness-instrumentation-2026-05-19`. **Spec written Sprint 13; implemented Sprint 14 (this branch). Not merged — Sean reviews in the morning.**
+
+## Sprint 14 implementation addendum (2026-05-19)
+
+**The Sprint 13 spec sketched a per-agent endpoint on each agent's own Express server.** Sprint 14 implemented it instead as **swarm-level on repid-engine** (`src/routes/v1/runloop-liveness.ts`), with a per-agent variant at `/api/v1/runloop-liveness/:agent_name`. Rationale: (a) one stable URL for UptimeRobot vs polling 12 endpoints; (b) cross-agent aggregation catches the *stagger* pattern, not just one freeze; (c) uses `agent_heartbeat` as single source of truth — the same columns wired in `trinity-symphony-shared` Sprint 14 R-3. Per-agent semantics ("HEALTHY iff `loop_count > 0` AND `last_ping` within 5 min") are preserved; aggregate ≥ 8/12 healthy → HTTP 200, else 503. Auth: public path (added to `src/middleware/auth.ts`) so monitoring can ping without API keys. The rest of this doc remains the authoritative semantic spec — only the deployment locus changed.
 
 ## Problem (evidence-grounded)
 
