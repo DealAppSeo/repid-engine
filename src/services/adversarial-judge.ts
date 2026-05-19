@@ -1,4 +1,5 @@
 // Using global fetch
+import { db } from '../db';
 
 /**
  * Defect 1 fix (2026-05-18) — adversarial judge provider ROTATION.
@@ -211,6 +212,44 @@ function safeParse(s: string): any {
   }
 }
 
+/**
+ * Observability: one provider_health row per rotation attempt (success |
+ * failure | skipped). Best-effort — a health-write failure is logged but
+ * NEVER throws, so observability can never break adversarial judging.
+ * provider_health is an observability surface, not the patent/audit/money
+ * surface, so log-and-swallow is correct here (cf. RULE-11 which governs the
+ * audit surfaces). View: provider_health_summary.
+ */
+async function recordProviderHealth(row: {
+  provider: string;
+  model: string;
+  outcome: 'success' | 'failure' | 'skipped';
+  failure_mode?: string | null;
+  latency_ms?: number | null;
+  task_id?: string | null;
+  verdict?: string | null;
+  confidence?: number | null;
+}): Promise<void> {
+  try {
+    const { error } = await db.from('provider_health').insert({
+      provider: row.provider,
+      model: row.model,
+      outcome: row.outcome,
+      failure_mode: row.failure_mode ?? null,
+      latency_ms: row.latency_ms ?? null,
+      task_id: row.task_id ?? null,
+      verdict: row.verdict ?? null,
+      confidence: row.confidence ?? null,
+      source: 'adversarial_judge',
+    });
+    if (error) {
+      console.warn(`[AdversarialJudge] provider_health write failed (${row.provider}/${row.outcome}):`, error.message);
+    }
+  } catch (e: any) {
+    console.warn(`[AdversarialJudge] provider_health write threw (${row.provider}/${row.outcome}):`, e?.message ?? e);
+  }
+}
+
 export async function runAdversarialJudge(taskData: any): Promise<AdversarialJudgeResult> {
   const prompt = `You are a critical adversarial judge. A subordinate agent has submitted the following task response.
 Your goal is to actively find flaws, hallucinations, or unfulfilled requirements.
@@ -229,10 +268,15 @@ Output ONLY valid JSON.`;
 
   const skipFamily = claimerFamily(taskData);
   const attempts: JudgeAttempt[] = [];
+  const taskId = taskData?.id != null ? String(taskData.id) : null;
 
   for (const p of PROVIDERS) {
     if (skipFamily && p.family === skipFamily) {
       attempts.push({ provider: p.family, failure_mode: 'skipped_claimer_family' });
+      await recordProviderHealth({
+        provider: p.family, model: p.model, outcome: 'skipped',
+        failure_mode: 'skipped_claimer_family', task_id: taskId,
+      });
       continue;
     }
 
@@ -240,10 +284,15 @@ Output ONLY valid JSON.`;
     if (!key) {
       attempts.push({ provider: p.family, failure_mode: 'no_api_key' });
       console.warn(`[AdversarialJudge] ${p.family}: no API key set — rotating to next provider.`);
+      await recordProviderHealth({
+        provider: p.family, model: p.model, outcome: 'failure',
+        failure_mode: 'no_api_key', task_id: taskId,
+      });
       continue;
     }
 
     let raw: string;
+    const t0 = Date.now();
     try {
       raw = await p.call(prompt, p.model, key);
     } catch (err: any) {
@@ -254,6 +303,10 @@ Output ONLY valid JSON.`;
         `[AdversarialJudge] ${p.family} call failed (${mode}) — rotating:`,
         err?.message ?? err
       );
+      await recordProviderHealth({
+        provider: p.family, model: p.model, outcome: 'failure',
+        failure_mode: mode, latency_ms: Date.now() - t0, task_id: taskId,
+      });
       continue;
     }
 
@@ -264,6 +317,10 @@ Output ONLY valid JSON.`;
     } catch {
       attempts.push({ provider: p.family, failure_mode: 'unparseable', detail: raw.slice(0, 120) });
       console.error(`[AdversarialJudge] ${p.family}: unparseable output — rotating to next provider.`);
+      await recordProviderHealth({
+        provider: p.family, model: p.model, outcome: 'failure',
+        failure_mode: 'unparseable', latency_ms: Date.now() - t0, task_id: taskId,
+      });
       continue;
     }
 
@@ -278,12 +335,21 @@ Output ONLY valid JSON.`;
       console.error(
         `[AdversarialJudge] ${p.family}: no verdict / zero confidence — rotating to next provider.`
       );
+      await recordProviderHealth({
+        provider: p.family, model: p.model, outcome: 'failure',
+        failure_mode: 'no_verdict_or_zero_confidence',
+        latency_ms: Date.now() - t0, task_id: taskId,
+      });
       continue;
     }
 
     console.log(
       `[AdversarialJudge] verdict from ${p.family}: ${verdict} (confidence ${confidence})`
     );
+    await recordProviderHealth({
+      provider: p.family, model: p.model, outcome: 'success',
+      latency_ms: Date.now() - t0, task_id: taskId, verdict, confidence,
+    });
     return {
       verdict,
       confidence,
