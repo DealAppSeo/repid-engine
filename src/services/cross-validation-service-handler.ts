@@ -71,7 +71,7 @@ export class CrossValidationServiceHandler extends ServiceHandlerBase {
     } else {
       // v1 beliefs adapter: extract authentic per-validator beliefs returned
       // by the modified PCP layer to enable proper Pythagorean gap calculation.
-      const beliefs = pcpResult.validatorBeliefs;
+      const beliefs = pcpResult.validatorBeliefs ?? pcpResult.validators.map(() => pcpResult.confidence);
       const commaResult = checkPythagoreanComma(beliefs);
       comma_veto = commaResult.comma_veto;
       comma_gap = commaResult.comma_gap;
