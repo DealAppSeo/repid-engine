@@ -90,7 +90,8 @@ ${taskData.result}`;
   return {
     score: finalScore,
     confidence: avgConfidence,
-    validators: results.map(r => r.name)
+    validators: results.map(r => r.name),
+    validatorBeliefs: results.map(r => r.confidence)
   };
 }
 

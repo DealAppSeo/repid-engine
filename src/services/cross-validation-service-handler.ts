@@ -69,10 +69,9 @@ export class CrossValidationServiceHandler extends ServiceHandlerBase {
       comma_severity = 'insufficient_validators';
       comma_layer_inactive = true;
     } else {
-      // v1 beliefs adapter: uniform per-validator confidence (PCP exposes only
-      // aggregate confidence). Per-validator beliefs extraction is a known v1
-      // limitation — surfaced in adjacent issues.
-      const beliefs = pcpResult.validators.map(() => pcpResult.confidence);
+      // v1 beliefs adapter: extract authentic per-validator beliefs returned
+      // by the modified PCP layer to enable proper Pythagorean gap calculation.
+      const beliefs = pcpResult.validatorBeliefs ?? pcpResult.validators.map(() => pcpResult.confidence);
       const commaResult = checkPythagoreanComma(beliefs);
       comma_veto = commaResult.comma_veto;
       comma_gap = commaResult.comma_gap;
