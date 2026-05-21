@@ -725,13 +725,18 @@ router.get('/:id/vdr', async (req: Request, res: Response) => {
   return res.json(data);
 });
 
-// GET /:id/proof/:job_id — public proof status
+// GET /:id/proof/:job_id — public proof status.
+// Phase 7 Gap C: SELECT list now includes proof_bytes + proof_size_bytes so
+// TrustShell's verifyLocally() / @hyperdag/proof-verifier WASM caller can
+// reach the actual Plonky3 proof payload. Pre-Phase-7 this returned only
+// metadata (status/hash/timestamps), making client-side verification a
+// guaranteed null-payload failure.
 router.get('/:id/proof/:job_id', async (req: Request, res: Response) => {
   const job_id = String(req.params.job_id);
   const agentId = String(req.params.id);
   const { data, error } = await db
     .from('repid_proof_queue')
-    .select('job_id,status,proof_hash,created_at,completed_at')
+    .select('job_id,status,proof_hash,proof_bytes,proof_size_bytes,created_at,completed_at')
     .eq('job_id', job_id)
     .eq('agent_id', agentId)
     .single();
