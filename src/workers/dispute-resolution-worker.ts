@@ -74,11 +74,16 @@ export class DisputeResolutionWorker {
       };
 
       const pcpResult = await runPCP(syntheticTask);
-      const judgeResult = await runAdversarialJudge({
-        content: JSON.stringify(contract.result),
-        claimer_provider: undefined,
-        pcp_result: pcpResult,
-      });
+      // Phase 5 (Bug A) — judge accepts the SAME taskData shape as PCP (title /
+      // description / result / optional metadata). Previously this passed
+      // { content, claimer_provider, pcp_result } — none of those fields are
+      // read by runAdversarialJudge, so the prompt template substituted
+      // "undefined" for title/description/result and every provider either
+      // produced an unparseable verdict or returned zero-confidence ESCALATE,
+      // which the verdict logic below then resolved as 'no_fault'. Fix:
+      // pass the canonical syntheticTask the judge actually reads. PCP's
+      // result is still used downstream in the verdict gates.
+      const judgeResult = await runAdversarialJudge(syntheticTask);
 
       // Verdict:
       //   PCP confidence high + judge APPROVE → buyer_at_fault (provider was correct)
