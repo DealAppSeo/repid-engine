@@ -85,14 +85,20 @@ export class DisputeResolutionWorker {
       // result is still used downstream in the verdict gates.
       const judgeResult = await runAdversarialJudge(syntheticTask);
 
-      // Verdict:
+      // Verdict (Phase 6 / Bug B — see runAdversarialJudge prompt at
+      // src/services/adversarial-judge.ts:263 — the judge contract is
+      // APPROVE | CHALLENGE | ESCALATE; 'REJECT' is not in the vocabulary.
+      // Pre-fix this branch compared against 'REJECT' which never matched, so
+      // judge contributed nothing to the provider_at_fault path. Verdict gate
+      // now reads the correct CHALLENGE token):
       //   PCP confidence high + judge APPROVE → buyer_at_fault (provider was correct)
-      //   PCP confidence low OR judge REJECT → provider_at_fault
-      //   Mixed → no_fault
+      //   PCP confidence low OR judge CHALLENGE → provider_at_fault
+      //   Mixed (incl. ESCALATE) → no_fault
+      // Terminal status is 'resolved' in every branch — set at the update below.
       let verdict: 'provider_at_fault' | 'buyer_at_fault' | 'no_fault';
       if (pcpResult.confidence >= 0.7 && judgeResult.verdict === 'APPROVE') {
         verdict = 'buyer_at_fault';
-      } else if (pcpResult.confidence < 0.3 || judgeResult.verdict === 'REJECT') {
+      } else if (pcpResult.confidence < 0.3 || judgeResult.verdict === 'CHALLENGE') {
         verdict = 'provider_at_fault';
       } else {
         verdict = 'no_fault';
