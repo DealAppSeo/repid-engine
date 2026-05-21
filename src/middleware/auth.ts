@@ -74,6 +74,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // Best effort log to Supabase
   const { error } = await db.from('trinity_agent_logs').insert({
     action: 'api_auth_attempt',
+    agent: valid
+      ? ((req.headers['x-agent-name'] as string) || 'api-gateway')
+      : 'UNAUTHENTICATED',
     metadata: {
       success: valid,
       tier,
