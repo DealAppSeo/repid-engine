@@ -36,6 +36,17 @@ export function createAgentsReputationRouter(
 
   // ---------------------------------------------------------------
   // POST /agents/:id/reputation/write  (Bearer auth)
+  //
+  // @deprecated since Phase 8 (2026-05-21). The FeedbackLoopWorker
+  // (src/workers/feedback-loop-worker.ts) now wires the automatic
+  // on-chain write path triggered by repid_events of type
+  // x402_inbound_settled / x402_outbound_settled. This manual
+  // endpoint remains live as an operator force-write surface (e.g.,
+  // for ad-hoc reconciliation, backfill scripting, or testing) but
+  // routine reputation propagation should flow through the worker.
+  // Removal target: V1.x or later, gated on observed worker stability
+  // and no operator dependence on this endpoint. Sean strategic
+  // ruling 2026-05-21.
   // ---------------------------------------------------------------
   router.post(
     '/agents/:id/reputation/write',
