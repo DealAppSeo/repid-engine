@@ -31,6 +31,7 @@ import { createAgentsOnchainRouter } from './routes/agents-onchain';
 import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
+import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -425,6 +426,26 @@ async function processCascadeQueue() {
 if (!IS_TEST) {
   setInterval(processCascadeQueue, 60_000);
   processCascadeQueue();
+}
+
+// Phase 8 — wire the FeedbackLoopWorker (ERC-8004 reputation write-back).
+// The worker class and the Erc8004ReputationWriter have been
+// production-complete since 2026-05-11 but the .start() call site was
+// never added. Same "Cold Module Disease" pattern as Phase 4 C2 (cascade)
+// and Phase 7 (ZKP write-back). 4th instance documented.
+//
+// Per Strategy Claude Phase 8 Pre-Diagnosis rulings:
+//   - Tier floor: 1000 (ESTABLISHED+) — locked inside the worker
+//   - Drain-mode rate-limit: 1 write per 60s for first 24h (TODO removal)
+//   - Manual /reputation/write route: kept, marked @deprecated
+//   - AbortSignal/timeout on ethers.js call: applied inside worker
+//   - Circuit breaker: 5 consecutive failures → 5min cool-down
+//
+// Schedule mirrors Phase 4 C2's setInterval pattern. Worker is observability
+// + ledger write surface; not a critical path. start() logs boot config
+// (tier_floor, rate_limit_drain_mode boolean) for ops visibility.
+if (!IS_TEST) {
+  feedbackLoopWorker.start(60_000);
 }
 
 // Daily health check at 6am UTC
