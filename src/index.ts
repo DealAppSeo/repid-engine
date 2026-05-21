@@ -317,6 +317,116 @@ if (!IS_TEST) {
   checkStalledAndAlert();
 }
 
+// Sprint MVP-Delivery Phase 4 (C2) — Cascade Pickup Worker.
+//
+// Transitions service_contracts.status pending → escrowed. The pending→escrowed
+// edge was previously only writable via POST /api/v1/contracts/:id/escrow
+// (HTTP-driven placeholder, "in a real flow this would interface with x402");
+// no caller existed anywhere in either repo, so all `pending` contracts piled
+// up forever. 13 contracts had been stuck pending for 38-46h at sprint open.
+//
+// γ service_type policy (Strategy Claude ruling): pick contracts where
+// agent_services.service_type IS NOT NULL via the FK join (preferred), OR
+// payload->>'service_type' IS NOT NULL (fallback when FK row missing).
+// Skip when both NULL — manifested in CC_PHASE_4_REPORT.md.
+//
+// Pickup gates:
+//   1. status='pending' AND expires_at > NOW()
+//   2. agent_services.active = true
+//   3. buyer.current_repid >= service.min_repid_to_purchase (or 0 if NULL)
+//   4. (Phase 8 will add x402 settlement validation here — TODO comment marks
+//      the seam.)
+// Optimistic concurrency: UPDATE predicate includes .eq('status','pending')
+// so a race against the manual /escrow endpoint or another worker instance
+// loses cleanly (0 rows updated → skip).
+async function processCascadeQueue() {
+  try {
+    const { data: pending, error } = await db
+      .from('service_contracts')
+      .select('id, service_id, buyer_agent_id, agreed_price_usdc_raw, payload, expires_at, created_at, agent_services!inner(service_type, active, min_repid_to_purchase)')
+      .eq('status', 'pending')
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: true })
+      .limit(10);
+
+    if (error) {
+      console.error('[cascade] poll failed:', error?.message ?? error, (error as any)?.stack ?? new Error().stack);
+      return;
+    }
+    if (!pending || pending.length === 0) return;
+
+    for (const c of pending as any[]) {
+      // γ service_type resolution: FK preferred, payload fallback.
+      const fkServiceType = c.agent_services?.service_type ?? null;
+      const payloadServiceType = (c.payload && typeof c.payload === 'object') ? c.payload.service_type ?? null : null;
+      const serviceType = fkServiceType || payloadServiceType;
+
+      if (!serviceType) {
+        console.warn(`[cascade] skip ${c.id}: service_type unresolvable (FK=NULL, payload=NULL)`);
+        continue;
+      }
+
+      // Service must be active.
+      if (c.agent_services?.active === false) {
+        console.warn(`[cascade] skip ${c.id}: agent_services.active=false`);
+        continue;
+      }
+
+      // Buyer must meet the service's min_repid floor (defaults to 0 if NULL).
+      const minRepid = c.agent_services?.min_repid_to_purchase ?? 0;
+      if (minRepid > 0) {
+        const { data: buyer, error: buyerErr } = await db
+          .from('repid_agents')
+          .select('current_repid')
+          .eq('id', c.buyer_agent_id)
+          .maybeSingle();
+        if (buyerErr) {
+          console.error(`[cascade] buyer lookup failed for ${c.id}:`, buyerErr?.message ?? buyerErr, (buyerErr as any)?.stack ?? new Error().stack);
+          continue;
+        }
+        if (!buyer || (buyer as any).current_repid < minRepid) {
+          console.warn(`[cascade] skip ${c.id}: buyer current_repid below floor ${minRepid}`);
+          continue;
+        }
+      }
+
+      // TODO(Phase 8): validate x402 settlement here. For MVP we trust the
+      // contract creator's representation that the buyer intends to pay; the
+      // /escrow placeholder's "in a real flow this would interface with x402"
+      // comment is the original contract for this gate.
+
+      // Optimistic-concurrency transition pending → escrowed.
+      const nowIso = new Date().toISOString();
+      const { data: updated, error: updErr } = await db
+        .from('service_contracts')
+        .update({ status: 'escrowed', escrowed_at: nowIso })
+        .eq('id', c.id)
+        .eq('status', 'pending')
+        .select('id')
+        .maybeSingle();
+
+      if (updErr) {
+        console.error(`[cascade] transition failed for ${c.id}:`, updErr?.message ?? updErr, (updErr as any)?.stack ?? new Error().stack);
+        continue;
+      }
+      if (!updated) {
+        // Race lost — another worker or the manual endpoint already advanced this.
+        continue;
+      }
+      const ageMin = Math.round((Date.now() - new Date(c.created_at).getTime()) / 60_000);
+      console.log(`[cascade] escrowed ${c.id} (service_type=${serviceType}, age=${ageMin}min)`);
+    }
+  } catch (e: any) {
+    // Loud per Phase 2.9.4: never silent-swallow.
+    console.error('[cascade] unhandled error:', e?.message ?? String(e), e?.stack ?? new Error().stack);
+  }
+}
+
+if (!IS_TEST) {
+  setInterval(processCascadeQueue, 60_000);
+  processCascadeQueue();
+}
+
 // Daily health check at 6am UTC
 async function dailyHealthAlert() {
   const supabase = db;
