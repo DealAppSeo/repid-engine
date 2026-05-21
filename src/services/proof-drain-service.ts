@@ -122,12 +122,121 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     return Math.round((data as { repid_after: number }).repid_after);
   }
 
-  async function markCompleted(rowId: string, proofHash: string): Promise<void> {
+  /**
+   * Phase 7 Gap B — canonical proof artifact write to repid_zkp_proofs.
+   *
+   * Non-fatal: any failure here is logged loudly but never thrown. The queue
+   * UPDATE in markCompleted() is the primary truth; this insert is additive
+   * evidence. A retry of markCompleted() must NOT re-run this insert (no
+   * unique constraint on (agent_id, zk_commitment); we would create duplicate
+   * rows). Hence the `try/catch` + log-only pattern.
+   *
+   * Schema mapping (verified Phase 7 against information_schema):
+   *   - repid_zkp_proofs.proof_type    text NOT NULL, CHECK in {'POSTCARD','ENVELOPE','PACKAGE'}
+   *   - repid_zkp_proofs.tier_proven   text NOT NULL  (PROBATIONARY|EARNING|ESTABLISHED|AUTONOMOUS|VETERAN)
+   *   - repid_zkp_proofs.agent_id      uuid nullable
+   *   - repid_zkp_proofs.merkle_root   text nullable
+   *   - repid_zkp_proofs.zk_commitment text nullable
+   *   - eas_attestation_uid            text nullable (V1.x will fill from EAS flow)
+   *   - eas_schema                     defaults to 'constitutional-compliance-v1'
+   *
+   * proof_type mapping: the prover (zkp-postcard service) emits
+   * proof_type='plonky3_range_check' or 'sha256_commitment_poc' — its
+   * INTERNAL algorithm variant — neither of which satisfies the CHECK
+   * constraint. Since both come from the zkp-postcard service (which produces
+   * Postcard-tier proofs regardless of the inner algorithm), we always write
+   * 'POSTCARD' here. The algorithm-variant info is preserved in proof_bytes
+   * (binary format encodes its own version). Envelope/Package tiers will be
+   * written by future provers (zkp-envelope, zkp-package).
+   *
+   * tier_proven: authoritative source is repid_agents.tier (kept in sync by
+   * the trg_sync_tier Postgres trigger; do NOT trust the prover's tier field
+   * — it's app-supplied per Sean's CLAUDE.md guidance). Fallback to
+   * 'PROBATIONARY' if the agent row is missing, so we never violate the
+   * NOT NULL constraint.
+   */
+  async function insertCanonicalProof(args: {
+    agentId: string;
+    commitment: string;
+    merkleRoot: string | null;
+  }): Promise<void> {
+    try {
+      let tierProven = 'PROBATIONARY';
+      try {
+        const { data: agent } = await config.supabase
+          .from('repid_agents')
+          .select('tier')
+          .eq('id', args.agentId)
+          .maybeSingle();
+        if (agent && (agent as any).tier) {
+          tierProven = (agent as any).tier;
+        } else {
+          console.warn(`[ProofDrain] repid_agents row missing for ${args.agentId}; defaulting tier_proven=PROBATIONARY`);
+        }
+      } catch (e) {
+        console.warn(`[ProofDrain] tier lookup threw for ${args.agentId}:`, e instanceof Error ? e.message : e);
+      }
+
+      const { error } = await config.supabase.from('repid_zkp_proofs').insert({
+        agent_id: args.agentId,
+        proof_type: 'POSTCARD',
+        tier_proven: tierProven,
+        merkle_root: args.merkleRoot,
+        zk_commitment: args.commitment || null,
+        // eas_attestation_uid: NULL — EAS flow is V1.x
+        // eas_schema: defaults to 'constitutional-compliance-v1'
+        // created_at: defaults to NOW()
+      });
+      if (error) {
+        console.error(
+          `[ProofDrain] repid_zkp_proofs INSERT failed for ${args.agentId} (queue stays completed):`,
+          error.message,
+          error
+        );
+      }
+    } catch (e) {
+      console.error(
+        `[ProofDrain] insertCanonicalProof threw for ${args.agentId} (queue stays completed):`,
+        e instanceof Error ? e.message : e,
+        e instanceof Error ? e.stack : undefined
+      );
+    }
+  }
+
+  /**
+   * Phase 7 Gap A — markCompleted now persists proof_bytes + proof_size_bytes
+   * onto the queue row (the bytes were being discarded pre-Phase-7: 1 of
+   * 2716 completed queue rows had proof_bytes populated, the rest were
+   * NULL because this UPDATE list omitted them). Followed by Gap B's
+   * canonical insert to repid_zkp_proofs.
+   */
+  async function markCompleted(args: {
+    rowId: string;
+    agentId: string;
+    proofHash: string;
+    proofBytes: string | null;
+    proofSizeBytes: number | null;
+    commitment: string;
+    merkleRoot: string | null;
+  }): Promise<void> {
     const { error } = await config.supabase
       .from('repid_proof_queue')
-      .update({ status: 'completed', proof_hash: proofHash, completed_at: new Date().toISOString() })
-      .eq('id', rowId);
+      .update({
+        status: 'completed',
+        proof_hash: args.proofHash,
+        proof_bytes: args.proofBytes,
+        proof_size_bytes: args.proofSizeBytes,
+        completed_at: new Date().toISOString()
+      })
+      .eq('id', args.rowId);
     if (error) throw new Error(`mark completed failed: ${error.message}`);
+
+    // Gap B — additive evidence insert. Non-fatal; never throws.
+    await insertCanonicalProof({
+      agentId: args.agentId,
+      commitment: args.commitment,
+      merkleRoot: args.merkleRoot,
+    });
   }
 
   async function markFailed(rowId: string, message: string): Promise<void> {
@@ -164,9 +273,45 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       return r;
     });
 
-    const proof = (await res.json()) as { commitment?: string; proof_hash?: string; hash?: string };
+    // Phase 7 Gap A — parse the FULL prover response (was discarding everything
+    // but commitment/hash). Prover JSON shape per the zkp-postcard service:
+    //   { proof_type, tier, commitment, proof_bytes, proof_size_bytes?, merkle_root? }
+    const proof = (await res.json()) as {
+      commitment?: string;
+      proof_hash?: string;
+      hash?: string;
+      proof_bytes?: string;
+      proof_size_bytes?: number;
+      proof_type?: string;
+      tier?: string;
+      merkle_root?: string;
+    };
     const proofHash = proof.commitment ?? proof.proof_hash ?? proof.hash ?? '';
-    await withRetry(`markCompleted[${job.id}]`, () => markCompleted(job.id, proofHash));
+    const commitment = proof.commitment ?? '';
+    const proofBytes = typeof proof.proof_bytes === 'string' ? proof.proof_bytes : null;
+    // Prefer the prover's declared size; fall back to a Base64-length estimate
+    // when bytes are present but the size field isn't (the prior 2716/2642 row
+    // distribution shows size was sometimes populated independently — preserve
+    // that signal when available).
+    const proofSizeBytes =
+      typeof proof.proof_size_bytes === 'number'
+        ? proof.proof_size_bytes
+        : proofBytes
+          ? Math.ceil((proofBytes.length * 3) / 4)
+          : null;
+    const merkleRoot = typeof proof.merkle_root === 'string' ? proof.merkle_root : null;
+
+    await withRetry(`markCompleted[${job.id}]`, () =>
+      markCompleted({
+        rowId: job.id,
+        agentId: job.agent_id,
+        proofHash,
+        proofBytes,
+        proofSizeBytes,
+        commitment,
+        merkleRoot,
+      })
+    );
     return 'completed';
   }
 
