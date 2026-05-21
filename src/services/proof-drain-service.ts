@@ -31,8 +31,34 @@ export interface ProofDrainService {
 
 export const DEFAULT_PROOF_DRAIN_STALL_MS = 10 * 60 * 1000;
 
-const MAX_RETRY_ATTEMPTS = 3;
-const RETRY_DELAYS_MS = [1000, 4000, 16000];
+// Phase 7B (Unbounded Wait Disease) — broader exponential backoff so a slow
+// upstream (Supabase compute degraded, prover hanging) doesn't translate into
+// a tight retry storm. Previously: 3 attempts at 1s + 4s + 16s (max ~21s
+// elapsed before throw + 10s idle sleep = ~31s per failure cycle, observed in
+// production as the 14h+ retry storm of 2026-05-21). Now: 5 attempts with
+// cap-at-256s tail (max ~341s elapsed before throw + cool-down).
+const MAX_RETRY_ATTEMPTS = 5;
+const RETRY_DELAYS_MS = [1000, 4000, 16000, 64000, 256000];
+
+// Phase 7B — per-DB-query timeout. supabase-js's query builder does not
+// natively accept AbortSignal, so we wrap the thenable in Promise.race with
+// a setTimeout-rejection. Caveat: the underlying HTTP request continues in
+// the background until the network completes; the timeout only releases the
+// caller. Acceptable for our needs (the caller's await unwinds; the next
+// retry can issue a fresh request). 5s default per CLAUDE-RULE-8.
+const DB_QUERY_TIMEOUT_MS = 5000;
+
+function withQueryTimeout<T>(label: string, query: PromiseLike<T>, ms: number = DB_QUERY_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const handle = setTimeout(() => {
+      reject(new Error(`query timeout after ${ms}ms: ${label}`));
+    }, ms);
+    Promise.resolve(query).then(
+      v => { clearTimeout(handle); resolve(v); },
+      err => { clearTimeout(handle); reject(err); }
+    );
+  });
+}
 
 async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
   let lastErr: unknown;
@@ -42,7 +68,7 @@ async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
     } catch (err) {
       lastErr = err;
       if (attempt < MAX_RETRY_ATTEMPTS) {
-        const delay = RETRY_DELAYS_MS[attempt - 1] ?? 16000;
+        const delay = RETRY_DELAYS_MS[attempt - 1] ?? 256000;
         console.warn(`[ProofDrain] ${label} attempt ${attempt}/${MAX_RETRY_ATTEMPTS} failed; retrying in ${delay}ms:`, err instanceof Error ? err.message : err);
         await new Promise(r => setTimeout(r, delay));
       }
@@ -77,6 +103,18 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   let lastDrainAt = Date.now();
   let stallNotified = false;
 
+  // Phase 7B (Unbounded Wait Disease cool-down) — circuit breaker. Tracks
+  // consecutive `tick failed` outcomes. After CIRCUIT_OPEN_THRESHOLD
+  // consecutive failures the loop sleeps CIRCUIT_OPEN_SLEEP_MS before the
+  // next tick attempt (default 5min) instead of the usual idleSleepMs.
+  // Reset to 0 on any successful tick (jobsCompleted + jobsFailed > 0 path
+  // OR drainOnce returning a clean empty batch). Counter increments only in
+  // tick's outer catch (drainOnce threw).
+  const CIRCUIT_OPEN_THRESHOLD = 5;
+  const CIRCUIT_OPEN_SLEEP_MS = 5 * 60 * 1000; // 5 minutes
+  let consecutiveTickFailures = 0;
+  let circuitOpenLogged = false;
+
   async function emitStallHitl(queueDepth: number, elapsedMs: number): Promise<void> {
     try {
       const { error } = await config.supabase.from('trinity_hitl_requests').insert({
@@ -102,12 +140,18 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   }
 
   async function fetchPendingBatch(): Promise<Array<{ id: string; job_id: string; agent_id: string; event_id: string; status: string }>> {
-    const { data, error } = await config.supabase
-      .from('repid_proof_queue')
-      .select('id, job_id, agent_id, event_id, status')
-      .eq('status', 'pending')
-      .eq('zkp_service_url', config.zkpServiceUrl)
-      .limit(batchSize);
+    // Phase 7B — wrap in withQueryTimeout so a hanging Supabase query
+    // (compute degradation, query-planner saturation) doesn't lock the tick
+    // indefinitely. 5s ceiling per CLAUDE-RULE-8 NEVER UNBOUNDED WAIT.
+    const { data, error } = await withQueryTimeout(
+      'fetchPendingBatch',
+      config.supabase
+        .from('repid_proof_queue')
+        .select('id, job_id, agent_id, event_id, status')
+        .eq('status', 'pending')
+        .eq('zkp_service_url', config.zkpServiceUrl)
+        .limit(batchSize)
+    );
     if (error) throw new Error(`fetch pending failed: ${error.message}`);
     return data ?? [];
   }
@@ -342,6 +386,14 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       state.jobsCompletedTotal += jobsCompleted;
       state.jobsFailedTotal += jobsFailed;
       state.ticksTotal += 1;
+      // Phase 7B circuit-breaker — drainOnce returned without throwing,
+      // so the tick "succeeded" (regardless of per-job pass/fail). Reset
+      // the consecutive-failure counter and re-arm the open-log gate.
+      if (consecutiveTickFailures > 0 || circuitOpenLogged) {
+        console.log(`[ProofDrain] circuit-breaker reset — tick succeeded after ${consecutiveTickFailures} consecutive failures`);
+        consecutiveTickFailures = 0;
+        circuitOpenLogged = false;
+      }
       if (jobsCompleted > 0) {
         state.lastDrainAt = new Date().toISOString();
         lastDrainAt = Date.now();
@@ -359,9 +411,17 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       state.lastError = { message, at: new Date().toISOString() };
-      console.error('[ProofDrain] tick failed:', message);
+      consecutiveTickFailures += 1;
+      console.error(`[ProofDrain] tick failed (consecutive=${consecutiveTickFailures}/${CIRCUIT_OPEN_THRESHOLD}):`, message);
+      if (consecutiveTickFailures >= CIRCUIT_OPEN_THRESHOLD && !circuitOpenLogged) {
+        circuitOpenLogged = true;
+        console.error(`[ProofDrain] CIRCUIT OPEN — ${CIRCUIT_OPEN_THRESHOLD}+ consecutive tick failures; sleeping ${CIRCUIT_OPEN_SLEEP_MS}ms (5min) between tick attempts until upstream recovers`);
+      }
       return 0;
     } finally {
+      // Phase 7B safety net — tickInFlight MUST be released even on synchronous
+      // throw, abort propagation, or process-level interrupts that re-enter
+      // the JS event loop. finally runs regardless of how try/catch exits.
       tickInFlight = false;
     }
   }
@@ -369,7 +429,19 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   async function loop(): Promise<void> {
     while (!stopped) {
       const processed = await tick();
-      const sleepMs = processed > 0 ? pollIntervalMs : idleSleepMs;
+      // Phase 7B — sleep choice (in order):
+      //  1. Circuit open (≥ CIRCUIT_OPEN_THRESHOLD consecutive failures):
+      //     CIRCUIT_OPEN_SLEEP_MS (5min) — give upstream time to recover.
+      //  2. Work done this tick: pollIntervalMs (default 2s).
+      //  3. Idle/no-work: idleSleepMs (default 10s).
+      let sleepMs: number;
+      if (consecutiveTickFailures >= CIRCUIT_OPEN_THRESHOLD) {
+        sleepMs = CIRCUIT_OPEN_SLEEP_MS;
+      } else if (processed > 0) {
+        sleepMs = pollIntervalMs;
+      } else {
+        sleepMs = idleSleepMs;
+      }
       await new Promise<void>(resolve => {
         loopTimer = setTimeout(resolve, sleepMs);
       });
