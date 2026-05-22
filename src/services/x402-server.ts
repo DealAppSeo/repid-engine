@@ -159,14 +159,24 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
   const content = generateTipContent(tip.prediction_payload || {});
 
   await db.from('linked_bets').update({ status: 'delivered' }).eq('id', input.tipId);
+  // Schema-drift fix (2026-05-22): the prior insert used columns that do not
+  // exist on x402_settlements (payee_address / settlement_tx_hash /
+  // http_402_challenge), so this write errored silently. Map to the real
+  // generated-schema columns (verified via src/types/database.types.ts):
+  // required = amount, prediction_topic, tip_id. The X-PAYMENT header lives in
+  // x_payment_header; the provider/requestor are agent ids, not wallet strings.
   await db.from('x402_settlements').insert({
-    payer_address: input.payerAddress ?? null,
-    payee_address: PROVIDER_WALLET,
-    amount: tip.bet_amount,
+    tip_id: input.tipId,
+    prediction_topic: String((tip.prediction_payload as any)?.topic ?? 'unknown'),
+    amount: Number(tip.bet_amount),
     asset: 'USDC',
-    settlement_tx_hash: input.xPaymentHeader,
-    http_402_challenge: input.tipId,
+    status: 'settled',
+    payer_address: input.payerAddress ?? null,
+    provider_agent_id: tip.agent_id ?? null,
+    requestor_agent_id: (tip.prediction_payload as any)?.requestor ?? null,
+    x_payment_header: input.xPaymentHeader,
     is_simulated: isSimulated,
+    delivered_at: new Date().toISOString(),
   });
 
   const audit = await emitAuditEvent({
