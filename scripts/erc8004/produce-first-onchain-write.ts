@@ -37,8 +37,15 @@
 
 import { getReputationWriter, persistReputationWrite } from '../../src/services/erc8004-reputation';
 import { db } from '../../src/db';
+import { ethers } from 'ethers';
+import IDENTITY_REGISTRY_ABI from '../../src/contracts/IdentityRegistry.abi.json';
 
 const ESTABLISHED_FLOOR = 1000; // matches FeedbackLoopWorker tier_floor
+
+// IdentityRegistry (ERC-721). The ReputationRegistry's self-feedback check is
+// `require(msg.sender != agent)` where `agent = IdentityRegistry.ownerOf(agentId)`,
+// so we resolve the token owner before broadcasting (see resolveTokenOwner).
+const DEFAULT_IDENTITY_REGISTRY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 
 interface EligibleAgent {
   id: string;
@@ -70,6 +77,25 @@ async function resolveAgent(agentArg: string | undefined): Promise<EligibleAgent
     .limit(1)
     .maybeSingle();
   return (data as EligibleAgent | null) ?? null;
+}
+
+/**
+ * Read the on-chain owner of an identity token via IdentityRegistry.ownerOf.
+ * Returns null (with a loud warning) if the read can't complete. Used to detect
+ * the "Self-feedback not allowed" condition before spending gas.
+ */
+async function resolveTokenOwner(tokenId: string): Promise<string | null> {
+  try {
+    const rpc = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+    const registryAddr = process.env.TRUST_IDENTITY_REGISTRY || DEFAULT_IDENTITY_REGISTRY;
+    const provider = new ethers.JsonRpcProvider(rpc);
+    const registry = new ethers.Contract(registryAddr, IDENTITY_REGISTRY_ABI as any, provider);
+    const owner: string = await (registry as any).ownerOf(BigInt(tokenId));
+    return owner;
+  } catch (e: any) {
+    console.warn(`[first-write] could not read ownerOf(${tokenId}) on IdentityRegistry: ${e?.message ?? e}`);
+    return null;
+  }
 }
 
 async function main(): Promise<void> {
@@ -110,6 +136,34 @@ async function main(): Promise<void> {
     `[first-write] target agent    : ${agent.agent_name} ` +
       `(id=${agent.id}, repid=${agent.current_repid}, tier=${agent.tier}, token=${agent.erc8004_token_id})`
   );
+
+  // Pre-flight self-feedback guard (fix 2026-05-22). The ReputationRegistry
+  // reverts `require(msg.sender != agent, "Self-feedback not allowed")` where
+  // `agent = IdentityRegistry.ownerOf(agentId)`. If the reviewer wallet owns the
+  // target token, the write is guaranteed to revert — catch it here BEFORE
+  // broadcasting so we never burn gas on a doomed tx (the bug Sean hit when the
+  // operator wallet 0xdf6b8215… owned sophia's token 3747).
+  const tokenOwner = await resolveTokenOwner(agent.erc8004_token_id);
+  if (tokenOwner) {
+    console.log(`[first-write] token ${agent.erc8004_token_id} on-chain owner: ${tokenOwner}`);
+    if (tokenOwner.toLowerCase() === operator.toLowerCase()) {
+      console.error(
+        `FATAL: SELF-FEEDBACK — reviewer wallet ${operator} OWNS target token ` +
+          `${agent.erc8004_token_id} (${agent.agent_name}); giveFeedback would revert ` +
+          `"Self-feedback not allowed". Fix: set ERC8004_REPUTATION_WRITER_KEY to a reviewer ` +
+          `wallet that does NOT own this token, or target an agent whose token it does not own.`
+      );
+      process.exit(1);
+    }
+  } else if (execute) {
+    // Fail-safe: never broadcast blind. (A dry run is still allowed for inspection.)
+    console.error(
+      `FATAL: could not verify on-chain ownerOf(${agent.erc8004_token_id}); refusing to ` +
+        `broadcast to avoid a blind self-feedback revert. Check BASE_SEPOLIA_RPC_URL / ` +
+        `TRUST_IDENTITY_REGISTRY and retry.`
+    );
+    process.exit(1);
+  }
 
   if (!execute) {
     console.log(
