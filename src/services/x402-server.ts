@@ -13,6 +13,7 @@
 
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
+import { x402Facilitator, PaymentRequirements } from './x402-facilitator';
 
 const USDC_BASE_SEPOLIA = process.env.USDC_BASE_SEPOLIA_ADDRESS ?? '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PROVIDER_WALLET = process.env.PROVIDER_AGENT_WALLET ?? '0x0000000000000000000000000000000000000000';
@@ -127,11 +128,25 @@ export interface TipDeliveryResult {
   error?: string;
 }
 
-async function verifyPaymentOnChain(_xPayment: string): Promise<boolean> {
-  // v0.2 hook: parse X-PAYMENT, query Base Sepolia for the underlying
-  // USDC transfer event, confirm amount + payee match the 402 challenge.
-  // For v0.1 with X402_REAL_RPC unset, this code path is unreachable.
-  return false;
+async function verifyPaymentOnChain(
+  xPayment: string,
+  requirements: PaymentRequirements[]
+): Promise<boolean> {
+  // Real verification: delegate EIP-712 / EIP-3009 signature + on-chain
+  // settlement check to the Coinbase x402 facilitator (x402.org/facilitator).
+  // Reached only when X402_REAL_RPC is set — simulated mode short-circuits
+  // before this call. Returns false (loud) on facilitator rejection/error so
+  // an unverified payment never unlocks delivery.
+  try {
+    const result = await x402Facilitator.verifyPayment(xPayment, requirements);
+    if (!result.valid) {
+      console.warn(`[x402-server] facilitator rejected payment: ${result.reason ?? 'unknown'}`);
+    }
+    return result.valid;
+  } catch (e: any) {
+    console.error(`[x402-server] facilitator verify error: ${e?.message ?? e}`);
+    return false;
+  }
 }
 
 function generateTipContent(predictionPayload: Record<string, unknown>): string {
@@ -151,7 +166,16 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
   }
 
   const isSimulated = !process.env.X402_REAL_RPC;
-  const verified = isSimulated ? true : await verifyPaymentOnChain(input.xPaymentHeader);
+  // Reconstruct the payment requirements the client paid against so the
+  // facilitator can verify the signed authorization matches amount/payee.
+  const requirements = x402Facilitator.buildPaymentRequirements({
+    resource: `/api/v1/tip/deliver/${input.tipId}`,
+    payTo: PROVIDER_WALLET,
+    priceUsdc: String(tip.bet_amount),
+    network: 'base-sepolia',
+    description: `Prediction tip: ${(tip.prediction_payload as any)?.topic ?? ''}`,
+  });
+  const verified = isSimulated ? true : await verifyPaymentOnChain(input.xPaymentHeader, requirements);
   if (!verified) {
     return { ok: false, tip_id: input.tipId, is_simulated: isSimulated, audit_chain_id: null, error: 'payment verification failed' };
   }
@@ -159,15 +183,69 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
   const content = generateTipContent(tip.prediction_payload || {});
 
   await db.from('linked_bets').update({ status: 'delivered' }).eq('id', input.tipId);
+  // Schema-drift fix (2026-05-22): the prior insert used columns that do not
+  // exist on x402_settlements (payee_address / settlement_tx_hash /
+  // http_402_challenge), so this write errored silently. Map to the real
+  // generated-schema columns (verified via src/types/database.types.ts):
+  // required = amount, prediction_topic, tip_id. The X-PAYMENT header lives in
+  // x_payment_header; the provider/requestor are agent ids, not wallet strings.
   await db.from('x402_settlements').insert({
-    payer_address: input.payerAddress ?? null,
-    payee_address: PROVIDER_WALLET,
-    amount: tip.bet_amount,
+    tip_id: input.tipId,
+    prediction_topic: String((tip.prediction_payload as any)?.topic ?? 'unknown'),
+    amount: Number(tip.bet_amount),
     asset: 'USDC',
-    settlement_tx_hash: input.xPaymentHeader,
-    http_402_challenge: input.tipId,
+    status: 'settled',
+    payer_address: input.payerAddress ?? null,
+    provider_agent_id: tip.agent_id ?? null,
+    requestor_agent_id: (tip.prediction_payload as any)?.requestor ?? null,
+    x_payment_header: input.xPaymentHeader,
     is_simulated: isSimulated,
+    delivered_at: new Date().toISOString(),
   });
+
+  // Close the A2A -> RepID -> ERC-8004 loop: queue a reputation event for the
+  // provider who delivered the paid service. The FeedbackLoopWorker (CC1) polls
+  // repid_events for 'x402_inbound_settled' and writes the agent's RepID
+  // on-chain. Shape mirrors the inbound route (x402-inbound.ts). `is_simulated`
+  // is carried in event_data so the on-chain consumer can skip simulated tips
+  // (coordinate with CC1: simulated settlements should NOT earn on-chain RepID).
+  const { error: repidEventErr } = await db.from('repid_events').insert({
+    subject_id: tip.agent_id,
+    subject_type: 'agent',
+    event_type: 'x402_inbound_settled',
+    reputation_delta: 5,
+    event_data: {
+      tx_hash: input.xPaymentHeader,
+      tip_id: input.tipId,
+      amount: tip.bet_amount,
+      is_simulated: isSimulated,
+      settled_at: new Date().toISOString(),
+    },
+  });
+  // RULE-11: never silent-swallow. A failed score-event insert would lose a
+  // RepID event with no trace. Log loud + emit an audit event so the loss is
+  // discoverable. Do NOT throw — the tip is already settled; delivery must not
+  // fail because the downstream score event didn't persist.
+  if (repidEventErr) {
+    console.error(
+      `[x402-server] repid_events insert FAILED for tip ${input.tipId} (RepID event lost):`,
+      repidEventErr?.message ?? repidEventErr,
+      (repidEventErr as any)?.stack ?? new Error().stack
+    );
+    await emitAuditEvent({
+      event_type: 'x402_repid_event_insert_failed',
+      source_table: 'repid_events',
+      source_id: input.tipId,
+      payload: {
+        tip_id: input.tipId,
+        provider: tip.agent_id,
+        reason: repidEventErr?.message ?? String(repidEventErr),
+        is_simulated: isSimulated,
+      },
+    }).catch((e: any) =>
+      console.error('[x402-server] audit emit for repid_events failure also failed:', e?.message ?? e)
+    );
+  }
 
   const audit = await emitAuditEvent({
     event_type: 'x402_tip_delivered',
