@@ -203,6 +203,26 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
     delivered_at: new Date().toISOString(),
   });
 
+  // Close the A2A -> RepID -> ERC-8004 loop: queue a reputation event for the
+  // provider who delivered the paid service. The FeedbackLoopWorker (CC1) polls
+  // repid_events for 'x402_inbound_settled' and writes the agent's RepID
+  // on-chain. Shape mirrors the inbound route (x402-inbound.ts). `is_simulated`
+  // is carried in event_data so the on-chain consumer can skip simulated tips
+  // (coordinate with CC1: simulated settlements should NOT earn on-chain RepID).
+  await db.from('repid_events').insert({
+    subject_id: tip.agent_id,
+    subject_type: 'agent',
+    event_type: 'x402_inbound_settled',
+    reputation_delta: 5,
+    event_data: {
+      tx_hash: input.xPaymentHeader,
+      tip_id: input.tipId,
+      amount: tip.bet_amount,
+      is_simulated: isSimulated,
+      settled_at: new Date().toISOString(),
+    },
+  });
+
   const audit = await emitAuditEvent({
     event_type: 'x402_tip_delivered',
     source_table: 'linked_bets',
