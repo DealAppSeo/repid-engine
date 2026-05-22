@@ -68,8 +68,27 @@ export class FeedbackLoopWorker {
         { retries: 1, label: 'feedback-loop:poll' }
       );
     } catch (e) {
-      console.error('[FeedbackLoopWorker] Error fetching events:', e instanceof Error ? e.message : String(e));
-      return;
+      // Direct-pg unavailable (e.g. DATABASE_URL unset on this service — a
+      // requirement the PostgREST bypass introduced). Fall back to the
+      // pre-bypass supabase-js poll so a missing bypass env var cannot silently
+      // disable the entire ERC-8004 on-chain pipeline (the poll is the first
+      // step; a hard return here strands every downstream write). This poll is
+      // 60s cadence — not the hot path the bypass targeted — so REST is fine.
+      console.warn(
+        '[FeedbackLoopWorker] direct-pg poll failed, falling back to supabase-js:',
+        e instanceof Error ? e.message : String(e)
+      );
+      const { data, error } = await db
+        .from('repid_events')
+        .select('*')
+        .in('event_type', ['x402_inbound_settled', 'x402_outbound_settled'])
+        .is('processed_at', null)
+        .limit(50);
+      if (error) {
+        console.error('[FeedbackLoopWorker] supabase-js fallback poll also failed:', error.message);
+        return;
+      }
+      events = data ?? [];
     }
 
     if (!events || events.length === 0) {
