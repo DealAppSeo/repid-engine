@@ -95,6 +95,10 @@ describe('proof-drain-service', () => {
 
     const svc = createProofDrainService({
       supabase,
+      // PostgREST bypass (2026-05-21): fetchPendingBatch now uses direct pg.
+      // Inject a mock pgQuery returning the same pending rows the supabase mock
+      // used to serve, so the drain behavior under test is unchanged.
+      pgQueryImpl: (async () => state.pending) as any,
       zkpServiceUrl: 'http://zkp.test',
       fetchImpl: fakeFetch as any
     });
@@ -123,6 +127,10 @@ describe('proof-drain-service', () => {
 
     const svc = createProofDrainService({
       supabase,
+      // PostgREST bypass (2026-05-21): fetchPendingBatch now uses direct pg.
+      // Inject a mock pgQuery returning the same pending rows the supabase mock
+      // used to serve, so the drain behavior under test is unchanged.
+      pgQueryImpl: (async () => state.pending) as any,
       zkpServiceUrl: 'http://zkp.test',
       fetchImpl: fakeFetch as any
     });
@@ -150,6 +158,10 @@ describe('proof-drain-service', () => {
 
     const svc = createProofDrainService({
       supabase,
+      // PostgREST bypass (2026-05-21): fetchPendingBatch now uses direct pg.
+      // Inject a mock pgQuery returning the same pending rows the supabase mock
+      // used to serve, so the drain behavior under test is unchanged.
+      pgQueryImpl: (async () => state.pending) as any,
       zkpServiceUrl: 'http://zkp.test',
       stallThresholdMs: 30,
       pollIntervalMs: 5,
