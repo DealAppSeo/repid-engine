@@ -34,18 +34,25 @@ import { db } from '../db';
 import { VerificationServiceHandler } from '../services/verification-service-handler';
 import { CrossValidationServiceHandler } from '../services/cross-validation-service-handler';
 import { AnfisRoutingServiceHandler } from '../services/anfis-routing-service-handler';
+import { ReputationAuditServiceHandler } from '../services/reputation-audit-service-handler';
+import { StorageServiceHandler } from '../services/storage-service-handler';
 
 const POLL_MS = parseInt(process.env.CASCADE_SETTLEMENT_POLL_MS ?? '60000', 10);
 const MAX_PER_CYCLE = parseInt(process.env.CASCADE_SETTLEMENT_MAX_PER_CYCLE ?? '20', 10);
 
 export class CascadeSettlementWorker {
   // Same handler set the production HTTP driver (routes/v1/agent.ts) instantiates.
-  // Each processOne() filters to its own service_type, so running all three per
-  // provider covers every escrowed contract that provider owns.
+  // Each processOne() filters to its own service_type, so running all five per
+  // provider covers every escrowed contract that provider owns. reputation_audit
+  // + storage were registered in agent.ts (Gemini handler-registry PR, merged
+  // 2026-05-22); added here so those two service types also drain server-side
+  // rather than only via the HTTP /agent/process-contracts path.
   private readonly handlers = [
     new VerificationServiceHandler(),
     new CrossValidationServiceHandler(),
     new AnfisRoutingServiceHandler(),
+    new ReputationAuditServiceHandler(),
+    new StorageServiceHandler(),
   ];
   private timer: NodeJS.Timeout | null = null;
 
