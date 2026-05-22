@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { pgQuery } from '../db/direct-pg';
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -8,6 +9,9 @@ export interface ProofDrainServiceConfig {
   batchSize?: number;
   stallThresholdMs?: number;
   fetchImpl?: typeof fetch;
+  // PostgREST bypass (2026-05-21) — injectable direct-pg query fn for the hot
+  // fetchPendingBatch poll. Defaults to the real pgQuery; tests pass a mock.
+  pgQueryImpl?: typeof pgQuery;
 }
 
 export interface ProofDrainServiceStatus {
@@ -40,25 +44,11 @@ export const DEFAULT_PROOF_DRAIN_STALL_MS = 10 * 60 * 1000;
 const MAX_RETRY_ATTEMPTS = 5;
 const RETRY_DELAYS_MS = [1000, 4000, 16000, 64000, 256000];
 
-// Phase 7B — per-DB-query timeout. supabase-js's query builder does not
-// natively accept AbortSignal, so we wrap the thenable in Promise.race with
-// a setTimeout-rejection. Caveat: the underlying HTTP request continues in
-// the background until the network completes; the timeout only releases the
-// caller. Acceptable for our needs (the caller's await unwinds; the next
-// retry can issue a fresh request). 5s default per CLAUDE-RULE-8.
-const DB_QUERY_TIMEOUT_MS = 5000;
-
-function withQueryTimeout<T>(label: string, query: PromiseLike<T>, ms: number = DB_QUERY_TIMEOUT_MS): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const handle = setTimeout(() => {
-      reject(new Error(`query timeout after ${ms}ms: ${label}`));
-    }, ms);
-    Promise.resolve(query).then(
-      v => { clearTimeout(handle); resolve(v); },
-      err => { clearTimeout(handle); reject(err); }
-    );
-  });
-}
+// Phase 7B's withQueryTimeout helper (Promise.race over a supabase-js thenable)
+// was removed 2026-05-21: fetchPendingBatch now uses direct pg via pgQuery,
+// which owns its own per-attempt timeout + circuit breaker. The remaining
+// supabase-js calls in this file (markCompleted/markFailed/insertCanonicalProof/
+// fetchScore/emitStallHitl) are low-frequency and stay on supabase-js.
 
 async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
   let lastErr: unknown;
@@ -83,6 +73,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   const batchSize = config.batchSize ?? 20;
   const stallThresholdMs = config.stallThresholdMs ?? DEFAULT_PROOF_DRAIN_STALL_MS;
   const httpFetch = config.fetchImpl ?? fetch;
+  const pgq = config.pgQueryImpl ?? pgQuery;
 
   const state: ProofDrainServiceStatus = {
     status: 'stopped',
@@ -140,20 +131,20 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   }
 
   async function fetchPendingBatch(): Promise<Array<{ id: string; job_id: string; agent_id: string; event_id: string; status: string }>> {
-    // Phase 7B — wrap in withQueryTimeout so a hanging Supabase query
-    // (compute degradation, query-planner saturation) doesn't lock the tick
-    // indefinitely. 5s ceiling per CLAUDE-RULE-8 NEVER UNBOUNDED WAIT.
-    const { data, error } = await withQueryTimeout(
-      'fetchPendingBatch',
-      config.supabase
-        .from('repid_proof_queue')
-        .select('id, job_id, agent_id, event_id, status')
-        .eq('status', 'pending')
-        .eq('zkp_service_url', config.zkpServiceUrl)
-        .limit(batchSize)
+    // PostgREST bypass (2026-05-21) — direct pg SELECT in place of the
+    // supabase query builder. pgQuery owns the per-attempt timeout + circuit
+    // breaker (RULE-8), so the Phase-7B withQueryTimeout wrapper is no longer
+    // needed here; the drainOnce-level withRetry still provides outer retry, so
+    // we keep retries:1 (single attempt) to preserve that structure.
+    const rows = await pgq<{ id: string; job_id: string; agent_id: string; event_id: string; status: string }>(
+      `SELECT id, job_id, agent_id, event_id, status
+       FROM repid_proof_queue
+       WHERE status = $1 AND zkp_service_url = $2
+       LIMIT $3`,
+      ['pending', config.zkpServiceUrl, batchSize],
+      { retries: 1, label: 'fetchPendingBatch' }
     );
-    if (error) throw new Error(`fetch pending failed: ${error.message}`);
-    return data ?? [];
+    return rows;
   }
 
   async function fetchScore(eventId: string): Promise<number | null> {
