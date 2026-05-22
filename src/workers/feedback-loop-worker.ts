@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
+import { isEligibleForOnChainWrite, POLL_EVENT_FILTER_SQL } from './feedback-loop-filters';
 import { getReputationWriter, persistReputationWrite, type WriteRepIDResult } from '../services/erc8004-reputation';
 
 // Phase 8 — drain-mode rate limit. For the first 24h after worker boot, cap
@@ -60,9 +61,13 @@ export class FeedbackLoopWorker {
     //    supabase-js — low frequency, not in scope. RULE-8.
     let events: any[];
     try {
+      // Defensive filters (2026-05-22): after Sean drained 990 stale events,
+      // POLL_EVENT_FILTER_SQL keeps mock/simulated/orphaned rows out of the
+      // poll so they can never reach the on-chain writer. See
+      // feedback-loop-filters.ts (kept in sync with the JS guard below).
       events = await pgQuery(
         `SELECT * FROM repid_events
-         WHERE event_type = ANY($1) AND processed_at IS NULL
+         WHERE event_type = ANY($1) AND processed_at IS NULL${POLL_EVENT_FILTER_SQL}
          LIMIT 50`,
         [['x402_inbound_settled', 'x402_outbound_settled']],
         { retries: 1, label: 'feedback-loop:poll' }
@@ -89,6 +94,24 @@ export class FeedbackLoopWorker {
     for (const event of events) {
       try {
         const { subject_id, event_data } = event;
+
+        // Defense-in-depth: re-check each row against the same rules as the SQL
+        // poll filter. If the query is ever relaxed, this still blocks a
+        // mock/simulated/orphaned event from a real on-chain write. Mark it
+        // processed so it doesn't re-poll (RULE-11: error-checked).
+        const gate = isEligibleForOnChainWrite(event);
+        if (!gate.eligible) {
+          console.warn(`[FeedbackLoopWorker] Skipping ineligible event ${event.id} (${gate.reason})`);
+          const { error: skipErr } = await db
+            .from('repid_events')
+            .update({ processed_at: new Date().toISOString() })
+            .eq('id', event.id);
+          if (skipErr) {
+            console.error(`[FeedbackLoopWorker] failed to mark ineligible event ${event.id} processed:`, skipErr.message ?? skipErr);
+          }
+          continue;
+        }
+
         const { data: agent } = await db
           .from('repid_agents')
           .select('id, agent_name, current_repid, tier, erc8004_token_id')
