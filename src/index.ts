@@ -34,6 +34,7 @@ import { createAgentsReputationRouter } from './routes/agents-reputation';
 import x402InboundRouter from './routes/x402-inbound';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
+import { halJudgmentWorker } from './workers/hal-judgment-worker';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -477,6 +478,14 @@ if (!IS_TEST) {
 // CASCADE_SETTLEMENT_ENABLED=true (mirrors DisputeResolutionWorker gating).
 if (!IS_TEST) {
   cascadeSettlementWorker.start();
+}
+
+// HAL Judgment Worker — fills verdict_hal on repid_events rows where x402 set a
+// verdict + verdict_hal='pending'. Runs the real cross-LLM HAL evaluator and
+// derives pass/fail (no fabricated pass — gas rule). OFF unless
+// HAL_JUDGMENT_WORKER_ENABLED=true (mirrors the cascade/dispute gating).
+if (!IS_TEST) {
+  halJudgmentWorker.start();
 }
 
 // Daily health check at 6am UTC
