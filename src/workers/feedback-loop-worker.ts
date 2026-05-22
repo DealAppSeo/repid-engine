@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { pgQuery } from '../db/direct-pg';
 import { getReputationWriter, persistReputationWrite, type WriteRepIDResult } from '../services/erc8004-reputation';
 
 // Phase 8 — drain-mode rate limit. For the first 24h after worker boot, cap
@@ -52,16 +53,22 @@ export class FeedbackLoopWorker {
 
     console.log('[FeedbackLoopWorker] Starting cycle...');
 
-    // 1. Fetch unprocessed x402 events
-    const { data: events, error } = await db
-      .from('repid_events')
-      .select('*')
-      .in('event_type', ['x402_inbound_settled', 'x402_outbound_settled'])
-      .is('processed_at', null)
-      .limit(50);
-
-    if (error) {
-      console.error('[FeedbackLoopWorker] Error fetching events:', error.message);
+    // 1. Fetch unprocessed x402 events — PostgREST bypass (2026-05-21): direct
+    //    pg SELECT in place of supabase-js. retries:1 (60s poll cadence; pgQuery
+    //    owns the timeout + circuit breaker). The per-event writes further down
+    //    (repid_agents read, repid_events/repid_agents updates) stay on
+    //    supabase-js — low frequency, not in scope. RULE-8.
+    let events: any[];
+    try {
+      events = await pgQuery(
+        `SELECT * FROM repid_events
+         WHERE event_type = ANY($1) AND processed_at IS NULL
+         LIMIT 50`,
+        [['x402_inbound_settled', 'x402_outbound_settled']],
+        { retries: 1, label: 'feedback-loop:poll' }
+      );
+    } catch (e) {
+      console.error('[FeedbackLoopWorker] Error fetching events:', e instanceof Error ? e.message : String(e));
       return;
     }
 

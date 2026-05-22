@@ -2,6 +2,7 @@ import * as dotenv from 'dotenv';
 import express, { type Request, type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { createProofDrainService } from '../services/proof-drain-service';
+import { pgPing } from '../db/direct-pg';
 
 dotenv.config();
 
@@ -33,6 +34,17 @@ async function main(): Promise<void> {
   const supabase = createClient(supabaseUrl, supabaseKey, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
+
+  // PostgREST bypass (2026-05-21) — boot diagnostic. fetchPendingBatch (the
+  // entry point to all drain work) now uses direct-pg, so a failed ping means
+  // the worker can't fetch jobs. Loud, non-fatal (the per-call circuit breaker
+  // + /health endpoint surface ongoing degradation; we avoid a restart loop).
+  const ping = await pgPing();
+  if (ping.ok) {
+    console.log(`[direct-pg] ping OK: latency=${ping.latencyMs}ms (pool max=5)`);
+  } else {
+    console.error(`[direct-pg] PING FAILED after ${ping.latencyMs}ms: ${ping.error} — fetchPendingBatch will fail until DATABASE_URL is set (Supavisor transaction pooler, port 6543)`);
+  }
 
   const service = createProofDrainService({
     supabase,
