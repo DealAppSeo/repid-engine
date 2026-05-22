@@ -32,6 +32,7 @@ import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
+import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -459,6 +460,17 @@ if (!IS_TEST) {
 // (tier_floor, rate_limit_drain_mode boolean) for ops visibility.
 if (!IS_TEST) {
   feedbackLoopWorker.start(60_000);
+}
+
+// Cascade Settlement Worker — the missing escrowed→fulfilled drain. The inline
+// Cascade Pickup Worker above advances pending→escrowed; nothing server-side
+// then advanced escrowed→fulfilled (only the frozen ConstitutionalAgentV4 loop
+// or the HTTP /agent/process-contracts endpoint did), so escrowed contracts
+// piled up. This worker runs the same verified handlers' processOne() on an
+// interval. Economically active (drives RepID deltas), so it is OFF unless
+// CASCADE_SETTLEMENT_ENABLED=true (mirrors DisputeResolutionWorker gating).
+if (!IS_TEST) {
+  cascadeSettlementWorker.start();
 }
 
 // Daily health check at 6am UTC
