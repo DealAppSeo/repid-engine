@@ -191,15 +191,80 @@ export class Erc8004ReputationWriter {
 let _singleton: Erc8004ReputationWriter | null = null;
 let _initAttempted = false;
 
+/**
+ * Resolve the signing key from the fallback chain, sanitizing the raw env
+ * value (trim, strip surrounding quotes, normalize 0x prefix) and validating
+ * the strict format BEFORE it reaches `new ethers.Wallet()`. This replaces the
+ * prior inline `A || B || C` chain that passed the raw value straight to
+ * ethers — a malformed value (whitespace, quotes, wrong length, non-hex) threw
+ * the cryptic ethers "invalid private key" TypeError and crash-looped the
+ * worker at boot with no indication of which env var was at fault.
+ *
+ * Behavior:
+ *   - No candidate set (or all empty after trim) → returns null. Preserves the
+ *     documented soft-disable above (engine boots without reputation creds).
+ *   - A candidate IS set but its value fails format validation → throws LOUD,
+ *     naming the env var, its fallback rank, and the specific reason. The bad
+ *     value is NOT silently skipped to the next candidate (that would hide the
+ *     misconfiguration). Mirrors audit-merkle-anchor.ts's trim() precedent,
+ *     extended to full validation.
+ */
+function resolvePrivateKey(): { key: string; sourceVar: string } | null {
+  const candidates: Array<{ name: string; rank: number }> = [
+    { name: 'ERC8004_REPUTATION_WRITER_KEY', rank: 1 },
+    { name: 'ERC8004_MINTER_PRIVATE_KEY', rank: 2 },
+    { name: 'ERC8004_OPERATOR_KEY', rank: 3 },
+  ];
+
+  for (const { name, rank } of candidates) {
+    const raw = process.env[name];
+    if (!raw) continue; // unset
+
+    // Trim whitespace, then strip a single layer of surrounding quotes.
+    let v = raw.trim();
+    if (
+      (v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith("'") && v.endsWith("'"))
+    ) {
+      v = v.slice(1, -1).trim();
+    }
+    if (v.length === 0) continue; // empty after cleanup → treat as unset (matches prior `||` semantics)
+
+    // Add 0x prefix if missing AND the remaining string is exactly 64 hex chars.
+    if (!v.startsWith('0x') && /^[0-9a-fA-F]{64}$/.test(v)) {
+      v = '0x' + v;
+    }
+
+    // Strict format gate: 0x + 64 hex chars (66 total).
+    if (!/^0x[0-9a-fA-F]{64}$/.test(v)) {
+      throw new Error(
+        `[Erc8004ReputationWriter] FATAL: private key from ${name} (fallback rank ${rank}) failed format validation: ${describeBadKey(v)}`
+      );
+    }
+
+    console.log(
+      `[Erc8004ReputationWriter] private key resolved from ${name} (format validated)`
+    );
+    return { key: v, sourceVar: name };
+  }
+
+  return null; // no candidate present
+}
+
+function describeBadKey(v: string): string {
+  if (v.length === 0) return 'value is empty after trim';
+  if (v.length !== 66) return `length is ${v.length}, expected 66 (0x + 64 hex chars)`;
+  if (!v.startsWith('0x')) return 'missing 0x prefix';
+  if (!/^0x[0-9a-fA-F]{64}$/.test(v)) return 'contains non-hex characters or is malformed';
+  return 'unknown format issue';
+}
+
 export function getReputationWriter(): Erc8004ReputationWriter | null {
   if (_initAttempted) return _singleton;
   _initAttempted = true;
   const rpc = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
-  const pk =
-    process.env.ERC8004_REPUTATION_WRITER_KEY ||
-    process.env.ERC8004_MINTER_PRIVATE_KEY ||
-    process.env.ERC8004_OPERATOR_KEY;
-  if (!pk) {
+  const resolved = resolvePrivateKey();
+  if (!resolved) {
     console.warn(
       '[erc8004-reputation] No signing key env var set (ERC8004_REPUTATION_WRITER_KEY / ERC8004_MINTER_PRIVATE_KEY / ERC8004_OPERATOR_KEY); reputation writes disabled.'
     );
@@ -207,7 +272,7 @@ export function getReputationWriter(): Erc8004ReputationWriter | null {
   }
   _singleton = new Erc8004ReputationWriter({
     rpcUrl: rpc,
-    privateKey: pk,
+    privateKey: resolved.key,
     contractAddress: process.env.ERC8004_REPUTATION_CONTRACT,
     chainId: parseInt(process.env.ERC8004_REPUTATION_CHAIN_ID || '84532', 10),
   });
