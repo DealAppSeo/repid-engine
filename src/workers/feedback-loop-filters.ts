@@ -40,6 +40,8 @@ export interface FilterableEvent {
   subject_type?: string | null;
   subject_id?: string | null;
   event_data?: Record<string, any> | null;
+  verdict_x402?: string | null;
+  verdict_hal?: string | null;
 }
 
 export type EligibilityReason =
@@ -48,7 +50,9 @@ export type EligibilityReason =
   | 'is_simulated'
   | 'mock_tx_hash'
   | 'drained_historical_mock'
-  | 'drained_orphaned_conductor';
+  | 'drained_orphaned_conductor'
+  | 'x402_not_settled'
+  | 'hal_not_pass';
 
 /**
  * Returns whether a polled repid_event may drive a REAL on-chain ERC-8004
@@ -65,5 +69,17 @@ export function isEligibleForOnChainWrite(
   if (MOCK_TX_RE.test(String(ed.tx_hash ?? ''))) return { eligible: false, reason: 'mock_tx_hash' };
   if (String(ed.drained_as_historical_mock ?? 'false') === 'true') return { eligible: false, reason: 'drained_historical_mock' };
   if (String(ed.drained_as_orphaned_conductor_format ?? 'false') === 'true') return { eligible: false, reason: 'drained_orphaned_conductor' };
+
+  // Parallel-verdict gate (2026-05-22): on-chain write requires BOTH the x402
+  // settlement AND the HAL judgment to agree — either dissent vetoes. Env-gated
+  // (default OFF) so merging this can't halt existing worker writes before the
+  // migration + HAL judgment worker are live. Enable order: apply the verdict
+  // migration → HAL_JUDGMENT_WORKER_ENABLED=true → REQUIRE_DUAL_VERDICT=true.
+  // Rows that fail this gate are recorded off-chain (marked processed by the
+  // worker) and earn NO gas — exactly the gas rule.
+  if (process.env.REQUIRE_DUAL_VERDICT === 'true') {
+    if (event.verdict_x402 !== 'settled') return { eligible: false, reason: 'x402_not_settled' };
+    if (event.verdict_hal !== 'pass') return { eligible: false, reason: 'hal_not_pass' };
+  }
   return { eligible: true };
 }
