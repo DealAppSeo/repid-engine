@@ -209,7 +209,7 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
   // on-chain. Shape mirrors the inbound route (x402-inbound.ts). `is_simulated`
   // is carried in event_data so the on-chain consumer can skip simulated tips
   // (coordinate with CC1: simulated settlements should NOT earn on-chain RepID).
-  await db.from('repid_events').insert({
+  const { error: repidEventErr } = await db.from('repid_events').insert({
     subject_id: tip.agent_id,
     subject_type: 'agent',
     event_type: 'x402_inbound_settled',
@@ -222,6 +222,30 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
       settled_at: new Date().toISOString(),
     },
   });
+  // RULE-11: never silent-swallow. A failed score-event insert would lose a
+  // RepID event with no trace. Log loud + emit an audit event so the loss is
+  // discoverable. Do NOT throw — the tip is already settled; delivery must not
+  // fail because the downstream score event didn't persist.
+  if (repidEventErr) {
+    console.error(
+      `[x402-server] repid_events insert FAILED for tip ${input.tipId} (RepID event lost):`,
+      repidEventErr?.message ?? repidEventErr,
+      (repidEventErr as any)?.stack ?? new Error().stack
+    );
+    await emitAuditEvent({
+      event_type: 'x402_repid_event_insert_failed',
+      source_table: 'repid_events',
+      source_id: input.tipId,
+      payload: {
+        tip_id: input.tipId,
+        provider: tip.agent_id,
+        reason: repidEventErr?.message ?? String(repidEventErr),
+        is_simulated: isSimulated,
+      },
+    }).catch((e: any) =>
+      console.error('[x402-server] audit emit for repid_events failure also failed:', e?.message ?? e)
+    );
+  }
 
   const audit = await emitAuditEvent({
     event_type: 'x402_tip_delivered',
