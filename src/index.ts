@@ -31,6 +31,7 @@ import { createAgentsOnchainRouter } from './routes/agents-onchain';
 import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
+import x402InboundRouter from './routes/x402-inbound';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 
@@ -226,6 +227,11 @@ const externalScoreLimiter = rateLimit({
 });
 app.use('/api/v1/agents-external/:id/score-event', externalScoreLimiter);
 app.use('/api/v1/agents-external', agentsExternalScoreRouter);
+
+// x402 inbound — payment-gated endpoint (the HTTP 402 handshake is the access
+// control), so it is mounted BEFORE authMiddleware alongside the other public
+// surfaces. Route: POST /api/v1/x402/:uuid/trade-analysis
+app.use('/api/v1/x402', x402InboundRouter);
 
 
 app.use(authMiddleware);
