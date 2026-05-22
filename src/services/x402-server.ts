@@ -177,6 +177,27 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
   });
   const verified = isSimulated ? true : await verifyPaymentOnChain(input.xPaymentHeader, requirements);
   if (!verified) {
+    // x402 REJECTED leg of the parallel verdict. Record it so HAL still judges
+    // the output (verdict_hal='pending') and the off-chain RepID delta direction
+    // is captured. verdict_x402='rejected' → never an on-chain write (gas rule).
+    // RULE-11 error-checked; never throws (delivery already failing).
+    const { error: rejErr } = await db.from('repid_events').insert({
+      subject_id: tip.agent_id,
+      subject_type: 'agent',
+      event_type: 'x402_inbound_settled',
+      reputation_delta: 0,
+      verdict_x402: 'rejected',
+      verdict_hal: 'pending',
+      event_data: {
+        tip_id: input.tipId,
+        amount: tip.bet_amount,
+        is_simulated: isSimulated,
+        rejected_at: new Date().toISOString(),
+      },
+    });
+    if (rejErr) {
+      console.error(`[x402-server] repid_events (rejected) insert failed for tip ${input.tipId}:`, rejErr?.message ?? rejErr);
+    }
     return { ok: false, tip_id: input.tipId, is_simulated: isSimulated, audit_chain_id: null, error: 'payment verification failed' };
   }
 
@@ -214,6 +235,8 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
     subject_type: 'agent',
     event_type: 'x402_inbound_settled',
     reputation_delta: 5,
+    verdict_x402: 'settled',   // x402 leg of the parallel verdict (NEW column, not event_data)
+    verdict_hal: 'pending',    // HAL judgment worker fills this; FeedbackLoopWorker waits for both
     event_data: {
       tx_hash: input.xPaymentHeader,
       tip_id: input.tipId,
