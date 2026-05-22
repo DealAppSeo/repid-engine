@@ -13,6 +13,7 @@
 
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
+import { x402Facilitator, PaymentRequirements } from './x402-facilitator';
 
 const USDC_BASE_SEPOLIA = process.env.USDC_BASE_SEPOLIA_ADDRESS ?? '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PROVIDER_WALLET = process.env.PROVIDER_AGENT_WALLET ?? '0x0000000000000000000000000000000000000000';
@@ -127,11 +128,25 @@ export interface TipDeliveryResult {
   error?: string;
 }
 
-async function verifyPaymentOnChain(_xPayment: string): Promise<boolean> {
-  // v0.2 hook: parse X-PAYMENT, query Base Sepolia for the underlying
-  // USDC transfer event, confirm amount + payee match the 402 challenge.
-  // For v0.1 with X402_REAL_RPC unset, this code path is unreachable.
-  return false;
+async function verifyPaymentOnChain(
+  xPayment: string,
+  requirements: PaymentRequirements[]
+): Promise<boolean> {
+  // Real verification: delegate EIP-712 / EIP-3009 signature + on-chain
+  // settlement check to the Coinbase x402 facilitator (x402.org/facilitator).
+  // Reached only when X402_REAL_RPC is set — simulated mode short-circuits
+  // before this call. Returns false (loud) on facilitator rejection/error so
+  // an unverified payment never unlocks delivery.
+  try {
+    const result = await x402Facilitator.verifyPayment(xPayment, requirements);
+    if (!result.valid) {
+      console.warn(`[x402-server] facilitator rejected payment: ${result.reason ?? 'unknown'}`);
+    }
+    return result.valid;
+  } catch (e: any) {
+    console.error(`[x402-server] facilitator verify error: ${e?.message ?? e}`);
+    return false;
+  }
 }
 
 function generateTipContent(predictionPayload: Record<string, unknown>): string {
@@ -151,7 +166,16 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
   }
 
   const isSimulated = !process.env.X402_REAL_RPC;
-  const verified = isSimulated ? true : await verifyPaymentOnChain(input.xPaymentHeader);
+  // Reconstruct the payment requirements the client paid against so the
+  // facilitator can verify the signed authorization matches amount/payee.
+  const requirements = x402Facilitator.buildPaymentRequirements({
+    resource: `/api/v1/tip/deliver/${input.tipId}`,
+    payTo: PROVIDER_WALLET,
+    priceUsdc: String(tip.bet_amount),
+    network: 'base-sepolia',
+    description: `Prediction tip: ${(tip.prediction_payload as any)?.topic ?? ''}`,
+  });
+  const verified = isSimulated ? true : await verifyPaymentOnChain(input.xPaymentHeader, requirements);
   if (!verified) {
     return { ok: false, tip_id: input.tipId, is_simulated: isSimulated, audit_chain_id: null, error: 'payment verification failed' };
   }
