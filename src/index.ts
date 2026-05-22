@@ -36,6 +36,7 @@ import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
+import { pgPing } from './db/direct-pg';
 
 import { authMiddleware } from './middleware/auth';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
@@ -291,6 +292,18 @@ if (!IS_TEST) {
 
     // Score monitor Task 8
     setInterval(scoreMonitor, 300000);
+
+    // PostgREST bypass (2026-05-21) — boot diagnostic for the direct-pg client
+    // (used by the feedback-loop poll). Loud, non-fatal: the API itself serves
+    // via supabase-js and must stay up even if DATABASE_URL is unset, but a
+    // failure here means the direct-pg hot path is degraded. No silent fallback.
+    void pgPing().then((ping) => {
+      if (ping.ok) {
+        console.log(`[direct-pg] ping OK: latency=${ping.latencyMs}ms (pool max=5)`);
+      } else {
+        console.error(`[direct-pg] PING FAILED after ${ping.latencyMs}ms: ${ping.error} — set DATABASE_URL (Supavisor transaction pooler, port 6543)`);
+      }
+    });
   });
 }
 
