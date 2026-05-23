@@ -184,6 +184,22 @@ export async function factCheck(
 }
 
 /**
+ * Resolve fact-check thresholds from env (Phase 1 — runtime-tunable, no
+ * redeploy). Defaults: veto 0.5 (clear majority confidently-false), flag 0.35.
+ * Calibration max-F1 was veto≈0.30 (more aggressive); set HAL_VETO_THRESHOLD
+ * to tune. Clamped to [0,1]; flag never above veto.
+ */
+export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: number } {
+  const num = (v: string | undefined, d: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : d;
+  };
+  const vetoThreshold = num(process.env.HAL_VETO_THRESHOLD, 0.5);
+  const flagThreshold = Math.min(num(process.env.HAL_FLAG_THRESHOLD, 0.35), vetoThreshold);
+  return { vetoThreshold, flagThreshold };
+}
+
+/**
  * Build the free-tier fact-check provider set from env (groq + cerebras +
  * fireworks). 3 providers → majority vote + non-degraded agreement. Only
  * key-present providers are included. Models overridable via HAL_S2_*_MODEL.
