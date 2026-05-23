@@ -13,11 +13,15 @@
  */
 import { pgQuery } from '../../../src/db/direct-pg';
 
+const HAS_DB = !!(process.env.DATABASE_URL || process.env.SUPABASE_DB_URL);
+
 async function twoArgExists(): Promise<boolean> {
   const rows = await pgQuery<{ n: string }>(
     `SELECT COUNT(*) n FROM pg_proc p JOIN pg_namespace ns ON ns.oid=p.pronamespace
      WHERE p.proname='compute_tier' AND ns.nspname='public'
        AND pg_get_function_identity_arguments(p.oid)='repid integer, p_agent_id uuid'`,
+    [],
+    { retries: 1, timeoutMs: 2500, label: 'patch-b-probe' },
   );
   return parseInt(rows[0]?.n ?? '0', 10) > 0;
 }
@@ -25,6 +29,7 @@ async function twoArgExists(): Promise<boolean> {
 describe('Min Unique Counterparty Gate (Patch B)', () => {
   let applied = false;
   beforeAll(async () => {
+    if (!HAS_DB) { console.warn('[patch-b] no DATABASE_URL — skipping (live-DB integration test)'); return; }
     try { applied = await twoArgExists(); } catch { applied = false; }
     if (!applied) console.warn('[patch-b] compute_tier(integer,uuid) not applied — skipping gate assertions (expected pre-greenlight)');
   });
