@@ -177,6 +177,11 @@ export async function applyServiceFulfilledDeltas(
   // applyValidationEvent uses its 0.5/clean default and fulfillment still
   // completes. Simulated/empty deliverables are skipped to save eval cost.
   // This block does NOT touch the bridge insert that follows.
+  // Phase 1 (2026-05-23): HAL enrichment ships behind HAL_ENRICHMENT_ENABLED
+  // (default off → applyValidationEvent uses its 0.5/clean default = legacy
+  // behavior, byte-identical to pre-HAL-enrichment main). Zero behavior change
+  // at merge time; Sean flips the flag post-merge after smoke verification.
+  const halEnrichmentEnabled = process.env.HAL_ENRICHMENT_ENABLED === 'true';
   let halOverride: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any } | undefined;
   try {
     const { data: cRow } = await db
@@ -193,7 +198,7 @@ export async function applyServiceFulfilledDeltas(
     const isSimulated =
       meta.is_simulated === true || meta.is_simulated === 'true' ||
       payload.is_simulated === true || payload.is_simulated === 'true';
-    if (!isSimulated && deliverable.trim().length > 0) {
+    if (halEnrichmentEnabled && !isSimulated && deliverable.trim().length > 0) {
       const halResult = await evaluate(deliverable, deliverable, {
         domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
         certainty: 0.8,

@@ -60,6 +60,13 @@ beforeEach(() => {
   (evaluate as jest.Mock).mockClear();
   (global as any).__svcRow = null;
   (global as any).__evalImpl = null;
+  process.env.HAL_ENRICHMENT_ENABLED = 'true'; // existing tests exercise the ENABLED path
+  delete process.env.HAL_STRICTNESS;            // default strictness:1 unless a test overrides
+});
+
+afterEach(() => {
+  delete process.env.HAL_ENRICHMENT_ENABLED;
+  delete process.env.HAL_STRICTNESS;
 });
 
 describe('applyServiceFulfilledDeltas — HAL enrichment', () => {
@@ -148,5 +155,43 @@ describe('applyServiceFulfilledDeltas — HAL enrichment', () => {
     const override = (applyValidationEvent as jest.Mock).mock.calls[0][4];
     expect(override.hal_decision).toBe('vetoed');
     expect(override.hal_score).toBe(0.9);
+  });
+});
+
+describe('applyServiceFulfilledDeltas — HAL_ENRICHMENT_ENABLED gate (Phase 1)', () => {
+  const seedRealContract = () => {
+    (global as any).__svcRow = {
+      payload: { content: 'A real verified deliverable about X.', title: 'Task X', task_type: 'verification' },
+      metadata: {},
+      x402_payment_id: null,
+    };
+    (global as any).__evalImpl = async () => ({ hal_score: 0.3, vetoed: false, signals: {} });
+  };
+
+  test('gate OFF (unset) → HAL skipped, halOverride undefined (0.5/clean legacy)', async () => {
+    seedRealContract();
+    delete process.env.HAL_ENRICHMENT_ENABLED;
+    await applyServiceFulfilledDeltas(CONTRACT);
+    expect(evaluate as jest.Mock).not.toHaveBeenCalled();
+    const calls = (applyValidationEvent as jest.Mock).mock.calls;
+    expect(calls.length).toBe(2); // fulfillment still runs
+    expect(calls[0][4]).toBeUndefined(); // no override → applyValidationEvent uses 0.5/clean
+    expect(calls[1][4]).toBeUndefined();
+  });
+
+  test('gate OFF (="false") → HAL skipped', async () => {
+    seedRealContract();
+    process.env.HAL_ENRICHMENT_ENABLED = 'false';
+    await applyServiceFulfilledDeltas(CONTRACT);
+    expect(evaluate as jest.Mock).not.toHaveBeenCalled();
+    expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toBeUndefined();
+  });
+
+  test('gate ON (="true") → HAL runs → halOverride populated', async () => {
+    seedRealContract();
+    process.env.HAL_ENRICHMENT_ENABLED = 'true';
+    await applyServiceFulfilledDeltas(CONTRACT);
+    expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1);
+    expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toMatchObject({ hal_score: 0.3, hal_decision: 'clean' });
   });
 });
