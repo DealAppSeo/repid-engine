@@ -18,4 +18,7 @@ module.exports = {
   testTimeout: 30000,           // per-test ceiling — 30s
   setupFiles: ['dotenv/config'],
   transform: { '^.+\\.ts$': 'ts-jest' },
+  moduleNameMapper: {
+    '^@xenova/transformers$': '<rootDir>/tests/__mocks__/xenova-stub.js'
+  }
 };
