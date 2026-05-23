@@ -2,14 +2,12 @@
  * RepID Inflation Patch B — counterparty gate tests (live-DB integration).
  *
  * The gate is a DB function (compute_tier(integer, uuid)) shipped in migration
- * 20260523140000_repid_inflation_counterparty_gate.sql, which is NOT applied until Sean greenlights
- * it (calibration shows meaningful thresholds would mass-demote the current population). So this
- * test detects whether the 2-arg overload exists: if not applied, it skips (does not false-fail);
- * once applied, it validates the gate truth table. Thresholds asserted here assume the strict
- * "target" set (vet10/auto5/est3/earn1) — adjust if Sean ships different thresholds.
+ * 20260523140000_repid_inflation_counterparty_gate.sql. APPLIED to prod 2026-05-23 at the
+ * ZERO-DEMOTION FLOOR (vet_min=2, auto_min=2, est_min=0, earn_min=0) + is_human exclusion, per Sean.
+ * Assertions below match that floor (a 0-counterparty climber is blocked from AUTONOMOUS, capped at
+ * ESTABLISHED; est/earn are ungated so no further cascade). If Sean ratchets thresholds, update these.
  *
- * The gate logic was additionally verified live during the sprint via the strict overload on real
- * agents (apm cp3, shofet cp2, MEDIATOR cp0) — see report §2.
+ * Skips gracefully when no DATABASE_URL or when the 2-arg overload isn't present (other envs).
  */
 import { pgQuery } from '../../../src/db/direct-pg';
 
@@ -48,20 +46,23 @@ describe('Min Unique Counterparty Gate (Patch B)', () => {
     expect(rows[0]!.t).toBe('AUTONOMOUS');
   });
 
-  test('high RepID but 0 counterparties cascades down (not AUTONOMOUS/VETERAN)', async () => {
+  test('0-counterparty climber is blocked from AUTONOMOUS (capped at ESTABLISHED at the floor)', async () => {
     if (!applied) return;
+    // MEDIATOR (is_human=false, 0 delivered counterparties) at AUTONOMOUS-level repid: cp0 < auto_min(2)
+    // → capped to ESTABLISHED; est ungated so it stays there. This is the sock-puppet block.
     const rows = await pgQuery<{ t: string }>(
-      `SELECT compute_tier(9581, (SELECT id FROM repid_agents WHERE agent_name='MEDIATOR')) t`,
+      `SELECT compute_tier(6000, (SELECT id FROM repid_agents WHERE agent_name='MEDIATOR' LIMIT 1)) t`,
     );
-    expect(['EARNING', 'PROBATIONARY']).toContain(rows[0]!.t);
+    expect(rows[0]!.t).toBe('ESTABLISHED');
+    expect(rows[0]!.t).not.toBe('AUTONOMOUS');
   });
 
-  test('agent below AUTONOMOUS counterparty floor is capped at ESTABLISHED', async () => {
+  test('provider with >= floor counterparties passes (apm cp3 → AUTONOMOUS)', async () => {
     if (!applied) return;
-    // apm has 3 delivered counterparties < auto_min(5) → AUTONOMOUS base capped to ESTABLISHED.
+    // apm has 3 delivered counterparties >= auto_min(2) → AUTONOMOUS allowed.
     const rows = await pgQuery<{ t: string }>(
       `SELECT compute_tier(6000, (SELECT id FROM repid_agents WHERE agent_name='trinity-apm')) t`,
     );
-    expect(rows[0]!.t).toBe('ESTABLISHED');
+    expect(rows[0]!.t).toBe('AUTONOMOUS');
   });
 });
