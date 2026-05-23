@@ -26,18 +26,26 @@ beforeEach(() => {
 });
 
 describe('HalService.evaluate', () => {
-  test('default profile → strictness:2 → fact-check', async () => {
+  test('default profile → strictness:1 → extractor (unknown product = fast path)', async () => {
     const r = await svc().evaluate({ text: 'The capital of France is Paris.' });
+    expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(factCheck as jest.Mock).not.toHaveBeenCalled();
+    expect(r.mode).toBe('extractor');
+    expect(r.strictness).toBe(1);
+    expect(r.product).toBe('default');
+  });
+
+  test('strictness:2 override on default → fact-check', async () => {
+    const r = await svc().evaluate({ text: 'x', strictness: 2 });
     expect(factCheck as jest.Mock).toHaveBeenCalledTimes(1);
     expect(evaluate as jest.Mock).not.toHaveBeenCalled();
     expect(r.mode).toBe('fact-check');
     expect(r.strictness).toBe(2);
-    expect(r.product).toBe('default');
     expect(r.provider_responses).toBeDefined();
   });
 
   test('strictness:1 override → extractor', async () => {
-    const r = await svc().evaluate({ text: 'x', strictness: 1 });
+    const r = await svc().evaluate({ text: 'x', strictness: 1, context: { product: 'trustshell' } });
     expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1);
     expect(factCheck as jest.Mock).not.toHaveBeenCalled();
     expect(r.mode).toBe('extractor');
@@ -57,7 +65,7 @@ describe('HalService.evaluate', () => {
   });
 
   test('no providers → extractor fallback', async () => {
-    const r = await svc(0).evaluate({ text: 'x' });
+    const r = await svc(0).evaluate({ text: 'x', strictness: 2 });
     expect(factCheck as jest.Mock).not.toHaveBeenCalled();
     expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1);
     expect(r.mode).toBe('extractor-fallback');
@@ -65,7 +73,7 @@ describe('HalService.evaluate', () => {
 
   test('providers present but 0 responded → extractor fallback', async () => {
     (global as any).__fc = { hal_score: 0.5, decision: 'flagged', verdicts: [], providers_used: 0, agreement: null, degraded: true, latency_ms: 30 };
-    const r = await svc(3).evaluate({ text: 'x' });
+    const r = await svc(3).evaluate({ text: 'x', strictness: 2 });
     expect(factCheck as jest.Mock).toHaveBeenCalledTimes(1);
     expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1);
     expect(r.mode).toBe('extractor-fallback');
@@ -73,7 +81,7 @@ describe('HalService.evaluate', () => {
 
   test('fact-check vetoed propagates', async () => {
     (global as any).__fc = { hal_score: 0.9, decision: 'vetoed', verdicts: [], providers_used: 3, agreement: 1, degraded: false, latency_ms: 6 };
-    const r = await svc().evaluate({ text: 'Pluto is a planet.' });
+    const r = await svc().evaluate({ text: 'Pluto is a planet.', strictness: 2 });
     expect(r.decision).toBe('vetoed');
     expect(r.hal_score).toBe(0.9);
   });

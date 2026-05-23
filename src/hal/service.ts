@@ -39,11 +39,24 @@ interface Profile {
 /**
  * Product profiles — presets per Trust* domain. All thresholds env-overridable
  * (HAL_VETO_THRESHOLD / HAL_FLAG_THRESHOLD apply globally). Tune per product later.
+ *
+ * SCALE (fact-check, src/hal/fact-check.ts): hal_score in [0,1] = RISK that the
+ * deliverable is FALSE — HIGH score = more likely false (bad). decision:
+ * hal_score >= vetoThreshold → vetoed; >= flagThreshold → flagged; else clean.
+ * So vetoThreshold > flagThreshold, and a STRICTER domain uses a LOWER vetoThreshold
+ * (vetoes more readily). Calibration (20-item corpus): false mean 0.788 / true mean
+ * 0.171; veto 0.5 + flag 0.35 → caught_false 9/10, over-veto-true 0/7 (F1 high).
+ *
+ * NOTE (2026-05-23 reconciliation): MEL's research recommended 0.80-0.85 — same
+ * direction (high=risk) but too-HIGH a cutoff (would under-veto, missing false
+ * items scoring 0.5-0.79). NOT an inverted scale. Corrected to the calibrated
+ * 0.45-0.5 range here. MEL's directional intuition (finance stricter than mixed)
+ * is preserved: trusttrader vetoThreshold 0.45 < trustshell 0.5.
  */
 export const HAL_PROFILES: Record<Product, Profile> = {
-  default: { strictness: 2, vetoThreshold: 0.5, flagThreshold: 0.35, domain: 'general' },
+  default: { strictness: 1, vetoThreshold: 0.5, flagThreshold: 0.35, domain: 'general' }, // unknown product → fast extractor
   trustshell: { strictness: 2, vetoThreshold: 0.5, flagThreshold: 0.35, domain: 'technical' },
-  trusttrader: { strictness: 2, vetoThreshold: 0.45, flagThreshold: 0.3, domain: 'finance' },
+  trusttrader: { strictness: 2, vetoThreshold: 0.45, flagThreshold: 0.3, domain: 'finance' }, // stricter: lower veto = vetoes more readily
   trustcre: { strictness: 2, vetoThreshold: 0.5, flagThreshold: 0.35, domain: 'cre-underwriting' },
 };
 
