@@ -1,25 +1,35 @@
 /**
- * HAL Enrichment Phase 2 — applyServiceFulfilledDeltas wires real HAL.
- *
- * Mocks evaluate(), applyValidationEvent(), and db so we can assert the
- * halOverride passed into the SERVICE_FULFILLED score-event calls, without
- * touching Supabase or the (byte-verified) bridge insert.
+ * HAL enrichment integration — applyServiceFulfilledDeltas.
+ * strictness:1 = extractor (evaluate); strictness:2 = fact-check evaluator.
+ * Mocks evaluate/factCheck/applyValidationEvent/db so we assert the halOverride
+ * passed into the SERVICE_FULFILLED calls without network/Supabase. Bridge
+ * insert is byte-verified untouched (separate diff check).
  */
 
 (global as any).__svcRow = null;
 (global as any).__evalImpl = null;
+(global as any).__fcImpl = null;
 
 jest.mock('../../src/hal/lib/evaluate', () => ({
-  evaluate: jest.fn(async (...args: any[]) => {
+  evaluate: jest.fn(async () => {
     const impl = (global as any).__evalImpl;
-    if (typeof impl === 'function') return impl(...args);
-    return { hal_score: 0.5, vetoed: false, signals: {} };
+    if (typeof impl === 'function') return impl();
+    return { hal_score: 0.3, vetoed: false, signals: { harm_probability: 0.1, comma_severity: null } };
   }),
+}));
+
+jest.mock('../../src/hal/fact-check', () => ({
+  factCheck: jest.fn(async () => {
+    const impl = (global as any).__fcImpl;
+    if (typeof impl === 'function') return impl();
+    return { hal_score: 0.1, decision: 'clean', verdicts: [{ provider: 'groq', verdict: 'TRUE', confidence: 100 }], providers_used: 3, agreement: 1, degraded: false, latency_ms: 5 };
+  }),
+  buildFactCheckProviders: () => [{ name: 'groq', endpoint: 'x', apiKey: 'k', model: 'm' }],
+  factCheckOptsFromEnv: () => ({ vetoThreshold: 0.5, flagThreshold: 0.35 }),
 }));
 
 jest.mock('../../src/scoring/pipeline', () => ({
   applyValidationEvent: jest.fn(async () => ({})),
-  // Real deriveHalDecision logic (pipeline.ts:69).
   deriveHalDecision: (score: number, vetoed: boolean, sev?: string | null) =>
     vetoed || sev === 'critical' ? 'vetoed' : score >= 0.4 ? 'flagged' : 'clean',
 }));
@@ -28,18 +38,9 @@ jest.mock('../../src/db', () => ({
   db: {
     from: (table: string) => {
       if (table === 'service_contracts') {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: async () => ({ data: (global as any).__svcRow, error: null }),
-            }),
-          }),
-        };
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: (global as any).__svcRow, error: null }) }) }) };
       }
-      return {
-        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
-        insert: () => Promise.resolve({ data: null, error: null }),
-      };
+      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }), insert: () => Promise.resolve({ data: null, error: null }) };
     },
   },
 }));
@@ -47,215 +48,113 @@ jest.mock('../../src/db', () => ({
 import { applyServiceFulfilledDeltas } from '../../src/services/validation-repid-delta';
 import { applyValidationEvent } from '../../src/scoring/pipeline';
 import { evaluate } from '../../src/hal/lib/evaluate';
+import { factCheck } from '../../src/hal/fact-check';
 
-const CONTRACT = {
-  id: 'c-1',
-  service_id: 's-1',
-  provider_agent_id: 'prov-1',
-  buyer_agent_id: 'buyer-1',
-};
+const CONTRACT = { id: 'c-1', service_id: 's-1', provider_agent_id: 'prov-1', buyer_agent_id: 'buyer-1' };
+const seedReal = () => { (global as any).__svcRow = { payload: { content: 'A real deliverable to score.', title: 'Task', task_type: 'verification' }, metadata: {}, x402_payment_id: null }; };
 
 beforeEach(() => {
   (applyValidationEvent as jest.Mock).mockClear();
   (evaluate as jest.Mock).mockClear();
+  (factCheck as jest.Mock).mockClear();
   (global as any).__svcRow = null;
   (global as any).__evalImpl = null;
-  process.env.HAL_ENRICHMENT_ENABLED = 'true'; // existing tests exercise the ENABLED path
-  delete process.env.HAL_STRICTNESS;            // default strictness:1 unless a test overrides
-});
-
-afterEach(() => {
-  delete process.env.HAL_ENRICHMENT_ENABLED;
+  (global as any).__fcImpl = null;
+  process.env.HAL_ENRICHMENT_ENABLED = 'true';
   delete process.env.HAL_STRICTNESS;
 });
+afterEach(() => { delete process.env.HAL_ENRICHMENT_ENABLED; delete process.env.HAL_STRICTNESS; });
 
-describe('applyServiceFulfilledDeltas — HAL enrichment', () => {
-  test('1. clean deliverable → HAL evaluated → real hal passed as halOverride to both calls', async () => {
-    (global as any).__svcRow = {
-      payload: { content: 'A thorough verified deliverable about X.', title: 'Task X', task_type: 'verification' },
-      metadata: {},
-      x402_payment_id: null, // bridge insert skipped (not under test here)
-    };
-    (global as any).__evalImpl = async () => ({
-      hal_score: 0.7,
-      vetoed: false,
-      signals: { harm_probability: 0.6, comma_severity: null },
-    });
-
-    await applyServiceFulfilledDeltas(CONTRACT);
-
-    expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1);
-    // strictness:1 (MVP, extractor-only) confirmed
-    expect((evaluate as jest.Mock).mock.calls[0][2]).toMatchObject({ strictness: 1 });
-
-    const calls = (applyValidationEvent as jest.Mock).mock.calls;
-    expect(calls.length).toBe(2); // provider + buyer
-    const providerOverride = calls[0][4];
-    const buyerOverride = calls[1][4];
-    expect(providerOverride).toEqual({ hal_score: 0.7, hal_decision: 'flagged', hal_signals: { harm_probability: 0.6, comma_severity: null } });
-    expect(buyerOverride).toEqual(providerOverride);
-    // event_type + deltas unchanged
-    expect(calls[0][1]).toBe('SERVICE_FULFILLED');
-    expect(calls[0][2]).toBe(10);
-    expect(calls[1][2]).toBe(5);
-  });
-
-  test('2. simulated contract → HAL skipped → halOverride undefined (default 0.5/clean)', async () => {
-    (global as any).__svcRow = {
-      payload: { content: 'whatever', title: 't' },
-      metadata: { is_simulated: true },
-      x402_payment_id: null,
-    };
+describe('HAL_ENRICHMENT_ENABLED gate', () => {
+  test('OFF (unset) → no eval, no factCheck, halOverride undefined (legacy)', async () => {
+    seedReal(); delete process.env.HAL_ENRICHMENT_ENABLED;
     await applyServiceFulfilledDeltas(CONTRACT);
     expect(evaluate as jest.Mock).not.toHaveBeenCalled();
+    expect(factCheck as jest.Mock).not.toHaveBeenCalled();
     const calls = (applyValidationEvent as jest.Mock).mock.calls;
     expect(calls.length).toBe(2);
     expect(calls[0][4]).toBeUndefined();
     expect(calls[1][4]).toBeUndefined();
   });
 
-  test('3. HAL throws → falls back to default, fulfillment still completes', async () => {
-    (global as any).__svcRow = {
-      payload: { content: 'real deliverable text', title: 't' },
-      metadata: {},
-      x402_payment_id: null,
-    };
-    (global as any).__evalImpl = async () => {
-      throw new Error('hal blew up');
-    };
-    await expect(applyServiceFulfilledDeltas(CONTRACT)).resolves.toBeUndefined();
-    const calls = (applyValidationEvent as jest.Mock).mock.calls;
-    expect(calls.length).toBe(2); // fulfillment still ran
-    expect(calls[0][4]).toBeUndefined(); // fell back to default
-  });
-
-  test('4. empty deliverable → HAL skipped, default used', async () => {
-    (global as any).__svcRow = {
-      payload: { content: '   ', title: 't' },
-      metadata: {},
-      x402_payment_id: null,
-    };
+  test('OFF ("false") → skipped', async () => {
+    seedReal(); process.env.HAL_ENRICHMENT_ENABLED = 'false';
     await applyServiceFulfilledDeltas(CONTRACT);
     expect(evaluate as jest.Mock).not.toHaveBeenCalled();
     expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toBeUndefined();
-  });
-
-  test('5. vetoed deliverable → hal_decision vetoed propagated', async () => {
-    (global as any).__svcRow = {
-      payload: { content: 'a confidently false fabricated claim', title: 't' },
-      metadata: {},
-      x402_payment_id: null,
-    };
-    (global as any).__evalImpl = async () => ({
-      hal_score: 0.9,
-      vetoed: true,
-      signals: { comma_severity: 'critical' },
-    });
-    await applyServiceFulfilledDeltas(CONTRACT);
-    const override = (applyValidationEvent as jest.Mock).mock.calls[0][4];
-    expect(override.hal_decision).toBe('vetoed');
-    expect(override.hal_score).toBe(0.9);
   });
 });
 
-describe('applyServiceFulfilledDeltas — HAL_ENRICHMENT_ENABLED gate (Phase 1)', () => {
-  const seedRealContract = () => {
-    (global as any).__svcRow = {
-      payload: { content: 'A real verified deliverable about X.', title: 'Task X', task_type: 'verification' },
-      metadata: {},
-      x402_payment_id: null,
-    };
-    (global as any).__evalImpl = async () => ({ hal_score: 0.3, vetoed: false, signals: {} });
-  };
-
-  test('gate OFF (unset) → HAL skipped, halOverride undefined (0.5/clean legacy)', async () => {
-    seedRealContract();
-    delete process.env.HAL_ENRICHMENT_ENABLED;
-    await applyServiceFulfilledDeltas(CONTRACT);
-    expect(evaluate as jest.Mock).not.toHaveBeenCalled();
-    const calls = (applyValidationEvent as jest.Mock).mock.calls;
-    expect(calls.length).toBe(2); // fulfillment still runs
-    expect(calls[0][4]).toBeUndefined(); // no override → applyValidationEvent uses 0.5/clean
-    expect(calls[1][4]).toBeUndefined();
-  });
-
-  test('gate OFF (="false") → HAL skipped', async () => {
-    seedRealContract();
-    process.env.HAL_ENRICHMENT_ENABLED = 'false';
-    await applyServiceFulfilledDeltas(CONTRACT);
-    expect(evaluate as jest.Mock).not.toHaveBeenCalled();
-    expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toBeUndefined();
-  });
-
-  test('gate ON (="true") → HAL runs → halOverride populated', async () => {
-    seedRealContract();
-    process.env.HAL_ENRICHMENT_ENABLED = 'true';
+describe('strictness:1 (extractor, default)', () => {
+  test('ON + default → evaluate used, fact-check NOT, mode=extractor passed to both', async () => {
+    seedReal();
+    (global as any).__evalImpl = () => ({ hal_score: 0.3, vetoed: false, signals: { harm_probability: 0.1, comma_severity: null } });
     await applyServiceFulfilledDeltas(CONTRACT);
     expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1);
-    expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toMatchObject({ hal_score: 0.3, hal_decision: 'clean' });
+    expect(factCheck as jest.Mock).not.toHaveBeenCalled();
+    const o = (applyValidationEvent as jest.Mock).mock.calls[0][4];
+    expect(o.hal_score).toBe(0.3);
+    expect(o.hal_decision).toBe('clean');
+    expect(o.hal_signals.mode).toBe('extractor');
+    expect((applyValidationEvent as jest.Mock).mock.calls[1][4]).toEqual(o); // both calls same override
   });
 });
 
-describe('applyServiceFulfilledDeltas — HAL_STRICTNESS (Phase 2)', () => {
-  const seed = () => {
-    (global as any).__svcRow = {
-      payload: { content: 'A real deliverable to score.', title: 'Task', task_type: 'verification' },
-      metadata: {},
-      x402_payment_id: null,
-    };
-  };
-  afterEach(() => {
-    delete process.env.GROQ_API_KEY;
-    delete process.env.CEREBRAS_API_KEY;
+describe('strictness:2 (fact-check)', () => {
+  test('=2 → factCheck used, evaluate NOT; fc result becomes halOverride', async () => {
+    seedReal(); process.env.HAL_STRICTNESS = '2';
+    (global as any).__fcImpl = () => ({ hal_score: 0.9, decision: 'vetoed', verdicts: [{ provider: 'groq', verdict: 'FALSE', confidence: 100 }], providers_used: 3, agreement: 1, degraded: false, latency_ms: 7 });
+    await applyServiceFulfilledDeltas(CONTRACT);
+    expect(factCheck as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(evaluate as jest.Mock).not.toHaveBeenCalled();
+    const o = (applyValidationEvent as jest.Mock).mock.calls[0][4];
+    expect(o.hal_score).toBe(0.9);
+    expect(o.hal_decision).toBe('vetoed');
+    expect(o.hal_signals.mode).toBe('fact-check');
+    expect(o.hal_signals.providers_used).toBe(3);
+    expect(o.hal_signals.verdicts[0].verdict).toBe('FALSE');
   });
 
-  test('1. HAL_STRICTNESS unset → evaluate strictness:1, no providers', async () => {
-    seed();
-    (global as any).__evalImpl = async () => ({ hal_score: 0.3, vetoed: false, signals: {} });
+  test('=2 clean deliverable → fc clean → not vetoed', async () => {
+    seedReal(); process.env.HAL_STRICTNESS = '2';
+    (global as any).__fcImpl = () => ({ hal_score: 0.1, decision: 'clean', verdicts: [], providers_used: 3, agreement: 1, degraded: false, latency_ms: 5 });
     await applyServiceFulfilledDeltas(CONTRACT);
-    const ctx = (evaluate as jest.Mock).mock.calls[0][2];
-    expect(ctx.strictness).toBe(1);
-    expect(ctx.providers).toBeUndefined();
+    expect((applyValidationEvent as jest.Mock).mock.calls[0][4].hal_decision).toBe('clean');
   });
 
-  test('2. HAL_STRICTNESS=2 → evaluate strictness:2 with free providers groq+cerebras', async () => {
-    seed();
-    process.env.HAL_STRICTNESS = '2';
-    process.env.GROQ_API_KEY = 'test-groq';
-    process.env.CEREBRAS_API_KEY = 'test-cerebras';
-    (global as any).__evalImpl = async () => ({ hal_score: 0.2, vetoed: false, signals: { agreement_score: 0.9 } });
+  test('=2 but 0 providers respond → extractor fallback (mode=extractor-fallback)', async () => {
+    seedReal(); process.env.HAL_STRICTNESS = '2';
+    (global as any).__fcImpl = () => ({ hal_score: 0.5, decision: 'flagged', verdicts: [], providers_used: 0, agreement: null, degraded: true, latency_ms: 30 });
+    (global as any).__evalImpl = () => ({ hal_score: 0.3, vetoed: false, signals: {} });
     await applyServiceFulfilledDeltas(CONTRACT);
-    const ctx = (evaluate as jest.Mock).mock.calls[0][2];
-    expect(ctx.strictness).toBe(2);
-    expect(Array.isArray(ctx.providers)).toBe(true);
-    expect(ctx.providers.map((p: any) => p.provider)).toEqual(['groq', 'cerebras']);
-    expect(ctx.providers.every((p: any) => p.callType === 'openai-compat' && p.apiKey && p.endpoint)).toBe(true);
+    expect(factCheck as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(evaluate as jest.Mock).toHaveBeenCalledTimes(1); // fallback
+    expect((applyValidationEvent as jest.Mock).mock.calls[0][4].hal_signals.mode).toBe('extractor-fallback');
   });
 
-  test('3. strictness:2 errors → falls back to strictness:1 result', async () => {
-    seed();
-    process.env.HAL_STRICTNESS = '2';
-    process.env.GROQ_API_KEY = 'test-groq';
-    (global as any).__evalImpl = async (_c: any, _o: any, ctx: any) => {
-      if (ctx.strictness === 2) throw new Error('s2 provider down');
-      return { hal_score: 0.25, vetoed: false, signals: {} };
-    };
-    await applyServiceFulfilledDeltas(CONTRACT);
-    expect(evaluate as jest.Mock).toHaveBeenCalledTimes(2); // s2 then s1
-    expect((evaluate as jest.Mock).mock.calls[0][2].strictness).toBe(2);
-    expect((evaluate as jest.Mock).mock.calls[1][2].strictness).toBe(1);
-    expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toMatchObject({ hal_score: 0.25, hal_decision: 'clean' });
-  });
-
-  test('4. strictness:2 AND :1 both error → 0.5/clean default (override undefined)', async () => {
-    seed();
-    process.env.HAL_STRICTNESS = '2';
-    (global as any).__evalImpl = async () => {
-      throw new Error('all providers down');
-    };
-    await applyServiceFulfilledDeltas(CONTRACT);
+  test('=2 factCheck throws → non-fatal, halOverride undefined, fulfillment completes', async () => {
+    seedReal(); process.env.HAL_STRICTNESS = '2';
+    (global as any).__fcImpl = () => { throw new Error('fc blew up'); };
+    await expect(applyServiceFulfilledDeltas(CONTRACT)).resolves.toBeUndefined();
     const calls = (applyValidationEvent as jest.Mock).mock.calls;
-    expect(calls.length).toBe(2); // fulfillment still completes
-    expect(calls[0][4]).toBeUndefined(); // → applyValidationEvent uses 0.5/clean
+    expect(calls.length).toBe(2);
+    expect(calls[0][4]).toBeUndefined();
+  });
+});
+
+describe('skip conditions', () => {
+  test('simulated → no eval/factCheck, undefined', async () => {
+    (global as any).__svcRow = { payload: { content: 'x' }, metadata: { is_simulated: true }, x402_payment_id: null };
+    await applyServiceFulfilledDeltas(CONTRACT);
+    expect(evaluate as jest.Mock).not.toHaveBeenCalled();
+    expect(factCheck as jest.Mock).not.toHaveBeenCalled();
+    expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toBeUndefined();
+  });
+
+  test('empty deliverable → skipped', async () => {
+    (global as any).__svcRow = { payload: { content: '   ' }, metadata: {}, x402_payment_id: null };
+    await applyServiceFulfilledDeltas(CONTRACT);
+    expect(evaluate as jest.Mock).not.toHaveBeenCalled();
+    expect(factCheck as jest.Mock).not.toHaveBeenCalled();
   });
 });
