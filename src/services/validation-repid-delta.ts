@@ -189,6 +189,84 @@ export async function applyServiceFulfilledDeltas(
       role: 'buyer',
     }
   );
+
+  try {
+    // Fetch full contract row to get x402_payment_id, metadata, payload, and result
+    const { data: fullContract, error: fetchErr } = await db
+      .from('service_contracts')
+      .select('*, agent_services(service_type)')
+      .eq('id', contract.id)
+      .maybeSingle();
+
+    if (fetchErr) {
+      console.error(
+        `[applyServiceFulfilledDeltas] failed to fetch contract details:`,
+        fetchErr.message ?? fetchErr,
+        (fetchErr as any).stack ?? new Error().stack
+      );
+    } else if (fullContract && fullContract.x402_payment_id) {
+      const agentService = (fullContract as any).agent_services;
+      const taskType = fullContract.metadata?.task_type || fullContract.payload?.task_type || agentService?.service_type || null;
+
+      if (taskType !== null) {
+        let isSimulated = false;
+        if (
+          fullContract.metadata?.is_simulated === true ||
+          fullContract.metadata?.is_simulated === 'true' ||
+          fullContract.payload?.is_simulated === true ||
+          fullContract.payload?.is_simulated === 'true'
+        ) {
+          isSimulated = true;
+        }
+
+        // Check if settlement is simulated
+        const { data: settlement } = await db
+          .from('x402_settlements')
+          .select('is_simulated')
+          .eq('id', fullContract.x402_payment_id)
+          .maybeSingle();
+
+        if (settlement?.is_simulated) {
+          isSimulated = true;
+        }
+
+        const verdict = fullContract.result?.verdict || null;
+
+        const { error: insertErr } = await db.from('repid_events').insert({
+          subject_id: contract.provider_agent_id,
+          subject_type: 'agent',
+          event_type: 'service_fulfilled_settled',
+          reputation_delta: SERVICE_FULFILLED_DELTAS.provider,
+          event_data: {
+            is_simulated: isSimulated,
+            tx_hash: null,
+            metadata: {
+              contract_id: contract.id,
+              x402_payment_id: fullContract.x402_payment_id,
+              task_type: taskType,
+              verdict: verdict,
+            },
+          },
+        });
+
+        if (insertErr) {
+          console.error(
+            `[applyServiceFulfilledDeltas] repid_events bridge insert FAILED:`,
+            insertErr.message ?? insertErr,
+            (insertErr as any).stack ?? new Error().stack
+          );
+        } else {
+          console.log(`[applyServiceFulfilledDeltas] repid_events bridge insert SUCCEEDED for contract ${contract.id}`);
+        }
+      }
+    }
+  } catch (e: any) {
+    console.error(
+      `[applyServiceFulfilledDeltas] unexpected error in bridge insertion:`,
+      e.message ?? String(e),
+      e.stack ?? new Error().stack
+    );
+  }
 }
 
 export async function applyServiceSatisfiedDeltas(
