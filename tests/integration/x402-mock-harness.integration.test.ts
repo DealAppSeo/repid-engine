@@ -1,6 +1,7 @@
 import { settleX402Payment } from '../../src/services/x402-real-settler';
 import { db } from '../../src/db';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
+const uuidv4 = () => crypto.randomUUID();
 
 describe('X402 Mock Harness Extended Scenarios', () => {
   afterEach(() => {

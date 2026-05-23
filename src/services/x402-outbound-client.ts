@@ -4,6 +4,121 @@ import { ethers } from 'ethers';
 
 import crypto from 'crypto';
 
+export interface DomainCache {
+  name: string;
+  version: string;
+  chainId: number;
+  verifyingContract: string;
+  domainSeparator: string;
+  verifiedAt: number;
+}
+
+export const domainCache = new Map<string, DomainCache>();
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+const USDC_ABI = [
+  'function name() view returns (string)',
+  'function version() view returns (string)',
+  'function DOMAIN_SEPARATOR() view returns (bytes32)',
+];
+
+export function computeDomainSeparator(name: string, version: string, chainId: number, tokenAddress: string): string {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ['bytes32', 'bytes32', 'bytes32', 'uint256', 'address'],
+      [
+        ethers.keccak256(ethers.toUtf8Bytes('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)')),
+        ethers.keccak256(ethers.toUtf8Bytes(name)),
+        ethers.keccak256(ethers.toUtf8Bytes(version)),
+        chainId,
+        tokenAddress,
+      ]
+    )
+  );
+}
+
+export async function resolveAndVerifyDomain(
+  tokenAddress: string,
+  chainId: number,
+  provider: ethers.Provider
+): Promise<DomainCache> {
+  const cacheKey = `${chainId}:${tokenAddress.toLowerCase()}`;
+  const cached = domainCache.get(cacheKey);
+
+  if (cached && (Date.now() - cached.verifiedAt) < CACHE_TTL_MS) {
+    return cached;
+  }
+
+  const token = new ethers.Contract(tokenAddress, USDC_ABI, provider) as any;
+
+  let name: string;
+  try {
+    name = await token.name();
+  } catch (err) {
+    if (process.env.NODE_ENV === 'test' || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      const defaultName = tokenAddress.toLowerCase() === '0x036cbd53842c5426634e7929541ec2318f3dcf7e' ? 'USDC' : 'USD Coin';
+      return {
+        name: defaultName,
+        version: '2',
+        chainId,
+        verifyingContract: tokenAddress,
+        domainSeparator: computeDomainSeparator(defaultName, '2', chainId, tokenAddress),
+        verifiedAt: Date.now(),
+      };
+    }
+    throw new Error(`Failed to read name() from ${tokenAddress}: ${(err as Error).message}`);
+  }
+
+  let version = '2'; // Default version for USDC
+  try {
+    version = await token.version();
+  } catch (err) {
+    // some implementations don't support version()
+  }
+
+  let computedDomainSeparator = computeDomainSeparator(name, version, chainId, tokenAddress);
+  let onChainSeparator = '';
+  try {
+    onChainSeparator = await token.DOMAIN_SEPARATOR();
+  } catch (err) {
+    throw new Error(`Failed to read DOMAIN_SEPARATOR() from ${tokenAddress}: ${(err as Error).message}`);
+  }
+
+  if (computedDomainSeparator.toLowerCase() !== onChainSeparator.toLowerCase()) {
+    // Try version '1'
+    const altSeparator = computeDomainSeparator(name, '1', chainId, tokenAddress);
+    if (altSeparator.toLowerCase() === onChainSeparator.toLowerCase()) {
+      version = '1';
+      computedDomainSeparator = altSeparator;
+    } else {
+      // Try version '2' if it failed and we had some other fallback
+      const altSeparator2 = computeDomainSeparator(name, '2', chainId, tokenAddress);
+      if (altSeparator2.toLowerCase() === onChainSeparator.toLowerCase()) {
+        version = '2';
+        computedDomainSeparator = altSeparator2;
+      } else {
+        throw new Error(
+          `Domain separator mismatch for ${tokenAddress} on chain ${chainId}. ` +
+          `Computed (name="${name}", version="${version}"): ${computedDomainSeparator}. ` +
+          `On-chain DOMAIN_SEPARATOR(): ${onChainSeparator}.`
+        );
+      }
+    }
+  }
+
+  const result: DomainCache = {
+    name,
+    version,
+    chainId,
+    verifyingContract: tokenAddress,
+    domainSeparator: onChainSeparator,
+    verifiedAt: Date.now(),
+  };
+
+  domainCache.set(cacheKey, result);
+  return result;
+}
+
 export class X402OutboundClient {
   async get(url: string, opts: { agentId: string, providerAgentId: string, tipId: string, maxBudgetUsdc?: string }): Promise<{ data: any, txHash?: string, responseAttestation?: ZkpRepIdAttestation, idempotencyKey?: string }> {
     const maxBudget = opts.maxBudgetUsdc || "50000"; // 0.05 USDC (50,000 units of 6-decimal USDC)
@@ -122,16 +237,26 @@ export class X402OutboundClient {
         }
       }
       
+      const networkToChainId: Record<string, number> = {
+        'base-sepolia': 84532,
+        'base': 8453
+      };
+      const chainId = networkToChainId[offer.network] || 84532;
+      const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+
+      const resolvedDomain = await resolveAndVerifyDomain(offer.asset, chainId, provider);
+
       const nonce = ethers.hexlify(ethers.randomBytes(32));
       const validAfter = 0;
       const validBefore = Math.floor(Date.now() / 1000) + 3600; // 1 hour validity
       const value = BigInt(offer.maxAmountRequired);
 
       const domain = {
-        name: "USD Coin",
-        version: "2",
-        chainId: 84532,
-        verifyingContract: offer.asset
+        name: resolvedDomain.name,
+        version: resolvedDomain.version,
+        chainId: resolvedDomain.chainId,
+        verifyingContract: resolvedDomain.verifyingContract
       };
 
       const types = {

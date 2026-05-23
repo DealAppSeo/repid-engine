@@ -16,6 +16,11 @@ router.post('/', async (req: Request, res: Response) => {
   if (sErr || !service) return res.status(404).json({ error: 'Service not found' });
   if (!service.active) return res.status(400).json({ error: 'Service is not active' });
 
+  // Self-dealing guard (H3)
+  if (buyer_agent_id === service.provider_agent_id) {
+    return res.status(400).json({ error: 'self_dealing_forbidden', message: 'Self-dealing is forbidden' });
+  }
+
   // Get buyer repid
   const { data: buyer, error: bErr } = await db.from('repid_agents').select('current_repid').eq('id', buyer_agent_id).maybeSingle();
   if (bErr || !buyer) return res.status(404).json({ error: 'Buyer not found' });
@@ -121,6 +126,19 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     });
   }
 
+  // Replay protection (H1): verify this payment header hasn't been settled yet
+  const { data: duplicatePayment, error: dupErr } = await db.from('x402_settlements')
+    .select('id')
+    .eq('x_payment_header', xPaymentHeader)
+    .maybeSingle();
+
+  if (dupErr) {
+    return res.status(500).json({ error: 'database_query_failed', message: dupErr.message });
+  }
+  if (duplicatePayment) {
+    return res.status(400).json({ error: 'payment_already_used', message: 'This payment header has already been settled.' });
+  }
+
   // 4. Verify payment via facilitator
   const isSimulated = !process.env.X402_REAL_RPC;
   let txHash = '';
@@ -178,6 +196,30 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   }).select('id').single();
 
   if (settleInsertErr) {
+    // H2 ergonomics: if unique constraint violation (duplicate idempotency key), re-select the existing settlement
+    if (settleInsertErr.code === '23505' || settleInsertErr.message?.includes('duplicate key') || settleInsertErr.message?.includes('unique constraint')) {
+      const { data: existingSettle, error: getSettleErr } = await db.from('x402_settlements')
+        .select('id')
+        .eq('idempotency_key', contractId)
+        .maybeSingle();
+
+      if (!getSettleErr && existingSettle) {
+        // If we found the existing settlement, update the contract to link it
+        const { data: updatedContract, error: updateErr } = await db.from('service_contracts')
+          .update({
+            status: 'escrowed',
+            x402_payment_id: existingSettle.id,
+            escrowed_at: new Date().toISOString()
+          })
+          .eq('id', contractId)
+          .select().single();
+
+        if (!updateErr && updatedContract) {
+          return res.json(updatedContract);
+        }
+      }
+    }
+
     console.error('[escrow-x402] Failed to insert x402_settlement:', settleInsertErr.message);
     return res.status(500).json({ error: 'database_insert_failed', message: settleInsertErr.message });
   }
@@ -215,12 +257,46 @@ router.post('/:id/fulfill', async (req: Request, res: Response) => {
   const { result } = req.body;
   if (!result) return res.status(400).json({ error: 'result required' });
 
+  // 1. Fetch the existing contract to verify status precondition
+  const { data: existingContract, error: getErr } = await db.from('service_contracts')
+    .select('*')
+    .eq('id', req.params.id)
+    .maybeSingle();
+
+  if (getErr || !existingContract) {
+    return res.status(404).json({ error: 'Contract not found' });
+  }
+
+  // 2. Idempotent check: if already fulfilled, skip deltas and return 200 OK with the existing contract data
+  if (existingContract.status === 'fulfilled') {
+    return res.json(existingContract);
+  }
+
+  // 3. Precondition check: only escrowed contracts can be fulfilled
+  if (existingContract.status !== 'escrowed') {
+    return res.status(400).json({ error: `Cannot fulfill contract in status: ${existingContract.status}` });
+  }
+
+  // 4. Atomic state machine guard: update only if status is still escrowed (race prevention)
   const { data, error } = await db.from('service_contracts')
     .update({ status: 'fulfilled', result, fulfilled_at: new Date().toISOString() })
     .eq('id', req.params.id)
+    .eq('status', 'escrowed')
     .select().single();
   
-  if (error) return res.status(400).json({ error: error.message });
+  if (error) {
+    // If update failed due to no rows matching, double check if it was fulfilled by a concurrent request
+    if (error.code === 'PGRST116') {
+      const { data: doubleCheck, error: doubleCheckErr } = await db.from('service_contracts')
+        .select('*')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (!doubleCheckErr && doubleCheck && doubleCheck.status === 'fulfilled') {
+        return res.json(doubleCheck);
+      }
+    }
+    return res.status(400).json({ error: error.message });
+  }
 
   // Apply RepID deltas for fulfillment
   if (data) {
