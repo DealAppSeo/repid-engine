@@ -45,6 +45,15 @@ export interface FactCheckResult {
   agreement: number | null; // fraction sharing the modal non-error verdict
   degraded: boolean; // < 2 providers responded
   latency_ms: number;
+  // --- CC1 2026-05-23 provider-failure hardening (additive, all optional →
+  // backward-compatible; existing callers keep working unchanged). ---
+  quorum?: 'full' | 'partial' | 'low' | 'outage'; // succeeded vs attempted
+  provider_health?: {
+    attempted: number;
+    succeeded: number;
+    failed: Array<{ name: string; error: string }>;
+  };
+  quorum_note?: string; // set only when the resilience gate downgraded a decision
 }
 
 export interface FactCheckOpts {
@@ -140,6 +149,30 @@ function providerRisk(v: ProviderVerdict): number {
 }
 
 /**
+ * CC1 2026-05-23 — provider-failure hardening. Closes CC1's own launch-
+ * verification RULE-4 caveat: strictness:2 was verified only on the happy path
+ * (providers_used=2, agree=1.0); under partial provider outage (e.g. cerebras
+ * 429 → a single surviving provider), a lone FALSE verdict could fire a veto
+ * with no independent confirmation. A veto/flag now requires a real quorum
+ * (>= MIN_QUORUM_FOR_VETO successful providers). With only one surviving
+ * provider the decision defaults to 'clean' (degraded) — better a false-clean
+ * (caught downstream by the F-series filter + dispute path) than a false-veto.
+ *
+ * This WRAPS the existing aggregation: hal_score and agreement math are
+ * unchanged, and the patent comma-BFT lib (src/hal/lib/*) is untouched. Note
+ * the agreement/score were already computed over successful responses only
+ * (ERROR providers filtered before aggregation), so failed providers never
+ * inflated the score — this gate adds the missing quorum requirement.
+ */
+const MIN_QUORUM_FOR_VETO = 2;
+
+function computeQuorum(succeeded: number, attempted: number): 'full' | 'partial' | 'low' | 'outage' {
+  if (succeeded === 0) return 'outage';
+  if (succeeded === 1) return 'low';
+  return succeeded >= attempted ? 'full' : 'partial';
+}
+
+/**
  * Evaluate a deliverable's factual truth via cross-provider verdicts.
  * Falls back gracefully when providers fail; returns providers_used=0 (caller
  * should then use the extractor signal) when none respond.
@@ -165,9 +198,19 @@ export async function factCheck(
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
 
+  // CC1 provider-failure hardening: surface per-provider health + quorum.
+  const failed = verdicts
+    .filter((v) => v.verdict === 'ERROR')
+    .map((v) => ({ name: v.provider, error: v.error ?? 'unknown' }));
+  const quorum = computeQuorum(providers_used, providers.length);
+
   if (providers_used === 0) {
     // No truth signal available — neutral score; caller falls back to extractor.
-    return { hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms };
+    return {
+      hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
+      quorum, provider_health: { attempted: providers.length, succeeded: 0, failed },
+      quorum_note: `No provider responded (0/${providers.length}); neutral score, caller falls back to extractor.`,
+    };
   }
 
   const hal_score = ok.reduce((s, v) => s + providerRisk(v), 0) / providers_used;
@@ -177,10 +220,25 @@ export async function factCheck(
   const modal = Math.max(...Object.values(counts));
   const agreement = modal / providers_used;
 
-  const decision: FactCheckResult['decision'] =
+  const baseDecision: FactCheckResult['decision'] =
     hal_score >= vetoThreshold ? 'vetoed' : hal_score >= flagThreshold ? 'flagged' : 'clean';
 
-  return { hal_score, decision, verdicts, providers_used, agreement, degraded: providers_used < 2, latency_ms };
+  // RESILIENCE GATE (CC1 2026-05-23): a veto/flag requires >= MIN_QUORUM_FOR_VETO
+  // successful providers. With a single surviving provider (low quorum), downgrade
+  // to 'clean' — a lone provider's verdict is not enough to veto. hal_score is
+  // preserved for observability; only the decision is changed.
+  let decision = baseDecision;
+  let quorum_note: string | undefined;
+  if (providers_used < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
+    decision = 'clean';
+    quorum_note = `Low quorum (${providers_used}/${providers.length}): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — a single surviving provider cannot veto.`;
+  }
+
+  return {
+    hal_score, decision, verdicts, providers_used, agreement, degraded: providers_used < 2, latency_ms,
+    quorum, provider_health: { attempted: providers.length, succeeded: providers_used, failed },
+    ...(quorum_note ? { quorum_note } : {}),
+  };
 }
 
 /**
