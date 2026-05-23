@@ -30,16 +30,19 @@ Agents gaming `repid_agents.current_repid` for unearned tier/standing:
   WHERE a.status='pending_review' ORDER BY a.z_score DESC;
   ```
 
-### Patch B — Counterparty gate (WRITTEN, NOT APPLIED — pending Sean greenlight)
+### Patch B — Counterparty gate (APPLIED 2026-05-23 at zero-demotion floor + is_human exclusion)
 - **What:** tier advancement requires N+ distinct delivered counterparties. Catches *structural*
   concentration. Implemented in `compute_tier(integer, uuid)` (new 2-arg overload; 1-arg untouched =
   backward compatible) with a cascading floor; activated by repointing `sync_tier()`.
 - **Counterparty count:** `count_unique_counterparties(uuid)` = distinct buyers on contracts with
   `status IN ('fulfilled','satisfied','settled','resolved')` (includes disputed→resolved; the spec's
   fulfilled-only filter undercounts).
-- **⚠️ Not applied:** calibration (below) shows meaningful thresholds would mass-demote the current
-  population. Migration ships **zero-demotion ratchet-floor defaults** (auto/vet ≥2, est/earn ungated);
-  Sean picks thresholds and applies. Activation is on every `repid_agents` write via `trg_sync_tier`.
+- **Status:** APPLIED to prod 2026-05-23 at the **zero-demotion floor** (vet/auto_min=2, est/earn ungated)
+  per Sean. Verified 0 pending demotions; gate caps a 0-counterparty climber at ESTABLISHED. Activation
+  is on every `repid_agents` write via `trg_sync_tier`. Ratchet est_min/earn_min up later (re-run
+  `calibrate.ts` first).
+- **is_human exclusion:** human/role accounts skip the gate. ⚠️ `is_human` is uniformly false today, so
+  the exclusion is currently inert (moot at the floor) — populate it before ratcheting ≥1.
 
 ## Calibration (2026-05-23, 30 active agents)
 RepID today is earned mostly via **non-service events** (challenges, stakes, referrals, code), so
@@ -56,7 +59,7 @@ Tier-demotion impact of candidate thresholds (auto/est/earn minimums):
 Re-run anytime: `npx tsx scripts/repid-inflation/calibrate.ts`.
 
 ## Tuning
-- **Z-threshold** default 3.0 (~P99.7). At the current small population (n≈12 active-in-week) one big
+- **Z-threshold** default **2.5** (Sean, 2026-05-23, for small-population sensitivity). At the current small population (n≈12 active-in-week) one big
   earner inflates the stddev and caps its own Z (e.g. shofet delta 470 → z 2.41 < 3, not flagged).
   Consider a lower threshold (2.0–2.5) for small n, or robust stats (median/MAD) — see V1.5.
 - **Counterparty thresholds** ship at the zero-demotion floor; ratchet est_min/earn_min upward
