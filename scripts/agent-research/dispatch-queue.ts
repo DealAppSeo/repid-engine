@@ -14,6 +14,25 @@ import * as fs from 'fs';
 
 const OUT = 'E:/dev/dogfood-v3';
 fs.mkdirSync(OUT, { recursive: true });
+
+/**
+ * Disagreement quota — appended to every `verify`-type prompt.
+ *
+ * Cycle-1 cross-validation produced 0 "disagree" verdicts across 5 verifier pairs
+ * (1 agree / 4 partial_agree). That is an agreeable-by-default failure mode, not real
+ * consensus — a verifier that never disagrees adds no signal. This forces each verifier
+ * to act as an adversarial critic: surface concrete challenges with quoted claims, or
+ * explicitly justify their absence. `agree` must be earned, not defaulted to.
+ */
+const DISAGREEMENT_QUOTA = `
+
+--- CROSS-VALIDATION DISCIPLINE (mandatory — read before answering) ---
+You are an ADVERSARIAL CRITIC, not a cheerleader. Agreement-by-default is a failure mode and will be treated as a non-answer.
+1. You MUST surface at least TWO concrete, specific challenges to the work below: factual errors, unsupported claims, unstated assumptions, missing evidence, internal contradictions, or overstated confidence. Quote the exact claim you are challenging before responding to it.
+2. If after genuine scrutiny you find fewer than two real challenges, you MUST justify each absence with the specific evidence that makes that part unimpeachable. "Looks reasonable" / "seems fine" is NOT acceptable justification.
+3. Choose verdict = agree ONLY if you produced zero surviving challenges AND can defend that the work is correct and complete. Otherwise use partial_agree (some challenges, core holds) or disagree (a challenge undermines a core claim).
+4. End with exactly: cross_validation_verdict = agree | partial_agree | disagree ; disagreements_raised = <integer> ; rationale = <one line>.
+`;
 const ERC = fs.existsSync(`${OUT}/_erc_context.md`) ? fs.readFileSync(`${OUT}/_erc_context.md`, 'utf8') : '';
 const byUid: Record<string, ResearchTask> = Object.fromEntries(TASKS.map((t) => [t.uid, t]));
 
@@ -60,14 +79,19 @@ async function exec(uid: string) {
     const f = byUid[dep]?.outFile;
     if (f && fs.existsSync(f)) ctx += `\n\n--- INPUT FROM ${dep} ---\n${fs.readFileSync(f, 'utf8').slice(0, 3500)}\n`;
   }
-  const r = await freeComplete(task.prompt + ctx, 1600);
+  // Verify tasks get the disagreement quota appended so the verifier acts as a critic.
+  const prompt = task.type === 'verify' ? task.prompt + DISAGREEMENT_QUOTA : task.prompt;
+  const r = await freeComplete(prompt + ctx, 1600);
   const body = r.ok ? r.text! : `(LLM unavailable: ${r.error})`;
   const header = `# ${task.agent} — ${task.uid}\n_Track ${task.track} (${task.track_name}) · ${task.type} · ${new Date().toISOString()} · provider: ${r.provider ?? 'none'}_\n\n`;
   fs.writeFileSync(task.outFile, header + body + '\n');
   let verdict: string | null = null;
+  let disagreements: number | null = null;
   if (task.type === 'verify') {
     const m = body.match(/verdict\s*[:=]?\s*\*{0,2}\s*(agree|partial_agree|disagree)/i);
     if (m) verdict = m[1].toLowerCase();
+    const dm = body.match(/disagreements?_raised\s*[:=]?\s*\*{0,2}\s*(\d+)/i);
+    if (dm) disagreements = Number(dm[1]);
   }
   await db.from('agent_research_queue').update({
     status: r.ok ? 'complete' : 'failed',
@@ -76,8 +100,8 @@ async function exec(uid: string) {
     cross_validation_verdict: verdict,
     llm_provider_used: r.provider ?? null,
   }).eq('task_uid', uid);
-  console.log(`${r.ok ? 'OK ' : 'ERR'} ${uid} via ${r.provider ?? '-'} ${body.length}c${verdict ? ' verdict=' + verdict : ''}`);
-  return { uid, ok: r.ok, provider: r.provider, chars: body.length, verdict };
+  console.log(`${r.ok ? 'OK ' : 'ERR'} ${uid} via ${r.provider ?? '-'} ${body.length}c${verdict ? ' verdict=' + verdict : ''}${disagreements != null ? ' disagreements=' + disagreements : ''}`);
+  return { uid, ok: r.ok, provider: r.provider, chars: body.length, verdict, disagreements };
 }
 
 (async () => {
