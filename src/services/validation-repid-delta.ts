@@ -1,5 +1,6 @@
 import { db } from '../db';
-import { applyValidationEvent } from '../scoring/pipeline';
+import { applyValidationEvent, deriveHalDecision } from '../scoring/pipeline';
+import { evaluate } from '../hal/lib/evaluate';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -169,6 +170,54 @@ const SERVICE_DISPUTE_DELTAS = {
 export async function applyServiceFulfilledDeltas(
   contract: { id: string, service_id: string, provider_agent_id: string, buyer_agent_id: string }
 ): Promise<void> {
+  // HAL enrichment (2026-05-22): evaluate the deliverable text and pass a real
+  // HAL verdict into the SERVICE_FULFILLED score-event rows below. NON-FATAL —
+  // any failure (eval error, missing payload) falls back to undefined, so
+  // applyValidationEvent uses its 0.5/clean default and fulfillment still
+  // completes. Simulated/empty deliverables are skipped to save eval cost.
+  // This block does NOT touch the bridge insert that follows.
+  let halOverride: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any } | undefined;
+  try {
+    const { data: cRow } = await db
+      .from('service_contracts')
+      .select('payload, metadata')
+      .eq('id', contract.id)
+      .maybeSingle();
+    const payload: any = (cRow as any)?.payload ?? {};
+    const meta: any = (cRow as any)?.metadata ?? {};
+    const deliverable: string = typeof payload.content === 'string' ? payload.content : '';
+    const promptText: string =
+      (typeof payload.title === 'string' && payload.title) ||
+      (typeof payload.criteria === 'string' ? payload.criteria : '') || '';
+    const isSimulated =
+      meta.is_simulated === true || meta.is_simulated === 'true' ||
+      payload.is_simulated === true || payload.is_simulated === 'true';
+    if (!isSimulated && deliverable.trim().length > 0) {
+      const halResult = await evaluate(deliverable, deliverable, {
+        domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
+        certainty: 0.8,
+        strictness: 1, // extractor-only — synchronous, no LLM fan-out (MVP)
+        prompt: promptText,
+      });
+      const decision = deriveHalDecision(
+        halResult.hal_score,
+        halResult.vetoed,
+        (halResult.signals as any)?.comma_severity ?? null,
+      );
+      halOverride = {
+        hal_score: halResult.hal_score,
+        hal_decision: decision,
+        hal_signals: halResult.signals,
+      };
+    }
+  } catch (halErr: any) {
+    console.error(
+      `[hal-enrichment] eval failed for contract ${contract.id}; falling back to default 0.5/clean:`,
+      halErr?.message ?? String(halErr),
+    );
+    halOverride = undefined;
+  }
+
   await applyValidationEvent(
     contract.provider_agent_id,
     'SERVICE_FULFILLED',
@@ -177,7 +226,8 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'provider',
-    }
+    },
+    halOverride
   );
   await applyValidationEvent(
     contract.buyer_agent_id,
@@ -187,7 +237,8 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'buyer',
-    }
+    },
+    halOverride
   );
 
   try {
