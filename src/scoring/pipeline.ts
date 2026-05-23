@@ -301,7 +301,8 @@ export async function applyValidationEvent(
   agent_id: string,
   event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY' | 'SERVICE_FULFILLED' | 'SERVICE_SATISFIED',
   delta: number,
-  metadata: Record<string, any> = {}
+  metadata: Record<string, any> = {},
+  halOverride?: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any }
 ) {
   const agent = await loadAgent(agent_id);
   if (!agent) throw new Error(`Agent not found: ${agent_id}`);
@@ -312,20 +313,30 @@ export async function applyValidationEvent(
   const triggerProof = await shouldTriggerProof(agent_id, Math.abs(delta));
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 
+  // HAL enrichment (2026-05-22): callers may pass real HAL via halOverride.
+  // Default (no override) preserves the prior 0.5/clean placeholder so the
+  // existing 4-arg callers are byte-for-byte unchanged. decision_outcome now
+  // tracks hal_decision (was always 'clean'); with no override it stays 'clean'.
+  const halScore = halOverride?.hal_score ?? 0.5;
+  const halDecision = halOverride?.hal_decision ?? 'clean';
+  const enrichedMetadata = halOverride?.hal_signals
+    ? { ...metadata, hal_signals: halOverride.hal_signals }
+    : metadata;
+
   const insertPayload = {
     agent_id,
     event_type,
     delta: Math.round(delta),
     repid_before: old_repid,
     repid_after: Math.round(new_repid),
-    hal_score: 0.5,
-    hal_decision: 'clean',
+    hal_score: halScore,
+    hal_decision: halDecision,
     repid_delta_calculated: Math.round(delta),
     repid_delta_applied: Math.round(new_repid - old_repid),
     zk_proof_triggered: triggerProof,
     zk_proof_id,
-    decision_outcome: 'clean',
-    metadata
+    decision_outcome: halDecision,
+    metadata: enrichedMetadata
   };
 
   const { data: eventRow, error: evErr } = await db
@@ -369,6 +380,8 @@ export async function applyValidationEvent(
         delta: Math.round(delta),
         repid_before: old_repid,
         repid_after: Math.round(new_repid),
+        hal_score: halScore,
+        hal_decision: halDecision,
         phase_2_7_4_signature: true,
       });
     } catch (auditErr: any) {

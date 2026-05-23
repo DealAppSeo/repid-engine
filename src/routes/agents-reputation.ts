@@ -17,6 +17,7 @@ import {
   persistReputationWrite,
   Erc8004ReputationWriter,
 } from '../services/erc8004-reputation';
+import { pgQuery } from '../db/direct-pg';
 
 const DEFAULT_REPUTATION_CONTRACT =
   Erc8004ReputationWriter.DEFAULTS.BASE_SEPOLIA_REPUTATION;
@@ -199,6 +200,51 @@ export function createAgentsReputationRouter(
           process.env.PUBLIC_ENGINE_BASE_URL ||
           'https://repid-engine-production.up.railway.app';
 
+        // HAL enrichment (2026-05-22): surface recent HAL signals so off-chain
+        // ERC-8004 verifiers reading this feedbackURI see real HAL, not just the
+        // cumulative score. Bounded LIMIT 20 (RULE-8) via pgQuery. ADDITIVE +
+        // degrade-gracefully: if the query fails (e.g. DATABASE_URL unset in this
+        // env), hal_summary is null and every other field is unchanged — no
+        // existing consumer breaks (Branch D contingency).
+        let hal_summary: Record<string, unknown> | null = null;
+        try {
+          const rows = await pgQuery<{
+            event_type: string;
+            hal_score: number | null;
+            hal_decision: string | null;
+            created_at: string;
+          }>(
+            `SELECT event_type, hal_score, hal_decision, created_at
+             FROM repid_score_events
+             WHERE agent_id = $1
+             ORDER BY created_at DESC
+             LIMIT 20`,
+            [String(req.params.id)],
+            { retries: 1, label: 'reputation:hal-summary' }
+          );
+          const scored = rows.filter((r) => typeof r.hal_score === 'number');
+          const aggregate =
+            scored.length > 0
+              ? scored.reduce((s, r) => s + (r.hal_score as number), 0) / scored.length
+              : null;
+          hal_summary = {
+            recent_events: rows.map((r) => ({
+              type: r.event_type,
+              hal_score: r.hal_score,
+              hal_decision: r.hal_decision,
+              timestamp: r.created_at,
+            })),
+            aggregate_hal_score: aggregate,
+            veto_count: rows.filter((r) => r.hal_decision === 'vetoed').length,
+            flagged_count: rows.filter((r) => r.hal_decision === 'flagged').length,
+            sample_size: rows.length,
+          };
+        } catch (halErr: unknown) {
+          const msg = halErr instanceof Error ? halErr.message : String(halErr);
+          console.error('[agents-reputation] hal_summary query failed (omitting):', msg);
+          hal_summary = null;
+        }
+
         res.setHeader('Cache-Control', 'public, max-age=60');
         res.status(200).json({
           version: 'hyperdag-feedback-v1',
@@ -213,6 +259,7 @@ export function createAgentsReputationRouter(
             hyperdag_repid: true,
             tier: agent.tier,
           },
+          hal_summary,
           hyperdag: {
             tier: agent.tier,
             verifier_package: '@hyperdag/proof-verifier@^0.1.0',
