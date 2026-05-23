@@ -1,6 +1,9 @@
 import { db } from '../db';
-import { applyValidationEvent } from '../scoring/pipeline';
+import { applyValidationEvent, deriveHalDecision } from '../scoring/pipeline';
+import { evaluate } from '../hal/lib/evaluate';
 import { hasTruthySimFlag } from '../utils/truthy';
+import type { HALProviderConfig } from '../hal/lib/types';
+import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal/fact-check';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -167,9 +170,118 @@ const SERVICE_DISPUTE_DELTAS = {
   no_fault:          { provider: 0, buyer: 0 },
 } as const;
 
+// Free-tier cross-LLM providers for HAL strictness:2 (cross-LLM consensus /
+// Comma-BFT). Uses the fixed free-LLM router's providers (groq + cerebras) —
+// never paid. Only providers with a key set are included; <2 degrades to the
+// extractor signal. NOTE: comma_gap (the Pythagorean-Comma BFT veto) is null
+// with <3 providers — a 3rd free provider (e.g. fireworks) would enable the
+// full 3-provider Comma-BFT; tracked as a follow-up.
+// Retained (exported) for the patent comma-BFT lib path; strictness:2 now uses
+// the fact-check evaluator (src/hal/fact-check.ts) per 2026-05-23 calibration.
+export function buildFreeHalProviders(): HALProviderConfig[] {
+  const out: HALProviderConfig[] = [];
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  if (groqKey) {
+    out.push({
+      provider: 'groq',
+      model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+      endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+      apiKey: groqKey,
+      callType: 'openai-compat',
+    });
+  }
+  const cerebrasKey = process.env.CEREBRAS_API_KEY?.trim();
+  if (cerebrasKey) {
+    out.push({
+      provider: 'cerebras',
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'llama3.1-8b',
+      endpoint: 'https://api.cerebras.ai/v1/chat/completions',
+      apiKey: cerebrasKey,
+      callType: 'openai-compat',
+    });
+  }
+  return out;
+}
+
 export async function applyServiceFulfilledDeltas(
   contract: { id: string, service_id: string, provider_agent_id: string, buyer_agent_id: string }
 ): Promise<void> {
+  // HAL enrichment (2026-05-22): evaluate the deliverable text and pass a real
+  // HAL verdict into the SERVICE_FULFILLED score-event rows below. NON-FATAL —
+  // any failure (eval error, missing payload) falls back to undefined, so
+  // applyValidationEvent uses its 0.5/clean default and fulfillment still
+  // completes. Simulated/empty deliverables are skipped to save eval cost.
+  // This block does NOT touch the bridge insert that follows.
+  // Phase 1 (2026-05-23): HAL enrichment ships behind HAL_ENRICHMENT_ENABLED
+  // (default off → applyValidationEvent uses its 0.5/clean default = legacy
+  // behavior, byte-identical to pre-HAL-enrichment main). Zero behavior change
+  // at merge time; Sean flips the flag post-merge after smoke verification.
+  const halEnrichmentEnabled = process.env.HAL_ENRICHMENT_ENABLED === 'true';
+  let halOverride: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any } | undefined;
+  try {
+    const { data: cRow } = await db
+      .from('service_contracts')
+      .select('payload, metadata')
+      .eq('id', contract.id)
+      .maybeSingle();
+    const payload: any = (cRow as any)?.payload ?? {};
+    const meta: any = (cRow as any)?.metadata ?? {};
+    const deliverable: string = typeof payload.content === 'string' ? payload.content : '';
+    const promptText: string =
+      (typeof payload.title === 'string' && payload.title) ||
+      (typeof payload.criteria === 'string' ? payload.criteria : '') || '';
+    const isSimulated =
+      meta.is_simulated === true || meta.is_simulated === 'true' ||
+      payload.is_simulated === true || payload.is_simulated === 'true';
+    if (halEnrichmentEnabled && !isSimulated && deliverable.trim().length > 0) {
+      // Phase 4 (2026-05-23): HAL_STRICTNESS=1 = extractor-only (synchronous, no
+      // LLM). HAL_STRICTNESS=2 = question-shaped cross-LLM FACT-CHECK — the
+      // calibrated truth signal (discrimination gap +0.617 vs the extractor's
+      // -0.020 on the 20-item corpus; caught_false 9/10, over-veto-true 0/7).
+      // strictness:2 falls back to the extractor when no provider responds;
+      // the outer catch falls to the 0.5/clean default.
+      const halStrictness: 1 | 2 = process.env.HAL_STRICTNESS === '2' ? 2 : 1;
+      const domain = typeof payload.task_type === 'string' ? payload.task_type : 'general';
+      const runExtractor = async (): Promise<{ hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals: any }> => {
+        const r = await evaluate(deliverable, deliverable, { domain, certainty: 0.8, strictness: 1, prompt: promptText });
+        return {
+          hal_score: r.hal_score,
+          hal_decision: deriveHalDecision(r.hal_score, r.vetoed, (r.signals as any)?.comma_severity ?? null),
+          hal_signals: { mode: 'extractor', ...(r.signals as any) },
+        };
+      };
+      if (halStrictness === 2) {
+        const fc = await factCheck(deliverable, buildFactCheckProviders(), factCheckOptsFromEnv());
+        if (fc.providers_used > 0) {
+          halOverride = {
+            hal_score: fc.hal_score,
+            hal_decision: fc.decision,
+            hal_signals: {
+              mode: 'fact-check',
+              providers_used: fc.providers_used,
+              agreement: fc.agreement,
+              degraded: fc.degraded,
+              latency_ms: fc.latency_ms,
+              verdicts: fc.verdicts,
+            },
+          };
+        } else {
+          // No cross-LLM truth signal available → extractor fallback.
+          halOverride = await runExtractor();
+          (halOverride.hal_signals as any).mode = 'extractor-fallback';
+        }
+      } else {
+        halOverride = await runExtractor();
+      }
+    }
+  } catch (halErr: any) {
+    console.error(
+      `[hal-enrichment] eval failed for contract ${contract.id}; falling back to default 0.5/clean:`,
+      halErr?.message ?? String(halErr),
+    );
+    halOverride = undefined;
+  }
+
   await applyValidationEvent(
     contract.provider_agent_id,
     'SERVICE_FULFILLED',
@@ -178,7 +290,8 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'provider',
-    }
+    },
+    halOverride
   );
   await applyValidationEvent(
     contract.buyer_agent_id,
@@ -188,7 +301,8 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'buyer',
-    }
+    },
+    halOverride
   );
 
   try {
