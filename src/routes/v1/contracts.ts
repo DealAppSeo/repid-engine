@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../../services/validation-repid-delta';
 import { x402Facilitator } from '../../services/x402-facilitator';
+import { escrowRateLimitPerIP, escrowRateLimitPerApiKey } from '../../middleware/x402-rate-limit';
 
 const router = Router();
 
@@ -39,7 +40,7 @@ router.post('/', async (req: Request, res: Response) => {
   res.status(201).json(data);
 });
 
-router.post('/:id/escrow', async (req: Request, res: Response) => {
+router.post('/:id/escrow', escrowRateLimitPerIP, escrowRateLimitPerApiKey, async (req: Request, res: Response) => {
   const contractId = req.params.id;
 
   // 1. Fetch contract
