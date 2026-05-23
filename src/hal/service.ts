@@ -77,7 +77,12 @@ export class HalService {
         if (fc.providers_used > 0) {
           return {
             hal_score: fc.hal_score, decision: fc.decision, mode: 'fact-check', strictness, product,
-            signals: { providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded },
+            signals: {
+              providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded,
+              // CC1 2026-05-23 provider-failure hardening: surface quorum + per-provider health.
+              quorum: fc.quorum, provider_health: fc.provider_health,
+              ...(fc.quorum_note ? { quorum_note: fc.quorum_note } : {}),
+            },
             provider_responses: fc.verdicts, latency_ms: Date.now() - start,
           };
         }
