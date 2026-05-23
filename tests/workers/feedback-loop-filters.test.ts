@@ -91,8 +91,8 @@ describe('FeedbackLoopWorker defensive filters', () => {
     for (const frag of [
       "subject_type = 'agent'",
       'subject_id ~',
-      "is_simulated', 'false') != 'true'",
-      "tx_hash', '') !~ '^0x(mock|abc|0{8})'",
+      "lower(COALESCE(event_data->>'is_simulated', 'false')) NOT IN ('true', '1', 'yes')",
+      "tx_hash', '') !~* '^0x(mock|abc|0{8})'",
       "drained_as_historical_mock', 'false') != 'true'",
       "drained_as_orphaned_conductor_format', 'false') != 'true'",
     ]) {
