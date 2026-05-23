@@ -3,6 +3,7 @@ import { applyValidationEvent, deriveHalDecision } from '../scoring/pipeline';
 import { evaluate } from '../hal/lib/evaluate';
 import { hasTruthySimFlag } from '../utils/truthy';
 import type { HALProviderConfig } from '../hal/lib/types';
+import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal/fact-check';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -175,7 +176,9 @@ const SERVICE_DISPUTE_DELTAS = {
 // extractor signal. NOTE: comma_gap (the Pythagorean-Comma BFT veto) is null
 // with <3 providers — a 3rd free provider (e.g. fireworks) would enable the
 // full 3-provider Comma-BFT; tracked as a follow-up.
-function buildFreeHalProviders(): HALProviderConfig[] {
+// Retained (exported) for the patent comma-BFT lib path; strictness:2 now uses
+// the fact-check evaluator (src/hal/fact-check.ts) per 2026-05-23 calibration.
+export function buildFreeHalProviders(): HALProviderConfig[] {
   const out: HALProviderConfig[] = [];
   const groqKey = process.env.GROQ_API_KEY?.trim();
   if (groqKey) {
@@ -231,46 +234,45 @@ export async function applyServiceFulfilledDeltas(
       meta.is_simulated === true || meta.is_simulated === 'true' ||
       payload.is_simulated === true || payload.is_simulated === 'true';
     if (halEnrichmentEnabled && !isSimulated && deliverable.trim().length > 0) {
-      // Phase 2 (2026-05-23): HAL_STRICTNESS selects extractor-only (1, default,
-      // synchronous, no LLM fan-out) vs cross-LLM consensus / Comma-BFT (2,
-      // ~0.5-2s, fans out to free providers). On a strictness:2 error we fall
-      // back to strictness:1; only a double failure falls to the 0.5/clean
-      // default (outer catch). Clamp guards against bad env values.
+      // Phase 4 (2026-05-23): HAL_STRICTNESS=1 = extractor-only (synchronous, no
+      // LLM). HAL_STRICTNESS=2 = question-shaped cross-LLM FACT-CHECK — the
+      // calibrated truth signal (discrimination gap +0.617 vs the extractor's
+      // -0.020 on the 20-item corpus; caught_false 9/10, over-veto-true 0/7).
+      // strictness:2 falls back to the extractor when no provider responds;
+      // the outer catch falls to the 0.5/clean default.
       const halStrictness: 1 | 2 = process.env.HAL_STRICTNESS === '2' ? 2 : 1;
       const domain = typeof payload.task_type === 'string' ? payload.task_type : 'general';
-      const runEval = (s: 1 | 2) =>
-        evaluate(deliverable, deliverable, {
-          domain,
-          certainty: 0.8,
-          strictness: s,
-          prompt: promptText,
-          // strictness:2 requires providers for cross-LLM consensus / Comma-BFT.
-          ...(s === 2 ? { providers: buildFreeHalProviders() } : {}),
-        });
-      let halResult;
+      const runExtractor = async (): Promise<{ hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals: any }> => {
+        const r = await evaluate(deliverable, deliverable, { domain, certainty: 0.8, strictness: 1, prompt: promptText });
+        return {
+          hal_score: r.hal_score,
+          hal_decision: deriveHalDecision(r.hal_score, r.vetoed, (r.signals as any)?.comma_severity ?? null),
+          hal_signals: { mode: 'extractor', ...(r.signals as any) },
+        };
+      };
       if (halStrictness === 2) {
-        try {
-          halResult = await runEval(2);
-        } catch (s2err: any) {
-          console.error(
-            `[hal-enrichment] strictness:2 failed for contract ${contract.id}; falling back to strictness:1:`,
-            s2err?.message ?? String(s2err),
-          );
-          halResult = await runEval(1);
+        const fc = await factCheck(deliverable, buildFactCheckProviders(), factCheckOptsFromEnv());
+        if (fc.providers_used > 0) {
+          halOverride = {
+            hal_score: fc.hal_score,
+            hal_decision: fc.decision,
+            hal_signals: {
+              mode: 'fact-check',
+              providers_used: fc.providers_used,
+              agreement: fc.agreement,
+              degraded: fc.degraded,
+              latency_ms: fc.latency_ms,
+              verdicts: fc.verdicts,
+            },
+          };
+        } else {
+          // No cross-LLM truth signal available → extractor fallback.
+          halOverride = await runExtractor();
+          (halOverride.hal_signals as any).mode = 'extractor-fallback';
         }
       } else {
-        halResult = await runEval(1);
+        halOverride = await runExtractor();
       }
-      const decision = deriveHalDecision(
-        halResult.hal_score,
-        halResult.vetoed,
-        (halResult.signals as any)?.comma_severity ?? null,
-      );
-      halOverride = {
-        hal_score: halResult.hal_score,
-        hal_decision: decision,
-        hal_signals: halResult.signals,
-      };
     }
   } catch (halErr: any) {
     console.error(
