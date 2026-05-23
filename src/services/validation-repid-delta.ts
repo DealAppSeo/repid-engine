@@ -2,6 +2,7 @@ import { db } from '../db';
 import { applyValidationEvent, deriveHalDecision } from '../scoring/pipeline';
 import { evaluate } from '../hal/lib/evaluate';
 import { hasTruthySimFlag } from '../utils/truthy';
+import type { HALProviderConfig } from '../hal/lib/types';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -168,6 +169,37 @@ const SERVICE_DISPUTE_DELTAS = {
   no_fault:          { provider: 0, buyer: 0 },
 } as const;
 
+// Free-tier cross-LLM providers for HAL strictness:2 (cross-LLM consensus /
+// Comma-BFT). Uses the fixed free-LLM router's providers (groq + cerebras) —
+// never paid. Only providers with a key set are included; <2 degrades to the
+// extractor signal. NOTE: comma_gap (the Pythagorean-Comma BFT veto) is null
+// with <3 providers — a 3rd free provider (e.g. fireworks) would enable the
+// full 3-provider Comma-BFT; tracked as a follow-up.
+function buildFreeHalProviders(): HALProviderConfig[] {
+  const out: HALProviderConfig[] = [];
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  if (groqKey) {
+    out.push({
+      provider: 'groq',
+      model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+      endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+      apiKey: groqKey,
+      callType: 'openai-compat',
+    });
+  }
+  const cerebrasKey = process.env.CEREBRAS_API_KEY?.trim();
+  if (cerebrasKey) {
+    out.push({
+      provider: 'cerebras',
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'llama3.1-8b',
+      endpoint: 'https://api.cerebras.ai/v1/chat/completions',
+      apiKey: cerebrasKey,
+      callType: 'openai-compat',
+    });
+  }
+  return out;
+}
+
 export async function applyServiceFulfilledDeltas(
   contract: { id: string, service_id: string, provider_agent_id: string, buyer_agent_id: string }
 ): Promise<void> {
@@ -199,12 +231,36 @@ export async function applyServiceFulfilledDeltas(
       meta.is_simulated === true || meta.is_simulated === 'true' ||
       payload.is_simulated === true || payload.is_simulated === 'true';
     if (halEnrichmentEnabled && !isSimulated && deliverable.trim().length > 0) {
-      const halResult = await evaluate(deliverable, deliverable, {
-        domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
-        certainty: 0.8,
-        strictness: 1, // extractor-only — synchronous, no LLM fan-out (MVP)
-        prompt: promptText,
-      });
+      // Phase 2 (2026-05-23): HAL_STRICTNESS selects extractor-only (1, default,
+      // synchronous, no LLM fan-out) vs cross-LLM consensus / Comma-BFT (2,
+      // ~0.5-2s, fans out to free providers). On a strictness:2 error we fall
+      // back to strictness:1; only a double failure falls to the 0.5/clean
+      // default (outer catch). Clamp guards against bad env values.
+      const halStrictness: 1 | 2 = process.env.HAL_STRICTNESS === '2' ? 2 : 1;
+      const domain = typeof payload.task_type === 'string' ? payload.task_type : 'general';
+      const runEval = (s: 1 | 2) =>
+        evaluate(deliverable, deliverable, {
+          domain,
+          certainty: 0.8,
+          strictness: s,
+          prompt: promptText,
+          // strictness:2 requires providers for cross-LLM consensus / Comma-BFT.
+          ...(s === 2 ? { providers: buildFreeHalProviders() } : {}),
+        });
+      let halResult;
+      if (halStrictness === 2) {
+        try {
+          halResult = await runEval(2);
+        } catch (s2err: any) {
+          console.error(
+            `[hal-enrichment] strictness:2 failed for contract ${contract.id}; falling back to strictness:1:`,
+            s2err?.message ?? String(s2err),
+          );
+          halResult = await runEval(1);
+        }
+      } else {
+        halResult = await runEval(1);
+      }
       const decision = deriveHalDecision(
         halResult.hal_score,
         halResult.vetoed,

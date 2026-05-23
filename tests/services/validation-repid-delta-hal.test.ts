@@ -195,3 +195,67 @@ describe('applyServiceFulfilledDeltas — HAL_ENRICHMENT_ENABLED gate (Phase 1)'
     expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toMatchObject({ hal_score: 0.3, hal_decision: 'clean' });
   });
 });
+
+describe('applyServiceFulfilledDeltas — HAL_STRICTNESS (Phase 2)', () => {
+  const seed = () => {
+    (global as any).__svcRow = {
+      payload: { content: 'A real deliverable to score.', title: 'Task', task_type: 'verification' },
+      metadata: {},
+      x402_payment_id: null,
+    };
+  };
+  afterEach(() => {
+    delete process.env.GROQ_API_KEY;
+    delete process.env.CEREBRAS_API_KEY;
+  });
+
+  test('1. HAL_STRICTNESS unset → evaluate strictness:1, no providers', async () => {
+    seed();
+    (global as any).__evalImpl = async () => ({ hal_score: 0.3, vetoed: false, signals: {} });
+    await applyServiceFulfilledDeltas(CONTRACT);
+    const ctx = (evaluate as jest.Mock).mock.calls[0][2];
+    expect(ctx.strictness).toBe(1);
+    expect(ctx.providers).toBeUndefined();
+  });
+
+  test('2. HAL_STRICTNESS=2 → evaluate strictness:2 with free providers groq+cerebras', async () => {
+    seed();
+    process.env.HAL_STRICTNESS = '2';
+    process.env.GROQ_API_KEY = 'test-groq';
+    process.env.CEREBRAS_API_KEY = 'test-cerebras';
+    (global as any).__evalImpl = async () => ({ hal_score: 0.2, vetoed: false, signals: { agreement_score: 0.9 } });
+    await applyServiceFulfilledDeltas(CONTRACT);
+    const ctx = (evaluate as jest.Mock).mock.calls[0][2];
+    expect(ctx.strictness).toBe(2);
+    expect(Array.isArray(ctx.providers)).toBe(true);
+    expect(ctx.providers.map((p: any) => p.provider)).toEqual(['groq', 'cerebras']);
+    expect(ctx.providers.every((p: any) => p.callType === 'openai-compat' && p.apiKey && p.endpoint)).toBe(true);
+  });
+
+  test('3. strictness:2 errors → falls back to strictness:1 result', async () => {
+    seed();
+    process.env.HAL_STRICTNESS = '2';
+    process.env.GROQ_API_KEY = 'test-groq';
+    (global as any).__evalImpl = async (_c: any, _o: any, ctx: any) => {
+      if (ctx.strictness === 2) throw new Error('s2 provider down');
+      return { hal_score: 0.25, vetoed: false, signals: {} };
+    };
+    await applyServiceFulfilledDeltas(CONTRACT);
+    expect(evaluate as jest.Mock).toHaveBeenCalledTimes(2); // s2 then s1
+    expect((evaluate as jest.Mock).mock.calls[0][2].strictness).toBe(2);
+    expect((evaluate as jest.Mock).mock.calls[1][2].strictness).toBe(1);
+    expect((applyValidationEvent as jest.Mock).mock.calls[0][4]).toMatchObject({ hal_score: 0.25, hal_decision: 'clean' });
+  });
+
+  test('4. strictness:2 AND :1 both error → 0.5/clean default (override undefined)', async () => {
+    seed();
+    process.env.HAL_STRICTNESS = '2';
+    (global as any).__evalImpl = async () => {
+      throw new Error('all providers down');
+    };
+    await applyServiceFulfilledDeltas(CONTRACT);
+    const calls = (applyValidationEvent as jest.Mock).mock.calls;
+    expect(calls.length).toBe(2); // fulfillment still completes
+    expect(calls[0][4]).toBeUndefined(); // → applyValidationEvent uses 0.5/clean
+  });
+});
