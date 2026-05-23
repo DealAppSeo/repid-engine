@@ -42,7 +42,10 @@ const WINDOW_TRUNC: Record<DetectionWindow, string> = {
   monthly: 'month',
 };
 
-export const DEFAULT_Z_THRESHOLD = 3.0;
+// 2.5 (not the textbook 3.0): the active-in-window population is small (n≈12), where a single
+// large earner inflates the stddev enough to cap its own Z below 3 (e.g. shofet z=2.41 at Δ470).
+// Sean set 2.5 for sensitivity at this scale; raise toward 3.0 as the population grows.
+export const DEFAULT_Z_THRESHOLD = 2.5;
 
 /**
  * Compute per-agent RepID growth over the window and its Z-score vs the active-in-window population.

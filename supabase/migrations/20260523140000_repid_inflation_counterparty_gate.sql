@@ -33,13 +33,14 @@ $$ LANGUAGE SQL STABLE;
 CREATE OR REPLACE FUNCTION compute_tier(p_repid INTEGER, p_agent_id UUID)
 RETURNS TEXT AS $$
 DECLARE
-  -- TUNE THESE before applying. Defaults = zero-demotion floor (0 current agents demoted).
+  -- TUNE THESE before ratcheting. Defaults = zero-demotion floor (0 current agents demoted).
   vet_min  INTEGER := 2;   -- target (mature economy): 10
   auto_min INTEGER := 2;   -- target: 5
   est_min  INTEGER := 0;   -- target: 3   (0 = ungated; any value >=1 demotes ~10 current agents)
   earn_min INTEGER := 0;   -- target: 1
   base_tier TEXT;
   cp INTEGER;
+  v_is_human BOOLEAN;
 BEGIN
   -- Existing score thresholds (must mirror compute_tier(integer)).
   base_tier := CASE
@@ -52,6 +53,16 @@ BEGIN
 
   IF p_agent_id IS NULL THEN
     RETURN base_tier;  -- backward compat: no gate without an agent id
+  END IF;
+
+  -- Exclude human/role accounts from the counterparty gate (Sean directive 2026-05-23): they don't
+  -- provide services, so a counterparty floor shouldn't demote them.
+  -- ⚠️ is_human is currently FALSE for all active rows (incl. the HUMAN/SEAN accounts). Populate it
+  -- (UPDATE repid_agents SET is_human=true WHERE ...) BEFORE ratcheting est_min/earn_min >= 1, or
+  -- those accounts will be demoted. At the zero-demotion floor below this exclusion is inert anyway.
+  SELECT is_human INTO v_is_human FROM repid_agents WHERE id = p_agent_id;
+  IF COALESCE(v_is_human, false) THEN
+    RETURN base_tier;
   END IF;
 
   cp := count_unique_counterparties(p_agent_id);
