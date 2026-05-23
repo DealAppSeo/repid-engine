@@ -118,7 +118,12 @@ router.post('/:id/escrow', escrowRateLimitPerIP, escrowRateLimitPerApiKey, async
     return res.status(402).json({
       x402Version: 1,
       accepts: requirements,
-      error: 'Payment required'
+      error: 'Payment required',
+      extra: {
+        contract_id: contract.id,
+        estimated_settlement_gas_usd: '0.001',
+        network_fee_note: 'Includes ~0.001 USDC for settlement transaction',
+      }
     });
   }
 
@@ -127,9 +132,28 @@ router.post('/:id/escrow', escrowRateLimitPerIP, escrowRateLimitPerApiKey, async
   let txHash = '';
   let payerAddress = '';
 
+  const escrowStart = Date.now();
+  console.log(JSON.stringify({
+    event: 'x402_escrow_attempt',
+    contract_id: contract.id,
+    has_payment_header: !!xPaymentHeader,
+    enforcement_enabled: enforcementEnabled,
+    timestamp: Date.now(),
+  }));
+
   if (!isSimulated) {
+    const verifyStart = Date.now();
     const verifyResult = await x402Facilitator.verifyPayment(xPaymentHeader, requirements);
+    const verifyLatency = Date.now() - verifyStart;
+
     if (!verifyResult.valid) {
+      console.log(JSON.stringify({
+        event: 'x402_failure',
+        contract_id: contract.id,
+        stage: 'verify',
+        reason: verifyResult.reason || 'Payment verification failed',
+        latency_ms: Date.now() - escrowStart,
+      }));
       return res.status(402).json({
         x402Version: 1,
         accepts: requirements,
@@ -138,14 +162,36 @@ router.post('/:id/escrow', escrowRateLimitPerIP, escrowRateLimitPerApiKey, async
       });
     }
     payerAddress = verifyResult.payer;
+    console.log(JSON.stringify({
+      event: 'x402_verify_success',
+      contract_id: contract.id,
+      payer: payerAddress,
+      latency_ms: verifyLatency,
+    }));
   }
 
   if (!isSimulated) {
+    const settleStart = Date.now();
     try {
       const settleResult = await x402Facilitator.settlePayment(xPaymentHeader, requirements);
+      const settleLatency = Date.now() - settleStart;
       txHash = settleResult.txHash;
+      console.log(JSON.stringify({
+        event: 'x402_settle_success',
+        contract_id: contract.id,
+        tx_hash: txHash,
+        latency_ms: settleLatency,
+      }));
     } catch (e: any) {
+      const totalLatency = Date.now() - escrowStart;
       console.error('[escrow-x402] Settlement failed, queuing for recovery:', e.message);
+      console.log(JSON.stringify({
+        event: 'x402_failure',
+        contract_id: contract.id,
+        stage: 'settle',
+        reason: e.message,
+        latency_ms: totalLatency,
+      }));
       await x402Facilitator.queueFailure({
         direction: 'inbound',
         agent_id: contract.buyer_agent_id,
@@ -179,7 +225,15 @@ router.post('/:id/escrow', escrowRateLimitPerIP, escrowRateLimitPerApiKey, async
   }).select('id').single();
 
   if (settleInsertErr) {
+    const totalLatency = Date.now() - escrowStart;
     console.error('[escrow-x402] Failed to insert x402_settlement:', settleInsertErr.message);
+    console.log(JSON.stringify({
+      event: 'x402_failure',
+      contract_id: contract.id,
+      stage: 'db_insert',
+      reason: settleInsertErr.message,
+      latency_ms: totalLatency,
+    }));
     return res.status(500).json({ error: 'database_insert_failed', message: settleInsertErr.message });
   }
 
@@ -194,9 +248,24 @@ router.post('/:id/escrow', escrowRateLimitPerIP, escrowRateLimitPerApiKey, async
     .select().single();
 
   if (updateErr) {
+    const totalLatency = Date.now() - escrowStart;
     console.error('[escrow-x402] Failed to update service contract:', updateErr.message);
+    console.log(JSON.stringify({
+      event: 'x402_failure',
+      contract_id: contract.id,
+      stage: 'contract_update',
+      reason: updateErr.message,
+      latency_ms: totalLatency,
+    }));
     return res.status(500).json({ error: 'contract_update_failed', message: updateErr.message });
   }
+
+  console.log(JSON.stringify({
+    event: 'x402_escrow_success',
+    contract_id: contract.id,
+    settlement_id: settlement.id,
+    latency_ms: Date.now() - escrowStart,
+  }));
 
   res.json(updatedContract);
 });
