@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../../services/validation-repid-delta';
+import { x402Facilitator } from '../../services/x402-facilitator';
 
 const router = Router();
 
@@ -39,15 +40,166 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 router.post('/:id/escrow', async (req: Request, res: Response) => {
-  // In a real flow, this would interface with x402
-  const { data, error } = await db.from('service_contracts')
-    .update({ status: 'escrowed', escrowed_at: new Date().toISOString() })
-    .eq('id', req.params.id)
+  const contractId = req.params.id;
+
+  // 1. Fetch contract
+  const { data: contract, error: getErr } = await db.from('service_contracts')
+    .select('*')
+    .eq('id', contractId)
+    .maybeSingle();
+
+  if (getErr || !contract) {
+    return res.status(404).json({ error: 'contract_not_found' });
+  }
+
+  // Toggle check
+  const enforcementEnabled = process.env.X402_ENFORCEMENT_ENABLED === 'true';
+
+  if (!enforcementEnabled) {
+    // Legacy behavior
+    const { data, error } = await db.from('service_contracts')
+      .update({ status: 'escrowed', escrowed_at: new Date().toISOString() })
+      .eq('id', contractId)
+      .select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json(data);
+  }
+
+  // Idempotency check — if this contract already has a settlement, return existing
+  const { data: existing, error: existErr } = await db.from('x402_settlements')
+    .select('id')
+    .eq('idempotency_key', contractId)
+    .maybeSingle();
+
+  if (existing) {
+    const settlementId = existing.id;
+    // ensure contract is escrowed with this settlement_id
+    const { data: updatedContract, error: updateErr } = await db.from('service_contracts')
+      .update({
+        status: 'escrowed',
+        x402_payment_id: settlementId,
+        escrowed_at: new Date().toISOString()
+      })
+      .eq('id', contractId)
+      .select().single();
+    
+    if (updateErr) {
+      return res.status(500).json({ error: 'contract_update_failed', message: updateErr.message });
+    }
+    return res.json(updatedContract);
+  }
+
+  // Enforcement is ON: check contract status
+  if (contract.status !== 'pending') {
+    return res.status(409).json({ error: 'wrong_status', current: contract.status });
+  }
+
+  // 2. Fetch provider agent to get their wallet address
+  const { data: provider, error: providerErr } = await db.from('repid_agents')
+    .select('wallet_address')
+    .eq('id', contract.provider_agent_id)
+    .maybeSingle();
+
+  const priceUsdc = String(contract.agreed_price_usdc_raw);
+  const resource = `/api/v1/contracts/${contract.id}/escrow`;
+
+  const requirements = x402Facilitator.buildPaymentRequirements({
+    resource,
+    payTo: provider?.wallet_address || '0x0000000000000000000000000000000000000000',
+    priceUsdc,
+    network: 'base-sepolia',
+    description: `Service Contract ${contract.id} Escrow payment`
+  });
+
+  // 3. Parse X-PAYMENT header
+  const xPaymentHeader = req.header('X-PAYMENT');
+  if (!xPaymentHeader) {
+    return res.status(402).json({
+      x402Version: 1,
+      accepts: requirements,
+      error: 'Payment required'
+    });
+  }
+
+  // 4. Verify payment via facilitator
+  const isSimulated = !process.env.X402_REAL_RPC;
+  let txHash = '';
+  let payerAddress = '';
+
+  if (!isSimulated) {
+    const verifyResult = await x402Facilitator.verifyPayment(xPaymentHeader, requirements);
+    if (!verifyResult.valid) {
+      return res.status(402).json({
+        x402Version: 1,
+        accepts: requirements,
+        error: 'Payment verification failed',
+        reason: verifyResult.reason
+      });
+    }
+    payerAddress = verifyResult.payer;
+  }
+
+  if (!isSimulated) {
+    try {
+      const settleResult = await x402Facilitator.settlePayment(xPaymentHeader, requirements);
+      txHash = settleResult.txHash;
+    } catch (e: any) {
+      console.error('[escrow-x402] Settlement failed, queuing for recovery:', e.message);
+      await x402Facilitator.queueFailure({
+        direction: 'inbound',
+        agent_id: contract.buyer_agent_id,
+        payment_payload_b64: xPaymentHeader,
+        payment_requirements: requirements,
+        facilitator_response: { error: e.message }
+      });
+      return res.status(500).json({ error: 'settlement_failed', message: e.message });
+    }
+  } else {
+    // Simulated mode: accept header as-is
+    txHash = xPaymentHeader; // Use header as mock tx_hash
+  }
+
+  // 5. Record settlement in x402_settlements
+  const topic = String((contract.payload as any)?.service_type || 'service_escrow');
+  const { data: settlement, error: settleInsertErr } = await db.from('x402_settlements').insert({
+    tip_id: `contract_${contractId}`,
+    prediction_topic: topic,
+    amount: Number(contract.agreed_price_usdc_raw),
+    asset: 'USDC',
+    status: 'settled',
+    payer_address: payerAddress || null,
+    provider_agent_id: contract.provider_agent_id,
+    requestor_agent_id: contract.buyer_agent_id,
+    x_payment_header: xPaymentHeader,
+    is_simulated: isSimulated,
+    delivered_at: new Date().toISOString(),
+    idempotency_key: contractId,
+    settlement_attempt_count: 1
+  }).select('id').single();
+
+  if (settleInsertErr) {
+    console.error('[escrow-x402] Failed to insert x402_settlement:', settleInsertErr.message);
+    return res.status(500).json({ error: 'database_insert_failed', message: settleInsertErr.message });
+  }
+
+  // 6. Update contract: transition status to escrowed and link x402_payment_id
+  const { data: updatedContract, error: updateErr } = await db.from('service_contracts')
+    .update({
+      status: 'escrowed',
+      x402_payment_id: settlement.id,
+      escrowed_at: new Date().toISOString()
+    })
+    .eq('id', contractId)
     .select().single();
-  
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+
+  if (updateErr) {
+    console.error('[escrow-x402] Failed to update service contract:', updateErr.message);
+    return res.status(500).json({ error: 'contract_update_failed', message: updateErr.message });
+  }
+
+  res.json(updatedContract);
 });
+
 
 router.post('/:id/cancel', async (req: Request, res: Response) => {
   const { data, error } = await db.from('service_contracts')

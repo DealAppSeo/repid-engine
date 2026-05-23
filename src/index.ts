@@ -362,11 +362,19 @@ if (!IS_TEST) {
 // loses cleanly (0 rows updated → skip).
 async function processCascadeQueue() {
   try {
-    const { data: pending, error } = await db
+    const enforcementOn = process.env.X402_ENFORCEMENT_ENABLED === 'true';
+
+    let query = db
       .from('service_contracts')
       .select('id, service_id, buyer_agent_id, agreed_price_usdc_raw, payload, expires_at, created_at, agent_services!inner(service_type, active, min_repid_to_purchase)')
       .eq('status', 'pending')
-      .gt('expires_at', new Date().toISOString())
+      .gt('expires_at', new Date().toISOString());
+
+    if (enforcementOn) {
+      query = query.not('x402_payment_id', 'is', null);
+    }
+
+    const { data: pending, error } = await query
       .order('created_at', { ascending: true })
       .limit(10);
 
@@ -374,6 +382,21 @@ async function processCascadeQueue() {
       console.error('[cascade] poll failed:', error?.message ?? error, (error as any)?.stack ?? new Error().stack);
       return;
     }
+
+    // Observability: count pending contracts blocked by payment requirement
+    if (enforcementOn) {
+      const { count, error: countErr } = await db
+        .from('service_contracts')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending')
+        .gt('expires_at', new Date().toISOString())
+        .is('x402_payment_id', null);
+
+      if (!countErr && count !== null && count > 0) {
+        console.log(`[cascade-x402] ${count} pending contracts blocked by payment requirement`);
+      }
+    }
+
     if (!pending || pending.length === 0) return;
 
     for (const c of pending as any[]) {
@@ -621,4 +644,5 @@ startHitlExpirationJob();
 const disputeWorker = new DisputeResolutionWorker();
 disputeWorker.start();
 
+export { processCascadeQueue };
 export default app;
