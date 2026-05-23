@@ -47,6 +47,45 @@ describe('FeedbackLoopWorker defensive filters', () => {
     expect(r.reason).toBeUndefined();
   });
 
+  // 7. service_fulfilled_settled simulated vs real
+  it('blocks simulated service_fulfilled_settled events', () => {
+    const r = isEligibleForOnChainWrite({
+      subject_type: 'agent',
+      subject_id: REAL_UUID,
+      event_data: {
+        is_simulated: true,
+        tx_hash: null,
+        metadata: {
+          contract_id: 'c-1',
+          x402_payment_id: 'p-1',
+          task_type: 'cross_validation',
+          verdict: 'PASS'
+        }
+      }
+    });
+    expect(r.eligible).toBe(false);
+    expect(r.reason).toBe('is_simulated');
+  });
+
+  it('accepts non-simulated service_fulfilled_settled events', () => {
+    const r = isEligibleForOnChainWrite({
+      subject_type: 'agent',
+      subject_id: REAL_UUID,
+      event_data: {
+        is_simulated: false,
+        tx_hash: null,
+        metadata: {
+          contract_id: 'c-1',
+          x402_payment_id: 'p-1',
+          task_type: 'cross_validation',
+          verdict: 'PASS'
+        }
+      }
+    });
+    expect(r.eligible).toBe(true);
+    expect(r.reason).toBeUndefined();
+  });
+
   // Guard: the SQL fragment stays in sync with the JS predicate (all 6 clauses present).
   it('SQL filter fragment contains all six guard clauses', () => {
     for (const frag of [

@@ -69,7 +69,7 @@ export class FeedbackLoopWorker {
         `SELECT * FROM repid_events
          WHERE event_type = ANY($1) AND processed_at IS NULL${POLL_EVENT_FILTER_SQL}
          LIMIT 50`,
-        [['x402_inbound_settled', 'x402_outbound_settled']],
+        [['x402_inbound_settled', 'x402_outbound_settled', 'service_fulfilled_settled']],
         { retries: 1, label: 'feedback-loop:poll' }
       );
     } catch (e) {
