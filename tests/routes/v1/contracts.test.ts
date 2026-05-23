@@ -81,13 +81,58 @@ describe('Contracts Routes', () => {
       process.env.X402_ENFORCEMENT_ENABLED = 'false';
     });
 
+    const mockDbForEscrow = (opts: { contractStatus: string; existingSettlement: any; insertMock?: any }) => {
+      jest.spyOn(db, 'from').mockImplementation((table: string) => {
+        if (table === 'service_contracts') {
+          return {
+            select: jest.fn().mockReturnThis(),
+            update: jest.fn().mockReturnThis(),
+            eq: jest.fn().mockReturnThis(),
+            maybeSingle: jest.fn().mockResolvedValue({
+              data: {
+                id: 'test-id',
+                status: opts.contractStatus,
+                agreed_price_usdc_raw: 10000,
+                provider_agent_id: 'provider-123',
+                wallet_address: '0xProviderWallet'
+              },
+              error: null
+            }),
+            single: jest.fn().mockResolvedValue({
+              data: {
+                id: 'test-id',
+                status: 'escrowed',
+                x402_payment_id: 'settlement-uuid'
+              },
+              error: null
+            })
+          } as any;
+        } else if (table === 'repid_agents') {
+          return {
+            select: jest.fn().mockReturnThis(),
+            eq: jest.fn().mockReturnThis(),
+            maybeSingle: jest.fn().mockResolvedValue({ data: { wallet_address: '0xProviderWallet' }, error: null }),
+          } as any;
+        } else if (table === 'x402_settlements') {
+          return {
+            select: jest.fn().mockReturnThis(),
+            eq: jest.fn().mockReturnThis(),
+            maybeSingle: jest.fn().mockResolvedValue({ data: opts.existingSettlement, error: null }),
+            insert: opts.insertMock || jest.fn().mockReturnThis(),
+            single: jest.fn().mockResolvedValue({ data: { id: 'settlement-uuid' }, error: null })
+          } as any;
+        }
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+          upsert: jest.fn().mockResolvedValue({ data: null, error: null })
+        } as any;
+      });
+    };
+
     it('returns 402 payment required if X-PAYMENT header is missing', async () => {
-      jest.spyOn(db, 'from').mockReturnValue({
-        select: jest.fn().mockReturnThis(),
-        eq: jest.fn().mockReturnThis(),
-        maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'pending', agreed_price_usdc_raw: 10000, provider_agent_id: 'provider-123', wallet_address: '0xProviderWallet' }, error: null }),
-        upsert: jest.fn().mockResolvedValue({ data: null, error: null })
-      } as any);
+      mockDbForEscrow({ contractStatus: 'pending', existingSettlement: null });
 
       const res = await request(app).post('/api/v1/contracts/test-id/escrow');
       expect(res.status).toBe(402);
@@ -96,12 +141,7 @@ describe('Contracts Routes', () => {
     });
 
     it('returns 409 conflict if contract is already escrowed', async () => {
-      jest.spyOn(db, 'from').mockReturnValue({
-        select: jest.fn().mockReturnThis(),
-        eq: jest.fn().mockReturnThis(),
-        maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'escrowed' }, error: null }),
-        upsert: jest.fn().mockResolvedValue({ data: null, error: null })
-      } as any);
+      mockDbForEscrow({ contractStatus: 'escrowed', existingSettlement: null });
 
       const res = await request(app).post('/api/v1/contracts/test-id/escrow');
       expect(res.status).toBe(409);
@@ -110,39 +150,10 @@ describe('Contracts Routes', () => {
 
     it('accepts valid X-PAYMENT and transitions contract to escrowed', async () => {
       const mockInsert = jest.fn().mockReturnThis();
-      const mockSingle = jest.fn().mockResolvedValue({ data: { id: 'settlement-uuid' }, error: null });
-      
-      jest.spyOn(db, 'from').mockImplementation((table) => {
-        if (table === 'service_contracts') {
-          return {
-            select: jest.fn().mockReturnThis(),
-            update: jest.fn().mockReturnThis(),
-            eq: jest.fn().mockReturnThis(),
-            maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'pending', agreed_price_usdc_raw: 10000, provider_agent_id: 'provider-123' }, error: null }),
-            single: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'escrowed', x402_payment_id: 'settlement-uuid' }, error: null }),
-            upsert: jest.fn().mockResolvedValue({ data: null, error: null })
-          } as any;
-        } else if (table === 'repid_agents') {
-          return {
-            select: jest.fn().mockReturnThis(),
-            eq: jest.fn().mockReturnThis(),
-            maybeSingle: jest.fn().mockResolvedValue({ data: { wallet_address: '0xProviderWallet' }, error: null }),
-            upsert: jest.fn().mockResolvedValue({ data: null, error: null })
-          } as any;
-        } else if (table === 'x402_settlements') {
-          return {
-            insert: mockInsert,
-            select: jest.fn().mockReturnThis(),
-            single: mockSingle,
-            upsert: jest.fn().mockResolvedValue({ data: null, error: null })
-          } as any;
-        }
-        return {
-          upsert: jest.fn().mockResolvedValue({ data: null, error: null }),
-          select: jest.fn().mockReturnThis(),
-          eq: jest.fn().mockReturnThis(),
-          maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null })
-        } as any;
+      mockDbForEscrow({
+        contractStatus: 'pending',
+        existingSettlement: null,
+        insertMock: mockInsert
       });
 
       const res = await request(app)
@@ -158,6 +169,20 @@ describe('Contracts Routes', () => {
         asset: 'USDC',
         idempotency_key: 'test-id'
       }));
+    });
+
+    it('enforces rate limiting and returns 429 when limits are exceeded', async () => {
+      mockDbForEscrow({ contractStatus: 'pending', existingSettlement: null });
+
+      // Send 10 requests (limit is 10 per minute per IP)
+      for (let i = 0; i < 10; i++) {
+        await request(app).post('/api/v1/contracts/test-rate-limit/escrow');
+      }
+
+      // The 11th request must fail with 429
+      const res = await request(app).post('/api/v1/contracts/test-rate-limit/escrow');
+      expect(res.status).toBe(429);
+      expect(res.body.error).toBe('rate_limit_exceeded');
     });
   });
 });
