@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { applyValidationEvent } from '../scoring/pipeline';
+import { hasTruthySimFlag } from '../utils/truthy';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -209,15 +210,14 @@ export async function applyServiceFulfilledDeltas(
       const taskType = fullContract.metadata?.task_type || fullContract.payload?.task_type || agentService?.service_type || null;
 
       if (taskType !== null) {
-        let isSimulated = false;
-        if (
-          fullContract.metadata?.is_simulated === true ||
-          fullContract.metadata?.is_simulated === 'true' ||
-          fullContract.payload?.is_simulated === true ||
-          fullContract.payload?.is_simulated === 'true'
-        ) {
-          isSimulated = true;
-        }
+        // F-series patch (2026-05-22): normalize is_simulated across case/type
+        // ("True"/"TRUE"/1/"1"/"yes") and nested/mislocated flags via
+        // hasTruthySimFlag (src/utils/truthy.ts). Replaces the prior
+        // case-sensitive `=== true || === 'true'` check. The x402_settlements
+        // check below is unchanged (settlement-level safety net).
+        let isSimulated =
+          hasTruthySimFlag(fullContract.metadata) ||
+          hasTruthySimFlag(fullContract.payload);
 
         // Check if settlement is simulated
         const { data: settlement } = await db

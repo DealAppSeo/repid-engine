@@ -17,11 +17,14 @@
  * If you change one layer, change the other to match.
  */
 
+import { hasTruthySimFlag } from '../utils/truthy';
+
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Placeholder / mock tx hashes: 0xmock..., 0xabc..., or 0x0000000000... (8+ zeros).
-export const MOCK_TX_RE = /^0x(mock|abc|0{8})/;
+// F-series patch (2026-05-22): case-insensitive so 0xMOCK.../0xABC... also match.
+export const MOCK_TX_RE = /^0x(mock|abc|0{8})/i;
 
 /**
  * SQL fragment appended verbatim to the poll WHERE clause. Mirrors
@@ -31,8 +34,8 @@ export const MOCK_TX_RE = /^0x(mock|abc|0{8})/;
 export const POLL_EVENT_FILTER_SQL = `
          AND subject_type = 'agent'
          AND subject_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-         AND COALESCE(event_data->>'is_simulated', 'false') != 'true'
-         AND COALESCE(event_data->>'tx_hash', '') !~ '^0x(mock|abc|0{8})'
+         AND lower(COALESCE(event_data->>'is_simulated', 'false')) NOT IN ('true', '1', 'yes')
+         AND COALESCE(event_data->>'tx_hash', '') !~* '^0x(mock|abc|0{8})'
          AND COALESCE(event_data->>'drained_as_historical_mock', 'false') != 'true'
          AND COALESCE(event_data->>'drained_as_orphaned_conductor_format', 'false') != 'true'`;
 
@@ -52,8 +55,9 @@ export type EligibilityReason =
 
 /**
  * Returns whether a polled repid_event may drive a REAL on-chain ERC-8004
- * write. `String(...)` coercion handles both JSON booleans (true) and the
- * Postgres `->>` text form ('true') uniformly.
+ * write. is_simulated is normalized via hasTruthySimFlag (F-series patch
+ * 2026-05-22): case/type variants ("True"/"TRUE"/1/"1"/"yes") and nested
+ * flags are all caught; mock tx hashes now match case-insensitively.
  */
 export function isEligibleForOnChainWrite(
   event: FilterableEvent
@@ -61,7 +65,7 @@ export function isEligibleForOnChainWrite(
   const ed = event.event_data ?? {};
   if (event.subject_type !== 'agent') return { eligible: false, reason: 'subject_type_not_agent' };
   if (!event.subject_id || !UUID_RE.test(event.subject_id)) return { eligible: false, reason: 'subject_id_not_uuid' };
-  if (String(ed.is_simulated ?? 'false') === 'true') return { eligible: false, reason: 'is_simulated' };
+  if (hasTruthySimFlag(ed)) return { eligible: false, reason: 'is_simulated' };
   if (MOCK_TX_RE.test(String(ed.tx_hash ?? ''))) return { eligible: false, reason: 'mock_tx_hash' };
   if (String(ed.drained_as_historical_mock ?? 'false') === 'true') return { eligible: false, reason: 'drained_historical_mock' };
   if (String(ed.drained_as_orphaned_conductor_format ?? 'false') === 'true') return { eligible: false, reason: 'drained_orphaned_conductor' };
