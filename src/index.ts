@@ -35,6 +35,7 @@ import { createAgentsReputationRouter } from './routes/agents-reputation';
 import x402InboundRouter from './routes/x402-inbound';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
+import { x402Metrics } from './observability/x402-metrics';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -250,6 +251,14 @@ app.use('/api/v1', receiptsRouter);
 // Sprint R-C: RepID admin endpoints (attest) — auth required
 app.use('/api/v1', repidAdminRouter);
 app.use('/api/v1/admin/caps', adminCapsRouter);
+
+app.get('/api/v1/observability/x402-metrics', (req, res) => {
+  const apiKey = (req as any).apiKey;
+  if (!apiKey || apiKey.tier !== 'ops') {
+    return res.status(403).json({ error: 'Forbidden: Ops tier only' });
+  }
+  return res.json(x402Metrics.snapshot());
+});
 
 // v11 external agent endpoints
 app.use('/api/v1/agents/register', registrationLimiter);

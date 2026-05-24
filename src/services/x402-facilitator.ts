@@ -4,6 +4,7 @@ import { db } from '../db';
 import { ethers } from 'ethers';
 import { resolveAndVerifyDomain } from './x402-outbound-client';
 import { getActiveNetwork } from '../config/network';
+import { x402Metrics } from '../observability/x402-metrics';
 
 export interface PaymentRequirements {
   scheme: 'exact';
@@ -58,6 +59,10 @@ export class X402Facilitator {
     xPaymentHeader: string,
     requirements: PaymentRequirements | PaymentRequirements[]
   ): Promise<VerifyResult> {
+    const startTime = Date.now();
+    x402Metrics.increment('facilitator.verify.attempt');
+    x402Metrics.increment('facilitator.verify.real');
+
     try {
       let paymentPayload: any;
       try {
@@ -68,6 +73,8 @@ export class X402Facilitator {
 
       const reqObj = Array.isArray(requirements) ? requirements[0] : requirements;
       if (!reqObj) {
+        x402Metrics.increment('facilitator.verify.failure');
+        x402Metrics.recordLatency('facilitator.verify', Date.now() - startTime);
         return { valid: false, payer: '', reason: 'Requirements must not be empty' };
       }
 
@@ -132,16 +139,26 @@ export class X402Facilitator {
 
       if (!response.ok) {
         const text = await response.text();
+        x402Metrics.increment('facilitator.verify.failure');
+        x402Metrics.recordLatency('facilitator.verify', Date.now() - startTime);
         return { valid: false, payer: '', reason: `Facilitator error: ${response.status} ${text}` };
       }
 
       const data = await response.json() as any;
+      if (data.valid) {
+        x402Metrics.increment('facilitator.verify.success');
+      } else {
+        x402Metrics.increment('facilitator.verify.failure');
+      }
+      x402Metrics.recordLatency('facilitator.verify', Date.now() - startTime);
       return {
         valid: data.valid !== undefined ? data.valid : data.isValid,
         payer: data.payer,
         reason: data.reason
       };
     } catch (e: any) {
+      x402Metrics.increment('facilitator.verify.failure');
+      x402Metrics.recordLatency('facilitator.verify', Date.now() - startTime);
       return { valid: false, payer: '', reason: e.message };
     }
   }
@@ -150,6 +167,10 @@ export class X402Facilitator {
     xPaymentHeader: string,
     requirements: PaymentRequirements | PaymentRequirements[]
   ): Promise<SettleResult> {
+    const startTime = Date.now();
+    x402Metrics.increment('facilitator.settle.attempt');
+    x402Metrics.increment('facilitator.settle.real');
+
     try {
       let paymentPayload: any;
       try {
@@ -160,6 +181,8 @@ export class X402Facilitator {
 
       const reqObj = Array.isArray(requirements) ? requirements[0] : requirements;
       if (!reqObj) {
+        x402Metrics.increment('facilitator.settle.failure');
+        x402Metrics.recordLatency('facilitator.settle', Date.now() - startTime);
         throw new Error('Requirements must not be empty');
       }
 
@@ -224,13 +247,20 @@ export class X402Facilitator {
 
       if (!response.ok) {
         const text = await response.text();
+        x402Metrics.increment('facilitator.settle.failure');
+        x402Metrics.recordLatency('facilitator.settle', Date.now() - startTime);
         throw new Error(`Facilitator error: ${response.status} ${text}`);
       }
 
       const data = await response.json() as any;
       if (!data.success) {
+        x402Metrics.increment('facilitator.settle.failure');
+        x402Metrics.recordLatency('facilitator.settle', Date.now() - startTime);
         throw new Error(data.reason || 'Settlement failed');
       }
+
+      x402Metrics.increment('facilitator.settle.success');
+      x402Metrics.recordLatency('facilitator.settle', Date.now() - startTime);
 
       return {
         success: data.success,
@@ -239,6 +269,8 @@ export class X402Facilitator {
         payer: data.payer
       };
     } catch (e: any) {
+      x402Metrics.increment('facilitator.settle.failure');
+      x402Metrics.recordLatency('facilitator.settle', Date.now() - startTime);
       throw new Error(`Settlement failed: ${e.message}`);
     }
   }
