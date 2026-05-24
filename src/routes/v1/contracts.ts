@@ -112,7 +112,6 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     resource,
     payTo: provider?.wallet_address || '0x0000000000000000000000000000000000000000',
     priceUsdc,
-    network: 'base-sepolia',
     description: `Service Contract ${contract.id} Escrow payment`
   });
 

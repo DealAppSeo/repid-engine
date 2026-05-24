@@ -1,6 +1,7 @@
 import { repIdAttestationService, ZkpRepIdAttestation } from './repid-attestation';
 import { db } from '../db';
 import { ethers } from 'ethers';
+import { getActiveNetwork } from '../config/network';
 
 import crypto from 'crypto';
 
@@ -141,13 +142,14 @@ export class X402OutboundClient {
 
     let offer: any;
     if (response.status === 402) {
+      const netConfig = getActiveNetwork();
       const body = await response.json() as any;
       const accepts = body.accepts as any[];
-      offer = accepts.find((a: any) => a.network === 'base-sepolia' && a.scheme === 'exact');
+      offer = accepts.find((a: any) => a.network === netConfig.x402.networkParam && a.scheme === 'exact');
 
 
       if (!offer) {
-        throw new Error('No compatible x402 offer found (requires base-sepolia exact scheme)');
+        throw new Error(`No compatible x402 offer found (requires ${netConfig.x402.networkParam} exact scheme)`);
       }
 
       if (BigInt(offer.maxAmountRequired) > BigInt(maxBudget)) {
@@ -237,12 +239,9 @@ export class X402OutboundClient {
         }
       }
       
-      const networkToChainId: Record<string, number> = {
-        'base-sepolia': 84532,
-        'base': 8453
-      };
-      const chainId = networkToChainId[offer.network] || 84532;
-      const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+      const netConfig = getActiveNetwork();
+      const chainId = netConfig.chainId;
+      const rpcUrl = netConfig.rpcUrl;
       const provider = new ethers.JsonRpcProvider(rpcUrl);
 
       const resolvedDomain = await resolveAndVerifyDomain(offer.asset, chainId, provider);
