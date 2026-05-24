@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 
 const router = express.Router();
 const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.SUPABASE_URL || 'http://localhost:54321',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || 'dummy-key'
 );
 
 router.post('/run', async (req, res) => {
