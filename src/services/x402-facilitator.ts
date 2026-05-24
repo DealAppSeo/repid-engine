@@ -1,6 +1,7 @@
 import { Request } from 'express';
 import { ZkpRepIdAttestation } from './repid-attestation';
 import { db } from '../db';
+import { ethers } from 'ethers';
 
 export interface PaymentRequirements {
   scheme: 'exact';
@@ -49,16 +50,55 @@ export class X402Facilitator {
     }];
   }
 
-  async verifyPayment(xPaymentHeader: string, requirements: PaymentRequirements[]): Promise<VerifyResult> {
+  async verifyPayment(
+    xPaymentHeader: string,
+    requirements: PaymentRequirements | PaymentRequirements[]
+  ): Promise<VerifyResult> {
     try {
-      const paymentPayload = JSON.parse(Buffer.from(xPaymentHeader, 'base64').toString('utf8'));
+      let paymentPayload: any;
+      try {
+        paymentPayload = JSON.parse(Buffer.from(xPaymentHeader, 'base64').toString('utf8'));
+      } catch (err) {
+        paymentPayload = { txHash: xPaymentHeader };
+      }
+
+      const reqObj = Array.isArray(requirements) ? requirements[0] : requirements;
+      if (!reqObj) {
+        return { valid: false, payer: '', reason: 'Requirements must not be empty' };
+      }
+
+      let signature = paymentPayload.signature || paymentPayload.txHash;
+      if (!signature && paymentPayload.r && paymentPayload.s && paymentPayload.v !== undefined) {
+        try {
+          signature = ethers.Signature.from({
+            r: paymentPayload.r,
+            s: paymentPayload.s,
+            v: Number(paymentPayload.v)
+          }).serialized;
+        } catch (e) {
+          // ignore
+        }
+      }
 
       const response = await fetch(`${FACILITATOR_URL}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          paymentPayload,
-          paymentRequirements: requirements
+          x402Version: 1,
+          scheme: reqObj.scheme,
+          network: reqObj.network,
+          payload: {
+            signature: signature || '',
+            authorization: {
+              from: paymentPayload.from,
+              to: paymentPayload.to,
+              value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
+              validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
+              validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
+              nonce: paymentPayload.nonce
+            }
+          },
+          paymentRequirements: reqObj
         })
       });
 
@@ -78,16 +118,55 @@ export class X402Facilitator {
     }
   }
 
-  async settlePayment(xPaymentHeader: string, requirements: PaymentRequirements[]): Promise<SettleResult> {
+  async settlePayment(
+    xPaymentHeader: string,
+    requirements: PaymentRequirements | PaymentRequirements[]
+  ): Promise<SettleResult> {
     try {
-      const paymentPayload = JSON.parse(Buffer.from(xPaymentHeader, 'base64').toString('utf8'));
+      let paymentPayload: any;
+      try {
+        paymentPayload = JSON.parse(Buffer.from(xPaymentHeader, 'base64').toString('utf8'));
+      } catch (err) {
+        paymentPayload = { txHash: xPaymentHeader };
+      }
+
+      const reqObj = Array.isArray(requirements) ? requirements[0] : requirements;
+      if (!reqObj) {
+        throw new Error('Requirements must not be empty');
+      }
+
+      let signature = paymentPayload.signature || paymentPayload.txHash;
+      if (!signature && paymentPayload.r && paymentPayload.s && paymentPayload.v !== undefined) {
+        try {
+          signature = ethers.Signature.from({
+            r: paymentPayload.r,
+            s: paymentPayload.s,
+            v: Number(paymentPayload.v)
+          }).serialized;
+        } catch (e) {
+          // ignore
+        }
+      }
 
       const response = await fetch(`${FACILITATOR_URL}/settle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          paymentPayload,
-          paymentRequirements: requirements
+          x402Version: 1,
+          scheme: reqObj.scheme,
+          network: reqObj.network,
+          payload: {
+            signature: signature || '',
+            authorization: {
+              from: paymentPayload.from,
+              to: paymentPayload.to,
+              value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
+              validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
+              validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
+              nonce: paymentPayload.nonce
+            }
+          },
+          paymentRequirements: reqObj
         })
       });
 
@@ -116,7 +195,7 @@ export class X402Facilitator {
     direction: 'inbound' | 'outbound',
     agent_id: string,
     payment_payload_b64: string,
-    payment_requirements: PaymentRequirements[],
+    payment_requirements: PaymentRequirements | PaymentRequirements[],
     facilitator_response?: any
   }): Promise<void> {
     await db.from('x402_settlement_failures').insert({
