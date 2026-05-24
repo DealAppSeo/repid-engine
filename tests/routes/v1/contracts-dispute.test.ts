@@ -1,24 +1,28 @@
 import request from 'supertest';
 import app from '../../../src/index';
 
-const mockSelect = jest.fn().mockReturnThis();
-const mockEq = jest.fn().mockReturnThis();
-const mockMaybeSingle = jest.fn().mockResolvedValue({ data: { id: 'test-id', active: true, provider_agent_id: 'provider-123', min_repid_to_purchase: 100, current_repid: 200 }, error: null });
+jest.mock('../../../src/db', () => {
+  const mockSelect = jest.fn().mockReturnThis();
+  const mockEq = jest.fn().mockReturnThis();
+  const mockMaybeSingle = jest.fn().mockResolvedValue({ data: { id: 'test-id', active: true, provider_agent_id: 'provider-123', min_repid_to_purchase: 100, current_repid: 200 }, error: null });
 
-jest.mock('../../../src/db', () => ({
-  db: {
-    from: jest.fn().mockReturnThis(),
-    select: mockSelect,
-    insert: jest.fn().mockReturnThis(),
-    update: jest.fn().mockReturnThis(),
-    eq: mockEq,
-    single: jest.fn().mockResolvedValue({ data: { id: 'contract-id' }, error: null }),
-    maybeSingle: mockMaybeSingle,
-    range: jest.fn().mockReturnThis(),
-    limit: jest.fn().mockReturnThis(),
-    order: jest.fn().mockReturnThis(),
-  }
-}));
+  return {
+    db: {
+      from: jest.fn().mockReturnThis(),
+      select: mockSelect,
+      insert: jest.fn().mockReturnThis(),
+      update: jest.fn().mockReturnThis(),
+      eq: mockEq,
+      single: jest.fn().mockResolvedValue({ data: { id: 'contract-id' }, error: null }),
+      maybeSingle: mockMaybeSingle,
+      range: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      rpc: jest.fn().mockResolvedValue({ data: null, error: null }),
+      upsert: jest.fn().mockReturnThis(),
+    }
+  };
+});
 
 // Mock authentication
 jest.mock('../../../src/middleware/auth', () => ({
@@ -34,6 +38,7 @@ describe('Contracts Dispute Routes', () => {
       reason: 'provider failed to deliver',
       evidence: {}
     });
+    if (res.status === 500) console.error('DISPUTE 500 ERROR:', res.text || res.body);
     expect(res.status).toBe(200);
   });
 
