@@ -72,8 +72,11 @@ export function parseWorktreeList(porcelain: string, primaryGitDir: string): Wor
     if (!worktree) continue;
     // For non-primary worktrees git stores per-worktree state at <main-git-dir>/worktrees/<name>.
     // For the primary, gitDir IS the main .git directory.
-    const isPrimary = path.resolve(worktree) === path.resolve(path.dirname(primaryGitDir));
-    const wtName = path.basename(worktree);
+    const normWorktree = worktree.replace(/\\/g, '/');
+    const normPrimary = primaryGitDir.replace(/\\/g, '/');
+    const normPrimaryDir = path.dirname(normPrimary);
+    const isPrimary = path.resolve(normWorktree) === path.resolve(normPrimaryDir);
+    const wtName = path.basename(normWorktree);
     const gitDir = isPrimary ? primaryGitDir : path.join(primaryGitDir, 'worktrees', wtName);
     out.push({ worktree, gitDir, branch, detached, isPrimary, isBare });
   }

@@ -3,7 +3,30 @@ import app from '../src/index';
 import { signRepIDAttestation, _testHelpers } from '../src/repid/repid-attestation';
 import * as crypto from 'crypto';
 
+jest.mock('../src/db', () => {
+  const chain: any = {
+    from: jest.fn().mockImplementation(() => chain),
+    select: jest.fn().mockImplementation(() => chain),
+    eq: jest.fn().mockImplementation(() => chain),
+    single: jest.fn().mockImplementation(() => Promise.resolve({ data: { id: '32e0e809-c1c4-4405-913f-135c8a2d6626', current_repid: 1000 }, error: null })),
+    insert: jest.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
+  };
+  return {
+    db: chain
+  };
+});
+
 describe('Security Fixes — Phase 0.5', () => {
+  const originalApiKeys = process.env.REPID_API_KEYS;
+
+  beforeAll(() => {
+    process.env.REPID_API_KEYS = 'test-key-123:pro';
+  });
+
+  afterAll(() => {
+    process.env.REPID_API_KEYS = originalApiKeys;
+  });
+
   beforeEach(() => {
     _testHelpers().resetCache();
   });

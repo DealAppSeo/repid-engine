@@ -1,6 +1,6 @@
 
-import { runScoreEvent } from '../src/scoring/pipeline';
-import { db } from '../src/db';
+import { runScoreEvent } from '../../src/scoring/pipeline';
+import { db } from '../../src/db';
 import crypto from 'crypto';
 
 describe('ZKP Proof Orchestration Smoke Test', () => {
