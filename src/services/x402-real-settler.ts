@@ -44,7 +44,7 @@ export async function settleX402Payment(
       return { settlement_source: 'pending_funding', error: 'MOCK_FACILITATOR is false' };
     }
 
-    if (process.env.MOCK_FACILITATOR !== 'false') {
+    if (process.env.MOCK_FACILITATOR === 'true') {
       // 1. Amount Governor check
       if (amountUSDC > 1.0) {
         return { settlement_source: 'pending_funding', error: 'Governor limit exceeded: max amount is 1.0 USDC' };
