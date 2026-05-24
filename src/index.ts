@@ -12,6 +12,7 @@ import hashkeyRouter from './routes/hashkey';
 import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
+import halEvaluateRouter from './routes/hal-evaluate';
 import v1Router from './routes/v1';
 import agentsExternalRouter from './routes/agents-external';
 import agentsExternalScoreRouter from './routes/agents-external-score';
@@ -155,6 +156,8 @@ app.use((req, res, next) => {
   // Phase 2.10: /api/v1/agent/process-contracts carries buyer payload content
   // (free-form prose/code) processed by PCP/judge; downstream writes parameterized.
   if (req.path === '/api/v1/agent/process-contracts') return next();
+  // Phase 2: HAL evaluation payload accepts free-form text that may contain SQL keywords or semicolons
+  if (req.path === '/api/v1/hal/evaluate') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -179,6 +182,7 @@ app.use((req, res, next) => {
 app.use('/api/v1/telegram', telegramRouter);
 app.use('/api/v1/hal-benchmark', halTestRouter);
 app.use('/api/v1/audit', auditRouter);
+app.use('/api/v1/hal', halEvaluateRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 app.use('/', discoveryRouter);
