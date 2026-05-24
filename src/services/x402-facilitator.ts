@@ -3,10 +3,11 @@ import { ZkpRepIdAttestation } from './repid-attestation';
 import { db } from '../db';
 import { ethers } from 'ethers';
 import { resolveAndVerifyDomain } from './x402-outbound-client';
+import { getActiveNetwork } from '../config/network';
 
 export interface PaymentRequirements {
   scheme: 'exact';
-  network: 'base-sepolia';
+  network: string;
   maxAmountRequired: string;
   asset: string;
   payTo: string;
@@ -32,22 +33,20 @@ export interface SettleResult {
   payer: string;
 }
 
-const FACILITATOR_URL = "https://x402.org/facilitator";
-const USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
-
 export class X402Facilitator {
   buildPaymentRequirements(opts: {
     resource: string,
     payTo: string,
     priceUsdc: string,
-    network: "base-sepolia",
+    network?: string,
     description?: string
   }): PaymentRequirements[] {
+    const netConfig = getActiveNetwork();
     return [{
       scheme: "exact",
-      network: "base-sepolia",
+      network: netConfig.x402.networkParam,
       maxAmountRequired: opts.priceUsdc,
-      asset: USDC_BASE_SEPOLIA,
+      asset: netConfig.contracts.usdc,
       payTo: opts.payTo,
       resource: opts.resource,
       mimeType: "application/json",
@@ -85,12 +84,9 @@ export class X402Facilitator {
         }
       }
 
-      const networkToChainId: Record<string, number> = {
-        'base-sepolia': 84532,
-        'base': 8453
-      };
-      const chainId = networkToChainId[reqObj.network] || 84532;
-      const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+      const netConfig = getActiveNetwork();
+      const chainId = netConfig.chainId;
+      const rpcUrl = netConfig.rpcUrl;
       const provider = new ethers.JsonRpcProvider(rpcUrl);
 
       let name = "USDC";
@@ -103,7 +99,7 @@ export class X402Facilitator {
         console.error(`[x402-facilitator] Error resolving domain for ${reqObj.asset}:`, err);
       }
 
-      const response = await fetch(`${FACILITATOR_URL}/verify`, {
+      const response = await fetch(`${netConfig.x402.facilitatorUrl}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -139,12 +135,12 @@ export class X402Facilitator {
         return { valid: false, payer: '', reason: `Facilitator error: ${response.status} ${text}` };
       }
 
-       const data = await response.json() as any;
-       return {
-         valid: data.valid !== undefined ? data.valid : data.isValid,
-         payer: data.payer,
-         reason: data.reason
-       };
+      const data = await response.json() as any;
+      return {
+        valid: data.valid !== undefined ? data.valid : data.isValid,
+        payer: data.payer,
+        reason: data.reason
+      };
     } catch (e: any) {
       return { valid: false, payer: '', reason: e.message };
     }
@@ -180,12 +176,9 @@ export class X402Facilitator {
         }
       }
 
-      const networkToChainId: Record<string, number> = {
-        'base-sepolia': 84532,
-        'base': 8453
-      };
-      const chainId = networkToChainId[reqObj.network] || 84532;
-      const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+      const netConfig = getActiveNetwork();
+      const chainId = netConfig.chainId;
+      const rpcUrl = netConfig.rpcUrl;
       const provider = new ethers.JsonRpcProvider(rpcUrl);
 
       let name = "USDC";
@@ -198,7 +191,7 @@ export class X402Facilitator {
         console.error(`[x402-facilitator] Error resolving domain for ${reqObj.asset}:`, err);
       }
 
-      const response = await fetch(`${FACILITATOR_URL}/settle`, {
+      const response = await fetch(`${netConfig.x402.facilitatorUrl}/settle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
