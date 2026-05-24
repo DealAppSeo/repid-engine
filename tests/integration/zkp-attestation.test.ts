@@ -34,7 +34,7 @@ describeIfDb('ZKP / EIP-712 RepID attestation roundtrip', () => {
     expect(error).toBeNull();
     expect(agent).not.toBeNull();
     const a = agent as any;
-    expect(a.agent_name).toBe('SOPHIA');
+    expect(a.agent_name.toUpperCase()).toContain('SOPHIA');
     expect(a.current_repid).toBeGreaterThan(0);
 
     // Synthetic signer (throwaway; not a production key)

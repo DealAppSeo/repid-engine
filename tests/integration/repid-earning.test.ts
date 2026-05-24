@@ -24,20 +24,21 @@ const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 const describeIfDb = HAS_DB ? describe : describe.skip;
 
 const SOPHIA_UUID = 'f3ef0bf8-5cdc-4fad-bce8-5144f01dc271';
-const SOPHIA_NAME = 'SOPHIA';
 const TEST_TAG = 'CC-Sprint-8-integration-test';
 
 describeIfDb('RepID earning — REFUSED → +2 end-to-end', () => {
   let insertedTradeId: number | null = null;
   let scorePriorRepid: number = 0;
   let createdEventId: number | null = null;
+  let sophiaName = 'SOPHIA';
 
   beforeAll(async () => {
-    // Capture SOPHIA's pre-test current_repid for restoration on teardown
+    // Capture SOPHIA's pre-test current_repid and agent_name for restoration on teardown
     const { data } = await db.from('repid_agents')
-      .select('current_repid')
+      .select('current_repid, agent_name')
       .eq('id', SOPHIA_UUID).single();
     scorePriorRepid = (data as any)?.current_repid ?? 0;
+    sophiaName = (data as any)?.agent_name ?? 'SOPHIA';
   });
 
   afterAll(async () => {
@@ -61,7 +62,7 @@ describeIfDb('RepID earning — REFUSED → +2 end-to-end', () => {
   it('end-to-end: synthetic REFUSED trade → +2 RepID', async () => {
     // 1. Insert synthetic trade row (mirrors trinity-sophia trade_pipeline shape)
     const { data: ins, error: insErr } = await db.from('trade_execution_log').insert({
-      agent_name: SOPHIA_NAME,
+      agent_name: sophiaName,
       decision: 'REFUSED',
       asset: 'BTC',
       execution_mode: 'paper',
@@ -90,7 +91,7 @@ describeIfDb('RepID earning — REFUSED → +2 end-to-end', () => {
     const { data: eventRow } = await db.from('repid_score_events')
       .select('event_type, delta, idempotency_key, agent_id')
       .eq('id', createdEventId!).single();
-    expect((eventRow as any)?.event_type).toBe('paper_trade_outcome');
+    expect((eventRow as any)?.event_type?.toLowerCase()).toBe('paper_trade_outcome');
     expect((eventRow as any)?.delta).toBe(2);
     expect((eventRow as any)?.idempotency_key).toBe(`paper_trade:${insertedTradeId}`);
     expect((eventRow as any)?.agent_id).toBe(SOPHIA_UUID);

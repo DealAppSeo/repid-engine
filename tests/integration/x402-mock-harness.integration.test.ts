@@ -48,8 +48,8 @@ describe('X402 Mock Harness Extended Scenarios', () => {
     const betId = uuidv4();
     await settleX402Payment('agent1', 'invalid_agent', 0.1, betId);
     
-    const { data } = await db.from('x402_settlement_failures').select('settlement_attempt_count').order('created_at', { ascending: false }).limit(1).single();
-    expect(data?.settlement_attempt_count).toBeGreaterThan(0);
+    const { data } = await db.from('x402_settlement_failures').select('attempt_count').order('created_at', { ascending: false }).limit(1).single();
+    expect(data?.attempt_count).toBeGreaterThan(0);
   });
 
   // 6. Non-existent agent ID throws not-found error.
