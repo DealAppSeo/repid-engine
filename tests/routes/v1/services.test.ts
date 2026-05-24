@@ -14,7 +14,9 @@ jest.mock('../../../src/db', () => ({
     limit: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     single: jest.fn().mockResolvedValue({ data: { id: 'test-id' }, error: null }),
-    maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id' }, error: null })
+    maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id' }, error: null }),
+    rpc: jest.fn().mockResolvedValue({ data: null, error: null }),
+    upsert: jest.fn().mockReturnThis()
   }
 }));
 
