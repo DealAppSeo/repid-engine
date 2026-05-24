@@ -3,17 +3,26 @@ import { db } from '../../src/db';
 import * as pcp from '../../src/services/pcp-validator';
 import * as judge from '../../src/services/adversarial-judge';
 
-jest.mock('../../src/db', () => ({
-  db: {
-    from: jest.fn().mockReturnThis(),
-    select: jest.fn().mockReturnThis(),
-    eq: jest.fn().mockReturnThis(),
-    order: jest.fn().mockReturnThis(),
-    limit: jest.fn().mockReturnThis(),
-    update: jest.fn().mockReturnThis(),
-    maybeSingle: jest.fn().mockResolvedValue({ data: null })
-  }
-}));
+jest.mock('../../src/db', () => {
+  const chain: any = {
+    from: jest.fn().mockImplementation(() => chain),
+    select: jest.fn().mockImplementation(() => chain),
+    eq: jest.fn().mockImplementation(() => chain),
+    order: jest.fn().mockImplementation(() => chain),
+    limit: jest.fn().mockImplementation(() => chain),
+    update: jest.fn().mockImplementation(() => chain),
+    insert: jest.fn().mockImplementation(() => chain),
+    upsert: jest.fn().mockImplementation(() => chain),
+    single: jest.fn().mockImplementation(() => Promise.resolve({ data: { id: 'test-agent', current_repid: 1000 }, error: null })),
+    maybeSingle: jest.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
+    rpc: jest.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
+    then: jest.fn().mockImplementation((onfulfilled) => Promise.resolve({ data: null, error: null }).then(onfulfilled))
+  };
+
+  return {
+    db: chain
+  };
+});
 
 jest.mock('../../src/services/pcp-validator', () => ({
   runPCP: jest.fn().mockResolvedValue({ confidence: 0.8 })
