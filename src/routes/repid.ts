@@ -103,8 +103,8 @@ repidPublicRouter.get('/repid/proof/:job_id', async (req: Request, res: Response
   return res.json(data);
 });
 
-// POST /api/v1/prove-repid — generate a ZKP RepID proof (no auth required)
-repidPublicRouter.post('/prove-repid', async (req: Request, res: Response) => {
+// POST /api/v1/prove-repid — generate a ZKP RepID proof (auth required)
+repidAdminRouter.post('/prove-repid', async (req: Request, res: Response) => {
   const { agent_id, requester_pubkey, requested_tier } = req.body;
 
   if (!agent_id || !requester_pubkey || !requested_tier) {
