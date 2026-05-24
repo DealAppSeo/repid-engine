@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../../services/validation-repid-delta';
 import { x402Facilitator } from '../../services/x402-facilitator';
+import { x402Metrics } from '../../observability/x402-metrics';
 
 const router = Router();
 
@@ -46,6 +47,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.post('/:id/escrow', async (req: Request, res: Response) => {
   const contractId = req.params.id;
+  x402Metrics.increment('escrow.attempt');
 
   // 1. Fetch contract
   const { data: contract, error: getErr } = await db.from('service_contracts')
@@ -54,6 +56,7 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     .maybeSingle();
 
   if (getErr || !contract) {
+    x402Metrics.increment('escrow.error.400');
     return res.status(404).json({ error: 'contract_not_found' });
   }
 
@@ -66,7 +69,11 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
       .update({ status: 'escrowed', escrowed_at: new Date().toISOString() })
       .eq('id', contractId)
       .select().single();
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      x402Metrics.increment('escrow.error.400');
+      return res.status(400).json({ error: error.message });
+    }
+    x402Metrics.increment('escrow.success');
     return res.json(data);
   }
 
@@ -89,13 +96,16 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
       .select().single();
     
     if (updateErr) {
+      x402Metrics.increment('escrow.error.500');
       return res.status(500).json({ error: 'contract_update_failed', message: updateErr.message });
     }
+    x402Metrics.increment('escrow.success');
     return res.json(updatedContract);
   }
 
   // Enforcement is ON: check contract status
   if (contract.status !== 'pending') {
+    x402Metrics.increment('escrow.error.400');
     return res.status(409).json({ error: 'wrong_status', current: contract.status });
   }
 
@@ -118,6 +128,7 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   // 3. Parse X-PAYMENT header
   const xPaymentHeader = req.header('X-PAYMENT');
   if (!xPaymentHeader) {
+    x402Metrics.increment('escrow.error.402');
     return res.status(402).json({
       x402Version: 1,
       accepts: requirements,
@@ -132,9 +143,11 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     .maybeSingle();
 
   if (dupErr) {
+    x402Metrics.increment('escrow.error.500');
     return res.status(500).json({ error: 'database_query_failed', message: dupErr.message });
   }
   if (duplicatePayment) {
+    x402Metrics.increment('escrow.error.400');
     return res.status(400).json({ error: 'payment_already_used', message: 'This payment header has already been settled.' });
   }
 
@@ -146,6 +159,7 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   if (!isSimulated) {
     const verifyResult = await x402Facilitator.verifyPayment(xPaymentHeader, requirements);
     if (!verifyResult.valid) {
+      x402Metrics.increment('escrow.error.402');
       return res.status(402).json({
         x402Version: 1,
         accepts: requirements,
@@ -154,6 +168,11 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
       });
     }
     payerAddress = verifyResult.payer;
+  } else {
+    // Simulated mode verify instrumentation
+    x402Metrics.increment('facilitator.verify.attempt');
+    x402Metrics.increment('facilitator.verify.simulated');
+    x402Metrics.increment('facilitator.verify.success');
   }
 
   if (!isSimulated) {
@@ -169,11 +188,15 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
         payment_requirements: requirements,
         facilitator_response: { error: e.message }
       });
+      x402Metrics.increment('escrow.error.500');
       return res.status(500).json({ error: 'settlement_failed', message: e.message });
     }
   } else {
     // Simulated mode: accept header as-is
     txHash = xPaymentHeader; // Use header as mock tx_hash
+    x402Metrics.increment('facilitator.settle.attempt');
+    x402Metrics.increment('facilitator.settle.simulated');
+    x402Metrics.increment('facilitator.settle.success');
   }
 
   // 5. Record settlement in x402_settlements
@@ -215,12 +238,14 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
           .select().single();
 
         if (!updateErr && updatedContract) {
+          x402Metrics.increment('escrow.success');
           return res.json(updatedContract);
         }
       }
     }
 
     console.error('[escrow-x402] Failed to insert x402_settlement:', settleInsertErr.message);
+    x402Metrics.increment('escrow.error.500');
     return res.status(500).json({ error: 'database_insert_failed', message: settleInsertErr.message });
   }
 
@@ -237,9 +262,11 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
 
   if (updateErr) {
     console.error('[escrow-x402] Failed to update service contract:', updateErr.message);
+    x402Metrics.increment('escrow.error.500');
     return res.status(500).json({ error: 'contract_update_failed', message: updateErr.message });
   }
 
+  x402Metrics.increment('escrow.success');
   res.json(updatedContract);
 });
 
