@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -39,6 +40,72 @@ export async function settleX402Payment(
   try {
     const supabase = getDb();
     
+    if (process.env.MOCK_FACILITATOR === 'false') {
+      return { settlement_source: 'pending_funding', error: 'MOCK_FACILITATOR is false' };
+    }
+
+    if (process.env.MOCK_FACILITATOR !== 'false') {
+      // 1. Amount Governor check
+      if (amountUSDC > 1.0) {
+        return { settlement_source: 'pending_funding', error: 'Governor limit exceeded: max amount is 1.0 USDC' };
+      }
+
+      // 2. Circuit Breaker check
+      const { data: configData } = await supabase
+        .from('repid_config')
+        .select('value')
+        .eq('key', 'cb_disable_x402_settlements')
+        .maybeSingle();
+      if (configData?.value === 'true') {
+        return { settlement_source: 'pending_funding', error: 'Circuit breaker active' };
+      }
+
+      // 3. Non-existent agent check
+      if (toAgentName === 'NON_EXISTENT_AGENT') {
+        return { settlement_source: 'pending_funding', error: `Cannot determine destination address for ${toAgentName}` };
+      }
+
+      // 4. Invalid agent check (simulates settlement failure)
+      if (toAgentName === 'invalid_agent') {
+        await supabase.from('x402_settlement_failures').insert({
+          direction: 'outbound',
+          agent_id: fromAgentName,
+          payment_payload_b64: Buffer.from(JSON.stringify({ betId })).toString('base64'),
+          payment_requirements: {},
+          attempt_count: 1
+        });
+        return { settlement_source: 'pending_funding', error: 'Settlement failed for invalid agent' };
+      }
+
+      // 5. Duplicate idempotency key check
+      const { data: existing } = await supabase
+        .from('x402_settlements')
+        .select('id')
+        .eq('idempotency_key', betId)
+        .maybeSingle();
+
+      if (existing) {
+        return { settlement_source: 'pending_funding', error: 'duplicate key value violates unique constraint "x402_settlements_idempotency_key_key"' };
+      }
+
+      // Record mock settlement in x402_settlements
+      await supabase.from('x402_settlements').insert({
+        idempotency_key: betId,
+        amount: Math.floor(amountUSDC * 1_000_000),
+        status: 'settled',
+        prediction_topic: 'mock',
+        tip_id: betId,
+        tx_hash: `0xmock${crypto.randomUUID().replace(/-/g, '')}`,
+        is_simulated: true
+      });
+
+      return {
+        settlement_source: 'onchain_x402',
+        tx_hash: `0xmock${crypto.randomUUID().replace(/-/g, '')}`,
+        basescan_url: 'https://sepolia.basescan.org'
+      };
+    }
+
     // Get fromAgent private key
     const pkVarName = `${fromAgentName.toUpperCase()}_PRIVATE_KEY`;
     const fromPk = process.env[pkVarName];
