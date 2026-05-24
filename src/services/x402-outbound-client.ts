@@ -239,7 +239,6 @@ export class X402OutboundClient {
         }
       }
       
-      const netConfig = getActiveNetwork();
       const chainId = netConfig.chainId;
       const rpcUrl = netConfig.rpcUrl;
       const provider = new ethers.JsonRpcProvider(rpcUrl);
