@@ -1,0 +1,81 @@
+-- RepID economic-loop dashboard queries — Sean-runnable in Supabase SQL editor.
+-- CC1, 2026-05-24. Two groups: (A) live queries against source tables (work today, no new table);
+-- (B) snapshot-history queries (need repid_telemetry_snapshots, migration 001).
+
+-- ════════════════════════════ A. LIVE (work now) ════════════════════════════
+
+-- A1. Operational health — active agents by tier
+SELECT tier, COUNT(*) AS n
+FROM repid_agents WHERE lifecycle_status = 'active'
+GROUP BY tier ORDER BY n DESC;
+
+-- A2. Queue depth (pending work)
+SELECT
+  (SELECT COUNT(*) FROM service_contracts WHERE status = 'pending')   AS pending_contracts,
+  (SELECT COUNT(*) FROM service_contracts WHERE status = 'escrowed')  AS escrowed_contracts,
+  (SELECT COUNT(*) FROM repid_events
+     WHERE event_type = 'service_fulfilled_settled' AND processed_at IS NULL) AS pending_bridge_writes;
+
+-- A3. Economic flow — real contract settlements + on-chain attestations
+SELECT
+  (SELECT COUNT(*) FROM x402_settlements WHERE is_simulated = false AND idempotency_key IS NOT NULL) AS real_contract_settlements,
+  (SELECT COUNT(*) FROM x402_settlements WHERE is_simulated = false AND idempotency_key IS NOT NULL AND tx_hash IS NOT NULL) AS with_tx_hash,
+  (SELECT COUNT(*) FROM erc8004_reputation_writes WHERE tx_hash !~* '^0x(mock|abc|0{8})') AS real_onchain_attestations,
+  (SELECT MAX(id) FROM erc8004_reputation_writes) AS max_write_id;
+
+-- A4. Settlement velocity (last 7 days, hourly, real only)
+SELECT date_trunc('hour', created_at) AS hour, COUNT(*) AS settlements
+FROM x402_settlements
+WHERE is_simulated = false AND created_at > NOW() - INTERVAL '7 days'
+GROUP BY 1 ORDER BY 1 DESC;
+
+-- A5. HAL behavior — veto rate (last 7 days)
+SELECT hal_decision, COUNT(*) AS n,
+       ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct
+FROM repid_score_events
+WHERE hal_decision IS NOT NULL AND created_at > NOW() - INTERVAL '7 days'
+GROUP BY hal_decision;
+
+-- A6. Swarm health (existing view — adapt, don't duplicate)
+SELECT * FROM trinity_swarm_health;
+
+-- ─── Audit-trail integrity monitors (invariants — investigate any non-green) ───
+
+-- A7. GAP A monitor — real settlements missing on-chain tx_hash (target: 0 after Gemini H1)
+SELECT COUNT(*) AS settlements_missing_tx_hash
+FROM x402_settlements
+WHERE is_simulated = false AND idempotency_key IS NOT NULL AND tx_hash IS NULL;
+
+-- A8. INVARIANT — simulated→on-chain leaks (MUST be 0)
+SELECT COUNT(*) AS sim_to_onchain_leaks
+FROM repid_events
+WHERE event_type = 'service_fulfilled_settled'
+  AND lower(COALESCE(event_data->>'is_simulated','false')) IN ('true','1','yes')
+  AND COALESCE(event_data->>'reputation_tx_hash','') !~* '^0x(mock|abc|0{8})'
+  AND COALESCE(event_data->>'reputation_tx_hash','') <> '';
+
+-- A9. Duplicate real fire per contract (MUST be empty — double-fulfill signal)
+SELECT idempotency_key, COUNT(*)
+FROM x402_settlements
+WHERE is_simulated = false AND idempotency_key IS NOT NULL
+GROUP BY idempotency_key HAVING COUNT(*) > 1;
+
+-- ════════════════════════ B. SNAPSHOT HISTORY (after migration 001) ═══════════
+
+-- B1. Latest snapshot per family
+SELECT metric_family, metric_name, metric_value, snapshot_at
+FROM repid_telemetry_snapshots t
+WHERE snapshot_at = (SELECT MAX(snapshot_at) FROM repid_telemetry_snapshots t2 WHERE t2.metric_family = t.metric_family)
+ORDER BY metric_family, metric_name;
+
+-- B2. A single metric over time (e.g. veto_rate trend)
+SELECT snapshot_at, metric_value
+FROM repid_telemetry_snapshots
+WHERE metric_name = 'veto_rate_recent'
+ORDER BY snapshot_at DESC LIMIT 50;
+
+-- B3. GAP-A remediation trend (settlements_missing_tx_hash should trend to 0)
+SELECT snapshot_at, metric_value->>'value' AS missing_tx_hash
+FROM repid_telemetry_snapshots
+WHERE metric_name = 'settlements_missing_tx_hash'
+ORDER BY snapshot_at DESC LIMIT 50;
