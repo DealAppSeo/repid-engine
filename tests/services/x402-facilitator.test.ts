@@ -51,19 +51,27 @@ describe('X402Facilitator Envelope Shape Tests', () => {
     // Validate SHAPE C compatibility
     expect(lastRequestBody).toBeDefined();
     expect(lastRequestBody.x402Version).toBe(1);
-    expect(lastRequestBody.scheme).toBe('exact');
-    expect(lastRequestBody.network).toBe('base-sepolia');
-    expect(lastRequestBody.paymentRequirements).not.toBeInstanceOf(Array);
-    expect(lastRequestBody.paymentRequirements).toEqual(mockRequirements);
-    expect(lastRequestBody.payload).toBeDefined();
-    expect(lastRequestBody.payload.signature).toBe('0xsignaturestring');
-    expect(lastRequestBody.payload.authorization).toEqual({
+    expect(lastRequestBody.paymentPayload).toBeDefined();
+    expect(lastRequestBody.paymentPayload.x402Version).toBe(1);
+    expect(lastRequestBody.paymentPayload.scheme).toBe('exact');
+    expect(lastRequestBody.paymentPayload.network).toBe('base-sepolia');
+    expect(lastRequestBody.paymentPayload.payload).toBeDefined();
+    expect(lastRequestBody.paymentPayload.payload.signature).toBe('0xsignaturestring');
+    expect(lastRequestBody.paymentPayload.payload.authorization).toEqual({
       from: sampleFlatPayment.from,
       to: sampleFlatPayment.to,
       value: sampleFlatPayment.value,
       validAfter: 0,
       validBefore: 1716500000,
       nonce: sampleFlatPayment.nonce
+    });
+    expect(lastRequestBody.paymentRequirements).not.toBeInstanceOf(Array);
+    expect(lastRequestBody.paymentRequirements).toEqual({
+      ...mockRequirements,
+      extra: {
+        name: 'USDC',
+        version: '2'
+      }
     });
   });
 
@@ -83,9 +91,21 @@ describe('X402Facilitator Envelope Shape Tests', () => {
     // Validate SHAPE C compatibility
     expect(lastRequestBody).toBeDefined();
     expect(lastRequestBody.x402Version).toBe(1);
+    expect(lastRequestBody.paymentPayload).toBeDefined();
+    expect(lastRequestBody.paymentPayload.x402Version).toBe(1);
+    expect(lastRequestBody.paymentPayload.scheme).toBe('exact');
+    expect(lastRequestBody.paymentPayload.network).toBe('base-sepolia');
+    expect(lastRequestBody.paymentPayload.payload).toBeDefined();
+    expect(lastRequestBody.paymentPayload.payload.signature).toBe('0xsignaturestring');
+    expect(lastRequestBody.paymentPayload.payload.authorization.validBefore).toBe(1716500000);
     expect(lastRequestBody.paymentRequirements).not.toBeInstanceOf(Array);
-    expect(lastRequestBody.payload.signature).toBe('0xsignaturestring');
-    expect(lastRequestBody.payload.authorization.validBefore).toBe(1716500000);
+    expect(lastRequestBody.paymentRequirements).toEqual({
+      ...mockRequirements,
+      extra: {
+        name: 'USDC',
+        version: '2'
+      }
+    });
   });
 
   test('constructs EIP-712 signature from v,r,s if txHash is missing', async () => {
@@ -139,6 +159,6 @@ describe('X402Facilitator Envelope Shape Tests', () => {
     await x402Facilitator.verifyPayment(headerB64, mockRequirements);
 
     expect(lastRequestBody).toBeDefined();
-    expect(lastRequestBody.payload.signature).toBe(signature);
+    expect(lastRequestBody.paymentPayload.payload.signature).toBe(signature);
   });
 });
