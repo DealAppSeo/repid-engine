@@ -10,7 +10,7 @@
  * Hermetic: only touches repid_config rows we own; restores state on teardown.
  */
 
-import { breaker, flipBreaker, isTripped, readAllBreakers, BreakerKey } from '../src/middleware/circuit-breaker';
+import { breaker, flipBreaker, isTripped, readAllBreakers, BreakerKey } from '../../src/middleware/circuit-breaker';
 
 const ALL_KEYS: BreakerKey[] = [
   'cb_disable_x402_settlements',

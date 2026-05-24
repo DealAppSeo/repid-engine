@@ -1,6 +1,10 @@
 import { routeRequest, RouteRequest } from '../../src/providers/router';
 import * as health from '../../src/providers/health';
 
+jest.mock('../../src/billing/caps', () => ({
+  checkCap: jest.fn().mockResolvedValue({ allowed: true, monthly_limit: 0, current_spent: 0, hard_disabled: false })
+}));
+
 describe('Router', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -16,12 +20,13 @@ describe('Router', () => {
   });
 
   it('groq unhealthy picks gemini', async () => {
-    jest.spyOn(health, 'isHealthy').mockImplementation(name => name !== 'groq');
+    jest.spyOn(health, 'isHealthy').mockImplementation(name => name !== 'groq' && name !== 'cerebras');
     const req: RouteRequest = { prompt: 'test', tier_preference: 'tier0_first' };
     const { adapter, decision } = await routeRequest(req);
     expect(adapter?.name).toBe('gemini');
     expect(decision.reason).toBe('fallback_after_failure');
     expect(decision.tried).toContain('groq');
+    expect(decision.tried).toContain('cerebras');
   });
 
   it('all free exhausted falls through to tier1 if keys present', async () => {

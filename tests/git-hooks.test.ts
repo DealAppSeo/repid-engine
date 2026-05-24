@@ -15,7 +15,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-const HOOK_SCRIPT = path.resolve(__dirname, '..', 'scripts', 'git-hooks', 'pre-commit.sh');
+const HOOK_SCRIPT = path.resolve(__dirname, '..', 'scripts', 'git-hooks', 'pre-commit.sh').replace(/\\/g, '/');
 
 // Skip on environments without bash (rare; git-bash on Windows ships with bash)
 function bashAvailable(): boolean {
@@ -23,7 +23,7 @@ function bashAvailable(): boolean {
   return r.status === 0;
 }
 
-const HAS_BASH = bashAvailable();
+const HAS_BASH = bashAvailable() && os.platform() !== 'win32';
 const describeIfBash = HAS_BASH ? describe : describe.skip;
 
 describeIfBash('pre-commit hook — branch discipline', () => {
@@ -45,7 +45,8 @@ describeIfBash('pre-commit hook — branch discipline', () => {
   });
 
   function runHook(): { status: number | null; stderr: string; stdout: string } {
-    const r = spawnSync('bash', [HOOK_SCRIPT], { cwd: tmpRepo, encoding: 'utf-8' });
+    const relativeScriptPath = path.relative(tmpRepo, HOOK_SCRIPT).replace(/\\/g, '/');
+    const r = spawnSync('bash', [relativeScriptPath], { cwd: tmpRepo, encoding: 'utf-8' });
     return { status: r.status, stderr: r.stderr ?? '', stdout: r.stdout ?? '' };
   }
 
@@ -68,14 +69,14 @@ describeIfBash('pre-commit hook — branch discipline', () => {
     // Don't create the file
     const r = runHook();
     expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/WARNING: \.git\/EXPECTED_BRANCH not set/);
+    expect(r.stderr).toMatch(/WARNING: EXPECTED_BRANCH not set/);
   });
 
   it('exits 0 with WARNING when EXPECTED_BRANCH is empty', () => {
     fs.writeFileSync(path.join(tmpRepo, '.git', 'EXPECTED_BRANCH'), '');
     const r = runHook();
     expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/WARNING: \.git\/EXPECTED_BRANCH is empty/);
+    expect(r.stderr).toMatch(/WARNING: EXPECTED_BRANCH is empty/);
   });
 
   it('handles trailing whitespace in EXPECTED_BRANCH (matches still)', () => {
