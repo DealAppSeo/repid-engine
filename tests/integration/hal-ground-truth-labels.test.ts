@@ -13,7 +13,7 @@
  * Skipped if SUPABASE env unset.
  */
 
-import { db } from '../src/db';
+import { db } from '../../src/db';
 
 const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 const describeIfDb = HAS_DB ? describe : describe.skip;
