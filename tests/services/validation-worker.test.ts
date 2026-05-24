@@ -31,6 +31,26 @@ jest.mock('../../src/scoring/pipeline', () => ({
 }));
 
 describe('Phase 2.6: Validation Worker End-to-End Suites', () => {
+  let envBackup: any = {};
+
+  beforeAll(() => {
+    const keys = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'DEEPSEEK_API_KEY', 'CEREBRAS_API_KEY'];
+    for (const k of keys) {
+      envBackup[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterAll(() => {
+    for (const k of Object.keys(envBackup)) {
+      if (envBackup[k] !== undefined) {
+        process.env[k] = envBackup[k];
+      } else {
+        delete process.env[k];
+      }
+    }
+  });
+
   beforeEach(() => {
     fetchMock.mockReset();
     jest.clearAllMocks();
@@ -74,6 +94,7 @@ describe('Phase 2.6: Validation Worker End-to-End Suites', () => {
     it('should pick OpenAI if claimer used Anthropic', async () => {
       process.env.OPENAI_API_KEY = 'fake-key';
       fetchMock.mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ choices: [{ message: { content: '{"verdict": "APPROVE", "confidence": 0.9, "critique": "ok"}' } }] })
       });
 
