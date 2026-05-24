@@ -192,7 +192,8 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     is_simulated: isSimulated,
     delivered_at: new Date().toISOString(),
     idempotency_key: contractId,
-    settlement_attempt_count: 1
+    settlement_attempt_count: 1,
+    tx_hash: txHash
   }).select('id').single();
 
   if (settleInsertErr) {
@@ -229,7 +230,8 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     .update({
       status: 'escrowed',
       x402_payment_id: settlement.id,
-      escrowed_at: new Date().toISOString()
+      escrowed_at: new Date().toISOString(),
+      settled_at: new Date().toISOString()
     })
     .eq('id', contractId)
     .select().single();
