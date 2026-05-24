@@ -14,6 +14,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import v1Router from './routes/v1';
+import launchStatusRouter from './routes/v1/launch-status';
 import agentsExternalRouter from './routes/agents-external';
 import agentsExternalScoreRouter from './routes/agents-external-score';
 import keysRouter from './routes/key-management';
@@ -159,6 +160,11 @@ app.use((req, res, next) => {
   if (req.path === '/api/v1/agent/process-contracts') return next();
   // Phase 2: HAL evaluation payload accepts free-form text that may contain SQL keywords or semicolons
   if (req.path === '/api/v1/hal/evaluate') return next();
+  // CC1 2026-05-25: /repid/verify + /prove-repid carry base64url signatures whose
+  // alphabet includes '-', so a valid signature can contain '--' and the blanket SQL
+  // scan intermittently 400s legitimate signed requests (also a flaky-test source).
+  // Verification is signature-based and downstream Supabase writes are parameterized.
+  if (req.path === '/api/v1/repid/verify' || req.path === '/api/v1/prove-repid') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -186,6 +192,9 @@ app.use('/api/v1/audit', auditRouter);
 app.use('/api/v1/hal', halEvaluateRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
+// CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
+// exact paths from the authed /api/v1/status/* observability + /api/v1/receipts/:id).
+app.use('/api/v1', launchStatusRouter);
 app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
