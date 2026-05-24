@@ -206,6 +206,11 @@ export function verifyRepIDAttestation(
     return { valid: false, reason: `unsupported version: ${payload.version}` };
   }
 
+  const km = loadOrGenerateSigningKey();
+  if (signing_pubkey.trim() !== km.publicKeyB64) {
+    return { valid: false, reason: 'signing_pubkey does not match authoritative signing key' };
+  }
+
   let pubKey: crypto.KeyObject;
   try {
     pubKey = publicKeyFromRawB64(signing_pubkey);

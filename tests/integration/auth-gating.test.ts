@@ -24,13 +24,13 @@ describe('Auth gating', () => {
       expect(res.status).toBe(200);
     });
 
-    it('POST /api/v1/prove-repid without body returns 400 (not 401)', async () => {
+    it('POST /api/v1/prove-repid without body/auth returns 401', async () => {
       const res = await request(app)
         .post('/api/v1/prove-repid')
         .set('Content-Type', 'application/json')
         .send({});
-      // Expected: 400 (missing fields) — NOT 401 (auth required)
-      expect([400, 404]).toContain(res.status);
+      // Expected: 401 (auth required)
+      expect(res.status).toBe(401);
     });
   });
 
