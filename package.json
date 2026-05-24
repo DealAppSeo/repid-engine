@@ -11,6 +11,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest --config jest.config.js --forceExit",
+    "test:regression": "jest --config jest.config.js tests/regression",
     "verify:alpaca": "ts-node scripts/verify/alpaca-paper-flow.ts",
     "test:e2e": "jest --config tests/e2e/jest.e2e.config.js --runInBand --forceExit",
     "smoke:hal-external": "ts-node scripts/external-caller-smoke-test.ts",
