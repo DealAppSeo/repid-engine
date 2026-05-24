@@ -160,6 +160,11 @@ app.use((req, res, next) => {
   if (req.path === '/api/v1/agent/process-contracts') return next();
   // Phase 2: HAL evaluation payload accepts free-form text that may contain SQL keywords or semicolons
   if (req.path === '/api/v1/hal/evaluate') return next();
+  // CC1 2026-05-25: /repid/verify + /prove-repid carry base64url signatures whose
+  // alphabet includes '-', so a valid signature can contain '--' and the blanket SQL
+  // scan intermittently 400s legitimate signed requests (also a flaky-test source).
+  // Verification is signature-based and downstream Supabase writes are parameterized.
+  if (req.path === '/api/v1/repid/verify' || req.path === '/api/v1/prove-repid') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
