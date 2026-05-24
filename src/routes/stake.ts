@@ -5,7 +5,7 @@ import { fractionForRepID } from '../repid-staking/repid-fraction';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || 'https://qnnpjhlxljtqyigedwkb.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || 'dummy-key'
 );
 
 export const stakeRouter = Router();

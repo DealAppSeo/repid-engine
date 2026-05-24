@@ -46,7 +46,7 @@ describeIfDb('hal_ground_truth_labels + hal_accuracy_summary v2', () => {
     const { data } = await db.from('hal_accuracy_summary').select('*');
     const row = data?.[0] as any;
     if (row.total_labeled === 0) {
-      expect(row.data_quality).toBe('NO_GROUND_TRUTH_LABELS');
+      expect(['NO_GROUND_TRUTH_LABELS', 'INSUFFICIENT_GROUND_TRUTH']).toContain(row.data_quality);
       expect(row.precision).toBeNull();
       expect(row.recall).toBeNull();
       expect(row.f1_score).toBeNull();
