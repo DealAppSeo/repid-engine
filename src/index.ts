@@ -14,6 +14,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import v1Router from './routes/v1';
+import launchStatusRouter from './routes/v1/launch-status';
 import agentsExternalRouter from './routes/agents-external';
 import agentsExternalScoreRouter from './routes/agents-external-score';
 import keysRouter from './routes/key-management';
@@ -186,6 +187,9 @@ app.use('/api/v1/audit', auditRouter);
 app.use('/api/v1/hal', halEvaluateRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
+// CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
+// exact paths from the authed /api/v1/status/* observability + /api/v1/receipts/:id).
+app.use('/api/v1', launchStatusRouter);
 app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
