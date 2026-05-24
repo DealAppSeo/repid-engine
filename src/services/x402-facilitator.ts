@@ -2,6 +2,7 @@ import { Request } from 'express';
 import { ZkpRepIdAttestation } from './repid-attestation';
 import { db } from '../db';
 import { ethers } from 'ethers';
+import { resolveAndVerifyDomain } from './x402-outbound-client';
 
 export interface PaymentRequirements {
   scheme: 'exact';
@@ -12,6 +13,10 @@ export interface PaymentRequirements {
   resource: string;
   mimeType: string;
   description?: string;
+  extra?: {
+    name: string;
+    version: string;
+  };
 }
 
 export interface VerifyResult {
@@ -80,25 +85,52 @@ export class X402Facilitator {
         }
       }
 
+      const networkToChainId: Record<string, number> = {
+        'base-sepolia': 84532,
+        'base': 8453
+      };
+      const chainId = networkToChainId[reqObj.network] || 84532;
+      const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+
+      let name = "USDC";
+      let version = "2";
+      try {
+        const resolvedDomain = await resolveAndVerifyDomain(reqObj.asset, chainId, provider);
+        name = resolvedDomain.name;
+        version = resolvedDomain.version;
+      } catch (err) {
+        console.error(`[x402-facilitator] Error resolving domain for ${reqObj.asset}:`, err);
+      }
+
       const response = await fetch(`${FACILITATOR_URL}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           x402Version: 1,
-          scheme: reqObj.scheme,
-          network: reqObj.network,
-          payload: {
-            signature: signature || '',
-            authorization: {
-              from: paymentPayload.from,
-              to: paymentPayload.to,
-              value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
-              validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
-              validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
-              nonce: paymentPayload.nonce
+          paymentPayload: {
+            x402Version: 1,
+            scheme: reqObj.scheme,
+            network: reqObj.network,
+            payload: {
+              signature: signature || '',
+              authorization: {
+                from: paymentPayload.from,
+                to: paymentPayload.to,
+                value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
+                validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
+                validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
+                nonce: paymentPayload.nonce
+              }
             }
           },
-          paymentRequirements: reqObj
+          paymentRequirements: {
+            ...reqObj,
+            extra: {
+              name,
+              version
+            }
+          }
         })
       });
 
@@ -107,12 +139,12 @@ export class X402Facilitator {
         return { valid: false, payer: '', reason: `Facilitator error: ${response.status} ${text}` };
       }
 
-      const data = await response.json() as any;
-      return {
-        valid: data.valid,
-        payer: data.payer,
-        reason: data.reason
-      };
+       const data = await response.json() as any;
+       return {
+         valid: data.valid !== undefined ? data.valid : data.isValid,
+         payer: data.payer,
+         reason: data.reason
+       };
     } catch (e: any) {
       return { valid: false, payer: '', reason: e.message };
     }
@@ -148,25 +180,52 @@ export class X402Facilitator {
         }
       }
 
+      const networkToChainId: Record<string, number> = {
+        'base-sepolia': 84532,
+        'base': 8453
+      };
+      const chainId = networkToChainId[reqObj.network] || 84532;
+      const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+
+      let name = "USDC";
+      let version = "2";
+      try {
+        const resolvedDomain = await resolveAndVerifyDomain(reqObj.asset, chainId, provider);
+        name = resolvedDomain.name;
+        version = resolvedDomain.version;
+      } catch (err) {
+        console.error(`[x402-facilitator] Error resolving domain for ${reqObj.asset}:`, err);
+      }
+
       const response = await fetch(`${FACILITATOR_URL}/settle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           x402Version: 1,
-          scheme: reqObj.scheme,
-          network: reqObj.network,
-          payload: {
-            signature: signature || '',
-            authorization: {
-              from: paymentPayload.from,
-              to: paymentPayload.to,
-              value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
-              validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
-              validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
-              nonce: paymentPayload.nonce
+          paymentPayload: {
+            x402Version: 1,
+            scheme: reqObj.scheme,
+            network: reqObj.network,
+            payload: {
+              signature: signature || '',
+              authorization: {
+                from: paymentPayload.from,
+                to: paymentPayload.to,
+                value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
+                validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
+                validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
+                nonce: paymentPayload.nonce
+              }
             }
           },
-          paymentRequirements: reqObj
+          paymentRequirements: {
+            ...reqObj,
+            extra: {
+              name,
+              version
+            }
+          }
         })
       });
 
