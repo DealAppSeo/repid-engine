@@ -354,6 +354,7 @@ export async function applyServiceFulfilledDeltas(
           event_data: {
             is_simulated: isSimulated,
             tx_hash: null,
+            contract_id: contract.id,
             metadata: {
               contract_id: contract.id,
               x402_payment_id: fullContract.x402_payment_id,
