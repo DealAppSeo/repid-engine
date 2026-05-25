@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
+.env.local
+.env*.local
+.firecrawl/
 *.js.map
 .DS_Store
 .claude/worktrees/
