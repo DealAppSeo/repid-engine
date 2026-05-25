@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
+import { validateAgentApiKey } from '../auth/api-keys';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   const publicPaths = ['/health', '/healthz', '/', '/api/v1/health'];
@@ -71,6 +72,24 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     }
   }
 
+  // API key issuance V0 (2026-05-24): if the env-var allowlist didn't match, fall through to a
+  // DB-issued key (agent_api_keys, hashed). Backward compatible — env keys still win first, and the
+  // DB lookup uses only existing columns (agent_id/scopes), so it works before the tier/rate-limit
+  // migration is applied. DB-issued keys are tagged tier='testnet' until tier wiring lands.
+  let dbAgentId: string | undefined;
+  if (!valid) {
+    try {
+      const dbKey = await validateAgentApiKey(apiKey);
+      if (dbKey) {
+        valid = true;
+        tier = 'testnet';
+        dbAgentId = dbKey.agent_id;
+      }
+    } catch (e) {
+      // DB unreachable → fall through to the 403 below (env path already failed).
+    }
+  }
+
   // Best effort log to Supabase
   const { error } = await db.from('trinity_agent_logs').insert({
     action: 'api_auth_attempt',
@@ -92,6 +111,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   }
 
   (req as any).apiKey = { key: apiKey, tier };
+  if (dbAgentId) (req as any).agent_id = dbAgentId;
   next();
 };
 

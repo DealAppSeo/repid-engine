@@ -13,6 +13,7 @@ import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
+import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import agentsExternalRouter from './routes/agents-external';
@@ -165,6 +166,9 @@ app.use((req, res, next) => {
   // scan intermittently 400s legitimate signed requests (also a flaky-test source).
   // Verification is signature-based and downstream Supabase writes are parameterized.
   if (req.path === '/api/v1/repid/verify' || req.path === '/api/v1/prove-repid') return next();
+  // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
+  // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
+  if (req.path === '/api/v1/api-key-requests/request') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -190,6 +194,8 @@ app.use('/api/v1/telegram', telegramRouter);
 app.use('/api/v1/hal-benchmark', halTestRouter);
 app.use('/api/v1/audit', auditRouter);
 app.use('/api/v1/hal', halEvaluateRouter);
+// API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
+app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
