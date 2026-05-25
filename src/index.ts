@@ -16,6 +16,7 @@ import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
+import internalCronRouter from './routes/v1/internal-cron';
 import agentsExternalRouter from './routes/agents-external';
 import agentsExternalScoreRouter from './routes/agents-external-score';
 import keysRouter from './routes/key-management';
@@ -201,6 +202,9 @@ app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
 // exact paths from the authed /api/v1/status/* observability + /api/v1/receipts/:id).
 app.use('/api/v1', launchStatusRouter);
+// CC1 2026-05-25: UptimeRobot cron triggers (token-gated via X-Cron-Token, mounted
+// pre-auth so they need no REPID_API_KEY; their own CRON_TRIGGER_TOKEN is the auth).
+app.use('/api/v1/internal/cron', internalCronRouter);
 app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
