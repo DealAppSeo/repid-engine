@@ -14,10 +14,10 @@ This document summarizes the key design and architectural decisions made to hard
 - **Context**: Reusing the same chain object across distinct queries caused mock pollution (e.g. mock results from querying settlements were returned for contracts, or `.select().single()` threw due to missing mock methods in nested builder chains).
 - **Outcome**: High-fidelity unit tests that cleanly verify database interaction patterns.
 
-## 3. Multi-RPC Failover Utility
+## 3. Multi-RPC Failover for Reputation Writing (D-026)
 - **Decision**: Created `src/clients/rpc-with-failover.ts` and integrated it across all components that perform on-chain operations (`x402-facilitator`, `x402-outbound-client`, `repid-attestation`, and `erc8004-reputation`).
 - **Context**: In V1 production, RPC outages on public endpoints could cause critical feedback loops, attestation verification, and settlement pipelines to freeze or drop requests.
-- **Outcome**: The utility automatically instantiates and caches a standard `JsonRpcProvider` for single-RPC configurations, or an ethers `FallbackProvider` when multiple backup endpoints are provided.
+- **Outcome**: The utility automatically instantiates and caches a standard `JsonRpcProvider` for single-RPC configurations, or an ethers `FallbackProvider` when multiple backup endpoints are provided. This resolves D-026 by securing seamless failover capability.
 
 ## 4. Local SLM Fallback for HAL Fact Checking
 - **Decision**: Implemented a local keyword and heuristic fact-checking fallback layer inside `src/hal/fact-check.ts` that triggers when all external API providers fail and `HAL_LOCAL_FALLBACK_ENABLED=true` is set.

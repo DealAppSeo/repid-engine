@@ -91,4 +91,34 @@ describe('rpc-with-failover provider resolver', () => {
     const provider3 = getProvider();
     expect(provider3).not.toBe(provider2);
   });
+
+  it('fails over from failing primary RPC to succeeding backup RPC without manual intervention', async () => {
+    // In ethers v6, FallbackProvider orchestrates over standard JsonRpcProviders.
+    // We mock the send method on JsonRpcProvider to simulate failure on primary and success on backup.
+    
+    // We stub getNetwork and send to simulate failing primary
+    const mockPrimary = new ethers.JsonRpcProvider('https://failing-rpc.test', undefined, { staticNetwork: true });
+    jest.spyOn(mockPrimary, 'send').mockRejectedValue(new Error('primary RPC failed'));
+    jest.spyOn(mockPrimary, 'getNetwork').mockRejectedValue(new Error('primary RPC network failure'));
+
+    // We stub getNetwork and send to simulate succeeding backup
+    const mockBackup = new ethers.JsonRpcProvider('https://succeeding-rpc.test', undefined, { staticNetwork: true });
+    jest.spyOn(mockBackup, 'send').mockImplementation(async (method: string) => {
+      if (method === 'eth_blockNumber') {
+        return '0x64'; // block 100 in hex
+      }
+      if (method === 'eth_chainId') {
+        return '0x3039'; // chainId 12345 in hex
+      }
+      throw new Error(`unmocked send method: ${method}`);
+    });
+    jest.spyOn(mockBackup, 'getNetwork').mockResolvedValue(new ethers.Network('backup-net', 12345n));
+
+    // Instantiate FallbackProvider with mock providers
+    const fallbackProvider = new ethers.FallbackProvider([mockPrimary, mockBackup]);
+    
+    // Call getBlockNumber, which triggers eth_blockNumber call
+    const blockNumber = await fallbackProvider.getBlockNumber();
+    expect(blockNumber).toBe(100);
+  });
 });

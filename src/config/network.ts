@@ -27,7 +27,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     rpcUrls: [
       process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
       process.env.BASE_SEPOLIA_RPC_URL_BACKUP_1,
-      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_2,
+      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_2 || process.env.BACKUP_2,
     ].filter(Boolean) as string[],
     contracts: {
       usdc: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
@@ -65,6 +65,13 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   },
 };
 
+/**
+ * Resolves and returns the configured network configuration for the active network environment.
+ * The active network is specified by the NETWORK environment variable (defaults to 'base-sepolia').
+ *
+ * To support dynamic test configuration and runtime failover tuning, primary and backup RPC URLs,
+ * as well as safety value caps, are resolved dynamically from process.env on every call.
+ */
 export function getActiveNetwork(): NetworkConfig {
   const networkName = process.env.NETWORK || 'base-sepolia';
   const network = NETWORKS[networkName];
@@ -72,14 +79,29 @@ export function getActiveNetwork(): NetworkConfig {
     throw new Error(`Unknown network: ${networkName}. Valid: ${Object.keys(NETWORKS).join(', ')}`);
   }
   
-  // Return a cloned object so we don't mutate the global config, resolving caps dynamically
+  // Return a cloned object so we don't mutate the global config, resolving caps and RPCs dynamically
   const resolved = { ...network };
-  if (networkName === 'base') {
+  
+  if (networkName === 'base-sepolia') {
+    resolved.rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+    resolved.rpcUrls = [
+      resolved.rpcUrl,
+      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_1,
+      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_2 || process.env.BACKUP_2,
+    ].filter(Boolean) as string[];
+  } else if (networkName === 'base') {
+    resolved.rpcUrl = process.env.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org';
+    resolved.rpcUrls = [
+      resolved.rpcUrl,
+      process.env.BASE_MAINNET_RPC_URL_BACKUP_1,
+      process.env.BASE_MAINNET_RPC_URL_BACKUP_2,
+    ].filter(Boolean) as string[];
     resolved.caps = {
       perContractUsdCap: process.env.MAINNET_PER_CONTRACT_USD_CAP ? Number(process.env.MAINNET_PER_CONTRACT_USD_CAP) : 10,
       dailyVolumeUsdCap: process.env.MAINNET_DAILY_VOLUME_USD_CAP ? Number(process.env.MAINNET_DAILY_VOLUME_USD_CAP) : 100,
       perAgentDailyTxCap: process.env.MAINNET_PER_AGENT_DAILY_TX_CAP ? Number(process.env.MAINNET_PER_AGENT_DAILY_TX_CAP) : 50,
     };
   }
+  
   return resolved;
 }
