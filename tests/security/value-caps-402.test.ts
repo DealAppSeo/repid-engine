@@ -321,4 +321,52 @@ describe('Global USDC Value Caps (Phase 1)', () => {
       expect(res.body.requested).toBe(101_000_000);
     });
   });
+
+  describe('VALUE_CAP_ENFORCEMENT Configurable Modes', () => {
+    afterEach(() => {
+      delete process.env.VALUE_CAP_ENFORCEMENT;
+    });
+
+    it('bypasses checks completely when VALUE_CAP_ENFORCEMENT=off', async () => {
+      process.env.VALUE_CAP_ENFORCEMENT = 'off';
+      mockDbCalls({
+        servicePrice: 15_000_000, // 15 USDC (exceeds cap of 10)
+        settlementsToday: [],
+        contractStatus: 'pending'
+      });
+
+      const res = await request(app)
+        .post('/api/v1/contracts')
+        .send({
+          service_id: 'service-123',
+          buyer_agent_id: 'buyer-456',
+          payload: { task: 'test' }
+        });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('logs warning but allows when VALUE_CAP_ENFORCEMENT=warn', async () => {
+      process.env.VALUE_CAP_ENFORCEMENT = 'warn';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      mockDbCalls({
+        servicePrice: 15_000_000, // 15 USDC (exceeds cap of 10)
+        settlementsToday: [],
+        contractStatus: 'pending'
+      });
+
+      const res = await request(app)
+        .post('/api/v1/contracts')
+        .send({
+          service_id: 'service-123',
+          buyer_agent_id: 'buyer-456',
+          payload: { task: 'test' }
+        });
+
+      expect(res.status).toBe(201);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[VALUE_CAP_WARNING]'));
+      warnSpy.mockRestore();
+    });
+  });
 });

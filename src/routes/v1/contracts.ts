@@ -8,10 +8,19 @@ import { getActiveNetwork } from '../../config/network';
 const router = Router();
 
 function checkGlobalValueCaps(priceUsdcRaw: number, settledTodayRaw: number): { allowed: boolean; error?: string; cap?: number; requested?: number } {
+  const enforcement = process.env.VALUE_CAP_ENFORCEMENT || 'enforce';
+  if (enforcement === 'off') {
+    return { allowed: true };
+  }
+
   const perContractCapRaw = (Number(process.env.VALUE_CAP_PER_CONTRACT_USDC) || 10) * 1_000_000;
   const dailyCapRaw = (Number(process.env.VALUE_CAP_DAILY_USDC) || 100) * 1_000_000;
 
   if (priceUsdcRaw > perContractCapRaw) {
+    if (enforcement === 'warn') {
+      console.warn(`[VALUE_CAP_WARNING] Per-contract cap exceeded. Limit: ${perContractCapRaw}, Requested: ${priceUsdcRaw}`);
+      return { allowed: true };
+    }
     return {
       allowed: false,
       error: 'per_contract_cap_exceeded',
@@ -21,6 +30,10 @@ function checkGlobalValueCaps(priceUsdcRaw: number, settledTodayRaw: number): { 
   }
 
   if (settledTodayRaw + priceUsdcRaw > dailyCapRaw) {
+    if (enforcement === 'warn') {
+      console.warn(`[VALUE_CAP_WARNING] Daily cumulative cap exceeded. Limit: ${dailyCapRaw}, Requested: ${settledTodayRaw + priceUsdcRaw}`);
+      return { allowed: true };
+    }
     return {
       allowed: false,
       error: 'daily_cumulative_cap_exceeded',
