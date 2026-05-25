@@ -79,3 +79,37 @@ SELECT snapshot_at, metric_value->>'value' AS missing_tx_hash
 FROM repid_telemetry_snapshots
 WHERE metric_name = 'settlements_missing_tx_hash'
 ORDER BY snapshot_at DESC LIMIT 50;
+
+-- ════════════════════ C. SETTLEMENTS TIMELINE (Phase 3, 2026-05-25) ════════════════════
+-- Settlements + score_events + on-chain attestations bucketed hourly over the last 7 days.
+-- Sean-runnable; also feeds a future dashboard trend chart.
+SELECT
+  date_trunc('hour', t.hour) AS hour,
+  COALESCE(s.settlements, 0)        AS settlements,
+  COALESCE(s.real_settlements, 0)   AS real_settlements,
+  COALESCE(e.score_events, 0)       AS score_events,
+  COALESCE(e.vetoed, 0)             AS hal_vetoed,
+  COALESCE(a.attestations, 0)       AS onchain_attestations
+FROM generate_series(date_trunc('hour', NOW() - INTERVAL '7 days'), date_trunc('hour', NOW()), INTERVAL '1 hour') AS t(hour)
+LEFT JOIN (
+  SELECT date_trunc('hour', created_at) h,
+         COUNT(*) settlements,
+         COUNT(*) FILTER (WHERE is_simulated = false) real_settlements
+  FROM x402_settlements WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY 1
+) s ON s.h = t.hour
+LEFT JOIN (
+  SELECT date_trunc('hour', created_at) h,
+         COUNT(*) score_events,
+         COUNT(*) FILTER (WHERE hal_decision = 'vetoed') vetoed
+  FROM repid_score_events WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY 1
+) e ON e.h = t.hour
+LEFT JOIN (
+  SELECT date_trunc('hour', created_at) h, COUNT(*) attestations
+  FROM erc8004_reputation_writes WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY 1
+) a ON a.h = t.hour
+ORDER BY hour DESC;
+
+-- C2. Compact daily-rollup history (from health-summary-24h.ts)
+SELECT snapshot_at, metric_value
+FROM repid_telemetry_snapshots
+WHERE metric_family = 'health_24h' ORDER BY snapshot_at DESC LIMIT 30;
