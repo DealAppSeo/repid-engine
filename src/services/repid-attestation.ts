@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { db } from '../db';
 import crypto from 'crypto';
+import { getProvider } from '../clients/rpc-with-failover';
 import reputationAbiRaw from '../contracts/ReputationRegistry.abi.json';
 
 const REPUTATION_ABI = (reputationAbiRaw as any).abi ?? (reputationAbiRaw as unknown[]);
@@ -46,11 +47,10 @@ const TYPES = {
 
 export class RepIdAttestationService {
   private attestorWallet: ethers.Wallet;
-  private provider: ethers.JsonRpcProvider;
+  private provider: ethers.Provider;
 
   constructor() {
-    const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
-    this.provider = new ethers.JsonRpcProvider(rpcUrl);
+    this.provider = getProvider();
 
     const pk = process.env.HYPERDAG_ATTESTOR_PRIVATE_KEY;
     if (!pk) {

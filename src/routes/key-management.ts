@@ -38,6 +38,7 @@ async function requireAdminAuth(req: Request, res: Response, next: any) {
 
   const legacyKey = (agent as any).constitution?.api_key;
   if (legacyKey && legacyKey === token) {
+    console.warn(`[DEPRECATION WARNING] Legacy api_key used for agent: ${agentId} in key management. Please transition to modern scoped API keys.`);
     return next();
   }
 
