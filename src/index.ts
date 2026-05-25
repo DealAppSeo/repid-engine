@@ -14,6 +14,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
+import marketplaceRouter from './routes/v1/marketplace';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -200,6 +201,12 @@ app.use('/api/v1/audit', auditRouter);
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
+// V2 SUBSTRATE (PHASE 2 OF MARKETPLACE): RepID rent/sell listings + rentals CRUD.
+// SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
+// earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
+// NOTE: branch feat/cc2-2026-05-26-federation-marketplace adds its own /api/v1/federation mount in
+// this same region (trivial overlap, expected — see PR bodies).
+app.use('/api/v1/marketplace', marketplaceRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
