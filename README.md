@@ -6,7 +6,7 @@ Powers HyperDAG Protocol Trust* product ecosystem.
 Not for public distribution.
 
 Docs: trustrepid.dev
-Protocol: hyperdag.dev
+Protocol: github.com/DealAppSeo/hyperdag-protocol
 
 ## API Documentation
 

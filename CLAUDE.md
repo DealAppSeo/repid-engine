@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`repid-engine` is the proprietary behavioral reputation scoring backend for the HyperDAG Protocol Trust* ecosystem (`trustrepid.dev` / `hyperdag.dev`). It is an Express API that mutates agent reputation (`repid`) scores in Supabase and stubs out an EAS / ERC-8004 / ZKP attestation pipeline.
+`repid-engine` is the proprietary behavioral reputation scoring backend for the HyperDAG Protocol Trust* ecosystem (`trustrepid.dev` · github.com/DealAppSeo/hyperdag-protocol). It is an Express API that mutates agent reputation (`repid`) scores in Supabase and stubs out an EAS / ERC-8004 / ZKP attestation pipeline.
 
 Private, proprietary — not for public distribution.
 
