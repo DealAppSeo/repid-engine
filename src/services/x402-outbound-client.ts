@@ -58,7 +58,8 @@ export async function resolveAndVerifyDomain(
     name = await token.name();
   } catch (err) {
     if (process.env.NODE_ENV === 'test' || tokenAddress === '0x0000000000000000000000000000000000000000') {
-      const defaultName = tokenAddress.toLowerCase() === '0x036cbd53842c5426634e7929541ec2318f3dcf7e' ? 'USDC' : 'USD Coin';
+      const net = getActiveNetwork();
+      const defaultName = tokenAddress.toLowerCase() === net.contracts.usdc.toLowerCase() ? 'USDC' : 'USD Coin';
       return {
         name: defaultName,
         version: '2',

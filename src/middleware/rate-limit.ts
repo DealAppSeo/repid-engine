@@ -31,6 +31,7 @@
 import { Request, Response, NextFunction } from 'express';
 import * as crypto from 'crypto';
 import { db } from '../db';
+import { getRedisClient } from '../clients/redis-client';
 
 // ────────────────────────────────────────────────────────────────
 // Bucket math
@@ -109,6 +110,76 @@ class BucketStore {
 }
 
 export const bucketStore = new BucketStore();
+
+/**
+ * Atomic token bucket rate limiter using Redis Lua script.
+ * Falls back to local in-memory BucketStore if Redis is unavailable.
+ */
+async function consumeRedis(key: string, limit: number): Promise<{ allowed: boolean; remaining: number; retryAfterSec: number }> {
+  try {
+    const redis = getRedisClient();
+    const now = Date.now();
+    
+    const luaScript = `
+      local key = KEYS[1]
+      local capacity = tonumber(ARGV[1])
+      local now = tonumber(ARGV[2])
+      local refill_per_ms = capacity / 60000.0
+      
+      local current = redis.call('HMGET', key, 'tokens', 'last_refill')
+      local tokens = tonumber(current[1]) or capacity
+      local last_refill = tonumber(current[2]) or now
+      
+      local elapsed = now - last_refill
+      local new_tokens = tokens
+      if elapsed > 0 then
+        new_tokens = math.min(capacity, tokens + (elapsed * refill_per_ms))
+      end
+      
+      local allowed = 0
+      local remaining = 0
+      local retry_after_sec = 0
+      
+      if new_tokens >= 1 then
+        allowed = 1
+        new_tokens = new_tokens - 1
+        remaining = math.floor(new_tokens)
+        redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill', now)
+        redis.call('EXPIRE', key, 300)
+      else
+        allowed = 0
+        remaining = 0
+        local ms_until_one = (1 - new_tokens) / refill_per_ms
+        retry_after_sec = math.max(1, math.ceil(ms_until_one / 1000))
+        redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill', now)
+        redis.call('EXPIRE', key, 300)
+      end
+      
+      return {allowed, remaining, retry_after_sec}
+    `;
+    
+    const result = await redis.eval(
+      luaScript,
+      1,
+      key,
+      limit.toString(),
+      now.toString()
+    ) as [number, number, number];
+    
+    return {
+      allowed: result[0] === 1,
+      remaining: result[1],
+      retryAfterSec: result[2],
+    };
+  } catch (err: any) {
+    console.warn('[REDIS] Rate limit check failed, falling back to memory/fail-open:', err.message);
+    try {
+      return bucketStore.consume(key, limit);
+    } catch {
+      return { allowed: true, remaining: limit, retryAfterSec: 0 };
+    }
+  }
+}
 
 // ────────────────────────────────────────────────────────────────
 // Identity resolution
@@ -260,7 +331,9 @@ export function rateLimitMiddleware() {
       return next();
     }
 
-    const r = bucketStore.consume(id.key, id.limit);
+    const r = process.env.RATE_LIMIT_BACKEND === 'redis'
+      ? await consumeRedis(id.key, id.limit)
+      : bucketStore.consume(id.key, id.limit);
     res.setHeader('X-RateLimit-Limit', String(id.limit));
     res.setHeader('X-RateLimit-Remaining', String(r.remaining));
     res.setHeader('X-RateLimit-Bucket', id.kind);
