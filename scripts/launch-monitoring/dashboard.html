@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<!-- RepID engine status dashboard (CC1, 2026-05-25). Single static file, no build.
+     Fetches the public /status, /receipts/hero, /health every 30s. Open locally or
+     host on GitHub Pages. NOTE: if served from a non-allowlisted origin, CORS may
+     block fetches — run from an allowed origin or open the file directly. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RepID Engine — Status</title>
+  <style>
+    :root { --ok:#1a7f37; --bad:#cf222e; --bg:#0d1117; --card:#161b22; --fg:#e6edf3; --mut:#7d8590; }
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--bg); color:var(--fg); margin:0; padding:24px; }
+    h1 { font-size:18px; margin:0 0 4px; } .sub { color:var(--mut); font-size:12px; margin-bottom:20px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+    .card { background:var(--card); border:1px solid #30363d; border-radius:10px; padding:16px; }
+    .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:0 0 10px; }
+    .big { font-size:28px; font-weight:600; } .row { display:flex; justify-content:space-between; padding:3px 0; font-size:13px; }
+    .ok { color:var(--ok); } .bad { color:var(--bad); }
+    a { color:#58a6ff; word-break:break-all; } code { color:#79c0ff; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  </style>
+</head>
+<body>
+  <h1>RepID Engine — Live Status</h1>
+  <div class="sub">refreshes every 30s · <span id="updated">—</span> · <span id="base"></span></div>
+  <div class="grid">
+    <div class="card"><h2>Service</h2><div class="big"><span id="svc-dot" class="dot"></span><span id="svc">…</span></div><div id="svc-detail" class="sub"></div></div>
+    <div class="card"><h2>Activity (24h)</h2>
+      <div class="row"><span>On-chain attestations</span><b id="m-attest">—</b></div>
+      <div class="row"><span>Real settlements</span><b id="m-settle">—</b></div>
+      <div class="row"><span>Score events</span><b id="m-score">—</b></div></div>
+    <div class="card"><h2>Heartbeat / Audit</h2>
+      <div class="row"><span>Last heartbeat</span><b id="hb">—</b></div>
+      <div class="row"><span>Audit status</span><b id="audit">—</b></div></div>
+    <div class="card"><h2>Hero receipt (on-chain proof)</h2>
+      <div class="row"><span>Value</span><b id="hero-val">—</b></div>
+      <div id="hero-usdc" class="sub"></div><div id="hero-attest" class="sub"></div></div>
+  </div>
+  <script>
+    const BASE = location.hostname === 'localhost' || location.protocol === 'file:'
+      ? 'https://repid-engine-production.up.railway.app' : '';
+    document.getElementById('base').textContent = BASE || location.origin;
+    const $ = id => document.getElementById(id);
+    async function j(p){ const r = await fetch(BASE + p); return { status:r.status, body: await r.json().catch(()=>({})) }; }
+
+    async function refresh() {
+      try {
+        const h = await j('/health');
+        const up = h.status === 200 && h.body.status === 'ok';
+        $('svc').textContent = up ? 'operational' : 'DOWN';
+        $('svc-dot').style.background = up ? 'var(--ok)' : 'var(--bad)';
+        $('svc').className = up ? 'ok' : 'bad';
+        $('svc-detail').textContent = up ? `supabase=${h.body.supabaseConnected} · hashkey=${h.body.hashkeyConnected}` : `HTTP ${h.status}`;
+      } catch(e){ $('svc').textContent='UNREACHABLE'; $('svc').className='bad'; $('svc-dot').style.background='var(--bad)'; }
+
+      try {
+        const s = await j('/api/v1/status'); const m = s.body.metrics_24h || {};
+        $('m-attest').textContent = m.onchain_attestations ?? '—';
+        $('m-settle').textContent = m.real_settlements ?? '—';
+        $('m-score').textContent = m.score_events ?? '—';
+        $('hb').textContent = s.body.last_heartbeat?.at ? new Date(s.body.last_heartbeat.at).toLocaleString() : 'not enabled';
+        $('audit').textContent = s.body.audit_status?.overall ?? 'not enabled';
+      } catch(e){ $('m-attest').textContent='ERR'; }
+
+      try {
+        const r = await j('/api/v1/receipts/hero'); const b = r.body;
+        $('hero-val').textContent = b.value_usdc ? `${b.value_usdc} USDC` : '—';
+        if (b.usdc_settlement) $('hero-usdc').innerHTML = `USDC: <a href="${b.usdc_settlement.basescan}" target="_blank">${(b.usdc_settlement.tx||'').slice(0,22)}…</a>`;
+        if (b.reputation_attestation) $('hero-attest').innerHTML = `ERC-8004: <a href="${b.reputation_attestation.basescan}" target="_blank">${(b.reputation_attestation.tx||'').slice(0,22)}…</a>`;
+      } catch(e){ $('hero-val').textContent='ERR'; }
+
+      $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+    }
+    refresh(); setInterval(refresh, 30000);
+  </script>
+</body>
+</html>
