@@ -19,6 +19,7 @@ import observabilityRouter from './v1/observability';
 import servicesRouter from './v1/services';
 import contractsRouter from './v1/contracts';
 import agentRouter from './v1/agent';
+import peerVerificationRouter from './peer-verification';
 
 const router = Router();
 router.use(substanceGateRouter);
@@ -27,6 +28,7 @@ router.use('/hitl', hitlRouter);
 router.use('/status', observabilityRouter);
 router.use('/services', servicesRouter);
 router.use('/contracts', contractsRouter);
+router.use('/peer-verification', peerVerificationRouter);
 
 router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
