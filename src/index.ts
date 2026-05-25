@@ -14,6 +14,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
+import controllerRouter from './routes/v1/controller';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -173,6 +174,10 @@ app.use((req, res, next) => {
   // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
   // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
   if (req.path === '/api/v1/api-key-requests/request') return next();
+  // Controller (CC2 2026-05-26): /controller/sprint + /wake carry free-form sprint
+  // titles/descriptions (prose that legitimately contains SQL-shaped tokens). SBT-gated;
+  // downstream Supabase writes are parameterized.
+  if (req.path.startsWith('/api/v1/controller/sprint') || req.path.startsWith('/api/v1/controller/wake')) return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -200,6 +205,9 @@ app.use('/api/v1/audit', auditRouter);
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
+// Controller API (CC2 2026-05-26) — SBT-gated (its own controller-auth middleware),
+// so mounted before the REPID_API_KEYS authMiddleware. Backend for the v0.app controller rebuild.
+app.use('/api/v1/controller', controllerRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
