@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { db } from '../db';
 import crypto from 'crypto';
 import { getProvider } from '../clients/rpc-with-failover';
+import { getActiveNetwork } from '../config/network';
 import reputationAbiRaw from '../contracts/ReputationRegistry.abi.json';
 
 const REPUTATION_ABI = (reputationAbiRaw as any).abi ?? (reputationAbiRaw as unknown[]);
@@ -12,8 +13,7 @@ export interface RepIdAttestation {
   agent_name: string;
   repid: number;
   tier: string;
-  erc8004_token_id: string | null;
-  erc8004_chain_id: 84532;
+  erc8004_chain_id: number;
   erc8004_registry: string;
   last_reputation_tx: string | null;
   issued_at: string;
@@ -24,15 +24,14 @@ export interface RepIdAttestation {
 
 export type ZkpRepIdAttestation = RepIdAttestation & { zkp_proof: string | null };
 
-const CANONICAL_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e";
-// The ReputationRegistry contract (not the IdentityRegistry)
-const REPUTATION_CONTRACT_ADDRESS = "0x8004B663056A597Dffe9eCcC1965A193B7388713";
-
-const EIP712_DOMAIN = {
-  name: "HyperDAG",
-  version: "1",
-  chainId: 84532
-};
+function getEip712Domain() {
+  const net = getActiveNetwork();
+  return {
+    name: "HyperDAG",
+    version: "1",
+    chainId: net.chainId
+  };
+}
 
 const TYPES = {
   RepIdAttestation: [
@@ -88,7 +87,8 @@ export class RepIdAttestationService {
       nonce: nonce
     };
 
-    const signature = await this.attestorWallet.signTypedData(EIP712_DOMAIN, TYPES, message);
+    const net = getActiveNetwork();
+    const signature = await this.attestorWallet.signTypedData(getEip712Domain(), TYPES, message);
 
     const attestation: RepIdAttestation = {
       version: "1",
@@ -97,8 +97,8 @@ export class RepIdAttestationService {
       repid: agent.current_repid,
       tier: agent.tier,
       erc8004_token_id: agent.erc8004_token_id,
-      erc8004_chain_id: 84532,
-      erc8004_registry: CANONICAL_REGISTRY,
+      erc8004_chain_id: net.chainId,
+      erc8004_registry: net.contracts.identityRegistry || '0x8004A818BFB912233c491871b3d84c89A494BD9e',
       last_reputation_tx: agent.last_reputation_tx_hash,
       issued_at: issuedAt,
       expires_at: expiresAt,
@@ -140,7 +140,7 @@ export class RepIdAttestationService {
     };
 
     try {
-      const recoveredAddress = ethers.verifyTypedData(EIP712_DOMAIN, TYPES, message, attestation.signature);
+      const recoveredAddress = ethers.verifyTypedData(getEip712Domain(), TYPES, message, attestation.signature);
       const expectedAddress = process.env.HYPERDAG_ATTESTOR_ADDRESS || this.attestorWallet.address;
 
       if (recoveredAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
@@ -153,7 +153,9 @@ export class RepIdAttestationService {
     // Phase 1.1: Verify on-chain RepID matches if erc8004_token_id present
     if (attestation.erc8004_token_id) {
       try {
-        const contract = new ethers.Contract(REPUTATION_CONTRACT_ADDRESS, REPUTATION_ABI, this.provider);
+        const net = getActiveNetwork();
+        const reputationContract = net.contracts.reputationRegistry || '0x8004B663056A597Dffe9eCcC1965A193B7388713';
+        const contract = new ethers.Contract(reputationContract, REPUTATION_ABI, this.provider);
         const hyperdagWallet = this.attestorWallet.address; // Assuming attestor is the one who wrote the feedback
         
         // getSummary(tokenId, clientAddresses, tag1, tag2)
