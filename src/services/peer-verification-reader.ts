@@ -61,7 +61,7 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
 
       if (eligibleVerifiers.length === 0) {
         // Fallback if the pool somehow is empty (e.g. source is the only verifier)
-        eligibleVerifiers.push(VERIFIER_POOL[0]);
+        eligibleVerifiers.push(VERIFIER_POOL[0] ?? 'trinity-mel');
       }
 
       // Stateless deterministic round-robin based on queue ID
