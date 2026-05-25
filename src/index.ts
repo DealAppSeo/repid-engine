@@ -14,6 +14,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
+import federationRouter from './routes/v1/federation';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -200,6 +201,12 @@ app.use('/api/v1/audit', auditRouter);
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
+// V2 SUBSTRATE: federated developer-node onboarding (node-facing; gated by node_id/nonce +
+// federation opt-in state, NOT by SBT/REPID_API_KEY). Mounted before authMiddleware. Stubbed-
+// functional: validates + writes developer_nodes/federation_events; no live federation yet.
+// NOTE: branch feat/cc2-2026-05-26-marketplace adds its own /api/v1/marketplace mount here too
+// (trivial overlap on this line region, expected — see PR bodies).
+app.use('/api/v1/federation', federationRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
