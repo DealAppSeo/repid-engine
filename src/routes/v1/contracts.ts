@@ -3,6 +3,7 @@ import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../../services/validation-repid-delta';
 import { x402Facilitator } from '../../services/x402-facilitator';
 import { x402Metrics } from '../../observability/x402-metrics';
+import { getActiveNetwork } from '../../config/network';
 
 const router = Router();
 
@@ -107,6 +108,77 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   if (contract.status !== 'pending') {
     x402Metrics.increment('escrow.error.400');
     return res.status(409).json({ error: 'wrong_status', current: contract.status });
+  }
+
+  // 1.5. Enforce Mainnet Safety Caps if applicable
+  const activeNetwork = getActiveNetwork();
+  console.log('DEBUG ACTIVE NETWORK:', activeNetwork.name, 'CAPS:', JSON.stringify(activeNetwork.caps));
+  const rawPrice = Number(contract.agreed_price_usdc_raw);
+  const priceInUsd = rawPrice / 1_000_000;
+
+  if (activeNetwork.caps) {
+    const { perContractUsdCap, dailyVolumeUsdCap, perAgentDailyTxCap } = activeNetwork.caps;
+
+    // Per-contract Cap Check
+    if (perContractUsdCap && priceInUsd > perContractUsdCap) {
+      x402Metrics.increment('escrow.error.400');
+      return res.status(400).json({
+        error: 'per_contract_cap_exceeded',
+        cap: perContractUsdCap,
+        requested: priceInUsd,
+      });
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // Daily Volume Cap Check
+    if (dailyVolumeUsdCap) {
+      const { data: settledToday, error: volErr } = await db
+        .from('x402_settlements')
+        .select('amount')
+        .eq('is_simulated', false)
+        .eq('status', 'settled')
+        .gte('created_at', `${today}T00:00:00.000Z`)
+        .lte('created_at', `${today}T23:59:59.999Z`);
+
+      if (volErr) {
+        console.error('[escrow-x402] Failed to check daily settled volume:', volErr.message);
+      } else {
+        const todayVolumeUsd = (settledToday || []).reduce((acc, row) => acc + Number(row.amount), 0) / 1_000_000;
+        if (todayVolumeUsd + priceInUsd > dailyVolumeUsdCap) {
+          x402Metrics.increment('escrow.error.429');
+          return res.status(429).json({
+            error: 'daily_volume_cap_exceeded',
+            cap: dailyVolumeUsdCap,
+            todays_volume: todayVolumeUsd,
+            attempted: priceInUsd,
+          });
+        }
+      }
+    }
+
+    // Per-agent Daily Transaction Cap Check
+    if (perAgentDailyTxCap) {
+      const { count: agentTxToday, error: countErr } = await db
+        .from('x402_settlements')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_simulated', false)
+        .eq('requestor_agent_id', contract.buyer_agent_id)
+        .eq('status', 'settled')
+        .gte('created_at', `${today}T00:00:00.000Z`)
+        .lte('created_at', `${today}T23:59:59.999Z`);
+
+      if (countErr) {
+        console.error('[escrow-x402] Failed to check per-agent daily transaction count:', countErr.message);
+      } else if (agentTxToday !== null && agentTxToday >= perAgentDailyTxCap) {
+        x402Metrics.increment('escrow.error.429');
+        return res.status(429).json({
+          error: 'per_agent_daily_tx_cap_exceeded',
+          cap: perAgentDailyTxCap,
+          todays_count: agentTxToday,
+        });
+      }
+    }
   }
 
   // 2. Fetch provider agent to get their wallet address

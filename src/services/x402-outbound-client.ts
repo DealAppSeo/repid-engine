@@ -2,6 +2,7 @@ import { repIdAttestationService, ZkpRepIdAttestation } from './repid-attestatio
 import { db } from '../db';
 import { ethers } from 'ethers';
 import { getActiveNetwork } from '../config/network';
+import { getProvider } from '../clients/rpc-with-failover';
 
 import crypto from 'crypto';
 
@@ -240,8 +241,7 @@ export class X402OutboundClient {
       }
       
       const chainId = netConfig.chainId;
-      const rpcUrl = netConfig.rpcUrl;
-      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const provider = getProvider();
 
       const resolvedDomain = await resolveAndVerifyDomain(offer.asset, chainId, provider);
 

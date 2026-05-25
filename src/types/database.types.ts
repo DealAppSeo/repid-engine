@@ -6088,6 +6088,7 @@ export type Database = {
           created_at: string
           gas_used: number | null
           id: number
+          repid_event_id: number | null
           repid_value: number
           tier: string
           tx_hash: string
@@ -6101,6 +6102,7 @@ export type Database = {
           created_at?: string
           gas_used?: number | null
           id?: number
+          repid_event_id?: number | null
           repid_value: number
           tier: string
           tx_hash: string
@@ -6114,6 +6116,7 @@ export type Database = {
           created_at?: string
           gas_used?: number | null
           id?: number
+          repid_event_id?: number | null
           repid_value?: number
           tier?: string
           tx_hash?: string
@@ -6124,6 +6127,13 @@ export type Database = {
             columns: ["agent_id"]
             isOneToOne: false
             referencedRelation: "repid_agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "erc8004_reputation_writes_repid_event_id_fkey"
+            columns: ["repid_event_id"]
+            isOneToOne: false
+            referencedRelation: "repid_events"
             referencedColumns: ["id"]
           },
         ]
@@ -14736,6 +14746,7 @@ export type Database = {
           certainty_at_claim: number | null
           challenger_repid_at_event: number | null
           collusion_risk: number | null
+          contract_id: string | null
           created_at: string | null
           decision_outcome: string | null
           delta: number
@@ -14773,6 +14784,7 @@ export type Database = {
           certainty_at_claim?: number | null
           challenger_repid_at_event?: number | null
           collusion_risk?: number | null
+          contract_id?: string | null
           created_at?: string | null
           decision_outcome?: string | null
           delta: number
@@ -14810,6 +14822,7 @@ export type Database = {
           certainty_at_claim?: number | null
           challenger_repid_at_event?: number | null
           collusion_risk?: number | null
+          contract_id?: string | null
           created_at?: string | null
           decision_outcome?: string | null
           delta?: number

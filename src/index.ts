@@ -46,6 +46,7 @@ import { authMiddleware } from './middleware/auth';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 // CC Sprint 2: global token-bucket rate limiter (BYOK bypass + tier-based)
 import { rateLimitMiddleware as globalRateLimit } from './middleware/rate-limit';
+import { attestationExtractorMiddleware } from './middleware/attestation-extractor';
 import { versioningMiddleware } from './middleware/versioning';
 import { scoreMonitor } from './engine/score-monitor';
 
@@ -101,8 +102,10 @@ app.use(express.json({ limit: "1mb" }));
 // CC Sprint 2: global rate limiter on /api/v1/*. Order matters — must run
 // AFTER express.json (so we can bypass-fast on BYOK before doing any work)
 // and BEFORE route handlers + the existing express-rate-limit per-route
+// and BEFORE route handlers + the existing express-rate-limit per-route
 // limiters (which act as additional stricter caps, not replacements). BYOK
 // keys with valid hashes in user_api_keys bypass entirely.
+app.use(attestationExtractorMiddleware);
 app.use(globalRateLimit());
 
 // HYGIENE-1: silence JSON parse stack traces. Malformed bodies still 
