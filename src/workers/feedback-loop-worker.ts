@@ -201,7 +201,8 @@ export class FeedbackLoopWorker {
           block_number: result.blockNumber,
           gas_used: result.gasUsed,
           chain_id: writer.chainId,
-          contract_address: writer.getContractAddress()
+          contract_address: writer.getContractAddress(),
+          repid_event_id: event.id
         });
 
       } catch (e: any) {
