@@ -7,47 +7,98 @@ import { getActiveNetwork } from '../../config/network';
 
 const router = Router();
 
+function checkGlobalValueCaps(priceUsdcRaw: number, settledTodayRaw: number): { allowed: boolean; error?: string; cap?: number; requested?: number } {
+  const perContractCapRaw = (Number(process.env.VALUE_CAP_PER_CONTRACT_USDC) || 10) * 1_000_000;
+  const dailyCapRaw = (Number(process.env.VALUE_CAP_DAILY_USDC) || 100) * 1_000_000;
+
+  if (priceUsdcRaw > perContractCapRaw) {
+    return {
+      allowed: false,
+      error: 'per_contract_cap_exceeded',
+      cap: perContractCapRaw,
+      requested: priceUsdcRaw
+    };
+  }
+
+  if (settledTodayRaw + priceUsdcRaw > dailyCapRaw) {
+    return {
+      allowed: false,
+      error: 'daily_cumulative_cap_exceeded',
+      cap: dailyCapRaw,
+      requested: settledTodayRaw + priceUsdcRaw
+    };
+  }
+
+  return { allowed: true };
+}
+
 router.post('/', async (req: Request, res: Response) => {
-  const { service_id, buyer_agent_id, payload, agreed_price_usdc_raw } = req.body;
-  if (!service_id || !buyer_agent_id || !payload) {
-    return res.status(400).json({ error: 'service_id, buyer_agent_id, and payload required' });
+  try {
+    const { service_id, buyer_agent_id, payload, agreed_price_usdc_raw } = req.body;
+    if (!service_id || !buyer_agent_id || !payload) {
+      return res.status(400).json({ error: 'service_id, buyer_agent_id, and payload required' });
+    }
+
+    // Get service
+    const { data: service, error: sErr } = await db.from('agent_services').select('*').eq('id', service_id).maybeSingle();
+    if (sErr || !service) return res.status(404).json({ error: 'Service not found' });
+    if (!service.active) return res.status(400).json({ error: 'Service is not active' });
+
+    // Self-dealing guard (H3)
+    if (buyer_agent_id === service.provider_agent_id) {
+      return res.status(400).json({ error: 'self_dealing_forbidden', message: 'Self-dealing is forbidden' });
+    }
+
+    // Get buyer repid
+    const { data: buyer, error: bErr } = await db.from('repid_agents').select('current_repid').eq('id', buyer_agent_id).maybeSingle();
+    if (bErr || !buyer) return res.status(404).json({ error: 'Buyer not found' });
+
+    if (buyer.current_repid < (service.min_repid_to_purchase || 0)) {
+      return res.status(403).json({ error: 'Buyer RepID below service minimum requirement' });
+    }
+
+    const price = agreed_price_usdc_raw !== undefined ? agreed_price_usdc_raw : service.base_price_usdc_raw;
+
+    // Global Value Caps Check
+    const today = new Date().toISOString().split('T')[0];
+    const { data: settledToday, error: volErr } = await db
+      .from('x402_settlements')
+      .select('amount')
+      .eq('status', 'settled')
+      .gte('created_at', `${today}T00:00:00.000Z`)
+      .lte('created_at', `${today}T23:59:59.999Z`);
+    const settledTodayRaw = (settledToday || []).reduce((acc, row) => acc + Number(row.amount || 0), 0);
+
+    const capCheck = checkGlobalValueCaps(Number(price), settledTodayRaw);
+    if (!capCheck.allowed) {
+      return res.status(402).json({
+        error: capCheck.error,
+        message: `Value cap exceeded: ${capCheck.error}`,
+        cap: capCheck.cap,
+        requested: capCheck.requested
+      });
+    }
+
+    const { data, error } = await db.from('service_contracts').insert({
+      service_id,
+      buyer_agent_id,
+      provider_agent_id: service.provider_agent_id,
+      agreed_price_usdc_raw: price,
+      payload,
+      status: 'pending'
+    }).select().single();
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(201).json(data);
+  } catch (err: any) {
+    console.error('ERROR IN POST /:', err);
+    res.status(500).json({ error: 'internal_error', message: err.message, stack: err.stack });
   }
-
-  // Get service
-  const { data: service, error: sErr } = await db.from('agent_services').select('*').eq('id', service_id).maybeSingle();
-  if (sErr || !service) return res.status(404).json({ error: 'Service not found' });
-  if (!service.active) return res.status(400).json({ error: 'Service is not active' });
-
-  // Self-dealing guard (H3)
-  if (buyer_agent_id === service.provider_agent_id) {
-    return res.status(400).json({ error: 'self_dealing_forbidden', message: 'Self-dealing is forbidden' });
-  }
-
-  // Get buyer repid
-  const { data: buyer, error: bErr } = await db.from('repid_agents').select('current_repid').eq('id', buyer_agent_id).maybeSingle();
-  if (bErr || !buyer) return res.status(404).json({ error: 'Buyer not found' });
-
-  if (buyer.current_repid < (service.min_repid_to_purchase || 0)) {
-    return res.status(403).json({ error: 'Buyer RepID below service minimum requirement' });
-  }
-
-  const price = agreed_price_usdc_raw !== undefined ? agreed_price_usdc_raw : service.base_price_usdc_raw;
-
-  const { data, error } = await db.from('service_contracts').insert({
-    service_id,
-    buyer_agent_id,
-    provider_agent_id: service.provider_agent_id,
-    agreed_price_usdc_raw: price,
-    payload,
-    status: 'pending'
-  }).select().single();
-
-  if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json(data);
 });
 
 router.post('/:id/escrow', async (req: Request, res: Response) => {
-  const contractId = req.params.id;
+  try {
+    const contractId = req.params.id;
   x402Metrics.increment('escrow.attempt');
 
   // 1. Fetch contract
@@ -108,6 +159,27 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   if (contract.status !== 'pending') {
     x402Metrics.increment('escrow.error.400');
     return res.status(409).json({ error: 'wrong_status', current: contract.status });
+  }
+
+  // Global Value Caps Check
+  const today = new Date().toISOString().split('T')[0];
+  const { data: settledToday, error: volErr } = await db
+    .from('x402_settlements')
+    .select('amount')
+    .eq('status', 'settled')
+    .gte('created_at', `${today}T00:00:00.000Z`)
+    .lte('created_at', `${today}T23:59:59.999Z`);
+  const settledTodayRaw = (settledToday || []).reduce((acc, row) => acc + Number(row.amount || 0), 0);
+
+  const capCheck = checkGlobalValueCaps(Number(contract.agreed_price_usdc_raw), settledTodayRaw);
+  if (!capCheck.allowed) {
+    x402Metrics.increment('escrow.error.402');
+    return res.status(402).json({
+      error: capCheck.error,
+      message: `Value cap exceeded: ${capCheck.error}`,
+      cap: capCheck.cap,
+      requested: capCheck.requested
+    });
   }
 
   // 1.5. Enforce Mainnet Safety Caps if applicable
@@ -338,8 +410,12 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'contract_update_failed', message: updateErr.message });
   }
 
-  x402Metrics.increment('escrow.success');
-  res.json(updatedContract);
+    x402Metrics.increment('escrow.success');
+    res.json(updatedContract);
+  } catch (err: any) {
+    console.error('ERROR IN ESCROW:', err);
+    res.status(500).json({ error: 'internal_error', message: err.message, stack: err.stack });
+  }
 });
 
 
