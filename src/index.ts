@@ -14,6 +14,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
+import escalationRouter from './routes/v1/escalation';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -173,6 +174,8 @@ app.use((req, res, next) => {
   // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
   // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
   if (req.path === '/api/v1/api-key-requests/request') return next();
+  // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
+  if (req.path === '/api/v1/escalation/escalate') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -270,6 +273,9 @@ app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
 app.use('/api/v1', receiptsRouter);
+// Escalation API (CC2 2026-05-26) — agent/worker-facing (REPID_API_KEYS auth). Routes
+// the controller escalation ladder; sean-level fires a Telegram alert via ORCH.
+app.use('/api/v1/escalation', escalationRouter);
 // Sprint R-C: RepID admin endpoints (attest) — auth required
 app.use('/api/v1', repidAdminRouter);
 app.use('/api/v1/admin/caps', adminCapsRouter);
