@@ -20,6 +20,7 @@ import servicesRouter from './v1/services';
 import contractsRouter from './v1/contracts';
 import agentRouter from './v1/agent';
 import peerVerificationRouter from './peer-verification';
+import squadsRouter from './v1/squads';
 
 const router = Router();
 router.use(substanceGateRouter);
@@ -29,6 +30,7 @@ router.use('/status', observabilityRouter);
 router.use('/services', servicesRouter);
 router.use('/contracts', contractsRouter);
 router.use('/peer-verification', peerVerificationRouter);
+router.use('/squads', squadsRouter);
 
 router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });

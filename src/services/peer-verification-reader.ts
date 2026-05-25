@@ -1,7 +1,11 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { PeerVerificationQueueEntry } from '../types/peer-verification';
 
-const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
+const TRINITY_12_AGENTS = [
+  'trinity-mel', 'trinity-shofet', 'trinity-gcm', 'trinity-orch',
+  'trinity-w3c', 'trinity-torch', 'trinity-veritas', 'trinity-apm',
+  'trinity-chesed', 'trinity-hdm', 'trinity-sophia', 'trinity-nexus'
+];
 const POLL_INTERVAL_MS = 30000;
 let readerInterval: NodeJS.Timeout | null = null;
 
@@ -53,19 +57,63 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       const queueEntry = claimed as PeerVerificationQueueEntry;
       const sourceAgentName = await getAgentName(db, queueEntry.source_agent_id);
 
-      // 3. Round-robin verifier selection (excluding the source agent)
+      // Get the source agent's squad_id
+      let sourceSquadId: string | null = null;
+      const sourceAgentQuery = db.from('repid_agents').select('squad_id').eq('id', queueEntry.source_agent_id);
+      
+      if (typeof sourceAgentQuery.single === 'function') {
+        try {
+          const { data: sourceAgent } = await sourceAgentQuery.single();
+          sourceSquadId = sourceAgent?.squad_id || null;
+        } catch {
+          sourceSquadId = null;
+        }
+      } else {
+        const { data: sourceAgentData } = await sourceAgentQuery;
+        sourceSquadId = (sourceAgentData && sourceAgentData.length > 0) ? (sourceAgentData[0]?.squad_id || null) : null;
+      }
+      
       const cleanSourceAgentName = sourceAgentName.toLowerCase().trim();
-      const eligibleVerifiers = VERIFIER_POOL.filter(
-        (name) => name.toLowerCase().trim() !== cleanSourceAgentName
-      );
 
+      // Query all potential verifiers to get their squad_ids
+      const verifierMap = new Map<string, string | null>();
+      const verifierQuery = db.from('repid_agents').select('agent_name, squad_id');
+      
+      if (typeof verifierQuery.in === 'function') {
+        const { data: verifierAgents } = await verifierQuery.in('agent_name', TRINITY_12_AGENTS);
+        if (verifierAgents) {
+          for (const va of verifierAgents) {
+            verifierMap.set(va.agent_name.toLowerCase().trim(), va.squad_id);
+          }
+        }
+      } else {
+        console.log('[PeerVerificationReader] Mock client detected (no .in function), using empty verifier map.');
+      }
+
+      // 3. Select verifier: cross-squad or fallback
+      let eligibleVerifiers: string[] = [];
+
+      if (sourceSquadId) {
+        // Find agents in a DIFFERENT squad
+        eligibleVerifiers = TRINITY_12_AGENTS.filter((name) => {
+          const cleanName = name.toLowerCase().trim();
+          if (cleanName === cleanSourceAgentName) return false;
+          
+          const squadId = verifierMap.get(cleanName);
+          return squadId && squadId !== sourceSquadId;
+        });
+      }
+
+      // Fallback: if no squad assignment or if cross-squad list is empty
       if (eligibleVerifiers.length === 0) {
-        // Fallback if the pool somehow is empty (e.g. source is the only verifier)
-        eligibleVerifiers.push(VERIFIER_POOL[0]);
+        eligibleVerifiers = TRINITY_12_AGENTS.filter(
+          (name) => name.toLowerCase().trim() !== cleanSourceAgentName
+        );
       }
 
       // Stateless deterministic round-robin based on queue ID
       const chosenVerifier = eligibleVerifiers[Number(queueEntry.id) % eligibleVerifiers.length];
+
 
       // 4. Dispatch task to trinity_tasks
       const { data: task, error: taskErr } = await db

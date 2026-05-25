@@ -185,13 +185,13 @@ describe('HAL Peer Verification Unit Tests', () => {
       expect(updatedQueueEntries).toHaveLength(2);
       expect(insertedTasks).toHaveLength(2);
 
-      // Queue entry 1 (id: '1') -> claimant: trinity-veritas. Verifier pool: ['trinity-mel', 'trinity-shofet', 'trinity-gcm'].
-      // All are eligible. 1 % 3 = 1 -> 'trinity-shofet'.
+      // Queue entry 1 (id: '1') -> claimant: trinity-veritas. Verifier pool: all 12 agents minus claimant.
+      // 1 % 11 = 1 -> 'trinity-shofet'.
       expect(insertedTasks[0].assigned_to).toBe('trinity-shofet');
 
-      // Queue entry 2 (id: '2') -> claimant: trinity-mel. Verifier pool: ['trinity-shofet', 'trinity-gcm']. (trinity-mel excluded).
-      // 2 % 2 = 0 -> 'trinity-shofet'.
-      expect(insertedTasks[1].assigned_to).toBe('trinity-shofet');
+      // Queue entry 2 (id: '2') -> claimant: trinity-mel. Verifier pool: all 12 agents minus claimant.
+      // 2 % 11 = 2 -> 'trinity-orch'.
+      expect(insertedTasks[1].assigned_to).toBe('trinity-orch');
     });
   });
 

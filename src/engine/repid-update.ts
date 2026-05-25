@@ -147,7 +147,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // eas_attestation_id links every event to an EAS attestation
   // via ERC-8004 ValidationRegistry (stub until Sprint 3)
   // mirror_test_triggered = ZKP-auditable proof of ideological neutrality (P-023/P-024)
-  await db.from('repid_score_events').insert({
+  const { data: scoreEvent } = await db.from('repid_score_events').insert({
     agent_id: input.agentId,
     event_type: input.eventType,
     delta: finalDelta,
@@ -174,7 +174,18 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       mirrorTest: input.mirrorTestMetadata ?? null,
       x402Context: input.x402Context ?? null,
     },
-  });
+  }).select('id').single();
+
+  if (scoreEvent) {
+    // Write provenance record
+    await db.from('rep_id_provenance').insert({
+      agent_id: input.agentId,
+      squad_id: agent.squad_id,
+      increment_amount: finalDelta,
+      source_event_id: scoreEvent.id,
+      source_type: input.eventType
+    });
+  }
 
   // 10 — Update supply rate
   await updateSupplyRate(input.eventType);
@@ -226,7 +237,7 @@ export async function registerAgent(params: {
   if (error || !newAgent)
     throw new Error(`[repid-engine] Registration failed: ${error?.message}`);
 
-  await db.from('repid_score_events').insert({
+  const { data: genesisEvent } = await db.from('repid_score_events').insert({
     agent_id: newAgent.id, event_type: 'GENESIS',
     delta: 0, repid_before: 200, repid_after: 200,
     ecosystem_need_weight: 1.0,
@@ -237,7 +248,17 @@ export async function registerAgent(params: {
       constitutionLoaded: Object.keys(params.constitution ?? {}).length > 0,
       easSchema: 'constitutional-compliance-v1',
     },
-  });
+  }).select('id').single();
+
+  if (genesisEvent) {
+    await db.from('rep_id_provenance').insert({
+      agent_id: newAgent.id,
+      squad_id: null,
+      increment_amount: 0,
+      source_event_id: genesisEvent.id,
+      source_type: 'GENESIS'
+    });
+  }
 
   return { agentId: newAgent.id, repId: 200, tier: 'PROBATIONARY' };
 }

@@ -2,6 +2,10 @@ import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { isEligibleForOnChainWrite, POLL_EVENT_FILTER_SQL } from './feedback-loop-filters';
 import { getReputationWriter, persistReputationWrite, type WriteRepIDResult } from '../services/erc8004-reputation';
+import { shouldAttestOnChain } from '../services/repid-attestation';
+import { getAgentPrivateKey } from '../routes/peer-verification';
+import crypto from 'crypto';
+
 
 // Phase 8 — drain-mode rate limit. For the first 24h after worker boot, cap
 // on-chain writes at 1 per 60s so a backlog drain (e.g., the 10 unprocessed
@@ -152,58 +156,97 @@ export class FeedbackLoopWorker {
           }
         }
 
-        // 2. Perform on-chain write — bounded by withRpcTimeout per CLAUDE-RULE-8
-        const feedbackHash = (event_data as any)?.tx_hash || (event_data as any)?.reputation_tx_hash || '0x0000000000000000000000000000000000000000000000000000000000000000';
+        // Check delegate gate
+        const attestOnChain = await shouldAttestOnChain(agent.id, event.id.toString());
+        if (attestOnChain) {
+          // 2. Perform on-chain write — bounded by withRpcTimeout per CLAUDE-RULE-8
+          const feedbackHash = (event_data as any)?.tx_hash || (event_data as any)?.reputation_tx_hash || '0x0000000000000000000000000000000000000000000000000000000000000000';
 
-        console.log(`[FeedbackLoopWorker] Writing RepID ${agent.current_repid} to chain for ${agent.agent_name} (token ${agent.erc8004_token_id})...`);
+          console.log(`[FeedbackLoopWorker] Writing RepID ${agent.current_repid} to chain for ${agent.agent_name} (token ${agent.erc8004_token_id})...`);
 
-        const result: WriteRepIDResult = await withRpcTimeout<WriteRepIDResult>(
-          `writeRepIDFeedback(${agent.agent_name},token=${agent.erc8004_token_id})`,
-          writer.writeRepIDFeedback({
-            agentTokenId: agent.erc8004_token_id,
-            repid: Math.round(agent.current_repid),
+          const result: WriteRepIDResult = await withRpcTimeout<WriteRepIDResult>(
+            `writeRepIDFeedback(${agent.agent_name},token=${agent.erc8004_token_id})`,
+            writer.writeRepIDFeedback({
+              agentTokenId: agent.erc8004_token_id,
+              repid: Math.round(agent.current_repid),
+              tier: agent.tier,
+              endpoint: `https://trustrepid.dev/api/v1/agents/${agent.id}/reputation/payload.json`,
+              feedbackURI: `https://trustrepid.dev/api/v1/agents/${agent.id}/reputation/payload.json`,
+              feedbackHash
+            })
+          );
+          lastFeedbackWriteAt = Date.now();
+
+          // Phase 8 — successful write resets the circuit breaker
+          if (consecutiveFeedbackFailures > 0 || circuitOpenLogged) {
+            console.log(`[FeedbackLoopWorker] circuit-breaker reset after ${consecutiveFeedbackFailures} consecutive failures`);
+            consecutiveFeedbackFailures = 0;
+            circuitOpenLogged = false;
+            circuitOpenUntil = 0;
+          }
+
+          console.log(`[FeedbackLoopWorker] RepID update confirmed for ${agent.agent_name}: ${result.txHash}`);
+
+          // 3. Mark event as processed
+          await db.from('repid_events').update({ 
+            processed_at: new Date().toISOString(),
+            event_data: { ...(event_data as any), reputation_tx_hash: result.txHash }
+          }).eq('id', event.id);
+
+          // 4. Update agent's last_reputation_tx_hash for fast-lookup
+          await db.from('repid_agents').update({
+            last_reputation_tx_hash: result.txHash
+          }).eq('id', agent.id);
+
+          // 5. Persist write record for audit trail
+          await persistReputationWrite(db, {
+            agent_id: agent.id,
+            agent_token_id: agent.erc8004_token_id,
+            repid_value: Math.round(agent.current_repid),
             tier: agent.tier,
-            endpoint: `https://trustrepid.dev/api/v1/agents/${agent.id}/reputation/payload.json`,
-            feedbackURI: `https://trustrepid.dev/api/v1/agents/${agent.id}/reputation/payload.json`,
-            feedbackHash
-          })
-        );
-        lastFeedbackWriteAt = Date.now();
+            tx_hash: result.txHash,
+            block_number: result.blockNumber,
+            gas_used: result.gasUsed,
+            chain_id: writer.chainId,
+            contract_address: writer.getContractAddress(),
+            repid_event_id: event.id
+          });
+        } else {
+          // Off-chain attestation gate
+          console.log(`[FeedbackLoopWorker] Gated off-chain attestation for ${agent.agent_name} (squad-gated). Generating off-chain cryptographic signature...`);
+          
+          const secretKey = getAgentPrivateKey(agent.agent_name);
+          const claimHash = crypto.createHash('sha256').update(`${agent.id}:${agent.current_repid}:${event.id}`).digest('hex');
+          const signature = crypto.createHmac('sha256', secretKey).update(claimHash).digest('hex');
 
-        // Phase 8 — successful write resets the circuit breaker
-        if (consecutiveFeedbackFailures > 0 || circuitOpenLogged) {
-          console.log(`[FeedbackLoopWorker] circuit-breaker reset after ${consecutiveFeedbackFailures} consecutive failures`);
-          consecutiveFeedbackFailures = 0;
-          circuitOpenLogged = false;
-          circuitOpenUntil = 0;
+          // Retrieve active squad_id
+          const { data: squadMembership } = await db
+            .from('squad_membership')
+            .select('squad_id')
+            .eq('agent_id', agent.id)
+            .is('left_at', null)
+            .maybeSingle();
+
+          const squadId = squadMembership?.squad_id;
+
+          await db.from('squad_internal_attestations').insert({
+            squad_id: squadId || '550e8400-e29b-41d4-a716-446655440004', // default to orchestration if not found
+            response_id: event.id,
+            attesting_agent_id: agent.id,
+            signature: signature,
+            attestation_type: 'reputation',
+            claim_hash: claimHash
+          });
+
+          // Mark event as processed (off-chain)
+          await db.from('repid_events').update({ 
+            processed_at: new Date().toISOString(),
+            event_data: { ...(event_data as any), reputation_tx_hash: 'off-chain-squad-attestation' }
+          }).eq('id', event.id);
+
+          console.log(`[FeedbackLoopWorker] Off-chain attestation recorded in squad_internal_attestations for ${agent.agent_name}`);
         }
 
-        console.log(`[FeedbackLoopWorker] RepID update confirmed for ${agent.agent_name}: ${result.txHash}`);
-
-        // 3. Mark event as processed
-        await db.from('repid_events').update({ 
-          processed_at: new Date().toISOString(),
-          event_data: { ...(event_data as any), reputation_tx_hash: result.txHash }
-        }).eq('id', event.id);
-
-        // 4. Update agent's last_reputation_tx_hash for fast-lookup
-        await db.from('repid_agents').update({
-          last_reputation_tx_hash: result.txHash
-        }).eq('id', agent.id);
-
-        // 5. Persist write record for audit trail
-        await persistReputationWrite(db, {
-          agent_id: agent.id,
-          agent_token_id: agent.erc8004_token_id,
-          repid_value: Math.round(agent.current_repid),
-          tier: agent.tier,
-          tx_hash: result.txHash,
-          block_number: result.blockNumber,
-          gas_used: result.gasUsed,
-          chain_id: writer.chainId,
-          contract_address: writer.getContractAddress(),
-          repid_event_id: event.id
-        });
 
       } catch (e: any) {
         // Phase 8 — bounded-failure path. Increment circuit-breaker counter;

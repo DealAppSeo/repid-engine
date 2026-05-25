@@ -253,11 +253,106 @@ export async function getPeerVerificationStats(): Promise<PeerVerificationStats>
       if (latencies.length > 0) {
         const p50Idx = Math.floor(latencies.length * 0.5);
         const p95Idx = Math.floor(latencies.length * 0.95);
-        stats.peer_verification_latency_p50 = latencies[p50Idx];
-        stats.peer_verification_latency_p95 = latencies[Math.min(p95Idx, latencies.length - 1)];
+        stats.peer_verification_latency_p50 = latencies[p50Idx] ?? 0;
+        stats.peer_verification_latency_p95 = latencies[Math.min(p95Idx, latencies.length - 1)] ?? 0;
       }
     }
   }
 
   return stats;
+}
+
+export interface SquadObservabilityStats {
+  squads_active_count: number;
+  on_chain_attestation_reduction_rate: number;
+  cross_squad_verification_rate: number;
+  rep_id_provenance_coverage: number;
+}
+
+export async function getSquadObservabilityStats(): Promise<SquadObservabilityStats> {
+  const { data: memberships } = await db
+    .from('squad_membership')
+    .select('squad_id')
+    .is('left_at', null);
+
+  const activeSquadIds = new Set((memberships || []).map((m: any) => m.squad_id).filter(Boolean));
+  const squads_active_count = activeSquadIds.size;
+
+  const { count: offChainCount } = await db
+    .from('squad_internal_attestations')
+    .select('id', { count: 'exact', head: true });
+
+  const { count: totalScoreEvents } = await db
+    .from('repid_score_events')
+    .select('id', { count: 'exact', head: true });
+
+  const totalOffChain = offChainCount || 0;
+  const totalOnChain = totalScoreEvents || 0;
+  const totalAttestations = totalOffChain + totalOnChain;
+  const on_chain_attestation_reduction_rate = totalAttestations > 0 
+    ? totalOffChain / totalAttestations 
+    : 0.0;
+
+  const { data: tasks } = await db
+    .from('trinity_tasks')
+    .select('assigned_to, metadata')
+    .eq('task_type', 'peer_verify')
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  let crossSquadCount = 0;
+  let squadClaimCount = 0;
+
+  if (tasks && tasks.length > 0) {
+    const { data: agents } = await db
+      .from('repid_agents')
+      .select('id, agent_name, squad_id');
+
+    const nameToSquad = new Map<string, string | null>();
+    const idToSquad = new Map<string, string | null>();
+
+    if (agents) {
+      agents.forEach((a: any) => {
+        if (a.agent_name) nameToSquad.set(a.agent_name.toLowerCase().trim(), a.squad_id);
+        if (a.id) idToSquad.set(a.id, a.squad_id);
+      });
+    }
+
+    tasks.forEach((t: any) => {
+      const srcId = t.metadata?.source_agent_id;
+      const verifierName = t.assigned_to?.toLowerCase().trim();
+
+      if (srcId && verifierName) {
+        const srcSquadId = idToSquad.get(srcId);
+        const verifierSquadId = nameToSquad.get(verifierName);
+
+        if (srcSquadId) {
+          squadClaimCount++;
+          if (verifierSquadId && verifierSquadId !== srcSquadId) {
+            crossSquadCount++;
+          }
+        }
+      }
+    });
+  }
+
+  const cross_squad_verification_rate = squadClaimCount > 0
+    ? crossSquadCount / squadClaimCount
+    : 1.0;
+
+  const { count: provenanceCount } = await db
+    .from('rep_id_provenance')
+    .select('id', { count: 'exact', head: true });
+
+  const totalProv = provenanceCount || 0;
+  const rep_id_provenance_coverage = totalOnChain > 0
+    ? Math.min(1.0, totalProv / totalOnChain)
+    : 1.0;
+
+  return {
+    squads_active_count,
+    on_chain_attestation_reduction_rate,
+    cross_squad_verification_rate,
+    rep_id_provenance_coverage,
+  };
 }

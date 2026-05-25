@@ -6,7 +6,8 @@ import {
   getHitlStatus,
   getAgentStatus,
   getRepidEventStats,
-  getPeerVerificationStats
+  getPeerVerificationStats,
+  getSquadObservabilityStats
 } from '../../services/observability-queries';
 
 const router = Router();
@@ -72,6 +73,16 @@ router.get('/peer-verification', async (req, res) => {
     const data = await getPeerVerificationStats();
     res.json(buildResponse(data));
   } catch (error: any) {
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch status' } });
+  }
+});
+
+router.get('/squads', async (req, res) => {
+  try {
+    const data = await getSquadObservabilityStats();
+    res.json(buildResponse(data));
+  } catch (error: any) {
+    console.error("ERROR IN SQUAD METRICS:", error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch status' } });
   }
 });

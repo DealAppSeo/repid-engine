@@ -190,6 +190,58 @@ export class RepIdAttestationService {
 
     return { valid: true };
   }
+
+  async shouldAttestOnChain(agentId: string, responseId: string): Promise<boolean> {
+    // 1. Look up agent's active squad membership
+    const { data: membership, error } = await db
+      .from('squad_membership')
+      .select('squad_id, is_delegate')
+      .eq('agent_id', agentId)
+      .is('left_at', null)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[RepIdAttestationService] Error checking squad membership:', error.message);
+      return true; // Fallback to legacy path (on-chain) on DB error
+    }
+
+    if (!membership) {
+      return true; // Not in a squad -> legacy path (always attest)
+    }
+
+    // 2. If explicitly marked as delegate, return true
+    if (membership.is_delegate) {
+      return true;
+    }
+
+    // 3. Otherwise, check dynamic rotation within the squad
+    const { data: squadMembers, error: membersErr } = await db
+      .from('squad_membership')
+      .select('agent_id')
+      .eq('squad_id', membership.squad_id)
+      .is('left_at', null)
+      .order('agent_id', { ascending: true });
+
+    if (membersErr || !squadMembers || squadMembers.length === 0) {
+      return true; // Fallback to on-chain
+    }
+
+    // Hash responseId to select a delegate deterministically
+    const hash = crypto.createHash('sha256').update(responseId.toString()).digest();
+    const verifierIndex = hash.readUInt32BE(0) % squadMembers.length;
+    const member = squadMembers[verifierIndex];
+    if (!member) {
+      return true;
+    }
+    const chosenDelegateId = member.agent_id;
+
+    return agentId === chosenDelegateId;
+  }
 }
 
 export const repIdAttestationService = new RepIdAttestationService();
+
+export async function shouldAttestOnChain(agentId: string, responseId: string): Promise<boolean> {
+  return repIdAttestationService.shouldAttestOnChain(agentId, responseId);
+}
+
