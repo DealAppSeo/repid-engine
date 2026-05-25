@@ -14,6 +14,8 @@
     "test:regression": "jest --config jest.config.js tests/regression",
     "heartbeat": "ts-node scripts/heartbeat/run-heartbeat.ts",
     "audit-probe": "ts-node scripts/audit-probe/run-audit-probe.ts",
+    "capture:telemetry": "ts-node scripts/observability/capture-telemetry.ts --family all",
+    "health:24h": "ts-node scripts/observability/health-summary-24h.ts",
     "verify:alpaca": "ts-node scripts/verify/alpaca-paper-flow.ts",
     "test:e2e": "jest --config tests/e2e/jest.e2e.config.js --runInBand --forceExit",
     "smoke:hal-external": "ts-node scripts/external-caller-smoke-test.ts",
