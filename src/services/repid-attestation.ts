@@ -13,6 +13,7 @@ export interface RepIdAttestation {
   agent_name: string;
   repid: number;
   tier: string;
+  erc8004_token_id: string | null;
   erc8004_chain_id: number;
   erc8004_registry: string;
   last_reputation_tx: string | null;
