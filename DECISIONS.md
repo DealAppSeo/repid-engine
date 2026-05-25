@@ -28,3 +28,16 @@ This document summarizes the key design and architectural decisions made to hard
 - **Decision**: Prioritize modern scoped API keys via `validateAgentApiKey` in both the agent-management (`key-management.ts`) and external scoring (`agents-external.ts`) routes.
 - **Context**: Legacy keys stored under the `constitution.api_key` JSONB column must be phased out, but V1 must remain backward compatible with existing agents to prevent breaking live production integrations.
 - **Outcome**: Validates modern keys first. If not found, falls back to legacy keys while logging a distinct `[DEPRECATION WARNING]`, allowing ops/telemetry to track active legacy integrations.
+
+---
+
+## 6. Redis Backend for Rate Limiter (D-032)
+- **Decision**: Added support for a Redis-backed rate limiter controlled by the environment variable `RATE_LIMIT_BACKEND=redis` (defaults to `memory` to preserve V1 behavior).
+- **Context**: In multi-instance deployments (such as Railway), using an in-memory Map for rate limiting does not scale horizontally and resets on container restarts.
+- **Outcome**: Enabled horizontal scaling of rate limiting using atomic Redis token bucket operations via a Lua script. If the Redis server is unreachable, the rate limiter gracefully falls back to in-memory tracking or fails open to prevent service disruption.
+
+## 7. Plonky3 Prover Decoupled TypeScript Wrapper (D-033)
+- **Decision**: Decoupled ZKP proof generation logic into a wrapper in `src/zk-proof/prover.ts`.
+- **Context**: Future V2 iterations will run full Plonky3 STARK circuits locally. Decoupling it via a TS wrapper lets the system fail over between HMAC stubs and the real Rust prover seamlessly.
+- **Outcome**: Standardized the input/output shape of proof generation, ensuring zero changes are required in the `/prove-repid` router when switching prover backends in the future.
+
