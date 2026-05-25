@@ -4,7 +4,7 @@ import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
-import { issueAgentApiKey } from '../auth/api-keys';
+import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
 import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 
@@ -48,6 +48,24 @@ async function authAgent(req: Request, res: Response, agentId: string): Promise<
     res.status(401).json({ error: 'Unauthorized: Bearer token required' });
     return null;
   }
+
+  // 1. Prioritize modern scoped API key validation
+  const validApiKey = await validateAgentApiKey(token);
+  if (validApiKey) {
+    if (validApiKey.agent_id !== agentId) {
+      res.status(403).json({ error: 'API key agent_id mismatch' });
+      return null;
+    }
+    const { data: agent, error } = await db
+      .from('repid_agents').select('*').eq('id', agentId).single();
+    if (error || !agent) {
+      res.status(404).json({ error: 'Agent not found' });
+      return null;
+    }
+    return agent;
+  }
+
+  // 2. Fallback to legacy constitution.api_key validation with deprecation warning
   const { data: agent, error } = await db
     .from('repid_agents').select('*').eq('id', agentId).single();
   if (error || !agent) {
@@ -55,11 +73,13 @@ async function authAgent(req: Request, res: Response, agentId: string): Promise<
     return null;
   }
   const storedKey = (agent as any)?.constitution?.api_key;
-  if (!storedKey || storedKey !== token) {
-    res.status(401).json({ error: 'Unauthorized: invalid api_key for agent' });
-    return null;
+  if (storedKey && storedKey === token) {
+    console.warn(`[DEPRECATION WARNING] Legacy api_key used for agent: ${agentId}. Please transition to modern scoped API keys.`);
+    return agent;
   }
-  return agent;
+
+  res.status(401).json({ error: 'Unauthorized: invalid api_key for agent' });
+  return null;
 }
 
 // Sprint A5: sanitize free-form text — strip script/javascript/data URIs, null bytes.

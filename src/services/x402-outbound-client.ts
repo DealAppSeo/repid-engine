@@ -2,6 +2,7 @@ import { repIdAttestationService, ZkpRepIdAttestation } from './repid-attestatio
 import { db } from '../db';
 import { ethers } from 'ethers';
 import { getActiveNetwork } from '../config/network';
+import { getProvider } from '../clients/rpc-with-failover';
 
 import crypto from 'crypto';
 
@@ -57,7 +58,8 @@ export async function resolveAndVerifyDomain(
     name = await token.name();
   } catch (err) {
     if (process.env.NODE_ENV === 'test' || tokenAddress === '0x0000000000000000000000000000000000000000') {
-      const defaultName = tokenAddress.toLowerCase() === '0x036cbd53842c5426634e7929541ec2318f3dcf7e' ? 'USDC' : 'USD Coin';
+      const net = getActiveNetwork();
+      const defaultName = tokenAddress.toLowerCase() === net.contracts.usdc.toLowerCase() ? 'USDC' : 'USD Coin';
       return {
         name: defaultName,
         version: '2',
@@ -240,8 +242,7 @@ export class X402OutboundClient {
       }
       
       const chainId = netConfig.chainId;
-      const rpcUrl = netConfig.rpcUrl;
-      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const provider = getProvider();
 
       const resolvedDomain = await resolveAndVerifyDomain(offer.asset, chainId, provider);
 

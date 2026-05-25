@@ -19,16 +19,19 @@
 // matches the actual ABI as fetched from the canonical repo.
 import { ethers } from 'ethers';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getProvider } from '../clients/rpc-with-failover';
+import { getActiveNetwork } from '../config/network';
 import reputationAbiRaw from '../contracts/ReputationRegistry.abi.json';
 
 const REPUTATION_ABI =
   (reputationAbiRaw as any).abi ?? (reputationAbiRaw as unknown[]);
 
 export interface ReputationWriterConfig {
-  rpcUrl: string;
+  rpcUrl?: string;
   privateKey: string;
   contractAddress?: string;
   chainId?: number;
+  provider?: ethers.Provider;
 }
 
 export interface WriteRepIDArgs {
@@ -63,14 +66,14 @@ export class Erc8004ReputationWriter {
     TAG_TIER_PREFIX: 'tier:',
   };
 
-  private readonly provider: ethers.JsonRpcProvider;
+  private readonly provider: ethers.Provider;
   private readonly wallet: ethers.Wallet;
   private readonly contract: ethers.Contract;
   private readonly contractAddress: string;
   readonly chainId: number;
 
   constructor(config: ReputationWriterConfig) {
-    this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    this.provider = config.provider || new ethers.JsonRpcProvider(config.rpcUrl || 'https://sepolia.base.org');
     this.wallet = new ethers.Wallet(config.privateKey, this.provider);
     this.chainId = config.chainId ?? 84532;
     this.contractAddress =
@@ -262,7 +265,7 @@ function describeBadKey(v: string): string {
 export function getReputationWriter(): Erc8004ReputationWriter | null {
   if (_initAttempted) return _singleton;
   _initAttempted = true;
-  const rpc = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
+  const net = getActiveNetwork();
   const resolved = resolvePrivateKey();
   if (!resolved) {
     console.warn(
@@ -271,10 +274,10 @@ export function getReputationWriter(): Erc8004ReputationWriter | null {
     return null;
   }
   _singleton = new Erc8004ReputationWriter({
-    rpcUrl: rpc,
+    provider: getProvider(),
     privateKey: resolved.key,
-    contractAddress: process.env.ERC8004_REPUTATION_CONTRACT,
-    chainId: parseInt(process.env.ERC8004_REPUTATION_CHAIN_ID || '84532', 10),
+    contractAddress: process.env.ERC8004_REPUTATION_CONTRACT || net.contracts.reputationRegistry,
+    chainId: net.chainId,
   });
   return _singleton;
 }
@@ -300,10 +303,8 @@ export async function persistReputationWrite(
     gas_used: string;
     chain_id: number;
     contract_address: string;
+    repid_event_id?: number;
   }
 ): Promise<void> {
   await supabase.from('erc8004_reputation_writes').insert(args);
-  // Note: increment of reputation_write_count is best-effort; relies on
-  // the caller having fetched current value. If it races, we lose +1
-  // resolution; the append-only log is the authoritative source.
 }
