@@ -253,8 +253,8 @@ export async function getPeerVerificationStats(): Promise<PeerVerificationStats>
       if (latencies.length > 0) {
         const p50Idx = Math.floor(latencies.length * 0.5);
         const p95Idx = Math.floor(latencies.length * 0.95);
-        stats.peer_verification_latency_p50 = latencies[p50Idx];
-        stats.peer_verification_latency_p95 = latencies[Math.min(p95Idx, latencies.length - 1)];
+        stats.peer_verification_latency_p50 = latencies[p50Idx] ?? 0;
+        stats.peer_verification_latency_p95 = latencies[Math.min(p95Idx, latencies.length - 1)] ?? 0;
       }
     }
   }
