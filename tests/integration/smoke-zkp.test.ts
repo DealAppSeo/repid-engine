@@ -3,7 +3,15 @@ import { runScoreEvent } from '../../src/scoring/pipeline';
 import { db } from '../../src/db';
 import crypto from 'crypto';
 
-describe('ZKP Proof Orchestration Smoke Test', () => {
+// Env-guard (matches the other integration suites, e.g. repid-earning / zkp-attestation):
+// this is a REAL integration test — it inserts an agent, runs the scoring pipeline, and
+// reads repid_proof_queue against the live DB — so it must SKIP (not fail) when CI lacks
+// Supabase creds. We deliberately do NOT mock the db (that would defeat the integration
+// test, unlike the verify-proof unit-test fix). Test logic is unchanged.
+const HAS_DB = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
+const describeIfDb = HAS_DB ? describe : describe.skip;
+
+describeIfDb('ZKP Proof Orchestration Smoke Test', () => {
   const testAgentId = crypto.randomUUID();
 
   beforeAll(async () => {
