@@ -5,6 +5,7 @@ import { checkAndAwardBadges } from '../engine/badges';
 import { HASHKEY_CONFIG } from './hashkey';
 import { anchorRepIdEvent } from '../engine/hashkey-chain';
 import { logHalProductionEvent, hashPrompt } from '../engine/production-logger';
+import { extractHALSignals } from '../hal/lib/extract';
 
 const router = Router();
 
@@ -173,15 +174,30 @@ router.post('/challenge', async (req: Request, res: Response) => {
   const easAttestationId = `eas-challenge-${Date.now()}-${String(challengerId).slice(0, 8)}`;
   const challengeId = `ch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+  let halSignals: any = null;
+  let computedCertainty = certainty;
+  try {
+    const signals = extractHALSignals({
+      text: claimStr,
+      domain: 'general',
+      certainty
+    });
+    halSignals = signals;
+    computedCertainty = signals.certainty_at_claim;
+  } catch (err: any) {
+    console.error('[challenge] Failed to extract HAL signals:', err.message);
+  }
+
   await db.from('repid_score_events').insert({
     agent_id: challengerId,
     event_type: challengerEventType,
     delta: challengerDelta,
     repid_before: challenger.current_repid,
     repid_after: challengerNewRepId,
-    certainty_at_claim: certainty,
+    certainty_at_claim: computedCertainty,
     ecosystem_need_weight: 1.0,
     eas_attestation_id: easAttestationId,
+    answer_text: claimStr,
     metadata: {
       challengeId,
       claim,
@@ -193,6 +209,7 @@ router.post('/challenge', async (req: Request, res: Response) => {
       easSchema: 'constitutional-compliance-v1',
       hashkeyContract: HASHKEY_CONFIG.contractAddress,
       chainId: HASHKEY_CONFIG.chainId,
+      hal_signals: halSignals,
     },
   });
 
@@ -202,9 +219,10 @@ router.post('/challenge', async (req: Request, res: Response) => {
     delta: defenderDelta,
     repid_before: defender.current_repid,
     repid_after: defenderNewRepId,
-    certainty_at_claim: null,
+    certainty_at_claim: computedCertainty,
     ecosystem_need_weight: 1.0,
     eas_attestation_id: easAttestationId,
+    answer_text: claimStr,
     metadata: {
       challengeId,
       claim,
@@ -217,6 +235,7 @@ router.post('/challenge', async (req: Request, res: Response) => {
       role: 'DEFENDER',
       hashkeyContract: HASHKEY_CONFIG.contractAddress,
       chainId: HASHKEY_CONFIG.chainId,
+      hal_signals: halSignals,
     },
   });
 
