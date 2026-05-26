@@ -1,6 +1,21 @@
 import { ServiceHandlerBase } from './service-handler-base';
 import type { ServiceContractRow } from '../types';
 import { db } from '../db';
+import { selectSlmRoute, estimateSlmSavings, type SlmModel, type SlmDecision, type SlmSavings } from '../providers/slm-tier';
+import { isHealthy } from '../providers/health';
+
+// Nominal token footprint for a classification/quick-check, used to ESTIMATE the
+// per-decision SLM cost saving at recommendation time (the actual call + real tokens
+// happen downstream). Documented assumption; the savings memo scales by volume.
+const SLM_NOMINAL_TOKENS_IN = 500;
+const SLM_NOMINAL_TOKENS_OUT = 100;
+
+// An SLM is "available" if its provider is healthy AND its API key is configured.
+// If none are available, selectSlmRoute returns null and we fall through to the LLM tier.
+function slmAvailable(m: SlmModel): boolean {
+  const keyPresent = !!process.env[`${m.provider.toUpperCase()}_API_KEY`];
+  return keyPresent && isHealthy(m.provider);
+}
 
 /**
  * Phase 2.10 — ANFIS Routing Service Handler (P-002)
@@ -17,6 +32,10 @@ interface RoutingPayload {
     domain?: string;
     latency_budget_ms?: number;
     cost_budget_usdc_raw?: number;
+    // SLM tier inputs (CC1 2026-05-26): when task_type is an SLM-eligible class and the
+    // required confidence is below the threshold, ANFIS routes to the ultra-cheap SLM tier.
+    task_type?: string;
+    confidence_required?: number;
   };
   buyer_provider_preferences?: string[];
 }
@@ -41,6 +60,32 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
       latency_budget: payload.task_characteristics?.latency_budget_ms ?? 5000,
       cost_budget: payload.task_characteristics?.cost_budget_usdc_raw ?? 100000,
     };
+
+    // SLM tier (CC1 2026-05-26): for SLM-eligible task classes with a low confidence bar,
+    // recommend the ultra-cheap SLM tier below the LLM tier. Falls through to the normal
+    // LLM routing below when not eligible or no SLM is available.
+    const slm = selectSlmRoute(
+      payload.task_characteristics?.task_type,
+      payload.task_characteristics?.confidence_required,
+      slmAvailable,
+    );
+    if (slm) {
+      const savings = estimateSlmSavings(SLM_NOMINAL_TOKENS_IN, SLM_NOMINAL_TOKENS_OUT, { provider: slm.provider, model: slm.model });
+      await this.recordSlmRoute(contract, slm, savings);
+      return {
+        recommended_provider: slm.provider,
+        recommended_model: slm.model,
+        chosen_tier: 'slm',
+        confidence: payload.task_characteristics?.confidence_required ?? 0.5,
+        fallback_chain: [`${slm.fallback.provider}/${slm.fallback.model}`, 'groq', 'anthropic'],
+        reasoning: slm.reason,
+        cost_saved_usd_estimate: savings.saved_usd,
+        cost_basis: { nominal_tokens_in: SLM_NOMINAL_TOKENS_IN, nominal_tokens_out: SLM_NOMINAL_TOKENS_OUT, baseline: savings.baseline, note: 'recommendation-time estimate at nominal tokens' },
+        contract_id: contract.id,
+        computed_at: new Date().toISOString(),
+        patent_marker: 'P-002',
+      };
+    }
 
     const historicalData = await this.queryProviderPerformance(features.domain);
 
@@ -118,6 +163,26 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
       return [];
     }
     return (data ?? []) as ProviderPerf[];
+  }
+
+  /**
+   * Cost tracking (Phase 2.2): record the SLM routing decision + estimated saving to the
+   * shared usage table, with per-agent attribution. Non-blocking — a logging failure must
+   * never break the routing recommendation.
+   */
+  private async recordSlmRoute(contract: ServiceContractRow, slm: SlmDecision, savings: SlmSavings): Promise<void> {
+    try {
+      const tc = (contract.payload as RoutingPayload).task_characteristics;
+      await db.from('trinity_tool_usage').insert({
+        agent_id: (contract as any).buyer_agent_id ?? null,
+        tool_name: 'slm_route',
+        mcp_call_params: { task_type: tc?.task_type, confidence_required: tc?.confidence_required, recommended: `${slm.provider}/${slm.model}` },
+        outcome: { tier: 'slm', provider: slm.provider, model: slm.model, savings, contract_id: contract.id },
+        latency_ms: 0,
+      });
+    } catch (e: any) {
+      console.error('[anfis_routing] recordSlmRoute failed (non-blocking):', e?.message ?? e);
+    }
   }
 
   /**

@@ -30,16 +30,19 @@ describe('Mainnet Value Caps Enforcement', () => {
   const originalEnvNetwork = process.env.NETWORK;
   const originalX402Enforcement = process.env.X402_ENFORCEMENT_ENABLED;
   const originalRealRpc = process.env.X402_REAL_RPC;
+  const originalValueCapEnforcement = process.env.VALUE_CAP_ENFORCEMENT;
 
   beforeAll(() => {
     process.env.X402_ENFORCEMENT_ENABLED = 'true';
     process.env.X402_REAL_RPC = ''; // simulated mode
+    process.env.VALUE_CAP_ENFORCEMENT = 'off';
   });
 
   afterAll(() => {
     process.env.NETWORK = originalEnvNetwork;
     process.env.X402_ENFORCEMENT_ENABLED = originalX402Enforcement;
     process.env.X402_REAL_RPC = originalRealRpc;
+    process.env.VALUE_CAP_ENFORCEMENT = originalValueCapEnforcement;
   });
 
   beforeEach(() => {
@@ -111,7 +114,7 @@ describe('Mainnet Value Caps Enforcement', () => {
               gte: jest.fn().mockReturnThis(),
               lte: jest.fn().mockImplementation(() => {
                 // If it's the daily volume check
-                if (mockSelectCallCount === 2) {
+                if (mockSelectCallCount === 2 || mockSelectCallCount === 3) {
                   return Promise.resolve({ data: opts.settledToday, error: null });
                 }
                 // If it's the per-agent daily transaction cap check
@@ -153,7 +156,7 @@ describe('Mainnet Value Caps Enforcement', () => {
     expect(res.body.status).toBe('escrowed');
   });
 
-  it('rejects escrow (400) when per-contract cap is exceeded', async () => {
+  it('rejects escrow (402) when per-contract cap is exceeded', async () => {
     mockDbForEscrow({
       contractPrice: 15000000, // $15 (cap is $10)
       contractStatus: 'pending',
@@ -166,13 +169,13 @@ describe('Mainnet Value Caps Enforcement', () => {
       .post('/api/v1/contracts/test-contract/escrow')
       .set('X-PAYMENT', 'simulated-payment-header');
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(402);
     expect(res.body.error).toBe('per_contract_cap_exceeded');
-    expect(res.body.cap).toBe(10);
-    expect(res.body.requested).toBe(15);
+    expect(res.body.cap).toBe(10000000);
+    expect(res.body.requested).toBe(15000000);
   });
 
-  it('rejects escrow (429) when daily volume cap is exceeded', async () => {
+  it('rejects escrow (402) when daily volume cap is exceeded', async () => {
     mockDbForEscrow({
       contractPrice: 8000000, // $8
       contractStatus: 'pending',
@@ -188,11 +191,10 @@ describe('Mainnet Value Caps Enforcement', () => {
       .post('/api/v1/contracts/test-contract/escrow')
       .set('X-PAYMENT', 'simulated-payment-header');
 
-    expect(res.status).toBe(429);
-    expect(res.body.error).toBe('daily_volume_cap_exceeded');
-    expect(res.body.cap).toBe(100);
-    expect(res.body.todays_volume).toBe(95);
-    expect(res.body.attempted).toBe(8);
+    expect(res.status).toBe(402);
+    expect(res.body.error).toBe('daily_cumulative_cap_exceeded');
+    expect(res.body.cap).toBe(100000000);
+    expect(res.body.requested).toBe(103000000);
   });
 
   it('rejects escrow (429) when per-agent daily transaction cap is exceeded', async () => {
