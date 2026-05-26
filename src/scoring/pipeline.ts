@@ -246,6 +246,32 @@ export async function runScoreEvent(
   }
   const score_event_id = Number((eventRow as any).id);
 
+  // Write to hal_classifications to record the HAL inference so /api/v1/hal/stats reports it
+  try {
+    const promptHash = crypto.createHash('sha256').update(input.prompt).digest('hex').slice(0, 32);
+    const categoryMapping: Record<string, string> = {
+      'factual': 'factual',
+      'opinion': 'opinion',
+      'math': 'math',
+      'code': 'code',
+      'creative': 'creative',
+      'time-sensitive': 'time-sensitive'
+    };
+    const taskTypeClean = String(input.task_domain || '').toLowerCase().trim();
+    const category = categoryMapping[taskTypeClean] || 'factual';
+
+    await db.from('hal_classifications').insert({
+      prompt_hash: promptHash,
+      category,
+      confidence: 'high',
+      latency_ms: 0,
+      provider: 'trinity-task-bridge',
+      model: 'deterministic-extractor',
+    });
+  } catch (err: any) {
+    console.warn('[scoring/pipeline] Failed to write to hal_classifications:', err.message);
+  }
+
   // 7. Update agent state.
   await db
     .from('repid_agents')

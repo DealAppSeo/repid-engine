@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { db } from '../db';
 import { runScoreEvent } from '../scoring/pipeline';
 
@@ -14,6 +15,17 @@ export function normalizeAgentName(assigned: string | null | undefined): string 
     name = `trinity-${name}`;
   }
   return name;
+}
+
+function generateDeterministicUuid(taskId: number | string): string {
+  const hash = crypto.createHash('sha256').update(String(taskId)).digest('hex');
+  return [
+    hash.substring(0, 8),
+    hash.substring(8, 12),
+    '4' + hash.substring(13, 16), // version 4
+    (parseInt(hash.substring(16, 17), 16) & 0x3 | 0x8).toString(16) + hash.substring(17, 20), // variant
+    hash.substring(20, 32)
+  ].join('-');
 }
 
 export async function startTrinityTaskBridge() {
@@ -36,11 +48,11 @@ async function pollCompletedTasks() {
   isRunning = true;
 
   try {
-    // Query recently completed done tasks that are not yet verified
+    // Query recently completed done, shadow_reject, or verified tasks that are not yet repid_verified
     const { data: tasks, error: fetchErr } = await db
       .from('trinity_tasks')
-      .select('id, agent_assigned, status, result, belief, uncertainty, title, description, task_type, metadata, completed_at, updated_at')
-      .eq('status', 'done')
+      .select('id, agent_assigned, claimed_by, agent_name, completed_by, status, result, belief, uncertainty, certainty, title, description, task_type, metadata, completed_at, updated_at')
+      .in('status', ['done', 'shadow_reject', 'verified'])
       .eq('repid_verified', false)
       .or(`completed_at.gt.${startTimestamp},updated_at.gt.${startTimestamp}`)
       .order('completed_at', { ascending: true })
@@ -57,7 +69,7 @@ async function pollCompletedTasks() {
       return;
     }
 
-    console.log(`[TrinityTaskBridge] Found ${tasks.length} pending done tasks to bridge`);
+    console.log(`[TrinityTaskBridge] Found ${tasks.length} pending completed/decision tasks to bridge`);
 
     for (const task of tasks) {
       try {
@@ -68,7 +80,31 @@ async function pollCompletedTasks() {
           continue;
         }
 
-        const agentName = normalizeAgentName(task.agent_assigned);
+        // Check if this task has already been scored (e.g. by substance-gate EPISTEMIC_VIOLATION)
+        const gateEventId = task.metadata?.substance_gate_event_id;
+        if (gateEventId) {
+          const { data: existingGateEvent, error: gateErr } = await db
+            .from('repid_score_events')
+            .select('id')
+            .eq('idempotency_key', gateEventId)
+            .maybeSingle();
+          if (gateErr) {
+            console.error(`[TrinityTaskBridge] Error checking existing score event for task ${task.id}:`, gateErr.message);
+          } else if (existingGateEvent) {
+            console.log(`[TrinityTaskBridge] Task ${task.id} already scored via gate event ${gateEventId}, marking bridged`);
+            await markTaskBridged(task);
+            continue;
+          }
+        }
+
+        const rawAgent = 
+          task.agent_assigned || 
+          task.claimed_by || 
+          task.agent_name || 
+          task.completed_by || 
+          task.metadata?.processedBy;
+        const agentName = normalizeAgentName(rawAgent);
+
         const { data: agentInfo, error: agentErr } = await db
           .from('repid_agents')
           .select('id')
@@ -81,16 +117,23 @@ async function pollCompletedTasks() {
           continue;
         }
 
-        // Map certainty from belief or uncertainty
+        // Map certainty from certainty, belief, uncertainty, or metadata
         let certainty = 0.85;
-        if (task.belief != null) {
+        if (task.certainty != null && !isNaN(parseFloat(task.certainty))) {
+          certainty = parseFloat(task.certainty);
+        } else if (task.belief != null && !isNaN(parseFloat(task.belief))) {
           certainty = parseFloat(task.belief);
-        } else if (task.uncertainty != null) {
+        } else if (task.uncertainty != null && !isNaN(parseFloat(task.uncertainty))) {
           certainty = 1 - parseFloat(task.uncertainty);
+        } else if (task.metadata?.certainty != null && !isNaN(parseFloat(task.metadata.certainty))) {
+          certainty = parseFloat(task.metadata.certainty);
         }
         certainty = Math.max(0, Math.min(1, certainty));
+        if (isNaN(certainty)) {
+          certainty = 0.85;
+        }
 
-        console.log(`[TrinityTaskBridge] Bridging task ${task.id} (agent: ${agentName}, certainty: ${certainty})`);
+        console.log(`[TrinityTaskBridge] Bridging task ${task.id} (status: ${task.status}, agent: ${agentName}, certainty: ${certainty})`);
 
         // Run score event
         const scoreResult = await runScoreEvent({
@@ -100,6 +143,7 @@ async function pollCompletedTasks() {
           task_domain: task.task_type || 'general',
           certainty: certainty,
           idempotency_key: `trinity_task_bridge_${task.id}`,
+          llm_call_id: generateDeterministicUuid(task.id),
         });
 
         console.log(`[TrinityTaskBridge] Score event successfully created: id=${scoreResult.score_event_id}, hal_score=${scoreResult.hal_score}, delta=${scoreResult.repid_delta_applied}`);
