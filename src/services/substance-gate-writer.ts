@@ -1,5 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { appendToAuditChain } from './auditChainWriter';
+import { extractHALSignals } from '../hal/lib/extract';
 
 /**
  * Extract provenance tags from a task for propagation to derivative events.
@@ -137,6 +138,34 @@ export async function slashRepIDForGateFail(
 
     const provenance = extractProvenance(task);
 
+    let certaintyAtClaim = 0.85;
+    let halScore = 0.5;
+    let halSignals: any = null;
+
+    try {
+      const deliverable = task.result || '';
+      const domain = task.task_type || 'finance';
+      if (deliverable.trim().length > 0) {
+        const signals = extractHALSignals({
+          text: deliverable,
+          domain,
+          certainty: 0.85
+        });
+        certaintyAtClaim = signals.certainty_at_claim;
+        halSignals = signals;
+
+        const scoreVal = (
+          0.4 * signals.harm_probability +
+          0.3 * signals.epistemic_uncertainty +
+          0.2 * (1 - signals.evidence_quality) +
+          0.1 * (1 - signals.scope_appropriateness)
+        ) * (531441 / 524288);
+        halScore = Math.min(1, scoreVal);
+      }
+    } catch (err: any) {
+      console.error('[GateWriter] Failed to extract HAL signals:', err.message);
+    }
+
     // Step 3: Write score event
     const { error: insertError } = await db.from('repid_score_events').insert({
       agent_id: agentUuid,
@@ -144,6 +173,12 @@ export async function slashRepIDForGateFail(
       delta: delta,
       repid_before: repidBefore,
       repid_after: repidAfter,
+      certainty_at_claim: certaintyAtClaim,
+      hal_score: halScore,
+      hal_decision: 'flagged',
+      answer_text: task.result || null,
+      prompt_text: task.description || task.title || null,
+      task_domain: task.task_type || null,
       idempotency_key: gateEventId,  // From A3
       metadata: {
         failure_subtype: 'substance_gate_fast_path',
@@ -152,7 +187,8 @@ export async function slashRepIDForGateFail(
         reap_count: reapCount,
         gate_event_id: gateEventId,
         agent_name: agentName,
-        provenance: provenance  // NEW: full provenance propagation
+        provenance: provenance,  // NEW: full provenance propagation
+        hal_signals: halSignals
       }
     });
 

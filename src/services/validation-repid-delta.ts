@@ -113,7 +113,10 @@ export async function applyValidationDeltas(
         outcome,
         tier_band: band,
         tier_provenance: tierToProvenance(taskData.tier),
-        judgeVerdict
+        judgeVerdict,
+        answer_text: taskData.result || '',
+        prompt_text: taskData.description || taskData.title || '',
+        task_domain: taskData.task_type || 'finance',
       });
     } else {
       console.error(`[applyValidationDeltas] CRITICAL: Claimer agent not found for task ${taskData.id}: ${taskData.claimed_by}`);
@@ -138,7 +141,10 @@ export async function applyValidationDeltas(
         outcome,
         tier_band: band,
         tier_provenance: tierToProvenance(taskData.tier),
-        consensus_reached: workerVerdict !== 'escalated'
+        consensus_reached: workerVerdict !== 'escalated',
+        answer_text: taskData.result || '',
+        prompt_text: taskData.description || taskData.title || '',
+        task_domain: taskData.task_type || 'finance',
       });
     } else {
       console.error(`[applyValidationDeltas] CRITICAL: Validator agent not found for task ${taskData.id}: ${validatorName}`);
@@ -272,9 +278,12 @@ export async function applyServiceFulfilledDeltas(
   const halEnrichmentEnabled = process.env.HAL_ENRICHMENT_ENABLED === 'true';
   let halOverride: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any } | undefined;
 
+  let deliverable = '';
+  let promptText = '';
+
   try {
-    const deliverable: string = typeof payload.content === 'string' ? payload.content : '';
-    const promptText: string =
+    deliverable = typeof payload.content === 'string' ? payload.content : '';
+    promptText =
       (typeof payload.title === 'string' && payload.title) ||
       (typeof payload.criteria === 'string' ? payload.criteria : '') || '';
 
@@ -335,6 +344,9 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'provider',
+      answer_text: deliverable,
+      prompt_text: promptText,
+      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
     },
     halOverride
   );
@@ -346,6 +358,9 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'buyer',
+      answer_text: deliverable,
+      prompt_text: promptText,
+      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
     },
     halOverride
   );
