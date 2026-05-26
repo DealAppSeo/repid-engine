@@ -5,6 +5,7 @@ import { ethers } from 'ethers';
 import { resolveAndVerifyDomain } from './x402-outbound-client';
 import { getActiveNetwork } from '../config/network';
 import { x402Metrics } from '../observability/x402-metrics';
+import { getProvider } from '../clients/rpc-with-failover';
 
 export interface PaymentRequirements {
   scheme: 'exact';
@@ -93,8 +94,7 @@ export class X402Facilitator {
 
       const netConfig = getActiveNetwork();
       const chainId = netConfig.chainId;
-      const rpcUrl = netConfig.rpcUrl;
-      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const provider = getProvider();
 
       let name = "USDC";
       let version = "2";
@@ -201,8 +201,7 @@ export class X402Facilitator {
 
       const netConfig = getActiveNetwork();
       const chainId = netConfig.chainId;
-      const rpcUrl = netConfig.rpcUrl;
-      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const provider = getProvider();
 
       let name = "USDC";
       let version = "2";

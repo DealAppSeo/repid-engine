@@ -206,33 +206,78 @@ export function buildFreeHalProviders(): HALProviderConfig[] {
 export async function applyServiceFulfilledDeltas(
   contract: { id: string, service_id: string, provider_agent_id: string, buyer_agent_id: string }
 ): Promise<void> {
+  // Fetch full contract row to get x402_payment_id, metadata, payload, and result
+  let fullContract: any = null;
+  try {
+    const { data, error: fetchErr } = await db
+      .from('service_contracts')
+      .select('*, agent_services(service_type)')
+      .eq('id', contract.id)
+      .maybeSingle();
+
+    if (fetchErr) {
+      console.error(
+        `[applyServiceFulfilledDeltas] failed to fetch contract details:`,
+        fetchErr.message ?? fetchErr
+      );
+    } else {
+      fullContract = data;
+    }
+  } catch (e: any) {
+    console.error(`[applyServiceFulfilledDeltas] unexpected error in fetch:`, e.message ?? String(e));
+  }
+
+  if (!fullContract) {
+    console.warn(`[applyServiceFulfilledDeltas] No contract found for ${contract.id}, skipping deltas.`);
+    return;
+  }
+
+  const payload: any = fullContract.payload ?? {};
+  const meta: any = fullContract.metadata ?? {};
+
+  // F-series patch (2026-05-22): normalize is_simulated across case/type
+  // ("True"/"TRUE"/1/"1"/"yes") and nested/mislocated flags via
+  // hasTruthySimFlag (src/utils/truthy.ts).
+  let isSimulated =
+    hasTruthySimFlag(meta) ||
+    hasTruthySimFlag(payload);
+
+  // Check if settlement is simulated
+  if (fullContract.x402_payment_id) {
+    try {
+      const { data: settlement } = await db
+        .from('x402_settlements')
+        .select('is_simulated')
+        .eq('id', fullContract.x402_payment_id)
+        .maybeSingle();
+
+      if (settlement?.is_simulated) {
+        isSimulated = true;
+      }
+    } catch (e: any) {
+      console.error(`[applyServiceFulfilledDeltas] failed to fetch settlement details:`, e.message ?? String(e));
+    }
+  }
+
+  // G1: gate RepID delta on !isSimulated. If simulated, delta applied is 0.
+  const providerDelta = isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.provider;
+  const buyerDelta = isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.buyer;
+
   // HAL enrichment (2026-05-22): evaluate the deliverable text and pass a real
   // HAL verdict into the SERVICE_FULFILLED score-event rows below. NON-FATAL —
   // any failure (eval error, missing payload) falls back to undefined, so
   // applyValidationEvent uses its 0.5/clean default and fulfillment still
   // completes. Simulated/empty deliverables are skipped to save eval cost.
   // This block does NOT touch the bridge insert that follows.
-  // Phase 1 (2026-05-23): HAL enrichment ships behind HAL_ENRICHMENT_ENABLED
-  // (default off → applyValidationEvent uses its 0.5/clean default = legacy
-  // behavior, byte-identical to pre-HAL-enrichment main). Zero behavior change
-  // at merge time; Sean flips the flag post-merge after smoke verification.
   const halEnrichmentEnabled = process.env.HAL_ENRICHMENT_ENABLED === 'true';
   let halOverride: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any } | undefined;
+
   try {
-    const { data: cRow } = await db
-      .from('service_contracts')
-      .select('payload, metadata')
-      .eq('id', contract.id)
-      .maybeSingle();
-    const payload: any = (cRow as any)?.payload ?? {};
-    const meta: any = (cRow as any)?.metadata ?? {};
     const deliverable: string = typeof payload.content === 'string' ? payload.content : '';
     const promptText: string =
       (typeof payload.title === 'string' && payload.title) ||
       (typeof payload.criteria === 'string' ? payload.criteria : '') || '';
-    const isSimulated =
-      meta.is_simulated === true || meta.is_simulated === 'true' ||
-      payload.is_simulated === true || payload.is_simulated === 'true';
+
     if (halEnrichmentEnabled && !isSimulated && deliverable.trim().length > 0) {
       // Phase 4 (2026-05-23): HAL_STRICTNESS=1 = extractor-only (synchronous, no
       // LLM). HAL_STRICTNESS=2 = question-shaped cross-LLM FACT-CHECK — the
@@ -285,7 +330,7 @@ export async function applyServiceFulfilledDeltas(
   await applyValidationEvent(
     contract.provider_agent_id,
     'SERVICE_FULFILLED',
-    SERVICE_FULFILLED_DELTAS.provider,
+    providerDelta,
     {
       contract_id: contract.id,
       service_id: contract.service_id,
@@ -296,7 +341,7 @@ export async function applyServiceFulfilledDeltas(
   await applyValidationEvent(
     contract.buyer_agent_id,
     'SERVICE_FULFILLED',
-    SERVICE_FULFILLED_DELTAS.buyer,
+    buyerDelta,
     {
       contract_id: contract.id,
       service_id: contract.service_id,
@@ -306,51 +351,18 @@ export async function applyServiceFulfilledDeltas(
   );
 
   try {
-    // Fetch full contract row to get x402_payment_id, metadata, payload, and result
-    const { data: fullContract, error: fetchErr } = await db
-      .from('service_contracts')
-      .select('*, agent_services(service_type)')
-      .eq('id', contract.id)
-      .maybeSingle();
-
-    if (fetchErr) {
-      console.error(
-        `[applyServiceFulfilledDeltas] failed to fetch contract details:`,
-        fetchErr.message ?? fetchErr,
-        (fetchErr as any).stack ?? new Error().stack
-      );
-    } else if (fullContract && fullContract.x402_payment_id) {
-      const agentService = (fullContract as any).agent_services;
-      const taskType = fullContract.metadata?.task_type || fullContract.payload?.task_type || agentService?.service_type || null;
+    if (fullContract.x402_payment_id) {
+      const agentService = fullContract.agent_services;
+      const taskType = meta.task_type || payload.task_type || agentService?.service_type || null;
 
       if (taskType !== null) {
-        // F-series patch (2026-05-22): normalize is_simulated across case/type
-        // ("True"/"TRUE"/1/"1"/"yes") and nested/mislocated flags via
-        // hasTruthySimFlag (src/utils/truthy.ts). Replaces the prior
-        // case-sensitive `=== true || === 'true'` check. The x402_settlements
-        // check below is unchanged (settlement-level safety net).
-        let isSimulated =
-          hasTruthySimFlag(fullContract.metadata) ||
-          hasTruthySimFlag(fullContract.payload);
-
-        // Check if settlement is simulated
-        const { data: settlement } = await db
-          .from('x402_settlements')
-          .select('is_simulated')
-          .eq('id', fullContract.x402_payment_id)
-          .maybeSingle();
-
-        if (settlement?.is_simulated) {
-          isSimulated = true;
-        }
-
         const verdict = fullContract.result?.verdict || null;
 
         const { error: insertErr } = await db.from('repid_events').insert({
           subject_id: contract.provider_agent_id,
           subject_type: 'agent',
           event_type: 'service_fulfilled_settled',
-          reputation_delta: SERVICE_FULFILLED_DELTAS.provider,
+          reputation_delta: providerDelta,
           event_data: {
             is_simulated: isSimulated,
             tx_hash: null,

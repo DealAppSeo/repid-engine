@@ -10,3 +10,5 @@ dist/
 
 # Generated artifacts (regenerable via npm scripts)
 hal-ground-truth-template.csv
+.env.local
+.firecrawl/

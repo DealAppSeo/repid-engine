@@ -19,7 +19,8 @@ import {
   verifyRepIDAttestation,
 } from '../repid/repid-attestation';
 import { db } from '../db';
-import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
+import { logProofGeneration } from '../zkp/plonky3-real';
+import { generateProof } from '../zk-proof/prover';
 import { fireWebhook } from '../services/webhook';
 
 export const repidPublicRouter = Router();
@@ -132,17 +133,28 @@ repidAdminRouter.post('/prove-repid', async (req: Request, res: Response) => {
   }
 
   const timestamp = new Date().toISOString();
-  const result = await generateProofReal(agent_id, requester_pubkey, requested_tier, timestamp);
-  const proof = result.proof;
+  const result = await generateProof({
+    agent_id,
+    requester_pubkey,
+    requested_tier,
+    timestamp,
+  });
   await logProofGeneration(db, agent_id, requested_tier);
-  fireWebhook('proof.generated', { proof, proof_source: result.proof_source, agent_id, requester_pubkey, tier: requested_tier, timestamp });
+  fireWebhook('proof.generated', {
+    proof: result.proof,
+    proof_source: result.proof_source,
+    agent_id,
+    requester_pubkey,
+    tier: requested_tier,
+    timestamp,
+  });
 
   res.json({
     tier: requested_tier,
-    proof,
+    proof: result.proof,
     proof_source: result.proof_source,
-    proofFormat: result.proof_source === 'plonky3_real' ? 'plonky3-real-v1' : 'plonky3-babybear-stub-v1',
-    proofVersion: "1.0",
+    proofFormat: result.proofFormat,
+    proofVersion: result.proofVersion,
     payload: basePayload,
   });
 });

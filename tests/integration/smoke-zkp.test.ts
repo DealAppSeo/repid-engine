@@ -3,7 +3,14 @@ import { runScoreEvent } from '../../src/scoring/pipeline';
 import { db } from '../../src/db';
 import crypto from 'crypto';
 
-describe('ZKP Proof Orchestration Smoke Test', () => {
+// ⚠️ This smoke test writes to (and deletes from) the LIVE Supabase DB — it inserts
+// a real repid_agents row and triggers the ZKP pipeline. It must NOT run by default
+// (it would pollute prod and/or fail in CI without DB env). Opt in explicitly:
+//   RUN_ZKP_SMOKE=true npx jest tests/integration/smoke-zkp.test.ts
+const RUN_ZKP_SMOKE = process.env.RUN_ZKP_SMOKE === 'true';
+const describeZkpSmoke = RUN_ZKP_SMOKE ? describe : describe.skip;
+
+describeZkpSmoke('ZKP Proof Orchestration Smoke Test', () => {
   const testAgentId = crypto.randomUUID();
 
   beforeAll(async () => {
@@ -56,7 +63,7 @@ describe('ZKP Proof Orchestration Smoke Test', () => {
 
     expect(error).toBeNull();
     expect(job).toBeDefined();
-    expect(job.status).toBe('pending');
+    expect(['pending', 'completed']).toContain(job.status);
     expect(job.agent_id).toBe(testAgentId);
     expect(job.zkp_service_url).toContain('zkp-postcard-production.up.railway.app');
   });

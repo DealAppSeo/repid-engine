@@ -42,6 +42,7 @@ export interface ScoreEventInput {
   task_domain?: string;
   certainty?: number;
   idempotency_key?: string;
+  contract_id?: string;
 }
 
 export interface ScoreEventResult {
@@ -208,6 +209,7 @@ export async function runScoreEvent(
     repid_after: Math.round(new_repid),
     certainty_at_claim:
       typeof input.certainty === 'number' ? input.certainty : 0.85,
+    contract_id: input.contract_id ?? null,
     llm_provider: input.provider_used ?? null,
     llm_model: input.model_used ?? null,
     hal_score,
@@ -336,7 +338,8 @@ export async function applyValidationEvent(
     zk_proof_triggered: triggerProof,
     zk_proof_id,
     decision_outcome: halDecision,
-    metadata: enrichedMetadata
+    metadata: enrichedMetadata,
+    contract_id: metadata?.contract_id ?? null,
   };
 
   const { data: eventRow, error: evErr } = await db

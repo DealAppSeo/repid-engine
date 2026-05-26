@@ -187,3 +187,77 @@ export async function getRepidEventStats(): Promise<RepidEventStats> {
   }
   return stats;
 }
+
+export interface PeerVerificationStats {
+  peer_verification_rate: number;
+  peer_verification_agreement_rate: number;
+  peer_verification_latency_p50: number;
+  peer_verification_latency_p95: number;
+  total_in_queue: number;
+  pending_count: number;
+  in_review_count: number;
+  completed_count: number;
+}
+
+export async function getPeerVerificationStats(): Promise<PeerVerificationStats> {
+  const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
+
+  // 1. Fetch total events in last 24h
+  const { count: totalEvents } = await db
+    .from('repid_score_events')
+    .select('id', { count: 'exact', head: true })
+    .gte('created_at', oneDayAgo);
+
+  // 2. Fetch queue stats in last 24h
+  const { data: queueEntries } = await db
+    .from('peer_verification_queue')
+    .select('verification_status, created_at, completed_at, verifier_signature')
+    .gte('created_at', oneDayAgo);
+
+  const stats: PeerVerificationStats = {
+    peer_verification_rate: 0,
+    peer_verification_agreement_rate: 0,
+    peer_verification_latency_p50: 0,
+    peer_verification_latency_p95: 0,
+    total_in_queue: queueEntries?.length || 0,
+    pending_count: 0,
+    in_review_count: 0,
+    completed_count: 0
+  };
+
+  if (queueEntries && queueEntries.length > 0) {
+    if (totalEvents && totalEvents > 0) {
+      stats.peer_verification_rate = queueEntries.length / totalEvents;
+    }
+
+    const completed = queueEntries.filter(e => e.verification_status === 'verified' || e.verification_status === 'disputed');
+    stats.completed_count = completed.length;
+    stats.pending_count = queueEntries.filter(e => e.verification_status === 'pending').length;
+    stats.in_review_count = queueEntries.filter(e => e.verification_status === 'in_review').length;
+
+    if (completed.length > 0) {
+      const verified = completed.filter(e => e.verification_status === 'verified').length;
+      stats.peer_verification_agreement_rate = verified / completed.length;
+
+      // Calculate latencies
+      const latencies = completed
+        .map(e => {
+          if (e.completed_at && e.created_at) {
+            return (new Date(e.completed_at).getTime() - new Date(e.created_at).getTime()) / 1000;
+          }
+          return null;
+        })
+        .filter((l): l is number => l !== null)
+        .sort((a, b) => a - b);
+
+      if (latencies.length > 0) {
+        const p50Idx = Math.floor(latencies.length * 0.5);
+        const p95Idx = Math.floor(latencies.length * 0.95);
+        stats.peer_verification_latency_p50 = latencies[p50Idx] ?? 0;
+        stats.peer_verification_latency_p95 = latencies[Math.min(p95Idx, latencies.length - 1)] ?? 0;
+      }
+    }
+  }
+
+  return stats;
+}
