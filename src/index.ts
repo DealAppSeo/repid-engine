@@ -334,10 +334,115 @@ app.use('/api/v1', createAgentRegistrationRouter(db));
 app.use('/api/v1', createAgentsReputationRouter(db));
 
 // v11 LLM trust leaderboard (public)
-app.get('/api/v1/llm-trust', async (_req, res) => {
+//
+// CC1 Round 3 (2026-05-26): added default filter + canonicalization on top of
+// the `llm_trust_leaderboard` view to remove test/diagnostic rows, normalize
+// case-sensitive duplicates, and hide statistical-noise rows.
+//
+// Defaults:
+//   - excludes llm_provider in {'test-harness', 'diagnostic-test', 'manual', 'test'} and NULL
+//   - excludes llm_provider matching /^test/i
+//   - excludes rows where last_decision is > 30 days old
+//   - lowercases provider names and merges casing duplicates by re-summing decisions
+// Opt-out: `?include_stale=true` keeps stale rows; `?include_test=true` keeps test entries.
+app.get('/api/v1/llm-trust', async (req, res) => {
   const { data, error } = await db.from('llm_trust_leaderboard').select('*');
   if (error) return res.status(500).json({ error: error.message });
-  return res.json(data ?? []);
+
+  const includeStale = String(req.query.include_stale ?? '').toLowerCase() === 'true';
+  const includeTest = String(req.query.include_test ?? '').toLowerCase() === 'true';
+
+  const TEST_PROVIDERS = new Set(['test-harness', 'diagnostic-test', 'manual', 'test']);
+  const STALE_CUTOFF_MS = 30 * 24 * 3600 * 1000;
+  const now = Date.now();
+
+  const filtered = (data ?? []).filter((row: any) => {
+    const provider = (row.llm_provider ?? '').trim();
+    if (!provider) return false; // exclude rows with no provider
+    if (!includeTest) {
+      const lc = provider.toLowerCase();
+      if (TEST_PROVIDERS.has(lc)) return false;
+      if (/^test/i.test(lc)) return false;
+    }
+    if (!includeStale && row.last_decision) {
+      const age = now - new Date(row.last_decision).getTime();
+      if (age > STALE_CUTOFF_MS) return false;
+    }
+    return true;
+  });
+
+  // Canonicalize provider name (lowercase) and merge case-sensitive duplicates
+  // (e.g. "openai"/"OpenAI"). Group key: (lowercased provider, model). Sum totals
+  // and recompute hallucination_rate_pct / trust_score_pct / avg_certainty as
+  // weighted averages on total_decisions.
+  type Agg = {
+    llm_provider: string;
+    llm_model: string | null;
+    total_decisions: number;
+    hallucinations_caught: number;
+    trust_score_pct_num: number; // weighted sum of trust_score_pct * total_decisions
+    avg_certainty_num: number;   // weighted sum of avg_certainty * total_decisions
+    agents_using_max: number;
+    last_decision: string | null;
+  };
+  const merged = new Map<string, Agg>();
+  for (const row of filtered) {
+    const lcProv = String(row.llm_provider).trim().toLowerCase();
+    const key = `${lcProv}::${row.llm_model ?? ''}`;
+    const td = Number(row.total_decisions ?? 0);
+    const hc = Number(row.hallucinations_caught ?? 0);
+    const trustPct = Number(row.trust_score_pct ?? 0);
+    const certAvg = Number(row.avg_certainty ?? 0);
+    const cur = merged.get(key) ?? {
+      llm_provider: lcProv,
+      llm_model: row.llm_model ?? null,
+      total_decisions: 0,
+      hallucinations_caught: 0,
+      trust_score_pct_num: 0,
+      avg_certainty_num: 0,
+      agents_using_max: 0,
+      last_decision: null as string | null,
+    };
+    cur.total_decisions += td;
+    cur.hallucinations_caught += hc;
+    cur.trust_score_pct_num += trustPct * td;
+    cur.avg_certainty_num += certAvg * td;
+    cur.agents_using_max = Math.max(cur.agents_using_max, Number(row.agents_using ?? 0));
+    if (row.last_decision) {
+      if (!cur.last_decision || new Date(row.last_decision).getTime() > new Date(cur.last_decision).getTime()) {
+        cur.last_decision = row.last_decision;
+      }
+    }
+    merged.set(key, cur);
+  }
+
+  // Hide statistical-noise rows: drop entries with fewer than 10 total decisions
+  // (these had a misleading "trust_score_pct: 0" on the prior endpoint because
+  // sparse-sample math). Override via `?min_decisions=N` (default 10).
+  const minDecisions = Number(req.query.min_decisions ?? 10);
+
+  const out = Array.from(merged.values())
+    .filter((a) => a.total_decisions >= (Number.isFinite(minDecisions) ? minDecisions : 10))
+    .map((a) => ({
+      llm_provider: a.llm_provider,
+      llm_model: a.llm_model,
+      total_decisions: a.total_decisions,
+      hallucinations_caught: a.hallucinations_caught,
+      hallucination_rate_pct: a.total_decisions > 0
+        ? +(100 * a.hallucinations_caught / a.total_decisions).toFixed(2)
+        : 0,
+      trust_score_pct: a.total_decisions > 0
+        ? +(a.trust_score_pct_num / a.total_decisions).toFixed(2)
+        : null,
+      avg_certainty: a.total_decisions > 0
+        ? +(a.avg_certainty_num / a.total_decisions).toFixed(3)
+        : null,
+      agents_using: a.agents_using_max,
+      last_decision: a.last_decision,
+    }))
+    .sort((a, b) => (b.trust_score_pct ?? 0) - (a.trust_score_pct ?? 0) || b.total_decisions - a.total_decisions);
+
+  return res.json(out);
 });
 
 app.use(healthRouter);
