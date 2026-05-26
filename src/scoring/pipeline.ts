@@ -338,7 +338,11 @@ export async function applyValidationEvent(
         domain: taskDomain,
         certainty: typeof halOverride?.hal_signals?.certainty_at_claim === 'number'
           ? halOverride.hal_signals.certainty_at_claim
-          : 0.85
+          : (typeof metadata?.certainty === 'number'
+              ? metadata.certainty
+              : (typeof metadata?.certainty_at_claim === 'number'
+                  ? metadata.certainty_at_claim
+                  : 0.85))
       });
       certaintyAtClaim = signals.certainty_at_claim;
       

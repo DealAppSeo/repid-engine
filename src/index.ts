@@ -1,5 +1,6 @@
 import express from 'express';
 import { startValidationWorker } from './services/validation-queue-worker';
+import { startTrinityTaskBridge } from './services/trinity-task-bridge';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
@@ -707,6 +708,10 @@ import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 
 startValidationWorker();
 startHitlExpirationJob();
+
+if (!IS_TEST) {
+  startTrinityTaskBridge();
+}
 
 // Phase 2.11 — Dispute Resolution Worker
 const disputeWorker = new DisputeResolutionWorker();
