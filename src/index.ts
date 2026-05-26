@@ -14,6 +14,10 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
+import controllerRouter from './routes/v1/controller';
+import escalationRouter from './routes/v1/escalation';
+import federationRouter from './routes/v1/federation';
+import marketplaceRouter from './routes/v1/marketplace';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -173,6 +177,12 @@ app.use((req, res, next) => {
   // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
   // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
   if (req.path === '/api/v1/api-key-requests/request') return next();
+  // Controller (CC2 2026-05-26): /controller/sprint + /wake carry free-form sprint
+  // titles/descriptions (prose that legitimately contains SQL-shaped tokens). SBT-gated;
+  // downstream Supabase writes are parameterized.
+  if (req.path.startsWith('/api/v1/controller/sprint') || req.path.startsWith('/api/v1/controller/wake')) return next();
+  // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
+  if (req.path === '/api/v1/escalation/escalate') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -200,6 +210,17 @@ app.use('/api/v1/audit', auditRouter);
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
+// Controller API (CC2 2026-05-26) — SBT-gated (its own controller-auth middleware),
+// so mounted before the REPID_API_KEYS authMiddleware. Backend for the v0.app controller rebuild.
+app.use('/api/v1/controller', controllerRouter);
+// V2 SUBSTRATE: federated developer-node onboarding (node-facing; gated by node_id/nonce +
+// federation opt-in state, NOT by SBT/REPID_API_KEY). Mounted before authMiddleware. Stubbed-
+// functional: validates + writes developer_nodes/federation_events; no live federation yet.
+app.use('/api/v1/federation', federationRouter);
+// V2 SUBSTRATE (PHASE 2 OF MARKETPLACE): RepID rent/sell listings + rentals CRUD.
+// SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
+// earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
+app.use('/api/v1/marketplace', marketplaceRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
@@ -270,6 +291,9 @@ app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
 app.use('/api/v1', receiptsRouter);
+// Escalation API (CC2 2026-05-26) — agent/worker-facing (REPID_API_KEYS auth). Routes
+// the controller escalation ladder; sean-level fires a Telegram alert via ORCH.
+app.use('/api/v1/escalation', escalationRouter);
 // Sprint R-C: RepID admin endpoints (attest) — auth required
 app.use('/api/v1', repidAdminRouter);
 app.use('/api/v1/admin/caps', adminCapsRouter);

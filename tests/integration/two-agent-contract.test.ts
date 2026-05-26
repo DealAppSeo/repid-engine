@@ -23,6 +23,17 @@ jest.mock('../../src/db', () => {
         return chain;
       }),
       eq: mockEq,
+      neq: jest.fn().mockReturnThis(),
+      gte: jest.fn().mockReturnThis(),
+      gt: jest.fn().mockReturnThis(),
+      lte: jest.fn().mockReturnThis(),
+      lt: jest.fn().mockReturnThis(),
+      not: jest.fn().mockReturnThis(),
+      is: jest.fn().mockReturnThis(),
+      ilike: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      match: jest.fn().mockReturnThis(),
+      delete: jest.fn().mockReturnThis(),
       single: jest.fn().mockResolvedValue({ data: { id: 'contract-id' }, error: null }),
       maybeSingle: jest.fn().mockImplementation(() => {
         return Promise.resolve({
