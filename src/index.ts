@@ -17,6 +17,7 @@ import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
+import marketplaceRouter from './routes/v1/marketplace';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -215,9 +216,11 @@ app.use('/api/v1/controller', controllerRouter);
 // V2 SUBSTRATE: federated developer-node onboarding (node-facing; gated by node_id/nonce +
 // federation opt-in state, NOT by SBT/REPID_API_KEY). Mounted before authMiddleware. Stubbed-
 // functional: validates + writes developer_nodes/federation_events; no live federation yet.
-// NOTE: branch feat/cc2-2026-05-26-marketplace adds its own /api/v1/marketplace mount here too
-// (trivial overlap on this line region, expected — see PR bodies).
 app.use('/api/v1/federation', federationRouter);
+// V2 SUBSTRATE (PHASE 2 OF MARKETPLACE): RepID rent/sell listings + rentals CRUD.
+// SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
+// earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
+app.use('/api/v1/marketplace', marketplaceRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
