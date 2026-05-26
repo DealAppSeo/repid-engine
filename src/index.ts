@@ -15,6 +15,7 @@ import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import controllerRouter from './routes/v1/controller';
+import escalationRouter from './routes/v1/escalation';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -178,6 +179,8 @@ app.use((req, res, next) => {
   // titles/descriptions (prose that legitimately contains SQL-shaped tokens). SBT-gated;
   // downstream Supabase writes are parameterized.
   if (req.path.startsWith('/api/v1/controller/sprint') || req.path.startsWith('/api/v1/controller/wake')) return next();
+  // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
+  if (req.path === '/api/v1/escalation/escalate') return next();
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
       if (typeof obj[key] === 'string') {
@@ -278,6 +281,9 @@ app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
 app.use('/api/v1', receiptsRouter);
+// Escalation API (CC2 2026-05-26) — agent/worker-facing (REPID_API_KEYS auth). Routes
+// the controller escalation ladder; sean-level fires a Telegram alert via ORCH.
+app.use('/api/v1/escalation', escalationRouter);
 // Sprint R-C: RepID admin endpoints (attest) — auth required
 app.use('/api/v1', repidAdminRouter);
 app.use('/api/v1/admin/caps', adminCapsRouter);
