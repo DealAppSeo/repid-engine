@@ -30,6 +30,7 @@ import {
 } from '../hal/lib/constants';
 import { computeDelta, HALDecision } from './repid-delta';
 import { appendToAuditChain } from '../services/auditChainWriter';
+import { extractHALSignals } from '../hal/lib/extract';
 
 export interface ScoreEventInput {
   agent_id: string;
@@ -319,11 +320,54 @@ export async function applyValidationEvent(
   // Default (no override) preserves the prior 0.5/clean placeholder so the
   // existing 4-arg callers are byte-for-byte unchanged. decision_outcome now
   // tracks hal_decision (was always 'clean'); with no override it stays 'clean'.
-  const halScore = halOverride?.hal_score ?? 0.5;
-  const halDecision = halOverride?.hal_decision ?? 'clean';
-  const enrichedMetadata = halOverride?.hal_signals
+  let certaintyAtClaim: number | null = null;
+  let halScore = halOverride?.hal_score ?? 0.5;
+  let halDecision = halOverride?.hal_decision ?? 'clean';
+  let enrichedMetadata = halOverride?.hal_signals
     ? { ...metadata, hal_signals: halOverride.hal_signals }
     : metadata;
+
+  const answerText = metadata?.answer_text || null;
+  const promptText = metadata?.prompt_text || null;
+  const taskDomain = metadata?.task_domain || 'finance';
+
+  if (answerText && answerText.trim()) {
+    try {
+      const signals = extractHALSignals({
+        text: answerText,
+        domain: taskDomain,
+        certainty: typeof halOverride?.hal_signals?.certainty_at_claim === 'number'
+          ? halOverride.hal_signals.certainty_at_claim
+          : 0.85
+      });
+      certaintyAtClaim = signals.certainty_at_claim;
+      
+      if (!halOverride) {
+        const scoreVal = (
+          0.4 * signals.harm_probability +
+          0.3 * signals.epistemic_uncertainty +
+          0.2 * (1 - signals.evidence_quality) +
+          0.1 * (1 - signals.scope_appropriateness)
+        ) * (531441 / 524288);
+        halScore = Math.min(1, scoreVal);
+        halDecision = deriveHalDecision(halScore, halScore >= 0.25);
+        enrichedMetadata = {
+          ...metadata,
+          hal_signals: signals
+        };
+      } else {
+        certaintyAtClaim = typeof halOverride.hal_signals?.certainty_at_claim === 'number'
+          ? halOverride.hal_signals.certainty_at_claim
+          : 0.85;
+      }
+    } catch (err: any) {
+      console.error('[applyValidationEvent] Failed to run extractHALSignals:', err.message);
+    }
+  } else if (halOverride?.hal_signals) {
+    certaintyAtClaim = typeof halOverride.hal_signals.certainty_at_claim === 'number'
+      ? halOverride.hal_signals.certainty_at_claim
+      : null;
+  }
 
   const insertPayload = {
     agent_id,
@@ -331,6 +375,7 @@ export async function applyValidationEvent(
     delta: Math.round(delta),
     repid_before: old_repid,
     repid_after: Math.round(new_repid),
+    certainty_at_claim: certaintyAtClaim,
     hal_score: halScore,
     hal_decision: halDecision,
     repid_delta_calculated: Math.round(delta),
@@ -340,6 +385,9 @@ export async function applyValidationEvent(
     decision_outcome: halDecision,
     metadata: enrichedMetadata,
     contract_id: metadata?.contract_id ?? null,
+    answer_text: answerText,
+    prompt_text: promptText,
+    task_domain: taskDomain,
   };
 
   const { data: eventRow, error: evErr } = await db
