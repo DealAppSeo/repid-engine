@@ -17,6 +17,7 @@ import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
+import productivityRouter from './routes/v1/productivity';
 import agentsExternalRouter from './routes/agents-external';
 import agentsExternalScoreRouter from './routes/agents-external-score';
 import keysRouter from './routes/key-management';
@@ -269,6 +270,8 @@ app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
+// CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
+app.use('/api/v1/observability', productivityRouter);
 app.use('/api/v1', receiptsRouter);
 // Sprint R-C: RepID admin endpoints (attest) — auth required
 app.use('/api/v1', repidAdminRouter);

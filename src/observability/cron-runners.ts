@@ -62,6 +62,10 @@ export async function captureTelemetry(sb: SupabaseClient, opts: RunOpts = {}) {
     return { leaks: leaks.length, ids: leaks.map((e: any) => e.id) };
   }, { invariant: 'must_be_zero' });
 
+  // Productivity stack (CC1 2026-05-26): every telemetry snapshot now carries the
+  // productivity numbers (ANFIS routing mix, SLM savings, Firecrawl/external spend, per-agent).
+  await add('productivity', 'stack', () => computeProductivityStack(sb));
+
   const snapshot_at = new Date().toISOString();
   let persisted = 0;
   if (opts.persist !== false) {
@@ -131,4 +135,80 @@ export async function runAuditProbe(sb: SupabaseClient, opts: RunOpts = {}) {
     persisted = !error;
   }
   return { overall, computed_at, results, persisted };
+}
+
+/**
+ * Productivity stack (CC1 2026-05-26): the numbers behind GET /api/v1/observability/
+ * productivity-stack. Computes from real sources; several are sparse until SLM routing
+ * accrues, Firecrawl (#45) merges, and llm_provider logging lands — flagged in `note`.
+ */
+export async function computeProductivityStack(sb: SupabaseClient) {
+  const s = since(24);
+  const EXPENSIVE = new Set(['anthropic', 'openai']);
+
+  // ANFIS routing distribution — from repid_score_events.llm_provider/model.
+  const routing = { slm: 0, cheap_llm: 0, expensive_llm: 0, total: 0, source: 'repid_score_events.llm_provider' };
+  try {
+    const { data } = await sb.from('repid_score_events').select('llm_provider,llm_model').gte('created_at', s).not('llm_provider', 'is', null);
+    for (const r of (data || [])) {
+      routing.total++;
+      const p = String((r as any).llm_provider).toLowerCase();
+      const m = String((r as any).llm_model || '').toLowerCase();
+      if ((p === 'groq' || p === 'cerebras') && m.includes('8b')) routing.slm++;
+      else if (EXPENSIVE.has(p)) routing.expensive_llm++;
+      else routing.cheap_llm++;
+    }
+  } catch { /* leave zeros */ }
+
+  // SLM tier: decisions + cost saved (from trinity_tool_usage 'slm_route').
+  const slm_tier = { decisions: 0, cost_saved_usd: 0, slm_actual_cost_usd: 0 };
+  try {
+    const { data } = await sb.from('trinity_tool_usage').select('outcome').eq('tool_name', 'slm_route').gte('created_at', s);
+    slm_tier.decisions = data?.length ?? 0;
+    for (const r of (data || [])) {
+      slm_tier.cost_saved_usd += Number((r as any).outcome?.savings?.saved_usd ?? 0);
+      slm_tier.slm_actual_cost_usd += Number((r as any).outcome?.savings?.slm_cost_usd ?? 0);
+    }
+    slm_tier.cost_saved_usd = +slm_tier.cost_saved_usd.toFixed(6);
+    slm_tier.slm_actual_cost_usd = +slm_tier.slm_actual_cost_usd.toFixed(6);
+  } catch { /* leave zeros */ }
+
+  // Firecrawl usage by agent + cost (from trinity_tool_usage 'firecrawl%').
+  const firecrawl: { calls: number; cost_usd: number; by_agent: Record<string, { calls: number; cost_usd: number }> } = { calls: 0, cost_usd: 0, by_agent: {} };
+  try {
+    const { data } = await sb.from('trinity_tool_usage').select('agent_id,outcome').ilike('tool_name', '%firecrawl%').gte('created_at', s);
+    for (const r of (data || [])) {
+      firecrawl.calls++;
+      const c = Number((r as any).outcome?.cost_usd ?? (r as any).outcome?.cost ?? 0);
+      firecrawl.cost_usd += c;
+      const a = (r as any).agent_id || 'unknown';
+      (firecrawl.by_agent[a] ||= { calls: 0, cost_usd: 0 });
+      firecrawl.by_agent[a]!.calls++; firecrawl.by_agent[a]!.cost_usd = +(firecrawl.by_agent[a]!.cost_usd + c).toFixed(6);
+    }
+    firecrawl.cost_usd = +firecrawl.cost_usd.toFixed(6);
+  } catch { /* leave zeros */ }
+
+  const total_external_spend_usd = +(firecrawl.cost_usd + slm_tier.slm_actual_cost_usd).toFixed(6);
+
+  // Per-agent productivity: tasks completed (24h) / external cost.
+  const per_agent: Record<string, { tasks_completed: number; cost_usd: number; productivity: number }> = {};
+  try {
+    const { data } = await sb.from('trinity_tasks').select('completed_by,agent_name').gte('completed_at', s);
+    for (const t of (data || [])) {
+      const a = (t as any).completed_by || (t as any).agent_name || 'unknown';
+      (per_agent[a] ||= { tasks_completed: 0, cost_usd: 0, productivity: 0 }).tasks_completed++;
+    }
+    for (const [a, v] of Object.entries(firecrawl.by_agent)) { (per_agent[a] ||= { tasks_completed: 0, cost_usd: 0, productivity: 0 }).cost_usd += v.cost_usd; }
+    for (const v of Object.values(per_agent)) v.productivity = v.cost_usd > 0 ? +(v.tasks_completed / v.cost_usd).toFixed(2) : v.tasks_completed;
+  } catch { /* leave empty */ }
+
+  return {
+    window: '24h', computed_at: new Date().toISOString(),
+    anfis_routing_distribution: routing,
+    slm_tier,
+    firecrawl,
+    total_external_spend_usd,
+    per_agent_productivity: per_agent,
+    note: 'Several metrics are sparse until SLM routing accrues, Firecrawl (#45) merges, and llm_provider logging lands.',
+  };
 }
