@@ -91,6 +91,12 @@ app.use(helmet());
 const allowedOrigins = [
   'https://trustrepid.dev',
   'https://www.trustrepid.dev',
+  // CC1 2026-05-26: trustshell.dev v0.app surface consumes public read endpoints
+  // (/api/v1/status, /api/v1/hal/stats, /api/v1/repid/:id, /api/v1/llm-trust,
+  // /api/v1/receipts/hero, /.well-known/agent.json). Additive — does not loosen
+  // the existing CORS denylist for any other origin.
+  'https://trustshell.dev',
+  'https://www.trustshell.dev',
   'http://localhost:3000',
   'http://localhost:3001',
 ];
