@@ -228,7 +228,7 @@ Source: `scripts/git-hooks/pre-commit.sh`; installer: `scripts/git-hooks/install
 
 Contributions welcome. Open an issue first for substantial changes so we can align on scope.
 
-For security-relevant findings (RepID gaming, on-chain attack surfaces, HAL bypasses), please follow responsible disclosure — open a private security advisory on GitHub rather than a public issue.
+For security-relevant findings (RepID gaming, on-chain attack surfaces, HAL bypasses), please follow responsible disclosure — open a GitHub Security Advisory rather than a public issue.
 
 ---
 
