@@ -61,6 +61,13 @@ describe('Red Team Security Hardening Tests (H1-H4 & P-B)', () => {
           lastEqField = field;
           return mockObj;
         }),
+        gte: jest.fn().mockImplementation(() => mockObj),
+        lte: jest.fn().mockImplementation(() => {
+          if (table === 'x402_settlements') {
+            return Promise.resolve({ data: [], error: null });
+          }
+          return mockObj;
+        }),
         insert: jest.fn().mockImplementation(() => mockObj),
         upsert: jest.fn().mockResolvedValue({ data: null, error: null }),
         maybeSingle: jest.fn().mockImplementation(() => {

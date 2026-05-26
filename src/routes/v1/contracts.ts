@@ -9,12 +9,22 @@ const router = Router();
 
 function checkGlobalValueCaps(priceUsdcRaw: number, settledTodayRaw: number): { allowed: boolean; error?: string; cap?: number; requested?: number } {
   const enforcement = process.env.VALUE_CAP_ENFORCEMENT || 'enforce';
+  const perContractCapRaw = (Number(process.env.VALUE_CAP_PER_CONTRACT_USDC) || 10) * 1_000_000;
+  const dailyCapRaw = (Number(process.env.VALUE_CAP_DAILY_USDC) || 100) * 1_000_000;
+
+  console.log('DEBUG GLOBAL CAPS:', {
+    priceUsdcRaw,
+    settledTodayRaw,
+    enforcement,
+    perContractCapRaw,
+    dailyCapRaw,
+    envPerContract: process.env.VALUE_CAP_PER_CONTRACT_USDC,
+    envDaily: process.env.VALUE_CAP_DAILY_USDC
+  });
+
   if (enforcement === 'off') {
     return { allowed: true };
   }
-
-  const perContractCapRaw = (Number(process.env.VALUE_CAP_PER_CONTRACT_USDC) || 10) * 1_000_000;
-  const dailyCapRaw = (Number(process.env.VALUE_CAP_DAILY_USDC) || 100) * 1_000_000;
 
   if (priceUsdcRaw > perContractCapRaw) {
     if (enforcement === 'warn') {
@@ -206,11 +216,12 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
 
     // Per-contract Cap Check
     if (perContractUsdCap && priceInUsd > perContractUsdCap) {
-      x402Metrics.increment('escrow.error.400');
-      return res.status(400).json({
+      x402Metrics.increment('escrow.error.402');
+      return res.status(402).json({
         error: 'per_contract_cap_exceeded',
-        cap: perContractUsdCap,
-        requested: priceInUsd,
+        message: 'Value cap exceeded: per_contract_cap_exceeded',
+        cap: perContractUsdCap * 1_000_000,
+        requested: rawPrice,
       });
     }
 
@@ -231,12 +242,12 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
       } else {
         const todayVolumeUsd = (settledToday || []).reduce((acc, row) => acc + Number(row.amount), 0) / 1_000_000;
         if (todayVolumeUsd + priceInUsd > dailyVolumeUsdCap) {
-          x402Metrics.increment('escrow.error.429');
-          return res.status(429).json({
-            error: 'daily_volume_cap_exceeded',
-            cap: dailyVolumeUsdCap,
-            todays_volume: todayVolumeUsd,
-            attempted: priceInUsd,
+          x402Metrics.increment('escrow.error.402');
+          return res.status(402).json({
+            error: 'daily_cumulative_cap_exceeded',
+            message: 'Value cap exceeded: daily_cumulative_cap_exceeded',
+            cap: dailyVolumeUsdCap * 1_000_000,
+            requested: (todayVolumeUsd + priceInUsd) * 1_000_000,
           });
         }
       }
