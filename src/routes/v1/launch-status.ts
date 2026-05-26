@@ -62,6 +62,43 @@ async function latestTelemetry(family: string): Promise<any | null> {
   } catch { return null; }
 }
 
+// PR-2 (CC1, 2026-05-26): summarize last-24h Firecrawl rollout activity from
+// trinity_tool_usage. Pure read; honest about empty state — returns
+// `{ enabled, calls, cost_usd_24h, by_agent: [], note }` so visitors see
+// truthful "rollout active, 0 calls so far" rather than masking the empty state.
+async function firecrawl24h(): Promise<{ enabled: boolean; calls: number; cost_usd_24h: number; by_agent: Array<{ agent_id: string; calls: number; cost_usd: number }>; note?: string }> {
+  const since = since24h();
+  try {
+    const { data, error } = await db.from('trinity_tool_usage')
+      .select('agent_id,outcome')
+      .ilike('tool_name', '%firecrawl%')
+      .gte('created_at', since);
+    if (error) {
+      return { enabled: false, calls: 0, cost_usd_24h: 0, by_agent: [], note: 'trinity_tool_usage read failed' };
+    }
+    const rows = data ?? [];
+    let cost = 0;
+    const byAgent = new Map<string, { calls: number; cost_usd: number }>();
+    for (const r of rows) {
+      const c = Number((r.outcome as any)?.cost_usd ?? 0);
+      cost += c;
+      const a = (r.agent_id as string) ?? 'unknown';
+      const cur = byAgent.get(a) ?? { calls: 0, cost_usd: 0 };
+      cur.calls++; cur.cost_usd = +(cur.cost_usd + c).toFixed(6);
+      byAgent.set(a, cur);
+    }
+    return {
+      enabled: true,
+      calls: rows.length,
+      cost_usd_24h: +cost.toFixed(6),
+      by_agent: Array.from(byAgent.entries()).map(([agent_id, v]) => ({ agent_id, ...v })),
+      ...(rows.length === 0 ? { note: 'rollout active, 0 calls in last 24h (research agents only: trinity-nexus, trinity-torch)' } : {}),
+    };
+  } catch {
+    return { enabled: false, calls: 0, cost_usd_24h: 0, by_agent: [], note: 'firecrawl summary failed' };
+  }
+}
+
 router.get('/status', async (_req: Request, res: Response) => {
   const since = since24h();
   let supabaseOk = true;
@@ -71,7 +108,11 @@ router.get('/status', async (_req: Request, res: Response) => {
     safeCount('repid_score_events', q => q.gte('created_at', since)),
   ]);
   if (attestations === null && realSettlements === null && scoreEvents === null) supabaseOk = false;
-  const [heartbeat, audit] = await Promise.all([latestTelemetry('heartbeat'), latestTelemetry('audit_probe')]);
+  const [heartbeat, audit, firecrawl] = await Promise.all([
+    latestTelemetry('heartbeat'),
+    latestTelemetry('audit_probe'),
+    firecrawl24h(),
+  ]);
 
   res.json({
     service: 'repid-engine',
@@ -83,6 +124,7 @@ router.get('/status', async (_req: Request, res: Response) => {
       onchain_attestations: attestations,
       real_settlements: realSettlements,
       score_events: scoreEvents,
+      firecrawl, // PR-2: rollout visibility — see firecrawl24h() above
     },
     last_heartbeat: heartbeat ? { at: heartbeat.at, result: heartbeat.value } : null,
     audit_status: audit ? { at: audit.at, overall: audit.value?.overall ?? null } : null,
@@ -92,6 +134,13 @@ router.get('/status', async (_req: Request, res: Response) => {
 
 router.get('/receipts/hero', (_req: Request, res: Response) => {
   res.json(HERO_RECEIPT);
+});
+
+// PR-2 (CC1, 2026-05-26): dedicated public Firecrawl-stats endpoint for
+// trustshell.dev (and curious devs) to inspect the rollout in detail. Same
+// read-only data, no auth, no PII.
+router.get('/firecrawl/stats', async (_req: Request, res: Response) => {
+  res.json(await firecrawl24h());
 });
 
 export default router;
