@@ -14,6 +14,8 @@ jest.mock('../../../src/db', () => ({
     range: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
+    gte: jest.fn().mockReturnThis(),
+    lte: jest.fn().mockResolvedValue({ data: [], error: null }),
     rpc: jest.fn().mockResolvedValue({ data: null, error: null }),
     upsert: jest.fn().mockResolvedValue({ data: null, error: null }),
   }
@@ -39,6 +41,8 @@ describe('Contracts Routes', () => {
       eq: jest.fn().mockReturnThis(),
       maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-service', active: true, min_repid_to_purchase: 100, base_price_usdc_raw: 10000 }, error: null }),
       single: jest.fn().mockResolvedValue({ data: { id: 'contract-id' }, error: null }),
+      gte: jest.fn().mockReturnThis(),
+      lte: jest.fn().mockResolvedValue({ data: [], error: null }),
       upsert: jest.fn().mockResolvedValue({ data: null, error: null })
     } as any);
 
@@ -63,6 +67,8 @@ describe('Contracts Routes', () => {
         eq: jest.fn().mockReturnThis(),
         maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'pending' }, error: null }),
         single: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'escrowed' }, error: null }),
+        gte: jest.fn().mockReturnThis(),
+        lte: jest.fn().mockResolvedValue({ data: [], error: null }),
         upsert: jest.fn().mockResolvedValue({ data: null, error: null })
       } as any);
 
@@ -119,7 +125,9 @@ describe('Contracts Routes', () => {
             eq: jest.fn().mockReturnThis(),
             maybeSingle: jest.fn().mockResolvedValue({ data: opts.existingSettlement, error: null }),
             insert: opts.insertMock || jest.fn().mockReturnThis(),
-            single: jest.fn().mockResolvedValue({ data: { id: 'settlement-uuid' }, error: null })
+            single: jest.fn().mockResolvedValue({ data: { id: 'settlement-uuid' }, error: null }),
+            gte: jest.fn().mockReturnThis(),
+            lte: jest.fn().mockResolvedValue({ data: [], error: null })
           } as any;
         }
         return {

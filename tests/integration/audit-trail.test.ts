@@ -17,6 +17,19 @@ jest.mock('../../src/db', () => ({
     insert: jest.fn().mockReturnThis(),
     update: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
+    neq: jest.fn().mockReturnThis(),
+    gte: jest.fn().mockReturnThis(),
+    gt: jest.fn().mockReturnThis(),
+    lte: jest.fn().mockReturnThis(),
+    lt: jest.fn().mockReturnThis(),
+    not: jest.fn().mockReturnThis(),
+    is: jest.fn().mockReturnThis(),
+    ilike: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
+    match: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    delete: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
     maybeSingle: jest.fn().mockReturnThis(),
     rpc: jest.fn().mockResolvedValue({ data: null, error: null }),
@@ -84,7 +97,22 @@ describe('Audit Trail Integration', () => {
           } as any;
         }),
         eq: jest.fn().mockImplementation((col: string, val: any) => {
-          return {
+          const chainObj: any = {
+            // Defensive chain methods — return self so any further chaining (eg .gte before
+            // maybeSingle) doesn't TypeError. The actual terminal is maybeSingle below.
+            gte: jest.fn().mockReturnThis(),
+            gt: jest.fn().mockReturnThis(),
+            lte: jest.fn().mockReturnThis(),
+            lt: jest.fn().mockReturnThis(),
+            not: jest.fn().mockReturnThis(),
+            is: jest.fn().mockReturnThis(),
+            neq: jest.fn().mockReturnThis(),
+            in: jest.fn().mockReturnThis(),
+            match: jest.fn().mockReturnThis(),
+            ilike: jest.fn().mockReturnThis(),
+            order: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockReturnThis(),
+            select: jest.fn().mockReturnThis(),
             maybeSingle: jest.fn().mockImplementation(() => {
               if (table === 'service_contracts') {
                 return Promise.resolve({ data: dbState.contracts[val] || null, error: null });
@@ -98,8 +126,14 @@ describe('Audit Trail Integration', () => {
               }
               return Promise.resolve({ data: null, error: null });
             })
-          } as any;
+          };
+          return chainObj as any;
         }),
+        gte: jest.fn().mockReturnThis(),
+        not: jest.fn().mockReturnThis(),
+        is: jest.fn().mockReturnThis(),
+        order: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
         upsert: jest.fn().mockResolvedValue({ data: null, error: null })
       } as any;
     });

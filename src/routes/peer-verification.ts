@@ -46,7 +46,6 @@ router.post('/respond', async (req: Request, res: Response) => {
     const { data: agent, error: agentErr } = await db
       .from('repid_agents')
       .select('id, agent_name')
-      .or(`id.eq.${crypto.UUID_RE ? '00000000-0000-0000-0000-000000000000' : '00000000-0000-0000-0000-000000000000'}`) // fallback
       .or(`id.eq.${/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(verifier_agent_id) ? verifier_agent_id : '00000000-0000-0000-0000-000000000000'},agent_name.eq.${verifier_agent_id}`)
       .single();
 
