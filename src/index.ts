@@ -21,6 +21,7 @@ import marketplaceRouter from './routes/v1/marketplace';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
+import productivityRouter from './routes/v1/productivity';
 import agentsExternalRouter from './routes/agents-external';
 import agentsExternalScoreRouter from './routes/agents-external-score';
 import keysRouter from './routes/key-management';
@@ -290,6 +291,8 @@ app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
 
 app.use('/api/v1', v1Router);
+// CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
+app.use('/api/v1/observability', productivityRouter);
 app.use('/api/v1', receiptsRouter);
 // Escalation API (CC2 2026-05-26) — agent/worker-facing (REPID_API_KEYS auth). Routes
 // the controller escalation ladder; sean-level fires a Telegram alert via ORCH.

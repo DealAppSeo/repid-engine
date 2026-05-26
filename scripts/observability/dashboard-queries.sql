@@ -113,3 +113,33 @@ ORDER BY hour DESC;
 SELECT snapshot_at, metric_value
 FROM repid_telemetry_snapshots
 WHERE metric_family = 'health_24h' ORDER BY snapshot_at DESC LIMIT 30;
+
+-- ════════════════════ D. PRODUCTIVITY STACK (Phase 4.3, 2026-05-26) ════════════════════
+-- Mirrors GET /api/v1/observability/productivity-stack for Sean's manual inspection.
+
+-- D1. SLM tier — decisions + cost saved (24h)
+SELECT COUNT(*) AS slm_decisions,
+       ROUND(COALESCE(SUM((outcome->'savings'->>'saved_usd')::numeric), 0), 6) AS slm_cost_saved_usd,
+       ROUND(COALESCE(SUM((outcome->'savings'->>'slm_cost_usd')::numeric), 0), 6) AS slm_actual_cost_usd
+FROM trinity_tool_usage
+WHERE tool_name = 'slm_route' AND created_at > NOW() - INTERVAL '24 hours';
+
+-- D2. Firecrawl usage + cost by agent (24h)
+SELECT agent_id, COUNT(*) AS calls,
+       ROUND(COALESCE(SUM(COALESCE((outcome->>'cost_usd')::numeric, (outcome->>'cost')::numeric, 0)), 0), 6) AS cost_usd
+FROM trinity_tool_usage
+WHERE tool_name ILIKE '%firecrawl%' AND created_at > NOW() - INTERVAL '24 hours'
+GROUP BY agent_id ORDER BY cost_usd DESC;
+
+-- D3. ANFIS routing distribution (24h): SLM vs cheap-LLM vs expensive-LLM
+SELECT
+  COUNT(*) FILTER (WHERE lower(llm_provider) IN ('groq','cerebras') AND lower(coalesce(llm_model,'')) LIKE '%8b%') AS slm,
+  COUNT(*) FILTER (WHERE lower(llm_provider) IN ('anthropic','openai')) AS expensive_llm,
+  COUNT(*) AS total_with_provider
+FROM repid_score_events
+WHERE llm_provider IS NOT NULL AND created_at > NOW() - INTERVAL '24 hours';
+
+-- D4. Per-agent productivity: tasks completed (24h)
+SELECT COALESCE(completed_by, agent_name, 'unknown') AS agent, COUNT(*) AS tasks_completed
+FROM trinity_tasks WHERE completed_at > NOW() - INTERVAL '24 hours'
+GROUP BY 1 ORDER BY tasks_completed DESC;
