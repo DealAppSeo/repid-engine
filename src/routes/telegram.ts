@@ -20,6 +20,31 @@ export async function sendTelegramAlert(message: string) {
   } catch(e) { console.error('Telegram alert failed:', e); }
 }
 
+// Like sendTelegramAlert but per-call chat_id + returns the Telegram message_id so
+// callers can store it for later round-trip correlation (V1.6 approve/deny on the
+// notification dispatcher path). Additive — does not affect sendTelegramAlert.
+export async function sendTelegramMessage(
+  chatId: string,
+  html: string
+): Promise<{ ok: boolean; message_id?: number; error?: string }> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not configured' };
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true }),
+    });
+    const j: any = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      return { ok: false, error: `tg ${r.status}: ${JSON.stringify(j).slice(0, 200)}` };
+    }
+    return { ok: true, message_id: j.result?.message_id };
+  } catch (e: any) {
+    return { ok: false, error: `network: ${e.message ?? String(e)}` };
+  }
+}
+
 router.post('/webhook', async (req, res) => {
   const { message } = req.body;
   if (!message?.text) return res.sendStatus(200);
