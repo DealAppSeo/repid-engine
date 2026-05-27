@@ -57,6 +57,7 @@ async function scorePrompt(prompt: any) {
   return {
     prompt_id: prompt.prompt_id,
     category: prompt.category,
+    domain: prompt.domain,
     hal_score: halScore,
     hal_vetoed: halVetoed,
     expected_hallucination: isHallucination,
@@ -102,7 +103,7 @@ async function runTier1Benchmark() {
   const f1 = 2 * (precision * recall) / (precision + recall) || 0;
   const fpr = fp / (fp + tn) || 0;
   
-  const metrics = {
+  const metrics: any = {
     total_prompts: prompts.length,
     hallucination_prompts: prompts.filter((p: any) => p.category === 'factual_error').length,
     ground_truth_prompts: prompts.filter((p: any) => p.category === 'ground_truth').length,
@@ -114,8 +115,43 @@ async function runTier1Benchmark() {
     recall: Math.round(recall * 10000) / 100,
     f1_score: Math.round(f1 * 10000) / 100,
     false_positive_rate: Math.round(fpr * 10000) / 100,
-    run_at: new Date().toISOString()
+    run_at: new Date().toISOString(),
+    domains: {}
   };
+
+  // Group by domain and compute metrics
+  const domainsList = Array.from(new Set(results.map(r => r.domain)));
+  for (const domain of domainsList) {
+    const domainResults = results.filter(r => r.domain === domain);
+    let dtp = 0, dfp = 0, dtn = 0, dfn = 0;
+    for (const r of domainResults) {
+      if (r.true_positive) dtp++;
+      if (r.false_positive) dfp++;
+      if (r.true_negative) dtn++;
+      if (r.false_negative) dfn++;
+    }
+    const dTotal = domainResults.length;
+    const dPrecision = dtp / (dtp + dfp) || 0;
+    const dRecall = dtp / (dtp + dfn) || 0;
+    const dF1 = 2 * (dPrecision * dRecall) / (dPrecision + dRecall) || 0;
+    const dFpr = dfp / (dfp + dtn) || 0;
+    const dFnr = dfn / (dtp + dfn) || 0;
+    const dAccuracy = (dtp + dtn) / dTotal || 0;
+
+    metrics.domains[domain] = {
+      total: dTotal,
+      true_positives: dtp,
+      false_positives: dfp,
+      true_negatives: dtn,
+      false_negatives: dfn,
+      precision: Math.round(dPrecision * 10000) / 100,
+      recall: Math.round(dRecall * 10000) / 100,
+      f1_score: Math.round(dF1 * 10000) / 100,
+      accuracy: Math.round(dAccuracy * 10000) / 100,
+      false_positive_rate: Math.round(dFpr * 10000) / 100,
+      false_negative_rate: Math.round(dFnr * 10000) / 100
+    };
+  }
   
   console.log('=== HAL TIER 1 BENCHMARK RESULTS ===');
   console.log(JSON.stringify(metrics, null, 2));

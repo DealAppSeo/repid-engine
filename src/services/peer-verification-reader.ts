@@ -53,11 +53,15 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       const queueEntry = claimed as PeerVerificationQueueEntry;
       const sourceAgentName = await getAgentName(db, queueEntry.source_agent_id);
 
-      // 3. Round-robin verifier selection (excluding the source agent)
-      const cleanSourceAgentName = sourceAgentName.toLowerCase().trim();
-      const eligibleVerifiers = VERIFIER_POOL.filter(
-        (name) => name.toLowerCase().trim() !== cleanSourceAgentName
-      );
+      // 3. UUID-based verifier selection (excluding the source agent)
+      const { data: verifierAgents } = await db
+        .from('repid_agents')
+        .select('id, agent_name')
+        .in('agent_name', VERIFIER_POOL);
+
+      const eligibleVerifiers = verifierAgents
+        ?.filter((agent) => agent.id !== queueEntry.source_agent_id)
+        .map((agent) => agent.agent_name) || [];
 
       if (eligibleVerifiers.length === 0) {
         // Fallback if the pool somehow is empty (e.g. source is the only verifier)
@@ -74,6 +78,7 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
           title: `[PEER_VERIFY] Verify response from ${sourceAgentName}`,
           description: `Verify the following claim: "${queueEntry.claim_text || ''}"\n\nSubmit your response using POST /api/v1/peer-verification/respond with queue_id: ${queueEntry.id}`,
           assigned_to: chosenVerifier,
+          agent_assigned: chosenVerifier,
           task_type: 'peer_verify',
           status: 'pending',
           priority: 80,
