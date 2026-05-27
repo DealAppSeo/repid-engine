@@ -3,6 +3,7 @@ import { db } from '../db';
 import { validateAgentApiKey } from '../auth/api-keys';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  if (req.method === 'OPTIONS') return next();
   const publicPaths = ['/health', '/healthz', '/', '/api/v1/health'];
   if (publicPaths.includes(req.path)) return next();
 
