@@ -44,6 +44,8 @@ import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
 import x402InboundRouter from './routes/x402-inbound';
+// CC2 Round 13 (2026-05-27): pure helpers for the /api/v1/llm-trust window filter + envelope.
+import { parseWindow, filterByWindow, buildEnvelope } from './services/llm-trust';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -346,10 +348,18 @@ app.use('/api/v1', createAgentsReputationRouter(db));
 // absolute dates + a footnote disclosing that activity reflects real
 // usage (sparse rows = the system is newly accumulating).
 //
-// Why the change: Round 3's defaults (min_decisions=10, 30-day staleness
-// filter) silently squashed the response to a single row (anthropic),
-// which made the landing's "Live trust scores" card look like it was
-// reporting on a one-provider universe.
+// CC2 Round 13 (2026-05-27): added a recency window on top of Round 12.
+// Default `?window=24h` (then 7d, 30d, all) restricts the providers array
+// to those with last_decision in the window. Response shape became an
+// envelope: { providers, window, total_providers_tracked,
+// providers_active_in_window, as_of }. `?legacy=true` keeps the bare
+// array shape that Round 12 returned for back-compat with anything that
+// hasn't migrated yet (trustshell.dev landing is the main consumer).
+// `total_providers_tracked` reads `ai_providers` WHERE enabled=true and
+// is INDEPENDENT of the allow-list — it answers the framing "X of Y
+// providers active." Premium-tier hook (docs only): the longer windows
+// (7d / 30d / all) are public today and slated to require RepID ≥ 500
+// in V2 — see the comment block below.
 //
 // Defaults:
 //   - lowercase(llm_provider) MUST be in CANONICAL_PROVIDERS — this
@@ -358,11 +368,23 @@ app.use('/api/v1', createAgentsReputationRouter(db));
 //     'OpenAI', 'Google') without separate deny-list entries
 //   - merges casing duplicates by lowercasing (Round 3 logic kept)
 //   - sorts by last_decision DESC (most-recent first)
+//   - ?window=24h            (CC2 Round 13) filters to last 24h activity
 // Opt-outs preserved for ops debugging:
 //   - ?include_test=true     → adds test/diagnostic/manual providers
 //   - ?include_all=true      → also returns case-dup capitalized rows
 //                              (alongside their lowercase canonical merge)
 //   - ?min_decisions=N       → restore an explicit threshold (default 1)
+//   - ?legacy=true           (CC2 Round 13) returns the bare array
+//                              (Round-12 shape) for back-compat
+//
+// Premium-tier hook (CC2 Round 13 — design only; not enforced today):
+//   ?window=24h is and will remain PUBLIC for everyone.
+//   ?window=7d, 30d, all are PUBLIC today; in V2 they are slated to
+//   require an authenticated caller whose `repid` is ≥ 500 (EARNING
+//   tier or higher). The enforcement is deferred: this Round 13 PR
+//   wires the surface so the future paywall is a middleware add, not
+//   a contract change. CC1's frontend can rely on "?window=24h is
+//   always free" today.
 const CANONICAL_LLM_PROVIDERS = new Set(['anthropic', 'groq', 'openai']);
 const TEST_LLM_PROVIDERS = new Set(['test-harness', 'diagnostic-test', 'manual', 'test']);
 
@@ -373,6 +395,11 @@ app.get('/api/v1/llm-trust', async (req, res) => {
   const includeTest = String(req.query.include_test ?? '').toLowerCase() === 'true';
   const includeAll = String(req.query.include_all ?? '').toLowerCase() === 'true';
   const minDecisions = Math.max(1, Number(req.query.min_decisions ?? 1) || 1);
+  const legacy = String(req.query.legacy ?? '').toLowerCase() === 'true';
+  // CC2 Round 13: parse the window query param. Default '24h' — providers
+  // array is then filtered by last_decision recency. ?window=all preserves
+  // the Round-12 behavior (no window filter, just allow-list).
+  const { window, cutoffIso } = parseWindow(req.query.window as string | undefined);
 
   const filtered = (data ?? []).filter((row: any) => {
     const provider = String(row.llm_provider ?? '').trim();
@@ -485,7 +512,33 @@ app.get('/api/v1/llm-trust', async (req, res) => {
       return b.total_decisions - a.total_decisions;
     });
 
-  return res.json(out);
+  // CC2 Round 13: apply the recency window AFTER per-provider collapse +
+  // sort so the upstream allow-list / sort behavior from Round 12 is intact.
+  // Providers whose last_decision is older than the window cutoff are dropped.
+  // ?window=all returns `out` unchanged (Round-12 behavior).
+  const inWindow = filterByWindow(out, cutoffIso);
+
+  // CC2 Round 13: `total_providers_tracked` reads `ai_providers` WHERE
+  // enabled=true. Independent of the allow-list — it answers "X of Y
+  // providers are active in the window." Honest count: it'll often be
+  // small (3 today: deepseek-free, groq-free, together-credits). If the
+  // count read fails for any reason, fall back to inWindow.length so
+  // the envelope still surfaces something coherent rather than 0.
+  const { count: trackedCount, error: tcErr } = await db
+    .from('ai_providers')
+    .select('*', { count: 'exact', head: true })
+    .eq('enabled', true);
+  if (tcErr) {
+    console.warn(`[llm-trust] ai_providers count failed: ${tcErr.message}`);
+  }
+  const totalProvidersTracked = trackedCount ?? inWindow.length;
+
+  // Back-compat: ?legacy=true returns the Round-12 bare array shape.
+  // Default is the Round-13 envelope. CC1's trustshell.dev landing should
+  // migrate to `response.providers` and surface the X-of-Y framing using
+  // `providers_active_in_window` / `total_providers_tracked`.
+  if (legacy) return res.json(inWindow);
+  return res.json(buildEnvelope(inWindow, window, totalProvidersTracked));
 });
 
 app.use(healthRouter);
