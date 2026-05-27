@@ -337,53 +337,64 @@ app.use('/api/v1', createAgentsReputationRouter(db));
 
 // v11 LLM trust leaderboard (public)
 //
-// CC1 Round 3 (2026-05-26): added default filter + canonicalization on top of
-// the `llm_trust_leaderboard` view to remove test/diagnostic rows, normalize
-// case-sensitive duplicates, and hide statistical-noise rows.
+// CC1 Round 12 (2026-05-27): replaced the Round-3 deny-list + min_decisions
+// approach with an explicit canonical-provider ALLOW-LIST. The default
+// response now returns the three canonical real providers (`anthropic`,
+// `groq`, `openai`) sorted by most-recent activity descending — even if
+// their last_decision is old or their volume is sparse. The honest "LLM
+// trust leaderboard" framing on the landing surfaces that openly via
+// absolute dates + a footnote disclosing that activity reflects real
+// usage (sparse rows = the system is newly accumulating).
+//
+// Why the change: Round 3's defaults (min_decisions=10, 30-day staleness
+// filter) silently squashed the response to a single row (anthropic),
+// which made the landing's "Live trust scores" card look like it was
+// reporting on a one-provider universe.
 //
 // Defaults:
-//   - excludes llm_provider in {'test-harness', 'diagnostic-test', 'manual', 'test'} and NULL
-//   - excludes llm_provider matching /^test/i
-//   - excludes rows where last_decision is > 30 days old
-//   - lowercases provider names and merges casing duplicates by re-summing decisions
-// Opt-out: `?include_stale=true` keeps stale rows; `?include_test=true` keeps test entries.
+//   - lowercase(llm_provider) MUST be in CANONICAL_PROVIDERS — this
+//     automatically excludes 'test-harness'/'diagnostic-test'/'manual'/
+//     'test' AND case-dup capitalized legacy rows ('Anthropic',
+//     'OpenAI', 'Google') without separate deny-list entries
+//   - merges casing duplicates by lowercasing (Round 3 logic kept)
+//   - sorts by last_decision DESC (most-recent first)
+// Opt-outs preserved for ops debugging:
+//   - ?include_test=true     → adds test/diagnostic/manual providers
+//   - ?include_all=true      → also returns case-dup capitalized rows
+//                              (alongside their lowercase canonical merge)
+//   - ?min_decisions=N       → restore an explicit threshold (default 1)
+const CANONICAL_LLM_PROVIDERS = new Set(['anthropic', 'groq', 'openai']);
+const TEST_LLM_PROVIDERS = new Set(['test-harness', 'diagnostic-test', 'manual', 'test']);
+
 app.get('/api/v1/llm-trust', async (req, res) => {
   const { data, error } = await db.from('llm_trust_leaderboard').select('*');
   if (error) return res.status(500).json({ error: error.message });
 
-  const includeStale = String(req.query.include_stale ?? '').toLowerCase() === 'true';
   const includeTest = String(req.query.include_test ?? '').toLowerCase() === 'true';
-
-  const TEST_PROVIDERS = new Set(['test-harness', 'diagnostic-test', 'manual', 'test']);
-  const STALE_CUTOFF_MS = 30 * 24 * 3600 * 1000;
-  const now = Date.now();
+  const includeAll = String(req.query.include_all ?? '').toLowerCase() === 'true';
+  const minDecisions = Math.max(1, Number(req.query.min_decisions ?? 1) || 1);
 
   const filtered = (data ?? []).filter((row: any) => {
-    const provider = (row.llm_provider ?? '').trim();
-    if (!provider) return false; // exclude rows with no provider
-    if (!includeTest) {
-      const lc = provider.toLowerCase();
-      if (TEST_PROVIDERS.has(lc)) return false;
-      if (/^test/i.test(lc)) return false;
+    const provider = String(row.llm_provider ?? '').trim();
+    if (!provider) return false;
+    const lc = provider.toLowerCase();
+    if (TEST_LLM_PROVIDERS.has(lc) || /^test/i.test(lc)) {
+      return includeTest;
     }
-    if (!includeStale && row.last_decision) {
-      const age = now - new Date(row.last_decision).getTime();
-      if (age > STALE_CUTOFF_MS) return false;
-    }
-    return true;
+    return includeAll || CANONICAL_LLM_PROVIDERS.has(lc);
   });
 
   // Canonicalize provider name (lowercase) and merge case-sensitive duplicates
-  // (e.g. "openai"/"OpenAI"). Group key: (lowercased provider, model). Sum totals
-  // and recompute hallucination_rate_pct / trust_score_pct / avg_certainty as
-  // weighted averages on total_decisions.
+  // (e.g. "openai"/"OpenAI"). Round 3 logic preserved. Group key: (lowercased
+  // provider, model). Sum totals; recompute trust_score_pct / hallucination_rate /
+  // avg_certainty as weighted averages on total_decisions.
   type Agg = {
     llm_provider: string;
     llm_model: string | null;
     total_decisions: number;
     hallucinations_caught: number;
-    trust_score_pct_num: number; // weighted sum of trust_score_pct * total_decisions
-    avg_certainty_num: number;   // weighted sum of avg_certainty * total_decisions
+    trust_score_pct_num: number;
+    avg_certainty_num: number;
     agents_using_max: number;
     last_decision: string | null;
   };
@@ -418,13 +429,36 @@ app.get('/api/v1/llm-trust', async (req, res) => {
     merged.set(key, cur);
   }
 
-  // Hide statistical-noise rows: drop entries with fewer than 10 total decisions
-  // (these had a misleading "trust_score_pct: 0" on the prior endpoint because
-  // sparse-sample math). Override via `?min_decisions=N` (default 10).
-  const minDecisions = Number(req.query.min_decisions ?? 10);
+  // For the LANDING leaderboard, we want one entry per provider (not per
+  // provider+model), so collapse models down to the provider-level row.
+  // Each provider's headline row is the merged total across all of its models.
+  const byProvider = new Map<string, Agg>();
+  for (const row of merged.values()) {
+    const cur = byProvider.get(row.llm_provider) ?? {
+      llm_provider: row.llm_provider,
+      llm_model: null, // headline row is provider-level
+      total_decisions: 0,
+      hallucinations_caught: 0,
+      trust_score_pct_num: 0,
+      avg_certainty_num: 0,
+      agents_using_max: 0,
+      last_decision: null as string | null,
+    };
+    cur.total_decisions += row.total_decisions;
+    cur.hallucinations_caught += row.hallucinations_caught;
+    cur.trust_score_pct_num += row.trust_score_pct_num;
+    cur.avg_certainty_num += row.avg_certainty_num;
+    cur.agents_using_max = Math.max(cur.agents_using_max, row.agents_using_max);
+    if (row.last_decision) {
+      if (!cur.last_decision || new Date(row.last_decision).getTime() > new Date(cur.last_decision).getTime()) {
+        cur.last_decision = row.last_decision;
+      }
+    }
+    byProvider.set(row.llm_provider, cur);
+  }
 
-  const out = Array.from(merged.values())
-    .filter((a) => a.total_decisions >= (Number.isFinite(minDecisions) ? minDecisions : 10))
+  const out = Array.from(byProvider.values())
+    .filter((a) => a.total_decisions >= minDecisions)
     .map((a) => ({
       llm_provider: a.llm_provider,
       llm_model: a.llm_model,
@@ -442,7 +476,14 @@ app.get('/api/v1/llm-trust', async (req, res) => {
       agents_using: a.agents_using_max,
       last_decision: a.last_decision,
     }))
-    .sort((a, b) => (b.trust_score_pct ?? 0) - (a.trust_score_pct ?? 0) || b.total_decisions - a.total_decisions);
+    .sort((a, b) => {
+      // Most-recent activity descending (per Sean's Round 12 spec).
+      const at = a.last_decision ? new Date(a.last_decision).getTime() : 0;
+      const bt = b.last_decision ? new Date(b.last_decision).getTime() : 0;
+      if (bt !== at) return bt - at;
+      // Tie-break: more decisions wins.
+      return b.total_decisions - a.total_decisions;
+    });
 
   return res.json(out);
 });
