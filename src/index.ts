@@ -2,6 +2,7 @@ import express from 'express';
 import { startValidationWorker } from './services/validation-queue-worker';
 import { startTrinityTaskBridge } from './services/trinity-task-bridge';
 import { startHitlNotificationDispatcher } from './services/hitl-notification-dispatcher';
+import { startPeerVerificationReader } from './services/peer-verification-reader';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
@@ -825,6 +826,7 @@ startHitlExpirationJob();
 
 if (!IS_TEST) {
   startTrinityTaskBridge();
+  startPeerVerificationReader(db);
 }
 
 // Phase 2.11 — Dispute Resolution Worker
