@@ -1,6 +1,7 @@
 import express from 'express';
 import { startValidationWorker } from './services/validation-queue-worker';
 import { startTrinityTaskBridge } from './services/trinity-task-bridge';
+import { startHitlNotificationDispatcher } from './services/hitl-notification-dispatcher';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
@@ -674,6 +675,14 @@ if (!IS_TEST) {
 // CASCADE_SETTLEMENT_ENABLED=true (mirrors DisputeResolutionWorker gating).
 if (!IS_TEST) {
   cascadeSettlementWorker.start();
+}
+
+// V1.5 Slice-1 HITL notification dispatcher (CC2 2026-05-26). Watches
+// trinity_hitl_requests for CAPABILITY_GAP rows and fans out to subscribers
+// in trinity_user_notification_prefs (telegram). DEFAULT OFF — Sean flips
+// NOTIFICATION_DISPATCHER_ENABLED=true on Railway once a test pref row exists.
+if (!IS_TEST) {
+  startHitlNotificationDispatcher();
 }
 
 // Daily health check at 6am UTC
