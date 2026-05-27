@@ -317,6 +317,7 @@ function getRouteOverride(reqPath: string, baseLimit: number): number | null {
 
 export function rateLimitMiddleware() {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (req.method === 'OPTIONS') return next();
     // Only gate /api/v1/* — leave health, /, telegram-webhook etc. alone
     if (!req.path.startsWith('/api/v1')) return next();
 
