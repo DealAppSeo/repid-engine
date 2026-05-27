@@ -144,6 +144,7 @@ async function pollCompletedTasks() {
           certainty: certainty,
           idempotency_key: `trinity_task_bridge_${task.id}`,
           llm_call_id: generateDeterministicUuid(task.id),
+          provider_used: task.metadata?.provider_used || task.metadata?.provider || null,
         });
 
         console.log(`[TrinityTaskBridge] Score event successfully created: id=${scoreResult.score_event_id}, hal_score=${scoreResult.hal_score}, delta=${scoreResult.repid_delta_applied}`);

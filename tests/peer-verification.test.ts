@@ -148,6 +148,14 @@ describe('HAL Peer Verification Unit Tests', () => {
           if (table === 'repid_agents') {
             return {
               select: () => ({
+                in: (col: string, vals: string[]) => ({
+                  data: [
+                    { id: 'agent-uuid-mel', agent_name: 'trinity-mel' },
+                    { id: 'agent-uuid-shofet', agent_name: 'trinity-shofet' },
+                    { id: 'agent-uuid-gcm', agent_name: 'trinity-gcm' }
+                  ],
+                  error: null
+                }),
                 eq: (col: string, val: string) => ({
                   single: async () => {
                     if (val === 'agent-uuid-veritas') {
