@@ -355,9 +355,11 @@ app.use('/api/v1', createAgentsReputationRouter(db));
 // providers_active_in_window, as_of }. `?legacy=true` keeps the bare
 // array shape that Round 12 returned for back-compat with anything that
 // hasn't migrated yet (trustshell.dev landing is the main consumer).
-// `total_providers_tracked` reads `ai_providers` WHERE enabled=true and
-// is INDEPENDENT of the allow-list — it answers the framing "X of Y
-// providers active." Premium-tier hook (docs only): the longer windows
+// `total_providers_tracked` reads `llm_provider_caps` WHERE
+// hard_disabled=false and is INDEPENDENT of the allow-list — it answers
+// the framing "X of Y providers active." (13 today across 4 populated
+// tiers — see the catalog expansion sprint report.)
+// Premium-tier hook (docs only): the longer windows
 // (7d / 30d / all) are public today and slated to require RepID ≥ 500
 // in V2 — see the comment block below.
 //
@@ -518,18 +520,27 @@ app.get('/api/v1/llm-trust', async (req, res) => {
   // ?window=all returns `out` unchanged (Round-12 behavior).
   const inWindow = filterByWindow(out, cutoffIso);
 
-  // CC2 Round 13: `total_providers_tracked` reads `ai_providers` WHERE
-  // enabled=true. Independent of the allow-list — it answers "X of Y
-  // providers are active in the window." Honest count: it'll often be
-  // small (3 today: deepseek-free, groq-free, together-credits). If the
-  // count read fails for any reason, fall back to inWindow.length so
-  // the envelope still surfaces something coherent rather than 0.
+  // CC2 Round 13 + fix (2026-05-27): `total_providers_tracked` reads
+  // `llm_provider_caps` WHERE hard_disabled=false. Semantically: "tracked"
+  // = what we have catalogued for trust scoring (= the catalog seeded by
+  // the SLM + vertical-tier expansion sprint, 13 active today across 4
+  // populated tiers: 0a/0s/0v/1).
+  //
+  // Earlier in this PR's history this read from `ai_providers WHERE
+  // enabled=true` (= 3), which surfaced API-credentials state rather than
+  // catalog state — wrong shape for the leaderboard's X-of-Y framing.
+  // The catalog is the source of truth for what we KNOW about; the
+  // window-filtered `providers` array is the source of truth for what's
+  // ACTIVE NOW. The envelope reports both honestly.
+  //
+  // Fallback (kept): on count-read failure, fall back to inWindow.length
+  // so the envelope still surfaces a coherent number rather than 0.
   const { count: trackedCount, error: tcErr } = await db
-    .from('ai_providers')
+    .from('llm_provider_caps')
     .select('*', { count: 'exact', head: true })
-    .eq('enabled', true);
+    .eq('hard_disabled', false);
   if (tcErr) {
-    console.warn(`[llm-trust] ai_providers count failed: ${tcErr.message}`);
+    console.warn(`[llm-trust] llm_provider_caps count failed: ${tcErr.message}`);
   }
   const totalProvidersTracked = trackedCount ?? inWindow.length;
 
