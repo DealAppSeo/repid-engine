@@ -29,6 +29,11 @@ router.use('/status', observabilityRouter);
 router.use('/services', servicesRouter);
 router.use('/contracts', contractsRouter);
 router.use('/peer-verification', peerVerificationRouter);
+// CC2 2026-05-27: alias mount so /api/v1/peer-verify/respond also resolves.
+// The 2026-05-27 sprint dispatched against /peer-verify; the existing live
+// mount is /peer-verification. Both paths route to the same handler so an
+// in-flight Gemini caller is not broken regardless of which URL it uses.
+router.use('/peer-verify', peerVerificationRouter);
 
 router.get('/health', (req: Request, res: Response) => {
   res.json({ status: "ok", version: "1.0.0", service: "repid-engine" });
