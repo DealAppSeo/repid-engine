@@ -9,7 +9,7 @@ export function getAgentPrivateKey(agentName: string): string {
   // Map "trinity-mel" to "MEL", "trinity-sophia" to "SOPHIA", etc.
   const cleanName = agentName.replace('trinity-', '').toUpperCase().trim();
   const envKey = `${cleanName}_PRIVATE_KEY`;
-  const pk = process.env[envKey] || process.env.TRUSTRAILS_HMAC_SECRET || 'trinity-default-sbt-secret';
+  const pk = process.env.PEER_VERIFY_HMAC_SECRET || process.env[envKey] || process.env.TRUSTRAILS_HMAC_SECRET || 'trinity-default-sbt-secret';
   return pk;
 }
 
