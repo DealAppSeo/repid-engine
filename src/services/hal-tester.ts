@@ -6,7 +6,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || 'dummy-key'
 );
 
-const ENGINE = 'https://repid-engine-production.up.railway.app';
+const ENGINE = process.env.REPID_API_URL || 'https://repid-engine-production.up.railway.app';
 const TEST_AGENT_ID = '51e8367b-a953-4361-a7b0-bb68e494c1bb';
 const TEST_AGENT_KEY = '675599f8-95ee-42df-bc8f-4f8b59243aa8';
 
