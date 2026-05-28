@@ -36,6 +36,7 @@ import { CrossValidationServiceHandler } from '../services/cross-validation-serv
 import { AnfisRoutingServiceHandler } from '../services/anfis-routing-service-handler';
 import { ReputationAuditServiceHandler } from '../services/reputation-audit-service-handler';
 import { StorageServiceHandler } from '../services/storage-service-handler';
+import { FactCheckServiceHandler } from '../services/fact-check-service-handler';
 
 const POLL_MS = parseInt(process.env.CASCADE_SETTLEMENT_POLL_MS ?? '60000', 10);
 const MAX_PER_CYCLE = parseInt(process.env.CASCADE_SETTLEMENT_MAX_PER_CYCLE ?? '20', 10);
@@ -53,6 +54,7 @@ export class CascadeSettlementWorker {
     new AnfisRoutingServiceHandler(),
     new ReputationAuditServiceHandler(),
     new StorageServiceHandler(),
+    new FactCheckServiceHandler(),
   ];
   private timer: NodeJS.Timeout | null = null;
 
