@@ -387,7 +387,7 @@ app.use('/api/v1', createAgentsReputationRouter(db));
 //   wires the surface so the future paywall is a middleware add, not
 //   a contract change. CC1's frontend can rely on "?window=24h is
 //   always free" today.
-const CANONICAL_LLM_PROVIDERS = new Set(['anthropic', 'groq', 'openai']);
+const CANONICAL_LLM_PROVIDERS = new Set(['anthropic', 'groq', 'openai', 'deepinfra']);
 const TEST_LLM_PROVIDERS = new Set(['test-harness', 'diagnostic-test', 'manual', 'test']);
 
 app.get('/api/v1/llm-trust', async (req, res) => {
