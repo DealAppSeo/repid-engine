@@ -139,7 +139,11 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       }
 
       let apiKey = '';
-      if (adapter.tier === 0) {
+      if (adapter.name === 'llama-3-2-1b' || adapter.name === 'gemma-3-2b') {
+        apiKey = process.env.HUGGINGFACE_API_TOKEN || process.env.HF_API_KEY || process.env.HF_TOKEN || '';
+      } else if (adapter.name === 'phi-4') {
+        apiKey = process.env.CEREBRAS_API_KEY || '';
+      } else if (adapter.tier === 0) {
         const envKey = `${adapter.name.toUpperCase()}_API_KEY`;
         apiKey = process.env[envKey] || '';
       } else {

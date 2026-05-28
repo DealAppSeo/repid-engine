@@ -74,14 +74,28 @@ async function pollCompletedTasks() {
     for (const task of tasks) {
       try {
         const answer = task.result?.trim() || '';
-        if (!answer || answer.toLowerCase() === 'hello') {
-          console.log(`[TrinityTaskBridge] Skipping hello/empty result for task ${task.id}`);
+        if (!answer || answer.toLowerCase() === 'hello' || answer.startsWith('[SOFT-SKIP]')) {
+          console.log(`[TrinityTaskBridge] Skipping hello/empty/soft-skip result for task ${task.id}`);
           await markTaskBridged(task);
           continue;
         }
 
+        // Safely parse metadata if it is a string
+        let metadataObj: any = {};
+        if (task.metadata) {
+          if (typeof task.metadata === 'string') {
+            try {
+              metadataObj = JSON.parse(task.metadata);
+            } catch (e) {
+              metadataObj = {};
+            }
+          } else if (typeof task.metadata === 'object') {
+            metadataObj = task.metadata;
+          }
+        }
+
         // Check if this task has already been scored (e.g. by substance-gate EPISTEMIC_VIOLATION)
-        const gateEventId = task.metadata?.substance_gate_event_id;
+        const gateEventId = metadataObj.substance_gate_event_id;
         if (gateEventId) {
           const { data: existingGateEvent, error: gateErr } = await db
             .from('repid_score_events')
@@ -102,7 +116,7 @@ async function pollCompletedTasks() {
           task.claimed_by || 
           task.agent_name || 
           task.completed_by || 
-          task.metadata?.processedBy;
+          metadataObj.processedBy;
         const agentName = normalizeAgentName(rawAgent);
 
         const { data: agentInfo, error: agentErr } = await db
@@ -125,8 +139,8 @@ async function pollCompletedTasks() {
           certainty = parseFloat(task.belief);
         } else if (task.uncertainty != null && !isNaN(parseFloat(task.uncertainty))) {
           certainty = 1 - parseFloat(task.uncertainty);
-        } else if (task.metadata?.certainty != null && !isNaN(parseFloat(task.metadata.certainty))) {
-          certainty = parseFloat(task.metadata.certainty);
+        } else if (metadataObj.certainty != null && !isNaN(parseFloat(metadataObj.certainty))) {
+          certainty = parseFloat(metadataObj.certainty);
         }
         certainty = Math.max(0, Math.min(1, certainty));
         if (isNaN(certainty)) {
@@ -144,7 +158,7 @@ async function pollCompletedTasks() {
           certainty: certainty,
           idempotency_key: `trinity_task_bridge_${task.id}`,
           llm_call_id: generateDeterministicUuid(task.id),
-          provider_used: task.metadata?.provider_used || task.metadata?.provider || null,
+          provider_used: metadataObj.provider_used || metadataObj.provider || null,
         });
 
         console.log(`[TrinityTaskBridge] Score event successfully created: id=${scoreResult.score_event_id}, hal_score=${scoreResult.hal_score}, delta=${scoreResult.repid_delta_applied}`);
@@ -164,7 +178,18 @@ async function pollCompletedTasks() {
 }
 
 async function markTaskBridged(task: any) {
-  const currentMetadata = task.metadata && typeof task.metadata === 'object' ? task.metadata : {};
+  let currentMetadata = {};
+  if (task.metadata) {
+    if (typeof task.metadata === 'string') {
+      try {
+        currentMetadata = JSON.parse(task.metadata);
+      } catch (e) {
+        currentMetadata = {};
+      }
+    } else if (typeof task.metadata === 'object') {
+      currentMetadata = task.metadata;
+    }
+  }
   const updatedMetadata = {
     ...currentMetadata,
     repid_bridged: 'true',
