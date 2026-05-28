@@ -363,7 +363,7 @@ app.use('/api/v1', createAgentsReputationRouter(db));
 //   - ?include_all=true      → also returns case-dup capitalized rows
 //                              (alongside their lowercase canonical merge)
 //   - ?min_decisions=N       → restore an explicit threshold (default 1)
-const CANONICAL_LLM_PROVIDERS = new Set(['anthropic', 'groq', 'openai']);
+const CANONICAL_LLM_PROVIDERS = new Set(['anthropic', 'groq', 'openai', 'llama-3-2-1b', 'gemma-3-2b', 'phi-4']);
 const TEST_LLM_PROVIDERS = new Set(['test-harness', 'diagnostic-test', 'manual', 'test']);
 
 app.get('/api/v1/llm-trust', async (req, res) => {
