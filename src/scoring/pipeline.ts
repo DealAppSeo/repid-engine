@@ -32,6 +32,19 @@ import { computeDelta, HALDecision } from './repid-delta';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
 
+export function canonicalizeProvider(provider: string | null | undefined): string | null {
+  if (!provider) return null;
+  const clean = provider.toLowerCase().trim();
+  if (clean.includes('gemini')) return 'gemini';
+  if (clean.includes('anthropic') || clean.includes('claude')) return 'anthropic';
+  if (clean.includes('openai') || clean.includes('gpt')) return 'openai';
+  if (clean.includes('deepseek')) return 'deepseek';
+  if (clean.includes('groq') || clean.includes('grok')) return 'groq';
+  if (clean.includes('cerebras')) return 'cerebras';
+  if (clean.includes('cohere')) return 'cohere';
+  return clean;
+}
+
 export interface ScoreEventInput {
   agent_id: string;
   prompt: string;
@@ -211,7 +224,7 @@ export async function runScoreEvent(
     certainty_at_claim:
       typeof input.certainty === 'number' ? input.certainty : 0.85,
     contract_id: input.contract_id ?? null,
-    llm_provider: input.provider_used ?? null,
+    llm_provider: canonicalizeProvider(input.provider_used),
     llm_model: input.model_used ?? null,
     hal_score,
     hal_decision: decision,
@@ -265,7 +278,7 @@ export async function runScoreEvent(
       category,
       confidence: 'high',
       latency_ms: 0,
-      provider: 'trinity-task-bridge',
+      provider: canonicalizeProvider(input.provider_used) || 'trinity-task-bridge',
       model: 'deterministic-extractor',
     });
   } catch (err: any) {
