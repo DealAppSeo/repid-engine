@@ -16,6 +16,9 @@ import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
+import { resolvePipelineStrictness } from './scoring/pipeline';
+import { HAL_PROFILES } from './hal/service';
+import { DEFAULT_STRICTNESS } from './hal/lib/evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
@@ -513,6 +516,20 @@ if (!IS_TEST) {
     } else {
       console.log('[Redis] Running in fallback mode - rate limiting disabled');
     }
+
+    // HAL strictness boot diagnostic (2026-05-28) — print the EFFECTIVE
+    // strictness per surface so the configured level is verifiable in Railway
+    // logs. The three surfaces use different defaults by design/history:
+    //   • score-event pipeline — now env-driven via HAL_STRICTNESS (fallback 1)
+    //   • HalService profiles  — preset per product (default profile = 2)
+    //   • evaluate() library    — DEFAULT_STRICTNESS when caller omits strictness
+    // See CC_STRICTNESS_AUDIT_AND_CONFIG_PR (2026-05-29).
+    console.log(
+      `[hal-strictness] HAL_STRICTNESS=${process.env.HAL_STRICTNESS ?? 'unset'} | ` +
+      `effective: pipeline=${resolvePipelineStrictness()}, ` +
+      `service-default-profile=${HAL_PROFILES.default.strictness}, ` +
+      `library-default=${DEFAULT_STRICTNESS}`
+    );
 
     // Score monitor Task 8
     setInterval(scoreMonitor, 300000);
