@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
+import { runValidationHarness } from '../services/hal-validation-runner';
 
 const router = Router();
 
@@ -122,6 +123,34 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     network: 'base-sepolia',
     last_updated: new Date().toISOString(),
   });
+});
+
+router.get('/hal/validation/results', async (_req: Request, res: Response) => {
+  try {
+    const { data: summaries, error } = await db
+      .from('hal_validation_summaries')
+      .select('*')
+      .order('run_at', { ascending: false })
+      .limit(10);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json(summaries);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/hal/validation/run', async (req: Request, res: Response) => {
+  try {
+    const strictness = req.body.strictness === 2 ? 2 : 1;
+    const results = await runValidationHarness(strictness);
+    res.json(results);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;
