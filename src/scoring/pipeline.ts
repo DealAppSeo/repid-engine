@@ -33,6 +33,7 @@ import { computeDelta, HALDecision } from './repid-delta';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
 import { halService } from '../hal/service';
+import { strictModeOrFallback } from '../hal/lib/strict-mode';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -229,10 +230,14 @@ export async function runScoreEvent(
       signals = result.signals as unknown as Record<string, unknown>;
     }
   } catch (e: unknown) {
-    halError = e instanceof Error ? e.message : String(e);
-    signals = { error: 'hal_failure', message: halError };
-    hal_score = 0.5;
-    vetoed = false;
+    // Graceful by default; HAL_STRICT_MODE=true rethrows so a measurement run
+    // never records a degraded score as a baseline.
+    strictModeOrFallback('runScoreEvent.evaluate', e, () => {
+      halError = e instanceof Error ? e.message : String(e);
+      signals = { error: 'hal_failure', message: halError };
+      hal_score = 0.5;
+      vetoed = false;
+    });
   }
 
   const decision: HALDecision = halError ? 'flagged' : deriveHalDecision(hal_score, vetoed, signals.comma_severity as string | null);
@@ -545,7 +550,11 @@ export async function applyValidationEvent(
           : 0.85;
       }
     } catch (err: any) {
-      console.error('[applyValidationEvent] Failed to run extractHALSignals:', err.message);
+      // Graceful by default (continue with override/defaults); HAL_STRICT_MODE
+      // =true rethrows so extractor failures fail loudly during measurement.
+      strictModeOrFallback('applyValidationEvent.extractHALSignals', err, () => {
+        console.error('[applyValidationEvent] Failed to run extractHALSignals:', err.message);
+      });
     }
   } else if (halOverride?.hal_signals) {
     certaintyAtClaim = typeof halOverride.hal_signals.certainty_at_claim === 'number'
