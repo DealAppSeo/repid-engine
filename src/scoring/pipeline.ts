@@ -31,6 +31,32 @@ import {
 import { computeDelta, HALDecision } from './repid-delta';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
+import type { StrictnessLevel } from '../hal/lib/types';
+
+/**
+ * HAL strictness for the score-event pipeline.
+ *
+ * Historically hardcoded to 1 (extractor-only) to keep scoring synchronous and
+ * avoid LLM fan-out inside the hot path. Now env-overridable via HAL_STRICTNESS
+ * so the multi-stage cross-LLM pipeline (levels 2–5) can be activated without a
+ * code change. Falls back to 1 when unset/invalid → behavior identical to the
+ * original hardcode until the env var is present.
+ *
+ * The explicit 1–5 clamp matters: a malformed HAL_STRICTNESS (e.g. "x") would
+ * otherwise reach evaluate() as NaN, whose normalizeStrictness() falls back to
+ * DEFAULT_STRICTNESS=4 — silently flipping the pipeline to level 4. Clamping to
+ * 1 here keeps an invalid env value as a no-op.
+ *
+ * NOTE: HAL_STRICTNESS is a GLOBAL var also read by the validation bridge
+ * (services/validation-repid-delta.ts) and honored by HalService profiles.
+ * See CC_STRICTNESS_AUDIT_AND_CONFIG_PR (2026-05-29) for the full propagation map.
+ */
+export function resolvePipelineStrictness(): StrictnessLevel {
+  const raw = process.env.HAL_STRICTNESS;
+  if (!raw) return 1;
+  const n = parseInt(raw, 10);
+  return n === 1 || n === 2 || n === 3 || n === 4 || n === 5 ? (n as StrictnessLevel) : 1;
+}
 
 export function canonicalizeProvider(provider: string | null | undefined): string | null {
   if (!provider) return null;
@@ -169,10 +195,12 @@ export async function runScoreEvent(
     throw new NotFoundError(`Agent not found: ${input.agent_id}`);
   }
 
-  // 3. HAL evaluation — extractor-only path (strictness 1) keeps this
-  //    synchronous and avoids LLM fan-out inside scoring. Cross-LLM
-  //    consensus is owned by /score-event's older v11 path and by the
-  //    /complete handler which has provider context.
+  // 3. HAL evaluation — defaults to the extractor-only path (strictness 1),
+  //    which keeps this synchronous and avoids LLM fan-out inside scoring.
+  //    Cross-LLM consensus is owned by /score-event's older v11 path and by
+  //    the /complete handler which has provider context. Set HAL_STRICTNESS
+  //    (1–5) to activate the multi-stage pipeline here without a code change.
+  const pipelineStrictness = resolvePipelineStrictness();
   let hal_score = 0.5;
   let vetoed = false;
   let signals: Record<string, unknown> = {};
@@ -181,7 +209,7 @@ export async function runScoreEvent(
     const result = await evaluate(input.answer, input.answer, {
       domain: input.task_domain ?? 'finance',
       certainty: typeof input.certainty === 'number' ? input.certainty : 0.85,
-      strictness: 1,
+      strictness: pipelineStrictness,
     });
     hal_score = Number.isFinite(result.hal_score) ? result.hal_score : 0.5;
     vetoed = !!result.vetoed;
