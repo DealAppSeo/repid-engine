@@ -3,6 +3,7 @@ import { startValidationWorker } from './services/validation-queue-worker';
 import { startTrinityTaskBridge } from './services/trinity-task-bridge';
 import { startHitlNotificationDispatcher } from './services/hitl-notification-dispatcher';
 import { startPeerVerificationReader } from './services/peer-verification-reader';
+import { runValidationHarness } from './services/hal-validation-runner';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
@@ -868,6 +869,12 @@ startHitlExpirationJob();
 if (!IS_TEST) {
   startTrinityTaskBridge();
   startPeerVerificationReader(db);
+  
+  // Continuous HAL Validation: Run validation harness on startup and every 12 hours
+  void runValidationHarness(1).catch((e) => console.error('[hal-validation-cron] startup run failed:', e.message));
+  setInterval(() => {
+    void runValidationHarness(1).catch((e) => console.error('[hal-validation-cron] interval run failed:', e.message));
+  }, 12 * 60 * 60 * 1000);
 }
 
 // Phase 2.11 — Dispute Resolution Worker
