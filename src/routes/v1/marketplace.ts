@@ -214,4 +214,245 @@ router.get('/rentals', async (_req: Request, res: Response) => {
   return res.status(200).json({ rentals: data ?? [] });
 });
 
+// ----------------------------------------------------------------------------
+// Recent-transactions surface — public read-only feed of completed
+// service_contracts (fulfilled / satisfied / settled / resolved). Joins
+// agent_services + service_categories + repid_agents + x402_settlements +
+// repid_score_events so the response is one self-contained row per contract,
+// suitable as the data source for a future TrustMarket page.
+//
+// Public-readable by design (no auth, no wallet addresses, no payloads — see
+// auth bypass for GET /api/v1/marketplace/recent-transactions in
+// middleware/auth.ts). RLS-safe because the response is hand-shaped here.
+//
+// Roadmap categories (v1_active=false in service_categories) are returned in
+// `coming_soon` so the UI can render them honestly as "coming soon" rather
+// than hiding the catalog. There is NO advertised price for them — only the
+// display_name + description.
+// ----------------------------------------------------------------------------
+
+const RECENT_TX_STATUSES = ['fulfilled', 'satisfied', 'settled', 'resolved'] as const;
+const RECENT_TX_LIMIT_DEFAULT = 10;
+const RECENT_TX_LIMIT_MAX = 50;
+
+type SettlementType = 'sim' | 'real' | 'none';
+
+interface MarketplaceTransaction {
+  contract_id: string;
+  service_type: string | null;
+  service_display_name: string | null;
+  price_usdc: string;
+  buyer_agent: string | null;
+  provider_agent: string | null;
+  status: string;
+  fulfilled_at: string | null;
+  satisfied_at: string | null;
+  settled_at: string | null;
+  buyer_satisfaction_score: number | null;
+  settlement_type: SettlementType;
+  settlement_tx_hash: string | null;
+  provider_repid_delta: number;
+  buyer_repid_delta: number;
+  is_simulated: boolean;
+}
+
+function priceFromRaw(raw: number | string | null | undefined): string {
+  const n = typeof raw === 'string' ? Number(raw) : raw;
+  if (!Number.isFinite(n as number) || (n as number) < 0) return '0.000000';
+  return ((n as number) / 1_000_000).toFixed(6);
+}
+
+router.get('/recent-transactions', async (req: Request, res: Response) => {
+  const limitRaw = Number(req.query.limit);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0
+    ? Math.min(limitRaw, RECENT_TX_LIMIT_MAX)
+    : RECENT_TX_LIMIT_DEFAULT;
+
+  try {
+    const { data: contracts, error: cErr } = await db
+      .from('service_contracts')
+      .select(
+        'id, service_id, buyer_agent_id, provider_agent_id, agreed_price_usdc_raw, ' +
+        'status, fulfilled_at, satisfied_at, settled_at, buyer_satisfaction_score, ' +
+        'x402_payment_id, metadata'
+      )
+      .in('status', RECENT_TX_STATUSES as unknown as string[])
+      .order('fulfilled_at', { ascending: false, nullsFirst: false })
+      .limit(limit);
+
+    if (cErr) {
+      console.error('[marketplace.recent-transactions] contracts query failed:', cErr.message);
+      return res.status(500).json({ error: 'recent_transactions_query_failed' });
+    }
+
+    const rows = (contracts ?? []) as any[];
+    if (rows.length === 0) {
+      const comingSoon = await readComingSoon();
+      return res.status(200).json({
+        transactions: [],
+        coming_soon: comingSoon,
+        meta: {
+          now: new Date().toISOString(),
+          live_handler_types: [
+            'verification', 'cross_validation', 'anfis_routing',
+            'reputation_audit', 'decentralized_storage',
+          ],
+        },
+      });
+    }
+
+    const serviceIds = Array.from(new Set(rows.map((r) => r.service_id).filter(Boolean))) as string[];
+    const agentIds = Array.from(new Set(
+      rows.flatMap((r) => [r.buyer_agent_id, r.provider_agent_id]).filter(Boolean),
+    )) as string[];
+    const settlementIds = Array.from(new Set(
+      rows.map((r) => r.x402_payment_id).filter(Boolean),
+    )) as string[];
+    const contractIdsForEvents = rows.map((r) => r.id);
+
+    const [servicesRes, agentsRes, settlementsRes, eventsRes] = await Promise.all([
+      serviceIds.length > 0
+        ? db.from('agent_services').select('id, service_type').in('id', serviceIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      agentIds.length > 0
+        ? db.from('repid_agents').select('id, agent_name').in('id', agentIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      settlementIds.length > 0
+        ? db
+          .from('x402_settlements')
+          .select('id, is_simulated, status, tx_hash')
+          .in('id', settlementIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      contractIdsForEvents.length > 0
+        ? db
+          .from('repid_score_events')
+          .select('agent_id, event_type, delta, metadata')
+          .in('event_type', ['SERVICE_FULFILLED', 'SERVICE_SATISFIED'])
+          .in('metadata->>contract_id', contractIdsForEvents)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+
+    const serviceById = new Map<string, { service_type: string | null }>();
+    for (const s of (servicesRes.data ?? []) as any[]) {
+      serviceById.set(s.id, { service_type: s.service_type ?? null });
+    }
+
+    const agentNameById = new Map<string, string>();
+    for (const a of (agentsRes.data ?? []) as any[]) {
+      if (a.id && typeof a.agent_name === 'string') agentNameById.set(a.id, a.agent_name);
+    }
+
+    const settlementById = new Map<string, { is_simulated: boolean; tx_hash: string | null }>();
+    for (const s of (settlementsRes.data ?? []) as any[]) {
+      settlementById.set(s.id, {
+        is_simulated: Boolean(s.is_simulated),
+        tx_hash: typeof s.tx_hash === 'string' && s.tx_hash.length > 0 ? s.tx_hash : null,
+      });
+    }
+
+    // deltas: sum SERVICE_FULFILLED + SERVICE_SATISFIED for each (contract_id, agent_id).
+    const deltaByContractAgent = new Map<string, number>(); // key = `${contract_id}|${agent_id}`
+    for (const ev of (eventsRes.data ?? []) as any[]) {
+      const cid = ev?.metadata?.contract_id;
+      if (typeof cid !== 'string' || !ev.agent_id) continue;
+      const k = `${cid}|${ev.agent_id}`;
+      deltaByContractAgent.set(k, (deltaByContractAgent.get(k) ?? 0) + Number(ev.delta ?? 0));
+    }
+
+    const liveTypes = new Set([
+      'verification', 'cross_validation', 'anfis_routing',
+      'reputation_audit', 'decentralized_storage',
+    ]);
+    const serviceDisplayNameByType: Record<string, string> = {
+      verification: 'Verification-as-a-Service',
+      cross_validation: 'Cross-Validation',
+      anfis_routing: 'ANFIS Routing Advisory',
+      reputation_audit: 'Reputation Audit',
+      decentralized_storage: 'Artifact Storage',
+    };
+
+    const transactions: MarketplaceTransaction[] = rows.map((r) => {
+      const svc = serviceById.get(r.service_id);
+      const settlement = r.x402_payment_id ? settlementById.get(r.x402_payment_id) : undefined;
+
+      let settlementType: SettlementType;
+      if (!settlement) {
+        settlementType = 'none';
+      } else {
+        settlementType = settlement.is_simulated ? 'sim' : 'real';
+      }
+
+      const providerDelta = deltaByContractAgent.get(`${r.id}|${r.provider_agent_id}`) ?? 0;
+      const buyerDelta = deltaByContractAgent.get(`${r.id}|${r.buyer_agent_id}`) ?? 0;
+
+      // metadata.is_simulated is the canonical demo/sim marker on service_contracts;
+      // truthy via the F-series normalized check.
+      const isSimMetadata = (() => {
+        const v = r?.metadata?.is_simulated;
+        if (v === true || v === 1) return true;
+        if (typeof v === 'string') return ['true', '1', 'yes'].includes(v.trim().toLowerCase());
+        return false;
+      })();
+      const isSimulated = isSimMetadata || settlementType === 'sim';
+
+      const type = svc?.service_type ?? null;
+      const display = type && liveTypes.has(type)
+        ? serviceDisplayNameByType[type] ?? type
+        : type;
+
+      return {
+        contract_id: r.id,
+        service_type: type,
+        service_display_name: display,
+        price_usdc: priceFromRaw(r.agreed_price_usdc_raw),
+        buyer_agent: agentNameById.get(r.buyer_agent_id) ?? null,
+        provider_agent: agentNameById.get(r.provider_agent_id) ?? null,
+        status: r.status,
+        fulfilled_at: r.fulfilled_at ?? null,
+        satisfied_at: r.satisfied_at ?? null,
+        settled_at: r.settled_at ?? null,
+        buyer_satisfaction_score: r.buyer_satisfaction_score ?? null,
+        settlement_type: settlementType,
+        settlement_tx_hash: settlement?.tx_hash ?? null,
+        provider_repid_delta: providerDelta,
+        buyer_repid_delta: buyerDelta,
+        is_simulated: isSimulated,
+      };
+    });
+
+    const comingSoon = await readComingSoon();
+
+    return res.status(200).json({
+      transactions,
+      coming_soon: comingSoon,
+      meta: {
+        now: new Date().toISOString(),
+        live_handler_types: Array.from(liveTypes),
+      },
+    });
+  } catch (e: any) {
+    console.error('[marketplace.recent-transactions] unhandled error:', e?.message ?? String(e));
+    return res.status(500).json({ error: 'recent_transactions_unhandled' });
+  }
+});
+
+async function readComingSoon(): Promise<Array<{ service_type: string; display_name: string; description: string | null }>> {
+  const { data, error } = await db
+    .from('service_categories')
+    .select('category_name, display_name, description')
+    .eq('v1_active', false)
+    .order('category_name', { ascending: true });
+
+  if (error) {
+    console.error('[marketplace.recent-transactions] coming_soon query failed:', error.message);
+    return [];
+  }
+
+  return ((data ?? []) as any[]).map((c) => ({
+    service_type: c.category_name,
+    display_name: typeof c.display_name === 'string' ? c.display_name : c.category_name,
+    description: typeof c.description === 'string' ? c.description : null,
+  }));
+}
+
 export default router;
