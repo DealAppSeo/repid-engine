@@ -1,7 +1,12 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { PeerVerificationQueueEntry } from '../types/peer-verification';
 
-const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
+const VERIFIER_POOL = [
+  'trinity-mel', 'trinity-shofet', 'trinity-gcm',
+  'trinity-torch', 'trinity-chesed', 'trinity-veritas',
+  'trinity-hdm', 'trinity-w3c', 'trinity-nexus',
+  'trinity-apm', 'trinity-sophia', 'trinity-orch'
+];
 const POLL_INTERVAL_MS = 30000;
 let readerInterval: NodeJS.Timeout | null = null;
 
@@ -81,7 +86,7 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
           agent_assigned: chosenVerifier,
           task_type: 'peer_verify',
           status: 'pending',
-          priority: 80,
+          priority: 95,
           metadata: {
             peer_verification_queue_id: queueEntry.id,
             source_response_id: queueEntry.source_response_id,
