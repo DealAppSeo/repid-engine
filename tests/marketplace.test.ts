@@ -147,3 +147,166 @@ describe('POST /rentals — settlement disabled', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ----------------------------------------------------------------------------
+// GET /recent-transactions — sanitized public feed of completed service_contracts.
+// Verifies the join+shape (not full DB plumbing). Uses the same call-time
+// global handle pattern as the other tests so jest does not hoist the mock.
+// ----------------------------------------------------------------------------
+describe('GET /recent-transactions', () => {
+  afterEach(() => {
+    delete (global as any).__mktDb;
+  });
+
+  function makeDb(handlers: {
+    contracts: any[];
+    services?: any[];
+    agents?: any[];
+    settlements?: any[];
+    events?: any[];
+    categories?: any[];
+  }) {
+    const tables: Record<string, any[]> = {
+      service_contracts: handlers.contracts ?? [],
+      agent_services: handlers.services ?? [],
+      repid_agents: handlers.agents ?? [],
+      x402_settlements: handlers.settlements ?? [],
+      repid_score_events: handlers.events ?? [],
+      service_categories: handlers.categories ?? [],
+    };
+    return {
+      from: (table: string) => {
+        const data = tables[table] ?? [];
+        const chain: any = {
+          _data: data,
+          select: function () { return this; },
+          in: function () { return this; },
+          eq: function () { return this; },
+          order: function () { return this; },
+          limit: async function () { return { data: this._data, error: null }; },
+          then: function (resolve: any) { resolve({ data: this._data, error: null }); },
+        };
+        return chain;
+      },
+    };
+  }
+
+  test('200 returns transactions + coming_soon shape', async () => {
+    (global as any).__mktDb = makeDb({
+      contracts: [
+        {
+          id: 'c1', service_id: 'svc1', buyer_agent_id: 'b1', provider_agent_id: 'p1',
+          agreed_price_usdc_raw: 100000, status: 'fulfilled',
+          fulfilled_at: '2026-05-27T23:00:00Z', satisfied_at: null, settled_at: null,
+          buyer_satisfaction_score: null, x402_payment_id: 's1',
+          metadata: { is_simulated: true, demo_tag: 'test' },
+        },
+      ],
+      services: [{ id: 'svc1', service_type: 'verification' }],
+      agents: [
+        { id: 'b1', agent_name: 'trinity-sophia' },
+        { id: 'p1', agent_name: 'trinity-veritas' },
+      ],
+      settlements: [{ id: 's1', is_simulated: true, status: 'settled', tx_hash: null }],
+      events: [
+        { agent_id: 'p1', event_type: 'SERVICE_FULFILLED', delta: 0, metadata: { contract_id: 'c1' } },
+        { agent_id: 'b1', event_type: 'SERVICE_FULFILLED', delta: 0, metadata: { contract_id: 'c1' } },
+      ],
+      categories: [
+        { category_name: 'fact_check', display_name: 'Fact Check', description: 'Roadmap — handler not yet implemented.' },
+      ],
+    });
+
+    const res = await request(makeApp()).get('/api/v1/marketplace/recent-transactions');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.transactions)).toBe(true);
+    expect(res.body.transactions).toHaveLength(1);
+
+    const tx = res.body.transactions[0];
+    expect(tx.contract_id).toBe('c1');
+    expect(tx.service_type).toBe('verification');
+    expect(tx.service_display_name).toBe('Verification-as-a-Service');
+    expect(tx.price_usdc).toBe('0.100000');
+    expect(tx.buyer_agent).toBe('trinity-sophia');
+    expect(tx.provider_agent).toBe('trinity-veritas');
+    expect(tx.settlement_type).toBe('sim');
+    expect(tx.is_simulated).toBe(true);
+    expect(tx.provider_repid_delta).toBe(0);
+    expect(tx.buyer_repid_delta).toBe(0);
+
+    expect(Array.isArray(res.body.coming_soon)).toBe(true);
+    expect(res.body.coming_soon[0]).toMatchObject({
+      service_type: 'fact_check',
+      display_name: 'Fact Check',
+    });
+    expect(res.body.meta.live_handler_types).toContain('verification');
+    expect(res.body.meta.live_handler_types).toContain('reputation_audit');
+  });
+
+  test('200 with empty transactions when no contracts exist', async () => {
+    (global as any).__mktDb = makeDb({
+      contracts: [],
+      categories: [{ category_name: 'llm_arbitrage', display_name: 'LLM Provider Arbitrage', description: null }],
+    });
+    const res = await request(makeApp()).get('/api/v1/marketplace/recent-transactions');
+    expect(res.status).toBe(200);
+    expect(res.body.transactions).toEqual([]);
+    expect(res.body.coming_soon[0].service_type).toBe('llm_arbitrage');
+  });
+
+  test('settlement_type=real when is_simulated=false on linked settlement', async () => {
+    (global as any).__mktDb = makeDb({
+      contracts: [
+        {
+          id: 'c2', service_id: 'svc1', buyer_agent_id: 'b1', provider_agent_id: 'p1',
+          agreed_price_usdc_raw: 50000, status: 'satisfied',
+          fulfilled_at: '2026-05-27T23:00:00Z', satisfied_at: '2026-05-27T23:01:00Z',
+          settled_at: '2026-05-27T23:01:01Z',
+          buyer_satisfaction_score: 0.85, x402_payment_id: 's2',
+          metadata: {},
+        },
+      ],
+      services: [{ id: 'svc1', service_type: 'anfis_routing' }],
+      agents: [
+        { id: 'b1', agent_name: 'trinity-sophia' },
+        { id: 'p1', agent_name: 'trinity-mel' },
+      ],
+      settlements: [{ id: 's2', is_simulated: false, status: 'settled', tx_hash: '0xabc123' }],
+      events: [],
+    });
+    const res = await request(makeApp()).get('/api/v1/marketplace/recent-transactions');
+    expect(res.status).toBe(200);
+    const tx = res.body.transactions[0];
+    expect(tx.settlement_type).toBe('real');
+    expect(tx.settlement_tx_hash).toBe('0xabc123');
+    expect(tx.is_simulated).toBe(false);
+    expect(tx.buyer_satisfaction_score).toBe(0.85);
+  });
+
+  test('settlement_type=none when no x402_payment_id', async () => {
+    (global as any).__mktDb = makeDb({
+      contracts: [
+        {
+          id: 'c3', service_id: 'svc1', buyer_agent_id: 'b1', provider_agent_id: 'p1',
+          agreed_price_usdc_raw: 100, status: 'fulfilled',
+          fulfilled_at: '2026-05-27T23:00:00Z', satisfied_at: null, settled_at: null,
+          buyer_satisfaction_score: null, x402_payment_id: null,
+          metadata: { is_simulated: 'true' },
+        },
+      ],
+      services: [{ id: 'svc1', service_type: 'verification' }],
+      agents: [
+        { id: 'b1', agent_name: 'trinity-orch' },
+        { id: 'p1', agent_name: 'trinity-veritas' },
+      ],
+      settlements: [],
+      events: [],
+    });
+    const res = await request(makeApp()).get('/api/v1/marketplace/recent-transactions');
+    expect(res.status).toBe(200);
+    const tx = res.body.transactions[0];
+    expect(tx.settlement_type).toBe('none');
+    expect(tx.settlement_tx_hash).toBeNull();
+    expect(tx.is_simulated).toBe(true); // truthy 'true' via F-series normalize
+  });
+});

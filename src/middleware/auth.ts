@@ -43,6 +43,8 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/registration\.json$/.test(req.path)) return next();
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/reputation\/(payload\.json|onchain)$/.test(req.path)) return next();
   if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
+  // CC2 2026-05-27: public marketplace transactions feed (sanitized; no wallets / payloads).
+  if (req.method === 'GET' && req.path === '/api/v1/marketplace/recent-transactions') return next();
   // Sprint 1: x402 inbound demo bypass
   if (req.method === 'POST' && /^\/api\/v1\/agents\/[^/]+\/trade-analysis$/.test(req.path)) return next();
 
