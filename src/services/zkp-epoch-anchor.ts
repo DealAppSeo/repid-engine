@@ -40,6 +40,10 @@ import { keccak256, getBytes, concat, toUtf8Bytes, ZeroHash, AbiCoder, Interface
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { buildMerkleRoot } from './audit-merkle-anchor';
+// Hash-AGNOSTIC root (sprint 2026-05-29): the epoch root is computed via an
+// injectable scheme so it survives the sha256→Poseidon2 dual-prover migration.
+// Default 'keccak256' = byte-identical to PR #73 (epochLeaf/buildMerkleRoot below).
+import { getHashScheme, buildRoot, DEFAULT_HASH_SCHEME } from '../zkp/merkle-root';
 
 /* -------------------------------------------------------------------------- */
 /* EAS constants (Base Sepolia)                                               */
@@ -153,29 +157,45 @@ export interface EpochRootResult {
   last_id: number | null;
   ids: number[];
   leaves: string[];
+  /** Hash scheme used to build the root (default keccak256). */
+  scheme: string;
+  /** Distinct commitments in the epoch — < proof_count means duplicate leaves
+   *  (the PR #74 nonce fix is not yet live; anchor soundness caveat). */
+  distinct_commitments: number;
+}
+
+export interface EpochComputeOpts {
+  /** Hash scheme name ('keccak256' default, 'sha256', 'poseidon2' when migrated). */
+  schemeName?: string;
+  /** Post-nonce CUTOFF: only include proofs with id > afterId (anchor unique-commitment proofs only). */
+  afterId?: number;
 }
 
 /**
  * Select an epoch's POSTCARD proofs and compute one merkle root over their
- * commitments. Read is on the hot path → direct pg [rule:8].
+ * commitments with a hash-AGNOSTIC scheme. Read is on the hot path → direct pg
+ * [rule:8]. Reads repid_zkp_proofs ONLY (deconfliction: no RepID-score table).
  */
-export async function computeEpochMerkleRoot(epoch: EpochSpec): Promise<EpochRootResult> {
+export async function computeEpochMerkleRoot(epoch: EpochSpec, opts: EpochComputeOpts = {}): Promise<EpochRootResult> {
+  const scheme = getHashScheme(opts.schemeName ?? DEFAULT_HASH_SCHEME);
+  const afterId = opts.afterId ?? 0;
   const rows = await pgQuery<EpochProofRow>(
     `SELECT id, zk_commitment
        FROM repid_zkp_proofs
       WHERE proof_type = 'POSTCARD'
         AND zk_commitment IS NOT NULL
         AND created_at >= $1 AND created_at < $2
+        AND id > $3
       ORDER BY id ASC`,
-    [epoch.start, epoch.end],
+    [epoch.start, epoch.end, afterId],
     { retries: 2, label: 'zkp-epoch-select' },
   );
 
   if (rows.length === 0) {
-    return { root: ZeroHash, proof_count: 0, first_id: null, last_id: null, ids: [], leaves: [] };
+    return { root: ZeroHash, proof_count: 0, first_id: null, last_id: null, ids: [], leaves: [], scheme: scheme.name, distinct_commitments: 0 };
   }
-  const leaves = rows.map(r => epochLeaf(r.zk_commitment));
-  const root = buildMerkleRoot(leaves);
+  const leaves = rows.map(r => scheme.leaf(r.zk_commitment));
+  const root = buildRoot(leaves, scheme.pair);
   return {
     root,
     proof_count: rows.length,
@@ -183,6 +203,8 @@ export async function computeEpochMerkleRoot(epoch: EpochSpec): Promise<EpochRoo
     last_id: rows[rows.length - 1]!.id,
     ids: rows.map(r => r.id),
     leaves,
+    scheme: scheme.name,
+    distinct_commitments: new Set(rows.map(r => r.zk_commitment)).size,
   };
 }
 
@@ -195,10 +217,13 @@ export interface AggregateResult extends EpochRootResult {
 /**
  * Phase 2 — compute the epoch root and (when persist) back-fill merkle_root on
  * every row in the epoch. The UPDATE is the previously-missing aggregator call
- * site. Hot-path write → direct pg [rule:8].
+ * site. Hot-path write → direct pg [rule:8]. Writes repid_zkp_proofs ONLY.
+ *
+ * DRY-RUN BY DEFAULT (persist defaults false) — mirrors the decay-loop operator
+ * pattern; the operator script passes persist:true only under --apply.
  */
-export async function aggregateEpoch(epoch: EpochSpec, opts: { persist?: boolean } = {}): Promise<AggregateResult> {
-  const r = await computeEpochMerkleRoot(epoch);
+export async function aggregateEpoch(epoch: EpochSpec, opts: { persist?: boolean } & EpochComputeOpts = {}): Promise<AggregateResult> {
+  const r = await computeEpochMerkleRoot(epoch, opts);
   let rows_updated = 0;
   if (opts.persist && r.proof_count > 0) {
     const updated = await pgQuery<{ id: number }>(
@@ -294,6 +319,37 @@ export function buildEasAttestationRequest(args: {
   };
 }
 
+/**
+ * P3 — the EXACT on-chain command block for Sean (one action). NOT executed
+ * here (Railway/on-chain = Sean-only). Two `cast` commands: register the schema
+ * once, then attest the epoch root. After sending, Sean passes the receipt's
+ * Attested UID to recordEpochAnchorUid() to back-fill eas_attestation_uid.
+ */
+export function buildSeanCommand(eas: EasAttestationRequest, opts: { firstId: number; lastId: number; idCount: number; resolver?: string; revocable?: boolean }): string {
+  const resolver = opts.resolver ?? '0x0000000000000000000000000000000000000000';
+  const revocable = (opts.revocable ?? true) ? 'true' : 'false';
+  return [
+    `# === EAS anchor for epoch ${eas.epoch} (Sean-only; do not run unattended) ===`,
+    `# Covers ${opts.idCount} POSTCARD proofs, repid_zkp_proofs.id ${opts.firstId}..${opts.lastId}`,
+    `# merkle_root: ${eas.merkleRoot}`,
+    `# schema:      ${eas.schemaString}`,
+    `# schemaUid:   ${eas.schemaUid}`,
+    `# EAS:         ${eas.easContract}   SchemaRegistry: ${SCHEMA_REGISTRY_BASE_SEPOLIA}   (Base Sepolia, chainId 84532)`,
+    `export RPC=$BASE_SEPOLIA_RPC_URL          # e.g. https://sepolia.base.org`,
+    `export PK=$AUDIT_ANCHOR_PRIVATE_KEY        # funded Base Sepolia key (Sean)`,
+    ``,
+    `# 1) Register the schema ONCE (skip if schemaUid already registered):`,
+    `cast send ${SCHEMA_REGISTRY_BASE_SEPOLIA} "register(string,address,bool)" \\`,
+    `  "${eas.schemaString}" ${resolver} ${revocable} --rpc-url $RPC --private-key $PK`,
+    ``,
+    `# 2) Attest the epoch root (broadcast-ready calldata):`,
+    `cast send ${eas.easContract} ${eas.attestCalldata} --rpc-url $RPC --private-key $PK`,
+    ``,
+    `# 3) Read the Attested UID from the receipt, then back-fill:`,
+    `#    recordEpochAnchorUid({start:'${''}', ...}, '<attestationUID>')  (operator script --record <uid>)`,
+  ].join('\n');
+}
+
 export type AnchorStatus = 'aggregated_deferred' | 'aggregated_anchored' | 'no_proofs';
 
 export interface AnchorResult {
@@ -315,9 +371,10 @@ export interface AnchorResult {
  */
 export async function anchorEpoch(
   epoch: EpochSpec,
-  opts: { persist?: boolean; sendOnChain?: boolean } = {},
+  opts: { persist?: boolean; sendOnChain?: boolean } & EpochComputeOpts = {},
 ): Promise<AnchorResult> {
-  const agg = await aggregateEpoch(epoch, { persist: opts.persist ?? true });
+  // DRY-RUN default: persist only when explicitly requested (operator --apply).
+  const agg = await aggregateEpoch(epoch, { persist: opts.persist ?? false, schemeName: opts.schemeName, afterId: opts.afterId });
   if (agg.proof_count === 0) {
     return { status: 'no_proofs', epoch: epoch.label, root: agg.root, proof_count: 0, rows_updated_merkle: 0, eas: null, eas_attestation_uid: null, rows_updated_eas: 0 };
   }
