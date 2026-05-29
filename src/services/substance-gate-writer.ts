@@ -1,6 +1,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { appendToAuditChain } from './auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
+import { slashAgentStake } from './stake-capability-bridge';
 
 /**
  * Extract provenance tags from a task for propagation to derivative events.
@@ -208,6 +209,20 @@ export async function slashRepIDForGateFail(
 
     if (updateError) {
       console.error('[GateWriter] Error updating repid_agents.current_repid:', updateError.message);
+    }
+
+    // Step 5 (Phase 3, 2026-05-28): bonded-stake slash hook. On a RepID slash we
+    // also reduce the agent's bonded stake and lock it to the originating task
+    // (one-way valve via locked_for_claim_id). No-op when the agent has no
+    // active stake. Best-effort: never block the RepID slash on a stake error.
+    try {
+      const claimId = Number.isFinite(Number(task?.id)) ? Number(task.id) : null;
+      const slash = await slashAgentStake(agentUuid, claimId);
+      if (slash.ok) {
+        console.log(`[GateWriter] bonded stake slashed for ${agentName}: -${slash.slashed_usdc} USDC (locked to claim ${claimId})`);
+      }
+    } catch (stakeErr: any) {
+      console.error('[GateWriter] bonded-stake slash hook failed (non-fatal):', stakeErr?.message ?? stakeErr);
     }
   } catch (error: any) {
     console.error('[GateWriter] Error slashing RepID:', error.message);
