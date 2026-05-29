@@ -580,6 +580,14 @@ export async function factCheck(
     attempted = providers.length;
   }
 
+  verdicts.forEach(v => {
+    if (v.verdict === 'ERROR') {
+      console.log(`  - Provider ${v.provider} FAILED in ${v.latency_ms}ms: ${v.error}`);
+    } else {
+      console.log(`  - Provider ${v.provider} returned ${v.verdict} (confidence ${v.confidence}%) in ${v.latency_ms}ms`);
+    }
+  });
+
   const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
