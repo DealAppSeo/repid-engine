@@ -15,6 +15,7 @@
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { BUILDER_FLOOR, computeAuthority, babylonianSqrt } from './authority-math';
+import { applyStakeCapability } from './stake-capability-bridge';
 
 export { BUILDER_FLOOR, computeAuthority };
 
@@ -59,6 +60,10 @@ export async function depositStake(
 
   const total = await getCurrentStake(builder.id);
   const auth = await snapshotAuthority(builder.id, total);
+
+  // Phase 3 (2026-05-28): propagate authority → per-agent capability. This is
+  // the previously-missing call site for repid_agent_stakes (0 rows / cold).
+  await applyStakeCapability(builder.id, auth.authority, total, { isSimulated: !process.env.X402_REAL_RPC });
 
   await emitAuditEvent({
     event_type: 'stake_deposit',
@@ -116,6 +121,10 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
 
   const newTotal = await getCurrentStake(builderId);
   const auth = await snapshotAuthority(builderId, newTotal);
+
+  // Phase 3 (2026-05-28): re-propagate the reduced authority to capability caps.
+  await applyStakeCapability(builderId, auth.authority, newTotal, { isSimulated: !process.env.X402_REAL_RPC });
+
   return { ok: true, total_active_stake: newTotal.toString(), authority_after: auth.authority.toString() };
 }
 
@@ -186,9 +195,15 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
     isDemoBuilder,
   });
 
-  await db.from('stake_authority_snapshots').insert({
+  // COLD-MODULE FIX (2026-05-28): this insert silently failed for the table's
+  // entire life — it wrote `computed_authority` (no such column) and omitted the
+  // NOT NULL `stake_total` and `authority` columns, and the error was never
+  // checked. Real columns: builder_id, stake_total, authority, basis. The error
+  // is now surfaced (no silent swallow — that swallow was the dormancy cause).
+  const { error: snapErr } = await db.from('stake_authority_snapshots').insert({
     builder_id: builderId,
-    computed_authority: auth.authority.toString(),
+    stake_total: stake.toString(),
+    authority: auth.authority.toString(),
     basis: {
       stake: stake.toString(),
       stake_sqrt: auth.breakdown.stakeSqrt,
@@ -199,8 +214,12 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
       mean_C: meanC,
       combined_score_used: auth.breakdown.combinedScore,
       floor_passed: auth.breakdown.builderFloorPassed,
+      is_simulated: !process.env.X402_REAL_RPC,
     },
   });
+  if (snapErr) {
+    console.error('[stake-vault] stake_authority_snapshots insert failed:', snapErr.message);
+  }
 
   return {
     authority: auth.authority,
