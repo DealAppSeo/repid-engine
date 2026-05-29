@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { pgQuery } from '../db/direct-pg';
+import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -291,6 +292,11 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       return 'failed';
     }
 
+    // Per-proof nonce (sprint 2026-05-29 Part B) — generated ONCE before the
+    // retry loop so retries of the same job reuse it (idempotent). Sent to the
+    // prover so a nonce-aware prover binds it, AND folded into the stored
+    // commitment below to guarantee uniqueness regardless of the prover.
+    const nonce = generateNonce();
     const res = await withRetry(`zkp.prove[${job.job_id}]`, async () => {
       const r = await httpFetch(`${config.zkpServiceUrl}/zkp/repid-proof`, {
         method: 'POST',
@@ -298,6 +304,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         body: JSON.stringify({
           agent_id: job.agent_id,
           score,
+          nonce,
           metadata: { job_id: job.job_id }
         })
       });
@@ -336,6 +343,18 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           : null;
     const merkleRoot = typeof proof.merkle_root === 'string' ? proof.merkle_root : null;
 
+    // Bind the per-proof nonce into the stored canonical commitment so every
+    // proof's zk_commitment is unique (root-cause fix: was deterministic per
+    // agent → 18.1% unique). The prover's commitment is bound in too, preserving
+    // the tie to the proof. proof_hash on the queue stays the prover's value.
+    const uniqueCommitment = buildPostcardCommitment({
+      agentId: job.agent_id,
+      score,
+      tier: typeof proof.tier === 'string' ? proof.tier : '',
+      nonce,
+      proverCommitment: commitment,
+    });
+
     await withRetry(`markCompleted[${job.id}]`, () =>
       markCompleted({
         rowId: job.id,
@@ -343,7 +362,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         proofHash,
         proofBytes,
         proofSizeBytes,
-        commitment,
+        commitment: uniqueCommitment,
         merkleRoot,
       })
     );
