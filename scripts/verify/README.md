@@ -17,6 +17,7 @@ Exit code is **non-zero iff a BLOCKING check FAILs** → CI blocks the merge.
 | `rls` | the CRITICAL-16 + `repid_score_events` have RLS on | `pg_tables.rowsecurity` via the `exec_sql` RPC; reports total disabled | yes |
 | `hal` | HAL discriminates (not "blind") | runs the labeled corpus through fact-check (strictness 2); asserts F1 ≥ `HAL_CHECK_MIN_F1` and separation > 0 | yes |
 | `repid-guards` | penalty + earned-floor triggers exist; no active agent below floor | `pg_trigger` + `repid_agents` via `exec_sql` | yes |
+| `swarm-throughput` | concurrency is REAL, not serial | cross-repo scan for the parallel-spawn mechanism (repid-engine + trinity-symphony-shared) **and** live `trinity_tasks` metrics (distinct active workers, backlog, completions/hr vs inflow/hr) | yes |
 
 `SKIP` (e.g. no provider keys, no DB credentials) **never blocks and never silently passes** —
 it shows as `⚠️` with a reason. The `hal` check also SKIPs (not FAILs) when >50% of samples hit
@@ -30,6 +31,12 @@ regression, so it must not false-block a merge.
 - `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` — required for `rls` / `repid-guards` / `hal` (else SKIP).
 - `GROQ_API_KEY` / `FIREWORKS_API_KEY` / `CEREBRAS_API_KEY` — ≥2 required for `hal` (else SKIP).
 - `HAL_CHECK_SAMPLE` (30), `HAL_VETO_THRESHOLD` (0.43), `HAL_CHECK_MIN_F1` (0.70).
+- `swarm-throughput`: `SWARM_MIN_WORKERS` (2 — "parallel" = ≥2 distinct workers active in 15m),
+  `SWARM_BACKLOG_MIN` (200 — below this, throughput isn't gated), `SWARM_FAIL_ON_BACKLOG_GROWTH`
+  (0 — set 1 to also block when inflow > completions). Cross-repo scan roots: `VERIFY_SCAN_DIRS`.
+  FAILs on the **serial bottleneck** (parallel mechanism in code but < MIN_WORKERS active with a
+  backlog) — so a "concurrency sprint" can't pass while the swarm runs at ~1 worker. Uses *distinct
+  active workers*, not the noisy instantaneous `doing` count.
 
 ## `npm run verify:claims -- <report.md>`
 

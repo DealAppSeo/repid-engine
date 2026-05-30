@@ -20,6 +20,7 @@ import { f2AuthzCheck } from './checks/f2-authz';
 import { rlsCheck } from './checks/rls';
 import { halCheck } from './checks/hal';
 import { repidGuardsCheck } from './checks/repid-guards';
+import { swarmThroughputCheck } from './checks/swarm-throughput';
 
 const REGISTRY: Record<string, Check> = {
   authority: authorityCheck,
@@ -27,6 +28,7 @@ const REGISTRY: Record<string, Check> = {
   rls: rlsCheck,
   hal: halCheck,
   'repid-guards': repidGuardsCheck,
+  'swarm-throughput': swarmThroughputCheck,
 };
 
 function parseList(flag: string): string[] | null {

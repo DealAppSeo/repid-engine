@@ -13,11 +13,11 @@
  * Scope: this catches claims of the KINDS it has extractors for. It is not a universal NLP
  * checker — unrecognized prose is left alone. Add extractors as new claim shapes recur.
  */
-import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'fs';
 import { authorityCheck } from './checks/authority';
 import { rlsCheck } from './checks/rls';
 import { halCheck } from './checks/hal';
+import { scanRepos, scanRootLabels as scanRootLabelsLib } from './lib/scan';
 
 type Verdict = 'REPRODUCES' | 'CONTRADICTED' | 'UNVERIFIED';
 interface Claim { type: string; quote: string; expected: string; derived: string; verdict: Verdict }
@@ -56,41 +56,11 @@ async function extractAuthorityFormula(text: string): Promise<Claim[]> {
 }
 
 /** ── Extractor: concurrency mechanism ─────────────────────────────────────────
- * Catches a report claiming an atomic claim / MAX_CONCURRENCY / race-safe worker and
- * checks the mechanism actually exists in the codebase (phantom-claim detector).
- *
- * CROSS-REPO: a claim's mechanism may live in a different repo than the one we run in — e.g.
- * GA's swarm concurrency (atomic `claimed_by` claim) is in trinity-symphony-shared, not
- * repid-engine. Scanning only `<cwd>/src` false-flagged it as phantom. So we scan repid-engine
- * `src/` AND sibling repos (default: ../trinity-symphony-shared), `.ts` AND `.js`. Override the
- * roots with VERIFY_CLAIMS_SCAN_DIRS (comma-separated paths, absolute or relative to cwd). */
-function scanRoots(): string[] {
-  const override = (process.env.VERIFY_CLAIMS_SCAN_DIRS ?? '').split(',').map(s => s.trim()).filter(Boolean);
-  const defaults = [join(process.cwd(), 'src'), join(process.cwd(), '..', 'trinity-symphony-shared')];
-  const roots = (override.length ? override.map(d => (d.match(/^([a-zA-Z]:[\\/]|[\\/])/) ? d : join(process.cwd(), d))) : defaults);
-  return roots.filter(d => existsSync(d));
-}
-/** Return `<repo>:<relpath>` of the first file matching `re` across all scan roots, else null. */
-function scanRepos(re: RegExp): string | null {
-  for (const root of scanRoots()) {
-    const repo = root.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).slice(-2).join('/');
-    const stack = [root];
-    while (stack.length) {
-      const dir = stack.pop()!;
-      let entries: string[]; try { entries = readdirSync(dir); } catch { continue; }
-      for (const e of entries) {
-        if (e === 'node_modules' || e === '.git' || e === 'dist' || e === '.next') continue;
-        const p = join(dir, e);
-        let st; try { st = statSync(p); } catch { continue; }
-        if (st.isDirectory()) { stack.push(p); continue; }
-        if (!/\.(ts|js|tsx|mjs)$/.test(e)) continue;
-        let body: string; try { body = readFileSync(p, 'utf8'); } catch { continue; }
-        if (re.test(body)) return `${repo}:${p.replace(root, '').replace(/^[\\/]/, '').replace(/\\/g, '/')}`;
-      }
-    }
-  }
-  return null;
-}
+ * Catches a report claiming an atomic claim / MAX_CONCURRENCY / race-safe worker and checks the
+ * mechanism actually exists — CROSS-REPO (lib/scan), because a claim's mechanism may live in
+ * another repo (GA's swarm atomic `claimed_by` claim is in trinity-symphony-shared). Scanning
+ * only `<cwd>/src` is the blind spot that false-flagged it as phantom. */
+const scanRootLabels = scanRootLabelsLib;
 async function extractConcurrency(text: string): Promise<Claim[]> {
   const m = text.match(/[^\n]*(MAX_CONCURRENCY|atomic[^\n]{0,12}claim|claimed_by|race-?safe|conditional UPDATE|in-flight)[^\n]*/i);
   if (!m) return [];
@@ -109,7 +79,7 @@ async function extractConcurrency(text: string): Promise<Claim[]> {
   const derived = missing.length
     ? `partial — missing across scanned repos: ${missing.map(r => r.tok).join('; ')}${foundStr ? ` (found: ${foundStr})` : ''}`
     : `found: ${foundStr}`;
-  const scanned = scanRoots().map(r => r.split(/[\\/]/).filter(Boolean).slice(-1)[0]).join(', ');
+  const scanned = scanRootLabels().join(', ');
   return [{ type: 'concurrency', quote: clip(line, 110), expected: `named mechanism(s) across [${scanned}]: ${named.map(n => n.tok).join('; ')}`, derived, verdict }];
 }
 
