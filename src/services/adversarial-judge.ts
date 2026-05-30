@@ -41,10 +41,7 @@ interface ProviderSpec {
   family: JudgeFamily;
   model: string;
   apiKey: () => string | undefined;
-  call: (prompt: string, model: string, apiKey: string) => Promise<{
-    text: string;
-    usage?: { prompt_tokens: number; completion_tokens: number };
-  }>;
+  call: (p: any, model: any, apiKey: any) => Promise<any>;
 }
 
 interface JudgeAttempt {
@@ -118,7 +115,7 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'anthropic',
     model: 'claude-haiku-4-5-20251001',
     apiKey: () => process.env.ANTHROPIC_API_KEY,
-    call: async (prompt, model, apiKey) => {
+    call: async (prompt: any, model: any, apiKey: any) => {
       const { signal, clear } = withTimeout();
       try {
         const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -133,7 +130,7 @@ const PROVIDERS: ProviderSpec[] = [
             max_tokens: 200,
             temperature: 0.1,
             system: 'You are a critical adversarial judge.',
-            messages: [{ role: 'user', content: prompt }],
+            messages: [{ role: 'user', content: p }],
           }),
           signal,
         });
@@ -155,19 +152,19 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'groq',
     model: 'llama-3.3-70b-versatile',
     apiKey: () => process.env.GROQ_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.groq.com/openai/v1/chat/completions', p, m, k),
+    call: (p: any, model: any, apiKey: any) => callOpenAICompatible('https://api.groq.com/openai/v1/chat/completions', p, model, apiKey),
   },
   {
     family: 'openai',
     model: 'gpt-4o-mini',
     apiKey: () => process.env.OPENAI_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.openai.com/v1/chat/completions', p, m, k),
+    call: (p: any, model: any, apiKey: any) => callOpenAICompatible('https://api.openai.com/v1/chat/completions', p, model, apiKey),
   },
   {
     family: 'gemini',
     model: 'gemini-2.0-flash',
     apiKey: () => process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
-    call: async (prompt, model, apiKey) => {
+    call: async (p: any, model: any, apiKey: any) => {
       const { signal, clear } = withTimeout();
       try {
         const res = await fetch(
@@ -176,7 +173,7 @@ const PROVIDERS: ProviderSpec[] = [
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
+              contents: [{ parts: [{ text: p }] }],
               generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
             }),
             signal,
@@ -200,13 +197,13 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'deepseek',
     model: 'deepseek-chat',
     apiKey: () => process.env.DEEPSEEK_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.deepseek.com/v1/chat/completions', p, m, k),
+    call: (p: any, model: any, apiKey: any) => callOpenAICompatible('https://api.deepseek.com/v1/chat/completions', p, model, apiKey),
   },
   {
     family: 'cerebras',
     model: 'llama-3.3-70b',
     apiKey: () => process.env.CEREBRAS_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.cerebras.ai/v1/chat/completions', p, m, k),
+    call: (p: any, model: any, apiKey: any) => callOpenAICompatible('https://api.cerebras.ai/v1/chat/completions', p, model, apiKey),
   },
 ];
 
@@ -274,7 +271,7 @@ async function recordProviderHealth(row: {
 }
 
 export async function runAdversarialJudge(taskData: any): Promise<AdversarialJudgeResult> {
-  const prompt = `You are a critical adversarial judge. A subordinate agent has submitted the following task response.
+  const adversarialPrompt = `You are a critical adversarial judge. A subordinate agent has submitted the following task response.
 Your goal is to actively find flaws, hallucinations, or unfulfilled requirements.
 
 TASK: ${taskData.title}
@@ -319,7 +316,7 @@ Output ONLY valid JSON.`;
     const call_id = crypto.randomUUID();
     const t0 = Date.now();
     try {
-      const res = await p.call(prompt, p.model, key);
+      const res = await p.call(adversarialPrompt, p.model, key);
       raw = res.text;
       usage = res.usage;
       const latency = Date.now() - t0;

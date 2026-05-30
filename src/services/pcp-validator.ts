@@ -82,7 +82,7 @@ ${taskData.result}`;
         cost_usd,
         latency_ms: latency,
         status: 'success',
-        agent_id: agent.id,
+        agent_id: String(agent.id),
         task_hint: 'pcp_validation'
       }).catch(err => console.error('[runPCP] logLlmCall error:', err));
 
@@ -112,7 +112,7 @@ ${taskData.result}`;
         latency_ms: Date.now() - t0,
         status: 'failed',
         error_message: e.message || String(e),
-        agent_id: agent.id,
+        agent_id: String(agent.id),
         task_hint: 'pcp_validation'
       }).catch(err => console.error('[runPCP] logLlmCall error:', err));
       return { name: agent.agent_name, validity: 0, confidence: 0 };
