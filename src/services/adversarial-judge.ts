@@ -115,7 +115,7 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'anthropic',
     model: 'claude-haiku-4-5-20251001',
     apiKey: () => process.env.ANTHROPIC_API_KEY,
-    call: async (prompt: any, model: any, apiKey: any) => {
+    call: async (p: any, model: any, apiKey: any) => {
       const { signal, clear } = withTimeout();
       try {
         const res = await fetch('https://api.anthropic.com/v1/messages', {
