@@ -13,7 +13,7 @@
  * Scope: this catches claims of the KINDS it has extractors for. It is not a universal NLP
  * checker — unrecognized prose is left alone. Add extractors as new claim shapes recur.
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
 import { authorityCheck } from './checks/authority';
 import { rlsCheck } from './checks/rls';
@@ -57,20 +57,36 @@ async function extractAuthorityFormula(text: string): Promise<Claim[]> {
 
 /** ── Extractor: concurrency mechanism ─────────────────────────────────────────
  * Catches a report claiming an atomic claim / MAX_CONCURRENCY / race-safe worker and
- * checks the mechanism actually exists in the codebase (phantom-claim detector). */
-function scanSrc(re: RegExp): string | null {
-  const root = join(process.cwd(), 'src');
-  const stack = [root];
-  while (stack.length) {
-    const dir = stack.pop()!;
-    let entries: string[]; try { entries = readdirSync(dir); } catch { continue; }
-    for (const e of entries) {
-      const p = join(dir, e);
-      let st; try { st = statSync(p); } catch { continue; }
-      if (st.isDirectory()) { stack.push(p); continue; }
-      if (!/\.ts$/.test(e)) continue;
-      let body: string; try { body = readFileSync(p, 'utf8'); } catch { continue; }
-      if (re.test(body)) return p.replace(process.cwd(), '').replace(/\\/g, '/');
+ * checks the mechanism actually exists in the codebase (phantom-claim detector).
+ *
+ * CROSS-REPO: a claim's mechanism may live in a different repo than the one we run in — e.g.
+ * GA's swarm concurrency (atomic `claimed_by` claim) is in trinity-symphony-shared, not
+ * repid-engine. Scanning only `<cwd>/src` false-flagged it as phantom. So we scan repid-engine
+ * `src/` AND sibling repos (default: ../trinity-symphony-shared), `.ts` AND `.js`. Override the
+ * roots with VERIFY_CLAIMS_SCAN_DIRS (comma-separated paths, absolute or relative to cwd). */
+function scanRoots(): string[] {
+  const override = (process.env.VERIFY_CLAIMS_SCAN_DIRS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  const defaults = [join(process.cwd(), 'src'), join(process.cwd(), '..', 'trinity-symphony-shared')];
+  const roots = (override.length ? override.map(d => (d.match(/^([a-zA-Z]:[\\/]|[\\/])/) ? d : join(process.cwd(), d))) : defaults);
+  return roots.filter(d => existsSync(d));
+}
+/** Return `<repo>:<relpath>` of the first file matching `re` across all scan roots, else null. */
+function scanRepos(re: RegExp): string | null {
+  for (const root of scanRoots()) {
+    const repo = root.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+    const stack = [root];
+    while (stack.length) {
+      const dir = stack.pop()!;
+      let entries: string[]; try { entries = readdirSync(dir); } catch { continue; }
+      for (const e of entries) {
+        if (e === 'node_modules' || e === '.git' || e === 'dist' || e === '.next') continue;
+        const p = join(dir, e);
+        let st; try { st = statSync(p); } catch { continue; }
+        if (st.isDirectory()) { stack.push(p); continue; }
+        if (!/\.(ts|js|tsx|mjs)$/.test(e)) continue;
+        let body: string; try { body = readFileSync(p, 'utf8'); } catch { continue; }
+        if (re.test(body)) return `${repo}:${p.replace(root, '').replace(/^[\\/]/, '').replace(/\\/g, '/')}`;
+      }
     }
   }
   return null;
@@ -79,21 +95,22 @@ async function extractConcurrency(text: string): Promise<Claim[]> {
   const m = text.match(/[^\n]*(MAX_CONCURRENCY|atomic[^\n]{0,12}claim|claimed_by|race-?safe|conditional UPDATE|in-flight)[^\n]*/i);
   if (!m) return [];
   const line = m[0];
-  // Re-derive against the SPECIFICALLY-NAMED mechanism(s) — a stray unrelated match (e.g. a
-  // pre-existing FOR UPDATE SKIP LOCKED in another module) must NOT mask a phantom claim.
+  // Re-derive against the SPECIFICALLY-NAMED mechanism(s), scanned CROSS-REPO. A stray unrelated
+  // match must NOT mask a phantom; conversely a real mechanism in another repo must NOT be missed.
   const named: Array<{ tok: string; re: RegExp }> = [];
   if (/MAX_CONCURRENCY/i.test(line)) named.push({ tok: 'MAX_CONCURRENCY const', re: /\bMAX_CONCURRENCY\b/ });
-  if (/claimed_by/i.test(line)) named.push({ tok: 'atomic claimed_by write (SET claimed_by=)', re: /SET\s+claimed_by|claimed_by\s*=\s*[^=]/i });
-  if (!named.length) named.push({ tok: 'atomic claim (SET claimed_by / SKIP LOCKED)', re: /SET\s+claimed_by|FOR\s+UPDATE\s+SKIP\s+LOCKED/i });
+  if (/claimed_by/i.test(line)) named.push({ tok: 'atomic claimed_by claim', re: /SET\s+claimed_by|claimed_by\s*=\s*[^=]|\.is\(\s*['"]claimed_by['"]\s*,\s*null|claimed_by\s+IS\s+NULL/i });
+  if (!named.length) named.push({ tok: 'atomic claim (claimed_by / SKIP LOCKED)', re: /SET\s+claimed_by|claimed_by\s+IS\s+NULL|FOR\s+UPDATE\s+SKIP\s+LOCKED/i });
 
-  const results = named.map(n => ({ tok: n.tok, where: scanSrc(n.re) }));
+  const results = named.map(n => ({ tok: n.tok, where: scanRepos(n.re) }));
   const missing = results.filter(r => !r.where);
   const verdict: Verdict = missing.length ? 'CONTRADICTED' : 'REPRODUCES';
   const foundStr = results.filter(r => r.where).map(r => `${r.tok}@${r.where}`).join(', ');
   const derived = missing.length
-    ? `PHANTOM — missing in src/: ${missing.map(r => r.tok).join('; ')}${foundStr ? ` (unrelated found: ${foundStr})` : ''}`
+    ? `partial — missing across scanned repos: ${missing.map(r => r.tok).join('; ')}${foundStr ? ` (found: ${foundStr})` : ''}`
     : `found: ${foundStr}`;
-  return [{ type: 'concurrency', quote: clip(line, 110), expected: `named mechanism(s) in code: ${named.map(n => n.tok).join('; ')}`, derived, verdict }];
+  const scanned = scanRoots().map(r => r.split(/[\\/]/).filter(Boolean).slice(-1)[0]).join(', ');
+  return [{ type: 'concurrency', quote: clip(line, 110), expected: `named mechanism(s) across [${scanned}]: ${named.map(n => n.tok).join('; ')}`, derived, verdict }];
 }
 
 /** ── Extractor: RLS-disabled count ────────────────────────────────────────────*/
