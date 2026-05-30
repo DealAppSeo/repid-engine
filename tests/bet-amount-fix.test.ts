@@ -68,7 +68,7 @@ describe('Bet Amount Fix + Authority Scale', () => {
   });
 
   describe('Bug 2: authority-math produces correct scale', () => {
-    it('For stake=100_000_000, R=5500, W=800, C=600, authority is ~50_000_000', () => {
+    it('For stake=100_000_000, R=5500, W=800, C=600, authority is ~1_000_000_000', () => {
       const res = computeAuthority({
         stakeAmount: 100_000_000n,
         agentRepId: 5500,
@@ -78,11 +78,7 @@ describe('Bet Amount Fix + Authority Scale', () => {
       });
 
       const raw = Number(res.authority);
-      expect(raw).toBeGreaterThanOrEqual(40_000_000);
-      expect(raw).toBeLessThanOrEqual(60_000_000);
-      
-      // Asserts NOT in [0, 100_000] range
-      expect(raw).not.toBeLessThan(100_000);
+      expect(raw).toBe(1_000_000_000);
     });
 
     it('Uses defaults if fresh demo builder (R=0)', () => {
@@ -95,8 +91,59 @@ describe('Bet Amount Fix + Authority Scale', () => {
       });
 
       const raw = Number(res.authority);
-      expect(raw).toBeGreaterThanOrEqual(40_000_000);
-      expect(raw).toBeLessThanOrEqual(60_000_000);
+      expect(raw).toBe(1_000_000_000);
+    });
+
+    it('Asserts D-053 test vectors for real USD square root synthesis', () => {
+      // 1. $6,400 stake -> 8000 authority cap
+      const v1 = computeAuthority({
+        stakeAmount: 6_400_000_000n, // $6400
+        agentRepId: 9000,            // R > 8000
+        agentWisdom: 1000,
+        agentCharacter: 1000,
+        builderRepId: 9000
+      });
+      expect(v1.authority).toBe(8_000_000_000n);
+
+      // 2. $2,500 stake -> 5000 authority cap
+      const v2 = computeAuthority({
+        stakeAmount: 2_500_000_000n, // $2500
+        agentRepId: 9000,
+        agentWisdom: 1000,
+        agentCharacter: 1000,
+        builderRepId: 9000
+      });
+      expect(v2.authority).toBe(5_000_000_000n);
+
+      // 3. $100 stake -> 1000 authority cap
+      const v3 = computeAuthority({
+        stakeAmount: 100_000_000n, // $100
+        agentRepId: 9000,
+        agentWisdom: 1000,
+        agentCharacter: 1000,
+        builderRepId: 9000
+      });
+      expect(v3.authority).toBe(1_000_000_000n);
+
+      // 4. $25 stake -> 500 authority cap
+      const v4 = computeAuthority({
+        stakeAmount: 25_000_000n, // $25
+        agentRepId: 9000,
+        agentWisdom: 1000,
+        agentCharacter: 1000,
+        builderRepId: 9000
+      });
+      expect(v4.authority).toBe(500_000_000n);
+
+      // 5. Whale at $50k with R=300 -> capped at ~300
+      const v5 = computeAuthority({
+        stakeAmount: 50_000_000_000n, // $50,000
+        agentRepId: 300,
+        agentWisdom: 1000,
+        agentCharacter: 1000,
+        builderRepId: 9000
+      });
+      expect(v5.authority).toBe(300_000_000n); // 300 authority
     });
   });
 });
