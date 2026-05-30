@@ -35,7 +35,7 @@
  * Deliverable for XC WARM-UP sprint 2026-05-29. A6 co-sign required before any live writes.
  */
 
-import { db } from '../db';
+import { db } from '../../db';
 
 export interface SyncReport {
   startedAt: string;

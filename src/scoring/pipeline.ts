@@ -449,14 +449,20 @@ export async function applyValidationEvent(
 
   const score_event_id = (eventRow as any).id;
 
-  await db
-    .from('repid_agents')
-    .update({
-      current_repid: Math.round(new_repid),
-      last_active_at: new Date().toISOString(),
-      last_updated: new Date().toISOString(),
-    })
-    .eq('id', agent_id);
+  // Gated by WRITER_DIRECT_APPLY for the single-applier cutover (D-054). When false: insert-event-only
+  // (the event row above carries delta + repid_before/after); the aggregator applies it from the
+  // watermark, so this SERVICE_FULFILLED path can't double-count after the flip. Mirrors runScoreEvent.
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  if (WRITER_DIRECT_APPLY) {
+    await db
+      .from('repid_agents')
+      .update({
+        current_repid: Math.round(new_repid),
+        last_active_at: new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+      })
+      .eq('id', agent_id);
+  }
 
   // Patent-evidence audit anchor for service-contract fulfilment. The
   // validation_queue path anchors at the queue level (validation-queue-

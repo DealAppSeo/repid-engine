@@ -586,14 +586,21 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       p_was_correct: halApproved,
     });
 
-    // 14. Update agent
+    // 14. Update agent. current_repid + tier are gated by WRITER_DIRECT_APPLY for the single-applier
+    // cutover (D-054): when false, this PREDICTION_RESOLVE path is insert-event-only (event row above
+    // carries delta + repid_before/after) so it can't double-count with the aggregator after the flip.
+    // activity_30d / vested_repid are NOT aggregator-owned (activity_30d feeds decay), so they keep
+    // advancing regardless — only the reputation value itself is gated.
+    const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
     const agentUpdate: Record<string, any> = {
-      current_repid: newScore,
-      tier: newTier,
       activity_30d: ((agent as any).activity_30d ?? 0) + 1,
       last_updated: new Date().toISOString(),
       vested_repid: newVested,
     };
+    if (WRITER_DIRECT_APPLY) {
+      agentUpdate.current_repid = newScore;
+      agentUpdate.tier = newTier;
+    }
     await db.from('repid_agents').update(agentUpdate).eq('id', agentId);
 
     // Async proof generation stub
