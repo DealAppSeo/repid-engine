@@ -12,3 +12,4 @@ dist/
 hal-ground-truth-template.csv
 .env.local
 .firecrawl/
+verify-crosscheck-report.json

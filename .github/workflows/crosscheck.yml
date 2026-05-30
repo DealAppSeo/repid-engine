@@ -1,0 +1,68 @@
+# CC Sprint 2026-05-30 — Cross-Check Harness CI gate.
+#
+# Re-derives the load-bearing claims (authority formula, F2 spoofing, RLS invariant,
+# HAL discrimination, RepID guards) on every PR. A BLOCKING FAIL exits non-zero → the
+# job fails → merge is blocked (once this is made a required check; see below).
+#
+# Why a separate workflow from ci.yml: this gate can be toggled / phased-in independently
+# of the typecheck+test job, and reviewers see a distinct "crosscheck" status.
+#
+# ── Sean / Cowork action items ───────────────────────────────────────────────────────
+#   1. Repo Settings → Secrets and variables → Actions → Secrets, add (if not present):
+#        SUPABASE_URL            project URL (rls + repid-guards checks)
+#        SUPABASE_SERVICE_KEY    service-role key — never logged
+#        GROQ_API_KEY            } HAL discrimination check. If any are absent the HAL
+#        FIREWORKS_API_KEY       } check SKIPs (⚠️, never a silent pass) — it does not
+#        CEREBRAS_API_KEY        } block merge on missing keys.
+#   2. (Optional, transitional) Settings → … → Variables, add:
+#        CROSSCHECK_WARN_ONLY = rls            demote a currently-failing pre-existing-gap
+#        (or `rls,authority`)                   check to warn-only, so it doesn't block every
+#                                               PR before the fix lands. Remove once remediated.
+#   3. Cowork CO-SIGNS, then mark "crosscheck / crosscheck" a REQUIRED status check in
+#        Settings → Branches → branch protection for main.
+#
+# NOTE: on `main` today the suite is RED for real reasons — the authority fix (min(R,100·√S))
+# is not yet merged, and 8 critical tables have RLS off. Those are findings, not harness bugs.
+# Merge GA's authority fix and decide RLS gating BEFORE flipping this to a required check.
+
+name: crosscheck
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  crosscheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install (legacy peer deps per nixpacks.toml)
+        run: npm install --legacy-peer-deps
+
+      - name: verify:crosscheck (re-derive load-bearing claims)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          # Cowork-controlled transitional phase-in (comma list of check ids → warn-only).
+          WARN_ONLY: ${{ vars.CROSSCHECK_WARN_ONLY }}
+          # keep HAL fast/cheap in CI; raise/lower per provider budget.
+          HAL_CHECK_SAMPLE: '24'
+        run: npm run verify:crosscheck
+
+      - name: Upload crosscheck report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosscheck-report
+          path: verify-crosscheck-report.json
+          if-no-files-found: ignore
