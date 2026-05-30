@@ -201,8 +201,9 @@ export class RepIdEarningService {
       .single();
     if (insertErr) throw new Error(`event_insert_failed: ${insertErr.message}`);
 
-    // 6. Update agent current_repid (trg_sync_tier handles tier automatically)
-    if (appliedDelta !== 0) {
+    // 6. Update agent current_repid (gated by WRITER_DIRECT_APPLY for single-applier cutover)
+    const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+    if (appliedDelta !== 0 && WRITER_DIRECT_APPLY) {
       const { error: updateErr } = await db
         .from('repid_agents')
         .update({ current_repid: after, last_updated: new Date().toISOString() })
@@ -213,6 +214,8 @@ export class RepIdEarningService {
           `[repid-earning] event ${inserted.id} written but agent update failed: ${updateErr.message}`
         );
       }
+    } else if (appliedDelta !== 0) {
+      // WRITER_DIRECT_APPLY=false: event (with idempotency_key) written; aggregator will apply post-watermark.
     }
 
     return {
