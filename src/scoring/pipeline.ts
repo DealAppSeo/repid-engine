@@ -285,15 +285,21 @@ export async function runScoreEvent(
     console.warn('[scoring/pipeline] Failed to write to hal_classifications:', err.message);
   }
 
-  // 7. Update agent state.
-  await db
-    .from('repid_agents')
-    .update({
-      current_repid: Math.round(new_repid),
-      last_active_at: new Date().toISOString(),
-      last_updated: new Date().toISOString(),
-    })
-    .eq('id', input.agent_id);
+  // 7. Update agent state (gated by WRITER_DIRECT_APPLY for single-applier cutover).
+  // When false: insert event only (with full audit fields + idempotency_key); aggregator becomes sole applier.
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  if (WRITER_DIRECT_APPLY) {
+    await db
+      .from('repid_agents')
+      .update({
+        current_repid: Math.round(new_repid),
+        last_active_at: new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+      })
+      .eq('id', input.agent_id);
+  } else {
+    // Event already written above with repid_before/after + delta. Aggregator will apply from watermark.
+  }
 
   // 8. Queue ZK proof job (best-effort; failures don't block).
   if (triggerProof && zk_proof_id) {

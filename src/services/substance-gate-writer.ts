@@ -197,17 +197,22 @@ export async function slashRepIDForGateFail(
       return delta;
     }
 
-    // Step 4: Update current_repid
-    const { error: updateError } = await db
-      .from('repid_agents')
-      .update({ 
-        current_repid: repidAfter, 
-        last_updated: new Date().toISOString() 
-      })
-      .eq('agent_name', agentName);
+    // Step 4: Update current_repid (gated by WRITER_DIRECT_APPLY for single-applier cutover D-054/D-055)
+    const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+    if (WRITER_DIRECT_APPLY) {
+      const { error: updateError } = await db
+        .from('repid_agents')
+        .update({ 
+          current_repid: repidAfter, 
+          last_updated: new Date().toISOString() 
+        })
+        .eq('agent_name', agentName);
 
-    if (updateError) {
-      console.error('[GateWriter] Error updating repid_agents.current_repid:', updateError.message);
+      if (updateError) {
+        console.error('[GateWriter] Error updating repid_agents.current_repid:', updateError.message);
+      }
+    } else {
+      // Event inserted above with delta + idempotency_key. Aggregator applies; no double-count.
     }
   } catch (error: any) {
     console.error('[GateWriter] Error slashing RepID:', error.message);

@@ -16,19 +16,16 @@
  * - Reconciles with existing live writers (trinity_task_bridge + pipeline + substance-gate + repid-earning etc.)
  *   without double-count. See reconciliation decision in report.
  *
- * Reconciliation choice (with evidence):
- *   "Idempotent reconcile + path to single writer".
- *   Evidence in worktree:
- *   - src/scoring/pipeline.ts:289 (HAL_SCORE_EVENT insert + direct UPDATE current_repid)
- *   - src/services/trinity-task-bridge.ts:159 (calls pipeline with `trinity_task_bridge_${task.id}` idempotency_key)
- *   - src/services/substance-gate-writer.ts:170 (EPISTEMIC_VIOLATION insert + direct UPDATE)
- *   - src/services/repid-earning.ts (trade_id metadata idempotency + direct)
- *   - src/engine/repid-update.ts and routes (multiple GENESIS/challenge paths)
- *   - database.types.ts:14761 (idempotency_key column exists on repid_score_events)
- *   - Zero hits for trg_repid_earned_floor or tier_lower_bound in any .sql/.ts (trigger is LIVE ON DB only, per D-050)
- *   Today: coexists safely (reconcile sees 0 drift on freshly-applied events).
- *   Future (post A6 cutover + Cowork co-sign): flip pipeline/etc to "insert event only"; this aggregator (or hot RPC it exposes)
- *   becomes the single applier. Near-rt via 2-5s poll or LISTEN.
+ * Reconciliation choice (with evidence) — D-054/D-055 Writer Cutover in progress:
+ *   "Idempotent reconcile + path to single writer" (executing now).
+ *   All former direct-apply sites (pipeline, substance-gate, repid-earning, engine/repid-update, challenge routes)
+ *   are now behind WRITER_DIRECT_APPLY env (default true = legacy behavior for safe/reversible cutover).
+ *   When false: writers perform insert-event-only (idempotency_key + delta + repid_before/after fully preserved for audit).
+ *   Aggregator (gated by REPIDSYNC_APPLY) is the sole applier.
+ *   Evidence (pre/post): see files listed above + the WRITER_DIRECT_APPLY guards added in this cutover.
+ *   Cutover (detailed in XC_WRITER_CUTOVER.md): (a) deploy with flag still true + aggregator dry, (b) seed watermark on repid_agents,
+ *   (c) flip WRITER_DIRECT_APPLY=false (writers stop), (d) flip REPIDSYNC_APPLY=true + start worker. No double-count, no gap.
+ *   Fully reversible by env var only (no code redeploy to roll back). Trigger trg_repid_earned_floor still honored.
  *
  * Usage:
  *   ts-node src/services/reputation/repid-sync-aggregator.ts --dry-run
