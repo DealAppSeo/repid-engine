@@ -18,6 +18,10 @@
  * gracefully (3→2→1→0 providers); 0 providers → caller falls back to extractor.
  */
 
+import { logLlmCall } from '../billing/log-call';
+import { calculateCost } from '../billing/pricing';
+import crypto from 'crypto';
+
 export interface FactCheckProviderCfg {
   name: string;
   endpoint: string;
@@ -108,6 +112,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
   const controller = new AbortController();
   const timeoutMs = cfg.timeoutMs ?? 12_000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const call_id = crypto.randomUUID();
   try {
     const res = await fetch(cfg.endpoint, {
       method: 'POST',
@@ -126,16 +131,76 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     const latency_ms = Date.now() - start;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      logLlmCall({
+        call_id,
+        provider: cfg.name,
+        tier: '0a',
+        model: cfg.model,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cost_usd: 0,
+        latency_ms,
+        status: 'failed',
+        error_message: `HTTP ${res.status}: ${body.slice(0, 120)}`,
+        task_hint: 'hal_fact_check'
+      }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
     }
     const data: any = await res.json();
     const content: string = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.message?.reasoning_content ?? '';
-    if (!content.trim()) return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
+    
+    const tokensIn = data.usage?.prompt_tokens || 0;
+    const tokensOut = data.usage?.completion_tokens || 0;
+    const cost_usd = calculateCost(cfg.name, cfg.model, tokensIn, tokensOut);
+
+    if (!content.trim()) {
+      logLlmCall({
+        call_id,
+        provider: cfg.name,
+        tier: '0a',
+        model: cfg.model,
+        prompt_tokens: tokensIn,
+        completion_tokens: tokensOut,
+        cost_usd,
+        latency_ms,
+        status: 'failed',
+        error_message: 'empty content',
+        task_hint: 'hal_fact_check'
+      }).catch(err => console.error('[fact-check] logLlmCall error:', err));
+      return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
+    }
+    
+    logLlmCall({
+      call_id,
+      provider: cfg.name,
+      tier: '0a',
+      model: cfg.model,
+      prompt_tokens: tokensIn,
+      completion_tokens: tokensOut,
+      cost_usd,
+      latency_ms,
+      status: 'success',
+      task_hint: 'hal_fact_check'
+    }).catch(err => console.error('[fact-check] logLlmCall error:', err));
+
     const parsed = parseVerdict(content);
     return { provider: cfg.name, verdict: parsed.verdict, confidence: parsed.confidence, note: parsed.note, latency_ms };
   } catch (e: any) {
     const latency_ms = Date.now() - start;
     const error = e?.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : e?.message ?? String(e);
+    logLlmCall({
+      call_id,
+      provider: cfg.name,
+      tier: '0a',
+      model: cfg.model,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 0,
+      latency_ms,
+      status: e?.name === 'AbortError' ? 'rate_limited' : 'failed',
+      error_message: error,
+      task_hint: 'hal_fact_check'
+    }).catch(err => console.error('[fact-check] logLlmCall error:', err));
     return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error, latency_ms };
   } finally {
     clearTimeout(timer);
