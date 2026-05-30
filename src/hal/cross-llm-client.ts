@@ -35,6 +35,8 @@
 import crypto from 'crypto';
 import { db } from '../db';
 import { createDefaultEmbeddingClient } from './lib/cross-llm/embedding-client';
+import { logLlmCall } from '../billing/log-call';
+import { calculateCost } from '../billing/pricing';
 
 export type Squad = 'alpha' | 'beta' | 'gamma';
 export type CommaSeverity = 'none' | 'minor' | 'major' | 'critical';
@@ -125,7 +127,7 @@ function hashPrompt(prompt: string): string {
 
 async function callOpenAICompat(
   endpoint: string, apiKey: string, model: string, prompt: string, timeoutMs: number,
-): Promise<string> {
+): Promise<{ text: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -154,7 +156,13 @@ async function callOpenAICompat(
     let text: string = (data?.choices?.[0]?.message?.content ?? '').trim();
     text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     text = text.replace(/^<think>[\s\S]*$/i, '').trim();
-    return text;
+    return {
+      text,
+      usage: {
+        prompt_tokens: data.usage?.prompt_tokens || 0,
+        completion_tokens: data.usage?.completion_tokens || 0,
+      }
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -162,7 +170,7 @@ async function callOpenAICompat(
 
 async function callAnthropicNative(
   endpoint: string, apiKey: string, model: string, prompt: string, timeoutMs: number,
-): Promise<string> {
+): Promise<{ text: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -193,7 +201,13 @@ async function callAnthropicNative(
       .map(b => String(b.text ?? ''))
       .join('')
       .trim();
-    return text;
+    return {
+      text,
+      usage: {
+        prompt_tokens: data.usage?.input_tokens || 0,
+        completion_tokens: data.usage?.output_tokens || 0,
+      }
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -203,6 +217,8 @@ async function queryProvider(
   cfg: ProviderConfig, prompt: string, timeoutMs: number,
 ): Promise<ProviderAnswer> {
   const start = Date.now();
+  const call_id = crypto.randomUUID();
+  const tier = cfg.provider === 'anthropic' || cfg.provider === 'openai' ? '1' : '0a';
   if (!cfg.apiKey) {
     return {
       provider: cfg.provider, squad: cfg.squad, model: cfg.model, answer: '',
@@ -210,17 +226,50 @@ async function queryProvider(
     };
   }
   try {
-    const text = cfg.callType === 'anthropic-native'
+    const res = cfg.callType === 'anthropic-native'
       ? await callAnthropicNative(cfg.endpoint, cfg.apiKey, cfg.model, prompt, timeoutMs)
       : await callOpenAICompat(cfg.endpoint, cfg.apiKey, cfg.model, prompt, timeoutMs);
+    const latency_ms = Date.now() - start;
+    const tokensIn = res.usage?.prompt_tokens || 0;
+    const tokensOut = res.usage?.completion_tokens || 0;
+    const cost_usd = calculateCost(cfg.provider, cfg.model, tokensIn, tokensOut);
+
+    logLlmCall({
+      call_id,
+      provider: cfg.provider,
+      tier,
+      model: cfg.model,
+      prompt_tokens: tokensIn,
+      completion_tokens: tokensOut,
+      cost_usd,
+      latency_ms,
+      status: 'success',
+      task_hint: 'hal_cross_llm'
+    }).catch(err => console.error('[cross-llm-client] logLlmCall error:', err));
+
     return {
       provider: cfg.provider, squad: cfg.squad, model: cfg.model,
-      answer: text, latency_ms: Date.now() - start,
+      answer: res.text, latency_ms,
     };
   } catch (e: any) {
+    const latency_ms = Date.now() - start;
+    logLlmCall({
+      call_id,
+      provider: cfg.provider,
+      tier,
+      model: cfg.model,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 0,
+      latency_ms,
+      status: 'failed',
+      error_message: e.message || String(e),
+      task_hint: 'hal_cross_llm'
+    }).catch(err => console.error('[cross-llm-client] logLlmCall error:', err));
+
     return {
       provider: cfg.provider, squad: cfg.squad, model: cfg.model, answer: '',
-      latency_ms: Date.now() - start, error: e?.message ?? String(e),
+      latency_ms, error: e?.message ?? String(e),
     };
   }
 }
