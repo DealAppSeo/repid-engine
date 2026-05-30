@@ -1,5 +1,8 @@
 // Using global fetch
 import { db } from '../db';
+import { logLlmCall } from '../billing/log-call';
+import { calculateCost } from '../billing/pricing';
+import crypto from 'crypto';
 
 /**
  * Defect 1 fix (2026-05-18) — adversarial judge provider ROTATION.
@@ -38,8 +41,10 @@ interface ProviderSpec {
   family: JudgeFamily;
   model: string;
   apiKey: () => string | undefined;
-  /** Returns the raw model text. Throws on missing key / HTTP error / network error. */
-  call: (prompt: string, model: string, apiKey: string) => Promise<string>;
+  call: (prompt: string, model: string, apiKey: string) => Promise<{
+    text: string;
+    usage?: { prompt_tokens: number; completion_tokens: number };
+  }>;
 }
 
 interface JudgeAttempt {
@@ -80,7 +85,7 @@ async function callOpenAICompatible(
   prompt: string,
   model: string,
   apiKey: string
-): Promise<string> {
+): Promise<{ text: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const { signal, clear } = withTimeout();
   try {
     const res = await fetch(endpoint, {
@@ -96,7 +101,13 @@ async function callOpenAICompatible(
     });
     if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => ''));
     const json: any = await res.json();
-    return json.choices?.[0]?.message?.content || '{}';
+    return {
+      text: json.choices?.[0]?.message?.content || '{}',
+      usage: {
+        prompt_tokens: json.usage?.prompt_tokens || 0,
+        completion_tokens: json.usage?.completion_tokens || 0,
+      }
+    };
   } finally {
     clear();
   }
@@ -128,7 +139,13 @@ const PROVIDERS: ProviderSpec[] = [
         });
         if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => ''));
         const json: any = await res.json();
-        return json.content?.[0]?.text || '{}';
+        return {
+          text: json.content?.[0]?.text || '{}',
+          usage: {
+            prompt_tokens: json.usage?.input_tokens || 0,
+            completion_tokens: json.usage?.output_tokens || 0,
+          }
+        };
       } finally {
         clear();
       }
@@ -167,7 +184,13 @@ const PROVIDERS: ProviderSpec[] = [
         );
         if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => ''));
         const json: any = await res.json();
-        return json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        return {
+          text: json.candidates?.[0]?.content?.parts?.[0]?.text || '{}',
+          usage: {
+            prompt_tokens: json.usageMetadata?.promptTokenCount || 0,
+            completion_tokens: json.usageMetadata?.candidatesTokenCount || 0,
+          }
+        };
       } finally {
         clear();
       }
@@ -292,10 +315,32 @@ Output ONLY valid JSON.`;
     }
 
     let raw: string;
+    let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
+    const call_id = crypto.randomUUID();
     const t0 = Date.now();
     try {
-      raw = await p.call(prompt, p.model, key);
+      const res = await p.call(prompt, p.model, key);
+      raw = res.text;
+      usage = res.usage;
+      const latency = Date.now() - t0;
+      const tokensIn = usage?.prompt_tokens || 0;
+      const tokensOut = usage?.completion_tokens || 0;
+      const cost_usd = calculateCost(p.family, p.model, tokensIn, tokensOut);
+      
+      logLlmCall({
+        call_id,
+        provider: p.family,
+        tier: p.family === 'anthropic' || p.family === 'openai' ? '1' : '0a',
+        model: p.model,
+        prompt_tokens: tokensIn,
+        completion_tokens: tokensOut,
+        cost_usd,
+        latency_ms: latency,
+        status: 'success',
+        task_hint: 'adversarial_judge'
+      }).catch(err => console.error('[AdversarialJudge] logLlmCall error:', err));
     } catch (err: any) {
+      const latency = Date.now() - t0;
       const mode: JudgeAttempt['failure_mode'] =
         err instanceof HttpError ? (`http_${err.status}` as const) : 'network_error';
       attempts.push({ provider: p.family, failure_mode: mode, detail: err?.message });
@@ -305,8 +350,21 @@ Output ONLY valid JSON.`;
       );
       await recordProviderHealth({
         provider: p.family, model: p.model, outcome: 'failure',
-        failure_mode: mode, latency_ms: Date.now() - t0, task_id: taskId,
+        failure_mode: mode, latency_ms: latency, task_id: taskId,
       });
+      logLlmCall({
+        call_id,
+        provider: p.family,
+        tier: p.family === 'anthropic' || p.family === 'openai' ? '1' : '0a',
+        model: p.model,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cost_usd: 0,
+        latency_ms: latency,
+        status: 'failed',
+        error_message: err.message || String(err),
+        task_hint: 'adversarial_judge'
+      }).catch(err => console.error('[AdversarialJudge] logLlmCall error:', err));
       continue;
     }
 

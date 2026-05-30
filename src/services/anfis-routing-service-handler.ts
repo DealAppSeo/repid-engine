@@ -72,6 +72,21 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
     if (slm) {
       const savings = estimateSlmSavings(SLM_NOMINAL_TOKENS_IN, SLM_NOMINAL_TOKENS_OUT, { provider: slm.provider, model: slm.model });
       await this.recordSlmRoute(contract, slm, savings);
+
+      // Write ANFIS routing log (SLM decision)
+      try {
+        await db.from('anfis_routing_logs').insert({
+          request_text: payload.query || 'SLM Routing Decision',
+          selected_model: `${slm.provider}/${slm.model}`,
+          confidence_score: payload.task_characteristics?.confidence_required ?? 0.5,
+          cost_saved: savings.saved_usd,
+          latency_ms: 0,
+          success: true
+        });
+      } catch (e: any) {
+        console.error('[anfis_routing] recordSlmRoute log failure:', e?.message ?? e);
+      }
+
       return {
         recommended_provider: slm.provider,
         recommended_model: slm.model,
@@ -92,6 +107,20 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
     // Defensive empty-result guard (Phase 2.9.3 Task 2c finding): the RPC
     // returns 0 rows when there is no historical data for the domain.
     if (!historicalData || historicalData.length === 0) {
+      // Write ANFIS routing log (fallback decision)
+      try {
+        await db.from('anfis_routing_logs').insert({
+          request_text: payload.query || 'ANFIS Routing Fallback Decision',
+          selected_model: 'groq',
+          confidence_score: 0.3,
+          cost_saved: 0,
+          latency_ms: 0,
+          success: true
+        });
+      } catch (e: any) {
+        console.error('[anfis_routing] fallback log failure:', e?.message ?? e);
+      }
+
       return {
         recommended_provider: 'groq', // safe default — fastest, cheapest
         confidence: 0.3, // low-confidence flag
@@ -119,6 +148,20 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
     if (!recommended) {
       // Unreachable (scored mirrors non-empty historicalData) but satisfies
       // noUncheckedIndexedAccess and is a defensive default.
+      // Write ANFIS routing log (error/unscoreable decision)
+      try {
+        await db.from('anfis_routing_logs').insert({
+          request_text: payload.query || 'ANFIS Routing Error Decision',
+          selected_model: 'groq',
+          confidence_score: 0.3,
+          cost_saved: 0,
+          latency_ms: 0,
+          success: true
+        });
+      } catch (e: any) {
+        console.error('[anfis_routing] unscoreable log failure:', e?.message ?? e);
+      }
+
       return {
         recommended_provider: 'groq',
         confidence: 0.3,
@@ -131,10 +174,25 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
       };
     }
     const fallback_chain = scored.slice(1, 4).map((s) => s.provider);
+    const confidenceScore = Math.min(1, recommended.score);
+
+    // Write ANFIS routing log (scored decision)
+    try {
+      await db.from('anfis_routing_logs').insert({
+        request_text: payload.query || 'ANFIS Routing Scored Decision',
+        selected_model: recommended.provider,
+        confidence_score: confidenceScore,
+        cost_saved: 0,
+        latency_ms: 0,
+        success: true
+      });
+    } catch (e: any) {
+      console.error('[anfis_routing] scored log failure:', e?.message ?? e);
+    }
 
     return {
       recommended_provider: recommended.provider,
-      confidence: Math.min(1, recommended.score),
+      confidence: confidenceScore,
       fallback_chain,
       reasoning: this.summarizeReasoning(features, recommended),
       historical_basis: {
