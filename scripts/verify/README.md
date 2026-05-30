@@ -39,6 +39,11 @@ report before handoff. Extractors today: authority-formula, concurrency-mechanis
 detector), RLS-disabled-count, HAL F1/separation. Unrecognized prose is left alone (it is not a
 universal NLP checker); claims it can't currently derive are `UNVERIFIED`, never a silent pass.
 
+The concurrency extractor scans **cross-repo** — repid-engine `src/` **and** sibling repos (default
+`../trinity-symphony-shared`, `.ts`+`.js`), because a claim's mechanism may live in another repo
+(e.g. the swarm's atomic `claimed_by` claim is in trinity-symphony-shared, not repid-engine).
+Override roots with `VERIFY_CLAIMS_SCAN_DIRS` (comma-separated paths).
+
 ## Adding a new invariant
 
 1. Write `scripts/verify/checks/<id>.ts` exporting `async function xCheck(): Promise<CheckResult>`.
