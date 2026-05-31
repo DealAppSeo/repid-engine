@@ -1,7 +1,17 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { PeerVerificationQueueEntry } from '../types/peer-verification';
 
-const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
+// S-STABLE2 RCA (2026-05-31): peer_verify tasks round-robin across VERIFIER_POOL. This was hardcoded
+// to only ['trinity-mel','trinity-shofet','trinity-gcm'] — so 100% of the backlog (~4,650 pending, 1,500+
+// each) piled onto 3 of 12 agents while the other 9 (all peer_verify-capable + heartbeat-alive) starved.
+// The agent claim loop is correct/atomic — the imbalance is here, in the producer. Distribute across all
+// 12 live swarm agents; env-overridable (VERIFIER_POOL=comma,list) so ops can adjust without redeploy.
+const DEFAULT_VERIFIER_POOL = [
+  'trinity-apm', 'trinity-chesed', 'trinity-gcm', 'trinity-hdm', 'trinity-mel', 'trinity-nexus',
+  'trinity-orch', 'trinity-shofet', 'trinity-sophia', 'trinity-torch', 'trinity-veritas', 'trinity-w3c',
+];
+const VERIFIER_POOL = (process.env.VERIFIER_POOL ?? DEFAULT_VERIFIER_POOL.join(','))
+  .split(',').map((s) => s.trim()).filter(Boolean);
 const POLL_INTERVAL_MS = 30000;
 let readerInterval: NodeJS.Timeout | null = null;
 
