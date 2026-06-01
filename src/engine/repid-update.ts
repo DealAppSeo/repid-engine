@@ -136,12 +136,17 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   const newRepId = Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
 
-  // 8 — Update agent
-  await db.from('repid_agents').update({
-    current_repid: newRepId, tier: newTier,
-    last_updated: new Date().toISOString(),
-    activity_30d: agent.activity_30d + 1,
-  }).eq('id', input.agentId);
+  // 8 — Update agent (gated by WRITER_DIRECT_APPLY for single-applier cutover)
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  if (WRITER_DIRECT_APPLY) {
+    await db.from('repid_agents').update({
+      current_repid: newRepId, tier: newTier,
+      last_updated: new Date().toISOString(),
+      activity_30d: agent.activity_30d + 1,
+    }).eq('id', input.agentId);
+  } else {
+    // Event inserted below with full delta/audit fields. Aggregator is now the applier.
+  }
 
   // 9 — Full audit trail
   // eas_attestation_id links every event to an EAS attestation

@@ -326,15 +326,21 @@ export async function runScoreEvent(
     console.warn('[scoring/pipeline] Failed to write to hal_classifications:', err.message);
   }
 
-  // 7. Update agent state.
-  await db
-    .from('repid_agents')
-    .update({
-      current_repid: Math.round(new_repid),
-      last_active_at: new Date().toISOString(),
-      last_updated: new Date().toISOString(),
-    })
-    .eq('id', input.agent_id);
+  // 7. Update agent state (gated by WRITER_DIRECT_APPLY for single-applier cutover).
+  // When false: insert event only (with full audit fields + idempotency_key); aggregator becomes sole applier.
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  if (WRITER_DIRECT_APPLY) {
+    await db
+      .from('repid_agents')
+      .update({
+        current_repid: Math.round(new_repid),
+        last_active_at: new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+      })
+      .eq('id', input.agent_id);
+  } else {
+    // Event already written above with repid_before/after + delta. Aggregator will apply from watermark.
+  }
 
   // 8. Queue ZK proof job (best-effort; failures don't block).
   if (triggerProof && zk_proof_id) {
@@ -484,14 +490,20 @@ export async function applyValidationEvent(
 
   const score_event_id = (eventRow as any).id;
 
-  await db
-    .from('repid_agents')
-    .update({
-      current_repid: Math.round(new_repid),
-      last_active_at: new Date().toISOString(),
-      last_updated: new Date().toISOString(),
-    })
-    .eq('id', agent_id);
+  // Gated by WRITER_DIRECT_APPLY for the single-applier cutover (D-054). When false: insert-event-only
+  // (the event row above carries delta + repid_before/after); the aggregator applies it from the
+  // watermark, so this SERVICE_FULFILLED path can't double-count after the flip. Mirrors runScoreEvent.
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  if (WRITER_DIRECT_APPLY) {
+    await db
+      .from('repid_agents')
+      .update({
+        current_repid: Math.round(new_repid),
+        last_active_at: new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+      })
+      .eq('id', agent_id);
+  }
 
   // Patent-evidence audit anchor for service-contract fulfilment. The
   // validation_queue path anchors at the queue level (validation-queue-
