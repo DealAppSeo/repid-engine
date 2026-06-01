@@ -1,6 +1,6 @@
 import { getTierForRepId } from '../config/tier-limits';
 
-export const BUILDER_FLOOR = 5000;
+export const BUILDER_FLOOR = 500;
 
 export interface AuthorityInput {
   stakeAmount: bigint;
@@ -58,23 +58,27 @@ export function computeAuthority(args: AuthorityInput): AuthorityResult {
 
   // Use realistic demo defaults if it's a fresh demo builder
   const r = isFreshDemo ? 5500n : BigInt(args.agentRepId);
-  const w = isFreshDemo ? 800n : BigInt(args.agentWisdom);
-  const c = isFreshDemo ? 600n : BigInt(args.agentCharacter);
+  const w = isFreshDemo ? 800n : BigInt(args.agentWisdom || 800);
+  const c = isFreshDemo ? 600n : BigInt(args.agentCharacter || 600);
 
   const combinedScore = r * w * c;
-  const stakeSqrt = babylonianSqrt(args.stakeAmount);
-  
-  // For stake = 100_000_000 (100 USDC), stakeSqrt = 10_000.
-  // combinedScore for defaults (5500 * 800 * 600) = 2,640,000,000.
-  // Product = 26,400,000,000,000.
-  // To get ~50,000,000 (50 USDC), divide by 528,000. We'll use 500,000n.
-  const authority = (stakeSqrt * combinedScore) / 500_000n;
+
+  // Anti-whale Synthesis formula: A = min(R, 100 * sqrt(S_usd))
+  // S_usd is calculated by converting the micro-USDC stake to USD (dividing by 10^6),
+  // taking the square root, multiplying by 100, and scaling back to micro-units (multiplying by 10^6).
+  // Formula: A_micro = min(R * 10^6, 100 * sqrt(S_usd) * 10^6)
+  const rScaled = r * 1_000_000n;
+  const stakeUSD = Number(args.stakeAmount) / 1_000_000;
+  const stakeSqrtUSD = Math.sqrt(stakeUSD);
+  const scaledAuthorityUSD = 100 * stakeSqrtUSD;
+  const sScaled = BigInt(Math.floor(scaledAuthorityUSD * 1_000_000));
+  const authority = rScaled < sScaled ? rScaled : sScaled;
   
   return {
     authority,
     breakdown: {
       stakeAmount: args.stakeAmount.toString(),
-      stakeSqrt: stakeSqrt.toString(),
+      stakeSqrt: stakeSqrtUSD.toString(),
       combinedScore: combinedScore.toString(),
       builderFloorPassed: true,
     },

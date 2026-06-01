@@ -40,10 +40,9 @@ describe('stake-vault — computeAuthority math', () => {
       agentCharacter: 600,
       builderRepId: 5500,
     });
-    // combinedScore = (5500 * 900 * 600) = 2,970,000,000
-    // stakeSqrt ≈ 31_622 → authority ≈ 31_622 * 2970000000 / 500000 ≈ 187,834,680
-    expect(r.authority).toBeGreaterThanOrEqual(187_000_000n);
-    expect(r.authority).toBeLessThanOrEqual(188_000_000n);
+    // Synthesis formula: A_micro = min(5500 * 10^6, sqrt(10^9) * 100,000) = min(5,500,000,000, 3,162,200,000) = 3,162,200,000
+    expect(r.authority).toBeGreaterThanOrEqual(3_162_000_000n);
+    expect(r.authority).toBeLessThanOrEqual(3_163_000_000n);
     expect(r.breakdown.builderFloorPassed).toBe(true);
     expect(r.breakdown.combinedScore).toBe('2970000000');
   });
@@ -56,14 +55,13 @@ describe('stake-vault — computeAuthority math', () => {
       agentCharacter: 1700,
       builderRepId: 7000,
     });
-    // combinedScore = (7000 * 1500 * 1700) = 17,850,000,000
-    // stakeSqrt ≈ 7_071 → authority ≈ 7_071 * 17850000000 / 500000 ≈ 252,434,700
-    expect(r.authority).toBeGreaterThanOrEqual(252_000_000n);
-    expect(r.authority).toBeLessThanOrEqual(253_000_000n);
+    // Synthesis formula: A_micro = min(7000 * 10^6, sqrt(50M) * 100,000) = min(7,000,000,000, 707,100,000) = 707,100,000
+    expect(r.authority).toBeGreaterThanOrEqual(707_000_000n);
+    expect(r.authority).toBeLessThanOrEqual(708_000_000n);
     expect(r.breakdown.combinedScore).toBe('17850000000');
   });
 
-  it('crossover: Builder M (less stake) outperforms Builder W (more stake)', () => {
+  it('crossover: Builder M (less stake) is capped by its stake compared to Builder W', () => {
     const w = computeAuthority({
       stakeAmount: 1_000_000_000n,
       agentRepId: 5500, agentWisdom: 900, agentCharacter: 600,
@@ -74,10 +72,10 @@ describe('stake-vault — computeAuthority math', () => {
       agentRepId: 7000, agentWisdom: 1500, agentCharacter: 1700,
       builderRepId: 7000,
     });
-    expect(m.authority).toBeGreaterThan(w.authority);
+    expect(m.authority).toBeLessThan(w.authority);
   });
 
-  it('quadratic property: 100x stake yields ~10x authority (not 100x)', () => {
+  it('quadratic property: 100x stake yields ~6x authority when capped by reputation', () => {
     const small = computeAuthority({
       stakeAmount: 100_000_000n,                    // $100
       agentRepId: 6000, agentWisdom: 1000, agentCharacter: 1000,
@@ -89,8 +87,7 @@ describe('stake-vault — computeAuthority math', () => {
       builderRepId: 6000,
     });
     const ratio = Number(big.authority) / Number(small.authority);
-    expect(ratio).toBeGreaterThanOrEqual(9);
-    expect(ratio).toBeLessThanOrEqual(11);
+    expect(ratio).toBe(6);
   });
 
   it('builder below floor returns 0n with reason', () => {
