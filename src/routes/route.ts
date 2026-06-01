@@ -9,6 +9,7 @@ import { incrementSpend } from '../billing/caps';
 import { runScoreEvent, NotFoundError } from '../scoring/pipeline';
 import crypto from 'crypto';
 import { validateAgentApiKey } from '../auth/api-keys';
+import { db } from '../db';
 
 export const llmRouter = Router();
 
@@ -86,24 +87,74 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       return;
     }
 
-    if (agent_id) {
+    let resolvedAgentId = agent_id;
+    const isUuid = (val: any): boolean => {
+      if (typeof val !== 'string') return false;
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+    };
+
+    if (agent_id && typeof agent_id === 'string' && !isUuid(agent_id)) {
+      const lcName = agent_id.toLowerCase();
+      const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+      try {
+        const { data } = await db
+          .from('repid_agents')
+          .select('id')
+          .eq('agent_name', lookupName)
+          .maybeSingle();
+        if (data && data.id) {
+          resolvedAgentId = data.id;
+        }
+      } catch (err: any) {
+        console.warn(`[route] Failed to resolve agent_id UUID for name "${agent_id}":`, err.message);
+      }
+    }
+
+    if (resolvedAgentId) {
       const header = req.headers['authorization'];
       const token = typeof header === 'string' ? header.replace(/^Bearer\s+/i, '').trim() : '';
       if (!token) {
         res.status(401).json({ error: 'Missing API key for agent_id' });
         return;
       }
-      const validKey = await validateAgentApiKey(token);
-      if (!validKey) {
-        res.status(401).json({ error: 'Invalid or revoked API key' });
-        return;
+      const rawKeys = process.env.REPID_API_KEYS || '';
+      const keyList = rawKeys.split(',').map(s => s.trim()).filter(Boolean);
+      let isEnvKey = false;
+      for (const k of keyList) {
+        const [key] = k.split(':');
+        if (key === token) {
+          isEnvKey = true;
+          break;
+        }
       }
-      if (!validKey.scopes.includes('llm_complete')) {
-        res.status(403).json({ error: 'Insufficient scopes (missing llm_complete)' });
-        return;
+
+      // Agent-scoped keys are validated for existence + scope; shared env keys carry no agent binding.
+      const validKey = isEnvKey ? null : await validateAgentApiKey(token);
+      if (!isEnvKey) {
+        if (!validKey) {
+          res.status(401).json({ error: 'Invalid or revoked API key' });
+          return;
+        }
+        if (!validKey.scopes.includes('llm_complete')) {
+          res.status(403).json({ error: 'Insufficient scopes (missing llm_complete)' });
+          return;
+        }
       }
-      if (validKey.agent_id !== agent_id) {
-        res.status(403).json({ error: 'API key agent_id mismatch' });
+
+      // F2 spoofing fix (2026-06-01): enforce the agent_id binding on EVERY auth path. This check
+      // previously lived inside `if (!isEnvKey)`, so any holder of a shared REPID_API_KEYS env key
+      // could set agent_id to ANY agent and write score-events/cost/logs under it (impersonation).
+      // Now: an agent-scoped key must match its bound agent; a shared env key may NOT target a
+      // specific agent_id (it has no agent binding to verify). Callers that don't target a specific
+      // agent never enter this block (resolvedAgentId is falsy → unauthenticated service call, unchanged).
+      if (validKey) {
+        if (validKey.agent_id !== resolvedAgentId) {
+          res.status(403).json({ error: 'API key agent_id mismatch' });
+          return;
+        }
+      } else {
+        // isEnvKey === true here: a shared env key cannot impersonate a specific agent_id.
+        res.status(403).json({ error: 'Shared env key cannot target a specific agent_id' });
         return;
       }
     }
@@ -156,6 +207,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         continue;
       }
 
+      const startTime = Date.now();
       try {
         const result = await adapter.complete({
           prompt,
@@ -179,18 +231,33 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           cost_usd,
           latency_ms: result.latencyMs,
           status: 'success',
-          task_hint
+          task_hint,
+          agent_id: (resolvedAgentId && isUuid(resolvedAgentId)) ? resolvedAgentId : undefined
         });
+
+        // Write routing decision to anfis_routing_logs (Phase 2.10 / P3)
+        try {
+          await db.from('anfis_routing_logs').insert({
+            request_text: prompt.substring(0, 500),
+            selected_model: `${adapter.name}/${result.model || 'default'}`,
+            confidence_score: decision.chosen_tier === 'slm' ? 0.9 : 0.7,
+            cost_saved: 0,
+            latency_ms: result.latencyMs,
+            success: true
+          });
+        } catch (e: any) {
+          console.error('[anfis_routing] complete log failure:', e?.message ?? e);
+        }
 
         // Sprint A7 — HAL evaluation + RepID scoring. Only runs when caller
         // supplies agent_id. Score-event failures are logged but never block
         // the LLM response (preserves backward compat for callers that don't
         // care about scoring).
         let hal_evaluation: Record<string, unknown> | null = null;
-        if (typeof agent_id === 'string' && agent_id.length > 0) {
+        if (typeof resolvedAgentId === 'string' && resolvedAgentId.length > 0) {
           try {
             const scoreResult = await runScoreEvent({
-              agent_id,
+              agent_id: resolvedAgentId,
               prompt,
               answer: result.answer,
               provider_used: adapter.name,
@@ -229,6 +296,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         return;
 
       } catch (error: any) {
+        const latencyMs = Date.now() - startTime;
         let status: 'failed' | 'rate_limited' | 'cap_hit' = 'failed';
         if (error instanceof RateLimitError) {
           markRateLimit(adapter.name, error.retryAfterMs || 10000);
@@ -240,6 +308,19 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         }
         excludeProviders.push(adapter.name);
 
+        try {
+          await db.from('anfis_routing_logs').insert({
+            request_text: prompt.substring(0, 500),
+            selected_model: `${adapter.name}/unknown`,
+            confidence_score: decision?.chosen_tier === 'slm' ? 0.9 : 0.7,
+            cost_saved: 0,
+            latency_ms: latencyMs,
+            success: false
+          });
+        } catch (e: any) {
+          console.error('[anfis_routing] failure log failure:', e?.message ?? e);
+        }
+
         logLlmCall({
           call_id,
           provider: adapter.name,
@@ -248,10 +329,11 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           prompt_tokens: 0,
           completion_tokens: 0,
           cost_usd: 0,
-          latency_ms: 0,
+          latency_ms: latencyMs,
           status,
           error_message: error.message,
-          task_hint
+          task_hint,
+          agent_id: (resolvedAgentId && isUuid(resolvedAgentId)) ? resolvedAgentId : undefined
         });
       }
     }
