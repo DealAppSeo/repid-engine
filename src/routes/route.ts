@@ -128,8 +128,9 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         }
       }
 
+      // Agent-scoped keys are validated for existence + scope; shared env keys carry no agent binding.
+      const validKey = isEnvKey ? null : await validateAgentApiKey(token);
       if (!isEnvKey) {
-        const validKey = await validateAgentApiKey(token);
         if (!validKey) {
           res.status(401).json({ error: 'Invalid or revoked API key' });
           return;
@@ -138,10 +139,23 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           res.status(403).json({ error: 'Insufficient scopes (missing llm_complete)' });
           return;
         }
+      }
+
+      // F2 spoofing fix (2026-06-01): enforce the agent_id binding on EVERY auth path. This check
+      // previously lived inside `if (!isEnvKey)`, so any holder of a shared REPID_API_KEYS env key
+      // could set agent_id to ANY agent and write score-events/cost/logs under it (impersonation).
+      // Now: an agent-scoped key must match its bound agent; a shared env key may NOT target a
+      // specific agent_id (it has no agent binding to verify). Callers that don't target a specific
+      // agent never enter this block (resolvedAgentId is falsy → unauthenticated service call, unchanged).
+      if (validKey) {
         if (validKey.agent_id !== resolvedAgentId) {
           res.status(403).json({ error: 'API key agent_id mismatch' });
           return;
         }
+      } else {
+        // isEnvKey === true here: a shared env key cannot impersonate a specific agent_id.
+        res.status(403).json({ error: 'Shared env key cannot target a specific agent_id' });
+        return;
       }
     }
 
