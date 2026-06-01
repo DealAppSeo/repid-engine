@@ -9,6 +9,7 @@ import { OpenAIAdapter } from './openai';
 import { Llama321bAdapter, Gemma32bAdapter, Phi4Adapter } from './slm';
 import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
 import { checkCap } from '../billing/caps';
+import { db } from '../db';
 
 export interface RouteRequest {
   prompt: string;
@@ -72,6 +73,38 @@ export function isLowComplexity(prompt: string, taskHint?: string): boolean {
   return false;
 }
 
+async function getAnfisRecommendation(domain: string): Promise<string | null> {
+  try {
+    const { data, error } = await db.rpc('anfis_provider_performance_lookup', {
+      p_domain: domain,
+      p_window_days: 30
+    });
+    if (error || !data || data.length === 0) return null;
+    
+    // Scored using fitness function: hit_rate * latencyFit * costFit
+    // latency_budget = 5000ms, cost_budget = 100000 micro-USDC ($0.10)
+    const scored = data.map((p: any) => {
+      const avgLatency = Number(p.avg_latency_ms) || 1000;
+      const avgCost = Number(p.avg_cost_usdc) || 1000;
+      const hitRate = p.hit_rate !== null ? Number(p.hit_rate) : 0.8;
+      
+      const latencyFit = 5000 >= avgLatency ? 1.0 : 5000 / avgLatency;
+      const costFit = 100000 >= avgCost ? 1.0 : 100000 / avgCost;
+      
+      return {
+        provider: p.provider,
+        score: hitRate * latencyFit * costFit
+      };
+    });
+    
+    scored.sort((a: any, b: any) => b.score - a.score);
+    return scored[0]?.provider || null;
+  } catch (e) {
+    console.error('[anfis-routing] lookup failed, falling back:', e);
+    return null;
+  }
+}
+
 export async function routeRequest(req: RouteRequest, excludeProviders: string[] = []): Promise<{ adapter: ProviderAdapter | null, decision: RouteDecision }> {
   const tried: string[] = [...excludeProviders];
 
@@ -103,13 +136,30 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     }
   }
 
+  // ANFIS recommendation lookup
+  let anfisRecommended: string | null = null;
+  if (req.tier_preference === 'auto') {
+    const domain = req.task_hint || 'general';
+    anfisRecommended = await getAnfisRecommendation(domain);
+  }
+
   const tryTier0 = req.tier_preference !== 'tier1_only';
   const tryTier1 = req.tier_preference !== 'tier0_only';
 
   let capHit = false;
 
   if (tryTier0) {
-    for (const adapter of tier0aAdapters) {
+    // Prioritize ANFIS recommendation in Tier 0a if applicable
+    let prioritizedTier0 = [...tier0aAdapters];
+    if (anfisRecommended) {
+      const recIndex = prioritizedTier0.findIndex(a => a.name === anfisRecommended);
+      if (recIndex > -1) {
+        const [recAdapter] = prioritizedTier0.splice(recIndex, 1);
+        prioritizedTier0.unshift(recAdapter!);
+      }
+    }
+
+    for (const adapter of prioritizedTier0) {
       if (excludeProviders.includes(adapter.name)) continue;
       
       if (isHealthy(adapter.name)) {
@@ -138,7 +188,17 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   }
 
   if (tryTier1 && req.user_paid_keys) {
-    for (const adapter of tier1Adapters) {
+    // Prioritize ANFIS recommendation in Tier 1 if applicable
+    let prioritizedTier1 = [...tier1Adapters];
+    if (anfisRecommended) {
+      const recIndex = prioritizedTier1.findIndex(a => a.name === anfisRecommended);
+      if (recIndex > -1) {
+        const [recAdapter] = prioritizedTier1.splice(recIndex, 1);
+        prioritizedTier1.unshift(recAdapter!);
+      }
+    }
+
+    for (const adapter of prioritizedTier1) {
       if (excludeProviders.includes(adapter.name)) continue;
 
       const key = (req.user_paid_keys as any)[adapter.name];

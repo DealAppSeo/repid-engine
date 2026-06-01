@@ -69,10 +69,10 @@ describe('builder W floor — regression for "authority = 0 below floor"', () =>
     expect(a.authority > 0n).toBe(true);
   });
 
-  it('builder with 5 agents at RepID 1200 → builder_repid < 5000, authority === 0n', async () => {
-    agentsTable = fiveActiveAgentsAt(1200);
+  it('builder with 5 agents at RepID 400 → builder_repid < 500, authority === 0n', async () => {
+    agentsTable = fiveActiveAgentsAt(400);
     const r = await recomputeBuilderRepID('builder-y');
-    expect(r.builder_repid).toBe(1200);
+    expect(r.builder_repid).toBe(400);
     expect(r.builder_repid).toBeLessThan(BUILDER_FLOOR);
 
     const a = computeAuthority({

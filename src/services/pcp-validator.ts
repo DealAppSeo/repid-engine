@@ -1,11 +1,15 @@
 import { db } from '../db';
+import { logLlmCall } from '../billing/log-call';
+import { calculateCost } from '../billing/pricing';
+import crypto from 'crypto';
+
 // Using global fetch
 
 export async function runPCP(taskData: any) {
   // 1. Select Validators
   const { data: agents, error } = await db
     .from('repid_agents')
-    .select('agent_name, current_repid');
+    .select('id, agent_name, current_repid');
 
   if (error || !agents) {
     console.error('[runPCP] Failed to fetch agents:', error);
@@ -36,6 +40,8 @@ CLAIMER OUTPUT:
 ${taskData.result}`;
 
   const results = await Promise.all(selectedValidators.map(async (agent) => {
+    const call_id = crypto.randomUUID();
+    const t0 = Date.now();
     try {
       // route to free tier logic
       const apiKey = process.env.GROQ_API_KEY;
@@ -55,7 +61,31 @@ ${taskData.result}`;
         })
       });
       
+      const latency = Date.now() - t0;
+      if (res.ok === false) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Groq HTTP ${res.status}: ${body}`);
+      }
+      
       const json = await res.json();
+      const tokensIn = json.usage?.prompt_tokens || 0;
+      const tokensOut = json.usage?.completion_tokens || 0;
+      const cost_usd = calculateCost('groq', 'llama-3.3-70b-versatile', tokensIn, tokensOut);
+      
+      logLlmCall({
+        call_id,
+        provider: 'groq',
+        tier: '0a',
+        model: 'llama-3.3-70b-versatile',
+        prompt_tokens: tokensIn,
+        completion_tokens: tokensOut,
+        cost_usd,
+        latency_ms: latency,
+        status: 'success',
+        agent_id: agent.id,
+        task_hint: 'pcp_validation'
+      }).catch(err => console.error('[runPCP] logLlmCall error:', err));
+
       const content = json.choices?.[0]?.message?.content || '{}';
       let parsed;
       try {
@@ -69,8 +99,22 @@ ${taskData.result}`;
         validity: Number(parsed.validity) || 0,
         confidence: Number(parsed.confidence) || 0
       };
-    } catch (e) {
+    } catch (e: any) {
       console.error(`[runPCP] Validator ${agent.agent_name} failed:`, e);
+      logLlmCall({
+        call_id,
+        provider: 'groq',
+        tier: '0a',
+        model: 'llama-3.3-70b-versatile',
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cost_usd: 0,
+        latency_ms: Date.now() - t0,
+        status: 'failed',
+        error_message: e.message || String(e),
+        agent_id: agent.id,
+        task_hint: 'pcp_validation'
+      }).catch(err => console.error('[runPCP] logLlmCall error:', err));
       return { name: agent.agent_name, validity: 0, confidence: 0 };
     }
   }));
