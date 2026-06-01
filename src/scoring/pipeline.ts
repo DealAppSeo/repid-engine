@@ -31,6 +31,30 @@ import {
 import { computeDelta, HALDecision } from './repid-delta';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
+import { halService } from '../hal/service';
+
+/**
+ * HAL scoring path selector for the live score-event pipeline.
+ *
+ * DEFECT (sprint 2026-05-29, proven): the live pipeline scored every event with
+ * the EXTRACTOR-only path (strictness 1), which has NO discriminative power —
+ * on a 20-item labeled corpus the extractor gave AUC(FALSE>TRUE)=0.407 and a
+ * NEGATIVE true/false gap (-0.020); live scores cluster at ~0.27 and nothing
+ * meaningfully separates truth from hallucination. The discriminative scorer is
+ * the cross-LLM FACT-CHECK path (halService strictness 2, groq+fireworks): on
+ * the 109-case validation corpus it scores F1 0.77, precision 0.84, with
+ * label=pass median 0.25 vs label=veto median 0.75 (gap +0.425).
+ *
+ * Fix: make the path env-selectable so prod can route the live pipeline through
+ * the discriminative fact-check scorer. DEFAULT 1 (extractor) = byte-identical
+ * to today — fully reversible; flipping to 2 is Sean-gated + Cowork co-sign
+ * (it changes veto behavior under D-050 and adds cross-LLM latency/cost per
+ * event — shadow first). Clamp avoids a malformed env silently selecting a
+ * different level.
+ */
+export function resolveHalStrictness(): 1 | 2 {
+  return process.env.HAL_STRICTNESS === '2' ? 2 : 1;
+}
 
 export function canonicalizeProvider(provider: string | null | undefined): string | null {
   if (!provider) return null;
@@ -169,23 +193,40 @@ export async function runScoreEvent(
     throw new NotFoundError(`Agent not found: ${input.agent_id}`);
   }
 
-  // 3. HAL evaluation — extractor-only path (strictness 1) keeps this
-  //    synchronous and avoids LLM fan-out inside scoring. Cross-LLM
-  //    consensus is owned by /score-event's older v11 path and by the
-  //    /complete handler which has provider context.
+  // 3. HAL evaluation. DEFAULT (HAL_STRICTNESS unset → 1): extractor-only path,
+  //    synchronous, no LLM fan-out — byte-identical to the prior behavior. But
+  //    the extractor has NO discriminative power (see resolveHalStrictness): it
+  //    is why live HAL catches 0 hallucinations. With HAL_STRICTNESS=2 the
+  //    pipeline routes through the cross-LLM FACT-CHECK scorer (halService),
+  //    which actually separates truth from hallucination (F1 0.77 on the
+  //    labeled corpus). The flip is Sean-gated + Cowork co-sign (shadow first).
+  const halStrictness = resolveHalStrictness();
   let hal_score = 0.5;
   let vetoed = false;
   let signals: Record<string, unknown> = {};
   let halError: string | null = null;
   try {
-    const result = await evaluate(input.answer, input.answer, {
-      domain: input.task_domain ?? 'finance',
-      certainty: typeof input.certainty === 'number' ? input.certainty : 0.85,
-      strictness: 1,
-    });
-    hal_score = Number.isFinite(result.hal_score) ? result.hal_score : 0.5;
-    vetoed = !!result.vetoed;
-    signals = result.signals as unknown as Record<string, unknown>;
+    if (halStrictness >= 2) {
+      // Discriminative path — providers built by halService; falls back to the
+      // extractor internally when no provider responds (degraded, not silent).
+      const r = await halService.evaluate({
+        text: input.answer,
+        context: { domain: input.task_domain ?? 'finance', certainty: typeof input.certainty === 'number' ? input.certainty : 0.85 },
+        strictness: 2,
+      });
+      hal_score = Number.isFinite(r.hal_score) ? r.hal_score : 0.5;
+      vetoed = r.decision === 'vetoed';
+      signals = { ...(r.signals as Record<string, unknown>), hal_mode: r.mode, hal_strictness: 2 };
+    } else {
+      const result = await evaluate(input.answer, input.answer, {
+        domain: input.task_domain ?? 'finance',
+        certainty: typeof input.certainty === 'number' ? input.certainty : 0.85,
+        strictness: 1,
+      });
+      hal_score = Number.isFinite(result.hal_score) ? result.hal_score : 0.5;
+      vetoed = !!result.vetoed;
+      signals = result.signals as unknown as Record<string, unknown>;
+    }
   } catch (e: unknown) {
     halError = e instanceof Error ? e.message : String(e);
     signals = { error: 'hal_failure', message: halError };
