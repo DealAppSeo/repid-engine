@@ -15,6 +15,8 @@
 
 import crypto from 'crypto';
 import { db } from '../db';
+import { logLlmCall } from '../billing/log-call';
+import { calculateCost } from '../billing/pricing';
 
 export type Category =
   | 'factual'
@@ -75,7 +77,7 @@ async function callGroq(
   model: string,
   endpoint: string,
   timeoutMs: number,
-): Promise<{ raw: string; latency_ms: number }> {
+): Promise<{ raw: string; latency_ms: number; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const start = Date.now();
@@ -105,7 +107,14 @@ async function callGroq(
     }
     const data: any = await res.json();
     const raw = data?.choices?.[0]?.message?.content ?? '';
-    return { raw, latency_ms };
+    return {
+      raw,
+      latency_ms,
+      usage: {
+        prompt_tokens: data.usage?.prompt_tokens || 0,
+        completion_tokens: data.usage?.completion_tokens || 0,
+      }
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -177,7 +186,7 @@ export async function classify(
   let lastErr: any;
   while (attempt < 2) {
     try {
-      const { raw, latency_ms } = await callGroq(
+      const { raw, latency_ms, usage } = await callGroq(
         prompt, apiKey, model, endpoint, timeoutMs,
       );
       const { category, confidence } = parseClassification(raw);
@@ -185,6 +194,25 @@ export async function classify(
         category, confidence, latency_ms,
         provider: 'groq', model, raw,
       };
+
+      const tokensIn = usage?.prompt_tokens || 0;
+      const tokensOut = usage?.completion_tokens || 0;
+      const cost_usd = calculateCost('groq', model, tokensIn, tokensOut);
+      const call_id = crypto.randomUUID();
+
+      logLlmCall({
+        call_id,
+        provider: 'groq',
+        tier: '0a',
+        model,
+        prompt_tokens: tokensIn,
+        completion_tokens: tokensOut,
+        cost_usd,
+        latency_ms,
+        status: 'success',
+        task_hint: 'hal_classify'
+      }).catch(err => console.error('[classifier] logLlmCall error:', err));
+
       if (persist) {
         const promptHash = hashPrompt(prompt);
         void persistClassification(promptHash, result);
@@ -210,6 +238,21 @@ export async function classify(
       }
       return result;
     } catch (e: any) {
+      const call_id = crypto.randomUUID();
+      logLlmCall({
+        call_id,
+        provider: 'groq',
+        tier: '0a',
+        model,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cost_usd: 0,
+        latency_ms: 0,
+        status: 'failed',
+        error_message: e.message || String(e),
+        task_hint: 'hal_classify'
+      }).catch(err => console.error('[classifier] logLlmCall error:', err));
+
       lastErr = e;
       attempt += 1;
       if (attempt < 2) {
