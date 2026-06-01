@@ -160,16 +160,21 @@ router.post('/challenge', async (req: Request, res: Response) => {
   const defenderNewRepId = Math.max(10, Math.min(10000, defender.current_repid + defenderDelta));
 
   const now = new Date().toISOString();
-  await db.from('repid_agents').update({
-    current_repid: challengerNewRepId,
-    last_updated: now,
-    activity_30d: (challenger.activity_30d ?? 0) + 1,
-  }).eq('id', challengerId);
-  await db.from('repid_agents').update({
-    current_repid: defenderNewRepId,
-    last_updated: now,
-    activity_30d: (defender.activity_30d ?? 0) + 1,
-  }).eq('id', defenderId);
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  if (WRITER_DIRECT_APPLY) {
+    await db.from('repid_agents').update({
+      current_repid: challengerNewRepId,
+      last_updated: now,
+      activity_30d: (challenger.activity_30d ?? 0) + 1,
+    }).eq('id', challengerId);
+    await db.from('repid_agents').update({
+      current_repid: defenderNewRepId,
+      last_updated: now,
+      activity_30d: (defender.activity_30d ?? 0) + 1,
+    }).eq('id', defenderId);
+  } else {
+    // Events already inserted above (with deltas + idempotency). Aggregator applies from seeded watermark.
+  }
 
   const easAttestationId = `eas-challenge-${Date.now()}-${String(challengerId).slice(0, 8)}`;
   const challengeId = `ch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
