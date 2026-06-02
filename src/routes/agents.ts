@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
+import { getAgentPerformance, getAgentsLeaderboard } from '../analytics/agent-performance';
 
 const router = Router();
 
@@ -441,6 +442,81 @@ router.get('/suggested-rules', async (req: Request, res: Response) => {
     source: 'stub-library',
     note: 'Sprint 5: real Cerebras Fast Inference call. Sprint 4: library stub.',
   });
+});
+
+// GET /api/v1/agents/leaderboard
+router.get('/api/v1/agents/leaderboard', async (req: Request, res: Response) => {
+  try {
+    const period = (typeof req.query.period === 'string' ? req.query.period : '24h') as '1h' | '24h' | '7d' | '30d';
+    if (!['1h', '24h', '7d', '30d'].includes(period)) {
+      return res.status(400).json({ error: 'invalid period: 1h | 24h | 7d | 30d' });
+    }
+    const leaderboard = await getAgentsLeaderboard(period);
+    return res.json(leaderboard);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/agents/:name/performance
+router.get('/api/v1/agents/:name/performance', async (req: Request, res: Response) => {
+  try {
+    const name = String(req.params.name || '');
+    const period = String(req.query.period || '24h') as '1h' | '24h' | '7d' | '30d';
+    if (!['1h', '24h', '7d', '30d'].includes(period)) {
+      return res.status(400).json({ error: 'invalid period: 1h | 24h | 7d | 30d' });
+    }
+    const perf = await getAgentPerformance(name, period);
+    return res.json(perf);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/agents/fingerprints
+router.get('/api/v1/agents/fingerprints', async (req: Request, res: Response) => {
+  try {
+    const { data, error } = await db
+      .from('hallucination_fingerprints')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/agents/learning-feed
+router.get('/api/v1/agents/learning-feed', async (req: Request, res: Response) => {
+  try {
+    const { data, error } = await db
+      .from('agent_learning_events')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(30);
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/agents/mentorships
+router.get('/api/v1/agents/mentorships', async (req: Request, res: Response) => {
+  try {
+    const { data, error } = await db
+      .from('agent_mentorships')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;

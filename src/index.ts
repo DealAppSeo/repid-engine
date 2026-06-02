@@ -50,6 +50,9 @@ import providersRouter from './routes/providers';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
 import securityStatusRouter from './routes/security-status';
+// S-OPTIMIZE — cost + efficiency dashboards (public read, over the existing llm_call_log ledger).
+import costsRouter from './routes/costs';
+import efficiencyRouter from './routes/efficiency';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -58,6 +61,9 @@ import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
 import { pgPing } from './db/direct-pg';
+import { seedFingerprints, runFingerprintClustering } from './analytics/hallucination-fingerprints';
+import { agentHealthCheck } from './services/self-healing';
+import { assignMentorships } from './services/agent-mentorship';
 
 import { authMiddleware } from './middleware/auth';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
@@ -249,6 +255,9 @@ app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
 app.use('/api/v1', halStatsRouter);
+// S-OPTIMIZE — public cost + efficiency dashboards (read-only, over llm_call_log + trinity_tasks).
+app.use('/api/v1', costsRouter);
+app.use('/api/v1', efficiencyRouter);
 app.get('/api/v1/metrics', async (_req, res) => {
   const supabase = db;
   const [agents, decisions, hallucinations] = await Promise.all([
@@ -577,6 +586,31 @@ async function checkStalledAndAlert() {
 if (!IS_TEST) {
   setInterval(checkStalledAndAlert, 60*60*1000);
   checkStalledAndAlert();
+
+  // Seed default fingerprints
+  seedFingerprints().then(() => {
+    console.log('[hallucination-fingerprints] Seeded default fingerprints');
+  }).catch(err => {
+    console.error('[hallucination-fingerprints] Seeding failed:', err.message);
+  });
+
+  // Run fingerprint clustering hourly
+  setInterval(runFingerprintClustering, 60*60*1000);
+  runFingerprintClustering().catch(err => {
+    console.error('[hallucination-fingerprints] Clustering failed:', err.message);
+  });
+
+  // Run agent health check hourly (Self-Healing)
+  setInterval(agentHealthCheck, 60*60*1000);
+  agentHealthCheck().catch(err => {
+    console.error('[SelfHealing] Health check failed:', err.message);
+  });
+
+  // Run mentorship assignments daily
+  setInterval(assignMentorships, 24*60*60*1000);
+  assignMentorships().catch(err => {
+    console.error('[Mentorship] Assignment failed:', err.message);
+  });
 }
 
 // Sprint MVP-Delivery Phase 4 (C2) — Cascade Pickup Worker.

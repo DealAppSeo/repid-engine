@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { db } from '../db';
 import { runScoreEvent } from '../scoring/pipeline';
+import { handleMenteeFailure, handleMenteeSuccess } from './agent-mentorship';
 
 const POLL_INTERVAL_MS = parseInt(process.env.TRINITY_BRIDGE_POLL_MS || '30000', 10);
 const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
@@ -162,6 +163,13 @@ async function pollCompletedTasks() {
         });
 
         console.log(`[TrinityTaskBridge] Score event successfully created: id=${scoreResult.score_event_id}, hal_score=${scoreResult.hal_score}, delta=${scoreResult.repid_delta_applied}`);
+
+        // Mentorship hooks
+        if (scoreResult.repid_delta_applied < 0 || scoreResult.hal_score > 0.5) {
+          await handleMenteeFailure(agentName, task, scoreResult);
+        } else {
+          await handleMenteeSuccess(agentName, task.task_type || 'general');
+        }
 
         await markTaskBridged(task);
 
