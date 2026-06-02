@@ -183,30 +183,49 @@ router.post('/comparison/vote', async (req: Request, res: Response) => {
   }
 });
 
+const HAL_AGREEMENT_VALUES = ['agree', 'disagree', 'partial'] as const;
+
 // PATCH /session/:sessionId/rate — update an existing session's rating.
+// S-FIX: writes the real `hal_agreement` column (was stashed in rating_feedback) and, when the user
+// DISAGREES with HAL's verdict, logs a learning event so HAL miscalls feed calibration.
 router.patch('/session/:sessionId/rate', async (req: Request, res: Response) => {
   const sessionId = String(req.params.sessionId);
   const { rating, rating_feedback, hal_agreement } = req.body ?? {};
   if (rating !== undefined && (typeof rating !== 'number' || rating < 1 || rating > 5)) {
     return res.status(400).json({ error: 'invalid_rating', expected: 'rating is an integer 1..5' });
   }
+  if (hal_agreement !== undefined && !HAL_AGREEMENT_VALUES.includes(hal_agreement)) {
+    return res.status(400).json({ error: 'invalid_hal_agreement', expected: 'one of agree|disagree|partial' });
+  }
   try {
     const update: Record<string, any> = { rated_at: new Date().toISOString() };
     if (rating !== undefined) update.rating = Math.round(rating);
     if (rating_feedback !== undefined) update.rating_feedback = String(rating_feedback);
-    if (hal_agreement !== undefined) {
-      // stash hal_agreement in rating_feedback if no dedicated column — keep it simple + non-destructive
-      update.rating_feedback = update.rating_feedback ?? `hal_agreement:${hal_agreement}`;
-    }
+    if (hal_agreement !== undefined) update.hal_agreement = hal_agreement;
+
     const { data, error } = await db
       .from('trustchat_sessions')
       .update(update)
       .eq('session_id', sessionId)
-      .select('session_id')
+      .select('session_id, hal_score, hal_verdict')
       .maybeSingle();
     if (error) return res.status(500).json({ error: 'rate_update_failed', detail: error.message });
     if (!data) return res.status(404).json({ error: 'session_not_found', session_id: sessionId });
-    return res.json({ ok: true, session_id: sessionId });
+
+    // S-FIX Phase 1.4 — when a user says HAL got it wrong, capture it as a learning event.
+    // Non-blocking: a logging failure must never fail the rating.
+    if (hal_agreement === 'disagree') {
+      const row: any = data;
+      void db.from('agent_learning_events').insert({
+        source_agent: 'user-feedback',
+        event_type: 'hal_verdict_disputed',
+        lesson: `User disagreed with HAL verdict on session ${sessionId}. HAL said "${row.hal_verdict ?? 'unknown'}"`
+          + ` (risk ${row.hal_score ?? '?'}); user rated ${rating ?? 'n/a'}/5.`,
+        evidence: { session_id: sessionId, hal_score: row.hal_score, hal_verdict: row.hal_verdict, user_rating: rating ?? null },
+        confidence: 0.7,
+      }).then(({ error: lerr }: any) => { if (lerr) console.error('[rate] learning-event insert failed:', lerr.message); });
+    }
+    return res.json({ ok: true, session_id: sessionId, hal_agreement: hal_agreement ?? null });
   } catch (e: any) {
     return res.status(500).json({ error: 'rate_failed', detail: e?.message ?? String(e) });
   }
