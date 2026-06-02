@@ -125,7 +125,7 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
           adapter,
           decision: {
             chosen_provider: adapter.name,
-            chosen_tier: 'slm',
+            chosen_tier: '0a',
             reason: 'slm_low_complexity',
             tried
           }

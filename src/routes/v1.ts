@@ -20,6 +20,7 @@ import servicesRouter from './v1/services';
 import contractsRouter from './v1/contracts';
 import agentRouter from './v1/agent';
 import peerVerificationRouter from './peer-verification';
+import { createAndResolveArenaChallenge } from '../testing/red-team';
 
 const router = Router();
 router.use(substanceGateRouter);
@@ -587,6 +588,33 @@ router.post('/webhooks/register', async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: 'Failed' });
 
   res.json(data);
+});
+
+// ============================================================================
+// S-REDTEAM: Arena challenge micro-transaction endpoint (Phase 6)
+// POST /api/v1/challenge/create
+// Body: { challenger_agent: string, defender_agent: string, claim: string, stake_repid: number }
+// Returns resolution + RepID deltas (φ weighted, BFT 3 neutral evaluators, asymmetric +1/-2 for judges)
+// ============================================================================
+router.post('/challenge/create', async (req: Request, res: Response) => {
+  const { challenger_agent, defender_agent, claim, stake_repid } = req.body ?? {};
+  if (!challenger_agent || !defender_agent || !claim || typeof stake_repid !== 'number') {
+    return res.status(400).json({ error: 'challenger_agent, defender_agent, claim, stake_repid required' });
+  }
+  if (challenger_agent === defender_agent) {
+    return res.status(400).json({ error: 'challenger and defender must be different' });
+  }
+  try {
+    const result = await createAndResolveArenaChallenge({
+      challenger_agent: String(challenger_agent),
+      defender_agent: String(defender_agent),
+      claim: String(claim),
+      stake_repid: Math.max(1, Math.floor(stake_repid)),
+    });
+    return res.json({ ok: true, ...result });
+  } catch (e: any) {
+    return res.status(500).json({ error: 'arena_resolution_failed', message: e?.message });
+  }
 });
 
 export default router;
