@@ -11,6 +11,7 @@
 import { Router, type Request, type Response } from 'express';
 import { halService } from '../hal/service';
 import { scanForInjection } from '../hal/injection-guard';
+import { getCachedHalResult, cacheHalResult } from '../cache/hal-cache'; // S-CACHE
 
 const router = Router();
 
@@ -35,7 +36,14 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     });
   }
   try {
+    // S-CACHE Phase 2 — return a cached verdict for the same (text, strictness) within the TTL,
+    // skipping the LLM/extractor work. The cache key folds strictness in as the "provider".
+    const cacheProvider = `s${s ?? 'default'}`;
+    const cached = await getCachedHalResult(text, cacheProvider);
+    if (cached) return res.json({ ...cached, injection });
+
     const result = await halService.evaluate({ text, context: context as any, strictness: s });
+    void cacheHalResult(text, cacheProvider, result);
     return res.json({ ...(result as any), injection });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

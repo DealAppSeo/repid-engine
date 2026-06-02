@@ -54,6 +54,8 @@ import securityStatusRouter from './routes/security-status';
 // S-OPTIMIZE — cost + efficiency dashboards (public read, over the existing llm_call_log ledger).
 import costsRouter from './routes/costs';
 import efficiencyRouter from './routes/efficiency';
+// S-CACHE — DragonflyDB cache stats (public read; graceful no-op without REDIS_URL).
+import cacheStatsRouter from './routes/cache-stats';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -253,6 +255,8 @@ app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
 app.use('/api/v1', halStatsRouter);
+// S-CACHE — public cache stats dashboard.
+app.use('/api/v1', cacheStatsRouter);
 // S-OPTIMIZE — public cost + efficiency dashboards (read-only, over llm_call_log + trinity_tasks).
 app.use('/api/v1', costsRouter);
 app.use('/api/v1', efficiencyRouter);
