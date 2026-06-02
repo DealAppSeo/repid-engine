@@ -61,7 +61,7 @@ export async function deriveOutcomeFromChain(seed: string = 'default'): Promise<
   let provider: ethers.JsonRpcProvider | null = null;
   try {
     provider = new ethers.JsonRpcProvider(RPC_URL);
-    const block = await withTimeout(provider.getBlock('latest'), RPC_TIMEOUT_MS);
+    const block = await withTimeout<ethers.Block | null>(provider.getBlock('latest'), RPC_TIMEOUT_MS);
     if (!block || typeof block.hash !== 'string' || !block.hash.startsWith('0x') || typeof block.number !== 'number') {
       return hmacFallback(seed);
     }
