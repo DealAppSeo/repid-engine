@@ -44,6 +44,12 @@ import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
 import x402InboundRouter from './routes/x402-inbound';
+// S-SPINE — TrustChat viral surface (all public except referral stats).
+import leaderboardRouter from './routes/leaderboard';
+import providersRouter from './routes/providers';
+import subscribeRouter from './routes/subscribe';
+import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
+import securityStatusRouter from './routes/security-status';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -291,6 +297,22 @@ app.use('/api/v1/agents-external', agentsExternalScoreRouter);
 // surfaces. Route: POST /api/v1/x402/:uuid/trade-analysis
 app.use('/api/v1/x402', x402InboundRouter);
 
+// S-SPINE — public TrustChat viral surface (leaderboard, providers, subscribe,
+// referral /track, security status). Mounted BEFORE authMiddleware so they need
+// no API key. /subscribe is IP-rate-limited (5/min). Referral STATS is authed
+// (mounted after authMiddleware below).
+const subscribeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: 'Too many subscribe requests' },
+  keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+});
+app.use('/api/v1', leaderboardRouter);
+app.use('/api/v1', providersRouter);
+app.use('/api/v1/subscribe', subscribeLimiter);
+app.use('/api/v1', subscribeRouter);
+app.use('/api/v1', referralTrackRouter);
+app.use('/api/v1', securityStatusRouter);
 
 app.use(authMiddleware);
 
@@ -303,6 +325,8 @@ app.use('/api/v1', v1Router);
 // CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
 app.use('/api/v1/observability', productivityRouter);
 app.use('/api/v1', receiptsRouter);
+// S-SPINE — referral stats dashboard (authed: requires a valid REPID_API_KEY / service role).
+app.use('/api/v1', referralStatsRouter);
 // Escalation API (CC2 2026-05-26) — agent/worker-facing (REPID_API_KEYS auth). Routes
 // the controller escalation ladder; sean-level fires a Telegram alert via ORCH.
 app.use('/api/v1/escalation', escalationRouter);
