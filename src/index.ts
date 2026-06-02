@@ -3,6 +3,7 @@ import { startValidationWorker } from './services/validation-queue-worker';
 import { startTrinityTaskBridge } from './services/trinity-task-bridge';
 import { startHitlNotificationDispatcher } from './services/hitl-notification-dispatcher';
 import { startPeerVerificationReader } from './services/peer-verification-reader';
+import { startHitlExpirySweeper } from './services/hitl-expiry-sweeper';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
@@ -755,6 +756,14 @@ if (!IS_TEST) {
 // NOTIFICATION_DISPATCHER_ENABLED=true on Railway once a test pref row exists.
 if (!IS_TEST) {
   startHitlNotificationDispatcher();
+}
+
+// V1.6 (CC2 2026-05-27) — HITL TTL expiry sweeper. Periodically flips pending
+// rows to 'expired' once expires_at lapses. Acts ONLY on rows with expires_at
+// IS NOT NULL (pre-migration pending rows are unaffected). DEFAULT OFF — Sean
+// flips HITL_EXPIRY_SWEEPER_ENABLED=true after the callback handler is live.
+if (!IS_TEST) {
+  startHitlExpirySweeper();
 }
 
 // Daily health check at 6am UTC

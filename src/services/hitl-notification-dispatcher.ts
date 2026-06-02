@@ -1,6 +1,7 @@
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
-import { sendTelegramMessage } from '../routes/telegram';
+import { sendTelegramMessage, type TelegramInlineKeyboard } from '../routes/telegram';
+import { signCallbackPayload, shortIdFromUuid } from './hitl-callback-handler';
 
 // V1.5 Slice-1 HITL notification dispatcher (CC2 2026-05-26).
 //
@@ -188,7 +189,29 @@ export async function pollOnce(): Promise<void> {
           continue;
         }
 
-        const send = await sendTelegramMessage(String(chatId), msg);
+        // V1.6 (CC2 2026-05-27): attach signed Approve/Deny inline keyboard ONLY when
+        // both HITL_CALLBACK_ENABLED='true' AND HITL_CALLBACK_HMAC_SECRET is set.
+        // Either gate missing → fall back to slice-1 1-way push (no keyboard).
+        // Sign failure (shouldn't happen here — we just checked the secret) is
+        // swallowed so a buttoning failure can never break a notification send.
+        let inlineKeyboard: TelegramInlineKeyboard | undefined;
+        if (process.env.HITL_CALLBACK_ENABLED === 'true' && !!process.env.HITL_CALLBACK_HMAC_SECRET) {
+          try {
+            const shortId = shortIdFromUuid(req.id);
+            const ttlHours = parseInt(process.env.HITL_CALLBACK_TTL_HOURS || '24', 10);
+            const expSec = Math.floor(Date.now() / 1000) + ttlHours * 3600;
+            inlineKeyboard = {
+              inline_keyboard: [[
+                { text: '✅ Approve', callback_data: signCallbackPayload('a', shortId, expSec) },
+                { text: '❌ Deny',    callback_data: signCallbackPayload('d', shortId, expSec) },
+              ]],
+            };
+          } catch (e: any) {
+            console.warn('[HitlNotificationDispatcher] inline-keyboard sign failed (sending without buttons):', e?.message ?? e);
+          }
+        }
+
+        const send = await sendTelegramMessage(String(chatId), msg, inlineKeyboard);
         await db.from('notifications').insert({
           user_id: p.user_id ?? NIL_UUID,
           type: eventType,

@@ -1,5 +1,6 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { handleHitlCallback } from '../services/hitl-callback-handler';
 const router = express.Router();
 
 const supabase = createClient(
@@ -23,17 +24,29 @@ export async function sendTelegramAlert(message: string) {
 // Like sendTelegramAlert but per-call chat_id + returns the Telegram message_id so
 // callers can store it for later round-trip correlation (V1.6 approve/deny on the
 // notification dispatcher path). Additive — does not affect sendTelegramAlert.
+export interface TelegramInlineKeyboard {
+  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+}
+
 export async function sendTelegramMessage(
   chatId: string,
-  html: string
+  html: string,
+  inlineKeyboard?: TelegramInlineKeyboard,
 ): Promise<{ ok: boolean; message_id?: number; error?: string }> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not configured' };
+  const body: Record<string, any> = {
+    chat_id: chatId,
+    text: html,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  };
+  if (inlineKeyboard) body.reply_markup = inlineKeyboard;
   try {
     const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true }),
+      body: JSON.stringify(body),
     });
     const j: any = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
@@ -46,6 +59,27 @@ export async function sendTelegramMessage(
 }
 
 router.post('/webhook', async (req, res) => {
+  // V1.6 (CC2 2026-05-27): X-Telegram-Bot-Api-Secret-Token check — applies to ALL
+  // update types. If TELEGRAM_WEBHOOK_SECRET is set, Telegram must echo the same
+  // string in this header (configured via setWebhook → secret_token). Unset env =
+  // backwards-compatible (skip check) so existing message commands keep working
+  // until Sean opts in. When Sean SETS the env, he must ALSO re-run /set-webhook
+  // so Telegram starts sending the header (the GET handler picks it up automatically).
+  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (expectedSecret) {
+    const provided = req.headers['x-telegram-bot-api-secret-token'];
+    if (provided !== expectedSecret) {
+      return res.sendStatus(401);
+    }
+  }
+
+  // V1.6: callback_query branch (additive) — handles HITL approve/deny button taps.
+  // Slice-1 dispatcher only attaches inline keyboards when HITL_CALLBACK_ENABLED='true'
+  // AND HITL_CALLBACK_HMAC_SECRET is set, so this branch is dormant by default.
+  if ((req.body as any)?.callback_query) {
+    return handleHitlCallback(req, res);
+  }
+
   const { message } = req.body;
   if (!message?.text) return res.sendStatus(200);
   const chatId = message.chat.id;
@@ -162,14 +196,23 @@ router.post('/webhook', async (req, res) => {
 
 router.get('/set-webhook', async (req, res) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
+  // V1.6: include secret_token if TELEGRAM_WEBHOOK_SECRET is set so Telegram
+  // echoes it in the X-Telegram-Bot-Api-Secret-Token header. Backwards-compatible:
+  // if env unset, setWebhook omits secret_token (existing behavior).
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
   try {
+    const body: Record<string, any> = {
+      url: 'https://repid-engine-production.up.railway.app/api/v1/telegram/webhook',
+      allowed_updates: ['message', 'callback_query'],
+    };
+    if (webhookSecret) body.secret_token = webhookSecret;
     const r = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://repid-engine-production.up.railway.app/api/v1/telegram/webhook' })
+      body: JSON.stringify(body)
     });
     const d = await r.json();
-    res.json(d);
+    res.json({ ...d, with_secret_token: !!webhookSecret });
   } catch (e: any) {
     res.json({ error: e.message });
   }
