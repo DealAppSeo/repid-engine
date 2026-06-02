@@ -1,0 +1,11 @@
+{
+  "chordName": "D#_Major",
+  "note1": "ANFIS",
+  "note2": "GNN",
+  "note3": "Bayesian_Inference",
+  "circlePositions": { "note1": 9, "note2": 9, "note3": 8 },
+  "consonanceClass": "major_triad",
+  "taskDomain": "meta_routing",
+  "taskDescription": "Given a task with complexity=0.7, domain=mixed, uncertainty=0.4, select the optimal LLM provider from [groq, cerebras, anthropic, openai] considering cost, latency, and accuracy.",
+  "hypothesis": "ANFIS fuzzy routing + GNN graph-based capability modeling + Bayesian uncertainty quantification produces more accurate provider selection than ANFIS alone"
+}

@@ -1,0 +1,80 @@
+{
+  "_comment": "Project Harmonia — Circle of Fifths Algorithm Synergy Configuration. Design-only (2026-06-01).",
+  "_version": "1.0.0",
+  "_rationale": "Adjacent positions share deep mathematical structure (e.g. iterative approximation, probabilistic, graph traversal). Distant positions are 'dissonant' and test whether surprising synergies exist across unrelated families.",
+  "circle": [
+    { "position": 0, "key": "C",  "algorithms": ["gradient_descent", "newton_raphson", "babylonian_sqrt"], "domains": ["math", "optimization"] },
+    { "position": 1, "key": "G",  "algorithms": ["log_transform", "entropy", "kl_divergence"], "domains": ["math", "information_theory"] },
+    { "position": 2, "key": "D",  "algorithms": ["bayesian_update", "mcmc_sampling", "particle_filter"], "domains": ["probability", "ai"] },
+    { "position": 3, "key": "A",  "algorithms": ["pagerank", "community_detection", "shortest_path"], "domains": ["graph", "cs"] },
+    { "position": 4, "key": "E",  "algorithms": ["attention", "self_attention", "cross_attention"], "domains": ["ai", "transformers"] },
+    { "position": 5, "key": "B",  "algorithms": ["genetic_algorithm", "simulated_annealing", "ant_colony"], "domains": ["optimization", "biology"] },
+    { "position": 6, "key": "F#", "algorithms": ["bft_consensus", "pbft", "hotstuff"], "domains": ["distributed", "consensus"] },
+    { "position": 7, "key": "C#", "algorithms": ["anfis", "fuzzy_inference", "neuro_fuzzy"], "domains": ["ai", "control"] },
+    { "position": 8, "key": "G#", "algorithms": ["embedding", "vector_search", "cosine_similarity"], "domains": ["ai", "retrieval"] },
+    { "position": 9, "key": "D#", "algorithms": ["rep_id_economy", "stake_weighted", "quadratic_voting"], "domains": ["economics", "governance"] },
+    { "position": 10,"key": "A#", "algorithms": ["hal_scoring", "pythagorean_comma_bft", "multi_provider_ensemble"], "domains": ["ai", "trust"] },
+    { "position": 11,"key": "F",  "algorithms": ["z3_smt", "groth16_proof", "merkle_dag"], "domains": ["formal", "zkp", "cs"] }
+  ],
+
+  "triad_definitions": {
+    "major": [0, 4, 7],
+    "minor": [0, 3, 7],
+    "diminished": [0, 3, 6],
+    "augmented": [0, 4, 8],
+    "dissonant_control": [0, 1, 6]
+  },
+
+  "major_triads": [
+    { "name": "C_Major",     "positions": [0, 4, 7],   "notes": ["C", "E", "B"],     "consonance_class": "major_triad" },
+    { "name": "G_Major",     "positions": [1, 5, 8],   "notes": ["G", "B", "C#"],    "consonance_class": "major_triad" },
+    { "name": "D_Major",     "positions": [2, 6, 9],   "notes": ["D", "F#", "D#"],   "consonance_class": "major_triad" },
+    { "name": "A_Major",     "positions": [3, 7, 10],  "notes": ["A", "C#", "A#"],   "consonance_class": "major_triad" },
+    { "name": "E_Major",     "positions": [4, 8, 11],  "notes": ["E", "G#", "F"],    "consonance_class": "major_triad" },
+    { "name": "B_Major",     "positions": [5, 9, 0],   "notes": ["B", "D#", "C"],    "consonance_class": "major_triad" },
+    { "name": "F#_Major",    "positions": [6, 10, 1],  "notes": ["F#", "A#", "G"],   "consonance_class": "major_triad" },
+    { "name": "C#_Major",    "positions": [7, 11, 2],  "notes": ["C#", "F", "D"],    "consonance_class": "major_triad" },
+    { "name": "G#_Major",    "positions": [8, 0, 3],   "notes": ["G#", "C", "A"],    "consonance_class": "major_triad" },
+    { "name": "D#_Major",    "positions": [9, 1, 4],   "notes": ["D#", "G", "E"],    "consonance_class": "major_triad" },
+    { "name": "A#_Major",    "positions": [10, 2, 5],  "notes": ["A#", "D", "B"],    "consonance_class": "major_triad" },
+    { "name": "F_Major",     "positions": [11, 3, 6],  "notes": ["F", "A", "F#"],    "consonance_class": "major_triad" }
+  ],
+
+  "minor_triads": [
+    { "name": "C_minor",     "positions": [0, 3, 7],   "notes": ["C", "A", "C#"],    "consonance_class": "minor_triad" },
+    { "name": "G_minor",     "positions": [1, 4, 8],   "notes": ["G", "E", "G#"],    "consonance_class": "minor_triad" },
+    { "name": "D_minor",     "positions": [2, 5, 9],   "notes": ["D", "B", "D#"],    "consonance_class": "minor_triad" },
+    { "name": "A_minor",     "positions": [3, 6, 10],  "notes": ["A", "F#", "A#"],   "consonance_class": "minor_triad" },
+    { "name": "E_minor",     "positions": [4, 7, 11],  "notes": ["E", "C#", "F"],    "consonance_class": "minor_triad" },
+    { "name": "B_minor",     "positions": [5, 8, 0],   "notes": ["B", "G#", "C"],    "consonance_class": "minor_triad" },
+    { "name": "F#_minor",    "positions": [6, 9, 1],   "notes": ["F#", "D#", "G"],   "consonance_class": "minor_triad" },
+    { "name": "C#_minor",    "positions": [7, 10, 2],  "notes": ["C#", "A#", "D"],   "consonance_class": "minor_triad" },
+    { "name": "G#_minor",    "positions": [8, 11, 3],  "notes": ["G#", "F", "A"],    "consonance_class": "minor_triad" },
+    { "name": "D#_minor",    "positions": [9, 0, 4],   "notes": ["D#", "C", "E"],    "consonance_class": "minor_triad" },
+    { "name": "A#_minor",    "positions": [10, 1, 5],  "notes": ["A#", "G", "B"],    "consonance_class": "minor_triad" },
+    { "name": "F_minor",     "positions": [11, 2, 6],  "notes": ["F", "D", "F#"],    "consonance_class": "minor_triad" }
+  ],
+
+  "dissonant_controls": [
+    { "name": "dissonant_0", "positions": [0, 1, 6],   "notes": ["C", "G", "F#"],    "consonance_class": "random_control", "description": "maximally close + one tritone" },
+    { "name": "dissonant_1", "positions": [2, 3, 8],   "notes": ["D", "A", "G#"],    "consonance_class": "random_control", "description": "two adjacent + distant" },
+    { "name": "dissonant_2", "positions": [4, 5, 10],  "notes": ["E", "B", "A#"],    "consonance_class": "random_control", "description": "tight cluster + distant" },
+    { "name": "dissonant_3", "positions": [7, 9, 11],  "notes": ["C#", "D#", "F"],   "consonance_class": "random_control", "description": "spread with no harmonic relation" },
+    { "name": "dissonant_4", "positions": [0, 2, 5],   "notes": ["C", "D", "B"],     "consonance_class": "random_control", "description": "nearby but not fifths-based" }
+  ],
+
+  "experiment_space": {
+    "total_major_triads": 12,
+    "total_minor_triads": 12,
+    "total_dissonant_controls": 5,
+    "total_distinct_chords": 29,
+    "estimated_unique_experiments_per_task_domain": 29,
+    "note": "Each chord can be tested against many task_domains (meta_routing, hal_improvement, consensus, etc.). With 5 domains and 3 reproductions required, total experiment budget is intentionally small (max 5/day)."
+  },
+
+  "rotation_policy": {
+    "per_batch": "3 consonant (major or minor), 1 dissonant, 1 random_control",
+    "max_per_day": 5,
+    "falsifiability_test": "If random_control consistently beats structured chords after 30+ experiments, reject Circle hypothesis and archive framework."
+  }
+}
