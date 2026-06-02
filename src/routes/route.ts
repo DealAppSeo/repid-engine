@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { routeRequest, RouteRequest } from '../providers/router';
+import { logToolCall } from '../utils/tool-call-logger';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
 import { RateLimitError, AuthError } from '../providers/types';
 import { logLlmCall } from '../billing/log-call';
@@ -183,6 +184,16 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       
       const { adapter, decision } = await routeRequest(routeReq, excludeProviders);
       lastDecision = decision;
+      // S-HARDEN Phase 3 — audit the ANFIS routing decision (gated by TOOL_CALL_LOGGING; no-op default; never throws).
+      void logToolCall({
+        agentName: 'anfis-router',
+        toolName: 'provider-selection',
+        toolInput: { tier_preference },
+        toolOutput: { chosen_provider: decision.chosen_provider, chosen_tier: decision.chosen_tier, reason: decision.reason },
+        repidAtCall: 0,
+        confidenceAtCall: 0.9,
+        autonomyTier: 'just_do_it',
+      });
 
       if (!adapter || decision.reason === 'all_exhausted') {
         res.status(503).json({ error: 'All available providers exhausted', router_decision: decision });
