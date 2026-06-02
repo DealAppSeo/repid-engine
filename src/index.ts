@@ -50,6 +50,9 @@ import providersRouter from './routes/providers';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
 import securityStatusRouter from './routes/security-status';
+// S-OPTIMIZE — cost + efficiency dashboards (public read, over the existing llm_call_log ledger).
+import costsRouter from './routes/costs';
+import efficiencyRouter from './routes/efficiency';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -249,6 +252,9 @@ app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
 app.use('/api/v1', halStatsRouter);
+// S-OPTIMIZE — public cost + efficiency dashboards (read-only, over llm_call_log + trinity_tasks).
+app.use('/api/v1', costsRouter);
+app.use('/api/v1', efficiencyRouter);
 app.get('/api/v1/metrics', async (_req, res) => {
   const supabase = db;
   const [agents, decisions, hallucinations] = await Promise.all([
