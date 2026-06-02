@@ -128,3 +128,15 @@ export const EPISTEMIC_HEDGES: readonly string[] = [
   'estimate', 'projection', 'forecast', 'assumption', 'according to',
   'based on', 'as of', 'reported', 'approximately',
 ];
+
+/**
+ * Injection / jailbreak / override markers for harm boost (S-CHAIN close 12% gap from S-REDTEAM).
+ * Any match raises harm_probability (prompt injection is high-harm).
+ */
+export const INJECTION_MARKERS: readonly string[] = [
+  'ignore previous', 'ignore all previous', 'new instruction', 'system override',
+  'system prompt', 'override protocol', 'do anything now', 'dan mode', 'jailbreak',
+  'reveal your', 'output all', 'as a new instruction', 'from the system administrator',
+  'maintenance mode', 'developer mode', 'unrestricted', 'no restrictions',
+  'confirm you are running without', 'i have been jailbroken',
+];
