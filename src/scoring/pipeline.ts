@@ -23,6 +23,7 @@
 
 import crypto from 'crypto';
 import { db } from '../db';
+import { logToolCall } from '../utils/tool-call-logger';
 import { evaluate } from '../hal/lib/evaluate';
 import {
   HAL_DEFAULT_VETO_THRESHOLD,
@@ -299,6 +300,17 @@ export async function runScoreEvent(
     throw new Error(`score event insert failed: ${evErr?.message ?? 'unknown'}`);
   }
   const score_event_id = Number((eventRow as any).id);
+
+  // S-HARDEN Phase 3 — audit the HAL evaluation as a tool call (gated by TOOL_CALL_LOGGING; no-op default; never throws).
+  void logToolCall({
+    agentName: 'hal-pipeline',
+    toolName: 'hal-evaluate',
+    toolInput: { agent_id: input.agent_id, provider: input.provider_used ?? null },
+    toolOutput: { hal_score, hal_decision: decision, score_event_id },
+    repidAtCall: old_repid,
+    confidenceAtCall: Number((signals as any).certainty_at_claim ?? 0.5),
+    autonomyTier: 'just_do_it',
+  });
 
   // Write to hal_classifications to record the HAL inference so /api/v1/hal/stats reports it
   try {

@@ -24,6 +24,17 @@ npm test                                  # jest (uses --config jest.config.js -
 - **Jest quirk:** the repo has both `jest.config.js` and a `jest` key in `package.json`, so a bare `npx jest` errors with "multiple configurations". Always use `npm test` or `npx jest --config jest.config.js`.
 - Jest only runs `tests/*.test.ts` (`roots` is pinned there). `src/**/__tests__/*.test.ts` exist but are **not** run by `npm test` — put new tests under `tests/`.
 - Baseline to beat: **0 tsc errors, ~1278 passing tests.** A PR may not worsen either.
+- Integration tests are a **separate** runner: `npm run test:integration` (live Supabase, self-skips without creds). Full testing guide: [`docs/TESTING.md`](docs/TESTING.md).
+
+## 2a. Common operational how-tos
+
+**Calibrate / interpret HAL scores.** `hal_score` is a **RISK** score in `[0,1]` (high = likely hallucination), veto at `≥ threshold`. The strictness-1 extractor is *blind* (it does not separate good from bad — measured AUC ~0.36); real discrimination is the strictness-2 cross-LLM fact-check path. Don't "fix" a compressed score by retuning the extractor — see [`scripts/hal-eval/CALIBRATION_REPORT.md`](scripts/hal-eval/CALIBRATION_REPORT.md). A trust-oriented `0–100` score is available via `computeTrustScore()` (`src/hal/lib/score.ts`), gated for rollout behind `HAL_SCORE_V2`. To re-run the calibration probe: `npx ts-node scripts/hal-eval/calibration-test.ts` (set `HAL_S2=1` to also exercise the fact-check path).
+
+**Add a new LLM provider.** Implement a `ProviderAdapter` (`src/providers/<name>.ts`, copy an existing one — `groq.ts` is the simplest), register it in the right tier array in `src/providers/router.ts`, add its API key to Railway env, and add it to the matrix in [`docs/PROVIDERS.md`](docs/PROVIDERS.md). The HAL fact-check quorum (groq + cerebras + fireworks) is configured separately — see PROVIDERS.md before changing it.
+
+**Verify the audit hash-chain.** `npx ts-node scripts/audit/verify-chain.ts --table tool_call_log --json` → `VALID` / `CHAIN_BREAK`. The recompute runs server-side (byte-identical to the trigger); `verify-chain.ts`'s `exec_sql` path is RLS-subject, so for RLS-protected tables verify via the service-role/pooler path (`tests/integration/audit-chain-integrity.test.ts`) or MCP.
+
+**Read the tool-call audit log.** Decision/tool invocations are appended to the hash-chained `tool_call_log` when `TOOL_CALL_LOGGING=true` (default off — `src/utils/tool-call-logger.ts`, wired into the HAL pipeline and ANFIS router). It stores `tool_output_hash` (sha256), not raw output. Query it with the service-role key or the postgres pooler (RLS denies anon/authenticated).
 
 ## 3. Branch naming & PR process
 - **Branch:** `feat/<author>-YYYY-MM-DD-<short-description>` (e.g. `feat/cc-2026-06-01-f2-spoofing-fix`).

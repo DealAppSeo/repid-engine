@@ -72,3 +72,22 @@ export function computeHALScore(
     formula: 'hal-canonical-v1',
   };
 }
+
+/**
+ * HAL_SCORE_V2 — a 0–100 TRUST score where HIGH = good answer.
+ *
+ * The canonical `hal_score` (above) is a hallucination-RISK score (HIGH = bad, veto at ≥0.25).
+ * Product surfaces (TrustChat) expect the opposite orientation — "a good answer scores high". This
+ * returns that trust view: when the cross-LLM agreement signal is present (strictness-2 fact-check,
+ * the discriminative path) it dominates (agreement fraction → trust); otherwise it falls back to
+ * `(1 − extractor risk)`. NOTE: the strictness-1 extractor is non-discriminative, so this fallback
+ * is only directionally correct — true good/bad separation requires the strictness-2 fact-check.
+ * Gate activation behind `HAL_SCORE_V2=true`; the risk-based `hal_score` remains the default.
+ */
+export function computeTrustScore(signals: HALSignals): number {
+  // trust = (1 − risk)·100. At strictness 2 the cross-LLM agreement signal already feeds the risk
+  // (computeHALScore above), so this inverts correctly for the discriminative path; at strictness 1
+  // it's only directionally correct (the extractor doesn't separate good from bad).
+  const risk = computeHALScore(signals).hal_score;
+  return Math.round(Math.max(0, Math.min(100, (1 - risk) * 100)));
+}
