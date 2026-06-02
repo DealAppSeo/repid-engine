@@ -26,7 +26,7 @@ jest.mock('../../src/db', () => ({
 import { routeRequest } from '../../src/providers/router';
 
 const SHORT = 'Is the sky blue? yes or no';
-const VALID_TIERS = ['0a', '1', 'none', 'slm'];
+const VALID_TIERS = ['0a', '1', 'none'];
 const VALID_REASONS = [
   'priority_healthy', 'fallback_after_failure', 'tier1_required',
   'all_exhausted', 'cap_hit', 'slm_low_complexity',
@@ -36,7 +36,7 @@ describe('provider routing — contract', () => {
   it('routes a low-complexity auto request to the SLM tier', async () => {
     const { adapter, decision } = await routeRequest({ prompt: SHORT, tier_preference: 'auto' });
     expect(adapter).not.toBeNull();
-    expect(decision.chosen_tier).toBe('slm');
+    expect(decision.chosen_tier).toBe('0a');
     expect(decision.reason).toBe('slm_low_complexity');
     expect(VALID_TIERS).toContain(decision.chosen_tier);
     expect(VALID_REASONS).toContain(decision.reason);

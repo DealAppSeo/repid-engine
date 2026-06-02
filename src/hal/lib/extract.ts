@@ -28,6 +28,7 @@ import {
   DEFAULT_DOMAIN_ONTOLOGIES,
   EPISTEMIC_HEDGES,
   OVERCONFIDENCE_MARKERS,
+  INJECTION_MARKERS,
 } from './constants';
 import type { ExtractInput, HALSignals } from './types';
 
@@ -43,16 +44,21 @@ export function extractHALSignals(input: ExtractInput): HALSignals {
 
   // Signal 1: harm_probability
   // Overconfident specific claims carry higher harm risk.
+  // S-CHAIN: + strong boost for prompt injection / jailbreak / override patterns (closes 12% gap from S-REDTEAM).
   const overconfidenceCount = OVERCONFIDENCE_MARKERS
     .filter(k => text.includes(k)).length;
   const specificNumbers = (
     text.match(/\d+\.?\d*\s*(%|percent|basis|bps|billion|million)/g) || []
   ).length;
+  const injectionCount = INJECTION_MARKERS
+    .filter(k => text.includes(k)).length;
+  const injectionBoost = injectionCount > 0 ? 0.45 + Math.min(0.35, injectionCount * 0.1) : 0;
   const harm_probability = Math.min(
     1,
     (overconfidenceCount * 0.18) +
     (specificNumbers * 0.08) +
-    (certainty > 0.92 && overconfidenceCount > 0 ? 0.2 : 0),
+    (certainty > 0.92 && overconfidenceCount > 0 ? 0.2 : 0) +
+    injectionBoost,
   );
 
   // Signal 2: epistemic_uncertainty
