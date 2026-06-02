@@ -183,6 +183,55 @@ router.post('/comparison/vote', async (req: Request, res: Response) => {
   }
 });
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// GET /session/:sessionId — public single-evaluation read for the share page.
+// Returns the shareable evaluation (prompt, provider, response, HAL verdict + signals,
+// rating, view_count). Public read — a user sharing their own evaluation result.
+router.get('/session/:sessionId', async (req: Request, res: Response) => {
+  const sessionId = String(req.params.sessionId);
+  if (!UUID_RE.test(sessionId)) return res.status(400).json({ error: 'invalid_session_id' });
+  try {
+    const { data, error } = await db
+      .from('trustchat_sessions')
+      .select('session_id, user_message, llm_provider_used, llm_model, llm_response, hal_score, hal_verdict, hal_signals, hal_flagged_hallucination, rating, rating_feedback, view_count, created_at')
+      .eq('session_id', sessionId)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: 'session_fetch_failed', detail: error.message });
+    if (!data) return res.status(404).json({ error: 'session_not_found', session_id: sessionId });
+    const row: any = data;
+    return res.json({
+      ...row,
+      provider_display: meta(row.llm_provider_used ?? '').display_name,
+      company: meta(row.llm_provider_used ?? '').company,
+    });
+  } catch (e: any) {
+    return res.status(500).json({ error: 'session_failed', detail: e?.message ?? String(e) });
+  }
+});
+
+// POST /session/:sessionId/view — increment the share-page view counter. Public, idempotent-ish
+// (best-effort analytics; not rate-limited beyond the global limiter). Returns the new count.
+router.post('/session/:sessionId/view', async (req: Request, res: Response) => {
+  const sessionId = String(req.params.sessionId);
+  if (!UUID_RE.test(sessionId)) return res.status(400).json({ error: 'invalid_session_id' });
+  try {
+    // Atomic increment via RPC-free read-modify-write is racy; use a single SQL UPDATE through
+    // the service client. supabase-js lacks expression updates, so fetch-then-update with the
+    // current value (best-effort; a lost update on a concurrent view is acceptable for a counter).
+    const { data: cur } = await db
+      .from('trustchat_sessions').select('view_count').eq('session_id', sessionId).maybeSingle();
+    if (!cur) return res.status(404).json({ error: 'session_not_found', session_id: sessionId });
+    const next = (Number((cur as any).view_count) || 0) + 1;
+    const { error } = await db
+      .from('trustchat_sessions').update({ view_count: next }).eq('session_id', sessionId);
+    if (error) return res.status(500).json({ error: 'view_increment_failed', detail: error.message });
+    return res.json({ ok: true, view_count: next });
+  } catch (e: any) {
+    return res.status(500).json({ error: 'view_failed', detail: e?.message ?? String(e) });
+  }
+});
+
 // PATCH /session/:sessionId/rate — update an existing session's rating.
 router.patch('/session/:sessionId/rate', async (req: Request, res: Response) => {
   const sessionId = String(req.params.sessionId);

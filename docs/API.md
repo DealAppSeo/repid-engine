@@ -11,6 +11,8 @@ LOWEST avg risk.
 | GET | `/leaderboard/:provider` | none | — | 200 / 404 | per-provider detail + recent 10 + 7-day trend |
 | POST | `/comparison/vote` | none | `{session_id_left, session_id_right, winner: left\|right\|tie, prompt?}` | 201 / 400 | stores into `comparison_votes` |
 | PATCH | `/session/:sessionId/rate` | none | `{rating?: 1-5, rating_feedback?, hal_agreement?}` | 200 / 400 / 404 | updates `trustchat_sessions` rating cols |
+| GET | `/session/:sessionId` | none | — | 200 / 400 / 404 | **share page** — single evaluation (prompt, provider, response, HAL verdict+signals, rating, view_count) + provider display meta |
+| POST | `/session/:sessionId/view` | none | — | 200 / 400 / 404 | **share page** — increment + return `view_count` |
 | GET | `/providers` | none | — | 200 | provider list; `available` = API key configured |
 | POST | `/subscribe` | none (5/min/IP) | `{email, source?, ref_code?}` | 201 / 200 / 400 / 409 | `email_subscribers`; 200 = resubscribe, 409 = active dup |
 | GET | `/unsubscribe` | none | `?token=<uuid>` | 200 / 400 / 404 | CAN-SPAM/GDPR; marks `unsubscribed_at` |
@@ -38,6 +40,17 @@ LOWEST avg risk.
 (live server-side recompute over `hal_classifications` + `tool_call_log`), `authentication`
 (`anon_write_blocked` live; in-flight code fixes reported by merge state, not asserted as deployed),
 `tests` (last local gate, with `as_of`).
+
+## Frontend wiring (S-WIRE)
+
+The TrustChat frontend (`trustchat.dev`) calls **two** backends:
+- **repid-engine** (this service) for all of the above — leaderboard, comparison/vote, session
+  rate/view/share, providers, subscribe, track, security/status. The browser hits these
+  cross-origin, so CORS allows any `trust*.dev` origin (`src/utils/cors-origins.ts`).
+- **trustchat-backend** for `POST /chat` only (LLM call + HAL scoring + writes `trustchat_sessions`).
+
+Frontend env: `NEXT_PUBLIC_REPID_URL` (repid-engine) + `NEXT_PUBLIC_API_URL` (trustchat-backend).
+All repid-engine paths require the `/api/v1` prefix.
 
 ## Implementation notes
 

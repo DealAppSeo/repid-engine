@@ -4,6 +4,7 @@ import { startTrinityTaskBridge } from './services/trinity-task-bridge';
 import { startHitlNotificationDispatcher } from './services/hitl-notification-dispatcher';
 import { startPeerVerificationReader } from './services/peer-verification-reader';
 import cors from 'cors';
+import { isAllowedOrigin } from './utils/cors-origins';
 import helmet from 'helmet';
 import { config } from './config';
 import healthRouter from './routes/health';
@@ -97,23 +98,14 @@ app.use(helmet());
 // CORS — permit trustrepid.dev and localhost for development.
 // Public demo endpoints (token-signup, run-round-anonymous, stake/deposit)
 // need to be reachable from trustrepid.dev's frontend without auth headers.
-const allowedOrigins = [
-  'https://trustrepid.dev',
-  'https://www.trustrepid.dev',
-  // CC1 2026-05-26: trustshell.dev v0.app surface consumes public read endpoints
-  // (/api/v1/status, /api/v1/hal/stats, /api/v1/repid/:id, /api/v1/llm-trust,
-  // /api/v1/receipts/hero, /.well-known/agent.json). Additive — does not loosen
-  // the existing CORS denylist for any other origin.
-  'https://trustshell.dev',
-  'https://www.trustshell.dev',
-  'http://localhost:3000',
-  'http://localhost:3001',
-];
+// S-WIRE 2026-06-02: allow-list + anchored trust*.dev pattern live in src/utils/cors-origins.ts
+// (unit-tested there). The TrustChat frontend (trustchat.dev) + the rest of the Trust* ecosystem
+// call repid-engine's public endpoints directly cross-origin.
 app.use(cors({
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     // Allow no-origin requests (server-to-server, curl, mobile apps).
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (isAllowedOrigin(origin)) return callback(null, true);
     callback(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
