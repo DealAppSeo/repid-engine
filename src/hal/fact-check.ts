@@ -84,12 +84,20 @@ function factCheckPrompt(deliverable: string): string {
   );
 }
 
-/** Extract the first JSON object from possibly-verbose model output. */
+/** Extract a verdict from possibly-verbose model output (reasoning models emit prose THEN JSON). */
 function parseVerdict(text: string): { verdict: Verdict; confidence: number; note?: string } {
-  const m = text.match(/\{[\s\S]*?\}/);
-  if (m) {
+  // Scan ALL brace-groups and prefer the one that actually carries a "verdict" key — a reasoning
+  // model emits chain-of-thought (sometimes with braces) before the final JSON, so the first
+  // match isn't reliably the answer.
+  const candidates = text.match(/\{[\s\S]*?\}/g) ?? [];
+  const ordered = [
+    ...candidates.filter((c) => /verdict/i.test(c)),
+    ...candidates.filter((c) => !/verdict/i.test(c)),
+  ];
+  for (const c of ordered) {
     try {
-      const o = JSON.parse(m[0]);
+      const o = JSON.parse(c);
+      if (o.verdict === undefined && o.confidence === undefined) continue;
       const v = String(o.verdict ?? '').toUpperCase();
       const verdict: Verdict = v === 'TRUE' || v === 'FALSE' || v === 'UNCERTAIN' ? (v as Verdict) : 'UNCERTAIN';
       let confidence = Number(o.confidence);
@@ -97,14 +105,39 @@ function parseVerdict(text: string): { verdict: Verdict; confidence: number; not
       confidence = Math.max(0, Math.min(100, confidence));
       return { verdict, confidence, note: typeof o.note === 'string' ? o.note.slice(0, 80) : undefined };
     } catch {
-      /* fall through to keyword scan */
+      /* try next candidate */
     }
   }
-  // Fallback keyword scan if JSON parse failed.
+  // Fallback keyword scan if no parseable verdict JSON. Prefer an explicit "verdict": value over a
+  // bare TRUE/FALSE token appearing in reasoning prose.
   const up = text.toUpperCase();
-  if (up.includes('"VERDICT":"FALSE"') || /\bFALSE\b/.test(up)) return { verdict: 'FALSE', confidence: 60 };
-  if (up.includes('"VERDICT":"TRUE"') || /\bTRUE\b/.test(up)) return { verdict: 'TRUE', confidence: 60 };
+  const vm = up.match(/"VERDICT"\s*:\s*"(TRUE|FALSE|UNCERTAIN)"/);
+  if (vm) return { verdict: vm[1] as Verdict, confidence: 60 };
   return { verdict: 'UNCERTAIN', confidence: 50 };
+}
+
+/**
+ * POST to an OpenAI-compatible chat endpoint with a single jittered retry on HTTP 429.
+ * Free tiers (esp. groq) rate-limit under burst; one short backoff turns a transient 429 into a
+ * success without blowing the per-provider timeout. Honors a numeric Retry-After when present.
+ */
+async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal: AbortSignal): Promise<Response> {
+  let res = await fetch(cfg.endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+    body, signal,
+  });
+  if (res.status === 429) {
+    const ra = Number(res.headers?.get?.('retry-after'));
+    const waitMs = Math.min(3000, (Number.isFinite(ra) && ra > 0 ? ra * 1000 : 800) + Math.floor(Math.random() * 400));
+    await new Promise((r) => setTimeout(r, waitMs));
+    res = await fetch(cfg.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body, signal,
+    });
+  }
+  return res;
 }
 
 async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number): Promise<ProviderVerdict> {
@@ -114,20 +147,15 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const call_id = crypto.randomUUID();
   try {
-    const res = await fetch(cfg.endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [
-          { role: 'system', content: FACT_CHECK_SYSTEM },
-          { role: 'user', content: factCheckPrompt(deliverable) },
-        ],
-        max_tokens: maxTokens,
-        temperature: 0,
-      }),
-      signal: controller.signal,
-    });
+    const res = await postWith429Retry(cfg, JSON.stringify({
+      model: cfg.model,
+      messages: [
+        { role: 'system', content: FACT_CHECK_SYSTEM },
+        { role: 'user', content: factCheckPrompt(deliverable) },
+      ],
+      max_tokens: maxTokens,
+      temperature: 0,
+    }), controller.signal);
     const latency_ms = Date.now() - start;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -147,7 +175,10 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
     }
     const data: any = await res.json();
-    const content: string = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.message?.reasoning_content ?? '';
+    const msg = data?.choices?.[0]?.message ?? {};
+    // Reasoning models (cerebras zai-glm / gpt-oss) put output in `reasoning` or `reasoning_content`,
+    // not `content` — fall through all three so they parse.
+    const content: string = msg.content || msg.reasoning_content || msg.reasoning || '';
     
     const tokensIn = data.usage?.prompt_tokens || 0;
     const tokensOut = data.usage?.completion_tokens || 0;
@@ -252,7 +283,9 @@ export async function factCheck(
   const start = Date.now();
   const vetoThreshold = opts.vetoThreshold ?? 0.5;
   const flagThreshold = opts.flagThreshold ?? 0.35;
-  const maxTokens = opts.maxTokens ?? 120;
+  // Reasoning models (cerebras zai-glm) spend tokens thinking before emitting the verdict JSON;
+  // 120 truncated them mid-reasoning. 512 lets them finish while staying cheap for the terse models.
+  const maxTokens = opts.maxTokens ?? 512;
 
   const settled = await Promise.allSettled(providers.map((p) => queryProvider(p, deliverable, maxTokens)));
   const verdicts: ProviderVerdict[] = settled.map((s, i) =>
@@ -358,10 +391,14 @@ export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: 
  */
 export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
+  // S-QUORUM (2026-06-02): groq llama-3.3-70b-versatile 429s on the free tier under any burst;
+  // llama-3.1-8b-instant has a far higher free RPM and returns the same clean JSON verdict.
   const g = process.env.GROQ_API_KEY?.trim();
-  if (g) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.3-70b-versatile' });
+  if (g) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.1-8b-instant' });
+  // cerebras `llama3.1-8b` 404s on this key (no access); `zai-glm-4.7` is available and returns a
+  // correct verdict (in the `reasoning` field — handled in queryProvider) given enough max_tokens.
   const c = process.env.CEREBRAS_API_KEY?.trim();
-  if (c) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'llama3.1-8b' });
+  if (c) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
   const f = process.env.FIREWORKS_API_KEY?.trim();
   if (f) out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
   return out;
