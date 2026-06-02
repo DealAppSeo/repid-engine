@@ -10,6 +10,7 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { halService } from '../hal/service';
+import { scanForInjection } from '../hal/injection-guard';
 
 const router = Router();
 
@@ -22,9 +23,20 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'text too long (max 8000 chars)' });
   }
   const s = strictness === 2 || strictness === '2' ? 2 : strictness === 1 || strictness === '1' ? 1 : undefined;
+  // S-FIX Phase 3 — prompt-injection screen (additive; reported always). Hard-block only when
+  // HAL_INJECTION_BLOCK=true (default off → no behavior change), so a high-confidence injection
+  // is refused pre-evaluation with maximum risk.
+  const injection = scanForInjection(text);
+  if (process.env.HAL_INJECTION_BLOCK === 'true' && injection.decision === 'block') {
+    return res.status(400).json({
+      error: 'INJECTION_BLOCKED',
+      message: 'This prompt matches prompt-injection patterns.',
+      hal_score: 1.0, hal_verdict: 'INJECTION_BLOCKED', injection,
+    });
+  }
   try {
     const result = await halService.evaluate({ text, context: context as any, strictness: s });
-    return res.json(result);
+    return res.json({ ...(result as any), injection });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return res.status(500).json({ error: 'hal_evaluation_failed', message: msg });
