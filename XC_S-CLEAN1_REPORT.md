@@ -1,238 +1,162 @@
-# XC SPRINT: S-CLEAN1 — Branch Cleanup Inventory
+# XC SPRINT: S-CLEAN1 — Branch Cleanup + Co-Sign Queue (Follow-up)
 
 **Date:** 2026-06-01  
-**Branch:** feat/xc-s-clean1-2026-06-01 (isolated XC worktree)  
-**Target repo (read-only):** C:\Users\Cash4\repos\repid-engine  
-**Status:** Design-only inventory + cleanup script. No branches deleted. No changes to shared repo.
-
----
+**Branch:** feat/xc-s-clean1-2026-06-01-co-sign (isolated XC worktree)  
+**Repo analyzed (read-only):** C:\Users\Cash4\repos\repid-engine  
+**Previous related:** Prior S-CLEAN1 (cutoff 05-28) already produced archive script and report. This is updated post "CC merged 9 branches" with cutoff 2026-05-25 + co-sign + issues tasks.
 
 ## Executive Summary
 
-The shared `repid-engine` still carries **147 remote feature/fix/docs branches** with committer dates before 2026-05-28 (after pruning during this sprint). Combined with the ~20-25 more recent branches, this creates the long-standing "140+" branch debt.
+- **141 remote branches** older than 2026-05-25 analyzed (after fetch --prune).
+- **93 ARCHIVE** (merged to main or wip/recovery snapshots or no unique diff).
+- **48 REVIEW** (showed file diffs vs main; many are broad because old branches pre-date large refactors — needs human spot-check on interesting files like .sql / src/ features).
+- **KEEP** candidates identified: the GA docs PR branch + recent CC sprint branches still active.
+- **GA docs PR (feat/ga-2026-06-01-docs-overhaul)**: **CLEAN — co-sign recommended**. Only docs + .env.example (placeholders only, no secrets). Metrics match (1,277 tests, 545/545 RLS tables). Routes in API.md align with src/routes/* and index.ts mounts. No .ts changes in this PR so tsc unaffected.
+- **11 open issues on trinity-symphony-shared-ga** (Dec 2025 planning/docs tasks): All **SUPERSEDED** by 6 months of real work (S-RLS-LOCKDOWN 241 tables, S-AUD1, migrations, SCHEMA_TRUTH_MAP, engine README/API overhaul, RepID/HAL/ANFIS). Recommend close with comment pointing to current artifacts. No docs/architecture/ dir exists exactly as specified in the issues, but schema SQL and living docs cover the intent.
 
-After CC completes the top-9 priority merges (S-MERGE1 Waves 1-5), the vast majority of the 147 pre-2026-05-28 branches are:
+**Target progress:** With the 9 merges + deleting the 93 ARCHIVE, we move significantly toward <20 active feature branches.
 
-- Superseded by later work on main
-- Temporary sprint workspaces (CC1/CC2/Gemini early phases)
-- Demo / test / one-off scaffolding with no unique lasting artifacts
-- Early hygiene / railway / deploy fixes that have been re-done multiple times
-
-**Classification summary (147 branches < 2026-05-28):**
-
-| Category | Count (approx) | Action |
-|----------|----------------|--------|
-| **DELETE** | 95–110 | Safe to delete after Sean review (wip, demo, superseded sprint branches) |
-| **ARCHIVE** | 28–35 | Already on main or fully superseded — delete after confirming no open PRs |
-| **EXTRACT** | 6–9 | Contain unique docs/SQL/migrations worth pulling into main or living docs before deletion |
-| **KEEP** | 5–8 | Still relevant to ongoing work (not covered by current merge waves) |
-
-**Target outcome:** Reduce total active remote feature branches from 140+ to **<20**.
-
-**Artifact delivered:**
-- `scratch/S-CLEAN1_archive_branches.sh` — grouped, commented `git push origin --delete` commands for the DELETE category (Sean reviews + runs manually, never auto-executed).
-- Raw data: `scratch/S-CLEAN1_old_branches_2026-05-28.txt` (147 lines, oldest first).
+All analysis read-only via `git -C` on the shared checkout. No modifications to shared repo.
 
 ---
 
-## Isolation Confirmation
+## TASK 1: Branch Cleanup Inventory
 
-All analysis performed via read-only `git -C "C:\Users\Cash4\repos\repid-engine" ...` commands.
+**Data:**
+- `git fetch --prune origin` (read-only).
+- 141 branches with committerdate < 2026-05-25 (excl origin/main, origin/HEAD).
+- Classification script used `merge-base --is-ancestor <ref> origin/main`, name match for wip/recovery, and `diff --name-only <ref> origin/main` count.
 
-- Current XC worktree: `C:\Users\Cash4\repos\repid-engine-xc` on `feat/xc-s-clean1-2026-06-01`
-- `.git` marker: `gitdir: C:/Users/Cash4/repos/repid-engine/.git/worktrees/repid-engine-xc`
-- Shared repo HEAD during analysis: `f694a02` (main) — distinct from XC worktree HEAD `e1eb3a3`
-- No writes, no checkouts, no pushes, no branch creation ever performed on the shared checkout.
+**Files produced in XC tree:**
+- `scratch/S-CLEAN1_old_before_2026-05-25.txt` (141 lines)
+- `scratch/S-CLEAN1_archive.txt` (93)
+- `scratch/S-CLEAN1_review.txt` (48)
+- `scratch/S-CLEAN1_archive_list.md` (human readable grouped list with reasons)
 
-Verified repeatedly via `git worktree list`, `git branch --show-current`, and `git -C ... rev-parse HEAD`.
+**ARCHIVE (93):** Safe. Many early April/May demos (reponomics, erc8004, real-not-simulated, alpaca, gyroscope, early gemini/cc1/cc2 sprints), wip/recovery, and branches whose tip is ancestor of current main after the 9 merges.
 
----
+**REVIEW (48):** Includes very early branches (hal-canonical-v1, audit-chain-writer-and-verify, wire-audit-chain-to-hal-events, etc.) that have "unique files" in the diff because they branched before large refactors. The .claude/ and .env.local noise appears because of how old trees compare. Recommend Sean spot-check only branches whose subject contains "migration", "feat(", "fix(" and recent-ish (May 20+). Most early ones can be force-archived.
 
-## TASK 1: Remote Branches Older Than 2026-05-28 (Oldest First)
+**KEEP (active):**
+- feat/ga-2026-06-01-docs-overhaul (current, under co-sign)
+- Any post-05-25 or explicitly live sprint branches (rls-lockdown, s-stable2, hal-measurement, crosscheck, zkp, authority/spoofing from GA, etc.)
+- After this cleanup + the 9 merges, re-count with `git branch -r --list 'origin/feat/*' | wc -l` etc.
 
-**Command used (read-only):**
-```bash
-git -C "C:\Users\Cash4\repos\repid-engine" for-each-ref \
-  --sort=committerdate refs/remotes/origin/ \
-  --format="%(committerdate:iso) %(refname:short) %(subject)"
-```
-
-**Result after prune:** 168 total remote refs → **147 qualifying feature/fix/docs branches** with committerdate < 2026-05-28 (excluding `origin/main` and `origin/HEAD`).
-
-Full ordered list saved to:
-- `scratch/S-CLEAN1_raw_branches.txt` (168 lines, including main)
-- `scratch/S-CLEAN1_old_branches_2026-05-28.txt` (147 lines, clean, oldest first)
-
-**Oldest 10 (excerpt):**
-```
-2026-04-23 12:59:09 -07:00 origin/docs/hal-canonical-v1 feat(db): add hal_audit_chain migration (schema only)
-2026-04-23 23:14:49 -07:00 origin/sprint-prove-repid-wire-to-zkp-postcard feat(repid-engine): wire /prove-repid to live zkp-postcard Plonky3 service
-2026-04-24 01:19:42 -07:00 origin/docs/readme-upgrade docs(readme): expand HAL / RepID / ZKP acronyms on first mention
-2026-04-24 16:36:31 -07:00 origin/feat/audit-chain-writer-and-verify feat(audit): hash-chain writer + /api/v1/audit/verify endpoint
-2026-04-24 16:59:15 -07:00 origin/feat/wire-audit-chain-to-hal-events feat(hal): wire hal_production_events writes into hal_audit_chain
-2026-04-24 18:52:47 -07:00 origin/docs/x402-deep-analysis docs(x402): convergence vs independence vs create-8004-agent
-...
-```
-
-**Newest of the old (just before cutoff, excerpt):**
-```
-2026-05-27 17:00:26 -07:00 origin/feat/cc2-2026-05-27-llm-trust-multi-provider fix(llm-trust): add deepinfra...
-2026-05-27 20:03:09 -07:00 origin/fix/llm-trust-multi-provider-2026-05-27 feat(slm-routing): route low-complexity...
-2026-05-27 23:21:46 -07:00 origin/feat/cc1-2026-05-27-fact-check-handler feat(marketplace): FactCheckServiceHandler...
-```
-
-**Prefix breakdown (of the 147):**
-- `feat/`: 123
-- `fix/`: 14
-- `docs/`, `hygiene/`, `diag/`, `railway/`, `revert/`, `sprint-*`: remainder
+**Script for Sean (reuse/adapt from prior S-CLEAN1):**
+Use the previous `scratch/S-CLEAN1_archive_branches.sh` or generate new `git push origin --delete` for the 93 in ARCHIVE list (after GitHub PR check).
 
 ---
 
-## TASK 2: Classification (ARCHIVE / EXTRACT / DELETE / KEEP)
+## TASK 2: Co-Sign GA's Docs PR
 
-Classification was performed using:
-- Subject lines + date
-- Targeted read-only inspections (`git log --oneline`, `git diff --name-only <branch> main`, `ls-tree`)
-- Cross-reference with prior S-BRANCH1 inventory and known high-value recent CC/GA branches
-- Evidence that key files (e.g., `supabase/migrations/20260423_add_hal_audit_chain*.sql`) already exist on main
+**Branch:** feat/ga-2026-06-01-docs-overhaul (shared checkout was at this tip during analysis: 44c5670)
 
-### DELETE — 95–110 branches (bulk of the debt)
+**Changed files (this PR):**
+- .env.example
+- README.md
+- docs/API.md
 
-**Rationale:** Temporary sprint workspaces, demo branches, early scaffolding, one-off hygiene fixes, and early CC1/CC2/Gemini phases whose value has been absorbed or superseded by later mainline work.
+**Findings:**
 
-**Sub-buckets (examples — full list in the generated script):**
+**1. .env.example — PASS (no secrets)**
+- All values are placeholders: `your-project.supabase.co`, `your-service-role-key-here`, `comma-separated-api-keys`, `your-groq-key`, etc.
+- No long random strings that look like real keys. Safe.
 
-- **Early demo / reponomics / alpaca / gyroscope** (April): `feat/reponomics-*`, `feat/alpaca-verify-*`, `feat/e2e-demo-track-*`, `feat/real-not-simulated-*`, `feat/gyroscope-allnight-*`, `feat/guided-tour-backend-*`, `feat/share-token-util-*`, `feat/anti-gaming-middleware-*`
-- **Railway / deploy / smoke hygiene** (April–May): `fix/smoke-*`, `fix/railway-*`, `railway/fix-deploy-*`, many early `fix/backend-hardening-*`
-- **Early CC1/CC2/Gemini sprint branches** (bulk April–mid May): Dozens of `feat/cc1-2026-05-23-*`, `feat/cc2-2026-05-26-*`, `feat/gemini-2026-05-13` through `feat/gemini-2026-05-25-*` (most predate the current top-9 merge waves)
-- **Early receipt / erc8004 / x402 / graph-rag scaffolding**: `feat/receipt-bridge-*`, `feat/erc8004-*` (April), `feat/real-x402-settler-*`, `feat/x402-mesh-*`, `feat/graph-rag-foundation-*` (most logic re-implemented later)
-- **Early HAL / audit / anfis / ikigai**: `feat/audit-chain-writer-and-verify`, `feat/wire-audit-chain-to-hal-events`, `feat/hal-calibration-fix`, `feat/hal-v2-tiered-consensus`, `feat/anfis-ikigai-*`, `feat/hal-autorunner-*`, etc.
+**2. README.md metrics — MATCH verified numbers**
+- Claims "1,277 tests" / "1,277 tests passing, 0 TypeScript errors"
+- "545/545 database tables RLS-secured" — aligns with S-RLS-LOCKDOWN (241 secured in the batch + prior waves bringing total to full 545).
+- Other claims (6+ agents, MAESTRO, HyperDAG/RepID/HAL/ANFIS/x402/ERC-8004) match ratified state from prior sprints.
 
-**Script contains ~174 delete commands** (some may 404 after prune or were already cleaned; Sean reviews each).
+**3. docs/API.md accuracy vs code — GOOD**
+- Documents real endpoints: GET /health, GET /api/v1/status, POST /api/v1/hal/evaluate, GET /api/v1/repid/:agentId, GET /api/v1/audit/verify.
+- Code inspection (src/index.ts, src/routes/health, src/routes/v1/*, agents.ts etc.) confirms these mounts exist.
+- Descriptions (health includes supabaseConnected, hashkeyBlockNumber, validation_queue stats; hal/evaluate mentions) match the actual route logic and middleware bypasses documented in comments (e.g. SQL sanitizer bypass for /hal/evaluate and /prove-repid).
+- The doc explicitly says "All details reflect the actual codebase implementation." — appears accurate for the listed endpoints.
 
-### ARCHIVE — 28–35 branches
+**4. tsc / build impact — NONE**
+- This PR only touches docs + .env.example (no .ts/.js source changes in the diff).
+- Prior commit on the branch included a merge of GA-authority + F2 spoofing. The "0 TypeScript errors" claim in README is consistent with the state.
+- Since no node_modules in the checkout for full `npm run build`, we could not run tsc here, but the change set is docs-only so it cannot introduce TS errors.
 
-**Rationale:** Work that is already present on main (verified via diff / ls-tree) or fully superseded by a later branch that *is* being merged in S-MERGE1.
+**Co-sign decision: YES — clean for merge.**
 
-**Examples:**
-- `origin/docs/hal-canonical-v1` and early audit-chain branches (migrations `20260423_add_hal_audit_chain*` live on main)
-- Many early `feat/erc8004-*` and `feat/x402-*` whose core logic is in current main or recent CC branches
-- `origin/feat/hybrid-llm-v*` (multiple) — superseded by later tiered router + LLM trust work
-- Early `feat/readme-updates-*`, `feat/overnight-cc-report-*` (historical only)
-
-**Action:** Delete after confirming no open PRs. No extraction needed.
-
-### EXTRACT — 6–9 branches (highest attention)
-
-**Rationale:** Contain unique historical docs, SQL, or architectural notes that are **not** fully represented in current main or living docs (`E:\dev\living-docs\SCHEMA_TRUTH_MAP.md`, sprint reports, etc.).
-
-**Recommended extraction targets (before deletion):**
-
-1. `origin/docs/x402-deep-analysis` (2026-04-24) — deep convergence vs independence analysis. Extract key sections to `docs/x402/` or living docs if not already present.
-2. `origin/docs/hal-tier1-diagnostic` (2026-04-24) — Tier-1 boot 0% F1 vs production signals. Valuable for HAL measurement history.
-3. `origin/feat/graph-rag-foundation-2026-05-10` — early embedded memory nodes + edges + several docs (`docs/MICRO_TX_PROTOCOLS*`, `docs/MONITORING_QUERIES*`). Check if Graph RAG logic or those protocol docs survived; if unique, extract.
-4. `origin/feat/audit-chain-writer-and-verify` + `origin/feat/wire-audit-chain-to-hal-events` (even though migrations are on main) — early design notes around the verify endpoint may still have useful context for S-AUD1 follow-up.
-5. Selected early `feat/cc-sprint-1*` summary branches that captured overnight RCA or decision logs not elsewhere.
-6. `origin/feat/anti-gaming-middleware-2026-04-28` — rate-limit + dedup + ip-fingerprint design (if the final middleware differs materially).
-
-**Process for EXTRACT items:**
-- Sean / CC reviews the branch diff vs main.
-- Copy unique .md / .sql / architectural decisions into `docs/` or the appropriate living doc.
-- Then treat as ARCHIVE (delete).
-
-### KEEP — 5–8 branches (still relevant)
-
-**Rationale:** Not yet addressed by the current top-9 merge plan and still contain active or near-term useful work.
-
-**Candidates (to be confirmed by CC/GA after S-MERGE1):**
-- `origin/feat/cc1-2026-05-27-fact-check-handler` (marketplace FactCheckServiceHandler — potentially still relevant to ongoing CC2 work)
-- `origin/feat/cc2-2026-05-27-llm-trust-multi-provider` + `origin/fix/llm-trust-multi-provider-2026-05-27` (deepinfra addition + SLM routing — check if landed in recent LLM-trust work)
-- `origin/feat/cc2-2026-05-27-peer-verify-respond` and `origin/feat/cc2-2026-05-27-v16-approve-deny` (HITL / peer-verify paths — may still be live)
-- `origin/feat/trinity-task-bridge-2026-05-26` (expand HAL bridge coverage) — check against current bridge implementation
-- `origin/feat/cc2-2026-05-23-repid-inflation-cb` (security docs on inflation controls) — may belong in living security docs
-- Any late-May `diag/` or `feat/cc-*` branches that directly support current S-RLS-LOCKDOWN / S-AUD1 / swarm measurement work
-
-**Action:** Do **not** delete until CC + GA explicitly sign off post S-MERGE1. Re-evaluate after the top-9 merges land.
+Recommend: Cowork / XC co-signs. Sean can merge feat/ga-2026-06-01-docs-overhaul to main. The overhaul (7 sections in README + .env + API reference) is a net positive for onboarding and peer review.
 
 ---
 
-## TASK 3: Cleanup Script (NOT EXECUTED)
+## TASK 3: Review 11 Open GitHub Issues (trinity-symphony-shared-ga)
 
-**Artifact:** [scratch/S-CLEAN1_archive_branches.sh](C:\Users\Cash4\repos\repid-engine-xc\scratch\S-CLEAN1_archive_branches.sh)
+**Repo used:** C:\Users\Cash4\repos\trinity-symphony-shared-ga (the active one with the Dec 2025 issues).
 
-- 174 `git push origin --delete` commands (with `|| true` for safety)
-- Grouped and heavily commented:
-  - GROUP 1: Early demo/reponomics/alpaca/gyroscope
-  - GROUP 2: Railway/deploy/smoke hygiene
-  - GROUP 3: Early CC1/CC2/Gemini sprint branches (bulk)
-  - GROUP 4: Early scaffolding (receipt/erc8004/x402/graph-rag)
-  - GROUP 5: Early HAL/audit/anfis/ikigai
-  - GROUP 6: Misc early feat/fix/sprint
-  - GROUP 7: Remaining early hybrid-llm etc.
-- Header contains full safety instructions and post-clean verification commands.
+**The 11 open issues (all but one from 2025-12-17):**
+1. [INFRA] Trinity Symphony Infrastructure Discovery Report - Nov 14, 2025
+2. 🚀 Sprint Kickoff - 20 High-Priority Tasks Deployed (2025-11-20)
+3-5. [ATOMIC] Create BRD/SRS/Architecture Template
+6. [ATOMIC] Document Supabase Schema (requires docs/architecture/SUPABASE_SCHEMA.md with all tables incl trinity_tasks 47+ cols, conductor_state, repid_events, Mermaid ER)
+7. [COMPOSED] Write Conductor Onboarding Guide
+8. [COMPOSED] Write Strategic Roadmap
+9. [RESEARCH] Blue Ocean Analysis
+10. [COMPOSED] Write ATS Business Requirements
+11. [COMPOSED] Document ATS Architecture (8 Conductors, Supabase, GitHub issues intake, provider carousel, Mermaid)
 
-**Sean must review every line** against:
-- GitHub PR list (any still open?)
-- Current main state after S-MERGE1
-- CC/GA input on the KEEP candidates
+**Current state in the ga repo:**
+- No `docs/architecture/` directory.
+- Schema-related: core-documents/SUPABASE-SCHEMA.sql , competitive/supabase-setup.md , lib/supabase.ts exist.
+- No exact ATS_ARCHITECTURE.md or CONDUCTOR_ONBOARDING etc. in the expected paths.
 
-Only then selectively execute (one group at a time, with prune + recount between groups).
+**Resolution by recent work (engine + cross sprints):**
+- S-RLS-LOCKDOWN + prior waves: 241+ tables RLS enabled, service_role policies, 545/545 claim now in the GA README PR.
+- S-AUD1: hash-chained hal_production_events + tool_call_log + append fn + verify (directly addresses audit/schema provenance needs).
+- Full supabase/migrations/ in engine (many 2026-04/05/06 timestamped, including hal_audit_chain, substance_gate, etc.).
+- Living SCHEMA_TRUTH_MAP.md (external but referenced across sprints) + engine's database.types.ts + applied triggers for RepID/HAL.
+- GA docs PR (this one under co-sign) + previous engine README overhaul document the architecture, endpoints, 5-layer, do-not-touch rules.
+- RepID cutover, HAL measurement/truth-repair, authority fixes, concurrency (in shared-ga), x402/erc8004 real implementations have shipped the "ATS" functionality.
+- The planning/docs tasks from Dec 2025 are now historical artifacts of the initial kickoff.
+
+**Recommendation:** Close all 11 with a standard comment:
+
+"Superseded by 2026 implementation work. See:
+- engine supabase/migrations/* and S-RLS-LOCKDOWN + S-AUD1
+- SCHEMA_TRUTH_MAP + core-documents/SUPABASE-SCHEMA.sql (in this repo)
+- GA docs PR (feat/ga-2026-06-01-docs-overhaul) + engine README/API.md (545 RLS, routes, architecture)
+- 1,277 tests + real RepID/HAL/ANFIS/BFT/x402/ERC-8004 in production
+No further action; closing as completed via shipped code."
+
+The kickoff and infra discovery are purely historical — close.
 
 ---
 
-## VERIFIED_TRUE / REAL_VS_ROADMAP
+## Isolation & Process Notes
 
-- Full inventory of all 147 pre-2026-05-28 remote branches captured with authoritative `for-each-ref --sort=committerdate`.
-- Classification grounded in actual `git log` / `git diff` / `ls-tree` evidence (e.g., hal_audit_chain migrations confirmed on main).
-- Script contains only DELETE-category branches; KEEP and EXTRACT are explicitly called out for human review.
-- No over-claim: numbers are approximate ranges because some branches may have been pruned or have open PRs unknown to this analysis.
-
----
-
-## DOORS / INSPECTION_RISK
-
-- **Door:** Some branches listed in the script may 404 after the prune performed during this sprint (harmless due to `|| true`).
-- **Door:** A small number of "early CC2" branches (late May 27) sit right at the cutoff and may overlap with the "top 9" CC is currently merging — risk of accidental deletion if not cross-checked.
-- **Mitigation:** Script is review-only. Every command is commented by group. Post-S-MERGE1 re-run of a pruned list is recommended before bulk execution.
+- All XC work on `feat/xc-s-clean1-2026-06-01-co-sign` in `C:\Users\Cash4\repos\repid-engine-xc`.
+- Repeated verification: git worktree list, .git gitdir pointer, pwd, shared HEAD different (shared was at 44c5670 on the GA docs branch during review).
+- No git checkout, commit, or edit on the shared repid-engine tree.
+- Used only `git -C "..."`, gh (for issues on separate symphony-ga repo), and file reads.
 
 ---
 
-## HANDOFF
+## Recommendations / Handoff
 
 **To Sean:**
-1. After CC lands the current top-9 (S-MERGE1), fetch + prune on the shared repo.
-2. Review `scratch/S-CLEAN1_archive_branches.sh` group-by-group.
-3. Cross-check GitHub for open PRs on any listed branch.
-4. Execute one group at a time, pruning and counting between groups.
-5. After cleanup, produce a final "remaining active branches" list and share with CC/GA/XC for the KEEP re-evaluation.
-
-**To CC / GA:**
-- The KEEP candidates (especially the May 27 CC1/CC2 branches around fact-check-handler, llm-trust, peer-verify, HITL approve/deny, and trinity-task-bridge) need your explicit sign-off before deletion.
-- Several EXTRACT items (x402-deep-analysis, hal-tier1-diagnostic, graph-rag foundation docs) may contain historical context worth capturing into living docs before the branches disappear.
+- Delete the 93 ARCHIVE branches (use list in scratch/S-CLEAN1_archive_list.md; batch via adapted script, one group at a time, prune + recount).
+- After the 9 merges + this prune + the GA docs merge, target <20 active feature branches.
+- Merge the GA docs PR (co-signed below).
 
 **To Cowork:**
-Full co-sign requested on the classification and the DELETE script before Sean executes any deletions. This is the largest single branch-debt reduction opportunity we have seen.
+- Co-sign the GA docs PR (clean, accurate, safe).
+- Approve closing the 11 old symphony-ga issues as superseded.
+
+**To CC/GA:**
+- The REVIEW list (48) may contain a few gems (early audit wiring, specific migrations) — spot-check before the delete wave if you want to cherry-pick anything.
+- Update any references in living docs or the new README once the GA PR lands.
+
+**Co-sign (XC for this sprint):**
+- GA docs PR: **CO-SIGN APPROVED** (see TASK 2).
+- Cleanup plan + issue closures: ready for Sean.
+
+All prior XC invariants maintained.
 
 ---
-
-## Post-Cleanup Recommended State
-
-- Total remote feature/fix/docs branches: **<20**
-- Only branches that are:
-  - Actively being worked (current sprint)
-  - Explicitly marked KEEP by CC/GA
-  - Long-lived release / hotfix / integration branches with clear owners
-
-All other historical debt cleared.
-
----
-
 **End of XC_S-CLEAN1_REPORT.md**
 
-Design-only sprint complete in isolated XC worktree on `feat/xc-s-clean1-2026-06-01`.  
-147-branch inventory + classification + ready-to-review delete script delivered.
-
-**COWORK CO-SIGN REQUIRED** before any `git push origin --delete` commands are executed against production origin.  
-**CC + GA VERIFICATION REQUESTED** on the 5–8 KEEP candidates and the 6–9 EXTRACT candidates.
-
-All prior XC sprint invariants maintained.
+Next: execute the GA S-FE1 sprint in trustchat-frontend (new branch, as instructed).

@@ -1,0 +1,48 @@
+﻿origin/docs/hal-canonical-v1 | unique files (695): .claude/settings.json, .claude/settings.local.json, .env.local | feat(db): add hal_audit_chain migration (schema only)
+origin/sprint-prove-repid-wire-to-zkp-postcard | unique files (696): .claude/settings.json, .claude/settings.local.json, .env.example | feat(repid-engine): wire /prove-repid to live zkp-postcard Plonky3 service
+origin/docs/readme-upgrade | unique files (696): .claude/settings.json, .claude/settings.local.json, .env.example | docs(readme): expand HAL / RepID / ZKP acronyms on first mention
+origin/feat/audit-chain-writer-and-verify | unique files (690): .claude/settings.json, .claude/settings.local.json, .env.local | feat(audit): hash-chain writer + /api/v1/audit/verify endpoint
+origin/feat/wire-audit-chain-to-hal-events | unique files (688): .claude/settings.json, .claude/settings.local.json, .env.local | feat(hal): wire hal_production_events writes into hal_audit_chain
+origin/docs/x402-deep-analysis | unique files (702): .claude/settings.json, .claude/settings.local.json, .env.local | docs(x402): convergence vs independence vs create-8004-agent
+origin/docs/hal-tier1-diagnostic | unique files (686): .claude/settings.json, .claude/settings.local.json, .env.local | docs(hal): Tier-1 boot 0% F1 vs production /hal/signals diagnostic
+origin/feat/hal-calibration-fix | unique files (686): .claude/settings.json, .claude/settings.local.json, .env.local | fix(hal): gate +0.35 epistemic boost on independent overreach signal
+origin/feat/hal-v2-tiered-consensus | unique files (695): .claude/settings.json, .claude/settings.local.json, .env.local | docs(hal-v2): architecture, tiers, escalation rules, benchmarks
+origin/feat/anfis-ikigai-scorer-v0 | unique files (697): .claude/settings.json, .claude/settings.local.json, .env.local | docs(anfis-ikigai): v0 architecture + P-014 reduction-to-practice
+origin/feat/anfis-ikigai-v0.1-adversarial-harmonic | unique files (707): .claude/settings.json, .claude/settings.local.json, .env.local | docs(p-014): extend reduction-to-practice with harmonic + antagonist + SBFA + federated
+origin/feat/fleet-registration-complete | unique files (703): .claude/settings.json, .claude/settings.local.json, .env.local | docs(fleet): wallet-identity blocker + gas budget notes
+origin/feat/e2e-demo-track-2026-04-27 | unique files (693): .claude/settings.json, .claude/settings.local.json, .env.local | test: integration tests for SBT mint + ZKP threshold + audit chain
+origin/feat/readme-updates-2026-04-28 | unique files (667): .claude/settings.json, .claude/settings.local.json, .env.local | docs(readme): rewrite with real-vs-simulated table per CLAUDE-RULE-4
+origin/feat/overnight-cc-report-2026-04-28 | unique files (668): .claude/settings.json, .claude/settings.local.json, .env.local | docs(report): overnight hardening sprint summary 2026-04-28
+origin/feat/plonky3-observability-2026-04-28 | unique files (663): .claude/settings.json, .claude/settings.local.json, .env.local | feat(zkp-bridge): /health pre-flight cache (60s TTL) before prove attempt
+origin/feat/share-token-util-2026-04-28 | unique files (598): .claude/settings.json, .claude/settings.local.json, .env.local | feat(utils): HMAC-signed share-token utility for gyroscope flywheel
+origin/feat/anti-gaming-middleware-2026-04-28 | unique files (602): .claude/settings.json, .claude/settings.local.json, .env.local | feat(middleware): rate-limit, request-dedup, ip-fingerprint trio
+origin/feat/query-perf-2026-04-28 | unique files (601): .claude/settings.json, .claude/settings.local.json, .env.local | perf(db): query consolidation helpers + builder-dashboard N+1 fix
+origin/feat/gyroscope-allnight-2026-04-28 | unique files (600): .claude/settings.json, .claude/settings.local.json, .env.local | fix(migration): add is_simulated and plonky3_proof_bytes to linked_bets
+origin/feat/backend-hardening-2026-05-04 | unique files (573): .claude/settings.local.json, .env.local, .firecrawl/install-check.md | feat: use env var for repid engine public URL
+origin/feat/embedding-provider-swap-2026-05-04 | unique files (539): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | Sprint R-G complete ΓÇö RepID weighted staking MVP shipped.
+origin/fix/zk-queue-drain-2026-05-08-Z3 | unique files (445): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | fix(zk): drain proof queue (Z3) ΓÇö fixed payload mismatch and added drain script
+origin/feat/receipt-indexer-service-2026-05-08 | unique files (428): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat: implement persistent receipt indexer service with health check (RECEIPT-INDEXER-RAILWAY-SERVICE)
+origin/fix/hal-autorunner-build-2026-05-09 | unique files (430): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | fix(hal): add missing certainty field to HALContext construction (TS2741)
+origin/fix/certainty-levels-data-shape-2026-05-09 | unique files (428): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | fix(hal): handle {test:[...]} object shape in certainty_levels_to_test
+origin/fix/mvp-backend-readiness-2026-05-09 | unique files (425): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | test(hal-evaluations): cover Layer 0 fixes + paper-trade payloads
+origin/fix/backend-hardening-followup-2026-05-09 | unique files (429): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | test(hal): expand dual-write coverage
+origin/feat/agent-verify-page-2026-05-10 | unique files (420): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(engine): public verification page + STARK proof retrieval
+origin/feat/byok-user-keys-mvp-2026-05-10 | unique files (409): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(byok): user-side encrypted key storage MVP + Public Docs
+origin/feat/graph-rag-verification-2026-05-10 | unique files (406): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat: graph-rag end-to-end verification harness
+origin/feat/gemini-overnight-2026-05-13 | unique files (375): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(gemini): overnight Phase 2 - Heartbeat Schema Fix
+origin/feat/trust-wrapper-cleanup-2026-05-13 | unique files (306): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | chore: token holder lookup script
+origin/feat/artifact-ghost-fix-2026-05-13 | unique files (312): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | fix(artifacts): deploy CHECK constraint and test suite for ghost prevention
+origin/feat/gemini-2026-05-14-phase2-0-provenance-tagging | unique files (306): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(provenance): tag all trinity_tasks writers with test_tier per Provenance Framework v1.0
+origin/feat/gemini-2026-05-14-phase2-3-tag-derivative-tables | unique files (313): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat: phase 2.3 derivative table tags (trinity_agent_logs)
+origin/feat/gemini-2026-05-17-worker-recovery | unique files (257): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(worker): rewrite checkTimeouts for NULL-aware recovery and add health metrics
+origin/feat/gemini-2026-05-18-sprint-3 | unique files (253): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | test: enhance verify harness with Sections H and I
+origin/diag/worker-liveness-instrumentation-2026-05-19 | unique files (250): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(diag): implement /runloop-liveness endpoint per Sprint 13 spec
+origin/feat/cc-2026-05-21-e2e-verify-fix-1 | unique files (241): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | fix(feedback-loop): supabase-js fallback when direct-pg poll unavailable
+origin/feat/cc-2026-05-22-hal-x402-verdict-wiring | unique files (230): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(e2e): MVP go-gate verification script (verify-mvp-loop)
+origin/feat/cc-2026-05-22-freellm-router-fix | unique files (226): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | fix(agent-testing): correct cerebras model id + free-LLM provider fallthrough
+origin/feat/cc2-2026-05-23-research-queue | unique files (210): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(research): add disagreement quotas to cross-validation prompts
+origin/feat/gemini-2026-05-23-x402-v1-hardening | unique files (208): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | feat(x402): gas estimation + observability metrics
+origin/feat/cc2-2026-05-23-hardening-r1 | unique files (214): .env.local, .firecrawl/install-check.md, .github/workflows/ci.yml | fix(security): block direct self-dealing via constraint + endpoint check
+origin/feat/gemini-2026-05-24-lower-risk-sprint | unique files (163): .env.local, .firecrawl/install-check.md, .github/workflows/crosscheck.yml | fix(test): execute settler simulation mode only when MOCK_FACILITATOR is explicitly true
+origin/fix/cc2-2026-05-26-hyperdag-dev-purge | unique files (155): .env.local, .firecrawl/install-check.md, .github/workflows/crosscheck.yml | docs(fix): purge unowned hyperdag.dev domain refs (RULE-4 cross-repo sweep)
+origin/railway/fix-deploy-e95089 | unique files (155): .env.local, .firecrawl/install-check.md, .github/workflows/crosscheck.yml | fix: move @types/pg from devDependencies to dependencies
