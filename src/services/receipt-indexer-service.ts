@@ -160,7 +160,7 @@ export function createIndexerService(config: IndexerServiceConfig): IndexerServi
     mainTickInFlight = true;
     const prevLastBlock = state.lastBlock;
     try {
-      const tip = await withRetry('eth_blockNumber', () => provider.getBlockNumber());
+      const tip: number = await withRetry<number>('eth_blockNumber', () => provider.getBlockNumber());
       const safeTip = Math.max(0, tip - tipLagBlocks);
       const fromBlock = await determineFromBlock();
 

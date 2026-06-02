@@ -251,7 +251,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             request_text: prompt.substring(0, 500),
             selected_model: `${adapter.name}/${result.model || 'default'}`,
-            confidence_score: decision.chosen_tier === 'slm' ? 0.9 : 0.7,
+            confidence_score: decision.chosen_tier === '0a' ? 0.9 : 0.7,
             cost_saved: 0,
             latency_ms: result.latencyMs,
             success: true
@@ -323,7 +323,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             request_text: prompt.substring(0, 500),
             selected_model: `${adapter.name}/unknown`,
-            confidence_score: decision?.chosen_tier === 'slm' ? 0.9 : 0.7,
+            confidence_score: decision?.chosen_tier === '0a' ? 0.9 : 0.7,
             cost_saved: 0,
             latency_ms: latencyMs,
             success: false

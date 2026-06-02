@@ -34,7 +34,7 @@ export const SLM_BACKUP: SlmModel = { provider: 'cerebras', model: 'llama3.1-8b'
 export const SLM_BASELINE_LLM: SlmModel = { provider: 'groq', model: 'llama-3.1-70b-versatile' };
 
 export interface SlmDecision {
-  tier: 'slm';
+  tier: '0a';
   provider: string;
   model: string;
   fallback: SlmModel; // the other SLM, for the caller's chain
@@ -62,7 +62,7 @@ export function selectSlmRoute(
     const m = candidates[i]!;
     if (available(m)) {
       return {
-        tier: 'slm',
+        tier: '0a',
         provider: m.provider,
         model: m.model,
         fallback: candidates[(i + 1) % candidates.length]!,

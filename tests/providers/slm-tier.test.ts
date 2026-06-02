@@ -10,7 +10,7 @@ describe('SLM tier routing decision', () => {
   it('classification + low confidence → SLM primary (Phase 2.3 case 1)', () => {
     const d = selectSlmRoute('classification', 0.3, allAvailable);
     expect(d).not.toBeNull();
-    expect(d!.tier).toBe('slm');
+    expect(d!.tier).toBe('0a');
     expect(d!.provider).toBe(SLM_PRIMARY.provider);
     expect(d!.model).toBe(SLM_PRIMARY.model);
   });
@@ -19,7 +19,7 @@ describe('SLM tier routing decision', () => {
     'eligible task %s with confidence_required just under threshold → SLM',
     (task) => {
       const d = selectSlmRoute(task, SLM_CONFIDENCE_THRESHOLD - 0.01, allAvailable);
-      expect(d?.tier).toBe('slm');
+      expect(d?.tier).toBe('0a');
     },
   );
 

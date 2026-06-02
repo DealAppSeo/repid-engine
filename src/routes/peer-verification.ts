@@ -120,6 +120,12 @@ router.post('/respond', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'signature must be lowercase hex' });
   }
 
+  // S-CHAIN Phase 7 anti-self + anti-collusion (from S-REDTEAM)
+  if (verifier_agent_id === queueEntry.agent_id) {
+    return res.status(403).json({ error: 'self-endorsement blocked (anti-collusion)' });
+  }
+  // TODO full ring detection: query recent peer_verification_queue for mutual verifier<->agent pairs; if pattern, penalize RepID.
+
   try {
     // ----- Resolve verifier agent (name → uuid OR uuid → name) ---------------
     const lookupClause = UUID_RE.test(verifier_agent_id)
