@@ -90,7 +90,7 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
       return {
         recommended_provider: slm.provider,
         recommended_model: slm.model,
-        chosen_tier: 'slm',
+        chosen_tier: '0a',
         confidence: payload.task_characteristics?.confidence_required ?? 0.5,
         fallback_chain: [`${slm.fallback.provider}/${slm.fallback.model}`, 'groq', 'anthropic'],
         reasoning: slm.reason,
@@ -235,7 +235,7 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
         agent_id: (contract as any).buyer_agent_id ?? null,
         tool_name: 'slm_route',
         mcp_call_params: { task_type: tc?.task_type, confidence_required: tc?.confidence_required, recommended: `${slm.provider}/${slm.model}` },
-        outcome: { tier: 'slm', provider: slm.provider, model: slm.model, savings, contract_id: contract.id },
+        outcome: { tier: '0a', provider: slm.provider, model: slm.model, savings, contract_id: contract.id },
         latency_ms: 0,
       });
     } catch (e: any) {
