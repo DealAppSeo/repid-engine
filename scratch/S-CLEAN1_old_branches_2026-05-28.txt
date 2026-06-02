@@ -1,0 +1,147 @@
+﻿2026-04-23 12:59:09 -07:00 origin/docs/hal-canonical-v1 feat(db): add hal_audit_chain migration (schema only)
+2026-04-23 23:14:49 -07:00 origin/sprint-prove-repid-wire-to-zkp-postcard feat(repid-engine): wire /prove-repid to live zkp-postcard Plonky3 service
+2026-04-24 01:19:42 -07:00 origin/docs/readme-upgrade docs(readme): expand HAL / RepID / ZKP acronyms on first mention
+2026-04-24 16:36:31 -07:00 origin/feat/audit-chain-writer-and-verify feat(audit): hash-chain writer + /api/v1/audit/verify endpoint
+2026-04-24 16:59:15 -07:00 origin/feat/wire-audit-chain-to-hal-events feat(hal): wire hal_production_events writes into hal_audit_chain
+2026-04-24 18:52:47 -07:00 origin/docs/x402-deep-analysis docs(x402): convergence vs independence vs create-8004-agent
+2026-04-24 20:14:45 -07:00 origin/docs/hal-tier1-diagnostic docs(hal): Tier-1 boot 0% F1 vs production /hal/signals diagnostic
+2026-04-24 21:13:07 -07:00 origin/feat/hal-calibration-fix fix(hal): gate +0.35 epistemic boost on independent overreach signal
+2026-04-25 10:14:45 -07:00 origin/feat/hal-v2-tiered-consensus docs(hal-v2): architecture, tiers, escalation rules, benchmarks
+2026-04-26 09:37:46 -07:00 origin/feat/anfis-ikigai-scorer-v0 docs(anfis-ikigai): v0 architecture + P-014 reduction-to-practice
+2026-04-26 11:22:57 -07:00 origin/feat/anfis-ikigai-v0.1-adversarial-harmonic docs(p-014): extend reduction-to-practice with harmonic + antagonist + SBFA + federated
+2026-04-26 15:50:39 -07:00 origin/feat/fleet-registration-complete docs(fleet): wallet-identity blocker + gas budget notes
+2026-04-26 19:34:14 -07:00 origin/feat/e2e-demo-track-2026-04-27 test: integration tests for SBT mint + ZKP threshold + audit chain
+2026-04-27 10:26:36 -07:00 origin/feat/reponomics-demo-2026-04-27 docs: REPONOMICS-API.md ΓÇö endpoint reference + Sean-signature recipe
+2026-04-27 18:11:38 -07:00 origin/feat/reponomics-live-demo-2026-04-27 test(reponomics): anonymous signup + round runner (13 new tests)
+2026-04-27 21:43:35 -07:00 origin/feat/reponomics-full-account-2026-04-27 fix(health): allow /api/v1/health in auth middleware
+2026-04-27 23:42:17 -07:00 origin/feat/real-not-simulated-2026-04-27 feat(oracle): real Base Sepolia block-hash oracle with HMAC fallback
+2026-04-28 00:24:31 -07:00 origin/feat/erc8004-canonical-2026-04-27 chore(erc8004): canonical registration output log
+2026-04-28 02:19:45 -07:00 origin/feat/wire-canonical-writer-2026-04-28 feat: phase 1 - wire canonical writer into anonymous round runner
+2026-04-28 08:56:21 -07:00 origin/feat/erc8004-validation-2026-04-28 feat: phase A - validation registry writer
+2026-04-28 08:57:43 -07:00 origin/feat/real-x402-settler-2026-04-28 feat: phase B - real x402 USDC settler
+2026-04-28 09:41:03 -07:00 origin/feat/hardening-2026-04-28-jwt fix(test): gate src/index.ts side-effects on NODE_ENV !== 'test'
+2026-04-28 09:53:53 -07:00 origin/feat/e2e-tests-2026-04-28 test(e2e): live Railway flow walker (token-signup ΓåÆ stake ΓåÆ round ΓåÆ snapshot)
+2026-04-28 10:02:08 -07:00 origin/feat/canonical-register-all-2026-04-28 feat: phase C - register 10 trinity agents canonically
+2026-04-28 10:06:56 -07:00 origin/feat/alpaca-verify-2026-04-28 verify(alpaca): paper-trading flow verifier ΓÇö creds + order + poll + cancel
+2026-04-28 10:13:27 -07:00 origin/feat/readme-updates-2026-04-28 docs(readme): rewrite with real-vs-simulated table per CLAUDE-RULE-4
+2026-04-28 10:24:34 -07:00 origin/feat/overnight-cc-report-2026-04-28 docs(report): overnight hardening sprint summary 2026-04-28
+2026-04-28 12:17:36 -07:00 origin/feat/plonky3-observability-2026-04-28 feat(zkp-bridge): /health pre-flight cache (60s TTL) before prove attempt
+2026-04-28 18:52:09 -07:00 origin/feat/guided-tour-backend-2026-04-28 feat(demo): backend hooks for guided-tour pedagogy
+2026-04-28 22:24:05 -07:00 origin/feat/share-token-util-2026-04-28 feat(utils): HMAC-signed share-token utility for gyroscope flywheel
+2026-04-28 22:29:16 -07:00 origin/feat/anti-gaming-middleware-2026-04-28 feat(middleware): rate-limit, request-dedup, ip-fingerprint trio
+2026-04-28 22:35:06 -07:00 origin/feat/query-perf-2026-04-28 perf(db): query consolidation helpers + builder-dashboard N+1 fix
+2026-04-29 01:14:09 -07:00 origin/feat/gyroscope-allnight-2026-04-28 fix(migration): add is_simulated and plonky3_proof_bytes to linked_bets
+2026-05-02 01:10:52 -07:00 origin/feat/audit-chain-merkle-2026-04-28 fix(hal): wire 5-signal combiner into score-event handler
+2026-05-02 15:13:14 -07:00 origin/feat/cross-llm-verification-layer-2026-05-03 feat(hal): Phase 1.5 ext ΓÇö Pythagorean Comma BFT veto + 3-provider cross-LLM
+2026-05-03 00:51:31 -07:00 origin/feat/receipt-bridge-integration-2026-05-03 feat: erc8004 poster, receipt indexer, and trinity validators schema
+2026-05-03 20:32:49 -07:00 origin/feat/backend-hardening-2026-05-04 feat: use env var for repid engine public URL
+2026-05-04 14:33:47 -07:00 origin/feat/receipt-bridge-v1-2026-05-03 [CC1 sprint 2026-05-04] Phase 4+5 ΓÇö smoke script and live verification
+2026-05-04 21:46:53 -07:00 origin/feat/hal-extraction-library-2026-05-04 [CC1 sprint 2026-05-04] P5-A ΓÇö widen Layer 1 gate to include 'math' + smoke test wiring
+2026-05-05 13:47:00 -07:00 origin/feat/embedding-provider-swap-2026-05-04 Sprint R-G complete ΓÇö RepID weighted staking MVP shipped.
+2026-05-05 18:48:59 -07:00 origin/feat/repid-staking-mvp-2026-05-05 feat: staking mvp backend route
+2026-05-06 18:00:34 -07:00 origin/feat/tiered-router-direct-only-2026-05-07 feat: Tiered Router with Direct Adapters only
+2026-05-06 21:15:27 -07:00 origin/feat/agent-registration-2026-05-07-A5 feat(A5): external agent registration ΓÇö Maya-shape additive contract
+2026-05-07 00:30:06 -07:00 origin/fix/hal-decision-enum-2026-05-08 fix(scoring): add hal_decision enum derivation to scoring pipeline
+2026-05-07 12:49:40 -07:00 origin/fix/zk-queue-drain-2026-05-08-Z3 fix(zk): drain proof queue (Z3) ΓÇö fixed payload mismatch and added drain script
+2026-05-07 16:48:46 -07:00 origin/fix/smoke-failures-2026-05-08 test: update smoke script to handle manual redirects and 301s
+2026-05-07 17:29:29 -07:00 origin/fix/hygiene-1-2026-05-08 fix: hygiene-1 ΓÇö silence JSON parse traces, gate HAL benchmark, and add tests
+2026-05-08 12:11:55 -07:00 origin/fix/smoke-router-order-2026-05-08 fix: mount discovery/hal-stats/bounties/prove-repid routes before auth middleware (SMOKE-FIXES-ROUTER-ORDER)
+2026-05-08 12:26:16 -07:00 origin/feat/receipt-indexer-service-2026-05-08 feat: implement persistent receipt indexer service with health check (RECEIPT-INDEXER-RAILWAY-SERVICE)
+2026-05-08 23:26:13 -07:00 origin/feat/hal-autorunner-2026-05-08 feat(hal): persistent HAL autorunner with F1/precision/recall metrics (HAL-AUTORUNNER)
+2026-05-09 12:25:10 -07:00 origin/fix/hal-autorunner-build-2026-05-09 fix(hal): add missing certainty field to HALContext construction (TS2741)
+2026-05-09 13:46:21 -07:00 origin/revert/hal-autorunner-2026-05-09 revert: HAL autorunner pending unified-evaluation architecture
+2026-05-09 17:45:22 -07:00 origin/fix/certainty-levels-data-shape-2026-05-09 fix(hal): handle {test:[...]} object shape in certainty_levels_to_test
+2026-05-09 19:36:34 -07:00 origin/feat/hal-evaluations-unified-table-2026-05-09 feat(hal): unified evaluations table + dual-write hook
+2026-05-09 21:28:45 -07:00 origin/fix/mvp-backend-readiness-2026-05-09 test(hal-evaluations): cover Layer 0 fixes + paper-trade payloads
+2026-05-09 22:18:38 -07:00 origin/fix/backend-hardening-followup-2026-05-09 test(hal): expand dual-write coverage
+2026-05-10 09:45:06 -07:00 origin/feat/indexer-worker-hardening-2026-05-10 feat(indexer,worker): retry + stall detection hardening
+2026-05-10 14:26:58 -07:00 origin/fix/move-service-entrypoints-2026-05-10 fix(deploy): move service entry points to src/scripts/ + add npm scripts
+2026-05-10 15:37:53 -07:00 origin/fix/railway-toml-startcommand-2026-05-10 fix(deploy): remove global startCommand override in railway.toml
+2026-05-10 16:02:54 -07:00 origin/feat/erc8004-spec-compliance-2026-05-10 fix(worker): improve healthcheck robustness
+2026-05-10 16:02:54 -07:00 origin/feat/v1-gap-inventory-2026-05-10 fix(worker): improve healthcheck robustness
+2026-05-10 16:02:54 -07:00 origin/fix/indexer-healthcheck-2026-05-10 fix(worker): improve healthcheck robustness
+2026-05-10 17:52:57 -07:00 origin/feat/graph-rag-foundation-2026-05-10 feat(graph-rag): foundation ΓÇö embedded memory nodes + edges
+2026-05-10 18:21:27 -07:00 origin/feat/erc8004-minting-flow-2026-05-10 feat(erc8004): minter + HTTP routes + backfill for 4 headline agents
+2026-05-10 18:33:49 -07:00 origin/feat/agent-verify-page-2026-05-10 feat(engine): public verification page + STARK proof retrieval
+2026-05-10 18:54:48 -07:00 origin/feat/megasprint-mass-mint-graphrag-canon-2026-05-10 feat(megasprint): mass-mint backfill + Graph RAG HAL wiring + canon
+2026-05-10 21:40:48 -07:00 origin/feat/byok-user-keys-mvp-2026-05-10 feat(byok): user-side encrypted key storage MVP + Public Docs
+2026-05-10 21:48:04 -07:00 origin/feat/graph-rag-verification-2026-05-10 feat: graph-rag end-to-end verification harness
+2026-05-11 15:26:27 -07:00 origin/feat/repid-earning-rate-limit-2026-05-11 feat(sprint-2): RepID earning + rate limiter + V1 gap inventory
+2026-05-11 16:57:58 -07:00 origin/feat/x402-mesh-bidirectional-2026-05-11 Merge branch 'main' into feat/x402-mesh-bidirectional-2026-05-11
+2026-05-11 17:07:36 -07:00 origin/feat/pnl-writer-repair-2026-05-11 feat(sprint-3): pnl_realized investigation + scoreTrade reality alignment
+2026-05-11 17:41:06 -07:00 origin/feat/hal-accuracy-view-cleanups-2026-05-11 feat(sprint-4): hal_accuracy_summary view + housekeeping
+2026-05-11 21:51:18 -07:00 origin/feat/recovery-substrate-and-evidence-2026-05-11 feat(sprint-6): trinity_swarm_health view + heartbeat interval tracking
+2026-05-11 23:02:51 -07:00 origin/feat/gap-closure-and-distribution-2026-05-12 feat(sprint-7): gap closure + distribution hardening
+2026-05-11 23:56:14 -07:00 origin/feat/rls-wave-1-and-integration-tests-2026-05-12 feat(sprint-8): RLS Wave 1 (40 Category A) + integration test suite + CI gate
+2026-05-12 01:32:58 -07:00 origin/feat/substrate-wakeup-and-micro-tx-loop-2026-05-12 CC Sprint 9: substrate wake-up scaffolding (probes, breakers, runbooks, mocks)
+2026-05-12 14:59:04 -07:00 origin/feat/x402-first-microtx-hardening-2026-05-12 feat(x402): sprint 4 complete - idempotency, governor, circuit breaker, tests
+2026-05-12 15:14:12 -07:00 origin/feat/schema-canon-and-graph-rag-substrate-2026-05-12 fix(sprint-10): restore Phase 5 files lost during branch turbulence
+2026-05-12 15:46:59 -07:00 origin/feat/cc-sprint-11-surface-fixes-2026-05-12 feat(types): wire Supabase TS type generator + npm scripts
+2026-05-12 16:07:51 -07:00 origin/feat/x402-recovery-and-mvp-corrective-2026-05-12 feat(x402): extend health CLI with recovery worker status
+2026-05-12 16:33:11 -07:00 origin/feat/cc-sprint-12-worktree-topology-2026-05-12 feat(git): worktree doctor health-check CLI
+2026-05-12 16:50:30 -07:00 origin/feat/x402-wakeup-readiness-2026-05-12 docs(x402): append protocol for first real micro-transaction
+2026-05-13 03:19:22 -07:00 origin/feat/gemini-overnight-2026-05-13 feat(gemini): overnight Phase 2 - Heartbeat Schema Fix
+2026-05-13 13:32:24 -07:00 origin/feat/trust-wrapper-cleanup-2026-05-13 chore: token holder lookup script
+2026-05-13 14:30:47 -07:00 origin/feat/artifact-ghost-fix-2026-05-13 fix(artifacts): deploy CHECK constraint and test suite for ghost prevention
+2026-05-14 18:30:56 -07:00 origin/feat/gemini-2026-05-14-phase2-0-provenance-tagging feat(provenance): tag all trinity_tasks writers with test_tier per Provenance Framework v1.0
+2026-05-14 20:18:39 -07:00 origin/feat/gemini-2026-05-14-phase2-3-tag-derivative-tables feat: phase 2.3 derivative table tags (trinity_agent_logs)
+2026-05-14 20:24:38 -07:00 origin/feat/gemini-2026-05-14-phase2-4-shareable-zkp-card-generator fix: resolve package.json merge conflict markers
+2026-05-15 13:53:10 -07:00 origin/feat/gemini-2026-05-14-phase2-5-substance-gate-hardening fix(repid-engine): Phase 2.5.2 schema fixes and tier mismatches
+2026-05-16 12:34:13 -07:00 origin/feat/gemini-2026-05-16-phase2-7-4-delta-restoration Phase 2.7.4: restore canonical RepID deltas + tier lookup + audit trace + patent trail
+2026-05-16 13:44:17 -07:00 origin/feat/cc-2026-05-16-phase2-8-wire-swarm-hal Phase 2.8: bypass SQL-keyword sanitizer for /api/v1/substance-gate/events
+2026-05-16 17:06:08 -07:00 origin/feat/cc-2026-05-16-phase2-9-1-pcp-validator-schema-fix Phase 2.9.1: fix pcp-validator schema drift (name -> agent_name, drop metadata)
+2026-05-16 19:15:51 -07:00 origin/feat/cc-2026-05-16-phase2-9-2-worker-stall Phase 2.9.2: fix validation_queue claim violating processed_check constraint
+2026-05-16 22:03:31 -07:00 origin/feat/cc-2026-05-16-phase2-9-4-hal-audit-rpc-signature Phase 2.9.4: fix append_hal_audit_chain RPC signature (gate + non-HITL worker)
+2026-05-16 23:19:39 -07:00 origin/feat/gemini-2026-05-17-phase2-11-storage-audit-dispute Phase 2.11: storage + reputation audit handlers + dispute resolution worker
+2026-05-17 00:56:34 -07:00 origin/feat/gemini-2026-05-16-phase2-9-a2a-foundation-typescript Phase 2.9: a2a foundation TypeScript implementation (delta functions, routes, sanitizer bypasses, worker mods)
+2026-05-17 01:03:06 -07:00 origin/hygiene/pcp-validator-tests Hygiene: export selectWeightedValidators and add unit tests for pcp-validator
+2026-05-17 01:13:37 -07:00 origin/hygiene/validation-fixes Hygiene: fix mapResolutionToOutcome typo and add missing agent logs in applyValidationDeltas
+2026-05-17 01:26:11 -07:00 origin/feat/cc-2026-05-16-phase2-10-three-services Phase 2.10: three production service handlers (verification, cross-validation, anfis-routing)
+2026-05-17 17:18:32 -07:00 origin/feat/gemini-2026-05-17-worker-recovery feat(worker): rewrite checkTimeouts for NULL-aware recovery and add health metrics
+2026-05-17 18:40:59 -07:00 origin/feat/gemini-2026-05-17-checktimeouts-health feat(worker): harden checkTimeouts against NULL processed_at and add detailed /health surface
+2026-05-17 22:45:10 -07:00 origin/feat/gemini-2026-05-18-phase-2-11-migration-relocate fix(migrations): relocate phase 2.11 SQL files from root migrations/ to supabase/migrations/ with 14-digit timestamps
+2026-05-17 23:02:28 -07:00 origin/feat/gemini-2026-05-18-rpc-validation-queue feat(observability): create get_validation_queue_status_24h RPC
+2026-05-18 10:38:46 -07:00 origin/feat/gemini-2026-05-18-mvp-cascade-harness feat(harness): MVP cascade verification SQL script
+2026-05-18 16:22:31 -07:00 origin/feat/gemini-2026-05-18-sprint-3 test: enhance verify harness with Sections H and I
+2026-05-18 17:01:42 -07:00 origin/feat/cc-2026-05-18-defect-3-fix feat(observability): provider_health per judge rotation attempt
+2026-05-18 19:05:20 -07:00 origin/feat/gemini-2026-05-18-defect-4-fix fix(hal): correct typescript compilation error for undefined validatorBeliefs
+2026-05-19 15:50:16 -07:00 origin/diag/worker-liveness-instrumentation-2026-05-19 feat(diag): implement /runloop-liveness endpoint per Sprint 13 spec
+2026-05-21 14:06:34 -07:00 origin/feat/cc-2026-05-20-mvp-delivery feat(erc8004): wire FeedbackLoopWorker.start() + drain-mode rate-limit + AbortSignal + circuit breaker (Phase 8)
+2026-05-21 17:06:14 -07:00 origin/feat/cc-2026-05-21-postgrest-bypass-repid feat(boot): direct-pg pgPing diagnostic in API + proof-drain worker
+2026-05-22 00:05:06 -07:00 origin/feat/cc-2026-05-21-erc8004-key-sanitize fix(erc8004): sanitize and validate private key with loud-on-bad-input behavior
+2026-05-22 02:36:42 -07:00 origin/feat/cc-2026-05-21-e2e-verify-fix-1 fix(feedback-loop): supabase-js fallback when direct-pg poll unavailable
+2026-05-22 03:46:14 -07:00 origin/feat/gemini-2026-05-22-handler-registry-completion feat(handlers): register reputation_audit + decentralized_storage handlers
+2026-05-22 03:59:20 -07:00 origin/feat/cc-2026-05-22-pipeline-restoration feat(cascade): server-side escrowed->fulfilled settlement worker
+2026-05-22 11:11:49 -07:00 origin/feat/cc-2026-05-22-x402-wiring fix(x402): RULE-11 error check on post-settlement repid_events insert
+2026-05-22 14:56:18 -07:00 origin/feat/gemini-2026-05-22-agent-registry-hygiene feat(agent-registry): soft-retire RAVEN & test agents, add name validation utility and tests
+2026-05-22 15:01:13 -07:00 origin/feat/cc-2026-05-22-defensive-filters-and-testing feat(testing): 4 MVP scenarios + run-all CLI
+2026-05-22 15:37:51 -07:00 origin/feat/cc-2026-05-22-onchain-write-selffeedback-guard fix(erc8004): pre-flight self-feedback guard in first-onchain-write script
+2026-05-22 16:57:06 -07:00 origin/feat/cc-2026-05-22-hal-x402-verdict-wiring feat(e2e): MVP go-gate verification script (verify-mvp-loop)
+2026-05-22 20:45:18 -07:00 origin/feat/cc-2026-05-22-freellm-router-fix fix(agent-testing): correct cerebras model id + free-LLM provider fallthrough
+2026-05-22 20:57:14 -07:00 origin/feat/gemini-2026-05-22-jtbd-social-flywheel feat(bridge): wire SERVICE_FULFILLED to ERC-8004 attestation via service_fulfilled_settled event
+2026-05-22 23:39:32 -07:00 origin/feat/cc2-2026-05-22-fseries-patch fix(security): normalize is_simulated gate (case/type/nested) ΓÇö F-series patch
+2026-05-23 00:46:49 -07:00 origin/feat/cc2-2026-05-22-hal-enrichment feat(hal): add HAL_STRICTNESS env (1|2) with provider fallback to s1 on error
+2026-05-23 01:58:25 -07:00 origin/feat/cc2-2026-05-23-hal-truth-signal feat(hal): HalService + REST endpoint + Trust* product profiles
+2026-05-23 02:23:27 -07:00 origin/feat/gemini-2026-05-23-x402-real-implementation feat(x402): implement server-side payment enforcement and verification
+2026-05-23 13:14:33 -07:00 origin/feat/cc2-2026-05-23-research-queue feat(research): add disagreement quotas to cross-validation prompts
+2026-05-23 13:26:06 -07:00 origin/feat/gemini-2026-05-23-x402-v1-hardening feat(x402): gas estimation + observability metrics
+2026-05-23 13:26:46 -07:00 origin/feat/cc2-2026-05-23-hardening-r1 fix(security): block direct self-dealing via constraint + endpoint check
+2026-05-23 14:59:07 -07:00 origin/feat/gemini-2026-05-23-x402-cleanup-batch fix(x402): domain fix + P5 double-fulfill + CC2 handoff integration
+2026-05-23 15:00:45 -07:00 origin/feat/cc1-2026-05-23-hal-provider-failure-hardening sim(hal): provider-failure simulation over CC2 calibration corpus (full/partial/low quorum, pre vs post gate)
+2026-05-23 15:32:25 -07:00 origin/feat/cc2-2026-05-23-repid-inflation-cb docs(security): mark Patch B applied (zero-demotion floor + is_human exclusion); Patch C z=2.5
+2026-05-23 18:19:36 -07:00 origin/feat/gemini-2026-05-23-x402-facilitator-format-fix feat: Update x402-facilitator to send standard x402 envelope to x402.org
+2026-05-23 20:28:11 -07:00 origin/feat/gemini-2026-05-23-x402-facilitator-format-fix-r2 feat: wrap x402 requests in paymentPayload and inject name and version into paymentRequirements extra
+2026-05-23 20:30:15 -07:00 origin/feat/gemini-2026-05-23-hal-endpoint-mount feat: import and mount halEvaluateRouter at /api/v1/hal and add to SQL sanitizer bypass
+2026-05-24 08:26:35 -07:00 origin/feat/gemini-2026-05-24-security-audit-mainnet-observability test(security): update auth-gating tests to expect 401 for /prove-repid without auth
+2026-05-24 10:41:09 -07:00 origin/feat/gemini-2026-05-24-lower-risk-sprint fix(test): execute settler simulation mode only when MOCK_FACILITATOR is explicitly true
+2026-05-24 12:56:29 -07:00 origin/feat/cc1-2026-05-24-mainnet-readiness-telemetry test(regression): V1 critical-path coverage
+2026-05-24 22:31:14 -07:00 origin/fix/cc2-2026-05-26-hyperdag-dev-purge docs(fix): purge unowned hyperdag.dev domain refs (RULE-4 cross-repo sweep)
+2026-05-24 22:39:56 -07:00 origin/feat/gemini-2026-05-25-v1-launch-readiness test(integration): fix race condition in smoke-zkp test by allowing completed status
+2026-05-24 22:43:24 -07:00 origin/feat/gemini-2026-05-25-v1.5-redis-zk fix(v1.5): add missing erc8004_token_id to RepIdAttestation interface
+2026-05-24 23:05:46 -07:00 origin/railway/fix-deploy-e95089 fix: move @types/pg from devDependencies to dependencies
+2026-05-26 16:11:50 -07:00 origin/feat/trinity-task-bridge-2026-05-26 feat: expand HAL bridge coverage to done, shadow_reject, and verified tasks
+2026-05-27 11:00:59 -07:00 origin/feat/cc2-2026-05-27-peer-verify-respond feat(peer-verify): atomic-UPDATE-RETURNING /respond + 409 conflict + sprint-spec HMAC secret
+2026-05-27 11:08:00 -07:00 origin/feat/cc2-2026-05-27-v16-approve-deny feat(v16): HITL approve/deny return loop via Telegram inline keyboard (default OFF)
+2026-05-27 17:00:26 -07:00 origin/feat/cc2-2026-05-27-llm-trust-multi-provider fix(llm-trust): add deepinfra to canonical allow-list (dominant active provider, 253/24h)
+2026-05-27 20:03:09 -07:00 origin/fix/llm-trust-multi-provider-2026-05-27 feat(slm-routing): route low-complexity prompts to SLM tier and safely parse bridge task metadata
+2026-05-27 23:21:46 -07:00 origin/feat/cc1-2026-05-27-fact-check-handler feat(marketplace): FactCheckServiceHandler ΓÇö first new service handler since 2.10/2.11

@@ -1,0 +1,93 @@
+﻿origin/feat/reponomics-demo-2026-04-27 | merged to main (ancestor) | docs: REPONOMICS-API.md ΓÇö endpoint reference + Sean-signature recipe
+origin/feat/reponomics-live-demo-2026-04-27 | merged to main (ancestor) | test(reponomics): anonymous signup + round runner (13 new tests)
+origin/feat/reponomics-full-account-2026-04-27 | merged to main (ancestor) | fix(health): allow /api/v1/health in auth middleware
+origin/feat/real-not-simulated-2026-04-27 | merged to main (ancestor) | feat(oracle): real Base Sepolia block-hash oracle with HMAC fallback
+origin/feat/erc8004-canonical-2026-04-27 | merged to main (ancestor) | chore(erc8004): canonical registration output log
+origin/feat/wire-canonical-writer-2026-04-28 | merged to main (ancestor) | feat: phase 1 - wire canonical writer into anonymous round runner
+origin/feat/erc8004-validation-2026-04-28 | merged to main (ancestor) | feat: phase A - validation registry writer
+origin/feat/real-x402-settler-2026-04-28 | merged to main (ancestor) | feat: phase B - real x402 USDC settler
+origin/feat/hardening-2026-04-28-jwt | merged to main (ancestor) | fix(test): gate src/index.ts side-effects on NODE_ENV !== 'test'
+origin/feat/e2e-tests-2026-04-28 | merged to main (ancestor) | test(e2e): live Railway flow walker (token-signup ΓåÆ stake ΓåÆ round ΓåÆ snapshot)
+origin/feat/canonical-register-all-2026-04-28 | merged to main (ancestor) | feat: phase C - register 10 trinity agents canonically
+origin/feat/alpaca-verify-2026-04-28 | merged to main (ancestor) | verify(alpaca): paper-trading flow verifier ΓÇö creds + order + poll + cancel
+origin/feat/guided-tour-backend-2026-04-28 | merged to main (ancestor) | feat(demo): backend hooks for guided-tour pedagogy
+origin/feat/audit-chain-merkle-2026-04-28 | merged to main (ancestor) | fix(hal): wire 5-signal combiner into score-event handler
+origin/feat/cross-llm-verification-layer-2026-05-03 | merged to main (ancestor) | feat(hal): Phase 1.5 ext ΓÇö Pythagorean Comma BFT veto + 3-provider cross-LLM
+origin/feat/receipt-bridge-integration-2026-05-03 | merged to main (ancestor) | feat: erc8004 poster, receipt indexer, and trinity validators schema
+origin/feat/receipt-bridge-v1-2026-05-03 | merged to main (ancestor) | [CC1 sprint 2026-05-04] Phase 4+5 ΓÇö smoke script and live verification
+origin/feat/hal-extraction-library-2026-05-04 | merged to main (ancestor) | [CC1 sprint 2026-05-04] P5-A ΓÇö widen Layer 1 gate to include 'math' + smoke test wiring
+origin/feat/repid-staking-mvp-2026-05-05 | merged to main (ancestor) | feat: staking mvp backend route
+origin/feat/tiered-router-direct-only-2026-05-07 | merged to main (ancestor) | feat: Tiered Router with Direct Adapters only
+origin/feat/agent-registration-2026-05-07-A5 | merged to main (ancestor) | feat(A5): external agent registration ΓÇö Maya-shape additive contract
+origin/fix/hal-decision-enum-2026-05-08 | merged to main (ancestor) | fix(scoring): add hal_decision enum derivation to scoring pipeline
+origin/fix/smoke-failures-2026-05-08 | merged to main (ancestor) | test: update smoke script to handle manual redirects and 301s
+origin/fix/hygiene-1-2026-05-08 | merged to main (ancestor) | fix: hygiene-1 ΓÇö silence JSON parse traces, gate HAL benchmark, and add tests
+origin/fix/smoke-router-order-2026-05-08 | merged to main (ancestor) | fix: mount discovery/hal-stats/bounties/prove-repid routes before auth middleware (SMOKE-FIXES-ROUTER-ORDER)
+origin/feat/hal-autorunner-2026-05-08 | merged to main (ancestor) | feat(hal): persistent HAL autorunner with F1/precision/recall metrics (HAL-AUTORUNNER)
+origin/revert/hal-autorunner-2026-05-09 | merged to main (ancestor) | revert: HAL autorunner pending unified-evaluation architecture
+origin/feat/hal-evaluations-unified-table-2026-05-09 | merged to main (ancestor) | feat(hal): unified evaluations table + dual-write hook
+origin/feat/indexer-worker-hardening-2026-05-10 | merged to main (ancestor) | feat(indexer,worker): retry + stall detection hardening
+origin/fix/move-service-entrypoints-2026-05-10 | merged to main (ancestor) | fix(deploy): move service entry points to src/scripts/ + add npm scripts
+origin/fix/railway-toml-startcommand-2026-05-10 | merged to main (ancestor) | fix(deploy): remove global startCommand override in railway.toml
+origin/feat/erc8004-spec-compliance-2026-05-10 | merged to main (ancestor) | fix(worker): improve healthcheck robustness
+origin/feat/v1-gap-inventory-2026-05-10 | merged to main (ancestor) | fix(worker): improve healthcheck robustness
+origin/fix/indexer-healthcheck-2026-05-10 | merged to main (ancestor) | fix(worker): improve healthcheck robustness
+origin/feat/graph-rag-foundation-2026-05-10 | merged to main (ancestor) | feat(graph-rag): foundation ΓÇö embedded memory nodes + edges
+origin/feat/erc8004-minting-flow-2026-05-10 | merged to main (ancestor) | feat(erc8004): minter + HTTP routes + backfill for 4 headline agents
+origin/feat/megasprint-mass-mint-graphrag-canon-2026-05-10 | merged to main (ancestor) | feat(megasprint): mass-mint backfill + Graph RAG HAL wiring + canon
+origin/feat/repid-earning-rate-limit-2026-05-11 | merged to main (ancestor) | feat(sprint-2): RepID earning + rate limiter + V1 gap inventory
+origin/feat/x402-mesh-bidirectional-2026-05-11 | merged to main (ancestor) | Merge branch 'main' into feat/x402-mesh-bidirectional-2026-05-11
+origin/feat/pnl-writer-repair-2026-05-11 | merged to main (ancestor) | feat(sprint-3): pnl_realized investigation + scoreTrade reality alignment
+origin/feat/hal-accuracy-view-cleanups-2026-05-11 | merged to main (ancestor) | feat(sprint-4): hal_accuracy_summary view + housekeeping
+origin/feat/recovery-substrate-and-evidence-2026-05-11 | merged to main (ancestor) | feat(sprint-6): trinity_swarm_health view + heartbeat interval tracking
+origin/feat/gap-closure-and-distribution-2026-05-12 | merged to main (ancestor) | feat(sprint-7): gap closure + distribution hardening
+origin/feat/rls-wave-1-and-integration-tests-2026-05-12 | merged to main (ancestor) | feat(sprint-8): RLS Wave 1 (40 Category A) + integration test suite + CI gate
+origin/feat/substrate-wakeup-and-micro-tx-loop-2026-05-12 | merged to main (ancestor) | CC Sprint 9: substrate wake-up scaffolding (probes, breakers, runbooks, mocks)
+origin/feat/x402-first-microtx-hardening-2026-05-12 | merged to main (ancestor) | feat(x402): sprint 4 complete - idempotency, governor, circuit breaker, tests
+origin/feat/schema-canon-and-graph-rag-substrate-2026-05-12 | merged to main (ancestor) | fix(sprint-10): restore Phase 5 files lost during branch turbulence
+origin/feat/cc-sprint-11-surface-fixes-2026-05-12 | merged to main (ancestor) | feat(types): wire Supabase TS type generator + npm scripts
+origin/feat/x402-recovery-and-mvp-corrective-2026-05-12 | merged to main (ancestor) | feat(x402): extend health CLI with recovery worker status
+origin/feat/cc-sprint-12-worktree-topology-2026-05-12 | merged to main (ancestor) | feat(git): worktree doctor health-check CLI
+origin/feat/x402-wakeup-readiness-2026-05-12 | merged to main (ancestor) | docs(x402): append protocol for first real micro-transaction
+origin/feat/gemini-2026-05-14-phase2-4-shareable-zkp-card-generator | merged to main (ancestor) | fix: resolve package.json merge conflict markers
+origin/feat/gemini-2026-05-14-phase2-5-substance-gate-hardening | merged to main (ancestor) | fix(repid-engine): Phase 2.5.2 schema fixes and tier mismatches
+origin/feat/gemini-2026-05-16-phase2-7-4-delta-restoration | merged to main (ancestor) | Phase 2.7.4: restore canonical RepID deltas + tier lookup + audit trace + patent trail
+origin/feat/cc-2026-05-16-phase2-8-wire-swarm-hal | merged to main (ancestor) | Phase 2.8: bypass SQL-keyword sanitizer for /api/v1/substance-gate/events
+origin/feat/cc-2026-05-16-phase2-9-1-pcp-validator-schema-fix | merged to main (ancestor) | Phase 2.9.1: fix pcp-validator schema drift (name -> agent_name, drop metadata)
+origin/feat/cc-2026-05-16-phase2-9-2-worker-stall | merged to main (ancestor) | Phase 2.9.2: fix validation_queue claim violating processed_check constraint
+origin/feat/cc-2026-05-16-phase2-9-4-hal-audit-rpc-signature | merged to main (ancestor) | Phase 2.9.4: fix append_hal_audit_chain RPC signature (gate + non-HITL worker)
+origin/feat/gemini-2026-05-17-phase2-11-storage-audit-dispute | merged to main (ancestor) | Phase 2.11: storage + reputation audit handlers + dispute resolution worker
+origin/feat/gemini-2026-05-16-phase2-9-a2a-foundation-typescript | merged to main (ancestor) | Phase 2.9: a2a foundation TypeScript implementation (delta functions, routes, sanitizer bypasses, worker mods)
+origin/hygiene/pcp-validator-tests | merged to main (ancestor) | Hygiene: export selectWeightedValidators and add unit tests for pcp-validator
+origin/hygiene/validation-fixes | merged to main (ancestor) | Hygiene: fix mapResolutionToOutcome typo and add missing agent logs in applyValidationDeltas
+origin/feat/cc-2026-05-16-phase2-10-three-services | merged to main (ancestor) | Phase 2.10: three production service handlers (verification, cross-validation, anfis-routing)
+origin/feat/gemini-2026-05-17-checktimeouts-health | merged to main (ancestor) | feat(worker): harden checkTimeouts against NULL processed_at and add detailed /health surface
+origin/feat/gemini-2026-05-18-phase-2-11-migration-relocate | merged to main (ancestor) | fix(migrations): relocate phase 2.11 SQL files from root migrations/ to supabase/migrations/ with 14-digit timestamps
+origin/feat/gemini-2026-05-18-rpc-validation-queue | merged to main (ancestor) | feat(observability): create get_validation_queue_status_24h RPC
+origin/feat/gemini-2026-05-18-mvp-cascade-harness | merged to main (ancestor) | feat(harness): MVP cascade verification SQL script
+origin/feat/cc-2026-05-18-defect-3-fix | merged to main (ancestor) | feat(observability): provider_health per judge rotation attempt
+origin/feat/gemini-2026-05-18-defect-4-fix | merged to main (ancestor) | fix(hal): correct typescript compilation error for undefined validatorBeliefs
+origin/feat/cc-2026-05-20-mvp-delivery | merged to main (ancestor) | feat(erc8004): wire FeedbackLoopWorker.start() + drain-mode rate-limit + AbortSignal + circuit breaker (Phase 8)
+origin/feat/cc-2026-05-21-postgrest-bypass-repid | merged to main (ancestor) | feat(boot): direct-pg pgPing diagnostic in API + proof-drain worker
+origin/feat/cc-2026-05-21-erc8004-key-sanitize | merged to main (ancestor) | fix(erc8004): sanitize and validate private key with loud-on-bad-input behavior
+origin/feat/gemini-2026-05-22-handler-registry-completion | merged to main (ancestor) | feat(handlers): register reputation_audit + decentralized_storage handlers
+origin/feat/cc-2026-05-22-pipeline-restoration | merged to main (ancestor) | feat(cascade): server-side escrowed->fulfilled settlement worker
+origin/feat/cc-2026-05-22-x402-wiring | merged to main (ancestor) | fix(x402): RULE-11 error check on post-settlement repid_events insert
+origin/feat/gemini-2026-05-22-agent-registry-hygiene | merged to main (ancestor) | feat(agent-registry): soft-retire RAVEN & test agents, add name validation utility and tests
+origin/feat/cc-2026-05-22-defensive-filters-and-testing | merged to main (ancestor) | feat(testing): 4 MVP scenarios + run-all CLI
+origin/feat/cc-2026-05-22-onchain-write-selffeedback-guard | merged to main (ancestor) | fix(erc8004): pre-flight self-feedback guard in first-onchain-write script
+origin/feat/gemini-2026-05-22-jtbd-social-flywheel | merged to main (ancestor) | feat(bridge): wire SERVICE_FULFILLED to ERC-8004 attestation via service_fulfilled_settled event
+origin/feat/cc2-2026-05-22-fseries-patch | merged to main (ancestor) | fix(security): normalize is_simulated gate (case/type/nested) ΓÇö F-series patch
+origin/feat/cc2-2026-05-22-hal-enrichment | merged to main (ancestor) | feat(hal): add HAL_STRICTNESS env (1|2) with provider fallback to s1 on error
+origin/feat/cc2-2026-05-23-hal-truth-signal | merged to main (ancestor) | feat(hal): HalService + REST endpoint + Trust* product profiles
+origin/feat/gemini-2026-05-23-x402-real-implementation | merged to main (ancestor) | feat(x402): implement server-side payment enforcement and verification
+origin/feat/gemini-2026-05-23-x402-cleanup-batch | merged to main (ancestor) | fix(x402): domain fix + P5 double-fulfill + CC2 handoff integration
+origin/feat/cc1-2026-05-23-hal-provider-failure-hardening | merged to main (ancestor) | sim(hal): provider-failure simulation over CC2 calibration corpus (full/partial/low quorum, pre vs post gate)
+origin/feat/cc2-2026-05-23-repid-inflation-cb | merged to main (ancestor) | docs(security): mark Patch B applied (zero-demotion floor + is_human exclusion); Patch C z=2.5
+origin/feat/gemini-2026-05-23-x402-facilitator-format-fix | merged to main (ancestor) | feat: Update x402-facilitator to send standard x402 envelope to x402.org
+origin/feat/gemini-2026-05-23-x402-facilitator-format-fix-r2 | merged to main (ancestor) | feat: wrap x402 requests in paymentPayload and inject name and version into paymentRequirements extra
+origin/feat/gemini-2026-05-23-hal-endpoint-mount | merged to main (ancestor) | feat: import and mount halEvaluateRouter at /api/v1/hal and add to SQL sanitizer bypass
+origin/feat/gemini-2026-05-24-security-audit-mainnet-observability | merged to main (ancestor) | test(security): update auth-gating tests to expect 401 for /prove-repid without auth
+origin/feat/cc1-2026-05-24-mainnet-readiness-telemetry | merged to main (ancestor) | test(regression): V1 critical-path coverage
+origin/feat/gemini-2026-05-25-v1-launch-readiness | merged to main (ancestor) | test(integration): fix race condition in smoke-zkp test by allowing completed status
+origin/feat/gemini-2026-05-25-v1.5-redis-zk | merged to main (ancestor) | fix(v1.5): add missing erc8004_token_id to RepIdAttestation interface
