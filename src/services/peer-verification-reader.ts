@@ -53,14 +53,16 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       const queueEntry = claimed as PeerVerificationQueueEntry;
       const sourceAgentName = await getAgentName(db, queueEntry.source_agent_id);
 
-      // 3. UUID-based verifier selection (excluding the source agent)
+      // 3. UUID-based verifier selection (excluding the source agent and excluded_verifiers)
       const { data: verifierAgents } = await db
         .from('repid_agents')
         .select('id, agent_name')
         .in('agent_name', VERIFIER_POOL);
 
+      const excluded = (queueEntry as any).metadata?.excluded_verifiers || [];
+
       const eligibleVerifiers = verifierAgents
-        ?.filter((agent) => agent.id !== queueEntry.source_agent_id)
+        ?.filter((agent) => agent.id !== queueEntry.source_agent_id && !excluded.includes(agent.agent_name))
         .map((agent) => agent.agent_name) || [];
 
       if (eligibleVerifiers.length === 0) {

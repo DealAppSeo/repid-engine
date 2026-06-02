@@ -4,6 +4,7 @@ import { runAdversarialJudge } from './adversarial-judge';
 import { applyValidationDeltas } from './validation-repid-delta';
 import { HitlReason, HitlResolution, hitlService } from './hitl-service';
 import { appendToAuditChain } from './auditChainWriter';
+import { handleHallucinationCaught } from './learning-feed';
 
 const POLL_INTERVAL_MS = parseInt(process.env.VALIDATION_WORKER_POLL_MS || '30000', 10);
 const BATCH_SIZE = parseInt(process.env.VALIDATION_BATCH_SIZE || '5', 10);
@@ -161,6 +162,18 @@ async function processSingleTask(claim: any) {
       }).eq('id', claim.task_id);
 
       await applyValidationDeltas(claim.id, taskData, workerVerdict, pcpResult.validators, judgeVerdict);
+
+      if (workerVerdict === 'challenged' && taskData.claimed_by) {
+        const verifier = pcpResult.validators[0] || 'trinity-veritas';
+        try {
+          await handleHallucinationCaught(verifier, taskData.claimed_by, taskData, {
+            hal_score: 1.0 - pcpScore,
+            hal_signals: { certainty_at_claim: pcpScore, evidence_quality: pcpConfidence }
+          });
+        } catch (feedErr: any) {
+          console.error('[ValidationWorker] Failed to trigger learning feed hook:', feedErr.message);
+        }
+      }
 
       // Append hal_audit_chain entry. Correct 4-arg p_-prefixed RPC via the
       // shared appendToAuditChain helper (the prior raw 3-arg unprefixed call
