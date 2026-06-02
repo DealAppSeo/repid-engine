@@ -245,6 +245,34 @@ function getClientIp(req: Request): string {
   return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
+/**
+ * Normalize an IP for use as a rate-limit bucket key.
+ *
+ * IPv4 is keyed as-is. IPv6 is masked to its /64 prefix (the first four hextets) —
+ * a single end user is routinely allocated a whole /64, so keying on the full /128
+ * lets an attacker rotate addresses within their own subnet for a fresh bucket each
+ * request (unbounded evasion). This mirrors express-rate-limit's `ipKeyGenerator`,
+ * which the per-route limiters already use; this brings the tiered middleware in line.
+ */
+export function normalizeIpForKey(ip: string): string {
+  if (!ip || ip === 'unknown') return 'unknown';
+  // Strip IPv4-mapped IPv6 prefix (::ffff:1.2.3.4 → 1.2.3.4) and zone id (%eth0).
+  let v = ip.replace(/^::ffff:/i, '').split('%')[0] ?? ip;
+  if (!v.includes(':')) return v; // IPv4 — key whole address
+  // IPv6 → /64. Expand a single :: so we can take the first four groups deterministically.
+  const dbl = v.indexOf('::');
+  let groups: string[];
+  if (dbl !== -1) {
+    const head = v.slice(0, dbl).split(':').filter(Boolean);
+    const tail = v.slice(dbl + 2).split(':').filter(Boolean);
+    const fill = Array(Math.max(0, 8 - head.length - tail.length)).fill('0');
+    groups = [...head, ...fill, ...tail];
+  } else {
+    groups = v.split(':');
+  }
+  return groups.slice(0, 4).map(g => g || '0').join(':') + '::/64';
+}
+
 async function resolveIdentity(req: Request, routeOverride: number | null): Promise<Identity> {
   // 1. BYOK
   const auth = (req.headers['authorization'] as string | undefined) ?? '';
@@ -281,8 +309,9 @@ async function resolveIdentity(req: Request, routeOverride: number | null): Prom
     };
   }
 
-  // 3. IP fallback
-  const ip = getClientIp(req);
+  // 3. IP fallback — key on the /64 prefix for IPv6 so a single subnet can't evade
+  // the limit by rotating addresses (see normalizeIpForKey).
+  const ip = normalizeIpForKey(getClientIp(req));
   const limit = routeOverride ?? TIER_LIMITS.IP_DEFAULT!;
   return { kind: 'ip', key: `ip:${ip}`, limit, bypass: false };
 }

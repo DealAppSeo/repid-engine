@@ -12,7 +12,7 @@
  * gives us confidence the algorithm is correct.
  */
 
-import { bucketStore, __test } from '../src/middleware/rate-limit';
+import { bucketStore, __test, normalizeIpForKey } from '../src/middleware/rate-limit';
 
 describe('BucketStore — token bucket math', () => {
   beforeEach(() => bucketStore.__reset());
@@ -105,6 +105,41 @@ describe('hashByokKey — deterministic SHA-256', () => {
   it('different inputs produce different hashes', () => {
     const { hashByokKey } = __test;
     expect(hashByokKey('a')).not.toBe(hashByokKey('b'));
+  });
+});
+
+describe('normalizeIpForKey — IPv6 /64 bucketing (GMPD evasion guard)', () => {
+  it('keys IPv4 as the whole address', () => {
+    expect(normalizeIpForKey('203.0.113.7')).toBe('203.0.113.7');
+  });
+
+  it('strips IPv4-mapped IPv6 prefix', () => {
+    expect(normalizeIpForKey('::ffff:203.0.113.7')).toBe('203.0.113.7');
+  });
+
+  it('masks a full IPv6 address to its /64 prefix', () => {
+    expect(normalizeIpForKey('2001:db8:abcd:1234:5678:9abc:def0:1')).toBe('2001:db8:abcd:1234::/64');
+  });
+
+  it('collapses an entire /64 to one bucket (rotating host bits cannot evade)', () => {
+    const a = normalizeIpForKey('2001:db8:abcd:1234:1111:2222:3333:4444');
+    const b = normalizeIpForKey('2001:db8:abcd:1234:ffff:ffff:ffff:ffff');
+    expect(a).toBe(b);
+    expect(a).toBe('2001:db8:abcd:1234::/64');
+  });
+
+  it('expands :: compression before taking the prefix', () => {
+    expect(normalizeIpForKey('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(normalizeIpForKey('::1')).toBe('0:0:0:0::/64');
+  });
+
+  it('strips a zone id', () => {
+    expect(normalizeIpForKey('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+  });
+
+  it('passes through unknown', () => {
+    expect(normalizeIpForKey('unknown')).toBe('unknown');
+    expect(normalizeIpForKey('')).toBe('unknown');
   });
 });
 
