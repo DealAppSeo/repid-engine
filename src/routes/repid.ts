@@ -38,7 +38,22 @@ export const repidAdminRouter = Router();
 // the existing tests/repid-score.test.ts smoke test stays green.
 repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => {
   try {
-    const lookup = await getRepIDForAgent(String(req.params.agentId ?? ''));
+    let resolvedId = String(req.params.agentId ?? '');
+    if (resolvedId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedId)) {
+      let query = db.from('repid_agents').select('id');
+      if (/^\d+$/.test(resolvedId)) {
+        query = query.eq('erc8004_token_id', resolvedId);
+      } else {
+        const lcName = resolvedId.toLowerCase();
+        const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+        query = query.eq('agent_name', lookupName);
+      }
+      const { data } = await query.maybeSingle();
+      if (data && data.id) {
+        resolvedId = data.id;
+      }
+    }
+    const lookup = await getRepIDForAgent(resolvedId);
     res.json(lookup);
   } catch (e: any) {
     if (e?.code === 'DATABASE_ERROR') {
@@ -53,9 +68,24 @@ repidPublicRouter.get(
   '/repid/:agentId/history',
   async (req: Request, res: Response) => {
     try {
+      let resolvedId = String(req.params.agentId ?? '');
+      if (resolvedId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedId)) {
+        let query = db.from('repid_agents').select('id');
+        if (/^\d+$/.test(resolvedId)) {
+          query = query.eq('erc8004_token_id', resolvedId);
+        } else {
+          const lcName = resolvedId.toLowerCase();
+          const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+          query = query.eq('agent_name', lookupName);
+        }
+        const { data } = await query.maybeSingle();
+        if (data && data.id) {
+          resolvedId = data.id;
+        }
+      }
       const since = typeof req.query.since === 'string' ? req.query.since : undefined;
-      const history = await getRepIDHistory(String(req.params.agentId ?? ''), since);
-      res.json({ agent_id: String(req.params.agentId ?? ''), count: history.length, events: history });
+      const history = await getRepIDHistory(resolvedId, since);
+      res.json({ agent_id: resolvedId, count: history.length, events: history });
     } catch (e: any) {
       if (e?.code === 'AGENT_NOT_FOUND') {
         return res.status(404).json({ error: 'AGENT_NOT_FOUND', detail: e.message });
@@ -64,6 +94,46 @@ repidPublicRouter.get(
     }
   },
 );
+
+// GET /api/v1/repid/:agentId/zkp — latest ZKP proof for an agent
+repidPublicRouter.get('/repid/:agentId/zkp', async (req: Request, res: Response) => {
+  try {
+    let resolvedId = String(req.params.agentId ?? '');
+    if (resolvedId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedId)) {
+      let query = db.from('repid_agents').select('id');
+      if (/^\d+$/.test(resolvedId)) {
+        query = query.eq('erc8004_token_id', resolvedId);
+      } else {
+        const lcName = resolvedId.toLowerCase();
+        const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+        query = query.eq('agent_name', lookupName);
+      }
+      const { data } = await query.maybeSingle();
+      if (data && data.id) {
+        resolvedId = data.id;
+      }
+    }
+
+    const { data: proof, error } = await db
+      .from('repid_zkp_proofs')
+      .select('*')
+      .eq('agent_id', resolvedId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      return res.status(500).json({ error: 'DATABASE_ERROR', detail: error.message });
+    }
+    if (!proof) {
+      return res.status(404).json({ error: 'NO_PROOF_FOUND' });
+    }
+
+    res.json(proof);
+  } catch (e: any) {
+    res.status(500).json({ error: 'INTERNAL', detail: e?.message ?? String(e) });
+  }
+});
 
 // POST /api/v1/repid/verify — verify an attestation (no auth — anyone can verify)
 repidPublicRouter.post('/repid/verify', async (req: Request, res: Response) => {
