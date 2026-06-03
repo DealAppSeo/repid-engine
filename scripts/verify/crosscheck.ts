@@ -21,6 +21,9 @@ import { rlsCheck } from './checks/rls';
 import { halCheck } from './checks/hal';
 import { repidGuardsCheck } from './checks/repid-guards';
 import { swarmThroughputCheck } from './checks/swarm-throughput';
+import { halAblationCheck } from './checks/hal-ablation';
+import { repidFloorCheck } from './checks/repid-floor';
+import { zkpAnchorCheck } from './checks/zkp-anchor';
 
 const REGISTRY: Record<string, Check> = {
   authority: authorityCheck,
@@ -29,6 +32,10 @@ const REGISTRY: Record<string, Check> = {
   hal: halCheck,
   'repid-guards': repidGuardsCheck,
   'swarm-throughput': swarmThroughputCheck,
+  // S-HAL-TRUTH 2026-06-03 — CC-owned merge-gate checks (Phase 6).
+  'hal-ablation': halAblationCheck,   // B AUC ≥ plain-majority A on the persisted corpus
+  'repid-floor': repidFloorCheck,     // no active trinity agent pinned at floor w/ peak ≥ 2× (drain signature)
+  'zkp-anchor': zkpAnchorCheck,       // recent proofs have non-zero EAS coverage (pairs with XC)
 };
 
 function parseList(flag: string): string[] | null {

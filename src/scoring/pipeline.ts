@@ -237,6 +237,12 @@ export async function runScoreEvent(
 
   const decision: HALDecision = halError ? 'flagged' : deriveHalDecision(hal_score, vetoed, signals.comma_severity as string | null);
 
+  // hallucination_caught: TRUE only when the DISCRIMINATIVE fact-check path (strictness 2) grounded
+  // the veto in actual provider FALSE verdicts. The strictness-1 extractor is style-only (no ground
+  // truth; AUC ~0.36 on the labeled corpus), so its vetoes are NOT caught hallucinations and must not
+  // drain the live score. Mirrors the column the event-log guard trg_hal_penalty_guard checks.
+  const hallucination_caught = !halError && halStrictness >= 2 && decision === 'vetoed';
+
   // 4. Compute delta.
   const delta = computeDelta({
     hal_score,
@@ -246,8 +252,22 @@ export async function runScoreEvent(
     vesting_cliff_active: agent.vesting_cliff_active,
   });
 
+  // S-DRAIN (Phase 3): gate the DIRECT current_repid apply on hallucination_caught, mirroring the
+  // event-log guard trg_hal_penalty_guard. A negative HAL delta only drains the live score when a
+  // hallucination was actually caught; blind-extractor style vetoes are suppressed (applied 0).
+  // Reversible via HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION (default ON). Without this gate the
+  // trigger protected only the audit log while the app still wrote old_repid-10 to repid_agents,
+  // pinning live agents to the tier floor while peak_repid stayed 2-3x higher.
+  const penaltyRequiresHallucination = process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false';
+  let effectiveDeltaApplied = delta.delta_applied;
+  let penaltySuppressed = false;
+  if (penaltyRequiresHallucination && effectiveDeltaApplied < 0 && !hallucination_caught) {
+    effectiveDeltaApplied = 0;
+    penaltySuppressed = true;
+  }
+
   const old_repid = agent.current_repid;
-  const new_repid = old_repid + delta.delta_applied;
+  const new_repid = old_repid + effectiveDeltaApplied;
 
   // 5. ZK proof trigger logic (decided pre-insert so we can record on the row).
   const triggerProof = await shouldTriggerProof(
@@ -260,7 +280,7 @@ export async function runScoreEvent(
   const insertPayload: Record<string, unknown> = {
     agent_id: input.agent_id,
     event_type: 'HAL_SCORE_EVENT',
-    delta: Math.round(delta.delta_applied),
+    delta: Math.round(effectiveDeltaApplied),
     repid_before: old_repid,
     repid_after: Math.round(new_repid),
     certainty_at_claim:
@@ -270,8 +290,9 @@ export async function runScoreEvent(
     llm_model: input.model_used ?? null,
     hal_score,
     hal_decision: decision,
+    hallucination_caught,
     repid_delta_calculated: Math.round(delta.delta_calculated),
-    repid_delta_applied: Math.round(delta.delta_applied),
+    repid_delta_applied: Math.round(effectiveDeltaApplied),
     tier_used: input.tier_used ?? null,
     prompt_text: input.prompt,
     answer_text: input.answer,
@@ -284,9 +305,15 @@ export async function runScoreEvent(
     metadata: {
       hal_signals: signals,
       hal_error: halError,
-      delta_reason: delta.reason,
+      delta_reason: penaltySuppressed
+        ? `${delta.reason} (S-DRAIN: penalty suppressed — no hallucination_caught)`
+        : delta.reason,
       vesting_cliff_active: agent.vesting_cliff_active,
       block_threshold_used: HAL_CONSTITUTIONAL_BLOCK_THRESHOLD,
+      penalty_suppressed: penaltySuppressed,
+      ...(penaltySuppressed
+        ? { suppressed_reason: 'no_hallucination_caught', original_delta: Math.round(delta.delta_applied) }
+        : {}),
     },
   };
 
@@ -389,12 +416,14 @@ export async function runScoreEvent(
     hal_decision: decision,
     signals,
     repid_delta_calculated: delta.delta_calculated,
-    repid_delta_applied: delta.delta_applied,
+    repid_delta_applied: effectiveDeltaApplied,
     old_repid,
     new_repid: Math.round(new_repid),
     zk_proof_triggered: triggerProof,
     zk_proof_id,
-    reason: delta.reason,
+    reason: penaltySuppressed
+      ? `${delta.reason} (S-DRAIN: penalty suppressed — no hallucination_caught)`
+      : delta.reason,
   };
 }
 
