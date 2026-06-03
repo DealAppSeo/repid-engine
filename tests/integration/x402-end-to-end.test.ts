@@ -233,4 +233,12 @@ describe('x402 End-to-End Contract Economic Loop', () => {
     expect(escrowRes.body.status).toBe('escrowed');
     expect(escrowRes.body.x402_payment_id).toBeNull();
   });
+
+  afterAll(async () => {
+    // Teardown: close pg pool and redis client
+    const { closePgPool } = require('../../src/db/direct-pg');
+    const { closeRedisClient } = require('../../src/clients/redis-client');
+    await closePgPool();
+    await closeRedisClient();
+  });
 });

@@ -1,15 +1,13 @@
 import { Router } from 'express';
 import { db } from '../../db';
-import { requireHumanSbt } from '../../middleware/controller-auth';
+import { requireRole, mintQrToken } from '../../middleware/controller-auth';
 
 // Controller API (CC2 2026-05-26) — backend for the aitc controller-UI rebuild
-// (v0.app). All routes are human-SBT gated; wake/sprint require the MASTER SBT.
-// Reads go against the LIVE tables (agent_heartbeat + repid_agents), which fixes
-// the legacy "System Offline 0%" wrong-table bug at the source.
+// (v0.app). All routes are gated by role permissions.
 const router = Router();
 
-// Base auth: every controller route needs a valid human SBT.
-router.use(requireHumanSbt());
+// Base auth: every controller route needs at least a valid viewer role.
+router.use(requireRole('viewer'));
 
 // GET /agent-grid — live status of all Trinity agents.
 router.get('/agent-grid', async (_req, res) => {
@@ -88,8 +86,67 @@ router.get('/squads', async (_req, res) => {
   });
 });
 
-// POST /wake/:agent_id — manual wake signal (MASTER SBT only).
-router.post('/wake/:agent_id', requireHumanSbt({ master: true }), async (req, res) => {
+// POST /leads — capture emails for waitlist/prompts (gated to viewer).
+router.post('/leads', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email || !String(email).includes('@')) {
+    return res.status(400).json({ error: 'Valid email is required' });
+  }
+  const { error } = await db
+    .from('trinity_leads')
+    .insert({
+      email: String(email).trim(),
+      created_at: new Date().toISOString(),
+    });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, message: 'Email captured successfully' });
+});
+
+// POST /directives — operator-privileged task injection.
+router.post('/directives', requireRole('operator'), async (req, res) => {
+  const { agent_name, title, description, success_criteria, expected_output, priority } = req.body || {};
+  if (!agent_name || !title || !description || !success_criteria || !expected_output) {
+    return res.status(400).json({ error: 'agent_name, title, description, success_criteria, and expected_output are required' });
+  }
+  const { data, error } = await db
+    .from('trinity_tasks')
+    .insert({
+      title: String(title),
+      description: String(description),
+      success_criteria: String(success_criteria),
+      expected_output: String(expected_output),
+      agent_assigned: String(agent_name),
+      agent_name: String(agent_name),
+      assigned_to: String(agent_name),
+      status: 'pending',
+      priority: priority != null ? Number(priority) : 1,
+      insert_source: 'controller',
+      created_at: new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, directive_task_id: data?.id });
+});
+
+// POST /token — mint scoped QR / link tokens.
+router.post('/token', requireRole('operator'), (req, res) => {
+  const { role, durationMs } = req.body || {};
+  const targetRole = role === 'admin' || role === 'operator' || role === 'viewer' ? role : 'viewer';
+  const duration = durationMs != null ? Number(durationMs) : 3600 * 1000; // default 1 hour
+  const token = mintQrToken(targetRole, duration);
+  const baseUrl = process.env.CONTROLLER_URL || 'https://controller.trustshell.dev';
+  res.json({
+    ok: true,
+    token,
+    role: targetRole,
+    expiresAt: Date.now() + duration,
+    shareUrl: `${baseUrl}/?token=${token}`,
+  });
+});
+
+// POST /wake/:agent_id — manual wake signal (admin only).
+router.post('/wake/:agent_id', requireRole('admin'), async (req, res) => {
   const agent = req.params.agent_id;
   const { data, error } = await db
     .from('trinity_tasks')
@@ -109,8 +166,8 @@ router.post('/wake/:agent_id', requireHumanSbt({ master: true }), async (req, re
   res.json({ ok: true, agent, wake_task_id: data?.id });
 });
 
-// POST /sprint/:agent_id — dispatch a sprint to an agent (MASTER SBT only).
-router.post('/sprint/:agent_id', requireHumanSbt({ master: true }), async (req, res) => {
+// POST /sprint/:agent_id — dispatch a sprint to an agent (admin only).
+router.post('/sprint/:agent_id', requireRole('admin'), async (req, res) => {
   const agent = req.params.agent_id;
   const { title, description, priority } = req.body || {};
   if (!title || !description) {

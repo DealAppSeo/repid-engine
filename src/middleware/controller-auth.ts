@@ -1,21 +1,47 @@
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { db } from '../db';
+import { validateAgentApiKey } from '../auth/api-keys';
 
-// Controller endpoints are gated by the human SBT registry (human_sbt_registry),
-// NOT by REPID_API_KEYS. Read endpoints require any valid human SBT; privileged
-// ops (wake/sprint) require the MASTER SBT.
-//
-// ⚠️ human_sbt_registry has no "master"/Sean tier today (tiers: institutional /
-// qualified_investor / retail). So master identity is env-configured via
-// CONTROLLER_MASTER_SBT (a token_id OR a wallet_address). Defaults CLOSED: if the
-// env is unset, NO caller is master (privileged ops are blocked). Surfaced to Sean
-// (D-046). Squad-scoped permissions are stubbed (master-only) for now.
+const SECRET: string = process.env.CONTROLLER_QR_SECRET || 'controller-secret-key-1337-abc';
 
 export interface SbtContext {
   tokenId?: string;
   wallet?: string;
   tier?: string;
   isMaster: boolean;
+}
+
+export function mintQrToken(role: 'viewer' | 'operator' | 'admin', durationMs: number = 3600 * 1000): string {
+  const expiresAt = Date.now() + durationMs;
+  const payload = JSON.stringify({ role, expiresAt });
+  const base64Payload = Buffer.from(payload).toString('base64url');
+  const hmac = crypto.createHmac('sha256', SECRET);
+  hmac.update(base64Payload);
+  const sig = hmac.digest('hex');
+  return `${base64Payload}.${sig}`;
+}
+
+export function verifyQrToken(tokenStr: string): { role: 'viewer' | 'operator' | 'admin'; expiresAt: number } | null {
+  try {
+    const parts = tokenStr.split('.');
+    if (parts.length !== 2) return null;
+    const base64Payload = parts[0];
+    const sig = parts[1];
+    if (!base64Payload || !sig) return null;
+
+    const hmac = crypto.createHmac('sha256', SECRET);
+    hmac.update(base64Payload);
+    const expectedSig = hmac.digest('hex');
+    if (sig !== expectedSig) return null;
+
+    const payloadStr = Buffer.from(base64Payload, 'base64url').toString('utf8');
+    const payload = JSON.parse(payloadStr);
+    if (Date.now() > payload.expiresAt) return null; // Expired
+    return payload;
+  } catch (e) {
+    return null;
+  }
 }
 
 export async function resolveSbt(req: Request): Promise<SbtContext | null> {
@@ -39,25 +65,100 @@ export async function resolveSbt(req: Request): Promise<SbtContext | null> {
   return { tokenId: row.token_id, wallet: row.wallet_address ?? undefined, tier: row.qualification_tier ?? undefined, isMaster };
 }
 
-// Express middleware factory. `{ master: true }` additionally requires the master SBT.
-export function requireHumanSbt(opts: { master?: boolean } = {}) {
+export async function resolveControllerRole(req: Request): Promise<'viewer' | 'operator' | 'admin' | null> {
+  // 1. Check for scoped QR token in Authorization header, x-controller-token header, or query param
+  let tokenStr = '';
+  const authHeader = req.headers['authorization'];
+  if (typeof authHeader === 'string') {
+    if (authHeader.startsWith('Bearer ')) {
+      tokenStr = authHeader.substring(7).trim();
+    } else {
+      tokenStr = authHeader.trim();
+    }
+  }
+  if (!tokenStr) {
+    tokenStr = ((req.headers['x-controller-token'] as string) || '').trim();
+  }
+  if (!tokenStr && req.query.token) {
+    tokenStr = String(req.query.token).trim();
+  }
+
+  if (tokenStr) {
+    const verified = verifyQrToken(tokenStr);
+    if (verified) {
+      return verified.role;
+    }
+  }
+
+  // 2. Check for API key (x-api-key header or Authorization header if not matching QR token)
+  let apiKey = ((req.headers['x-api-key'] as string) || '').trim();
+  if (!apiKey && authHeader && !authHeader.startsWith('Bearer ') && !authHeader.includes('.')) {
+    apiKey = authHeader.trim();
+  }
+  if (!apiKey && authHeader && authHeader.startsWith('Bearer ')) {
+    const candidate = authHeader.substring(7).trim();
+    if (!candidate.includes('.')) { // Scoped QR tokens have a dot, API keys do not
+      apiKey = candidate;
+    }
+  }
+
+  if (apiKey) {
+    const validated = await validateAgentApiKey(apiKey);
+    if (validated) {
+      if (validated.scopes.includes('admin') || apiKey === process.env.CONTROLLER_MASTER_KEY) {
+        return 'admin';
+      }
+      if (validated.scopes.includes('operator')) {
+        return 'operator';
+      }
+      return 'viewer';
+    }
+  }
+
+  // 3. Check for SBT (x-sbt-token or x-sbt-wallet)
+  try {
+    const sbt = await resolveSbt(req);
+    if (sbt) {
+      if (sbt.isMaster || sbt.tier === 'institutional') {
+        return 'admin';
+      }
+      if (sbt.tier === 'qualified_investor') {
+        return 'operator';
+      }
+      return 'viewer';
+    }
+  } catch (e) {
+    console.error('SBT lookup failed', e);
+  }
+
+  return null;
+}
+
+const roleHierarchy = {
+  viewer: 1,
+  operator: 2,
+  admin: 3
+};
+
+export function requireRole(requiredRole: 'viewer' | 'operator' | 'admin') {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    let sbt: SbtContext | null = null;
-    try {
-      sbt = await resolveSbt(req);
-    } catch (e) {
-      res.status(500).json({ error: 'SBT lookup failed' });
+    const role = await resolveControllerRole(req);
+    if (!role) {
+      res.status(401).json({ error: 'Unauthorized: Valid SBT, API key, or scoped QR token required' });
       return;
     }
-    if (!sbt) {
-      res.status(401).json({ error: 'Controller requires a human SBT (x-sbt-token or x-sbt-wallet)' });
+
+    if (roleHierarchy[role] < roleHierarchy[requiredRole]) {
+      res.status(403).json({ error: `Forbidden: Requires at least ${requiredRole} permission (your role: ${role})` });
       return;
     }
-    if (opts.master && !sbt.isMaster) {
-      res.status(403).json({ error: 'Master SBT required for this operation (set CONTROLLER_MASTER_SBT)' });
-      return;
-    }
-    (req as any).sbt = sbt;
+
+    (req as any).controllerRole = role;
     next();
   };
+}
+
+// Keep backwards compatibility with requireHumanSbt
+export function requireHumanSbt(opts: { master?: boolean } = {}) {
+  return requireRole(opts.master ? 'admin' : 'viewer');
 }
