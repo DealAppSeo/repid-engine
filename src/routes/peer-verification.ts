@@ -26,12 +26,6 @@ router.post('/respond', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'invalid verdict value' });
   }
 
-  // S-CHAIN Phase 7 anti-self + anti-collusion (from S-REDTEAM)
-  if (verifier_agent_id === queueEntry.agent_id) {
-    return res.status(403).json({ error: 'self-endorsement blocked (anti-collusion)' });
-  }
-  // TODO full ring detection: query recent peer_verification_queue for mutual verifier<->agent pairs; if pattern, penalize RepID.
-
   try {
     // 1. Fetch queue entry
     const { data: queueEntry, error: queueErr } = await db
@@ -43,6 +37,12 @@ router.post('/respond', async (req: Request, res: Response) => {
     if (queueErr || !queueEntry) {
       return res.status(404).json({ error: 'Queue entry not found' });
     }
+
+    // S-CHAIN Phase 7 anti-self + anti-collusion (from S-REDTEAM)
+    if (verifier_agent_id === queueEntry.agent_id) {
+      return res.status(403).json({ error: 'self-endorsement blocked (anti-collusion)' });
+    }
+    // TODO full ring detection: query recent peer_verification_queue for mutual verifier<->agent pairs; if pattern, penalize RepID.
 
     if (queueEntry.verification_status !== 'pending' && queueEntry.verification_status !== 'in_review') {
       return res.status(400).json({ error: 'Queue entry is already processed' });

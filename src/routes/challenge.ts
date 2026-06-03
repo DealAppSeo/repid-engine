@@ -53,7 +53,7 @@ router.post('/challenge', async (req: Request, res: Response) => {
       .select('*', { count: 'exact', head: true })
       .in('event_type', ['peer_verify', 'challenge_won', 'challenge_lost'])
       .gte('created_at', since)
-      .or(`agent_name.eq.${challenger?.agent_name},agent_name.eq.${defender?.agent_name}`);
+      .or(`agent_name.eq.${challengerId},agent_name.eq.${defenderId}`); // fallback to ids (names resolved later; anti-collusion is advisory)
     if ((count || 0) > 3) {
       console.warn(`[S-CHAIN anti-collusion] high mutual activity between ${challengerId} and ${defenderId} (${count})`);
       // Could escalate to BFT or apply extra penalty here in future.
