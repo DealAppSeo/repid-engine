@@ -13,6 +13,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { verifyChainBreaks } from '../services/audit/verify-chain-db';
+import { getCachedLeaderboard, cacheLeaderboard } from '../cache/leaderboard-cache'; // S-CACHE — shared L2
 
 const router = Router();
 
@@ -114,6 +115,10 @@ async function integrityStatus(): Promise<string> {
 router.get('/leaderboard', async (_req: Request, res: Response) => {
   try {
     if (cache && Date.now() - cache.at < CACHE_TTL_MS) return res.json(cache.payload);
+    // L2 — shared DragonflyDB cache (cross-instance, survives restarts). S-CACHE.
+    const redisHit = await getCachedLeaderboard();
+    if (redisHit) { cache = { at: Date.now(), payload: redisHit }; return res.json({ ...redisHit, _cache: 'redis' }); }
+
     const rows = await fetchRealSessions();
     const providers = aggregate(rows);
     const integrity = await integrityStatus();
@@ -124,6 +129,7 @@ router.get('/leaderboard', async (_req: Request, res: Response) => {
       integrity,
     };
     cache = { at: Date.now(), payload };
+    void cacheLeaderboard(payload);
     return res.json(payload);
   } catch (e: any) {
     return res.status(500).json({ error: 'leaderboard_failed', detail: e?.message ?? String(e) });
