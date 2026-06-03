@@ -2,6 +2,8 @@
 
 `repid-engine` is the behavioral-reputation scoring backend for the HyperDAG Protocol Trust\* ecosystem — an Express + TypeScript API over Supabase that scores agent reputation (RepID), runs the HAL hallucination check, and anchors a hash-chained audit + ZKP/EAS attestation pipeline. **Private / proprietary** — do not redistribute. This guide gets a new contributor productive.
 
+**R2 (2026-06-03) hygiene note:** All XC work in dedicated worktree (../repid-engine-xc3 off origin/main, feat/xc-2026-06-03-eas-rls-restore). Never edit shared checkout. DDL via apply_migration (Sean co-sign). Verify LIVE (keys in shell) or mark BLOCKED. See XC_REPORT_2026-06-03_R2.md for EAS real, RLS 33, RepID restore, staking writes, gate hygiene.
+
 ## 1. Local setup
 ```bash
 git clone <repo> && cd repid-engine

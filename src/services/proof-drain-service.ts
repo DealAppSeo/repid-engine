@@ -219,9 +219,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         tier_proven: tierProven,
         merkle_root: args.merkleRoot,
         zk_commitment: args.commitment || null,
-        // eas_attestation_uid: NULL — EAS flow is V1.x
-        // eas_schema: defaults to 'constitutional-compliance-v1'
-        // created_at: defaults to NOW()
+        // eas_attestation_uid + eas_schema populated by R2 EAS land below (qualifying only)
       });
       if (error) {
         console.error(
@@ -229,6 +227,35 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           error.message,
           error
         );
+      }
+
+      // R2: LAND EAS FOR REAL — HyperDAG-bound (merkle present) only. Non-fatal.
+      if (args.merkleRoot) {
+        try {
+          const { easAttestationService } = await import('./eas-attestation-service');
+          if (easAttestationService.hasAttesterKey()) {
+            const attestRes = await easAttestationService.attestProof({
+              proofId: 0, // best-effort; real id resolved by uid update path if needed
+              agentId: args.agentId,
+              tier: tierProven,
+              merkleRoot: args.merkleRoot,
+              repidSnapshot: null,
+              proofType: 'POSTCARD',
+            });
+            if (attestRes.uid) {
+              await config.supabase
+                .from('repid_zkp_proofs')
+                .update({ eas_attestation_uid: attestRes.uid, eas_schema: 'constitutional-compliance-v1' })
+                .eq('zk_commitment', args.commitment)
+                .is('eas_attestation_uid', null);
+              console.log(`[ProofDrain][R2-EAS] real uid=${attestRes.uid} tx=${attestRes.txHash} agent=${args.agentId} tier=${tierProven}`);
+            } else if (attestRes.error) {
+              console.warn(`[ProofDrain][R2-EAS] attest no-uid: ${attestRes.error}`);
+            }
+          }
+        } catch (easE: any) {
+          console.warn('[ProofDrain][R2-EAS] wire non-fatal (no key or tx fail ok):', easE?.message || easE);
+        }
       }
     } catch (e) {
       console.error(
