@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
 import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
+import { routeProofRequest } from '../zkp/proof-router'; // S-ONCHAIN: routing classification (owned)
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -213,6 +214,10 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       } catch (e) {
         console.warn(`[ProofDrain] tier lookup threw for ${args.agentId}:`, e instanceof Error ? e.message : e);
       }
+
+      // S-ONCHAIN Phase 3: log routing decision for this proof (even for drain output)
+      const decision = await routeProofRequest('POSTCARD', { agentRepId: tierProven === 'VETERAN' ? 8000 : 1000 });
+      console.log(`[ProofDrain] routing for proof: ${decision.route_to} (${decision.reason})`);
 
       const { error } = await config.supabase.from('repid_zkp_proofs').insert({
         agent_id: args.agentId,
