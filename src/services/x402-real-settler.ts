@@ -173,6 +173,36 @@ export async function settleX402Payment(
       }
     }
 
+    // Record real settlement in x402_settlements
+    try {
+      const { data: fromAgent } = await supabase
+        .from('repid_agents')
+        .select('id')
+        .eq('agent_name', fromAgentName)
+        .maybeSingle();
+
+      const { data: toAgent } = await supabase
+        .from('repid_agents')
+        .select('id')
+        .eq('agent_name', toAgentName)
+        .maybeSingle();
+
+      await supabase.from('x402_settlements').insert({
+        idempotency_key: betId,
+        amount: parsedAmount,
+        status: 'settled',
+        prediction_topic: 'onchain_transfer',
+        tip_id: betId,
+        tx_hash: txHash,
+        is_simulated: false,
+        payer_address: wallet.address,
+        provider_agent_id: toAgent?.id || null,
+        requestor_agent_id: fromAgent?.id || null
+      });
+    } catch (dbErr: any) {
+      console.error('[x402-real-settler] Failed to log settlement in DB:', dbErr.message);
+    }
+
     return {
       tx_hash: txHash,
       basescan_url: `https://sepolia.basescan.org/tx/${txHash}`,
