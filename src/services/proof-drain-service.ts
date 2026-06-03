@@ -230,6 +230,32 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           error
         );
       }
+
+      // R3: EAS real-ready wire (only merkle/HyperDAG). Non-fatal. Uses our service (no borrowed).
+      if (args.merkleRoot) {
+        try {
+          const { easService } = await import('./eas-attestation-service.js');
+          if (easService.hasAttesterKey()) {
+            const res = await easService.attestProof({
+              proofId: 0,
+              agentId: args.agentId,
+              tier: tierProven,
+              merkleRoot: args.merkleRoot,
+              repidSnapshot: null,
+              proofType: 'POSTCARD'
+            });
+            if (res.uid) {
+              await config.supabase.from('repid_zkp_proofs')
+                .update({ eas_attestation_uid: res.uid, eas_schema: 'constitutional-compliance-v1' })
+                .eq('zk_commitment', args.commitment)
+                .is('eas_attestation_uid', null);
+              console.log(`[ProofDrain][R3-EAS] uid=${res.uid} agent=${args.agentId}`);
+            }
+          }
+        } catch (e: any) {
+          console.warn('[ProofDrain][R3-EAS] non-fatal:', e?.message || e);
+        }
+      }
     } catch (e) {
       console.error(
         `[ProofDrain] insertCanonicalProof threw for ${args.agentId} (queue stays completed):`,
