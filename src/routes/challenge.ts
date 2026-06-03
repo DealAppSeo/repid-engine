@@ -45,20 +45,6 @@ router.post('/challenge', async (req: Request, res: Response) => {
     });
   }
 
-  // S-CHAIN Phase 7: anti-collusion basic (S-REDTEAM gaming vector)
-  // If the pair has >3 mutual approvals in last 24h, treat as ring risk (log + higher hal scrutiny).
-  try {
-    const since = new Date(Date.now() - 24*3600*1000).toISOString();
-    const { count } = await db.from('repid_score_events')
-      .select('*', { count: 'exact', head: true })
-      .in('event_type', ['peer_verify', 'challenge_won', 'challenge_lost'])
-      .gte('created_at', since)
-      .or(`agent_name.eq.${challenger?.agent_name},agent_name.eq.${defender?.agent_name}`);
-    if ((count || 0) > 3) {
-      console.warn(`[S-CHAIN anti-collusion] high mutual activity between ${challengerId} and ${defenderId} (${count})`);
-      // Could escalate to BFT or apply extra penalty here in future.
-    }
-  } catch {}
   const claimStr = String(claim).trim();
   if (claimStr.length < 10) {
     return res.status(400).json({
@@ -93,6 +79,22 @@ router.post('/challenge', async (req: Request, res: Response) => {
   if (!challenger || !defender) {
     return res.status(404).json({ error: 'Challenger or defender not found' });
   }
+
+  // S-CHAIN Phase 7: anti-collusion basic (S-REDTEAM gaming vector). Runs AFTER challenger/defender
+  // are loaded (they are referenced below). If the pair has >3 mutual approvals in the last 24h,
+  // treat as ring risk (log + higher hal scrutiny).
+  try {
+    const since = new Date(Date.now() - 24*3600*1000).toISOString();
+    const { count } = await db.from('repid_score_events')
+      .select('*', { count: 'exact', head: true })
+      .in('event_type', ['peer_verify', 'challenge_won', 'challenge_lost'])
+      .gte('created_at', since)
+      .or(`agent_name.eq.${challenger?.agent_name},agent_name.eq.${defender?.agent_name}`);
+    if ((count || 0) > 3) {
+      console.warn(`[S-CHAIN anti-collusion] high mutual activity between ${challengerId} and ${defenderId} (${count})`);
+      // Could escalate to BFT or apply extra penalty here in future.
+    }
+  } catch {}
 
   const audit = await auditConstitutionalCompliance({
     agentId: challengerId,
