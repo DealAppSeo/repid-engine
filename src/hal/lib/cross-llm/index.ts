@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import type { CommaSeverity, CrossLLMSummary, HALEmbeddingClient, HALProviderConfig } from '../types';
 import { computeAgreement, checkPythagoreanComma } from './agreement';
 import { queryProvider, type ProviderAnswer } from './providers';
+import { pgQuery } from '../../../db/direct-pg';
 
 export interface CrossLLMOptions {
   providers: HALProviderConfig[];
@@ -33,6 +34,122 @@ export interface CrossLLMOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10000;
+
+interface CircuitState {
+  consecutiveFailures: number;
+  openUntil: number;
+}
+const circuitStates: Record<string, CircuitState> = {};
+
+function getCircuitState(provider: string): CircuitState {
+  const norm = provider.toLowerCase().trim();
+  if (!circuitStates[norm]) {
+    circuitStates[norm] = { consecutiveFailures: 0, openUntil: 0 };
+  }
+  return circuitStates[norm]!;
+}
+
+export function isCircuitOpen(provider: string): boolean {
+  const state = getCircuitState(provider);
+  return Date.now() < state.openUntil;
+}
+
+async function setProviderHealth(providerName: string, verified: boolean): Promise<void> {
+  try {
+    let mappedName = providerName.toLowerCase().trim();
+    if (mappedName === 'anthropic') {
+      mappedName = 'anthropic-direct';
+    }
+    const rows = await pgQuery(
+      'SELECT id FROM provider_trust_scores WHERE provider_name = $1',
+      [mappedName]
+    );
+    if (rows.length > 0) {
+      await pgQuery(
+        'UPDATE provider_trust_scores SET verified = $2, last_updated = NOW() WHERE provider_name = $1',
+        [mappedName, verified]
+      );
+    } else {
+      await pgQuery(
+        'INSERT INTO provider_trust_scores (provider_name, verified, last_updated) VALUES ($1, $2, NOW())',
+        [mappedName, verified]
+      );
+    }
+    console.log(`[setProviderHealth] updated health of ${mappedName} in DB to ${verified}`);
+  } catch (err: any) {
+    console.error(`[setProviderHealth] failed for ${providerName}:`, err.message || err);
+  }
+}
+
+export async function markProviderSuccess(provider: string): Promise<void> {
+  const state = getCircuitState(provider);
+  const wasOpen = state.consecutiveFailures >= 5;
+  state.consecutiveFailures = 0;
+  state.openUntil = 0;
+  if (wasOpen) {
+    console.log(`[circuit-breaker] CIRCUIT CLOSED (RESET) for ${provider}`);
+    await setProviderHealth(provider, true);
+  }
+}
+
+export async function markProviderFailure(provider: string, errMessage: string): Promise<void> {
+  const state = getCircuitState(provider);
+  state.consecutiveFailures += 1;
+  console.warn(`[circuit-breaker] Provider ${provider} failure ${state.consecutiveFailures}/5: ${errMessage}`);
+  if (state.consecutiveFailures >= 5) {
+    state.openUntil = Date.now() + 5 * 60 * 1000; // 5-minute cool-down
+    console.error(`[circuit-breaker] CIRCUIT OPEN for ${provider} until ${new Date(state.openUntil).toISOString()}`);
+    await setProviderHealth(provider, false);
+  }
+}
+
+function resolveSingleFallback(excludeNames: string[]): HALProviderConfig | null {
+  const pool: HALProviderConfig[] = [
+    {
+      provider: 'groq',
+      model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'llama-3.3-70b-versatile',
+      endpoint: process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ?? 'https://api.groq.com/openai/v1/chat/completions',
+      apiKey: process.env.GROQ_API_KEY ?? '',
+      callType: 'openai-compat' as const,
+    },
+    {
+      provider: 'cerebras',
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7',
+      endpoint: 'https://api.cerebras.ai/v1/chat/completions',
+      apiKey: process.env.CEREBRAS_API_KEY ?? '',
+      callType: 'openai-compat' as const,
+    },
+    {
+      provider: 'fireworks',
+      model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5',
+      endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions',
+      apiKey: process.env.FIREWORKS_API_KEY ?? '',
+      callType: 'openai-compat' as const,
+    },
+    {
+      provider: 'deepseek',
+      model: process.env.CROSS_LLM_PROVIDER_3_MODEL ?? 'deepseek-chat',
+      endpoint: process.env.CROSS_LLM_PROVIDER_3_ENDPOINT ?? 'https://api.deepseek.com/v1/chat/completions',
+      apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+      callType: 'openai-compat' as const,
+    },
+    {
+      provider: 'anthropic',
+      model: process.env.CROSS_LLM_PROVIDER_2_MODEL ?? 'claude-haiku-4-5-20251001',
+      endpoint: process.env.CROSS_LLM_PROVIDER_2_ENDPOINT ?? 'https://api.anthropic.com/v1/messages',
+      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+      callType: 'anthropic-native' as const,
+    }
+  ];
+
+  const excludes = new Set(excludeNames.map(n => n.toLowerCase().trim()));
+  for (const p of pool) {
+    if (p.apiKey && !isCircuitOpen(p.provider) && !excludes.has(p.provider.toLowerCase().trim())) {
+      return p;
+    }
+  }
+  return null;
+}
 
 function hashPrompt(prompt: string): string {
   return crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 32);
@@ -86,20 +203,48 @@ export async function checkCrossLLM(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const start = Date.now();
 
-  const providersWithTimeout: HALProviderConfig[] = options.providers.map(p => ({
-    ...p,
-    timeoutMs: p.timeoutMs ?? timeoutMs,
-  }));
+  const selectedProviders: HALProviderConfig[] = [];
+  const selectedNames = new Set<string>();
+
+  for (const p of options.providers) {
+    if (p.apiKey && !isCircuitOpen(p.provider) && !selectedNames.has(p.provider.toLowerCase().trim())) {
+      selectedProviders.push({ ...p, timeoutMs: p.timeoutMs ?? timeoutMs });
+      selectedNames.add(p.provider.toLowerCase().trim());
+    } else {
+      const fb = resolveSingleFallback([p.provider, ...selectedNames]);
+      if (fb) {
+        selectedProviders.push({ ...fb, squad: p.squad, timeoutMs: fb.timeoutMs ?? timeoutMs });
+        selectedNames.add(fb.provider.toLowerCase().trim());
+      } else {
+        selectedProviders.push({ ...p, timeoutMs: p.timeoutMs ?? timeoutMs });
+        selectedNames.add(p.provider.toLowerCase().trim());
+      }
+    }
+  }
 
   const settled = await Promise.allSettled(
-    providersWithTimeout.map(cfg => queryProvider(cfg, prompt)),
+    selectedProviders.map(async (cfg) => {
+      try {
+        const res = await queryProvider(cfg, prompt);
+        if (res.error) {
+          await markProviderFailure(cfg.provider, res.error);
+        } else {
+          await markProviderSuccess(cfg.provider);
+        }
+        return res;
+      } catch (err: any) {
+        await markProviderFailure(cfg.provider, err.message || String(err));
+        throw err;
+      }
+    })
   );
+
   const answers: ProviderAnswer[] = settled.map((s, i) => {
     if (s.status === 'fulfilled') return s.value;
     return {
-      provider: providersWithTimeout[i]!.provider,
-      squad: providersWithTimeout[i]!.squad ?? 'alpha',
-      model: providersWithTimeout[i]!.model,
+      provider: selectedProviders[i]!.provider,
+      squad: String(selectedProviders[i]!.squad ?? 'alpha'),
+      model: selectedProviders[i]!.model,
       answer: '',
       latency_ms: 0,
       error: String((s as PromiseRejectedResult).reason),
