@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"Reentrancy prevention pattern is widely accepted","latency_ms":232},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"Checks out","latency_ms":304},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":857}]}
