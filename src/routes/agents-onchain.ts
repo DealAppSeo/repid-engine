@@ -11,6 +11,7 @@
 import { Router, type Request, type Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { Erc8004Minter } from '../services/erc8004-minter';
+import { verifyAllT12OnChain, verifyAgentOnChain } from '../services/onchain-verifier';
 
 // Default ERC-8004 IdentityRegistry on Base Sepolia (vanity address, multi-chain).
 // Source: hyperdag-protocol/packages/contracts (deployed via vanity-deploy 2026-04).
@@ -157,5 +158,23 @@ export function createAgentsOnchainRouter(supabase: SupabaseClient): Router {
     }
   });
 
+  // S-ONCHAIN Phase 4 batch verifier (inside router factory so 'router' in scope)
+  router.get('/verify-onchain', async (req: Request, res: Response) => {
+    try {
+      const { agent } = req.query;
+      if (agent) {
+        const v = await verifyAgentOnChain(String(agent));
+        return res.json(v);
+      }
+      const batch = await verifyAllT12OnChain();
+      res.json(batch);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 }
+
+// NOTE: The /verify-onchain batch route is registered inside createAgentsOnchainRouter (see above).
+// Mount the router in v1.ts or index as usual. The import at top level (line ~14) covers it.

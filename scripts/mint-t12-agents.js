@@ -91,6 +91,7 @@ async function main() {
 
   const results = [];
   const resultsFile = path.join(__dirname, '..', 'scratch', 'S-CHAIN_mint_results.json');
+  const correctResultsFile = path.join(__dirname, '..', 'scratch', 'mint-t12-correct-results.json'); // per S-ONCHAIN spec Step 1.3
 
   for (let i = 0; i < T12.length; i++) {
     const a = T12[i];
@@ -100,9 +101,19 @@ async function main() {
 
     try {
       if (isDry) {
-        const gas = await contract['register(string)'].estimateGas(uri);
-        console.log('  DRY: gas estimate =', gas.toString());
-        results.push({ name: a.name, uuid: a.uuid, uri, dry: true, gas: gas.toString() });
+        if (PK) {
+          try {
+            const gas = await contract['register(string)'].estimateGas(uri);
+            console.log('  DRY: gas estimate =', gas.toString());
+            results.push({ name: a.name, uuid: a.uuid, uri, dry: true, gas: gas.toString() });
+          } catch (estErr) {
+            console.log('  DRY: estimate failed (', estErr.message?.slice(0,80) || estErr, '), using simulated gas 150000');
+            results.push({ name: a.name, uuid: a.uuid, uri, dry: true, gas: '150000', note: 'estimate reverted, simulated' });
+          }
+        } else {
+          console.log('  DRY (no PK): simulated gas 150000 (production uses register(string) as in Erc8004Minter)');
+          results.push({ name: a.name, uuid: a.uuid, uri, dry: true, gas: '150000', note: 'no PK, simulated; uses production register(string) overload' });
+        }
         continue;
       }
 
@@ -166,8 +177,10 @@ async function main() {
   };
 
   fs.writeFileSync(resultsFile, JSON.stringify(summary, null, 2));
+  fs.writeFileSync(correctResultsFile, JSON.stringify(summary, null, 2));
   console.log('\n=== MINT COMPLETE ===');
   console.log('Wrote', resultsFile);
+  console.log('Wrote', correctResultsFile, '(per S-ONCHAIN spec)');
   console.log('Success count:', summary.success, '/', T12.length);
   console.log('\nTo make Marco see real txs on basescan:');
   console.log('1. Run this script with funded key (it will produce the txs above).');
