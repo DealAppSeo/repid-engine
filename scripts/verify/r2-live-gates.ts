@@ -5,7 +5,6 @@
  * Never assume. Re-runnable. Updates SCHEMA_TRUTH_MAP additive when live numbers change.
  */
 import 'dotenv/config';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.SUPABASE_URL_PUBLIC || '';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE || '';
@@ -23,6 +22,8 @@ async function main() {
     process.exit(0);
   }
 
+  // Lazy import only when keys present (allows running verifier for BLOCKED path with no node_modules/@supabase)
+  const { createClient, SupabaseClient } = await import('@supabase/supabase-js');
   let db: SupabaseClient;
   try {
     db = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
