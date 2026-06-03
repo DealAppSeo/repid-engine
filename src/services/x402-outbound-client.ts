@@ -340,10 +340,10 @@ export class X402OutboundClient {
 
     if (idempotencyKey) {
       const isSimulated = !process.env.X402_REAL_RPC;
-      const { data: existingSettlement } = await db.from('x402_settlements')
+      const query = db.from('x402_settlements')
         .select('settlement_attempt_count')
-        .eq('idempotency_key', idempotencyKey)
-        .maybeSingle();
+        .eq('idempotency_key', idempotencyKey);
+      const { data: existingSettlement } = await (query.maybeSingle ? query.maybeSingle() : (query as any).single());
 
       const settlementObj = {
         idempotency_key: idempotencyKey,

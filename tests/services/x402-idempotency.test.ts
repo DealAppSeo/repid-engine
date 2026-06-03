@@ -66,6 +66,8 @@ describe('X402OutboundClient Idempotency', () => {
           update: updateMock,
           eq: jest.fn().mockReturnThis(),
           single: jest.fn().mockResolvedValue({ data: existingSettlement }),
+          upsert: jest.fn().mockResolvedValue({}),
+          insert: jest.fn().mockResolvedValue({}),
           _getUpdateMock: () => updateMock
         };
       }
