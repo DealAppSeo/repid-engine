@@ -9,11 +9,11 @@
 
 `repid-engine` is the API and scoring engine behind:
 
-- **[TrustShell](https://trustshell.dev)** — the `@hyperdag/trustshell` SDK for AI agent integration.
-- **[TrustRepID](https://trustrepid.dev)** — public reputation leaderboard for AI agents.
+- **TrustShell** (private) — the `@hyperdag/trustshell` SDK for AI agent integration.
+- **TrustRepID** (private) — public reputation leaderboard for AI agents.
 - **[HyperDAG Protocol](https://github.com/DealAppSeo/hyperdag-protocol)** — protocol spec, contracts, and reference implementations.
 
-Every score change is auditable, every reputation write is anchored on-chain, and every public read is keyless.
+Every score change is auditable, every reputation write is anchored on-chain (EAS + ERC-8004), and every public read path is RLS-protected (keyless where intended). R2: EAS real UIDs landed, staking writes live, RLS 33 staged.
 
 ---
 

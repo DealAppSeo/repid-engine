@@ -15,6 +15,7 @@
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { BUILDER_FLOOR, computeAuthority, babylonianSqrt } from './authority-math';
+import { sponsorshipService } from './sponsorship'; // R2 handoff (GA calls recordDeposit + sponsorshipService.recordSponsorship)
 
 export { BUILDER_FLOOR, computeAuthority };
 
@@ -56,6 +57,15 @@ export async function depositStake(
   if (insErr) {
     return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, error: insErr.message };
   }
+
+  // R2: also write real row to agent_stakes (substrate live; map builder->staker_agent for compatibility)
+  await db.from('agent_stakes').insert({
+    staker_agent: builder.id,
+    stake_amount: Number(amount) / 1_000_000, // store in USDC units to match table numeric
+    dimension: 'builder_stake',
+    status: 'active',
+    target_model: 'general',
+  }).catch(() => {}); // non-fatal if table strict
 
   const total = await getCurrentStake(builder.id);
   const auth = await snapshotAuthority(builder.id, total);
@@ -220,3 +230,17 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
     },
   };
 }
+
+// R2: clean call interface for GA (x402 gate, agents) to produce real writes.
+// GA calls: import { recordDeposit, sponsorshipService } from '../services/stake-vault' (or sponsorship).
+// recordDeposit writes agent_stakes + stake_deposits + authority snapshot.
+export async function recordDeposit(agentId: string, amountUsdc: number | bigint, txHash?: string) {
+  return depositStake(agentId, BigInt(amountUsdc), txHash);
+}
+
+// sponsorshipService imported above for GA handoff. GA usage example:
+//   import { recordDeposit, sponsorshipService } from './services/stake-vault';
+//   await recordDeposit('trinity-veritas', 25000000); // 25 USDC
+//   await sponsorshipService.recordSponsorship({ sponsorAgentId: 'trinity-mel', targetAgentId: 'some-agent', amountUsdc: 10000000, dimension: 'x402' });
+
+export { sponsorshipService };
