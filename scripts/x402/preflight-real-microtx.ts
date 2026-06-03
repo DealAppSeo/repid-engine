@@ -93,7 +93,7 @@ export async function runPreflight(): Promise<PreflightCheck[]> {
 
   // 6. Idempotency substrate
   try {
-    const { data: col } = await db.from('x402_settlements').select('idempotency_key').limit(1).catch(() => ({ data: null }));
+    const { data: col } = await db.from('x402_settlements').select('idempotency_key').limit(1);
     checks.push({ name: 'Idempotency substrate', status: 'GREEN', detail: 'column exists', remediation: '' });
   } catch (e: any) {
     checks.push({ name: 'Idempotency substrate', status: 'RED', detail: 'column check failed', remediation: 'Run migrations' });
