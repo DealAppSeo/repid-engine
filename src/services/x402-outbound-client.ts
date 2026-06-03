@@ -141,6 +141,8 @@ export class X402OutboundClient {
     let txHash: string | undefined;
     let counterpartyAttestation: ZkpRepIdAttestation | undefined;
     let idempotencyKey: string | undefined;
+    let paymentB64: string | undefined;
+    let wallet: ethers.Wallet | undefined;
 
     let offer: any;
     if (response.status === 402) {
@@ -172,7 +174,7 @@ export class X402OutboundClient {
         throw new Error(`Private key for agent ${agentName} not found in env (${agentName.toUpperCase()}_PRIVATE_KEY)`);
       }
 
-      const wallet = new ethers.Wallet(pk);
+      wallet = new ethers.Wallet(pk);
 
       // --- GOVERNOR CHECK BEFORE NEW PAYMENT ---
       const { data: configRows } = await db.from('repid_config')
@@ -293,7 +295,7 @@ export class X402OutboundClient {
         nonce: nonce
       };
 
-      const paymentB64 = Buffer.from(JSON.stringify(paymentPayload)).toString('base64');
+      paymentB64 = Buffer.from(JSON.stringify(paymentPayload)).toString('base64');
 
       // 4. Retry with X-PAYMENT header
       response = await fetch(url, {
@@ -334,6 +336,33 @@ export class X402OutboundClient {
       } catch (e) {
         console.warn('[X402OutboundClient] Failed to parse counterparty attestation');
       }
+    }
+
+    if (idempotencyKey) {
+      const isSimulated = !process.env.X402_REAL_RPC;
+      const { data: existingSettlement } = await db.from('x402_settlements')
+        .select('settlement_attempt_count')
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+
+      const settlementObj = {
+        idempotency_key: idempotencyKey,
+        tip_id: opts.tipId,
+        requestor_agent_id: opts.agentId,
+        provider_agent_id: opts.providerAgentId,
+        prediction_topic: 'Outbound Analysis',
+        amount: offer ? BigInt(offer.maxAmountRequired) : 0n,
+        asset: offer?.asset || 'USDC',
+        payer_address: wallet?.address || null,
+        x_payment_header: paymentB64 || null,
+        is_simulated: isSimulated,
+        status: response.ok ? 'settled' : 'failed',
+        tx_hash: txHash || null,
+        delivered_at: response.ok ? new Date().toISOString() : null,
+        settlement_attempt_count: existingSettlement ? (existingSettlement.settlement_attempt_count || 1) + 1 : 1
+      };
+
+      await db.from('x402_settlements').upsert(settlementObj);
     }
 
     // 5. Write to repid_events

@@ -17,6 +17,8 @@ async function main() {
   
   const agentName = 'dry_run_agent_' + Date.now();
   process.env[`${agentName.toUpperCase()}_PRIVATE_KEY`] = wallet.privateKey;
+  process.env[`TRINITY-${agentName.toUpperCase()}_PRIVATE_KEY`] = wallet.privateKey;
+  process.env[`TRINITY_${agentName.toUpperCase()}_PRIVATE_KEY`] = wallet.privateKey;
   
   await db.from('repid_agents').insert({
     id: agentId,

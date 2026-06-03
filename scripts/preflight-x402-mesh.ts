@@ -140,7 +140,7 @@ async function runPreflight() {
     // USDC Balance
     const usdcAddr = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
     const usdc = new ethers.Contract(usdcAddr, ['function balanceBytes() view returns (uint256)', 'function balanceOf(address) view returns (uint256)'], provider);
-    const usdcBalance = await usdc.balanceOf(wallet.address);
+    const usdcBalance = await (usdc as any).balanceOf(wallet.address);
     console.log(`USDC Balance: ${ethers.formatUnits(usdcBalance, 6)} USDC`);
 
     if (usdcBalance < ethers.parseUnits('1', 6)) {
