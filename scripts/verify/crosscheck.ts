@@ -24,6 +24,7 @@ import { swarmThroughputCheck } from './checks/swarm-throughput';
 import { halAblationCheck } from './checks/hal-ablation';
 import { repidFloorCheck } from './checks/repid-floor';
 import { zkpAnchorCheck } from './checks/zkp-anchor';
+import { commaVerdictCheck } from './checks/comma-verdict';
 
 const REGISTRY: Record<string, Check> = {
   authority: authorityCheck,
@@ -36,6 +37,7 @@ const REGISTRY: Record<string, Check> = {
   'hal-ablation': halAblationCheck,   // B AUC ≥ plain-majority A on the persisted corpus
   'repid-floor': repidFloorCheck,     // no active trinity agent pinned at floor w/ peak ≥ 2× (drain signature)
   'zkp-anchor': zkpAnchorCheck,       // recent proofs have non-zero EAS coverage (pairs with XC)
+  'comma-verdict': commaVerdictCheck, // S-COMMA-R2: B-vs-C cyclic-drift verdict backed by current ablation
 };
 
 function parseList(flag: string): string[] | null {
