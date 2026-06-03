@@ -12,7 +12,6 @@
  * Sean: set key, fund with 0.01 ETH testnet, co-sign first real tx.
  */
 import 'dotenv/config';
-import { createClient } from '@supabase/supabase-js';
 import { easAttestationService, fetchAndDecodeAttestation } from '../src/services/eas-attestation-service';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
@@ -33,6 +32,7 @@ async function main() {
     process.exit(0);
   }
 
+  const { createClient } = await import('@supabase/supabase-js');
   const db = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
 
   // Find 5+ qualifying (merkle + recent enough for HyperDAG snapshot)
