@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
+import { todayPT } from '../lib/time';
 
 const router = Router();
 
@@ -41,7 +42,7 @@ router.post('/agents/human', async (req: Request, res: Response) => {
     },
     governing_bodies: ['HyperDAG Protocol'],
     anonymous: true,
-    version_date: new Date().toISOString().split('T')[0],
+    version_date: todayPT(),
   };
 
   try {
@@ -358,7 +359,7 @@ router.get('/agents/:id/card', async (req: Request, res: Response) => {
   const ethicsScore = ethics.overallScore;
   const tierLabel = String(agent.tier).replace(/_/g, ' ');
   const repIdStr = Number(agent.current_repid).toLocaleString();
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayPT();
 
   const svg = `<svg width="400" height="220" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
   <rect width="400" height="220" rx="16" fill="#111827"/>
