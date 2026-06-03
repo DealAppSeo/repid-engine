@@ -13,7 +13,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { verifyChainBreaks } from '../services/audit/verify-chain-db';
-import { cacheGet, cacheSet } from '../cache/dragonfly'; // S-CACHE — shared L2 leaderboard cache
+import { getCachedLeaderboard, cacheLeaderboard } from '../cache/leaderboard-cache'; // S-CACHE — shared L2
 
 const router = Router();
 
@@ -116,11 +116,9 @@ router.get('/leaderboard', async (_req: Request, res: Response) => {
   try {
     if (cache && Date.now() - cache.at < CACHE_TTL_MS) return res.json(cache.payload);
     // L2 — shared DragonflyDB cache (cross-instance, survives restarts). S-CACHE.
-    const redisHit = await cacheGet('leaderboard:v1');
-    if (redisHit) {
-      try { const p = JSON.parse(redisHit); cache = { at: Date.now(), payload: p }; return res.json({ ...p, _cache: 'redis' }); }
-      catch { /* corrupt → recompute */ }
-    }
+    const redisHit = await getCachedLeaderboard();
+    if (redisHit) { cache = { at: Date.now(), payload: redisHit }; return res.json({ ...redisHit, _cache: 'redis' }); }
+
     const rows = await fetchRealSessions();
     const providers = aggregate(rows);
     const integrity = await integrityStatus();
@@ -131,7 +129,7 @@ router.get('/leaderboard', async (_req: Request, res: Response) => {
       integrity,
     };
     cache = { at: Date.now(), payload };
-    void cacheSet('leaderboard:v1', JSON.stringify(payload), 60);
+    void cacheLeaderboard(payload);
     return res.json(payload);
   } catch (e: any) {
     return res.status(500).json({ error: 'leaderboard_failed', detail: e?.message ?? String(e) });

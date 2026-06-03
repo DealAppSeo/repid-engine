@@ -19,8 +19,22 @@ import { getCachedHalResult, cacheHalResult, getHalCacheStats, __hashPrompt } fr
 import { checkRateLimit } from '../../src/cache/rate-limiter';
 import { getCachedVerification, recordVerification } from '../../src/cache/verification-cache';
 import { recordProviderCall, getProviderHealth } from '../../src/cache/provider-health';
+import { getCachedLeaderboard, cacheLeaderboard } from '../../src/cache/leaderboard-cache';
 
 beforeEach(() => store.clear());
+
+describe('leaderboard-cache', () => {
+  it('miss → null, then hit after caching', async () => {
+    expect(await getCachedLeaderboard()).toBeNull();
+    const payload = { providers: [{ name: 'groq', avg_score: 0.1 }], total_evaluations: 1 };
+    await cacheLeaderboard(payload);
+    expect(await getCachedLeaderboard()).toEqual(payload);
+  });
+  it('returns null on corrupt JSON', async () => {
+    store.set('leaderboard:v1', '{not json');
+    expect(await getCachedLeaderboard()).toBeNull();
+  });
+});
 
 describe('hal-cache', () => {
   it('hashPrompt is deterministic; different providers → different keys', () => {
