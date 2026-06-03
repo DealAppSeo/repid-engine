@@ -34,6 +34,7 @@ import halTestRouter from './routes/hal-test';
 import auditRouter from './routes/audit';
 import fullAccountRouter from './routes/full-account';
 import receiptsRouter from './routes/receipts';
+import mvpApiRouter from './routes/mvp-api'; // S-WIRE-MVP — provider-trust/capabilities/dna/x402-gate/disputes/staking/zkp
 import { repidPublicRouter, repidAdminRouter } from './routes/repid';
 import stakeRouter from './routes/stake';
 import { llmRouter } from './routes/route';
@@ -342,6 +343,8 @@ app.use('/api/v1', v1Router);
 // CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
 app.use('/api/v1/observability', productivityRouter);
 app.use('/api/v1', receiptsRouter);
+// S-WIRE-MVP — agent-facing API over the eight new ecosystem tables (authed, post-authMiddleware).
+app.use('/api/v1', mvpApiRouter);
 // S-SPINE — referral stats dashboard (authed: requires a valid REPID_API_KEY / service role).
 app.use('/api/v1', referralStatsRouter);
 // Escalation API (CC2 2026-05-26) — agent/worker-facing (REPID_API_KEYS auth). Routes
