@@ -6,15 +6,24 @@ const POLL_INTERVAL_MS = parseInt(process.env.HITL_EXPIRATION_POLL_MS || '300000
 const ENABLED = () => process.env.HITL_EXPIRATION_ENABLED !== 'false';
 const TIMEOUT_VERDICT = (process.env.HITL_TIMEOUT_VERDICT || 'challenged') as HitlResolution;
 
+let hitlInterval: NodeJS.Timeout | null = null;
+
 export async function startHitlExpirationJob() {
   if (!ENABLED()) {
     console.log('[HitlExpirationJob] Disabled via env flag, skipping');
     return;
   }
   console.log('[HitlExpirationJob] Starting loop');
-  const interval = setInterval(runExpirationSweep, POLL_INTERVAL_MS);
-  if (typeof interval.unref === 'function') {
-    interval.unref();
+  hitlInterval = setInterval(runExpirationSweep, POLL_INTERVAL_MS);
+  if (hitlInterval && typeof hitlInterval.unref === 'function') {
+    hitlInterval.unref();
+  }
+}
+
+export function stopHitlExpirationJob() {
+  if (hitlInterval) {
+    clearInterval(hitlInterval);
+    hitlInterval = null;
   }
 }
 

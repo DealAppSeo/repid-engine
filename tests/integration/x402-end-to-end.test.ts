@@ -235,9 +235,13 @@ describe('x402 End-to-End Contract Economic Loop', () => {
   });
 
   afterAll(async () => {
-    // Teardown: close pg pool and redis client
+    // Rollback Note: If direct pool closing or worker termination causes tests to fail in environments
+    // without database access, these lines can be reverted. The mock database handles are configured above.
     const { closePgPool } = require('../../src/db/direct-pg');
     const { closeRedisClient } = require('../../src/clients/redis-client');
+    const { stopHitlExpirationJob } = require('../../src/services/hitl-expiration-job');
+    
+    stopHitlExpirationJob();
     await closePgPool();
     await closeRedisClient();
   });

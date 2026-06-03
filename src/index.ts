@@ -197,12 +197,12 @@ app.use((req, res, next) => {
   // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
   // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
   if (req.path === '/api/v1/api-key-requests/request') return next();
-  // Controller: bypass SQL-keyword scan for all controller routes as they are authenticated and parameterized
-  if (req.path.startsWith('/api/v1/controller')) return next();
   // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
   if (req.path === '/api/v1/escalation/escalate') return next();
+  const SKIP_SANITIZER_KEYS = new Set(['description', 'success_criteria', 'expected_output', 'notes', 'title', 'constitution_text', 'interest', 'linkedin', 'github', 'notes_text']);
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
+      if (SKIP_SANITIZER_KEYS.has(key)) continue;
       if (typeof obj[key] === 'string') {
         const val = obj[key].toUpperCase();
         if (val.includes('SELECT ') || val.includes('DROP ') || val.includes('INSERT ') || val.includes('UPDATE ') || val.includes('DELETE ') || val.includes('--') || val.includes(';')) {
