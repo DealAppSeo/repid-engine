@@ -89,13 +89,18 @@ router.get('/squads', async (_req, res) => {
 // POST /leads — capture emails for waitlist/prompts (gated to viewer).
 router.post('/leads', async (req, res) => {
   const { email } = req.body || {};
-  if (!email || !String(email).includes('@')) {
-    return res.status(400).json({ error: 'Valid email is required' });
+  if (typeof email !== 'string' || !email.includes('@') || email.length < 3 || email.length > 255) {
+    return res.status(400).json({ error: 'Valid email between 3 and 255 characters is required' });
   }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email.trim())) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
   const { error } = await db
     .from('trinity_leads')
     .insert({
-      email: String(email).trim(),
+      email: email.trim(),
       created_at: new Date().toISOString(),
     });
   if (error) return res.status(500).json({ error: error.message });
@@ -105,21 +110,43 @@ router.post('/leads', async (req, res) => {
 // POST /directives — operator-privileged task injection.
 router.post('/directives', requireRole('operator'), async (req, res) => {
   const { agent_name, title, description, success_criteria, expected_output, priority } = req.body || {};
-  if (!agent_name || !title || !description || !success_criteria || !expected_output) {
-    return res.status(400).json({ error: 'agent_name, title, description, success_criteria, and expected_output are required' });
+  
+  if (
+    typeof agent_name !== 'string' || agent_name.length < 1 || agent_name.length > 100 ||
+    typeof title !== 'string' || title.length < 1 || title.length > 255 ||
+    typeof description !== 'string' || description.length < 1 || description.length > 5000 ||
+    typeof success_criteria !== 'string' || success_criteria.length < 1 || success_criteria.length > 5000 ||
+    typeof expected_output !== 'string' || expected_output.length < 1 || expected_output.length > 5000
+  ) {
+    return res.status(400).json({ error: 'Invalid string field types or lengths (max 255 for title, 5000 for text)' });
   }
+
+  // Validate agent name format (alphanumeric, dashes, underscores, and UUIDs)
+  const agentNameRegex = /^[a-zA-Z0-9-_]+$/;
+  if (!agentNameRegex.test(agent_name)) {
+    return res.status(400).json({ error: 'Invalid agent_name format' });
+  }
+
+  let validatedPriority = 1;
+  if (priority !== undefined) {
+    if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < 1 || priority > 5) {
+      return res.status(400).json({ error: 'Priority must be an integer between 1 and 5' });
+    }
+    validatedPriority = priority;
+  }
+
   const { data, error } = await db
     .from('trinity_tasks')
     .insert({
-      title: String(title),
-      description: String(description),
-      success_criteria: String(success_criteria),
-      expected_output: String(expected_output),
-      agent_assigned: String(agent_name),
-      agent_name: String(agent_name),
-      assigned_to: String(agent_name),
+      title: title.trim(),
+      description: description.trim(),
+      success_criteria: success_criteria.trim(),
+      expected_output: expected_output.trim(),
+      agent_assigned: agent_name.trim(),
+      agent_name: agent_name.trim(),
+      assigned_to: agent_name.trim(),
       status: 'pending',
-      priority: priority != null ? Number(priority) : 1,
+      priority: validatedPriority,
       insert_source: 'controller',
       created_at: new Date().toISOString(),
     })
@@ -132,8 +159,19 @@ router.post('/directives', requireRole('operator'), async (req, res) => {
 // POST /token — mint scoped QR / link tokens.
 router.post('/token', requireRole('operator'), (req, res) => {
   const { role, durationMs } = req.body || {};
-  const targetRole = role === 'admin' || role === 'operator' || role === 'viewer' ? role : 'viewer';
-  const duration = durationMs != null ? Number(durationMs) : 3600 * 1000; // default 1 hour
+  if (role !== undefined && !['viewer', 'operator', 'admin'].includes(role)) {
+    return res.status(400).json({ error: 'Invalid role specified' });
+  }
+  const targetRole = role || 'viewer';
+
+  let duration = 3600 * 1000; // default 1 hour
+  if (durationMs !== undefined) {
+    if (typeof durationMs !== 'number' || !Number.isInteger(durationMs) || durationMs <= 0 || durationMs > 24 * 3600 * 1000) {
+      return res.status(400).json({ error: 'durationMs must be a positive integer not exceeding 24 hours' });
+    }
+    duration = durationMs;
+  }
+
   const token = mintQrToken(targetRole, duration);
   const baseUrl = process.env.CONTROLLER_URL || 'https://controller.trustshell.dev';
   res.json({
@@ -148,14 +186,19 @@ router.post('/token', requireRole('operator'), (req, res) => {
 // POST /wake/:agent_id — manual wake signal (admin only).
 router.post('/wake/:agent_id', requireRole('admin'), async (req, res) => {
   const agent = req.params.agent_id;
+  const agentNameRegex = /^[a-zA-Z0-9-_]+$/;
+  if (typeof agent !== 'string' || agent.length < 1 || agent.length > 100 || !agentNameRegex.test(agent)) {
+    return res.status(400).json({ error: 'Invalid agent identity' });
+  }
+
   const { data, error } = await db
     .from('trinity_tasks')
     .insert({
       title: 'CONTROLLER_WAKE',
       task_type: 'system',
       description: `Manual wake signal for ${agent} dispatched via controller.`,
-      assigned_to: agent,
-      agent_name: agent,
+      assigned_to: agent.trim(),
+      agent_name: agent.trim(),
       status: 'pending',
       insert_source: 'controller',
       created_at: new Date().toISOString(),
@@ -169,20 +212,37 @@ router.post('/wake/:agent_id', requireRole('admin'), async (req, res) => {
 // POST /sprint/:agent_id — dispatch a sprint to an agent (admin only).
 router.post('/sprint/:agent_id', requireRole('admin'), async (req, res) => {
   const agent = req.params.agent_id;
-  const { title, description, priority } = req.body || {};
-  if (!title || !description) {
-    return res.status(400).json({ error: 'title and description are required' });
+  const agentNameRegex = /^[a-zA-Z0-9-_]+$/;
+  if (typeof agent !== 'string' || agent.length < 1 || agent.length > 100 || !agentNameRegex.test(agent)) {
+    return res.status(400).json({ error: 'Invalid agent identity' });
   }
+
+  const { title, description, priority } = req.body || {};
+  if (
+    typeof title !== 'string' || title.length < 1 || title.length > 255 ||
+    typeof description !== 'string' || description.length < 1 || description.length > 5000
+  ) {
+    return res.status(400).json({ error: 'title (max 255) and description (max 5000) strings are required' });
+  }
+
+  let validatedPriority: number | null = null;
+  if (priority !== undefined && priority !== null) {
+    if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < 1 || priority > 5) {
+      return res.status(400).json({ error: 'Priority must be an integer between 1 and 5' });
+    }
+    validatedPriority = priority;
+  }
+
   const { data, error } = await db
     .from('trinity_tasks')
     .insert({
-      title: String(title),
+      title: title.trim(),
       task_type: 'system',
-      description: String(description),
-      assigned_to: agent,
-      agent_name: agent,
+      description: description.trim(),
+      assigned_to: agent.trim(),
+      agent_name: agent.trim(),
       status: 'pending',
-      priority: priority != null ? Number(priority) : null,
+      priority: validatedPriority,
       insert_source: 'controller',
       created_at: new Date().toISOString(),
     })

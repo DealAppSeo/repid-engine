@@ -154,6 +154,70 @@ export function requireRole(requiredRole: 'viewer' | 'operator' | 'admin') {
     }
 
     (req as any).controllerRole = role;
+
+    // f2-authz check for controller routes when authenticated via API Key
+    const dbAgentId = (req as any).dbAgentId;
+    if (dbAgentId) {
+      const targetAgentId = req.body?.agent_id || 
+                            req.body?.buyer_agent_id || 
+                            req.body?.requestor_agent_id || 
+                            req.body?.provider_agent_id ||
+                            req.body?.agent ||
+                            req.query?.agent_id ||
+                            req.query?.agent ||
+                            req.query?.buyer_agent_id ||
+                            req.query?.provider_agent_id;
+      
+      const targetAgentName = req.body?.agent_name || 
+                              req.body?.agent_assigned || 
+                              req.body?.assigned_to;
+
+      let boundAgentName: string | undefined;
+      try {
+        const fromObj = db.from('repid_agents');
+        if (fromObj && typeof fromObj.select === 'function') {
+          const { data: agentData } = await fromObj.select('agent_name').eq('id', dbAgentId).maybeSingle();
+          boundAgentName = agentData?.agent_name;
+        }
+      } catch (e) {
+        console.warn('[controllerAuth] repid_agents lookup failed (possibly mocked DB):', e);
+      }
+
+      if (targetAgentId || targetAgentName) {
+        if (targetAgentId && String(targetAgentId).trim().toLowerCase() !== String(dbAgentId).trim().toLowerCase()) {
+          if (!boundAgentName || String(targetAgentId).trim().toLowerCase() !== boundAgentName.toLowerCase()) {
+            res.status(403).json({ error: 'Forbidden: agent_id mismatch (API key is bound to a different agent identity)' });
+            return;
+          }
+        }
+
+        if (targetAgentName && boundAgentName && String(targetAgentName).trim().toLowerCase() !== boundAgentName.toLowerCase()) {
+          if (String(targetAgentName).trim().toLowerCase() !== dbAgentId.toLowerCase()) {
+            res.status(403).json({ error: 'Forbidden: agent_name mismatch (API key is bound to a different agent identity)' });
+            return;
+          }
+        }
+      }
+
+      // Check for UUID or name in URL path parameters
+      const pathParts = req.path.split('/');
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const pathUuid = pathParts.find(p => uuidRe.test(p));
+      if (pathUuid && pathUuid.toLowerCase() !== dbAgentId.toLowerCase()) {
+        res.status(403).json({ error: 'Forbidden: agent_id in path mismatch (API key is bound to a different agent identity)' });
+        return;
+      }
+
+      const lastPart = pathParts[pathParts.length - 1];
+      if (lastPart && lastPart.length > 0 && !uuidRe.test(lastPart) &&
+          !['directives', 'token', 'agent-grid', 'activity-feed', 'hallucination-meter', 'squads', 'leads'].includes(lastPart.toLowerCase())) {
+        if (boundAgentName && lastPart.toLowerCase() !== boundAgentName.toLowerCase()) {
+          res.status(403).json({ error: 'Forbidden: agent identity in path mismatch (API key is bound to a different agent identity)' });
+          return;
+        }
+      }
+    }
+
     next();
   };
 }

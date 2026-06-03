@@ -273,6 +273,29 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       commitment: args.commitment,
       merkleRoot: args.merkleRoot,
     });
+
+    // Write through to Dragonfly proof cache and zkp_proofs_staged table
+    try {
+      const { cacheStagedProof } = require('../cache/proof-cache');
+      const { data: agent } = await config.supabase
+        .from('repid_agents')
+        .select('agent_name')
+        .eq('id', args.agentId)
+        .maybeSingle();
+      const agentName = agent?.agent_name || args.agentId;
+
+      await cacheStagedProof({
+        proof_type: 'POSTCARD',
+        agent_name: agentName,
+        proof_data: args.proofBytes ? Buffer.from(args.proofBytes, 'base64').toString('hex') : '',
+        proof_hash: args.proofHash,
+        merkle_root: args.merkleRoot || '',
+        anchor_tx_hash: args.commitment || '',
+        status: 'valid',
+      });
+    } catch (cacheErr) {
+      console.warn('[ProofDrain] Failed to cache staged proof:', cacheErr);
+    }
   }
 
   async function markFailed(rowId: string, message: string): Promise<void> {
