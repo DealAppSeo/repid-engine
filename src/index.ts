@@ -9,6 +9,7 @@ import { isAllowedOrigin } from './utils/cors-origins';
 import helmet from 'helmet';
 import { config } from './config';
 import healthRouter from './routes/health';
+import healthExtendedRouter from './routes/health-extended';
 import agentsRouter from './routes/agents';
 import scoreRouter from './routes/score';
 import referendumRouter from './routes/referendum';
@@ -196,10 +197,8 @@ app.use((req, res, next) => {
   // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
   // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
   if (req.path === '/api/v1/api-key-requests/request') return next();
-  // Controller (CC2 2026-05-26): /controller/sprint + /wake carry free-form sprint
-  // titles/descriptions (prose that legitimately contains SQL-shaped tokens). SBT-gated;
-  // downstream Supabase writes are parameterized.
-  if (req.path.startsWith('/api/v1/controller/sprint') || req.path.startsWith('/api/v1/controller/wake')) return next();
+  // Controller: bypass SQL-keyword scan for all controller routes as they are authenticated and parameterized
+  if (req.path.startsWith('/api/v1/controller')) return next();
   // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
   if (req.path === '/api/v1/escalation/escalate') return next();
   const sanitizeObj = (obj: any) => {
@@ -527,6 +526,7 @@ app.get('/api/v1/llm-trust', async (req, res) => {
 });
 
 app.use(healthRouter);
+app.use(healthExtendedRouter);
 app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
 app.use(scoreRouter);

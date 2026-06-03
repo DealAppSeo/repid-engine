@@ -12,7 +12,10 @@ export async function startHitlExpirationJob() {
     return;
   }
   console.log('[HitlExpirationJob] Starting loop');
-  setInterval(runExpirationSweep, POLL_INTERVAL_MS);
+  const interval = setInterval(runExpirationSweep, POLL_INTERVAL_MS);
+  if (typeof interval.unref === 'function') {
+    interval.unref();
+  }
 }
 
 async function runExpirationSweep() {

@@ -17,10 +17,17 @@ export function getRedisClient(): Redis {
   }
 
   // Create ioredis instance
-  cachedClient = new Redis(redisUrl, {
+  const options: any = {
     maxRetriesPerRequest: 3,
     enableOfflineQueue: true, // Keep commands in queue during reconnection
-  });
+  };
+  if (redisUrl.startsWith('rediss://')) {
+    options.tls = {
+      rejectUnauthorized: false
+    };
+  }
+
+  cachedClient = new Redis(redisUrl, options);
 
   cachedClient.on('error', (err) => {
     console.error('[REDIS] Client error:', err);
