@@ -20,6 +20,7 @@
 
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
+import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
 import crypto from 'crypto';
 
 export interface FactCheckProviderCfg {
@@ -297,6 +298,9 @@ export async function factCheck(
   const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
+
+  // S-CACHE Phase 5 — record real-time provider health from the quorum (no-op without REDIS_URL).
+  for (const v of verdicts) void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
 
   // CC1 provider-failure hardening: surface per-provider health + quorum.
   const failed = verdicts

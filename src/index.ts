@@ -54,6 +54,10 @@ import securityStatusRouter from './routes/security-status';
 // S-OPTIMIZE — cost + efficiency dashboards (public read, over the existing llm_call_log ledger).
 import costsRouter from './routes/costs';
 import efficiencyRouter from './routes/efficiency';
+// S-CACHE — DragonflyDB cache stats (public read; graceful no-op without REDIS_URL).
+import cacheStatsRouter from './routes/cache-stats';
+import { getCache } from './cache/dragonfly';
+import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -227,6 +231,10 @@ app.use((req, res, next) => {
 app.use('/api/v1/telegram', telegramRouter);
 app.use('/api/v1/hal-benchmark', halTestRouter);
 app.use('/api/v1/audit', auditRouter);
+// S-CACHE — per-IP rate limit (10/24h) on the public HAL "ask" surface. trustchat-backend's
+// server-to-server path is /hal/signals (not throttled); the user-facing /chat lives in
+// trustchat-backend (no Redis there yet — same middleware should be added when it gets Redis).
+app.use('/api/v1/hal/evaluate', ipRateLimit(10, 86400));
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
@@ -253,6 +261,8 @@ app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
 app.use('/api/v1', halStatsRouter);
+// S-CACHE — public cache stats dashboard.
+app.use('/api/v1', cacheStatsRouter);
 // S-OPTIMIZE — public cost + efficiency dashboards (read-only, over llm_call_log + trinity_tasks).
 app.use('/api/v1', costsRouter);
 app.use('/api/v1', efficiencyRouter);
@@ -540,9 +550,16 @@ if (!IS_TEST) {
 
     const redisUrl = process.env.REDIS_URL;
     if (redisUrl) {
-      console.log('[Redis] Connected');
+      // S-CACHE — establish + verify the DragonflyDB cache connection on startup (graceful: a
+      // failure logs a warning and the cache stays a no-op; it never blocks boot).
+      const c = getCache();
+      if (c) {
+        c.ping()
+          .then(() => console.log('[dragonfly] connected (cache layer active)'))
+          .catch((err: any) => console.warn('[dragonfly] not available, cache disabled:', err?.message ?? err));
+      }
     } else {
-      console.log('[Redis] Running in fallback mode - rate limiting disabled');
+      console.log('[Redis] Running in fallback mode - cache + persistent rate limiting disabled');
     }
 
     // Score monitor Task 8
