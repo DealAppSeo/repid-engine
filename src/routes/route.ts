@@ -246,18 +246,27 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           agent_id: (resolvedAgentId && isUuid(resolvedAgentId)) ? resolvedAgentId : undefined
         });
 
-        // Write routing decision to anfis_routing_logs (Phase 2.10 / P3)
-        try {
-          await db.from('anfis_routing_logs').insert({
-            request_text: prompt.substring(0, 500),
-            selected_model: `${adapter.name}/${result.model || 'default'}`,
-            confidence_score: decision.chosen_tier === '0a' ? 0.9 : 0.7,
-            cost_saved: 0,
-            latency_ms: result.latencyMs,
-            success: true
-          });
-        } catch (e: any) {
-          console.error('[anfis_routing] complete log failure:', e?.message ?? e);
+        // SHADOW (2026-06-04): write the REAL production routing decision + outcome to
+        // anfis_routing_logs, and record what ANFIS WOULD have chosen (verified_by) so it can be
+        // scored offline WITHOUT steering production (cost-order still decides). Flag ANFIS_SHADOW_LOG
+        // (default ON); off reverts cleanly. This is real data (real prompt + the adapter actually
+        // used), distinct from the external rust-brain "2+2"/test-model probe rows.
+        if (process.env.ANFIS_SHADOW_LOG !== 'false') {
+          try {
+            await db.from('anfis_routing_logs').insert({
+              request_text: prompt.substring(0, 500),
+              selected_model: `${adapter.name}/${result.model || 'default'}`,
+              confidence_score: decision.chosen_tier === '0a' ? 0.9 : 0.7,
+              cost_saved: 0,
+              latency_ms: result.latencyMs,
+              success: true,
+              verified_by: decision.anfis_recommended
+                ? `shadow_anfis:${decision.anfis_recommended}${decision.anfis_recommended === adapter.name ? '(match)' : '(diff)'}`
+                : 'shadow_anfis:none',
+            });
+          } catch (e: any) {
+            console.error('[anfis_routing] complete log failure:', e?.message ?? e);
+          }
         }
 
         // Sprint A7 — HAL evaluation + RepID scoring. Only runs when caller
