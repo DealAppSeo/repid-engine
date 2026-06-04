@@ -26,6 +26,7 @@ export interface RouteDecision {
   chosen_tier: '0a' | '1' | 'none' | 'slm';
   reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit' | 'slm_low_complexity';
   tried: string[];
+  anfis_recommended?: string | null; // SHADOW: the adapter ANFIS would have chosen (not steering when strict)
 }
 
 const slmAdapters: ProviderAdapter[] = [
@@ -73,6 +74,24 @@ export function isLowComplexity(prompt: string, taskHint?: string): boolean {
   return false;
 }
 
+// R5/2026-06-04 — the ANFIS RPC aggregates repid_score_events.llm_provider (ANSWER-generation
+// provider names like 'deepinfra'/'anthropic'/'gpt-4o-mini'), which never matched the router's
+// tier0a/tier1 adapter names (groq/cerebras/gemini/cohere/deepseek/anthropic/openai) → findIndex=-1
+// → ANFIS reorder was a silent no-op. Normalize to an adapter name (or null if none maps).
+const ROUTER_ADAPTERS = ['groq', 'cerebras', 'gemini', 'cohere', 'deepseek', 'anthropic', 'openai'];
+export function normalizeToAdapter(provider: string): string | null {
+  const p = (provider || '').toLowerCase();
+  if (ROUTER_ADAPTERS.includes(p)) return p;
+  if (/groq/.test(p)) return 'groq';
+  if (/cerebras|glm|zai/.test(p)) return 'cerebras';
+  if (/gemini|gemma|google/.test(p)) return 'gemini';
+  if (/cohere|command/.test(p)) return 'cohere';
+  if (/deepseek/.test(p)) return 'deepseek';
+  if (/claude|anthropic/.test(p)) return 'anthropic';
+  if (/gpt|openai|^o[0-9]/.test(p)) return 'openai';
+  return null; // deepinfra/together/litellm/test-model etc. have no router adapter
+}
+
 async function getAnfisRecommendation(domain: string): Promise<string | null> {
   try {
     const { data, error } = await db.rpc('anfis_provider_performance_lookup', {
@@ -98,7 +117,9 @@ async function getAnfisRecommendation(domain: string): Promise<string | null> {
     });
     
     scored.sort((a: any, b: any) => b.score - a.score);
-    return scored[0]?.provider || null;
+    // Return the highest-scoring provider that maps to a real router adapter (skip unmappable ones).
+    for (const s of scored) { const a = normalizeToAdapter(s.provider); if (a) return a; }
+    return null;
   } catch (e) {
     console.error('[anfis-routing] lookup failed, falling back:', e);
     return null;
@@ -142,11 +163,15 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   // not cost, and currently drives 0 traffic — routing_decisions=0). Set ROUTER_STRICT_COST_ORDER=false
   // to restore ANFIS reordering. Reversible.
   const strictCostOrder = process.env.ROUTER_STRICT_COST_ORDER !== 'false';
+  // SHADOW MODE (2026-06-04): compute the ANFIS recommendation for LOGGING/scoring even when strict
+  // cost-order is ON, but only let it REORDER production when strict cost-order is OFF. So ANFIS runs
+  // in shadow (we record what it WOULD pick in decision.anfis_recommended) without steering traffic.
+  const shadowLog = process.env.ANFIS_SHADOW_LOG !== 'false';
   let anfisRecommended: string | null = null;
-  if (!strictCostOrder && req.tier_preference === 'auto') {
-    const domain = req.task_hint || 'general';
-    anfisRecommended = await getAnfisRecommendation(domain);
+  if ((shadowLog || !strictCostOrder) && req.tier_preference === 'auto') {
+    anfisRecommended = await getAnfisRecommendation(req.task_hint || 'general');
   }
+  const anfisSteers = !strictCostOrder ? anfisRecommended : null; // only reorders when NOT strict
 
   const tryTier0 = req.tier_preference !== 'tier1_only';
   const tryTier1 = req.tier_preference !== 'tier0_only';
@@ -156,8 +181,8 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   if (tryTier0) {
     // Prioritize ANFIS recommendation in Tier 0a if applicable
     let prioritizedTier0 = [...tier0aAdapters];
-    if (anfisRecommended) {
-      const recIndex = prioritizedTier0.findIndex(a => a.name === anfisRecommended);
+    if (anfisSteers) {
+      const recIndex = prioritizedTier0.findIndex(a => a.name === anfisSteers);
       if (recIndex > -1) {
         const [recAdapter] = prioritizedTier0.splice(recIndex, 1);
         prioritizedTier0.unshift(recAdapter!);
@@ -183,7 +208,8 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
             chosen_provider: adapter.name,
             chosen_tier: '0a',
             reason: tried.length === 0 ? 'priority_healthy' : (capHit ? 'cap_hit' : 'fallback_after_failure'),
-            tried
+            tried,
+            anfis_recommended: anfisRecommended
           }
         };
       } else {
@@ -195,8 +221,8 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   if (tryTier1 && req.user_paid_keys) {
     // Prioritize ANFIS recommendation in Tier 1 if applicable
     let prioritizedTier1 = [...tier1Adapters];
-    if (anfisRecommended) {
-      const recIndex = prioritizedTier1.findIndex(a => a.name === anfisRecommended);
+    if (anfisSteers) {
+      const recIndex = prioritizedTier1.findIndex(a => a.name === anfisSteers);
       if (recIndex > -1) {
         const [recAdapter] = prioritizedTier1.splice(recIndex, 1);
         prioritizedTier1.unshift(recAdapter!);
@@ -225,7 +251,8 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
             chosen_provider: adapter.name,
             chosen_tier: '1',
             reason: (req.tier_preference === 'tier1_only' || !tryTier0) ? 'tier1_required' : (capHit ? 'cap_hit' : 'fallback_after_failure'),
-            tried
+            tried,
+            anfis_recommended: anfisRecommended
           }
         };
       } else {
