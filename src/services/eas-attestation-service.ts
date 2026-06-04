@@ -1,7 +1,7 @@
 /**
  * EAS Attestation Service for R3 (HyperDAG-bound, our merkle_root only).
  * No borrowed UIDs. Attests payload containing merkle_root from repid_zkp_proofs.
- * Requires EAS_ATTESTER_PRIVATE_KEY (Sean funded on Base Sepolia).
+ * Requires HYPERDAG_ATTESTOR_PRIVATE_KEY (or fallback EAS_ATTESTER_PRIVATE_KEY) - confirm live Railway name (both may be set; this service for ZKP eas_anchored now supports the HYPERDAG name used by repid-attestation and likely the funded attester).
  * Schema: constitutional-compliance-v1 with agentId, tier, merkleRoot etc.
  * Red team: on-chain getAttestation decode must == DB row merkle etc.
  */
@@ -33,7 +33,7 @@ function getProvider() {
 }
 
 function getSigner() {
-  const pk = process.env.EAS_ATTESTER_PRIVATE_KEY;
+  const pk = process.env.HYPERDAG_ATTESTOR_PRIVATE_KEY || process.env.EAS_ATTESTER_PRIVATE_KEY;
   if (!pk) return null;
   if (!wallet) wallet = new Wallet(pk, getProvider());
   return wallet;
@@ -43,7 +43,7 @@ export function hasAttesterKey(): boolean { return !!getSigner(); }
 
 export async function attestProof(input: ProofAttestInput): Promise<{ uid: string | null; txHash: string | null; error?: string }> {
   const signer = getSigner();
-  if (!signer) return { uid: null, txHash: null, error: 'EAS_ATTESTER_PRIVATE_KEY missing (Sean provision + fund)' };
+  if (!signer) return { uid: null, txHash: null, error: 'HYPERDAG_ATTESTOR_PRIVATE_KEY (or EAS_ATTESTER_PRIVATE_KEY) missing (Sean provision + fund; confirm live Railway var name matches)' };
   if (!input.merkleRoot) return { uid: null, txHash: null, error: 'only HyperDAG merkle_root proofs qualify' };
 
   const eas = new Contract(EAS_CONTRACT, [
