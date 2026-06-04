@@ -1,24 +1,30 @@
 /**
- * R3: exercise staking beyond N=1.
- * Calls recordDeposit + sponsorship multiple times for varied flows.
- * Verifies 4x/3:1/A logic in paths.
- * Run: npx ts-node scripts/exercise-staking.ts (after npm ci; DB writes may simulate or BLOCKED on keys).
- * Gate: >1 rows in agent_stakes / sponsorship_records from this (or manual).
+ * R4 (GA): exercise economy beyond N=1 using XC's recordDeposit/recordSponsorship iface from stake-vault/sponsorship.ts.
+ * Calls >1 varied (sponsors + deposits where possible). Results visible on live dashboard.
+ * Run after npm ci. Uses real agent short names from repid_agents (VERITAS etc for sponsorship path).
+ * recordDeposit targets builders table (may simulate). Gate: total stakes/sponsors rows increase, visible via /api/demo or trustshell dashboard.
+ * Citations: src/services/stake-vault.ts:235 (recordDeposit), sponsorship.ts:29 (recordSponsorship), exercise script.
  */
 import 'dotenv/config';
 import { recordDeposit } from '../src/services/stake-vault';
 import { recordSponsorship } from '../src/services/sponsorship';
 
 async function main() {
-  console.log('[EXERCISE-STAKING R3] beyond N=1');
-  // varied: different builders/agents, amounts, sponsor
-  await recordDeposit('builder-demo-1', 10_000_000); // 10 USDC
-  await recordDeposit('builder-demo-2', 25_000_000);
-  const s1 = await recordSponsorship('trinity-mel', 'some-target-1', 5_000_000, 'r3-ex1');
-  const s2 = await recordSponsorship('trinity-veritas', 'some-target-2', 15_000_000, 'r3-ex2');
-  console.log('deposits + sponsors called:', { s1, s2 });
-  console.log('Check live: agent_stakes and sponsorship_records should have >1 from exercise (or simulated).');
-  console.log('Confirm in code: 4x/3:1/A from authority-math used.');
+  console.log('[EXERCISE-STAKING R4-GA] beyond N=1 (parallel XC R4 complete)');
+  // Use real short names observed in agent_stakes (UPPER, no trinity- prefix in data)
+  // Sponsorship normalizes internally.
+  const s1 = await recordSponsorship('VERITAS', 'HDM', 2_000_000, 'ga-r4-ex1'); // 2 USDC sponsor
+  const s2 = await recordSponsorship('GCM', 'TORCH', 3_500_000, 'ga-r4-ex2');
+  const s3 = await recordSponsorship('HDM', 'VERITAS', 1_000_000, 'ga-r4-ex3');
+  console.log('[R4] sponsorship calls:', { s1, s2, s3 });
+
+  // Deposits (builder path; use known builder ids or addresses from ground; may be limited)
+  const d1 = await recordDeposit('0xt0ken15ee295a1b184e6cddb6da309ca1fc972d', 5_000_000);
+  const d2 = await recordDeposit('0xt0kenb3ebc05d7523634e5db82701e606b531c7', 12_000_000);
+  console.log('[R4] deposit calls:', { d1, d2 });
+
+  console.log('[R4] Economy exercise complete. Verify >1 total in agent_stakes + sponsorship_records visible on dashboard (no hardcodes).');
+  console.log('Authority: A = min(R, 100 * sqrt(S_own + S_sponsor/3)) with 4x cap. See authority-math.ts + stake-vault.');
 }
 
 main().catch(console.error);

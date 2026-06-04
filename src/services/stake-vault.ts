@@ -58,14 +58,15 @@ export async function depositStake(
     return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, error: insErr.message };
   }
 
-  // R3: also write to agent_stakes for substrate exercise >N=1
+  // R3/R4: also write to agent_stakes for substrate exercise >N=1 (GA dashboard visible)
+  // Fixed: cast for supabase builder (not native promise); fire-and-forget non-blocking
   (db.from('agent_stakes').insert({
     staker_agent: builder.id,
     stake_amount: Number(amount) / 1_000_000,
     dimension: 'builder_stake',
     status: 'active',
     target_model: 'general'
-  }) as any).catch(() => {});
+  }) as any).then(() => {}).catch(() => {});
 
   const total = await getCurrentStake(builder.id);
   const auth = await snapshotAuthority(builder.id, total);
