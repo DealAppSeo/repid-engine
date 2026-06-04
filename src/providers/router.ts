@@ -82,8 +82,8 @@ const ROUTER_ADAPTERS = ['groq', 'cerebras', 'gemini', 'cohere', 'deepseek', 'an
 export function normalizeToAdapter(provider: string): string | null {
   const p = (provider || '').toLowerCase();
   if (ROUTER_ADAPTERS.includes(p)) return p;
-  if (/groq/.test(p)) return 'groq';
-  if (/cerebras|glm|zai/.test(p)) return 'cerebras';
+  if (/cerebras|glm|zai/.test(p)) return 'cerebras'; // cerebras before the llama fallback (cerebras can host llama)
+  if (/groq|llama/.test(p)) return 'groq';           // groq is the default free llama adapter
   if (/gemini|gemma|google/.test(p)) return 'gemini';
   if (/cohere|command/.test(p)) return 'cohere';
   if (/deepseek/.test(p)) return 'deepseek';
