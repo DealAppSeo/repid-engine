@@ -33,7 +33,9 @@ function getProvider() {
 }
 
 function getSigner() {
-  const pk = process.env.EAS_ATTESTER_PRIVATE_KEY;
+  // XC fix (c28360e): the funded Base-Sepolia attester wallet is HYPERDAG_ATTESTOR_PRIVATE_KEY;
+  // EAS_ATTESTER_PRIVATE_KEY is the legacy/fallback name. HYPERDAG primary.
+  const pk = process.env.HYPERDAG_ATTESTOR_PRIVATE_KEY || process.env.EAS_ATTESTER_PRIVATE_KEY;
   if (!pk) return null;
   if (!wallet) wallet = new Wallet(pk, getProvider());
   return wallet;
@@ -43,7 +45,7 @@ export function hasAttesterKey(): boolean { return !!getSigner(); }
 
 export async function attestProof(input: ProofAttestInput): Promise<{ uid: string | null; txHash: string | null; error?: string }> {
   const signer = getSigner();
-  if (!signer) return { uid: null, txHash: null, error: 'EAS_ATTESTER_PRIVATE_KEY missing (Sean provision + fund)' };
+  if (!signer) return { uid: null, txHash: null, error: 'HYPERDAG_ATTESTOR_PRIVATE_KEY (or EAS_ATTESTER_PRIVATE_KEY) missing (Sean provision + fund; confirm live Railway var name matches)' };
   if (!input.merkleRoot) return { uid: null, txHash: null, error: 'only HyperDAG merkle_root proofs qualify' };
 
   const eas = new Contract(EAS_CONTRACT, [

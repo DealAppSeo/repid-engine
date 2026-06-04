@@ -471,8 +471,10 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   // correct verdict (in the `reasoning` field — handled in queryProvider) given enough max_tokens.
   const c = process.env.CEREBRAS_API_KEY?.trim();
   if (c) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
+  // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended → 100% fail, ~31% of calls
+  // wasted). Now opt-in: requires HAL_S2_ENABLE_FIREWORKS=true (default OFF). Reversible: set the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
-  if (f) out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
+  if (f && process.env.HAL_S2_ENABLE_FIREWORKS === 'true') out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
   // R4 — DeepSeek (cheap paid) as a reliable quorum anchor so a >= 2-provider quorum forms even when
   // the free tiers (groq/cerebras) throttle under prod burst (today they fall back to the extractor,
   // and the penalty then fail-safes to no-drain via HAL_PENALTY_REQUIRES_QUORUM). DeepSeek returns
