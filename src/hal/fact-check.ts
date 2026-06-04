@@ -29,6 +29,40 @@ export interface FactCheckProviderCfg {
   apiKey: string;
   model: string;
   timeoutMs?: number;
+  family?: string; // R5 — independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
+  tier?: 'free' | 'cheap' | 'escalation'; // R6 — cost class for cheapest-first quorum assembly
+}
+
+/**
+ * R6 — cost class for cheapest-first quorum assembly. free (groq/gemini/cerebras/mistral/qwen) →
+ * cheap-paid (deepseek) → escalation (fireworks/anthropic/openai/asi1/togetherai/litellm). The quorum
+ * stops escalating the moment >= 2 distinct families respond, so pricier providers are only paid for
+ * when the free tier can't form a quorum.
+ */
+export function costTierOf(p: { name: string; family?: string }): 'free' | 'cheap' | 'escalation' {
+  const k = `${p.name} ${p.family ?? ''}`.toLowerCase();
+  if (/groq|gemini|gemma|cerebras|glm|zai|mistral|mixtral|qwen|llama/.test(k)) return 'free';
+  if (/deepseek/.test(k)) return 'cheap';
+  return 'escalation'; // fireworks/anthropic/openai/asi1/togetherai/litellm/cohere/kimi
+}
+
+/**
+ * R5 — map a model name to its independent FAMILY. Quorum counts DISTINCT families, not hosts: two
+ * hosts serving the same base model (e.g. groq + a mis-configured cerebras both on Llama) are ONE
+ * independent vote, not two. Keyed by model so a host swapping models is reclassified automatically.
+ */
+export function familyOf(model: string): string {
+  const m = (model || '').toLowerCase();
+  if (/deepseek/.test(m)) return 'deepseek';
+  if (/llama/.test(m)) return 'llama';
+  if (/glm|zai/.test(m)) return 'glm';
+  if (/kimi|moonshot/.test(m)) return 'kimi';
+  if (/gemini|gemma/.test(m)) return 'gemini';
+  if (/mistral|mixtral|ministral/.test(m)) return 'mistral';
+  if (/qwen/.test(m)) return 'qwen';
+  if (/gpt|o1|o3|o4/.test(m)) return 'openai';
+  if (/claude/.test(m)) return 'anthropic';
+  return m.split(/[-/:]/)[0] || 'unknown';
 }
 
 export type Verdict = 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'ERROR';
@@ -47,6 +81,8 @@ export interface FactCheckResult {
   decision: 'vetoed' | 'flagged' | 'clean';
   verdicts: ProviderVerdict[];
   providers_used: number; // non-error responses
+  families_used?: number; // R5 — distinct independent families among the non-error responses
+  families?: string[];    // R5 — the distinct families that voted
   agreement: number | null; // fraction sharing the modal non-error verdict
   degraded: boolean; // < 2 providers responded
   latency_ms: number;
@@ -141,10 +177,11 @@ async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal:
   return res;
 }
 
-async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number): Promise<ProviderVerdict> {
+async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number, quorumId?: string): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
-  const timeoutMs = cfg.timeoutMs ?? 12_000;
+  // R5 — configurable per-call timeout so one slow provider can't stall the family quorum.
+  const timeoutMs = cfg.timeoutMs ?? (Number(process.env.HAL_S2_TIMEOUT_MS) || 12_000);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const call_id = crypto.randomUUID();
   try {
@@ -171,7 +208,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         latency_ms,
         status: 'failed',
         error_message: `HTTP ${res.status}: ${body.slice(0, 120)}`,
-        task_hint: 'hal_fact_check'
+        task_hint: 'hal_fact_check', quorum_id: quorumId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
     }
@@ -197,7 +234,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         latency_ms,
         status: 'failed',
         error_message: 'empty content',
-        task_hint: 'hal_fact_check'
+        task_hint: 'hal_fact_check', quorum_id: quorumId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
     }
@@ -212,7 +249,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       cost_usd,
       latency_ms,
       status: 'success',
-      task_hint: 'hal_fact_check'
+      task_hint: 'hal_fact_check', quorum_id: quorumId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
 
     const parsed = parseVerdict(content);
@@ -231,7 +268,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       latency_ms,
       status: e?.name === 'AbortError' ? 'rate_limited' : 'failed',
       error_message: error,
-      task_hint: 'hal_fact_check'
+      task_hint: 'hal_fact_check', quorum_id: quorumId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
     return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error, latency_ms };
   } finally {
@@ -288,16 +325,47 @@ export async function factCheck(
   // 120 truncated them mid-reasoning. 512 lets them finish while staying cheap for the terse models.
   const maxTokens = opts.maxTokens ?? 512;
 
-  const settled = await Promise.allSettled(providers.map((p) => queryProvider(p, deliverable, maxTokens)));
-  const verdicts: ProviderVerdict[] = settled.map((s, i) =>
-    s.status === 'fulfilled'
-      ? s.value
-      : { provider: providers[i]!.name, verdict: 'ERROR', confidence: 0, error: String((s as PromiseRejectedResult).reason), latency_ms: 0 },
-  );
+  const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log
+  const familyByName = new Map(providers.map((p) => [p.name, p.family ?? familyOf(p.model)]));
+  const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId);
+  const settle = async (ps: FactCheckProviderCfg[]): Promise<ProviderVerdict[]> => {
+    const s = await Promise.allSettled(ps.map(callOne));
+    return s.map((r, i) => r.status === 'fulfilled' ? r.value
+      : { provider: ps[i]!.name, verdict: 'ERROR' as Verdict, confidence: 0, error: String((r as PromiseRejectedResult).reason), latency_ms: 0 });
+  };
+  const distinctFamilies = (vs: ProviderVerdict[]) =>
+    new Set(vs.filter((v) => v.verdict !== 'ERROR').map((v) => familyByName.get(v.provider) ?? v.provider)).size;
+
+  // R6 — CHEAPEST-FIRST quorum assembly: call free → cheap → escalation in waves, stopping the moment
+  // >= MIN_QUORUM_FOR_VETO distinct families respond (so paid providers are only hit when free can't
+  // form a quorum). Revertible via HAL_QUORUM_COST_ORDERED=false (→ all providers in parallel, prior).
+  const costOrdered = process.env.HAL_QUORUM_COST_ORDERED !== 'false';
+  let verdicts: ProviderVerdict[] = [];
+  let attempted = 0;
+  if (costOrdered) {
+    const rank = (p: FactCheckProviderCfg) => ({ free: 0, cheap: 1, escalation: 2 })[p.tier ?? costTierOf({ name: p.name, family: familyByName.get(p.name) })];
+    const waves = [0, 1, 2].map((r) => providers.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
+    for (const wave of waves) {
+      verdicts.push(...(await settle(wave)));
+      attempted += wave.length;
+      if (distinctFamilies(verdicts) >= MIN_QUORUM_FOR_VETO) break; // quorum formed — don't escalate to pricier tiers
+    }
+  } else {
+    verdicts = await settle(providers);
+    attempted = providers.length;
+  }
 
   const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
+
+  // R5 — distinct independent FAMILIES among the successful providers (groq-Llama + cerebras-Llama = 1).
+  const familiesSet = new Set(ok.map((v) => familyByName.get(v.provider) ?? v.provider));
+  const families = [...familiesSet];
+  const families_used = families.length;
+  // Quorum is counted in families by default; HAL_QUORUM_FAMILY_AWARE=false reverts to host count.
+  const familyAware = process.env.HAL_QUORUM_FAMILY_AWARE !== 'false';
+  const quorumCount = familyAware ? families_used : providers_used;
 
   // S-CACHE Phase 5 — record real-time provider health from the quorum (no-op without REDIS_URL).
   for (const v of verdicts) void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
@@ -306,7 +374,7 @@ export async function factCheck(
   const failed = verdicts
     .filter((v) => v.verdict === 'ERROR')
     .map((v) => ({ name: v.provider, error: v.error ?? 'unknown' }));
-  const quorum = computeQuorum(providers_used, providers.length);
+  const quorum = computeQuorum(providers_used, attempted);
 
   if (providers_used === 0) {
     if (process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true') {
@@ -328,7 +396,7 @@ export async function factCheck(
         degraded: true,
         latency_ms: Date.now() - start,
         quorum,
-        provider_health: { attempted: providers.length, succeeded: 0, failed },
+        provider_health: { attempted: attempted, succeeded: 0, failed },
         fallback_used: 'local_slm',
         confidence: 'degraded',
       };
@@ -337,8 +405,8 @@ export async function factCheck(
     // No truth signal available — neutral score; caller falls back to extractor.
     return {
       hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
-      quorum, provider_health: { attempted: providers.length, succeeded: 0, failed },
-      quorum_note: `No provider responded (0/${providers.length}); neutral score, caller falls back to extractor.`,
+      quorum, provider_health: { attempted: attempted, succeeded: 0, failed },
+      quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
     };
   }
 
@@ -358,14 +426,14 @@ export async function factCheck(
   // preserved for observability; only the decision is changed.
   let decision = baseDecision;
   let quorum_note: string | undefined;
-  if (providers_used < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
+  if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
     decision = 'clean';
-    quorum_note = `Low quorum (${providers_used}/${providers.length}): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — a single surviving provider cannot veto.`;
+    quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
   }
 
   return {
-    hal_score, decision, verdicts, providers_used, agreement, degraded: providers_used < 2, latency_ms,
-    quorum, provider_health: { attempted: providers.length, succeeded: providers_used, failed },
+    hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
+    quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
     ...(quorum_note ? { quorum_note } : {}),
   };
 }
@@ -412,7 +480,23 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   // HAL_S2_ENABLE_DEEPSEEK=true and the quorum assembles reliably. Revertible via the flag.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
   if (d && process.env.HAL_S2_ENABLE_DEEPSEEK === 'true') {
-    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat' });
+    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
   }
+  // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
+  // Each gated by key + an enable flag (opt-in, revertible): set the key AND HAL_S2_ENABLE_<X>=true.
+  const gm = process.env.GEMINI_API_KEY?.trim();
+  if (gm && process.env.HAL_S2_ENABLE_GEMINI === 'true') {
+    out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
+  }
+  const ms = process.env.MISTRAL_API_KEY?.trim();
+  if (ms && process.env.HAL_S2_ENABLE_MISTRAL === 'true') {
+    out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
+  }
+  const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
+  if (qw && process.env.HAL_S2_ENABLE_QWEN === 'true') {
+    out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
+  }
+  // Tag the always-on hosts with their family (model-derived; explicit for clarity).
+  for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
 }
