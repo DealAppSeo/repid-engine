@@ -92,18 +92,46 @@ export interface FullContext extends AuthorityContext {
 /** Load live authority context for an agent: tier/repid/custodian + active stake + today's authorized spend + open disputes. */
 export async function loadAuthorityContext(agent: string): Promise<FullContext> {
   const since = startOfUtcDay();
-  const [agentRes, stakeRes, gateRes, dispRes] = await Promise.all([
+  const shortId = agent.replace(/^trinity-/i, '').toUpperCase();
+  const [agentRes, ownStakesRes, sponsorStakesRes, gateRes, dispRes] = await Promise.all([
     db.from('repid_agents').select('tier, current_repid, conservator_address').eq('agent_name', agent).maybeSingle(),
-    db.from('staking_deposits').select('amount_usdc').eq('agent_name', agent).eq('status', 'active'),
+    db.from('agent_stakes').select('stake_amount').eq('staker_agent', shortId).eq('status', 'active'),
+    db.from('sponsorship_records').select('collateral_usdc').eq('sponsored_agent', shortId).eq('status', 'active'),
     db.from('x402_payment_gates').select('amount_usdc').eq('agent_name', agent).eq('authorized', true).gte('requested_at', since),
     db.from('dispute_claims').select('id').eq('defendant_agent', agent).in('status', ['filed', 'reviewing', 'appealed']),
   ]);
   const agentRow: any = agentRes.data ?? {};
+  const repid = Number(agentRow.current_repid ?? 0);
+  const tier = agentRow.tier ?? 'PROBATIONARY';
+  const limit = limitForTier(tier);
+
+  // Sum own stakes (staker_agent = shortId)
+  // stake_amount is in micro-USDC, convert to USD/USDC
+  const ownStakes = (ownStakesRes.data ?? []) as any[];
+  const ownStakeUSD = ownStakes.reduce((sum, row) => sum + Number(row.stake_amount ?? 0) / 1_000_000, 0);
+
+  // Sum sponsored collateral (sponsored_agent = shortId)
+  // collateral_usdc is in USDC (USD)
+  const sponsorStakes = (sponsorStakesRes.data ?? []) as any[];
+  const sponsorStakeUSD = sponsorStakes.reduce((sum, row) => sum + Number(row.collateral_usdc ?? 0), 0);
+
+  // Compute effective backing: S_effective = S_own + S_sponsor / 3
+  const effectiveStakeUSD = ownStakeUSD + (sponsorStakeUSD / 3);
+
+  // A = min(R, 100 * sqrt(S_effective))
+  const mathAuthority = Math.min(repid, 100 * Math.sqrt(effectiveStakeUSD));
+
+  // Enforce 4x own-exposure cap: A = min(A, 4 * ownStakeUSD)
+  const finalAuthority = Math.min(mathAuthority, 4 * ownStakeUSD);
+
+  // If requires_stake is false, default to repid
+  const stakeAvailable = limit.requires_stake ? finalAuthority : repid;
+
   return {
     tier: agentRow.tier ?? null,
     current_repid: agentRow.current_repid ?? null,
     conservator_address: agentRow.conservator_address ?? null,
-    stake_available: sumUsdc(stakeRes.data as any[]),
+    stake_available: stakeAvailable,
     daily_used: sumUsdc(gateRes.data as any[]),
     open_disputes: (dispRes.data ?? []).length,
   };
