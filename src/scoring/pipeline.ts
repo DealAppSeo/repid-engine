@@ -253,7 +253,12 @@ export async function runScoreEvent(
   const QUORUM_MIN = 2;
   const halMode = signals.hal_mode as string | undefined; // 'fact-check' | 'extractor' | 'extractor-fallback'
   const providersUsed = Number((signals as Record<string, unknown>).providers_used ?? 0);
-  const quorumMet = halMode === 'fact-check' && providersUsed >= QUORUM_MIN;
+  // R5 — count DISTINCT FAMILIES (groq-Llama + cerebras-Llama = 1). Falls back to host count if the
+  // fact-check result predates families_used. Revert to host count via HAL_QUORUM_FAMILY_AWARE=false.
+  const familyAware = process.env.HAL_QUORUM_FAMILY_AWARE !== 'false';
+  const familiesUsed = Number((signals as Record<string, unknown>).families_used ?? providersUsed);
+  const quorumCount = familyAware ? familiesUsed : providersUsed;
+  const quorumMet = halMode === 'fact-check' && quorumCount >= QUORUM_MIN;
   const groundedVeto = !halError && halStrictness >= 2 && decision === 'vetoed';
   const quorumUnavailable = groundedVeto && penaltyRequiresQuorum && !quorumMet;
   const hallucination_caught = groundedVeto && (penaltyRequiresQuorum ? quorumMet : true);
@@ -329,6 +334,8 @@ export async function runScoreEvent(
       // R4 — quorum evidence: every APPLIED penalty must show >= 2 providers here.
       quorum_met: quorumMet,
       quorum_providers_used: providersUsed,
+      quorum_families_used: familiesUsed,
+      quorum_families: (signals as Record<string, unknown>).families ?? null,
       hal_mode: halMode ?? null,
       ...(penaltySuppressed
         ? {
