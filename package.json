@@ -29,7 +29,6 @@
     "backfill:erc8004:mass": "ts-node scripts/erc8004-backfill-mass-19plus1.ts",
     "reputation:backfill:spokespersons": "ts-node scripts/erc8004-reputation-backfill-spokespersons.ts",
     "probe:reputation": "ts-node scripts/erc8004-reputation-probe.ts",
-
     "x402:health": "tsx scripts/x402-health.ts",
     "x402:recovery-worker": "tsx scripts/x402/run-recovery-worker.ts",
     "install:hooks": "ts-node scripts/install-hooks.ts",
@@ -80,6 +79,7 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.6.0",
+    "@types/pg": "^8.11.0",
     "@xenova/transformers": "^2.17.2",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
@@ -91,7 +91,6 @@
     "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.11.0",
-    "@types/pg": "^8.11.0",
     "solc": "^0.8.34",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",

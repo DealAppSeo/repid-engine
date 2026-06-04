@@ -40,3 +40,11 @@ After `npm audit` (8 vulns: 1 critical, 4 high, 2 moderate, 1 low) and safe `npm
 - For EAS: key in Railway, attest only merkle.
 
 See also: docs/SECURITY.md if extended, CONTRIBUTING for env.
+
+## R4 npm audit (no --force)
+Vulns: 1 critical (protobufjs via @xenova/transformers/onnx - code injection/DoS in generated code, not reachable in runtime as transformers only for optional embeddings, not EAS/RLS/x402 paths).
+High: tmp (path traversal, dev only).
+Safe fix run: no change to versions.
+Forward: kept majors (ethers 6, transformers 2.17, solc 0.8). tsc verified 0.
+Rationale in main doc above.
+
