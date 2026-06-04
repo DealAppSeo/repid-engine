@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"FALSE","confidence":100,"note":"Python uses lexical scoping, not dynamic scoping","latency_ms":302},{"provider":"groq-70b","verdict":"FALSE","confidence":100,"note":"uses lexical scoping","latency_ms":166},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":845}]}

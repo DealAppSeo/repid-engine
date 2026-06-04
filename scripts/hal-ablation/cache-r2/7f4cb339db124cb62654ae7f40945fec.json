@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":80,"note":"Earthworms can regenerate lost body parts","latency_ms":3251},{"provider":"groq-70b","verdict":"TRUE","confidence":90,"note":"Generally accurate","latency_ms":295},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":4506}]}
