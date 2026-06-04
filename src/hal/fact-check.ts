@@ -29,6 +29,26 @@ export interface FactCheckProviderCfg {
   apiKey: string;
   model: string;
   timeoutMs?: number;
+  family?: string; // R5 — independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
+}
+
+/**
+ * R5 — map a model name to its independent FAMILY. Quorum counts DISTINCT families, not hosts: two
+ * hosts serving the same base model (e.g. groq + a mis-configured cerebras both on Llama) are ONE
+ * independent vote, not two. Keyed by model so a host swapping models is reclassified automatically.
+ */
+export function familyOf(model: string): string {
+  const m = (model || '').toLowerCase();
+  if (/deepseek/.test(m)) return 'deepseek';
+  if (/llama/.test(m)) return 'llama';
+  if (/glm|zai/.test(m)) return 'glm';
+  if (/kimi|moonshot/.test(m)) return 'kimi';
+  if (/gemini|gemma/.test(m)) return 'gemini';
+  if (/mistral|mixtral|ministral/.test(m)) return 'mistral';
+  if (/qwen/.test(m)) return 'qwen';
+  if (/gpt|o1|o3|o4/.test(m)) return 'openai';
+  if (/claude/.test(m)) return 'anthropic';
+  return m.split(/[-/:]/)[0] || 'unknown';
 }
 
 export type Verdict = 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'ERROR';
@@ -47,6 +67,8 @@ export interface FactCheckResult {
   decision: 'vetoed' | 'flagged' | 'clean';
   verdicts: ProviderVerdict[];
   providers_used: number; // non-error responses
+  families_used?: number; // R5 — distinct independent families among the non-error responses
+  families?: string[];    // R5 — the distinct families that voted
   agreement: number | null; // fraction sharing the modal non-error verdict
   degraded: boolean; // < 2 providers responded
   latency_ms: number;
@@ -144,7 +166,8 @@ async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal:
 async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
-  const timeoutMs = cfg.timeoutMs ?? 12_000;
+  // R5 — configurable per-call timeout so one slow provider can't stall the family quorum.
+  const timeoutMs = cfg.timeoutMs ?? (Number(process.env.HAL_S2_TIMEOUT_MS) || 12_000);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const call_id = crypto.randomUUID();
   try {
@@ -299,6 +322,15 @@ export async function factCheck(
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
 
+  // R5 — distinct independent FAMILIES among the successful providers (groq-Llama + cerebras-Llama = 1).
+  const familyByName = new Map(providers.map((p) => [p.name, p.family ?? familyOf(p.model)]));
+  const familiesSet = new Set(ok.map((v) => familyByName.get(v.provider) ?? v.provider));
+  const families = [...familiesSet];
+  const families_used = families.length;
+  // Quorum is counted in families by default; HAL_QUORUM_FAMILY_AWARE=false reverts to host count.
+  const familyAware = process.env.HAL_QUORUM_FAMILY_AWARE !== 'false';
+  const quorumCount = familyAware ? families_used : providers_used;
+
   // S-CACHE Phase 5 — record real-time provider health from the quorum (no-op without REDIS_URL).
   for (const v of verdicts) void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
 
@@ -358,13 +390,13 @@ export async function factCheck(
   // preserved for observability; only the decision is changed.
   let decision = baseDecision;
   let quorum_note: string | undefined;
-  if (providers_used < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
+  if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
     decision = 'clean';
-    quorum_note = `Low quorum (${providers_used}/${providers.length}): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — a single surviving provider cannot veto.`;
+    quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${providers.length} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
   }
 
   return {
-    hal_score, decision, verdicts, providers_used, agreement, degraded: providers_used < 2, latency_ms,
+    hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: providers.length, succeeded: providers_used, failed },
     ...(quorum_note ? { quorum_note } : {}),
   };
@@ -412,7 +444,23 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   // HAL_S2_ENABLE_DEEPSEEK=true and the quorum assembles reliably. Revertible via the flag.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
   if (d && process.env.HAL_S2_ENABLE_DEEPSEEK === 'true') {
-    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat' });
+    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
   }
+  // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
+  // Each gated by key + an enable flag (opt-in, revertible): set the key AND HAL_S2_ENABLE_<X>=true.
+  const gm = process.env.GEMINI_API_KEY?.trim();
+  if (gm && process.env.HAL_S2_ENABLE_GEMINI === 'true') {
+    out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
+  }
+  const ms = process.env.MISTRAL_API_KEY?.trim();
+  if (ms && process.env.HAL_S2_ENABLE_MISTRAL === 'true') {
+    out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
+  }
+  const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
+  if (qw && process.env.HAL_S2_ENABLE_QWEN === 'true') {
+    out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
+  }
+  // Tag the always-on hosts with their family (model-derived; explicit for clarity).
+  for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
 }
