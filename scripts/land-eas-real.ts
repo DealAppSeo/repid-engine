@@ -2,7 +2,7 @@
  * R3 EAS real-ready land script.
  * - Deletes/ignores any borrowed UID backfill (none staged here; previous fake ones removed per CC).
  * - Uses eas-attestation-service to attest OUR merkle_root + HyperDAG payload.
- * - After Sean EAS_ATTESTER_PRIVATE_KEY (funded), run this.
+ * - After Sean HYPERDAG_ATTESTOR_PRIVATE_KEY (or EAS_ATTESTER; confirm live name), run this.
  * - Red-teams the 5: on-chain payload decode == DB merkle_root etc.
  * - Gate: live eas_attestation_uid count >0 with match evidence, or BLOCKED (no key).
  */
@@ -17,7 +17,7 @@ async function main() {
   console.log(`[LAND-EAS-REAL R3] ${ts} xc4`);
 
   if (!easService.hasAttesterKey()) {
-    console.log('[LAND-EAS-REAL] BLOCKED: no EAS_ATTESTER_PRIVATE_KEY (Sean: provision funded Base Sepolia key)');
+    console.log('[LAND-EAS-REAL] BLOCKED: no HYPERDAG_ATTESTOR_PRIVATE_KEY (or EAS_ATTESTER_PRIVATE_KEY; Sean: provision funded Base Sepolia key; confirm live Railway name)');
     console.log('After key: npx ts-node scripts/land-eas-real.ts');
     process.exit(0);
   }
