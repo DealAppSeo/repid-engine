@@ -163,7 +163,7 @@ async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal:
   return res;
 }
 
-async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number): Promise<ProviderVerdict> {
+async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number, quorumId?: string): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
   // R5 — configurable per-call timeout so one slow provider can't stall the family quorum.
@@ -194,7 +194,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         latency_ms,
         status: 'failed',
         error_message: `HTTP ${res.status}: ${body.slice(0, 120)}`,
-        task_hint: 'hal_fact_check'
+        task_hint: 'hal_fact_check', quorum_id: quorumId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
     }
@@ -220,7 +220,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         latency_ms,
         status: 'failed',
         error_message: 'empty content',
-        task_hint: 'hal_fact_check'
+        task_hint: 'hal_fact_check', quorum_id: quorumId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
     }
@@ -235,7 +235,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       cost_usd,
       latency_ms,
       status: 'success',
-      task_hint: 'hal_fact_check'
+      task_hint: 'hal_fact_check', quorum_id: quorumId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
 
     const parsed = parseVerdict(content);
@@ -254,7 +254,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       latency_ms,
       status: e?.name === 'AbortError' ? 'rate_limited' : 'failed',
       error_message: error,
-      task_hint: 'hal_fact_check'
+      task_hint: 'hal_fact_check', quorum_id: quorumId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
     return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error, latency_ms };
   } finally {
@@ -311,7 +311,8 @@ export async function factCheck(
   // 120 truncated them mid-reasoning. 512 lets them finish while staying cheap for the terse models.
   const maxTokens = opts.maxTokens ?? 512;
 
-  const settled = await Promise.allSettled(providers.map((p) => queryProvider(p, deliverable, maxTokens)));
+  const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log
+  const settled = await Promise.allSettled(providers.map((p) => queryProvider(p, deliverable, maxTokens, quorumId)));
   const verdicts: ProviderVerdict[] = settled.map((s, i) =>
     s.status === 'fulfilled'
       ? s.value
