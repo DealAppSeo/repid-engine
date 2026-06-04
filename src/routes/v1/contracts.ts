@@ -4,6 +4,7 @@ import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../../
 import { x402Facilitator } from '../../services/x402-facilitator';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
+import { todayPT } from '../../lib/time';
 
 const router = Router();
 
@@ -83,7 +84,7 @@ router.post('/', async (req: Request, res: Response) => {
     const price = agreed_price_usdc_raw !== undefined ? agreed_price_usdc_raw : service.base_price_usdc_raw;
 
     // Global Value Caps Check
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayPT();
     const { data: settledToday, error: volErr } = await db
       .from('x402_settlements')
       .select('amount')
@@ -225,7 +226,7 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
       });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayPT();
 
     // Daily Volume Cap Check
     if (dailyVolumeUsdCap) {
