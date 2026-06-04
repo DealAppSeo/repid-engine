@@ -405,5 +405,14 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   if (c) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
   const f = process.env.FIREWORKS_API_KEY?.trim();
   if (f) out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
+  // R4 — DeepSeek (cheap paid) as a reliable quorum anchor so a >= 2-provider quorum forms even when
+  // the free tiers (groq/cerebras) throttle under prod burst (today they fall back to the extractor,
+  // and the penalty then fail-safes to no-drain via HAL_PENALTY_REQUIRES_QUORUM). DeepSeek returns
+  // HTTP 402 (unfunded) as of 2026-06-03, so it is gated OFF by default; once funded, set
+  // HAL_S2_ENABLE_DEEPSEEK=true and the quorum assembles reliably. Revertible via the flag.
+  const d = process.env.DEEPSEEK_API_KEY?.trim();
+  if (d && process.env.HAL_S2_ENABLE_DEEPSEEK === 'true') {
+    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat' });
+  }
   return out;
 }
