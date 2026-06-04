@@ -241,7 +241,22 @@ export async function runScoreEvent(
   // the veto in actual provider FALSE verdicts. The strictness-1 extractor is style-only (no ground
   // truth; AUC ~0.36 on the labeled corpus), so its vetoes are NOT caught hallucinations and must not
   // drain the live score. Mirrors the column the event-log guard trg_hal_penalty_guard checks.
-  const hallucination_caught = !halError && halStrictness >= 2 && decision === 'vetoed';
+  //
+  // R4 — PENALTY REQUIRES QUORUM. A negative penalty may apply ONLY when the fact-check path actually
+  // assembled >= 2 independent providers that agreed on the veto (single-provider AUC 0.36-0.78 vs
+  // quorum AUC 0.92). When the quorum can't assemble (providers throttled → halService returns
+  // mode 'extractor-fallback' with providers_used absent), we FAIL SAFE: no penalty, logged
+  // 'quorum_unavailable' — NEVER a single-provider/extractor drain. This stops the live over-flag
+  // (2026-06-03: 35 deepinfra extractor-fallback drains/15m, identical hal_score 0.265, providers_used
+  // null). Reversible via HAL_PENALTY_REQUIRES_QUORUM (default ON).
+  const penaltyRequiresQuorum = process.env.HAL_PENALTY_REQUIRES_QUORUM !== 'false';
+  const QUORUM_MIN = 2;
+  const halMode = signals.hal_mode as string | undefined; // 'fact-check' | 'extractor' | 'extractor-fallback'
+  const providersUsed = Number((signals as Record<string, unknown>).providers_used ?? 0);
+  const quorumMet = halMode === 'fact-check' && providersUsed >= QUORUM_MIN;
+  const groundedVeto = !halError && halStrictness >= 2 && decision === 'vetoed';
+  const quorumUnavailable = groundedVeto && penaltyRequiresQuorum && !quorumMet;
+  const hallucination_caught = groundedVeto && (penaltyRequiresQuorum ? quorumMet : true);
 
   // 4. Compute delta.
   const delta = computeDelta({
@@ -306,13 +321,20 @@ export async function runScoreEvent(
       hal_signals: signals,
       hal_error: halError,
       delta_reason: penaltySuppressed
-        ? `${delta.reason} (S-DRAIN: penalty suppressed — no hallucination_caught)`
+        ? `${delta.reason} (S-DRAIN: penalty suppressed — ${quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught'})`
         : delta.reason,
       vesting_cliff_active: agent.vesting_cliff_active,
       block_threshold_used: HAL_CONSTITUTIONAL_BLOCK_THRESHOLD,
       penalty_suppressed: penaltySuppressed,
+      // R4 — quorum evidence: every APPLIED penalty must show >= 2 providers here.
+      quorum_met: quorumMet,
+      quorum_providers_used: providersUsed,
+      hal_mode: halMode ?? null,
       ...(penaltySuppressed
-        ? { suppressed_reason: 'no_hallucination_caught', original_delta: Math.round(delta.delta_applied) }
+        ? {
+            suppressed_reason: quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught',
+            original_delta: Math.round(delta.delta_applied),
+          }
         : {}),
     },
   };
