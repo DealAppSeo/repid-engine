@@ -30,6 +30,20 @@ export interface FactCheckProviderCfg {
   model: string;
   timeoutMs?: number;
   family?: string; // R5 — independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
+  tier?: 'free' | 'cheap' | 'escalation'; // R6 — cost class for cheapest-first quorum assembly
+}
+
+/**
+ * R6 — cost class for cheapest-first quorum assembly. free (groq/gemini/cerebras/mistral/qwen) →
+ * cheap-paid (deepseek) → escalation (fireworks/anthropic/openai/asi1/togetherai/litellm). The quorum
+ * stops escalating the moment >= 2 distinct families respond, so pricier providers are only paid for
+ * when the free tier can't form a quorum.
+ */
+export function costTierOf(p: { name: string; family?: string }): 'free' | 'cheap' | 'escalation' {
+  const k = `${p.name} ${p.family ?? ''}`.toLowerCase();
+  if (/groq|gemini|gemma|cerebras|glm|zai|mistral|mixtral|qwen|llama/.test(k)) return 'free';
+  if (/deepseek/.test(k)) return 'cheap';
+  return 'escalation'; // fireworks/anthropic/openai/asi1/togetherai/litellm/cohere/kimi
 }
 
 /**
@@ -312,19 +326,40 @@ export async function factCheck(
   const maxTokens = opts.maxTokens ?? 512;
 
   const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log
-  const settled = await Promise.allSettled(providers.map((p) => queryProvider(p, deliverable, maxTokens, quorumId)));
-  const verdicts: ProviderVerdict[] = settled.map((s, i) =>
-    s.status === 'fulfilled'
-      ? s.value
-      : { provider: providers[i]!.name, verdict: 'ERROR', confidence: 0, error: String((s as PromiseRejectedResult).reason), latency_ms: 0 },
-  );
+  const familyByName = new Map(providers.map((p) => [p.name, p.family ?? familyOf(p.model)]));
+  const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId);
+  const settle = async (ps: FactCheckProviderCfg[]): Promise<ProviderVerdict[]> => {
+    const s = await Promise.allSettled(ps.map(callOne));
+    return s.map((r, i) => r.status === 'fulfilled' ? r.value
+      : { provider: ps[i]!.name, verdict: 'ERROR' as Verdict, confidence: 0, error: String((r as PromiseRejectedResult).reason), latency_ms: 0 });
+  };
+  const distinctFamilies = (vs: ProviderVerdict[]) =>
+    new Set(vs.filter((v) => v.verdict !== 'ERROR').map((v) => familyByName.get(v.provider) ?? v.provider)).size;
+
+  // R6 — CHEAPEST-FIRST quorum assembly: call free → cheap → escalation in waves, stopping the moment
+  // >= MIN_QUORUM_FOR_VETO distinct families respond (so paid providers are only hit when free can't
+  // form a quorum). Revertible via HAL_QUORUM_COST_ORDERED=false (→ all providers in parallel, prior).
+  const costOrdered = process.env.HAL_QUORUM_COST_ORDERED !== 'false';
+  let verdicts: ProviderVerdict[] = [];
+  let attempted = 0;
+  if (costOrdered) {
+    const rank = (p: FactCheckProviderCfg) => ({ free: 0, cheap: 1, escalation: 2 })[p.tier ?? costTierOf({ name: p.name, family: familyByName.get(p.name) })];
+    const waves = [0, 1, 2].map((r) => providers.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
+    for (const wave of waves) {
+      verdicts.push(...(await settle(wave)));
+      attempted += wave.length;
+      if (distinctFamilies(verdicts) >= MIN_QUORUM_FOR_VETO) break; // quorum formed — don't escalate to pricier tiers
+    }
+  } else {
+    verdicts = await settle(providers);
+    attempted = providers.length;
+  }
 
   const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
 
   // R5 — distinct independent FAMILIES among the successful providers (groq-Llama + cerebras-Llama = 1).
-  const familyByName = new Map(providers.map((p) => [p.name, p.family ?? familyOf(p.model)]));
   const familiesSet = new Set(ok.map((v) => familyByName.get(v.provider) ?? v.provider));
   const families = [...familiesSet];
   const families_used = families.length;
@@ -339,7 +374,7 @@ export async function factCheck(
   const failed = verdicts
     .filter((v) => v.verdict === 'ERROR')
     .map((v) => ({ name: v.provider, error: v.error ?? 'unknown' }));
-  const quorum = computeQuorum(providers_used, providers.length);
+  const quorum = computeQuorum(providers_used, attempted);
 
   if (providers_used === 0) {
     if (process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true') {
@@ -361,7 +396,7 @@ export async function factCheck(
         degraded: true,
         latency_ms: Date.now() - start,
         quorum,
-        provider_health: { attempted: providers.length, succeeded: 0, failed },
+        provider_health: { attempted: attempted, succeeded: 0, failed },
         fallback_used: 'local_slm',
         confidence: 'degraded',
       };
@@ -370,8 +405,8 @@ export async function factCheck(
     // No truth signal available — neutral score; caller falls back to extractor.
     return {
       hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
-      quorum, provider_health: { attempted: providers.length, succeeded: 0, failed },
-      quorum_note: `No provider responded (0/${providers.length}); neutral score, caller falls back to extractor.`,
+      quorum, provider_health: { attempted: attempted, succeeded: 0, failed },
+      quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
     };
   }
 
@@ -393,12 +428,12 @@ export async function factCheck(
   let quorum_note: string | undefined;
   if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
     decision = 'clean';
-    quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${providers.length} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
+    quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
   }
 
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
-    quorum, provider_health: { attempted: providers.length, succeeded: providers_used, failed },
+    quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
     ...(quorum_note ? { quorum_note } : {}),
   };
 }
