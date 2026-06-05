@@ -10,6 +10,7 @@ import { Llama321bAdapter, Gemma32bAdapter, Phi4Adapter } from './slm';
 import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
 import { checkCap } from '../billing/caps';
 import { db } from '../db';
+import { computeShadowDecision } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
 
 export interface RouteRequest {
   prompt: string;
@@ -107,6 +108,20 @@ async function getAnfisRecommendation(domain: string): Promise<string | null> {
 
 export async function routeRequest(req: RouteRequest, excludeProviders: string[] = []): Promise<{ adapter: ProviderAdapter | null, decision: RouteDecision }> {
   const tried: string[] = [...excludeProviders];
+
+  // TRACK A A2 SHADOW: always compute ANFIS rec alongside static (ANFIS does NOT decide yet).
+  // Log both + outcome later (to anfis_routing_logs after schema apply).
+  // Reversible: controlled by ROUTER_ANFIS_SHADOW (default on for sprint).
+  let shadow: any = null;
+  try {
+    if (process.env.ROUTER_ANFIS_SHADOW !== 'false') {
+      shadow = computeShadowDecision({ chosen_provider: 'tbd', chosen_tier: '0a', reason: 'static' }, req.prompt, req.task_hint);
+      // For now console (table insert after migration apply + tolerant db)
+      console.log('[ANFIS-SHADOW]', JSON.stringify(shadow));
+    }
+  } catch (e) {
+    // tolerant for no key / no table yet
+  }
 
   // Intercept for low-complexity SLM routing
   if (req.tier_preference === 'auto' && isLowComplexity(req.prompt, req.task_hint)) {
@@ -234,7 +249,7 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     }
   }
 
-  return {
+  const finalDecision = {
     adapter: null,
     decision: {
       chosen_provider: 'none',
@@ -243,4 +258,9 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
       tried
     }
   };
+  if (shadow) {
+    console.log('[ANFIS-SHADOW final]', JSON.stringify({ static: finalDecision.decision, anfis: shadow.anfis, delta: shadow.delta }));
+    // TODO after migration: await db.from('anfis_routing_logs').insert({ static_provider: ..., anfis_provider: shadow.anfis.recommendedProvider, ... })
+  }
+  return finalDecision;
 }

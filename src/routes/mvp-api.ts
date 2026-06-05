@@ -290,13 +290,17 @@ router.post('/zkp/route', async (req: Request, res: Response) => {
     if (error) return fail(res, 500, 'zkp_route_failed', error.message);
     if (!data) return fail(res, 404, 'proof_type_not_routable', proof_type);
     const cfg: any = data;
-      // S-ONCHAIN Phase 3: classify + log fast vs heavy decision (per proof request, for audit)
-      const routeTo = cfg.zkp_system || ((cfg.sensitivity || 0.5) > 0.6 ? 'plonky3_stark' : 'fast_groth16');
-      console.log(`[ZKP Route] ${cfg.proof_type} sens=${cfg.sensitivity} reg=${cfg.regulatory_tag||'none'} -> ${routeTo}`);
-      // use routeTo below for the routed decision
+      // BUILD sprint B0/B4: explicit 3-tier (1 low/hash, 2 fast groth, 3 plonky vault). Sensitivity + reg + freq classify.
+      // tier3 only for high sens/reg (never overkill postcard data).
+      const sens = cfg.sensitivity || 0.5;
+      let routeTo = cfg.zkp_system || (sens > 0.7 ? 'plonky3_stark' : 'fast_groth16');
+      let tier: 1|2|3 = sens > 0.85 ? 3 : (sens > 0.7 || cfg.regulatory_tag ? 3 : (sens < 0.3 ? 2 : 2));
+      if (sens < 0.3 && !cfg.regulatory_tag) { routeTo = 'fast_groth16'; tier = 2; } // or hash for 1 if low
+      console.log(`[ZKP Route] ${cfg.proof_type} sens=${sens} reg=${cfg.regulatory_tag||'none'} -> ${routeTo} tier=${tier}`);
     return res.json({
       proof_type: cfg.proof_type,
       route_to: routeTo,
+      tier,
       sensitivity: cfg.sensitivity,
       pre_stageable: cfg.pre_stageable,
       max_frequency_per_day: cfg.max_frequency_per_day,

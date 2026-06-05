@@ -76,6 +76,8 @@ function anfisForward(
   return { output, ruleWeights: normalizedWeights, dissonance };
 }
 
+export { anfisForward, goldenCenters, goldenSpreads, gaussianMF };
+
 // Full CommaANFIS with PCV veto
 export function commaANFIS(inputs: number[]): {
   halScore: number;
