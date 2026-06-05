@@ -14,6 +14,7 @@ export interface LlmCallEntry {
   user_id?: string;
   agent_id?: string;
   task_hint?: string;
+  quorum_id?: string;
 }
 
 export async function logLlmCall(entry: LlmCallEntry): Promise<void> {
