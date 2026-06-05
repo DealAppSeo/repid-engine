@@ -262,39 +262,67 @@ export async function getPeerVerificationStats(): Promise<PeerVerificationStats>
   return stats;
 }
 
-export async function getLlmRoutingStats(): Promise<any> {
+export async function getLlmRoutingStats(windowDays: number = 7): Promise<any> {
+  // PHASE2: surface from llm_call_log (free-first now provable post instrumentation).
+  // Provider/model usage, free (tier0a) vs paid split, total cost, counts. Matches DONE-CHECK GROUP BY provider count/sum(cost_usd).
+  // Cite: SPRINT_XC_2026-06-05.md:18 (P2.1 + DONE-CHECK), route.ts logLlmCall (provider/tier/cost_usd), observability.ts /status/routing (mounted /api/v1/status/routing via v1.ts:29).
+  const since = new Date(Date.now() - windowDays * 86400_000).toISOString();
   const { data: rows, error } = await db
-    .from('anfis_routing_logs')
-    .select('*')
-    .order('created_at', { ascending: false });
+    .from('llm_call_log')
+    .select('provider, tier, model, cost_usd, latency_ms, status, created_at, prompt_tokens, completion_tokens')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(50000); // tolerant; for prod use agg or rpc
 
-  if (error || !rows) {
-    throw error || new Error('No data');
+  if (error) {
+    // tolerant for BLOCKED/no rows
+    return { total_calls: 0, note: 'llm_call_log query failed or empty (BLOCKED creds or no data)', error: error.message };
+  }
+  const calls = rows || [];
+
+  const total_calls = calls.length;
+  const total_cost = calls.reduce((s, r: any) => s + (Number(r.cost_usd) || 0), 0);
+  const free_calls = calls.filter((r: any) => (r.tier || '').includes('0') || (r.tier || '') === '0a').length;
+  const paid_calls = total_calls - free_calls;
+  const free_cost = calls.filter((r: any) => (r.tier || '').includes('0') || (r.tier || '') === '0a').reduce((s, r: any) => s + (Number(r.cost_usd) || 0), 0);
+  const paid_cost = total_cost - free_cost;
+
+  // group by provider
+  const byProvider: Record<string, { count: number; cost: number; avg_lat: number }> = {};
+  for (const r of calls) {
+    const p = r.provider || 'unknown';
+    if (!byProvider[p]) byProvider[p] = { count: 0, cost: 0, avg_lat: 0 };
+    byProvider[p].count++;
+    byProvider[p].cost += Number(r.cost_usd) || 0;
+    byProvider[p].avg_lat += Number(r.latency_ms) || 0;
+  }
+  for (const p of Object.keys(byProvider)) {
+    const b = byProvider[p]!;
+    b.avg_lat = b.count > 0 ? Math.round(b.avg_lat / b.count) : 0;
+    b.cost = Math.round(b.cost * 100000) / 100000;
   }
 
-  const total_decisions = rows.length;
-  let success_count = 0;
-  let confidence_sum = 0;
-  let latency_sum = 0;
-  let total_cost_saved = 0;
-
-  for (const r of rows) {
-    if (r.success) success_count++;
-    confidence_sum += r.confidence_score || 0;
-    latency_sum += r.latency_ms || 0;
-    total_cost_saved += Number(r.cost_saved) || 0;
+  // simple model usage sample (top)
+  const modelCounts: Record<string, number> = {};
+  for (const r of calls) {
+    const m = r.model || 'unknown';
+    modelCounts[m] = (modelCounts[m] || 0) + 1;
   }
 
-  const avg_confidence = total_decisions > 0 ? confidence_sum / total_decisions : 0;
-  const success_rate = total_decisions > 0 ? success_count / total_decisions : 0;
-  const avg_latency_ms = total_decisions > 0 ? latency_sum / total_decisions : 0;
+  const free_first_pct = total_calls > 0 ? Math.round((free_calls / total_calls) * 1000) / 10 : 0;
 
   return {
-    total_decisions,
-    avg_confidence: Math.round(avg_confidence * 1000) / 1000,
-    success_rate: Math.round(success_rate * 1000) / 1000,
-    total_cost_saved: Math.round(total_cost_saved * 10000) / 10000,
-    avg_latency_ms: Math.round(avg_latency_ms),
-    recent_logs: rows.slice(0, 10)
+    window_days: windowDays,
+    total_calls,
+    total_cost_usd: Math.round(total_cost * 100000) / 100000,
+    free_first_pct,
+    free_calls,
+    paid_calls,
+    free_cost_usd: Math.round(free_cost * 100000) / 100000,
+    paid_cost_usd: Math.round(paid_cost * 100000) / 100000,
+    by_provider: byProvider,
+    top_models: Object.entries(modelCounts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([m,c])=>({model:m, count:c})),
+    note: 'free-first provable from llm_call_log (tier 0a = groq/cerebras/gemini/cohere/deepseek + slm). Matches SELECT provider,count(*),sum(cost_usd) GROUP BY.',
+    recent_sample: calls.slice(0, 3)
   };
 }

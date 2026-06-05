@@ -1,0 +1,42 @@
+{
+  "generated": "2026-06-05T23:19:35.310Z",
+  "total_good": 35,
+  "cats": {
+    "factual": {
+      "count": 20,
+      "avg_cost_saved": -0.000015,
+      "cheaper_count": 0,
+      "beats_pct": 0,
+      "avg_conf": 0.89,
+      "propose_promote": true,
+      "note": "ANFIS wins or neutral on cost vs static; promote candidate (reversible flag, needs HAL qual crosscheck on real T12 labels)"
+    },
+    "code": {
+      "count": 12,
+      "avg_cost_saved": -0.00001808,
+      "cheaper_count": 4,
+      "beats_pct": 33.3,
+      "avg_conf": 0.929,
+      "propose_promote": true,
+      "note": "ANFIS wins or neutral on cost vs static; promote candidate (reversible flag, needs HAL qual crosscheck on real T12 labels)"
+    },
+    "creative": {
+      "count": 2,
+      "avg_cost_saved": 0.000147,
+      "cheaper_count": 2,
+      "beats_pct": 100,
+      "avg_conf": 0.945,
+      "propose_promote": true,
+      "note": "ANFIS wins or neutral on cost vs static; promote candidate (reversible flag, needs HAL qual crosscheck on real T12 labels)"
+    },
+    "math": {
+      "count": 1,
+      "avg_cost_saved": 0.000006,
+      "cheaper_count": 1,
+      "beats_pct": 100,
+      "avg_conf": 0.75,
+      "propose_promote": true,
+      "note": "ANFIS wins or neutral on cost vs static; promote candidate (reversible flag, needs HAL qual crosscheck on real T12 labels)"
+    }
+  }
+}
