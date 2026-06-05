@@ -103,20 +103,31 @@ export async function pgQuery<T extends QueryResultRow = any>(
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let timer: NodeJS.Timeout | null = null;
     try {
-      const result = await Promise.race<QueryResult<T>>([
-        getPgPool().query<T>(text, params),
-        timeoutReject<QueryResult<T>>(timeoutMs, label),
-      ]);
+      const queryPromise = getPgPool().query<T>(text, params);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`[direct-pg] query timeout after ${timeoutMs}ms: ${label}`)), timeoutMs);
+      });
+
+      const result = await Promise.race([queryPromise, timeoutPromise]);
+      if (timer) clearTimeout(timer);
+
       // Success — reset the breaker.
       consecutiveFailures = 0;
       circuitOpenLogged = false;
       return result.rows;
     } catch (err) {
+      if (timer) clearTimeout(timer);
       lastErr = err;
       if (attempt < maxAttempts - 1) {
         const delay = BACKOFF_SCHEDULE_MS[attempt] ?? BACKOFF_SCHEDULE_MS[BACKOFF_SCHEDULE_MS.length - 1]!;
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise((r) => {
+          const t = setTimeout(r, delay);
+          if (t && typeof t.unref === 'function') {
+            t.unref();
+          }
+        });
       }
     }
   }

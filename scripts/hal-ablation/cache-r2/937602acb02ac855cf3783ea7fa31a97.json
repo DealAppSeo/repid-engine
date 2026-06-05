@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"UNCERTAIN","confidence":0,"note":"Limited information available on Plonky3","latency_ms":193},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"Verified cryptography details","latency_ms":141},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":1058}]}
