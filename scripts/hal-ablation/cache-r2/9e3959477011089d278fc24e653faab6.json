@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"FALSE","confidence":100,"note":"Limit order may not be filled immediately at current market price","latency_ms":2610},{"provider":"groq-70b","verdict":"FALSE","confidence":100,"note":"Incorrect definition","latency_ms":124},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":4042}]}

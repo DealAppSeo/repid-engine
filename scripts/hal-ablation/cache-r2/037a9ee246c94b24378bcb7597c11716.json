@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"FALSE","confidence":100,"note":"Incorrect Goldilocks field modulus value","latency_ms":316},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"Verified","latency_ms":408},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":3919}]}

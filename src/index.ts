@@ -5,9 +5,11 @@ import { startHitlNotificationDispatcher } from './services/hitl-notification-di
 import { startPeerVerificationReader } from './services/peer-verification-reader';
 import { startHitlExpirySweeper } from './services/hitl-expiry-sweeper';
 import cors from 'cors';
+import { isAllowedOrigin } from './utils/cors-origins';
 import helmet from 'helmet';
 import { config } from './config';
 import healthRouter from './routes/health';
+import healthExtendedRouter from './routes/health-extended';
 import agentsRouter from './routes/agents';
 import scoreRouter from './routes/score';
 import referendumRouter from './routes/referendum';
@@ -34,6 +36,7 @@ import halTestRouter from './routes/hal-test';
 import auditRouter from './routes/audit';
 import fullAccountRouter from './routes/full-account';
 import receiptsRouter from './routes/receipts';
+import mvpApiRouter from './routes/mvp-api'; // S-WIRE-MVP — provider-trust/capabilities/dna/x402-gate/disputes/staking/zkp
 import { repidPublicRouter, repidAdminRouter } from './routes/repid';
 import stakeRouter from './routes/stake';
 import { llmRouter } from './routes/route';
@@ -54,6 +57,10 @@ import securityStatusRouter from './routes/security-status';
 // S-OPTIMIZE — cost + efficiency dashboards (public read, over the existing llm_call_log ledger).
 import costsRouter from './routes/costs';
 import efficiencyRouter from './routes/efficiency';
+// S-CACHE — DragonflyDB cache stats (public read; graceful no-op without REDIS_URL).
+import cacheStatsRouter from './routes/cache-stats';
+import { getCache } from './cache/dragonfly';
+import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -98,30 +105,23 @@ const scoreLimiter = rateLimit({
   keyGenerator: (req): string => String(req.params.id || ipKeyGenerator(req.ip ?? '')),
 });
 app.use(helmet());
-// CORS — permit trustrepid.dev and localhost for development.
-// Public demo endpoints (token-signup, run-round-anonymous, stake/deposit)
-// need to be reachable from trustrepid.dev's frontend without auth headers.
-const allowedOrigins = [
-  'https://trustrepid.dev',
-  'https://www.trustrepid.dev',
-  // CC1 2026-05-26: trustshell.dev v0.app surface consumes public read endpoints
-  // (/api/v1/status, /api/v1/hal/stats, /api/v1/repid/:id, /api/v1/llm-trust,
-  // /api/v1/receipts/hero, /.well-known/agent.json). Additive — does not loosen
-  // the existing CORS denylist for any other origin.
-  'https://trustshell.dev',
-  'https://www.trustshell.dev',
-  'http://localhost:3000',
-  'http://localhost:3001',
-];
+// CORS — allow-list + anchored trust*.dev pattern (src/utils/cors-origins.ts). The trustchat.dev
+// frontend + the rest of the Trust* ecosystem call repid-engine's public endpoints (rating, vote,
+// subscribe, track, session/share, leaderboard) cross-origin. NOTE (S-FRONTEND restore): this
+// trust*.dev allowance shipped in #82 but was dropped by a later merge — restored here so the live
+// frontend buttons stop CORS-failing.
 app.use(cors({
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     // Allow no-origin requests (server-to-server, curl, mobile apps).
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (isAllowedOrigin(origin)) return callback(null, true);
     callback(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  // PATCH is required: the trustchat.dev rating button calls PATCH /api/v1/session/:id/rate
+  // cross-origin; without PATCH here the preflight's Access-Control-Allow-Methods omits it and
+  // the browser blocks the request ("Failed to fetch").
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'X-RepID-Version'],
 }));
 app.use(express.json({ limit: "1mb" }));
@@ -197,14 +197,12 @@ app.use((req, res, next) => {
   // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
   // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
   if (req.path === '/api/v1/api-key-requests/request') return next();
-  // Controller (CC2 2026-05-26): /controller/sprint + /wake carry free-form sprint
-  // titles/descriptions (prose that legitimately contains SQL-shaped tokens). SBT-gated;
-  // downstream Supabase writes are parameterized.
-  if (req.path.startsWith('/api/v1/controller/sprint') || req.path.startsWith('/api/v1/controller/wake')) return next();
   // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
   if (req.path === '/api/v1/escalation/escalate') return next();
+  const SKIP_SANITIZER_KEYS = new Set(['description', 'success_criteria', 'expected_output', 'notes', 'title', 'constitution_text', 'interest', 'linkedin', 'github', 'notes_text']);
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
+      if (SKIP_SANITIZER_KEYS.has(key)) continue;
       if (typeof obj[key] === 'string') {
         const val = obj[key].toUpperCase();
         if (val.includes('SELECT ') || val.includes('DROP ') || val.includes('INSERT ') || val.includes('UPDATE ') || val.includes('DELETE ') || val.includes('--') || val.includes(';')) {
@@ -227,6 +225,10 @@ app.use((req, res, next) => {
 app.use('/api/v1/telegram', telegramRouter);
 app.use('/api/v1/hal-benchmark', halTestRouter);
 app.use('/api/v1/audit', auditRouter);
+// S-CACHE — per-IP rate limit (10/24h) on the public HAL "ask" surface. trustchat-backend's
+// server-to-server path is /hal/signals (not throttled); the user-facing /chat lives in
+// trustchat-backend (no Redis there yet — same middleware should be added when it gets Redis).
+app.use('/api/v1/hal/evaluate', ipRateLimit(10, 86400));
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
@@ -253,6 +255,8 @@ app.use('/', discoveryRouter);
 app.use('/', agentCardRouter);
 app.use('/', bountiesRouter);
 app.use('/api/v1', halStatsRouter);
+// S-CACHE — public cache stats dashboard.
+app.use('/api/v1', cacheStatsRouter);
 // S-OPTIMIZE — public cost + efficiency dashboards (read-only, over llm_call_log + trinity_tasks).
 app.use('/api/v1', costsRouter);
 app.use('/api/v1', efficiencyRouter);
@@ -332,6 +336,8 @@ app.use('/api/v1', v1Router);
 // CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
 app.use('/api/v1/observability', productivityRouter);
 app.use('/api/v1', receiptsRouter);
+// S-WIRE-MVP — agent-facing API over the eight new ecosystem tables (authed, post-authMiddleware).
+app.use('/api/v1', mvpApiRouter);
 // S-SPINE — referral stats dashboard (authed: requires a valid REPID_API_KEY / service role).
 app.use('/api/v1', referralStatsRouter);
 // Escalation API (CC2 2026-05-26) — agent/worker-facing (REPID_API_KEYS auth). Routes
@@ -520,6 +526,7 @@ app.get('/api/v1/llm-trust', async (req, res) => {
 });
 
 app.use(healthRouter);
+app.use(healthExtendedRouter);
 app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
 app.use(scoreRouter);
@@ -540,9 +547,16 @@ if (!IS_TEST) {
 
     const redisUrl = process.env.REDIS_URL;
     if (redisUrl) {
-      console.log('[Redis] Connected');
+      // S-CACHE — establish + verify the DragonflyDB cache connection on startup (graceful: a
+      // failure logs a warning and the cache stays a no-op; it never blocks boot).
+      const c = getCache();
+      if (c) {
+        c.ping()
+          .then(() => console.log('[dragonfly] connected (cache layer active)'))
+          .catch((err: any) => console.warn('[dragonfly] not available, cache disabled:', err?.message ?? err));
+      }
     } else {
-      console.log('[Redis] Running in fallback mode - rate limiting disabled');
+      console.log('[Redis] Running in fallback mode - cache + persistent rate limiting disabled');
     }
 
     // Score monitor Task 8

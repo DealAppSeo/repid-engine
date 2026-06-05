@@ -120,6 +120,11 @@ router.post('/respond', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'signature must be lowercase hex' });
   }
 
+  // S-CHAIN Phase 7 anti-self + anti-collusion (from S-REDTEAM).
+  // Self-endorsement is enforced atomically below by the UPDATE's `source_agent_id <> verifierUuid`
+  // guard (and the 0-row probe returns 400 'Self-verification is not permitted'), using the RESOLVED
+  // verifier UUID — so no separate pre-resolution check is needed here (the prior one referenced an
+  // undefined `queueEntry` and broke the build).
   // TODO full ring detection: query recent peer_verification_queue for mutual verifier<->agent pairs; if pattern, penalize RepID.
 
   try {

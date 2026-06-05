@@ -15,6 +15,7 @@
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { BUILDER_FLOOR, computeAuthority, babylonianSqrt } from './authority-math';
+import { recordSponsorship } from './sponsorship'; // R3 exercise + GA handoff
 
 export { BUILDER_FLOOR, computeAuthority };
 
@@ -56,6 +57,15 @@ export async function depositStake(
   if (insErr) {
     return { ok: false, builder_id: builder.id, total_active_stake: '0', authority_after: '0', is_simulated: true, error: insErr.message };
   }
+
+  // R3: also write to agent_stakes for substrate exercise >N=1
+  (db.from('agent_stakes').insert({
+    staker_agent: builder.id,
+    stake_amount: Number(amount) / 1_000_000,
+    dimension: 'builder_stake',
+    status: 'active',
+    target_model: 'general'
+  }) as any).catch(() => {});
 
   const total = await getCurrentStake(builder.id);
   const auth = await snapshotAuthority(builder.id, total);
@@ -220,3 +230,10 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
     },
   };
 }
+
+// R3: clean GA handoff + exercise >N=1. Call recordDeposit multiple times for varied flows.
+export async function recordDeposit(agentId: string, amountUsdc: number | bigint, txHash?: string) {
+  return depositStake(String(agentId), BigInt(amountUsdc), txHash);
+}
+
+export { recordSponsorship } from './sponsorship';

@@ -230,6 +230,32 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           error
         );
       }
+
+      // R3: EAS real-ready wire (only merkle/HyperDAG). Non-fatal. Uses our service (no borrowed).
+      if (args.merkleRoot) {
+        try {
+          const { easService } = await import('./eas-attestation-service.js');
+          if (easService.hasAttesterKey()) {
+            const res = await easService.attestProof({
+              proofId: 0,
+              agentId: args.agentId,
+              tier: tierProven,
+              merkleRoot: args.merkleRoot,
+              repidSnapshot: null,
+              proofType: 'POSTCARD'
+            });
+            if (res.uid) {
+              await config.supabase.from('repid_zkp_proofs')
+                .update({ eas_attestation_uid: res.uid, eas_schema: 'constitutional-compliance-v1' })
+                .eq('zk_commitment', args.commitment)
+                .is('eas_attestation_uid', null);
+              console.log(`[ProofDrain][R3-EAS] uid=${res.uid} agent=${args.agentId}`);
+            }
+          }
+        } catch (e: any) {
+          console.warn('[ProofDrain][R3-EAS] non-fatal:', e?.message || e);
+        }
+      }
     } catch (e) {
       console.error(
         `[ProofDrain] insertCanonicalProof threw for ${args.agentId} (queue stays completed):`,
@@ -273,6 +299,29 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       commitment: args.commitment,
       merkleRoot: args.merkleRoot,
     });
+
+    // Write through to Dragonfly proof cache and zkp_proofs_staged table
+    try {
+      const { cacheStagedProof } = require('../cache/proof-cache');
+      const { data: agent } = await config.supabase
+        .from('repid_agents')
+        .select('agent_name')
+        .eq('id', args.agentId)
+        .maybeSingle();
+      const agentName = agent?.agent_name || args.agentId;
+
+      await cacheStagedProof({
+        proof_type: 'POSTCARD',
+        agent_name: agentName,
+        proof_data: args.proofBytes ? Buffer.from(args.proofBytes, 'base64').toString('hex') : '',
+        proof_hash: args.proofHash,
+        merkle_root: args.merkleRoot || '',
+        anchor_tx_hash: args.commitment || '',
+        status: 'valid',
+      });
+    } catch (cacheErr) {
+      console.warn('[ProofDrain] Failed to cache staged proof:', cacheErr);
+    }
   }
 
   async function markFailed(rowId: string, message: string): Promise<void> {

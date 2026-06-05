@@ -1,0 +1,35 @@
+{
+  "run_id": "cc-measure-2026-05-30T04-25-26-088Z",
+  "n": 109,
+  "gen_failed": 56,
+  "B_factcheck": {
+    "n": 109,
+    "threshold": 0.43,
+    "auc": 0.7748,
+    "f1": 0.6022,
+    "precision": 0.8,
+    "recall": 0.4828,
+    "veto_rate": 0.3211,
+    "separation": 0.3227,
+    "tp": 28,
+    "fp": 7,
+    "fn": 30,
+    "tn": 44
+  },
+  "C_extractor": {
+    "n": 109,
+    "threshold": 0.25,
+    "auc": 0.3753,
+    "f1": 0.5294,
+    "precision": 0.4615,
+    "recall": 0.6207,
+    "veto_rate": 0.7156,
+    "separation": -0.0136,
+    "tp": 36,
+    "fp": 42,
+    "fn": 22,
+    "tn": 9
+  },
+  "delta_auc_B_minus_C": 0.3995,
+  "delta_f1_B_minus_C": 0.0728
+}

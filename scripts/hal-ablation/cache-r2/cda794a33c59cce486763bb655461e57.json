@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"ERC-20 transfer function returns boolean indicating success or failure","latency_ms":401},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"ERC-20 spec","latency_ms":228},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":1062}]}

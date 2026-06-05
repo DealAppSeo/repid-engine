@@ -14,6 +14,7 @@ export interface LlmCallEntry {
   user_id?: string;
   agent_id?: string;
   task_hint?: string;
+  quorum_id?: string; // R5 — groups the provider calls of one HAL fact-check quorum
 }
 
 export async function logLlmCall(entry: LlmCallEntry): Promise<void> {

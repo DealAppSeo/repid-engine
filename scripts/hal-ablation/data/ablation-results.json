@@ -1,0 +1,223 @@
+{
+  "run_at": "2026-06-03T08:37:47.349Z",
+  "corpus_size": 165,
+  "quorum_size": 9,
+  "degraded": 2,
+  "providers": [
+    {
+      "name": "groq",
+      "model": "llama-3.1-8b-instant"
+    },
+    {
+      "name": "cerebras",
+      "model": "zai-glm-4.7"
+    },
+    {
+      "name": "fireworks",
+      "model": "accounts/fireworks/models/kimi-k2p5"
+    }
+  ],
+  "calls_made_this_run": 0,
+  "est_cost_usd": 0,
+  "comma_ratio": 1.0136432647705078,
+  "results": [
+    {
+      "scorer": "A_plain_majority",
+      "n": 9,
+      "threshold": 0.5,
+      "auc": 0.675,
+      "f1": 0.5714,
+      "precision": 0.6667,
+      "recall": 0.5,
+      "veto_rate": 0.3333,
+      "separation": 0.1375,
+      "tp": 2,
+      "fp": 1,
+      "fn": 2,
+      "tn": 4
+    },
+    {
+      "scorer": "B0_ensemble_noComma",
+      "n": 9,
+      "threshold": 0.5,
+      "auc": 0.675,
+      "f1": 0.5714,
+      "precision": 0.6667,
+      "recall": 0.5,
+      "veto_rate": 0.3333,
+      "separation": 0.1175,
+      "tp": 2,
+      "fp": 1,
+      "fn": 2,
+      "tn": 4
+    },
+    {
+      "scorer": "B_HAL_comma",
+      "n": 9,
+      "threshold": 0.5,
+      "auc": 0.675,
+      "f1": 0.5714,
+      "precision": 0.6667,
+      "recall": 0.5,
+      "veto_rate": 0.3333,
+      "separation": 0.1191,
+      "tp": 2,
+      "fp": 1,
+      "fn": 2,
+      "tn": 4
+    },
+    {
+      "scorer": "C_extractor_prod",
+      "n": 11,
+      "threshold": 0.25,
+      "auc": 0.45,
+      "f1": 0.3636,
+      "precision": 0.3333,
+      "recall": 0.4,
+      "veto_rate": 0.5455,
+      "separation": -0.0041,
+      "tp": 2,
+      "fp": 4,
+      "fn": 3,
+      "tn": 2
+    },
+    {
+      "scorer": "C_extractor_at0.5",
+      "n": 11,
+      "threshold": 0.5,
+      "auc": 0.45,
+      "f1": 0,
+      "precision": 0,
+      "recall": 0,
+      "veto_rate": 0,
+      "separation": -0.0041,
+      "tp": 0,
+      "fp": 0,
+      "fn": 5,
+      "tn": 6
+    }
+  ],
+  "rows": [
+    {
+      "id": "htc-0105acb3-84dc-4a5d-b7dc-691c7eeedfe4",
+      "gt": false,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.25,
+      "score_B0": 0.25,
+      "score_B": 0.25341081619262695,
+      "score_C": 0.28635422229766844
+    },
+    {
+      "id": "htc-087e5c53-3fd7-4539-8adf-19edc3f55c76",
+      "gt": true,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.75,
+      "score_B0": 0.75,
+      "score_B": 0.7602324485778809,
+      "score_C": 0.28635422229766844
+    },
+    {
+      "id": "htc-0a4e7837-fd69-4603-b15a-0b13716d4db3",
+      "gt": true,
+      "source": "hal_test_cases",
+      "providers_used": 1,
+      "quorum": false,
+      "score_A": 0.5,
+      "score_B0": 0.5,
+      "score_B": 0.5068216323852539,
+      "score_C": 0.3916604948043823
+    },
+    {
+      "id": "htc-0af3c058-dae7-4692-9eef-5b3f798abfe9",
+      "gt": false,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.25,
+      "score_B0": 0.25,
+      "score_B": 0.25341081619262695,
+      "score_C": 0.24468222141265872
+    },
+    {
+      "id": "htc-0b9a1107-f48f-4b66-ab6c-7b88854e6315",
+      "gt": false,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.75,
+      "score_B0": 0.75,
+      "score_B": 0.7602324485778809,
+      "score_C": 0.23465841579437255
+    },
+    {
+      "id": "htc-17264221-1901-4c21-916c-dfbd7e6bd7c5",
+      "gt": false,
+      "source": "hal_test_cases",
+      "providers_used": 1,
+      "quorum": false,
+      "score_A": 0.5,
+      "score_B0": 0.5,
+      "score_B": 0.5068216323852539,
+      "score_C": 0.2878746871948242
+    },
+    {
+      "id": "htc-17e242e5-21b9-4f42-bc7d-3bb7d67e46e6",
+      "gt": true,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.25,
+      "score_B0": 0.25,
+      "score_B": 0.25341081619262695,
+      "score_C": 0.2483425998687744
+    },
+    {
+      "id": "htc-1840bebf-0747-4c8f-a18e-8ac0ae250870",
+      "gt": false,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0,
+      "score_B0": 0.1,
+      "score_B": 0.10136432647705079,
+      "score_C": 0.2513835296630859
+    },
+    {
+      "id": "htc-434e5f70-1f4a-4e17-8eaa-b683f371f6df",
+      "gt": false,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.25,
+      "score_B0": 0.25,
+      "score_B": 0.25341081619262695,
+      "score_C": 0.2924360818862915
+    },
+    {
+      "id": "htc-70b19fc4-90d2-484c-8b3a-b46254e51912",
+      "gt": true,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.5,
+      "score_B0": 0.5,
+      "score_B": 0.5068216323852539,
+      "score_C": 0.1351524353027344
+    },
+    {
+      "id": "htc-b7c34b26-359d-40a1-beec-d571875fe37a",
+      "gt": true,
+      "source": "hal_test_cases",
+      "providers_used": 2,
+      "quorum": true,
+      "score_A": 0.25,
+      "score_B0": 0.25,
+      "score_B": 0.25341081619262695,
+      "score_C": 0.24935624313354493
+    }
+  ]
+}
