@@ -263,10 +263,24 @@ export async function runScoreEvent(
   const quorumUnavailable = groundedVeto && penaltyRequiresQuorum && !quorumMet;
   const hallucination_caught = groundedVeto && (penaltyRequiresQuorum ? quorumMet : true);
 
-  // 4. Compute delta.
+  // HONEST-HAL (2026-06-04): the blind style-extractor (strictness 1; AUC ~0.375 < chance on the
+  // 109-case labeled corpus [report CC 06-03]) must NOT drive the HAL decision OR the RepID delta —
+  // in either direction. The drain-gate above already suppresses the extractor's NEGATIVE delta, but
+  // its 'clean' verdict still granted a POSITIVE reward (computeDelta clean → +1..+5) and its label
+  // still wrote 'vetoed'/'clean' to the event row + downstream. Only a real cross-provider FACT-CHECK
+  // QUORUM (mode 'fact-check' && >= QUORUM_MIN distinct families — quorumMet, computed above) is
+  // decision-eligible. Without a quorum the scoring decision is NEUTRALIZED to 'flagged' (monitor,
+  // zero applied delta via the drain-gate) and the extractor's raw decision is kept in metadata for
+  // telemetry ONLY. Reversible via HAL_DECISION_REQUIRES_QUORUM (default ON). On a HAL failure we keep
+  // the existing 'flagged' fail-soft (decision already 'flagged') — neutralization is a no-op there.
+  const decisionRequiresQuorum = process.env.HAL_DECISION_REQUIRES_QUORUM !== 'false';
+  const decisionNeutralized = decisionRequiresQuorum && !quorumMet && !halError && decision !== 'flagged';
+  const scoringDecision: HALDecision = decisionNeutralized ? 'flagged' : decision;
+
+  // 4. Compute delta. Driven by the QUORUM-eligible scoringDecision, never the raw extractor decision.
   const delta = computeDelta({
     hal_score,
-    hal_decision: decision,
+    hal_decision: scoringDecision,
     current_repid: agent.current_repid,
     agent_tier: agent.tier,
     vesting_cliff_active: agent.vesting_cliff_active,
@@ -309,7 +323,7 @@ export async function runScoreEvent(
     llm_provider: canonicalizeProvider(input.provider_used),
     llm_model: input.model_used ?? null,
     hal_score,
-    hal_decision: decision,
+    hal_decision: scoringDecision,
     hallucination_caught,
     repid_delta_calculated: Math.round(delta.delta_calculated),
     repid_delta_applied: Math.round(effectiveDeltaApplied),
@@ -318,7 +332,7 @@ export async function runScoreEvent(
     answer_text: input.answer,
     llm_call_id: input.llm_call_id ?? null,
     task_domain: input.task_domain ?? null,
-    decision_outcome: decision,
+    decision_outcome: scoringDecision,
     zk_proof_triggered: triggerProof,
     zk_proof_id,
     idempotency_key: input.idempotency_key ?? null,
@@ -337,6 +351,11 @@ export async function runScoreEvent(
       quorum_families_used: familiesUsed,
       quorum_families: (signals as Record<string, unknown>).families ?? null,
       hal_mode: halMode ?? null,
+      // HONEST-HAL — decision provenance. scoringDecision (the recorded hal_decision) is quorum-only;
+      // extractor_decision is the blind style-extractor's raw call, kept for telemetry ONLY.
+      decision_source: quorumMet ? 'fact-check-quorum' : 'neutralized-no-quorum',
+      decision_neutralized: decisionNeutralized,
+      extractor_decision: decision,
       ...(penaltySuppressed
         ? {
             suppressed_reason: quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught',
@@ -442,7 +461,7 @@ export async function runScoreEvent(
   return {
     score_event_id,
     hal_score,
-    hal_decision: decision,
+    hal_decision: scoringDecision,
     signals,
     repid_delta_calculated: delta.delta_calculated,
     repid_delta_applied: effectiveDeltaApplied,
