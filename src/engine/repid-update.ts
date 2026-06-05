@@ -14,7 +14,8 @@ export interface RepIdUpdateInput {
     | 'PREDICTION_RESOLVE'
     | 'STAKE'|'GENESIS'|'REFERRAL'|'PEACEMAKER'|'SELF_MONITOR'
     | 'CODE_CONTRIBUTION' | 'WORKFLOW_CONTRIBUTION' | 'TOOL_PIONEER'
-    | 'AGENT_TEACHING' | 'AUDIT_CONTRIBUTION';
+    | 'AGENT_TEACHING' | 'AUDIT_CONTRIBUTION'
+    | 'HANDOFF_COSIGN_VERIFIED' | 'HANDOFF_COSIGN_FALSE_PASS_SLASH'; // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN)
   certaintyAtClaim?: number;
   pStated?: number;
   pCorrect?: number;
@@ -68,9 +69,29 @@ const FIXED_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
   STAKE: 5, GENESIS: 0, REFERRAL: 20, PEACEMAKER: 15, SELF_MONITOR: 10,
   CODE_CONTRIBUTION: 25, WORKFLOW_CONTRIBUTION: 20, TOOL_PIONEER: 12,
   AGENT_TEACHING: 15, AUDIT_CONTRIBUTION: 15,
+  HANDOFF_COSIGN_VERIFIED: 10, // producer + verifier each get + on verified co-sign (calibrated)
+  HANDOFF_COSIGN_FALSE_PASS_SLASH: -15, // slash the rubber-stamper (verifier) on false-PASS
 };
 
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
+  // Phase 3 dogfooding gate: co-sign -> RepID only if flag ON (default OFF until CC honest-HAL merge)
+  const isDogfoodCoSignEvent = input.eventType === 'HANDOFF_COSIGN_VERIFIED' || input.eventType === 'HANDOFF_COSIGN_FALSE_PASS_SLASH';
+  if (isDogfoodCoSignEvent && process.env.DOGFOOD_REPID_FROM_COSIGN !== 'true') {
+    // flag-OFF no-op: return a no-delta result (tests cover this)
+    const { data: agent } = await db.from('repid_agents').select('*').eq('id', input.agentId).single();
+    return {
+      agentId: input.agentId,
+      agentName: agent?.agent_name || 'unknown',
+      repIdBefore: agent?.current_repid || 0,
+      repIdAfter: agent?.current_repid || 0,
+      delta: 0,
+      tier: computeTier(agent?.current_repid || 0),
+      ecosystemNeedWeight: 0,
+      redemptionModifierApplied: false,
+      constitutionalAudit: { passed: true, complianceScore: 1, halMode: 0, easAttestationId: '', easSchema: '', processingMs: 0 },
+    } as any;
+  }
+
   // 1 — Fetch agent
   const { data: agent, error } = await db
     .from('repid_agents').select('*').eq('id', input.agentId).single();

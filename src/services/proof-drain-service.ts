@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
+import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
+import { routeProofRequest } from '../zkp/proof-router'; // S-ONCHAIN: routing classification (owned)
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -213,6 +215,10 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         console.warn(`[ProofDrain] tier lookup threw for ${args.agentId}:`, e instanceof Error ? e.message : e);
       }
 
+      // S-ONCHAIN Phase 3: log routing decision for this proof (even for drain output)
+      const decision = await routeProofRequest('POSTCARD', { agentRepId: tierProven === 'VETERAN' ? 8000 : 1000 });
+      console.log(`[ProofDrain] routing for proof: ${decision.route_to} (${decision.reason})`);
+
       const { error } = await config.supabase.from('repid_zkp_proofs').insert({
         agent_id: args.agentId,
         proof_type: 'POSTCARD',
@@ -229,6 +235,29 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           error.message,
           error
         );
+      } else if (args.merkleRoot) {
+        // S-ONCHAIN Phase 2: wire real EAS on Base Sepolia for qualifying proofs (those with merkle_root from drain, e.g. tier promotions).
+        // Gate: only threshold/anchored ones to control cost. Update row with uid + schema so presentProof() can return honest on-chain ref.
+        try {
+          const res = await easService.attestProof({
+            proofId: 0,
+            agentId: args.agentId,
+            tier: tierProven,
+            merkleRoot: args.merkleRoot,
+            repidSnapshot: 0,
+            proofType: 'POSTCARD'
+          });
+          const uid = res?.uid;
+          if (uid && !uid.startsWith('0x0000')) {
+            await config.supabase.from('repid_zkp_proofs')
+              .update({ eas_attestation_uid: uid, eas_schema: 'constitutional-compliance-v1' })
+              .eq('agent_id', args.agentId)
+              .eq('merkle_root', args.merkleRoot);
+            console.log(`[ProofDrain] EAS attested for ${args.agentId}: ${uid}`);
+          }
+        } catch (easErr: any) {
+          console.warn(`[ProofDrain] EAS attest skipped/failed for ${args.agentId}: ${easErr?.message || easErr} (fund EAS_ATTESTER_PRIVATE_KEY on Base Sepolia)`);
+        }
       }
 
       // R3: EAS real-ready wire (only merkle/HyperDAG). Non-fatal. Uses our service (no borrowed).
