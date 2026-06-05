@@ -10,9 +10,9 @@
 import { factCheck, type FactCheckProviderCfg } from '../../../src/hal/fact-check';
 
 const PROVIDERS: FactCheckProviderCfg[] = [
-  { name: 'groq', endpoint: 'http://groq.test', apiKey: 'k', model: 'm', timeoutMs: 2000 },
-  { name: 'cerebras', endpoint: 'http://cerebras.test', apiKey: 'k', model: 'm', timeoutMs: 2000 },
-  { name: 'fireworks', endpoint: 'http://fireworks.test', apiKey: 'k', model: 'm', timeoutMs: 2000 },
+  { name: 'groq', endpoint: 'http://groq.test', apiKey: 'k', model: 'llama-3-8b', timeoutMs: 2000 },
+  { name: 'cerebras', endpoint: 'http://cerebras.test', apiKey: 'k', model: 'gemini-2.5', timeoutMs: 2000 },
+  { name: 'fireworks', endpoint: 'http://fireworks.test', apiKey: 'k', model: 'qwen-2.5', timeoutMs: 2000 },
 ];
 
 type Outcome = { kind: 'ok'; verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN'; confidence?: number } | { kind: '429' } | { kind: 'throw' };

@@ -22,6 +22,7 @@ import { db } from '../db';
 import { logProofGeneration } from '../zkp/plonky3-real';
 import { generateProof } from '../zk-proof/prover';
 import { fireWebhook } from '../services/webhook';
+import { getReputationWriter, Erc8004ReputationWriter } from '../services/erc8004-reputation';
 
 export const repidPublicRouter = Router();
 
@@ -45,6 +46,61 @@ repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => 
       console.error(`[repid] lookup db error for ${req.params.agentId}: ${e.message}`);
     }
     return res.status(404).json({ error: 'AGENT_NOT_FOUND', detail: e?.message ?? String(e) });
+  }
+});
+
+// GET /api/v1/repid/:agentId/onchain — read and map reputation on-chain registry score
+repidPublicRouter.get('/repid/:agentId/onchain', async (req: Request, res: Response) => {
+  const { agentId } = req.params;
+  try {
+    const { data: agent, error } = await db
+      .from('repid_agents')
+      .select('id, agent_name, current_repid, erc8004_token_id')
+      .eq('id', agentId)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`[repid/onchain] db error for ${agentId}: ${error.message}`);
+      return res.status(500).json({ error: 'INTERNAL', detail: error.message });
+    }
+    if (!agent) {
+      return res.status(404).json({ error: 'AGENT_NOT_FOUND', detail: `Agent ${agentId} not found` });
+    }
+    if (!agent.erc8004_token_id) {
+      return res.status(400).json({ error: 'NO_ERC8004_IDENTITY', detail: `Agent ${agentId} has no registered erc8004_token_id` });
+    }
+
+    let writer = getReputationWriter();
+    if (!writer) {
+      // Fallback: instantiate read-only writer with a dummy key so we can perform the getSummary call
+      const { getActiveNetwork } = require('../config/network');
+      const { getProvider } = require('../clients/rpc-with-failover');
+      const net = getActiveNetwork();
+      writer = new Erc8004ReputationWriter({
+        provider: getProvider(),
+        privateKey: '0x0000000000000000000000000000000000000000000000000000000000000001',
+        contractAddress: process.env.ERC8004_REPUTATION_CONTRACT || net.contracts.reputationRegistry,
+        chainId: net.chainId,
+      });
+    }
+
+    const summary = await writer.readHyperDAGFeedback(agent.erc8004_token_id);
+    res.json({
+      agent_id: agentId,
+      agent_name: agent.agent_name,
+      erc8004_token_id: agent.erc8004_token_id,
+      onchain_reputation: {
+        count: summary.count,
+        score: Number(summary.summaryValue),
+        decimals: summary.summaryValueDecimals
+      },
+      contract_address: writer.getContractAddress(),
+      chain_id: writer.chainId,
+      operator_address: await writer.getOperatorAddress()
+    });
+  } catch (e: any) {
+    console.error(`[repid/onchain] error for ${agentId}:`, e?.message ?? e);
+    res.status(500).json({ error: 'ONCHAIN_READ_FAILED', detail: e?.message ?? String(e) });
   }
 });
 

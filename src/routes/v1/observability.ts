@@ -6,7 +6,8 @@ import {
   getHitlStatus,
   getAgentStatus,
   getRepidEventStats,
-  getPeerVerificationStats
+  getPeerVerificationStats,
+  getLlmRoutingStats
 } from '../../services/observability-queries';
 
 const router = Router();
@@ -70,6 +71,15 @@ router.get('/repid-events', async (req, res) => {
 router.get('/peer-verification', async (req, res) => {
   try {
     const data = await getPeerVerificationStats();
+    res.json(buildResponse(data));
+  } catch (error: any) {
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch status' } });
+  }
+});
+
+router.get('/routing', async (req, res) => {
+  try {
+    const data = await getLlmRoutingStats();
     res.json(buildResponse(data));
   } catch (error: any) {
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch status' } });

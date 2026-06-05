@@ -10,7 +10,7 @@ import { Llama321bAdapter, Gemma32bAdapter, Phi4Adapter } from './slm';
 import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
 import { checkCap } from '../billing/caps';
 import { db } from '../db';
-import { computeShadowDecision } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
+import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
 
 export interface RouteRequest {
   prompt: string;
@@ -106,8 +106,73 @@ async function getAnfisRecommendation(domain: string): Promise<string | null> {
   }
 }
 
-export async function routeRequest(req: RouteRequest, excludeProviders: string[] = []): Promise<{ adapter: ProviderAdapter | null, decision: RouteDecision }> {
+export async function routeRequest(req: RouteRequest, excludeProviders: string[] = []): Promise<{
+  adapter: ProviderAdapter | null;
+  decision: RouteDecision;
+  staticProvider: string;
+  staticTier: string;
+  anfisProvider: string;
+  anfisTier: string;
+  anfisConfidence: number;
+}> {
   const tried: string[] = [...excludeProviders];
+
+  // 1. Compute ANFIS choice
+  const anfisRec = anfisRecommendProvider(req.prompt, req.task_hint);
+  const anfisProvider = anfisRec.recommendedProvider;
+  const anfisTier = anfisRec.recommendedTier;
+  const anfisConfidence = anfisRec.confidence;
+
+  // 2. Compute Static choice
+  let staticProvider = 'none';
+  let staticTier = 'none';
+  let foundStatic = false;
+
+  // Check SLM for low complexity in static mode
+  if (req.tier_preference === 'auto' && isLowComplexity(req.prompt, req.task_hint)) {
+    for (const adapter of slmAdapters) {
+      if (!excludeProviders.includes(adapter.name) && isHealthy(adapter.name)) {
+        const cap = await checkCap(adapter.name);
+        if (cap.allowed) {
+          staticProvider = adapter.name;
+          staticTier = 'slm';
+          foundStatic = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Check Tier 0a in static mode
+  if (!foundStatic && req.tier_preference !== 'tier1_only') {
+    for (const adapter of tier0aAdapters) {
+      if (!excludeProviders.includes(adapter.name) && isHealthy(adapter.name)) {
+        const cap = await checkCap(adapter.name);
+        if (cap.allowed) {
+          staticProvider = adapter.name;
+          staticTier = '0a';
+          foundStatic = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Check Tier 1 in static mode
+  if (!foundStatic && req.tier_preference !== 'tier0_only' && req.user_paid_keys) {
+    for (const adapter of tier1Adapters) {
+      const key = (req.user_paid_keys as any)[adapter.name];
+      if (key && !excludeProviders.includes(adapter.name) && isHealthy(adapter.name)) {
+        const cap = await checkCap(adapter.name);
+        if (cap.allowed) {
+          staticProvider = adapter.name;
+          staticTier = '1';
+          foundStatic = true;
+          break;
+        }
+      }
+    }
+  }
 
   // TRACK A A2 SHADOW: always compute ANFIS rec alongside static (ANFIS does NOT decide yet).
   // Log both + outcome later (to anfis_routing_logs after schema apply).
@@ -115,7 +180,8 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   let shadow: any = null;
   try {
     if (process.env.ROUTER_ANFIS_SHADOW !== 'false') {
-      shadow = computeShadowDecision({ chosen_provider: 'tbd', chosen_tier: '0a', reason: 'static' }, req.prompt, req.task_hint);
+      const staticStub = { chosen_provider: staticProvider, chosen_tier: staticTier as any, reason: 'static', tried: [] as string[] };
+      shadow = computeShadowDecision(staticStub as any, req.prompt, req.task_hint);
       // For now console (table insert after migration apply + tolerant db)
       console.log('[ANFIS-SHADOW]', JSON.stringify(shadow));
     }
@@ -143,7 +209,12 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
             chosen_tier: '0a',
             reason: 'slm_low_complexity',
             tried
-          }
+          },
+          staticProvider,
+          staticTier,
+          anfisProvider,
+          anfisTier,
+          anfisConfidence
         };
       } else {
         tried.push(adapter.name);
@@ -199,7 +270,12 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
             chosen_tier: '0a',
             reason: tried.length === 0 ? 'priority_healthy' : (capHit ? 'cap_hit' : 'fallback_after_failure'),
             tried
-          }
+          },
+          staticProvider,
+          staticTier,
+          anfisProvider,
+          anfisTier,
+          anfisConfidence
         };
       } else {
         tried.push(adapter.name);
@@ -241,7 +317,12 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
             chosen_tier: '1',
             reason: (req.tier_preference === 'tier1_only' || !tryTier0) ? 'tier1_required' : (capHit ? 'cap_hit' : 'fallback_after_failure'),
             tried
-          }
+          },
+          staticProvider,
+          staticTier,
+          anfisProvider,
+          anfisTier,
+          anfisConfidence
         };
       } else {
         tried.push(adapter.name);
@@ -253,14 +334,18 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     adapter: null,
     decision: {
       chosen_provider: 'none',
-      chosen_tier: 'none',
-      reason: 'all_exhausted',
+      chosen_tier: 'none' as const,
+      reason: 'all_exhausted' as const,
       tried
-    }
+    },
+    staticProvider,
+    staticTier,
+    anfisProvider,
+    anfisTier,
+    anfisConfidence
   };
   if (shadow) {
     console.log('[ANFIS-SHADOW final]', JSON.stringify({ static: finalDecision.decision, anfis: shadow.anfis, delta: shadow.delta }));
-    // TODO after migration: await db.from('anfis_routing_logs').insert({ static_provider: ..., anfis_provider: shadow.anfis.recommendedProvider, ... })
   }
   return finalDecision;
 }

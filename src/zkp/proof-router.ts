@@ -27,7 +27,7 @@ export async function routeProofRequest(proofType: string, context?: { agentRepI
     .maybeSingle();
 
   if (!cfg) {
-    return { proof_type: proofType, route_to: 'fast_groth16', reason: 'no config, default fast' };
+    return { proof_type: proofType, route_to: 'fast_groth16', tier: 2, reason: 'no config, default fast' };
   }
 
   let route_to: 'fast_groth16' | 'plonky3_stark' | 'hash' = cfg.zkp_system || 'fast_groth16';

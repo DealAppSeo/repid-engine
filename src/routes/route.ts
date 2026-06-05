@@ -78,6 +78,22 @@ llmRouter.post('/v1/llm/route-debug', llmLimiter, async (req: Request, res: Resp
   }
 });
 
+function getDefaultModelForProvider(provider: string): string {
+  switch (provider) {
+    case 'groq': return 'llama-3.1-8b-instant';
+    case 'cerebras': return 'llama3.1-8b';
+    case 'gemini': return 'gemini-2.0-flash';
+    case 'cohere': return 'command-r';
+    case 'deepseek': return 'deepseek-chat';
+    case 'anthropic': return 'claude-haiku-4-5';
+    case 'openai': return 'gpt-4o-mini';
+    case 'llama-3-2-1b': return 'llama-3-2-1b';
+    case 'gemma-3-2b': return 'gemma-3-2b';
+    case 'phi-4': return 'phi-4';
+    default: return 'default';
+  }
+}
+
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
   const call_id = crypto.randomUUID();
   try {
@@ -182,7 +198,15 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     while (attempts < maxAttempts) {
       attempts++;
       
-      const { adapter, decision } = await routeRequest(routeReq, excludeProviders);
+      const {
+        adapter,
+        decision,
+        staticProvider,
+        staticTier,
+        anfisProvider,
+        anfisTier,
+        anfisConfidence
+      } = await routeRequest(routeReq, excludeProviders);
       lastDecision = decision;
       // S-HARDEN Phase 3 — audit the ANFIS routing decision (gated by TOOL_CALL_LOGGING; no-op default; never throws).
       void logToolCall({
@@ -248,13 +272,20 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
 
         // Write routing decision to anfis_routing_logs (Phase 2.10 / P3)
         try {
+          const staticModel = getDefaultModelForProvider(staticProvider);
+          const anfisModel = getDefaultModelForProvider(anfisProvider);
+          const staticCost = calculateCost(staticProvider, staticModel, result.tokensIn, result.tokensOut);
+          const anfisCost = calculateCost(anfisProvider, anfisModel, result.tokensIn, result.tokensOut);
+          const cost_saved = staticCost - anfisCost;
+
           await db.from('anfis_routing_logs').insert({
             request_text: prompt.substring(0, 500),
             selected_model: `${adapter.name}/${result.model || 'default'}`,
-            confidence_score: decision.chosen_tier === '0a' ? 0.9 : 0.7,
-            cost_saved: 0,
+            confidence_score: anfisConfidence,
+            cost_saved,
             latency_ms: result.latencyMs,
-            success: true
+            success: true,
+            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`]
           });
         } catch (e: any) {
           console.error('[anfis_routing] complete log failure:', e?.message ?? e);
@@ -323,10 +354,11 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             request_text: prompt.substring(0, 500),
             selected_model: `${adapter.name}/unknown`,
-            confidence_score: decision?.chosen_tier === '0a' ? 0.9 : 0.7,
+            confidence_score: anfisConfidence,
             cost_saved: 0,
             latency_ms: latencyMs,
-            success: false
+            success: false,
+            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`]
           });
         } catch (e: any) {
           console.error('[anfis_routing] failure log failure:', e?.message ?? e);

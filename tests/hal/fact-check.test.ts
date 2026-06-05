@@ -111,13 +111,16 @@ describe('factCheck — env thresholds + provider builder', () => {
   });
 
   test('buildFactCheckProviders includes only keyed providers', () => {
-    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY };
+    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY, fe: process.env.HAL_S2_ENABLE_FIREWORKS };
     process.env.GROQ_API_KEY = 'g'; process.env.CEREBRAS_API_KEY = 'c'; delete process.env.FIREWORKS_API_KEY;
     const ps = buildFactCheckProviders();
     expect(ps.map((p) => p.name)).toEqual(['groq', 'cerebras']);
     process.env.FIREWORKS_API_KEY = 'f';
+    process.env.HAL_S2_ENABLE_FIREWORKS = 'true';
     expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['groq', 'cerebras', 'fireworks']);
     process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f;
+    if (save.fe === undefined) delete process.env.HAL_S2_ENABLE_FIREWORKS;
+    else process.env.HAL_S2_ENABLE_FIREWORKS = save.fe;
     if (!save.g) delete process.env.GROQ_API_KEY;
     if (!save.c) delete process.env.CEREBRAS_API_KEY;
     if (!save.f) delete process.env.FIREWORKS_API_KEY;
