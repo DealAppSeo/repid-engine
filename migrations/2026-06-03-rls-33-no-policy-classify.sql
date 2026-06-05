@@ -36,3 +36,19 @@ COMMENT ON TABLE public.stake_deposits IS 'S-ONCHAIN Phase 5 (a) service-role-on
 -- Smoke: query pg_policies for the tables; anon select denied; service ok; client reads for (b) succeed.
 
 -- Note: full list of 33 from live: run SELECT tablename FROM pg_tables t WHERE schemaname='public' AND rowsecurity AND NOT EXISTS (SELECT 1 FROM pg_policies p WHERE p.tablename=t.tablename); in Supabase.
+
+-- Phase 5 fold-in (2026-06-04): GA's two newly-found unpoliced tables
+-- agent_artifacts: (a) service-role-only (internal artifacts, embeddings, zk_weight for sprints; sensitive node data). Rationale: no client read proven; economic/audit internal.
+ALTER TABLE IF EXISTS public.agent_artifacts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_all" ON public.agent_artifacts;
+CREATE POLICY "service_role_all" ON public.agent_artifacts FOR ALL TO service_role USING (true) WITH CHECK (true);
+COMMENT ON TABLE public.agent_artifacts IS 'S-ONCHAIN Phase 5 (a) service-role-only (artifacts/zk for sprints). No anon/auth policy.';
+
+-- t12_e2e_proofs: (a) service-role-only (e2e test proofs, similar to zkp_proofs; internal verification). Rationale: no public client read; tied to T12 e2e, service/audit only. (If GA needs read, move to (b) owner.)
+ALTER TABLE IF EXISTS public.t12_e2e_proofs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_all" ON public.t12_e2e_proofs;
+CREATE POLICY "service_role_all" ON public.t12_e2e_proofs FOR ALL TO service_role USING (true) WITH CHECK (true);
+COMMENT ON TABLE public.t12_e2e_proofs IS 'S-ONCHAIN Phase 5 (a) service-role-only (T12 e2e proofs). No anon/auth policy.';
+
+-- Updated classification: all 35 now covered; (a) for both new (internal/sensitive); no (b) added unless client read proven.
+-- Full a/b rationale in report + this file. Sean applies.
