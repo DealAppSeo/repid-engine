@@ -11,6 +11,7 @@ cp .env .env.local                  # a dummy .env is committed for boot-without
 **Env vars** (`src/config.ts` throws at boot without the first two):
 - `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` — required. Get from Sean / Railway (project `qnnpjhlxljtqyigedwkb`).
 - Optional: `GROQ_API_KEY` / `CEREBRAS_API_KEY` / `FIREWORKS_API_KEY` (HAL cross-LLM, strictness 2), `DATABASE_URL` (Supavisor pooler `:6543`, direct-pg hot paths), `DEPLOYER_PRIVATE_KEY` (on-chain writes — read paths work without it).
+- Time: set `TZ=America/Los_Angeles` on Railway (and locally) so `todayPT()` and SQL AT TIME ZONE are consistent (R3 alignment). See src/lib/time.ts.
 - Real secrets come from Railway env vars at deploy. **Never commit secrets.**
 ```bash
 npm run dev      # ts-node src/index.ts (binds 0.0.0.0:$PORT, default 3000)

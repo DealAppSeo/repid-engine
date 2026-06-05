@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"LASSO regression uses L1 regularization for sparse solutions.","latency_ms":298},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"Accurate statement","latency_ms":168},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":4020}]}
