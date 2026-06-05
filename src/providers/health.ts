@@ -17,6 +17,9 @@ export function getHealthState(provider: string): HealthState {
 
 export function isHealthy(provider: string): boolean {
   const state = getHealthState(provider);
+  if (state.resetAt && Date.now() < state.resetAt) {
+    return false; // rate backoff (transient, for diversity fix)
+  }
   if (!state.healthy && state.resetAt && Date.now() > state.resetAt) {
     state.healthy = true;
     state.errorCount = 0;
@@ -45,8 +48,11 @@ export function markSuccess(provider: string): void {
 
 export function markRateLimit(provider: string, retryAfterMs: number): void {
   const state = getHealthState(provider);
-  state.healthy = false;
-  state.resetAt = Date.now() + retryAfterMs;
+  // Fix for cascade collapse (MD: DeepInfra/free rate limits shrink panel to 1-2, causing slm->fallback).
+  // Rate is transient delay, NOT permanent health kill. Keep healthy for diversity (3+ free/cheap vote).
+  // isHealthy will respect resetAt for this provider.
+  // state.healthy = false; // removed for diversity
+  state.resetAt = Date.now() + Math.min(retryAfterMs || 30000, 60000); // cap
 }
 
 export function recoverProviders(): void {
