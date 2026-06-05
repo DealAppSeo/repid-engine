@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Plonky3 prover bridge â€” proof_source flag tests.
  *
  * Mocks global.fetch and toggles PLONKY3_PROVER_URL to verify:
@@ -52,7 +52,7 @@ describe('plonky3-real â€” generateProofReal', () => {
     expect(r.proof).toBe('real_proof_bytes_abc123');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0]![0];
-    expect(url).toBe('https://prover.example.com/prove/trade_auth');
+    expect(url).toBe('https://prover.example.com/prove/tier_range');
   });
 
   it('strips trailing slash from PLONKY3_PROVER_URL when building the path', async () => {
@@ -64,7 +64,7 @@ describe('plonky3-real â€” generateProofReal', () => {
     (global as any).fetch = fetchMock;
     const { generateProofReal } = require('../src/zkp/plonky3-real');
     await generateProofReal('a', 'b', 'c', 'd');
-    expect(fetchMock.mock.calls[0]![0]).toBe('https://prover.example.com/prove/trade_auth');
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://prover.example.com/prove/tier_range');
   });
 
   it('retries once on AbortError and succeeds on the retry', async () => {

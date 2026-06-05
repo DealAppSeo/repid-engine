@@ -261,3 +261,40 @@ export async function getPeerVerificationStats(): Promise<PeerVerificationStats>
 
   return stats;
 }
+
+export async function getLlmRoutingStats(): Promise<any> {
+  const { data: rows, error } = await db
+    .from('anfis_routing_logs')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error || !rows) {
+    throw error || new Error('No data');
+  }
+
+  const total_decisions = rows.length;
+  let success_count = 0;
+  let confidence_sum = 0;
+  let latency_sum = 0;
+  let total_cost_saved = 0;
+
+  for (const r of rows) {
+    if (r.success) success_count++;
+    confidence_sum += r.confidence_score || 0;
+    latency_sum += r.latency_ms || 0;
+    total_cost_saved += Number(r.cost_saved) || 0;
+  }
+
+  const avg_confidence = total_decisions > 0 ? confidence_sum / total_decisions : 0;
+  const success_rate = total_decisions > 0 ? success_count / total_decisions : 0;
+  const avg_latency_ms = total_decisions > 0 ? latency_sum / total_decisions : 0;
+
+  return {
+    total_decisions,
+    avg_confidence: Math.round(avg_confidence * 1000) / 1000,
+    success_rate: Math.round(success_rate * 1000) / 1000,
+    total_cost_saved: Math.round(total_cost_saved * 10000) / 10000,
+    avg_latency_ms: Math.round(avg_latency_ms),
+    recent_logs: rows.slice(0, 10)
+  };
+}

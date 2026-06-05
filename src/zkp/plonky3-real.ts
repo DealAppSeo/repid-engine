@@ -69,7 +69,7 @@ export async function generateProofReal(
     return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
   }
 
-  const url = PROVER_URL.replace(/\/$/, '') + '/prove/trade_auth';
+  const url = PROVER_URL.replace(/\/$/, '') + '/prove/tier_range';
   const init: RequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

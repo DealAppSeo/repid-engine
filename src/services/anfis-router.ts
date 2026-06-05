@@ -47,8 +47,10 @@ function featurizePrompt(prompt: string, taskHint?: string): { length: number; l
 function lassoSelectFeatures(features: number[], importance: number[], threshold = 0.1): { selected: number[]; names: string[] } {
   const names = ['len', 'low', 'cat', 'cost', 'rate', 'qual'];
   const weighted = features.map((f, i) => Math.abs(f * (importance[i] || 1)));
-  const selectedIdx = weighted.map((w, i) => w > threshold ? i : -1).filter(i => i >= 0);
-  return { selected: selectedIdx.map(i => features[i]), names: selectedIdx.map(i => names[i]) };
+  const selectedIdx: number[] = weighted.map((w, i) => w > threshold ? i : -1).filter(i => i >= 0);
+  const selected: number[] = selectedIdx.map(i => features[i]!);
+  const selectedNames: string[] = selectedIdx.map(i => names[i] as string);
+  return { selected, names: selectedNames };
 }
 
 // Rebuilt ANFIS forward + LASSO for routing rec (adapt from comma scaffold for provider choice).
