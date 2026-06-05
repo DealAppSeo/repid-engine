@@ -5,7 +5,7 @@
 
 **Track:** DeFi
 **Demo:** https://trusttrader.dev/challenge
-**GitHub:** https://github.com/DealAppSeo/trusttrader (private)
+**GitHub:** trusttrader (private)
 
 ## One Line
 The only AI trading agent with a mathematical veto —
