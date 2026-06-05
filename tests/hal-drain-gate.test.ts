@@ -72,7 +72,16 @@ beforeEach(() => {
   (global as any).__pipUpdateCalls = [];
   delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
   delete process.env.HAL_STRICTNESS;
+  // This suite isolates the DIRECT-APPLY DRAIN gate (HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION).
+  // The orthogonal HONEST-HAL gate (HAL_DECISION_REQUIRES_QUORUM, default ON) would otherwise
+  // neutralize the extractor's 'vetoed' label to 'flagged' before the drain gate is even reached,
+  // hiding what this suite asserts. Disable it here so the extractor decision flows through exactly
+  // as the drain gate was designed to handle. Honest-HAL neutralization has its own suite
+  // (tests/hal-honest-decision.test.ts).
+  process.env.HAL_DECISION_REQUIRES_QUORUM = 'false';
 });
+
+afterAll(() => { delete process.env.HAL_DECISION_REQUIRES_QUORUM; });
 
 describe('S-DRAIN direct-apply penalty gate', () => {
   test('extractor veto with gate ON (default) → penalty suppressed, current_repid unchanged', async () => {

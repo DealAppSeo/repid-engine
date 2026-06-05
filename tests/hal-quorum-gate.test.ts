@@ -50,8 +50,15 @@ beforeEach(() => {
   process.env.HAL_STRICTNESS = '2';
   delete process.env.HAL_PENALTY_REQUIRES_QUORUM;
   delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
+  // This suite unit-tests the PENALTY-quorum gate (HAL_PENALTY_REQUIRES_QUORUM). The newer HONEST-HAL
+  // gate (HAL_DECISION_REQUIRES_QUORUM, default ON) is a redundant UPSTREAM layer for these scenarios:
+  // it neutralizes a non-fact-check veto to 'flagged' at the decision level before the penalty gate is
+  // reached (same end-state — no drain — but a different label/calculated value). Disable it here so the
+  // extractor-fallback decision flows through and the penalty gate alone is exercised. Honest-HAL has
+  // its own suite (tests/hal-honest-decision.test.ts).
+  process.env.HAL_DECISION_REQUIRES_QUORUM = 'false';
 });
-afterAll(() => { delete process.env.HAL_STRICTNESS; });
+afterAll(() => { delete process.env.HAL_STRICTNESS; delete process.env.HAL_DECISION_REQUIRES_QUORUM; });
 
 const run = () => runScoreEvent({ agent_id: AGENT, prompt: 'p', answer: 'some answer', provider_used: 'deepinfra' });
 
