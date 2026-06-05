@@ -11,6 +11,8 @@ const P: FactCheckProviderCfg[] = [
   { name: 'p3', endpoint: 'http://x/3', apiKey: 'k3', model: 'm3' },
 ];
 
+const originalFetch = global.fetch;
+
 // model -> response: object verdict | 'HTTP500' | 'REJECT' | 'EMPTY' | raw string
 let byModel: Record<string, any> = {};
 beforeEach(() => {
@@ -23,6 +25,10 @@ beforeEach(() => {
     const content = r === 'EMPTY' ? '' : typeof r === 'string' ? r : JSON.stringify(r);
     return { ok: true, json: async () => ({ choices: [{ message: { content } }] }) } as any;
   });
+});
+
+afterAll(() => {
+  global.fetch = originalFetch;
 });
 
 describe('factCheck — aggregation + decision', () => {
@@ -111,15 +117,16 @@ describe('factCheck — env thresholds + provider builder', () => {
   });
 
   test('buildFactCheckProviders includes only keyed providers', () => {
-    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY };
+    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY, fw_en: process.env.HAL_S2_ENABLE_FIREWORKS };
     process.env.GROQ_API_KEY = 'g'; process.env.CEREBRAS_API_KEY = 'c'; delete process.env.FIREWORKS_API_KEY;
     const ps = buildFactCheckProviders();
     expect(ps.map((p) => p.name)).toEqual(['groq', 'cerebras']);
-    process.env.FIREWORKS_API_KEY = 'f';
+    process.env.FIREWORKS_API_KEY = 'f'; process.env.HAL_S2_ENABLE_FIREWORKS = 'true';
     expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['groq', 'cerebras', 'fireworks']);
-    process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f;
+    process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f; process.env.HAL_S2_ENABLE_FIREWORKS = save.fw_en;
     if (!save.g) delete process.env.GROQ_API_KEY;
     if (!save.c) delete process.env.CEREBRAS_API_KEY;
     if (!save.f) delete process.env.FIREWORKS_API_KEY;
+    if (!save.fw_en) delete process.env.HAL_S2_ENABLE_FIREWORKS;
   });
 });
