@@ -1943,6 +1943,41 @@ export type Database = {
           },
         ]
       }
+      agent_handoffs: {
+        Row: {
+          id: number
+          from_agent: string
+          to_agent: string
+          artifact_path: string
+          claim: string
+          status: string
+          co_signer: string | null
+          created_at: string | null
+          resolved_at: string | null
+        }
+        Insert: {
+          id?: number
+          from_agent: string
+          to_agent: string
+          artifact_path: string
+          claim: string
+          status: string
+          co_signer?: string | null
+          created_at?: string | null
+          resolved_at?: string | null
+        }
+        Update: {
+          from_agent?: string
+          to_agent?: string
+          artifact_path?: string
+          claim?: string
+          status?: string
+          co_signer?: string | null
+          created_at?: string | null
+          resolved_at?: string | null
+        }
+        Relationships: []
+      }
       agents: {
         Row: {
           capabilities: string[] | null
