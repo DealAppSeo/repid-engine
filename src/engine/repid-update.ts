@@ -152,6 +152,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // eas_attestation_id links every event to an EAS attestation
   // via ERC-8004 ValidationRegistry (stub until Sprint 3)
   // mirror_test_triggered = ZKP-auditable proof of ideological neutrality (P-023/P-024)
+  //
+  // HONEST-HAL: S-HONEST-HAL (Phase 1)
+  // Wire HAL verdicts directly into the audit trail (mode='shadow' until HAL >= bar).
+  // Never optimize the system against its own signals — measure only against ground truth.
+  const halMode = process.env.DOGFOOD_REPID_FROM_COSIGN === 'true' ? 'shadow' : process.env.HAL_DECISIONS_REQUIRES_QUORUM === 'true' ? 'live' : 'off';
+
   await db.from('repid_score_events').insert({
     agent_id: input.agentId,
     event_type: input.eventType,
@@ -159,11 +165,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     repid_before: agent.current_repid,
     repid_after: newRepId,
     certainty_at_claim: input.certaintyAtClaim ?? null,
-    hal_score: 0.0,
-    hal_decision: 'clean',
+    hal_score: 0.0, // (S-HONEST-HAL Phase 2: wire HAL fact-check verdicts here)
+    hal_decision: 'clean', // (S-HONEST-HAL Phase 2: map HAL veto/flag/clean)
     ecosystem_need_weight: ecosystemNeedWeight,
     mirror_test_triggered: input.mirrorTestTriggered ?? !audit.mirrorTestPassed,
     eas_attestation_id: audit.easAttestationId,
+    mode: halMode, // (S-HONEST-HAL) 'shadow' = test mode, 'live' = of-record, 'off' = HAL not wired
     metadata: {
       decayApplied: agent.current_repid - decayedRepId,
       redemptionModifier: redemptionMod,
