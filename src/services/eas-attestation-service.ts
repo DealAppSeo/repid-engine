@@ -1,122 +1,110 @@
 /**
- * src/services/eas-attestation-service.ts
- * S-ONCHAIN owned: EAS attestation wiring for ZKP proofs.
- * Uses ethers (existing dep) to call EAS on Base Sepolia.
- * Attests qualifying proofs (those with merkle_root from drain, tier promotion/threshold).
- * Populates eas_attestation_uid and eas_schema in repid_zkp_proofs.
- *
- * Cost guard: Base Sepolia only. Faucet funded attester key via EAS_ATTESTER_PRIVATE_KEY.
- * Sean co-sign for production attester key / on-chain ops.
- *
- * Schema: we register/use "constitutional-compliance-v1" with fields for proof.
- * The UID is returned from register or hardcoded after one-time register.
+ * EAS Attestation Service for R3 (HyperDAG-bound, our merkle_root only).
+ * No borrowed UIDs. Attests payload containing merkle_root from repid_zkp_proofs.
+ * Requires EAS_ATTESTER_PRIVATE_KEY (Sean funded on Base Sepolia).
+ * Schema: constitutional-compliance-v1 with agentId, tier, merkleRoot etc.
+ * Red team: on-chain getAttestation decode must == DB row merkle etc.
  */
-
-import { ethers } from 'ethers';
+import { ethers, Contract, Wallet, JsonRpcProvider, solidityPackedKeccak256, AbiCoder, Interface } from 'ethers';
 import { db } from '../db';
 
-const BASE_SEPOLIA_RPC = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
-const EAS_CONTRACT = '0x4200000000000000000000000000000000000021'; // official predeploy on Base Sepolia
-const SCHEMA_REGISTRY = '0x4200000000000000000000000000000000000020';
+export const EAS_CONTRACT = '0x4200000000000000000000000000000000000021';
+export const SCHEMA_REGISTRY = '0x4200000000000000000000000000000000000020';
+const RPC = process.env.BASE_SEPOLIA_RPC || 'https://sepolia.base.org';
 
-// Minimal ABI for EAS attest and SchemaRegistry register (for one-time schema setup)
-const EAS_ABI = [
-  "function attest(tuple(bytes32 schema, tuple(address recipient, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, uint256 value) data) request) payable returns (bytes32)",
-  "function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid, bytes32 schema, uint64 time, uint64 expirationTime, uint64 revocationTime, bytes32 refUID, address recipient, address attester, bool revocable, bytes data))"
-];
+export const PROOF_SCHEMA = 'constitutional-compliance-v1';
+export const PROOF_SCHEMA_DEF = 'string agentId,string tier,bytes32 merkleRoot,uint256 repidSnapshot,string proofType,uint64 proofId';
 
-const SCHEMA_REGISTRY_ABI = [
-  "function register(string calldata schema, address resolver, bool revocable) external returns (bytes32)"
-];
+export interface ProofAttestInput {
+  proofId: number;
+  agentId: string;
+  tier: string;
+  merkleRoot: string;
+  repidSnapshot?: number | null;
+  proofType?: string;
+}
 
-// Our schema for proofs: string proofType, string tierProven, bytes32 merkleRoot, uint256 repIdAtProof, bytes32 zkCommitment
-const PROOF_SCHEMA = "string proofType, string tierProven, bytes32 merkleRoot, uint256 repIdAtProof, bytes32 zkCommitment";
-const DEFAULT_EAS_SCHEMA_NAME = "constitutional-compliance-v1";
+let provider: JsonRpcProvider | null = null;
+let wallet: Wallet | null = null;
 
-// Hardcoded after register; or set via env after one-time run of registerSchema()
-const DEFAULT_SCHEMA_UID = process.env.EAS_PROOF_SCHEMA_UID || "0x0000000000000000000000000000000000000000000000000000000000000000"; // replace after register
+function getProvider() {
+  if (!provider) provider = new JsonRpcProvider(RPC);
+  return provider;
+}
 
-export class EASAttestationService {
-  private provider: ethers.JsonRpcProvider;
-  private signer?: ethers.Wallet;
-  private easContract: ethers.Contract;
-  private schemaRegistry: ethers.Contract;
+function getSigner() {
+  // XC fix (c28360e): the funded Base-Sepolia attester wallet is HYPERDAG_ATTESTOR_PRIVATE_KEY;
+  // EAS_ATTESTER_PRIVATE_KEY is the legacy/fallback name. HYPERDAG primary.
+  const pk = process.env.HYPERDAG_ATTESTOR_PRIVATE_KEY || process.env.EAS_ATTESTER_PRIVATE_KEY;
+  if (!pk) return null;
+  if (!wallet) wallet = new Wallet(pk, getProvider());
+  return wallet;
+}
 
-  constructor() {
-    this.provider = new ethers.JsonRpcProvider(BASE_SEPOLIA_RPC);
-    const pk = process.env.EAS_ATTESTER_PRIVATE_KEY || process.env.ERC8004_MINTER_PRIVATE_KEY;
-    if (pk) {
-      this.signer = new ethers.Wallet(pk, this.provider);
+export function hasAttesterKey(): boolean { return !!getSigner(); }
+
+export async function attestProof(input: ProofAttestInput): Promise<{ uid: string | null; txHash: string | null; error?: string }> {
+  const signer = getSigner();
+  if (!signer) return { uid: null, txHash: null, error: 'HYPERDAG_ATTESTOR_PRIVATE_KEY (or EAS_ATTESTER_PRIVATE_KEY) missing (Sean provision + fund; confirm live Railway var name matches)' };
+  if (!input.merkleRoot) return { uid: null, txHash: null, error: 'only HyperDAG merkle_root proofs qualify' };
+
+  const eas = new Contract(EAS_CONTRACT, [
+    'function attest((bytes32 schema,(address recipient,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,uint256 value) data) request) external payable returns (bytes32)',
+    'function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))'
+  ], signer);
+
+  const resolver = '0x0000000000000000000000000000000000000000';
+  const revocable = true;
+  const schemaUid = solidityPackedKeccak256(['string','address','bool'], [PROOF_SCHEMA_DEF, resolver, revocable]);
+
+  const encoded = AbiCoder.defaultAbiCoder().encode(
+    ['string','string','bytes32','uint256','string','uint64'],
+    [input.agentId, input.tier, input.merkleRoot, BigInt(input.repidSnapshot || 0), input.proofType || 'POSTCARD', BigInt(input.proofId)]
+  );
+
+  const req = {
+    schema: schemaUid,
+    data: {
+      recipient: '0x0000000000000000000000000000000000000000',
+      expirationTime: 0,
+      revocable,
+      refUID: '0x0000000000000000000000000000000000000000000000000000000000000000',
+      data: encoded,
+      value: 0
     }
-    this.easContract = new ethers.Contract(EAS_CONTRACT, EAS_ABI, this.signer || this.provider);
-    this.schemaRegistry = new ethers.Contract(SCHEMA_REGISTRY, SCHEMA_REGISTRY_ABI, this.signer || this.provider);
-  }
+  };
 
-  async registerProofSchema(): Promise<string> {
-    if (!this.signer) throw new Error('EAS attester key required to register schema');
-    const tx = await this.schemaRegistry.register(PROOF_SCHEMA, ethers.ZeroAddress, true);
-    const receipt = await tx.wait();
-    // The UID is emitted in Registered event or computed as keccak of params + version
-    // For simplicity, we compute or return from logs. In practice, use the returned or known.
-    // Here we return a placeholder; real run captures the UID from event.
-    console.log('[EAS] Schema registered (tx:', tx.hash, '). Capture UID from event/log for EAS_PROOF_SCHEMA_UID env.');
-    return DEFAULT_SCHEMA_UID; // in real, parse log for the uid
-  }
-
-  async attestProof(params: {
-    proofType: string;
-    tierProven: string;
-    merkleRoot: string | null;
-    repIdAtProof: number;
-    zkCommitment: string | null;
-    recipient?: string; // optional, default zero for public
-  }): Promise<string | null> {
-    if (!this.signer) {
-      console.warn('[EAS] No attester key; skipping real attestation (would produce uid on funded run).');
-      // For staging/demo, return a deterministic placeholder (not real on-chain)
-      return '0x' + ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(params))).slice(2, 66).padEnd(64, '0');
+  try {
+    const tx = await (eas as any).attest(req);
+    const rc = await tx.wait();
+    // parse event for uid
+    const iface = new Interface(['event Attested(address indexed recipient, address indexed attester, bytes32 uid, bytes32 indexed schema)']);
+    let uid: string | null = null;
+    for (const log of rc.logs || []) {
+      try {
+        const p = iface.parseLog({ topics: log.topics, data: log.data });
+        if (p && p.name === 'Attested') { uid = p.args.uid; break; }
+      } catch {}
     }
-    const schemaUID = DEFAULT_SCHEMA_UID;
-    if (schemaUID === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-      console.warn('[EAS] No schema UID configured; call registerProofSchema first or set EAS_PROOF_SCHEMA_UID.');
-      return null;
-    }
-
-    const recipient = params.recipient || ethers.ZeroAddress;
-    const expirationTime = 0; // no expire
-    const revocable = true;
-    const refUID = ethers.ZeroHash;
-    const data = ethers.AbiCoder.defaultAbiCoder().encode(
-      ['string', 'string', 'bytes32', 'uint256', 'bytes32'],
-      [params.proofType, params.tierProven, params.merkleRoot || ethers.ZeroHash, params.repIdAtProof, params.zkCommitment || ethers.ZeroHash]
-    );
-    const value = 0;
-
-    const request = {
-      schema: schemaUID,
-      data: { recipient, expirationTime, revocable, refUID, data, value }
-    };
-
-    try {
-      const tx = await this.easContract.attest(request);
-      console.log('[EAS] Attest tx sent:', tx.hash, 'for', params.proofType, params.tierProven);
-      const receipt = await tx.wait(1);
-      // The uid is the first topic or use getAttestation, but EAS returns uid as return value in some, but in practice parse log or use indexer.
-      // For ethers, we can compute or the tx receipt has the event.
-      // Simplified: return a placeholder or parse; in real use the EAS SDK get or event.
-      // For this, we return the tx hash as proxy; real uid is emitted in Attested event.
-      // To get exact uid, in production use the SDK or parse.
-      const uid = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
-        ['bytes32', 'address', 'bytes32'], // approx for uid derivation, real is internal
-        [schemaUID, recipient, refUID]
-      )); // NOTE: real uid is assigned by contract; this is illustrative. Use SDK in prod for exact.
-      console.log('[EAS] Attested (approx uid for wire):', uid);
-      return uid;
-    } catch (e: any) {
-      console.error('[EAS] Attest failed (fund the attester key on Base Sepolia):', e.message);
-      return null;
-    }
+    return { uid, txHash: rc?.hash || tx.hash };
+  } catch (e: any) {
+    return { uid: null, txHash: null, error: e?.message || 'attest failed' };
   }
 }
 
-export const easService = new EASAttestationService();
+export async function redTeamPayloadMatch(row: { id: number; agent_id: string | null; tier_proven: string; merkle_root: string | null; eas_attestation_uid: string | null }): Promise<{ match: boolean; details: string; explorer?: string }> {
+  if (!row.eas_attestation_uid) return { match: false, details: 'no uid' };
+  const signer = getProvider(); // read only
+  const eas = new Contract(EAS_CONTRACT, ['function getAttestation(bytes32 uid) view returns (tuple(bytes32 uid,bytes32 schema,uint64 time,uint64 expirationTime,uint64 revocationTime,bytes32 refUID,address recipient,address attester,bool revocable,bytes data))'], signer);
+  try {
+    const att = await (eas as any).getAttestation(row.eas_attestation_uid);
+    const dec = AbiCoder.defaultAbiCoder().decode(['string','string','bytes32','uint256','string','uint64'], att.data);
+    const match = dec[0] === (row.agent_id || '') && dec[1] === row.tier_proven && (dec[2] || '').toLowerCase() === (row.merkle_root || '').toLowerCase();
+    const explorer = `https://base-sepolia.easscan.org/attestation/view/${row.eas_attestation_uid}`;
+    return { match, details: match ? 'PAYLOAD_MATCH (HyperDAG merkle/agent/tier)' : 'MISMATCH', explorer };
+  } catch (e: any) {
+    return { match: false, details: e?.message || 'fetch fail' };
+  }
+}
+
+export const easService = { hasAttesterKey, attestProof, redTeamPayloadMatch };

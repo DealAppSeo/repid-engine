@@ -235,26 +235,31 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           error.message,
           error
         );
-      } else if (args.merkleRoot) {
-        // S-ONCHAIN Phase 2: wire real EAS on Base Sepolia for qualifying proofs (those with merkle_root from drain, e.g. tier promotions).
-        // Gate: only threshold/anchored ones to control cost. Update row with uid + schema so presentProof() can return honest on-chain ref.
+      }
+
+      // R3: EAS real-ready wire (only merkle/HyperDAG). Non-fatal. Uses our service (no borrowed).
+      if (args.merkleRoot) {
         try {
-          const uid = await easService.attestProof({
-            proofType: 'POSTCARD',
-            tierProven,
-            merkleRoot: args.merkleRoot,
-            repIdAtProof: 0, // could fetch from score if needed
-            zkCommitment: args.commitment || null
-          });
-          if (uid && !uid.startsWith('0x0000')) {
-            await config.supabase.from('repid_zkp_proofs')
-              .update({ eas_attestation_uid: uid, eas_schema: 'constitutional-compliance-v1' })
-              .eq('agent_id', args.agentId)
-              .eq('merkle_root', args.merkleRoot);
-            console.log(`[ProofDrain] EAS attested for ${args.agentId}: ${uid}`);
+          const { easService } = await import('./eas-attestation-service.js');
+          if (easService.hasAttesterKey()) {
+            const res = await easService.attestProof({
+              proofId: 0,
+              agentId: args.agentId,
+              tier: tierProven,
+              merkleRoot: args.merkleRoot,
+              repidSnapshot: null,
+              proofType: 'POSTCARD'
+            });
+            if (res.uid) {
+              await config.supabase.from('repid_zkp_proofs')
+                .update({ eas_attestation_uid: res.uid, eas_schema: 'constitutional-compliance-v1' })
+                .eq('zk_commitment', args.commitment)
+                .is('eas_attestation_uid', null);
+              console.log(`[ProofDrain][R3-EAS] uid=${res.uid} agent=${args.agentId}`);
+            }
           }
-        } catch (easErr: any) {
-          console.warn(`[ProofDrain] EAS attest skipped/failed for ${args.agentId}: ${easErr?.message || easErr} (fund EAS_ATTESTER_PRIVATE_KEY on Base Sepolia)`);
+        } catch (e: any) {
+          console.warn('[ProofDrain][R3-EAS] non-fatal:', e?.message || e);
         }
       }
     } catch (e) {
@@ -300,6 +305,29 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       commitment: args.commitment,
       merkleRoot: args.merkleRoot,
     });
+
+    // Write through to Dragonfly proof cache and zkp_proofs_staged table
+    try {
+      const { cacheStagedProof } = require('../cache/proof-cache');
+      const { data: agent } = await config.supabase
+        .from('repid_agents')
+        .select('agent_name')
+        .eq('id', args.agentId)
+        .maybeSingle();
+      const agentName = agent?.agent_name || args.agentId;
+
+      await cacheStagedProof({
+        proof_type: 'POSTCARD',
+        agent_name: agentName,
+        proof_data: args.proofBytes ? Buffer.from(args.proofBytes, 'base64').toString('hex') : '',
+        proof_hash: args.proofHash,
+        merkle_root: args.merkleRoot || '',
+        anchor_tx_hash: args.commitment || '',
+        status: 'valid',
+      });
+    } catch (cacheErr) {
+      console.warn('[ProofDrain] Failed to cache staged proof:', cacheErr);
+    }
   }
 
   async function markFailed(rowId: string, message: string): Promise<void> {
