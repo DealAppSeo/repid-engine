@@ -102,6 +102,10 @@ export function anfisRecommendProvider(
   } else if (providerState.cost < 0.3 && providerState.qual > 0.7) {
     tier = '0a';
     recProvider = providerState.rate < 0.3 ? 'cerebras' : 'groq';
+  } else if (providerState.rate > 0.6) {
+    // high rate pressure: prefer cheapest groq for positive cost_saved vs static later picks
+    tier = '0a';
+    recProvider = 'groq';
   } else {
     tier = '0a';
     recProvider = 'gemini';

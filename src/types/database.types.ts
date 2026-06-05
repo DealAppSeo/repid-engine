@@ -9909,6 +9909,75 @@ anfis_weight_history: {
         }
         Relationships: []
       }
+      anfis_routing_logs: {
+        Row: {
+          id: number
+          created_at: string
+          prompt_preview: string | null
+          category: string | null
+          static_provider: string | null
+          static_tier: string | null
+          static_reason: string | null
+          anfis_provider: string | null
+          anfis_tier: string | null
+          anfis_conf: number | null
+          cost_usdc: number | null
+          cost_saved: number | null
+          latency_ms: number | null
+          success: boolean | null
+          verified_by: string[] | null
+          request_text: string | null
+          outcome_hal_score: number | null
+          outcome_vetoed: boolean | null
+          n_providers: number | null
+          notes: Json | null
+        }
+        Insert: {
+          id?: number
+          created_at?: string
+          prompt_preview?: string | null
+          category?: string | null
+          static_provider?: string | null
+          static_tier?: string | null
+          static_reason?: string | null
+          anfis_provider?: string | null
+          anfis_tier?: string | null
+          anfis_conf?: number | null
+          cost_usdc?: number | null
+          cost_saved?: number | null
+          latency_ms?: number | null
+          success?: boolean | null
+          verified_by?: string[] | null
+          request_text?: string | null
+          outcome_hal_score?: number | null
+          outcome_vetoed?: boolean | null
+          n_providers?: number | null
+          notes?: Json | null
+        }
+        Update: {
+          id?: number
+          created_at?: string
+          prompt_preview?: string | null
+          category?: string | null
+          static_provider?: string | null
+          static_tier?: string | null
+          static_reason?: string | null
+          anfis_provider?: string | null
+          anfis_tier?: string | null
+          anfis_conf?: number | null
+          cost_usdc?: number | null
+          cost_saved?: number | null
+          latency_ms?: number | null
+          success?: boolean | null
+          verified_by?: string[] | null
+          request_text?: string | null
+          outcome_hal_score?: number | null
+          outcome_vetoed?: boolean | null
+          n_providers?: number | null
+          notes?: Json | null
+        }
+        Relationships: []
+      }
       llm_provider_caps: {
         Row: {
           created_at: string

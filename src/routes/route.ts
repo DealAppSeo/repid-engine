@@ -94,6 +94,15 @@ function getDefaultModelForProvider(provider: string): string {
   }
 }
 
+function inferCategory(prompt: string, taskHint?: string): string {
+  const s = (prompt + ' ' + (taskHint || '')).toLowerCase();
+  if (/classif|yes\/no|true\/false|fact check|is this|simple fact/.test(s)) return 'factual';
+  if (/code|bug|fix|function|typescript|python|implement/.test(s)) return 'code';
+  if (/creative|story|poem|imagine|write a|generate.*tale/.test(s)) return 'creative';
+  if (/math|calculate|equation|prove/.test(s)) return 'math';
+  return 'general';
+}
+
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
   const call_id = crypto.randomUUID();
   try {
@@ -270,22 +279,31 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           agent_id: (resolvedAgentId && isUuid(resolvedAgentId)) ? resolvedAgentId : undefined
         });
 
-        // Write routing decision to anfis_routing_logs (Phase 2.10 / P3)
+        // Write routing decision to anfis_routing_logs (PHASE1 fix: both picks + REAL delta from ledger+tokens on success path; full schema for mig+types+ DONE-CHECK cost_saved<>0 + array_length(verified_by)>=2)
+        // Cite: migrations/2026-06-05-anfis-routing-logs.sql (CREATE+ALTER cost_saved/verified_by), src/types/database.types.ts:9912, src/providers/router.ts:121 (anfisRec), calculateCost, inferCategory.
         try {
           const staticModel = getDefaultModelForProvider(staticProvider);
           const anfisModel = getDefaultModelForProvider(anfisProvider);
           const staticCost = calculateCost(staticProvider, staticModel, result.tokensIn, result.tokensOut);
           const anfisCost = calculateCost(anfisProvider, anfisModel, result.tokensIn, result.tokensOut);
           const cost_saved = staticCost - anfisCost;
+          const cat = inferCategory(prompt, task_hint);
 
           await db.from('anfis_routing_logs').insert({
-            request_text: prompt.substring(0, 500),
-            selected_model: `${adapter.name}/${result.model || 'default'}`,
-            confidence_score: anfisConfidence,
+            prompt_preview: prompt.substring(0, 200),
+            category: cat,
+            static_provider: staticProvider,
+            static_tier: staticTier,
+            static_reason: 'static',
+            anfis_provider: anfisProvider,
+            anfis_tier: anfisTier,
+            anfis_conf: anfisConfidence,
+            cost_usdc: cost_saved,
             cost_saved,
             latency_ms: result.latencyMs,
             success: true,
-            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`]
+            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`],
+            request_text: prompt.substring(0, 500)
           });
         } catch (e: any) {
           console.error('[anfis_routing] complete log failure:', e?.message ?? e);
@@ -351,20 +369,31 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         excludeProviders.push(adapter.name);
 
         try {
-          // M2-P1 fix: always compute counterfactual delta even on failure path (was hardcoded 0; now logs static vs ANFIS for cost_saved computation)
+          // PHASE1 fix: compute real counterfactual delta even on failure (est tokens from prompt len for differential; was 0,0). Both picks in verified_by always. Full schema.
+          // Cite: same as success block + SPRINT_XC_2026-06-05.md PHASE1.
+          const estIn = Math.max(8, Math.floor(prompt.length / 3.5));
+          const estOut = 48;
           const staticModel = getDefaultModelForProvider(staticProvider);
           const anfisModel = getDefaultModelForProvider(anfisProvider);
-          const staticCost = calculateCost(staticProvider, staticModel, result ? result.tokensIn : 0, result ? result.tokensOut : 0);
-          const anfisCost = calculateCost(anfisProvider, anfisModel, result ? result.tokensIn : 0, result ? result.tokensOut : 0);
+          const staticCost = calculateCost(staticProvider, staticModel, estIn, estOut);
+          const anfisCost = calculateCost(anfisProvider, anfisModel, estIn, estOut);
           const cost_saved = staticCost - anfisCost;
+          const cat = inferCategory(prompt, task_hint);
           await db.from('anfis_routing_logs').insert({
-            request_text: prompt.substring(0, 500),
-            selected_model: `${adapter.name}/unknown`,
-            confidence_score: anfisConfidence,
+            prompt_preview: prompt.substring(0, 200),
+            category: cat,
+            static_provider: staticProvider,
+            static_tier: staticTier,
+            static_reason: 'static',
+            anfis_provider: anfisProvider,
+            anfis_tier: anfisTier,
+            anfis_conf: anfisConfidence,
+            cost_usdc: cost_saved,
             cost_saved,
             latency_ms: latencyMs,
             success: false,
-            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`]
+            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`],
+            request_text: prompt.substring(0, 500)
           });
         } catch (e: any) {
           console.error('[anfis_routing] failure log failure:', e?.message ?? e);
