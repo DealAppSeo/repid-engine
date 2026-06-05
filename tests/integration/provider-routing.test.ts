@@ -23,6 +23,10 @@ jest.mock('../../src/db', () => ({
   db: { rpc: jest.fn().mockResolvedValue({ data: null, error: null }) },
 }));
 
+// Make SLM healthy in test/CI env (SLM isHealthy checks for HF/Cerebras tokens; without them the low-complexity
+// early-return in router never triggers and test gets 'fallback_after_failure' instead of 'slm_low_complexity').
+process.env.HUGGINGFACE_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN || 'dummy-for-ci-test';
+
 import { routeRequest } from '../../src/providers/router';
 
 const SHORT = 'Is the sky blue? yes or no';
