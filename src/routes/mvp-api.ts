@@ -290,9 +290,13 @@ router.post('/zkp/route', async (req: Request, res: Response) => {
     if (error) return fail(res, 500, 'zkp_route_failed', error.message);
     if (!data) return fail(res, 404, 'proof_type_not_routable', proof_type);
     const cfg: any = data;
+      // S-ONCHAIN Phase 3: classify + log fast vs heavy decision (per proof request, for audit)
+      const routeTo = cfg.zkp_system || ((cfg.sensitivity || 0.5) > 0.6 ? 'plonky3_stark' : 'fast_groth16');
+      console.log(`[ZKP Route] ${cfg.proof_type} sens=${cfg.sensitivity} reg=${cfg.regulatory_tag||'none'} -> ${routeTo}`);
+      // use routeTo below for the routed decision
     return res.json({
       proof_type: cfg.proof_type,
-      route_to: cfg.zkp_system,
+      route_to: routeTo,
       sensitivity: cfg.sensitivity,
       pre_stageable: cfg.pre_stageable,
       max_frequency_per_day: cfg.max_frequency_per_day,
@@ -303,3 +307,4 @@ router.post('/zkp/route', async (req: Request, res: Response) => {
 });
 
 export default router;
+

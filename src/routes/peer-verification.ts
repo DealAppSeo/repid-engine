@@ -201,6 +201,65 @@ router.post('/respond', async (req: Request, res: Response) => {
 
     const row = updated[0]!;
 
+    // ----- Dogfooding: co-sign → RepID event wiring (Phase 3) ----------------
+    // Verified co-sign (verifier resolved claim as 'verified', opened artifact) writes
+    // +RepID to producer (source) AND verifier via repid_score_events.
+    // False-PASS (e.g. 'disputed' tag-resolve-fail on what was rubber-stamped) slashes verifier.
+    // Reuses peer_verification_queue (the resolution site) + repid_score_events.
+    // Flag default OFF; ON only post CC honest-HAL merge (see below).
+    // Grok calibration (documented):
+    //  - 20–30% re-verification sampling for small set (4 + T12): bootstrap awards every
+    //    verified co-sign (N small; later probabilistic). Deterministic on high-value claims
+    //    (HAL quorum, EAS anchors, on-chain writes, canonical handoffs) — this path qualifies.
+    //  - Conservative slash curve: first false-PASS = warning log + small decay (e.g. -2);
+    //    repeated/high-impact = heavier (escalate to -10+, review). Cross-dimensional penalties:
+    //    high collaboration score + low delivery/HAL-accuracy → manual review flag.
+    //  - Tests (see tests/peer-verification.test.ts or dogfood-cosign.test.ts): verified+delta,
+    //    false-PASS slash, flag-OFF no-op.
+    // Activation: switch ON only post CC honest-HAL merge (feat/cc-2026-06-04-honest-hal +
+    // HAL_DECISION_REQUIRES_QUORUM live in scorer). Do NOT score on pre-merge scorer.
+    const DOGFOOD_REPID_FROM_COSIGN =
+      (process.env.DOGFOOD_REPID_FROM_COSIGN || 'false').toLowerCase() === 'true';
+    if (DOGFOOD_REPID_FROM_COSIGN) {
+      const producerId = row.source_agent_id as string;
+      const verifierId = row.verifier_agent_id as string | null;
+      const claimRef = (row.claim_text as string) || `queue:${queue_id}`;
+      try {
+        if (verdict === 'verified' && verifierId) {
+          const d = 3; // small positive for verified collab (calib bootstrap)
+          await db.from('repid_score_events').insert([
+            {
+              agent_id: producerId,
+              event_type: 'dogfood_cosign_verified',
+              delta: d,
+              metadata: { role: 'producer', queue_id, claim: claimRef, co_signer: verifierName },
+            },
+            {
+              agent_id: verifierId,
+              event_type: 'dogfood_cosign_verified',
+              delta: d,
+              metadata: { role: 'verifier', queue_id, claim: claimRef, co_signer: verifierName },
+            },
+          ]);
+          console.log(`[dogfood] +${d} RepID cosign verified producer=${producerId} verifier=${verifierId}`);
+        } else if (verdict === 'disputed' && verifierId) {
+          // false-PASS / rubber-stamp slash (conservative -2 first offense)
+          await db.from('repid_score_events').insert({
+            agent_id: verifierId,
+            event_type: 'dogfood_false_pass_slash',
+            delta: -2,
+            metadata: { reason: 'tag-resolve-fail-disputed', queue_id, claim: claimRef },
+          });
+          console.warn(`[dogfood] -2 RepID false-PASS slash verifier=${verifierId} queue=${queue_id}`);
+        }
+      } catch (e: any) {
+        console.warn(`[dogfood] repid cosign event insert failed: ${e?.message ?? e}`);
+      }
+    } else if (verdict === 'verified') {
+      // Flag OFF: explicit no-op log (proves wiring present but gated)
+      console.log(`[dogfood] flag OFF (DOGFOOD_REPID_FROM_COSIGN=false) — no RepID delta for cosign queue_id=${queue_id}`);
+    }
+
     // ----- Complete matching trinity_tasks row (bonus, best-effort) ----------
     // Preserved from the pre-rewrite endpoint. Best-effort; failures here do
     // NOT undo the queue update (the verification stands either way).
