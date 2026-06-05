@@ -6,7 +6,9 @@ dist/
 .firecrawl/
 *.js.map
 .DS_Store
-.claude/worktrees/
+.claude/
+
+*.log
 
 # Generated artifacts (regenerable via npm scripts)
 hal-ground-truth-template.csv
