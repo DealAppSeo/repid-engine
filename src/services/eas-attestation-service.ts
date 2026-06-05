@@ -1,4 +1,4 @@
-﻿/**
+/**
  * EAS Attestation Service for R3 (HyperDAG-bound, our merkle_root only).
  * No borrowed UIDs. Attests payload containing merkle_root from repid_zkp_proofs.
  * Requires EAS_ATTESTER_PRIVATE_KEY (Sean funded on Base Sepolia).
