@@ -176,7 +176,7 @@ router.get('/disputes/:id', async (req: Request, res: Response) => {
   } catch (e: any) { return fail(res, 500, 'disputes_failed', e?.message); }
 });
 
-// ---------------------------------------------------------------- Phase 7: staking (read)
+// ---------------------------------------------------------------- Phase 7: staking (read/write)
 router.get('/staking/:agent', async (req: Request, res: Response) => {
   const agent = String(req.params.agent);
   try {
@@ -192,6 +192,80 @@ router.get('/staking/:agent', async (req: Request, res: Response) => {
       .reduce((s, d) => s + Number(d.amount_usdc ?? 0), 0);
     return res.json({ agent_name: agent, total_active_usdc, deposits: rows });
   } catch (e: any) { return fail(res, 500, 'staking_failed', e?.message); }
+});
+
+router.post('/staking/deposit', async (req: Request, res: Response): Promise<void> => {
+  const { agent, amount, target_model, dimension } = req.body ?? {};
+  if (!agent || typeof agent !== 'string') {
+    fail(res, 400, 'invalid_agent', 'agent is required');
+    return;
+  }
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) {
+    fail(res, 400, 'invalid_amount', 'amount must be positive');
+    return;
+  }
+  try {
+    const shortId = agent.replace(/^trinity-/i, '').toUpperCase();
+    const { data, error } = await db.from('agent_stakes').insert({
+      staker_agent: shortId,
+      target_model: target_model ?? 'default',
+      dimension: dimension ?? 'general',
+      stake_amount: Math.round(amt * 1_000_000), // convert to micro-USDC
+      status: 'active',
+      created_at: new Date().toISOString()
+    }).select('*').single();
+    if (error) {
+      fail(res, 500, 'staking_deposit_failed', error.message);
+      return;
+    }
+    res.json({ ok: true, stake: data });
+  } catch (e: any) {
+    fail(res, 500, 'staking_deposit_failed', e?.message);
+  }
+});
+
+router.post('/staking/sponsor', async (req: Request, res: Response): Promise<void> => {
+  const { sponsor_agent, sponsored_agent, collateral_usdc } = req.body ?? {};
+  if (!sponsor_agent || typeof sponsor_agent !== 'string') {
+    fail(res, 400, 'invalid_sponsor_agent', 'sponsor_agent is required');
+    return;
+  }
+  if (!sponsored_agent || typeof sponsored_agent !== 'string') {
+    fail(res, 400, 'invalid_sponsored_agent', 'sponsored_agent is required');
+    return;
+  }
+  const collateral = Number(collateral_usdc);
+  if (!Number.isFinite(collateral) || collateral <= 0) {
+    fail(res, 400, 'invalid_collateral', 'collateral_usdc must be positive');
+    return;
+  }
+  try {
+    const sponsorShort = sponsor_agent.replace(/^trinity-/i, '').toUpperCase();
+    const sponsoredShort = sponsored_agent.replace(/^trinity-/i, '').toUpperCase();
+
+    // Query repid of the sponsor
+    const { data: sponsorAgent } = await db.from('repid_agents').select('current_repid').eq('agent_name', sponsor_agent).maybeSingle();
+    const sponsorRepid = sponsorAgent?.current_repid ?? 0;
+
+    const { data, error } = await db.from('sponsorship_records').insert({
+      sponsor_agent: sponsorShort,
+      sponsored_agent: sponsoredShort,
+      collateral_usdc: collateral,
+      granted_authority_usdc: collateral / 3, // 3:1 ratio
+      collateral_ratio: 3,
+      sponsor_repid_at_start: sponsorRepid,
+      status: 'active',
+      created_at: new Date().toISOString()
+    }).select('*').single();
+    if (error) {
+      fail(res, 500, 'sponsorship_failed', error.message);
+      return;
+    }
+    res.json({ ok: true, sponsorship: data });
+  } catch (e: any) {
+    fail(res, 500, 'sponsorship_failed', e?.message);
+  }
 });
 
 // ---------------------------------------------------------------- Phase 8: ZKP routing
@@ -216,10 +290,6 @@ router.post('/zkp/route', async (req: Request, res: Response) => {
     if (error) return fail(res, 500, 'zkp_route_failed', error.message);
     if (!data) return fail(res, 404, 'proof_type_not_routable', proof_type);
     const cfg: any = data;
-      // S-ONCHAIN Phase 3: classify + log fast vs heavy decision (per proof request, for audit)
-      const routeTo = cfg.zkp_system || ((cfg.sensitivity || 0.5) > 0.6 ? 'plonky3_stark' : 'fast_groth16');
-      console.log(\"[ZKP Route] ${cfg.proof_type} sens=${cfg.sensitivity} reg=${cfg.regulatory_tag||'none'} -> ${routeTo}\");
-      // use routeTo below
     return res.json({
       proof_type: cfg.proof_type,
       route_to: cfg.zkp_system,
@@ -233,4 +303,3 @@ router.post('/zkp/route', async (req: Request, res: Response) => {
 });
 
 export default router;
-

@@ -79,6 +79,8 @@ export class HalService {
             hal_score: fc.hal_score, decision: fc.decision, mode: 'fact-check', strictness, product,
             signals: {
               providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded,
+              // R5 — distinct independent families that voted (the quorum unit).
+              families_used: fc.families_used, families: fc.families,
               // CC1 2026-05-23 provider-failure hardening: surface quorum + per-provider health.
               quorum: fc.quorum, provider_health: fc.provider_health,
               ...(fc.quorum_note ? { quorum_note: fc.quorum_note } : {}),

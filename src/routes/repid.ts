@@ -91,6 +91,19 @@ repidPublicRouter.post('/repid/verify', async (req: Request, res: Response) => {
 repidPublicRouter.get('/repid/proof/:job_id', async (req: Request, res: Response) => {
   const job_id = String(req.params.job_id ?? '');
   if (!job_id) return res.status(400).json({ error: 'job_id required' });
+
+  const cacheKey = `proof-job:${job_id}`;
+  const { cacheGet, cacheSet } = require('../cache/dragonfly');
+  try {
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      console.log(`[repid-route] Cache hit for proof job: ${job_id}`);
+      return res.json(JSON.parse(cached));
+    }
+  } catch (err) {
+    console.warn(`[repid-route] Cache error for proof job:`, err);
+  }
+
   const { data, error } = await db
     .from('repid_proof_queue')
     .select('job_id,agent_id,status,proof_hash,proof_bytes,proof_size_bytes,created_at,completed_at')
@@ -101,6 +114,15 @@ repidPublicRouter.get('/repid/proof/:job_id', async (req: Request, res: Response
     return res.status(500).json({ error: 'INTERNAL', detail: error.message });
   }
   if (!data) return res.status(404).json({ error: 'Proof job not found' });
+
+  if (data.status === 'completed') {
+    try {
+      await cacheSet(cacheKey, JSON.stringify(data), 7200);
+    } catch (err) {
+      console.warn(`[repid-route] Failed to set cache for completed proof job:`, err);
+    }
+  }
+
   return res.json(data);
 });
 

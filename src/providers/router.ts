@@ -137,8 +137,13 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   }
 
   // ANFIS recommendation lookup
+  // R6 — STRICT cost-order: tier0a is already cost-sorted (free → cheap-paid; tier1 = escalation).
+  // By default we enforce that order and do NOT let ANFIS reorder it (ANFIS optimizes latency/quality,
+  // not cost, and currently drives 0 traffic — routing_decisions=0). Set ROUTER_STRICT_COST_ORDER=false
+  // to restore ANFIS reordering. Reversible.
+  const strictCostOrder = process.env.ROUTER_STRICT_COST_ORDER !== 'false';
   let anfisRecommended: string | null = null;
-  if (req.tier_preference === 'auto') {
+  if (!strictCostOrder && req.tier_preference === 'auto') {
     const domain = req.task_hint || 'general';
     anfisRecommended = await getAnfisRecommendation(domain);
   }

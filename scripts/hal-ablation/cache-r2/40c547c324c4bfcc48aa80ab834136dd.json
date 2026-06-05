@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"SEC Form 8-K requires disclosure within 4 business days","latency_ms":320},{"provider":"groq-70b","verdict":"TRUE","confidence":90,"note":"SEC guidelines","latency_ms":288},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":2498}]}

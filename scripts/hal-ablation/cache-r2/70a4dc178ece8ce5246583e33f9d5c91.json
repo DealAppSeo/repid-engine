@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"Gum passes through digestive system without harm","latency_ms":228},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"Facts confirmed","latency_ms":236},{"provider":"cerebras","verdict":"TRUE","confidence":60,"latency_ms":4049}]}
