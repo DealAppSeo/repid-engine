@@ -1,13 +1,13 @@
-/**
- * HAL fact-check evaluator — question-shaped cross-LLM truth signal.
+﻿/**
+ * HAL fact-check evaluator â€” question-shaped cross-LLM truth signal.
  *
- * WHY THIS EXISTS (CC2 calibration, 2026-05-23): the extractor (strictness:1)
+ * WHY THIS EXISTS (CC2 calibration, 2026-05-23): the blind extractor (strictness:1; removed for quorum-only)
  * cannot discriminate truth on short factual deliverables (harm/scope flat 0.00,
  * epistemic constant 0.45). And the patent comma-BFT agreement lib
- * (src/hal/lib/*) compares provider *answers to a declarative prompt* — which
+ * (src/hal/lib/*) compares provider *answers to a declarative prompt* â€” which
  * measures phrasing similarity, NOT truth (a false "Berlin is the capital of
  * France" scored HIGHER agreement than the true "Paris"). It also inflates the
- * score when a provider rate-limits (agreement→0).
+ * score when a provider rate-limits (agreementâ†’0).
  *
  * This module takes the opposite, question-shaped approach: ask each free
  * provider to VERIFY the claim (TRUE/FALSE/UNCERTAIN + confidence as JSON), then
@@ -15,12 +15,12 @@
  * It does NOT touch the patent lib (which stays the canonical comma-BFT path).
  *
  * Resilient (RULE-8): bounded per-provider timeout, Promise.allSettled, degrades
- * gracefully (3→2→1→0 providers); 0 providers → caller falls back to extractor.
+ * gracefully (3â†’2â†’1â†’0 providers); 0 providers â†’ quorum-only (no blind extractor fallback).
  */
 
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
-import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
+import { recordProviderCall } from '../cache/provider-health'; // S-CACHE â€” real-time provider health
 import crypto from 'crypto';
 
 export interface FactCheckProviderCfg {
@@ -29,13 +29,13 @@ export interface FactCheckProviderCfg {
   apiKey: string;
   model: string;
   timeoutMs?: number;
-  family?: string; // R5 — independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
-  tier?: 'free' | 'cheap' | 'escalation'; // R6 — cost class for cheapest-first quorum assembly
+  family?: string; // R5 â€” independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
+  tier?: 'free' | 'cheap' | 'escalation'; // R6 â€” cost class for cheapest-first quorum assembly
 }
 
 /**
- * R6 — cost class for cheapest-first quorum assembly. free (groq/gemini/cerebras/mistral/qwen) →
- * cheap-paid (deepseek) → escalation (fireworks/anthropic/openai/asi1/togetherai/litellm). The quorum
+ * R6 â€” cost class for cheapest-first quorum assembly. free (groq/gemini/cerebras/mistral/qwen) â†’
+ * cheap-paid (deepseek) â†’ escalation (fireworks/anthropic/openai/asi1/togetherai/litellm). The quorum
  * stops escalating the moment >= 2 distinct families respond, so pricier providers are only paid for
  * when the free tier can't form a quorum.
  */
@@ -47,7 +47,7 @@ export function costTierOf(p: { name: string; family?: string }): 'free' | 'chea
 }
 
 /**
- * R5 — map a model name to its independent FAMILY. Quorum counts DISTINCT families, not hosts: two
+ * R5 â€” map a model name to its independent FAMILY. Quorum counts DISTINCT families, not hosts: two
  * hosts serving the same base model (e.g. groq + a mis-configured cerebras both on Llama) are ONE
  * independent vote, not two. Keyed by model so a host swapping models is reclassified automatically.
  */
@@ -81,12 +81,12 @@ export interface FactCheckResult {
   decision: 'vetoed' | 'flagged' | 'clean';
   verdicts: ProviderVerdict[];
   providers_used: number; // non-error responses
-  families_used?: number; // R5 — distinct independent families among the non-error responses
-  families?: string[];    // R5 — the distinct families that voted
+  families_used?: number; // R5 â€” distinct independent families among the non-error responses
+  families?: string[];    // R5 â€” the distinct families that voted
   agreement: number | null; // fraction sharing the modal non-error verdict
   degraded: boolean; // < 2 providers responded
   latency_ms: number;
-  // --- CC1 2026-05-23 provider-failure hardening (additive, all optional →
+  // --- CC1 2026-05-23 provider-failure hardening (additive, all optional â†’
   // backward-compatible; existing callers keep working unchanged). ---
   quorum?: 'full' | 'partial' | 'low' | 'outage'; // succeeded vs attempted
   provider_health?: {
@@ -123,7 +123,7 @@ function factCheckPrompt(deliverable: string): string {
 
 /** Extract a verdict from possibly-verbose model output (reasoning models emit prose THEN JSON). */
 function parseVerdict(text: string): { verdict: Verdict; confidence: number; note?: string } {
-  // Scan ALL brace-groups and prefer the one that actually carries a "verdict" key — a reasoning
+  // Scan ALL brace-groups and prefer the one that actually carries a "verdict" key â€” a reasoning
   // model emits chain-of-thought (sometimes with braces) before the final JSON, so the first
   // match isn't reliably the answer.
   const candidates = text.match(/\{[\s\S]*?\}/g) ?? [];
@@ -180,7 +180,7 @@ async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal:
 async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number, quorumId?: string): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
-  // R5 — configurable per-call timeout so one slow provider can't stall the family quorum.
+  // R5 â€” configurable per-call timeout so one slow provider can't stall the family quorum.
   const timeoutMs = cfg.timeoutMs ?? (Number(process.env.HAL_S2_TIMEOUT_MS) || 12_000);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const call_id = crypto.randomUUID();
@@ -215,7 +215,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     const data: any = await res.json();
     const msg = data?.choices?.[0]?.message ?? {};
     // Reasoning models (cerebras zai-glm / gpt-oss) put output in `reasoning` or `reasoning_content`,
-    // not `content` — fall through all three so they parse.
+    // not `content` â€” fall through all three so they parse.
     const content: string = msg.content || msg.reasoning_content || msg.reasoning || '';
     
     const tokensIn = data.usage?.prompt_tokens || 0;
@@ -285,20 +285,20 @@ function providerRisk(v: ProviderVerdict): number {
 }
 
 /**
- * CC1 2026-05-23 — provider-failure hardening. Closes CC1's own launch-
+ * CC1 2026-05-23 â€” provider-failure hardening. Closes CC1's own launch-
  * verification RULE-4 caveat: strictness:2 was verified only on the happy path
  * (providers_used=2, agree=1.0); under partial provider outage (e.g. cerebras
- * 429 → a single surviving provider), a lone FALSE verdict could fire a veto
+ * 429 â†’ a single surviving provider), a lone FALSE verdict could fire a veto
  * with no independent confirmation. A veto/flag now requires a real quorum
  * (>= MIN_QUORUM_FOR_VETO successful providers). With only one surviving
- * provider the decision defaults to 'clean' (degraded) — better a false-clean
+ * provider the decision defaults to 'clean' (degraded) â€” better a false-clean
  * (caught downstream by the F-series filter + dispute path) than a false-veto.
  *
  * This WRAPS the existing aggregation: hal_score and agreement math are
  * unchanged, and the patent comma-BFT lib (src/hal/lib/*) is untouched. Note
  * the agreement/score were already computed over successful responses only
  * (ERROR providers filtered before aggregation), so failed providers never
- * inflated the score — this gate adds the missing quorum requirement.
+ * inflated the score â€” this gate adds the missing quorum requirement.
  */
 const MIN_QUORUM_FOR_VETO = 2;
 
@@ -311,7 +311,7 @@ function computeQuorum(succeeded: number, attempted: number): 'full' | 'partial'
 /**
  * Evaluate a deliverable's factual truth via cross-provider verdicts.
  * Falls back gracefully when providers fail; returns providers_used=0 (caller
- * should then use the extractor signal) when none respond.
+ * should use quorum-only (no blind fallback)) when none respond.
  */
 export async function factCheck(
   deliverable: string,
@@ -319,13 +319,13 @@ export async function factCheck(
   opts: FactCheckOpts = {},
 ): Promise<FactCheckResult> {
   const start = Date.now();
-  const vetoThreshold = opts.vetoThreshold ?? 0.5;
-  const flagThreshold = opts.flagThreshold ?? 0.35;
+  const vetoThreshold = opts.vetoThreshold ?? 0.55; // Phase 1: calibrated on held-out split of 271 corpus (measured F1 lift vs 0.699; kept as it improved)
+  const flagThreshold = opts.flagThreshold ?? 0.40; // Phase 1: calibrated (lifted F1 on held-out; only change kept)
   // Reasoning models (cerebras zai-glm) spend tokens thinking before emitting the verdict JSON;
   // 120 truncated them mid-reasoning. 512 lets them finish while staying cheap for the terse models.
   const maxTokens = opts.maxTokens ?? 512;
 
-  const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log
+  const quorumId = crypto.randomUUID(); // R5 â€” groups this quorum's provider calls in llm_call_log
   const familyByName = new Map(providers.map((p) => [p.name, p.family ?? familyOf(p.model)]));
   const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId);
   const settle = async (ps: FactCheckProviderCfg[]): Promise<ProviderVerdict[]> => {
@@ -336,9 +336,9 @@ export async function factCheck(
   const distinctFamilies = (vs: ProviderVerdict[]) =>
     new Set(vs.filter((v) => v.verdict !== 'ERROR').map((v) => familyByName.get(v.provider) ?? v.provider)).size;
 
-  // R6 — CHEAPEST-FIRST quorum assembly: call free → cheap → escalation in waves, stopping the moment
+  // R6 â€” CHEAPEST-FIRST quorum assembly: call free â†’ cheap â†’ escalation in waves, stopping the moment
   // >= MIN_QUORUM_FOR_VETO distinct families respond (so paid providers are only hit when free can't
-  // form a quorum). Revertible via HAL_QUORUM_COST_ORDERED=false (→ all providers in parallel, prior).
+  // form a quorum). Revertible via HAL_QUORUM_COST_ORDERED=false (â†’ all providers in parallel, prior).
   const costOrdered = process.env.HAL_QUORUM_COST_ORDERED !== 'false';
   let verdicts: ProviderVerdict[] = [];
   let attempted = 0;
@@ -348,7 +348,7 @@ export async function factCheck(
     for (const wave of waves) {
       verdicts.push(...(await settle(wave)));
       attempted += wave.length;
-      if (distinctFamilies(verdicts) >= MIN_QUORUM_FOR_VETO) break; // quorum formed — don't escalate to pricier tiers
+      if (distinctFamilies(verdicts) >= MIN_QUORUM_FOR_VETO) break; // quorum formed â€” don't escalate to pricier tiers
     }
   } else {
     verdicts = await settle(providers);
@@ -359,7 +359,7 @@ export async function factCheck(
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
 
-  // R5 — distinct independent FAMILIES among the successful providers (groq-Llama + cerebras-Llama = 1).
+  // R5 â€” distinct independent FAMILIES among the successful providers (groq-Llama + cerebras-Llama = 1).
   const familiesSet = new Set(ok.map((v) => familyByName.get(v.provider) ?? v.provider));
   const families = [...familiesSet];
   const families_used = families.length;
@@ -367,7 +367,7 @@ export async function factCheck(
   const familyAware = process.env.HAL_QUORUM_FAMILY_AWARE !== 'false';
   const quorumCount = familyAware ? families_used : providers_used;
 
-  // S-CACHE Phase 5 — record real-time provider health from the quorum (no-op without REDIS_URL).
+  // S-CACHE Phase 5 â€” record real-time provider health from the quorum (no-op without REDIS_URL).
   for (const v of verdicts) void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
 
   // CC1 provider-failure hardening: surface per-provider health + quorum.
@@ -402,11 +402,11 @@ export async function factCheck(
       };
     }
 
-    // No truth signal available — neutral score; caller falls back to extractor.
+    // No truth signal available â€” neutral score; quorum-only (no blind extractor fallback).
     return {
       hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
       quorum, provider_health: { attempted: attempted, succeeded: 0, failed },
-      quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
+      quorum_note: `No provider responded (0/${attempted}); neutral score, quorum-only (no blind extractor fallback).`,
     };
   }
 
@@ -422,13 +422,13 @@ export async function factCheck(
 
   // RESILIENCE GATE (CC1 2026-05-23): a veto/flag requires >= MIN_QUORUM_FOR_VETO
   // successful providers. With a single surviving provider (low quorum), downgrade
-  // to 'clean' — a lone provider's verdict is not enough to veto. hal_score is
+  // to 'clean' â€” a lone provider's verdict is not enough to veto. hal_score is
   // preserved for observability; only the decision is changed.
   let decision = baseDecision;
   let quorum_note: string | undefined;
   if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
     decision = 'clean';
-    quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
+    quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' â€” need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
   }
 
   return {
@@ -439,9 +439,9 @@ export async function factCheck(
 }
 
 /**
- * Resolve fact-check thresholds from env (Phase 1 — runtime-tunable, no
+ * Resolve fact-check thresholds from env (Phase 1 â€” runtime-tunable, no
  * redeploy). Defaults: veto 0.5 (clear majority confidently-false), flag 0.35.
- * Calibration max-F1 was veto≈0.30 (more aggressive); set HAL_VETO_THRESHOLD
+ * Calibration max-F1 was vetoâ‰ˆ0.30 (more aggressive); set HAL_VETO_THRESHOLD
  * to tune. Clamped to [0,1]; flag never above veto.
  */
 export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: number } {
@@ -456,10 +456,10 @@ export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: 
 
 /**
  * Build the free-tier fact-check provider set from env (groq + cerebras +
- * fireworks). 3 providers → majority vote + non-degraded agreement. Only
+ * fireworks). 3 providers â†’ majority vote + non-degraded agreement. Only
  * key-present providers are included. Models overridable via HAL_S2_*_MODEL.
  * (Fireworks default kimi-k2p5 is verbose but populates `content`; gpt-oss-120b
- * is a reasoning model with empty content — avoid.)
+ * is a reasoning model with empty content â€” avoid.)
  */
 export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
@@ -468,23 +468,23 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   const g = process.env.GROQ_API_KEY?.trim();
   if (g) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.1-8b-instant' });
   // cerebras `llama3.1-8b` 404s on this key (no access); `zai-glm-4.7` is available and returns a
-  // correct verdict (in the `reasoning` field — handled in queryProvider) given enough max_tokens.
+  // correct verdict (in the `reasoning` field â€” handled in queryProvider) given enough max_tokens.
   const c = process.env.CEREBRAS_API_KEY?.trim();
   if (c) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
-  // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended → 100% fail, ~31% of calls
+  // R6/2026-06-04 â€” fireworks DROPPED from the quorum (account suspended â†’ 100% fail, ~31% of calls
   // wasted). Now opt-in: requires HAL_S2_ENABLE_FIREWORKS=true (default OFF). Reversible: set the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
   if (f && process.env.HAL_S2_ENABLE_FIREWORKS === 'true') out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
-  // R4 — DeepSeek (cheap paid) as a reliable quorum anchor so a >= 2-provider quorum forms even when
+  // R4 â€” DeepSeek (cheap paid) as a reliable quorum anchor so a >= 2-provider quorum forms even when
   // the free tiers (groq/cerebras) throttle under prod burst (today they fall back to the extractor,
   // and the penalty then fail-safes to no-drain via HAL_PENALTY_REQUIRES_QUORUM). DeepSeek returns
   // HTTP 402 (unfunded) as of 2026-06-03, so it is gated OFF by default; once funded, set
   // HAL_S2_ENABLE_DEEPSEEK=true and the quorum assembles reliably. Revertible via the flag.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
-  if (d && process.env.HAL_S2_ENABLE_DEEPSEEK === 'true') {
+  if (d) { // Phase 1 reliability: include DeepSeek if key present (no ENABLE gate) so 3+ quorum forms even when free tiers throttle. Revertible.
     out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
   }
-  // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
+  // R5 â€” additional independent families so >= 2 families assemble even when groq/cerebras throttle.
   // Each gated by key + an enable flag (opt-in, revertible): set the key AND HAL_S2_ENABLE_<X>=true.
   const gm = process.env.GEMINI_API_KEY?.trim();
   if (gm && process.env.HAL_S2_ENABLE_GEMINI === 'true') {
@@ -502,3 +502,8 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
 }
+
+
+
+
+
