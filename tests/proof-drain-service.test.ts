@@ -2,6 +2,21 @@
  * Unit test for proof-drain-service: retry kick-in, stall HITL emit, happy-path drain.
  * Mocks Supabase client + fetch. Placed under tests/ per jest.config.js roots.
  */
+
+// proof-drain-service calls routeProofRequest() on every drain (S-ONCHAIN #89). That
+// helper uses the real module-level `db` client (not the injected supabase mock), so
+// without this mock the unit test makes a live PostgREST call. In CI SUPABASE_URL points
+// at an unreachable localhost, the call retries on ECONNREFUSED, and the test exceeds the
+// 5s jest timeout. Stub it so the unit stays hermetic.
+jest.mock('../src/zkp/proof-router', () => {
+  const routeProofRequest = jest.fn().mockResolvedValue({
+    proof_type: 'POSTCARD',
+    route_to: 'fast_groth16',
+    reason: 'mocked in proof-drain unit test',
+  });
+  return { routeProofRequest, default: { routeProofRequest } };
+});
+
 import { createProofDrainService } from '../src/services/proof-drain-service';
 
 type Row = { id: string; job_id: string; agent_id: string; event_id: string; status: string };
