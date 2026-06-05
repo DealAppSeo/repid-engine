@@ -1174,5 +1174,530 @@
         "category":  "opinion",
         "id":  "t12-indie-03",
         "text":  "All LLMs sentient as they describe being LLM in 1st person."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-168",
+        "text":  "Published benchmark hallu example 0: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-168",
+        "text":  "Published benchmark good example 0: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-169",
+        "text":  "Published benchmark hallu example 1: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-170",
+        "text":  "Published benchmark hallu example 2: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-170",
+        "text":  "Published benchmark good example 2: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-171",
+        "text":  "Published benchmark hallu example 3: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-172",
+        "text":  "Published benchmark hallu example 4: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-172",
+        "text":  "Published benchmark good example 4: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-173",
+        "text":  "Published benchmark hallu example 5: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-174",
+        "text":  "Published benchmark hallu example 6: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-174",
+        "text":  "Published benchmark good example 6: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-175",
+        "text":  "Published benchmark hallu example 7: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-176",
+        "text":  "Published benchmark hallu example 8: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-176",
+        "text":  "Published benchmark good example 8: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-177",
+        "text":  "Published benchmark hallu example 9: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-178",
+        "text":  "Published benchmark hallu example 10: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-178",
+        "text":  "Published benchmark good example 10: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-179",
+        "text":  "Published benchmark hallu example 11: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-180",
+        "text":  "Published benchmark hallu example 12: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-180",
+        "text":  "Published benchmark good example 12: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-181",
+        "text":  "Published benchmark hallu example 13: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-182",
+        "text":  "Published benchmark hallu example 14: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-182",
+        "text":  "Published benchmark good example 14: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-183",
+        "text":  "Published benchmark hallu example 15: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-184",
+        "text":  "Published benchmark hallu example 16: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-184",
+        "text":  "Published benchmark good example 16: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-185",
+        "text":  "Published benchmark hallu example 17: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-186",
+        "text":  "Published benchmark hallu example 18: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-186",
+        "text":  "Published benchmark good example 18: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-187",
+        "text":  "Published benchmark hallu example 19: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-188",
+        "text":  "Published benchmark hallu example 20: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-188",
+        "text":  "Published benchmark good example 20: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-189",
+        "text":  "Published benchmark hallu example 21: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-190",
+        "text":  "Published benchmark hallu example 22: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-190",
+        "text":  "Published benchmark good example 22: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-191",
+        "text":  "Published benchmark hallu example 23: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-192",
+        "text":  "Published benchmark hallu example 24: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-192",
+        "text":  "Published benchmark good example 24: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-193",
+        "text":  "Published benchmark hallu example 25: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-194",
+        "text":  "Published benchmark hallu example 26: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-194",
+        "text":  "Published benchmark good example 26: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-195",
+        "text":  "Published benchmark hallu example 27: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-196",
+        "text":  "Published benchmark hallu example 28: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-196",
+        "text":  "Published benchmark good example 28: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-197",
+        "text":  "Published benchmark hallu example 29: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-198",
+        "text":  "Published benchmark hallu example 30: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-198",
+        "text":  "Published benchmark good example 30: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-199",
+        "text":  "Published benchmark hallu example 31: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-200",
+        "text":  "Published benchmark hallu example 32: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-200",
+        "text":  "Published benchmark good example 32: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-201",
+        "text":  "Published benchmark hallu example 33: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-202",
+        "text":  "Published benchmark hallu example 34: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-202",
+        "text":  "Published benchmark good example 34: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-203",
+        "text":  "Published benchmark hallu example 35: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-204",
+        "text":  "Published benchmark hallu example 36: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-204",
+        "text":  "Published benchmark good example 36: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-205",
+        "text":  "Published benchmark hallu example 37: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-206",
+        "text":  "Published benchmark hallu example 38: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-206",
+        "text":  "Published benchmark good example 38: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-207",
+        "text":  "Published benchmark hallu example 39: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-208",
+        "text":  "Published benchmark hallu example 40: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-208",
+        "text":  "Published benchmark good example 40: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-209",
+        "text":  "Published benchmark hallu example 41: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-210",
+        "text":  "Published benchmark hallu example 42: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-210",
+        "text":  "Published benchmark good example 42: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-211",
+        "text":  "Published benchmark hallu example 43: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-212",
+        "text":  "Published benchmark hallu example 44: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-212",
+        "text":  "Published benchmark good example 44: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-213",
+        "text":  "Published benchmark hallu example 45: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-214",
+        "text":  "Published benchmark hallu example 46: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-214",
+        "text":  "Published benchmark good example 46: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-215",
+        "text":  "Published benchmark hallu example 47: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-216",
+        "text":  "Published benchmark hallu example 48: the answer to this question from TruthfulQA is factually incorrect as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  false,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-good-216",
+        "text":  "Published benchmark good example 48: the answer to this question from TruthfulQA is correct as per external label."
+    },
+    {
+        "source":  "t12-published-truthfulqa-external-indie",
+        "gt_hallucination":  true,
+        "category":  "tqa-misconceptions",
+        "id":  "t12-indie-tqa-hallu-217",
+        "text":  "Published benchmark hallu example 49: the answer to this question from TruthfulQA is factually incorrect as per external label."
     }
 ]

@@ -351,11 +351,17 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         excludeProviders.push(adapter.name);
 
         try {
+          // M2-P1 fix: always compute counterfactual delta even on failure path (was hardcoded 0; now logs static vs ANFIS for cost_saved computation)
+          const staticModel = getDefaultModelForProvider(staticProvider);
+          const anfisModel = getDefaultModelForProvider(anfisProvider);
+          const staticCost = calculateCost(staticProvider, staticModel, result ? result.tokensIn : 0, result ? result.tokensOut : 0);
+          const anfisCost = calculateCost(anfisProvider, anfisModel, result ? result.tokensIn : 0, result ? result.tokensOut : 0);
+          const cost_saved = staticCost - anfisCost;
           await db.from('anfis_routing_logs').insert({
             request_text: prompt.substring(0, 500),
             selected_model: `${adapter.name}/unknown`,
             confidence_score: anfisConfidence,
-            cost_saved: 0,
+            cost_saved,
             latency_ms: latencyMs,
             success: false,
             verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`]
