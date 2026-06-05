@@ -1,0 +1,82 @@
+[
+  {
+    "agent_name": "trinity-orch",
+    "wallet": "0x28Ee130b0500b580967952EE396d4a66Adf9c9E8",
+    "token_id": "6649",
+    "tx_hash": "0xbdeb173cd0533a0f897136c7bd68795ab117f936470e70821994d95583f2ed39",
+    "block": 42329427,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-w3c",
+    "wallet": "0x7aA57A05A61dd20e0F07B82cC827F5d4a9B848F6",
+    "token_id": "6650",
+    "tx_hash": "0x7e3dbb9b0eac2b559d56160c0805aeb3055fcce3790cfaaf9e499fd272c100f7",
+    "block": 42329432,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-torch",
+    "wallet": "0x3A9061616331B779264A39757c84c46B64955ABF",
+    "token_id": "6651",
+    "tx_hash": "0x24bac332c154a08359519d41c5edfba824e0a20b3a3479d74352efe8c7d7f9d3",
+    "block": 42329435,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-gcm",
+    "wallet": "0x99b2f3A741923A58dA5fF10fB440351ed63178Cc",
+    "token_id": "6652",
+    "tx_hash": "0x5a96109bdde30ba45135accdf4d5d57523eba4059fe7a13ff85bd48b4ed83cbe",
+    "block": 42329440,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-chesed",
+    "wallet": "0x62cdd257B9F6ed27320112C13167aC0726630178",
+    "token_id": "6653",
+    "tx_hash": "0x870b57d6ab054c69822d84bdce208a8b966adaefe3bf0f9b5da1defccb6d3313",
+    "block": 42329445,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-mel",
+    "wallet": "0xEf033B6f9cC649d8aD099d7A8e194Eb13AbDB666",
+    "token_id": "6654",
+    "tx_hash": "0x19f4ae39c68b2e4863816b54163d6b759b9985f2a1df542249e789ccf32c0b2a",
+    "block": 42329450,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-apm",
+    "wallet": "0xceD17F65E0e7b3a77D5321A2d3715840317199C",
+    "token_id": "6655",
+    "tx_hash": "0x5194eae18691fc14bb61972f93860692b49242af05c63a5c6d0684bad1504e63",
+    "block": 42329455,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-sophia",
+    "wallet": "0x7b84CCE5502d393DAa6533285eF3e2f8D3A13261",
+    "token_id": "6656",
+    "tx_hash": "0xfa6dc4e9110e60f3e72146172820a251b39772ad8a040f23d7f3bde1406eefd9",
+    "block": 42329458,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-nexus",
+    "wallet": "0x038Fd84EFf76513913d9A39bEB41b8189F3a8a2d",
+    "token_id": "6657",
+    "tx_hash": "0xcefcd44d00711c493e91622afe85813aedb3dc2ee1cc9beaff2c4242a0fff0ed",
+    "block": 42329463,
+    "status": "success"
+  },
+  {
+    "agent_name": "trinity-hdm",
+    "wallet": "0x74ea6d9565B8E125BaB2FFb491B39E2fA0bA8928",
+    "token_id": "6658",
+    "tx_hash": "0x7eb0a93751ee359eb3aef2567cbc0dec20850b551fbb7d804971090c0f085ee4",
+    "block": 42329466,
+    "status": "success"
+  }
+]
