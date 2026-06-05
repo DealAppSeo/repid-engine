@@ -24,13 +24,15 @@ ON CONFLICT (proof_type) DO UPDATE SET
   description = EXCLUDED.description,
   updated_at = NOW();
 
--- Config <-> doc map (1:1):
--- POSTCARD <-> Fast Groth16+Poseidon2 / signatures/EAS / RepID thresholds (high freq, low stakes)
--- ENVELOPE <-> Groth16 on-chain leaf (per ZKP_TIERING)
--- PACKAGE <-> Plonky3/zkVM off-chain wrapped (regulatory, pre-stage, ROADMAP)
--- See ZKP_ROUTING_ARCHITECTURE.md "What Goes Where" and "Two ZKP Systems" for full.
+-- Config <-> doc map (1:1) per public ZKP_ROUTING_ARCHITECTURE.md (E:\dev\living-docs\ZKP_ROUTING_ARCHITECTURE.md) AND ZKP_TIERING_DECISION (per sprint):
+-- POSTCARD <-> Fast Groth16+Poseidon2 (high-freq low-stakes: RepID thresholds, agent identity, peer verification signatures, task attestations per doc "What Goes Where" table rows 1-4 + "Fast Path" section); signatures/EAS per sprint mapping.
+-- ENVELOPE <-> Groth16 (on-chain leaf for on-chain verification/compliance) per sprint ZKP_TIERING_DECISION (doc implies on-chain for certain envelopes; "The Router" classify + security model).
+-- PACKAGE <-> zkVM/Plonky3-engine (off-chain, wrapped to Groth16 for Merkle anchor; pre-staging for regulatory like HIPAA/SOX per doc rows 7+ + "Heavy Path" + "Pre-staging" sections) -- ROADMAP, not raw-Plonky3-on-chain per sprint.
+-- See full doc: E:\dev\living-docs\ZKP_ROUTING_ARCHITECTURE.md sections "Two ZKP Systems, One Router", "What Goes Where" table, "The Router" (sensitivity/freq/reg tag classify + pre-staging), "Pre-staging: Making Heavy Proofs Feel Instant", "Security Model (Fast vs Heavy)", "Integration With Existing Stack".
+-- ZKP_TIERING_DECISION explicit from sprint: postcard = signatures/EAS · envelope = Groth16 (on-chain leaf) · package = zkVM/Plonky3-engine (off-chain, wrapped to Groth16) — ROADMAP, not raw-Plonky3-on-chain.
+-- Matches doc "Right Tool for the Right Job" + router logic in proof-router.ts (sens >0.7 or reg or high freq -> heavy).
 
--- Logging wired: proof-router.ts:46 console.log(`[ZKP Router] ${proofType} -> ${route_to} ...`); mvp-api /zkp/route returns the decision.
+-- Logging wired: proof-router.ts:46 console.log(`[ZKP Router] ${proofType} -> ${route_to} ...`); mvp-api /zkp/route returns the decision per proof request (already logs fast/heavy split).
 -- Add DB log if table exists (e.g. zkp_routing_log).
 
 -- Apply via Sean co-sign. Verify schema first (types or information_schema.columns for zkp_routing_config).
