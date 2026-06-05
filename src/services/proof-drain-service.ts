@@ -239,13 +239,15 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         // S-ONCHAIN Phase 2: wire real EAS on Base Sepolia for qualifying proofs (those with merkle_root from drain, e.g. tier promotions).
         // Gate: only threshold/anchored ones to control cost. Update row with uid + schema so presentProof() can return honest on-chain ref.
         try {
-          const uid = await easService.attestProof({
-            proofType: 'POSTCARD',
-            tierProven,
+          const res = await easService.attestProof({
+            proofId: 0,
+            agentId: args.agentId,
+            tier: tierProven,
             merkleRoot: args.merkleRoot,
-            repIdAtProof: 0, // could fetch from score if needed
-            zkCommitment: args.commitment || null
+            repidSnapshot: 0,
+            proofType: 'POSTCARD'
           });
+          const uid = res?.uid;
           if (uid && !uid.startsWith('0x0000')) {
             await config.supabase.from('repid_zkp_proofs')
               .update({ eas_attestation_uid: uid, eas_schema: 'constitutional-compliance-v1' })
