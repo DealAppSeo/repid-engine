@@ -117,6 +117,7 @@ type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, Smal
 pub(crate) type VaultConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 pub mod aggregate;
+pub mod bound_disclosure;
 pub mod selective_disclosure;
 
 // ---- MiMC in the clear (witness generation) ----------------------------------
