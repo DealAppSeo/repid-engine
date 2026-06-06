@@ -3,6 +3,7 @@ import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
 import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
 import { routeProofRequest } from '../zkp/proof-router'; // S-ONCHAIN: routing classification (owned)
+import type { RouteDecision } from '../zkp/proof-router';
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -15,6 +16,12 @@ export interface ProofDrainServiceConfig {
   // PostgREST bypass (2026-05-21) — injectable direct-pg query fn for the hot
   // fetchPendingBatch poll. Defaults to the real pgQuery; tests pass a mock.
   pgQueryImpl?: typeof pgQuery;
+  // S-ONCHAIN routing-log classifier. routeProofRequest reaches the real `db`
+  // singleton (not config.supabase), so without injection a unit test that mocks
+  // supabase still makes a live DB round-trip here — under fake timers that hangs
+  // the drain (proof-drain-service.test 5s timeout). Inject a stub in tests;
+  // defaults to the real router so production behaviour is unchanged.
+  routeProofRequestImpl?: (proofType: string, context?: { agentRepId?: number; sensitivityHint?: number }) => Promise<RouteDecision>;
 }
 
 export interface ProofDrainServiceStatus {
@@ -77,6 +84,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   const stallThresholdMs = config.stallThresholdMs ?? DEFAULT_PROOF_DRAIN_STALL_MS;
   const httpFetch = config.fetchImpl ?? fetch;
   const pgq = config.pgQueryImpl ?? pgQuery;
+  const routeProof = config.routeProofRequestImpl ?? routeProofRequest;
 
   const state: ProofDrainServiceStatus = {
     status: 'stopped',
@@ -216,7 +224,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       }
 
       // S-ONCHAIN Phase 3: log routing decision for this proof (even for drain output)
-      const decision = await routeProofRequest('POSTCARD', { agentRepId: tierProven === 'VETERAN' ? 8000 : 1000 });
+      const decision = await routeProof('POSTCARD', { agentRepId: tierProven === 'VETERAN' ? 8000 : 1000 });
       console.log(`[ProofDrain] routing for proof: ${decision.route_to} (${decision.reason})`);
 
       const { error } = await config.supabase.from('repid_zkp_proofs').insert({
