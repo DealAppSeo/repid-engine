@@ -88,7 +88,7 @@ const W: usize = 2 * R + 3;
 const LEAF_COL: usize = 2 * R + 2;
 
 /// MiMC round constants (same u64 seeds used in-trace and in-AIR).
-const RC: [u64; R] = [
+pub(crate) const RC: [u64; R] = [
     0x6d6f_6e65, 0x726f_3031, 0x9e37_79b1, 0x1234_5678, 0xabcd_ef01, 0x0f0f_0f0f, 0xdead_beef,
     0xfeed_face, 0xc0ff_ee11, 0x5a5a_a5a5, 0x1357_9bdf, 0x2468_ace0,
 ];
@@ -116,6 +116,7 @@ type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>
 type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
 pub(crate) type VaultConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
+pub mod aggregate;
 pub mod selective_disclosure;
 
 // ---- MiMC in the clear (witness generation) ----------------------------------
@@ -127,7 +128,7 @@ fn pow7(x: Val) -> Val {
 }
 
 /// MiMC permutation states `L_1..L_R` for input `inp` with key `key`.
-fn mimc_states(inp: Val, key: Val) -> [Val; R] {
+pub(crate) fn mimc_states(inp: Val, key: Val) -> [Val; R] {
     let mut st = [Val::ZERO; R];
     let mut x = inp;
     for r in 0..R {
