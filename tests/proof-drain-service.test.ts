@@ -100,6 +100,9 @@ describe('proof-drain-service', () => {
       // used to serve, so the drain behavior under test is unchanged.
       pgQueryImpl: (async () => state.pending) as any,
       zkpServiceUrl: 'http://zkp.test',
+      // routeProofRequest reaches the real `db` singleton (not this mock supabase);
+      // stub it so the drain path stays hermetic and never makes a live DB call.
+      routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
       fetchImpl: fakeFetch as any
     });
 
@@ -132,6 +135,9 @@ describe('proof-drain-service', () => {
       // used to serve, so the drain behavior under test is unchanged.
       pgQueryImpl: (async () => state.pending) as any,
       zkpServiceUrl: 'http://zkp.test',
+      // routeProofRequest reaches the real `db` singleton (not this mock supabase);
+      // stub it so the drain path stays hermetic and never makes a live DB call.
+      routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
       fetchImpl: fakeFetch as any
     });
 
