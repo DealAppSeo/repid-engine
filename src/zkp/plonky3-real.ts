@@ -122,3 +122,48 @@ export async function logProofGeneration(supabase: any, agentId: string, tier: s
   }]);
   if (error) console.error('[zkp] Log error:', error);
 }
+
+// ---------------------------------------------------------------------------
+// zkp-vault prover endpoints (SPRINT_CC_3 P2). These call the real Rust prover
+// (zkp-vault `prover` bin) at $PLONKY3_PROVER_URL. No HMAC fallback: these are
+// real ZK statements, so a missing/failed prover returns null (callers decide).
+// The Rust service self-verifies before responding (`verified: true`).
+// ---------------------------------------------------------------------------
+
+export interface VaultProof {
+  ok: boolean;
+  verified: boolean;
+  statement: string;
+  proof_bytes: string; // hex
+  proof_len: number;
+  [k: string]: unknown;
+}
+
+async function callProver(path: string, body: unknown): Promise<VaultProof | null> {
+  if (!PROVER_URL) return null;
+  const url = PROVER_URL.replace(/\/$/, '') + path;
+  try {
+    const r = await fetchWithTimeout(
+      url,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
+      PROVER_TIMEOUT_MS,
+    );
+    if (!r.ok) return null;
+    const j = (await r.json()) as VaultProof;
+    return j?.ok && j?.verified ? j : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Prove human-anonymous ownership (secret/agent_id are private, sent over the
+ *  trusted prover channel only). Returns a self-verified proof or null. */
+export function generateOwnershipProof(secret: number, agentId: number, context: number) {
+  return callProver('/prove/ownership', { secret, agent_id: agentId, context });
+}
+
+/** Prove `score >= threshold` without revealing score. Returns a self-verified
+ *  proof or null. */
+export function generateTierRangeProof(score: number, threshold: number) {
+  return callProver('/prove/tier_range', { score, threshold });
+}
