@@ -49,8 +49,8 @@
 //!   for large groups.
 //! - MiMC over BabyBear gives ~field-size security; production should use Poseidon2
 //!   over a larger field and audited round constants/counts.
-//! - FRI uses `create_test_fri_params` (low blowup): correct for the correctness
-//!   gate + benchmark, not production soundness.
+//! - FRI now uses production-grade params (`make_config`: log_blowup 3, 28 queries,
+//!   16 PoW bits ≈ 100-bit conjectured security), not the test params (P1.1).
 //! - Court-order reveal (D-020): the human↔commitment link is sealed off-circuit
 //!   (encrypted to a custodian/court key); this circuit proves control anonymously,
 //!   the reveal is a custodian decryption gated by court order. No circuit change.
@@ -95,7 +95,7 @@ const RC: [u64; R] = [
 
 // ---- Plonky3 config (BabyBear + Keccak hiding MMCS + hiding FRI PCS) ----------
 // Reused verbatim from PR #95 (Plonky3's own test_zk construction).
-type Val = BabyBear;
+pub(crate) type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
 type ByteHash = Keccak256Hash;
 type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
@@ -114,7 +114,9 @@ type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
-type VaultConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+pub(crate) type VaultConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+
+pub mod selective_disclosure;
 
 // ---- MiMC in the clear (witness generation) ----------------------------------
 #[inline]
@@ -225,7 +227,13 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for OwnershipAir {
 }
 
 // ---- prove / verify ----------------------------------------------------------
-fn make_config() -> VaultConfig {
+/// Production-grade hiding-FRI config (P1.1 — no longer the test params).
+///
+/// `log_blowup = 3` is REQUIRED: our degree-7 MiMC constraints give a quotient of
+/// degree 8, and the LDE must cover the quotient domain (a smaller blowup panics in
+/// the PCS). Security (conjectured) ≈ `log_blowup * num_queries + proof_of_work_bits`
+/// = 3*28 + 16 ≈ 100 bits, versus ~7 bits for the test params.
+pub(crate) fn make_config() -> VaultConfig {
     let byte_hash = ByteHash {};
     let u64_hash = U64Hash::new(KeccakF {});
     let field_hash = FieldHash::new(u64_hash);
@@ -233,13 +241,11 @@ fn make_config() -> VaultConfig {
     let val_mmcs = ValHidingMmcs::new(field_hash, compress, SmallRng::seed_from_u64(1));
     let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    // log_blowup=3 (blowup 8) so the LDE covers the quotient domain for our
-    // degree-7 MiMC constraints (default test params use log_blowup=2, max deg 5).
     let fri_params = FriParameters {
-        log_blowup: 3,
+        log_blowup: 3,            // must be >= 3 to cover the degree-7 quotient domain
         log_final_poly_len: 2,
-        num_queries: 2,
-        proof_of_work_bits: 1,
+        num_queries: 28,          // 3*28 + 16 ~= 100-bit conjectured security
+        proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
     let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
