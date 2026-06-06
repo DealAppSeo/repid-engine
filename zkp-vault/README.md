@@ -7,7 +7,28 @@ Real Plonky3 STARKs behind the TypeScript Plonky3 stub (`src/zkp/plonky3-stub.ts
 |---|---|---|
 | `ownership` (lib root) | **human-anonymous ownership** — control a registered agent identity without revealing which human; per-context nullifier | D-019a (priority), D-020 |
 | `selective_disclosure` | **`earned ≥ X` AND healthy gap** (`perceived ≤ earned + band`) without revealing earned/perceived/gap | D-030 |
+| `bound_disclosure` | same band statement **bound to a public commitment** `C == H(H(earned,salt),perceived)` computed **in-circuit** (the real binding, not a public-input fallback) | D-030 / Sprint 3 P6 |
+| `aggregate` | **batch-aggregate N=8 ownership statements into ONE proof** (shared group; nullifier-set digest public) | Sprint 3 P1 |
 | (parked, PR #95) | tier-range "tier ≥ X without revealing the score" | D-019a (PARKED, retained) |
+
+### Prover service + x402 gate (`src/bin/prover.rs`, Sprint 3 P2/P4)
+`POST /prove/ownership`, `/prove/tier_range`, `/prove/disclosure` (each proves then
+self-verifies before responding); `POST /x402/gated` unlocks a paid call on a valid
+disclosure proof (200 `x402:settled`) or denies it (402) — revealing no values. Wired
+behind the TS bridge via `$PLONKY3_PROVER_URL` (`generateOwnershipProof` /
+`generateTierRangeProof` in `plonky3-real.ts`). On-chain x402 settlement is
+stubbed-testnet (facilitator not wired); the ZK gate is real.
+
+### On-chain anchors (Base Sepolia, real)
+- single ownership proof: tx `0xfffa1f4faa7a10d1bbae41dcfa4b1e19cc0db8588bded2d8f0623a360cb0f90f`
+- **batch aggregate** proof: tx `0xe91f29f40ef54fba95f9ae0b017ba5a69a56828bf64248d9a0d1585990586c7d` (block 42469344, batch_digest=1000482174)
+
+### Recursion note (honest)
+`aggregate` is **batch aggregation** (one proof for N statements), NOT recursive
+proof-composition (a STARK whose AIR verifies inner STARKs via an in-circuit FRI
+verifier). True recursion needs a FRI-verifier AIR (not in Plonky3 0.3; a multi-week
+build) and is the documented next step. The "aggregate N into one" + anchor property
+is delivered.
 
 Per **D-019a** the tier-range proof is **retained and parked** (PR #95) as a
 selective-disclosure capability; `selective_disclosure` here is its D-030-justified
