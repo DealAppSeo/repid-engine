@@ -23,9 +23,10 @@ jest.mock('../../src/db', () => ({
   db: { rpc: jest.fn().mockResolvedValue({ data: null, error: null }) },
 }));
 
-// Make SLM healthy in test/CI env (SLM isHealthy checks for HF/Cerebras tokens; without them the low-complexity
-// early-return in router never triggers and test gets 'fallback_after_failure' instead of 'slm_low_complexity').
-process.env.HUGGINGFACE_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN || 'dummy-for-ci-test';
+// Token-dependent test: SLM isHealthy checks for HF/Cerebras tokens.
+// If no token in env (CI without secret), SKIP visibly (never fake pass with dummy, never WARN downgrade).
+// This makes the test honest: skipped when env missing (network/token kind), not broken code.
+const HAS_HF_TOKEN = !!process.env.HUGGINGFACE_API_TOKEN;
 
 import { routeRequest } from '../../src/providers/router';
 
@@ -37,7 +38,7 @@ const VALID_REASONS = [
 ];
 
 describe('provider routing — contract', () => {
-  it('routes a low-complexity auto request to the SLM tier', async () => {
+  it.skipIf(!HAS_HF_TOKEN)('routes a low-complexity auto request to the SLM tier', async () => {
     const { adapter, decision } = await routeRequest({ prompt: SHORT, tier_preference: 'auto' });
     expect(adapter).not.toBeNull();
     expect(decision.chosen_tier).toBe('0a');
