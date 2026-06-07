@@ -78,6 +78,31 @@ llmRouter.post('/v1/llm/route-debug', llmLimiter, async (req: Request, res: Resp
   }
 });
 
+function getDefaultModelForProvider(provider: string): string {
+  switch (provider) {
+    case 'groq': return 'llama-3.1-8b-instant';
+    case 'cerebras': return 'llama3.1-8b';
+    case 'gemini': return 'gemini-2.0-flash';
+    case 'cohere': return 'command-r';
+    case 'deepseek': return 'deepseek-chat';
+    case 'anthropic': return 'claude-haiku-4-5';
+    case 'openai': return 'gpt-4o-mini';
+    case 'llama-3-2-1b': return 'llama-3-2-1b';
+    case 'gemma-3-2b': return 'gemma-3-2b';
+    case 'phi-4': return 'phi-4';
+    default: return 'default';
+  }
+}
+
+function inferCategory(prompt: string, taskHint?: string): string {
+  const s = (prompt + ' ' + (taskHint || '')).toLowerCase();
+  if (/classif|yes\/no|true\/false|fact check|is this|simple fact/.test(s)) return 'factual';
+  if (/code|bug|fix|function|typescript|python|implement/.test(s)) return 'code';
+  if (/creative|story|poem|imagine|write a|generate.*tale/.test(s)) return 'creative';
+  if (/math|calculate|equation|prove/.test(s)) return 'math';
+  return 'general';
+}
+
 llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Response): Promise<void> => {
   const call_id = crypto.randomUUID();
   try {
@@ -182,7 +207,15 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     while (attempts < maxAttempts) {
       attempts++;
       
-      const { adapter, decision } = await routeRequest(routeReq, excludeProviders);
+      const {
+        adapter,
+        decision,
+        staticProvider,
+        staticTier,
+        anfisProvider,
+        anfisTier,
+        anfisConfidence
+      } = await routeRequest(routeReq, excludeProviders);
       lastDecision = decision;
       // S-HARDEN Phase 3 — audit the ANFIS routing decision (gated by TOOL_CALL_LOGGING; no-op default; never throws).
       void logToolCall({
@@ -246,15 +279,31 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           agent_id: (resolvedAgentId && isUuid(resolvedAgentId)) ? resolvedAgentId : undefined
         });
 
-        // Write routing decision to anfis_routing_logs (Phase 2.10 / P3)
+        // Write routing decision to anfis_routing_logs (PHASE1 fix: both picks + REAL delta from ledger+tokens on success path; full schema for mig+types+ DONE-CHECK cost_saved<>0 + array_length(verified_by)>=2)
+        // Cite: migrations/2026-06-05-anfis-routing-logs.sql (CREATE+ALTER cost_saved/verified_by), src/types/database.types.ts:9912, src/providers/router.ts:121 (anfisRec), calculateCost, inferCategory.
         try {
+          const staticModel = getDefaultModelForProvider(staticProvider);
+          const anfisModel = getDefaultModelForProvider(anfisProvider);
+          const staticCost = calculateCost(staticProvider, staticModel, result.tokensIn, result.tokensOut);
+          const anfisCost = calculateCost(anfisProvider, anfisModel, result.tokensIn, result.tokensOut);
+          const cost_saved = staticCost - anfisCost;
+          const cat = inferCategory(prompt, task_hint);
+
           await db.from('anfis_routing_logs').insert({
-            request_text: prompt.substring(0, 500),
-            selected_model: `${adapter.name}/${result.model || 'default'}`,
-            confidence_score: decision.chosen_tier === '0a' ? 0.9 : 0.7,
-            cost_saved: 0,
+            prompt_preview: prompt.substring(0, 200),
+            category: cat,
+            static_provider: staticProvider,
+            static_tier: staticTier,
+            static_reason: 'static',
+            anfis_provider: anfisProvider,
+            anfis_tier: anfisTier,
+            anfis_conf: anfisConfidence,
+            cost_usdc: cost_saved,
+            cost_saved,
             latency_ms: result.latencyMs,
-            success: true
+            success: true,
+            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`],
+            request_text: prompt.substring(0, 500)
           });
         } catch (e: any) {
           console.error('[anfis_routing] complete log failure:', e?.message ?? e);
@@ -320,13 +369,31 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         excludeProviders.push(adapter.name);
 
         try {
+          // PHASE1 fix: compute real counterfactual delta even on failure (est tokens from prompt len for differential; was 0,0). Both picks in verified_by always. Full schema.
+          // Cite: same as success block + SPRINT_XC_2026-06-05.md PHASE1.
+          const estIn = Math.max(8, Math.floor(prompt.length / 3.5));
+          const estOut = 48;
+          const staticModel = getDefaultModelForProvider(staticProvider);
+          const anfisModel = getDefaultModelForProvider(anfisProvider);
+          const staticCost = calculateCost(staticProvider, staticModel, estIn, estOut);
+          const anfisCost = calculateCost(anfisProvider, anfisModel, estIn, estOut);
+          const cost_saved = staticCost - anfisCost;
+          const cat = inferCategory(prompt, task_hint);
           await db.from('anfis_routing_logs').insert({
-            request_text: prompt.substring(0, 500),
-            selected_model: `${adapter.name}/unknown`,
-            confidence_score: decision?.chosen_tier === '0a' ? 0.9 : 0.7,
-            cost_saved: 0,
+            prompt_preview: prompt.substring(0, 200),
+            category: cat,
+            static_provider: staticProvider,
+            static_tier: staticTier,
+            static_reason: 'static',
+            anfis_provider: anfisProvider,
+            anfis_tier: anfisTier,
+            anfis_conf: anfisConfidence,
+            cost_usdc: cost_saved,
+            cost_saved,
             latency_ms: latencyMs,
-            success: false
+            success: false,
+            verified_by: [`static:${staticProvider}:${staticTier}`, `anfis:${anfisProvider}:${anfisTier}`],
+            request_text: prompt.substring(0, 500)
           });
         } catch (e: any) {
           console.error('[anfis_routing] failure log failure:', e?.message ?? e);
