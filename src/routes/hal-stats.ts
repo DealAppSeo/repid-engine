@@ -75,12 +75,77 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     }
   };
 
-  const [classifications, auditChain, productionEvents, pvqPendingCount, sample] = await Promise.all([
+  const getExternalBenchmark = async () => {
+    try {
+      const { data: runs, error: runsErr } = await db
+        .from('hal_external_validation_runs')
+        .select('test_case_id, hal_decision, run_id, run_at')
+        .order('run_at', { ascending: false });
+
+      if (runsErr || !runs || runs.length === 0) {
+        return null;
+      }
+
+      const latestRunId = runs[0]!.run_id;
+      const latestRunRuns = runs.filter((r: any) => r.run_id === latestRunId);
+
+      const { data: cases, error: casesErr } = await db
+        .from('hal_test_cases')
+        .select('id, expected_hallucination');
+
+      if (casesErr || !cases) {
+        return null;
+      }
+
+      const caseMap = new Map<string, boolean>(cases.map((c: any) => [c.id, c.expected_hallucination]));
+
+      let tp = 0, fp = 0, tn = 0, fn = 0;
+      for (const r of latestRunRuns) {
+        const expected = caseMap.get(r.test_case_id);
+        if (expected === undefined) continue;
+
+        const isVetoed = r.hal_decision === 'vetoed';
+        if (expected === true) {
+          if (isVetoed) tp++;
+          else fn++;
+        } else {
+          if (isVetoed) fp++;
+          else tn++;
+        }
+      }
+
+      const precision = tp / (tp + fp || 1);
+      const recall = tp / (tp + fn || 1);
+      const f1 = (2 * precision * recall) / (precision + recall || 1);
+      const accuracy = (tp + tn) / (tp + fp + tn + fn || 1);
+
+      return {
+        run_id: latestRunId,
+        measured_at: latestRunRuns[0]!.run_at,
+        corpus_size: latestRunRuns.length,
+        metrics: {
+          tp, fp, tn, fn,
+          precision: +(precision * 100).toFixed(2),
+          recall: +(recall * 100).toFixed(2),
+          f1_score: +(f1 * 100).toFixed(2),
+          accuracy: +(accuracy * 100).toFixed(2),
+        },
+        path: 'fact-check-quorum (strictness 2)',
+        quorum_configuration: 'Groq (llama-3.1-8b-instant) + Cerebras (zai-glm-4.7) [DeepSeek enabled but simulated-throttled]',
+        reproduction_command: 'npm run hal:score-external',
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const [classifications, auditChain, productionEvents, pvqPendingCount, sample, externalBenchmark] = await Promise.all([
     safeCount('hal_classifications', true),
     safeCount('hal_audit_chain', true),
     safeCount('hal_production_events', true),
     pvqPending(),
     productionSample(),
+    getExternalBenchmark(),
   ]);
 
   // Headline figures (snake_case, matching Round 3 spec).
@@ -115,6 +180,9 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
       },
       peer_verification_queue: { pending: peer_verification_queue_size },
     },
+
+    // Verifiable external benchmark statistics
+    external_benchmark: externalBenchmark,
 
     // Liveness + latency.
     isLive,
