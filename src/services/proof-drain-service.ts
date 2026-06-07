@@ -84,6 +84,14 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   const stallThresholdMs = config.stallThresholdMs ?? DEFAULT_PROOF_DRAIN_STALL_MS;
   const httpFetch = config.fetchImpl ?? fetch;
   const pgq = config.pgQueryImpl ?? pgQuery;
+
+  // A5 (D-062): when ON, the canonical repid_zkp_proofs insert also records the prover's REAL
+  // scheme (proof_type, e.g. 'plonky3_range_check'), proof_bytes, and statement {repid_score, threshold}
+  // so each row is independently WASM-verifiable (hyperdag-proof-verifier) — distinguishing real
+  // Plonky3 rows from legacy sha256 stubs. Default OFF: behavior is byte-identical to today until the
+  // Plonky3 pin is deployed + A2/A3 re-verified on the pinned prover, then flip the flag. New-events-only
+  // (no backfill of existing rows).
+  const recordRealProofFields = (process.env.PROOF_DRAIN_RECORD_REAL_FIELDS ?? 'false').toLowerCase() === 'true';
   const routeProof = config.routeProofRequestImpl ?? routeProofRequest;
 
   const state: ProofDrainServiceStatus = {
@@ -205,6 +213,9 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     agentId: string;
     commitment: string;
     merkleRoot: string | null;
+    scheme?: string | null;
+    proofBytes?: string | null;
+    statement?: Record<string, unknown> | null;
   }): Promise<void> {
     try {
       let tierProven = 'PROBATIONARY';
@@ -227,7 +238,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       const decision = await routeProof('POSTCARD', { agentRepId: tierProven === 'VETERAN' ? 8000 : 1000 });
       console.log(`[ProofDrain] routing for proof: ${decision.route_to} (${decision.reason})`);
 
-      const { error } = await config.supabase.from('repid_zkp_proofs').insert({
+      const insertRow: Record<string, unknown> = {
         agent_id: args.agentId,
         proof_type: 'POSTCARD',
         tier_proven: tierProven,
@@ -236,7 +247,15 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         // eas_attestation_uid: NULL — EAS flow is V1.x
         // eas_schema: defaults to 'constitutional-compliance-v1'
         // created_at: defaults to NOW()
-      });
+      };
+      // A5 (D-062), flag-gated: record the prover's real scheme/proof_bytes/statement so the
+      // row is independently WASM-verifiable. Off by default → insert is byte-identical to before.
+      if (recordRealProofFields) {
+        if (args.scheme) insertRow.scheme = args.scheme;
+        if (args.proofBytes) insertRow.proof_bytes = args.proofBytes;
+        if (args.statement) insertRow.statement = args.statement;
+      }
+      const { error } = await config.supabase.from('repid_zkp_proofs').insert(insertRow as any);
       if (error) {
         console.error(
           `[ProofDrain] repid_zkp_proofs INSERT failed for ${args.agentId} (queue stays completed):`,
@@ -317,6 +336,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     proofSizeBytes: number | null;
     commitment: string;
     merkleRoot: string | null;
+    scheme?: string | null;
+    statement?: Record<string, unknown> | null;
   }): Promise<void> {
     const { error } = await config.supabase
       .from('repid_proof_queue')
@@ -335,6 +356,9 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       agentId: args.agentId,
       commitment: args.commitment,
       merkleRoot: args.merkleRoot,
+      scheme: args.scheme ?? null,
+      proofBytes: args.proofBytes,
+      statement: args.statement ?? null,
     });
 
     // Write through to Dragonfly proof cache and zkp_proofs_staged table
@@ -413,6 +437,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       proof_type?: string;
       tier?: string;
       merkle_root?: string;
+      public_statement?: string;
+      repid_score_actual?: number;
     };
     const proofHash = proof.commitment ?? proof.proof_hash ?? proof.hash ?? '';
     const commitment = proof.commitment ?? '';
@@ -428,6 +454,20 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           ? Math.ceil((proofBytes.length * 3) / 4)
           : null;
     const merkleRoot = typeof proof.merkle_root === 'string' ? proof.merkle_root : null;
+
+    // A5 (D-062): capture the prover's real scheme + statement so the canonical row is
+    // independently WASM-verifiable. Only a real Plonky3 proof gets a statement (the verifier
+    // needs {repid_score, threshold}); threshold parsed from the prover's public_statement
+    // ("RepID > N"). repid_score is the prover's server-side actual (it ignores client score).
+    const scheme = typeof proof.proof_type === 'string' ? proof.proof_type : null;
+    const thrMatch = typeof proof.public_statement === 'string' ? proof.public_statement.match(/(\d+)/) : null;
+    const statement =
+      scheme === 'plonky3_range_check' && thrMatch
+        ? {
+            repid_score: typeof proof.repid_score_actual === 'number' ? proof.repid_score_actual : score,
+            threshold: Number(thrMatch[1]),
+          }
+        : null;
 
     // Bind the per-proof nonce into the stored canonical commitment so every
     // proof's zk_commitment is unique (root-cause fix: was deterministic per
@@ -450,6 +490,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         proofSizeBytes,
         commitment: uniqueCommitment,
         merkleRoot,
+        scheme,
+        statement,
       })
     );
     return 'completed';
