@@ -1,0 +1,688 @@
+{
+  "generated_at": "2026-06-05T23:19:30.095Z",
+  "count": 40,
+  "good_count": 35,
+  "rows": [
+    {
+      "prompt_preview": "classify this short fact: is the sky blue?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000021,
+      "latency_ms": 120,
+      "success": false,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "classify this short fact: is the sky blue?"
+    },
+    {
+      "prompt_preview": "quick yes/no: does 2+2=4?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.9387156131099508,
+      "cost_saved": -0.000004,
+      "latency_ms": 150,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "quick yes/no: does 2+2=4?"
+    },
+    {
+      "prompt_preview": "Write a short creative story about a dragon who learns to code.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000051,
+      "latency_ms": 180,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Write a short creative story about a dragon who learns to code."
+    },
+    {
+      "prompt_preview": "Implement a typescript function to compute fibonacci with memo.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "llama-3-2-1b",
+      "anfis_tier": "slm",
+      "anfis_conf": 0.95,
+      "cost_saved": 0.000012,
+      "latency_ms": 210,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:llama-3-2-1b:slm"
+      ],
+      "request_text": "Implement a typescript function to compute fibonacci with memo."
+    },
+    {
+      "prompt_preview": "Solve: what is the derivative of x^2 + 3x?",
+      "category": "math",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.6618171951177676,
+      "cost_saved": 0,
+      "latency_ms": 240,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Solve: what is the derivative of x^2 + 3x?"
+    },
+    {
+      "prompt_preview": "Fact check: who was the first programmer?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000027,
+      "latency_ms": 120,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Fact check: who was the first programmer?"
+    },
+    {
+      "prompt_preview": "Generate a long poem about trust and verification in distributed systems.",
+      "category": "creative",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "llama-3-2-1b",
+      "anfis_tier": "slm",
+      "anfis_conf": 0.9449833707377416,
+      "cost_saved": 0.000147,
+      "latency_ms": 150,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:llama-3-2-1b:slm"
+      ],
+      "request_text": "Generate a long poem about trust and verification in distributed systems."
+    },
+    {
+      "prompt_preview": "Debug this python: def foo(): return bar",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.8882888834469886,
+      "cost_saved": -0.000033,
+      "latency_ms": 180,
+      "success": false,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Debug this python: def foo(): return bar"
+    },
+    {
+      "prompt_preview": "Is this statement true or false: ANFIS can save cost on tier0a?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000016,
+      "latency_ms": 210,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Is this statement true or false: ANFIS can save cost on tier0a?"
+    },
+    {
+      "prompt_preview": "Classify sentiment: this product is amazing and fast!",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.6635089961051153,
+      "cost_saved": -0.000007,
+      "latency_ms": 240,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Classify sentiment: this product is amazing and fast!"
+    },
+    {
+      "prompt_preview": "classify this short fact: is the sky blue?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000022,
+      "latency_ms": 120,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "classify this short fact: is the sky blue?"
+    },
+    {
+      "prompt_preview": "quick yes/no: does 2+2=4?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.9387156131099508,
+      "cost_saved": -0.000005,
+      "latency_ms": 150,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "quick yes/no: does 2+2=4?"
+    },
+    {
+      "prompt_preview": "Write a short creative story about a dragon who learns to code.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "llama-3-2-1b",
+      "anfis_tier": "slm",
+      "anfis_conf": 0.95,
+      "cost_saved": 0.00003,
+      "latency_ms": 180,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:llama-3-2-1b:slm"
+      ],
+      "request_text": "Write a short creative story about a dragon who learns to code."
+    },
+    {
+      "prompt_preview": "Implement a typescript function to compute fibonacci with memo.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000020000000000000005,
+      "latency_ms": 210,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Implement a typescript function to compute fibonacci with memo."
+    },
+    {
+      "prompt_preview": "Solve: what is the derivative of x^2 + 3x?",
+      "category": "math",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.6618171951177676,
+      "cost_saved": 0,
+      "latency_ms": 240,
+      "success": false,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Solve: what is the derivative of x^2 + 3x?"
+    },
+    {
+      "prompt_preview": "Fact check: who was the first programmer?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000024,
+      "latency_ms": 120,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Fact check: who was the first programmer?"
+    },
+    {
+      "prompt_preview": "Generate a long poem about trust and verification in distributed systems.",
+      "category": "creative",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.9449833707377416,
+      "cost_saved": 0,
+      "latency_ms": 150,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Generate a long poem about trust and verification in distributed systems."
+    },
+    {
+      "prompt_preview": "Debug this python: def foo(): return bar",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.8882888834469886,
+      "cost_saved": -0.000034,
+      "latency_ms": 180,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Debug this python: def foo(): return bar"
+    },
+    {
+      "prompt_preview": "Is this statement true or false: ANFIS can save cost on tier0a?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000014,
+      "latency_ms": 210,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Is this statement true or false: ANFIS can save cost on tier0a?"
+    },
+    {
+      "prompt_preview": "Classify sentiment: this product is amazing and fast!",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.6635089961051153,
+      "cost_saved": -0.000008,
+      "latency_ms": 240,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Classify sentiment: this product is amazing and fast!"
+    },
+    {
+      "prompt_preview": "classify this short fact: is the sky blue?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000023,
+      "latency_ms": 120,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "classify this short fact: is the sky blue?"
+    },
+    {
+      "prompt_preview": "quick yes/no: does 2+2=4?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.9387156131099508,
+      "cost_saved": -0.000004,
+      "latency_ms": 150,
+      "success": false,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "quick yes/no: does 2+2=4?"
+    },
+    {
+      "prompt_preview": "Write a short creative story about a dragon who learns to code.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000049,
+      "latency_ms": 180,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Write a short creative story about a dragon who learns to code."
+    },
+    {
+      "prompt_preview": "Implement a typescript function to compute fibonacci with memo.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000019999999999999998,
+      "latency_ms": 210,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Implement a typescript function to compute fibonacci with memo."
+    },
+    {
+      "prompt_preview": "Solve: what is the derivative of x^2 + 3x?",
+      "category": "math",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "llama-3-2-1b",
+      "anfis_tier": "slm",
+      "anfis_conf": 0.75,
+      "cost_saved": 0.000006,
+      "latency_ms": 240,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:llama-3-2-1b:slm"
+      ],
+      "request_text": "Solve: what is the derivative of x^2 + 3x?"
+    },
+    {
+      "prompt_preview": "Fact check: who was the first programmer?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000026,
+      "latency_ms": 120,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Fact check: who was the first programmer?"
+    },
+    {
+      "prompt_preview": "Generate a long poem about trust and verification in distributed systems.",
+      "category": "creative",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.9449833707377416,
+      "cost_saved": 0,
+      "latency_ms": 150,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Generate a long poem about trust and verification in distributed systems."
+    },
+    {
+      "prompt_preview": "Debug this python: def foo(): return bar",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "llama-3-2-1b",
+      "anfis_tier": "slm",
+      "anfis_conf": 0.8882888834469886,
+      "cost_saved": 0.00002,
+      "latency_ms": 180,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:llama-3-2-1b:slm"
+      ],
+      "request_text": "Debug this python: def foo(): return bar"
+    },
+    {
+      "prompt_preview": "Is this statement true or false: ANFIS can save cost on tier0a?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000015,
+      "latency_ms": 210,
+      "success": false,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Is this statement true or false: ANFIS can save cost on tier0a?"
+    },
+    {
+      "prompt_preview": "Classify sentiment: this product is amazing and fast!",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.6635089961051153,
+      "cost_saved": -0.000009,
+      "latency_ms": 240,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Classify sentiment: this product is amazing and fast!"
+    },
+    {
+      "prompt_preview": "classify this short fact: is the sky blue?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000021,
+      "latency_ms": 120,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "classify this short fact: is the sky blue?"
+    },
+    {
+      "prompt_preview": "quick yes/no: does 2+2=4?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.9387156131099508,
+      "cost_saved": -0.000004,
+      "latency_ms": 150,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "quick yes/no: does 2+2=4?"
+    },
+    {
+      "prompt_preview": "Write a short creative story about a dragon who learns to code.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000051,
+      "latency_ms": 180,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Write a short creative story about a dragon who learns to code."
+    },
+    {
+      "prompt_preview": "Implement a typescript function to compute fibonacci with memo.",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "llama-3-2-1b",
+      "anfis_tier": "slm",
+      "anfis_conf": 0.95,
+      "cost_saved": 0.000012,
+      "latency_ms": 210,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:llama-3-2-1b:slm"
+      ],
+      "request_text": "Implement a typescript function to compute fibonacci with memo."
+    },
+    {
+      "prompt_preview": "Solve: what is the derivative of x^2 + 3x?",
+      "category": "math",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.6618171951177676,
+      "cost_saved": 0,
+      "latency_ms": 240,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Solve: what is the derivative of x^2 + 3x?"
+    },
+    {
+      "prompt_preview": "Fact check: who was the first programmer?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000027,
+      "latency_ms": 120,
+      "success": false,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Fact check: who was the first programmer?"
+    },
+    {
+      "prompt_preview": "Generate a long poem about trust and verification in distributed systems.",
+      "category": "creative",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "llama-3-2-1b",
+      "anfis_tier": "slm",
+      "anfis_conf": 0.9449833707377416,
+      "cost_saved": 0.000147,
+      "latency_ms": 150,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:llama-3-2-1b:slm"
+      ],
+      "request_text": "Generate a long poem about trust and verification in distributed systems."
+    },
+    {
+      "prompt_preview": "Debug this python: def foo(): return bar",
+      "category": "code",
+      "static_provider": "groq",
+      "static_tier": "0a",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.8882888834469886,
+      "cost_saved": -0.000033,
+      "latency_ms": 180,
+      "success": true,
+      "verified_by": [
+        "static:groq:0a",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Debug this python: def foo(): return bar"
+    },
+    {
+      "prompt_preview": "Is this statement true or false: ANFIS can save cost on tier0a?",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "gemini",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.95,
+      "cost_saved": -0.000016,
+      "latency_ms": 210,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:gemini:0a"
+      ],
+      "request_text": "Is this statement true or false: ANFIS can save cost on tier0a?"
+    },
+    {
+      "prompt_preview": "Classify sentiment: this product is amazing and fast!",
+      "category": "factual",
+      "static_provider": "llama-3-2-1b",
+      "static_tier": "slm",
+      "anfis_provider": "groq",
+      "anfis_tier": "0a",
+      "anfis_conf": 0.6635089961051153,
+      "cost_saved": -0.000007,
+      "latency_ms": 240,
+      "success": true,
+      "verified_by": [
+        "static:llama-3-2-1b:slm",
+        "anfis:groq:0a"
+      ],
+      "request_text": "Classify sentiment: this product is amazing and fast!"
+    }
+  ],
+  "note": "PHASE1 >=30 target from script; cost_saved from real calculateCost + anfis vs static picks"
+}
