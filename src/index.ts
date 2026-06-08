@@ -62,6 +62,7 @@ import cacheStatsRouter from './routes/cache-stats';
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
+import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
 
@@ -762,6 +763,18 @@ if (!IS_TEST) {
 // CASCADE_SETTLEMENT_ENABLED=true (mirrors DisputeResolutionWorker gating).
 if (!IS_TEST) {
   cascadeSettlementWorker.start();
+}
+
+// x402 Settlement Recovery Worker (W2 2026-06-08) — the COLD MODULE behind the ERC-8004
+// dormancy. startRecoveryWorker() existed but was never called in bootstrap, so rows in
+// x402_settlement_failures were never retried → no fresh *_settled events reached the
+// (already-started) FeedbackLoopWorker → ~5 days of no on-chain reputation writes despite
+// a PRESENT writer key. Mounted here, RULE-8-guarded (re-entrancy + catch in the worker).
+// OFF unless X402_RECOVERY_WORKER_ENABLED=true (house style: zero change at merge; Sean flips).
+if (!IS_TEST && process.env.X402_RECOVERY_WORKER_ENABLED === 'true') {
+  const intervalMs = Number(process.env.X402_RECOVERY_POLL_MS ?? 30000);
+  startRecoveryWorker({ pollIntervalMs: intervalMs });
+  console.log(`[x402-recovery] recovery worker started (poll ${intervalMs}ms)`);
 }
 
 // V1.5 Slice-1 HITL notification dispatcher (CC2 2026-05-26). Watches
