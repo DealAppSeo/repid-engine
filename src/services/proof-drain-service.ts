@@ -318,6 +318,55 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           console.warn('[ProofDrain][R3-EAS] non-fatal:', e?.message || e);
         }
       }
+
+      // W3 (2026-06-08) — continuous EAS anchoring for REAL proofs. The two blocks above
+      // only fire when the prover returns a merkle_root (the 05-30 batch); real plonky3
+      // proofs carry a zk_commitment but no merkle_root, so they never anchored — only 5
+      // attestations exist. Anchor each new real proof by its commitment (a 32-byte proof
+      // identity that fits the schema's bytes32 merkleRoot field). Gated by
+      // EAS_CONTINUOUS_ANCHOR_ENABLED (default OFF → no on-chain fire at merge / per the
+      // "don't fire" discipline) and the attester key being present. RULE-8: bounded.
+      if (
+        !error &&
+        process.env.EAS_CONTINUOUS_ANCHOR_ENABLED === 'true' &&
+        recordRealProofFields &&
+        args.scheme && args.proofBytes && args.commitment && !args.merkleRoot
+      ) {
+        let anchorTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const { easService } = await import('./eas-attestation-service.js');
+          if (easService.hasAttesterKey()) {
+            const anchorTimeoutMs = Number(process.env.EAS_ANCHOR_TIMEOUT_MS ?? 30000);
+            const res = (await Promise.race([
+              easService.attestProof({
+                proofId: 0,
+                agentId: args.agentId,
+                tier: tierProven,
+                merkleRoot: args.commitment, // commitment as the 32-byte proof anchor
+                repidSnapshot: null,
+                proofType: args.scheme,
+              }),
+              new Promise((_, rej) => {
+                anchorTimer = setTimeout(
+                  () => rej(new Error(`EAS continuous anchor timeout after ${anchorTimeoutMs}ms`)),
+                  anchorTimeoutMs,
+                );
+              }),
+            ])) as { uid: string | null };
+            if (res?.uid && !res.uid.startsWith('0x0000')) {
+              await config.supabase.from('repid_zkp_proofs')
+                .update({ eas_attestation_uid: res.uid, eas_schema: 'constitutional-compliance-v1' })
+                .eq('zk_commitment', args.commitment)
+                .is('eas_attestation_uid', null);
+              console.log(`[ProofDrain][W3-EAS] continuous anchor uid=${res.uid} agent=${args.agentId} scheme=${args.scheme}`);
+            }
+          }
+        } catch (e: any) {
+          console.warn('[ProofDrain][W3-EAS] continuous anchor non-fatal:', e?.message || e);
+        } finally {
+          if (anchorTimer) clearTimeout(anchorTimer); // RULE-8: release the timer
+        }
+      }
     } catch (e) {
       console.error(
         `[ProofDrain] insertCanonicalProof threw for ${args.agentId} (queue stays completed):`,
