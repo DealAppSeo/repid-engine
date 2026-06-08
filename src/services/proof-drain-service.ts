@@ -92,6 +92,12 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   // Plonky3 pin is deployed + A2/A3 re-verified on the pinned prover, then flip the flag. New-events-only
   // (no backfill of existing rows).
   const recordRealProofFields = (process.env.PROOF_DRAIN_RECORD_REAL_FIELDS ?? 'false').toLowerCase() === 'true';
+  // RULE-8 (Unbounded Wait Disease, W1 fix): the prover httpFetch had no per-attempt
+  // timeout, so a single hung prover call wedged the drain loop forever (the stall that
+  // froze all proofs at 2026-06-07 09:58, right after the one real proof). Bound every
+  // prover call with an AbortController; on abort it throws → withRetry backs off → the
+  // circuit breaker trips, instead of the loop hanging.
+  const proverTimeoutMs = Number(process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS ?? 20000);
   const routeProof = config.routeProofRequestImpl ?? routeProofRequest;
 
   const state: ProofDrainServiceStatus = {
@@ -408,21 +414,33 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     // commitment below to guarantee uniqueness regardless of the prover.
     const nonce = generateNonce();
     const res = await withRetry(`zkp.prove[${job.job_id}]`, async () => {
-      const r = await httpFetch(`${config.zkpServiceUrl}/zkp/repid-proof`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agent_id: job.agent_id,
-          score,
-          nonce,
-          metadata: { job_id: job.job_id }
-        })
-      });
-      if (!r.ok) {
-        const text = await r.text().catch(() => '');
-        throw new Error(`HTTP ${r.status}: ${text}`);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), proverTimeoutMs);
+      try {
+        const r = await httpFetch(`${config.zkpServiceUrl}/zkp/repid-proof`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent_id: job.agent_id,
+            score,
+            nonce,
+            metadata: { job_id: job.job_id }
+          }),
+          signal: controller.signal
+        });
+        if (!r.ok) {
+          const text = await r.text().catch(() => '');
+          throw new Error(`HTTP ${r.status}: ${text}`);
+        }
+        return r;
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === 'AbortError') {
+          throw new Error(`prover timeout after ${proverTimeoutMs}ms (zkp.prove[${job.job_id}])`);
+        }
+        throw e;
+      } finally {
+        clearTimeout(timer); // RULE-8: release the timer regardless of outcome
       }
-      return r;
     });
 
     // Phase 7 Gap A — parse the FULL prover response (was discarding everything

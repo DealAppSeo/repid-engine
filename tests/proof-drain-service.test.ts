@@ -278,4 +278,54 @@ describe('proof-drain-service', () => {
     expect(hitl.reason).toBe('worker_stalled');
     expect((hitl.context as any).queueDepth).toBeGreaterThan(0);
   }, 10000);
+
+  // W1 (RULE-8): a prover that never responds must NOT wedge the drain. Each prover call
+  // is bounded by PROOF_DRAIN_PROVER_TIMEOUT_MS; on timeout it aborts → withRetry retries →
+  // the job is marked failed and drainOnce RESOLVES (instead of hanging forever, the stall
+  // that froze all proofs at 2026-06-07 09:58).
+  test('W1: hung prover call times out and does not wedge the drain', async () => {
+    const prev = process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS;
+    process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS = '50';
+    try {
+      const state: MockSupabaseState = {
+        pending: [{ id: 'r1', job_id: 'j1', agent_id: 'a1', event_id: 'e1', status: 'pending' }],
+        scoreById: { e1: 1500 },
+        updates: [],
+        hitlInserts: []
+      };
+      const supabase = makeMockSupabase(state);
+      // A prover that never answers — only settles by rejecting when its AbortSignal fires.
+      const hungFetch = jest.fn((_url: string, opts: any) => new Promise((_resolve, reject) => {
+        const signal = opts?.signal;
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            const e = new Error('aborted'); e.name = 'AbortError'; reject(e);
+          });
+        }
+      }));
+
+      const svc = createProofDrainService({
+        supabase,
+        pgQueryImpl: (async () => state.pending) as any,
+        zkpServiceUrl: 'http://zkp.test',
+        routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
+        fetchImpl: hungFetch as any
+      });
+
+      const p = svc.drainOnce();
+      // Drive the per-attempt 50ms timeouts + the 1s/4s/16s/64s retry backoffs.
+      await jest.advanceTimersByTimeAsync(90_000);
+      const result = await p;
+
+      expect(result.jobsFailed).toBe(1);
+      expect(result.jobsCompleted).toBe(0);
+      // 5 bounded attempts were made (MAX_RETRY_ATTEMPTS) — none hung.
+      expect(hungFetch).toHaveBeenCalledTimes(5);
+      // job was marked failed (not left dangling).
+      expect(state.updates.some(u => u.id === 'r1' && (u.patch as any).status === 'failed')).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS;
+      else process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS = prev;
+    }
+  }, 15000);
 });
