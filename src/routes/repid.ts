@@ -126,6 +126,104 @@ repidPublicRouter.get('/repid/proof/:job_id', async (req: Request, res: Response
   return res.json(data);
 });
 
+// GET /api/v1/repid/:agentId/proof — the agent's latest cryptographically-real RepID range
+// proof, shaped for client-side WASM verification (W4 / @hyperdag/trustshell presentProof()).
+// Returns proof_bytes (base64) + the full statement {agent_id, repid_score, threshold, tier}
+// the agent-bound verifier needs, plus the EAS anchor (if any). Public surface (proofs are
+// accountability-public; mounted before authMiddleware). Registered AFTER /repid/proof/:job_id
+// so the literal 'proof' second segment never shadows this one.
+repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Response) => {
+  const agentId = String(req.params.agentId ?? '');
+  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+
+  // Prefer a real, WASM-verifiable plonky3 proof; fall back to the latest row so callers
+  // can see legacy (stub) state honestly rather than a 404.
+  const base = db
+    .from('repid_zkp_proofs')
+    .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at')
+    .eq('agent_id', agentId);
+
+  let { data, error } = await base
+    .eq('scheme', 'plonky3_range_check')
+    .not('proof_bytes', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!error && !data) {
+    // No real proof yet — return the latest row of any kind (honest legacy/stub state).
+    ({ data, error } = await db
+      .from('repid_zkp_proofs')
+      .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at')
+      .eq('agent_id', agentId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle());
+  }
+
+  if (error) {
+    console.error(`[repid] proof-by-agent db error for ${agentId}: ${error.message}`);
+    return res.status(500).json({ error: 'INTERNAL', detail: error.message });
+  }
+  if (!data) return res.status(404).json({ error: 'No proof found for agent', agent_id: agentId });
+
+  const stmt = (data.statement ?? {}) as { threshold?: number; repid_score?: number };
+  const cryptographically_verifiable =
+    data.scheme === 'plonky3_range_check' && typeof data.proof_bytes === 'string' && data.proof_bytes.length > 0;
+
+  return res.json({
+    agent_id: data.agent_id,
+    scheme: data.scheme,
+    proof_type: data.proof_type,
+    // base64 proof bytes; empty string for legacy sha256 stubs (cryptographically_verifiable=false)
+    proof_bytes: data.proof_bytes ?? '',
+    // full statement shape the agent-bound WASM verifier expects
+    statement: {
+      agent_id: data.agent_id,
+      repid_score: stmt.repid_score ?? null,
+      threshold: stmt.threshold ?? null,
+      tier: data.tier_proven,
+    },
+    eas: {
+      attestation_uid: data.eas_attestation_uid ?? null,
+      schema: data.eas_schema ?? null,
+      anchored: !!data.eas_attestation_uid,
+      network: 'base-sepolia',
+    },
+    cryptographically_verifiable,
+    created_at: data.created_at,
+  });
+});
+
+// GET /api/v1/meta/trust — D-022 data residuals for trustshell.dev: a glossary of the
+// ecosystem acronyms + the testnet status the site can render as a status field. Static,
+// public, cache-friendly. (UI/copy is v0/Sean — this is the data contract only.)
+repidPublicRouter.get('/meta/trust', async (_req: Request, res: Response) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  return res.json({
+    network_status: {
+      network: 'base-sepolia',
+      status: 'testnet',
+      chain_id: 84532,
+      note: 'All RepID proofs and EAS attestations are on Base Sepolia testnet — not mainnet.',
+    },
+    glossary: {
+      HAL: 'Hallucination Abatement Layer — a cross-provider quorum that flags or vetoes ungrounded model output.',
+      RepID: 'Reputation Identity — an agent’s behavioral reputation score (0–10000) earned through verified outcomes.',
+      ZKP: 'Zero-Knowledge Proof — a Plonky3 STARK proving an agent’s RepID exceeds a threshold without revealing the score.',
+      'agent-bound proof': 'A RepID proof whose public statement includes agent_id, so it cannot be replayed for another agent.',
+      EAS: 'Ethereum Attestation Service — where RepID proofs are anchored on-chain (Base Sepolia).',
+      'ERC-8004': 'The trustless-agents reputation standard the on-chain reputation writes conform to.',
+      tier: 'PROBATIONARY (0–499) · EARNING (500–999) · ESTABLISHED (1000–4999) · AUTONOMOUS (5000–7999) · VETERAN (8000–10000).',
+    },
+    verifier: {
+      package: '@hyperdag/proof-verifier',
+      verify_client_side: true,
+      note: 'Proofs are verifiable in-browser with the WASM verifier — trust math, not the server.',
+    },
+  });
+});
+
 // POST /api/v1/prove-repid — generate a ZKP RepID proof (auth required)
 repidAdminRouter.post('/prove-repid', async (req: Request, res: Response) => {
   const { agent_id, requester_pubkey, requested_tier } = req.body;
