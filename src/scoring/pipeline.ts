@@ -106,9 +106,48 @@ export class NotFoundError extends Error {
   }
 }
 
-export function deriveHalDecision(hal_score: number, vetoed: boolean, comma_severity?: string | null): HALDecision {
-  // vetoed boolean OR critical Comma BFT severity → 'vetoed'
-  if (vetoed || comma_severity === 'critical') {
+// Canonical HAL test/eval categories. Single source so the decision path and the
+// hal_classifications logging never diverge on category naming.
+const HAL_CATEGORY_MAP: Record<string, string> = {
+  factual: 'factual',
+  opinion: 'opinion',
+  math: 'math',
+  code: 'code',
+  creative: 'creative',
+  'time-sensitive': 'time-sensitive',
+};
+
+// Categories where a hard "hallucination veto" is ill-defined: a subjective opinion or a
+// temporally-relative claim is not a factual hallucination. On the labeled 350-case corpus
+// these two categories drove 46 of 71 false vetoes (65%), while math/code/factual stayed
+// precise (math F1 0.94, zero false vetoes). B1 routes them to a soft 'flagged' instead.
+const HAL_SOFT_VETO_CATEGORIES = new Set(['opinion', 'time-sensitive']);
+
+export function resolveHalCategory(taskDomain?: string | null): string {
+  const clean = String(taskDomain || '').toLowerCase().trim();
+  return HAL_CATEGORY_MAP[clean] || 'factual';
+}
+
+export function deriveHalDecision(
+  hal_score: number,
+  vetoed: boolean,
+  comma_severity?: string | null,
+  category?: string | null,
+): HALDecision {
+  // Critical Comma-BFT dissonance is an integrity signal — always a hard veto,
+  // independent of category.
+  if (comma_severity === 'critical') {
+    return 'vetoed';
+  }
+  // Category-aware soft veto (B1, gated by HAL_CATEGORY_SOFT_VETO; default OFF = no
+  // behavior change). For opinion/time-sensitive a HAL veto is downgraded to 'flagged'
+  // (monitor, no hard block / no -10 penalty); checkable categories keep hard-veto.
+  if (vetoed) {
+    const softVetoEnabled = process.env.HAL_CATEGORY_SOFT_VETO === 'true';
+    const isSoftCategory = !!category && HAL_SOFT_VETO_CATEGORIES.has(category);
+    if (softVetoEnabled && isSoftCategory) {
+      return 'flagged';
+    }
     return 'vetoed';
   }
   // borderline (no penalty applied, but flagged for monitoring)
@@ -235,7 +274,8 @@ export async function runScoreEvent(
     vetoed = false;
   }
 
-  const decision: HALDecision = halError ? 'flagged' : deriveHalDecision(hal_score, vetoed, signals.comma_severity as string | null);
+  const halCategory = resolveHalCategory(input.task_domain);
+  const decision: HALDecision = halError ? 'flagged' : deriveHalDecision(hal_score, vetoed, signals.comma_severity as string | null, halCategory);
 
   // hallucination_caught: TRUE only when the DISCRIMINATIVE fact-check path (strictness 2) grounded
   // the veto in actual provider FALSE verdicts. The strictness-1 extractor is style-only (no ground
@@ -390,16 +430,7 @@ export async function runScoreEvent(
   // Write to hal_classifications to record the HAL inference so /api/v1/hal/stats reports it
   try {
     const promptHash = crypto.createHash('sha256').update(input.prompt).digest('hex').slice(0, 32);
-    const categoryMapping: Record<string, string> = {
-      'factual': 'factual',
-      'opinion': 'opinion',
-      'math': 'math',
-      'code': 'code',
-      'creative': 'creative',
-      'time-sensitive': 'time-sensitive'
-    };
-    const taskTypeClean = String(input.task_domain || '').toLowerCase().trim();
-    const category = categoryMapping[taskTypeClean] || 'factual';
+    const category = resolveHalCategory(input.task_domain);
 
     await db.from('hal_classifications').insert({
       prompt_hash: promptHash,
@@ -529,7 +560,7 @@ export async function applyValidationEvent(
           0.1 * (1 - signals.scope_appropriateness)
         ) * (531441 / 524288);
         halScore = Math.min(1, scoreVal);
-        halDecision = deriveHalDecision(halScore, halScore >= 0.25);
+        halDecision = deriveHalDecision(halScore, halScore >= 0.25, null, resolveHalCategory(taskDomain));
         enrichedMetadata = {
           ...metadata,
           hal_signals: signals
