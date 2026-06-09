@@ -9,7 +9,7 @@
  * Tuning thresholds will move in Sprint D2.
  */
 
-export type HALDecision = 'clean' | 'flagged' | 'vetoed';
+export type HALDecision = 'clean' | 'flagged' | 'vetoed' | 'abstain';
 
 export interface DeltaInput {
   hal_score: number;          // 0..1 (post-A6); pre-A6 may emit dissonance scale
@@ -45,9 +45,18 @@ export function computeDelta(input: DeltaInput): DeltaOutput {
   if (hal_decision === 'vetoed') {
     delta_calculated = -10;
     reason = 'HAL vetoed: hallucination or constitutional block';
+  } else if (hal_decision === 'abstain') {
+    // A2 — HAL abstained: not a checkable claim (opinion/question, no FALSE quorum). No truth
+    // was asserted, so no reward and NO penalty (Micah 6:8 humility — don't judge where there's
+    // nothing to judge). Kills the documented opinion/time-sensitive over-penalization.
+    delta_calculated = 0;
+    reason = 'HAL abstained: not a checkable factual claim — no delta';
   } else if (hal_decision === 'flagged') {
-    delta_calculated = -2;
-    reason = 'HAL flagged: borderline signal';
+    // A2 — flagged = a single FALSE with no independent quorum (or borderline score). Surfaced for
+    // review but NOT a confirmed error, so it no longer carries a penalty (was -2). Only a real
+    // FALSE quorum ('vetoed') costs RepID.
+    delta_calculated = 0;
+    reason = 'HAL flagged: unconfirmed (no FALSE quorum) — surfaced, no delta';
   } else {
     // clean
     const score = Number.isFinite(hal_score) ? hal_score : 0.5;

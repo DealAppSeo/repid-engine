@@ -175,3 +175,41 @@ describe('verdict-driven gate (CC1 / W6) — veto requires a FALSE quorum', () =
     expect(r.decision).toBe('flagged');
   });
 });
+
+describe('A1 verdict-count decision mode (HAL_DECISION_MODE=verdict)', () => {
+  const prev = process.env.HAL_DECISION_MODE;
+  beforeEach(() => { process.env.HAL_DECISION_MODE = 'verdict'; });
+  afterEach(() => { if (prev === undefined) delete process.env.HAL_DECISION_MODE; else process.env.HAL_DECISION_MODE = prev; });
+
+  test('2 FALSE families → vetoed with a human-readable reason', async () => {
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 100 }, m3: { verdict: 'TRUE', confidence: 80 } };
+    const r = await factCheck('The Mona Lisa was painted by Picasso.', P);
+    expect(r.decision).toBe('vetoed');
+    expect(r.decision_reason).toMatch(/2 of 3 independent model families judged this claim FALSE/);
+  });
+
+  test('2 FALSE from the SAME family → NOT a quorum → flagged (independence)', async () => {
+    const sameFam = [
+      { name: 'pa', endpoint: 'http://x/a', apiKey: 'k', model: 'llama-3-a' },
+      { name: 'pb', endpoint: 'http://x/b', apiKey: 'k', model: 'llama-3-b' }, // same family 'llama'
+      { name: 'pc', endpoint: 'http://x/c', apiKey: 'k', model: 'gemini-2.5' },
+    ];
+    byModel = { 'llama-3-a': { verdict: 'FALSE', confidence: 100 }, 'llama-3-b': { verdict: 'FALSE', confidence: 100 }, 'gemini-2.5': { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('x', sameFam as any);
+    expect(r.decision).toBe('flagged'); // only 1 distinct FALSE family (llama) → no quorum
+    expect(r.decision_reason).toMatch(/Only 1 family judged this FALSE/);
+  });
+
+  test('all UNCERTAIN → abstain (not a checkable claim)', async () => {
+    byModel = { m1: { verdict: 'UNCERTAIN', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Jazz is the most beautiful music.', P);
+    expect(r.decision).toBe('abstain');
+    expect(r.decision_reason).toMatch(/not a checkable factual claim/);
+  });
+
+  test('TRUE quorum, no FALSE → clean', async () => {
+    byModel = { m1: { verdict: 'TRUE', confidence: 100 }, m2: { verdict: 'TRUE', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Paris is the capital of France.', P);
+    expect(r.decision).toBe('clean');
+  });
+});

@@ -480,7 +480,7 @@ export async function applyValidationEvent(
   event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY' | 'SERVICE_FULFILLED' | 'SERVICE_SATISFIED',
   delta: number,
   metadata: Record<string, any> = {},
-  halOverride?: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any }
+  halOverride?: { hal_score: number; hal_decision: HALDecision; hal_signals?: any }
 ) {
   const agent = await loadAgent(agent_id);
   if (!agent) throw new Error(`Agent not found: ${agent_id}`);
@@ -497,7 +497,7 @@ export async function applyValidationEvent(
   // tracks hal_decision (was always 'clean'); with no override it stays 'clean'.
   let certaintyAtClaim: number | null = null;
   let halScore = halOverride?.hal_score ?? 0.5;
-  let halDecision = halOverride?.hal_decision ?? 'clean';
+  let halDecision: HALDecision = halOverride?.hal_decision ?? 'clean';
   let enrichedMetadata = halOverride?.hal_signals
     ? { ...metadata, hal_signals: halOverride.hal_signals }
     : metadata;
