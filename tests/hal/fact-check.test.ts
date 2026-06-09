@@ -130,3 +130,48 @@ describe('factCheck — env thresholds + provider builder', () => {
     if (!save.fw_en) delete process.env.HAL_S2_ENABLE_FIREWORKS;
   });
 });
+
+describe('verdict-driven gate (CC1 / W6) — veto requires a FALSE quorum', () => {
+  const prev = process.env.HAL_VERDICT_DRIVEN_VETO;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.HAL_VERDICT_DRIVEN_VETO;
+    else process.env.HAL_VERDICT_DRIVEN_VETO = prev;
+  });
+
+  test('flag OFF: all-UNCERTAIN still over-vetoes (score 0.5) — zero behavior change', async () => {
+    delete process.env.HAL_VERDICT_DRIVEN_VETO;
+    byModel = { m1: { verdict: 'UNCERTAIN', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Jazz is the most beautiful music.', P);
+    expect(r.hal_score).toBeCloseTo(0.5, 5);
+    expect(r.decision).toBe('vetoed'); // the W6 over-veto, preserved when the gate is OFF
+  });
+
+  test('flag ON: all-UNCERTAIN (opinion/question) → flagged, not vetoed', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'UNCERTAIN', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Jazz is the most beautiful music.', P);
+    expect(r.decision).toBe('flagged');
+    expect(r.quorum_note).toMatch(/no FALSE quorum/);
+  });
+
+  test('flag ON: FALSE quorum (3 FALSE) → still vetoed', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 90 }, m3: { verdict: 'FALSE', confidence: 100 } };
+    const r = await factCheck('The Mona Lisa was painted by Picasso.', P);
+    expect(r.decision).toBe('vetoed');
+  });
+
+  test('flag ON: 2 FALSE + 1 UNCERTAIN → FALSE quorum → vetoed', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('x', P);
+    expect(r.decision).toBe('vetoed');
+  });
+
+  test('flag ON: 1 FALSE + 2 UNCERTAIN → no FALSE quorum → flagged', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('x', P);
+    expect(r.decision).toBe('flagged');
+  });
+});
