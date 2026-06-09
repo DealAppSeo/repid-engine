@@ -754,6 +754,18 @@ if (!IS_TEST) {
   feedbackLoopWorker.start(60_000);
 }
 
+// A3 — boot-time HAL family-independence audit. Logs the live provider→family map and loudly
+// flags any collapse (two providers sharing a base model count as ONE quorum vote, not two).
+if (!IS_TEST) {
+  try {
+    const { assertFamilyIndependenceAtBoot } = require('./hal/fact-check');
+    assertFamilyIndependenceAtBoot();
+  } catch (e: any) {
+    console.error('[hal] family-independence audit failed at boot:', e?.message ?? e);
+    if (process.env.HAL_STRICT_FAMILY_INDEPENDENCE === 'true') throw e;
+  }
+}
+
 // Cascade Settlement Worker — the missing escrowed→fulfilled drain. The inline
 // Cascade Pickup Worker above advances pending→escrowed; nothing server-side
 // then advanced escrowed→fulfilled (only the frozen ConstitutionalAgentV4 loop

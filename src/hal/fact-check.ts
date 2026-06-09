@@ -553,3 +553,38 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
 }
+
+/**
+ * A3 — FAMILY-INDEPENDENCE AUDIT. Two providers serving the same base model FAMILY (e.g. two
+ * Llama endpoints) are ONE independent vote, not two; counting them as two would let a single
+ * model's error form a fake "quorum" and break the dissent guarantee the whole gate rests on.
+ * Returns the families that cover more than one configured provider.
+ */
+export function auditFamilyIndependence(providers: FactCheckProviderCfg[]): {
+  independent: boolean;
+  families: string[];
+  collapsed: Array<{ family: string; providers: string[] }>;
+} {
+  const byFam = new Map<string, string[]>();
+  for (const p of providers) {
+    const fam = p.family ?? familyOf(p.model);
+    byFam.set(fam, [...(byFam.get(fam) ?? []), p.name]);
+  }
+  const collapsed = [...byFam.entries()].filter(([, ps]) => ps.length > 1).map(([family, ps]) => ({ family, providers: ps }));
+  return { independent: collapsed.length === 0, families: [...byFam.keys()], collapsed };
+}
+
+/**
+ * A3 — loud boot-time assertion. Logs the live family map; on a collapse it logs a LOUD error and,
+ * when HAL_STRICT_FAMILY_INDEPENDENCE=true, throws (default = warn-not-crash so a misconfig is
+ * visible without taking the service down).
+ */
+export function assertFamilyIndependenceAtBoot(providers: FactCheckProviderCfg[] = buildFactCheckProviders()): void {
+  const a = auditFamilyIndependence(providers);
+  console.log(`[hal] fact-check quorum: ${providers.length} providers across ${a.families.length} families [${a.families.join(', ')}]`);
+  if (!a.independent) {
+    const msg = `[hal] *** FAMILY-INDEPENDENCE VIOLATION *** these families back >1 provider and count as ONE vote, not several — quorum dissent guarantee broken: ${a.collapsed.map((c) => `${c.family}=[${c.providers.join(',')}]`).join('; ')}`;
+    console.error(msg);
+    if (process.env.HAL_STRICT_FAMILY_INDEPENDENCE === 'true') throw new Error(msg);
+  }
+}
