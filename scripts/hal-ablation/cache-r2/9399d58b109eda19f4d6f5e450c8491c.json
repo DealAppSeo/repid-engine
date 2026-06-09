@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"Chameleons change colors primarily for camouflage and communication","latency_ms":232},{"provider":"groq-70b","verdict":"FALSE","confidence":90,"note":"Not only camouflage","latency_ms":163},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":925}]}

@@ -11,6 +11,10 @@ interface MockSupabaseState {
   scoreById: Record<string, number>;
   updates: Array<{ id: string; patch: Record<string, unknown> }>;
   hitlInserts: Array<Record<string, unknown>>;
+  // A5 (D-062) optional capture surfaces — undefined in legacy tests (canonical insert
+  // then falls through to the "unexpected table" throw, swallowed non-fatally as before).
+  zkpInserts?: Array<Record<string, unknown>>;
+  agentTier?: string;
 }
 
 function makeMockSupabase(state: MockSupabaseState): any {
@@ -66,6 +70,20 @@ function makeMockSupabase(state: MockSupabaseState): any {
           }
         };
       }
+      // A5 (D-062): only active when a test opts in via state.zkpInserts — legacy tests
+      // (without it) keep falling through to the throw below (canonical insert swallowed).
+      if (table === 'repid_agents' && state.zkpInserts) {
+        const agentRow = { tier: state.agentTier ?? 'ESTABLISHED', agent_name: 'test-agent' };
+        return {
+          select() { return { eq() { return { maybeSingle() { return Promise.resolve({ data: agentRow, error: null }); } }; } }; }
+        };
+      }
+      if (table === 'repid_zkp_proofs' && state.zkpInserts) {
+        return {
+          insert(row: Record<string, unknown>) { state.zkpInserts!.push(row); return Promise.resolve({ error: null }); },
+          update() { return { eq() { return { eq() { return Promise.resolve({ error: null }); }, is() { return Promise.resolve({ error: null }); } }; } }; }
+        };
+      }
       throw new Error(`unexpected table ${table}`);
     }
   };
@@ -100,6 +118,9 @@ describe('proof-drain-service', () => {
       // used to serve, so the drain behavior under test is unchanged.
       pgQueryImpl: (async () => state.pending) as any,
       zkpServiceUrl: 'http://zkp.test',
+      // routeProofRequest reaches the real `db` singleton (not this mock supabase);
+      // stub it so the drain path stays hermetic and never makes a live DB call.
+      routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
       fetchImpl: fakeFetch as any
     });
 
@@ -110,6 +131,81 @@ describe('proof-drain-service', () => {
     expect(state.updates[0].patch.status).toBe('completed');
     expect(state.updates[0].patch.proof_hash).toBe('commit-abc');
     expect(fakeFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('A5 flag ON: records prover scheme/proof_bytes/statement into repid_zkp_proofs', async () => {
+    const prev = process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+    process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = 'true';
+    try {
+      const state: MockSupabaseState = {
+        pending: [{ id: 'r9', job_id: 'j9', agent_id: 'a9', event_id: 'e9', status: 'pending' }],
+        scoreById: { e9: 2280 },
+        updates: [], hitlInserts: [], zkpInserts: [], agentTier: 'ESTABLISHED'
+      };
+      const supabase = makeMockSupabase(state);
+      const fakeFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          commitment: '0xreal', proof_type: 'plonky3_range_check', proof_bytes: 'QkFTRTY0UFJPT0Y=',
+          public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED'
+        }),
+        text: async () => ''
+      });
+      const svc = createProofDrainService({
+        supabase,
+        pgQueryImpl: (async () => state.pending) as any,
+        zkpServiceUrl: 'http://zkp.test',
+        routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
+        fetchImpl: fakeFetch as any
+      });
+      const result = await svc.drainOnce();
+      expect(result.jobsCompleted).toBe(1);
+      expect(state.zkpInserts!.length).toBe(1);
+      const row = state.zkpInserts![0]!;
+      expect(row.scheme).toBe('plonky3_range_check');
+      expect(row.proof_bytes).toBe('QkFTRTY0UFJPT0Y=');
+      expect(row.statement).toEqual({ repid_score: 2280, threshold: 999 });
+    } finally {
+      if (prev === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+      else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prev;
+    }
+  });
+
+  test('A5 flag OFF (default): canonical insert omits scheme/proof_bytes/statement', async () => {
+    const prev = process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+    delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+    try {
+      const state: MockSupabaseState = {
+        pending: [{ id: 'r10', job_id: 'j10', agent_id: 'a10', event_id: 'e10', status: 'pending' }],
+        scoreById: { e10: 2280 },
+        updates: [], hitlInserts: [], zkpInserts: [], agentTier: 'ESTABLISHED'
+      };
+      const supabase = makeMockSupabase(state);
+      const fakeFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          commitment: '0xreal', proof_type: 'plonky3_range_check', proof_bytes: 'QkFTRTY0',
+          public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED'
+        }),
+        text: async () => ''
+      });
+      const svc = createProofDrainService({
+        supabase,
+        pgQueryImpl: (async () => state.pending) as any,
+        zkpServiceUrl: 'http://zkp.test',
+        routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
+        fetchImpl: fakeFetch as any
+      });
+      await svc.drainOnce();
+      expect(state.zkpInserts!.length).toBe(1);
+      const row = state.zkpInserts![0]!;
+      expect(row.scheme).toBeUndefined();
+      expect(row.proof_bytes).toBeUndefined();
+      expect(row.statement).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+      else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prev;
+    }
   });
 
   test('retries on transient ZKP fetch failure (3 attempts)', async () => {
@@ -132,6 +228,9 @@ describe('proof-drain-service', () => {
       // used to serve, so the drain behavior under test is unchanged.
       pgQueryImpl: (async () => state.pending) as any,
       zkpServiceUrl: 'http://zkp.test',
+      // routeProofRequest reaches the real `db` singleton (not this mock supabase);
+      // stub it so the drain path stays hermetic and never makes a live DB call.
+      routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
       fetchImpl: fakeFetch as any
     });
 
@@ -179,4 +278,54 @@ describe('proof-drain-service', () => {
     expect(hitl.reason).toBe('worker_stalled');
     expect((hitl.context as any).queueDepth).toBeGreaterThan(0);
   }, 10000);
+
+  // W1 (RULE-8): a prover that never responds must NOT wedge the drain. Each prover call
+  // is bounded by PROOF_DRAIN_PROVER_TIMEOUT_MS; on timeout it aborts → withRetry retries →
+  // the job is marked failed and drainOnce RESOLVES (instead of hanging forever, the stall
+  // that froze all proofs at 2026-06-07 09:58).
+  test('W1: hung prover call times out and does not wedge the drain', async () => {
+    const prev = process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS;
+    process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS = '50';
+    try {
+      const state: MockSupabaseState = {
+        pending: [{ id: 'r1', job_id: 'j1', agent_id: 'a1', event_id: 'e1', status: 'pending' }],
+        scoreById: { e1: 1500 },
+        updates: [],
+        hitlInserts: []
+      };
+      const supabase = makeMockSupabase(state);
+      // A prover that never answers — only settles by rejecting when its AbortSignal fires.
+      const hungFetch = jest.fn((_url: string, opts: any) => new Promise((_resolve, reject) => {
+        const signal = opts?.signal;
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            const e = new Error('aborted'); e.name = 'AbortError'; reject(e);
+          });
+        }
+      }));
+
+      const svc = createProofDrainService({
+        supabase,
+        pgQueryImpl: (async () => state.pending) as any,
+        zkpServiceUrl: 'http://zkp.test',
+        routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
+        fetchImpl: hungFetch as any
+      });
+
+      const p = svc.drainOnce();
+      // Drive the per-attempt 50ms timeouts + the 1s/4s/16s/64s retry backoffs.
+      await jest.advanceTimersByTimeAsync(90_000);
+      const result = await p;
+
+      expect(result.jobsFailed).toBe(1);
+      expect(result.jobsCompleted).toBe(0);
+      // 5 bounded attempts were made (MAX_RETRY_ATTEMPTS) — none hung.
+      expect(hungFetch).toHaveBeenCalledTimes(5);
+      // job was marked failed (not left dangling).
+      expect(state.updates.some(u => u.id === 'r1' && (u.patch as any).status === 'failed')).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS;
+      else process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS = prev;
+    }
+  }, 15000);
 });

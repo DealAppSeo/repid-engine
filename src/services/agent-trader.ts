@@ -18,6 +18,7 @@
 
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
+import { todayPT } from '../lib/time';
 import { placeBet, resolveBet, signOracleOutcome } from './linked-bet-resolver';
 
 export const APM_AGENT_NAME = 'APM';
@@ -51,7 +52,7 @@ export interface UpcomingGame {
 }
 
 function dailySeed(): number {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayPT();
   let h = 0;
   for (const c of today) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return h;

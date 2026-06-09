@@ -361,6 +361,17 @@ async function callAnthropicNative(
 async function queryProvider(
   cfg: ProviderConfig, prompt: string, timeoutMs: number,
 ): Promise<ProviderAnswer> {
+  const { isProviderHealthy, recordProviderCall } = require('../cache/provider-health');
+  
+  // Check provider health before making the call
+  const healthy = await isProviderHealthy(cfg.provider);
+  if (!healthy) {
+    return {
+      provider: cfg.provider, squad: cfg.squad, model: cfg.model, answer: '',
+      latency_ms: 0, error: `provider ${cfg.provider} is marked unhealthy in cache`,
+    };
+  }
+
   const start = Date.now();
   const call_id = crypto.randomUUID();
   const tier = cfg.provider === 'anthropic' || cfg.provider === 'openai' ? '1' : '0a';
@@ -378,6 +389,9 @@ async function queryProvider(
     const tokensIn = res.usage?.prompt_tokens || 0;
     const tokensOut = res.usage?.completion_tokens || 0;
     const cost_usd = calculateCost(cfg.provider, cfg.model, tokensIn, tokensOut);
+
+    // Record success in provider health cache
+    await recordProviderCall(cfg.provider, true, latency_ms);
 
     logLlmCall({
       call_id,
@@ -398,6 +412,10 @@ async function queryProvider(
     };
   } catch (e: any) {
     const latency_ms = Date.now() - start;
+    
+    // Record failure in provider health cache
+    await recordProviderCall(cfg.provider, false, latency_ms);
+
     logLlmCall({
       call_id,
       provider: cfg.provider,
@@ -617,20 +635,65 @@ async function compareViaHttp(
 
 export async function checkCrossLLM(
   prompt: string,
-  opts: { persist?: boolean; timeoutMs?: number } = {},
+  opts: { persist?: boolean; timeoutMs?: number; agent?: string; agentId?: string } = {},
 ): Promise<CrossLLMResult | null> {
   const persistFlag = opts.persist !== false;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const start = Date.now();
+  const promptHash = hashPrompt(prompt);
+
+  // 1. Check semantic-cache first
+  const { getCachedSemanticResponse, cacheSemanticResponse } = require('../cache/semantic-cache');
+  try {
+    const cached = await getCachedSemanticResponse(prompt);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed === 'object' && parsed.answers) {
+        console.log(`[cross-llm-client] Semantic cache HIT for prompt: ${promptHash}`);
+        return parsed as CrossLLMResult;
+      }
+    }
+  } catch (err) {
+    console.warn('[cross-llm-client] Semantic cache lookup error:', err);
+  }
+
+  // 2. Check wisdom-cache if agent is specified
+  const agentIdentifier = opts.agent || opts.agentId;
+  if (agentIdentifier) {
+    const { getCachedWisdom } = require('../cache/wisdom-cache');
+    try {
+      const cachedWisdom = await getCachedWisdom(agentIdentifier, promptHash);
+      if (cachedWisdom) {
+        const parsed = JSON.parse(cachedWisdom);
+        if (parsed && typeof parsed === 'object' && parsed.answers) {
+          console.log(`[cross-llm-client] Wisdom cache HIT for agent ${agentIdentifier}: ${promptHash}`);
+          return parsed as CrossLLMResult;
+        }
+      }
+    } catch (err) {
+      console.warn('[cross-llm-client] Wisdom cache lookup error:', err);
+    }
+  }
 
   const httpUrl = process.env.CROSS_LLM_VERIFIER_URL;
   if (httpUrl) {
     const r = await compareViaHttp(httpUrl, prompt, timeoutMs);
-    if (r) return r;
+    if (r) {
+      // Cache the HTTP result
+      try {
+        await cacheSemanticResponse(prompt, JSON.stringify(r), r.answers[0]?.provider || 'http-cross-llm');
+        if (agentIdentifier) {
+          const { cacheWisdom } = require('../cache/wisdom-cache');
+          await cacheWisdom(agentIdentifier, promptHash, JSON.stringify(r));
+        }
+      } catch (err) {
+        console.warn('[cross-llm-client] Cache write error for HTTP result:', err);
+      }
+      return r;
+    }
     // fall through to in-process on HTTP failure
   }
 
-  const promptHash = hashPrompt(prompt);
   const providers = resolveTriadProviders();
   const openaiKey = process.env.OPENAI_API_KEY ?? '';
 
@@ -682,6 +745,18 @@ export async function checkCrossLLM(
       latency_ms: Date.now() - start,
     };
     if (persistFlag) void persist(promptHash, result);
+
+    // Cache the degenerate result too to avoid repeat empty calls
+    try {
+      await cacheSemanticResponse(prompt, JSON.stringify(result), 'fallback');
+      if (agentIdentifier) {
+        const { cacheWisdom } = require('../cache/wisdom-cache');
+        await cacheWisdom(agentIdentifier, promptHash, JSON.stringify(result));
+      }
+    } catch (err) {
+      console.warn('[cross-llm-client] Degenerate cache write error:', err);
+    }
+
     return result;
   }
 
@@ -706,6 +781,18 @@ export async function checkCrossLLM(
     latency_ms: Date.now() - start,
   };
   if (persistFlag) void persist(promptHash, result);
+
+  // Write finalized results to caches
+  try {
+    await cacheSemanticResponse(prompt, JSON.stringify(result), result.answers[0]?.provider || 'cross-llm');
+    if (agentIdentifier) {
+      const { cacheWisdom } = require('../cache/wisdom-cache');
+      await cacheWisdom(agentIdentifier, promptHash, JSON.stringify(result));
+    }
+  } catch (err) {
+    console.warn('[cross-llm-client] Final cache write error:', err);
+  }
+
   return result;
 }
 

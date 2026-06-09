@@ -64,7 +64,7 @@ export function recoverProviders(): void {
 }
 
 // Background poller
-setInterval(recoverProviders, 30000);
+setInterval(recoverProviders, 30000).unref();
 
 export function getAllHealthStates() {
   const out: Record<string, any> = {};

@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"Reentrancy vulnerability definition is accurate","latency_ms":194},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"Correct definition","latency_ms":167},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":1285}]}
