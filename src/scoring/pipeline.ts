@@ -299,6 +299,11 @@ export async function runScoreEvent(
     effectiveDeltaApplied = 0;
     penaltySuppressed = true;
   }
+  // A2: a grounded veto neutralized for lack of quorum is also a suppressed penalty for
+  // observability — the would-be -10 didn't apply. (After A2, scoringDecision='flagged' computes
+  // to 0 directly rather than -2-then-suppress, so set the flag explicitly to keep the metadata
+  // — suppressed_reason='quorum_unavailable', penalty_suppressed=true — stable.)
+  if (quorumUnavailable) penaltySuppressed = true;
 
   const old_repid = agent.current_repid;
   const new_repid = old_repid + effectiveDeltaApplied;
