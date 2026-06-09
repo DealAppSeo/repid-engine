@@ -69,6 +69,10 @@ export type Verdict = 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'ERROR';
 
 export interface ProviderVerdict {
   provider: string;
+  // CC2: model is a first-class, declared field so the per-provider model string survives the
+  // verdicts -> provider_responses -> hal_validation_runs path (the 06-08 model='unknown' was a
+  // stale branch that predated model plumbing; declaring it here prevents a silent future drop).
+  model?: string;
   verdict: Verdict;
   confidence: number; // 0..100
   note?: string;
@@ -210,7 +214,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         error_message: `HTTP ${res.status}: ${body.slice(0, 120)}`,
         task_hint: 'hal_fact_check', quorum_id: quorumId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
-      return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
+      return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
     }
     const data: any = await res.json();
     const msg = data?.choices?.[0]?.message ?? {};
@@ -236,7 +240,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         error_message: 'empty content',
         task_hint: 'hal_fact_check', quorum_id: quorumId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
-      return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
+      return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
     }
     
     logLlmCall({
@@ -270,7 +274,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       error_message: error,
       task_hint: 'hal_fact_check', quorum_id: quorumId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
-    return { provider: cfg.name, verdict: 'ERROR', confidence: 0, error, latency_ms };
+    return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error, latency_ms };
   } finally {
     clearTimeout(timer);
   }
@@ -331,7 +335,7 @@ export async function factCheck(
   const settle = async (ps: FactCheckProviderCfg[]): Promise<ProviderVerdict[]> => {
     const s = await Promise.allSettled(ps.map(callOne));
     return s.map((r, i) => r.status === 'fulfilled' ? r.value
-      : { provider: ps[i]!.name, verdict: 'ERROR' as Verdict, confidence: 0, error: String((r as PromiseRejectedResult).reason), latency_ms: 0 });
+      : { provider: ps[i]!.name, model: ps[i]!.model, verdict: 'ERROR' as Verdict, confidence: 0, error: String((r as PromiseRejectedResult).reason), latency_ms: 0 });
   };
   const distinctFamilies = (vs: ProviderVerdict[]) =>
     new Set(vs.filter((v) => v.verdict !== 'ERROR').map((v) => familyByName.get(v.provider) ?? v.provider)).size;
