@@ -9,19 +9,26 @@ async function main() {
   console.log("🚀 Starting HAL Validation Audit & Sweep...");
   const runId = crypto.randomUUID();
 
-  // 1. Fetch test cases for the 5 target categories
+  // 1. Fetch test cases for the 5 target categories.
+  //    CC3: --source <tag> restricts to a corpus version (e.g. the T12-cleaned set
+  //    'source=t12-2026-06-08') so GA measures on the VALIDATED corpus, not the contaminated one
+  //    (W6). Omit --source to run all. The chosen corpus tag is logged for reproducibility.
   const categories = ['math', 'code', 'opinion', 'creative', 'time-sensitive'];
-  const { data: cases, error } = await db
+  const srcIdx = process.argv.indexOf('--source');
+  const sourceFilter = srcIdx >= 0 && srcIdx + 1 < process.argv.length ? process.argv[srcIdx + 1] : undefined;
+  let q = db
     .from('hal_test_cases')
-    .select('id, prompt_text, category, expected_decision, expected_hallucination, difficulty')
+    .select('id, prompt_text, category, expected_decision, expected_hallucination, difficulty, source')
     .in('category', categories);
+  if (sourceFilter) q = q.eq('source', sourceFilter);
+  const { data: cases, error } = await q;
 
   if (error || !cases) {
     console.error("Failed to fetch test cases:", error?.message);
     process.exit(1);
   }
 
-  console.log(`Fetched ${cases.length} test cases.`);
+  console.log(`Fetched ${cases.length} test cases${sourceFilter ? ` (corpus source='${sourceFilter}')` : ' (all sources)'}.`);
 
   const results: any[] = [];
 
