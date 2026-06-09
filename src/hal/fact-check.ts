@@ -431,6 +431,27 @@ export async function factCheck(
     quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
   }
 
+  // CC1 verdict-driven gate (W6 fix, gated by HAL_VERDICT_DRIVEN_VETO, default OFF). A hard veto
+  // must rest on a cross-provider FALSE quorum (a factual error multiple independent families
+  // agree on), NOT merely hal_score >= vetoThreshold. The score path over-vetoes UNCERTAIN-dominated
+  // input: every UNCERTAIN verdict scores 0.5 (providerRisk), so an all-UNCERTAIN deliverable
+  // (a subjective opinion, or a question with no assertion) lands at hal_score 0.5 == vetoThreshold
+  // and was vetoed — the opinion/time-sensitive over-veto W6 found. With the gate ON, a 'vetoed'
+  // baseDecision with no FALSE quorum is downgraded to 'flagged' (surfaced, no hard veto / -10).
+  // Factual errors (math/code/factual) still produce FALSE verdicts → FALSE quorum → veto stays.
+  // This is verdict-driven, NOT category-driven (HAL_CATEGORY_SOFT_VETO stays OFF — the corpus
+  // "opinion" category is contaminated with mislabeled false facts that must keep hard-vetoing).
+  if (process.env.HAL_VERDICT_DRIVEN_VETO === 'true' && decision === 'vetoed') {
+    const falseFamilies = new Set(
+      ok.filter((v) => v.verdict === 'FALSE').map((v) => familyByName.get(v.provider) ?? v.provider),
+    ).size;
+    const falseQuorum = familyAware ? falseFamilies : ok.filter((v) => v.verdict === 'FALSE').length;
+    if (falseQuorum < MIN_QUORUM_FOR_VETO) {
+      decision = 'flagged';
+      quorum_note = `Verdict-driven gate: no FALSE quorum (${falseQuorum} FALSE ${familyAware ? 'famil' + (falseQuorum === 1 ? 'y' : 'ies') : 'provider' + (falseQuorum === 1 ? '' : 's')} < ${MIN_QUORUM_FOR_VETO}); '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'flagged' — UNCERTAIN/opinion, not a confirmed factual error.`;
+    }
+  }
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
