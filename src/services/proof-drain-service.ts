@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
+import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
+import { routeProofRequest } from '../zkp/proof-router'; // S-ONCHAIN: routing classification (owned)
+import type { RouteDecision } from '../zkp/proof-router';
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -13,6 +16,12 @@ export interface ProofDrainServiceConfig {
   // PostgREST bypass (2026-05-21) — injectable direct-pg query fn for the hot
   // fetchPendingBatch poll. Defaults to the real pgQuery; tests pass a mock.
   pgQueryImpl?: typeof pgQuery;
+  // S-ONCHAIN routing-log classifier. routeProofRequest reaches the real `db`
+  // singleton (not config.supabase), so without injection a unit test that mocks
+  // supabase still makes a live DB round-trip here — under fake timers that hangs
+  // the drain (proof-drain-service.test 5s timeout). Inject a stub in tests;
+  // defaults to the real router so production behaviour is unchanged.
+  routeProofRequestImpl?: (proofType: string, context?: { agentRepId?: number; sensitivityHint?: number }) => Promise<RouteDecision>;
 }
 
 export interface ProofDrainServiceStatus {
@@ -75,6 +84,21 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   const stallThresholdMs = config.stallThresholdMs ?? DEFAULT_PROOF_DRAIN_STALL_MS;
   const httpFetch = config.fetchImpl ?? fetch;
   const pgq = config.pgQueryImpl ?? pgQuery;
+
+  // A5 (D-062): when ON, the canonical repid_zkp_proofs insert also records the prover's REAL
+  // scheme (proof_type, e.g. 'plonky3_range_check'), proof_bytes, and statement {repid_score, threshold}
+  // so each row is independently WASM-verifiable (hyperdag-proof-verifier) — distinguishing real
+  // Plonky3 rows from legacy sha256 stubs. Default OFF: behavior is byte-identical to today until the
+  // Plonky3 pin is deployed + A2/A3 re-verified on the pinned prover, then flip the flag. New-events-only
+  // (no backfill of existing rows).
+  const recordRealProofFields = (process.env.PROOF_DRAIN_RECORD_REAL_FIELDS ?? 'false').toLowerCase() === 'true';
+  // RULE-8 (Unbounded Wait Disease, W1 fix): the prover httpFetch had no per-attempt
+  // timeout, so a single hung prover call wedged the drain loop forever (the stall that
+  // froze all proofs at 2026-06-07 09:58, right after the one real proof). Bound every
+  // prover call with an AbortController; on abort it throws → withRetry backs off → the
+  // circuit breaker trips, instead of the loop hanging.
+  const proverTimeoutMs = Number(process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS ?? 20000);
+  const routeProof = config.routeProofRequestImpl ?? routeProofRequest;
 
   const state: ProofDrainServiceStatus = {
     status: 'stopped',
@@ -195,6 +219,9 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     agentId: string;
     commitment: string;
     merkleRoot: string | null;
+    scheme?: string | null;
+    proofBytes?: string | null;
+    statement?: Record<string, unknown> | null;
   }): Promise<void> {
     try {
       let tierProven = 'PROBATIONARY';
@@ -213,7 +240,11 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         console.warn(`[ProofDrain] tier lookup threw for ${args.agentId}:`, e instanceof Error ? e.message : e);
       }
 
-      const { error } = await config.supabase.from('repid_zkp_proofs').insert({
+      // S-ONCHAIN Phase 3: log routing decision for this proof (even for drain output)
+      const decision = await routeProof('POSTCARD', { agentRepId: tierProven === 'VETERAN' ? 8000 : 1000 });
+      console.log(`[ProofDrain] routing for proof: ${decision.route_to} (${decision.reason})`);
+
+      const insertRow: Record<string, unknown> = {
         agent_id: args.agentId,
         proof_type: 'POSTCARD',
         tier_proven: tierProven,
@@ -222,13 +253,119 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         // eas_attestation_uid: NULL — EAS flow is V1.x
         // eas_schema: defaults to 'constitutional-compliance-v1'
         // created_at: defaults to NOW()
-      });
+      };
+      // A5 (D-062), flag-gated: record the prover's real scheme/proof_bytes/statement so the
+      // row is independently WASM-verifiable. Off by default → insert is byte-identical to before.
+      if (recordRealProofFields) {
+        if (args.scheme) insertRow.scheme = args.scheme;
+        if (args.proofBytes) insertRow.proof_bytes = args.proofBytes;
+        if (args.statement) insertRow.statement = args.statement;
+      }
+      const { error } = await config.supabase.from('repid_zkp_proofs').insert(insertRow as any);
       if (error) {
         console.error(
           `[ProofDrain] repid_zkp_proofs INSERT failed for ${args.agentId} (queue stays completed):`,
           error.message,
           error
         );
+      } else if (args.merkleRoot) {
+        // S-ONCHAIN Phase 2: wire real EAS on Base Sepolia for qualifying proofs (those with merkle_root from drain, e.g. tier promotions).
+        // Gate: only threshold/anchored ones to control cost. Update row with uid + schema so presentProof() can return honest on-chain ref.
+        try {
+          const res = await easService.attestProof({
+            proofId: 0,
+            agentId: args.agentId,
+            tier: tierProven,
+            merkleRoot: args.merkleRoot,
+            repidSnapshot: 0,
+            proofType: 'POSTCARD'
+          });
+          const uid = res?.uid;
+          if (uid && !uid.startsWith('0x0000')) {
+            await config.supabase.from('repid_zkp_proofs')
+              .update({ eas_attestation_uid: uid, eas_schema: 'constitutional-compliance-v1' })
+              .eq('agent_id', args.agentId)
+              .eq('merkle_root', args.merkleRoot);
+            console.log(`[ProofDrain] EAS attested for ${args.agentId}: ${uid}`);
+          }
+        } catch (easErr: any) {
+          console.warn(`[ProofDrain] EAS attest skipped/failed for ${args.agentId}: ${easErr?.message || easErr} (fund EAS_ATTESTER_PRIVATE_KEY on Base Sepolia)`);
+        }
+      }
+
+      // R3: EAS real-ready wire (only merkle/HyperDAG). Non-fatal. Uses our service (no borrowed).
+      if (args.merkleRoot) {
+        try {
+          const { easService } = await import('./eas-attestation-service.js');
+          if (easService.hasAttesterKey()) {
+            const res = await easService.attestProof({
+              proofId: 0,
+              agentId: args.agentId,
+              tier: tierProven,
+              merkleRoot: args.merkleRoot,
+              repidSnapshot: null,
+              proofType: 'POSTCARD'
+            });
+            if (res.uid) {
+              await config.supabase.from('repid_zkp_proofs')
+                .update({ eas_attestation_uid: res.uid, eas_schema: 'constitutional-compliance-v1' })
+                .eq('zk_commitment', args.commitment)
+                .is('eas_attestation_uid', null);
+              console.log(`[ProofDrain][R3-EAS] uid=${res.uid} agent=${args.agentId}`);
+            }
+          }
+        } catch (e: any) {
+          console.warn('[ProofDrain][R3-EAS] non-fatal:', e?.message || e);
+        }
+      }
+
+      // W3 (2026-06-08) — continuous EAS anchoring for REAL proofs. The two blocks above
+      // only fire when the prover returns a merkle_root (the 05-30 batch); real plonky3
+      // proofs carry a zk_commitment but no merkle_root, so they never anchored — only 5
+      // attestations exist. Anchor each new real proof by its commitment (a 32-byte proof
+      // identity that fits the schema's bytes32 merkleRoot field). Gated by
+      // EAS_CONTINUOUS_ANCHOR_ENABLED (default OFF → no on-chain fire at merge / per the
+      // "don't fire" discipline) and the attester key being present. RULE-8: bounded.
+      if (
+        !error &&
+        process.env.EAS_CONTINUOUS_ANCHOR_ENABLED === 'true' &&
+        recordRealProofFields &&
+        args.scheme && args.proofBytes && args.commitment && !args.merkleRoot
+      ) {
+        let anchorTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const { easService } = await import('./eas-attestation-service.js');
+          if (easService.hasAttesterKey()) {
+            const anchorTimeoutMs = Number(process.env.EAS_ANCHOR_TIMEOUT_MS ?? 30000);
+            const res = (await Promise.race([
+              easService.attestProof({
+                proofId: 0,
+                agentId: args.agentId,
+                tier: tierProven,
+                merkleRoot: args.commitment, // commitment as the 32-byte proof anchor
+                repidSnapshot: null,
+                proofType: args.scheme,
+              }),
+              new Promise((_, rej) => {
+                anchorTimer = setTimeout(
+                  () => rej(new Error(`EAS continuous anchor timeout after ${anchorTimeoutMs}ms`)),
+                  anchorTimeoutMs,
+                );
+              }),
+            ])) as { uid: string | null };
+            if (res?.uid && !res.uid.startsWith('0x0000')) {
+              await config.supabase.from('repid_zkp_proofs')
+                .update({ eas_attestation_uid: res.uid, eas_schema: 'constitutional-compliance-v1' })
+                .eq('zk_commitment', args.commitment)
+                .is('eas_attestation_uid', null);
+              console.log(`[ProofDrain][W3-EAS] continuous anchor uid=${res.uid} agent=${args.agentId} scheme=${args.scheme}`);
+            }
+          }
+        } catch (e: any) {
+          console.warn('[ProofDrain][W3-EAS] continuous anchor non-fatal:', e?.message || e);
+        } finally {
+          if (anchorTimer) clearTimeout(anchorTimer); // RULE-8: release the timer
+        }
       }
     } catch (e) {
       console.error(
@@ -254,6 +391,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     proofSizeBytes: number | null;
     commitment: string;
     merkleRoot: string | null;
+    scheme?: string | null;
+    statement?: Record<string, unknown> | null;
   }): Promise<void> {
     const { error } = await config.supabase
       .from('repid_proof_queue')
@@ -272,7 +411,33 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       agentId: args.agentId,
       commitment: args.commitment,
       merkleRoot: args.merkleRoot,
+      scheme: args.scheme ?? null,
+      proofBytes: args.proofBytes,
+      statement: args.statement ?? null,
     });
+
+    // Write through to Dragonfly proof cache and zkp_proofs_staged table
+    try {
+      const { cacheStagedProof } = require('../cache/proof-cache');
+      const { data: agent } = await config.supabase
+        .from('repid_agents')
+        .select('agent_name')
+        .eq('id', args.agentId)
+        .maybeSingle();
+      const agentName = agent?.agent_name || args.agentId;
+
+      await cacheStagedProof({
+        proof_type: 'POSTCARD',
+        agent_name: agentName,
+        proof_data: args.proofBytes ? Buffer.from(args.proofBytes, 'base64').toString('hex') : '',
+        proof_hash: args.proofHash,
+        merkle_root: args.merkleRoot || '',
+        anchor_tx_hash: args.commitment || '',
+        status: 'valid',
+      });
+    } catch (cacheErr) {
+      console.warn('[ProofDrain] Failed to cache staged proof:', cacheErr);
+    }
   }
 
   async function markFailed(rowId: string, message: string): Promise<void> {
@@ -298,21 +463,33 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     // commitment below to guarantee uniqueness regardless of the prover.
     const nonce = generateNonce();
     const res = await withRetry(`zkp.prove[${job.job_id}]`, async () => {
-      const r = await httpFetch(`${config.zkpServiceUrl}/zkp/repid-proof`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agent_id: job.agent_id,
-          score,
-          nonce,
-          metadata: { job_id: job.job_id }
-        })
-      });
-      if (!r.ok) {
-        const text = await r.text().catch(() => '');
-        throw new Error(`HTTP ${r.status}: ${text}`);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), proverTimeoutMs);
+      try {
+        const r = await httpFetch(`${config.zkpServiceUrl}/zkp/repid-proof`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent_id: job.agent_id,
+            score,
+            nonce,
+            metadata: { job_id: job.job_id }
+          }),
+          signal: controller.signal
+        });
+        if (!r.ok) {
+          const text = await r.text().catch(() => '');
+          throw new Error(`HTTP ${r.status}: ${text}`);
+        }
+        return r;
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === 'AbortError') {
+          throw new Error(`prover timeout after ${proverTimeoutMs}ms (zkp.prove[${job.job_id}])`);
+        }
+        throw e;
+      } finally {
+        clearTimeout(timer); // RULE-8: release the timer regardless of outcome
       }
-      return r;
     });
 
     // Phase 7 Gap A — parse the FULL prover response (was discarding everything
@@ -327,6 +504,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       proof_type?: string;
       tier?: string;
       merkle_root?: string;
+      public_statement?: string;
+      repid_score_actual?: number;
     };
     const proofHash = proof.commitment ?? proof.proof_hash ?? proof.hash ?? '';
     const commitment = proof.commitment ?? '';
@@ -342,6 +521,20 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           ? Math.ceil((proofBytes.length * 3) / 4)
           : null;
     const merkleRoot = typeof proof.merkle_root === 'string' ? proof.merkle_root : null;
+
+    // A5 (D-062): capture the prover's real scheme + statement so the canonical row is
+    // independently WASM-verifiable. Only a real Plonky3 proof gets a statement (the verifier
+    // needs {repid_score, threshold}); threshold parsed from the prover's public_statement
+    // ("RepID > N"). repid_score is the prover's server-side actual (it ignores client score).
+    const scheme = typeof proof.proof_type === 'string' ? proof.proof_type : null;
+    const thrMatch = typeof proof.public_statement === 'string' ? proof.public_statement.match(/(\d+)/) : null;
+    const statement =
+      scheme === 'plonky3_range_check' && thrMatch
+        ? {
+            repid_score: typeof proof.repid_score_actual === 'number' ? proof.repid_score_actual : score,
+            threshold: Number(thrMatch[1]),
+          }
+        : null;
 
     // Bind the per-proof nonce into the stored canonical commitment so every
     // proof's zk_commitment is unique (root-cause fix: was deterministic per
@@ -364,6 +557,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         proofSizeBytes,
         commitment: uniqueCommitment,
         merkleRoot,
+        scheme,
+        statement,
       })
     );
     return 'completed';

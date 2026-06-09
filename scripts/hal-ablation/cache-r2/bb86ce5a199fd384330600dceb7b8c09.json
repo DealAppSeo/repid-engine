@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"FALSE","confidence":100,"note":"Groq is a hardware company, not a hosted LLM provider","latency_ms":234},{"provider":"groq-70b","verdict":"FALSE","confidence":100,"note":"No evidence","latency_ms":257},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":901}]}

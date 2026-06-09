@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"UNCERTAIN","confidence":0,"note":"Slippage estimation depends on various factors, not just AMM formula","latency_ms":212},{"provider":"groq-70b","verdict":"FALSE","confidence":90,"note":"Insufficient data","latency_ms":124},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":1080}]}

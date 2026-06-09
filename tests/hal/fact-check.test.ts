@@ -11,6 +11,8 @@ const P: FactCheckProviderCfg[] = [
   { name: 'p3', endpoint: 'http://x/3', apiKey: 'k3', model: 'm3' },
 ];
 
+const originalFetch = global.fetch;
+
 // model -> response: object verdict | 'HTTP500' | 'REJECT' | 'EMPTY' | raw string
 let byModel: Record<string, any> = {};
 beforeEach(() => {
@@ -23,6 +25,10 @@ beforeEach(() => {
     const content = r === 'EMPTY' ? '' : typeof r === 'string' ? r : JSON.stringify(r);
     return { ok: true, json: async () => ({ choices: [{ message: { content } }] }) } as any;
   });
+});
+
+afterAll(() => {
+  global.fetch = originalFetch;
 });
 
 describe('factCheck — aggregation + decision', () => {
@@ -111,15 +117,99 @@ describe('factCheck — env thresholds + provider builder', () => {
   });
 
   test('buildFactCheckProviders includes only keyed providers', () => {
-    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY };
+    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY, fw_en: process.env.HAL_S2_ENABLE_FIREWORKS };
     process.env.GROQ_API_KEY = 'g'; process.env.CEREBRAS_API_KEY = 'c'; delete process.env.FIREWORKS_API_KEY;
     const ps = buildFactCheckProviders();
     expect(ps.map((p) => p.name)).toEqual(['groq', 'cerebras']);
-    process.env.FIREWORKS_API_KEY = 'f';
+    process.env.FIREWORKS_API_KEY = 'f'; process.env.HAL_S2_ENABLE_FIREWORKS = 'true';
     expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['groq', 'cerebras', 'fireworks']);
-    process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f;
+    process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f; process.env.HAL_S2_ENABLE_FIREWORKS = save.fw_en;
     if (!save.g) delete process.env.GROQ_API_KEY;
     if (!save.c) delete process.env.CEREBRAS_API_KEY;
     if (!save.f) delete process.env.FIREWORKS_API_KEY;
+    if (!save.fw_en) delete process.env.HAL_S2_ENABLE_FIREWORKS;
+  });
+});
+
+describe('verdict-driven gate (CC1 / W6) — veto requires a FALSE quorum', () => {
+  const prev = process.env.HAL_VERDICT_DRIVEN_VETO;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.HAL_VERDICT_DRIVEN_VETO;
+    else process.env.HAL_VERDICT_DRIVEN_VETO = prev;
+  });
+
+  test('flag OFF: all-UNCERTAIN still over-vetoes (score 0.5) — zero behavior change', async () => {
+    delete process.env.HAL_VERDICT_DRIVEN_VETO;
+    byModel = { m1: { verdict: 'UNCERTAIN', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Jazz is the most beautiful music.', P);
+    expect(r.hal_score).toBeCloseTo(0.5, 5);
+    expect(r.decision).toBe('vetoed'); // the W6 over-veto, preserved when the gate is OFF
+  });
+
+  test('flag ON: all-UNCERTAIN (opinion/question) → flagged, not vetoed', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'UNCERTAIN', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Jazz is the most beautiful music.', P);
+    expect(r.decision).toBe('flagged');
+    expect(r.quorum_note).toMatch(/no FALSE quorum/);
+  });
+
+  test('flag ON: FALSE quorum (3 FALSE) → still vetoed', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 90 }, m3: { verdict: 'FALSE', confidence: 100 } };
+    const r = await factCheck('The Mona Lisa was painted by Picasso.', P);
+    expect(r.decision).toBe('vetoed');
+  });
+
+  test('flag ON: 2 FALSE + 1 UNCERTAIN → FALSE quorum → vetoed', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('x', P);
+    expect(r.decision).toBe('vetoed');
+  });
+
+  test('flag ON: 1 FALSE + 2 UNCERTAIN → no FALSE quorum → flagged', async () => {
+    process.env.HAL_VERDICT_DRIVEN_VETO = 'true';
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('x', P);
+    expect(r.decision).toBe('flagged');
+  });
+});
+
+describe('A1 verdict-count decision mode (HAL_DECISION_MODE=verdict)', () => {
+  const prev = process.env.HAL_DECISION_MODE;
+  beforeEach(() => { process.env.HAL_DECISION_MODE = 'verdict'; });
+  afterEach(() => { if (prev === undefined) delete process.env.HAL_DECISION_MODE; else process.env.HAL_DECISION_MODE = prev; });
+
+  test('2 FALSE families → vetoed with a human-readable reason', async () => {
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 100 }, m3: { verdict: 'TRUE', confidence: 80 } };
+    const r = await factCheck('The Mona Lisa was painted by Picasso.', P);
+    expect(r.decision).toBe('vetoed');
+    expect(r.decision_reason).toMatch(/2 of 3 independent model families judged this claim FALSE/);
+  });
+
+  test('2 FALSE from the SAME family → NOT a quorum → flagged (independence)', async () => {
+    const sameFam = [
+      { name: 'pa', endpoint: 'http://x/a', apiKey: 'k', model: 'llama-3-a' },
+      { name: 'pb', endpoint: 'http://x/b', apiKey: 'k', model: 'llama-3-b' }, // same family 'llama'
+      { name: 'pc', endpoint: 'http://x/c', apiKey: 'k', model: 'gemini-2.5' },
+    ];
+    byModel = { 'llama-3-a': { verdict: 'FALSE', confidence: 100 }, 'llama-3-b': { verdict: 'FALSE', confidence: 100 }, 'gemini-2.5': { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('x', sameFam as any);
+    expect(r.decision).toBe('flagged'); // only 1 distinct FALSE family (llama) → no quorum
+    expect(r.decision_reason).toMatch(/Only 1 family judged this FALSE/);
+  });
+
+  test('all UNCERTAIN → abstain (not a checkable claim)', async () => {
+    byModel = { m1: { verdict: 'UNCERTAIN', confidence: 100 }, m2: { verdict: 'UNCERTAIN', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Jazz is the most beautiful music.', P);
+    expect(r.decision).toBe('abstain');
+    expect(r.decision_reason).toMatch(/not a checkable factual claim/);
+  });
+
+  test('TRUE quorum, no FALSE → clean', async () => {
+    byModel = { m1: { verdict: 'TRUE', confidence: 100 }, m2: { verdict: 'TRUE', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
+    const r = await factCheck('Paris is the capital of France.', P);
+    expect(r.decision).toBe('clean');
   });
 });

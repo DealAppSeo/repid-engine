@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"FALSE","confidence":100,"note":"Impermanent loss is minimized when price ratio diverges by 1.414 (sqrt(2))","latency_ms":242},{"provider":"groq-70b","verdict":"FALSE","confidence":100,"note":"Incorrect threshold","latency_ms":149},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":4012}]}

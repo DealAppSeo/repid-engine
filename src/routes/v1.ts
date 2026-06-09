@@ -125,30 +125,102 @@ router.get('/metrics', async (req: Request, res: Response) => {
 
 
 
-router.post('/verify-proof', async (req: Request, res: Response) => {
-  const { proof, agent_id, requester_pubkey, tier, timestamp } = req.body;
-
-  if (!proof || !agent_id || !requester_pubkey || !tier || !timestamp) {
-    return res.status(400).json({ error: 'Missing required fields' });
+/**
+ * Pure decision for a stored proof row (no DB side effects).
+ * - If proof_bytes present: real WASM cryptographic verify using the proven path.
+ * - If absent (stub/sha256 rows): honest "attested, not cryptographically verified".
+ * Used by the /verify-proof endpoint and fixture tests.
+ */
+export async function verifyProofCryptographically(proofRow: any, claimedStatement?: any) {
+  if (!proofRow) {
+    return { valid: false, cryptographically_verified: false, error: 'no proof row' };
   }
 
-  // Verify by recomputing both the real-prover-attempted hash AND the
-  // HMAC fallback hash — accept if the supplied proof matches either,
-  // because /prove-repid may have returned the real prover's bytes
-  // OR the fallback bytes depending on PLONKY3_PROVER_URL availability
-  // at issue time.
-  const recomputed = await generateProofReal(agent_id, requester_pubkey, tier, timestamp);
-  const valid = proof === recomputed.proof;
+  if (proofRow.proof_bytes) {
+    try {
+      // Proven verification path (the independent WASM one exercised in the negative suite)
+      const verifierMod: any = await import('@hyperdag/proof-verifier');
+      const publicInputs = proofRow.statement || claimedStatement || {
+        agent_id: proofRow.agent_id,
+        tier: proofRow.tier_proven,
+      };
+      const valid = await verifierMod.verify(proofRow.proof_bytes, publicInputs);
+      return {
+        valid: !!valid,
+        cryptographically_verified: true,
+        verified_at: new Date().toISOString(),
+        proof_version: 'plonky3-wasm-1.0',
+      };
+    } catch (e: any) {
+      console.error('[verify-proof] WASM verify error', e);
+      return { valid: false, cryptographically_verified: true, error: 'wasm-verify-failed' };
+    }
+  }
 
-  const { error } = await db.from('trinity_agent_logs').insert({
+  // Absent proof_bytes — today's sha256/HMAC stub rows (pre real Plonky3 flip)
+  const hasOtherAttestation = !!(proofRow.merkle_root || proofRow.eas_attestation_uid || proofRow.zk_commitment);
+  return {
+    valid: hasOtherAttestation,
+    cryptographically_verified: false,
+    message: 'attested, not cryptographically verified',
+    verified_at: new Date().toISOString(),
+    proof_version: 'attested-stub-1.0',
+  };
+}
+
+router.post('/verify-proof', async (req: Request, res: Response) => {
+  // New path: identify by agent + tier, lookup stored proof, WASM-verify if proof_bytes present.
+  // Legacy fields (proof + generation params) are accepted for compat but the verification
+  // now prefers the stored artifact (read-only side; inserts are untouched per CC1 #101).
+  const { agent_id, tier } = req.body;
+
+  if (!agent_id || !tier) {
+    return res.status(400).json({ error: 'Missing required fields: agent_id, tier' });
+  }
+
+  // Lookup the canonical stored proof (repid_zkp_proofs is the home for proof artifacts post Phase 7)
+  const { data: proofRow, error: lookupError } = await db
+    .from('repid_zkp_proofs')
+    .select('*')
+    .eq('agent_id', agent_id)
+    .eq('tier_proven', tier)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (lookupError) {
+    console.error('[verify-proof] lookup error', lookupError);
+  }
+
+  if (!proofRow) {
+    return res.status(404).json({ error: 'No stored proof found for this agent and tier' });
+  }
+
+  const result = await verifyProofCryptographically(proofRow, req.body);
+
+  // Preserve logging/webhook shape for downstream consumers
+  const { error: logError } = await db.from('trinity_agent_logs').insert({
     action: 'zkp_proof_verified',
-    metadata: { valid, agent_id, requester_pubkey, tier, timestamp, proof }
+    metadata: {
+      ...result,
+      agent_id,
+      tier,
+      proof_row_id: proofRow.id,
+    },
   });
-    if (error) console.error(error);
+  if (logError) console.error(logError);
 
-  fireWebhook('proof.verified', { valid, agent_id, requester_pubkey, tier, timestamp, proof });
+  fireWebhook('proof.verified', {
+    ...result,
+    agent_id,
+    tier,
+  });
 
-  res.json({ valid, tier, agent_id, verified_at: new Date().toISOString(), proof_version: "1.0" });
+  res.json({
+    ...result,
+    tier,
+    agent_id,
+  });
 });
 
 router.get('/repid/:agent_id', async (req: Request, res: Response) => {

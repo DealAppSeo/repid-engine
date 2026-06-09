@@ -761,13 +761,38 @@ router.get('/:id/vdr', async (req: Request, res: Response) => {
 router.get('/:id/proof/:job_id', async (req: Request, res: Response) => {
   const job_id = String(req.params.job_id);
   const agentId = String(req.params.id);
+
+  const cacheKey = `proof-job:${job_id}`;
+  const { cacheGet, cacheSet } = require('../cache/dragonfly');
+  try {
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && parsed.agent_id === agentId) {
+        console.log(`[agents-external-route] Cache hit for proof job: ${job_id}`);
+        return res.json(parsed);
+      }
+    }
+  } catch (err) {
+    console.warn(`[agents-external-route] Cache error for proof job:`, err);
+  }
+
   const { data, error } = await db
     .from('repid_proof_queue')
-    .select('job_id,status,proof_hash,proof_bytes,proof_size_bytes,created_at,completed_at')
+    .select('job_id,agent_id,status,proof_hash,proof_bytes,proof_size_bytes,created_at,completed_at')
     .eq('job_id', job_id)
     .eq('agent_id', agentId)
-    .single();
+    .maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'Proof job not found' });
+
+  if (data.status === 'completed') {
+    try {
+      await cacheSet(cacheKey, JSON.stringify(data), 7200);
+    } catch (err) {
+      console.warn(`[agents-external-route] Failed to set cache for completed proof job:`, err);
+    }
+  }
+
   return res.json(data);
 });
 

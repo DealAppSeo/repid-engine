@@ -140,10 +140,22 @@ async function logRun(result: RecoveryResult, dryRun?: boolean) {
 
 export function startRecoveryWorker(opts?: { pollIntervalMs?: number }): { stop: () => void } {
   const intervalMs = opts?.pollIntervalMs || 30000;
-  
+  // RULE-8: re-entrancy guard so a slow recovery pass never overlaps the next tick, and
+  // catch so a thrown pass can't crash the process or leave the flag stuck.
+  let running = false;
+
   const timer = setInterval(async () => {
-    await processRecoveryQueue();
+    if (running) return; // previous pass still in flight — skip this tick
+    running = true;
+    try {
+      await processRecoveryQueue();
+    } catch (err) {
+      console.error('[x402-recovery] processRecoveryQueue threw:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false; // release regardless of outcome
+    }
   }, intervalMs);
+  if (typeof (timer as any).unref === 'function') (timer as any).unref();
 
   return {
     stop: () => clearInterval(timer)

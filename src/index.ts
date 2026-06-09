@@ -9,6 +9,7 @@ import { isAllowedOrigin } from './utils/cors-origins';
 import helmet from 'helmet';
 import { config } from './config';
 import healthRouter from './routes/health';
+import healthExtendedRouter from './routes/health-extended';
 import agentsRouter from './routes/agents';
 import scoreRouter from './routes/score';
 import referendumRouter from './routes/referendum';
@@ -61,6 +62,7 @@ import cacheStatsRouter from './routes/cache-stats';
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
+import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
 
@@ -196,14 +198,12 @@ app.use((req, res, next) => {
   // API key issuance V0 (2026-05-24): /request use_case is free-form prose (may contain SQL-shaped
   // tokens); the route uses parameterized Supabase writes. Public route, mounted before authMiddleware.
   if (req.path === '/api/v1/api-key-requests/request') return next();
-  // Controller (CC2 2026-05-26): /controller/sprint + /wake carry free-form sprint
-  // titles/descriptions (prose that legitimately contains SQL-shaped tokens). SBT-gated;
-  // downstream Supabase writes are parameterized.
-  if (req.path.startsWith('/api/v1/controller/sprint') || req.path.startsWith('/api/v1/controller/wake')) return next();
   // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
   if (req.path === '/api/v1/escalation/escalate') return next();
+  const SKIP_SANITIZER_KEYS = new Set(['description', 'success_criteria', 'expected_output', 'notes', 'title', 'constitution_text', 'interest', 'linkedin', 'github', 'notes_text']);
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
+      if (SKIP_SANITIZER_KEYS.has(key)) continue;
       if (typeof obj[key] === 'string') {
         const val = obj[key].toUpperCase();
         if (val.includes('SELECT ') || val.includes('DROP ') || val.includes('INSERT ') || val.includes('UPDATE ') || val.includes('DELETE ') || val.includes('--') || val.includes(';')) {
@@ -527,6 +527,7 @@ app.get('/api/v1/llm-trust', async (req, res) => {
 });
 
 app.use(healthRouter);
+app.use(healthExtendedRouter);
 app.use(agentsRouter);
 app.use(challengeRouter);   // Sprint 5: must come before scoreRouter (conflicting /challenge)
 app.use(scoreRouter);
@@ -753,6 +754,18 @@ if (!IS_TEST) {
   feedbackLoopWorker.start(60_000);
 }
 
+// A3 — boot-time HAL family-independence audit. Logs the live provider→family map and loudly
+// flags any collapse (two providers sharing a base model count as ONE quorum vote, not two).
+if (!IS_TEST) {
+  try {
+    const { assertFamilyIndependenceAtBoot } = require('./hal/fact-check');
+    assertFamilyIndependenceAtBoot();
+  } catch (e: any) {
+    console.error('[hal] family-independence audit failed at boot:', e?.message ?? e);
+    if (process.env.HAL_STRICT_FAMILY_INDEPENDENCE === 'true') throw e;
+  }
+}
+
 // Cascade Settlement Worker — the missing escrowed→fulfilled drain. The inline
 // Cascade Pickup Worker above advances pending→escrowed; nothing server-side
 // then advanced escrowed→fulfilled (only the frozen ConstitutionalAgentV4 loop
@@ -762,6 +775,18 @@ if (!IS_TEST) {
 // CASCADE_SETTLEMENT_ENABLED=true (mirrors DisputeResolutionWorker gating).
 if (!IS_TEST) {
   cascadeSettlementWorker.start();
+}
+
+// x402 Settlement Recovery Worker (W2 2026-06-08) — the COLD MODULE behind the ERC-8004
+// dormancy. startRecoveryWorker() existed but was never called in bootstrap, so rows in
+// x402_settlement_failures were never retried → no fresh *_settled events reached the
+// (already-started) FeedbackLoopWorker → ~5 days of no on-chain reputation writes despite
+// a PRESENT writer key. Mounted here, RULE-8-guarded (re-entrancy + catch in the worker).
+// OFF unless X402_RECOVERY_WORKER_ENABLED=true (house style: zero change at merge; Sean flips).
+if (!IS_TEST && process.env.X402_RECOVERY_WORKER_ENABLED === 'true') {
+  const intervalMs = Number(process.env.X402_RECOVERY_POLL_MS ?? 30000);
+  startRecoveryWorker({ pollIntervalMs: intervalMs });
+  console.log(`[x402-recovery] recovery worker started (poll ${intervalMs}ms)`);
 }
 
 // V1.5 Slice-1 HITL notification dispatcher (CC2 2026-05-26). Watches

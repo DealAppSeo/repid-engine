@@ -1,0 +1,1 @@
+{"verdicts":[{"provider":"groq-8b","verdict":"TRUE","confidence":100,"note":"Plonky3 uses BN254 with Groth16 proving system.","latency_ms":526},{"provider":"groq-70b","verdict":"TRUE","confidence":100,"note":"Verified","latency_ms":182},{"provider":"cerebras","verdict":"UNCERTAIN","confidence":50,"latency_ms":4272}]}

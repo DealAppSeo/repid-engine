@@ -10,9 +10,9 @@
 import { factCheck, type FactCheckProviderCfg } from '../../../src/hal/fact-check';
 
 const PROVIDERS: FactCheckProviderCfg[] = [
-  { name: 'groq', endpoint: 'http://groq.test', apiKey: 'k', model: 'm', timeoutMs: 2000 },
-  { name: 'cerebras', endpoint: 'http://cerebras.test', apiKey: 'k', model: 'm', timeoutMs: 2000 },
-  { name: 'fireworks', endpoint: 'http://fireworks.test', apiKey: 'k', model: 'm', timeoutMs: 2000 },
+  { name: 'groq', endpoint: 'http://groq.test', apiKey: 'k', model: 'm', timeoutMs: 2000, family: 'groq' },
+  { name: 'cerebras', endpoint: 'http://cerebras.test', apiKey: 'k', model: 'm', timeoutMs: 2000, family: 'cerebras' },
+  { name: 'fireworks', endpoint: 'http://fireworks.test', apiKey: 'k', model: 'm', timeoutMs: 2000, family: 'fireworks' },
 ];
 
 type Outcome = { kind: 'ok'; verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN'; confidence?: number } | { kind: '429' } | { kind: 'throw' };
@@ -36,6 +36,8 @@ function mockFetch(map: Record<string, Outcome>) {
 afterEach(() => { jest.restoreAllMocks(); (global as any).fetch = undefined; });
 
 describe('HAL provider-failure resilience — minimum quorum gate', () => {
+  beforeAll(() => { process.env.HAL_QUORUM_COST_ORDERED = 'false'; }); // Disable cost-ordered assembly for testing
+
   test('3/3 succeed (all TRUE): full quorum, clean, behavior unchanged', async () => {
     mockFetch({ groq: { kind: 'ok', verdict: 'TRUE' }, cerebras: { kind: 'ok', verdict: 'TRUE' }, fireworks: { kind: 'ok', verdict: 'TRUE' } });
     const r = await factCheck('The chemical symbol for gold is Au.', PROVIDERS);

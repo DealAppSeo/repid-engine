@@ -20,7 +20,8 @@ export interface HalEvaluationRequest {
 
 export interface HalEvaluationResponse {
   hal_score: number;
-  decision: 'vetoed' | 'flagged' | 'clean';
+  decision: 'vetoed' | 'flagged' | 'clean' | 'abstain';
+  decision_reason?: string; // A1 — human-readable explanation (verdict mode)
   mode: 'fact-check' | 'extractor' | 'extractor-fallback';
   strictness: 1 | 2;
   product: Product;
@@ -76,9 +77,13 @@ export class HalService {
         const fc = await factCheck(req.text, providers, { vetoThreshold, flagThreshold });
         if (fc.providers_used > 0) {
           return {
-            hal_score: fc.hal_score, decision: fc.decision, mode: 'fact-check', strictness, product,
+            hal_score: fc.hal_score, decision: fc.decision,
+            ...(fc.decision_reason ? { decision_reason: fc.decision_reason } : {}),
+            mode: 'fact-check', strictness, product,
             signals: {
               providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded,
+              // R5 — distinct independent families that voted (the quorum unit).
+              families_used: fc.families_used, families: fc.families,
               // CC1 2026-05-23 provider-failure hardening: surface quorum + per-provider health.
               quorum: fc.quorum, provider_health: fc.provider_health,
               ...(fc.quorum_note ? { quorum_note: fc.quorum_note } : {}),
