@@ -276,7 +276,7 @@ export async function applyServiceFulfilledDeltas(
   // completes. Simulated/empty deliverables are skipped to save eval cost.
   // This block does NOT touch the bridge insert that follows.
   const halEnrichmentEnabled = process.env.HAL_ENRICHMENT_ENABLED === 'true';
-  let halOverride: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any } | undefined;
+  let halOverride: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean' | 'abstain'; hal_signals?: any } | undefined;
 
   let deliverable = '';
   let promptText = '';
@@ -296,7 +296,7 @@ export async function applyServiceFulfilledDeltas(
       // the outer catch falls to the 0.5/clean default.
       const halStrictness: 1 | 2 = process.env.HAL_STRICTNESS === '2' ? 2 : 1;
       const domain = typeof payload.task_type === 'string' ? payload.task_type : 'general';
-      const runExtractor = async (): Promise<{ hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals: any }> => {
+      const runExtractor = async (): Promise<{ hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean' | 'abstain'; hal_signals: any }> => {
         const r = await evaluate(deliverable, deliverable, { domain, certainty: 0.8, strictness: 1, prompt: promptText });
         return {
           hal_score: r.hal_score,
