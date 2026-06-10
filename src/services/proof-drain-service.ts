@@ -86,11 +86,13 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   const pgq = config.pgQueryImpl ?? pgQuery;
 
   // A5 (D-062): when ON, the canonical repid_zkp_proofs insert also records the prover's REAL
-  // scheme (proof_type, e.g. 'plonky3_range_check'), proof_bytes, and statement {repid_score, threshold}
-  // so each row is independently WASM-verifiable (hyperdag-proof-verifier) — distinguishing real
-  // Plonky3 rows from legacy sha256 stubs. Default OFF: behavior is byte-identical to today until the
-  // Plonky3 pin is deployed + A2/A3 re-verified on the pinned prover, then flip the flag. New-events-only
-  // (no backfill of existing rows).
+  // scheme (proof_type, e.g. 'plonky3_range_check'), proof_bytes, statement {repid_score, threshold},
+  // and — B-2 (Inv-1) — the aggregation-ready Poseidon2/BabyBear leaf + leaf_scheme lineage tag,
+  // so each row is independently WASM-verifiable (hyperdag-proof-verifier) AND its leaf is foldable
+  // by a future PACKAGE-tier proof — distinguishing real Plonky3 rows from legacy sha256 stubs.
+  // Default OFF: behavior is byte-identical to today until the Plonky3 pin is deployed + A2/A3
+  // re-verified on the pinned prover + the zkp-circuits-domain migration applied, then flip the flag.
+  // New-events-only (no backfill of existing rows).
   const recordRealProofFields = (process.env.PROOF_DRAIN_RECORD_REAL_FIELDS ?? 'false').toLowerCase() === 'true';
   // RULE-8 (Unbounded Wait Disease, W1 fix): the prover httpFetch had no per-attempt
   // timeout, so a single hung prover call wedged the drain loop forever (the stall that
@@ -222,6 +224,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     scheme?: string | null;
     proofBytes?: string | null;
     statement?: Record<string, unknown> | null;
+    poseidon2Leaf?: string | null;
+    leafScheme?: string | null;
   }): Promise<void> {
     try {
       let tierProven = 'PROBATIONARY';
@@ -260,6 +264,11 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         if (args.scheme) insertRow.scheme = args.scheme;
         if (args.proofBytes) insertRow.proof_bytes = args.proofBytes;
         if (args.statement) insertRow.statement = args.statement;
+        // B-2 (Inv-1): the aggregation-ready Poseidon2 leaf + its lineage tag. Same flag gate
+        // as scheme/proof_bytes/statement — requires the 2026-06-08-zkp-circuits-domain migration
+        // (adds poseidon2_leaf + leaf_scheme columns) to be applied first. Off by default.
+        if (args.poseidon2Leaf) insertRow.poseidon2_leaf = args.poseidon2Leaf;
+        if (args.leafScheme) insertRow.leaf_scheme = args.leafScheme;
       }
       const { error } = await config.supabase.from('repid_zkp_proofs').insert(insertRow as any);
       if (error) {
@@ -393,6 +402,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     merkleRoot: string | null;
     scheme?: string | null;
     statement?: Record<string, unknown> | null;
+    poseidon2Leaf?: string | null;
+    leafScheme?: string | null;
   }): Promise<void> {
     const { error } = await config.supabase
       .from('repid_proof_queue')
@@ -414,6 +425,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       scheme: args.scheme ?? null,
       proofBytes: args.proofBytes,
       statement: args.statement ?? null,
+      poseidon2Leaf: args.poseidon2Leaf ?? null,
+      leafScheme: args.leafScheme ?? null,
     });
 
     // Write through to Dragonfly proof cache and zkp_proofs_staged table
@@ -506,6 +519,10 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       merkle_root?: string;
       public_statement?: string;
       repid_score_actual?: number;
+      // B-2 (Inv-1): aggregation-ready Poseidon2/BabyBear leaf + its lineage tag, emitted by the
+      // leaf-aware prover ('poseidon2_babybear'). Empty on the sha256 fallback path.
+      poseidon2_leaf?: string;
+      leaf_scheme?: string;
     };
     const proofHash = proof.commitment ?? proof.proof_hash ?? proof.hash ?? '';
     const commitment = proof.commitment ?? '';
@@ -536,6 +553,15 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           }
         : null;
 
+    // B-2 (Inv-1): capture the aggregation-ready Poseidon2 leaf + lineage tag from the leaf-aware
+    // prover. The leaf is deterministic over the statement (that determinism is what lets a future
+    // PACKAGE-tier fold it), so it is stored in its OWN column — NOT zk_commitment (which stays
+    // nonce-bound for row uniqueness). Empty/absent ⇒ null (sha256 fallback, no Poseidon2 lineage).
+    const poseidon2Leaf =
+      typeof proof.poseidon2_leaf === 'string' && proof.poseidon2_leaf.length > 0 ? proof.poseidon2_leaf : null;
+    const leafScheme =
+      typeof proof.leaf_scheme === 'string' && proof.leaf_scheme.length > 0 ? proof.leaf_scheme : null;
+
     // Bind the per-proof nonce into the stored canonical commitment so every
     // proof's zk_commitment is unique (root-cause fix: was deterministic per
     // agent → 18.1% unique). The prover's commitment is bound in too, preserving
@@ -559,6 +585,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         merkleRoot,
         scheme,
         statement,
+        poseidon2Leaf,
+        leafScheme,
       })
     );
     return 'completed';
