@@ -79,7 +79,7 @@ describe('computeDelta', () => {
     expect(r.reason).toMatch(/floor-protected/);
   });
 
-  test('flagged during vesting → calculated=-2, applied=0', () => {
+  test('flagged → calculated=0, applied=0 (A2: unconfirmed claims no longer penalized)', () => {
     const r = computeDelta({
       hal_score: 0.4,
       hal_decision: 'flagged',
@@ -87,7 +87,19 @@ describe('computeDelta', () => {
       agent_tier: 'ESTABLISHED',
       vesting_cliff_active: true,
     });
-    expect(r.delta_calculated).toBe(-2);
+    expect(r.delta_calculated).toBe(0); // A2: flagged (no FALSE quorum) carries no penalty
+    expect(r.delta_applied).toBe(0);
+  });
+
+  test('vetoed during vesting → calculated=-10, applied=0 (vesting suppresses negatives)', () => {
+    const r = computeDelta({
+      hal_score: 0.9,
+      hal_decision: 'vetoed',
+      current_repid: 1000,
+      agent_tier: 'ESTABLISHED',
+      vesting_cliff_active: true,
+    });
+    expect(r.delta_calculated).toBe(-10);
     expect(r.delta_applied).toBe(0);
   });
 
@@ -114,5 +126,19 @@ describe('computeDelta', () => {
       vesting_cliff_active: false,
     });
     expect(r.delta_calculated).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('A2 — abstain/flagged carry no RepID penalty', () => {
+  const { computeDelta } = require('../src/scoring/repid-delta');
+  const base = { current_repid: 2000, vesting_cliff_active: false, hal_score: 0.5 };
+  test('abstain → delta 0 (not a checkable claim)', () => {
+    expect(computeDelta({ ...base, hal_decision: 'abstain' }).delta_calculated).toBe(0);
+  });
+  test('flagged → delta 0 (unconfirmed, no FALSE quorum)', () => {
+    expect(computeDelta({ ...base, hal_decision: 'flagged' }).delta_calculated).toBe(0);
+  });
+  test('vetoed → -10 preserved (confirmed FALSE quorum)', () => {
+    expect(computeDelta({ ...base, hal_decision: 'vetoed' }).delta_calculated).toBe(-10);
   });
 });

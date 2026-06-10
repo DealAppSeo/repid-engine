@@ -299,6 +299,11 @@ export async function runScoreEvent(
     effectiveDeltaApplied = 0;
     penaltySuppressed = true;
   }
+  // A2: a grounded veto neutralized for lack of quorum is also a suppressed penalty for
+  // observability — the would-be -10 didn't apply. (After A2, scoringDecision='flagged' computes
+  // to 0 directly rather than -2-then-suppress, so set the flag explicitly to keep the metadata
+  // — suppressed_reason='quorum_unavailable', penalty_suppressed=true — stable.)
+  if (quorumUnavailable) penaltySuppressed = true;
 
   const old_repid = agent.current_repid;
   const new_repid = old_repid + effectiveDeltaApplied;
@@ -480,7 +485,7 @@ export async function applyValidationEvent(
   event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY' | 'SERVICE_FULFILLED' | 'SERVICE_SATISFIED',
   delta: number,
   metadata: Record<string, any> = {},
-  halOverride?: { hal_score: number; hal_decision: 'vetoed' | 'flagged' | 'clean'; hal_signals?: any }
+  halOverride?: { hal_score: number; hal_decision: HALDecision; hal_signals?: any }
 ) {
   const agent = await loadAgent(agent_id);
   if (!agent) throw new Error(`Agent not found: ${agent_id}`);
@@ -497,7 +502,7 @@ export async function applyValidationEvent(
   // tracks hal_decision (was always 'clean'); with no override it stays 'clean'.
   let certaintyAtClaim: number | null = null;
   let halScore = halOverride?.hal_score ?? 0.5;
-  let halDecision = halOverride?.hal_decision ?? 'clean';
+  let halDecision: HALDecision = halOverride?.hal_decision ?? 'clean';
   let enrichedMetadata = halOverride?.hal_signals
     ? { ...metadata, hal_signals: halOverride.hal_signals }
     : metadata;
