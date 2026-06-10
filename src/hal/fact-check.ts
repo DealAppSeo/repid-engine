@@ -80,9 +80,14 @@ export interface ProviderVerdict {
   latency_ms: number;
 }
 
+export type HalDecision = 'vetoed' | 'flagged' | 'clean' | 'abstain';
+
 export interface FactCheckResult {
   hal_score: number; // 0..1, higher = more likely false/risky (matches HAL convention)
-  decision: 'vetoed' | 'flagged' | 'clean';
+  decision: HalDecision;
+  // A1 — human-readable explanation of WHY (verdict mode), e.g. "2 of 3 independent model
+  // families judged this claim FALSE (Groq/Llama, Gemini, DeepSeek)". The demo surface.
+  decision_reason?: string;
   verdicts: ProviderVerdict[];
   providers_used: number; // non-error responses
   families_used?: number; // R5 — distinct independent families among the non-error responses
@@ -421,44 +426,65 @@ export async function factCheck(
   const modal = Math.max(...Object.values(counts));
   const agreement = modal / providers_used;
 
-  const baseDecision: FactCheckResult['decision'] =
-    hal_score >= vetoThreshold ? 'vetoed' : hal_score >= flagThreshold ? 'flagged' : 'clean';
+  // Family-aware verdict tallies (the explainability primitive).
+  const famsOf = (want: Verdict) =>
+    [...new Set(ok.filter((v) => v.verdict === want).map((v) => familyByName.get(v.provider) ?? v.provider))];
+  const falseFams = famsOf('FALSE');
+  const trueFams = famsOf('TRUE');
 
-  // RESILIENCE GATE (CC1 2026-05-23): a veto/flag requires >= MIN_QUORUM_FOR_VETO
-  // successful providers. With a single surviving provider (low quorum), downgrade
-  // to 'clean' — a lone provider's verdict is not enough to veto. hal_score is
-  // preserved for observability; only the decision is changed.
-  let decision = baseDecision;
+  let decision: HalDecision;
+  let decision_reason: string | undefined;
   let quorum_note: string | undefined;
-  if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
-    decision = 'clean';
-    quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
-  }
 
-  // CC1 verdict-driven gate (W6 fix, gated by HAL_VERDICT_DRIVEN_VETO, default OFF). A hard veto
-  // must rest on a cross-provider FALSE quorum (a factual error multiple independent families
-  // agree on), NOT merely hal_score >= vetoThreshold. The score path over-vetoes UNCERTAIN-dominated
-  // input: every UNCERTAIN verdict scores 0.5 (providerRisk), so an all-UNCERTAIN deliverable
-  // (a subjective opinion, or a question with no assertion) lands at hal_score 0.5 == vetoThreshold
-  // and was vetoed — the opinion/time-sensitive over-veto W6 found. With the gate ON, a 'vetoed'
-  // baseDecision with no FALSE quorum is downgraded to 'flagged' (surfaced, no hard veto / -10).
-  // Factual errors (math/code/factual) still produce FALSE verdicts → FALSE quorum → veto stays.
-  // This is verdict-driven, NOT category-driven (HAL_CATEGORY_SOFT_VETO stays OFF — the corpus
-  // "opinion" category is contaminated with mislabeled false facts that must keep hard-vetoing).
-  if (process.env.HAL_VERDICT_DRIVEN_VETO === 'true' && decision === 'vetoed') {
-    const falseFamilies = new Set(
-      ok.filter((v) => v.verdict === 'FALSE').map((v) => familyByName.get(v.provider) ?? v.provider),
-    ).size;
-    const falseQuorum = familyAware ? falseFamilies : ok.filter((v) => v.verdict === 'FALSE').length;
-    if (falseQuorum < MIN_QUORUM_FOR_VETO) {
+  if (process.env.HAL_DECISION_MODE === 'verdict') {
+    // A1 — VERDICT-COUNT as the PRIMARY decision (explainability refactor). Family-aware verdict
+    // counts drive the decision; hal_score is demoted to a logged secondary signal. Counting
+    // distinct FALSE families (not a 0.5 score on UNCERTAIN) is what a non-expert can read.
+    const falseN = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
+    const trueN = familyAware ? trueFams.length : ok.filter((v) => v.verdict === 'TRUE').length;
+    if (falseN >= MIN_QUORUM_FOR_VETO) {
+      decision = 'vetoed';
+      decision_reason = `${falseN} of ${familyAware ? families_used : providers_used} independent model ${familyAware ? 'families' : 'providers'} judged this claim FALSE (${falseFams.join('/')}).`;
+    } else if (falseN === 1) {
       decision = 'flagged';
-      quorum_note = `Verdict-driven gate: no FALSE quorum (${falseQuorum} FALSE ${familyAware ? 'famil' + (falseQuorum === 1 ? 'y' : 'ies') : 'provider' + (falseQuorum === 1 ? '' : 's')} < ${MIN_QUORUM_FOR_VETO}); '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'flagged' — UNCERTAIN/opinion, not a confirmed factual error.`;
+      decision_reason = `Only 1 ${familyAware ? 'family' : 'provider'} judged this FALSE (${falseFams.join('/')}) — no independent quorum. Flagged for review, not vetoed.`;
+    } else if (trueN >= MIN_QUORUM_FOR_VETO) {
+      decision = 'clean';
+      decision_reason = `${trueN} independent ${familyAware ? 'families' : 'providers'} judged this claim TRUE (${trueFams.join('/')}); no FALSE verdicts.`;
+    } else {
+      // 0 FALSE and no TRUE quorum → nothing checkable was confirmed either way.
+      decision = 'abstain';
+      decision_reason = `No model family judged this claim FALSE, and there is no TRUE quorum — not a checkable factual claim (likely an opinion or a question). HAL did not judge it.`;
+    }
+  } else {
+    // SCORE mode (default — byte-identical to prior behavior): hal_score thresholds + the
+    // resilience gate + the CC1 verdict-driven gate.
+    const baseDecision: HalDecision =
+      hal_score >= vetoThreshold ? 'vetoed' : hal_score >= flagThreshold ? 'flagged' : 'clean';
+    decision = baseDecision;
+
+    // RESILIENCE GATE (CC1 2026-05-23): a veto/flag requires >= MIN_QUORUM_FOR_VETO successful
+    // providers; a lone provider downgrades to 'clean'. hal_score preserved; only decision changes.
+    if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
+      decision = 'clean';
+      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
+    }
+
+    // CC1 verdict-driven gate (HAL_VERDICT_DRIVEN_VETO, default OFF): a 'vetoed' baseDecision with
+    // no FALSE quorum downgrades to 'flagged' (the all-UNCERTAIN @0.5 over-veto W6 found).
+    if (process.env.HAL_VERDICT_DRIVEN_VETO === 'true' && decision === 'vetoed') {
+      const falseQuorum = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
+      if (falseQuorum < MIN_QUORUM_FOR_VETO) {
+        decision = 'flagged';
+        quorum_note = `Verdict-driven gate: no FALSE quorum (${falseQuorum} FALSE < ${MIN_QUORUM_FOR_VETO}); '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'flagged' — UNCERTAIN/opinion, not a confirmed factual error.`;
+      }
     }
   }
 
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
+    ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
   };
 }
@@ -526,4 +552,39 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   // Tag the always-on hosts with their family (model-derived; explicit for clarity).
   for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
+}
+
+/**
+ * A3 — FAMILY-INDEPENDENCE AUDIT. Two providers serving the same base model FAMILY (e.g. two
+ * Llama endpoints) are ONE independent vote, not two; counting them as two would let a single
+ * model's error form a fake "quorum" and break the dissent guarantee the whole gate rests on.
+ * Returns the families that cover more than one configured provider.
+ */
+export function auditFamilyIndependence(providers: FactCheckProviderCfg[]): {
+  independent: boolean;
+  families: string[];
+  collapsed: Array<{ family: string; providers: string[] }>;
+} {
+  const byFam = new Map<string, string[]>();
+  for (const p of providers) {
+    const fam = p.family ?? familyOf(p.model);
+    byFam.set(fam, [...(byFam.get(fam) ?? []), p.name]);
+  }
+  const collapsed = [...byFam.entries()].filter(([, ps]) => ps.length > 1).map(([family, ps]) => ({ family, providers: ps }));
+  return { independent: collapsed.length === 0, families: [...byFam.keys()], collapsed };
+}
+
+/**
+ * A3 — loud boot-time assertion. Logs the live family map; on a collapse it logs a LOUD error and,
+ * when HAL_STRICT_FAMILY_INDEPENDENCE=true, throws (default = warn-not-crash so a misconfig is
+ * visible without taking the service down).
+ */
+export function assertFamilyIndependenceAtBoot(providers: FactCheckProviderCfg[] = buildFactCheckProviders()): void {
+  const a = auditFamilyIndependence(providers);
+  console.log(`[hal] fact-check quorum: ${providers.length} providers across ${a.families.length} families [${a.families.join(', ')}]`);
+  if (!a.independent) {
+    const msg = `[hal] *** FAMILY-INDEPENDENCE VIOLATION *** these families back >1 provider and count as ONE vote, not several — quorum dissent guarantee broken: ${a.collapsed.map((c) => `${c.family}=[${c.providers.join(',')}]`).join('; ')}`;
+    console.error(msg);
+    if (process.env.HAL_STRICT_FAMILY_INDEPENDENCE === 'true') throw new Error(msg);
+  }
 }
