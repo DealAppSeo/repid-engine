@@ -36,7 +36,10 @@ function mockFetch(map: Record<string, Outcome>) {
 afterEach(() => { jest.restoreAllMocks(); (global as any).fetch = undefined; });
 
 describe('HAL provider-failure resilience — minimum quorum gate', () => {
-  beforeAll(() => { process.env.HAL_QUORUM_COST_ORDERED = 'false'; }); // Disable cost-ordered assembly for testing
+  // B2 (CC1 2026-06-11): these assert SCORE-mode resilience-gate behavior (downgrade-to-clean). The
+  // code default is now 'verdict' — pin score mode so these score-mode tests keep their semantics.
+  beforeAll(() => { process.env.HAL_QUORUM_COST_ORDERED = 'false'; process.env.HAL_DECISION_MODE = 'score'; });
+  afterAll(() => { delete process.env.HAL_DECISION_MODE; });
 
   test('3/3 succeed (all TRUE): full quorum, clean, behavior unchanged', async () => {
     mockFetch({ groq: { kind: 'ok', verdict: 'TRUE' }, cerebras: { kind: 'ok', verdict: 'TRUE' }, fireworks: { kind: 'ok', verdict: 'TRUE' } });

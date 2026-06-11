@@ -16,6 +16,10 @@ const originalFetch = global.fetch;
 // model -> response: object verdict | 'HTTP500' | 'REJECT' | 'EMPTY' | raw string
 let byModel: Record<string, any> = {};
 beforeEach(() => {
+  // B2 (CC1 2026-06-11): the CODE default is now 'verdict'. These legacy suites test SCORE-mode
+  // mechanics (thresholds, the score-mode verdict-driven gate, score resilience), so pin them to
+  // 'score'. The `A1 verdict-count` describe overrides to 'verdict'; the default-mode test deletes it.
+  process.env.HAL_DECISION_MODE = 'score';
   byModel = {};
   (global as any).fetch = jest.fn(async (_url: string, init: any) => {
     const model = JSON.parse(init.body).model;
@@ -29,6 +33,19 @@ beforeEach(() => {
 
 afterAll(() => {
   global.fetch = originalFetch;
+  delete process.env.HAL_DECISION_MODE;
+});
+
+// B2 (CC1 2026-06-11): lock the NEW default — with NO HAL_DECISION_MODE set, an all-UNCERTAIN
+// opinion must ABSTAIN (not veto). This is the deployed behavior the gating fix delivers.
+describe('B2 default mode (no env) → verdict: pure-UNCERTAIN opinion abstains', () => {
+  test('all-UNCERTAIN with no HAL_DECISION_MODE → abstain, never vetoed', async () => {
+    delete process.env.HAL_DECISION_MODE; // true production default
+    byModel = Object.fromEntries(P.map((p) => [p.model, { verdict: 'UNCERTAIN', confidence: 50 }]));
+    const r = await factCheck('Chocolate ice cream tastes better than vanilla.', P);
+    expect(r.decision).toBe('abstain');
+    expect(r.decision).not.toBe('vetoed');
+  });
 });
 
 describe('factCheck — aggregation + decision', () => {

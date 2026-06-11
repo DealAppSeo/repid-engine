@@ -22,6 +22,7 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
 import crypto from 'crypto';
+import { queryOpenAI } from './lib/openai'; // demoted grounding (support-only) NLI backend
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -106,6 +107,11 @@ export interface FactCheckResult {
   quorum_note?: string; // set only when the resilience gate downgraded a decision
   fallback_used?: 'local_slm';
   confidence?: 'degraded';
+  // DEMOTED grounding (support-not-suppress, HAL_GROUNDING_SUPPORT, default off): an entailment
+  // signal SURFACED as evidence on a 'flagged' decision. It NEVER changes the decision (GA's original
+  // suppression-to-clean is what cost recall) — it only informs a reviewer. Absent unless enabled + fired.
+  context_entails?: boolean;
+  entailment_rationale?: string;
 }
 
 export interface FactCheckOpts {
@@ -322,10 +328,33 @@ function computeQuorum(succeeded: number, attempted: number): 'full' | 'partial'
  * Falls back gracefully when providers fail; returns providers_used=0 (caller
  * should then use the extractor signal) when none respond.
  */
+/**
+ * DEMOTED grounding NLI (GA's evidence-grounding, support-not-suppress). Asks whether `context`
+ * entails `claim`. Returns null on any failure (no key, parse error) so it can NEVER block a call.
+ * Used ONLY to SURFACE a support signal on a 'flagged' decision — it does not suppress vetoes.
+ */
+export async function checkEntailment(
+  claim: string,
+  context: string,
+): Promise<{ entails: boolean; rationale: string } | null> {
+  const systemPrompt =
+    'You are a strict natural-language-inference engine. Decide if the context entails (supports as ' +
+    'true, no contradiction) the claim.\nOutput ONLY JSON: {"entails": true|false, "rationale": "one sentence"}';
+  try {
+    const raw = await queryOpenAI(`Context:\n${context}\n\nClaim: "${claim}"`, systemPrompt, true);
+    const parsed = JSON.parse(raw);
+    return { entails: parsed.entails === true, rationale: String(parsed.rationale ?? '').slice(0, 200) };
+  } catch (e: any) {
+    console.error('[entailment] support check failed (non-blocking):', e?.message);
+    return null;
+  }
+}
+
 export async function factCheck(
   deliverable: string,
   providers: FactCheckProviderCfg[],
   opts: FactCheckOpts = {},
+  context?: string,
 ): Promise<FactCheckResult> {
   const start = Date.now();
   const vetoThreshold = opts.vetoThreshold ?? 0.5;
@@ -436,7 +465,14 @@ export async function factCheck(
   let decision_reason: string | undefined;
   let quorum_note: string | undefined;
 
-  if (process.env.HAL_DECISION_MODE === 'verdict') {
+  // B2 RECONCILIATION (CC1 2026-06-11): VERDICT mode is now the DEFAULT. It is the exact config the
+  // locked HaluEval F1 0.73 was measured under ("verdict-driven, family-diverse"), AND it fixes the
+  // all-UNCERTAIN opinion over-veto cleanly: a veto requires a FALSE QUORUM, so an opinion (0 FALSE)
+  // → 'abstain', never 'vetoed'. Factual detection is UNTOUCHED (>= MIN_QUORUM_FOR_VETO FALSE families
+  // still veto), so 0.73 is preserved by construction — no `providerRisk(UNCERTAIN)` mutation (which
+  // WOULD perturb the score math and conflict with "keep 0.73 untouched"). Revert: HAL_DECISION_MODE='score'.
+  const decisionMode = process.env.HAL_DECISION_MODE ?? 'verdict';
+  if (decisionMode === 'verdict') {
     // A1 — VERDICT-COUNT as the PRIMARY decision (explainability refactor). Family-aware verdict
     // counts drive the decision; hal_score is demoted to a logged secondary signal. Counting
     // distinct FALSE families (not a 0.5 score on UNCERTAIN) is what a non-expert can read.
@@ -481,11 +517,31 @@ export async function factCheck(
     }
   }
 
+  // DEMOTED grounding (support-not-suppress, HAL_GROUNDING_SUPPORT, default OFF): GA's NLI is folded
+  // in here but it NEVER suppresses a decision. Only on a borderline 'flagged' result with context
+  // provided do we surface an entailment signal as EVIDENCE for a reviewer. The decision stands as the
+  // verdict counts set it — so the recall GA traded away (suppression-to-clean) is recovered.
+  let context_entails: boolean | undefined;
+  let entailment_rationale: string | undefined;
+  if (
+    process.env.HAL_GROUNDING_SUPPORT === 'true' &&
+    decision === 'flagged' &&
+    context &&
+    context.trim().length > 0
+  ) {
+    const e = await checkEntailment(deliverable, context);
+    if (e) {
+      context_entails = e.entails;
+      entailment_rationale = e.rationale;
+    }
+  }
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
+    ...(context_entails !== undefined ? { context_entails, entailment_rationale } : {}),
   };
 }
 
