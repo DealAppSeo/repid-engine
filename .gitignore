@@ -13,3 +13,9 @@ hal-ground-truth-template.csv
 .env.local
 .firecrawl/
 verify-crosscheck-report.json
+
+# Secrets — never commit (added 2026-06-12 secrets cleanup)
+railway_env.json
+*.env
+*_vars.txt
+*_secret.key
