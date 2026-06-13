@@ -29,19 +29,29 @@ const FRAMES: Record<string, string> = {
 };
 const ARMS = ['C', 'SH', 'RU', 'SI', 'ST'];
 
-// ── §3 6-family roster + provider map. Exact model string logged at write; model_version from the
-//    provider response. callType selects the API shape. (Frontier models pinned at freeze time.) ──
-type Subject = { key: string; family: string; tier: string; callType: 'openai' | 'anthropic' | 'gemini'; baseUrl?: string; apiKeyEnv: string; model: string };
+// ── §3 7-family roster + provider map. `litellmAlias` routes the family through the LiteLLM proxy
+//    (LITELLM_URL/LITELLM_MASTER_KEY) — preferred, since direct GROQ/DEEPSEEK keys are 401-dead and the
+//    swarm reaches providers via LiteLLM. Aliases verified against the live litellm config 2026-06-13:
+//    [groq-llama, cerebras-llama, anthropic-claude, fireworks-deepseek-r1, fireworks-llama4-maverick,
+//     fireworks-llama31-8b, deepseek-chat, openrouter-fallback]. Only Anthropic/DeepSeek/Llama have a
+//    clean alias today → OpenAI/Gemini/Qwen/Grok need litellm config entries (litellmAlias=null, flagged). ──
+type Subject = { key: string; family: string; tier: string; callType: 'openai' | 'anthropic' | 'gemini'; baseUrl?: string; apiKeyEnv: string; model: string; litellmAlias: string | null };
 const ROSTER: Record<string, Subject> = {
-  'openai':   { key: 'openai',   family: 'OpenAI GPT',      tier: 'frontier-closed', callType: 'openai',    baseUrl: 'https://api.openai.com/v1',     apiKeyEnv: 'OPENAI_API_KEY',    model: 'gpt-4o-mini' },
-  'anthropic':{ key: 'anthropic',family: 'Anthropic Claude',tier: 'frontier-closed', callType: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', model: 'claude-3-5-haiku-latest' },
-  'gemini':   { key: 'gemini',   family: 'Google Gemini',   tier: 'frontier-closed', callType: 'gemini',    apiKeyEnv: 'GEMINI_API_KEY',    model: 'gemini-2.0-flash' },
-  'deepseek': { key: 'deepseek', family: 'DeepSeek',        tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.deepseek.com/v1',   apiKeyEnv: 'DEEPSEEK_API_KEY',  model: 'deepseek-chat' },
-  'qwen':     { key: 'qwen',     family: 'Alibaba Qwen',    tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.together.xyz/v1',    apiKeyEnv: 'TOGETHER_API_KEY',  model: 'Qwen/Qwen2.5-72B-Instruct-Turbo' },
-  'llama':    { key: 'llama',    family: 'Meta Llama',      tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY',      model: 'llama-3.3-70b-versatile' },
+  'openai':   { key: 'openai',   family: 'OpenAI GPT',      tier: 'frontier-closed', callType: 'openai',    baseUrl: 'https://api.openai.com/v1',     apiKeyEnv: 'OPENAI_API_KEY',    model: 'gpt-4o-mini', litellmAlias: null /* TODO: add openai alias to litellm config */ },
+  'anthropic':{ key: 'anthropic',family: 'Anthropic Claude',tier: 'frontier-closed', callType: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', model: 'claude-3-5-haiku-latest', litellmAlias: 'anthropic-claude' },
+  'gemini':   { key: 'gemini',   family: 'Google Gemini',   tier: 'frontier-closed', callType: 'gemini',    apiKeyEnv: 'GEMINI_API_KEY',    model: 'gemini-2.0-flash', litellmAlias: null /* TODO: add gemini alias */ },
+  'deepseek': { key: 'deepseek', family: 'DeepSeek',        tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.deepseek.com/v1',   apiKeyEnv: 'DEEPSEEK_API_KEY',  model: 'deepseek-chat', litellmAlias: 'deepseek-chat' },
+  'qwen':     { key: 'qwen',     family: 'Alibaba Qwen',    tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.together.xyz/v1',    apiKeyEnv: 'TOGETHER_API_KEY',  model: 'Qwen/Qwen2.5-72B-Instruct-Turbo', litellmAlias: null /* TODO: add qwen alias */ },
+  'llama':    { key: 'llama',    family: 'Meta Llama',      tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY',      model: 'llama-3.3-70b-versatile', litellmAlias: 'groq-llama' },
+  'grok':     { key: 'grok',     family: 'xAI Grok',        tier: 'frontier-closed', callType: 'openai',    baseUrl: 'https://api.x.ai/v1',           apiKeyEnv: 'GROK_API_KEY',      model: 'grok-2-latest', litellmAlias: null /* TODO: add grok alias */ },
   // Dry-run / fallback free tier: Cerebras serves zai-glm-4.7 + gpt-oss-120b on this account (NOT Llama).
-  'cerebras': { key: 'cerebras', family: 'Cerebras GLM',     tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.cerebras.ai/v1',     apiKeyEnv: 'CEREBRAS_API_KEY',  model: 'zai-glm-4.7' },
+  'cerebras': { key: 'cerebras', family: 'Cerebras GLM',     tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.cerebras.ai/v1',     apiKeyEnv: 'CEREBRAS_API_KEY',  model: 'zai-glm-4.7', litellmAlias: 'cerebras-llama' },
 };
+
+// Route through the LiteLLM proxy by default (set USE_LITELLM=false for direct provider keys / dry-run).
+const USE_LITELLM = process.env.USE_LITELLM !== 'false';
+const LITELLM_URL = (process.env.LITELLM_URL || '').replace(/\/$/, '');
+const SHA256_EMPTY = '0x' + crypto.createHash('sha256').update('', 'utf8').digest('hex'); // guard sentinel
 
 // ── Sampling — IDENTICAL across arms (§5). R distinct fixed seeds for within-condition variance. ──
 const TEMPERATURE = 0.7;
@@ -106,6 +116,40 @@ async function callModel(s: Subject, prompt: string, seed: number): Promise<{ te
   throw new Error(`${s.key}: rate-limited after retries (429)`);
 }
 
+/** Route a generation through the LiteLLM proxy (OpenAI-compatible). Provider keys live in the proxy,
+ *  so this works when the direct GROQ/DEEPSEEK keys are dead. 429/502/503 (proxy busy/down) → backoff. */
+async function callViaLiteLLM(alias: string, prompt: string, seed: number): Promise<{ text: string; modelVersion: string }> {
+  const key = process.env.LITELLM_MASTER_KEY;
+  if (!LITELLM_URL || !key) throw new Error('LITELLM_URL / LITELLM_MASTER_KEY not set');
+  const body = JSON.stringify({ model: alias, temperature: TEMPERATURE, top_p: TOP_P, seed, max_tokens: 1024, messages: [{ role: 'user', content: prompt }] });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await fetch(`${LITELLM_URL}/v1/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body,
+    });
+    if (r.status === 429 || r.status === 502 || r.status === 503) { await sleep(8000 * (attempt + 1)); continue; }
+    if (!r.ok) throw new Error(`litellm(${alias}) ${r.status}: ${(await r.text()).slice(0, 120)}`);
+    const d: any = await r.json();
+    return { text: (d.choices?.[0]?.message?.content ?? ''), modelVersion: d.model ?? alias };
+  }
+  throw new Error(`litellm(${alias}): unavailable after retries (429/502/503)`);
+}
+
+/** Generate WITH the empty-output guard. Routes via LiteLLM (preferred) or the direct provider, then
+ *  enforces non-empty: a response hashing to sha256("") (or whitespace-only) is RETRIED with backoff;
+ *  if still empty after the retries it throws EMPTY_OUTPUT so the caller NEVER stores it as a datum. */
+async function generate(s: Subject, prompt: string, seed: number): Promise<{ text: string; modelVersion: string }> {
+  if (USE_LITELLM && !s.litellmAlias) {
+    throw new Error(`NO_LITELLM_ALIAS: ${s.family} has no litellm alias — add it to the litellm config (or run USE_LITELLM=false)`);
+  }
+  const route = USE_LITELLM && s.litellmAlias ? () => callViaLiteLLM(s.litellmAlias!, prompt, seed) : () => callModel(s, prompt, seed);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await route();
+    if (res.text.trim().length > 0 && sha256hex(res.text) !== SHA256_EMPTY) return res;
+    if (attempt < 2) { console.error(`  [empty-output guard] ${s.family} seed${seed} attempt ${attempt} returned empty → retrying`); await sleep(4000 * (attempt + 1)); }
+  }
+  throw new Error('EMPTY_OUTPUT'); // exhausted retries → flagged, never written
+}
+
 /** Seal raw text off-chain (private). Ledger stores only the ref + the hash, never the raw text. */
 function sealRaw(runId: string, armId: string, taskId: string, rep: number, text: string): string {
   const dir = path.join(process.env.E1_RAW_DIR || path.join(process.cwd(), 'e1-raw-sealed'), runId, armId, taskId);
@@ -120,7 +164,7 @@ interface Task { task_id: string; text: string }
 async function run(opts: { runId: string; families: string[]; tasks: Task[]; replicates: number }) {
   const sb = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!);
   const seeds = SEEDS_FULL.slice(0, opts.replicates);
-  let ok = 0, fail = 0;
+  let ok = 0, fail = 0, flaggedEmpty = 0;
   for (const famKey of opts.families) {
     const s = ROSTER[famKey];
     if (!s) { console.error('unknown family', famKey); continue; }
@@ -130,7 +174,7 @@ async function run(opts: { runId: string; families: string[]; tasks: Task[]; rep
           const seed = seeds[rep]!;
           const prompt = `${FRAMES[arm]}\n\n${task.text}`;        // identical task; only the frame changes
           try {
-            const { text, modelVersion } = await callModel(s, prompt, seed); // STATELESS (fresh call)
+            const { text, modelVersion } = await generate(s, prompt, seed); // STATELESS + empty-output guard
             const row = {
               run_id: opts.runId, model: s.model, provider: s.key, model_version: modelVersion,
               arm_id: arm, task_id: task.task_id, replicate_idx: rep,
@@ -149,13 +193,16 @@ async function run(opts: { runId: string; families: string[]; tasks: Task[]; rep
             } else {
               ok++; process.stdout.write(`  ${s.family} ${task.task_id} ${arm} r${rep} ✓\n`);
             }
-          } catch (e: any) { fail++; console.error(`  ${s.family} ${task.task_id} ${arm} r${rep} ✗ ${e.message}`); }
+          } catch (e: any) {
+            if (e.message === 'EMPTY_OUTPUT') { flaggedEmpty++; console.error(`  ${s.family} ${task.task_id} ${arm} r${rep} ⚑ FLAGGED empty-output — NOT stored`); }
+            else { fail++; console.error(`  ${s.family} ${task.task_id} ${arm} r${rep} ✗ ${e.message}`); }
+          }
           await sleep(INTER_CALL_MS); // pace to stay under free-tier RPM
         }
       }
     }
   }
-  console.log(`\nDONE run_id=${opts.runId}: ${ok} written, ${fail} failed.`);
+  console.log(`\nDONE run_id=${opts.runId}: ${ok} written, ${flaggedEmpty} flagged-empty (not stored), ${fail} failed.`);
 }
 
 // ── CLI ──
@@ -166,7 +213,30 @@ const runId = arg('--run-id', 'DRYRUN')!;
 const modelOverride = arg('--model');
 if (modelOverride) for (const k of Object.keys(ROSTER)) ROSTER[k]!.model = ROSTER[k]!.key === (arg('--family') || 'cerebras') ? modelOverride : ROSTER[k]!.model;
 
-if (argv.includes('--dry-run')) {
+if (argv.includes('--probe')) {
+  // 1-row reachability probe per roster family via LiteLLM (no writes). Prints raw status.
+  const FAMILIES = ['openai', 'anthropic', 'gemini', 'deepseek', 'qwen', 'llama', 'grok'];
+  (async () => {
+    console.log(`LiteLLM reachability probe — URL=${LITELLM_URL || '(unset)'}  USE_LITELLM=${USE_LITELLM}`);
+    for (const k of FAMILIES) {
+      const s = ROSTER[k]!;
+      if (!s.litellmAlias) { console.log(`  ${s.family.padEnd(18)} alias=(none)               → SKIP: no litellm alias in config (add it)`); continue; }
+      const t0 = Date.now();
+      try {  // one-shot (no retry) for a fast reachability read
+        const r = await fetch(`${LITELLM_URL}/v1/chat/completions`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.LITELLM_MASTER_KEY}` },
+          body: JSON.stringify({ model: s.litellmAlias, messages: [{ role: 'user', content: 'Reply with the single word: pong' }], max_tokens: 8 }),
+        });
+        const ms = Date.now() - t0;
+        if (r.ok) { const d: any = await r.json(); const txt = (d.choices?.[0]?.message?.content ?? '').trim(); console.log(`  ${s.family.padEnd(18)} alias=${s.litellmAlias.padEnd(20)} → OK ${ms}ms reply="${txt.slice(0, 40)}"${txt ? '' : ' [EMPTY]'}`); }
+        else { console.log(`  ${s.family.padEnd(18)} alias=${s.litellmAlias.padEnd(20)} → HTTP ${r.status} ${ms}ms ${(await r.text()).slice(0, 80)}`); }
+      } catch (e: any) {
+        console.log(`  ${s.family.padEnd(18)} alias=${s.litellmAlias.padEnd(20)} → ERR ${e.message}`);
+      }
+      await sleep(1500);
+    }
+  })().catch((e) => { console.error(e); process.exit(1); });
+} else if (argv.includes('--dry-run')) {
   // 1 family × 5 arms × 3 synthetic tasks × R=1 = 15 rows. NOT the sealed corpus.
   const family = arg('--family', 'cerebras')!;
   const tasks: Task[] = [
