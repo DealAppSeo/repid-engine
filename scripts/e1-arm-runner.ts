@@ -33,17 +33,18 @@ const ARMS = ['C', 'SH', 'RU', 'SI', 'ST'];
 //    (LITELLM_URL/LITELLM_MASTER_KEY) — preferred, since direct GROQ/DEEPSEEK keys are 401-dead and the
 //    swarm reaches providers via LiteLLM. Aliases verified against the live litellm config 2026-06-13:
 //    [groq-llama, cerebras-llama, anthropic-claude, fireworks-deepseek-r1, fireworks-llama4-maverick,
-//     fireworks-llama31-8b, deepseek-chat, openrouter-fallback]. Only Anthropic/DeepSeek/Llama have a
-//    clean alias today → OpenAI/Gemini/Qwen/Grok need litellm config entries (litellmAlias=null, flagged). ──
+//     fireworks-llama31-8b, deepseek-chat, openrouter-fallback]. All 7 families now carry an alias so the
+//     runner routes (no SKIP). NOTE: openai-gpt/gemini-flash/qwen-72b/grok-2 are NOT YET in the live
+//     litellm config — Sean must add the 4 model_list entries (report §1, routed via os.environ/OPENROUTER_API_KEY). ──
 type Subject = { key: string; family: string; tier: string; callType: 'openai' | 'anthropic' | 'gemini'; baseUrl?: string; apiKeyEnv: string; model: string; litellmAlias: string | null };
 const ROSTER: Record<string, Subject> = {
-  'openai':   { key: 'openai',   family: 'OpenAI GPT',      tier: 'frontier-closed', callType: 'openai',    baseUrl: 'https://api.openai.com/v1',     apiKeyEnv: 'OPENAI_API_KEY',    model: 'gpt-4o-mini', litellmAlias: null /* TODO: add openai alias to litellm config */ },
+  'openai':   { key: 'openai',   family: 'OpenAI GPT',      tier: 'frontier-closed', callType: 'openai',    baseUrl: 'https://api.openai.com/v1',     apiKeyEnv: 'OPENAI_API_KEY',    model: 'gpt-4o-mini', litellmAlias: 'openai-gpt' /* add to litellm config: openrouter/openai/gpt-4o-mini */ },
   'anthropic':{ key: 'anthropic',family: 'Anthropic Claude',tier: 'frontier-closed', callType: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', model: 'claude-3-5-haiku-latest', litellmAlias: 'anthropic-claude' },
-  'gemini':   { key: 'gemini',   family: 'Google Gemini',   tier: 'frontier-closed', callType: 'gemini',    apiKeyEnv: 'GEMINI_API_KEY',    model: 'gemini-2.0-flash', litellmAlias: null /* TODO: add gemini alias */ },
+  'gemini':   { key: 'gemini',   family: 'Google Gemini',   tier: 'frontier-closed', callType: 'gemini',    apiKeyEnv: 'GEMINI_API_KEY',    model: 'gemini-2.0-flash', litellmAlias: 'gemini-flash' /* add to litellm config: openrouter/google/gemini-2.0-flash-001 */ },
   'deepseek': { key: 'deepseek', family: 'DeepSeek',        tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.deepseek.com/v1',   apiKeyEnv: 'DEEPSEEK_API_KEY',  model: 'deepseek-chat', litellmAlias: 'deepseek-chat' },
-  'qwen':     { key: 'qwen',     family: 'Alibaba Qwen',    tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.together.xyz/v1',    apiKeyEnv: 'TOGETHER_API_KEY',  model: 'Qwen/Qwen2.5-72B-Instruct-Turbo', litellmAlias: null /* TODO: add qwen alias */ },
+  'qwen':     { key: 'qwen',     family: 'Alibaba Qwen',    tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.together.xyz/v1',    apiKeyEnv: 'TOGETHER_API_KEY',  model: 'Qwen/Qwen2.5-72B-Instruct-Turbo', litellmAlias: 'qwen-72b' /* add to litellm config: openrouter/qwen/qwen-2.5-72b-instruct */ },
   'llama':    { key: 'llama',    family: 'Meta Llama',      tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY',      model: 'llama-3.3-70b-versatile', litellmAlias: 'groq-llama' },
-  'grok':     { key: 'grok',     family: 'xAI Grok',        tier: 'frontier-closed', callType: 'openai',    baseUrl: 'https://api.x.ai/v1',           apiKeyEnv: 'GROK_API_KEY',      model: 'grok-2-latest', litellmAlias: null /* TODO: add grok alias */ },
+  'grok':     { key: 'grok',     family: 'xAI Grok',        tier: 'frontier-closed', callType: 'openai',    baseUrl: 'https://api.x.ai/v1',           apiKeyEnv: 'GROK_API_KEY',      model: 'grok-2-latest', litellmAlias: 'grok-2' /* add to litellm config: openrouter/x-ai/grok-2-1212 */ },
   // Dry-run / fallback free tier: Cerebras serves zai-glm-4.7 + gpt-oss-120b on this account (NOT Llama).
   'cerebras': { key: 'cerebras', family: 'Cerebras GLM',     tier: 'open-weight',     callType: 'openai',    baseUrl: 'https://api.cerebras.ai/v1',     apiKeyEnv: 'CEREBRAS_API_KEY',  model: 'zai-glm-4.7', litellmAlias: 'cerebras-llama' },
 };
