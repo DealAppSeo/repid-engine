@@ -1,0 +1,15 @@
+{
+  "preRegistration": {
+    "doc": "REPID_E1_PREREGISTRATION.md",
+    "version": "v1.0-DRAFT",
+    "status": "PROVISIONAL — pre-registration NOT yet frozen. At Gate-2 freeze, replace this object with the frozen-doc SHA-256 before computing the final commitHash.",
+    "design": "5-arm factorial (C/SH/RU/SI/ST) x 30 tasks x 6 families x R=5 = 4500 generations",
+    "arms": ["C", "SH", "RU", "SI", "ST"]
+  },
+  "taskSet": {
+    "corpusHash": "c798c270c34389482f913dc19fefd53534a059324e541d1f1e88543609b468da",
+    "note": "REAL sealed-corpus hash (e1_sealed_corpus). The full task instances reduce to this hash."
+  },
+  "seeds": [1001, 1002, 1003, 1004, 1005],
+  "analysisCodeHash": "a7245671c1fcb188c3a48d3e3400e118f65e3efe"
+}
