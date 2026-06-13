@@ -16,7 +16,7 @@
 
 CREATE TABLE IF NOT EXISTS public.e1_response_ledger (
   id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  run_id          uuid        NOT NULL,                 -- the experiment run (one pre-registration/commit)
+  run_id          text        NOT NULL,                 -- human-readable run name ('DRYRUN', 'E1-CONFIRMATORY-…')
   model           text        NOT NULL,                 -- e.g. 'llama-3.1-8b-instant'  (denormalized provenance)
   provider        text        NOT NULL,                 -- e.g. 'groq'
   model_version   text,                                 -- provider-reported version/snapshot if available
@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS public.e1_response_ledger (
   scoring_version text        NOT NULL,                 -- the scoring code/rubric version applied
   created_at      timestamptz NOT NULL DEFAULT now(),
   -- One row per (run, arm, task, replicate): blocks duplicate/double writes of the same cell.
-  CONSTRAINT e1_response_ledger_cell_uniq UNIQUE (run_id, arm_id, task_id, replicate_idx)
+  -- prod-applied cell key includes `model` (one model per family → equivalent cell key); verify-first authoritative.
+  CONSTRAINT e1_response_ledger_cell_uniq UNIQUE (run_id, model, arm_id, task_id, replicate_idx)
 );
 
 COMMENT ON TABLE public.e1_response_ledger IS
@@ -49,7 +50,10 @@ ALTER TABLE public.e1_response_ledger FORCE ROW LEVEL SECURITY;  -- table owner 
 
 -- Revoke every grant from the public-facing roles (belt). service_role bypasses RLS for the writer.
 REVOKE ALL ON public.e1_response_ledger FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT ON public.e1_response_ledger TO service_role;  -- read + append only; NO update/delete
+-- Supabase DEFAULT PRIVILEGES grant service_role ALL at CREATE — revoke down to read+append so even
+-- service_role cannot UPDATE/DELETE/TRUNCATE (the TRUNCATE gap a row-level trigger cannot catch).
+REVOKE ALL ON public.e1_response_ledger FROM service_role;
+GRANT SELECT, INSERT ON public.e1_response_ledger TO service_role;  -- read + append only; NO update/delete/truncate
 
 -- RLS policy: only service_role may read/insert (suspenders — even if a grant leaks later).
 DROP POLICY IF EXISTS e1_ledger_service_only ON public.e1_response_ledger;
