@@ -22,6 +22,14 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
 import crypto from 'crypto';
+import {
+  sbfaConsensus,
+  votesFromVerdicts,
+  ConstantReliabilityOracle,
+  type SbfaDecision,
+  type StakesLevel,
+  type ActionKind,
+} from './sbfa-consensus';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -106,6 +114,33 @@ export interface FactCheckResult {
   quorum_note?: string; // set only when the resilience gate downgraded a decision
   fallback_used?: 'local_slm';
   confidence?: 'degraded';
+  // --- SBFA v0.2 shadow (additive; default-on SHADOW only, never changes `decision`). Exposes the
+  // belief / ignorance / confidence the verdict event needs (§7 CC). The decision-replacement path is
+  // a SEPARATE flag gated on the A6 co-sign with GA. See src/hal/sbfa-consensus.ts. ---
+  sbfa?: {
+    decision: SbfaDecision; // 'act' | 'hold' | 'abstain' | 'escalate' (shadow — advisory only)
+    belief: number; // DST mass on {act warranted}
+    belief_not: number; // DST mass on {no action}
+    ignorance_mass: number; // DST mass on {uncertain} (Yager)
+    confidence: number; // 1 − ignorance
+    weighted_agreement: number;
+    escalate_to: 'contested_bft' | null;
+    correlated_warning: boolean;
+    comma_conservative: boolean;
+    reliability_source: string;
+    enforced: boolean; // true only if SBFA actually changed the live decision (A6-gated)
+  };
+}
+
+/** Map fact-check thresholds onto SBFA stakes/action. Reversible safety surface = protective. */
+function sbfaStakes(): StakesLevel {
+  const s = (process.env.HAL_SBFA_STAKES ?? 'medium').toLowerCase();
+  return s === 'low' || s === 'high' || s === 'irreversible' ? (s as StakesLevel) : 'medium';
+}
+function sbfaAction(): ActionKind {
+  // HAL veto is a reputation penalty (reversible via dispute) → protective by default; set
+  // HAL_SBFA_ACTION=punitive to apply the irreversible-slash bar.
+  return process.env.HAL_SBFA_ACTION === 'punitive' ? 'punitive' : 'protective';
 }
 
 export interface FactCheckOpts {
@@ -481,11 +516,50 @@ export async function factCheck(
     }
   }
 
+  // --- SBFA v0.2 SHADOW (default ON; pure, no I/O). Computes the reliability-weighted-supermajority
+  // + Yager-abstain verdict from the SAME per-provider verdicts and exposes belief/ignorance/confidence
+  // for the verdict event (§7 CC). It does NOT change `decision` unless HAL_SBFA_ENFORCE=true (the
+  // A6-gated path), and even then only to DEFER a would-be veto (never to manufacture one). ---
+  let sbfaField: FactCheckResult['sbfa'];
+  if (process.env.HAL_SBFA_SHADOW !== 'false') {
+    try {
+      const votes = votesFromVerdicts(verdicts);
+      // Placeholder oracle until GA wires the verified-outcome oracle (§2.1). NOT a real reliability source.
+      const oracle = new ConstantReliabilityOracle(0.7, 4);
+      const v = sbfaConsensus({ votes, stakes: sbfaStakes(), action: sbfaAction(), category: 'factual', oracle });
+      let enforced = false;
+      if (process.env.HAL_SBFA_ENFORCE === 'true' && decision === 'vetoed' && (v.decision === 'abstain' || v.decision === 'escalate')) {
+        // A6-gated: SBFA says "insufficient consensus / defer" → downgrade the veto to flagged (defer,
+        // do not punish). Never the reverse. Logged loudly so the override is auditable.
+        decision = 'flagged';
+        enforced = true;
+        quorum_note = `SBFA v0.2 ${v.decision} (belief ${v.belief_act.toFixed(3)}, ignorance ${v.ignorance_mass.toFixed(3)}): would-be 'vetoed' deferred to 'flagged'. ${v.reason}`;
+      }
+      sbfaField = {
+        decision: v.decision,
+        belief: v.belief_act,
+        belief_not: v.belief_not,
+        ignorance_mass: v.ignorance_mass,
+        confidence: v.confidence,
+        weighted_agreement: v.weighted_agreement,
+        escalate_to: v.escalate_to,
+        correlated_warning: v.correlated_warning,
+        comma_conservative: v.comma_conservative,
+        reliability_source: v.reliability_source,
+        enforced,
+      };
+    } catch {
+      // Shadow must never break the live path — swallow and continue without the field.
+      sbfaField = undefined;
+    }
+  }
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
+    ...(sbfaField ? { sbfa: sbfaField } : {}),
   };
 }
 
