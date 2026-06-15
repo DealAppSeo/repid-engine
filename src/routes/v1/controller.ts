@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../../db';
 import { requireRole, mintQrToken } from '../../middleware/controller-auth';
 import { setAgentEnabled } from '../../services/agent-controls';
+import { hitlService, HitlResolution } from '../../services/hitl-service';
 
 // Controller API (CC2 2026-05-26) — backend for the aitc controller-UI rebuild
 // (v0.app). All routes are gated by role permissions.
@@ -264,6 +265,92 @@ router.post('/sprint/:agent_id', requireRole('admin'), async (req, res) => {
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true, agent, sprint_task_id: data?.id });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HITL REQUEST endpoints — controller-pwa deep-link surface (CC 2026-06-15)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /requests/pending — viewer+: list open HITL requests awaiting decision.
+// Must be registered BEFORE /requests/:id to avoid "pending" being matched as :id.
+router.get('/requests/pending', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const data = await hitlService.getPendingRequests({ limit });
+    res.json({ data });
+  } catch (err: any) {
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch pending requests' } });
+  }
+});
+
+// GET /requests/history — viewer+: resolved HITL rows from hal_audit_chain.
+// Returns entries where source_table = 'hitl_requests' ordered newest-first.
+router.get('/requests/history', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const { data, error } = await db
+      .from('hal_audit_chain')
+      .select('id, source_id, event_payload, created_at')
+      .eq('source_table', 'hitl_requests')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: error.message } });
+    }
+    res.json({ data: data || [] });
+  } catch (err: any) {
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch history' } });
+  }
+});
+
+// GET /requests/:id — viewer+: fetch a single HITL request by UUID.
+router.get('/requests/:id', async (req, res) => {
+  try {
+    const data = await hitlService.getRequest(req.params.id);
+    if (!data) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Request not found' } });
+    }
+    res.json({ data });
+  } catch (err: any) {
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch request' } });
+  }
+});
+
+// POST /requests/:id/decide — operator+: approve or deny a pending HITL request.
+// Maps: decision='approved' → resolution='approve_claimer'
+//       decision='denied'   → resolution='challenge_claimer'
+router.post('/requests/:id/decide', requireRole('operator'), async (req, res) => {
+  try {
+    const { decision, note } = req.body || {};
+
+    if (decision !== 'approved' && decision !== 'denied') {
+      return res.status(400).json({
+        error: { code: 'BAD_REQUEST', message: "decision must be 'approved' or 'denied'" }
+      });
+    }
+
+    const resolution: HitlResolution = decision === 'approved' ? 'approve_claimer' : 'challenge_claimer';
+
+    // Derive reviewer identity from the authenticated controller context.
+    const reviewer = (req as any).controllerRole ?? 'controller-operator';
+
+    const requestId = String(req.params.id ?? '');
+    const data = await hitlService.resolveRequest({
+      requestId,
+      resolution,
+      notes: typeof note === 'string' ? note : undefined,
+      reviewer
+    });
+
+    res.json({ ok: true, data });
+  } catch (err: any) {
+    const msg: string = err?.message ?? 'Failed to decide on request';
+    if (msg.includes('Not found') || msg.includes('not found')) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: msg } });
+    }
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: msg } });
+  }
 });
 
 export default router;
