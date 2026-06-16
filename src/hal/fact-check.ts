@@ -31,6 +31,7 @@ import {
   type StakesLevel,
   type ActionKind,
 } from './sbfa-consensus';
+import { hashText, generateNonce } from '../zkp/commitment';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -131,6 +132,14 @@ export interface FactCheckResult {
     reliability_source: string;
     enforced: boolean; // true only if SBFA actually changed the live decision (A6-gated)
     trace: SbfaTrace; // GLASS BOX — structured + human-readable decision trace (wrapper + HITL PWA)
+    // PHASE A — honesty stack bound to THIS verdict (agent_id folded in downstream where it's known).
+    // The pipeline/drain builds buildHonestyCommitment({...honesty, agent_id}) → zk_commitment + hal_audit_chain.
+    honesty: {
+      prompt_hash: string; // hashText(deliverable)
+      decision_text_hash: string; // hashText(decision + reason + sbfa decision)
+      nonce: string; // fresh per verdict
+      timestamp: string; // ISO-8601 — binds the decision time (anti-backdate)
+    };
   };
 }
 
@@ -558,6 +567,13 @@ export async function factCheck(
       // Placeholder oracle until GA wires the verified-outcome oracle (§2.1). NOT a real reliability source.
       const oracle = new ConstantReliabilityOracle(0.7, 4);
       const v = sbfaConsensus({ votes, stakes: sbfaStakes(), action: sbfaAction(), category: 'factual', oracle });
+      // PHASE A — honesty stack: bind the prompt, the decision text, a fresh nonce, and the time.
+      const honesty = {
+        prompt_hash: hashText(deliverable),
+        decision_text_hash: hashText(`${decision}|${decision_reason ?? ''}|${v.decision}|${v.belief_act.toFixed(4)}|${v.ignorance_mass.toFixed(4)}`),
+        nonce: generateNonce(),
+        timestamp: new Date().toISOString(),
+      };
       let enforced = false;
       if (process.env.HAL_SBFA_ENFORCE === 'true' && decision === 'vetoed' && (v.decision === 'abstain' || v.decision === 'escalate')) {
         // A6-gated: SBFA says "insufficient consensus / defer" → downgrade the veto to flagged (defer,
@@ -579,6 +595,7 @@ export async function factCheck(
         reliability_source: v.reliability_source,
         enforced,
         trace: v.trace,
+        honesty,
       };
       // SAMPLED (~10%), OFF-HOT-PATH telemetry for the Gate-ON measurement — fire-and-forget, never awaited.
       if (sbfaSampleHit()) {
@@ -598,8 +615,10 @@ export async function factCheck(
           }
         });
       }
-    } catch {
-      // Shadow must never break the live path — swallow and continue without the field.
+    } catch (err) {
+      // Shadow must never break the live path — but do NOT swallow silently (PHASE A honesty):
+      // log loud so a broken Glass Box is visible, then continue without the field.
+      console.error('[hal/sbfa] shadow/Glass-Box computation failed (live decision unaffected):', err instanceof Error ? err.message : err);
       sbfaField = undefined;
     }
   }

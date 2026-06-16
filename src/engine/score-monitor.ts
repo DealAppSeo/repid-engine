@@ -20,5 +20,9 @@ export async function scoreMonitor() {
       }
       lastScores.set(agent.id, agent.current_repid);
     }
-  } catch (err) {}
+  } catch (err) {
+    // PHASE A — no silent swallow: a monitor failure (DB outage, schema drift) must be visible,
+    // not hidden. Log loud; the monitor is non-fatal so we still return without throwing.
+    console.error('[score-monitor] tick failed:', err instanceof Error ? err.message : err);
+  }
 }
