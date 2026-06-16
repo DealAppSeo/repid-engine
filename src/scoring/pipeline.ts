@@ -32,7 +32,8 @@ import {
 import { computeDelta, HALDecision } from './repid-delta';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
-import { halService } from '../hal/service';
+import { halService, type HalEvaluationResponse } from '../hal/service';
+import { hitlService } from '../services/hitl-service';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -179,6 +180,111 @@ async function shouldTriggerProof(agentId: string, deltaMagnitude: number): Prom
   return typeof count === 'number' && count > 0 && (count + 1) % 10 === 0;
 }
 
+/**
+ * HITL threshold for the HAL/SBFA trace producer (decoupled from the veto threshold).
+ * Reads `hal_hitl_threshold` from repid_config. Default 0.7.
+ *
+ * Direction (GA CORRECTED): ABOVE the threshold → human auditor. A high hal_score
+ * means the output is likely false/risky — exactly the case where an async human
+ * should review the decision trace. This is the OPPOSITE direction from the veto
+ * threshold (veto fires when score >= veto threshold; human review fires the same way —
+ * score >= hitl_threshold — but at a separate, tunable level so the human-review bar
+ * can be set independently from the penalty bar).
+ *
+ * SBFA `escalate` and `abstain` also trigger regardless of score (the panel is telling
+ * us it can't decide — human review is the only honest answer).
+ */
+async function resolveHitlThreshold(): Promise<number> {
+  try {
+    const { data } = await db
+      .from('repid_config')
+      .select('value')
+      .eq('key', 'hal_hitl_threshold')
+      .maybeSingle();
+    const v = (data as any)?.value;
+    if (v !== null && v !== undefined) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
+    }
+  } catch {
+    // repid_config unavailable — fall through to default (non-fatal)
+  }
+  return 0.7; // safe default: only clearly-bad scores trigger human review
+}
+
+/**
+ * Escalation-trace-producer (feat/cc-2026-06-16-escalation-trace-producer).
+ *
+ * When a HAL/SBFA decision crosses the human-trigger threshold (hal_score ABOVE
+ * hal_hitl_threshold, OR SBFA says 'escalate'/'abstain'), create (or idempotently
+ * return) a HITL request whose context.sbfa carries the full SBFA verdict + Glass
+ * Box trace so the controller-pwa Glass Box renderer has everything it needs.
+ *
+ * Contract:
+ *  - NEVER throws (all failures are logged + suppressed — cannot block scoring).
+ *  - Gated by HITL_TRACE_PRODUCER env flag (default 'true' = on; set 'false' to disable).
+ *  - Fires only when halEval.sbfa is present (strictness-2 / fact-check path only).
+ *  - taskId is a BigInt trinity_tasks.id; if the caller has no task we use 0 as a
+ *    sentinel (the HITL table accepts any integer; 0 is the "no-task" sentinel for
+ *    pipeline-level escalations not tied to a specific task).
+ */
+export async function maybeCreateHitlForHalVerdict(opts: {
+  halScore: number;
+  halEval: HalEvaluationResponse | null;
+  agentId: string;
+  scoreEventId?: number;
+  taskId?: number;
+}): Promise<{ id: string; created: boolean } | null> {
+  if (process.env.HITL_TRACE_PRODUCER === 'false') return null;
+
+  // Only fire on the fact-check path (sbfa is present only when strictness=2 ran a real quorum).
+  const sbfa = opts.halEval?.sbfa;
+  if (!sbfa) return null;
+
+  // Determine whether any trigger condition is met.
+  const threshold = await resolveHitlThreshold();
+  const scoreAbove = opts.halScore > threshold;  // ABOVE (GA CORRECTED direction)
+  const sbfaNeedsHuman = sbfa.decision === 'escalate' || sbfa.decision === 'abstain';
+
+  if (!scoreAbove && !sbfaNeedsHuman) return null;
+
+  const reason = sbfa.decision === 'escalate'
+    ? 'sbfa_escalate'
+    : sbfa.decision === 'abstain'
+      ? 'sbfa_abstain'
+      : 'hal_score_above_threshold';
+
+  try {
+    const result = await hitlService.createRequest({
+      taskId: opts.taskId ?? 0,
+      validationQueueId: null,
+      reason,
+      context: {
+        taskSnapshot: {
+          agent_id: opts.agentId,
+          score_event_id: opts.scoreEventId ?? null,
+          hal_score: opts.halScore,
+          hal_hitl_threshold: threshold,
+          trigger: scoreAbove
+            ? `hal_score ${opts.halScore.toFixed(3)} > threshold ${threshold.toFixed(3)}`
+            : `sbfa.decision=${sbfa.decision}`,
+        },
+        sbfa, // GLASS BOX — the full SBFA verdict + trace; controller-pwa renders request.context.sbfa
+      },
+      priority: reason === 'sbfa_escalate' ? 8 : 6, // escalation is higher priority than score-only
+    });
+    return result;
+  } catch (err) {
+    // Non-fatal: log loudly (RULE-11) but NEVER rethrow — scoring must never be blocked by HITL.
+    console.error(
+      `[pipeline/trace-producer] HITL createRequest FAILED for agent=${opts.agentId} ` +
+        `reason=${reason} hal_score=${opts.halScore.toFixed(3)} — scoring unaffected:`,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
 export async function runScoreEvent(
   input: ScoreEventInput
 ): Promise<ScoreEventResult> {
@@ -206,6 +312,8 @@ export async function runScoreEvent(
   let vetoed = false;
   let signals: Record<string, unknown> = {};
   let halError: string | null = null;
+  // Captured only on the strictness-2 path — carries sbfa for the trace producer.
+  let halEvalFull: HalEvaluationResponse | null = null;
   try {
     if (halStrictness >= 2) {
       // Discriminative path — providers built by halService; falls back to the
@@ -215,6 +323,7 @@ export async function runScoreEvent(
         context: { domain: input.task_domain ?? 'finance', certainty: typeof input.certainty === 'number' ? input.certainty : 0.85 },
         strictness: 2,
       });
+      halEvalFull = r; // captured for trace-producer (sbfa lives here)
       hal_score = Number.isFinite(r.hal_score) ? r.hal_score : 0.5;
       vetoed = r.decision === 'vetoed';
       signals = { ...(r.signals as Record<string, unknown>), hal_mode: r.mode, hal_strictness: 2 };
@@ -462,6 +571,21 @@ export async function runScoreEvent(
 
   // 9. Leaderboard refresh — repid_leaderboard_public is a regular VIEW
   //    (not materialized) per Phase 1 schema query, so no refresh needed.
+
+  // 10. HITL trace-producer (feat/cc-2026-06-16-escalation-trace-producer).
+  //     Fire-and-forget: non-fatal, never awaited before the return so it cannot
+  //     add latency to the scoring response. The SBFA trace inside halEvalFull is
+  //     attached to the HITL request context so the controller-pwa Glass Box
+  //     renderer always has the full decision trace when a human review is needed.
+  //     Only fires when HITL_TRACE_PRODUCER !== 'false' AND halEvalFull.sbfa exists
+  //     (strictness-2 / fact-check path with a real quorum).
+  void maybeCreateHitlForHalVerdict({
+    halScore: hal_score,
+    halEval: halEvalFull,
+    agentId: input.agent_id,
+    scoreEventId: score_event_id,
+    taskId: undefined, // pipeline-level event (not bound to a specific trinity_tasks.id)
+  });
 
   return {
     score_event_id,
