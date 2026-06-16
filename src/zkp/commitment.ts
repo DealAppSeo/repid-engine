@@ -54,3 +54,46 @@ export function buildPostcardCommitment(input: PostcardCommitmentInput): string 
   ].join('|');
   return '0x' + createHash('sha256').update(parts).digest('hex');
 }
+
+/** sha256(text) as 0x-hex. Hash-agnostic helper (swaps to Poseidon2 with the migration). */
+export function hashText(text: string): string {
+  return '0x' + createHash('sha256').update(text ?? '').digest('hex');
+}
+
+/**
+ * PHASE A — the HONESTY STACK bound into the SBFA verdict + zk_commitment.
+ *
+ * Binds the *decision provenance* — which prompt, which decision text, which agent, a fresh nonce,
+ * and a timestamp — so a stored verdict/commitment can't be silently swapped, replayed, or
+ * back-dated. Any change to ANY field changes the commitment (tamper-evident). The same construction
+ * holds when the inner hash becomes Poseidon2 (Invariant 1); sha256 here matches the live 0x-hex
+ * family so it is drop-in compatible today.
+ */
+export interface HonestyStack {
+  agent_id: string;
+  prompt_hash: string; // hashText(input prompt / deliverable)
+  decision_text_hash: string; // hashText(decision + reason + belief/ignorance)
+  nonce: string; // generateNonce() — fresh per verdict
+  timestamp: string; // ISO-8601, bound so a verdict can't be back-dated
+  sbfa_decision?: string; // 'act'|'hold'|'abstain'|'escalate'
+  hal_score?: number;
+}
+
+/**
+ * Deterministic over the honesty stack; unique per verdict via the nonce; tamper-evident (any field
+ * change ⇒ a different commitment). This is the value bound into the SBFA verdict AND folded into the
+ * proof's zk_commitment so the queued/anchored artifact is provably tied to THIS decision.
+ */
+export function buildHonestyCommitment(h: HonestyStack): string {
+  const parts = [
+    'honesty_v1',
+    h.agent_id,
+    h.prompt_hash,
+    h.decision_text_hash,
+    h.nonce,
+    h.timestamp,
+    h.sbfa_decision ?? '',
+    h.hal_score == null ? '' : h.hal_score.toFixed(6),
+  ].join('|');
+  return '0x' + createHash('sha256').update(parts).digest('hex');
+}
