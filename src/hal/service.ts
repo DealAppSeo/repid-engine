@@ -7,7 +7,7 @@
  * the extractor (strictness:1). Decoupled from the scoring pipeline / db so it's
  * independently testable and embeddable.
  */
-import { factCheck, buildFactCheckProviders, type FactCheckProviderCfg } from './fact-check';
+import { factCheck, buildFactCheckProviders, type FactCheckProviderCfg, type FactCheckResult } from './fact-check';
 import { evaluate } from './lib/evaluate';
 
 export type Product = 'trustshell' | 'trusttrader' | 'trustcre' | 'default';
@@ -28,6 +28,9 @@ export interface HalEvaluationResponse {
   signals: Record<string, unknown>;
   provider_responses?: unknown[];
   latency_ms: number;
+  // GLASS BOX — SBFA v0.2 belief/ignorance/confidence + the structured human-readable decision trace.
+  // Surfaced to the wrapper verdict event + the HITL PWA. Present only on the fact-check (strictness-2) path.
+  sbfa?: FactCheckResult['sbfa'];
 }
 
 interface Profile {
@@ -89,6 +92,7 @@ export class HalService {
               ...(fc.quorum_note ? { quorum_note: fc.quorum_note } : {}),
             },
             provider_responses: fc.verdicts, latency_ms: Date.now() - start,
+            ...(fc.sbfa ? { sbfa: fc.sbfa } : {}),
           };
         }
       }
