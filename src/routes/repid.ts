@@ -136,22 +136,23 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
   const agentId = String(req.params.agentId ?? '');
   if (!agentId) return res.status(400).json({ error: 'agentId required' });
 
-  // Prefer a real, WASM-verifiable plonky3 proof; fall back to the latest row so callers
-  // can see legacy (stub) state honestly rather than a 404.
+  // Prefer a real, WASM-verifiable plonky3 proof (is_real=true after 2026-06-15 migration);
+  // fall back to the latest row so callers can see legacy (stub) state honestly rather than a 404.
+  // is_real=true gate: STAGED — requires 2026-06-15-zkp-is-real-discriminator.sql to be applied.
   const base = db
     .from('repid_zkp_proofs')
     .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at')
     .eq('agent_id', agentId);
 
   let { data, error } = await base
-    .eq('scheme', 'plonky3_range_check')
-    .not('proof_bytes', 'is', null)
+    .eq('is_real', true)  // GATED: only real Plonky3 proofs (scheme NOT NULL AND proof_bytes present)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (!error && !data) {
     // No real proof yet — return the latest row of any kind (honest legacy/stub state).
+    // Callers MUST check cryptographically_verifiable=false to distinguish stubs.
     ({ data, error } = await db
       .from('repid_zkp_proofs')
       .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at')

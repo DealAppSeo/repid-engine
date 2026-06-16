@@ -24,6 +24,14 @@ function requireEnv(name: string, fallback?: string): string {
 async function main(): Promise<void> {
   const supabaseUrl = requireEnv('SUPABASE_URL');
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || requireEnv('SUPABASE_SERVICE_KEY');
+  // REAL-PROVER ROUTING (Phase 2, 2026-06-15):
+  // Default changed: point to the real Plonky3 prover (hyperdag-core) so new proofs write
+  // real scheme + proof_bytes. The old zkp-postcard stub prover is the fallback for legacy.
+  // Sean sets ZKP_SERVICE_URL=https://hyperdag-core-production.up.railway.app on Railway.
+  // ⚠️  ALSO set ZKP_SERVICE_URL on repid-engine (pipeline.ts enqueue) to the SAME URL so the
+  //     queue's zkp_service_url column matches and the drain worker's filter picks them up.
+  //     Existing queue rows with the old URL stay on the old worker — they will drain normally
+  //     once the old drain depletes them; new enqueues go to the new URL.
   const zkpServiceUrl = process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app';
 
   const pollIntervalMs = process.env.PROOF_DRAIN_POLL_INTERVAL_MS ? parseInt(process.env.PROOF_DRAIN_POLL_INTERVAL_MS, 10) : 2000;
@@ -54,7 +62,22 @@ async function main(): Promise<void> {
     batchSize
   });
 
+  // Boot log — makes a silent crash visible in Railway logs immediately.
+  console.log(`[ProofDrainService] boot complete: zkpServiceUrl=${zkpServiceUrl} PROOF_DRAIN_RECORD_REAL_FIELDS=${process.env.PROOF_DRAIN_RECORD_REAL_FIELDS ?? 'false'} EAS_CONTINUOUS_ANCHOR_ENABLED=${process.env.EAS_CONTINUOUS_ANCHOR_ENABLED ?? 'false'}`);
+
   await service.start();
+
+  // Periodic heartbeat: logs a one-liner every 60 s so a frozen/looping worker is visible
+  // as a gap in Railway log timestamps. Does NOT affect scoring or DB writes; purely
+  // observability. RULE-8: setInterval ref-counted by the process; cleared on shutdown.
+  const HEARTBEAT_INTERVAL_MS = 60_000;
+  const heartbeatTimer = setInterval(() => {
+    const s = service.getStatus();
+    console.log(
+      `[ProofDrainService][heartbeat] status=${s.status} ticks=${s.ticksTotal} completed=${s.jobsCompletedTotal} failed=${s.jobsFailedTotal} lastTick=${s.lastTickAt ?? 'never'} lastDrain=${s.lastDrainAt ?? 'never'}`
+    );
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref(); // don't hold the event loop open for the timer alone
 
   const app = express();
   app.use(express.json({ limit: '64kb' }));
@@ -89,6 +112,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string) => {
     console.log(`[ProofDrainService] Received ${signal}; shutting down...`);
+    clearInterval(heartbeatTimer);
     await service.stop();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5000).unref();

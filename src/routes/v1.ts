@@ -178,15 +178,30 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing required fields: agent_id, tier' });
   }
 
-  // Lookup the canonical stored proof (repid_zkp_proofs is the home for proof artifacts post Phase 7)
-  const { data: proofRow, error: lookupError } = await db
+  // Lookup the canonical stored proof (repid_zkp_proofs is the home for proof artifacts post Phase 7).
+  // is_real=true gate: STAGED — requires 2026-06-15-zkp-is-real-discriminator.sql to be applied.
+  // Prefer real Plonky3 proofs; fall back to any proof (stub) so legacy callers aren't 404'd.
+  let { data: proofRow, error: lookupError } = await db
     .from('repid_zkp_proofs')
     .select('*')
     .eq('agent_id', agent_id)
     .eq('tier_proven', tier)
+    .eq('is_real', true)  // GATED: only real Plonky3 proofs
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+
+  if (!lookupError && !proofRow) {
+    // No real proof — fall back to any (stub) row so the endpoint is still usable.
+    ({ data: proofRow, error: lookupError } = await db
+      .from('repid_zkp_proofs')
+      .select('*')
+      .eq('agent_id', agent_id)
+      .eq('tier_proven', tier)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle());
+  }
 
   if (lookupError) {
     console.error('[verify-proof] lookup error', lookupError);
