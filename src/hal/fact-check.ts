@@ -27,6 +27,7 @@ import {
   votesFromVerdicts,
   ConstantReliabilityOracle,
   type SbfaDecision,
+  type SbfaTrace,
   type StakesLevel,
   type ActionKind,
 } from './sbfa-consensus';
@@ -129,7 +130,29 @@ export interface FactCheckResult {
     comma_conservative: boolean;
     reliability_source: string;
     enforced: boolean; // true only if SBFA actually changed the live decision (A6-gated)
+    trace: SbfaTrace; // GLASS BOX — structured + human-readable decision trace (wrapper + HITL PWA)
   };
+}
+
+/**
+ * SBFA shadow telemetry sink — pluggable, OFF the hot path. Default logs a structured one-liner
+ * (visible in Railway logs, zero DB dependency). GA can replace it with a DB writer for the Gate-ON
+ * measurement. NEVER called synchronously in the request path — see the sampled setImmediate below.
+ */
+export type SbfaTelemetry = (row: {
+  live_decision: HalDecision;
+  sbfa_decision: SbfaDecision;
+  belief: number;
+  ignorance_mass: number;
+  weighted_agreement: number;
+  enforced: boolean;
+}) => void;
+let sbfaTelemetrySink: SbfaTelemetry = (row) => {
+  console.log(`[sbfa-shadow] live=${row.live_decision} sbfa=${row.sbfa_decision} belief=${row.belief.toFixed(3)} ign=${row.ignorance_mass.toFixed(3)} agree=${row.weighted_agreement.toFixed(3)} enforced=${row.enforced}`);
+};
+/** Test/GA seam to swap the telemetry sink (e.g. a DB writer). */
+export function setSbfaTelemetrySink(sink: SbfaTelemetry): void {
+  sbfaTelemetrySink = sink;
 }
 
 /** Map fact-check thresholds onto SBFA stakes/action. Reversible safety surface = protective. */
@@ -141,6 +164,12 @@ function sbfaAction(): ActionKind {
   // HAL veto is a reputation penalty (reversible via dispute) → protective by default; set
   // HAL_SBFA_ACTION=punitive to apply the irreversible-slash bar.
   return process.env.HAL_SBFA_ACTION === 'punitive' ? 'punitive' : 'protective';
+}
+/** ~10% sampling for the OFF-hot-path shadow telemetry. SBFA_SHADOW_SAMPLE_RATE in [0,1], default 0.1. */
+function sbfaSampleHit(): boolean {
+  const r = Number(process.env.SBFA_SHADOW_SAMPLE_RATE);
+  const rate = Number.isFinite(r) && r >= 0 && r <= 1 ? r : 0.1;
+  return Math.random() < rate;
 }
 
 export interface FactCheckOpts {
@@ -516,10 +545,12 @@ export async function factCheck(
     }
   }
 
-  // --- SBFA v0.2 SHADOW (default ON; pure, no I/O). Computes the reliability-weighted-supermajority
-  // + Yager-abstain verdict from the SAME per-provider verdicts and exposes belief/ignorance/confidence
-  // for the verdict event (§7 CC). It does NOT change `decision` unless HAL_SBFA_ENFORCE=true (the
-  // A6-gated path), and even then only to DEFER a would-be veto (never to manufacture one). ---
+  // --- SBFA v0.2 SHADOW + GLASS BOX (default ON). ZERO extra inference: it reuses the per-provider
+  // verdicts already computed and makes NO new LLM calls. The decision trace is pure DST math (sub-ms),
+  // attached to EVERY decision so the wrapper + HITL PWA always have the Glass Box (§7 CC, task 3).
+  // The live `decision` is NOT changed unless HAL_SBFA_ENFORCE=true (A6-gated, defer-only). Telemetry
+  // persistence for the Gate-ON measurement is SAMPLED (~10%) and fired OFF the hot path (setImmediate,
+  // never awaited) — so prod never eats latency and the shadow can never block a live decision. ---
   let sbfaField: FactCheckResult['sbfa'];
   if (process.env.HAL_SBFA_SHADOW !== 'false') {
     try {
@@ -547,7 +578,26 @@ export async function factCheck(
         comma_conservative: v.comma_conservative,
         reliability_source: v.reliability_source,
         enforced,
+        trace: v.trace,
       };
+      // SAMPLED (~10%), OFF-HOT-PATH telemetry for the Gate-ON measurement — fire-and-forget, never awaited.
+      if (sbfaSampleHit()) {
+        const liveDecision = decision; // final live decision (post-enforce)
+        setImmediate(() => {
+          try {
+            sbfaTelemetrySink({
+              live_decision: liveDecision,
+              sbfa_decision: v.decision,
+              belief: v.belief_act,
+              ignorance_mass: v.ignorance_mass,
+              weighted_agreement: v.weighted_agreement,
+              enforced,
+            });
+          } catch {
+            /* telemetry must never affect the request */
+          }
+        });
+      }
     } catch {
       // Shadow must never break the live path — swallow and continue without the field.
       sbfaField = undefined;

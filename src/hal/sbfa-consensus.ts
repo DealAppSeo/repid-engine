@@ -84,6 +84,38 @@ export interface SbfaInput {
   nearDeadlockCount?: number;
 }
 
+/** GLASS BOX — per-validator evidence contribution (what each model added to the decision). */
+export interface SbfaVoteTrace {
+  validator: string;
+  modelVersion: string;
+  family?: string;
+  belief: number; // P(action warranted) this validator asserted
+  confidence: number; // 0..1 stated confidence
+  reliability_mean: number; // oracle Beta mean — the earned weight
+  reliability_alpha: number;
+  reliability_beta: number;
+  trust: number; // confidence × reliability — the Shafer discount applied
+  contributes_act: number; // this vote's own discounted DST mass toward {act}
+  contributes_not: number;
+  contributes_ignorance: number;
+}
+
+/** GLASS BOX — the full structured, human-readable decision trace (the differentiator made visible). */
+export interface SbfaTrace {
+  votes: SbfaVoteTrace[];
+  fused: { belief_act: number; belief_not: number; ignorance_mass: number };
+  weighted_agreement: number;
+  act_threshold: number;
+  ignorance_cap: number;
+  min_confidence: number;
+  stakes: StakesLevel;
+  action: ActionKind;
+  reliability_source: string;
+  flags: { correlated_warning: boolean; comma_conservative: boolean; near_deadlock_triggered: boolean };
+  /** One human-readable line per step: who voted, weights, quorum math, why act/defer/pass. */
+  lines: string[];
+}
+
 export interface SbfaVerdict {
   decision: SbfaDecision;
   /** Dempster-Shafer (Yager) masses over the frame {act}, {¬act}, {uncertain}. Sum to 1. */
@@ -107,6 +139,8 @@ export interface SbfaVerdict {
   comma_conservative: boolean;
   reliability_source: string;
   reason: string;
+  /** GLASS BOX decision trace — always present (cheap, pure). Surfaced in the verdict event + HITL PWA. */
+  trace: SbfaTrace;
 }
 
 /** Risk-scaled supermajority bars (§2.2). Punitive raises the bar; protective lowers it (§1). */
@@ -212,6 +246,19 @@ export function sbfaConsensus(input: SbfaInput): SbfaVerdict {
       comma_conservative: false,
       reliability_source: oracle.source,
       reason: 'No validator votes — maximal ignorance, deferring.',
+      trace: {
+        votes: [],
+        fused: { belief_act: 0, belief_not: 0, ignorance_mass: 1 },
+        weighted_agreement: 0.5,
+        act_threshold: ACT_BAR[stakes],
+        ignorance_cap: IGNORANCE_CAP[stakes],
+        min_confidence: MIN_CONFIDENCE_TO_ACT[stakes],
+        stakes,
+        action,
+        reliability_source: oracle.source,
+        flags: { correlated_warning: false, comma_conservative: false, near_deadlock_triggered: false },
+        lines: ['No validator responded — the panel has nothing to weigh. Maximal ignorance → defer.'],
+      },
     };
   }
 
@@ -219,13 +266,29 @@ export function sbfaConsensus(input: SbfaInput): SbfaVerdict {
   let mass: [number, number, number] = [0, 0, 1]; // vacuous: all ignorance
   const beliefs: number[] = [];
   const families = new Set<string>();
+  const voteTraces: SbfaVoteTrace[] = [];
   for (const v of votes) {
     const w = oracle.getWeight(v.validator, v.modelVersion, category);
     const denom = w.alpha + w.beta;
     const reliabilityMean = denom > 0 ? w.alpha / denom : 0.5;
-    mass = yagerCombine(mass, voteToBpa(v.belief, v.confidence, reliabilityMean));
+    const bpa = voteToBpa(v.belief, v.confidence, reliabilityMean); // this vote's OWN discounted evidence
+    mass = yagerCombine(mass, bpa);
     beliefs.push(clamp01(v.belief));
     if (v.familyKey) families.add(v.familyKey);
+    voteTraces.push({
+      validator: v.validator,
+      modelVersion: v.modelVersion,
+      family: v.familyKey,
+      belief: clamp01(v.belief),
+      confidence: clamp01(v.confidence),
+      reliability_mean: reliabilityMean,
+      reliability_alpha: w.alpha,
+      reliability_beta: w.beta,
+      trust: clamp01(v.confidence) * clamp01(reliabilityMean),
+      contributes_act: bpa[0],
+      contributes_not: bpa[1],
+      contributes_ignorance: bpa[2],
+    });
   }
 
   const [belief_act, belief_not, ignorance_mass] = mass;
@@ -298,6 +361,42 @@ export function sbfaConsensus(input: SbfaInput): SbfaVerdict {
     reason += ` | Chronic near-deadlock accumulator fired (${near_deadlock_count} ≥ ${CHRONIC_NEAR_DEADLOCK_THRESHOLD}) → forcing escalation (inertia-exploitation guard, §5).`;
   }
 
+  // --- 6. GLASS BOX trace (cheap, pure — built from values already computed). ---
+  const f2 = (x: number) => x.toFixed(2);
+  const f3 = (x: number) => x.toFixed(3);
+  const lines: string[] = [];
+  lines.push(`SBFA v0.2 · stakes=${stakes} · action=${action} · reliability=${oracle.source}`);
+  for (const t of voteTraces) {
+    const fam = t.family ? `/${t.family}` : '';
+    lines.push(
+      `· ${t.validator} (${t.modelVersion}${fam}): believes ACTION ${f2(t.belief)} @ conf ${f2(t.confidence)}, ` +
+        `earned reliability ${f2(t.reliability_mean)} ⇒ evidence act ${f2(t.contributes_act)} / ¬act ${f2(t.contributes_not)} / ignorance ${f2(t.contributes_ignorance)}`
+    );
+  }
+  lines.push(
+    `Fused (Yager DST): belief(act)=${f3(belief_act)}, belief(¬act)=${f3(belief_not)}, ignorance=${f3(ignorance_mass)}; ` +
+      `weighted agreement=${f3(weighted_agreement)}, confidence=${f3(confidence)}.`
+  );
+  lines.push(`Bars (${stakes}/${action}): act ≥ ${actBar}, ignorance ≤ ${ignoranceCap}, confidence ≥ ${minConf}.`);
+  if (correlated_warning) lines.push(`⚠ Correlated panel: ${families.size} independent famil${families.size === 1 ? 'y' : 'ies'} across ${votes.length} one-sided votes — treat as weaker (§5 common-mode).`);
+  if (comma_conservative) lines.push(`⚠ P-003 coordinated-dissonance: tight agreement at high belief — declining to auto-punish.`);
+  if (near_deadlock_triggered) lines.push(`⚠ Chronic near-deadlock (${near_deadlock_count} ≥ ${CHRONIC_NEAR_DEADLOCK_THRESHOLD}) — forced escalation (§5 inertia guard).`);
+  lines.push(`DECISION: ${decision.toUpperCase()}${escalate_to ? ` → ${escalate_to}` : ''} — ${reason}`);
+
+  const trace: SbfaTrace = {
+    votes: voteTraces,
+    fused: { belief_act, belief_not, ignorance_mass },
+    weighted_agreement,
+    act_threshold: actBar,
+    ignorance_cap: ignoranceCap,
+    min_confidence: minConf,
+    stakes,
+    action,
+    reliability_source: oracle.source,
+    flags: { correlated_warning, comma_conservative, near_deadlock_triggered },
+    lines,
+  };
+
   return {
     decision,
     belief_act,
@@ -313,6 +412,7 @@ export function sbfaConsensus(input: SbfaInput): SbfaVerdict {
     comma_conservative,
     reliability_source: oracle.source,
     reason,
+    trace,
   };
 }
 

@@ -165,6 +165,39 @@ describe('SBFA v0.2 — degenerate + oracle', () => {
   });
 });
 
+describe('SBFA v0.2 — Glass Box trace', () => {
+  test('trace mirrors the fused masses + per-vote evidence + a DECISION line', () => {
+    const v = run([vote(0.95, 0.95, 'a', 'fa'), vote(0.9, 0.9, 'b', 'fb'), vote(0.2, 0.7, 'c', 'fc')]);
+    expect(v.trace.votes).toHaveLength(3);
+    expect(v.trace.fused.belief_act).toBeCloseTo(v.belief_act, 9);
+    expect(v.trace.fused.ignorance_mass).toBeCloseTo(v.ignorance_mass, 9);
+    // each vote exposes reliability + its own discounted DST contribution
+    for (const t of v.trace.votes) {
+      expect(t.reliability_mean).toBeGreaterThan(0);
+      const sum = t.contributes_act + t.contributes_not + t.contributes_ignorance;
+      expect(sum).toBeCloseTo(1, 6);
+    }
+    // human-readable: a header, per-vote lines, a fusion line, and a DECISION line
+    expect(v.trace.lines.length).toBeGreaterThanOrEqual(5);
+    expect(v.trace.lines.some((l) => l.startsWith('DECISION:'))).toBe(true);
+    expect(v.trace.lines.some((l) => l.includes('Fused (Yager DST)'))).toBe(true);
+  });
+
+  test('trace surfaces the P-003 and correlated flags as warning lines', () => {
+    const v = run([vote(0.9, 0.95, 'a', 'llama'), vote(0.905, 0.95, 'b', 'llama'), vote(0.908, 0.95, 'c', 'llama')], {
+      action: 'punitive', stakes: 'high',
+    });
+    expect(v.trace.flags.comma_conservative).toBe(true);
+    expect(v.trace.lines.some((l) => l.includes('P-003'))).toBe(true);
+  });
+
+  test('empty panel still produces a trace with a defer line', () => {
+    const v = run([], { stakes: 'low' });
+    expect(v.trace.votes).toHaveLength(0);
+    expect(v.trace.lines.length).toBeGreaterThan(0);
+  });
+});
+
 describe('SBFA v0.2 — votesFromVerdicts adapter', () => {
   test('FALSE→high belief, TRUE→low belief, UNCERTAIN→0.5/low-conf, ERROR dropped', () => {
     const votes = votesFromVerdicts([
