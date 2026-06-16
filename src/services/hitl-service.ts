@@ -1,11 +1,15 @@
 import { db as supabase } from '../db';
+import type { FactCheckResult } from '../hal/fact-check';
 
 export type HitlReason =
   | 'judge_escalated'
   | 'pcp_low_confidence'
   | 'judge_pcp_disagreement'
   | 'manual_review'
-  | 'timeout_escalation';
+  | 'timeout_escalation'
+  | 'hal_score_above_threshold'   // HAL score crossed hal_hitl_threshold (async human auditor)
+  | 'sbfa_escalate'               // SBFA decision = 'escalate' (contested panel, needs human)
+  | 'sbfa_abstain';               // SBFA decision = 'abstain' (no checkable claim, human review)
 
 export type HitlResolution =
   | 'approve_claimer'
@@ -27,8 +31,15 @@ export interface HitlContext {
   judgeVerdict?: string;
   judgeConfidence?: number;
   validatorAgents?: string[];
-  taskSnapshot: Record<string, unknown>;
+  taskSnapshot?: Record<string, unknown>;
   workerVerdictPreHitl?: string;
+  /**
+   * GLASS BOX — SBFA v0.2 belief/ignorance/confidence + structured decision trace.
+   * Populated by the escalation-trace-producer (feat/cc-2026-06-16) when a HAL/SBFA
+   * decision crosses the human-trigger threshold (hal_hitl_threshold).
+   * The controller-pwa Glass Box renderer reads request.context?.sbfa (or .sbfa_trace).
+   */
+  sbfa?: FactCheckResult['sbfa'];
 }
 
 export interface HitlRequest {
