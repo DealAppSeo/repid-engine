@@ -3,6 +3,7 @@ import { startValidationWorker } from './services/validation-queue-worker';
 import { startTrinityTaskBridge } from './services/trinity-task-bridge';
 import { startHitlNotificationDispatcher } from './services/hitl-notification-dispatcher';
 import { startPeerVerificationReader } from './services/peer-verification-reader';
+import { startPeerVerificationReaper } from './services/peer-verification-reaper';
 import { startHitlExpirySweeper } from './services/hitl-expiry-sweeper';
 import cors from 'cors';
 import { isAllowedOrigin } from './utils/cors-origins';
@@ -946,6 +947,7 @@ startHitlExpirationJob();
 if (!IS_TEST) {
   startTrinityTaskBridge();
   startPeerVerificationReader(db);
+  startPeerVerificationReaper(); // self-heals stuck in_review (flag PEER_VERIFY_REAPER_ENABLED, default off)
 }
 
 // Phase 2.11 — Dispute Resolution Worker
