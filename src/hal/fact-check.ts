@@ -673,6 +673,22 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   if (qw && process.env.HAL_S2_ENABLE_QWEN === 'true') {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
   }
+  // S-QUORUM-HEALTH (2026-06-17): healthy drawer families to replace the degraded always-on pair.
+  // Live llm_call_log (48h) — groq 1.31% (dying), cerebras ~62% (degraded), gemini 0.10% (dead).
+  // These are healthy/independent alternate hosts; each gated by key + HAL_S2_ENABLE_<X>=true
+  // (opt-in, reversible). Pick models from DISTINCT base-model families to keep votes independent.
+  const tg = (process.env.TOGETHER_API_KEY || process.env.TOGETHERAI_API_KEY)?.trim();
+  if (tg && process.env.HAL_S2_ENABLE_TOGETHER === 'true') {
+    out.push({ name: 'together', endpoint: 'https://api.together.xyz/v1/chat/completions', apiKey: tg, model: process.env.HAL_S2_TOGETHER_MODEL ?? 'Qwen/Qwen2.5-72B-Instruct-Turbo', family: process.env.HAL_S2_TOGETHER_FAMILY ?? 'qwen' });
+  }
+  const sn = process.env.SAMBANOVA_API_KEY?.trim();
+  if (sn && process.env.HAL_S2_ENABLE_SAMBANOVA === 'true') {
+    out.push({ name: 'sambanova', endpoint: 'https://api.sambanova.ai/v1/chat/completions', apiKey: sn, model: process.env.HAL_S2_SAMBANOVA_MODEL ?? 'Meta-Llama-3.3-70B-Instruct', family: process.env.HAL_S2_SAMBANOVA_FAMILY ?? 'llama' });
+  }
+  const di = process.env.DEEPINFRA_API_KEY?.trim();
+  if (di && process.env.HAL_S2_ENABLE_DEEPINFRA === 'true') {
+    out.push({ name: 'deepinfra', endpoint: 'https://api.deepinfra.com/v1/openai/chat/completions', apiKey: di, model: process.env.HAL_S2_DEEPINFRA_MODEL ?? 'mistralai/Mistral-Small-24B-Instruct-2501', family: process.env.HAL_S2_DEEPINFRA_FAMILY ?? 'mistral' });
+  }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity).
   for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
