@@ -18,7 +18,7 @@
 
 import { pgQuery } from '../db/direct-pg';
 import { db } from '../db';
-import { runScoreEvent, ScoreEventResult } from '../scoring/pipeline';
+import { ScoreEventResult } from '../scoring/pipeline';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -81,9 +81,12 @@ async function isCollusionCapExceeded(
     const count = parseInt(rows[0]?.n ?? '0', 10);
     return count >= COLLUSION_CAP;
   } catch (err: any) {
-    // Fail safe: if we can't check, allow the reward (don't accidentally block honest verifiers)
-    console.warn('[validation-writeback] collusion cap check failed, allowing reward:', err.message);
-    return false;
+    // XC GATE (§"Secondary seam — collusion check fail-open"): fail-CLOSED. If the cap cannot be
+    // verified, treat the pair as capped (skip the validator reward) rather than pay out blind —
+    // a check outage must not become a gaming path. An honest verifier loses at most one reward on
+    // a transient DB error; a colluding ring cannot exploit a check failure.
+    console.warn('[validation-writeback] collusion cap check failed → fail-closed (treating as capped):', err.message);
+    return true;
   }
 }
 
@@ -239,28 +242,16 @@ export async function emitBilateralWriteback(params: {
     writeback_version: 'v1',
   };
 
-  // ── Emit validator event ─────────────────────────────────────────────────
-  // D-4: idempotency key binds verifier UUID explicitly (prevents HMAC impersonation replay)
+  // ── Emit validator event (direct INSERT only) ────────────────────────────
+  // D-4: idempotency key binds verifier UUID explicitly (prevents HMAC impersonation replay).
+  // XC GATE (XC_WRITEBACK_GATE_ATWB_VERDICT.md §"runScoreEvent + direct-INSERT conflict"):
+  // the prior runScoreEvent pre-call that lived here was REMOVED. It (1) inserted under the
+  // SAME idempotency_key, so the canonical VALIDATOR_REWARD row below was silently skipped in
+  // production; (2) wrote event_type='HAL_SCORE_EVENT', re-firing repid_score_events_peer_verify
+  // _trigger → spurious pvq re-enqueue (recursion); (3) applied a HAL-computed delta, not the
+  // canonical D-1/D-5 peer-verify delta. The direct INSERT below + the peer_verify:% partial
+  // unique index are the single correct write path.
   const validatorKey = `${base}:validator:${verifierAgentId}`;
-  let validatorEvent: ScoreEventResult | undefined;
-
-  if (validatorDelta !== 0 || !collusionCapped) {
-    // Even if delta=0 after collusion cap, we still emit for the audit trail unless capped
-    if (!collusionCapped) {
-      validatorEvent = await runScoreEvent({
-        agent_id: verifierAgentId,
-        prompt: `peer_verify: ${claimText ? claimText.slice(0, 200) : '(no claim text)'}`,
-        answer: `verdict:${verdict} pvq:${pvqId}`,
-        idempotency_key: validatorKey,
-        task_domain: 'peer_verification',
-        contract_id: undefined,
-      });
-      // Override the delta: runScoreEvent computes HAL-based delta; we need the canonical
-      // peer-verify delta. We emit through runScoreEvent for idempotency/audit infra only,
-      // then insert a separate event_type row for the actual peer_verify delta.
-      // See NOTE below — we emit a SUPPLEMENTARY event with the correct type/delta.
-    }
-  }
 
   // Insert the canonical peer-verify scored events via applyValidationEvent-shaped insert
   // (direct DB insert to ensure event_type accuracy — runScoreEvent always writes HAL_SCORE_EVENT)
