@@ -130,8 +130,15 @@ router.get('/metrics', async (req: Request, res: Response) => {
  * - If proof_bytes present: real WASM cryptographic verify using the proven path.
  * - If absent (stub/sha256 rows): honest "attested, not cryptographically verified".
  * Used by the /verify-proof endpoint and fixture tests.
+ *
+ * SECURITY (XC PROOF_INTEGRITY_DEFENSES §6 / agent_id column-bind):
+ * publicInputs are constructed EXCLUSIVELY from the stored proof row — never from
+ * request body / caller-supplied data.  A caller cannot override agent_id or tier
+ * by passing them in the body: the DB query already scoped the row to the requested
+ * (agent_id, tier), so the row's own fields are the authoritative binding.
+ * The claimedStatement parameter has been removed to eliminate the override surface.
  */
-export async function verifyProofCryptographically(proofRow: any, claimedStatement?: any) {
+export async function verifyProofCryptographically(proofRow: any) {
   if (!proofRow) {
     return { valid: false, cryptographically_verified: false, error: 'no proof row' };
   }
@@ -140,7 +147,10 @@ export async function verifyProofCryptographically(proofRow: any, claimedStateme
     try {
       // Proven verification path (the independent WASM one exercised in the negative suite)
       const verifierMod: any = await import('@hyperdag/proof-verifier');
-      const publicInputs = proofRow.statement || claimedStatement || {
+      // Always bind from stored columns — never let the caller supply publicInputs.
+      // proofRow.statement is the canonical form (written by the prover at insert time);
+      // fall back to column-level fields only when statement was not recorded (older rows).
+      const publicInputs = proofRow.statement ?? {
         agent_id: proofRow.agent_id,
         tier: proofRow.tier_proven,
       };
@@ -196,7 +206,9 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
     return res.status(404).json({ error: 'No stored proof found for this agent and tier' });
   }
 
-  const result = await verifyProofCryptographically(proofRow, req.body);
+  // agent_id comes exclusively from the stored proof row — req.body is NOT passed through.
+  // See verifyProofCryptographically doc-comment for the security rationale.
+  const result = await verifyProofCryptographically(proofRow);
 
   // Preserve logging/webhook shape for downstream consumers
   const { error: logError } = await db.from('trinity_agent_logs').insert({
