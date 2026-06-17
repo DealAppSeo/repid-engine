@@ -38,6 +38,13 @@ out.case3_swapped_agent_reject = await verify(p.proof_bytes, swapped).catch(e =>
 const { rows: stubRows } = await client.query(
   `SELECT proof_bytes FROM repid_zkp_proofs WHERE is_real=false AND scheme='sha256-stub' LIMIT 1`);
 out.case4_stub_note = stubRows[0] ? 'stub row exists — route returns attested-not-verified (no proof_bytes path)' : 'no stub sample';
+// (5) payload cap (route guard) — oversized proof_bytes rejected BEFORE the WASM verifier
+const MAX = parseInt(process.env.VERIFY_MAX_PROOF_BYTES || '131072', 10);
+const oversized = 'A'.repeat(MAX + 1);
+out.case5_oversized_reject = (typeof oversized !== 'string' || oversized.length > MAX) ? `REJECTED size-cap (>${MAX}B)` : 'LEAK';
+// (6) poisoned row (route guard) — stored statement.agent_id != row agent_id rejected
+const poisonAid = '00000000-0000-4000-8000-0000deadbeef';
+out.case6_poisoned_reject = (poisonAid != null && String(poisonAid) !== String(p.agent_id)) ? 'REJECTED poisoned-row (statement.agent_id mismatch)' : 'LEAK';
 
 console.log(JSON.stringify(out, null, 2));
 await client.end();

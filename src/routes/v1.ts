@@ -145,6 +145,13 @@ export async function verifyProofCryptographically(proofRow: any) {
 
   if (proofRow.proof_bytes) {
     try {
+      // HARDENING (XC LIVELOOP_REDTEAM — payload cap): never route an oversized or wrong-typed
+      // stored proof into the WASM verifier (DoS surface). Real plonky3 proofs are ~14 KB; cap
+      // generously and reject before doing any work.
+      const MAX_PROOF_BYTES = parseInt(process.env.VERIFY_MAX_PROOF_BYTES || '131072', 10); // 128 KB
+      if (typeof proofRow.proof_bytes !== 'string' || proofRow.proof_bytes.length > MAX_PROOF_BYTES) {
+        return { valid: false, cryptographically_verified: false, error: 'proof exceeds size cap or wrong type' };
+      }
       // Proven verification path (the independent WASM one exercised in the negative suite)
       const verifierMod: any = await import('@hyperdag/proof-verifier');
       // Construct the verifier's public inputs {agent_id, repid_score, threshold, tier}.
@@ -154,6 +161,12 @@ export async function verifyProofCryptographically(proofRow: any) {
       // threshold from the stored statement. Verified live (tests/zk-proof/verify-proof-harness.mjs):
       // real proof VALID-accepts; byte-tampered + swapped-agent_id both reject (InvalidOpeningArgument).
       const s = (proofRow.statement && typeof proofRow.statement === 'object') ? proofRow.statement : {};
+      // HARDENING (XC LIVELOOP_REDTEAM — poisoned-row guard): if the stored statement carries an
+      // agent_id that disagrees with the row's typed agent_id column, the row is inconsistent
+      // (poisoned write-path) — reject rather than verify. Binding still always uses the column.
+      if (s.agent_id != null && String(s.agent_id) !== String(proofRow.agent_id)) {
+        return { valid: false, cryptographically_verified: false, error: 'poisoned row: statement.agent_id mismatch' };
+      }
       const publicInputs = {
         agent_id: proofRow.agent_id,
         repid_score: s.repid_score,
