@@ -147,11 +147,17 @@ export async function verifyProofCryptographically(proofRow: any) {
     try {
       // Proven verification path (the independent WASM one exercised in the negative suite)
       const verifierMod: any = await import('@hyperdag/proof-verifier');
-      // Always bind from stored columns — never let the caller supply publicInputs.
-      // proofRow.statement is the canonical form (written by the prover at insert time);
-      // fall back to column-level fields only when statement was not recorded (older rows).
-      const publicInputs = proofRow.statement ?? {
+      // Construct the verifier's public inputs {agent_id, repid_score, threshold, tier}.
+      // The stored statement carries repid_score + threshold but NOT agent_id/tier, so passing
+      // it raw fails serde ("missing field agent_id"). Bind agent_id + tier from the TYPED
+      // COLUMNS (authoritative — never caller-supplied, spoof-safe) and take repid_score +
+      // threshold from the stored statement. Verified live (tests/zk-proof/verify-proof-harness.mjs):
+      // real proof VALID-accepts; byte-tampered + swapped-agent_id both reject (InvalidOpeningArgument).
+      const s = (proofRow.statement && typeof proofRow.statement === 'object') ? proofRow.statement : {};
+      const publicInputs = {
         agent_id: proofRow.agent_id,
+        repid_score: s.repid_score,
+        threshold: s.threshold,
         tier: proofRow.tier_proven,
       };
       const valid = await verifierMod.verify(proofRow.proof_bytes, publicInputs);
