@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import crypto from 'crypto';
+import { emitBilateralWriteback } from '../services/validation-loop-writeback';
 
 // CC2 2026-05-27: HMAC-gated POST /respond for Gemini's peer_verify task handler.
 //
@@ -201,63 +202,46 @@ router.post('/respond', async (req: Request, res: Response) => {
 
     const row = updated[0]!;
 
-    // ----- Dogfooding: co-sign → RepID event wiring (Phase 3) ----------------
-    // Verified co-sign (verifier resolved claim as 'verified', opened artifact) writes
-    // +RepID to producer (source) AND verifier via repid_score_events.
-    // False-PASS (e.g. 'disputed' tag-resolve-fail on what was rubber-stamped) slashes verifier.
-    // Reuses peer_verification_queue (the resolution site) + repid_score_events.
-    // Flag default OFF; ON only post CC honest-HAL merge (see below).
-    // Grok calibration (documented):
-    //  - 20–30% re-verification sampling for small set (4 + T12): bootstrap awards every
-    //    verified co-sign (N small; later probabilistic). Deterministic on high-value claims
-    //    (HAL quorum, EAS anchors, on-chain writes, canonical handoffs) — this path qualifies.
-    //  - Conservative slash curve: first false-PASS = warning log + small decay (e.g. -2);
-    //    repeated/high-impact = heavier (escalate to -10+, review). Cross-dimensional penalties:
-    //    high collaboration score + low delivery/HAL-accuracy → manual review flag.
-    //  - Tests (see tests/peer-verification.test.ts or dogfood-cosign.test.ts): verified+delta,
-    //    false-PASS slash, flag-OFF no-op.
-    // Activation: switch ON only post CC honest-HAL merge (feat/cc-2026-06-04-honest-hal +
-    // HAL_DECISION_REQUIRES_QUORUM live in scorer). Do NOT score on pre-merge scorer.
-    const DOGFOOD_REPID_FROM_COSIGN =
-      (process.env.DOGFOOD_REPID_FROM_COSIGN || 'false').toLowerCase() === 'true';
-    if (DOGFOOD_REPID_FROM_COSIGN) {
+    // ----- Phase 2: Bilateral writeback (VALIDATION_WRITEBACK_ENABLED, default OFF) ----
+    // Wire terminal verdict → repid_score_events for BOTH agents (validator β + source α).
+    // XC defenses implemented: D-1 anchor-gated, D-3 collusion cap, D-4 HMAC-bind idempotency,
+    // D-5 diminishing returns. Flag default OFF — nothing moves RepID until Sean co-signs.
+    //
+    // Previous DOGFOOD_REPID_FROM_COSIGN path was a +3/−2 mini delta with no defenses;
+    // this replaces it with the full canonical bilateral writeback from the spec.
+    if (verdict === 'verified' || verdict === 'disputed') {
       const producerId = row.source_agent_id as string;
       const verifierId = row.verifier_agent_id as string | null;
-      const claimRef = (row.claim_text as string) || `queue:${queue_id}`;
-      try {
-        if (verdict === 'verified' && verifierId) {
-          const d = 3; // small positive for verified collab (calib bootstrap)
-          await db.from('repid_score_events').insert([
-            {
-              agent_id: producerId,
-              event_type: 'dogfood_cosign_verified',
-              delta: d,
-              metadata: { role: 'producer', queue_id, claim: claimRef, co_signer: verifierName },
-            },
-            {
-              agent_id: verifierId,
-              event_type: 'dogfood_cosign_verified',
-              delta: d,
-              metadata: { role: 'verifier', queue_id, claim: claimRef, co_signer: verifierName },
-            },
-          ]);
-          console.log(`[dogfood] +${d} RepID cosign verified producer=${producerId} verifier=${verifierId}`);
-        } else if (verdict === 'disputed' && verifierId) {
-          // false-PASS / rubber-stamp slash (conservative -2 first offense)
-          await db.from('repid_score_events').insert({
-            agent_id: verifierId,
-            event_type: 'dogfood_false_pass_slash',
-            delta: -2,
-            metadata: { reason: 'tag-resolve-fail-disputed', queue_id, claim: claimRef },
+      if (verifierId) {
+        try {
+          const result = await emitBilateralWriteback({
+            pvqId: row.id as string | number,
+            verdict: verdict as 'verified' | 'disputed',
+            verifierAgentId: verifierId,
+            sourceAgentId: producerId,
+            sourceResponseId: (row as any).source_response_id ?? null,
+            claimText: row.claim_text as string | null,
           });
-          console.warn(`[dogfood] -2 RepID false-PASS slash verifier=${verifierId} queue=${queue_id}`);
+          if (result.skipped) {
+            console.log(
+              `[peer-verify/writeback] skipped queue_id=${queue_id}: ${result.skip_reason}`,
+            );
+          } else if (result.idempotent_replay) {
+            console.log(`[peer-verify/writeback] idempotent replay queue_id=${queue_id} — 0 new rows`);
+          } else {
+            console.log(
+              `[peer-verify/writeback] bilateral events emitted queue_id=${queue_id} ` +
+              `validator=${result.validator_event?.score_event_id ?? 'n/a'} ` +
+              `source=${result.source_event?.score_event_id ?? 'n/a'} ` +
+              `anchor=${result.anchor_found} collusion_capped=${result.collusion_capped} ` +
+              `multiplier=${result.diminishing_multiplier}`,
+            );
+          }
+        } catch (e: any) {
+          // Non-fatal: verification stands even if writeback fails
+          console.error(`[peer-verify/writeback] bilateral writeback error queue_id=${queue_id}: ${e?.message ?? e}`);
         }
-      } catch (e: any) {
-        console.warn(`[dogfood] repid cosign event insert failed: ${e?.message ?? e}`);
       }
-    } else if (verdict === 'verified') {
-      // Flag OFF: explicit no-op log (proves wiring present but gated)
-      console.log(`[dogfood] flag OFF (DOGFOOD_REPID_FROM_COSIGN=false) — no RepID delta for cosign queue_id=${queue_id}`);
     }
 
     // ----- Complete matching trinity_tasks row (bonus, best-effort) ----------
