@@ -2,6 +2,7 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { handleHitlCallback } from '../services/hitl-callback-handler';
 import { listAgentControls, setAgentEnabled } from '../services/agent-controls';
+import { fetchVerticalLeaderboard } from '../services/vertical-leaderboard';
 const router = express.Router();
 
 const supabase = createClient(
@@ -124,20 +125,20 @@ router.post('/webhook', async (req, res) => {
           + `${live ? ' (live)' : ''}`;
       });
 
-      const { data } = await supabase
-        .from('repid_agents')
-        .select('agent_name,current_repid,tier,vdr_count')
-        .order('current_repid', { ascending: false })
-        .limit(6);
-      const vdr = (await supabase.from('repid_agents').select('vdr_count'))
-        .data?.reduce((s,a)=>s+(a.vdr_count||0),0) || 0;
+      const lb = await fetchVerticalLeaderboard();
+      const topOverall = lb.overall.slice(0, 6);
+      const topVerticals = Object.entries(lb.by_vertical)
+        .filter(([, entries]) => entries.length > 0)
+        .slice(0, 3)
+        .map(([v, entries]) => `  ${v}: ${entries[0]!.agent_name} (${entries[0]!.domain_pct ?? entries[0]!.current_repid}%)`);
+
       reply = `🤖 <b>TRINITY SYMPHONY</b>\n`
         + `<b>Controls</b>\n${controlLines.join('\n') || '(none)'}\n\n`
-        + `VDR: ${vdr}\n\n`
-        + (data||[]).map(a=>
-          `${(a.tier==='AUTONOMOUS'||a.tier==='VETERAN')?'🔵':a.tier==='ESTABLISHED'?'🟡':'⚪'} `
-          +`${a.agent_name}: ${a.current_repid} RepID`
-        ).join('\n');
+        + `<b>Leaderboard (Trinity 12)</b>\n`
+        + topOverall.map((a, i) =>
+          `${i + 1}. ${a.agent_name}: ${a.current_repid} RepID (${a.tier})`
+        ).join('\n')
+        + (topVerticals.length ? `\n\n<b>Top verticals</b>\n${topVerticals.join('\n')}` : '');
     }
     else if (text === '/health' || text === '/h') {
       const health = await supabase.rpc('daily_system_health_check');
