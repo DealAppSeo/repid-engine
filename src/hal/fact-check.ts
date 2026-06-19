@@ -689,6 +689,19 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   if (di && process.env.HAL_S2_ENABLE_DEEPINFRA === 'true') {
     out.push({ name: 'deepinfra', endpoint: 'https://api.deepinfra.com/v1/openai/chat/completions', apiKey: di, model: process.env.HAL_S2_DEEPINFRA_MODEL ?? 'mistralai/Mistral-Small-24B-Instruct-2501', family: process.env.HAL_S2_DEEPINFRA_FAMILY ?? 'mistral' });
   }
+  // Hermes (Nous Research — open-weights, democratize-AI aligned). Via OpenRouter (key already in drawer,
+  // free/near-free Hermes endpoints) → distinct 'hermes' family for quorum independence. Verify the exact
+  // (free) model id with: curl openrouter.ai/api/v1/models | grep hermes. Default-OFF, reversible.
+  const orh = (process.env.OPENROUTER_API_KEY || process.env.HERMES_API_KEY)?.trim();
+  if (orh && process.env.HAL_S2_ENABLE_HERMES === 'true') {
+    out.push({
+      name: 'hermes',
+      endpoint: process.env.HAL_S2_HERMES_ENDPOINT ?? 'https://openrouter.ai/api/v1/chat/completions',
+      apiKey: orh,
+      model: process.env.HAL_S2_HERMES_MODEL ?? 'nousresearch/hermes-3-llama-3.1-405b',
+      family: 'hermes',
+    });
+  }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity).
   for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
