@@ -211,6 +211,9 @@ router.post('/register', async (req: Request, res: Response) => {
         vested_repid: 0,
         byok_provider: byok_provider ?? null,
         byok_acknowledged_at: byok_provider ? new Date().toISOString() : null,
+        // Also persist the custodian in the TYPED column (not just constitution JSON) so queries
+        // on repid_agents.conservator_address resolve the human custodian directly. (CC 2026-06-18)
+        conservator_address: conservator_address ?? null,
         constitution,
       })
       .select('id, created_at, erc8004_token_id')
