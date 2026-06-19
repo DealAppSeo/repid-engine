@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../../db';
 import { requireRole, mintQrToken } from '../../middleware/controller-auth';
 import { hitlService, HitlResolution } from '../../services/hitl-service';
+import { setAgentEnabled } from '../../services/agent-controls';
 
 // Controller API (CC2 2026-05-26) — backend for the aitc controller-UI rebuild
 // (v0.app). All routes are gated by role permissions.
@@ -184,13 +185,15 @@ router.post('/token', requireRole('operator'), (req, res) => {
   });
 });
 
-// POST /wake/:agent_id — manual wake signal (admin only).
+// POST /wake/:agent_id — enable agent_controls + optional wake task (admin only).
 router.post('/wake/:agent_id', requireRole('admin'), async (req, res) => {
   const agent = req.params.agent_id;
   const agentNameRegex = /^[a-zA-Z0-9-_]+$/;
   if (typeof agent !== 'string' || agent.length < 1 || agent.length > 100 || !agentNameRegex.test(agent)) {
     return res.status(400).json({ error: 'Invalid agent identity' });
   }
+
+  const control = await setAgentEnabled(agent, true, 'controller', 'controller /wake');
 
   const { data, error } = await db
     .from('trinity_tasks')
@@ -207,7 +210,18 @@ router.post('/wake/:agent_id', requireRole('admin'), async (req, res) => {
     .select('id')
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ ok: true, agent, wake_task_id: data?.id });
+  res.json({ ok: true, agent, wake_task_id: data?.id, agent_controls: control });
+});
+
+// POST /sleep/:agent_id — disable agent work loop (heartbeat only).
+router.post('/sleep/:agent_id', requireRole('admin'), async (req, res) => {
+  const agent = req.params.agent_id;
+  const agentNameRegex = /^[a-zA-Z0-9-_]+$/;
+  if (typeof agent !== 'string' || agent.length < 1 || agent.length > 100 || !agentNameRegex.test(agent)) {
+    return res.status(400).json({ error: 'Invalid agent identity' });
+  }
+  const control = await setAgentEnabled(agent, false, 'controller', 'controller /sleep');
+  res.json({ ok: true, agent, agent_controls: control });
 });
 
 // POST /sprint/:agent_id — dispatch a sprint to an agent (admin only).

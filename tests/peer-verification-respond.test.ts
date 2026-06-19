@@ -38,6 +38,11 @@ jest.mock('../src/db/direct-pg', () => ({
   pgPing: jest.fn(async () => true),
 }));
 
+const emitScoreMock = jest.fn(async () => ({ emitted: false }));
+jest.mock('../src/services/peer-verify-score', () => ({
+  emitPeerVerifyScoreEvents: (...args: any[]) => emitScoreMock(...args),
+}));
+
 jest.mock('../src/db', () => {
   return {
     db: {
@@ -100,6 +105,7 @@ describe('POST /api/v1/peer-verify/respond — body-shape validation', () => {
     (global as any).__pvAgentRow = null;
     (global as any).__pvAgentErr = null;
     pgQueryMock.mockClear();
+    emitScoreMock.mockClear();
     delete process.env.PEER_VERIFY_HMAC_SECRET;
     delete process.env.SHOFET_PRIVATE_KEY;
     delete process.env.TRUSTRAILS_HMAC_SECRET;
@@ -231,6 +237,9 @@ describe('POST /api/v1/peer-verify/respond — HMAC validation', () => {
     expect(res.body.agreement_score).toBe(1.0);
     expect(res.body.matched_via).toBe('global');
     expect(pgQueryMock).toHaveBeenCalledTimes(1); // happy path = single UPDATE, no probe
+    expect(emitScoreMock).toHaveBeenCalledWith(
+      expect.objectContaining({ queueId: QUEUE_ID, verdict: 'verified' })
+    );
   });
 
   test('good HMAC via per-agent SHOFET_PRIVATE_KEY (back-compat path) → 200', async () => {
@@ -289,6 +298,7 @@ describe('POST /api/v1/peer-verify/respond — atomic UPDATE outcomes', () => {
     (global as any).__pvProbeRows = [];
     (global as any).__pvTaskRows = [];
     pgQueryMock.mockClear();
+    emitScoreMock.mockClear();
     process.env.PEER_VERIFY_HMAC_SECRET = 'test-global-secret';
   });
   afterEach(() => {
