@@ -68,9 +68,16 @@ export const EAS_SCHEMA_STRING =
 /* Merkle leaf + inclusion proof (keccak256, Bitcoin-style — see Invariant flag) */
 /* -------------------------------------------------------------------------- */
 
-/** Leaf = keccak256(commitment-bytes). Deterministic, 32 bytes. */
-export function epochLeaf(commitment: string): string {
-  return keccak256(toUtf8Bytes(commitment));
+/**
+ * Epoch-bound leaf: preimage = domain ‖ epoch ‖ commitment (XC-S3).
+ * Cross-epoch replay cannot reproduce the same root with a different epoch label.
+ */
+export function epochLeaf(
+  commitment: string,
+  epochLabel: string,
+  domain: string = ANCHOR_DOMAIN,
+): string {
+  return keccak256(toUtf8Bytes(`${domain}\x00${epochLabel}\x00${commitment}`));
 }
 
 function pairHash(a: string, b: string): string {
@@ -183,6 +190,7 @@ export async function computeEpochMerkleRoot(epoch: EpochSpec, opts: EpochComput
     `SELECT id, zk_commitment
        FROM repid_zkp_proofs
       WHERE proof_type = 'POSTCARD'
+        AND is_real = true
         AND zk_commitment IS NOT NULL
         AND created_at >= $1 AND created_at < $2
         AND id > $3
@@ -194,7 +202,7 @@ export async function computeEpochMerkleRoot(epoch: EpochSpec, opts: EpochComput
   if (rows.length === 0) {
     return { root: ZeroHash, proof_count: 0, first_id: null, last_id: null, ids: [], leaves: [], scheme: scheme.name, distinct_commitments: 0 };
   }
-  const leaves = rows.map(r => scheme.leaf(r.zk_commitment));
+  const leaves = rows.map(r => epochLeaf(r.zk_commitment, epoch.label, ANCHOR_DOMAIN));
   const root = buildRoot(leaves, scheme.pair);
   return {
     root,
@@ -424,6 +432,13 @@ export async function recordEpochAnchorUid(epoch: EpochSpec, uid: string): Promi
 /* Verify-back (Phase 4)                                                       */
 /* -------------------------------------------------------------------------- */
 
+export interface AttestedEpochBounds {
+  epoch: string;
+  proofCount: number;
+  firstId: number;
+  lastId: number;
+}
+
 export interface VerifyBackResult {
   verified: boolean;
   proof_id: number;
@@ -441,7 +456,10 @@ export interface VerifyBackResult {
  * party with only (eas_attestation_uid, merkle_root, the proof's commitment +
  * siblings) can confirm the proof's tier membership.
  */
-export async function verifyProofViaAnchor(proofId: number): Promise<VerifyBackResult> {
+export async function verifyProofViaAnchor(
+  proofId: number,
+  attested?: AttestedEpochBounds,
+): Promise<VerifyBackResult> {
   const rows = await pgQuery<{ id: number; tier_proven: string; merkle_root: string | null; eas_attestation_uid: string | null; created_at: string }>(
     `SELECT id, tier_proven, merkle_root, eas_attestation_uid, created_at
        FROM repid_zkp_proofs WHERE id = $1`,
@@ -453,7 +471,25 @@ export async function verifyProofViaAnchor(proofId: number): Promise<VerifyBackR
   if (!row.merkle_root) return { verified: false, proof_id: proofId, tier_proven: row.tier_proven, merkle_root: null, eas_attestation_uid: row.eas_attestation_uid, inclusion: null, reason: 'proof not yet aggregated (merkle_root null)' };
 
   const epoch = dayEpoch(new Date(row.created_at));
+  if (attested) {
+    if (attested.epoch !== epoch.label) {
+      return { verified: false, proof_id: proofId, tier_proven: row.tier_proven, merkle_root: row.merkle_root, eas_attestation_uid: row.eas_attestation_uid, inclusion: null, reason: `epoch mismatch: attested=${attested.epoch} proof=${epoch.label}` };
+    }
+    if (proofId < attested.firstId || proofId > attested.lastId) {
+      return { verified: false, proof_id: proofId, tier_proven: row.tier_proven, merkle_root: row.merkle_root, eas_attestation_uid: row.eas_attestation_uid, inclusion: null, reason: `proof id ${proofId} outside attested range ${attested.firstId}..${attested.lastId}` };
+    }
+  }
+
   const epochRoot = await computeEpochMerkleRoot(epoch);
+  if (attested) {
+    if (epochRoot.proof_count !== attested.proofCount) {
+      return { verified: false, proof_id: proofId, tier_proven: row.tier_proven, merkle_root: row.merkle_root, eas_attestation_uid: row.eas_attestation_uid, inclusion: null, reason: `proofCount mismatch: attested=${attested.proofCount} recomputed=${epochRoot.proof_count}` };
+    }
+    if (epochRoot.first_id !== attested.firstId || epochRoot.last_id !== attested.lastId) {
+      return { verified: false, proof_id: proofId, tier_proven: row.tier_proven, merkle_root: row.merkle_root, eas_attestation_uid: row.eas_attestation_uid, inclusion: null, reason: 'attested id bounds do not match recomputed epoch' };
+    }
+  }
+
   const index = epochRoot.ids.indexOf(proofId);
   if (index < 0) return { verified: false, proof_id: proofId, tier_proven: row.tier_proven, merkle_root: row.merkle_root, eas_attestation_uid: row.eas_attestation_uid, inclusion: null, reason: 'proof not in recomputed epoch set' };
 

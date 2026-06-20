@@ -15,7 +15,10 @@ jest.mock('../src/db/direct-pg', () => ({
     if (/UPDATE .*eas_attestation_uid/i.test(text)) return (global as any).__zk.updateReturn;
     if (/UPDATE .*merkle_root/i.test(text)) return (global as any).__zk.updateReturn;
     if (/WHERE id = \$1/i.test(text)) return (global as any).__zk.loadRow;        // verify load
-    if (/SELECT id, zk_commitment/i.test(text)) return (global as any).__zk.selectRows; // epoch select
+    if (/SELECT id, zk_commitment/i.test(text)) {
+      (global as any).__zk.lastEpochSelectSql = text;
+      return (global as any).__zk.selectRows;
+    }
     return [];
   },
 }));
@@ -26,14 +29,17 @@ import { buildMerkleRoot } from '../src/services/audit-merkle-anchor';
 import {
   epochLeaf, buildMerkleProof, verifyMerkleProof,
   computeSchemaUid, buildEasAttestationRequest, EAS_SCHEMA_STRING, ANCHOR_DOMAIN,
-  aggregateEpoch, verifyProofViaAnchor, dayEpoch,
+  aggregateEpoch, verifyProofViaAnchor, dayEpoch, computeEpochMerkleRoot,
 } from '../src/services/zkp-epoch-anchor';
 
 const epoch = { start: '2026-05-28T00:00:00.000Z', end: '2026-05-29T00:00:00.000Z', label: '2026-05-28' };
 
+const EPOCH_LABEL = '2026-05-28';
+const leaf = (c: string, ep = EPOCH_LABEL) => epochLeaf(c, ep, ANCHOR_DOMAIN);
+
 describe('merkle inclusion proof', () => {
   it('proof root equals buildMerkleRoot for every index (even count)', () => {
-    const leaves = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(epochLeaf);
+    const leaves = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((c) => leaf(c));
     const root = buildMerkleRoot(leaves);
     for (let i = 0; i < leaves.length; i++) {
       const p = buildMerkleProof(leaves, i);
@@ -43,7 +49,7 @@ describe('merkle inclusion proof', () => {
   });
 
   it('handles odd leaf counts (Bitcoin-style duplicate) consistently', () => {
-    const leaves = ['x', 'y', 'z', 'p', 'q'].map(epochLeaf); // 5 = odd
+    const leaves = ['x', 'y', 'z', 'p', 'q'].map((c) => leaf(c)); // 5 = odd
     const root = buildMerkleRoot(leaves);
     for (let i = 0; i < leaves.length; i++) {
       const p = buildMerkleProof(leaves, i);
@@ -53,22 +59,38 @@ describe('merkle inclusion proof', () => {
   });
 
   it('single leaf: root == leaf, empty proof verifies', () => {
-    const leaves = [epochLeaf('only')];
+    const leaves = [leaf('only')];
     expect(buildMerkleRoot(leaves)).toBe(leaves[0]);
     const p = buildMerkleProof(leaves, 0);
     expect(verifyMerkleProof(p)).toBe(true);
   });
 
   it('rejects a tampered leaf', () => {
-    const leaves = ['a', 'b', 'c', 'd'].map(epochLeaf);
+    const leaves = ['a', 'b', 'c', 'd'].map((c) => leaf(c));
     const p = buildMerkleProof(leaves, 1);
     const tampered = { ...p, leaf: keccak256(toUtf8Bytes('evil')) };
     expect(verifyMerkleProof(tampered)).toBe(false);
   });
 
   it('epochLeaf is deterministic', () => {
-    expect(epochLeaf('commitX')).toBe(epochLeaf('commitX'));
-    expect(epochLeaf('commitX')).not.toBe(epochLeaf('commitY'));
+    expect(leaf('commitX')).toBe(leaf('commitX'));
+    expect(leaf('commitX')).not.toBe(leaf('commitY'));
+  });
+
+  // XC RED-TEAM FIXTURE: cross-epoch replay REJECTED (epoch-bound leaf)
+  it('XC RED-TEAM: cross-epoch replay produces different roots', () => {
+    const c = 'shared-commitment';
+    const rootA = buildMerkleRoot([epochLeaf(c, '2026-06-16', ANCHOR_DOMAIN)]);
+    const rootB = buildMerkleRoot([epochLeaf(c, '2026-06-17', ANCHOR_DOMAIN)]);
+    expect(rootA).not.toBe(rootB);
+  });
+
+  // XC RED-TEAM FIXTURE: forge-root regression (tampered leaf)
+  it('XC RED-TEAM: forge-root tampered inclusion REJECTED', () => {
+    const leaves = ['a', 'b'].map((c) => leaf(c));
+    const p = buildMerkleProof(leaves, 0);
+    const tampered = { ...p, leaf: keccak256(toUtf8Bytes('evil')) };
+    expect(verifyMerkleProof(tampered)).toBe(false);
   });
 });
 
@@ -115,7 +137,7 @@ describe('aggregate + verify-back (mocked pg)', () => {
     const r = await aggregateEpoch(epoch, { persist: true });
     expect(r.proof_count).toBe(6);
     expect(r.root).toMatch(/^0x[0-9a-f]{64}$/i);
-    expect(r.root).toBe(buildMerkleRoot(commits.map(epochLeaf)));
+    expect(r.root).toBe(buildMerkleRoot(commits.map((c) => leaf(c))));
     expect(r.rows_updated).toBe(6);
     expect(r.persisted).toBe(true);
   });
@@ -130,7 +152,7 @@ describe('aggregate + verify-back (mocked pg)', () => {
   it('verifyProofViaAnchor confirms membership against the stored root', async () => {
     const commits = Array.from({ length: 5 }, (_, i) => `c${i}`);
     const rows = commits.map((c, i) => ({ id: i + 1, zk_commitment: c }));
-    const root = buildMerkleRoot(commits.map(epochLeaf));
+    const root = buildMerkleRoot(commits.map((c) => leaf(c)));
     (global as any).__zk.selectRows = rows;
     // proof id 3 (created in this epoch), stored merkle_root = the real root.
     (global as any).__zk.loadRow = [{ id: 3, tier_proven: 'ESTABLISHED', merkle_root: root, eas_attestation_uid: '0xuid', created_at: '2026-05-28T12:00:00.000Z' }];
@@ -152,5 +174,35 @@ describe('aggregate + verify-back (mocked pg)', () => {
   it('dayEpoch produces UTC-day bounds', () => {
     const e = dayEpoch(new Date('2026-05-28T15:30:00.000Z'));
     expect(e).toEqual({ start: '2026-05-28T00:00:00.000Z', end: '2026-05-29T00:00:00.000Z', label: '2026-05-28' });
+  });
+
+  // XC RED-TEAM FIXTURE: count/bounds tamper REJECTED on verify-back
+  it('XC RED-TEAM: attested bounds tamper REJECTED', async () => {
+    const commits = ['c0', 'c1', 'c2'];
+    (global as any).__zk.selectRows = commits.map((c, i) => ({ id: i + 10, zk_commitment: c }));
+    const root = buildMerkleRoot(commits.map((c) => leaf(c)));
+    (global as any).__zk.loadRow = [{ id: 11, tier_proven: 'EARNING', merkle_root: root, eas_attestation_uid: '0xuid', created_at: '2026-05-28T12:00:00.000Z' }];
+
+    const v = await verifyProofViaAnchor(11, { epoch: '2026-05-28', proofCount: 999, firstId: 10, lastId: 12 });
+    expect(v.verified).toBe(false);
+    expect(v.reason).toMatch(/proofCount mismatch/);
+  });
+
+  // XC RED-TEAM FIXTURE: cross-epoch attestation REJECTED on verify-back
+  it('XC RED-TEAM: cross-epoch attestation REJECTED', async () => {
+    (global as any).__zk.loadRow = [{ id: 5, tier_proven: 'EARNING', merkle_root: '0x' + 'aa'.repeat(32), eas_attestation_uid: '0xuid', created_at: '2026-05-28T12:00:00.000Z' }];
+    const v = await verifyProofViaAnchor(5, { epoch: '2026-06-17', proofCount: 1, firstId: 5, lastId: 5 });
+    expect(v.verified).toBe(false);
+    expect(v.reason).toMatch(/epoch mismatch/);
+  });
+});
+
+describe('stub exclusion (mocked pg)', () => {
+  beforeEach(() => { (global as any).__zk = { selectRows: [], updateReturn: [], loadRow: [] }; });
+
+  // XC RED-TEAM FIXTURE: sha256-stub rows excluded from epoch root query
+  it('XC RED-TEAM: computeEpochMerkleRoot SQL filters is_real=true', async () => {
+    await computeEpochMerkleRoot(epoch);
+    expect((global as any).__zk.lastEpochSelectSql).toMatch(/is_real\s*=\s*true/i);
   });
 });
