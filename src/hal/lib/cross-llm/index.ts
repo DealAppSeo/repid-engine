@@ -91,6 +91,7 @@ export async function checkCrossLLM(
     timeoutMs: p.timeoutMs ?? timeoutMs,
   }));
 
+  console.log(`[checkCrossLLM] Calling ${providersWithTimeout.length} providers: ${providersWithTimeout.map(p => p.provider).join(', ')} for prompt: "${prompt.slice(0, 60)}..."`);
   const settled = await Promise.allSettled(
     providersWithTimeout.map(cfg => queryProvider(cfg, prompt)),
   );
@@ -104,6 +105,14 @@ export async function checkCrossLLM(
       latency_ms: 0,
       error: String((s as PromiseRejectedResult).reason),
     };
+  });
+
+  answers.forEach(a => {
+    if (a.error) {
+      console.log(`  - Provider ${a.provider} FAILED in ${a.latency_ms}ms: ${a.error}`);
+    } else {
+      console.log(`  - Provider ${a.provider} returned answer (length ${a.answer.length}) in ${a.latency_ms}ms`);
+    }
   });
 
   const answered = answers
