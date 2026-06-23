@@ -147,7 +147,8 @@ describe('proof-drain-service', () => {
         ok: true,
         json: async () => ({
           commitment: '0xreal', proof_type: 'plonky3_range_check', proof_bytes: 'QkFTRTY0UFJPT0Y=',
-          public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED'
+          public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED',
+          poseidon2_leaf: '0x32ed1341', leaf_scheme: 'poseidon2_babybear'
         }),
         text: async () => ''
       });
@@ -165,6 +166,9 @@ describe('proof-drain-service', () => {
       expect(row.scheme).toBe('plonky3_range_check');
       expect(row.proof_bytes).toBe('QkFTRTY0UFJPT0Y=');
       expect(row.statement).toEqual({ repid_score: 2280, threshold: 999 });
+      // B-2 (Inv-1): aggregation-ready leaf + lineage tag recorded under the same flag.
+      expect(row.poseidon2_leaf).toBe('0x32ed1341');
+      expect(row.leaf_scheme).toBe('poseidon2_babybear');
     } finally {
       if (prev === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
       else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prev;
@@ -185,7 +189,8 @@ describe('proof-drain-service', () => {
         ok: true,
         json: async () => ({
           commitment: '0xreal', proof_type: 'plonky3_range_check', proof_bytes: 'QkFTRTY0',
-          public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED'
+          public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED',
+          poseidon2_leaf: '0x32ed1341', leaf_scheme: 'poseidon2_babybear'
         }),
         text: async () => ''
       });
@@ -202,6 +207,9 @@ describe('proof-drain-service', () => {
       expect(row.scheme).toBeUndefined();
       expect(row.proof_bytes).toBeUndefined();
       expect(row.statement).toBeUndefined();
+      // B-2 (Inv-1): leaf fields are gated by the SAME flag — omitted when OFF.
+      expect(row.poseidon2_leaf).toBeUndefined();
+      expect(row.leaf_scheme).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
       else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prev;

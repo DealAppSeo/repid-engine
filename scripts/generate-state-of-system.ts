@@ -71,7 +71,7 @@ function getBranch(): string {
   const scoreEvents24h = await count('repid_score_events', q => q.gte('created_at', new Date(Date.now() - 864e5).toISOString()));
   const easAnchored = await count('repid_zkp_proofs', q => q.not('eas_attestation_uid', 'is', null));
   const qualifyingProofs = await count('repid_zkp_proofs', q => q.not('merkle_root', 'is', null));
-  const handoffsOpen = await count('agent_handoffs', q => q.eq('status', 'open'));
+  // agent_handoffs DROPPED (D-063) — never applied to prod; net-new table abandoned with PR #94.
   const stakesCount = await count('agent_stakes', q => q);
 
   // RepID deltas: until dogfooding activates (flag OFF, honest-HAL pending), all baseline/0
@@ -84,7 +84,6 @@ function getBranch(): string {
     branch: getBranch(),
     agents: { total: agentCount, active: activeAgents },
     proofs: { qualifying: qualifyingProofs, eas_anchored: easAnchored, coverage: qualifyingProofs ? `${easAnchored}/${qualifyingProofs}` : null },
-    handoffs: { open: handoffsOpen },
     stakes: stakesCount,
     score_events_24h: scoreEvents24h,
     git_shipped: getGitShipped(),
@@ -99,14 +98,13 @@ function getBranch(): string {
     `## Live Numbers (source-tagged)`,
     `- agents: total=${state.agents.total ?? 'n/a'} active=${state.agents.active ?? 'n/a'}`,
     `- proofs: qualifying=${state.proofs.qualifying ?? 'n/a'} eas_anchored=${state.proofs.eas_anchored ?? 'n/a'} (coverage ${state.proofs.coverage ?? 'n/a'})`,
-    `- handoffs open: ${state.handoffs.open ?? 'n/a'} (structured canonical now per Phase 2)`,
     `- stakes records: ${state.stakes ?? 'n/a'}`,
     `- score_events 24h: ${state.score_events_24h ?? 'n/a'}`,
     ``,
     `## G/Y/R Deltas`,
-    `- Y: substrate (peer_verification_queue + repid_score_events + agent_handoffs) live; EAS 5 real payload-matched from CC; RLS 33 + zkp config + recovery staged.`,
+    `- Y: substrate (peer_verification_queue + repid_score_events) live; EAS 5 real payload-matched from CC; RLS 33 + zkp config + recovery staged.`,
     `- R: EAS coverage 5/4573 (0.109%); dogfooding RepID OFF (pre honest-HAL); 4,568 qualifying unanchored.`,
-    `- G: T12 onchain, staking exercised, structured handoffs canonical, daily digest generator.`,
+    `- G: T12 onchain, staking exercised, daily digest generator.`,
     ``,
     `## What Shipped (git recent)`,
     ...state.git_shipped.map(s => `- ${s}`),
@@ -116,7 +114,7 @@ function getBranch(): string {
     ``,
     `## Open Tie-Breaks / Sean's Keystones (from living context)`,
     `- Honest-HAL merge (CC) — gates dogfood ON + full RepID cosign scoring.`,
-    `- Sean apply: agent_handoffs mig + dogfood flag sites + RLS folds + zkp reconciled (D-057 stage only).`,
+    `- Sean apply: dogfood flag sites + RLS folds + zkp reconciled (D-057 stage only).`,
     `- EAS >=10 real (with key) for Phase1 backfill + XC coverage to CC zkp crosscheck.`,
     `- ANFIS canonical home (repid router.ts) + constitutional fallback (Railway extract or shared v8.2).`,
     ``,
@@ -141,11 +139,11 @@ function getBranch(): string {
   const dayMarker = `## ${TODAY} — True-North Daily`;
   let dayEntry = `\n${dayMarker}\n\n`;
   dayEntry += `**Source:** XC 2026-06-04 dogfooding-digest (generate-state-of-system.ts) + CC EAS fire + prior recovery/RLS/EAS substrate.\n\n`;
-  dayEntry += `- **State G/Y/R:** Y substrate live; R low EAS + dogfood gated; G handoff canonical + digest.\n`;
-  dayEntry += `- **Shipped:** agent_handoffs schema (mig+types) + sample; peer-verification cosign→repid wiring (flag OFF); generate-state emitter; tests; report.\n`;
-  dayEntry += `- **Milestones:** Phase 0-5 gates (isolation verified, scorer pending, EAS 5 from CC pending >=10, handoff canonical, dogfood staged OFF, sample digest).\n`;
+  dayEntry += `- **State G/Y/R:** Y substrate live; R low EAS + dogfood gated; G digest.\n`;
+  dayEntry += `- **Shipped:** peer-verification cosign→repid wiring (flag OFF); generate-state emitter; tests; report.\n`;
+  dayEntry += `- **Milestones:** Phase 0-5 gates (isolation verified, scorer pending, EAS 5 from CC pending >=10, dogfood staged OFF, sample digest).\n`;
   dayEntry += `- **RepID deltas:** ${repidDeltasNote}\n`;
-  dayEntry += `- **Open:** honest-HAL (CC), Sean applies (handoff+dogfood+RLS), EAS key for >=10, GA digest nums.\n`;
+  dayEntry += `- **Open:** honest-HAL (CC), Sean applies (dogfood+RLS), EAS key for >=10, GA digest nums.\n`;
   dayEntry += `- **Tie-breaks/Keystones:** see current block above.\n\n`;
   dayEntry += `---\n`;
 
