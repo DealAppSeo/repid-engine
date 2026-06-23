@@ -62,7 +62,7 @@ export async function createTipRequest(input: TipRequestInput): Promise<TipReque
 
   const tipId = newTipId();
 
-  await db.from('linked_bets').insert({
+  const insertRes = await db.from('linked_bets').insert({
     id: tipId,
     agent_id: input.provider_agent_id,
     bet_amount: priceTotal.toString(),
@@ -72,10 +72,16 @@ export async function createTipRequest(input: TipRequestInput): Promise<TipReque
       requestor: input.requestor_agent_id,
     },
     oracle_endpoint: '',
-    expected_resolution_time: null,
+    expected_resolution_time: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     status: 'awaiting_payment',
     is_simulated: !process.env.X402_REAL_RPC,
   });
+
+  if (insertRes.error) {
+    console.error('[x402-server] linked_bets insert FAILED:', insertRes.error);
+  } else {
+    console.log('[x402-server] linked_bets insert succeeded:', tipId);
+  }
 
   await emitAuditEvent({
     event_type: 'x402_tip_requested',

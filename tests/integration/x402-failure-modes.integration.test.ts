@@ -103,7 +103,8 @@ describe('X402 Failure Modes Integration', () => {
             };
           },
           update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-          insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: {} }) }), throwOnError: () => Promise.resolve() })
+          insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: {} }) }), throwOnError: () => Promise.resolve() }),
+          upsert: () => Promise.resolve({ error: null })
         };
       }
       if (table === 'x402_settlement_failures') {

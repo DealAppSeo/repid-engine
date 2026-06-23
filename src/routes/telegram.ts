@@ -1,6 +1,8 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { handleHitlCallback } from '../services/hitl-callback-handler';
+import { listAgentControls, setAgentEnabled } from '../services/agent-controls';
+import { fetchVerticalLeaderboard } from '../services/vertical-leaderboard';
 const router = express.Router();
 
 const supabase = createClient(
@@ -84,23 +86,59 @@ router.post('/webhook', async (req, res) => {
   if (!message?.text) return res.sendStatus(200);
   const chatId = message.chat.id;
   const text = message.text.toLowerCase().trim();
+  const rawText = message.text.trim();
   let reply = '';
 
+  const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+  const isAdminChat = !adminChat || String(chatId) === String(adminChat);
+
   try {
-    if (text === '/status' || text === '/s') {
-      const { data } = await supabase
-        .from('repid_agents')
-        .select('agent_name,current_repid,tier,vdr_count')
-        .order('current_repid', { ascending: false })
-        .limit(6);
-      const vdr = (await supabase.from('repid_agents').select('vdr_count'))
-        .data?.reduce((s,a)=>s+(a.vdr_count||0),0) || 0;
+    const sleepMatch = rawText.match(/^\/sleep\s+(\S+)/i);
+    const wakeMatch = rawText.match(/^\/wake\s+(\S+)/i);
+
+    if (sleepMatch || wakeMatch) {
+      if (!isAdminChat) {
+        reply = '⛔ Control commands restricted to admin chat.';
+      } else {
+        const agentArg = (sleepMatch?.[1] || wakeMatch?.[1])!;
+        const enabled = !!wakeMatch;
+        const row = await setAgentEnabled(agentArg, enabled, 'telegram', enabled ? 'telegram /wake' : 'telegram /sleep');
+        reply = `${enabled ? '🟢' : '💤'} <b>${row.agent_name}</b> → ${enabled ? 'AWAKE' : 'SLEEPING'}\n`
+          + `agent_controls.enabled=${row.enabled}\n`
+          + `updated: ${row.updated_at}`;
+      }
+    }
+    else if (text === '/status' || text === '/s') {
+      const controls = await listAgentControls();
+      const { data: hb } = await supabase
+        .from('agent_heartbeat')
+        .select('agent_name,status,last_ping');
+      const hbByName = new Map((hb || []).map((h: any) => [h.agent_name, h]));
+
+      const controlLines = controls.map((c) => {
+        const fullName = c.agent_name.startsWith('trinity-') ? c.agent_name : `trinity-${c.agent_name}`;
+        const ping = hbByName.get(fullName);
+        const live = ping?.last_ping
+          ? (Date.now() - new Date(ping.last_ping).getTime()) < 5 * 60 * 1000
+          : false;
+        return `${c.enabled ? '🟢' : '💤'} ${c.agent_name}: ${c.enabled ? 'work' : 'heartbeat-only'}`
+          + `${live ? ' (live)' : ''}`;
+      });
+
+      const lb = await fetchVerticalLeaderboard();
+      const topOverall = lb.overall.slice(0, 6);
+      const topVerticals = Object.entries(lb.by_vertical)
+        .filter(([, entries]) => entries.length > 0)
+        .slice(0, 3)
+        .map(([v, entries]) => `  ${v}: ${entries[0]!.agent_name} (${entries[0]!.domain_pct ?? entries[0]!.current_repid}%)`);
+
       reply = `🤖 <b>TRINITY SYMPHONY</b>\n`
-        + `VDR: ${vdr} | Decisions: 264\n\n`
-        + (data||[]).map(a=>
-          `${(a.tier==='AUTONOMOUS'||a.tier==='VETERAN')?'🔵':a.tier==='ESTABLISHED'?'🟡':'⚪'} `
-          +`${a.agent_name}: ${a.current_repid} RepID`
-        ).join('\n');
+        + `<b>Controls</b>\n${controlLines.join('\n') || '(none)'}\n\n`
+        + `<b>Leaderboard (Trinity 12)</b>\n`
+        + topOverall.map((a, i) =>
+          `${i + 1}. ${a.agent_name}: ${a.current_repid} RepID (${a.tier})`
+        ).join('\n')
+        + (topVerticals.length ? `\n\n<b>Top verticals</b>\n${topVerticals.join('\n')}` : '');
     }
     else if (text === '/health' || text === '/h') {
       const health = await supabase.rpc('daily_system_health_check');
@@ -171,7 +209,9 @@ router.post('/webhook', async (req, res) => {
     }
     else {
       reply = `🤖 <b>Trinity Symphony Commands</b>\n`
-        + `/status — agent leaderboard\n`
+        + `/status — controls + leaderboard\n`
+        + `/sleep &lt;agent&gt; — idle agent (heartbeat only)\n`
+        + `/wake &lt;agent&gt; — resume work\n`
         + `/health — system health check\n`
         + `/hal — HAL veto status\n`
         + `/tasks — pending task queue\n`
