@@ -17,6 +17,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
+import { strictModeOrFallback } from './lib/strict-mode';
 
 export type Category =
   | 'factual'
@@ -261,14 +262,19 @@ export async function classify(
     }
   }
 
-  console.error('[classifier] failed after retry:', lastErr?.message ?? lastErr);
-  return {
-    category: 'factual',
-    confidence: 'low',
-    latency_ms: 0,
-    provider: 'fallback',
-    model: 'parse-error',
-  };
+  // Graceful by default: default to 'factual' so production routing continues.
+  // HAL_STRICT_MODE=true rethrows so a classifier timeout/error during a
+  // measurement run fails loudly instead of silently routing everything factual.
+  return strictModeOrFallback('classifier.layer0', lastErr, () => {
+    console.error('[classifier] failed after retry:', lastErr?.message ?? lastErr);
+    return {
+      category: 'factual',
+      confidence: 'low',
+      latency_ms: 0,
+      provider: 'fallback',
+      model: 'parse-error',
+    };
+  });
 }
 
 if (require.main === module) {

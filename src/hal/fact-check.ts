@@ -22,6 +22,15 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
 import crypto from 'crypto';
+import {
+  sbfaConsensus,
+  votesFromVerdicts,
+  ConstantReliabilityOracle,
+  type SbfaDecision,
+  type SbfaTrace,
+  type StakesLevel,
+  type ActionKind,
+} from './sbfa-consensus';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -106,6 +115,61 @@ export interface FactCheckResult {
   quorum_note?: string; // set only when the resilience gate downgraded a decision
   fallback_used?: 'local_slm';
   confidence?: 'degraded';
+  // --- SBFA v0.2 shadow (additive; default-on SHADOW only, never changes `decision`). Exposes the
+  // belief / ignorance / confidence the verdict event needs (§7 CC). The decision-replacement path is
+  // a SEPARATE flag gated on the A6 co-sign with GA. See src/hal/sbfa-consensus.ts. ---
+  sbfa?: {
+    decision: SbfaDecision; // 'act' | 'hold' | 'abstain' | 'escalate' (shadow — advisory only)
+    belief: number; // DST mass on {act warranted}
+    belief_not: number; // DST mass on {no action}
+    ignorance_mass: number; // DST mass on {uncertain} (Yager)
+    confidence: number; // 1 − ignorance
+    weighted_agreement: number;
+    escalate_to: 'contested_bft' | null;
+    correlated_warning: boolean;
+    comma_conservative: boolean;
+    reliability_source: string;
+    enforced: boolean; // true only if SBFA actually changed the live decision (A6-gated)
+    trace: SbfaTrace; // GLASS BOX — structured + human-readable decision trace (wrapper + HITL PWA)
+  };
+}
+
+/**
+ * SBFA shadow telemetry sink — pluggable, OFF the hot path. Default logs a structured one-liner
+ * (visible in Railway logs, zero DB dependency). GA can replace it with a DB writer for the Gate-ON
+ * measurement. NEVER called synchronously in the request path — see the sampled setImmediate below.
+ */
+export type SbfaTelemetry = (row: {
+  live_decision: HalDecision;
+  sbfa_decision: SbfaDecision;
+  belief: number;
+  ignorance_mass: number;
+  weighted_agreement: number;
+  enforced: boolean;
+}) => void;
+let sbfaTelemetrySink: SbfaTelemetry = (row) => {
+  console.log(`[sbfa-shadow] live=${row.live_decision} sbfa=${row.sbfa_decision} belief=${row.belief.toFixed(3)} ign=${row.ignorance_mass.toFixed(3)} agree=${row.weighted_agreement.toFixed(3)} enforced=${row.enforced}`);
+};
+/** Test/GA seam to swap the telemetry sink (e.g. a DB writer). */
+export function setSbfaTelemetrySink(sink: SbfaTelemetry): void {
+  sbfaTelemetrySink = sink;
+}
+
+/** Map fact-check thresholds onto SBFA stakes/action. Reversible safety surface = protective. */
+function sbfaStakes(): StakesLevel {
+  const s = (process.env.HAL_SBFA_STAKES ?? 'medium').toLowerCase();
+  return s === 'low' || s === 'high' || s === 'irreversible' ? (s as StakesLevel) : 'medium';
+}
+function sbfaAction(): ActionKind {
+  // HAL veto is a reputation penalty (reversible via dispute) → protective by default; set
+  // HAL_SBFA_ACTION=punitive to apply the irreversible-slash bar.
+  return process.env.HAL_SBFA_ACTION === 'punitive' ? 'punitive' : 'protective';
+}
+/** ~10% sampling for the OFF-hot-path shadow telemetry. SBFA_SHADOW_SAMPLE_RATE in [0,1], default 0.1. */
+function sbfaSampleHit(): boolean {
+  const r = Number(process.env.SBFA_SHADOW_SAMPLE_RATE);
+  const rate = Number.isFinite(r) && r >= 0 && r <= 1 ? r : 0.1;
+  return Math.random() < rate;
 }
 
 export interface FactCheckOpts {
@@ -364,6 +428,14 @@ export async function factCheck(
     attempted = providers.length;
   }
 
+  verdicts.forEach(v => {
+    if (v.verdict === 'ERROR') {
+      console.log(`  - Provider ${v.provider} FAILED in ${v.latency_ms}ms: ${v.error}`);
+    } else {
+      console.log(`  - Provider ${v.provider} returned ${v.verdict} (confidence ${v.confidence}%) in ${v.latency_ms}ms`);
+    }
+  });
+
   const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
@@ -481,11 +553,71 @@ export async function factCheck(
     }
   }
 
+  // --- SBFA v0.2 SHADOW + GLASS BOX (default ON). ZERO extra inference: it reuses the per-provider
+  // verdicts already computed and makes NO new LLM calls. The decision trace is pure DST math (sub-ms),
+  // attached to EVERY decision so the wrapper + HITL PWA always have the Glass Box (§7 CC, task 3).
+  // The live `decision` is NOT changed unless HAL_SBFA_ENFORCE=true (A6-gated, defer-only). Telemetry
+  // persistence for the Gate-ON measurement is SAMPLED (~10%) and fired OFF the hot path (setImmediate,
+  // never awaited) — so prod never eats latency and the shadow can never block a live decision. ---
+  let sbfaField: FactCheckResult['sbfa'];
+  if (process.env.HAL_SBFA_SHADOW !== 'false') {
+    try {
+      const votes = votesFromVerdicts(verdicts);
+      // Placeholder oracle until GA wires the verified-outcome oracle (§2.1). NOT a real reliability source.
+      const oracle = new ConstantReliabilityOracle(0.7, 4);
+      const v = sbfaConsensus({ votes, stakes: sbfaStakes(), action: sbfaAction(), category: 'factual', oracle });
+      let enforced = false;
+      if (process.env.HAL_SBFA_ENFORCE === 'true' && decision === 'vetoed' && (v.decision === 'abstain' || v.decision === 'escalate')) {
+        // A6-gated: SBFA says "insufficient consensus / defer" → downgrade the veto to flagged (defer,
+        // do not punish). Never the reverse. Logged loudly so the override is auditable.
+        decision = 'flagged';
+        enforced = true;
+        quorum_note = `SBFA v0.2 ${v.decision} (belief ${v.belief_act.toFixed(3)}, ignorance ${v.ignorance_mass.toFixed(3)}): would-be 'vetoed' deferred to 'flagged'. ${v.reason}`;
+      }
+      sbfaField = {
+        decision: v.decision,
+        belief: v.belief_act,
+        belief_not: v.belief_not,
+        ignorance_mass: v.ignorance_mass,
+        confidence: v.confidence,
+        weighted_agreement: v.weighted_agreement,
+        escalate_to: v.escalate_to,
+        correlated_warning: v.correlated_warning,
+        comma_conservative: v.comma_conservative,
+        reliability_source: v.reliability_source,
+        enforced,
+        trace: v.trace,
+      };
+      // SAMPLED (~10%), OFF-HOT-PATH telemetry for the Gate-ON measurement — fire-and-forget, never awaited.
+      if (sbfaSampleHit()) {
+        const liveDecision = decision; // final live decision (post-enforce)
+        setImmediate(() => {
+          try {
+            sbfaTelemetrySink({
+              live_decision: liveDecision,
+              sbfa_decision: v.decision,
+              belief: v.belief_act,
+              ignorance_mass: v.ignorance_mass,
+              weighted_agreement: v.weighted_agreement,
+              enforced,
+            });
+          } catch {
+            /* telemetry must never affect the request */
+          }
+        });
+      }
+    } catch {
+      // Shadow must never break the live path — swallow and continue without the field.
+      sbfaField = undefined;
+    }
+  }
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
+    ...(sbfaField ? { sbfa: sbfaField } : {}),
   };
 }
 
