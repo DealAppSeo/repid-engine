@@ -3,6 +3,16 @@
  * SBT gate (401/403/pass + master), agent-grid shaping, squads, wake (master-gated insert).
  * db mocked via a call-time global holder; routes exercised through supertest.
  */
+jest.mock('../src/services/agent-controls', () => ({
+  setAgentEnabled: jest.fn().mockResolvedValue({
+    agent_name: 'mel',
+    enabled: true,
+    updated_by: 'controller',
+    reason: 'controller /wake',
+    updated_at: '2026-06-20T00:00:00.000Z',
+  }),
+}));
+
 jest.mock('../src/db', () => ({
   db: {
     from: (table: string) => {
