@@ -222,7 +222,7 @@ export async function checkCrossLLM(
     }
   }
 
-  console.log(`[checkCrossLLM] Calling ${providersWithTimeout.length} providers: ${providersWithTimeout.map(p => p.provider).join(', ')} for prompt: "${prompt.slice(0, 60)}..."`);
+  console.log(`[checkCrossLLM] Calling ${selectedProviders.length} providers: ${selectedProviders.map((p) => p.provider).join(', ')} for prompt: "${prompt.slice(0, 60)}..."`);
   const settled = await Promise.allSettled(
     selectedProviders.map(async (cfg) => {
       try {
