@@ -51,6 +51,7 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       .insert({
         erc8004_address: zkpCommitment,
         agent_name: 'HUMAN',
+        agent_id: anonymousId,
         current_repid: 200,
         tier: 'PROBATIONARY',
         constitution: {

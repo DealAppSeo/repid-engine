@@ -120,13 +120,13 @@ const FACT_CHECK_SYSTEM =
 
 function factCheckPrompt(deliverable: string): string {
   return (
-    'Assess whether the following statement is factually true.\n' +
+    'Determine if the following statement is factually true or false.\n' +
     `Statement: "${deliverable.replace(/"/g, "'").slice(0, 1200)}"\n\n` +
     'Reply with ONLY this JSON (no prose, no markdown):\n' +
     '{"verdict":"TRUE|FALSE|UNCERTAIN","confidence":0-100,"note":"<=12 words"}\n' +
-    '- TRUE: central factual claim is correct.\n' +
-    '- FALSE: contains a factual error.\n' +
-    '- UNCERTAIN: opinion, ambiguous, or not verifiable.'
+    '- TRUE: The statement is completely true.\n' +
+    '- FALSE: The statement contains a factual error or is false.\n' +
+    '- UNCERTAIN: The statement is subjective, opinion-based, or not verifiable.'
   );
 }
 
@@ -548,6 +548,25 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
   if (qw && process.env.HAL_S2_ENABLE_QWEN === 'true') {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
+  }
+  const l = process.env.LITELLM_MASTER_KEY?.trim();
+  if (l) {
+    out.push({
+      name: 'litellm',
+      endpoint: 'http://127.0.0.1:4000/v1/chat/completions',
+      apiKey: l,
+      model: 'hf/qwen-2.5-72b',
+      family: 'qwen',
+      tier: 'free'
+    });
+    out.push({
+      name: 'litellm-phi',
+      endpoint: 'http://127.0.0.1:4000/v1/chat/completions',
+      apiKey: l,
+      model: 'hf/phi-4-mini',
+      family: 'phi',
+      tier: 'escalation'
+    });
   }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity).
   for (const p of out) if (!p.family) p.family = familyOf(p.model);

@@ -66,6 +66,7 @@
     "hal:ground-truth-template": "ts-node scripts/hal/seed-ground-truth.ts --export-template ./hal-ground-truth-template.csv",
     "types:gen": "npx supabase gen types typescript --project-id qnnpjhlxljtqyigedwkb --schema public > src/types/database.types.ts",
     "types:check": "tsc --noEmit",
+    "decay": "ts-node scripts/run-repid-decay.ts",
     "x402:preflight-real-microtx": "tsx scripts/x402/preflight-real-microtx.ts"
   },
   "keywords": [],

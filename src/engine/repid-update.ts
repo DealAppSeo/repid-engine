@@ -15,7 +15,8 @@ export interface RepIdUpdateInput {
     | 'STAKE'|'GENESIS'|'REFERRAL'|'PEACEMAKER'|'SELF_MONITOR'
     | 'CODE_CONTRIBUTION' | 'WORKFLOW_CONTRIBUTION' | 'TOOL_PIONEER'
     | 'AGENT_TEACHING' | 'AUDIT_CONTRIBUTION'
-    | 'HANDOFF_COSIGN_VERIFIED' | 'HANDOFF_COSIGN_FALSE_PASS_SLASH'; // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN)
+    | 'HANDOFF_COSIGN_VERIFIED' | 'HANDOFF_COSIGN_FALSE_PASS_SLASH' // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN)
+    | 'SALE_DROP';
   certaintyAtClaim?: number;
   pStated?: number;
   pCorrect?: number;
@@ -71,6 +72,7 @@ const FIXED_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
   AGENT_TEACHING: 15, AUDIT_CONTRIBUTION: 15,
   HANDOFF_COSIGN_VERIFIED: 10, // producer + verifier each get + on verified co-sign (calibrated)
   HANDOFF_COSIGN_FALSE_PASS_SLASH: -15, // slash the rubber-stamper (verifier) on false-PASS
+  SALE_DROP: -50,
 };
 
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
@@ -251,6 +253,7 @@ export async function registerAgent(params: {
   const { data: newAgent, error } = await db.from('repid_agents').insert({
     erc8004_address: params.erc8004Address,
     agent_name: params.agentName,
+    agent_id: params.agentName.toLowerCase(),
     conservator_address: params.conservatorAddress ?? null,
     constitution: params.constitution ?? {},
     current_repid: 200, tier: 'PROBATIONARY',

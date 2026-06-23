@@ -270,7 +270,7 @@ router.get('/:id/card', async (req: Request, res: Response) => {
 
   const { data: agent, error } = await db
     .from('repid_agents')
-    .select('id, agent_name, description, current_repid, erc8004_token_id, created_at, last_active_at')
+    .select('id, agent_name, description, current_repid, erc8004_token_id, created_at, last_active_at, domain_accuracy')
     .eq('id', agentId)
     .single();
   if (error || !agent) {
@@ -290,6 +290,7 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     vetoedRes,
     last100Res,
     lastEventRes,
+    zkpProofRes,
   ] = await Promise.all([
     db.from('repid_score_events').select('id', { count: 'exact', head: true })
       .eq('agent_id', agentId).eq('hal_decision', 'clean'),
@@ -302,6 +303,8 @@ router.get('/:id/card', async (req: Request, res: Response) => {
       .order('created_at', { ascending: false }).limit(100),
     db.from('repid_score_events').select('created_at')
       .eq('agent_id', agentId).order('created_at', { ascending: false }).limit(1),
+    db.from('repid_zkp_proofs').select('zk_commitment')
+      .eq('agent_id', agentId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
   ]);
 
   const last100Rows = (last100Res.data ?? []) as Array<{ hal_score: number | string | null }>;
@@ -339,6 +342,9 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     total_vetoed: vetoedRes.count ?? 0,
     avg_hal_score: avgHalScore,
     last_event_at: lastEventAt,
+    // Per-vertical RepID extensions
+    domain_accuracy: (agent as any).domain_accuracy ?? {},
+    zkp_proof_commitment: (zkpProofRes.data as any)?.zk_commitment ?? null,
   });
 });
 

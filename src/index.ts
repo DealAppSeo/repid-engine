@@ -48,6 +48,8 @@ import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
 import x402InboundRouter from './routes/x402-inbound';
+import credentialsRouter from './routes/credentials';
+import identityRouter from './routes/identity';
 // S-SPINE — TrustChat viral surface (all public except referral stats).
 import leaderboardRouter from './routes/leaderboard';
 import statsRouter from './routes/stats';
@@ -326,9 +328,12 @@ app.use('/api/v1', verticalLeaderboardRouter);
 app.use('/api/v1', leaderboardRouter);
 app.use('/api/v1', providersRouter);
 app.use('/api/v1/subscribe', subscribeLimiter);
-app.use('/api/v1', subscribeRouter);
+app.use('/api/v1/subscribe', subscribeRouter);
 app.use('/api/v1', referralTrackRouter);
 app.use('/api/v1', securityStatusRouter);
+
+app.use('/api/v1/credentials', credentialsRouter);
+app.use('/api/v1/identity', identityRouter);
 
 app.use(authMiddleware);
 
