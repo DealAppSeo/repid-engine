@@ -50,6 +50,8 @@ import { createAgentsReputationRouter } from './routes/agents-reputation';
 import x402InboundRouter from './routes/x402-inbound';
 // S-SPINE — TrustChat viral surface (all public except referral stats).
 import leaderboardRouter from './routes/leaderboard';
+import statsRouter from './routes/stats';
+import verticalLeaderboardRouter from './routes/vertical-leaderboard';
 import providersRouter from './routes/providers';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
@@ -319,6 +321,8 @@ const subscribeLimiter = rateLimit({
   message: { error: 'Too many subscribe requests' },
   keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
 });
+app.use('/api/v1', statsRouter);
+app.use('/api/v1', verticalLeaderboardRouter);
 app.use('/api/v1', leaderboardRouter);
 app.use('/api/v1', providersRouter);
 app.use('/api/v1/subscribe', subscribeLimiter);

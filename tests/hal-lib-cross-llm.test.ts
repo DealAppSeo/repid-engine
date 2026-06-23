@@ -12,6 +12,10 @@
 import { checkCrossLLM, checkPythagoreanComma, jaccardSimilarity, cosineSimilarity } from '../src/hal/lib/cross-llm';
 import type { HALProviderConfig } from '../src/hal/lib/types';
 
+jest.mock('../src/db/direct-pg', () => ({
+  pgQuery: jest.fn().mockResolvedValue([]),
+}));
+
 type FetchImpl = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 let fetchSpy: jest.SpyInstance<Promise<Response>, [RequestInfo | URL, RequestInit | undefined]> | null = null;
@@ -188,6 +192,55 @@ describe('checkCrossLLM — 3 providers, BFT veto active', () => {
     expect(result.comma_veto).toBe(false);
     expect(result.agreement_score).toBe(0);
     expect(result.comma_gap).not.toBeNull();
+  });
+
+  it('excludes provider and uses fallback when circuit is open after 5 failures', async () => {
+    const oldGroqKey = process.env.GROQ_API_KEY;
+    const oldCerebrasKey = process.env.CEREBRAS_API_KEY;
+    process.env.GROQ_API_KEY = 'mock-groq-key';
+    process.env.CEREBRAS_API_KEY = 'mock-cerebras-key';
+
+    try {
+      let groqFailCount = 0;
+      installFetchMock(async (input) => {
+        const url = String(input);
+        if (url.includes('groq')) {
+          groqFailCount++;
+          return new Response('error', { status: 500 });
+        }
+        if (url.includes('cerebras')) return buildOpenAICompatResponse('Cerebras response');
+        if (url.includes('anthropic')) return buildAnthropicResponse('Anthropic response');
+        if (url.includes('deepseek')) return buildOpenAICompatResponse('DeepSeek response');
+        return buildOpenAICompatResponse('Success');
+      });
+
+      const provGroq = makeProvider('groq');
+      const provAnthropic = makeProvider('anthropic', 'anthropic-native');
+      const provDeepseek = makeProvider('deepseek');
+
+      for (let i = 0; i < 5; i++) {
+        await checkCrossLLM('Test prompt', {
+          providers: [provGroq, provAnthropic, provDeepseek],
+        });
+      }
+
+      expect(groqFailCount).toBe(5);
+
+      const result = await checkCrossLLM('Test prompt', {
+        providers: [provGroq, provAnthropic, provDeepseek],
+      });
+
+      expect(groqFailCount).toBe(5);
+
+      const providersCalled = result.answers_per_provider.map(a => a.provider);
+      expect(providersCalled).toContain('cerebras');
+      expect(providersCalled).toContain('anthropic');
+      expect(providersCalled).toContain('deepseek');
+      expect(providersCalled).not.toContain('groq');
+    } finally {
+      process.env.GROQ_API_KEY = oldGroqKey;
+      process.env.CEREBRAS_API_KEY = oldCerebrasKey;
+    }
   });
 });
 
