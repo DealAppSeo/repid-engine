@@ -13,3 +13,6 @@ hal-ground-truth-template.csv
 .env.local
 .firecrawl/
 verify-crosscheck-report.json
+
+# CC 2026-06-24 consequence-gate LOCAL-ONLY shadow output (never commit, never prod)
+.shadow-logs/
