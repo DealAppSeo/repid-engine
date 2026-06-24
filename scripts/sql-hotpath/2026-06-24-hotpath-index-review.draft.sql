@@ -1,0 +1,59 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- HOT-PATH INDEX REVIEW — DRAFT, NOT APPLIED  (CC, 2026-06-24 round 2, Phase 3)
+-- HARD STOP: nothing in this file has been applied to prod. DROP/CREATE INDEX on
+-- Trinity prod (qnnpjhlxljtqyigedwkb) is a Tier-2 / Sean-only DDL action. This is a
+-- reviewable artifact only, grounded in a READ-ONLY schema verification (RULE-5).
+--
+-- ⚠ INTERPRETATION FLAG (read first): the brief said "optimize T12 via SQL."
+--   • Per HYPERDAG canon + memory, "T12" = the 12 Trinity agents (free swarm),
+--     reached via the `trinity_tasks` queue — NOT the governance T1/T2 tiers.
+--   • The round-2 brief author proposed reading it as the T1/T2 tier hot-path
+--     (`repid_agents.tier` / `trg_sync_tier`).
+--   Per the brief's own instruction ("if Sean meant the Trinity agents, flag and
+--   stop"), I did NOT draft speculative new indexes. Instead I VERIFIED both
+--   surfaces read-only and report what's actually there. Conclusion below.
+--
+-- VERIFIED 2026-06-24 [V, read-only pg_indexes/pg_trigger on prod]:
+--   Both candidate tables are ALREADY well-indexed for their obvious hot paths.
+--   There is NO evident missing index. Adding one would be premature and would add
+--   write amplification (trinity_tasks already carries ~23 indexes + 8 triggers;
+--   every claim/UPDATE pays for all of them).
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ===== trinity_tasks (the T12 = Trinity-agents reading) =====
+-- Claim/poll hot path is ALREADY covered:
+--   idx_trinity_tasks_claiming  = btree(status, claimed_by, priority, created_at)
+--                                 WHERE status IN ('pending','claimed')   <-- partial covering index, ideal for the claim scan
+--   idx_trinity_tasks_agent_assigned_status = btree(agent_assigned, status, priority DESC)
+--
+-- ACTIONABLE FINDING — REDUNDANT INDEXES (write-amplification on the claim hot path):
+--   idx_tasks_status          = btree(status)   ┐ IDENTICAL duplicate — two btrees on (status).
+--   idx_trinity_tasks_status  = btree(status)   ┘ Keep one, drop the other.
+--   idx_tasks_priority        = btree(priority DESC) ┐ functionally redundant for a single-column
+--   idx_trinity_tasks_priority= btree(priority)      ┘ btree (ASC/DESC scan both directions). Consider consolidating.
+--
+-- CANDIDATE (Sean to review; CONCURRENTLY to avoid locking the live claim path; NOT applied):
+--   -- DROP INDEX CONCURRENTLY IF EXISTS public.idx_tasks_status;          -- keep idx_trinity_tasks_status
+--   -- DROP INDEX CONCURRENTLY IF EXISTS public.idx_trinity_tasks_priority;-- keep idx_tasks_priority (DESC) OR vice-versa
+--   -- (verify with pg_stat_user_indexes.idx_scan BEFORE dropping — keep the one queries actually use)
+--
+-- The real "optimization" here is FEWER indexes + leaner triggers on the write path,
+-- not more indexes. Net-new index DDL is NOT recommended without an EXPLAIN-backed
+-- missing-index case, which the current index set does not show.
+
+-- ===== repid_agents (the T1/T2 tier reading) =====
+-- Tier hot path ALREADY covered:
+--   idx_agents_tier = btree(tier, current_repid DESC)
+--   trg_sync_tier   = BEFORE INSERT OR UPDATE OF current_repid -> sync_tier()  [V]  (tier is DB-derived; do not write tier app-side)
+-- No missing index evident for tier lookups / leaderboard-by-tier ordering.
+
+-- ===== Bounded-query (RULE-8) status =====
+-- The governance gate/classifier (CC round-1) reads NOTHING from the DB yet — the
+-- shadow log is LOCAL-only and deriveAction is a stub — so there is no new governance
+-- hot-path query to wrap. The one governance-adjacent read, GET /api/v1/llm-trust,
+-- was ALREADY bounded via pgQuery (timeout + circuit breaker) in CC round-1 (8816e31).
+-- The Trinity claim/poll queries live in `trinity-symphony-shared` (a different repo),
+-- outside CC's repid-engine territory — flag, do not cross.
+
+-- VERDICT: Phase 3 produces a VERIFICATION + a duplicate-index cleanup candidate, not
+-- new index DDL. Awaiting Sean's disambiguation of "T12" before any further SQL.
