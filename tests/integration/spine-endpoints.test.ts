@@ -71,9 +71,22 @@ live('S-SPINE live-DB endpoints', () => {
   );
 
   afterAll(async () => {
-    if (createdEmails.length) await db.from('email_subscribers').delete().in('email', createdEmails);
-    if (createdRefIds.length) await db.from('referral_tracking').delete().in('id', createdRefIds);
-    if (createdVoteIds.length) await db.from('comparison_votes').delete().in('id', createdVoteIds);
+    if (guard.isBlocked()) return;
+    const teardown = async () => {
+      if (createdEmails.length) await db.from('email_subscribers').delete().in('email', createdEmails);
+      if (createdRefIds.length) await db.from('referral_tracking').delete().in('id', createdRefIds);
+      if (createdVoteIds.length) await db.from('comparison_votes').delete().in('id', createdVoteIds);
+    };
+    try {
+      await Promise.race([
+        teardown(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('teardown timeout')), 8000)
+        ),
+      ]);
+    } catch {
+      guard.markBlocked('teardown timeout');
+    }
   });
 
   guard.itLive('GET /leaderboard returns providers + integrity', async () => {
