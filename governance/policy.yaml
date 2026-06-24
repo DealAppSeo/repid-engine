@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSEQUENCE CLASSIFIER POLICY — policy-as-code  (DRAFT, wired to nothing)
+# Spec: agent-decision-governance-spec-v0.3 §3.  Authored: CC, 2026-06-24.
+#
+# STATUS: DRAFT. This file is NOT loaded by any code yet. It is the policy-as-code
+#         representation of the deterministic T2 allowlist that currently lives in
+#         src/services/consequence-classifier.ts:DEFAULT_CONFIG. A future loader will
+#         read this file so the rules are auditable + diffable outside the TS source.
+#
+# GOVERN-THE-GOVERNOR [spec §3 LOCK A5]: this policy is ITSELF a T2 surface. Changes
+#         ship as a PR + Sean merge — agents may PROPOSE diffs, never merge them. The
+#         path `governance/policy.*` is in criticalPathPatterns precisely so the
+#         classifier flags edits to its own policy as T2. Do not weaken that.
+#
+# THRESHOLDS PENDING SEAN'S GO [spec §10.1–10.5]: the calibration numbers in §5 of the
+#         spec (n>=25, Wilson>=85%, cold-start ~50) are NOT encoded here — they gate
+#         T1 self-clearance, which is a later layer. This file encodes only §3 (the
+#         consequence allowlist), which is buildable now without those numbers.
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: governance.hyperdag/v0
+kind: ConsequencePolicy
+metadata:
+  name: consequence-classifier-default
+  spec: agent-decision-governance-spec-v0.3
+  section: "3"
+  tier_of_this_policy: T2          # changes require PR + Sean merge (LOCK A5)
+  status: DRAFT
+  wired: false
+
+# Two independent axes (spec §2). This file governs CONSEQUENCE only (property of the
+# action). Confidence/RepID (property of the claim) is a separate surface (§5).
+principles:
+  - "Consequence derives from infra-bound action facts, never self-reported agent intent."
+  - "T2 is a deterministic rule allowlist, never LLM judgment."
+  - "Any action matching no rule fails to HITL (T2). No fail-open."
+  - "An LLM may suggest a tier but may never downgrade below the rule floor."
+
+# ── Tunable thresholds (mirror ClassifierConfig) ────────────────────────────
+config:
+  # [V] prod project id — spec §3 + repo CLAUDE.md. Targeting this id is always T2.
+  prod_project_ids:
+    - qnnpjhlxljtqyigedwkb
+  # git push/merge to any of these refs is T2.
+  protected_refs: [main, master, production, prod, release]
+  # cost (USD) at or above this is T2; above 0 and below it is T1.
+  cost_t2_threshold_usd: 1.0
+  # DDL keywords (word-boundary, case-insensitive) that make a `db` action T2.
+  ddl_keywords: [alter, drop, create, truncate, grant, revoke]
+  # path patterns (regex, case-insensitive) that are always T2.
+  critical_path_patterns:
+    - '(^|/)migrations/'          # DB migrations
+    - '(^|/)\.env(\.|$)'          # secret files
+    - '(^|/)keymap'               # keymap*
+    - '(^|/)secrets?/'            # secret directories
+    - '\.pem$|\.key$'             # key material
+    - '(^|/)governance/policy\.'  # this policy governs itself
+
+# ── Rule catalog (mirrors evaluateRules; documentation + future-loader contract) ──
+# Each action is classified at the MAX severity across all matching rules; zero
+# matches => T2 (fail-safe). Rule ids match the RuleId union in the TS source.
+rules:
+  T2:
+    - id: T2_PROD_PROJECT     # action.projectId in prod_project_ids
+    - id: T2_CRITICAL_PATH    # any touched path matches critical_path_patterns
+    - id: T2_DDL              # kind=db and sql contains a ddl_keyword
+    - id: T2_PROTECTED_GIT    # kind=git, op in {push,merge}, targetRef in protected_refs
+    - id: T2_SECRET           # kind=secret (read/rotation)
+    - id: T2_PLATFORM_PROD    # kind=platform and platform.isProd=true
+    - id: T2_HIGH_COST        # costUsd >= cost_t2_threshold_usd
+  T1:
+    - id: T1_MERGE            # kind=git, op=merge, targetRef NOT protected
+    - id: T1_NONPROD_CONFIG   # kind=platform and platform.isProd=false
+    - id: T1_BOUNDED_SPEND    # 0 < costUsd < cost_t2_threshold_usd
+    - id: T1_FEATURE_PUSH     # kind=git, op=push, targetRef NOT protected
+  T0:
+    - id: T0_READ             # kind=read
+    - id: T0_LOCAL            # localOnly=true and kind in {file_write,shell}
+  fail_safe:
+    - id: UNMATCHED_FAILSAFE  # no rule matched => T2 (spec §3 LOCK A4)
+
+# ── Change control (spec §3, §10.5) ─────────────────────────────────────────
+change_control:
+  mechanism: "PR + Sean merge"
+  proposable_by_agents: true
+  mergeable_by_agents: false
+  rationale: "The classifier policy is a T2 surface; the governor cannot ungovern itself."
+  open_question_10_5: "confirm final location/format (yaml here vs Rego) — Sean's call."
