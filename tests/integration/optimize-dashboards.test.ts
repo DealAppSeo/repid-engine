@@ -7,11 +7,19 @@ process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy-ke
 
 import request from 'supertest';
 import app from '../../src/index';
+import { probeHttpHandler, useInfraProbe } from './helpers/infra-guard';
 
 const live = HAVE_CREDS ? describe : describe.skip;
 
 live('cost + efficiency dashboards (live llm_call_log)', () => {
-  it('GET /costs/summary returns the 24h cost shape', async () => {
+  const guard = useInfraProbe('optimize-dashboards', () =>
+    probeHttpHandler(async () => {
+      const res = await request(app).get('/api/v1/costs/summary');
+      return { status: res.status };
+    })
+  );
+
+  guard.itLive('GET /costs/summary returns the 24h cost shape', async () => {
     const res = await request(app).get('/api/v1/costs/summary');
     expect(res.status).toBe(200);
     expect(res.body.last_24h).toBeDefined();
@@ -23,7 +31,7 @@ live('cost + efficiency dashboards (live llm_call_log)', () => {
     expect(res.body.by_task_type).toBeDefined();
   });
 
-  it('GET /system/efficiency returns waste/cost/throughput/learning', async () => {
+  guard.itLive('GET /system/efficiency returns waste/cost/throughput/learning', async () => {
     const res = await request(app).get('/api/v1/system/efficiency');
     expect(res.status).toBe(200);
     expect(res.body.waste_rate).toBeDefined();

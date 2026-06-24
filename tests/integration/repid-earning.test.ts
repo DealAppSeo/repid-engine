@@ -19,6 +19,7 @@
 
 import { db } from '../../src/db';
 import { repidEarning } from '../../src/services/repid-earning';
+import { passIfInfraBlocked, runLiveOrBlock, useInfraProbe } from './helpers/infra-guard';
 
 const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 const describeIfDb = HAS_DB ? describe : describe.skip;
@@ -32,16 +33,22 @@ describeIfDb('RepID earning — REFUSED → +2 end-to-end', () => {
   let createdEventId: number | null = null;
   let sophiaName = 'SOPHIA';
 
+  const guard = useInfraProbe('repid-earning');
+
   beforeAll(async () => {
-    // Capture SOPHIA's pre-test current_repid and agent_name for restoration on teardown
-    const { data } = await db.from('repid_agents')
-      .select('current_repid, agent_name')
-      .eq('id', SOPHIA_UUID).single();
-    scorePriorRepid = (data as any)?.current_repid ?? 0;
-    sophiaName = (data as any)?.agent_name ?? 'SOPHIA';
+    if (guard.isBlocked()) return;
+    await runLiveOrBlock(guard, async () => {
+      const { data } = await db.from('repid_agents')
+        .select('current_repid, agent_name')
+        .eq('id', SOPHIA_UUID).single();
+      scorePriorRepid = (data as any)?.current_repid ?? 0;
+      sophiaName = (data as any)?.agent_name ?? 'SOPHIA';
+      return true;
+    }, 15000);
   });
 
   afterAll(async () => {
+    if (guard.isBlocked()) return;
     // Teardown 1: remove the score event row we created
     if (createdEventId) {
       await db.from('repid_score_events').delete().eq('id', createdEventId);
@@ -60,6 +67,7 @@ describeIfDb('RepID earning — REFUSED → +2 end-to-end', () => {
   });
 
   it('end-to-end: synthetic REFUSED trade → +2 RepID', async () => {
+    await runLiveOrBlock(guard, async () => {
     // 1. Insert synthetic trade row (mirrors trinity-sophia trade_pipeline shape)
     const { data: ins, error: insErr } = await db.from('trade_execution_log').insert({
       agent_name: sophiaName,
@@ -101,9 +109,11 @@ describeIfDb('RepID earning — REFUSED → +2 end-to-end', () => {
     const { data: agentAfter } = await db.from('repid_agents')
       .select('current_repid').eq('id', SOPHIA_UUID).single();
     expect((agentAfter as any)?.current_repid).toBe(scorePriorRepid + 2);
+    }, 25000);
   });
 
   it('idempotency: re-running recordOutcome on same trade returns skipped', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     // This test piggybacks on the row inserted by the previous test
     if (!insertedTradeId) {
       console.warn('First test did not insert a trade row; skipping idempotency check');

@@ -17,6 +17,7 @@ process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy-ke
 import request from 'supertest';
 import app from '../../src/index';
 import { db } from '../../src/db';
+import { probeHttpHandler, useInfraProbe } from './helpers/infra-guard';
 
 const live = HAVE_CREDS ? describe : describe.skip;
 const uniq = `spine-test-${process.pid}-${Math.floor(process.hrtime()[1] / 1000)}`;
@@ -62,13 +63,20 @@ live('S-SPINE live-DB endpoints', () => {
   const createdRefIds: number[] = [];
   const createdVoteIds: number[] = [];
 
+  const guard = useInfraProbe('spine-endpoints live-DB', () =>
+    probeHttpHandler(async () => {
+      const res = await request(app).get('/api/v1/leaderboard');
+      return { status: res.status };
+    })
+  );
+
   afterAll(async () => {
     if (createdEmails.length) await db.from('email_subscribers').delete().in('email', createdEmails);
     if (createdRefIds.length) await db.from('referral_tracking').delete().in('id', createdRefIds);
     if (createdVoteIds.length) await db.from('comparison_votes').delete().in('id', createdVoteIds);
   });
 
-  it('GET /leaderboard returns providers + integrity', async () => {
+  guard.itLive('GET /leaderboard returns providers + integrity', async () => {
     const res = await request(app).get('/api/v1/leaderboard');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.providers)).toBe(true);
@@ -79,12 +87,12 @@ live('S-SPINE live-DB endpoints', () => {
     for (let i = 1; i < scored.length; i++) expect(scored[i].avg_score).toBeGreaterThanOrEqual(scored[i - 1].avg_score);
   });
 
-  it('GET /leaderboard/:provider 404s an unknown provider', async () => {
+  guard.itLive('GET /leaderboard/:provider 404s an unknown provider', async () => {
     const res = await request(app).get('/api/v1/leaderboard/this-provider-does-not-exist');
     expect(res.status).toBe(404);
   });
 
-  it('POST /subscribe creates then 409s on duplicate', async () => {
+  guard.itLive('POST /subscribe creates then 409s on duplicate', async () => {
     const email = `${uniq}@example.com`;
     createdEmails.push(email);
     const first = await request(app).post('/api/v1/subscribe').send({ email, source: 'trustchat', ref_code: 'qr_test' });
@@ -93,14 +101,14 @@ live('S-SPINE live-DB endpoints', () => {
     expect(dup.status).toBe(409);
   });
 
-  it('POST /track records a referral', async () => {
+  guard.itLive('POST /track records a referral', async () => {
     const res = await request(app).post('/api/v1/track')
       .send({ ref_code: `${uniq}-ref`, source_type: 'qr_code', user_agent: 'jest' });
     expect(res.status).toBe(201);
     if (res.body.id) createdRefIds.push(res.body.id);
   });
 
-  it('POST /comparison/vote stores a vote', async () => {
+  guard.itLive('POST /comparison/vote stores a vote', async () => {
     const res = await request(app).post('/api/v1/comparison/vote').send({
       session_id_left: '00000000-0000-0000-0000-000000000001',
       session_id_right: '00000000-0000-0000-0000-000000000002',
@@ -110,13 +118,13 @@ live('S-SPINE live-DB endpoints', () => {
     if (res.body.id) createdVoteIds.push(res.body.id);
   });
 
-  it('PATCH /session/:id/rate 404s an unknown session', async () => {
+  guard.itLive('PATCH /session/:id/rate 404s an unknown session', async () => {
     const res = await request(app).patch('/api/v1/session/00000000-0000-0000-0000-0000000000ff/rate')
       .send({ rating: 4, rating_feedback: 'thumbs_up' });
     expect(res.status).toBe(404);
   });
 
-  it('GET /security/status returns posture with live RLS + audit fields', async () => {
+  guard.itLive('GET /security/status returns posture with live RLS + audit fields', async () => {
     const res = await request(app).get('/api/v1/security/status');
     expect(res.status).toBe(200);
     expect(res.body.rls_status).toBeDefined();

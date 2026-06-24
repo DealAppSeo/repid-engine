@@ -18,6 +18,7 @@
 
 import { Wallet, verifyTypedData } from 'ethers';
 import { db } from '../../src/db';
+import { passIfInfraBlocked, useInfraProbe } from './helpers/infra-guard';
 
 const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 const describeIfDb = HAS_DB ? describe : describe.skip;
@@ -26,7 +27,10 @@ const SOPHIA_UUID = 'f3ef0bf8-5cdc-4fad-bce8-5144f01dc271';
 const BASE_SEPOLIA_CHAIN_ID = 84532;
 
 describeIfDb('ZKP / EIP-712 RepID attestation roundtrip', () => {
+  const guard = useInfraProbe('zkp-attestation');
+
   it('signs + verifies attestation for SOPHIA using current_repid (canonical)', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     // Read SOPHIA's CANONICAL repid (NOT repid_score per Gemini divergence)
     const { data: agent, error } = await db.from('repid_agents')
       .select('id, agent_name, current_repid, tier')

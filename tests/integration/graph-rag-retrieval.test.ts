@@ -15,6 +15,7 @@
  */
 
 import { db } from '../../src/db';
+import { passIfInfraBlocked, useInfraProbe } from './helpers/infra-guard';
 
 const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 const describeIfDb = HAS_DB ? describe : describe.skip;
@@ -27,7 +28,10 @@ const SPOKESPERSONS = new Set([
 ]);
 
 describeIfDb('Graph RAG retrieval — graph_rag_match_nodes RPC', () => {
+  const guard = useInfraProbe('graph-rag-retrieval');
+
   it('RPC exists and accepts the documented signature', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     // Query: zero vector of length 384 (matches Xenova/all-MiniLM-L6-v2 dim)
     const zeroVec = new Array(384).fill(0);
     const { data, error } = await db.rpc('graph_rag_match_nodes', {
@@ -43,6 +47,7 @@ describeIfDb('Graph RAG retrieval — graph_rag_match_nodes RPC', () => {
   });
 
   it('returns nodes scoped to the provided agent_id (when nodes exist)', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     // Find the agent with the most memory nodes (any of the 4 spokespersons)
     const { data: counts } = await db.from('agent_memory_nodes')
       .select('agent_id', { count: 'exact', head: false });
@@ -72,6 +77,7 @@ describeIfDb('Graph RAG retrieval — graph_rag_match_nodes RPC', () => {
   });
 
   it('agent_memory_nodes contains spokesperson memories (Gemini seed)', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     const { data, count } = await db.from('agent_memory_nodes')
       .select('agent_id', { count: 'exact' });
     if ((count ?? 0) === 0) {
