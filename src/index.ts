@@ -71,7 +71,7 @@ import { x402Metrics } from './observability/x402-metrics';
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
-import { pgPing } from './db/direct-pg';
+import { pgPing, pgQuery } from './db/direct-pg';
 
 import { authMiddleware } from './middleware/auth';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
@@ -409,8 +409,23 @@ const CANONICAL_LLM_PROVIDERS = new Set(['anthropic', 'groq', 'openai', 'llama-3
 const TEST_LLM_PROVIDERS = new Set(['test-harness', 'diagnostic-test', 'manual', 'test']);
 
 app.get('/api/v1/llm-trust', async (req, res) => {
-  const { data, error } = await db.from('llm_trust_leaderboard').select('*');
-  if (error) return res.status(500).json({ error: error.message });
+  // RULE-8 (NEVER UNBOUNDED WAIT): route the leaderboard read through pgQuery, which bounds the
+  // call with a timeout + process-wide circuit breaker. Previously this used supabase-js/PostgREST
+  // with no timeout — a saturated pooler made the request HANG (observed 000 in prod). Now a
+  // downstream/DB outage degrades FAST (503) instead of hanging. Hot path: 5s ceiling, no backoff.
+  let data: any[];
+  try {
+    data = await pgQuery<any>('SELECT * FROM llm_trust_leaderboard', [], {
+      timeoutMs: 5_000,
+      retries: 1,
+      label: 'llm-trust-leaderboard',
+    });
+  } catch (err) {
+    return res.status(503).json({
+      error: 'llm-trust leaderboard temporarily unavailable',
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const includeTest = String(req.query.include_test ?? '').toLowerCase() === 'true';
   const includeAll = String(req.query.include_all ?? '').toLowerCase() === 'true';
