@@ -205,7 +205,8 @@ describe('X402OutboundClient Governor', () => {
       if (table === 'x402_settlements') {
         return {
           select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: null }) }) }),
-          insert: () => ({})
+          insert: () => ({}),
+          upsert: () => Promise.resolve({ data: null })
         };
       }
       return { insert: () => ({}) }; // repid_events insert

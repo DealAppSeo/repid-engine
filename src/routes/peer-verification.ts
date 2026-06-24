@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
+import { emitPeerVerifyScoreEvents } from '../services/peer-verify-score';
 import crypto from 'crypto';
 
 // CC2 2026-05-27: HMAC-gated POST /respond for Gemini's peer_verify task handler.
@@ -218,46 +219,24 @@ router.post('/respond', async (req: Request, res: Response) => {
     //    false-PASS slash, flag-OFF no-op.
     // Activation: switch ON only post CC honest-HAL merge (feat/cc-2026-06-04-honest-hal +
     // HAL_DECISION_REQUIRES_QUORUM live in scorer). Do NOT score on pre-merge scorer.
-    const DOGFOOD_REPID_FROM_COSIGN =
-      (process.env.DOGFOOD_REPID_FROM_COSIGN || 'false').toLowerCase() === 'true';
-    if (DOGFOOD_REPID_FROM_COSIGN) {
-      const producerId = row.source_agent_id as string;
-      const verifierId = row.verifier_agent_id as string | null;
-      const claimRef = (row.claim_text as string) || `queue:${queue_id}`;
-      try {
-        if (verdict === 'verified' && verifierId) {
-          const d = 3; // small positive for verified collab (calib bootstrap)
-          await db.from('repid_score_events').insert([
-            {
-              agent_id: producerId,
-              event_type: 'dogfood_cosign_verified',
-              delta: d,
-              metadata: { role: 'producer', queue_id, claim: claimRef, co_signer: verifierName },
-            },
-            {
-              agent_id: verifierId,
-              event_type: 'dogfood_cosign_verified',
-              delta: d,
-              metadata: { role: 'verifier', queue_id, claim: claimRef, co_signer: verifierName },
-            },
-          ]);
-          console.log(`[dogfood] +${d} RepID cosign verified producer=${producerId} verifier=${verifierId}`);
-        } else if (verdict === 'disputed' && verifierId) {
-          // false-PASS / rubber-stamp slash (conservative -2 first offense)
-          await db.from('repid_score_events').insert({
-            agent_id: verifierId,
-            event_type: 'dogfood_false_pass_slash',
-            delta: -2,
-            metadata: { reason: 'tag-resolve-fail-disputed', queue_id, claim: claimRef },
-          });
-          console.warn(`[dogfood] -2 RepID false-PASS slash verifier=${verifierId} queue=${queue_id}`);
-        }
-      } catch (e: any) {
-        console.warn(`[dogfood] repid cosign event insert failed: ${e?.message ?? e}`);
+    // Veritas / peer-verify score emission — AFTER real HMAC-verified verdict only.
+    // pgQuery INSERT → apply_repid_score_event trigger moves current_repid.
+    try {
+      const scoreResult = await emitPeerVerifyScoreEvents({
+        queueId: queue_id,
+        producerAgentId: row.source_agent_id as string,
+        verifierAgentId: (row.verifier_agent_id as string | null) ?? verifierUuid,
+        verdict: verdict as 'verified' | 'disputed' | 'timeout',
+        claimText: row.claim_text as string | null,
+        certaintyAtClaim: row.certainty_at_claim as number | null,
+      });
+      if (scoreResult.emitted) {
+        console.log(
+          `[peer-verify] RepID events emitted queue=${queue_id} producer_after=${scoreResult.producerRepidAfter ?? 'n/a'} verifier_after=${scoreResult.verifierRepidAfter ?? 'n/a'}`
+        );
       }
-    } else if (verdict === 'verified') {
-      // Flag OFF: explicit no-op log (proves wiring present but gated)
-      console.log(`[dogfood] flag OFF (DOGFOOD_REPID_FROM_COSIGN=false) — no RepID delta for cosign queue_id=${queue_id}`);
+    } catch (e: any) {
+      console.warn(`[peer-verify] score event insert failed: ${e?.message ?? e}`);
     }
 
     // ----- Complete matching trinity_tasks row (bonus, best-effort) ----------
