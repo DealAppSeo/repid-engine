@@ -1,0 +1,25 @@
+{
+  "name": "@trustrails/guard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Installable governance guardrail — classify agent actions T0/T1/T2, block T2 to human sign-off, adversarially review T1, and emit a decision trace.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "index.ts",
+  "scripts": {
+    "demo": "tsx cli.ts",
+    "guard": "tsx cli.ts",
+    "allow-example": "tsx cli.ts examples/t0-local-write.json",
+    "block-example": "tsx cli.ts examples/t2-db-drop.json",
+    "test": "echo \"run from repo root: npx jest tests/trustrails-*.test.ts\" && exit 0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}
