@@ -145,7 +145,7 @@ curl https://repid-engine-production.up.railway.app/.well-known/agent.json
 
 1. **Extractor only** — fastest, pattern-based.
 2. **Cross-LLM with semantic similarity** — adds embedding agreement.
-3. **Three-zone Pythagorean Comma band** — adds harmonic uncertainty bounds.
+3. **Three-zone dissonance band** *(origin-story: the Pythagorean Comma; **experimental, under falsification testing** — promising on synthetic data only, not yet validated on real data with independent lineage)* — adds harmonic uncertainty bounds.
 4. **Consensus-vs-claim comparison** — adds verifier consensus.
 5. **Tampering detection** — adds adversarial signal analysis.
 
