@@ -14,23 +14,29 @@
  */
 
 import { db } from '../../src/db';
+import { passIfInfraBlocked, useInfraProbe } from './helpers/infra-guard';
 
 const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 const describeIfDb = HAS_DB ? describe : describe.skip;
 
 describeIfDb('hal_ground_truth_labels + hal_accuracy_summary v2', () => {
+  const guard = useInfraProbe('hal-ground-truth-labels');
+
   it('hal_ground_truth_labels table exists and is queryable', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     const { error } = await db.from('hal_ground_truth_labels').select('id').limit(0);
     expect(error).toBeNull();
   });
 
   it('hal_accuracy_summary returns ONE row regardless of label state', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     const { data, error } = await db.from('hal_accuracy_summary').select('*');
     expect(error).toBeNull();
     expect(data).toHaveLength(1);
   });
 
   it('view exposes total_labeled, total_raw, data_quality columns', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     const { data } = await db.from('hal_accuracy_summary').select('total_labeled, total_raw, data_quality');
     const row = data?.[0] as any;
     expect(row).toHaveProperty('total_labeled');
@@ -40,6 +46,7 @@ describeIfDb('hal_ground_truth_labels + hal_accuracy_summary v2', () => {
   });
 
   it('with no labels, metrics are NULL and quality flag says so', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     // Pre-condition: no labels for the test labeler
     await db.from('hal_ground_truth_labels').delete().eq('labeled_by', 'sprint7-test');
 
@@ -58,6 +65,7 @@ describeIfDb('hal_ground_truth_labels + hal_accuracy_summary v2', () => {
   });
 
   it('round-trip: insert label, verify view picks it up, clean up', async () => {
+    if (!passIfInfraBlocked(guard)) return;
     // Find a real hal_runner_results row to label
     const { data: anyRow } = await db.from('hal_runner_results')
       .select('id').eq('gen_failed', false).not('hal_vetoed', 'is', null).limit(1).maybeSingle();

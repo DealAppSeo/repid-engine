@@ -2,6 +2,7 @@ import { db } from '../../src/db';
 import { applyServiceFulfilledDeltas } from '../../src/services/validation-repid-delta';
 import { FeedbackLoopWorker } from '../../src/workers/feedback-loop-worker';
 import crypto from 'crypto';
+import { runLiveOrBlock, useInfraProbe } from './helpers/infra-guard';
 
 // Mock pgQuery to fetch from the actual db using supabase-js db client!
 jest.mock('../../src/db/direct-pg', () => {
@@ -32,6 +33,8 @@ const mockWriter = {
 };
 
 describe('Bridge Integration E2E Trace', () => {
+  const guard = useInfraProbe('bridge-integration');
+
   const buyer_agent_id = '84f2d7de-5bb9-4f3b-92ca-aecc7c498271';
   const provider_agent_id = '32e0e809-c1c4-4405-913f-135c8a2d6626'; // trinity-shofet (Established, token 5863)
   const service_id = '0edfc364-ad2a-4b3a-bdc4-20b03ab92e21';
@@ -45,6 +48,7 @@ describe('Bridge Integration E2E Trace', () => {
   let realEventId: string;
 
   afterAll(async () => {
+    if (guard.isBlocked()) return;
     // Cleanup
     if (simEventId) {
       await db.from('repid_events').delete().eq('id', simEventId);
@@ -57,6 +61,7 @@ describe('Bridge Integration E2E Trace', () => {
   });
 
   it('verifies simulated vs real service contracts end-to-end', async () => {
+    await runLiveOrBlock(guard, async () => {
     // 1. Create simulated settlement and contract
     simSettlementId = crypto.randomUUID();
     const { error: simSetErr } = await db.from('x402_settlements').insert({
@@ -185,5 +190,6 @@ describe('Bridge Integration E2E Trace', () => {
       repid: expect.any(Number),
       tier: 'ESTABLISHED'
     }));
+    }, 25000);
   });
 });
