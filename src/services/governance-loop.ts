@@ -2,7 +2,7 @@
  * Wired governance loop — spec v0.3 §3 + §4.
  * action → CC classifier → if T1, adversarial chamber → verdict.
  */
-import { type Action, type Classification, classifyAction } from './consequence-classifier';
+import { type Action, type Classification, classifyAction as defaultClassifyAction } from './consequence-classifier';
 import {
   AdversarialRouter,
   type AdversarialObjection,
@@ -58,16 +58,24 @@ export interface GovernanceLoopInput {
   objection: AdversarialObjection;
 }
 
+export type ClassifyFn = (
+  action: Action,
+  opts?: { config?: import('./consequence-classifier').ClassifierConfig }
+) => Classification;
+
 export interface GovernanceLoopOptions {
   router?: AdversarialRouter;
   repoRoot?: string;
+  /** Red-team / hardened profiles inject alternate classification. */
+  classifyFn?: ClassifyFn;
 }
 
 export function runGovernanceLoop(
   input: GovernanceLoopInput,
   opts: GovernanceLoopOptions = {}
 ): GovernanceVerdict {
-  const classification = classifyAction(input.action);
+  const classify = opts.classifyFn ?? defaultClassifyAction;
+  const classification = classify(input.action);
   const router = opts.router ?? new AdversarialRouter({ repoRoot: opts.repoRoot });
 
   if (classification.tier === 'T0') {
