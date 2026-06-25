@@ -13,6 +13,7 @@ import {
   lineagesAreDiverse,
   TEMPLATE_LIBRARY_VERSION,
 } from '../config/adversarial-templates';
+import { classifyAction, type Action as ClassifierAction } from './consequence-classifier';
 
 /** Pluggable classifier — wires to CC's consequence-classifier when present. */
 export interface ConsequenceClassifier {
@@ -60,6 +61,41 @@ export interface AdversarialRouterOptions {
   classifier?: ConsequenceClassifier;
   repoRoot?: string;
 }
+
+/** Map chamber ProposedAction → CC infra-bound Action for classification. */
+export function proposedToClassifierAction(proposed: ProposedAction): ClassifierAction {
+  switch (proposed.actionClass) {
+    case 'merge':
+      return {
+        kind: 'git',
+        git: { operation: 'merge', targetRef: 'feat/integration-branch' },
+        paths: proposed.artifactRefs,
+        description: proposed.artifactSummary,
+      };
+    case 'prod-config':
+      return {
+        kind: 'platform',
+        platform: { name: 'railway', isProd: false },
+        paths: proposed.artifactRefs,
+        description: proposed.artifactSummary,
+      };
+    case 'spend':
+      return {
+        kind: 'spend',
+        costUsd: 0.5,
+        description: proposed.artifactSummary,
+      };
+    default:
+      return { kind: 'shell', description: proposed.artifactSummary };
+  }
+}
+
+/** Real CC classifier wired through the adapter (replaces stub default). */
+export const consequenceClassifierAdapter: ConsequenceClassifier = {
+  classifyAction(proposed) {
+    return classifyAction(proposedToClassifierAction(proposed)).tier;
+  },
+};
 
 const CI_RUN_RE = /^\d{8,}$/;
 const TEST_NAME_RE = /^[a-zA-Z0-9_./-]+\.test\.(ts|js)$/;
@@ -136,11 +172,11 @@ export function scoreAttack(
 }
 
 export class AdversarialRouter {
-  private classifier?: ConsequenceClassifier;
+  private classifier: ConsequenceClassifier;
   private repoRoot: string;
 
   constructor(opts: AdversarialRouterOptions = {}) {
-    this.classifier = opts.classifier;
+    this.classifier = opts.classifier ?? consequenceClassifierAdapter;
     this.repoRoot = opts.repoRoot ?? process.cwd();
   }
 
@@ -211,7 +247,7 @@ export class AdversarialRouter {
     adversary: ChamberParticipant,
     objection: AdversarialObjection
   ): { tier: 'T0' | 'T1' | 'T2'; decision?: ChamberDecision; templateVersion: string } {
-    const tier = this.classifier?.classifyAction(action) ?? 'T1';
+    const tier = this.classifier.classifyAction(action);
     if (tier !== 'T1') {
       return { tier, templateVersion: TEMPLATE_LIBRARY_VERSION };
     }
@@ -220,7 +256,7 @@ export class AdversarialRouter {
   }
 }
 
-/** Stub classifier for tests until CC branch is merged locally. */
+/** Isolated chamber tests only — production path uses consequenceClassifierAdapter. */
 export const stubConsequenceClassifier: ConsequenceClassifier = {
   classifyAction: () => 'T1',
 };
