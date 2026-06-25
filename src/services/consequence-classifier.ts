@@ -102,6 +102,10 @@ export interface ClassifierConfig {
   gitRefStripPrefixes?: string[];
   /** Aggregate spend cap (cumulative + velocity) applied when a spend-window snapshot is supplied. Optional. */
   spend?: SpendTrackerConfig;
+  /** [r6 FP] Non-executable surfaces (docs / tests / fixtures). A write/read whose paths are ALL
+   * non-executable (and match no critical pattern) is reversible context, not an executable action,
+   * so it does not fail-safe to T2. Any positive T2 rule still dominates. Optional. */
+  nonExecutablePathPatterns?: RegExp[];
 }
 
 /** [LOCK A5] The default allowlist — the literal surfaces enumerated in spec §3. */
@@ -121,6 +125,13 @@ export const DEFAULT_CONFIG: ClassifierConfig = {
   costT2ThresholdUsd: 1.0,
   gitRefStripPrefixes: ['refs/remotes/origin/', 'refs/heads/', 'refs/remotes/', 'origin/', 'upstream/'],
   spend: DEFAULT_SPEND_TRACKER_CONFIG,
+  nonExecutablePathPatterns: [
+    /\.(md|markdown|txt|rst|adoc)$/i,   // docs
+    /(^|\/)docs?\//i,                   // docs/ dir
+    /(^|\/)__tests__\//i, /(^|\/)tests?\//i, /(^|\/)fixtures?\//i, /(^|\/)__mocks__\//i,
+    /_test\.[a-z0-9]+$/i, /\.test\.[a-z0-9]+$/i, /\.spec\.[a-z0-9]+$/i,
+    /(^|\/)examples?\//i,
+  ],
 };
 
 export type RuleId =
@@ -128,7 +139,7 @@ export type RuleId =
   | 'T2_SECRET' | 'T2_PLATFORM_PROD' | 'T2_HIGH_COST'
   | 'T2_PROD_IDENTIFIER_IN_TEXT' | 'T2_SPEND_VELOCITY'
   | 'T1_MERGE' | 'T1_NONPROD_CONFIG' | 'T1_BOUNDED_SPEND' | 'T1_FEATURE_PUSH'
-  | 'T0_LOCAL' | 'T0_READ'
+  | 'T0_LOCAL' | 'T0_READ' | 'T0_NONEXEC_CONTEXT'
   | 'UNMATCHED_FAILSAFE';
 
 export interface RuleHit { ruleId: RuleId; tier: Tier; reason: string; }
@@ -263,6 +274,18 @@ export function evaluateRules(
   }
   if (action.localOnly === true && (action.kind === 'file_write' || action.kind === 'shell')) {
     hits.push({ ruleId: 'T0_LOCAL', tier: 'T0', reason: 'local-only / gitignored / reversible surface' });
+  }
+  // [r6 FP, CLASS-level] context determines consequence: a write/read whose paths are ALL
+  // non-executable (docs / tests / fixtures) AND match NO critical pattern is reversible context,
+  // not an executable action — so it does not fail-safe to T2. CRITICAL: this only emits a T0 hit;
+  // because the floor is max-severity, ANY positive T2 rule above still dominates. The exemption is
+  // for CONTEXT, never for bypassing detection of a real executable action (paired-attack proven).
+  {
+    const nonExec = config.nonExecutablePathPatterns ?? DEFAULT_CONFIG.nonExecutablePathPatterns ?? [];
+    const isNonExec = (p: string) => nonExec.some((re) => re.test(p)) && !config.criticalPathPatterns.some((re) => re.test(p));
+    if ((action.kind === 'file_write' || action.kind === 'read') && canonPaths.length && canonPaths.every(isNonExec)) {
+      hits.push({ ruleId: 'T0_NONEXEC_CONTEXT', tier: 'T0', reason: `non-executable doc/test/fixture surface (${(action.paths ?? []).join(', ')})` });
+    }
   }
 
   return hits;
