@@ -1,10 +1,12 @@
 import { type ClassifyFn } from '../../services/governance-loop';
+import { classifyAction } from '../../services/consequence-classifier';
+import { CC_ACTUAL_GATE, createCcActualGate } from './cc-actual-gate';
+export { CC_ACTUAL_GATE, CC_GATE_COMMIT, createCcActualGate } from './cc-actual-gate';
 import {
   classifyActionHardened,
   createHardenedContext,
   type HardenedContext,
 } from './hardened-reference';
-import { classifyAction } from '../../services/consequence-classifier';
 
 export interface GateProfile {
   id: string;
@@ -39,5 +41,8 @@ export const HARDENED_REFERENCE_PROFILE: GateProfile = {
     };
   },
 };
+
+/** Round-6+ parity: single source of truth. */
+export const PARITY_GATE_PROFILE = CC_ACTUAL_GATE;
 
 export const GATE_PROFILES = [PRE_HARDEN_PROFILE, HARDENED_REFERENCE_PROFILE];
