@@ -17,3 +17,8 @@ verify-crosscheck-report.json
 
 # CC 2026-06-24 consequence-gate LOCAL-ONLY shadow output (never commit, never prod)
 .shadow-logs/
+
+# CC ship 0.7.0 — trustrails package local artifacts
+trustrails/node_modules/
+.trustrails-traces/
+.redteam-scoreboard.json

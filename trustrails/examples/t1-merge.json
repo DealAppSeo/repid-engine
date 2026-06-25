@@ -1,0 +1,5 @@
+{
+  "kind": "git",
+  "git": { "operation": "merge", "targetRef": "feat/some-feature" },
+  "description": "merge a feature branch into another feature branch"
+}
