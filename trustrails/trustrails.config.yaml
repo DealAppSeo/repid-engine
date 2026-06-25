@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# trustrails.config.yaml — the governance rules, yours to SEE and TUNE.
+# Editing this file changes how guard() classifies and gates actions. Every field
+# below is enforced deterministically (spec v0.3 §3). This config is itself a T2
+# surface — in production, changes ship via PR + human sign-off (see policy.yaml).
+# ─────────────────────────────────────────────────────────────────────────────
+version: 0.1.0
+
+# T0 = trivial/reversible (allow) · T1 = consequential/bounded (adversarial review)
+# · T2 = critical/irreversible (human sign-off). T2 is a DETERMINISTIC allowlist:
+consequence:
+  # Targeting any of these project ids is always T2.
+  prodProjectIds:
+    - qnnpjhlxljtqyigedwkb        # Trinity prod
+  # git push/merge to any of these refs is T2.
+  protectedRefs: [main, master, production, prod, release]
+  # Cost (USD) at or above this is T2; above 0 and below it is T1.
+  costT2ThresholdUsd: 1.0
+  # SQL DDL keywords (word-boundary, case-insensitive) that make a `db` action T2.
+  ddlKeywords: [alter, drop, create, truncate, grant, revoke]
+  # Path patterns (regex, case-insensitive) that are always T2.
+  criticalPathPatterns:
+    - '(^|/)migrations/'
+    - '(^|/)\.env(\.|$)'
+    - '(^|/)keymap'
+    - '(^|/)secrets?/'
+    - '\.pem$|\.key$'
+    - '(^|/)governance/policy\.'
+    - '(^|/)trustrails\.config\.'   # the config governs itself
+
+# Which tiers REQUIRE human sign-off (guard returns a blocking verdict).
+# Default: T2 only. Add T1 here to force human review of EVERY consequential action.
+humanSignOffTiers:
+  - T2
+
+# Escalation thresholds for the T1 adversarial chamber (informational mirror of the
+# chamber's evidence gate — an objection needs machine-checkable, verified evidence
+# and a summary of at least this many chars to count as a substantive attack).
+escalation:
+  minObjectionSummaryLength: 12
+  requireVerifiedEvidence: true

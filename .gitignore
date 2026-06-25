@@ -17,3 +17,7 @@ verify-crosscheck-report.json
 
 # CC 2026-06-24 consequence-gate LOCAL-ONLY shadow output (never commit, never prod)
 .shadow-logs/
+
+# CC 2026-06-24 r4 — TrustRails LOCAL decision traces (never commit)
+.trustrails-traces/
+trustrails/node_modules/

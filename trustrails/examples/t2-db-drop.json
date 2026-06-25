@@ -1,0 +1,6 @@
+{
+  "kind": "db",
+  "sql": "DROP TABLE repid_agents",
+  "paths": ["migrations/0001-drop.sql"],
+  "description": "drop the agents table"
+}

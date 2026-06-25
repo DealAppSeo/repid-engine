@@ -1,0 +1,6 @@
+{
+  "kind": "file_write",
+  "paths": ["scratch/notes.md"],
+  "localOnly": true,
+  "description": "jot a local TODO note"
+}
