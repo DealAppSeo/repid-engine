@@ -1,0 +1,13 @@
+plugins:
+  generators:
+    rest:
+      RestGenerator:
+        uri: "http://localhost:3010/judge"
+        method: "post"
+        headers:
+          Content-Type: "application/json"
+        req_template_json_object:
+          prompt: "$INPUT"
+        response_json: true
+        response_json_field: "text"
+        request_timeout: 60

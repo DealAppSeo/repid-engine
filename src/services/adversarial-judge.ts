@@ -253,6 +253,9 @@ async function recordProviderHealth(row: {
   verdict?: string | null;
   confidence?: number | null;
 }): Promise<void> {
+  if (process.env.DISABLE_DB === 'true') {
+    return;
+  }
   try {
     const { error } = await db.from('provider_health').insert({
       provider: row.provider,
