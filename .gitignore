@@ -1,4 +1,5 @@
 node_modules/
+.redteam-scoreboard.json
 dist/
 .env
 .env.local
