@@ -14,6 +14,7 @@ import {
   TEMPLATE_LIBRARY_VERSION,
 } from '../config/adversarial-templates';
 import { classifyAction, type Action as ClassifierAction } from './consequence-classifier';
+import { scanForInjection } from '../hal/injection-guard';
 
 /** Pluggable classifier — wires to CC's consequence-classifier when present. */
 export interface ConsequenceClassifier {
@@ -208,6 +209,16 @@ export class AdversarialRouter {
   ): ChamberDecision {
     const template = this.selectTemplate(action);
     this.enforceLineageDiversity(proposer, adversary);
+
+    const scanDesc = scanForInjection(action.artifactSummary);
+    const scanObj = scanForInjection(objection.summary);
+    if (scanDesc.injectionScore >= 0.3 || scanObj.injectionScore >= 0.3) {
+      return {
+        outcome: 'escalate',
+        reason: `prompt injection detected: descScore=${scanDesc.injectionScore} objScore=${scanObj.injectionScore}`,
+        templateId: template.id,
+      };
+    }
 
     if (objection.agreesActionIsWrong) {
       return {

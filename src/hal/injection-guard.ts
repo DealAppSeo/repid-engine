@@ -15,6 +15,7 @@ export interface InjectionScan {
 
 const PATTERNS: { name: string; re: RegExp }[] = [
   { name: 'ignore_instructions', re: /ignore\s+(the\s+)?(all\s+|previous\s+|prior\s+|above\s+)+(instructions|prompts|rules)/i },
+  { name: 'ignore_prior', re: /\bignore\s+prior\b/i },
   { name: 'system_prompt', re: /(reveal|show|print|repeat|leak)\s+(your\s+)?(system\s+prompt|instructions|initial\s+prompt)/i },
   { name: 'you_are_now', re: /you\s+are\s+now\s+(a|an|the|in)\b/i },
   { name: 'act_as', re: /\bact\s+as\s+(if|though|a|an)\b/i },

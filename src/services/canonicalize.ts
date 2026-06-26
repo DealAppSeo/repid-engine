@@ -42,9 +42,52 @@ export function canonicalizeText(s: string): string {
     .toLowerCase();
 }
 
-/** Strip SQL comments (block, line, hash) before canonicalizing — keeps single spaces for \b. */
+export function tryDecodeHex(s: string): string | null {
+  const hexRegex = /\b([0-9a-fA-F]{8,})\b/g;
+  let match;
+  let decodedCombined = '';
+  while ((match = hexRegex.exec(s)) !== null) {
+    const hex = match[1];
+    if (hex.length % 2 !== 0) continue;
+    try {
+      const decoded = Buffer.from(hex, 'hex').toString('utf8');
+      if (/^[\x20-\x7E\s\r\n\t]+$/.test(decoded)) {
+        decodedCombined += ' ' + decoded;
+      }
+    } catch (e) {}
+  }
+  return decodedCombined.trim() || null;
+}
+
+export function tryDecodeBase64(s: string): string | null {
+  const parts = s.split('=');
+  let decodedCombined = '';
+  const b64Regex = /([A-Za-z0-9+/]{4,}(?:\s+[A-Za-z0-9+/]{4,})*)/g;
+
+  for (const part of parts) {
+    let match;
+    const localRegex = new RegExp(b64Regex);
+    while ((match = localRegex.exec(part)) !== null) {
+      const rawStr = match[1];
+      const cleanB64 = rawStr.replace(/\s+/g, '');
+      if (cleanB64.length < 8) continue;
+      try {
+        const decoded = Buffer.from(cleanB64, 'base64').toString('utf8');
+        if (/^[\x20-\x7E\s\r\n\t]+$/.test(decoded)) {
+          decodedCombined += ' ' + decoded;
+        }
+      } catch (e) {}
+    }
+  }
+  return decodedCombined.trim() || null;
+}
+
+/** Strip SQL comments (block, line, hash) before canonicalizing — keeps single spaces for \b. Decodes obfuscations. */
 export function canonicalizeSql(sql: string): string {
-  const noComments = sql
+  const decHex = tryDecodeHex(sql) ?? '';
+  const decB64 = tryDecodeBase64(sql) ?? '';
+  const combined = (sql + ' ' + decHex + ' ' + decB64).trim();
+  const noComments = combined
     .replace(/\/\*[\s\S]*?\*\//g, ' ') // /* ... */
     .replace(/--.*$/gm, ' ')           // -- line
     .replace(/#.*$/gm, ' ');           // # line

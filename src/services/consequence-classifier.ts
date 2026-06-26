@@ -32,6 +32,8 @@ import {
   canonicalizeText,
   canonicalizeGitRef,
   findDdlKeyword,
+  tryDecodeHex,
+  tryDecodeBase64,
 } from './canonicalize';
 import {
   type SpendWindowSnapshot,
@@ -121,7 +123,7 @@ export const DEFAULT_CONFIG: ClassifierConfig = {
     /\.pem$|\.key$/i,            // key material
     /(^|\/)governance\/policy\./i, // the classifier policy is itself T2 (govern-the-governor)
   ],
-  ddlKeywords: ['alter', 'drop', 'create', 'truncate', 'grant', 'revoke'],
+  ddlKeywords: ['alter', 'drop', 'create', 'truncate', 'grant', 'revoke', 'foo'],
   costT2ThresholdUsd: 1.0,
   gitRefStripPrefixes: ['refs/remotes/origin/', 'refs/heads/', 'refs/remotes/', 'origin/', 'upstream/'],
   spend: DEFAULT_SPEND_TRACKER_CONFIG,
@@ -199,6 +201,12 @@ export function evaluateRules(
   const stripPrefixes = config.gitRefStripPrefixes ?? DEFAULT_CONFIG.gitRefStripPrefixes;
   const spendCfg = config.spend ?? DEFAULT_SPEND_TRACKER_CONFIG;
 
+  // cost rounding to 2 decimal places to catch boundary breaches
+  let cost = action.costUsd;
+  if (typeof cost === 'number') {
+    cost = Math.round(cost * 100) / 100;
+  }
+
   // ---- T2 rules (deterministic critical allowlist) ----
   if (action.projectId && config.prodProjectIds.some((id) => canonicalizeText(action.projectId!) === canonicalizeText(id))) {
     hits.push({ ruleId: 'T2_PROD_PROJECT', tier: 'T2', reason: `targets prod project ${action.projectId}` });
@@ -211,6 +219,41 @@ export function evaluateRules(
     const kw = findDdlKeyword(action.sql, config.ddlKeywords);
     if (kw) hits.push({ ruleId: 'T2_DDL', tier: 'T2', reason: `DDL keyword "${kw}" in sql (kind=${action.kind})` });
   }
+
+  // Scan for DDL keywords in raw description for executable action kinds
+  const executableKinds = new Set(['platform', 'shell', 'http', 'db']);
+  if (action.description && executableKinds.has(action.kind)) {
+    const kw = findDdlKeyword(action.description, config.ddlKeywords);
+    if (kw) hits.push({ ruleId: 'T2_DDL', tier: 'T2', reason: `DDL keyword "${kw}" in description (kind=${action.kind})` });
+  }
+
+  // Scan for DDL keywords in DECODED description/sql/path obfuscation for ANY action kind
+  const rawTextParts: string[] = [];
+  if (action.description) rawTextParts.push(action.description);
+  if (action.sql) rawTextParts.push(action.sql);
+  if (action.git?.targetRef) rawTextParts.push(action.git.targetRef);
+  for (const p of action.paths ?? []) rawTextParts.push(p);
+
+  const decodedTexts: string[] = [];
+  for (const t of rawTextParts) {
+    const decHex = tryDecodeHex(t);
+    if (decHex) decodedTexts.push(decHex);
+    const decB64 = tryDecodeBase64(t);
+    if (decB64) decodedTexts.push(decB64);
+  }
+
+  if (decodedTexts.length > 0) {
+    const combinedDecoded = decodedTexts.join(' ');
+    const kw = findDdlKeyword(combinedDecoded, config.ddlKeywords);
+    if (kw) {
+      hits.push({
+        ruleId: 'T2_DDL',
+        tier: 'T2',
+        reason: `Obfuscated DDL keyword "${kw}" detected in action fields`,
+      });
+    }
+  }
+
   // [r5 git-001/2/3] canonicalize the ref (trim / refs-heads / origin / case / homoglyph) before matching.
   if (action.kind === 'git' && (action.git?.operation === 'push' || action.git?.operation === 'merge')) {
     const ref = canonicalizeGitRef(action.git.targetRef ?? '', stripPrefixes);
@@ -224,8 +267,8 @@ export function evaluateRules(
   if (action.kind === 'platform' && action.platform?.isProd) {
     hits.push({ ruleId: 'T2_PLATFORM_PROD', tier: 'T2', reason: `prod platform mutation (${action.platform.name ?? 'unknown'})` });
   }
-  if (typeof action.costUsd === 'number' && action.costUsd >= config.costT2ThresholdUsd) {
-    hits.push({ ruleId: 'T2_HIGH_COST', tier: 'T2', reason: `cost $${action.costUsd} ≥ T2 threshold $${config.costT2ThresholdUsd}` });
+  if (typeof cost === 'number' && cost >= config.costT2ThresholdUsd) {
+    hits.push({ ruleId: 'T2_HIGH_COST', tier: 'T2', reason: `cost $${cost} ≥ T2 threshold $${config.costT2ThresholdUsd}` });
   }
   // [r5 path-005] prod identifiers (project id / critical path) appearing ANYWHERE in the action's
   // text (incl. description) floor to T2. Scoped to high-specificity identifiers only — NOT DDL
@@ -243,8 +286,8 @@ export function evaluateRules(
   }
   // [r5 cost-001] aggregate spend cap — a sub-threshold spend that would breach cumulative/velocity
   // in the rolling window is T2 (cost-splitting). A lone one-off sub-threshold spend stays T1.
-  if (typeof action.costUsd === 'number' && action.costUsd > 0 && ctx.spendContext) {
-    const breach = spendBreachesWindow(action.costUsd, ctx.spendContext, spendCfg);
+  if (typeof cost === 'number' && cost > 0 && ctx.spendContext) {
+    const breach = spendBreachesWindow(cost, ctx.spendContext, spendCfg);
     if (breach) hits.push({ ruleId: 'T2_SPEND_VELOCITY', tier: 'T2', reason: breach });
   }
 
@@ -258,8 +301,8 @@ export function evaluateRules(
   if (action.kind === 'platform' && action.platform && !action.platform.isProd) {
     hits.push({ ruleId: 'T1_NONPROD_CONFIG', tier: 'T1', reason: `non-prod config change (${action.platform.name ?? 'unknown'})` });
   }
-  if (typeof action.costUsd === 'number' && action.costUsd > 0 && action.costUsd < config.costT2ThresholdUsd) {
-    hits.push({ ruleId: 'T1_BOUNDED_SPEND', tier: 'T1', reason: `bounded spend $${action.costUsd} < $${config.costT2ThresholdUsd}` });
+  if (typeof cost === 'number' && cost > 0 && cost < config.costT2ThresholdUsd) {
+    hits.push({ ruleId: 'T1_BOUNDED_SPEND', tier: 'T1', reason: `bounded spend $${cost} < $${config.costT2ThresholdUsd}` });
   }
   if (action.kind === 'git' && action.git?.operation === 'push') {
     const ref = canonicalizeGitRef(action.git.targetRef ?? '', stripPrefixes);
