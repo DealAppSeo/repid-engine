@@ -22,3 +22,6 @@ verify-crosscheck-report.json
 trustrails/node_modules/
 .trustrails-traces/
 .redteam-scoreboard.json
+
+# GA 2026-06-25 — key health registry local status cache
+key-health.json
