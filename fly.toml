@@ -1,0 +1,49 @@
+# fly.toml — repid-engine WARM STANDBY (Fly.io)
+# Region sjc = San Jose, CA — nearest Fly region to Supabase prod (us-west-1 / N. California),
+# minimizing standby<->DB latency and cross-region egress.
+#
+# STATUS: PREP ONLY. This config is staged for [SEAN] to `flyctl launch --no-deploy` + secrets + deploy.
+# The standby stays IDLE (no client engineUrl points at it) until CC's egress poll fix is merged.
+# See deploy/FAILOVER_RUNBOOK.md (ACTIVATION GATE) and deploy/ENV_MANIFEST.md (secrets to mirror).
+#
+# Railway stays PRIMARY. This is a standby, not a migration.
+
+app = "repid-engine-standby"
+primary_region = "sjc"
+
+[build]
+  # Same portable Dockerfile that Railway/Coolify can use — no host-specific build steps.
+  dockerfile = "Dockerfile"
+  # The git-pinned private dep (@hyperdag/proof-verifier) needs a build secret on deploy:
+  #   [SEAN]  flyctl deploy --build-secret gh_token=<github_pat_with_repo_scope>
+  # (Documented in Dockerfile header. Never store the token in this file.)
+
+[env]
+  NODE_ENV = "production"
+  # PORT is injected by Fly; the app reads $PORT and binds 0.0.0.0:$PORT.
+  # internal_port below MUST match the port the app listens on.
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # WARM standby: keep at least one machine running so failover RTO is seconds, not a cold boot.
+  # auto_stop = "suspend" lets Fly suspend on idle but auto_start brings it back on probe/traffic;
+  # min_machines_running = 1 keeps it warm. [SEAN] budget call: set min=0 for scale-to-zero (cheaper,
+  # slower RTO) per SPRINT Sean-gated action #4.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    # Probe the EXISTING /health route (no code change needed; src/routes/health.ts).
+    # /health does a live Supabase read, so a green check also proves the standby's DB creds work.
+    method = "GET"
+    path = "/health"
+    interval = "15s"
+    timeout = "4s"
+    grace_period = "20s"
+
+[[vm]]
+  # Small warm-standby footprint; bump if /health or real traffic shows pressure.
+  size = "shared-cpu-1x"
+  memory = "512mb"
