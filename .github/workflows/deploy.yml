@@ -1,0 +1,62 @@
+# Single merge -> deploy pipeline (Phase 5).
+# PREP: default target is Railway (Sean's existing flow) -> adding this file changes nothing today.
+# The Fly path is opt-in and requires [SEAN] GitHub secrets (FLY_API_TOKEN, GH_DEP_TOKEN).
+# This workflow runs ONLY on push to main (post-merge). It NEVER opens or merges a PR (no self-merge).
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Deploy target"
+        required: true
+        default: railway
+        type: choice
+        options:
+          - railway
+          - fly
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    # Resolve target: workflow_dispatch input wins; otherwise the repo variable DEPLOY_TARGET; default railway.
+    env:
+      DEPLOY_TARGET: ${{ github.event.inputs.deploy_target || vars.DEPLOY_TARGET || 'railway' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- RAILWAY PATH (default) ---
+      # Railway auto-deploys from main via its own integration; nothing to do here.
+      # This step documents the no-op so the single pipeline file covers both targets.
+      - name: Railway (no-op placeholder)
+        if: env.DEPLOY_TARGET == 'railway'
+        run: |
+          echo "DEPLOY_TARGET=railway -> Railway auto-deploys from main (Sean's existing flow)."
+          echo "No action taken by this workflow. To deploy to Fly, set DEPLOY_TARGET=fly."
+
+      # --- FLY PATH (opt-in) ---
+      - name: Set up flyctl
+        if: env.DEPLOY_TARGET == 'fly'
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly (warm standby)
+        if: env.DEPLOY_TARGET == 'fly'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          GH_DEP_TOKEN: ${{ secrets.GH_DEP_TOKEN }}
+        run: |
+          # Same portable Dockerfile; build secret resolves the private @hyperdag/proof-verifier dep.
+          flyctl deploy --remote-only \
+            --config fly.toml \
+            --build-secret gh_token="$GH_DEP_TOKEN"
