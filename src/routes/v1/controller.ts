@@ -3,6 +3,7 @@ import { db } from '../../db';
 import { requireRole, mintQrToken } from '../../middleware/controller-auth';
 import { hitlService, HitlResolution } from '../../services/hitl-service';
 import { setAgentEnabled } from '../../services/agent-controls';
+import { hitlService, HitlResolution } from '../../services/hitl-service';
 
 // Controller API (CC2 2026-05-26) — backend for the aitc controller-UI rebuild
 // (v0.app). All routes are gated by role permissions.
