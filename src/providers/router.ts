@@ -74,6 +74,30 @@ export function isLowComplexity(prompt: string, taskHint?: string): boolean {
   return false;
 }
 
+/**
+ * Map a caller task hint to a task_domain the performance-lookup RPC actually has rows for.
+ * The RPC keys on `repid_score_events.task_domain`; the live populated domains (30d) are
+ * EVERGREEN, peer_verify, cait, system, review, heal. A hint that already names one of those is
+ * used verbatim; anything unknown/absent (including the legacy 'general') maps to a configurable
+ * populated default so ANFIS gets a real reliability signal instead of an empty set.
+ * Pure + deterministic for the same env. Reversible via ROUTER_ANFIS_DEFAULT_DOMAIN.
+ */
+export const ANFIS_POPULATED_DOMAINS = ['EVERGREEN', 'peer_verify', 'cait', 'system', 'review', 'heal'] as const;
+
+export function resolveAnfisDomain(taskHint?: string): string {
+  const fallback = process.env.ROUTER_ANFIS_DEFAULT_DOMAIN || 'peer_verify';
+  if (!taskHint) return fallback;
+  const hint = taskHint.trim();
+  // Exact (case-insensitive) match against a domain that has data.
+  const exact = ANFIS_POPULATED_DOMAINS.find(d => d.toLowerCase() === hint.toLowerCase());
+  if (exact) return exact;
+  // An explicit 'general' (the old empty default) is treated as "no useful hint".
+  if (hint.toLowerCase() === 'general' || hint.length === 0) return fallback;
+  // Otherwise honor the caller's hint verbatim (it may be a real, less-common domain like
+  // 'research'/'finance'); the RPC returns empty for it and ANFIS falls back gracefully.
+  return hint;
+}
+
 async function getAnfisRecommendation(domain: string): Promise<string | null> {
   try {
     const { data, error } = await db.rpc('anfis_provider_performance_lookup', {
@@ -230,7 +254,15 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
   const strictCostOrder = process.env.ROUTER_STRICT_COST_ORDER !== 'false';
   let anfisRecommended: string | null = null;
   if (!strictCostOrder && req.tier_preference === 'auto') {
-    const domain = req.task_hint || 'general';
+    // ROOT-CAUSE #4 fix (GA 2026-06-26): the performance-lookup RPC filters
+    // `repid_score_events.task_domain = p_domain`. The old default `'general'` matches almost
+    // nothing (387 rows / 37 with a provider over 30d, verified live), so ANFIS always saw an
+    // empty signal and fell back to static — i.e. ANFIS was structurally starved even when
+    // ROUTER_STRICT_COST_ORDER=false. The real, populated domains are EVERGREEN / peer_verify /
+    // cait / review / system / heal. Use the caller's hint when present; otherwise fall back to a
+    // configurable POPULATED default (ROUTER_ANFIS_DEFAULT_DOMAIN, default 'peer_verify' — the
+    // dominant real domain, 73k rows) instead of the empty 'general'.
+    const domain = resolveAnfisDomain(req.task_hint);
     anfisRecommended = await getAnfisRecommendation(domain);
   }
 
