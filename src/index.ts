@@ -28,6 +28,7 @@ import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
 import productivityRouter from './routes/v1/productivity';
+import resilienceRouter from './routes/v1/resilience';
 import agentsExternalRouter from './routes/agents-external';
 import agentsExternalScoreRouter from './routes/agents-external-score';
 import keysRouter from './routes/key-management';
@@ -340,6 +341,9 @@ app.use(versioningMiddleware);
 app.use('/api/v1', v1Router);
 // CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
 app.use('/api/v1/observability', productivityRouter);
+// SPRINT_CC_EGRESS_AND_RESILIENCE B0/B5 — per-surface health-bus + ANFIS routing intake.
+// GET /api/v1/resilience/health (read-only; auth-if-enabled) · POST /api/v1/resilience/route (authed).
+app.use('/api/v1', resilienceRouter);
 app.use('/api/v1', receiptsRouter);
 // S-WIRE-MVP — agent-facing API over the eight new ecosystem tables (authed, post-authMiddleware).
 app.use('/api/v1', mvpApiRouter);
