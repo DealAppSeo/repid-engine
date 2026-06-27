@@ -1,0 +1,43 @@
+# Keep the build context lean AND keep secrets/scratch out of the image.
+# (Defense-in-depth: secrets must never be in any layer; values come from host secret stores.)
+
+# Build outputs / deps (rebuilt inside the image)
+node_modules
+dist
+*.js.map
+
+# VCS / CI / editor
+.git
+.gitignore
+.github
+.claude
+.vscode
+.idea
+.DS_Store
+
+# Env + secret files — NEVER ship these in an image layer
+.env
+.env.*
+*.env
+*secret*
+*.key
+litellm_vars.txt
+railway_env.json
+railway_vars_full.txt
+fireblocks_secret.key
+
+# Scratch / temp / local-only investigation artifacts (huge + irrelevant to runtime)
+scratch/
+scratch_*
+temp_*
+tmp_*
+*.log
+coverage/
+.firecrawl/
+
+# Docs that don't belong in a runtime image
+*.md
+deploy/
+docs/
+reports/
+data/
