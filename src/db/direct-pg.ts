@@ -28,6 +28,7 @@
  * session SET), so transaction-mode pooling is safe.
  */
 import { Pool, type QueryResult, type QueryResultRow } from 'pg';
+import { publishHealth, deriveBreakerState } from '../resilience/health-bus';
 
 const DEFAULT_QUERY_TIMEOUT_MS = 10_000;
 const CONNECTION_TIMEOUT_MS = 5_000;
@@ -40,6 +41,41 @@ let pool: Pool | null = null;
 let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 let circuitOpenLogged = false;
+
+// --- Resilience surface signal (B1) ---------------------------------------------------------------
+// The DB endpoint name for the health-bus. Derived from the pooler host:port so a deployment with a
+// non-default pooler still publishes a meaningful endpoint. Computed lazily / never throws.
+let dbEndpointCached: string | null = null;
+function dbEndpoint(): string {
+  if (dbEndpointCached) return dbEndpointCached;
+  const cs = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || '';
+  try {
+    const u = new URL(cs);
+    dbEndpointCached = `pooler:${u.port || '5432'}`;
+  } catch {
+    dbEndpointCached = 'pooler:6543';
+  }
+  return dbEndpointCached;
+}
+
+function publishDbHealth(latencyMs: number, ok: boolean, err?: string): void {
+  // Never let observability break a query path.
+  try {
+    const open = Date.now() < circuitOpenUntil;
+    publishHealth({
+      surface: 'db',
+      endpoint: dbEndpoint(),
+      healthy: ok && !open,
+      state: deriveBreakerState(consecutiveFailures, circuitOpenUntil, CIRCUIT_BREAKER_THRESHOLD),
+      latencyMsEwma: latencyMs,
+      errorRate: ok ? 0 : 1,
+      lastSuccessAt: ok ? Date.now() : undefined,
+      lastError: err,
+    });
+  } catch {
+    /* ignore */
+  }
+}
 
 function resolveConnectionString(): string {
   const cs = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
@@ -100,6 +136,7 @@ export async function pgQuery<T extends QueryResultRow = any>(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
   const maxAttempts = Math.max(1, opts.retries ?? BACKOFF_SCHEDULE_MS.length);
   const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
+  const callStart = Date.now();
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -116,6 +153,7 @@ export async function pgQuery<T extends QueryResultRow = any>(
       // Success — reset the breaker.
       consecutiveFailures = 0;
       circuitOpenLogged = false;
+      publishDbHealth(Date.now() - callStart, true);
       return result.rows;
     } catch (err) {
       if (timer) clearTimeout(timer);
@@ -142,7 +180,187 @@ export async function pgQuery<T extends QueryResultRow = any>(
         `cool-down ${CIRCUIT_COOLDOWN_MS}ms (5min). Last error: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`
     );
   }
+  publishDbHealth(Date.now() - callStart, false, lastErr instanceof Error ? lastErr.message : String(lastErr));
   throw lastErr instanceof Error ? lastErr : new Error(`[direct-pg] query failed: ${label}`);
+}
+
+/** True while the process-wide breaker is open (B1 degrade trigger). Exported for the wrappers/tests. */
+export function isCircuitOpen(): boolean {
+  return Date.now() < circuitOpenUntil;
+}
+
+// ==================================================================================================
+// B1 — read-cache + write-behind queue (degrade, don't die).
+// These are OPT-IN: plain pgQuery() above is byte-for-byte unchanged, so default behavior is identical.
+// ==================================================================================================
+
+interface CacheEntry<T> {
+  rows: T[];
+  storedAt: number;
+}
+
+/** Result of a cached read — `stale:true` means it was served from cache because live read failed. */
+export interface CachedResult<T> {
+  rows: T[];
+  stale: boolean;
+  /** epoch ms the cached value was stored (only meaningful when stale) */
+  cachedAt?: number;
+}
+
+const READ_CACHE_MAX = Number(process.env.PG_READ_CACHE_MAX) || 500;
+const readCache = new Map<string, CacheEntry<any>>();
+
+function cacheKey(text: string, params: any[], explicit?: string): string {
+  return explicit ?? `${text}::${JSON.stringify(params)}`;
+}
+
+/** LRU touch: delete+set moves the key to the end (most-recently-used). */
+function touchCache<T>(key: string, entry: CacheEntry<T>): void {
+  readCache.delete(key);
+  readCache.set(key, entry);
+  while (readCache.size > READ_CACHE_MAX) {
+    const oldest = readCache.keys().next().value;
+    if (oldest === undefined) break;
+    readCache.delete(oldest);
+  }
+}
+
+/**
+ * Read with last-known-good fallback. On a healthy read, the rows are cached and returned fresh.
+ * When the breaker is open OR the live read throws, the last cached value (if any, within ttlMs) is
+ * served with `stale:true` — degrade, don't die. If there is no usable cache, the error propagates
+ * (RULE-8: fail loud, never silently return empty).
+ *
+ * @param opts.ttlMs  max age a cached value may be served on failure (default 5 min)
+ * @param opts.key    explicit cache key (default = text+params)
+ */
+export async function pgQueryCached<T extends QueryResultRow = any>(
+  text: string,
+  params: any[] = [],
+  opts: { ttlMs?: number; key?: string; timeoutMs?: number; retries?: number; label?: string } = {}
+): Promise<CachedResult<T>> {
+  const ttlMs = opts.ttlMs ?? CIRCUIT_COOLDOWN_MS;
+  const key = cacheKey(text, params, opts.key);
+
+  const serveStale = (): CachedResult<T> | null => {
+    const cached = readCache.get(key) as CacheEntry<T> | undefined;
+    if (cached && Date.now() - cached.storedAt <= ttlMs) {
+      touchCache(key, cached);
+      console.warn(`[direct-pg] serving STALE cache for ${opts.label ?? key.slice(0, 48)} (age ${Date.now() - cached.storedAt}ms)`);
+      return { rows: cached.rows, stale: true, cachedAt: cached.storedAt };
+    }
+    return null;
+  };
+
+  // Breaker open → skip the live call entirely, serve cache if we have it.
+  if (isCircuitOpen()) {
+    const stale = serveStale();
+    if (stale) return stale;
+    throw new Error(`[direct-pg] circuit open and no usable cache for ${opts.label ?? key.slice(0, 48)}`);
+  }
+
+  try {
+    const rows = await pgQuery<T>(text, params, opts);
+    touchCache(key, { rows, storedAt: Date.now() });
+    return { rows, stale: false };
+  } catch (err) {
+    const stale = serveStale();
+    if (stale) return stale;
+    throw err;
+  }
+}
+
+// --- write-behind queue ---------------------------------------------------------------------------
+interface PendingWrite {
+  text: string;
+  params: any[];
+  label: string;
+  enqueuedAt: number;
+}
+
+const WRITE_BEHIND_MAX = Number(process.env.PG_WRITE_BEHIND_MAX) || 1000;
+const writeBehindQueue: PendingWrite[] = [];
+
+/** Number of writes currently queued (test/observability). */
+export function writeBehindDepth(): number {
+  return writeBehindQueue.length;
+}
+
+/**
+ * Durable-ish write: when the breaker is open, enqueue the write to a bounded in-memory queue and
+ * return `{ queued:true }` instead of throwing — the caller's flow continues, the write is replayed on
+ * recovery (pgFlushWriteBehind, invoked on pgPing success). When the queue is full we drop the OLDEST
+ * with a LOUD log (never silently lose the newest write). When the breaker is closed the write executes
+ * immediately like a normal pgQuery.
+ *
+ * Use ONLY for fire-and-forget writes that tolerate replay-on-recovery (heartbeats, audit logs,
+ * counters). Do NOT use for reads or for writes whose result the caller needs synchronously.
+ */
+export async function pgWriteBehind(
+  text: string,
+  params: any[] = [],
+  opts: { label?: string; timeoutMs?: number; retries?: number } = {}
+): Promise<{ executed: boolean; queued: boolean }> {
+  const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
+
+  if (isCircuitOpen()) {
+    if (writeBehindQueue.length >= WRITE_BEHIND_MAX) {
+      const dropped = writeBehindQueue.shift();
+      console.error(
+        `[direct-pg] write-behind queue FULL (${WRITE_BEHIND_MAX}) — dropped OLDEST write ` +
+          `(${dropped?.label}) to enqueue ${label}. A write was lost to back-pressure.`
+      );
+    }
+    writeBehindQueue.push({ text, params, label, enqueuedAt: Date.now() });
+    console.warn(`[direct-pg] breaker open — write-behind ENQUEUED ${label} (depth ${writeBehindQueue.length})`);
+    return { executed: false, queued: true };
+  }
+
+  // Breaker closed: execute now (fail-fast — single attempt, no long backoff, since the queue is the
+  // back-pressure mechanism). If it fails, enqueue rather than lose it.
+  try {
+    await pgQuery(text, params, { retries: 1, ...opts });
+    return { executed: true, queued: false };
+  } catch (err) {
+    if (writeBehindQueue.length >= WRITE_BEHIND_MAX) {
+      const dropped = writeBehindQueue.shift();
+      console.error(`[direct-pg] write-behind queue FULL — dropped OLDEST (${dropped?.label}) for ${label}`);
+    }
+    writeBehindQueue.push({ text, params, label, enqueuedAt: Date.now() });
+    console.warn(`[direct-pg] write failed, ENQUEUED for replay: ${label} (depth ${writeBehindQueue.length})`);
+    return { executed: false, queued: true };
+  }
+}
+
+/**
+ * Replay queued writes in FIFO order. Stops at the first failure (leaves the rest queued for the next
+ * recovery). Returns the count successfully flushed. Called automatically by pgPing on recovery; can
+ * also be invoked by a recovery worker.
+ */
+export async function pgFlushWriteBehind(): Promise<{ flushed: number; remaining: number }> {
+  let flushed = 0;
+  while (writeBehindQueue.length > 0) {
+    if (isCircuitOpen()) break;
+    const next = writeBehindQueue[0]!;
+    try {
+      await pgQuery(next.text, next.params, { label: next.label, retries: 1 });
+      writeBehindQueue.shift();
+      flushed += 1;
+    } catch (err) {
+      console.warn(`[direct-pg] write-behind replay failed for ${next.label}, will retry next recovery`);
+      break;
+    }
+  }
+  if (flushed > 0) {
+    console.log(`[direct-pg] write-behind flushed ${flushed} write(s); ${writeBehindQueue.length} remaining`);
+  }
+  return { flushed, remaining: writeBehindQueue.length };
+}
+
+/** Test-only: reset cache + queue. */
+export function __resetDbResilience(): void {
+  readCache.clear();
+  writeBehindQueue.length = 0;
 }
 
 /** Boot-time reachability check. Single attempt, 5s ceiling. Never throws. */
@@ -150,6 +368,10 @@ export async function pgPing(): Promise<{ ok: boolean; latencyMs: number; error?
   const start = Date.now();
   try {
     await pgQuery('SELECT 1', [], { timeoutMs: 5_000, retries: 1, label: 'pgPing' });
+    // Recovery hook: drain any write-behind backlog now that the DB answered. Best-effort, never throws.
+    void pgFlushWriteBehind().catch((e) =>
+      console.warn('[direct-pg] pgPing flush error:', e instanceof Error ? e.message : String(e))
+    );
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
     return { ok: false, latencyMs: Date.now() - start, error: err instanceof Error ? err.message : String(err) };

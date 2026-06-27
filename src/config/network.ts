@@ -19,16 +19,35 @@ export interface NetworkConfig {
   };
 }
 
+/**
+ * Default Base-Sepolia RPC endpoints (B2 — multi-endpoint rotation). At least three concrete public
+ * URLs so the RPC wrapper has real failover targets even when the optional env backups are unset
+ * (previously they resolved to `undefined` → effectively a single provider). Env vars still override
+ * each slot; this only changes the *default* from 1 URL to 3.
+ */
+export const DEFAULT_BASE_SEPOLIA_RPC_URLS: string[] = [
+  'https://sepolia.base.org',
+  'https://base-sepolia-rpc.publicnode.com',
+  'https://base-sepolia.gateway.tenderly.co',
+];
+
+/** Build the ordered Base-Sepolia URL list from env (with defaults), de-duplicated, primary first. */
+function resolveBaseSepoliaRpcUrls(): string[] {
+  const primary = process.env.BASE_SEPOLIA_RPC_URL || DEFAULT_BASE_SEPOLIA_RPC_URLS[0]!;
+  const urls = [
+    primary,
+    process.env.BASE_SEPOLIA_RPC_URL_BACKUP_1 || DEFAULT_BASE_SEPOLIA_RPC_URLS[1]!,
+    process.env.BASE_SEPOLIA_RPC_URL_BACKUP_2 || process.env.BACKUP_2 || DEFAULT_BASE_SEPOLIA_RPC_URLS[2]!,
+  ].filter(Boolean) as string[];
+  return Array.from(new Set(urls));
+}
+
 export const NETWORKS: Record<string, NetworkConfig> = {
   'base-sepolia': {
     name: 'Base Sepolia',
     chainId: 84532,
-    rpcUrl: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
-    rpcUrls: [
-      process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
-      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_1,
-      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_2 || process.env.BACKUP_2,
-    ].filter(Boolean) as string[],
+    rpcUrl: process.env.BASE_SEPOLIA_RPC_URL || DEFAULT_BASE_SEPOLIA_RPC_URLS[0]!,
+    rpcUrls: resolveBaseSepoliaRpcUrls(),
     contracts: {
       usdc: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
       reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
@@ -83,12 +102,8 @@ export function getActiveNetwork(): NetworkConfig {
   const resolved = { ...network };
   
   if (networkName === 'base-sepolia') {
-    resolved.rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
-    resolved.rpcUrls = [
-      resolved.rpcUrl,
-      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_1,
-      process.env.BASE_SEPOLIA_RPC_URL_BACKUP_2 || process.env.BACKUP_2,
-    ].filter(Boolean) as string[];
+    resolved.rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || DEFAULT_BASE_SEPOLIA_RPC_URLS[0]!;
+    resolved.rpcUrls = resolveBaseSepoliaRpcUrls();
   } else if (networkName === 'base') {
     resolved.rpcUrl = process.env.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org';
     resolved.rpcUrls = [
