@@ -22,7 +22,7 @@ const PROVIDERS: ProviderDef[] = [
   { id: 'anthropic', name: 'Claude', company: 'Anthropic', env: 'ANTHROPIC_API_KEY', default_model: 'claude-3-5-sonnet' },
   { id: 'openai', name: 'GPT-4o', company: 'OpenAI', env: 'OPENAI_API_KEY', default_model: 'gpt-4o' },
   { id: 'groq', name: 'Llama 3.x', company: 'Groq', env: 'GROQ_API_KEY', default_model: 'llama-3.3-70b-versatile' },
-  { id: 'cerebras', name: 'Cerebras', company: 'Cerebras', env: 'CEREBRAS_API_KEY', default_model: 'llama3.1-8b' },
+  { id: 'cerebras', name: 'Cerebras', company: 'Cerebras', env: 'CEREBRAS_API_KEY', default_model: 'zai-glm-4.7' },
   { id: 'fireworks', name: 'Fireworks', company: 'Fireworks AI', env: 'FIREWORKS_API_KEY', default_model: 'kimi-k2p5' },
   { id: 'gemini', name: 'Gemini', company: 'Google', env: 'GEMINI_API_KEY', default_model: 'gemini-1.5-pro' },
   { id: 'deepseek', name: 'DeepSeek', company: 'DeepSeek', env: 'DEEPSEEK_API_KEY', default_model: 'deepseek-chat' },

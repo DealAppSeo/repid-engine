@@ -25,7 +25,7 @@ llmRouter.get('/v1/llm/providers', (req: Request, res: Response) => {
   
   const tier0a = [
     { name: "groq", healthy: healths.groq ? healths.groq.state !== 'down' : true, default_model: "llama-3.1-8b-instant", last_success: healths.groq?.lastSuccess || null },
-    { name: "cerebras", healthy: healths.cerebras ? healths.cerebras.state !== 'down' : true, default_model: "llama3.1-8b", last_success: healths.cerebras?.lastSuccess || null },
+    { name: "cerebras", healthy: healths.cerebras ? healths.cerebras.state !== 'down' : true, default_model: "zai-glm-4.7", last_success: healths.cerebras?.lastSuccess || null },
     { name: "gemini", healthy: healths.gemini ? healths.gemini.state !== 'down' : true, default_model: "gemini-2.0-flash", last_success: healths.gemini?.lastSuccess || null },
     { name: "cohere", healthy: healths.cohere ? healths.cohere.state !== 'down' : true, default_model: "command-r", last_success: healths.cohere?.lastSuccess || null },
     { name: "deepseek", healthy: healths.deepseek ? healths.deepseek.state !== 'down' : true, default_model: "deepseek-chat", last_success: healths.deepseek?.lastSuccess || null }
@@ -81,7 +81,7 @@ llmRouter.post('/v1/llm/route-debug', llmLimiter, async (req: Request, res: Resp
 function getDefaultModelForProvider(provider: string): string {
   switch (provider) {
     case 'groq': return 'llama-3.1-8b-instant';
-    case 'cerebras': return 'llama3.1-8b';
+    case 'cerebras': return 'zai-glm-4.7';
     case 'gemini': return 'gemini-2.0-flash';
     case 'cohere': return 'command-r';
     case 'deepseek': return 'deepseek-chat';

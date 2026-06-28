@@ -200,7 +200,7 @@ export function buildFreeHalProviders(): HALProviderConfig[] {
   if (cerebrasKey) {
     out.push({
       provider: 'cerebras',
-      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'llama3.1-8b',
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7',
       endpoint: 'https://api.cerebras.ai/v1/chat/completions',
       apiKey: cerebrasKey,
       callType: 'openai-compat',

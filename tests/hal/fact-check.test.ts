@@ -1,8 +1,9 @@
-/**
- * HAL fact-check evaluator — deterministic unit tests (mocked fetch, no network).
- * Covers aggregation, decision thresholds, JSON-parse robustness, resilience
- * (3/2/1/0 providers), env thresholds, and provider builder.
- */
+jest.mock('../../src/services/hal-reliability-oracle', () => ({
+  reliabilityOracle: {
+    getProviderWeight: jest.fn(async () => 1.0)
+  }
+}));
+
 import { factCheck, factCheckOptsFromEnv, buildFactCheckProviders, type FactCheckProviderCfg } from '../../src/hal/fact-check';
 
 const P: FactCheckProviderCfg[] = [
@@ -12,10 +13,12 @@ const P: FactCheckProviderCfg[] = [
 ];
 
 const originalFetch = global.fetch;
+const originalVerdictDrivenVeto = process.env.HAL_VERDICT_DRIVEN_VETO;
 
 // model -> response: object verdict | 'HTTP500' | 'REJECT' | 'EMPTY' | raw string
 let byModel: Record<string, any> = {};
 beforeEach(() => {
+  process.env.HAL_VERDICT_DRIVEN_VETO = 'false';
   byModel = {};
   (global as any).fetch = jest.fn(async (_url: string, init: any) => {
     const model = JSON.parse(init.body).model;
@@ -29,6 +32,11 @@ beforeEach(() => {
 
 afterAll(() => {
   global.fetch = originalFetch;
+  if (originalVerdictDrivenVeto !== undefined) {
+    process.env.HAL_VERDICT_DRIVEN_VETO = originalVerdictDrivenVeto;
+  } else {
+    delete process.env.HAL_VERDICT_DRIVEN_VETO;
+  }
 });
 
 describe('factCheck — aggregation + decision', () => {
@@ -101,12 +109,12 @@ describe('factCheck — resilience (3/2/1/0)', () => {
 describe('factCheck — env thresholds + provider builder', () => {
   test('factCheckOptsFromEnv defaults + override + flag<=veto clamp', () => {
     delete process.env.HAL_VETO_THRESHOLD; delete process.env.HAL_FLAG_THRESHOLD;
-    expect(factCheckOptsFromEnv()).toEqual({ vetoThreshold: 0.5, flagThreshold: 0.35 });
+    expect(factCheckOptsFromEnv()).toEqual({ vetoThreshold: 0.43, flagThreshold: 0.35 });
     process.env.HAL_VETO_THRESHOLD = '0.3';
     expect(factCheckOptsFromEnv().vetoThreshold).toBe(0.3);
     expect(factCheckOptsFromEnv().flagThreshold).toBe(0.3); // clamped to <= veto
     process.env.HAL_VETO_THRESHOLD = '5'; // out of range → default
-    expect(factCheckOptsFromEnv().vetoThreshold).toBe(0.5);
+    expect(factCheckOptsFromEnv().vetoThreshold).toBe(0.43);
     delete process.env.HAL_VETO_THRESHOLD; delete process.env.HAL_FLAG_THRESHOLD;
   });
 
