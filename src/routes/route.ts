@@ -294,6 +294,9 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             prompt_preview: prompt.substring(0, 200),
             category: cat,
+            // selected_model is NOT NULL in the table; omitting it silently failed every insert
+            // (the success-path logger had written 0 rows). Record the model actually used.
+            selected_model: result.model || getDefaultModelForProvider(adapter.name),
             static_provider: staticProvider,
             static_tier: staticTier,
             static_reason: 'static',
@@ -384,6 +387,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             prompt_preview: prompt.substring(0, 200),
             category: cat,
+            // selected_model is NOT NULL; on the failure path use the attempted provider's default model.
+            selected_model: getDefaultModelForProvider(adapter.name),
             static_provider: staticProvider,
             static_tier: staticTier,
             static_reason: 'static',
