@@ -70,8 +70,28 @@ export function isLowComplexity(prompt: string, taskHint?: string): boolean {
   if (keywords.some(kw => p.includes(kw))) {
     return true;
   }
-  
+
   return false;
+}
+
+/**
+ * Resolve the credential for a Tier-1 provider (anthropic | openai).
+ *
+ * BUGFIX (2026-06-28, GA): Tier-1 candidates were ONLY ever eligible when the
+ * caller supplied `user_paid_keys`. On the Fly deployment the provider keys are
+ * present as ENV VARS (ANTHROPIC_API_KEY / OPENAI_API_KEY) but no caller passes
+ * user_paid_keys, so a `tier_preference:"tier1_only"` request built ZERO Tier-1
+ * candidates and returned `all_exhausted` with `tried:[]`. We now fall back to
+ * the env key when a user-paid key is absent. Caller-supplied keys still win.
+ */
+export function resolveTier1Key(
+  providerName: string,
+  userPaidKeys?: { openai?: string; anthropic?: string }
+): string | undefined {
+  const userKey = userPaidKeys ? (userPaidKeys as any)[providerName] : undefined;
+  if (userKey) return userKey;
+  const envKey = process.env[`${providerName.toUpperCase()}_API_KEY`];
+  return envKey || undefined;
 }
 
 /**
@@ -182,10 +202,11 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     }
   }
 
-  // Check Tier 1 in static mode
-  if (!foundStatic && req.tier_preference !== 'tier0_only' && req.user_paid_keys) {
+  // Check Tier 1 in static mode (env-key fallback so the static pick is non-'none'
+  // on tier1_only requests where no user_paid_keys are supplied).
+  if (!foundStatic && req.tier_preference !== 'tier0_only') {
     for (const adapter of tier1Adapters) {
-      const key = (req.user_paid_keys as any)[adapter.name];
+      const key = resolveTier1Key(adapter.name, req.user_paid_keys);
       if (key && !excludeProviders.includes(adapter.name) && isHealthy(adapter.name)) {
         const cap = await checkCap(adapter.name);
         if (cap.allowed) {
@@ -315,7 +336,10 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     }
   }
 
-  if (tryTier1 && req.user_paid_keys) {
+  // BUGFIX (2026-06-28): previously gated on `req.user_paid_keys`, which made
+  // `tier1_only` requests build zero candidates on env-key deployments (Fly).
+  // Now Tier-1 is eligible whenever a key resolves (user-paid OR env fallback).
+  if (tryTier1) {
     // Prioritize ANFIS recommendation in Tier 1 if applicable
     let prioritizedTier1 = [...tier1Adapters];
     if (anfisRecommended) {
@@ -329,7 +353,7 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     for (const adapter of prioritizedTier1) {
       if (excludeProviders.includes(adapter.name)) continue;
 
-      const key = (req.user_paid_keys as any)[adapter.name];
+      const key = resolveTier1Key(adapter.name, req.user_paid_keys);
       if (!key) continue;
 
       if (isHealthy(adapter.name)) {

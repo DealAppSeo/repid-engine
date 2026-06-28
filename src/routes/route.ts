@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { routeRequest, RouteRequest } from '../providers/router';
+import { routeRequest, RouteRequest, resolveTier1Key } from '../providers/router';
 import { logToolCall } from '../utils/tool-call-logger';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
 import { RateLimitError, AuthError } from '../providers/types';
@@ -242,7 +242,9 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         const envKey = `${adapter.name.toUpperCase()}_API_KEY`;
         apiKey = process.env[envKey] || '';
       } else {
-        apiKey = (user_paid_keys as any)?.[adapter.name] || '';
+        // Tier-1: prefer caller's user_paid_keys; fall back to deployed env key
+        // (ANTHROPIC_API_KEY / OPENAI_API_KEY) so tier1_only works without a caller key.
+        apiKey = resolveTier1Key(adapter.name, user_paid_keys) || '';
       }
 
       if (!apiKey) {
@@ -292,6 +294,9 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             prompt_preview: prompt.substring(0, 200),
             category: cat,
+            // selected_model is NOT NULL in the table; omitting it silently failed every insert
+            // (the success-path logger had written 0 rows). Record the model actually used.
+            selected_model: result.model || getDefaultModelForProvider(adapter.name),
             static_provider: staticProvider,
             static_tier: staticTier,
             static_reason: 'static',
@@ -382,6 +387,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           await db.from('anfis_routing_logs').insert({
             prompt_preview: prompt.substring(0, 200),
             category: cat,
+            // selected_model is NOT NULL; on the failure path use the attempted provider's default model.
+            selected_model: getDefaultModelForProvider(adapter.name),
             static_provider: staticProvider,
             static_tier: staticTier,
             static_reason: 'static',
