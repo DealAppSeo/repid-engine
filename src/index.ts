@@ -65,6 +65,7 @@ import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { x402Metrics } from './observability/x402-metrics';
+import { setSbfaTelemetrySink } from './hal/fact-check';
 
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
@@ -750,7 +751,7 @@ if (!IS_TEST) {
 // Schedule mirrors Phase 4 C2's setInterval pattern. Worker is observability
 // + ledger write surface; not a critical path. start() logs boot config
 // (tier_floor, rate_limit_drain_mode boolean) for ops visibility.
-if (!IS_TEST) {
+if (!IS_TEST && process.env.ENGINE_WORKERS_ENABLED !== 'false') {
   feedbackLoopWorker.start(60_000);
 }
 
@@ -943,7 +944,7 @@ import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 startValidationWorker();
 startHitlExpirationJob();
 
-if (!IS_TEST) {
+if (!IS_TEST && process.env.ENGINE_WORKERS_ENABLED !== 'false') {
   startTrinityTaskBridge();
   startPeerVerificationReader(db);
 }
@@ -951,6 +952,33 @@ if (!IS_TEST) {
 // Phase 2.11 — Dispute Resolution Worker
 const disputeWorker = new DisputeResolutionWorker();
 disputeWorker.start();
+
+// Phase 8 — point SBFA shadow telemetry sink to database snapshots
+if (!IS_TEST) {
+  setSbfaTelemetrySink(async (row) => {
+    try {
+      const { error } = await db.from('repid_telemetry_snapshots').insert({
+        metric_family: 'sbfa_shadow',
+        metric_name: 'shadow_run',
+        metric_value: {
+          live_decision: row.live_decision,
+          sbfa_decision: row.sbfa_decision,
+          belief: row.belief,
+          ignorance_mass: row.ignorance_mass,
+          weighted_agreement: row.weighted_agreement,
+          enforced: row.enforced
+        },
+        snapshot_at: new Date().toISOString(),
+        metadata: {}
+      });
+      if (error) {
+        console.error('[Telemetry] Failed to write SBFA telemetry snapshot:', error.message);
+      }
+    } catch (e: any) {
+      console.error('[Telemetry] Failed to write SBFA telemetry snapshot (exception):', e.message);
+    }
+  });
+}
 
 export { processCascadeQueue };
 export default app;
