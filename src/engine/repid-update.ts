@@ -179,7 +179,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // Never optimize the system against its own signals — measure only against ground truth.
   const halMode = process.env.DOGFOOD_REPID_FROM_COSIGN === 'true' ? 'shadow' : process.env.HAL_DECISIONS_REQUIRES_QUORUM === 'true' ? 'live' : 'off';
 
-  await db.from('repid_score_events').insert({
+  const { error: auditError } = await db.from('repid_score_events').insert({
     agent_id: input.agentId,
     event_type: input.eventType,
     delta: finalDelta,
@@ -191,8 +191,10 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     ecosystem_need_weight: ecosystemNeedWeight,
     mirror_test_triggered: input.mirrorTestTriggered ?? !audit.mirrorTestPassed,
     eas_attestation_id: audit.easAttestationId,
-    mode: halMode, // (S-HONEST-HAL) 'shadow' = test mode, 'live' = of-record, 'off' = HAL not wired
+    // (S-HONEST-HAL) record mode kept in metadata.mode — prod repid_score_events has NO top-level
+    // `mode` column; a top-level write here silently failed the whole audit insert (see throw below).
     metadata: {
+      mode: halMode, // 'shadow' = test mode, 'live' = of-record, 'off' = HAL not wired
       decayApplied: agent.current_repid - decayedRepId,
       redemptionModifier: redemptionMod,
       redemptionModifierApplied: redemptionApplied,
@@ -208,6 +210,19 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       x402Context: input.x402Context ?? null,
     },
   });
+
+  // RULE-11 / fail-loud (S-HONEST-HAL integrity): a money/reputation surface must NEVER mutate
+  // current_repid (step 8) without writing its repid_score_events audit row. Previously this
+  // insert's { error } was unchecked AND wrote a non-existent top-level `mode` column, so the row
+  // silently vanished while the score still changed — the source of the irreconcilable ledger.
+  // Throw so the failure is loud and the caller can alert/retry. (Follow-up: reorder to write the
+  // audit row before the agent UPDATE for true atomicity — out of scope for this minimal fix.)
+  if (auditError) {
+    throw new Error(
+      `[repid-engine] repid_score_events audit insert FAILED for agent ${input.agentId} ` +
+      `(event=${input.eventType}, delta=${finalDelta}): ${auditError.message}`,
+    );
+  }
 
   // 10 — Update supply rate
   await updateSupplyRate(input.eventType);
