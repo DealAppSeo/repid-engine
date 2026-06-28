@@ -5,6 +5,7 @@
 jest.mock('../../src/hal/fact-check', () => ({
   factCheck: jest.fn(async () => (global as any).__fc ?? { hal_score: 0.1, decision: 'clean', verdicts: [{ provider: 'groq', verdict: 'TRUE', confidence: 100 }], providers_used: 3, agreement: 1, degraded: false, latency_ms: 5 }),
   buildFactCheckProviders: () => [{ name: 'groq', endpoint: 'x', apiKey: 'k', model: 'm' }],
+  buildUniversalProviders: () => [{ name: 'groq', endpoint: 'x', apiKey: 'k', model: 'm' }],
 }));
 jest.mock('../../src/hal/lib/evaluate', () => ({
   evaluate: jest.fn(async () => ({ hal_score: 0.3, vetoed: false, signals: { comma_severity: null } })),
@@ -17,12 +18,23 @@ import type { FactCheckProviderCfg } from '../../src/hal/fact-check';
 
 const svc = (n = 1) => new HalService(() => Array.from({ length: n }, (_, i) => ({ name: 'p' + i, endpoint: 'x', apiKey: 'k', model: 'm' } as FactCheckProviderCfg)));
 
+const originalUniversalTruthfulness = process.env.HAL_UNIVERSAL_TRUTHFULNESS;
+
 beforeEach(() => {
+  process.env.HAL_UNIVERSAL_TRUTHFULNESS = 'false';
   (factCheck as jest.Mock).mockClear();
   (evaluate as jest.Mock).mockClear();
   (global as any).__fc = null;
   delete process.env.HAL_VETO_THRESHOLD;
   delete process.env.HAL_FLAG_THRESHOLD;
+});
+
+afterAll(() => {
+  if (originalUniversalTruthfulness !== undefined) {
+    process.env.HAL_UNIVERSAL_TRUTHFULNESS = originalUniversalTruthfulness;
+  } else {
+    delete process.env.HAL_UNIVERSAL_TRUTHFULNESS;
+  }
 });
 
 describe('HalService.evaluate', () => {
@@ -44,9 +56,9 @@ describe('HalService.evaluate', () => {
     expect(r.strictness).toBe(1);
   });
 
-  test('product trusttrader → finance thresholds (veto 0.45/flag 0.3) + product tag', async () => {
+  test('product trusttrader → finance thresholds (veto 0.43/flag 0.3) + product tag', async () => {
     const r = await svc().evaluate({ text: 'AAPL will hit $500 next week.', context: { product: 'trusttrader' } });
-    expect((factCheck as jest.Mock).mock.calls[0][2]).toEqual({ vetoThreshold: 0.45, flagThreshold: 0.3 });
+    expect((factCheck as jest.Mock).mock.calls[0][2]).toEqual({ vetoThreshold: 0.43, flagThreshold: 0.3, contextSource: 'unverified', category: 'fact' });
     expect(r.product).toBe('trusttrader');
   });
 

@@ -312,41 +312,36 @@ export function buildEasAttestationRequest(args: {
     encodedData,
     attestCalldata,
     seanAction:
-      `Sean action (on-chain, deferred): (1) ensure schema "${EAS_SCHEMA_STRING}" is registered on Base Sepolia ` +
-      `SchemaRegistry ${SCHEMA_REGISTRY_BASE_SEPOLIA} (schemaUid=${schemaUid}); ` +
-      `(2) send the prepared attestCalldata to EAS ${EAS_CONTRACT_BASE_SEPOLIA} from the funded deployer; ` +
-      `(3) the tx receipt's Attested event yields the attestation UID → pass it to recordEpochAnchorUid().`,
+      `Sean action (on-chain, deferred): send the prepared attestCalldata to EAS ${EAS_CONTRACT_BASE_SEPOLIA} from the funded attester key (0x4F8AD3fB35473b6DEA0559FfbbDe034e2Db504fb); schema already registered (verified by 5 prior anchors); the tx receipt's Attested event yields the UID → pass it to recordEpochAnchorUid().`,
   };
 }
 
 /**
- * P3 — the EXACT on-chain command block for Sean (one action). NOT executed
- * here (Railway/on-chain = Sean-only). Two `cast` commands: register the schema
- * once, then attest the epoch root. After sending, Sean passes the receipt's
- * Attested UID to recordEpochAnchorUid() to back-fill eas_attestation_uid.
+ * P3 — the EXACT on-chain command block for Sean (SINGLE copy-paste command).
+ * NOT executed here (Railway/on-chain = Sean-only). The register is one-time and
+ * already done (schema has 5 live anchors by the attester). The single command
+ * is the attest send with full calldata. After, Sean passes receipt Attested UID
+ * to recordEpochAnchorUid() (operator --record).
+ * Attester: 0x4F8AD3fB35473b6DEA0559FfbbDe034e2Db504fb (confirmed funded + prior txs [V]).
  */
 export function buildSeanCommand(eas: EasAttestationRequest, opts: { firstId: number; lastId: number; idCount: number; resolver?: string; revocable?: boolean }): string {
   const resolver = opts.resolver ?? '0x0000000000000000000000000000000000000000';
   const revocable = (opts.revocable ?? true) ? 'true' : 'false';
   return [
-    `# === EAS anchor for epoch ${eas.epoch} (Sean-only; do not run unattended) ===`,
+    `# === EAS anchor for epoch ${eas.epoch} (Sean-only; SINGLE copy-paste command) ===`,
     `# Covers ${opts.idCount} POSTCARD proofs, repid_zkp_proofs.id ${opts.firstId}..${opts.lastId}`,
     `# merkle_root: ${eas.merkleRoot}`,
     `# schema:      ${eas.schemaString}`,
     `# schemaUid:   ${eas.schemaUid}`,
     `# EAS:         ${eas.easContract}   SchemaRegistry: ${SCHEMA_REGISTRY_BASE_SEPOLIA}   (Base Sepolia, chainId 84532)`,
-    `export RPC=$BASE_SEPOLIA_RPC_URL          # e.g. https://sepolia.base.org`,
-    `export PK=$AUDIT_ANCHOR_PRIVATE_KEY        # funded Base Sepolia key (Sean)`,
+    `# Attester (PK holder): 0x4F8AD3fB35473b6DEA0559FfbbDe034e2Db504fb — schema already registered (5 prior anchors live)`,
+    `export RPC=$BASE_SEPOLIA_RPC_URL`,
+    `export PK=$AUDIT_ANCHOR_PRIVATE_KEY   # funded Base Sepolia key (Sean) — confirmed balance >0 + nonce=6 [V 2026-06-11 RPC]`,
     ``,
-    `# 1) Register the schema ONCE (skip if schemaUid already registered):`,
-    `cast send ${SCHEMA_REGISTRY_BASE_SEPOLIA} "register(string,address,bool)" \\`,
-    `  "${eas.schemaString}" ${resolver} ${revocable} --rpc-url $RPC --private-key $PK`,
-    ``,
-    `# 2) Attest the epoch root (broadcast-ready calldata):`,
+    `# SINGLE command (schema register skipped — already live):`,
     `cast send ${eas.easContract} ${eas.attestCalldata} --rpc-url $RPC --private-key $PK`,
     ``,
-    `# 3) Read the Attested UID from the receipt, then back-fill:`,
-    `#    recordEpochAnchorUid({start:'${''}', ...}, '<attestationUID>')  (operator script --record <uid>)`,
+    `# Post-send: read Attested UID from receipt, then operator: recordEpochAnchorUid(..., '<uid>')`,
   ].join('\n');
 }
 

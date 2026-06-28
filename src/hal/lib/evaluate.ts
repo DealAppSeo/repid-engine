@@ -131,7 +131,8 @@ export async function evaluate(
   const score = computeHALScore(enrichedSignals, threshold, context.commaOverride);
 
   const severity: CommaSeverity | null = cross ? cross.comma_severity : null;
-  let vetoed = score.vetoed || severity === 'critical';
+  // The below-chance style-extractor (strictness 1) must never veto
+  let vetoed = strictness >= 2 && (score.vetoed || severity === 'critical');
 
   // ---- Phase 4 zone classification (level 4+ acts on it) ----------------
   let agreementZone: AgreementZone | null = null;

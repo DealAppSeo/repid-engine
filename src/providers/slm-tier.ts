@@ -27,7 +27,7 @@ export interface SlmModel { provider: string; model: string; }
 // $0.05/$0.08 per 1M, very low latency); backup = Cerebras llama3.1-8b (ultra-low latency,
 // independent provider for failover). Both already have adapters + pricing in-repo.
 export const SLM_PRIMARY: SlmModel = { provider: 'groq', model: 'llama-3.1-8b-instant' };
-export const SLM_BACKUP: SlmModel = { provider: 'cerebras', model: 'llama3.1-8b' };
+export const SLM_BACKUP: SlmModel = { provider: 'cerebras', model: 'zai-glm-4.7' };
 
 // Baseline for the cost-saved metric: the "cheap LLM" the task would otherwise use.
 // Conservative — this is the cheapest mid LLM, not a tier-1 model, so savings are not inflated.

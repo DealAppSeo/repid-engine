@@ -31,6 +31,8 @@ import {
   type StakesLevel,
   type ActionKind,
 } from './sbfa-consensus';
+import { queryOpenAI } from './lib/openai';
+import { reliabilityOracle } from '../services/hal-reliability-oracle';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -40,6 +42,58 @@ export interface FactCheckProviderCfg {
   timeoutMs?: number;
   family?: string; // R5 — independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
   tier?: 'free' | 'cheap' | 'escalation'; // R6 — cost class for cheapest-first quorum assembly
+  callType?: 'openai-compat' | 'anthropic-native';
+}
+
+/**
+ * Build the active universal provider set. Default active quorum contains
+ * OpenAI (gpt-4o-mini), Anthropic (claude-haiku-4-5-20251001), and DeepSeek (deepseek-chat).
+ * For reasoning claims, DeepSeek Reasoner (deepseek-reasoner) is appended to the quorum.
+ */
+export function buildUniversalProviders(route: 'FACT' | 'REASONING'): FactCheckProviderCfg[] {
+  const out: FactCheckProviderCfg[] = [
+    {
+      name: 'openai',
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+      apiKey: process.env.OPENAI_API_KEY || '',
+      model: 'gpt-4o-mini',
+      family: 'openai',
+      tier: 'cheap',
+      callType: 'openai-compat'
+    },
+    {
+      name: 'anthropic',
+      endpoint: 'https://api.anthropic.com/v1/messages',
+      apiKey: process.env.ANTHROPIC_API_KEY || '',
+      model: 'claude-haiku-4-5-20251001',
+      family: 'anthropic',
+      tier: 'escalation',
+      callType: 'anthropic-native'
+    },
+    {
+      name: 'deepseek-chat',
+      endpoint: 'https://api.deepseek.com/v1/chat/completions',
+      apiKey: process.env.DEEPSEEK_API_KEY || '',
+      model: 'deepseek-chat',
+      family: 'deepseek',
+      tier: 'cheap',
+      callType: 'openai-compat'
+    }
+  ];
+
+  if (route === 'REASONING') {
+    out.push({
+      name: 'deepseek-reasoner',
+      endpoint: 'https://api.deepseek.com/v1/chat/completions',
+      apiKey: process.env.DEEPSEEK_API_KEY || '',
+      model: 'deepseek-reasoner',
+      family: 'deepseek',
+      tier: 'cheap',
+      callType: 'openai-compat'
+    });
+  }
+
+  return out;
 }
 
 /**
@@ -87,6 +141,8 @@ export interface ProviderVerdict {
   note?: string;
   error?: string;
   latency_ms: number;
+  tokens_in?: number;
+  tokens_out?: number;
 }
 
 export type HalDecision = 'vetoed' | 'flagged' | 'clean' | 'abstain';
@@ -115,6 +171,17 @@ export interface FactCheckResult {
   quorum_note?: string; // set only when the resilience gate downgraded a decision
   fallback_used?: 'local_slm';
   confidence?: 'degraded';
+  evidence?: {
+    veto_rule: string;
+    vetoing_providers: Array<{ name: string; verdict: string; confidence: number; note?: string }>;
+    retrieved_snippets?: string[];
+    recalled_snippets?: string[];
+    context_source?: 'model_recalled' | 'grounded' | 'unverified';
+    average_risk: number;
+    families_voted: string[];
+    veto_suppressed?: boolean;
+    suppression_reason?: string;
+  };
   // --- SBFA v0.2 shadow (additive; default-on SHADOW only, never changes `decision`). Exposes the
   // belief / ignorance / confidence the verdict event needs (§7 CC). The decision-replacement path is
   // a SEPARATE flag gated on the A6 co-sign with GA. See src/hal/sbfa-consensus.ts. ---
@@ -131,6 +198,12 @@ export interface FactCheckResult {
     reliability_source: string;
     enforced: boolean; // true only if SBFA actually changed the live decision (A6-gated)
     trace: SbfaTrace; // GLASS BOX — structured + human-readable decision trace (wrapper + HITL PWA)
+    honesty: {
+      prompt_hash: string; // hashText(deliverable)
+      decision_text_hash: string; // hashText(decision + reason + sbfa decision)
+      nonce: string; // fresh per verdict
+      timestamp: string; // ISO-8601 — binds the decision time (anti-backdate)
+    };
   };
 }
 
@@ -177,21 +250,26 @@ export interface FactCheckOpts {
   flagThreshold?: number; // default 0.35
   perProviderTimeoutMs?: number; // default 12000
   maxTokens?: number; // default 120
+  contextSource?: 'model_recalled' | 'grounded' | 'unverified';
+  category?: string;
 }
 
 const FACT_CHECK_SYSTEM =
   'You are a meticulous fact-checker. Judge ONLY factual accuracy against widely-accepted references. Be decisive. Output ONLY compact JSON.';
 
-function factCheckPrompt(deliverable: string): string {
-  return (
-    'Assess whether the following statement is factually true.\n' +
+function factCheckPrompt(deliverable: string, context?: string): string {
+  let prompt = '';
+  if (context) {
+    prompt += `Retrieved Context:\n${context}\n\n`;
+  }
+  prompt += 'Assess whether the following statement is factually true.\n' +
     `Statement: "${deliverable.replace(/"/g, "'").slice(0, 1200)}"\n\n` +
     'Reply with ONLY this JSON (no prose, no markdown):\n' +
     '{"verdict":"TRUE|FALSE|UNCERTAIN","confidence":0-100,"note":"<=12 words"}\n' +
     '- TRUE: central factual claim is correct.\n' +
     '- FALSE: contains a factual error.\n' +
-    '- UNCERTAIN: opinion, ambiguous, or not verifiable.'
-  );
+    '- UNCERTAIN: opinion, ambiguous, or not verifiable.';
+  return prompt;
 }
 
 /** Extract a verdict from possibly-verbose model output (reasoning models emit prose THEN JSON). */
@@ -226,15 +304,30 @@ function parseVerdict(text: string): { verdict: Verdict; confidence: number; not
   return { verdict: 'UNCERTAIN', confidence: 50 };
 }
 
+function buildHeaders(cfg: FactCheckProviderCfg): Record<string, string> {
+  if (cfg.callType === 'anthropic-native') {
+    return {
+      'Content-Type': 'application/json',
+      'x-api-key': cfg.apiKey,
+      'anthropic-version': '2023-06-01',
+    };
+  }
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${cfg.apiKey}`,
+  };
+}
+
 /**
- * POST to an OpenAI-compatible chat endpoint with a single jittered retry on HTTP 429.
- * Free tiers (esp. groq) rate-limit under burst; one short backoff turns a transient 429 into a
+ * POST to a chat endpoint with a single jittered retry on HTTP 429.
+ * Free tiers rate-limit under burst; one short backoff turns a transient 429 into a
  * success without blowing the per-provider timeout. Honors a numeric Retry-After when present.
  */
 async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal: AbortSignal): Promise<Response> {
+  const headers = buildHeaders(cfg);
   let res = await fetch(cfg.endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+    headers,
     body, signal,
   });
   if (res.status === 429) {
@@ -243,14 +336,20 @@ async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal:
     await new Promise((r) => setTimeout(r, waitMs));
     res = await fetch(cfg.endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      headers,
       body, signal,
     });
   }
   return res;
 }
 
-async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number, quorumId?: string): Promise<ProviderVerdict> {
+async function queryProvider(
+  cfg: FactCheckProviderCfg,
+  deliverable: string,
+  maxTokens: number,
+  quorumId?: string,
+  context?: string
+): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
   // R5 — configurable per-call timeout so one slow provider can't stall the family quorum.
@@ -258,15 +357,26 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const call_id = crypto.randomUUID();
   try {
-    const res = await postWith429Retry(cfg, JSON.stringify({
-      model: cfg.model,
-      messages: [
-        { role: 'system', content: FACT_CHECK_SYSTEM },
-        { role: 'user', content: factCheckPrompt(deliverable) },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0,
-    }), controller.signal);
+    const promptText = factCheckPrompt(deliverable, context);
+    const bodyStr = cfg.callType === 'anthropic-native'
+      ? JSON.stringify({
+          model: cfg.model,
+          max_tokens: maxTokens,
+          temperature: 0,
+          system: FACT_CHECK_SYSTEM,
+          messages: [{ role: 'user', content: promptText }],
+        })
+      : JSON.stringify({
+          model: cfg.model,
+          messages: [
+            { role: 'system', content: FACT_CHECK_SYSTEM },
+            { role: 'user', content: promptText },
+          ],
+          max_tokens: maxTokens,
+          temperature: 0,
+        });
+
+    const res = await postWith429Retry(cfg, bodyStr, controller.signal);
     const latency_ms = Date.now() - start;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -286,13 +396,28 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
     }
     const data: any = await res.json();
-    const msg = data?.choices?.[0]?.message ?? {};
-    // Reasoning models (cerebras zai-glm / gpt-oss) put output in `reasoning` or `reasoning_content`,
-    // not `content` — fall through all three so they parse.
-    const content: string = msg.content || msg.reasoning_content || msg.reasoning || '';
     
-    const tokensIn = data.usage?.prompt_tokens || 0;
-    const tokensOut = data.usage?.completion_tokens || 0;
+    let content = '';
+    let tokensIn = 0;
+    let tokensOut = 0;
+
+    if (cfg.callType === 'anthropic-native') {
+      const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
+      content = blocks
+        .filter(b => b?.type === 'text')
+        .map(b => String(b.text ?? ''))
+        .join('')
+        .trim();
+      tokensIn = data.usage?.input_tokens || 0;
+      tokensOut = data.usage?.output_tokens || 0;
+    } else {
+      const msg = data?.choices?.[0]?.message ?? {};
+      // Also support reasoning models (deepseek-reasoner) that use reasoning_content
+      content = msg.content || msg.reasoning_content || msg.reasoning || '';
+      tokensIn = data.usage?.prompt_tokens || 0;
+      tokensOut = data.usage?.completion_tokens || 0;
+    }
+
     const cost_usd = calculateCost(cfg.name, cfg.model, tokensIn, tokensOut);
 
     if (!content.trim()) {
@@ -326,7 +451,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
 
     const parsed = parseVerdict(content);
-    return { provider: cfg.name, verdict: parsed.verdict, confidence: parsed.confidence, note: parsed.note, latency_ms };
+    return { provider: cfg.name, verdict: parsed.verdict, confidence: parsed.confidence, note: parsed.note, latency_ms, tokens_in: tokensIn, tokens_out: tokensOut };
   } catch (e: any) {
     const latency_ms = Date.now() - start;
     const error = e?.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : e?.message ?? String(e);
@@ -381,6 +506,32 @@ function computeQuorum(succeeded: number, attempted: number): 'full' | 'partial'
   return succeeded >= attempted ? 'full' : 'partial';
 }
 
+export async function checkEntailment(claim: string, context: string): Promise<boolean> {
+  const systemPrompt = 
+    "You are a strict, logical natural language inference (NLI) engine. Determine if the provided context supports/entails the claim.\n" +
+    "Definitions:\n" +
+    "- ENTAILS: The context provides direct or indirect factual support that makes the claim true. There is no contradiction between context and claim.\n" +
+    "- CONTRADICTS: The context directly refutes the claim or makes it false.\n" +
+    "- NEUTRAL: The context does not contain enough information to judge the claim (silent).\n\n" +
+    "Output ONLY a JSON object (no markdown, no prose):\n" +
+    '{"entails": true|false, "rationale": "one sentence explanation"}';
+
+  const userPrompt = `Context:\n${context}\n\nClaim: "${claim}"`;
+
+  try {
+    const raw = await queryOpenAI(userPrompt, systemPrompt, true);
+    const parsed = JSON.parse(raw);
+    return parsed.entails === true;
+  } catch (e: any) {
+    console.error("[entailment] check failed:", e.message);
+    return false;
+  }
+}
+
+function hashText(text: string): string {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
 /**
  * Evaluate a deliverable's factual truth via cross-provider verdicts.
  * Falls back gracefully when providers fail; returns providers_used=0 (caller
@@ -390,6 +541,7 @@ export async function factCheck(
   deliverable: string,
   providers: FactCheckProviderCfg[],
   opts: FactCheckOpts = {},
+  context?: string,
 ): Promise<FactCheckResult> {
   const start = Date.now();
   const vetoThreshold = opts.vetoThreshold ?? 0.5;
@@ -400,7 +552,7 @@ export async function factCheck(
 
   const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log
   const familyByName = new Map(providers.map((p) => [p.name, p.family ?? familyOf(p.model)]));
-  const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId);
+  const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId, context);
   const settle = async (ps: FactCheckProviderCfg[]): Promise<ProviderVerdict[]> => {
     const s = await Promise.allSettled(ps.map(callOne));
     return s.map((r, i) => r.status === 'fulfilled' ? r.value
@@ -475,12 +627,8 @@ export async function factCheck(
       };
     }
 
-    // No truth signal available — neutral score; caller falls back to extractor.
-    return {
-      hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
-      quorum, provider_health: { attempted: attempted, succeeded: 0, failed },
-      quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
-    };
+    // No truth signal available — throw error to fail loud
+    throw new Error(`Fact-check BFT quorum failed: all providers failed or rate-limited. Attempted ${attempted} providers.`);
   }
 
   const hal_score = ok.reduce((s, v) => s + providerRisk(v), 0) / providers_used;
@@ -495,6 +643,51 @@ export async function factCheck(
     [...new Set(ok.filter((v) => v.verdict === want).map((v) => familyByName.get(v.provider) ?? v.provider))];
   const falseFams = famsOf('FALSE');
   const trueFams = famsOf('TRUE');
+
+  // LIFT RECALL: One-High-Conf-False veto rule
+  const hasHighConfFalse = ok.some((v) => v.verdict === 'FALSE' && v.confidence >= 90);
+  const meetsVetoScore = hal_score >= 0.43 && families_used >= 2;
+
+  // Fetch reliability weights from oracle for each successful provider
+  const category = opts.category ?? 'factual';
+  const providerWeights = await Promise.all(
+    ok.map(async (v) => {
+      const w = await reliabilityOracle.getProviderWeight(v.provider, category);
+      return { provider: v.provider, weight: w };
+    })
+  );
+  const weightMap = new Map(providerWeights.map((pw) => [pw.provider, pw.weight]));
+
+  // Calculate weighted false ratio
+  const totalWeight = ok.reduce((s, v) => s + (weightMap.get(v.provider) ?? 1.0), 0);
+  const falseWeight = ok
+    .filter((v) => v.verdict === 'FALSE')
+    .reduce((s, v) => s + (weightMap.get(v.provider) ?? 1.0), 0);
+  const weightedFalseRatio = totalWeight > 0 ? falseWeight / totalWeight : 0;
+
+  // No single provider (or single family) can veto
+  const falseProviders = ok.filter((v) => v.verdict === 'FALSE');
+  const falseFamilies = new Set(falseProviders.map((v) => familyByName.get(v.provider) ?? v.provider));
+  const hasMultipleFalseFamilies = falseFamilies.size >= 2;
+
+  // Legacy veto rule (Gate-OFF)
+  let baseDecision: FactCheckResult['decision'] = hal_score >= vetoThreshold ? 'vetoed' : hal_score >= flagThreshold ? 'flagged' : 'clean';
+
+  // Phase 1: Evidence-grounding veto suppression
+  let vetoSuppressed = false;
+  if (baseDecision === 'vetoed' && hasHighConfFalse && context && context.trim().length > 0) {
+    // Check if it's a lone high-conf-FALSE veto (meaning <= 1 provider voted FALSE)
+    const falseCount = ok.filter(v => v.verdict === 'FALSE').length;
+    if (falseCount <= 1) {
+      // Check if retrieved/recalled context entails the claim
+      const entails = await checkEntailment(deliverable, context);
+      if (entails) {
+        vetoSuppressed = true;
+        // Suppress veto: downgrade decision to flagged or clean based on average risk score
+        baseDecision = hal_score >= flagThreshold ? 'flagged' : 'clean';
+      }
+    }
+  }
 
   let decision: HalDecision;
   let decision_reason: string | undefined;
@@ -523,8 +716,6 @@ export async function factCheck(
   } else {
     // SCORE mode (default — byte-identical to prior behavior): hal_score thresholds + the
     // resilience gate + the CC1 verdict-driven gate.
-    const baseDecision: HalDecision =
-      hal_score >= vetoThreshold ? 'vetoed' : hal_score >= flagThreshold ? 'flagged' : 'clean';
     decision = baseDecision;
 
     // RESILIENCE GATE (CC1 2026-05-23): a veto/flag requires >= MIN_QUORUM_FOR_VETO successful
@@ -538,7 +729,7 @@ export async function factCheck(
     // no FALSE quorum downgrades to 'flagged' (the all-UNCERTAIN @0.5 over-veto W6 found).
     if (process.env.HAL_VERDICT_DRIVEN_VETO === 'true' && decision === 'vetoed') {
       const falseQuorum = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
-      if (falseQuorum < MIN_QUORUM_FOR_VETO) {
+      if (weightedFalseRatio < 0.60 || !hasMultipleFalseFamilies) {
         decision = 'flagged';
         quorum_note = `Verdict-driven gate: no FALSE quorum (${falseQuorum} FALSE < ${MIN_QUORUM_FOR_VETO}); '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'flagged' — UNCERTAIN/opinion, not a confirmed factual error.`;
       }
@@ -566,6 +757,16 @@ export async function factCheck(
         enforced = true;
         quorum_note = `SBFA v0.2 ${v.decision} (belief ${v.belief_act.toFixed(3)}, ignorance ${v.ignorance_mass.toFixed(3)}): would-be 'vetoed' deferred to 'flagged'. ${v.reason}`;
       }
+      const nonce = crypto.randomUUID();
+      const timestamp = new Date().toISOString();
+      const prompt_hash = hashText(deliverable);
+      const decision_text_hash = hashText(decision + (decision_reason || quorum_note || '') + v.decision);
+      const honesty = {
+        prompt_hash,
+        decision_text_hash,
+        nonce,
+        timestamp,
+      };
       sbfaField = {
         decision: v.decision,
         belief: v.belief_act,
@@ -579,6 +780,7 @@ export async function factCheck(
         reliability_source: v.reliability_source,
         enforced,
         trace: v.trace,
+        honesty,
       };
       // SAMPLED (~10%), OFF-HOT-PATH telemetry for the Gate-ON measurement — fire-and-forget, never awaited.
       if (sbfaSampleHit()) {
@@ -604,12 +806,35 @@ export async function factCheck(
     }
   }
 
+  // Construct Auditable Evidence
+  const vetoing_providers = ok
+    .filter(v => (v.verdict === 'FALSE' && v.confidence >= 90) || (meetsVetoScore && v.verdict === 'FALSE') || (process.env.HAL_VERDICT_DRIVEN_VETO === 'true' && v.verdict === 'FALSE'))
+    .map(v => ({ name: v.provider, verdict: v.verdict, confidence: v.confidence, note: v.note }));
+
+  const contextSourceVal = opts.contextSource ?? (context ? 'model_recalled' : undefined);
+
+  const evidence: FactCheckResult['evidence'] = {
+    veto_rule: decision === 'vetoed'
+      ? (process.env.HAL_VERDICT_DRIVEN_VETO === 'true' ? 'reliability-weighted-supermajority' : (hasHighConfFalse ? 'one-high-conf-false' : 'average-risk-quorum'))
+      : (vetoSuppressed ? 'suppressed' : 'none'),
+    vetoing_providers,
+    context_source: contextSourceVal,
+    ...(contextSourceVal === 'model_recalled'
+      ? { recalled_snippets: context ? context.split('\n\n') : undefined }
+      : { retrieved_snippets: context ? context.split('\n\n') : undefined }
+    ),
+    average_risk: hal_score,
+    families_voted: families,
+    ...(vetoSuppressed ? { veto_suppressed: true, suppression_reason: 'Retrieved/recalled context entails claim' } : {})
+  };
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
     ...(sbfaField ? { sbfa: sbfaField } : {}),
+    evidence
   };
 }
 
@@ -624,7 +849,7 @@ export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: 
     const n = Number(v);
     return Number.isFinite(n) && n >= 0 && n <= 1 ? n : d;
   };
-  const vetoThreshold = num(process.env.HAL_VETO_THRESHOLD, 0.5);
+  const vetoThreshold = num(process.env.HAL_VETO_THRESHOLD, 0.43);
   const flagThreshold = Math.min(num(process.env.HAL_FLAG_THRESHOLD, 0.35), vetoThreshold);
   return { vetoThreshold, flagThreshold };
 }
@@ -638,43 +863,46 @@ export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: 
  */
 export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
-  // S-QUORUM (2026-06-02): groq llama-3.3-70b-versatile 429s on the free tier under any burst;
-  // llama-3.1-8b-instant has a far higher free RPM and returns the same clean JSON verdict.
-  const g = process.env.GROQ_API_KEY?.trim();
-  if (g) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.1-8b-instant' });
-  // cerebras `llama3.1-8b` 404s on this key (no access); `zai-glm-4.7` is available and returns a
-  // correct verdict (in the `reasoning` field — handled in queryProvider) given enough max_tokens.
-  const c = process.env.CEREBRAS_API_KEY?.trim();
-  if (c) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
-  // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended → 100% fail, ~31% of calls
-  // wasted). Now opt-in: requires HAL_S2_ENABLE_FIREWORKS=true (default OFF). Reversible: set the flag.
-  const f = process.env.FIREWORKS_API_KEY?.trim();
-  if (f && process.env.HAL_S2_ENABLE_FIREWORKS === 'true') out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
-  // R4 — DeepSeek (cheap paid) as a reliable quorum anchor so a >= 2-provider quorum forms even when
-  // the free tiers (groq/cerebras) throttle under prod burst (today they fall back to the extractor,
-  // and the penalty then fail-safes to no-drain via HAL_PENALTY_REQUIRES_QUORUM). DeepSeek returns
-  // HTTP 402 (unfunded) as of 2026-06-03, so it is gated OFF by default; once funded, set
-  // HAL_S2_ENABLE_DEEPSEEK=true and the quorum assembles reliably. Revertible via the flag.
+
+  // 1. DeepSeek (primary, cost-rank: free)
   const d = process.env.DEEPSEEK_API_KEY?.trim();
-  if (d && process.env.HAL_S2_ENABLE_DEEPSEEK === 'true') {
-    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
+  if (d) {
+    out.push({
+      name: 'deepseek',
+      endpoint: 'https://api.deepseek.com/chat/completions',
+      apiKey: d,
+      model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat',
+      family: 'deepseek',
+      tier: 'free'
+    });
   }
-  // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
-  // Each gated by key + an enable flag (opt-in, revertible): set the key AND HAL_S2_ENABLE_<X>=true.
+
+  // 2. Cerebras (secondary, cost-rank: cheap)
+  const c = process.env.CEREBRAS_API_KEY?.trim();
+  if (c) {
+    out.push({
+      name: 'cerebras',
+      endpoint: 'https://api.cerebras.ai/v1/chat/completions',
+      apiKey: c,
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7',
+      family: 'glm',
+      tier: 'cheap'
+    });
+  }
+
+  // 3. Gemini (tertiary-on-reset, cost-rank: escalation)
   const gm = process.env.GEMINI_API_KEY?.trim();
-  if (gm && process.env.HAL_S2_ENABLE_GEMINI === 'true') {
-    out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
+  if (gm) {
+    out.push({
+      name: 'gemini',
+      endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      apiKey: gm,
+      model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash',
+      family: 'gemini',
+      tier: 'escalation'
+    });
   }
-  const ms = process.env.MISTRAL_API_KEY?.trim();
-  if (ms && process.env.HAL_S2_ENABLE_MISTRAL === 'true') {
-    out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
-  }
-  const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
-  if (qw && process.env.HAL_S2_ENABLE_QWEN === 'true') {
-    out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
-  }
-  // Tag the always-on hosts with their family (model-derived; explicit for clarity).
-  for (const p of out) if (!p.family) p.family = familyOf(p.model);
+
   return out;
 }
 

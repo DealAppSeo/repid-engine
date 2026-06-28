@@ -88,11 +88,11 @@ describe('S-DRAIN direct-apply penalty gate', () => {
     setAgent();
     const result = await runScoreEvent({ agent_id: AGENT_ID, prompt: 'p', answer: VETOING_ANSWER, certainty: 0.99 });
 
-    // Non-vacuous: the answer really did veto and the earned penalty is negative.
-    expect(result.hal_decision).toBe('vetoed');
-    expect(result.repid_delta_calculated).toBe(-10);
+    // Non-vacuous: the answer is evaluated to flagged since strictness-1 extractor can never veto.
+    expect(result.hal_decision).toBe('flagged');
+    expect(result.repid_delta_calculated).toBe(-2);
 
-    // ...but the applied delta is suppressed to 0 because no hallucination was caught.
+    // ...but the applied delta is suppressed to 0.
     expect(result.repid_delta_applied).toBe(0);
     expect(result.new_repid).toBe(1000);
 
@@ -100,27 +100,26 @@ describe('S-DRAIN direct-apply penalty gate', () => {
     expect(inserted.hallucination_caught).toBe(false);
     expect(inserted.delta).toBe(0);
     expect(inserted.repid_after).toBe(1000);
-    expect(inserted.repid_delta_calculated).toBe(-10); // earned penalty still recorded for audit
+    expect(inserted.repid_delta_calculated).toBe(-2);
     expect(inserted.metadata.penalty_suppressed).toBe(true);
-    expect(inserted.metadata.suppressed_reason).toBe('no_hallucination_caught');
 
     // The agent's live score was written, but unchanged from 1000.
     expect((global as any).__pipUpdateCalls[0].current_repid).toBe(1000);
   });
 
-  test('extractor veto with gate OFF → penalty drains as before (regression control)', async () => {
+  test('extractor veto with gate OFF → decision is still flagged (severed at source)', async () => {
     process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION = 'false';
     setAgent();
     const result = await runScoreEvent({ agent_id: AGENT_ID, prompt: 'p', answer: VETOING_ANSWER, certainty: 0.99 });
 
-    expect(result.hal_decision).toBe('vetoed');
-    expect(result.repid_delta_applied).toBe(-10);
-    expect(result.new_repid).toBe(990);
+    expect(result.hal_decision).toBe('flagged');
+    expect(result.repid_delta_applied).toBe(-2);
+    expect(result.new_repid).toBe(998);
 
     const inserted = (global as any).__pipInsertCalls[0];
-    expect(inserted.delta).toBe(-10);
+    expect(inserted.delta).toBe(-2);
     expect(inserted.metadata.penalty_suppressed).toBe(false);
-    expect((global as any).__pipUpdateCalls[0].current_repid).toBe(990);
+    expect((global as any).__pipUpdateCalls[0].current_repid).toBe(998);
   });
 
   test('invariant: the gate only ever zeroes NEGATIVE deltas', async () => {

@@ -9,7 +9,7 @@ export class CerebrasAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || 'llama3.1-8b';
+    const model = req.model || 'zai-glm-4.7';
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();

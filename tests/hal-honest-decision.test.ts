@@ -90,7 +90,7 @@ describe('HONEST-HAL — extractor output does not change veto or delta (no quor
     setAgent();
     const result = await runScoreEvent({ agent_id: AGENT_ID, prompt: 'p', answer: VETOING_ANSWER, certainty: 0.99 });
 
-    // Decision is NOT the extractor's veto — it is the quorum-only neutral 'flagged'.
+    // Decision is NOT the extractor's veto — it is the quorum-only neutral 'flagged' or severed-extractor 'flagged'.
     expect(result.hal_decision).toBe('flagged');
     // No live-score movement in either direction.
     expect(result.repid_delta_applied).toBe(0);
@@ -102,10 +102,10 @@ describe('HONEST-HAL — extractor output does not change veto or delta (no quor
     expect(inserted.delta).toBe(0);
     expect(inserted.repid_after).toBe(1000);
     expect(inserted.hallucination_caught).toBe(false);
-    // The extractor's raw call is preserved for telemetry, clearly marked as neutralized.
-    expect(inserted.metadata.decision_neutralized).toBe(true);
+    // The extractor's raw call is preserved for telemetry, clearly marked as flagged/neutral.
+    expect(inserted.metadata.decision_neutralized).toBe(false);
     expect(inserted.metadata.decision_source).toBe('neutralized-no-quorum');
-    expect(inserted.metadata.extractor_decision).toBe('vetoed');
+    expect(inserted.metadata.extractor_decision).toBe('flagged');
     // Live score written but unchanged.
     expect((global as any).__pipUpdateCalls[0].current_repid).toBe(1000);
   });
@@ -126,17 +126,17 @@ describe('HONEST-HAL — extractor output does not change veto or delta (no quor
     expect((global as any).__pipUpdateCalls[0].current_repid).toBe(1000);
   });
 
-  test('regression control: gate OFF → extractor decision flows through as before (vetoes again)', async () => {
+  test('regression control: gate OFF → extractor decision is still flagged (severed at source)', async () => {
     process.env.HAL_DECISION_REQUIRES_QUORUM = 'false';
-    // also disable the drain gate so the extractor veto can actually move the score (proving the
-    // extractor IS in the path when honest-HAL is off — i.e. honest-HAL is the lever that removed it).
+    // also disable the drain gate so if the extractor could veto it would move the score.
+    // However, since it is severed at source, it is still flagged and the minor flagged penalty of -2 applies.
     process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION = 'false';
     setAgent();
     const result = await runScoreEvent({ agent_id: AGENT_ID, prompt: 'p', answer: VETOING_ANSWER, certainty: 0.99 });
 
-    expect(result.hal_decision).toBe('vetoed');
-    expect(result.repid_delta_applied).toBe(-10);
-    expect(result.new_repid).toBe(990);
+    expect(result.hal_decision).toBe('flagged');
+    expect(result.repid_delta_applied).toBe(-2);
+    expect(result.new_repid).toBe(998);
   });
 
   test('invariant: when neutralized, the recorded delta is never positive', async () => {

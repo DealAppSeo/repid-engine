@@ -29,7 +29,8 @@
       "Bash(railway link *)",
       "Bash(railway --help)",
       "Bash(railway add *)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(gh auth *)"
     ]
   }
 }
