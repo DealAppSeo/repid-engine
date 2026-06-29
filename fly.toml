@@ -20,6 +20,11 @@ primary_region = "sjc"
 
 [env]
   NODE_ENV = "production"
+  PROOF_DRAIN_RECORD_REAL_FIELDS = "true"
+  # Lean standby/public engine: skip DB-polling background workers (feedbackLoop, trinity-bridge,
+  # peer-verification-reader) that flooded the contended MICRO DB → statement-timeout flapping.
+  # Default (unset) = workers ON, so Railway/full engine is unaffected. CC 2026-06-28.
+  ENGINE_WORKERS_ENABLED = "false"
   # PORT is injected by Fly; the app reads $PORT and binds 0.0.0.0:$PORT.
   # internal_port below MUST match the port the app listens on.
 

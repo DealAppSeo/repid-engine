@@ -13,3 +13,12 @@ hal-ground-truth-template.csv
 .env.local
 .firecrawl/
 verify-crosscheck-report.json
+
+# Secrets — never commit (dispatch hardening 2026-06-28, XC fix #5)
+service_role.txt
+railway_vars*.txt
+*.key
+*-key.txt
+.sb-service-key
+.telegram-*
+scripts/dispatch/.dispatch.env
