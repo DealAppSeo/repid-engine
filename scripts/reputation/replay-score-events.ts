@@ -44,8 +44,8 @@ function tierFloor(peak: number): number {
   return 0;
 }
 
-function clamp(x: number, peak: number): number {
-  const floor = tierFloor(peak);
+function clamp(x: number, peak: number, noFloor = false): number {
+  const floor = noFloor ? 0 : tierFloor(peak);
   return Math.max(floor, Math.min(10000, Math.max(10, Math.round(x))));
 }
 
@@ -74,6 +74,9 @@ async function main() {
 
   const agentArg = arg('--agent');
   const verbose = hasFlag('--verbose');
+  const noFloor = hasFlag('--no-floor');
+
+  console.log(`- Mode: ${noFloor ? 'WITHOUT floor (true earned scores)' : 'WITH floor (consistency proof)'}`);
 
   let agentsQuery = db.from('repid_agents').select('id, agent_name, current_repid, peak_repid');
   if (agentArg) {
@@ -197,7 +200,7 @@ async function main() {
       const prevPeak = runningPeak;
       
       runningPeak = Math.max(runningPeak, runningScore);
-      runningScore = clamp(runningScore + e.delta, runningPeak);
+      runningScore = clamp(runningScore + e.delta, runningPeak, noFloor);
 
       if (verbose && (runningScore !== e.repid_after || prevScore !== e.repid_before)) {
         console.log(
