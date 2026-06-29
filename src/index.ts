@@ -758,7 +758,7 @@ if (!IS_TEST) {
 // Schedule mirrors Phase 4 C2's setInterval pattern. Worker is observability
 // + ledger write surface; not a critical path. start() logs boot config
 // (tier_floor, rate_limit_drain_mode boolean) for ops visibility.
-if (!IS_TEST) {
+if (!IS_TEST && process.env.ENGINE_WORKERS_ENABLED !== 'false') {
   feedbackLoopWorker.start(60_000);
 }
 
@@ -951,7 +951,7 @@ import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 startValidationWorker();
 startHitlExpirationJob();
 
-if (!IS_TEST) {
+if (!IS_TEST && process.env.ENGINE_WORKERS_ENABLED !== 'false') {
   startTrinityTaskBridge();
   startPeerVerificationReader(db);
 }
