@@ -42,6 +42,7 @@
     "probe:repid": "ts-node scripts/liveness-probes/probe-repid-scoring.ts",
     "repid:sync": "ts-node src/services/reputation/repid-sync-aggregator.ts --dry-run",
     "repid:sync:apply": "REPIDSYNC_APPLY=true ts-node src/services/reputation/repid-sync-aggregator.ts --apply",
+    "repid:replay": "ts-node scripts/reputation/replay-score-events.ts",
     "probe:graph-rag": "ts-node scripts/liveness-probes/probe-graph-rag.ts",
     "probe:x402": "ts-node scripts/liveness-probes/probe-x402-settlements.ts",
     "probe:onchain": "ts-node scripts/liveness-probes/probe-onchain-reputation.ts",
