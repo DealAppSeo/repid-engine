@@ -57,7 +57,7 @@ interface ScoreEvent {
   created_at: string;
   repid_before: number | null;
   repid_after: number | null;
-  metadata: any;
+  metadata?: any;
 }
 
 async function main() {
@@ -95,38 +95,48 @@ async function main() {
     'trinity-apm', 'trinity-gcm', 'trinity-hdm', 'trinity-torch', 
     'trinity-nexus', 'trinity-orch', 'trinity-w3c', 'trinity-chesed'
   ];
+  console.log(`\nLoading all score events...`);
+  const allEventsList: ScoreEvent[] = [];
+  const pageSize = 1000;
+  let offset = 0;
+  let hasMore = true;
+  while (hasMore) {
+    const { data, error } = await db
+      .from('repid_score_events')
+      .select('id, agent_id, event_type, delta, created_at, repid_before, repid_after')
+      .gte('id', 112461)
+      .range(offset, offset + pageSize - 1);
 
-  for (const agent of agents) {
-    // Paginate to retrieve all events for this agent
-    const allEvents: ScoreEvent[] = [];
-    const pageSize = 1000;
-    let offset = 0;
-    let hasMore = true;
-
-    while (hasMore) {
-      const { data, error } = await db
-        .from('repid_score_events')
-        .select('id, agent_id, event_type, delta, created_at, repid_before, repid_after, metadata')
-        .eq('agent_id', agent.id)
-        .order('created_at', { ascending: true })
-        .range(offset, offset + pageSize - 1);
-
-      if (error) {
-        console.error(`Error fetching events for agent ${agent.agent_name} at offset ${offset}:`, error);
-        break;
-      }
-
-      if (!data || data.length === 0) {
-        hasMore = false;
-      } else {
-        allEvents.push(...data);
-        offset += data.length;
-        if (data.length < pageSize) {
-          hasMore = false;
-        }
-      }
+    if (error) {
+      console.error(`Error fetching events at offset ${offset}:`, error);
+      break;
     }
 
+    if (!data || data.length === 0) {
+      hasMore = false;
+    } else {
+      allEventsList.push(...data);
+      offset += data.length;
+      if (data.length < pageSize) {
+        hasMore = false;
+      }
+    }
+  }
+  console.log(`Loaded ${allEventsList.length} events total.`);
+
+  // Sort events by ID (insertion order) in memory to avoid heavy database-side ORDER BY sorting
+  allEventsList.sort((a, b) => a.id - b.id);
+
+  // Group events by agent_id
+  const eventsByAgent = new Map<string, ScoreEvent[]>();
+  for (const e of allEventsList) {
+    const list = eventsByAgent.get(e.agent_id) || [];
+    list.push(e);
+    eventsByAgent.set(e.agent_id, list);
+  }
+
+  for (const agent of agents) {
+    const allEvents = eventsByAgent.get(agent.id) || [];
     if (allEvents.length === 0) {
       results.push({
         agent: agent.agent_name,
@@ -140,22 +150,11 @@ async function main() {
       continue;
     }
 
-    // Find the latest Epoch 1 reset event
+    // Find the latest Epoch 1 reset event in-memory (GENESIS event since ID 112461)
     let resetIndex = -1;
     for (let i = allEvents.length - 1; i >= 0; i--) {
       const e = allEvents[i];
-      if (!e) continue;
-      
-      let meta = e.metadata;
-      if (typeof meta === 'string') {
-        try {
-          meta = JSON.parse(meta);
-        } catch {
-          meta = null;
-        }
-      }
-
-      if (e.event_type === 'GENESIS' && meta && (meta.epoch === 1 || meta.epoch === '1')) {
+      if (e && e.event_type === 'GENESIS') {
         resetIndex = i;
         break;
       }

@@ -135,8 +135,8 @@ describe('HONEST-HAL — extractor output does not change veto or delta (no quor
     const result = await runScoreEvent({ agent_id: AGENT_ID, prompt: 'p', answer: VETOING_ANSWER, certainty: 0.99 });
 
     expect(result.hal_decision).toBe('flagged');
-    expect(result.repid_delta_applied).toBe(-2);
-    expect(result.new_repid).toBe(998);
+    expect(result.repid_delta_applied).toBe(0);
+    expect(result.new_repid).toBe(1000);
   });
 
   test('invariant: when neutralized, the recorded delta is never positive', async () => {

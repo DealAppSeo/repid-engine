@@ -125,17 +125,16 @@ describe('factCheck — env thresholds + provider builder', () => {
   });
 
   test('buildFactCheckProviders includes only keyed providers', () => {
-    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY, fw_en: process.env.HAL_S2_ENABLE_FIREWORKS };
-    process.env.GROQ_API_KEY = 'g'; process.env.CEREBRAS_API_KEY = 'c'; delete process.env.FIREWORKS_API_KEY;
+    const save = { d: process.env.DEEPSEEK_API_KEY, c: process.env.CEREBRAS_API_KEY, g: process.env.GEMINI_API_KEY };
+    process.env.DEEPSEEK_API_KEY = 'd'; process.env.CEREBRAS_API_KEY = 'c'; delete process.env.GEMINI_API_KEY;
     const ps = buildFactCheckProviders();
-    expect(ps.map((p) => p.name)).toEqual(['groq', 'cerebras']);
-    process.env.FIREWORKS_API_KEY = 'f'; process.env.HAL_S2_ENABLE_FIREWORKS = 'true';
-    expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['groq', 'cerebras', 'fireworks']);
-    process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f; process.env.HAL_S2_ENABLE_FIREWORKS = save.fw_en;
-    if (!save.g) delete process.env.GROQ_API_KEY;
+    expect(ps.map((p) => p.name)).toEqual(['deepseek', 'cerebras']);
+    process.env.GEMINI_API_KEY = 'g';
+    expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['deepseek', 'cerebras', 'gemini']);
+    process.env.DEEPSEEK_API_KEY = save.d; process.env.CEREBRAS_API_KEY = save.c; process.env.GEMINI_API_KEY = save.g;
+    if (!save.d) delete process.env.DEEPSEEK_API_KEY;
     if (!save.c) delete process.env.CEREBRAS_API_KEY;
-    if (!save.f) delete process.env.FIREWORKS_API_KEY;
-    if (!save.fw_en) delete process.env.HAL_S2_ENABLE_FIREWORKS;
+    if (!save.g) delete process.env.GEMINI_API_KEY;
   });
 });
 

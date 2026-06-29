@@ -11,13 +11,15 @@ import { factCheck, costTierOf, buildFactCheckProviders, FactCheckProviderCfg } 
 describe('buildFactCheckProviders reads enable flags (R5/R6 wiring)', () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; });
-  it('gemini/mistral/qwen appear only when key AND HAL_S2_ENABLE_<X>=true', () => {
-    process.env.GEMINI_API_KEY = 'k'; process.env.MISTRAL_API_KEY = 'k'; process.env.QWEN_API_KEY = 'k';
-    delete process.env.HAL_S2_ENABLE_GEMINI; delete process.env.HAL_S2_ENABLE_MISTRAL; delete process.env.HAL_S2_ENABLE_QWEN;
-    expect(buildFactCheckProviders().map((p) => p.name)).not.toContain('gemini');
-    process.env.HAL_S2_ENABLE_GEMINI = 'true'; process.env.HAL_S2_ENABLE_MISTRAL = 'true'; process.env.HAL_S2_ENABLE_QWEN = 'true';
-    const names = buildFactCheckProviders().map((p) => p.name);
-    expect(names).toEqual(expect.arrayContaining(['gemini', 'mistral', 'qwen']));
+  it('gemini/deepseek/cerebras appear only when key is set', () => {
+    delete process.env.GEMINI_API_KEY; delete process.env.DEEPSEEK_API_KEY; delete process.env.CEREBRAS_API_KEY;
+    expect(buildFactCheckProviders().map((p) => p.name)).toEqual([]);
+    process.env.DEEPSEEK_API_KEY = 'k';
+    expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['deepseek']);
+    process.env.CEREBRAS_API_KEY = 'k';
+    expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['deepseek', 'cerebras']);
+    process.env.GEMINI_API_KEY = 'k';
+    expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['deepseek', 'cerebras', 'gemini']);
     const fams = buildFactCheckProviders();
     expect(fams.find((p) => p.name === 'gemini')?.family).toBe('gemini');
     // cost tiers classify correctly for the cheapest-first waves
