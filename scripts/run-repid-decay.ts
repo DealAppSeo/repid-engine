@@ -112,6 +112,29 @@ async function main() {
       [row.id, r.repid_before, r.repid_after],
       { retries: 2, label: 'repid-decay-log-event' },
     );
+    // Write DECAY audit event to repid_score_events (closing the unlogged update gap)
+    await pgQuery(
+      `INSERT INTO repid_score_events (
+         agent_id, event_type, delta, repid_before, repid_after, repid_delta_applied, idempotency_key, metadata
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
+      [
+        row.id,
+        'DECAY',
+        -r.decay_amount,
+        r.repid_before,
+        r.repid_after,
+        -r.decay_amount,
+        `decay:${row.id}:${new Date(nowMs).toISOString().substring(0, 10)}`,
+        JSON.stringify({
+          reason: 'Dormancy decay',
+          weeks_idle: r.weeks_idle,
+          effective_rate: r.effective_rate,
+          floored: r.floored
+        })
+      ],
+      { retries: 2, label: 'repid-decay-log-score-event' }
+    );
     applied++;
   }
   console.log(`\n[repid-decay] APPLIED decay to ${applied} agents; ${anomalies.length} skipped/flagged.`);
