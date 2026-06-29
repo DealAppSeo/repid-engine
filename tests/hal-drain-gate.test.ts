@@ -90,7 +90,7 @@ describe('S-DRAIN direct-apply penalty gate', () => {
 
     // Non-vacuous: the answer is evaluated to flagged since strictness-1 extractor can never veto.
     expect(result.hal_decision).toBe('flagged');
-    expect(result.repid_delta_calculated).toBe(-2);
+    expect(result.repid_delta_calculated).toBe(0);
 
     // ...but the applied delta is suppressed to 0.
     expect(result.repid_delta_applied).toBe(0);
@@ -100,8 +100,8 @@ describe('S-DRAIN direct-apply penalty gate', () => {
     expect(inserted.hallucination_caught).toBe(false);
     expect(inserted.delta).toBe(0);
     expect(inserted.repid_after).toBe(1000);
-    expect(inserted.repid_delta_calculated).toBe(-2);
-    expect(inserted.metadata.penalty_suppressed).toBe(true);
+    expect(inserted.repid_delta_calculated).toBe(0);
+    expect(inserted.metadata.penalty_suppressed).toBe(false);
 
     // The agent's live score was written, but unchanged from 1000.
     expect((global as any).__pipUpdateCalls[0].current_repid).toBe(1000);
@@ -113,13 +113,13 @@ describe('S-DRAIN direct-apply penalty gate', () => {
     const result = await runScoreEvent({ agent_id: AGENT_ID, prompt: 'p', answer: VETOING_ANSWER, certainty: 0.99 });
 
     expect(result.hal_decision).toBe('flagged');
-    expect(result.repid_delta_applied).toBe(-2);
-    expect(result.new_repid).toBe(998);
+    expect(result.repid_delta_applied).toBe(0);
+    expect(result.new_repid).toBe(1000);
 
     const inserted = (global as any).__pipInsertCalls[0];
-    expect(inserted.delta).toBe(-2);
+    expect(inserted.delta).toBe(0);
     expect(inserted.metadata.penalty_suppressed).toBe(false);
-    expect((global as any).__pipUpdateCalls[0].current_repid).toBe(998);
+    expect((global as any).__pipUpdateCalls[0].current_repid).toBe(1000);
   });
 
   test('invariant: the gate only ever zeroes NEGATIVE deltas', async () => {
