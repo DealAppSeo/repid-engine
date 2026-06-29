@@ -157,26 +157,15 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   const newRepId = Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
 
-  // 8 — Update agent (gated by WRITER_DIRECT_APPLY for single-applier cutover)
-  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
-  if (WRITER_DIRECT_APPLY) {
-    await db.from('repid_agents').update({
-      current_repid: newRepId, tier: newTier,
-      last_updated: new Date().toISOString(),
-      activity_30d: agent.activity_30d + 1,
-    }).eq('id', input.agentId);
-  } else {
-    // Event inserted below with full delta/audit fields. Aggregator is now the applier.
-  }
-
-  // 9 — Full audit trail
-  // eas_attestation_id links every event to an EAS attestation
-  // via ERC-8004 ValidationRegistry (stub until Sprint 3)
-  // mirror_test_triggered = ZKP-auditable proof of ideological neutrality (P-023/P-024)
+  // 8 — AUDIT ROW FIRST (atomicity reorder, 2026-06-29). Write the replayable ledger row BEFORE
+  // mutating the score, so a failed insert can NEVER leave current_repid changed without an audit
+  // row (the drift proven live: a constraint-failed insert had mutated the score first). If the
+  // insert throws, the score is never touched. (True txn atomicity via an RPC is the follow-up; this
+  // reorder eliminates the common drift case.)
   //
-  // HONEST-HAL: S-HONEST-HAL (Phase 1)
-  // Wire HAL verdicts directly into the audit trail (mode='shadow' until HAL >= bar).
-  // Never optimize the system against its own signals — measure only against ground truth.
+  // eas_attestation_id links every event to an EAS attestation via ERC-8004 ValidationRegistry.
+  // mirror_test_triggered = ZKP-auditable proof of ideological neutrality (P-023/P-024).
+  // HONEST-HAL: record mode in metadata.mode (prod has no top-level `mode` column).
   const halMode = process.env.DOGFOOD_REPID_FROM_COSIGN === 'true' ? 'shadow' : process.env.HAL_DECISIONS_REQUIRES_QUORUM === 'true' ? 'live' : 'off';
 
   const { error: auditError } = await db.from('repid_score_events').insert({
@@ -212,16 +201,27 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   });
 
   // RULE-11 / fail-loud (S-HONEST-HAL integrity): a money/reputation surface must NEVER mutate
-  // current_repid (step 8) without writing its repid_score_events audit row. Previously this
-  // insert's { error } was unchecked AND wrote a non-existent top-level `mode` column, so the row
-  // silently vanished while the score still changed — the source of the irreconcilable ledger.
-  // Throw so the failure is loud and the caller can alert/retry. (Follow-up: reorder to write the
-  // audit row before the agent UPDATE for true atomicity — out of scope for this minimal fix.)
+  // current_repid without first writing its repid_score_events audit row. This throw runs BEFORE the
+  // score update below, so a failed audit insert (e.g. a constraint violation) can never leave the
+  // score changed without a row — the irreconcilable-ledger drift, proven live 2026-06-29 and now
+  // eliminated by ordering insert→update.
   if (auditError) {
     throw new Error(
       `[repid-engine] repid_score_events audit insert FAILED for agent ${input.agentId} ` +
       `(event=${input.eventType}, delta=${finalDelta}): ${auditError.message}`,
     );
+  }
+
+  // 9 — Apply the score AFTER the audit row is safely written (atomicity reorder 2026-06-29, gated
+  // by WRITER_DIRECT_APPLY for single-applier cutover). The ledger row already exists, so even if
+  // this update fails the state stays reconcilable via replay — never a silent score-without-row drift.
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  if (WRITER_DIRECT_APPLY) {
+    await db.from('repid_agents').update({
+      current_repid: newRepId, tier: newTier,
+      last_updated: new Date().toISOString(),
+      activity_30d: agent.activity_30d + 1,
+    }).eq('id', input.agentId);
   }
 
   // 10 — Update supply rate
