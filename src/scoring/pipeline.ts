@@ -375,16 +375,35 @@ export async function runScoreEvent(
     },
   };
 
-  const { data: eventRow, error: evErr } = await db
-    .from('repid_score_events')
-    .insert(insertPayload)
-    .select('id')
-    .single();
-
-  if (evErr || !eventRow) {
-    throw new Error(`score event insert failed: ${evErr?.message ?? 'unknown'}`);
+  // v3.1 — penalties (applied delta < 0) take the atomic RPC: ONE txn inserts the audit row (repid_delta_applied
+  // pre-set so trg_apply_repid_score_event no-ops) + bypass-applies + sets floor_override on sub-floor demotion.
+  // Non-penalty (>=0) keeps the plain insert; the gated direct-apply below runs only when not appliedViaRpc.
+  const isPenalty = Math.round(effectiveDeltaApplied) < 0;
+  const directApply = process.env.WRITER_DIRECT_APPLY !== 'false';
+  let score_event_id: number;
+  let appliedViaRpc = false;
+  if (isPenalty && directApply) {
+    const { data: evId, error: rpcErr } = await db.rpc('apply_repid_penalty', {
+      p_agent: input.agent_id,
+      p_new_repid: Math.round(new_repid),
+      p_event: insertPayload,
+    });
+    if (rpcErr || evId == null) {
+      throw new Error(`apply_repid_penalty failed: ${rpcErr?.message ?? 'no event id'}`);
+    }
+    score_event_id = Number(evId);
+    appliedViaRpc = true;
+  } else {
+    const { data: eventRow, error: evErr } = await db
+      .from('repid_score_events')
+      .insert(insertPayload)
+      .select('id')
+      .single();
+    if (evErr || !eventRow) {
+      throw new Error(`score event insert failed: ${evErr?.message ?? 'unknown'}`);
+    }
+    score_event_id = Number((eventRow as any).id);
   }
-  const score_event_id = Number((eventRow as any).id);
 
   // S-HARDEN Phase 3 — audit the HAL evaluation as a tool call (gated by TOOL_CALL_LOGGING; no-op default; never throws).
   void logToolCall({
@@ -424,9 +443,9 @@ export async function runScoreEvent(
   }
 
   // 7. Update agent state (gated by WRITER_DIRECT_APPLY for single-applier cutover).
-  // When false: insert event only (with full audit fields + idempotency_key); aggregator becomes sole applier.
-  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
-  if (WRITER_DIRECT_APPLY) {
+  // Skipped when the v3.1 penalty RPC already applied atomically above (appliedViaRpc) — avoids double-apply.
+  // When directApply=false: insert event only; aggregator becomes sole applier from the watermark.
+  if (directApply && !appliedViaRpc) {
     await db
       .from('repid_agents')
       .update({
@@ -435,8 +454,6 @@ export async function runScoreEvent(
         last_updated: new Date().toISOString(),
       })
       .eq('id', input.agent_id);
-  } else {
-    // Event already written above with repid_before/after + delta. Aggregator will apply from watermark.
   }
 
   // 8. Queue ZK proof job (best-effort; failures don't block).
@@ -583,21 +600,35 @@ export async function applyValidationEvent(
     task_domain: taskDomain,
   };
 
-  const { data: eventRow, error: evErr } = await db
-    .from('repid_score_events')
-    .insert(insertPayload)
-    .select('id')
-    .single();
+  // v3.1 — penalties (delta < 0, e.g. VALIDATION_FAILED) take the atomic RPC: ONE txn inserts the audit row
+  // (repid_delta_applied pre-set so trg_apply_repid_score_event no-ops) + bypass-applies + sets floor_override.
+  // SERVICE_FULFILLED and other non-negative events keep the plain insert + the gated direct-apply below.
+  const isPenalty = Math.round(new_repid - old_repid) < 0;
+  const directApply = process.env.WRITER_DIRECT_APPLY !== 'false';
+  let score_event_id: any;
+  let appliedViaRpc = false;
+  if (isPenalty && directApply) {
+    const { data: evId, error: rpcErr } = await db.rpc('apply_repid_penalty', {
+      p_agent: agent_id,
+      p_new_repid: Math.round(new_repid),
+      p_event: insertPayload,
+    });
+    if (rpcErr || evId == null) throw new Error(`apply_repid_penalty failed: ${rpcErr?.message ?? 'no event id'}`);
+    score_event_id = evId;
+    appliedViaRpc = true;
+  } else {
+    const { data: eventRow, error: evErr } = await db
+      .from('repid_score_events')
+      .insert(insertPayload)
+      .select('id')
+      .single();
+    if (evErr) throw new Error(`score event insert failed: ${evErr.message}`);
+    score_event_id = (eventRow as any).id;
+  }
 
-  if (evErr) throw new Error(`score event insert failed: ${evErr.message}`);
-
-  const score_event_id = (eventRow as any).id;
-
-  // Gated by WRITER_DIRECT_APPLY for the single-applier cutover (D-054). When false: insert-event-only
-  // (the event row above carries delta + repid_before/after); the aggregator applies it from the
-  // watermark, so this SERVICE_FULFILLED path can't double-count after the flip. Mirrors runScoreEvent.
-  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
-  if (WRITER_DIRECT_APPLY) {
+  // Gated by WRITER_DIRECT_APPLY for the single-applier cutover (D-054). Skipped when the v3.1 penalty RPC
+  // already applied atomically (appliedViaRpc) — avoids double-apply. When false: insert-event-only, aggregator applies.
+  if (directApply && !appliedViaRpc) {
     await db
       .from('repid_agents')
       .update({
@@ -649,7 +680,7 @@ export async function applyValidationEvent(
       .insert({
         job_id: zk_proof_id,
         agent_id,
-        event_id: (eventRow as any).id,
+        event_id: score_event_id,
         status: 'pending',
         zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app',
       })
