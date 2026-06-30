@@ -15,7 +15,7 @@ CREATE OR REPLACE FUNCTION public.apply_repid_penalty(p_agent uuid, p_new_repid 
 AS $f$
 DECLARE
   v_cur integer; v_peak integer; v_applied integer; v_delta integer;
-  v_event_type text; v_mercy boolean; v_event_id bigint;
+  v_event_type text; v_mercy boolean; v_event_id bigint; v_idem text;
 BEGIN
   IF p_event IS NULL THEN RAISE EXCEPTION 'apply_repid_penalty(3-arg): p_event required; use the 2-arg form for apply-only'; END IF;
 
@@ -35,6 +35,15 @@ BEGIN
   -- w_volume is unimplemented + §7.1b is BLOCKED-FOR-SHADOW — so this stamps the flag for when they are. See report.)
   v_mercy      := coalesce((p_event->>'mercy_applied')::boolean, false);
   v_event_type := coalesce(p_event->>'event_type', 'PENALTY');
+  v_idem       := p_event->>'idempotency_key';
+
+  -- XC v3.1 fix #3 — idempotency hole close: a NON-NULL key is REQUIRED so the partial unique index
+  -- uq_score_events_idempotency_key can dedup a retried penalty. A NULL key bypasses uniqueness (NULLs are
+  -- distinct) → the double-penalty-on-retry hole XC found. Fail closed: all 3 penalty callers (HAL/validation/
+  -- red-team) now bind a deterministic source-tied key; refuse any penalty that arrives without one.
+  IF v_idem IS NULL OR v_idem = '' THEN
+    RAISE EXCEPTION 'apply_repid_penalty: idempotency_key required (NULL bypasses dedup → double-penalty on retry)';
+  END IF;
 
   -- XC v3.1 fix #1 — fail-closed HAL desync guard: a HAL_SCORE_EVENT penalty whose audit row trg_hal_penalty_guard
   -- would zero (no hallucination_caught while config requires it) must NOT silently demote the score (row would say
@@ -58,11 +67,20 @@ BEGIN
     coalesce((p_event->>'repid_delta_calculated')::int, v_delta), v_delta,
     (p_event->>'hallucination_caught')::boolean, (p_event->>'hal_score')::numeric, p_event->>'hal_decision',
     coalesce(p_event->>'decision_outcome', p_event->>'hal_decision'),
-    p_event->>'contract_id', p_event->>'idempotency_key', (p_event->>'economic_impact_usdc')::numeric, p_event->>'alignment_category',
+    p_event->>'contract_id', v_idem, (p_event->>'economic_impact_usdc')::numeric, p_event->>'alignment_category',
     p_event->>'task_domain', (p_event->>'certainty_at_claim')::numeric,
     coalesce(p_event->'metadata','{}'::jsonb)
       || jsonb_build_object('mercy_applied', v_mercy, 'v31_atomic', true, 'v31_payload', p_event)
-  ) RETURNING id INTO v_event_id;
+  )
+  ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+  RETURNING id INTO v_event_id;
+
+  -- Idempotent retry: the key already landed → this penalty was recorded + applied on a prior call. Return the
+  -- existing event id and DO NOT re-apply (no second slash). This is the fix for XC's double-penalty finding.
+  IF v_event_id IS NULL THEN
+    SELECT id INTO v_event_id FROM public.repid_score_events WHERE idempotency_key = v_idem ORDER BY id LIMIT 1;
+    RETURN v_event_id;
+  END IF;
 
   -- (b)+(c) apply with bypass + persistent floor_override on sub-floor demotion (else plain demotion within tier)
   IF v_applied < public.tier_lower_bound(v_peak) THEN

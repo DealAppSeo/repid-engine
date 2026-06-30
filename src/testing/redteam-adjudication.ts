@@ -57,7 +57,13 @@ async function applyDelta(agent: string, role: AppliedDelta['role'], delta: numb
     const { error: rpcErr } = await db.rpc('apply_repid_penalty', {
       p_agent: id,
       p_new_repid: newRepid,
-      p_event: { event_type: eventType, delta, repid_delta_calculated: delta, metadata },
+      p_event: {
+        event_type: eventType, delta, repid_delta_calculated: delta,
+        // v3.1.1 — deterministic idempotency key (source-tied): a re-adjudication of the same
+        // challenge/role/agent is a no-op, never a second slash. (RPC now REQUIRES a non-null key.)
+        idempotency_key: `redteam:${meta?.challenge_id ?? 'na'}:${role}:${agent}`,
+        metadata,
+      },
     });
     if (rpcErr) throw new Error(`apply_repid_penalty failed for ${agent}: ${rpcErr.message}`);
     const after = (await resolveAgent(agent)).current_repid; // read back post-trigger value

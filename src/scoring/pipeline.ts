@@ -383,10 +383,16 @@ export async function runScoreEvent(
   let score_event_id: number;
   let appliedViaRpc = false;
   if (isPenalty && directApply) {
+    // v3.1.1 — guarantee a non-null deterministic idempotency key (RPC now REQUIRES one; NULL bypassed dedup
+    // → double-penalty on retry). Prefer the caller's key, else the LLM call id, else a content hash.
+    const halIdemKey = input.idempotency_key
+      ?? (input.llm_call_id
+        ? `hal:${input.llm_call_id}`
+        : `hal:${input.agent_id}:${crypto.createHash('sha256').update(String(input.prompt ?? '') + '|' + String(input.answer ?? '')).digest('hex').slice(0, 24)}`);
     const { data: evId, error: rpcErr } = await db.rpc('apply_repid_penalty', {
       p_agent: input.agent_id,
       p_new_repid: Math.round(new_repid),
-      p_event: insertPayload,
+      p_event: { ...insertPayload, idempotency_key: halIdemKey },
     });
     if (rpcErr || evId == null) {
       throw new Error(`apply_repid_penalty failed: ${rpcErr?.message ?? 'no event id'}`);
@@ -608,10 +614,14 @@ export async function applyValidationEvent(
   let score_event_id: any;
   let appliedViaRpc = false;
   if (isPenalty && directApply) {
+    // v3.1.1 — deterministic source-tied idempotency key (RPC now REQUIRES one). A retried validation penalty
+    // for the same (event_type, contract/validation, agent) is a no-op, not a second slash.
+    const valIdemKey = (insertPayload as any).idempotency_key
+      ?? `val:${event_type}:${metadata?.contract_id ?? metadata?.validation_id ?? metadata?.task_id ?? 'na'}:${agent_id}`;
     const { data: evId, error: rpcErr } = await db.rpc('apply_repid_penalty', {
       p_agent: agent_id,
       p_new_repid: Math.round(new_repid),
-      p_event: insertPayload,
+      p_event: { ...insertPayload, idempotency_key: valIdemKey },
     });
     if (rpcErr || evId == null) throw new Error(`apply_repid_penalty failed: ${rpcErr?.message ?? 'no event id'}`);
     score_event_id = evId;
