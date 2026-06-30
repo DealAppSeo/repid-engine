@@ -47,13 +47,30 @@ async function resolveAgent(agent: string): Promise<{ id: string | null; current
  */
 async function applyDelta(agent: string, role: AppliedDelta['role'], delta: number, eventType: string, meta: any): Promise<AppliedDelta> {
   const { id, current_repid: before } = await resolveAgent(agent);
-  // Direct apply (engine WRITER_DIRECT_APPLY pattern); trg_repid_earned_floor enforces the floor.
+  const metadata = { ...meta, redteam: true, role, agent_name: agent, source: 'S-REDTEAM-R2' };
+
+  // v3.1 — penalties (delta < 0) go through the atomic RPC: ONE txn inserts the audit row (repid_delta_applied
+  // pre-set so trg_apply_repid_score_event no-ops) + bypass-applies + sets floor_override on sub-floor demotion.
+  // This is what makes a red-team slash actually persist on a high-peak agent instead of being re-floored.
+  if (id && delta < 0) {
+    const newRepid = Math.max(0, Math.round(before + delta));
+    const { error: rpcErr } = await db.rpc('apply_repid_penalty', {
+      p_agent: id,
+      p_new_repid: newRepid,
+      p_event: { event_type: eventType, delta, repid_delta_calculated: delta, metadata },
+    });
+    if (rpcErr) throw new Error(`apply_repid_penalty failed for ${agent}: ${rpcErr.message}`);
+    const after = (await resolveAgent(agent)).current_repid; // read back post-trigger value
+    return { agent, role, delta, before, after, event_type: eventType };
+  }
+
+  // Positive (finder reward) / unresolved-id path unchanged: direct apply + audit insert; trg enforces the floor.
   await db.from('repid_agents').update({ current_repid: Math.max(0, Math.round(before + delta)), last_updated: new Date().toISOString() }).eq('agent_name', agent);
   const after = (await resolveAgent(agent)).current_repid; // read back the post-trigger value
   const { error } = await db.from('repid_score_events').insert({
     agent_id: id, event_type: eventType,
     delta, repid_before: before, repid_after: after,
-    metadata: { ...meta, redteam: true, role, agent_name: agent, source: 'S-REDTEAM-R2' },
+    metadata,
   });
   if (error) throw new Error(`repid_score_events insert failed for ${agent}: ${error.message}`);
   return { agent, role, delta, before, after, event_type: eventType };
