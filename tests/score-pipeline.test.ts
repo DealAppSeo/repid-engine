@@ -232,3 +232,55 @@ describe('runScoreEvent', () => {
     expect(typeof inserted.repid_delta_applied).toBe('number');
   });
 });
+
+describe('runScoreEvent — symmetric purpose gate (XC asymmetry red-team)', () => {
+  // The purpose gate must zero a non-deliverable's HAL delta in BOTH directions. Previously it
+  // gated on `< 0`, so a HAL-clean chore still earned +1..+3 while its -10 was suppressed — a
+  // one-way gate that rewarded fake work. computeDelta clean → positive, so these inputs exercise
+  // the reward path specifically.
+  test('non-deliverable (evergreen) + HAL-clean → reward suppressed, applied delta 0', async () => {
+    (global as any).__pipAgentRow = {
+      id: AGENT_ID,
+      current_repid: 1000, // well above floor, no vesting cliff → no clamps interfere
+      tier: 'ESTABLISHED',
+      vesting_cliff_ends_at: null,
+    };
+    const result = await runScoreEvent({
+      agent_id: AGENT_ID,
+      prompt: 'What is 2+2?',
+      answer: 'Approximately 4',
+      provider_used: 'groq',
+      task_domain: 'evergreen',
+    });
+    const inserted = (global as any).__pipInsertCalls[0];
+    // A non-deliverable never moves the live score — neither punished NOR rewarded.
+    expect(inserted.repid_delta_applied).toBe(0);
+    expect(result.repid_delta_applied).toBe(0);
+    expect(inserted.metadata.purpose).toBe('operational');
+    // If HAL computed a non-zero reward, it must be recorded as suppressed (telemetry preserved).
+    if (typeof inserted.metadata.original_delta === 'number' && inserted.metadata.original_delta !== 0) {
+      expect(inserted.metadata.purpose_suppressed).toBe(true);
+      expect(String(inserted.metadata.suppressed_reason)).toContain('wrong_task_purpose');
+    }
+  });
+
+  test('deliverable (service_contract) + HAL-clean → reward KEPT, purpose not suppressed', async () => {
+    (global as any).__pipAgentRow = {
+      id: AGENT_ID,
+      current_repid: 1000,
+      tier: 'ESTABLISHED',
+      vesting_cliff_ends_at: null,
+    };
+    await runScoreEvent({
+      agent_id: AGENT_ID,
+      prompt: 'What is 2+2?',
+      answer: 'Approximately 4',
+      provider_used: 'groq',
+      task_domain: 'service_contract',
+    });
+    const inserted = (global as any).__pipInsertCalls[0];
+    // A real deliverable is scored at full weight — the purpose gate must NOT fire.
+    expect(inserted.metadata.purpose).toBe('deliverable');
+    expect(inserted.metadata.purpose_suppressed).toBe(false);
+  });
+});
