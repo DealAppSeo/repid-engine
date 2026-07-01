@@ -32,6 +32,34 @@ export interface PurposeVerdict {
 }
 
 /**
+ * Explicit deliverable domains — pinned deliverable-FIRST (XC red-team F1).
+ *
+ * task_domain is the reliable signal; prompt text is secondary. A real contracted
+ * deliverable whose prompt happens to contain operational vocabulary ("count", "report",
+ * "verify") must NOT be downgraded to a suppressed purpose, or it gets silently excused
+ * from HAL scoring. This is the highest-risk false-negative the gate can create.
+ *
+ * Matrix failure closed by this set: `service_contract + "count tasks by status"`
+ * classified as `operational` (HAL suppressed) — it must be `deliverable` (HAL applies).
+ *
+ * Lean inclusive here: over-inclusion means MORE real work is scored (the safe direction);
+ * under-inclusion re-opens the false-negative. Epoch-tunable — Sean owns the final set.
+ */
+const DELIVERABLE_DOMAINS = new Set<string>([
+  'service_contract',
+  'code',
+  'build',
+  'implement',
+  'deploy',
+  'development',
+  'feature',
+  'engineering',
+  'code_contribution',
+  'bugfix',
+  'refactor',
+]);
+
+/**
  * Classify a task's scoring purpose from its domain (= task.task_type on the bridge)
  * and, secondarily, the prompt text. Default = real deliverable (full HAL scoring) so
  * an unknown/new domain is scored normally, not silently excused.
@@ -42,6 +70,14 @@ export function classifyTaskPurpose(
 ): PurposeVerdict {
   const d = (taskDomain || 'general').toLowerCase();
   const p = (prompt || '').toLowerCase();
+
+  // F1 (XC red-team): explicit deliverable domains are pinned deliverable-FIRST — before any
+  // prompt-text heuristic. task_domain is the reliable signal; prompt vocabulary is secondary
+  // and must never override an explicit deliverable domain. Closes the service_contract false-negative.
+  if (DELIVERABLE_DOMAINS.has(d)) {
+    return { purpose: 'deliverable', halVetoApplies: true, weight: 1,
+      reason: `explicit deliverable domain (${d}) — HAL cross-LLM veto applies at full weight; prompt heuristics do not override` };
+  }
 
   // Adversarial drills — tests. Never score reputation; keep telemetry for HAL calibration.
   if (d === 'cait' || /\bhal veto self-test|jailbreak|prompt.?injection|red.?team|adversarial\b/.test(p)) {
