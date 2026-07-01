@@ -34,6 +34,7 @@ import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
 import { halService } from '../hal/service';
 import { strictModeOrFallback } from '../hal/lib/strict-mode';
+import { classifyTaskPurpose } from './task-purpose';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -310,6 +311,24 @@ export async function runScoreEvent(
   // — suppressed_reason='quorum_unavailable', penalty_suppressed=true — stable.)
   if (quorumUnavailable) penaltySuppressed = true;
 
+  // PURPOSE GATE (REPID_HONEST_SCORING_v1): a HAL veto only moves RepID on REAL deliverables.
+  // Internal cron / DB-fact / adversarial drills / peer-verify are NOT hallucination-veto surfaces
+  // (cross-LLM has no ground truth for "count tasks by status"). This is w_purpose in the §7.1 chain.
+  // Reversible via REPID_PURPOSE_GATE_ENABLED. Suppressed penalties are logged (telemetry kept).
+  const purposeGateEnabled = process.env.REPID_PURPOSE_GATE_ENABLED !== 'false';
+  const purposeVerdict = classifyTaskPurpose(input.task_domain, input.prompt);
+  let purposeSuppressed = false;
+  if (purposeGateEnabled && effectiveDeltaApplied !== 0 && !purposeVerdict.halVetoApplies) {
+    // Symmetric w_purpose (XC asymmetry red-team): a non-deliverable purpose zeroes the HAL delta in
+    // BOTH directions — a chore must be neither punished NOR rewarded by HAL scoring. This previously
+    // gated on `< 0`, so a HAL-clean chore (+1..+5 under strictness 2) still earned RepID while the
+    // -10 was suppressed — a one-way gate that let fake work be rewarded. weight 0 → 0 either direction.
+    const wasPenalty = effectiveDeltaApplied < 0;
+    effectiveDeltaApplied = Math.round(effectiveDeltaApplied * purposeVerdict.weight);
+    purposeSuppressed = true;
+    if (wasPenalty) penaltySuppressed = true; // keep penalty-specific S-DRAIN observability intact
+  }
+
   const old_repid = agent.current_repid;
   const new_repid = old_repid + effectiveDeltaApplied;
 
@@ -355,6 +374,9 @@ export async function runScoreEvent(
       vesting_cliff_active: agent.vesting_cliff_active,
       block_threshold_used: HAL_CONSTITUTIONAL_BLOCK_THRESHOLD,
       penalty_suppressed: penaltySuppressed,
+      purpose: purposeVerdict.purpose,
+      purpose_suppressed: purposeSuppressed,
+      purpose_reason: purposeSuppressed ? purposeVerdict.reason : null,
       // R4 — quorum evidence: every APPLIED penalty must show >= 2 providers here.
       quorum_met: quorumMet,
       quorum_providers_used: providersUsed,
@@ -366,9 +388,9 @@ export async function runScoreEvent(
       decision_source: quorumMet ? 'fact-check-quorum' : 'neutralized-no-quorum',
       decision_neutralized: decisionNeutralized,
       extractor_decision: decision,
-      ...(penaltySuppressed
+      ...(penaltySuppressed || purposeSuppressed
         ? {
-            suppressed_reason: quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught',
+            suppressed_reason: purposeSuppressed ? ('wrong_task_purpose:' + purposeVerdict.purpose) : (quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught'),
             original_delta: Math.round(delta.delta_applied),
           }
         : {}),
