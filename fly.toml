@@ -12,8 +12,11 @@ app = "repid-engine-standby"
 primary_region = "sjc"
 
 [build]
-  # Same portable Dockerfile that Railway/Coolify can use — no host-specific build steps.
-  dockerfile = "Dockerfile"
+  # Portable Dockerfile for Fly/Coolify. RENAMED to Dockerfile.fly 2026-07-01: Railway's RAILPACK
+  # builder auto-detected a root `Dockerfile` and used it (ignoring railway.toml nixpacks + the builder
+  # setting), then failed on Metal's lack of `--mount=type=secret` support — breaking every Railway deploy
+  # since 06-26. Keeping the Fly build under a non-root-detected name restores Railway→nixpacks.
+  dockerfile = "Dockerfile.fly"
   # The git-pinned private dep (@hyperdag/proof-verifier) needs a build secret on deploy:
   #   [SEAN]  flyctl deploy --build-secret gh_token=<github_pat_with_repo_scope>
   # (Documented in Dockerfile header. Never store the token in this file.)
