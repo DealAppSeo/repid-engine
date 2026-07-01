@@ -318,10 +318,15 @@ export async function runScoreEvent(
   const purposeGateEnabled = process.env.REPID_PURPOSE_GATE_ENABLED !== 'false';
   const purposeVerdict = classifyTaskPurpose(input.task_domain, input.prompt);
   let purposeSuppressed = false;
-  if (purposeGateEnabled && effectiveDeltaApplied < 0 && !purposeVerdict.halVetoApplies) {
-    effectiveDeltaApplied = Math.round(effectiveDeltaApplied * purposeVerdict.weight); // weight 0 → 0
-    penaltySuppressed = true;
+  if (purposeGateEnabled && effectiveDeltaApplied !== 0 && !purposeVerdict.halVetoApplies) {
+    // Symmetric w_purpose (XC asymmetry red-team): a non-deliverable purpose zeroes the HAL delta in
+    // BOTH directions — a chore must be neither punished NOR rewarded by HAL scoring. This previously
+    // gated on `< 0`, so a HAL-clean chore (+1..+5 under strictness 2) still earned RepID while the
+    // -10 was suppressed — a one-way gate that let fake work be rewarded. weight 0 → 0 either direction.
+    const wasPenalty = effectiveDeltaApplied < 0;
+    effectiveDeltaApplied = Math.round(effectiveDeltaApplied * purposeVerdict.weight);
     purposeSuppressed = true;
+    if (wasPenalty) penaltySuppressed = true; // keep penalty-specific S-DRAIN observability intact
   }
 
   const old_repid = agent.current_repid;
@@ -383,7 +388,7 @@ export async function runScoreEvent(
       decision_source: quorumMet ? 'fact-check-quorum' : 'neutralized-no-quorum',
       decision_neutralized: decisionNeutralized,
       extractor_decision: decision,
-      ...(penaltySuppressed
+      ...(penaltySuppressed || purposeSuppressed
         ? {
             suppressed_reason: purposeSuppressed ? ('wrong_task_purpose:' + purposeVerdict.purpose) : (quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught'),
             original_delta: Math.round(delta.delta_applied),
