@@ -21,7 +21,8 @@ export type TaskPurpose =
   | 'peer_verify'   // routes to peer-verify scoring, not a hallucination veto
   | 'monitoring'    // review/monitoring chores — not a deliverable
   | 'verification'  // verify-a-claim task — cross-LLM cannot verify DB/code claims
-  | 'generation';   // generating adversarial/test content — adversarial by design, not a hallucination
+  | 'generation'    // generating adversarial/test content — adversarial by design, not a hallucination
+  | 'panel_review'; // BFT verification-panel review of a code artifact — scored via HANDOFF_COSIGN, not HAL veto
 
 export interface PurposeVerdict {
   purpose: TaskPurpose;
@@ -77,6 +78,13 @@ export function classifyTaskPurpose(
   if (d === 'review' || d === 'monitoring') {
     return { purpose: 'monitoring', halVetoApplies: false, weight: 0,
       reason: `${d} — monitoring chore, not a deliverable` };
+  }
+
+  // BFT verification-panel review of a real code artifact (SHA-bound) — scored via the panel verdict /
+  // HANDOFF_COSIGN path (+10 aligned / -5 diverged), NOT a cross-LLM hallucination veto. Suppress HAL here.
+  if (d === 'verification_panel' || d === 'code_review_sha_bound') {
+    return { purpose: 'panel_review', halVetoApplies: false, weight: 0,
+      reason: 'BFT panel review of a code artifact — scored via panel verdict/HANDOFF_COSIGN, not cross-LLM fact-check' };
   }
 
   // Default: real deliverable — full HAL cross-LLM veto scoring.
