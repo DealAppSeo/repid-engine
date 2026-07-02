@@ -290,6 +290,7 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     vetoedRes,
     last100Res,
     lastEventRes,
+    badgesRes,
   ] = await Promise.all([
     db.from('repid_score_events').select('id', { count: 'exact', head: true })
       .eq('agent_id', agentId).eq('hal_decision', 'clean'),
@@ -302,6 +303,9 @@ router.get('/:id/card', async (req: Request, res: Response) => {
       .order('created_at', { ascending: false }).limit(100),
     db.from('repid_score_events').select('created_at')
       .eq('agent_id', agentId).order('created_at', { ascending: false }).limit(1),
+    // Sprint golden-E2E — earned badges for the card (best-effort; failures → []).
+    db.from('repid_badges').select('badge_name, badge_rarity, badge_description')
+      .eq('agent_id', agentId),
   ]);
 
   const last100Rows = (last100Res.data ?? []) as Array<{ hal_score: number | string | null }>;
@@ -322,11 +326,19 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     ? `https://sepolia.basescan.org/token/0x8004A818BFB912233c491871b3d84c89A494BD9e?a=${tokenId}`
     : null;
 
+  // Sprint golden-E2E — tier (RepID-derived, mirrors the DB compute_tier trigger) +
+  // earned badges. Both are additive to the existing public card contract.
+  const repidVal = (agent as any).current_repid ?? 1000;
+  const tier = computeTierFromRepid(repidVal);
+  const badges = ((badgesRes.data ?? []) as Array<{ badge_name: string; badge_rarity: string; badge_description: string }>)
+    .map(b => ({ name: b.badge_name, rarity: b.badge_rarity, description: b.badge_description }));
+
   return res.json({
     agent_id: (agent as any).id,
     name: (agent as any).agent_name,
     description: (agent as any).description ?? null,
-    repid: (agent as any).current_repid ?? 1000,
+    repid: repidVal,
+    tier,
     erc8004_token_id: tokenId,
     total_decisions: decisionCount ?? 0,
     base_sepolia_explorer_url: explorerUrl,
@@ -339,6 +351,8 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     total_vetoed: vetoedRes.count ?? 0,
     avg_hal_score: avgHalScore,
     last_event_at: lastEventAt,
+    // Sprint golden-E2E — earned badges.
+    badges,
   });
 });
 

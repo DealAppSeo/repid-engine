@@ -14,10 +14,20 @@ const VALID_UUID = '11111111-2222-4333-8444-555555555555';
 (global as any).__cardTestAgentRow = null;
 (global as any).__cardTestCountResult = 0;
 
+(global as any).__cardTestBadgeRows = [];
+
 jest.mock('../src/db', () => {
   return {
     db: {
       from: (tableName: string) => {
+        if (tableName === 'repid_badges') {
+          const chain: any = {
+            select: () => chain,
+            eq: () => chain,
+            then: (resolve: any) => resolve({ data: (global as any).__cardTestBadgeRows ?? [], error: null }),
+          };
+          return chain;
+        }
         if (tableName === 'repid_score_events') {
           // Sprint A7: card now also runs SELECT('hal_score').not().order().limit()
           // and SELECT('created_at').order().limit(). Mock supports both chains.
@@ -64,6 +74,7 @@ beforeEach(() => {
   (global as any).__cardTestAgentRow = null;
   (global as any).__cardTestCountResult = 0;
   (global as any).__cardTestEventRows = [];
+  (global as any).__cardTestBadgeRows = [];
 });
 
 describe('GET /api/v1/agents/:id/card', () => {
@@ -177,6 +188,50 @@ describe('GET /api/v1/agents/:id/card', () => {
     expect(res.body.total_vetoed).toBe(0);
     expect(res.body.avg_hal_score).toBeNull();
     expect(res.body.last_event_at).toBeNull();
+  });
+
+  // Sprint golden-E2E — tier + earned badges on the card.
+  it('returns RepID-derived tier and earned badges', async () => {
+    (global as any).__cardTestAgentRow = {
+      id: VALID_UUID,
+      agent_name: 'TieredAgent',
+      description: null,
+      current_repid: 1200, // ESTABLISHED (1000–4999)
+      erc8004_token_id: null,
+      created_at: '2026-05-07T03:00:00Z',
+      last_active_at: null,
+    };
+    (global as any).__cardTestBadgeRows = [
+      { badge_name: 'First Win', badge_rarity: 'COMMON', badge_description: 'Won your first constitutional challenge' },
+      { badge_name: 'Established', badge_rarity: 'RARE', badge_description: 'Crossed into ESTABLISHED tier (1,000 RepID)' },
+    ];
+    const res = await request(app).get(`/api/v1/agents/${VALID_UUID}/card`);
+    expect(res.status).toBe(200);
+    expect(res.body.tier).toBe('ESTABLISHED');
+    expect(Array.isArray(res.body.badges)).toBe(true);
+    expect(res.body.badges).toHaveLength(2);
+    expect(res.body.badges[0]).toEqual({
+      name: 'First Win',
+      rarity: 'COMMON',
+      description: 'Won your first constitutional challenge',
+    });
+  });
+
+  it('returns an empty badges array and PROBATIONARY tier for a low-RepID agent with no badges', async () => {
+    (global as any).__cardTestAgentRow = {
+      id: VALID_UUID,
+      agent_name: 'NewbieAgent',
+      description: null,
+      current_repid: 200, // PROBATIONARY (0–499)
+      erc8004_token_id: null,
+      created_at: '2026-05-07T03:00:00Z',
+      last_active_at: null,
+    };
+    (global as any).__cardTestBadgeRows = [];
+    const res = await request(app).get(`/api/v1/agents/${VALID_UUID}/card`);
+    expect(res.status).toBe(200);
+    expect(res.body.tier).toBe('PROBATIONARY');
+    expect(res.body.badges).toEqual([]);
   });
 
   it('returns null base_sepolia_explorer_url when no erc8004_token_id', async () => {

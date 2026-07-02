@@ -231,3 +231,52 @@ export class RepIdEarningService {
 }
 
 export const repidEarning = new RepIdEarningService();
+
+/**
+ * Builder-RepID feedback (golden-loop E2E).
+ *
+ * When an agent's `current_repid` changes, the owning builder's headline RepID should
+ * track the mean of the builder's agents. This is the seam called from the scoring
+ * pipeline (`repid-update.ts`) right after an agent update lands.
+ *
+ * It resolves the agent's `builder_id` and, when present, delegates the mean +
+ * ghost-penalty math to the canonical `recomputeBuilderRepID` in builder-registry.ts
+ * (single source of truth — this wrapper must NOT re-implement the formula, only route
+ * to it). Fully best-effort: every failure is caught and returned as
+ * `{ updated: false, reason }` so it can never break or block the agent score flow
+ * (mirrors the non-blocking badge-award contract).
+ */
+export interface BuilderRepIdFeedbackResult {
+  updated: boolean;
+  builder_id?: string;
+  builder_repid?: number;
+  reason?: string;
+}
+
+export async function recomputeBuilderRepIdForAgent(
+  agentId: string,
+): Promise<BuilderRepIdFeedbackResult> {
+  try {
+    const { data: agent, error } = await db
+      .from('repid_agents')
+      .select('builder_id')
+      .eq('id', agentId)
+      .maybeSingle();
+
+    if (error) return { updated: false, reason: `agent_lookup_failed: ${error.message}` };
+    const builderId = (agent as any)?.builder_id ?? null;
+    if (!builderId) return { updated: false, reason: 'no_builder' };
+
+    // Lazy require to avoid any import cycle between repid-earning and builder-registry.
+    const { recomputeBuilderRepID } = require('./builder-registry') as typeof import('./builder-registry');
+    const result = await recomputeBuilderRepID(builderId);
+    return {
+      updated: true,
+      builder_id: result.builder_id,
+      builder_repid: result.builder_repid,
+    };
+  } catch (e: any) {
+    // Non-blocking: builder feedback must never fail the agent score flow.
+    return { updated: false, reason: `error: ${e?.message ?? String(e)}` };
+  }
+}

@@ -1,9 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { x402Facilitator } from '../services/x402-facilitator';
 import { repIdAttestationService } from '../services/repid-attestation';
+import { checkTransactionAuthority } from '../services/x402-gate';
 import { db } from '../db';
 
 const router = Router();
+
+// Micro-USDC (6 decimals) → USDC dollar units for the tier-ceiling gate,
+// which is denominated in whole USDC (see TIER_LIMITS in x402-gate.ts).
+const microUsdcToUsd = (micro: string | number): number => Number(micro) / 1_000_000;
 
 // SOPHIA trade analysis demo
 router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
@@ -64,6 +69,67 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
         reason: attestationResult.reason
       });
     }
+  }
+
+  // 4a. Self-dealing guard — payer MUST NOT equal payee. A settled self-payment
+  // would let an agent manufacture reputation/settlement events for free. This is
+  // a PERMANENT failure (retrying can't fix it), so it is rejected before any
+  // authority load or settlement. We compare the verified payer wallet against the
+  // payee agent's wallet, and (when present) the caller's attested agent_id against
+  // this agent's id.
+  const payerWallet = (verifyResult.payer ?? '').toLowerCase();
+  const payeeWallet = (agent.wallet_address ?? '').toLowerCase();
+  const isWalletSelfDeal = !!payerWallet && !!payeeWallet && payerWallet === payeeWallet;
+  const isAgentSelfDeal = !!callerAttestation && String(callerAttestation.agent_id) === String(agent.id);
+  if (isWalletSelfDeal || isAgentSelfDeal) {
+    return res.status(402).json({
+      x402Version: 1,
+      accepts: requirements,
+      error: 'self_dealing_forbidden',
+      denial_reason: 'self_dealing_forbidden',
+      failure_class: 'PERMANENT',
+      next_step: 'Route the payment from a distinct payer agent/wallet; an agent cannot pay itself.',
+    });
+  }
+
+  // 4b. Tier-ceiling authority gate — enforce the payee agent's per-tx / daily /
+  // stake ceilings BEFORE delivering the service or settling. PROBATIONARY agents
+  // are fully gated ($0). Denials return HTTP 402 with the gate's denial_reason and
+  // a recoverable-vs-permanent classification so the caller knows whether to retry.
+  const amountUsd = microUsdcToUsd(priceUsdc);
+  const authority = await checkTransactionAuthority({
+    agent: agent.agent_name,
+    transaction_type: 'x402_inbound_trade_analysis',
+    amount: amountUsd,
+  });
+  if (!authority.authorized) {
+    // insufficient_stake / exceeds_daily_limit are RECOVERABLE (stake more, or wait
+    // for the daily window to reset). Everything else here is a policy PERMANENT deny.
+    const recoverable = new Set(['insufficient_stake', 'exceeds_daily_limit']);
+    const failureClass = recoverable.has(authority.denial_reason ?? '') ? 'RECOVERABLE' : 'PERMANENT';
+    const nextStep =
+      authority.denial_reason === 'insufficient_stake'
+        ? `Increase active stake to at least ${amountUsd} USDC, then retry.`
+        : authority.denial_reason === 'exceeds_daily_limit'
+          ? `Daily ceiling reached (${authority.daily_used}/${authority.daily_limit} USDC used). Retry after the UTC day resets.`
+          : authority.denial_reason === 'exceeds_per_tx_limit'
+            ? `Amount ${amountUsd} USDC exceeds the ${authority.tier} per-tx ceiling of ${authority.per_tx_limit} USDC.`
+            : authority.denial_reason === 'open_disputes'
+              ? 'Resolve open disputes before transacting.'
+              : `Tier ${authority.tier} is not permitted to settle this transaction.`;
+    return res.status(402).json({
+      x402Version: 1,
+      accepts: requirements,
+      error: 'tier_authority_denied',
+      denial_reason: authority.denial_reason,
+      failure_class: failureClass,
+      tier: authority.tier,
+      per_tx_limit: authority.per_tx_limit,
+      daily_limit: authority.daily_limit,
+      daily_remaining: authority.daily_remaining,
+      recommended: nextStep,
+      next_step: nextStep,
+    });
   }
 
   // 5. Deliver service

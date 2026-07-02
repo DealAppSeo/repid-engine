@@ -10,14 +10,20 @@ describe('x402-real-settler', () => {
     process.env.APM_PRIVATE_KEY = '0x123';
     process.env.VERITAS_PRIVATE_KEY = '0x456';
     
+    // Chainable mock covering both the real path (.select().eq().limit()) and the
+    // MOCK_FACILITATOR path (.select().eq().maybeSingle(), .insert()).
+    const makeChain = (): any => {
+      const chain: any = {
+        select: jest.fn(() => chain),
+        eq: jest.fn(() => chain),
+        limit: jest.fn().mockResolvedValue({ data: [] }),
+        maybeSingle: jest.fn().mockResolvedValue({ data: null }),
+        insert: jest.fn().mockResolvedValue({ data: null, error: null }),
+      };
+      return chain;
+    };
     (createClient as jest.Mock).mockReturnValue({
-      from: jest.fn().mockReturnValue({
-        select: jest.fn().mockReturnValue({
-          eq: jest.fn().mockReturnValue({
-            limit: jest.fn().mockResolvedValue({ data: [] })
-          })
-        })
-      })
+      from: jest.fn(() => makeChain()),
     });
   });
 
@@ -44,10 +50,12 @@ describe('x402-real-settler', () => {
     }));
 
     const result = await settleX402Payment('APM', 'VERITAS', 1, 'bet_123');
-    
+
     expect(result.settlement_source).toBe('onchain_x402');
     expect(result.tx_hash).toBe('0xdef');
     expect(result.basescan_url).toContain('0xdef');
+    // Task 2: a real on-chain transfer must flag is_real_settlement=true.
+    expect(result.is_real_settlement).toBe(true);
   });
 
   it('returns pending_funding if balance is zero or insufficient', async () => {
@@ -82,5 +90,34 @@ describe('x402-real-settler', () => {
     const result = await settleX402Payment('APM', 'VERITAS', 1, 'bet_123');
     expect(result.settlement_source).toBe('pending_funding');
     expect(result.error).toContain('Missing private key');
+  });
+
+  // Task 2 — every response carries is_real_settlement; mocks are honest + loud.
+  describe('is_real_settlement flag (Task 2)', () => {
+    it('non-real paths (pending_funding) flag is_real_settlement=false', async () => {
+      const mockBalanceOf = jest.fn().mockResolvedValue(500000n); // 0.5 USDC < 1
+      (ethers.Contract as jest.Mock).mockImplementation(() => ({ balanceOf: mockBalanceOf }));
+      const result = await settleX402Payment('APM', 'VERITAS', 1, 'bet_flag');
+      expect(result.settlement_source).toBe('pending_funding');
+      expect(result.is_real_settlement).toBe(false);
+    });
+
+    it('MOCK_FACILITATOR settlements flag is_real_settlement=false and warn loudly', async () => {
+      const prev = process.env.MOCK_FACILITATOR;
+      process.env.MOCK_FACILITATOR = 'true';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await settleX402Payment('APM', 'VERITAS', 0.5, 'bet_mock');
+        expect(result.settlement_source).toBe('onchain_x402');
+        expect(result.tx_hash).toMatch(/^0xmock/);
+        expect(result.is_real_settlement).toBe(false);
+        expect(warnSpy).toHaveBeenCalled();
+        expect(String(warnSpy.mock.calls[0]?.[0] ?? '')).toMatch(/SIMULATED|is_real_settlement=false/i);
+      } finally {
+        warnSpy.mockRestore();
+        if (prev === undefined) delete process.env.MOCK_FACILITATOR;
+        else process.env.MOCK_FACILITATOR = prev;
+      }
+    });
   });
 });

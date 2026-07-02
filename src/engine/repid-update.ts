@@ -226,6 +226,17 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     }).eq('id', input.agentId);
   }
 
+  // 9b — Builder-RepID feedback (golden-loop E2E). Recompute the owning builder's
+  // headline RepID from the mean of its agents after this agent's score moved.
+  // Non-blocking + best-effort: a no-builder agent or any failure is swallowed so
+  // builder feedback can NEVER break the agent score flow (mirrors badge awards).
+  try {
+    const { recomputeBuilderRepIdForAgent } = require('../services/repid-earning') as typeof import('../services/repid-earning');
+    await recomputeBuilderRepIdForAgent(input.agentId);
+  } catch {
+    // ignore — builder feedback is observability, not a critical path
+  }
+
   // 10 — Update supply rate
   await updateSupplyRate(input.eventType);
 

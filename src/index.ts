@@ -49,6 +49,7 @@ import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
 import x402InboundRouter from './routes/x402-inbound';
+import agentTradeRouter from './routes/agent-trade';
 // S-SPINE — TrustChat viral surface (all public except referral stats).
 import leaderboardRouter from './routes/leaderboard';
 import statsRouter from './routes/stats';
@@ -311,6 +312,11 @@ app.use('/api/v1/agents-external', agentsExternalScoreRouter);
 // control), so it is mounted BEFORE authMiddleware alongside the other public
 // surfaces. Route: POST /api/v1/x402/:uuid/trade-analysis
 app.use('/api/v1/x402', x402InboundRouter);
+
+// Generic agent↔agent trade surface (golden-loop E2E). Mounted BEFORE authMiddleware
+// alongside x402-inbound: the tier-ceiling authority gate + settlement are the access
+// control. Route: POST /api/v1/agent/:agentId/trade
+app.use('/api/v1', agentTradeRouter);
 
 // S-SPINE — public TrustChat viral surface (leaderboard, providers, subscribe,
 // referral /track, security status). Mounted BEFORE authMiddleware so they need

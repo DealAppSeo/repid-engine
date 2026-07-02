@@ -31,23 +31,37 @@ function getProvider() {
   return provider;
 }
 
+export interface SettleX402Result {
+  tx_hash?: string;
+  basescan_url?: string;
+  settlement_source: 'onchain_x402' | 'pending_funding';
+  error?: string;
+  /**
+   * TRUE only when USDC actually moved on-chain (a real signed transfer).
+   * FALSE for every mock/simulated settlement AND for any pending_funding
+   * (no-op) result. Callers must gate real-money accounting on this flag and
+   * never treat a mock tx_hash as a settled payment.
+   */
+  is_real_settlement: boolean;
+}
+
 export async function settleX402Payment(
   fromAgentName: string,
   toAgentName: string,
   amountUSDC: number,
   betId: string
-): Promise<{ tx_hash?: string; basescan_url?: string; settlement_source: 'onchain_x402' | 'pending_funding'; error?: string }> {
+): Promise<SettleX402Result> {
   try {
     const supabase = getDb();
-    
+
     if (process.env.MOCK_FACILITATOR === 'false') {
-      return { settlement_source: 'pending_funding', error: 'MOCK_FACILITATOR is false' };
+      return { settlement_source: 'pending_funding', error: 'MOCK_FACILITATOR is false', is_real_settlement: false };
     }
 
     if (process.env.MOCK_FACILITATOR === 'true') {
       // 1. Amount Governor check
       if (amountUSDC > 1.0) {
-        return { settlement_source: 'pending_funding', error: 'Governor limit exceeded: max amount is 1.0 USDC' };
+        return { settlement_source: 'pending_funding', error: 'Governor limit exceeded: max amount is 1.0 USDC', is_real_settlement: false };
       }
 
       // 2. Circuit Breaker check
@@ -57,12 +71,12 @@ export async function settleX402Payment(
         .eq('key', 'cb_disable_x402_settlements')
         .maybeSingle();
       if (configData?.value === 'true') {
-        return { settlement_source: 'pending_funding', error: 'Circuit breaker active' };
+        return { settlement_source: 'pending_funding', error: 'Circuit breaker active', is_real_settlement: false };
       }
 
       // 3. Non-existent agent check
       if (toAgentName === 'NON_EXISTENT_AGENT') {
-        return { settlement_source: 'pending_funding', error: `Cannot determine destination address for ${toAgentName}` };
+        return { settlement_source: 'pending_funding', error: `Cannot determine destination address for ${toAgentName}`, is_real_settlement: false };
       }
 
       // 4. Invalid agent check (simulates settlement failure)
@@ -74,7 +88,7 @@ export async function settleX402Payment(
           payment_requirements: {},
           attempt_count: 1
         });
-        return { settlement_source: 'pending_funding', error: 'Settlement failed for invalid agent' };
+        return { settlement_source: 'pending_funding', error: 'Settlement failed for invalid agent', is_real_settlement: false };
       }
 
       // 5. Duplicate idempotency key check
@@ -85,7 +99,7 @@ export async function settleX402Payment(
         .maybeSingle();
 
       if (existing) {
-        return { settlement_source: 'pending_funding', error: 'duplicate key value violates unique constraint "x402_settlements_idempotency_key_key"' };
+        return { settlement_source: 'pending_funding', error: 'duplicate key value violates unique constraint "x402_settlements_idempotency_key_key"', is_real_settlement: false };
       }
 
       // Record mock settlement in x402_settlements
@@ -99,10 +113,18 @@ export async function settleX402Payment(
         is_simulated: true
       });
 
+      // LOUD: a mock/simulated settlement is NOT a real on-chain transfer. Never
+      // let a mock tx_hash be mistaken for settled money downstream.
+      console.warn(
+        `[x402-real-settler] SIMULATED settlement (MOCK_FACILITATOR=true) — NO on-chain USDC moved. ` +
+        `from=${fromAgentName} to=${toAgentName} amount=${amountUSDC} USDC bet=${betId}. is_real_settlement=false`
+      );
+
       return {
         settlement_source: 'onchain_x402',
         tx_hash: `0xmock${crypto.randomUUID().replace(/-/g, '')}`,
-        basescan_url: 'https://sepolia.basescan.org'
+        basescan_url: 'https://sepolia.basescan.org',
+        is_real_settlement: false
       };
     }
 
@@ -110,7 +132,7 @@ export async function settleX402Payment(
     const pkVarName = `${fromAgentName.toUpperCase()}_PRIVATE_KEY`;
     const fromPk = process.env[pkVarName];
     if (!fromPk) {
-      return { settlement_source: 'pending_funding', error: `Missing private key for ${fromAgentName}` };
+      return { settlement_source: 'pending_funding', error: `Missing private key for ${fromAgentName}`, is_real_settlement: false };
     }
 
     const wallet = new ethers.Wallet(fromPk, getProvider());
@@ -122,7 +144,7 @@ export async function settleX402Payment(
     const balance = await (usdcContract as any).balanceOf(wallet.address);
     
     if (balance < BigInt(parsedAmount)) {
-      return { settlement_source: 'pending_funding' };
+      return { settlement_source: 'pending_funding', is_real_settlement: false };
     }
 
     // Determine toAddress
@@ -149,7 +171,7 @@ export async function settleX402Payment(
     }
 
     if (!toAddress) {
-      return { settlement_source: 'pending_funding', error: `Cannot determine destination address for ${toAgentName}` };
+      return { settlement_source: 'pending_funding', error: `Cannot determine destination address for ${toAgentName}`, is_real_settlement: false };
     }
 
     const executeTx = async () => {
@@ -169,7 +191,7 @@ export async function settleX402Payment(
       try {
         txHash = await executeTx();
       } catch (e2: any) {
-        return { settlement_source: 'pending_funding', error: e2.message };
+        return { settlement_source: 'pending_funding', error: e2.message, is_real_settlement: false };
       }
     }
 
@@ -206,10 +228,11 @@ export async function settleX402Payment(
     return {
       tx_hash: txHash,
       basescan_url: `https://sepolia.basescan.org/tx/${txHash}`,
-      settlement_source: 'onchain_x402'
+      settlement_source: 'onchain_x402',
+      is_real_settlement: true
     };
 
   } catch (err: any) {
-    return { settlement_source: 'pending_funding', error: err.message };
+    return { settlement_source: 'pending_funding', error: err.message, is_real_settlement: false };
   }
 }
