@@ -14,6 +14,8 @@
  * row per adjudication (turns that table 0→real) and returns the applied deltas for verification.
  */
 import { db } from '../db';
+import { emitOnChainOutboxEvent } from '../services/onchain-outbox';
+import type { OnChainEligibleEventType } from '../workers/feedback-loop-filters';
 
 export const REDTEAM_REWARDS = {
   FINDER_REWARD: 5,    // upheld REJECT-with-evidence
@@ -33,7 +35,16 @@ export interface AdjudicationInput {
   substance_passed?: boolean;
 }
 
-export interface AppliedDelta { agent: string; role: 'finder' | 'subject' | 'accuser'; delta: number; before: number; after: number; event_type: string; }
+export interface AppliedDelta { agent: string; agentId: string | null; role: 'finder' | 'subject' | 'accuser'; delta: number; before: number; after: number; event_type: string; }
+
+// Maps an adjudication case to its ERC-8004 outbox event_type (feat/verify-
+// redteam-repid-erc8004, 2026-07-02). These are consumed by FeedbackLoopWorker
+// via ONCHAIN_ELIGIBLE_EVENT_TYPES so a caught fault also lands on-chain.
+const CASE_TO_OUTBOX_EVENT: Record<AdjudicationCase, OnChainEligibleEventType> = {
+  good_catch: 'redteam_good_catch',
+  lazy_subject: 'redteam_lazy_subject',
+  frivolous_reject: 'redteam_frivolous_reject',
+};
 export interface AdjudicationResult { case: AdjudicationCase; challenge_id: string; deltas: AppliedDelta[]; red_team_result_id: number | null; }
 
 async function resolveAgent(agent: string): Promise<{ id: string | null; current_repid: number }> {
@@ -56,7 +67,7 @@ async function applyDelta(agent: string, role: AppliedDelta['role'], delta: numb
     metadata: { ...meta, redteam: true, role, agent_name: agent, source: 'S-REDTEAM-R2' },
   });
   if (error) throw new Error(`repid_score_events insert failed for ${agent}: ${error.message}`);
-  return { agent, role, delta, before, after, event_type: eventType };
+  return { agent, agentId: id, role, delta, before, after, event_type: eventType };
 }
 
 /** Whether a subject's artifact counts as "lazy" (no real deliverable). */
@@ -105,5 +116,21 @@ export async function adjudicate(input: AdjudicationInput): Promise<Adjudication
   };
   const { data, error } = await db.from('red_team_results').insert(row).select('id').maybeSingle();
   if (error) throw new Error(`red_team_results insert failed: ${error.message}`);
+
+  // Bridge each moved agent to the ERC-8004 outbox so a real red-team catch
+  // reaches the chain via FeedbackLoopWorker. Flag-gated (default OFF) + best-
+  // effort inside the helper — never fails the adjudication. Only agents that
+  // resolved to a uuid can be snapshotted on-chain.
+  const outboxEvent = CASE_TO_OUTBOX_EVENT[input.case];
+  for (const d of deltas) {
+    if (!d.agentId) continue;
+    await emitOnChainOutboxEvent({
+      subjectAgentId: d.agentId,
+      eventType: outboxEvent,
+      reputationDelta: d.delta,
+      context: { challenge_id: input.challenge_id, redteam_case: input.case, role: d.role },
+    });
+  }
+
   return { case: input.case, challenge_id: input.challenge_id, deltas, red_team_result_id: (data as any)?.id ?? null };
 }

@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
-import { isEligibleForOnChainWrite, POLL_EVENT_FILTER_SQL } from './feedback-loop-filters';
+import { isEligibleForOnChainWrite, POLL_EVENT_FILTER_SQL, ONCHAIN_ELIGIBLE_EVENT_TYPES } from './feedback-loop-filters';
 import { getReputationWriter, persistReputationWrite, type WriteRepIDResult } from '../services/erc8004-reputation';
 
 // Phase 8 — drain-mode rate limit. For the first 24h after worker boot, cap
@@ -69,7 +69,10 @@ export class FeedbackLoopWorker {
         `SELECT * FROM repid_events
          WHERE event_type = ANY($1) AND processed_at IS NULL${POLL_EVENT_FILTER_SQL}
          LIMIT 50`,
-        [['x402_inbound_settled', 'x402_outbound_settled', 'service_fulfilled_settled']],
+        // Broadened 2026-07-02: also drains peer-verify + red-team outbox rows
+        // (see ONCHAIN_ELIGIBLE_EVENT_TYPES). Passed as a mutable array copy
+        // because pgQuery params should not be a readonly tuple.
+        [[...ONCHAIN_ELIGIBLE_EVENT_TYPES]],
         { retries: 1, label: 'feedback-loop:poll' }
       );
     } catch (e) {
