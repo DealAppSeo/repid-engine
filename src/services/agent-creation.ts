@@ -18,6 +18,7 @@
 import { createHash } from 'crypto';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
+import { provisionWallet, persistProvisionedWallet } from './agent-wallet-manager';
 
 const STARTING_REPID = 1000;
 const STARTING_WISDOM = 1000;
@@ -33,6 +34,8 @@ export interface CreateAgentResult {
   ok: boolean;
   agent_id?: string;
   agent_address?: string;
+  /** Real EVM address the agent can sign/transact with (DB-custodied key). */
+  wallet_address?: string;
   initial_repid?: number;
   error?: string;
 }
@@ -80,6 +83,24 @@ export async function createBuilderAgent(input: CreateAgentInput): Promise<Creat
     return { ok: false, error: error?.message ?? 'agent insert failed' };
   }
 
+  // Provision a real EVM wallet so this new agent can actually sign/transact.
+  // The public address goes on repid_agents.wallet_address; the private key is
+  // encrypted (AES-GCM) into agent_secrets. Custody is interim env-master-key —
+  // flagged for KMS/Vault upgrade (see agent-wallet-manager.ts / agent-key-crypto.ts).
+  // Best-effort: a wallet failure must NOT fail agent creation, but we surface it.
+  let walletAddress: string | undefined;
+  try {
+    const provisioned = provisionWallet();
+    const persisted = await persistProvisionedWallet(data.id, provisioned);
+    if (persisted.ok) {
+      walletAddress = persisted.address;
+    } else {
+      console.error(`[agent-creation] wallet provisioning failed for ${data.id}: ${persisted.error}`);
+    }
+  } catch (walletErr: any) {
+    console.error(`[agent-creation] wallet provisioning threw for ${data.id}: ${walletErr?.message}`);
+  }
+
   await db
     .from('builders')
     .update({
@@ -98,6 +119,7 @@ export async function createBuilderAgent(input: CreateAgentInput): Promise<Creat
       agent_role: input.agentRole ?? null,
       builder_id: input.builderId,
       erc8004_address: erc8004,
+      wallet_address: walletAddress ?? null,
       initial_repid: STARTING_REPID,
     },
   });
@@ -106,6 +128,7 @@ export async function createBuilderAgent(input: CreateAgentInput): Promise<Creat
     ok: true,
     agent_id: data.id,
     agent_address: erc8004,
+    wallet_address: walletAddress,
     initial_repid: STARTING_REPID,
   };
 }
