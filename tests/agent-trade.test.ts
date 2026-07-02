@@ -1,19 +1,26 @@
 /**
  * Generic agent↔agent trade (Task 4) — POST /api/v1/agent/:agentId/trade.
  *
- * Mocks db, x402-gate authority, and x402-real-settler. Verifies:
+ * Mocks db, x402-gate authority, x402-real-settler, and the repid-update engine. Verifies:
  *   - self-dealing (payer == target) → 402 PERMANENT
  *   - unknown agents → 404
  *   - tier authority denial → 402 with denial_reason + failure_class + next_step
  *   - settlement failure → 402 with failure classification
- *   - happy path → 200, settled, and TWO repid_events rows emitted (payer + payee)
+ *   - happy path → 200, settled, and (golden loop) updateRepId() MOVES both agents'
+ *     current_repid, so the response surfaces new_repid / new_tier / badges for both.
  */
+
+// Satisfy src/config.ts boot guard without touching the (gitignored, worktree-absent)
+// .env — set dummy Supabase creds before src/index is imported. db is mocked below.
+process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost';
+process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'test-key';
 
 (global as any)._api_key_versions_table_checked = true;
 (global as any).__agents = {};              // id -> row
 (global as any).__authority = { authorized: true, denial_reason: null, tier: 'AUTONOMOUS', per_tx_limit: 1000, daily_limit: 10000, daily_remaining: 10000, daily_used: 0 };
 (global as any).__settlement = { settlement_source: 'onchain_x402', tx_hash: '0xreal', basescan_url: 'u', is_real_settlement: true };
-(global as any).__repidEventsInserts = [];
+// Records every updateRepId() call so we can prove BOTH agents' scores are moved through the pipeline.
+(global as any).__updateRepIdCalls = [];
 
 jest.mock('../src/db', () => ({
   db: {
@@ -27,10 +34,7 @@ jest.mock('../src/db', () => ({
           }
           return { data: null, error: null };
         },
-        insert: (rows: any) => {
-          if (table === 'repid_events') (global as any).__repidEventsInserts.push(rows);
-          return Promise.resolve({ data: null, error: null });
-        },
+        insert: () => Promise.resolve({ data: null, error: null }),
       };
       return chain;
     },
@@ -46,6 +50,30 @@ jest.mock('../src/services/x402-real-settler', () => ({
   settleX402Payment: async () => (global as any).__settlement,
 }));
 
+// Mock the scoring engine: capture calls and return a moved score / tier / badge per agent so the
+// route test proves the golden loop (settlement → updateRepId → new_repid/tier/badges) end to end.
+jest.mock('../src/engine/repid-update', () => ({
+  updateRepId: jest.fn(async (input: any) => {
+    (global as any).__updateRepIdCalls.push(input);
+    const agent = (global as any).__agents[input.agentId] ?? { agent_name: 'unknown', current_repid: 0 };
+    const delta = input.eventType === 'AGENT_TRADE_PAYER' ? 3 : 5;
+    const repIdAfter = (agent.current_repid ?? 0) + delta;
+    const tier = repIdAfter >= 8000 ? 'VETERAN' : repIdAfter >= 5000 ? 'AUTONOMOUS' : repIdAfter >= 1000 ? 'ESTABLISHED' : repIdAfter >= 500 ? 'EARNING' : 'PROBATIONARY';
+    return {
+      agentId: input.agentId,
+      agentName: agent.agent_name,
+      repIdBefore: agent.current_repid ?? 0,
+      repIdAfter,
+      delta,
+      tier,
+      ecosystemNeedWeight: 1,
+      redemptionModifierApplied: false,
+      constitutionalAudit: { passed: true, complianceScore: 1, halMode: 0, easAttestationId: '', easSchema: '', processingMs: 0 },
+      newBadges: input.eventType === 'AGENT_TRADE_PAYEE' ? [{ badge: 'FIRST_DELIVERY' }] : [],
+    };
+  }),
+}));
+
 import request from 'supertest';
 import app from '../src/index';
 
@@ -59,7 +87,7 @@ beforeEach(() => {
   };
   (global as any).__authority = { authorized: true, denial_reason: null, tier: 'AUTONOMOUS', per_tx_limit: 1000, daily_limit: 10000, daily_remaining: 10000, daily_used: 0 };
   (global as any).__settlement = { settlement_source: 'onchain_x402', tx_hash: '0xreal', basescan_url: 'u', is_real_settlement: true };
-  (global as any).__repidEventsInserts = [];
+  (global as any).__updateRepIdCalls = [];
 });
 
 describe('POST /api/v1/agent/:agentId/trade', () => {
@@ -91,7 +119,8 @@ describe('POST /api/v1/agent/:agentId/trade', () => {
     expect(res.body.denial_reason).toBe('exceeds_per_tx_limit');
     expect(res.body.failure_class).toBe('PERMANENT');
     expect(res.body.next_step).toBeTruthy();
-    expect((global as any).__repidEventsInserts).toHaveLength(0);
+    // no score movement on a denied trade
+    expect((global as any).__updateRepIdCalls).toHaveLength(0);
   });
 
   it('402s with PERMANENT class when settlement reports insufficient balance', async () => {
@@ -100,22 +129,33 @@ describe('POST /api/v1/agent/:agentId/trade', () => {
     expect(res.status).toBe(402);
     expect(res.body.error).toBe('settlement_failed');
     expect(res.body.failure_class).toBe('PERMANENT');
+    // settlement never succeeded → no score movement
+    expect((global as any).__updateRepIdCalls).toHaveLength(0);
   });
 
-  it('emits RepID events for BOTH agents on a settled trade (200)', async () => {
+  it('MOVES both agents current_repid via updateRepId() on a settled trade (200) — the golden loop', async () => {
     const res = await request(app).post(`/api/v1/agent/${PAYER}/trade`).send({ target_agent_id: PAYEE, amount_usdc: 5 });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('settled');
     expect(res.body.is_real_settlement).toBe(true);
-    expect(res.body.repid_events_emitted).toBe(2);
-    // one insert call carrying an array of two rows (payer + payee)
-    const inserts = (global as any).__repidEventsInserts;
-    expect(inserts).toHaveLength(1);
-    const rows = inserts[0];
-    expect(Array.isArray(rows)).toBe(true);
-    expect(rows).toHaveLength(2);
-    const subjects = rows.map((r: any) => r.subject_id).sort();
-    expect(subjects).toEqual([PAYER, PAYEE].sort());
-    expect(rows.every((r: any) => r.subject_type === 'agent')).toBe(true);
+
+    // updateRepId() was called for BOTH agents with the new golden-loop event types.
+    const calls = (global as any).__updateRepIdCalls;
+    expect(calls).toHaveLength(2);
+    const byAgent = Object.fromEntries(calls.map((c: any) => [c.agentId, c]));
+    expect(byAgent[PAYER].eventType).toBe('AGENT_TRADE_PAYER');
+    expect(byAgent[PAYEE].eventType).toBe('AGENT_TRADE_PAYEE');
+
+    // The response surfaces the moved RepID / tier / badges (the trade→RepID→tier→badge chain).
+    expect(res.body.payer_new_repid).toBe(6003);   // 6000 + payer delta 3
+    expect(res.body.target_new_repid).toBe(3005);  // 3000 + payee delta 5
+    expect(res.body.payer_new_tier).toBe('AUTONOMOUS');
+    expect(res.body.target_new_tier).toBe('ESTABLISHED');
+    expect(res.body.payer_repid_delta).toBe(3);
+    expect(res.body.target_repid_delta).toBe(5);
+    // payee crosses a badge milestone in this mock → badges surfaced
+    expect(Array.isArray(res.body.target_badges_awarded)).toBe(true);
+    expect(res.body.target_badges_awarded.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.body.payer_badges_awarded)).toBe(true);
   });
 });

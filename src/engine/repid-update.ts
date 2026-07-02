@@ -16,7 +16,8 @@ export interface RepIdUpdateInput {
     | 'CODE_CONTRIBUTION' | 'WORKFLOW_CONTRIBUTION' | 'TOOL_PIONEER'
     | 'AGENT_TEACHING' | 'AUDIT_CONTRIBUTION'
     | 'HANDOFF_COSIGN_VERIFIED' | 'HANDOFF_COSIGN_FALSE_PASS_SLASH'
-    | 'PEER_VERIFY_WRONG_CALL'; // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN) + BFT panel divergence
+    | 'PEER_VERIFY_WRONG_CALL' // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN) + BFT panel divergence
+    | 'AGENT_TRADE_PAYER' | 'AGENT_TRADE_PAYEE'; // golden-loop: settled agent↔agent value transfer (payer spends, payee delivers)
   certaintyAtClaim?: number;
   pStated?: number;
   pCorrect?: number;
@@ -73,6 +74,8 @@ const FIXED_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
   HANDOFF_COSIGN_VERIFIED: 10, // producer + verifier each get + on verified co-sign (calibrated)
   HANDOFF_COSIGN_FALSE_PASS_SLASH: -15, // slash the rubber-stamper (verifier) on false-PASS
   PEER_VERIFY_WRONG_CALL: -5, // BFT panel: reviewer diverged from majority (bounded; low-confidence self-flag exempt)
+  AGENT_TRADE_PAYER: 3, // golden-loop: payer earns for a successful settled spend
+  AGENT_TRADE_PAYEE: 5, // golden-loop: payee earns for delivery on a settled trade
 };
 
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
