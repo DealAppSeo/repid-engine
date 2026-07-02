@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import crypto from 'crypto';
+import { decryptPrivateKey, EncryptedKeyBlob } from './agent-key-crypto';
 
 dotenv.config();
 
@@ -29,6 +30,44 @@ function getProvider() {
     provider = new ethers.JsonRpcProvider(RPC_URL);
   }
   return provider;
+}
+
+/**
+ * Resolve a DB-custodied signing key by agent NAME (settler works in names).
+ * Looks up the agent id, pulls the latest agent_secrets row, decrypts it.
+ * Returns null when the agent has no custodied secret (e.g. Trinity env agents).
+ * Decryption errors are swallowed to null so a bad master key degrades to
+ * pending_funding rather than throwing mid-settlement.
+ */
+async function resolveCustodiedKeyByName(
+  supabase: any,
+  agentName: string
+): Promise<string | null> {
+  try {
+    const { data: agentRow } = await supabase
+      .from('repid_agents')
+      .select('id')
+      .eq('agent_name', agentName)
+      .limit(1)
+      .maybeSingle();
+    const agentId = agentRow?.id;
+    if (!agentId) return null;
+
+    const { data: secretRow } = await supabase
+      .from('agent_secrets')
+      .select('encrypted_private_key, key_version')
+      .eq('agent_id', agentId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const blob = secretRow?.encrypted_private_key as EncryptedKeyBlob | undefined;
+    if (!blob) return null;
+    return decryptPrivateKey(blob);
+  } catch (err: any) {
+    console.error(`[x402-real-settler] custodied key resolution failed for ${agentName}: ${err?.message}`);
+    return null;
+  }
 }
 
 export async function settleX402Payment(
@@ -106,9 +145,14 @@ export async function settleX402Payment(
       };
     }
 
-    // Get fromAgent private key
+    // Get fromAgent private key.
+    // Env key wins (unchanged behavior for the 12 pre-keyed Trinity agents);
+    // fall back to the DB-custodied encrypted key for newly-registered agents.
     const pkVarName = `${fromAgentName.toUpperCase()}_PRIVATE_KEY`;
-    const fromPk = process.env[pkVarName];
+    let fromPk = process.env[pkVarName];
+    if (!fromPk) {
+      fromPk = (await resolveCustodiedKeyByName(supabase, fromAgentName)) ?? undefined;
+    }
     if (!fromPk) {
       return { settlement_source: 'pending_funding', error: `Missing private key for ${fromAgentName}` };
     }
@@ -125,7 +169,14 @@ export async function settleX402Payment(
       return { settlement_source: 'pending_funding' };
     }
 
-    // Determine toAddress
+    // Determine toAddress.
+    // Env key wins (Trinity recipients). Otherwise resolve the recipient's REAL
+    // custodied wallet address. BUGFIX: previously this read erc8004_address,
+    // which for new agents is a fake `0xAGENT_…` / `external:<uuid>` registry id
+    // that is NOT a valid EVM address — funds could never route. We now prefer
+    // wallet_address (validated by ethers.isAddress) and only fall back to
+    // erc8004_address if it happens to be a real address (legacy rows that put a
+    // real 0x… there).
     let toAddress: string | null = null;
     const toPkVarName = `${toAgentName.toUpperCase()}_PRIVATE_KEY`;
     const toPk = process.env[toPkVarName];
@@ -136,14 +187,17 @@ export async function settleX402Payment(
       // Lookup in Supabase
       const { data, error } = await supabase
         .from('repid_agents')
-        .select('erc8004_address')
+        .select('wallet_address, erc8004_address')
         .eq('agent_name', toAgentName)
         .limit(1);
-      
-      if (!error && data && data.length > 0 && data[0].erc8004_address) {
-        // Just check if it's a valid address
-        if (ethers.isAddress(data[0].erc8004_address)) {
-          toAddress = data[0].erc8004_address;
+
+      const row = !error && data && data.length > 0 ? data[0] : null;
+      if (row) {
+        if (row.wallet_address && ethers.isAddress(row.wallet_address)) {
+          toAddress = row.wallet_address;
+        } else if (row.erc8004_address && ethers.isAddress(row.erc8004_address)) {
+          // Legacy fallback only — real 0x… stored in erc8004_address.
+          toAddress = row.erc8004_address;
         }
       }
     }
