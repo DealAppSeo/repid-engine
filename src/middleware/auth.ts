@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
 import { validateAgentApiKey } from '../auth/api-keys';
+import { logAgentEvent } from '../engine/agent-log';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   if (req.method === 'OPTIONS') return next();
@@ -91,21 +92,26 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     }
   }
 
-  // Best effort log to Supabase
-  const { error } = await db.from('trinity_agent_logs').insert({
-    action: 'api_auth_attempt',
-    agent: valid
-      ? ((req.headers['x-agent-name'] as string) || 'api-gateway')
-      : 'UNAUTHENTICATED',
-    metadata: {
-      success: valid,
-      tier,
-      path: req.path,
-      method: req.method,
-      ip: req.ip
-    }
-  });
-    if (error) console.error(error);
+  // Best-effort log to Supabase. Successful auth attempts fire on EVERY request and were the
+  // dominant source of trinity_agent_logs churn (~1.8M rows) — log them at 'info' so they are
+  // subject to AGENT_LOG_SAMPLE. FAILED auth attempts are security-relevant, so log at 'warn'
+  // (never sample-dropped).
+  await logAgentEvent(
+    {
+      action: 'api_auth_attempt',
+      agent: valid
+        ? ((req.headers['x-agent-name'] as string) || 'api-gateway')
+        : 'UNAUTHENTICATED',
+      metadata: {
+        success: valid,
+        tier,
+        path: req.path,
+        method: req.method,
+        ip: req.ip
+      }
+    },
+    valid ? 'info' : 'warn'
+  );
 
   if (!valid) {
     return res.status(403).json({ error: 'Forbidden: Invalid API key' });
