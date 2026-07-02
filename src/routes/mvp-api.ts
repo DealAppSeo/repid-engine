@@ -24,6 +24,12 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { updateProviderTrustScores, getProviderTrust } from '../services/provider-trust';
 import { checkTransactionAuthority, loadAuthorityContext, limitForTier } from '../services/x402-gate';
+import {
+  recordDelegation,
+  revokeDelegation,
+  assertDelegationCovers,
+  type DelegationMessage,
+} from '../services/agent-delegation';
 
 const router = Router();
 const fail = (res: Response, code: number, error: string, detail?: string) =>
@@ -114,13 +120,53 @@ router.post('/x402-gate/authorize', async (req: Request, res: Response) => {
   const amt = Number(amount);
   if (!Number.isFinite(amt)) return fail(res, 400, 'invalid_amount', 'amount must be a number');
   try {
+    // Explicit human→agent authorization gate (DELEGATION_REQUIRED; default OFF = no-op).
+    // When enabled, a valid unexpired unrevoked delegation must cover the amount before the
+    // tier/stake authority check runs.
+    const delegation = await assertDelegationCovers(agent, amt);
+    if (!delegation.allowed) {
+      return res.status(403).json({
+        authorized: false,
+        denial_reason: `delegation_${delegation.reason ?? 'denied'}`,
+        delegation_enforced: true,
+      });
+    }
     const decision = await checkTransactionAuthority({
       agent,
       transaction_type: String(transaction_type ?? 'transfer'),
       amount: amt,
     });
-    return res.status(decision.authorized ? 200 : 403).json(decision);
+    return res.status(decision.authorized ? 200 : 403).json({
+      ...decision,
+      delegation_enforced: delegation.enforced,
+    });
   } catch (e: any) { return fail(res, 500, 'x402_authorize_failed', e?.message); }
+});
+
+// ---------------------------------------------------------------- Delegations: explicit human→agent authority
+// Record an EIP-712 signed delegation ("I, <delegator>, authorize agent <agent> to spend up to
+// <max> until <expiry>"). The signature must recover to delegator, and delegator must own the agent.
+router.post('/delegations', async (req: Request, res: Response) => {
+  const { agent, message, signature } = req.body ?? {};
+  if (!agent || typeof agent !== 'string') return fail(res, 400, 'invalid_agent', 'agent is required');
+  if (!message || typeof message !== 'object') return fail(res, 400, 'invalid_message', 'message is required');
+  if (!signature || typeof signature !== 'string') return fail(res, 400, 'invalid_signature', 'signature is required');
+  try {
+    const result = await recordDelegation({ agent, message: message as DelegationMessage, signature });
+    if (!result.ok) return res.status(403).json({ ok: false, error: result.error, recovered: result.recovered });
+    return res.status(201).json({ ok: true, id: result.id });
+  } catch (e: any) { return fail(res, 500, 'delegation_record_failed', e?.message); }
+});
+
+// Revoke one delegation (by id) or all live delegations for an agent.
+router.post('/delegations/revoke', async (req: Request, res: Response) => {
+  const { agent, delegation_id } = req.body ?? {};
+  if (!agent || typeof agent !== 'string') return fail(res, 400, 'invalid_agent', 'agent is required');
+  try {
+    const result = await revokeDelegation({ agent, delegationId: delegation_id ? String(delegation_id) : undefined });
+    if (!result.ok) return fail(res, 500, 'delegation_revoke_failed', result.error);
+    return res.json({ ok: true, revoked: result.revoked });
+  } catch (e: any) { return fail(res, 500, 'delegation_revoke_failed', e?.message); }
 });
 
 router.get('/x402-gate/limits/:agent', async (req: Request, res: Response) => {
