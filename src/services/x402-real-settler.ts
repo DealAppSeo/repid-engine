@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import crypto from 'crypto';
+import { markDegraded } from '../lib/degraded';
 
 dotenv.config();
 
@@ -36,7 +37,7 @@ export async function settleX402Payment(
   toAgentName: string,
   amountUSDC: number,
   betId: string
-): Promise<{ tx_hash?: string; basescan_url?: string; settlement_source: 'onchain_x402' | 'pending_funding'; error?: string }> {
+): Promise<{ tx_hash?: string; basescan_url?: string; settlement_source: 'onchain_x402' | 'pending_funding'; error?: string; degraded_mode?: true; degraded_reason?: string; is_simulated?: boolean }> {
   try {
     const supabase = getDb();
     
@@ -99,11 +100,20 @@ export async function settleX402Payment(
         is_simulated: true
       });
 
-      return {
-        settlement_source: 'onchain_x402',
-        tx_hash: `0xmock${crypto.randomUUID().replace(/-/g, '')}`,
-        basescan_url: 'https://sepolia.basescan.org'
-      };
+      // "Degrade loudly": MOCK_FACILITATOR settlement is SIMULATED, not a real
+      // on-chain transfer (the tx_hash is a fabricated 0xmock... and the DB row
+      // is_simulated=true). Mark it so no caller mistakes the mock for a real
+      // settlement.
+      return markDegraded(
+        {
+          settlement_source: 'onchain_x402' as const,
+          tx_hash: `0xmock${crypto.randomUUID().replace(/-/g, '')}`,
+          basescan_url: 'https://sepolia.basescan.org',
+          is_simulated: true,
+        },
+        'MOCK_FACILITATOR=true — simulated settlement, tx_hash is a mock (NOT a real on-chain transfer)',
+        'x402',
+      );
     }
 
     // Get fromAgent private key
