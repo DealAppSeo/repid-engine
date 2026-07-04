@@ -458,6 +458,11 @@ export async function factCheck(
   const quorum = computeQuorum(providers_used, attempted);
 
   if (providers_used === 0) {
+    // Degrade LOUDLY: no fact-check provider produced a usable verdict. Both
+    // branches below already set structured markers (degraded / fallback_used /
+    // quorum_note); this adds the missing LOG line so the degrade is visible in
+    // Railway logs, not just in the returned object.
+    console.warn(`[hal] DEGRADED (loud fallback): fact-check quorum unavailable — 0/${attempted} providers responded${failed.length ? ` (failures: ${failed.map((f) => f.name).join(', ')})` : ''}; ${process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true' ? 'using local_slm heuristic (NOT a cross-LLM fact-check)' : 'returning neutral 0.5, caller falls back to extractor'}`);
     if (process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true') {
       const localVerdict: Verdict = deliverable.toLowerCase().includes('false') || deliverable.toLowerCase().includes('error') ? 'FALSE' : 'TRUE';
       const localScore = localVerdict === 'FALSE' ? 0.8 : 0.2;
