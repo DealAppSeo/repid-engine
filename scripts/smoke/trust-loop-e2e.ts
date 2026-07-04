@@ -53,31 +53,24 @@ async function rung0_halAccuracy() {
   }
   const runId = latest[0]!.run_id as string;
   const runAt = latest[0]!.run_at as string;
+  // Use the harness-stored `correct` flag (join-free — works for both DB-backed and
+  // file-backed corpora). vetoed = predicted-positive; clean/flagged = predicted-negative.
   const { data: rows } = await supa
     .from("hal_validation_runs")
-    .select("test_case_id, hal_decision, provider, model")
+    .select("hal_decision, correct, provider")
     .eq("run_id", runId);
   if (!rows || rows.length === 0) {
     return record("R0", "HAL accuracy (F1)", "FAIL", `latest run ${runId} has no rows`);
   }
-  // expected labels
-  const ids = rows.map((r) => r.test_case_id);
-  const { data: cases } = await supa
-    .from("hal_test_cases")
-    .select("id, expected_decision")
-    .in("id", ids);
-  const expected = new Map((cases ?? []).map((c) => [c.id, String(c.expected_decision)]));
   let tp = 0, fp = 0, fn = 0, tn = 0;
   for (const r of rows) {
-    const exp = expected.get(r.test_case_id);
     const dec = String(r.hal_decision);
-    // hal_decision domain is vetoed | clean | flagged; expected_decision is veto | pass
     const decVeto = dec === "vetoed" || dec === "veto";
-    const expVeto = exp === "veto";
-    if (decVeto && expVeto) tp++;
-    else if (decVeto && !expVeto) fp++;
-    else if (!decVeto && expVeto) fn++;
-    else tn++;
+    const correct = r.correct === true;
+    if (decVeto && correct) tp++;
+    else if (decVeto && !correct) fp++;
+    else if (!decVeto && correct) tn++;
+    else fn++;
   }
   const prec = tp + fp ? tp / (tp + fp) : 0;
   const rec = tp + fn ? tp / (tp + fn) : 0;
