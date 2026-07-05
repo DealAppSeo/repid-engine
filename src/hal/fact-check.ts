@@ -651,11 +651,13 @@ export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: 
  */
 /**
  * Per-provider enablement map for the fact-check quorum. Keys mirror the
- * HAL_S2_ENABLE_<X> env flags. groq + cerebras are ON by default today (they
- * are key-presence-gated only); everything else is opt-in (default OFF).
- * `buildFactCheckProviders()` derives this from env; the runtime-config layer
- * (`src/hal/config.ts`) derives it from repid_config → env → default and passes
- * it here, so a provider can be flipped from mobile/SQL with no redeploy.
+ * HAL_S2_ENABLE_<X> env flags. groq is the only PURE always-on host (key-
+ * presence only). cerebras is gated by HAL_S2_ENABLE_CEREBRAS but defaults ON
+ * (flag unset → on) so today's behavior is unchanged; everything else is opt-in
+ * (default OFF). `buildFactCheckProviders()` derives this from env; the runtime-
+ * config layer (`src/hal/config.ts`) derives it from repid_config → env →
+ * default and passes it here, so a provider can be flipped from mobile/SQL with
+ * no redeploy.
  */
 export interface FactCheckProviderEnable {
   groq: boolean;
@@ -715,15 +717,22 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
 }
 
 /**
- * Env-driven provider set (unchanged behavior). groq + cerebras enabled by
- * key-presence; the rest require HAL_S2_ENABLE_<X>=true. Thin wrapper over
- * buildFactCheckProvidersWith() so the env path and the runtime-config path
- * share one builder.
+ * Env-driven provider set. groq is the only PURE always-on host (key-presence
+ * only). cerebras is now an opt-in FAMILY gated by HAL_S2_ENABLE_CEREBRAS,
+ * exactly like deepseek/gemini/mistral — but it DEFAULTS ON (flag unset → on)
+ * so today's behavior is preserved; set HAL_S2_ENABLE_CEREBRAS='false' to drop
+ * it. This is what lets the cheapest-first assembly escalate past the free wave:
+ * with cerebras OFF, groq is a 1-family free wave, so the quorum reaches the
+ * deepseek (cheap) wave and groq+deepseek forms. The rest require an explicit
+ * =true opt-in. Thin wrapper over buildFactCheckProvidersWith() so the env path
+ * and the runtime-config path share one builder.
  */
 export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   return buildFactCheckProvidersWith({
     groq: true,
-    cerebras: true,
+    // default ON (unset → on), OFF only on an explicit 'false' — mirrors
+    // PROVIDER_DEFAULTS.HAL_S2_ENABLE_CEREBRAS=true in src/hal/config.ts.
+    cerebras: process.env.HAL_S2_ENABLE_CEREBRAS !== 'false',
     fireworks: process.env.HAL_S2_ENABLE_FIREWORKS === 'true',
     deepseek: process.env.HAL_S2_ENABLE_DEEPSEEK === 'true',
     gemini: process.env.HAL_S2_ENABLE_GEMINI === 'true',
