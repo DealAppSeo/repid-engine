@@ -80,6 +80,61 @@ export const KNOWN_UNMAPPED: ReadonlyArray<{ provider: string; model: string; fa
 const BY_MODEL = new Map<string, string>();
 for (const e of FAMILY_REGISTRY_SEED) BY_MODEL.set(e.model.toLowerCase(), e.family);
 
+/**
+ * SEED-INTEGRITY / AMBIGUITY DETECTION [FIX CYCLE 1 2026-07-05].
+ * familyOf() is a FIRST-MATCH regex: for a name that carries more than one known-family token
+ * (e.g. `deepseek-llama-3.3-70b` matches BOTH /deepseek/ AND /llama/), it returns whichever pattern
+ * comes first in its if-chain — silently classifying the model as the wrong family. When BUILDING the
+ * seed from familyOf() this is a mis-seed vector. This helper enumerates ALL known-family tokens a
+ * model name matches; >1 match = AMBIGUOUS => the model must be treated as unmapped and listed for
+ * manual review, NEVER first-match classified. Pure string inspection; used only at seed-build /
+ * integrity time, not at the runtime disjointness lookup (which is registry-only).
+ */
+const FAMILY_TOKEN_PATTERNS: ReadonlyArray<{ family: string; re: RegExp }> = Object.freeze([
+  { family: 'deepseek', re: /deepseek/ },
+  { family: 'llama', re: /llama/ },
+  { family: 'glm', re: /glm|zai/ },
+  { family: 'kimi', re: /kimi|moonshot/ },
+  { family: 'gemini', re: /gemini|gemma/ },
+  { family: 'mistral', re: /mistral|mixtral|ministral/ },
+  { family: 'qwen', re: /qwen/ },
+  { family: 'openai', re: /gpt|o1|o3|o4/ },
+  { family: 'anthropic', re: /claude/ },
+]);
+
+/** All known families whose token appears in the model name (first-match agnostic). */
+export function matchedFamilies(model: string): string[] {
+  const m = (model || '').toLowerCase();
+  const hits: string[] = [];
+  for (const { family, re } of FAMILY_TOKEN_PATTERNS) if (re.test(m)) hits.push(family);
+  return hits;
+}
+
+/**
+ * A model is AMBIGUOUS when its name carries tokens for MORE THAN ONE known family — familyOf() would
+ * first-match one and silently drop the other. Ambiguous models must NOT be seeded; they go to the
+ * "register explicitly" (KNOWN_UNMAPPED) path, same as junk. Guards against `deepseek-llama-*` /
+ * `llama-deepseek-*` mis-seeding.
+ */
+export function isAmbiguousFamily(model: string): boolean {
+  return matchedFamilies(model).length > 1;
+}
+
+/**
+ * SEED-BUILD GUARD: given a raw telemetry model name, return the family to seed, or a reason it must be
+ * omitted (unmapped/ambiguous). This is the ONLY sanctioned way to derive a seed family from familyOf()
+ * — it refuses to first-match an ambiguous name. Not used at runtime lookup (that path is registry-only).
+ */
+export function seedFamilyFor(model: string): { seed: true; family: string } | { seed: false; reason: string } {
+  const hits = matchedFamilies(model);
+  if (hits.length > 1) {
+    return { seed: false, reason: `AMBIGUOUS: matches multiple known families [${hits.join(', ')}] — do NOT first-match; register explicitly.` };
+  }
+  const derived = familyOf(model);
+  if (KNOWN_FAMILIES.has(derived) && hits.length === 1) return { seed: true, family: derived };
+  return { seed: false, reason: `UNMAPPED: familyOf -> "${derived}" is not a known family — register explicitly.` };
+}
+
 /** Thrown when a model has no confident family — the caller MUST register it before using disjointness. */
 export class UnmappedFamilyError extends Error {
   constructor(public readonly model: string, public readonly familyOfResult: string) {
@@ -89,20 +144,23 @@ export class UnmappedFamilyError extends Error {
 }
 
 /**
- * Resolve a model's family via REGISTRY LOOKUP. Order:
+ * Resolve a model's family via REGISTRY LOOKUP — REGISTRY-ONLY (§7, no string parsing at check time).
+ * [FIX CYCLE 1 2026-07-05] The prior familyOf() fallback was a disjointness BYPASS: familyOf() is a
+ * first-match substring regex, so an aliased model like `deepseek-llama-3.3-70b` (matches /deepseek/
+ * before /llama/) resolved to 'deepseek' — a Llama judge could then "pass" disjointness against a Llama
+ * candidate. Runtime lookup now consults ONLY the explicit seed (BY_MODEL); a model absent from the
+ * registry HARD-FAILS with UnmappedFamilyError (register-first). No provider-prefix or substring guess.
  *   1) explicit seed (BY_MODEL) — the authoritative table;
- *   2) familyOf() ONLY if it resolves to a KNOWN_FAMILIES value (defensive: a new model whose name
- *      clearly carries a known family, e.g. a fresh 'llama-4-*', is accepted without a redeploy);
- *   3) otherwise HARD-FAIL (UnmappedFamilyError) — never a provider-prefix guess.
- * This is the single lookup the disjointness module uses; it does no string surgery of its own.
+ *   2) otherwise HARD-FAIL (UnmappedFamilyError).
+ * familyOf() is invoked ONLY to populate a human-readable diagnostic in the error — it does NOT steer
+ * the resolve decision (which is registry membership alone).
  */
 export function resolveFamily(model: string): string {
   const key = (model || '').toLowerCase();
   const seeded = BY_MODEL.get(key);
   if (seeded) return seeded;
-  const derived = familyOf(model);
-  if (KNOWN_FAMILIES.has(derived)) return derived;
-  throw new UnmappedFamilyError(model, derived);
+  // Not in the registry: register-first. familyOf() here is DIAGNOSTIC ONLY (never decides the result).
+  throw new UnmappedFamilyError(model, familyOf(model));
 }
 
 /** Non-throwing probe: is this model confidently mappable to a family? */

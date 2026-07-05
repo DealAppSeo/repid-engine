@@ -13,7 +13,16 @@ import {
   assembleDisjointJudges,
   type DisjointViolation,
 } from '../src/decisioning/disjointness';
-import { resolveFamily, isMapped, UnmappedFamilyError, KNOWN_UNMAPPED } from '../src/decisioning/family-registry';
+import {
+  resolveFamily,
+  isMapped,
+  UnmappedFamilyError,
+  KNOWN_UNMAPPED,
+  FAMILY_REGISTRY_SEED,
+  isAmbiguousFamily,
+  matchedFamilies,
+  seedFamilyFor,
+} from '../src/decisioning/family-registry';
 
 describe('family-registry lookup', () => {
   it('resolves seeded models to their real family', () => {
@@ -39,6 +48,41 @@ describe('family-registry lookup', () => {
     expect(models).toContain('hf/phi-4-mini');
     expect(models.filter((m) => m === 'test-model').length).toBe(2);
     expect(models.filter((m) => m === 'unknown').length).toBe(3);
+  });
+
+  // ---- FIX CYCLE 1 (XC red-team repro): the familyOf() first-match bypass is closed ----
+  it('REGRESSION: an aliased Llama model is NOT silently resolved to deepseek (register-first)', () => {
+    // XC repro: `deepseek-llama-3.3-70b` matches /deepseek/ before /llama/ in familyOf(); the old
+    // fallback returned 'deepseek', letting a Llama judge pass disjointness against a Llama candidate.
+    // Runtime is now REGISTRY-ONLY: this model is not seeded, so it HARD-FAILS (never guesses 'deepseek').
+    expect(() => resolveFamily('deepseek-llama-3.3-70b')).toThrow(UnmappedFamilyError);
+    expect(isMapped('deepseek-llama-3.3-70b')).toBe(false);
+    // and the mirror alias order is handled identically
+    expect(() => resolveFamily('llama-deepseek-chat')).toThrow(UnmappedFamilyError);
+    expect(isMapped('llama-deepseek-chat')).toBe(false);
+  });
+
+  it('SEED INTEGRITY: multi-family names are flagged AMBIGUOUS, never first-matched', () => {
+    expect(matchedFamilies('deepseek-llama-3.3-70b').sort()).toEqual(['deepseek', 'llama']);
+    expect(isAmbiguousFamily('deepseek-llama-3.3-70b')).toBe(true);
+    expect(isAmbiguousFamily('llama-deepseek-chat')).toBe(true);
+    // the seed-build guard REFUSES to seed an ambiguous name (goes to register-explicitly path)
+    const s1 = seedFamilyFor('deepseek-llama-3.3-70b');
+    expect(s1.seed).toBe(false);
+    if (!s1.seed) expect(s1.reason).toMatch(/AMBIGUOUS/);
+    const s2 = seedFamilyFor('llama-deepseek-chat');
+    expect(s2.seed).toBe(false);
+    // an unambiguous, known-family name still seeds cleanly
+    const s3 = seedFamilyFor('llama-3.1-8b-instant');
+    expect(s3.seed).toBe(true);
+    if (s3.seed) expect(s3.family).toBe('llama');
+  });
+
+  it('NO REGRESSION: all 21 legitimately-seeded telemetry models still resolve to their family', () => {
+    expect(FAMILY_REGISTRY_SEED.length).toBe(21);
+    for (const e of FAMILY_REGISTRY_SEED) {
+      expect(resolveFamily(e.model)).toBe(e.family);
+    }
   });
 });
 
