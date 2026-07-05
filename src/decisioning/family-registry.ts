@@ -77,8 +77,19 @@ export const KNOWN_UNMAPPED: ReadonlyArray<{ provider: string; model: string; fa
   { provider: 'anthropic',    model: 'unknown',       familyOfResult: 'unknown', note: 'no model string' },
 ]);
 
-const BY_MODEL = new Map<string, string>();
-for (const e of FAMILY_REGISTRY_SEED) BY_MODEL.set(e.model.toLowerCase(), e.family);
+/**
+ * AMBIGUOUS-SEED entry excluded from BY_MODEL at load time. Same treatment as KNOWN_UNMAPPED:
+ * the model is NOT resolvable and needs explicit human family registration (Sean's call), because
+ * its name carries tokens for >1 known family and any single-family seed value is a first-match guess.
+ */
+export interface AmbiguousSeedEntry {
+  provider: string;
+  model: string;
+  /** the family the (rejected) seed row declared — kept for the audit trail, NOT used for resolution. */
+  seededFamily: string;
+  /** every known family whose token the model name matches (the reason it's ambiguous). */
+  matchedFamilies: string[];
+}
 
 /**
  * SEED-INTEGRITY / AMBIGUITY DETECTION [FIX CYCLE 1 2026-07-05].
@@ -118,6 +129,42 @@ export function matchedFamilies(model: string): string[] {
  */
 export function isAmbiguousFamily(model: string): boolean {
   return matchedFamilies(model).length > 1;
+}
+
+/**
+ * SEED SWEEP [FIX CYCLE 2 2026-07-05]. The ambiguity guard (isAmbiguousFamily / seedFamilyFor) was only
+ * applied to NEW seeding; the EXISTING FAMILY_REGISTRY_SEED was never swept. `hf/deepseek-r1-qwen-32b`
+ * was grandfathered in as `deepseek` yet matches BOTH /deepseek/ AND /qwen/ (a DeepSeek-R1-distill-Qwen
+ * hybrid) — so a Qwen-lineage judge could pass §7 disjointness against a Qwen candidate. Fix: sweep the
+ * WHOLE seed through isAmbiguousFamily when building BY_MODEL; EXCLUDE any ambiguous row (collect it into
+ * AMBIGUOUS_SEED for human resolution, same as an unmapped model). Excluded models are therefore absent
+ * from BY_MODEL -> resolveFamily() HARD-FAILS for them (register-first), never a first-match guess.
+ * (Placed AFTER isAmbiguousFamily/matchedFamilies/FAMILY_TOKEN_PATTERNS so no temporal-dead-zone access.)
+ */
+const BY_MODEL = new Map<string, string>();
+const _ambiguousSeed: AmbiguousSeedEntry[] = [];
+for (const e of FAMILY_REGISTRY_SEED) {
+  if (isAmbiguousFamily(e.model)) {
+    _ambiguousSeed.push({
+      provider: e.provider,
+      model: e.model,
+      seededFamily: e.family,
+      matchedFamilies: matchedFamilies(e.model),
+    });
+    continue; // EXCLUDE — do not register an ambiguous model under any single family.
+  }
+  BY_MODEL.set(e.model.toLowerCase(), e.family);
+}
+
+/** Seed rows rejected as ambiguous during the load-time sweep — exported/logged for human resolution. */
+export const AMBIGUOUS_SEED: ReadonlyArray<AmbiguousSeedEntry> = Object.freeze(_ambiguousSeed);
+
+if (AMBIGUOUS_SEED.length > 0) {
+  console.error(
+    `[family-registry] EXCLUDED ${AMBIGUOUS_SEED.length} ambiguous seed entr${AMBIGUOUS_SEED.length === 1 ? 'y' : 'ies'} ` +
+      `(match >1 known family; need explicit human registration): ` +
+      AMBIGUOUS_SEED.map((a) => `${a.model} [${a.matchedFamilies.join('/')}]`).join(', '),
+  );
 }
 
 /**

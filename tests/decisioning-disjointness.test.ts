@@ -19,6 +19,7 @@ import {
   UnmappedFamilyError,
   KNOWN_UNMAPPED,
   FAMILY_REGISTRY_SEED,
+  AMBIGUOUS_SEED,
   isAmbiguousFamily,
   matchedFamilies,
   seedFamilyFor,
@@ -78,9 +79,37 @@ describe('family-registry lookup', () => {
     if (s3.seed) expect(s3.family).toBe('llama');
   });
 
-  it('NO REGRESSION: all 21 legitimately-seeded telemetry models still resolve to their family', () => {
-    expect(FAMILY_REGISTRY_SEED.length).toBe(21);
-    for (const e of FAMILY_REGISTRY_SEED) {
+  // ---- FIX CYCLE 2 (XC red-team repro #2): the EXISTING seed is swept for ambiguity ----
+  it('SEED SWEEP: the whole seed is swept; the ambiguous hf/deepseek-r1-qwen-32b is EXCLUDED', () => {
+    // Exactly one grandfathered seed row is ambiguous (1/21): a DeepSeek-R1-distill-Qwen hybrid that
+    // matches BOTH /deepseek/ AND /qwen/. It must be swept out of BY_MODEL (register-first), not
+    // first-matched to 'deepseek'.
+    expect(AMBIGUOUS_SEED.length).toBe(1);
+    expect(AMBIGUOUS_SEED[0]!.model).toBe('hf/deepseek-r1-qwen-32b');
+    expect(AMBIGUOUS_SEED[0]!.matchedFamilies.sort()).toEqual(['deepseek', 'qwen']);
+    expect(isAmbiguousFamily('hf/deepseek-r1-qwen-32b')).toBe(true);
+  });
+
+  it('REGRESSION (XC #2): hf/deepseek-r1-qwen-32b HARD-FAILS — no clean deepseek pass', () => {
+    // Before the sweep it was seeded as 'deepseek'; now it is unmapped and throws (register-first).
+    expect(() => resolveFamily('hf/deepseek-r1-qwen-32b')).toThrow(UnmappedFamilyError);
+    expect(isMapped('hf/deepseek-r1-qwen-32b')).toBe(false);
+  });
+
+  it('REGRESSION (XC #2): a Qwen-lineage judge canNOT clean-pass §7 against a Qwen candidate', () => {
+    // XC repro: candidate hf/qwen-2.5-72b (qwen) vs judge hf/deepseek-r1-qwen-32b (Qwen-lineage).
+    // The old bug: judge resolved to 'deepseek' -> checkDisjoint returned disjoint=true (WRONG).
+    // Now the ambiguous judge is unmapped, so checkDisjoint THROWS rather than falsely passing.
+    const candidate = [{ provider: 'litellm', model: 'hf/qwen-2.5-72b' }];
+    const qwenLineageJudge = [{ provider: 'litellm', model: 'hf/deepseek-r1-qwen-32b' }];
+    expect(() => checkDisjoint(candidate, qwenLineageJudge)).toThrow(UnmappedFamilyError);
+  });
+
+  it('NO REGRESSION: the 20 unambiguous seeded telemetry models still resolve to their family', () => {
+    expect(FAMILY_REGISTRY_SEED.length).toBe(21); // seed table unchanged; sweep is at load time
+    const legit = FAMILY_REGISTRY_SEED.filter((e) => !isAmbiguousFamily(e.model));
+    expect(legit.length).toBe(20); // exactly one (hf/deepseek-r1-qwen-32b) swept out
+    for (const e of legit) {
       expect(resolveFamily(e.model)).toBe(e.family);
     }
   });
