@@ -116,6 +116,23 @@ export async function settleX402Payment(
       );
     }
 
+    // REAL settlement path (MOCK_FACILITATOR unset). Apply the SAME two safety
+    // guards the mock branch has — the real, on-chain path was previously
+    // unguarded. Reuses the exact existing checks; introduces no new limits.
+    // (a) Amount Governor: reject amounts above the 1.0 USDC ceiling.
+    if (amountUSDC > 1.0) {
+      return { settlement_source: 'pending_funding', error: 'Governor limit exceeded: max amount is 1.0 USDC' };
+    }
+    // (b) Circuit Breaker: repid_config key cb_disable_x402_settlements == 'true'.
+    const { data: cbConfigData } = await supabase
+      .from('repid_config')
+      .select('value')
+      .eq('key', 'cb_disable_x402_settlements')
+      .maybeSingle();
+    if (cbConfigData?.value === 'true') {
+      return { settlement_source: 'pending_funding', error: 'Circuit breaker active' };
+    }
+
     // Get fromAgent private key
     const pkVarName = `${fromAgentName.toUpperCase()}_PRIVATE_KEY`;
     const fromPk = process.env[pkVarName];
