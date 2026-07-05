@@ -178,7 +178,7 @@ helmet → cors → express.json → SQL-keyword sanitizer
 The scoring pipeline (`src/engine/repid-update.ts`):
 
 1. Fetch agent from `repid_agents`.
-2. **Constitutional audit** (`src/layers/constitutional-audit.ts`) — LASSO rule selection + ANFIS fuzzy scoring + mirror test + EAS attestation.
+2. **Constitutional audit hook** (`src/layers/constitutional-audit.ts`) — a Sprint-3 contract surface, **not yet implemented**. The LASSO rule selection, ANFIS compliance scoring, and mirror test are stubs; the layer is gated OFF by default (`CONSTITUTIONAL_AUDIT_ENABLED=false`) and does not influence scoring. No constitutional compliance is measured today.
 3. **Decay** (`src/layers/decay.ts`) — 30-day activity-based decay.
 4. **Ecosystem need weight** (`src/layers/ecosystem-need.ts`) — supply-rate multiplier.
 5. **Delta** — challenge events via `scoreChallengeOutcome`, predictions via `scorePrediction`, others via the `FIXED_DELTAS` table.

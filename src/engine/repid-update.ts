@@ -48,8 +48,11 @@ export interface RepIdUpdateResult {
   ecosystemNeedWeight: number;
   redemptionModifierApplied: boolean;
   constitutionalAudit: {
-    passed: boolean;
-    complianceScore: number;
+    // enabled=false → the audit is a non-load-bearing stub; passed/complianceScore
+    // are placeholders, not measurements (RULE-4). Callers must not treat them as real.
+    enabled: boolean;
+    passed: boolean | null;
+    complianceScore: number | null;
     halMode: number;
     easAttestationId: string;
     easSchema: string;
@@ -90,7 +93,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       tier: computeTier(agent?.current_repid || 0),
       ecosystemNeedWeight: 0,
       redemptionModifierApplied: false,
-      constitutionalAudit: { passed: true, complianceScore: 1, halMode: 0, easAttestationId: '', easSchema: '', processingMs: 0 },
+      constitutionalAudit: { enabled: false, passed: null, complianceScore: null, halMode: 0, easAttestationId: '', easSchema: '', processingMs: 0 },
     } as any;
   }
 
@@ -101,9 +104,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     throw new Error(`[repid-engine] Agent not found: ${input.agentId}`);
 
   // 2 — Constitutional audit (pre-execution injection hook)
-  // Stub today: LASSO + ANFIS live in Sprint 3.
-  // EAS attestation via ERC-8004 ValidationRegistry (stub UID generated).
-  // Every action passes through this gate — architecture is production-locked.
+  // NON-LOAD-BEARING (RULE-4, 2026-07-05): this is a Sprint-3 stub — LASSO/ANFIS/
+  // mirror are not real (anfis_scoreCompliance returns a hardcoded 1.0). It is
+  // gated behind CONSTITUTIONAL_AUDIT_ENABLED (default OFF). Its output does NOT
+  // steer the RepID delta here; when disabled (`audit.enabled === false`) it is
+  // recorded honestly in the audit row as "not measured", never as a real score.
+  // EAS attestation via ERC-8004 ValidationRegistry is a stub UID.
   const audit = await auditConstitutionalCompliance({
     agentId: input.agentId,
     actionType: input.eventType,
@@ -193,9 +199,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       redemptionModifier: redemptionMod,
       redemptionModifierApplied: redemptionApplied,
       constitutionalAudit: {
-        passed: audit.passed,
-        complianceScore: audit.complianceScore,
-        rulesChecked: audit.rulesChecked,
+        // RULE-4: when the audit is a disabled stub, record it as not-measured —
+        // never persist the placeholder pass/1.0 as if it were a real audit result.
+        enabled: audit.enabled,
+        passed: audit.enabled ? audit.passed : null,
+        complianceScore: audit.enabled ? audit.complianceScore : null,
+        rulesChecked: audit.enabled ? audit.rulesChecked : [],
         halMode: audit.halMode,
         easSchema: audit.easSchema,
         processingMs: audit.processingMs,
@@ -246,8 +255,9 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     delta: finalDelta, tier: newTier, ecosystemNeedWeight,
     redemptionModifierApplied: redemptionApplied,
     constitutionalAudit: {
-      passed: audit.passed,
-      complianceScore: audit.complianceScore,
+      enabled: audit.enabled,
+      passed: audit.enabled ? audit.passed : null,
+      complianceScore: audit.enabled ? audit.complianceScore : null,
       halMode: audit.halMode,
       easAttestationId: audit.easAttestationId,
       easSchema: audit.easSchema,
