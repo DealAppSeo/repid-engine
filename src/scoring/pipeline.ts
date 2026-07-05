@@ -35,6 +35,8 @@ import { extractHALSignals } from '../hal/lib/extract';
 import { halService } from '../hal/service';
 import { strictModeOrFallback } from '../hal/lib/strict-mode';
 import { classifyTaskPurpose } from './task-purpose';
+import { getHalConfig } from '../hal/config';
+import { buildFactCheckProvidersWith } from '../hal/fact-check';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -203,7 +205,15 @@ export async function runScoreEvent(
   //    pipeline routes through the cross-LLM FACT-CHECK scorer (halService),
   //    which actually separates truth from hallucination (F1 0.77 on the
   //    labeled corpus). The flip is Sean-gated + Cowork co-sign (shadow first).
-  const halStrictness = resolveHalStrictness();
+  //
+  // Runtime config (2026-07-05): the HAL knobs (strictness, per-provider
+  // enablement, quorum gates) resolve from repid_config → env → default via
+  // getHalConfig() so they can be changed from mobile/SQL with NO redeploy.
+  // Fail-safe: getHalConfig never throws (falls back to env/default). When
+  // HAL_CONFIG_FROM_DB=false it ignores the DB entirely (env/default only), so
+  // the resolved values equal the prior resolveHalStrictness()/env reads.
+  const halConfig = await getHalConfig();
+  const halStrictness = halConfig.strictness;
   let hal_score = 0.5;
   let vetoed = false;
   let signals: Record<string, unknown> = {};
@@ -216,6 +226,17 @@ export async function runScoreEvent(
         text: input.answer,
         context: { domain: input.task_domain ?? 'finance', certainty: typeof input.certainty === 'number' ? input.certainty : 0.85 },
         strictness: 2,
+        // repid_config-driven provider enablement (no redeploy). Falls back to
+        // the singleton's env-based set inside HalService when omitted.
+        providersFn: () => buildFactCheckProvidersWith({
+          groq: halConfig.providers.HAL_S2_ENABLE_GROQ,
+          cerebras: halConfig.providers.HAL_S2_ENABLE_CEREBRAS,
+          fireworks: halConfig.providers.HAL_S2_ENABLE_FIREWORKS,
+          deepseek: halConfig.providers.HAL_S2_ENABLE_DEEPSEEK,
+          gemini: halConfig.providers.HAL_S2_ENABLE_GEMINI,
+          mistral: halConfig.providers.HAL_S2_ENABLE_MISTRAL,
+          qwen: halConfig.providers.HAL_S2_ENABLE_QWEN,
+        }),
       });
       hal_score = Number.isFinite(r.hal_score) ? r.hal_score : 0.5;
       vetoed = r.decision === 'vetoed';
@@ -255,7 +276,7 @@ export async function runScoreEvent(
   // 'quorum_unavailable' — NEVER a single-provider/extractor drain. This stops the live over-flag
   // (2026-06-03: 35 deepinfra extractor-fallback drains/15m, identical hal_score 0.265, providers_used
   // null). Reversible via HAL_PENALTY_REQUIRES_QUORUM (default ON).
-  const penaltyRequiresQuorum = process.env.HAL_PENALTY_REQUIRES_QUORUM !== 'false';
+  const penaltyRequiresQuorum = halConfig.penaltyRequiresQuorum;
   const QUORUM_MIN = 2;
   const halMode = signals.hal_mode as string | undefined; // 'fact-check' | 'extractor' | 'extractor-fallback'
   const providersUsed = Number((signals as Record<string, unknown>).providers_used ?? 0);
@@ -279,7 +300,7 @@ export async function runScoreEvent(
   // zero applied delta via the drain-gate) and the extractor's raw decision is kept in metadata for
   // telemetry ONLY. Reversible via HAL_DECISION_REQUIRES_QUORUM (default ON). On a HAL failure we keep
   // the existing 'flagged' fail-soft (decision already 'flagged') — neutralization is a no-op there.
-  const decisionRequiresQuorum = process.env.HAL_DECISION_REQUIRES_QUORUM !== 'false';
+  const decisionRequiresQuorum = halConfig.decisionRequiresQuorum;
   const decisionNeutralized = decisionRequiresQuorum && !quorumMet && !halError && decision !== 'flagged';
   const scoringDecision: HALDecision = decisionNeutralized ? 'flagged' : decision;
 
