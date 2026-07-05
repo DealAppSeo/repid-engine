@@ -11,38 +11,13 @@
  * NO WRITES to any table. The only side effect is writing the CSV file to disk.
  */
 
+import './_load-env-master'; // MUST be first: loads real credentials before config.ts evaluates
 import * as fs from 'fs';
 import * as path from 'path';
-import * as dotenv from 'dotenv';
-
-// Load real credentials from the master env if the committed .env is a dummy.
-// .env.master lives at C:\Users\Cash4\repos\.env.master (two levels above the repo root's parent under worktrees;
-// resolve relative to CWD's repo ancestry). Prefer an explicit override if provided.
-(() => {
-  const explicit = process.env.ENV_MASTER_PATH;
-  const candidates = [
-    explicit,
-    path.resolve(process.cwd(), '../.env.master'),
-    path.resolve(process.cwd(), '../../.env.master'),
-    'C:/Users/Cash4/repos/.env.master',
-  ].filter(Boolean) as string[];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      dotenv.config({ path: c });
-      // eslint-disable-next-line no-console
-      console.error(`[phase0] loaded env from ${c}`);
-      return;
-    }
-  }
-  dotenv.config();
-  // eslint-disable-next-line no-console
-  console.error('[phase0] .env.master not found; fell back to default dotenv');
-})();
+import { runReplay, toCsv } from '../src/services/anfis-replay-harness';
+import { measureHookOverhead, hookEnabled } from '../src/services/anfis-litellm-test-hook';
 
 async function main() {
-  const { runReplay, toCsv } = await import('../src/services/anfis-replay-harness');
-  const { measureHookOverhead, hookEnabled } = await import('../src/services/anfis-litellm-test-hook');
-
   const outDir = process.env.SPRINT_OUT_DIR || 'E:/dev/sprints/2026-07-05/decisioning-foundation';
   fs.mkdirSync(outDir, { recursive: true });
 
