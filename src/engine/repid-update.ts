@@ -168,7 +168,10 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // eas_attestation_id links every event to an EAS attestation via ERC-8004 ValidationRegistry.
   // mirror_test_triggered = ZKP-auditable proof of ideological neutrality (P-023/P-024).
   // HONEST-HAL: record mode in metadata.mode (prod has no top-level `mode` column).
-  const halMode = process.env.DOGFOOD_REPID_FROM_COSIGN === 'true' ? 'shadow' : process.env.HAL_DECISIONS_REQUIRES_QUORUM === 'true' ? 'live' : 'off';
+  // Mode label must mirror the ACTUAL behavioral gate (src/scoring/pipeline.ts): the gate uses the
+  // SINGULAR var, default-ON (`!== 'false'`). Using the plural default-off spelling here mislabelled
+  // the recorded mode. Metadata-accuracy fix only — the gate logic is untouched.
+  const halMode = process.env.DOGFOOD_REPID_FROM_COSIGN === 'true' ? 'shadow' : process.env.HAL_DECISION_REQUIRES_QUORUM !== 'false' ? 'live' : 'off';
 
   const { error: auditError } = await db.from('repid_score_events').insert({
     agent_id: input.agentId,
