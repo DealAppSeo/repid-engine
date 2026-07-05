@@ -649,46 +649,87 @@ export function factCheckOptsFromEnv(): { vetoThreshold: number; flagThreshold: 
  * (Fireworks default kimi-k2p5 is verbose but populates `content`; gpt-oss-120b
  * is a reasoning model with empty content — avoid.)
  */
-export function buildFactCheckProviders(): FactCheckProviderCfg[] {
+/**
+ * Per-provider enablement map for the fact-check quorum. Keys mirror the
+ * HAL_S2_ENABLE_<X> env flags. groq + cerebras are ON by default today (they
+ * are key-presence-gated only); everything else is opt-in (default OFF).
+ * `buildFactCheckProviders()` derives this from env; the runtime-config layer
+ * (`src/hal/config.ts`) derives it from repid_config → env → default and passes
+ * it here, so a provider can be flipped from mobile/SQL with no redeploy.
+ */
+export interface FactCheckProviderEnable {
+  groq: boolean;
+  cerebras: boolean;
+  fireworks: boolean;
+  deepseek: boolean;
+  gemini: boolean;
+  mistral: boolean;
+  qwen: boolean;
+}
+
+/**
+ * Build the fact-check provider set for a given enablement map. A provider is
+ * included only when it is BOTH enabled AND its API key is present. Model
+ * defaults / overrides are unchanged (HAL_S2_*_MODEL still apply).
+ */
+export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
   // S-QUORUM (2026-06-02): groq llama-3.3-70b-versatile 429s on the free tier under any burst;
   // llama-3.1-8b-instant has a far higher free RPM and returns the same clean JSON verdict.
   const g = process.env.GROQ_API_KEY?.trim();
-  if (g) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.1-8b-instant' });
+  if (g && enabled.groq) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.1-8b-instant' });
   // cerebras `llama3.1-8b` 404s on this key (no access); `zai-glm-4.7` is available and returns a
   // correct verdict (in the `reasoning` field — handled in queryProvider) given enough max_tokens.
   const c = process.env.CEREBRAS_API_KEY?.trim();
-  if (c) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
+  if (c && enabled.cerebras) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended → 100% fail, ~31% of calls
-  // wasted). Now opt-in: requires HAL_S2_ENABLE_FIREWORKS=true (default OFF). Reversible: set the flag.
+  // wasted). Now opt-in: requires enable flag (default OFF). Reversible: flip the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
-  if (f && process.env.HAL_S2_ENABLE_FIREWORKS === 'true') out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
+  if (f && enabled.fireworks) out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
   // R4 — DeepSeek (cheap paid) as a reliable quorum anchor so a >= 2-provider quorum forms even when
   // the free tiers (groq/cerebras) throttle under prod burst (today they fall back to the extractor,
   // and the penalty then fail-safes to no-drain via HAL_PENALTY_REQUIRES_QUORUM). DeepSeek returns
-  // HTTP 402 (unfunded) as of 2026-06-03, so it is gated OFF by default; once funded, set
-  // HAL_S2_ENABLE_DEEPSEEK=true and the quorum assembles reliably. Revertible via the flag.
+  // HTTP 402 (unfunded) as of 2026-06-03, so it is gated OFF by default; once funded, enable it and
+  // the quorum assembles reliably. Revertible via the flag.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
-  if (d && process.env.HAL_S2_ENABLE_DEEPSEEK === 'true') {
+  if (d && enabled.deepseek) {
     out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
   }
   // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
-  // Each gated by key + an enable flag (opt-in, revertible): set the key AND HAL_S2_ENABLE_<X>=true.
+  // Each gated by key + an enable flag (opt-in, revertible): set the key AND enable it.
   const gm = process.env.GEMINI_API_KEY?.trim();
-  if (gm && process.env.HAL_S2_ENABLE_GEMINI === 'true') {
+  if (gm && enabled.gemini) {
     out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
-  if (ms && process.env.HAL_S2_ENABLE_MISTRAL === 'true') {
+  if (ms && enabled.mistral) {
     out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
   }
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
-  if (qw && process.env.HAL_S2_ENABLE_QWEN === 'true') {
+  if (qw && enabled.qwen) {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
   }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity).
   for (const p of out) if (!p.family) p.family = familyOf(p.model);
   return out;
+}
+
+/**
+ * Env-driven provider set (unchanged behavior). groq + cerebras enabled by
+ * key-presence; the rest require HAL_S2_ENABLE_<X>=true. Thin wrapper over
+ * buildFactCheckProvidersWith() so the env path and the runtime-config path
+ * share one builder.
+ */
+export function buildFactCheckProviders(): FactCheckProviderCfg[] {
+  return buildFactCheckProvidersWith({
+    groq: true,
+    cerebras: true,
+    fireworks: process.env.HAL_S2_ENABLE_FIREWORKS === 'true',
+    deepseek: process.env.HAL_S2_ENABLE_DEEPSEEK === 'true',
+    gemini: process.env.HAL_S2_ENABLE_GEMINI === 'true',
+    mistral: process.env.HAL_S2_ENABLE_MISTRAL === 'true',
+    qwen: process.env.HAL_S2_ENABLE_QWEN === 'true',
+  });
 }
 
 /**
