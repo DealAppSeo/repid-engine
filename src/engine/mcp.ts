@@ -12,7 +12,9 @@ export interface MCPCallResult {
   toolName: string;
   constitutionalCue: string;
   easAttestationId: string;
-  complianceScore: number;
+  // null when the constitutional audit did not actually run (stub disabled) —
+  // never report a placeholder as if it were a measured score (RULE-4).
+  complianceScore: number | null;
   requiresConservatorApproval: boolean;
   repidBonusEligible: number;
   latencyMs: number;
@@ -173,13 +175,21 @@ export async function callMCPWithGuardrails(
     actionMetadata: { toolName: input.toolName, params: input.params },
   });
 
+  // RULE-4 gate (2026-07-05): the constitutional audit is a NON-LOAD-BEARING stub
+  // (always passes with a hardcoded 1.0). While CONSTITUTIONAL_AUDIT_ENABLED is
+  // off, `audit.enabled` is false — we must NOT gate tool execution on its fake
+  // `passed`, and must NOT persist its placeholder 1.0 as a measured score.
+  const auditActive = audit.enabled;
+  // Honest value to store/return: null when the audit did not actually run.
+  const reportedComplianceScore = auditActive ? audit.complianceScore : null;
+
   if (tool.requires_conservator_approval) {
     return {
       allowed: false,
       toolName: input.toolName,
       constitutionalCue: tool.constitutional_cue,
       easAttestationId: audit.easAttestationId,
-      complianceScore: audit.complianceScore,
+      complianceScore: reportedComplianceScore,
       requiresConservatorApproval: true,
       repidBonusEligible: tool.repid_bonus,
       latencyMs: Date.now() - start,
@@ -187,7 +197,8 @@ export async function callMCPWithGuardrails(
     };
   }
 
-  if (!audit.passed) {
+  // Only gate on the audit when it is actually a real measurement (flag on).
+  if (auditActive && !audit.passed) {
     return {
       allowed: false,
       toolName: input.toolName,
@@ -243,7 +254,7 @@ export async function callMCPWithGuardrails(
     agent_id: input.agentId,
     tool_name: input.toolName,
     mcp_call_params: input.params,
-    constitutional_compliance_score: audit.complianceScore,
+    constitutional_compliance_score: reportedComplianceScore,
     eas_attestation_id: audit.easAttestationId,
     latency_ms: latencyMs,
     outcome,
@@ -265,7 +276,7 @@ export async function callMCPWithGuardrails(
       toolName: input.toolName,
       constitutionalCue: tool.constitutional_cue,
       easAttestationId: audit.easAttestationId,
-      complianceScore: audit.complianceScore,
+      complianceScore: reportedComplianceScore,
       requiresConservatorApproval: false,
       repidBonusEligible: 0,
       latencyMs,
@@ -279,7 +290,7 @@ export async function callMCPWithGuardrails(
     toolName: input.toolName,
     constitutionalCue: tool.constitutional_cue,
     easAttestationId: audit.easAttestationId,
-    complianceScore: audit.complianceScore,
+    complianceScore: reportedComplianceScore,
     requiresConservatorApproval: false,
     repidBonusEligible: tool.repid_bonus,
     latencyMs,

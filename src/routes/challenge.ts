@@ -105,19 +105,29 @@ router.post('/challenge', async (req: Request, res: Response) => {
   const certainty = typeof certaintyAtClaim === 'number' ? certaintyAtClaim : 0.75;
   const hasEvidence = typeof evidenceText === 'string' && evidenceText.length > 20;
 
+  // RULE-4 gate (2026-07-05): the constitutional audit is a NON-LOAD-BEARING stub
+  // (anfis_scoreCompliance always returns 1.0). While CONSTITUTIONAL_AUDIT_ENABLED
+  // is off, `audit.enabled` is false and its complianceScore/passed are NOT
+  // measurements — so we must NOT branch the verdict or scale the delta on them.
+  // When disabled: verdict derives from evidence + certainty only, and the score
+  // factor is a neutral 1.0 identity (never presented as "compliance"). When the
+  // real audit lands (flag on), the original constitutional-grounding path runs.
+  const auditActive = audit.enabled;
+  const complianceFactor = auditActive ? (audit.complianceScore ?? 1.0) : 1.0;
+
   let verdict: string;
   let halMode: number;
   let reasoning: string;
 
-  if (!audit.passed) {
+  if (auditActive && !audit.passed) {
     verdict = 'EPISTEMIC_VIOLATION';
     halMode = 4;
     reasoning = 'Claim states opinion as certain fact. Reclassified as epistemic violation.';
-  } else if (certainty > 0.9 && audit.complianceScore < 0.95) {
+  } else if (auditActive && certainty > 0.9 && audit.complianceScore < 0.95) {
     verdict = 'EPISTEMIC_VIOLATION';
     halMode = 4;
     reasoning = 'Overconfident claim without sufficient constitutional grounding.';
-  } else if (audit.complianceScore >= 0.85) {
+  } else if (!auditActive || audit.complianceScore >= 0.85) {
     if (hasEvidence && certainty >= 0.65) {
       verdict = 'CLAIM_UPHELD';
       halMode = 1;
@@ -147,14 +157,14 @@ router.post('/challenge', async (req: Request, res: Response) => {
 
   switch (verdict) {
     case 'CLAIM_UPHELD':
-      challengerDelta = Math.round(25 * (audit.complianceScore ?? 1.0));
+      challengerDelta = Math.round(25 * complianceFactor);
       defenderDelta = Math.round(-50 * certaintyPenalty);
       challengerEventType = 'CHALLENGE_WIN';
       defenderEventType = 'CHALLENGE_LOSS';
       break;
     case 'CLAIM_REJECTED':
       challengerDelta = Math.round(-50 * certaintyPenalty);
-      defenderDelta = Math.round(25 * (audit.complianceScore ?? 1.0));
+      defenderDelta = Math.round(25 * complianceFactor);
       challengerEventType = 'CHALLENGE_LOSS';
       defenderEventType = 'CHALLENGE_WIN';
       break;
@@ -270,7 +280,8 @@ router.post('/challenge', async (req: Request, res: Response) => {
     certaintyAtClaim: certainty,
     halVerdict: verdict,
     halMode,
-    halComplianceScore: audit.complianceScore,
+    // RULE-4: don't log the stub's placeholder 1.0 as a measured compliance score.
+    halComplianceScore: auditActive ? audit.complianceScore : undefined,
     layersActive: {
       sbfa: true,
       bft: true,
@@ -367,8 +378,11 @@ router.post('/challenge', async (req: Request, res: Response) => {
     hashkeyChainId: HASHKEY_CONFIG.chainId,
     hashkeyExplorerUrl: `${HASHKEY_CONFIG.explorerBase}/address/${HASHKEY_CONFIG.contractAddress}`,
     constitutionalAudit: {
-      passed: audit.passed,
-      complianceScore: audit.complianceScore,
+      // enabled=false → the audit did not run; complianceScore is a placeholder,
+      // not a measurement. Surfaced honestly so no caller reads it as real.
+      enabled: auditActive,
+      passed: auditActive ? audit.passed : null,
+      complianceScore: auditActive ? audit.complianceScore : null,
       halMode,
     },
     challenger: {

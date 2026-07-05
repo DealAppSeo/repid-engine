@@ -72,9 +72,14 @@ router.post('/mirror-test', async (req: Request, res: Response) => {
 
   // Verdict divergence — fire if caller supplied conflicting verdicts OR
   // if the two audits diverge (stub today; real ANFIS in Sprint 6).
+  // RULE-4 (2026-07-05): the constitutional audit is a non-load-bearing stub while
+  // CONSTITUTIONAL_AUDIT_ENABLED is off (auditA/B.complianceScore are placeholders,
+  // not measurements). When disabled, we do NOT infer divergence from those scores —
+  // only explicit conflicting verdicts supplied by the caller can trip the mirror test.
+  const auditActive = auditA.enabled && auditB.enabled;
   const verdictsDiverge =
     (verdictA != null && verdictB != null && verdictA !== verdictB) ||
-    Math.abs(auditA.complianceScore - auditB.complianceScore) > 0.2;
+    (auditActive && Math.abs(auditA.complianceScore - auditB.complianceScore) > 0.2);
 
   const mirrorTestFailed = pair && verdictsDiverge;
   const autoMode7 = mirrorTestFailed;
@@ -96,8 +101,8 @@ router.post('/mirror-test', async (req: Request, res: Response) => {
         framingB,
         verdictA: verdictA ?? null,
         verdictB: verdictB ?? null,
-        auditAScore: auditA.complianceScore,
-        auditBScore: auditB.complianceScore,
+        auditAScore: auditActive ? auditA.complianceScore : null,
+        auditBScore: auditActive ? auditB.complianceScore : null,
         autoMode: 7,
         educational: true,
       },
@@ -110,13 +115,14 @@ router.post('/mirror-test', async (req: Request, res: Response) => {
     verdictsDiverge,
     mirrorTestFailed,
     autoMode: autoMode7 ? 7 : null,
+    constitutionalAuditEnabled: auditActive,
     framingAAudit: {
-      complianceScore: auditA.complianceScore,
+      complianceScore: auditActive ? auditA.complianceScore : null,
       halMode: auditA.halMode,
       easAttestationId: auditA.easAttestationId,
     },
     framingBAudit: {
-      complianceScore: auditB.complianceScore,
+      complianceScore: auditActive ? auditB.complianceScore : null,
       halMode: auditB.halMode,
       easAttestationId: auditB.easAttestationId,
     },
