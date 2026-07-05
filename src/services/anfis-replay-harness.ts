@@ -37,6 +37,7 @@ import { anfisRecommendProvider, type AnfisRouterOutput } from './anfis-router';
 
 export interface LlmCallRow {
   id: string;
+  call_id: string | null;
   provider: string;
   tier: string;
   model: string;
@@ -64,7 +65,8 @@ export interface ProviderModel {
 }
 
 export interface ReplayRow {
-  call_id: string;
+  id: string; // llm_call_log.id (uuid PK) — kept distinct from call_id
+  call_id: string; // llm_call_log.call_id (real column; '' when null in source)
   created_at: string;
   provider_actual: string;
   tier_actual: string;
@@ -136,7 +138,7 @@ export async function readWindow(windowDays = WINDOW_DAYS): Promise<LlmCallRow[]
     const { data, error } = await db
       .from('llm_call_log')
       .select(
-        'id, provider, tier, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, task_hint, status, created_at'
+        'id, call_id, provider, tier, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, task_hint, status, created_at'
       )
       .gte('created_at', sinceIso)
       .order('created_at', { ascending: true })
@@ -251,7 +253,8 @@ export function replayOne(row: LlmCallRow, models: Map<string, ProviderModel>): 
   const actualLat = row.latency_ms == null ? ('' as const) : row.latency_ms;
 
   return {
-    call_id: row.id,
+    id: row.id,
+    call_id: row.call_id ?? '',
     created_at: row.created_at,
     provider_actual: row.provider,
     tier_actual: row.tier,
@@ -278,6 +281,7 @@ export function replayOne(row: LlmCallRow, models: Map<string, ProviderModel>): 
 }
 
 export const CSV_COLUMNS: (keyof ReplayRow)[] = [
+  'id',
   'call_id',
   'created_at',
   'provider_actual',

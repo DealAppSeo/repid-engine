@@ -28,15 +28,24 @@ async function main() {
   const csvPath = path.join(outDir, 'phase0-replay.csv');
   fs.writeFileSync(csvPath, toCsv(rows), 'utf8');
 
-  // ANFIS advisory-consult hook overhead — flag OFF (default): must be inert (fired=false, 0 overhead).
+  // ANFIS advisory-consult hook overhead — flag OFF: must be inert (fired=false, 0 overhead).
+  // KILL-SWITCH PROOF (V5): force the kill-switch OFF DETERMINISTICALLY before probing, so this asserts
+  // inertness independent of test-key state. If .env.master already set ANFIS_DECISIONING_HOOK_ENABLED=true,
+  // consult() would still return fired:false via the TEST-KEY gate — masking a hook that is actually ENABLED.
+  // Deleting the flag makes hookEnabled() genuinely false, so fired:false PROVES the kill-switch produces
+  // inertness, not merely a missing test key.
+  delete process.env.ANFIS_DECISIONING_HOOK_ENABLED;
   const sample = { prompt: 'classify this short fact', taskHint: 'classify', testKey: 'x' };
   const offState = { enabled: hookEnabled(), ...measureHookOverhead(1000, sample) };
 
-  // ASSERT OFF-state inertness (do not merely measure it): hard-fail if the hook fired while disabled.
-  if (offState.fired !== false) {
+  // ASSERT OFF-state inertness via the kill-switch (do not merely measure it):
+  //  - hookEnabled() MUST be false (the kill-switch is genuinely OFF, not a test-key miss)
+  //  - the hook MUST NOT have fired, and MUST report enabled=false.
+  if (hookEnabled() !== false || offState.enabled !== false || offState.fired !== false) {
     throw new Error(
-      `[phase0] OFF-state inertness assertion FAILED: hook fired while disabled (fired=${offState.fired}, ` +
-        `enabled=${offState.enabled}). Advisory hook must be provably inert with the flag OFF (R3/R4).`
+      `[phase0] OFF-state kill-switch inertness assertion FAILED: ` +
+        `hookEnabled()=${hookEnabled()}, offState.enabled=${offState.enabled}, offState.fired=${offState.fired}. ` +
+        `With the kill-switch forced OFF the advisory hook must be provably inert (R3/R4).`
     );
   }
 
