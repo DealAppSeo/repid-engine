@@ -9,6 +9,7 @@
  */
 import { factCheck, buildFactCheckProviders, type FactCheckProviderCfg, type FactCheckResult } from './fact-check';
 import { evaluate } from './lib/evaluate';
+import { markDegraded } from '../lib/degraded';
 
 export type Product = 'trustshell' | 'trusttrader' | 'trustcre' | 'default';
 
@@ -28,6 +29,12 @@ export interface HalEvaluationResponse {
   signals: Record<string, unknown>;
   provider_responses?: unknown[];
   latency_ms: number;
+  // "Degrade loudly": set on the extractor-fallback path (strictness-2 requested
+  // but the discriminative fact-check quorum was unavailable). mode already
+  // reads 'extractor-fallback'; these make the degrade explicit + logged so a
+  // caller can't silently treat the style-extractor score as a real fact-check.
+  degraded_mode?: true;
+  degraded_reason?: string;
   // GLASS BOX — SBFA v0.2 belief/ignorance/confidence + the structured human-readable decision trace.
   // Surfaced to the wrapper verdict event + the HITL PWA. Present only on the fact-check (strictness-2) path.
   sbfa?: FactCheckResult['sbfa'];
@@ -96,12 +103,20 @@ export class HalService {
           };
         }
       }
-      // No providers / none responded → extractor fallback.
+      // No providers / none responded → extractor fallback. Degrade LOUDLY: a
+      // strictness-2 fact-check was requested but couldn't assemble a quorum, so
+      // this score is the non-discriminative style-extractor, NOT a real
+      // cross-LLM fact-check. Mark + log it so it can't pass as the real path.
+      const providerCount = this.providersFn().length;
       const r = await evaluate(req.text, req.text, { domain, certainty, strictness: 1 });
-      return {
-        hal_score: r.hal_score, decision: deriveDecision(r.hal_score, r.vetoed, (r.signals as any)?.comma_severity ?? null),
-        mode: 'extractor-fallback', strictness, product, signals: r.signals as any, latency_ms: Date.now() - start,
-      };
+      return markDegraded(
+        {
+          hal_score: r.hal_score, decision: deriveDecision(r.hal_score, r.vetoed, (r.signals as any)?.comma_severity ?? null),
+          mode: 'extractor-fallback' as const, strictness, product, signals: r.signals as any, latency_ms: Date.now() - start,
+        },
+        `strictness-2 requested but fact-check quorum unavailable (${providerCount} provider(s) configured, none produced a usable verdict) — scored with the non-discriminative style-extractor, NOT a real cross-LLM fact-check`,
+        'hal',
+      );
     }
 
     const r = await evaluate(req.text, req.text, { domain, certainty, strictness: 1 });

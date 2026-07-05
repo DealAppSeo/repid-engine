@@ -10,6 +10,7 @@
  */
 
 import { createHmac } from 'crypto';
+import { markDegraded } from '../lib/degraded';
 
 const HMAC_SECRET = process.env.PROOF_SECRET || 'repid-default-secret';
 const PROVER_URL = process.env.PLONKY3_PROVER_URL || '';
@@ -20,6 +21,24 @@ export type ProofSource = 'plonky3_real' | 'hmac_fallback';
 export interface ProofResult {
   proof: string;
   proof_source: ProofSource;
+  // "Degrade loudly": the HMAC stub is NOT a real proof. Every fallback path
+  // sets these so a caller/DB row can never mistake a stub for a real Plonky3
+  // proof. Present ONLY on the fallback; the real path omits them (undefined).
+  degraded_mode?: true;
+  degraded_reason?: string;
+  is_real?: boolean; // true only on the real Plonky3 path; false on every fallback.
+}
+
+/**
+ * Build the HMAC fallback result with the loud degraded signal attached.
+ * `reason` names why we degraded (env unset / timeout / malformed proof_bytes).
+ */
+function fallbackResult(body: ProveTradeAuthBody, reason: string): ProofResult {
+  return markDegraded(
+    { proof: hmacFallback(body), proof_source: 'hmac_fallback' as ProofSource, is_real: false },
+    reason,
+    'zkp',
+  );
 }
 
 interface ProveTradeAuthBody {
@@ -66,7 +85,7 @@ export async function generateProofReal(
   };
 
   if (!PROVER_URL) {
-    return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
+    return fallbackResult(body, 'PLONKY3_PROVER_URL is unset — falling back to HMAC stub (NOT a real proof)');
   }
 
   const url = PROVER_URL.replace(/\/$/, '') + '/prove/trade_auth';
@@ -81,22 +100,22 @@ export async function generateProofReal(
       const r = await fetchWithTimeout(url, init, PROVER_TIMEOUT_MS);
       if (!r.ok) {
         // Non-2xx — don't retry status errors; only retry transport timeouts.
-        return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
+        return fallbackResult(body, `prover returned HTTP ${r.status} — falling back to HMAC stub (NOT a real proof)`);
       }
       const j = (await r.json()) as { proof_bytes?: string };
       if (typeof j?.proof_bytes !== 'string' || j.proof_bytes.length === 0) {
-        return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
+        return fallbackResult(body, 'prover returned malformed/empty proof_bytes — falling back to HMAC stub (NOT a real proof)');
       }
-      return { proof: j.proof_bytes, proof_source: 'plonky3_real' };
+      return { proof: j.proof_bytes, proof_source: 'plonky3_real', is_real: true };
     } catch (e: any) {
       // AbortError (timeout) or network error — retry once.
       const isTimeout = e?.name === 'AbortError' || /timeout|aborted/i.test(String(e?.message ?? e));
       if (attempt === 0 && isTimeout) continue;
-      return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
+      return fallbackResult(body, `prover request failed (${e?.name === 'AbortError' ? 'timeout' : (e?.message ?? String(e))}) — falling back to HMAC stub (NOT a real proof)`);
     }
   }
 
-  return { proof: hmacFallback(body), proof_source: 'hmac_fallback' };
+  return fallbackResult(body, 'prover retries exhausted — falling back to HMAC stub (NOT a real proof)');
 }
 
 /**
