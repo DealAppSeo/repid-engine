@@ -67,6 +67,7 @@ import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
+import { easAnchorWorker } from './workers/eas-anchor-worker';
 import { x402Metrics } from './observability/x402-metrics';
 
 import { runTier1Benchmark } from './services/hal-tester';
@@ -795,6 +796,20 @@ if (!IS_TEST && process.env.X402_RECOVERY_WORKER_ENABLED === 'true') {
   const intervalMs = Number(process.env.X402_RECOVERY_POLL_MS ?? 30000);
   startRecoveryWorker({ pollIntervalMs: intervalMs });
   console.log(`[x402-recovery] recovery worker started (poll ${intervalMs}ms)`);
+}
+
+// EAS Anchor Worker (2026-07-04) — anchors the 21,960 real, un-anchored Plonky3
+// proofs (is_real=true AND eas_attestation_uid IS NULL) to Base Sepolia EAS in
+// merkle batches, and anchors new real proofs on a schedule. Reuses the merkle
+// aggregation (src/zkp/merkle-root) + easService (src/services/eas-attestation-
+// service); no new crypto. Writing the uid back advances system_liveness_v's
+// eas_anchoring lane. OFF unless EAS_ANCHOR_WORKER_ENABLED=true AND the attester
+// key is present — with no key it degrades loudly and does not start (Sean flips
+// the flag + provides the funded key, then runs backfill). Never fires on-chain
+// at merge (house style: zero change at merge).
+if (!IS_TEST) {
+  const easAnchorIntervalMs = Number(process.env.EAS_ANCHOR_POLL_MS ?? 300000); // 5 min default
+  easAnchorWorker.start(easAnchorIntervalMs);
 }
 
 // V1.5 Slice-1 HITL notification dispatcher (CC2 2026-05-26). Watches
