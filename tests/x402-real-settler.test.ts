@@ -14,7 +14,9 @@ describe('x402-real-settler', () => {
       from: jest.fn().mockReturnValue({
         select: jest.fn().mockReturnValue({
           eq: jest.fn().mockReturnValue({
-            limit: jest.fn().mockResolvedValue({ data: [] })
+            limit: jest.fn().mockResolvedValue({ data: [] }),
+            // circuit-breaker guard reads cb_disable_x402_settlements → off (null)
+            maybeSingle: jest.fn().mockResolvedValue({ data: null })
           })
         })
       })

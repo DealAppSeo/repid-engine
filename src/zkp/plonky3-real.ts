@@ -13,7 +13,7 @@ import { createHmac } from 'crypto';
 import { markDegraded } from '../lib/degraded';
 
 const HMAC_SECRET = process.env.PROOF_SECRET || 'repid-default-secret';
-const PROVER_URL = process.env.PLONKY3_PROVER_URL || '';
+const PROVER_URL = process.env.PLONKY3_PROVER_URL || process.env.ZKP_SERVICE_URL || '';
 const PROVER_TIMEOUT_MS = 5000;
 
 export type ProofSource = 'plonky3_real' | 'hmac_fallback';
