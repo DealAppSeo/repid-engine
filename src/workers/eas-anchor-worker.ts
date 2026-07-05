@@ -266,13 +266,26 @@ export class EasAnchorWorker {
     if (!res.uid || res.error) {
       // Attest did not yield a uid (e.g. broadcast failed). Deferred; audit the
       // attempt as failed, do NOT write back (rows stay un-anchored, retried).
-      await this.audit.insertBatchRow({
-        merkle_root: root, hash_scheme: scheme, tx_hash: res.txHash ?? null,
-        eas_uid: null, eas_schema: EAS_ANCHOR_SCHEMA_LABEL,
-        proof_id_min: proofIdMin, proof_id_max: proofIdMax,
-        proof_count: rows.length, proof_ids: ids, status: 'failed',
-        error: res.error ?? 'attest returned no uid',
-      });
+      // Audit-row write is best-effort: a failure here (e.g. eas_anchor_batches
+      // missing) must NEVER abort the backfill loop — log loud + continue.
+      try {
+        const failAuditRes = await this.audit.insertBatchRow({
+          merkle_root: root, hash_scheme: scheme, tx_hash: res.txHash ?? null,
+          eas_uid: null, eas_schema: EAS_ANCHOR_SCHEMA_LABEL,
+          proof_id_min: proofIdMin, proof_id_max: proofIdMax,
+          proof_count: rows.length, proof_ids: ids, status: 'failed',
+          error: res.error ?? 'attest returned no uid',
+        });
+        if (failAuditRes.error) {
+          console.error(
+            `[eas-anchor] batch audit insert (failed-attest path) errored for batch id ${proofIdMin}..${proofIdMax}: ${failAuditRes.error}`,
+          );
+        }
+      } catch (e: any) {
+        console.error(
+          `[eas-anchor] batch audit insert (failed-attest path) THREW for batch id ${proofIdMin}..${proofIdMax}: ${e?.message ?? e}`,
+        );
+      }
       return {
         status: 'deferred', batchCount: rows.length, merkleRoot: root, easUid: null,
         txHash: res.txHash ?? null, proofIdMin, proofIdMax, rowsWrittenBack: 0,
@@ -281,16 +294,29 @@ export class EasAnchorWorker {
     }
 
     const rowsWrittenBack = await this.writebackUid(ids, res.uid);
-    const auditRes = await this.audit.insertBatchRow({
-      merkle_root: root, hash_scheme: scheme, tx_hash: res.txHash ?? null,
-      eas_uid: res.uid, eas_schema: EAS_ANCHOR_SCHEMA_LABEL,
-      proof_id_min: proofIdMin, proof_id_max: proofIdMax,
-      proof_count: rows.length, proof_ids: ids, status: 'anchored',
-    });
-    if (auditRes.error) {
-      // Non-fatal: the writeback (liveness) already landed. Audit row is
-      // additive; log loud rather than throw (RULE-8 spirit).
-      console.error(`[eas-anchor] batch audit insert failed (writeback OK): ${auditRes.error}`);
+    // Audit-row write is best-effort and MUST NOT abort the backfill or lose the
+    // already-completed on-chain anchor: the on-chain attest + writeback (liveness)
+    // have already landed above. A failed audit-row insert — returned error OR a
+    // thrown rejection (e.g. eas_anchor_batches missing) — is logged loud and the
+    // loop continues to the next batch. (This is the exact 2026-07-04 failure mode.)
+    try {
+      const auditRes = await this.audit.insertBatchRow({
+        merkle_root: root, hash_scheme: scheme, tx_hash: res.txHash ?? null,
+        eas_uid: res.uid, eas_schema: EAS_ANCHOR_SCHEMA_LABEL,
+        proof_id_min: proofIdMin, proof_id_max: proofIdMax,
+        proof_count: rows.length, proof_ids: ids, status: 'anchored',
+      });
+      if (auditRes.error) {
+        // Non-fatal: the writeback (liveness) already landed. Audit row is
+        // additive; log loud rather than throw (RULE-8 spirit).
+        console.error(
+          `[eas-anchor] batch audit insert failed (writeback OK) for batch id ${proofIdMin}..${proofIdMax}: ${auditRes.error}`,
+        );
+      }
+    } catch (e: any) {
+      console.error(
+        `[eas-anchor] batch audit insert THREW (writeback OK, anchor NOT lost) for batch id ${proofIdMin}..${proofIdMax}: ${e?.message ?? e}`,
+      );
     }
 
     console.log(
