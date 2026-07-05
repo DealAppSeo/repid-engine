@@ -76,6 +76,71 @@ seed. `familyOf()` (`src/hal/fact-check.ts:63-75`) is a **first-match substring 
 
 ---
 
+## FIX CYCLE 2 (2026-07-05) — swept the EXISTING seed for ambiguity (XC red-team #2)
+
+### The residual (verified by XC)
+FIX CYCLE 1's ambiguity guard (`seedFamilyFor` / `isAmbiguousFamily`) was applied to **new** seeding
+only — the **existing** `FAMILY_REGISTRY_SEED` was never swept. One grandfathered entry,
+`hf/deepseek-r1-qwen-32b` (`family-registry.ts:55`, seeded as `deepseek`), matches **BOTH**
+`/deepseek/` AND `/qwen/` (`matchedFamilies → ['deepseek','qwen']`, `isAmbiguousFamily → true`) — it is
+a DeepSeek-R1-**distill-Qwen** hybrid. Because it sat directly in `BY_MODEL`, `resolveFamily` returned a
+clean `deepseek`, so a **Qwen-lineage judge could pass §7 against a Qwen candidate**.
+
+- **Repro (XC):** candidate `hf/qwen-2.5-72b` (qwen) vs judge `hf/deepseek-r1-qwen-32b` →
+  old behavior: `checkDisjoint` returned `disjoint = true` (WRONG — a Qwen-lineage judge grading a Qwen candidate).
+
+### The fix (RULE-3 — the named residual only)
+Sweep the **entire** existing seed through `isAmbiguousFamily` at `BY_MODEL` build/load time
+(`family-registry.ts`, sweep block placed after `isAmbiguousFamily`/`matchedFamilies` to avoid a
+temporal-dead-zone on `FAMILY_TOKEN_PATTERNS`). Any seed row that matches >1 known family is **EXCLUDED**
+from `BY_MODEL` and collected into a new exported `AMBIGUOUS_SEED` list (+ a loud `console.error` at
+load) — identical treatment to `KNOWN_UNMAPPED`. So `hf/deepseek-r1-qwen-32b` is no longer in `BY_MODEL`;
+`resolveFamily` **throws `UnmappedFamilyError`** for it. **No family was hand-picked for it** — it is
+genuinely ambiguous, a Sean registration call.
+
+### Sweep result
+- **1 of 21** seed entries excluded as ambiguous: **`hf/deepseek-r1-qwen-32b`** (`['deepseek','qwen']`).
+- The **other 20** legit models still resolve to their recorded family (verified by iterating the seed
+  minus the ambiguous row). `FAMILY_REGISTRY_SEED` table itself is unchanged (21 rows); the sweep happens
+  at load time, so DB/code stay byte-aligned and the exclusion is auditable.
+
+### Repro now blocked (verified)
+- `resolveFamily('hf/deepseek-r1-qwen-32b')` → **throws `UnmappedFamilyError`** (was clean `deepseek`). ✅
+- `checkDisjoint([hf/qwen-2.5-72b], [hf/deepseek-r1-qwen-32b])` → **throws** rather than returning
+  `disjoint = true`. ✅ (repro result: NOT `disjoint=true`.)
+- `AMBIGUOUS_SEED.length === 1`, `AMBIGUOUS_SEED[0].model === 'hf/deepseek-r1-qwen-32b'`,
+  `matchedFamilies === ['deepseek','qwen']`. ✅
+
+### Verification
+- Regression tests added to `tests/decisioning-disjointness.test.ts` (XC's exact repro + sweep count +
+  20-still-resolve).
+- `npx jest --config jest.config.js tests/decisioning-disjointness.test.ts tests/hal-family-quorum.test.ts`
+  → **22 passed / 22** (HAL quorum lane still green).
+- `npx tsc --noEmit` → **exit 0**.
+
+### Files changed
+- `src/decisioning/family-registry.ts` — load-time seed sweep + `AMBIGUOUS_SEED` export/log.
+- `tests/decisioning-disjointness.test.ts` — FIX CYCLE 2 regression tests.
+- `phase1-findings.md` — this section + SEAN-NEEDED addition.
+
+---
+
+## SEAN-NEEDED — explicit family registration required (never guessed)
+These models cannot be resolved and must be registered by Sean before they can be used as candidates or
+judges. Anything here **hard-fails** `resolveFamily` (register-first).
+
+| provider | model | familyOf() / matches | note |
+|---|---|---|---|
+| litellm-phi | hf/phi-4-mini | `hf` | real family is Microsoft `phi`; familyOf() has NO phi rule. PROPOSED addition. |
+| groq | test-model | `test` | test sentinel, not a real model |
+| gemini | test-model | `test` | test sentinel |
+| groq | unknown | `unknown` | no model string |
+| llama-3-2-1b | unknown | `unknown` | provider implies llama; model col null-ish — NOT guessed |
+| anthropic | unknown | `unknown` | no model string |
+| litellm | **hf/deepseek-r1-qwen-32b** | matches **`['deepseek','qwen']`** | **NEW (FIX CYCLE 2):** DeepSeek-R1-**distill-Qwen** hybrid — genuinely two lineages. Should probably be treated as **BOTH** families (i.e. excluded from judging *either* deepseek or qwen candidates), NOT registered under one. Sean's explicit call. |
+
+---
+
 ## FOLLOW-UP (out of scope here — separate HAL lane) — record only
 The same `familyOf()` first-match regex (`src/hal/fact-check.ts:63-75`) **also gates HAL's live quorum
 family-independence** (`familyOf` is used directly to count distinct families in the HAL quorum path).
