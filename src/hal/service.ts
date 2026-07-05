@@ -17,6 +17,13 @@ export interface HalEvaluationRequest {
   text: string;
   context?: { domain?: string; certainty?: number; product?: Product };
   strictness?: 1 | 2;
+  /**
+   * Optional per-call provider-set override. When present, it is used instead
+   * of the service's default `providersFn` for THIS evaluation only. The
+   * runtime-config layer passes a repid_config-resolved set here so provider
+   * enablement is DB-driven (no redeploy) without mutating the shared singleton.
+   */
+  providersFn?: () => FactCheckProviderCfg[];
 }
 
 export interface HalEvaluationResponse {
@@ -81,8 +88,11 @@ export class HalService {
     const vetoThreshold = clamp01(process.env.HAL_VETO_THRESHOLD) ?? profile.vetoThreshold;
     const flagThreshold = Math.min(clamp01(process.env.HAL_FLAG_THRESHOLD) ?? profile.flagThreshold, vetoThreshold);
 
+    // Per-call provider override (repid_config-driven) wins over the singleton
+    // default; falls back to this.providersFn when absent.
+    const providersFn = req.providersFn ?? this.providersFn;
     if (strictness === 2) {
-      const providers = this.providersFn();
+      const providers = providersFn();
       if (providers.length > 0) {
         const fc = await factCheck(req.text, providers, { vetoThreshold, flagThreshold });
         if (fc.providers_used > 0) {
@@ -107,7 +117,7 @@ export class HalService {
       // strictness-2 fact-check was requested but couldn't assemble a quorum, so
       // this score is the non-discriminative style-extractor, NOT a real
       // cross-LLM fact-check. Mark + log it so it can't pass as the real path.
-      const providerCount = this.providersFn().length;
+      const providerCount = providersFn().length;
       const r = await evaluate(req.text, req.text, { domain, certainty, strictness: 1 });
       return markDegraded(
         {
