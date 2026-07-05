@@ -1,10 +1,15 @@
 /**
  * OUTPUT_PATH: src/services/anfis-litellm-test-hook.ts
  *
- * Phase 0 — LiteLLM ADVISORY TEST HOOK (PROMOTION-GATED, default OFF).
+ * Phase 0 — ANFIS ADVISORY TEST HOOK (PROMOTION-GATED, default OFF).
  * Bound spec: PRIORITY_B_ANFIS_DECISIONING_CHARTER_v1.md §3 (advisory-not-blocking) + R3 (advisory purity).
  *
- * PURPOSE: measure the round-trip overhead of consulting the ANFIS decisioning core from the request path,
+ * ⚠ NAMING PLACEHOLDER (honesty, R4): the filename says "litellm" because a P1 promotion may wire this hook
+ * into the LiteLLM request path. IT DOES NOT CALL LiteLLM YET. In Phase 0 it exercises ONLY the LOCAL ANFIS
+ * advisory forward pass (`anfisRecommendProvider`) — no HTTP, no LiteLLM client, no network. What it measures is
+ * the LOCAL ANFIS advisory-consult overhead, NOT "LiteLLM overhead". Do not report it as LiteLLM latency.
+ *
+ * PURPOSE: measure the round-trip overhead of consulting the LOCAL ANFIS decisioning core from the request path,
  * WITHOUT ever routing live traffic. The hook:
  *   - is DISABLED by default. It fires ONLY when BOTH:
  *       (a) process.env.ANFIS_DECISIONING_HOOK_ENABLED === 'true'  (kill-switch, default OFF), AND

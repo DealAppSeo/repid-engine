@@ -3,7 +3,9 @@
  *
  * Phase 0 runner for the ANFIS decisioning replay harness.
  * READ-ONLY over `llm_call_log`. Emits the per-call CSV to the sprint folder and prints a summary.
- * Also measures the LiteLLM test-hook overhead in BOTH states (OFF -> proves inertness; ON -> real overhead).
+ * Also measures the LOCAL ANFIS advisory-consult hook overhead in BOTH states, and ASSERTS OFF-state
+ * inertness (hard-fails if the hook fires when it must not). NOTE: the hook does NOT call LiteLLM in Phase 0 —
+ * the measured overhead is the local ANFIS advisory forward pass, not a LiteLLM round-trip.
  *
  * Usage (from repo root, with real credentials loaded via .env.master):
  *   npx ts-node scripts/anfis-replay-phase0.ts
@@ -26,11 +28,19 @@ async function main() {
   const csvPath = path.join(outDir, 'phase0-replay.csv');
   fs.writeFileSync(csvPath, toCsv(rows), 'utf8');
 
-  // Hook overhead — flag OFF (default): must report fired=false, 0 overhead (proof of inertness).
+  // ANFIS advisory-consult hook overhead — flag OFF (default): must be inert (fired=false, 0 overhead).
   const sample = { prompt: 'classify this short fact', taskHint: 'classify', testKey: 'x' };
   const offState = { enabled: hookEnabled(), ...measureHookOverhead(1000, sample) };
 
-  // Hook overhead — flag ON with a non-prod test key (measure REAL round-trip).
+  // ASSERT OFF-state inertness (do not merely measure it): hard-fail if the hook fired while disabled.
+  if (offState.fired !== false) {
+    throw new Error(
+      `[phase0] OFF-state inertness assertion FAILED: hook fired while disabled (fired=${offState.fired}, ` +
+        `enabled=${offState.enabled}). Advisory hook must be provably inert with the flag OFF (R3/R4).`
+    );
+  }
+
+  // ANFIS advisory-consult hook overhead — flag ON with a non-prod test key (measure REAL local round-trip).
   process.env.ANFIS_DECISIONING_HOOK_ENABLED = 'true';
   process.env.NODE_ENV = 'development';
   process.env.ANFIS_HOOK_TEST_KEY = 'phase0-nonprod-test-key';
@@ -40,8 +50,9 @@ async function main() {
   const report = {
     csvPath,
     ...summary,
-    hookOff: offState,
-    hookOn: onState,
+    // Local ANFIS advisory-consult overhead (NOT LiteLLM — the hook does not call LiteLLM in Phase 0).
+    anfisAdvisoryHookOff: offState,
+    anfisAdvisoryHookOn: onState,
   };
 
   // eslint-disable-next-line no-console
