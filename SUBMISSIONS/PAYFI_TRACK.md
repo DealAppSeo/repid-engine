@@ -27,9 +27,9 @@ RepID x402 payment gating:
 Every payment attempt calls:
 POST /agents/:id/x402-gate { amount: X }
 
-The gate checks RepID tier, constitutional compliance score,
-and HAL dissonance before authorizing. High-dissonance
-periods trigger CAPITAL PROTECTED regardless of tier.
+The gate checks RepID tier before authorizing. (A constitutional
+compliance score is a designed Sprint-3 input but is currently a
+stub gated OFF, so it does not factor into authorization today.)
 
 ## Integration
 ```

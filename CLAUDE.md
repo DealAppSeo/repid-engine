@@ -50,7 +50,7 @@ helmet → cors (allowlist) → express.json (1mb) → SQL-keyword body sanitize
 `updateRepId(input)` is the heart of the engine. Every score-changing event flows through this fixed sequence:
 
 1. Fetch agent from `repid_agents`.
-2. **Constitutional audit** (`src/layers/constitutional-audit.ts`) — LASSO rule selection + ANFIS fuzzy scoring + mirror test + EAS attestation. **Currently stubs that always pass with score 1.0**; real implementation is "Sprint 3". The audit assigns a `halMode` (1–7) gate.
+2. **Constitutional audit** (`src/layers/constitutional-audit.ts`) — LASSO rule selection + ANFIS fuzzy scoring + mirror test + EAS attestation. **Currently stubs that always pass with score 1.0**; real implementation is "Sprint 3". As of 2026-07-05 this layer is gated behind `CONSTITUTIONAL_AUDIT_ENABLED` (default FALSE) and is **non-load-bearing** — its output does not influence any RepID delta, challenge verdict, or MCP tool gate while disabled (RULE-4: no fake-pass may steer scoring or be reported as a real measurement).
 3. **Decay** (`src/layers/decay.ts`) — applied to current score based on 30-day activity.
 4. **Ecosystem need weight** (`src/layers/ecosystem-need.ts`) — multiplier from `repid_ecosystem_supply`.
 5. **Delta** — challenge events go through `scoreChallengeOutcome`, predictions through `scorePrediction`, everything else uses the `FIXED_DELTAS` table (STAKE=5, REFERRAL=20, PEACEMAKER=15, CODE_CONTRIBUTION=25, etc.).

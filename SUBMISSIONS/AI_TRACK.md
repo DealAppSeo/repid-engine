@@ -33,8 +33,10 @@ Every agent:
 ANFIS routing: Cerebras (1,002 calls, 100% success, 1.8s avg),
 Groq, DeepSeek — 72.5% cost reduction vs single-provider.
 
-Constitutional auditing: LASSO sparse rule selection →
-ANFIS fuzzy compliance scoring → EAS attestation on HashKey Chain.
+Constitutional audit hook (Sprint-3, not yet implemented): the
+LASSO sparse rule selection → ANFIS fuzzy compliance scoring →
+EAS attestation pipeline is a designed contract surface, currently
+stubbed and gated OFF — it does not measure compliance today.
 
 RepID tiers enforce graduated autonomy:
 - DBT (<1000): all actions need human confirmation
@@ -42,9 +44,9 @@ RepID tiers enforce graduated autonomy:
 - AUTONOMOUS (5000+): full autonomy, decay if inactive
 
 ## Live Evidence
-25 agents with real RepID scores on HashKey Chain.
-Active challenge history. Real EAS attestations.
-VERITAS (3235 RepID) enforces mirror-test on all verdicts.
+25 agents with real RepID scores. Active challenge history.
+(Note: EAS attestation and the VERITAS mirror-test are Sprint-3
+stubs — not yet enforced. Do not claim them as live.)
 
 ## Why AI Track
 Trinity Symphony is the infrastructure — RepID is the

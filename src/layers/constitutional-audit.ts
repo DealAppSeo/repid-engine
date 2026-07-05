@@ -1,5 +1,27 @@
 import { db } from '../db';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NON-LOAD-BEARING / NOT-YET-REAL (RULE-4 honesty gate — 2026-07-05)
+//
+// This module is a Sprint-3 CONTRACT SURFACE, not a working scorer. The three
+// core primitives below are stubs:
+//   • lasso_selectRelevantRules — returns ALL rules (no LASSO selection)
+//   • anfis_scoreCompliance      — returns a hardcoded 1.0 (no ANFIS scoring)
+//   • runMirrorTest              — returns true unconditionally (no VERITAS)
+// Because anfis_scoreCompliance always returns 1.0, the "constitutional
+// compliance score" is a fake pass, not a measurement. Shipping it as if it
+// were real would be a false claim.
+//
+// GATE: `CONSTITUTIONAL_AUDIT_ENABLED` (default FALSE). While disabled, the
+// audit MUST NOT influence any score-bearing decision (RepID delta, challenge
+// verdict, MCP tool gating). Callers check `result.enabled` and route around the
+// stub output when it is false. Do NOT delete the stub — it is the interface the
+// real Sprint-3 implementation will fill. When the real LASSO/ANFIS/mirror land,
+// flip the flag on and remove these guards at the call sites.
+// ─────────────────────────────────────────────────────────────────────────────
+export const CONSTITUTIONAL_AUDIT_ENABLED =
+  process.env.CONSTITUTIONAL_AUDIT_ENABLED === 'true';
+
 export interface ConstitutionalAuditInput {
   agentId: string;
   actionType: string;
@@ -9,8 +31,12 @@ export interface ConstitutionalAuditInput {
 }
 
 export interface ConstitutionalAuditResult {
+  // enabled=false means this result is a NON-LOAD-BEARING stub: complianceScore
+  // is a hardcoded placeholder, NOT a measurement. Callers must not let a
+  // disabled result influence any score-bearing decision.
+  enabled: boolean;
   passed: boolean;
-  complianceScore: number;       // 0.0 – 1.0 (ANFIS output when live)
+  complianceScore: number;       // 0.0 – 1.0 (ANFIS output when live; placeholder while enabled=false)
   rulesChecked: string[];        // LASSO-selected rule IDs
   violatedRule?: string;
   halMode: 1|2|3|4|5|6|7;
@@ -64,6 +90,26 @@ export async function auditConstitutionalCompliance(
 ): Promise<ConstitutionalAuditResult> {
   const startMs = Date.now();
 
+  // GATE (RULE-4): while CONSTITUTIONAL_AUDIT_ENABLED is false, return a
+  // transparent non-authoritative result. `passed: true` keeps the pipeline a
+  // clean no-op (nothing is newly vetoed), but `enabled: false` tells every
+  // caller NOT to treat complianceScore as a real measurement. The 1.0 here is
+  // a neutral identity placeholder, kept only so downstream shapes stay valid —
+  // callers are responsible for not multiplying/branching on it when disabled.
+  if (!CONSTITUTIONAL_AUDIT_ENABLED) {
+    return {
+      enabled: false,
+      passed: true,
+      complianceScore: 1.0, // placeholder ONLY — not a measurement (enabled=false)
+      rulesChecked: [],
+      halMode: 1,
+      easAttestationId: '',
+      easSchema: '',
+      mirrorTestPassed: true,
+      processingMs: Date.now() - startMs,
+    };
+  }
+
   // Step 1 — LASSO sparse rule selection (~2ms when live)
   const rulesChecked = await lasso_selectRelevantRules(
     input.agentId, input.actionType
@@ -93,6 +139,7 @@ export async function auditConstitutionalCompliance(
   else halMode = 6;
 
   return {
+    enabled: true,
     passed,
     complianceScore,
     rulesChecked,
