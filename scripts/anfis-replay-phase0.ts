@@ -56,6 +56,16 @@ async function main() {
   const onSample = { ...sample, testKey: 'phase0-nonprod-test-key' };
   const onState = { enabled: hookEnabled(), ...measureHookOverhead(1000, onSample) };
 
+  // ASSERT ON-state activation (symmetric to the OFF-state kill-switch check above):
+  //  - the hook MUST report enabled=true, and MUST have fired when genuinely enabled.
+  if (onState.enabled !== true || onState.fired !== true) {
+    throw new Error(
+      `[phase0] ON-state assertion FAILED: hook must fire when enabled ` +
+        `(onState.enabled=${onState.enabled}, onState.fired=${onState.fired}). ` +
+        `With the kill-switch ON and a non-prod test key the advisory hook must be provably active (R3/R4).`
+    );
+  }
+
   const report = {
     csvPath,
     ...summary,
