@@ -104,6 +104,9 @@ export class HalService {
               providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded,
               // R5 — distinct independent families that voted (the quorum unit).
               families_used: fc.families_used, families: fc.families,
+              // V3 FIX 2026-07-05 — surface models whose family was regex-guessed (not in the registry)
+              // so the unmapped signal reaches score-event metadata, not just the console.warn.
+              ...(fc.families_unmapped?.length ? { families_unmapped: fc.families_unmapped } : {}),
               // CC1 2026-05-23 provider-failure hardening: surface quorum + per-provider health.
               quorum: fc.quorum, provider_health: fc.provider_health,
               ...(fc.quorum_note ? { quorum_note: fc.quorum_note } : {}),
