@@ -16,6 +16,7 @@ import {
   shouldSample,
   inclusionScore,
   isCompletedDefault,
+  TERMINAL_STATUSES,
   DEFAULT_SAMPLER_RATE,
   SAMPLER_ENV,
   type CompletedCall,
@@ -87,14 +88,26 @@ describe('verification-sampler (uniform-random floor)', () => {
       { id: 'a', status: 'success' },
       { id: 'b', status: 'failed' },
       { id: 'c', status: 'rate_limited' },
+      { id: 'f', status: 'cap_hit' },  // terminal (schema CHECK) -> considered
       { id: 'd', status: 'pending' }, // not terminal -> skipped
       { id: 'e', status: null },      // not terminal -> skipped
     ];
     const res = selectVerificationFloor(calls, { rate: 1, seed: 'S' });
-    expect(res.consideredCount).toBe(3);
+    expect(res.consideredCount).toBe(4);
     expect(res.skippedNotCompleted).toBe(2);
     expect(isCompletedDefault({ id: 'x', status: 'success' })).toBe(true);
     expect(isCompletedDefault({ id: 'x', status: 'pending' })).toBe(false);
+  });
+
+  it('A1: a cap_hit call is a terminal status and IS eligible for sampling (no outcome-subset bias)', () => {
+    // cap_hit is in the schema CHECK (success|failed|rate_limited|cap_hit) — it must enter the floor.
+    expect((TERMINAL_STATUSES as readonly string[]).includes('cap_hit')).toBe(true);
+    expect(isCompletedDefault({ id: 'cap-1', status: 'cap_hit' })).toBe(true);
+    // rate=1 => every completed call sampled; a lone cap_hit call must be selected, not skipped.
+    const res = selectVerificationFloor([{ id: 'cap-1', status: 'cap_hit' }], { rate: 1, seed: 'S' });
+    expect(res.consideredCount).toBe(1);
+    expect(res.skippedNotCompleted).toBe(0);
+    expect(res.sampledIds).toEqual(['cap-1']);
   });
 
   it('config-driven from env; bad rate falls back to default with a warning', () => {
@@ -192,7 +205,7 @@ describe('canary-corpus (Goodhart tripwire)', () => {
     expect(canaryDivergence(water, ['H2O', 'h2o']).divergence).toBe(0);
   });
 
-  it('loads an EXTERNAL corpus file, merges + dedupes, and rejects bad rows loudly', () => {
+  it('loads an EXTERNAL corpus file, merges provenanced rows + rejects bad rows loudly', () => {
     const path = require('path');
     const os = require('os');
     const fs = require('fs');
@@ -200,23 +213,91 @@ describe('canary-corpus (Goodhart tripwire)', () => {
     fs.writeFileSync(
       file,
       JSON.stringify([
-        { id: 'ext-1', prompt: '2+2? number only', knownAnswer: '4', checkKind: 'numeric', source: 'arith' },
-        { id: 'bad-1', prompt: 'x', knownAnswer: '', checkKind: 'exact', source: 's' }, // empty knownAnswer -> reject
-        { id: 'bad-2', prompt: 'x', knownAnswer: 'y', checkKind: 'nonsense', source: 's' }, // bad kind -> reject
-        { id: 'canary-arith-1', prompt: 'override', knownAnswer: '68', checkKind: 'numeric', source: 'override' }, // dedupe by id
+        { id: 'ext-1', prompt: '2+2? number only', knownAnswer: '4', checkKind: 'numeric', source: 'arith', source_url: 'https://example.com/a' },
+        { id: 'bad-1', prompt: 'x', knownAnswer: '', checkKind: 'exact', source: 's', source_url: 'https://example.com/b' }, // empty knownAnswer -> reject
+        { id: 'bad-2', prompt: 'x', knownAnswer: 'y', checkKind: 'nonsense', source: 's', source_url: 'https://example.com/c' }, // bad kind -> reject
       ]),
     );
     const { probes, rejected } = loadCanaryCorpus(file);
     const ids = probes.map((p) => p.id);
     expect(ids).toContain('ext-1');
     expect(rejected.length).toBe(2); // bad-1, bad-2
-    // still only one canary-arith-1 (external overrides seed on id collision)
-    expect(ids.filter((i) => i === 'canary-arith-1').length).toBe(1);
+    // seed set is preserved and untouched
+    expect(ids).toContain('canary-arith-1');
     fs.unlinkSync(file);
   });
 
+  it('A3 SEED PROTECTION: an external row cannot override an immutable SEED id (rejected loud)', () => {
+    const path = require('path');
+    const os = require('os');
+    const fs = require('fs');
+    const file = path.join(os.tmpdir(), `canary-seed-${Date.now()}.json`);
+    fs.writeFileSync(
+      file,
+      JSON.stringify([
+        // collides with a built-in SEED id -> must be rejected, seed answer preserved
+        { id: 'canary-arith-1', prompt: 'override', knownAnswer: '999', checkKind: 'numeric', source: 'attacker', source_url: 'https://evil.example/x' },
+      ]),
+    );
+    const { probes, rejected } = loadCanaryCorpus(file);
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.reason).toMatch(/SEED/i);
+    // seed answer is intact (not poisoned to 999)
+    const arith = probes.find((p) => p.id === 'canary-arith-1')!;
+    expect(arith.knownAnswer).toBe('68');
+    expect(probes.filter((p) => p.id === 'canary-arith-1').length).toBe(1);
+    fs.unlinkSync(file);
+  });
+
+  it('A3 INTRA-FILE DEDUPE: a duplicate id within the file is rejected loud, not silently last-win', () => {
+    const path = require('path');
+    const os = require('os');
+    const fs = require('fs');
+    const file = path.join(os.tmpdir(), `canary-dup-${Date.now()}.json`);
+    fs.writeFileSync(
+      file,
+      JSON.stringify([
+        { id: 'dup-1', prompt: 'first', knownAnswer: '1', checkKind: 'numeric', source: 's', source_url: 'https://example.com/1' },
+        { id: 'dup-1', prompt: 'second', knownAnswer: '2', checkKind: 'numeric', source: 's', source_url: 'https://example.com/2' },
+      ]),
+    );
+    const { probes, rejected } = loadCanaryCorpus(file);
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.reason).toMatch(/duplicate id/i);
+    // only the FIRST occurrence kept (not silently overwritten by the second)
+    const kept = probes.filter((p) => p.id === 'dup-1');
+    expect(kept.length).toBe(1);
+    expect(kept[0]!.knownAnswer).toBe('1');
+    fs.unlinkSync(file);
+  });
+
+  it('A3 PROVENANCE: a row with no valid source_url is rejected as unprovenanced', () => {
+    // missing source_url
+    const noUrl = validateCanaryRow({ id: 'p1', prompt: 'p', knownAnswer: '4', checkKind: 'numeric', source: 's' }, 0);
+    expect(noUrl.ok).toBe(false);
+    if (!noUrl.ok) expect(noUrl.reason).toMatch(/unprovenanced|source_url/i);
+    // non-URL string
+    const badUrl = validateCanaryRow({ id: 'p2', prompt: 'p', knownAnswer: '4', checkKind: 'numeric', source: 's', source_url: 'not-a-url' }, 0);
+    expect(badUrl.ok).toBe(false);
+    // non-http scheme
+    const ftp = validateCanaryRow({ id: 'p3', prompt: 'p', knownAnswer: '4', checkKind: 'numeric', source: 's', source_url: 'ftp://x/y' }, 0);
+    expect(ftp.ok).toBe(false);
+  });
+
+  it('A3 PROVENANCE: a valid-URL provenanced row is accepted (T12 format aligns)', () => {
+    const ok = validateCanaryRow(
+      { id: 'p-ok', prompt: 'capital of Japan?', knownAnswer: 'Tokyo', checkKind: 'contains', expected: 'tokyo', source_title: 'geography', source_url: 'https://en.wikipedia.org/wiki/Tokyo' },
+      0,
+    );
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.probe.source_url).toBe('https://en.wikipedia.org/wiki/Tokyo');
+      expect(ok.probe.source).toBe('geography'); // source_title mapped to source
+    }
+  });
+
   it('validateCanaryRow rejects a non-compiling regex probe', () => {
-    const res = validateCanaryRow({ id: 'r', prompt: 'p', knownAnswer: '[', checkKind: 'regex', source: 's' }, 0);
+    const res = validateCanaryRow({ id: 'r', prompt: 'p', knownAnswer: '[', checkKind: 'regex', source: 's', source_url: 'https://example.com/r' }, 0);
     expect(res.ok).toBe(false);
   });
 });
