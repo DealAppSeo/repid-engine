@@ -20,6 +20,7 @@
     "verify:crosscheck": "ts-node scripts/verify/crosscheck.ts",
     "verify:claims": "ts-node scripts/verify/claims.ts",
     "test:e2e": "jest --config tests/e2e/jest.e2e.config.js --runInBand --forceExit",
+    "e2e:backend": "tsx scripts/e2e/backend-e2e.ts",
     "smoke:hal-external": "ts-node scripts/external-caller-smoke-test.ts",
     "smoke:prod": "tsx scripts/production-smoke.ts",
     "indexer": "node dist/scripts/start-indexer-service.js",
