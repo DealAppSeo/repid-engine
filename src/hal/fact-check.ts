@@ -22,6 +22,13 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
 import crypto from 'crypto';
+// CROSS-FIX 2026-07-05 — hardened registry-family lookup (single source of family truth). resolveFamily
+// is REGISTRY-ONLY and THROWS on an unmapped/ambiguous model. HAL is a LIVE scoring path and MUST NOT
+// throw here, so it is consumed ONLY via familyOfResolved() below (registry-primary, regex-fallback,
+// loud flag). This import is safe against the family-registry <-> fact-check cycle: family-registry
+// imports the HOISTED familyOf() declaration at load time; fact-check calls resolveFamily() only at
+// runtime (inside functions), never at module init. See familyOfResolved() for the fallback contract.
+import { resolveFamily } from '../decisioning/family-registry';
 import {
   sbfaConsensus,
   votesFromVerdicts,
@@ -72,6 +79,50 @@ export function familyOf(model: string): string {
   if (/gpt|o1|o3|o4/.test(m)) return 'openai';
   if (/claude/.test(m)) return 'anthropic';
   return m.split(/[-/:]/)[0] || 'unknown';
+}
+
+/**
+ * CROSS-FIX 2026-07-05 — REGISTRY-PRIMARY family resolution for HAL's LIVE quorum.
+ *
+ * WHY: `familyOf()` is a FIRST-MATCH substring regex. A compound/aliased model name that carries
+ * tokens for >1 family (e.g. `deepseek-llama-3.3-70b` matches /deepseek/ BEFORE /llama/) silently
+ * mis-classifies — weakening HAL's family-independence quorum (a Llama-lineage model could count as a
+ * distinct 'deepseek' vote). The hardened `resolveFamily()` (src/decisioning/family-registry.ts) is a
+ * registry-only lookup that is right for known models AND rejects ambiguous ones instead of guessing.
+ *
+ * BUT: `resolveFamily()` THROWS (`UnmappedFamilyError`) on an unmapped/ambiguous model, and HAL runs on
+ * LIVE scoring — it must NEVER throw or hard-fail on an unmapped model (unlike the decisioning gate,
+ * which is designed to hard-fail). So this wrapper:
+ *   1) tries the REGISTRY first (accurate for the common, known case), and if that throws
+ *   2) FALLS BACK to the legacy `familyOf()` regex so the live path always produces a family, BUT
+ *   3) emits a LOUD degraded log AND flags the model via `onUnmapped(model, fallbackFamily)` so the
+ *      unmapped model is visible in signals/metadata for later registration.
+ * Registry-known models get accurate classification; unknowns still work (fallback) but are surfaced.
+ * Never throws in the live path.
+ *
+ * `onUnmapped` is an optional collector the caller passes to accumulate the unmapped models seen in a
+ * single quorum (so `families_unmapped` can be reported once, not logged per-lookup at high volume).
+ */
+export function familyOfResolved(
+  model: string,
+  onUnmapped?: (model: string, fallbackFamily: string) => void,
+): string {
+  try {
+    return resolveFamily(model); // registry-only, accurate; throws on unmapped/ambiguous
+  } catch {
+    // LIVE PATH — never throw. Fall back to the legacy regex and flag the model loudly.
+    const fallbackFamily = familyOf(model);
+    if (onUnmapped) {
+      onUnmapped(model, fallbackFamily);
+    } else {
+      // No collector supplied (e.g. boot audit) — log directly so the degrade is still visible.
+      console.warn(
+        `[hal] hal_family_unmapped: model "${model}" not in family registry — fell back to familyOf() regex -> "${fallbackFamily}". ` +
+          `Register it in src/decisioning/family-registry.ts (+ the migration seed) so the quorum uses the accurate, non-spoofable family.`,
+      );
+    }
+    return fallbackFamily;
+  }
 }
 
 export type Verdict = 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'ERROR';
