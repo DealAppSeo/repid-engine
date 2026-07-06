@@ -15,7 +15,7 @@
 --
 -- SCHEMA-FIRST (CLAUDE-RULE-5): llm_call_log columns verified live [V qnnpjhlxljtqyigedwkb 2026-07-05]:
 --   id uuid, call_id uuid, provider text, tier text, model text, status text
---   (status domain enumerated live: 'success' 157025 / 'failed' 163708 / 'rate_limited' 2480).
+--   (status domain per schema CHECK: 'success' / 'failed' / 'rate_limited' / 'cap_hit' — all 4 terminal; call_status CHECK below matches the sampler's TERMINAL_STATUSES exactly).
 -- Style follows migrations/2026-07-05-anfis-decisioning-suggestions.sql (BIGSERIAL PK, TIMESTAMPTZ now(),
 -- RLS service_role_all, rollback + verify blocks).
 
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS decisioning_label_queue (
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dlq_call_status_chk') THEN
     ALTER TABLE decisioning_label_queue
-      ADD CONSTRAINT dlq_call_status_chk CHECK (call_status IS NULL OR call_status IN ('success','failed','rate_limited'));
+      ADD CONSTRAINT dlq_call_status_chk CHECK (call_status IS NULL OR call_status IN ('success','failed','rate_limited','cap_hit'));
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dlq_label_status_chk') THEN
     ALTER TABLE decisioning_label_queue
