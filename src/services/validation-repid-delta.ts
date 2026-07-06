@@ -4,6 +4,7 @@ import { evaluate } from '../hal/lib/evaluate';
 import { hasTruthySimFlag } from '../utils/truthy';
 import type { HALProviderConfig } from '../hal/lib/types';
 import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal/fact-check';
+import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -376,7 +377,7 @@ export async function applyServiceFulfilledDeltas(
       if (taskType !== null) {
         const verdict = fullContract.result?.verdict || null;
 
-        const { error: insertErr } = await db.from('repid_events').insert({
+        const { data: insertedEvent, error: insertErr } = await db.from('repid_events').insert({
           subject_id: contract.provider_agent_id,
           subject_type: 'agent',
           event_type: 'service_fulfilled_settled',
@@ -392,7 +393,7 @@ export async function applyServiceFulfilledDeltas(
               verdict: verdict,
             },
           },
-        });
+        }).select('id').maybeSingle();
 
         if (insertErr) {
           console.error(
@@ -402,6 +403,31 @@ export async function applyServiceFulfilledDeltas(
           );
         } else {
           console.log(`[applyServiceFulfilledDeltas] repid_events bridge insert SUCCEEDED for contract ${contract.id}`);
+
+          // Buy-loop last mile (2026-07-06): best-effort INLINE ERC-8004 on-chain
+          // reputation write. Gated (real settlement + token + floor), idempotent,
+          // and NON-FATAL — any failure leaves this repid_events row unprocessed
+          // for FeedbackLoopWorker to drain. Ships OFF behind
+          // ONCHAIN_REPUTATION_TRIGGER_ENABLED. Never throws into the delta path.
+          try {
+            const outcome = await maybeWriteOnChainReputation({
+              contractId: contract.id,
+              providerAgentId: contract.provider_agent_id,
+              isSimulated,
+              repidEventId: insertedEvent?.id ?? null,
+            });
+            console.log(
+              `[applyServiceFulfilledDeltas] on-chain reputation trigger outcome for contract ${contract.id}:`,
+              JSON.stringify(outcome),
+            );
+          } catch (triggerErr: any) {
+            // Defense-in-depth: maybeWriteOnChainReputation already swallows,
+            // but never let the on-chain path break fulfillment.
+            console.error(
+              `[applyServiceFulfilledDeltas] on-chain reputation trigger threw (non-fatal):`,
+              triggerErr?.message ?? String(triggerErr),
+            );
+          }
         }
       }
     }
