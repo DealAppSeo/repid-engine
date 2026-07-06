@@ -67,14 +67,31 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   }
 
   // 5. Deliver service
-  // In Stage 1, this is a mock analysis that simulates a high-value signal.
-  const analysis = {
-    agent: agent.agent_name,
-    timestamp: new Date().toISOString(),
-    status: 'success',
-    analysis: `Trade analysis for ${agent.agent_name} complete. Market conditions: Bullish. RepID leverage factor: ${(agent.current_repid / 1000).toFixed(2)}x.`,
-    is_verified_by_hyperdag: true
-  };
+  // HONESTY (RULE-4): there is no real trade-analysis engine wired here yet.
+  // Never return a fabricated verdict (e.g. a hardcoded "Bullish") with
+  // is_verified_by_hyperdag:true to a paying caller. Report the true state.
+  // A canned demo string is only emitted when X402_DEMO_ANALYSIS=true
+  // (default OFF), and it is explicitly labelled is_demo:true /
+  // is_verified_by_hyperdag:false so no caller mistakes it for a real signal.
+  const demoEnabled = process.env.X402_DEMO_ANALYSIS === 'true';
+  const analysis = demoEnabled
+    ? {
+        agent: agent.agent_name,
+        timestamp: new Date().toISOString(),
+        status: 'demo',
+        is_demo: true,
+        analysis: `DEMO ONLY (X402_DEMO_ANALYSIS=on) — not a real market signal. Sample output for ${agent.agent_name}. RepID leverage factor: ${(agent.current_repid / 1000).toFixed(2)}x.`,
+        is_verified_by_hyperdag: false,
+      }
+    : {
+        agent: agent.agent_name,
+        timestamp: new Date().toISOString(),
+        status: 'not_implemented',
+        error: 'trade_analysis_not_available',
+        message:
+          'Trade analysis is not yet implemented on this endpoint. No verified signal is produced. Payment settlement below is real; the analysis is not.',
+        is_verified_by_hyperdag: false,
+      };
 
   // 6. Settle payment
   let txHash = '';
