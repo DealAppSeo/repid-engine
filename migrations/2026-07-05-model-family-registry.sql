@@ -51,7 +51,11 @@ INSERT INTO model_family_registry (provider, model, family, source, evidence_n) 
   ('gpt-4o-mini',       'gpt-4o-mini',                          'openai',    'familyOf', 165),
   ('qwen',              'gpt-4o-mini',                          'openai',    'familyOf', 46),
   ('litellm-qwen',      'hf/qwen-2.5-72b',                      'qwen',      'familyOf', 9),
-  ('llama-3-2-1b',      'Llama-3.2-1B-Instruct',                'llama',     'familyOf', 3)
+  ('llama-3-2-1b',      'Llama-3.2-1B-Instruct',                'llama',     'familyOf', 3),
+  -- CROSS-FIX 2026-07-05: HAL's configured qwen default (HAL_S2_QWEN_MODEL default 'qwen-plus'). No
+  -- telemetry at seed time (qwen quorum is opt-in) so source='hal-config-default', evidence_n=0 (honest:
+  -- config, not telemetry). Unambiguous /qwen/ match → HAL's live quorum hits the registry, not the regex.
+  ('qwen',              'qwen-plus',                            'qwen',      'hal-config-default', 0)
 ON CONFLICT (provider, model) DO NOTHING;
 
 -- OMITTED (unmapped — listed for Sean, NOT seeded, hard-fail at lookup):
@@ -77,4 +81,4 @@ COMMENT ON TABLE model_family_registry IS
 
 -- POST-APPLY VERIFY:
 -- SELECT family, count(*) FROM model_family_registry GROUP BY family ORDER BY 2 DESC;
--- SELECT count(*) FROM model_family_registry;  -- expect 21
+-- SELECT count(*) FROM model_family_registry;  -- expect 22 (21 telemetry + 1 hal-config-default: qwen-plus)
