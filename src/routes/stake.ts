@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
 import { fractionForRepID } from '../repid-staking/repid-fraction';
+import { getStakingContractInfo, verifyStakeOnChain } from '../services/stake-onchain';
+import { updateRepId } from '../engine/repid-update';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || 'https://qnnpjhlxljtqyigedwkb.supabase.co',
@@ -138,6 +140,100 @@ stakeRouter.get('/stake/seeded', async (req: Request, res: Response) => {
     return;
   }
   res.json(data);
+});
+
+// ---------------------------------------------------------------------------
+// ON-CHAIN STAKE PATH (canonical RepIDStaking contract, Base Sepolia).
+// A client with testnet ETH stakes against the real contract; the verify
+// endpoint confirms the on-chain Staked event and only then grants the +5.
+// ---------------------------------------------------------------------------
+
+// GET /api/v1/stake/onchain/info — where + how much to stake.
+stakeRouter.get('/stake/onchain/info', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const info = await getStakingContractInfo();
+    res.json({
+      contract_address: info.contractAddress,
+      min_stake_wei: info.minStakeWei,
+      chain_id: info.chainId,
+      network: info.network,
+      deployed: info.contractAddress !== '',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/v1/stake/onchain/verify — { agent_id, tx_hash }.
+// Verifies the on-chain Staked event; on success records the STAKE RepID
+// delta with the tx_hash as provenance (this is the ONLY path that grants +5).
+stakeRouter.post('/stake/onchain/verify', stakeLimiter, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { agent_id, tx_hash } = req.body ?? {};
+    if (!agent_id || !tx_hash) {
+      res.status(400).json({ error: 'agent_id and tx_hash required' });
+      return;
+    }
+
+    const result = await verifyStakeOnChain(String(agent_id), String(tx_hash));
+    if (!result.verified) {
+      res.status(400).json({
+        verified: false,
+        reason: result.reason,
+        tx_hash: result.txHash,
+        basescan_url: result.basescanUrl,
+      });
+      return;
+    }
+
+    // Verified on-chain stake → grant the STAKE RepID delta, carrying the
+    // tx_hash as provenance. updateRepId gates the delta on this proof (a
+    // STAKE event without stakeProof yields delta 0 — no verified stake, no +5).
+    let scoreResult: Awaited<ReturnType<typeof updateRepId>> | null = null;
+    try {
+      scoreResult = await updateRepId({
+        agentId: String(agent_id),
+        eventType: 'STAKE',
+        stakeProof: {
+          txHash: result.txHash,
+          stakeId: result.stakeId ?? undefined,
+          amountWei: result.amountWei ?? undefined,
+          contractAddress: result.contractAddress ?? undefined,
+          onChainAgentId: result.onChainAgentId ?? undefined,
+          blockNumber: result.blockNumber ?? undefined,
+        },
+      });
+    } catch (scoreErr: any) {
+      // The stake IS verified on-chain even if scoring failed (e.g. agent row
+      // absent). Report the verified stake honestly; surface the scoring error.
+      res.status(200).json({
+        verified: true,
+        amount_wei: result.amountWei,
+        stake_id: result.stakeId,
+        contract_address: result.contractAddress,
+        block_number: result.blockNumber,
+        basescan_url: result.basescanUrl,
+        repid_delta_applied: false,
+        repid_error: scoreErr.message,
+      });
+      return;
+    }
+
+    res.json({
+      verified: true,
+      amount_wei: result.amountWei,
+      stake_id: result.stakeId,
+      on_chain_agent_id: result.onChainAgentId,
+      contract_address: result.contractAddress,
+      block_number: result.blockNumber,
+      basescan_url: result.basescanUrl,
+      repid_delta_applied: scoreResult.delta,
+      repid_after: scoreResult.repIdAfter,
+      tier: scoreResult.tier,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 export default stakeRouter;
