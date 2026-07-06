@@ -1,23 +1,22 @@
-# CC Sprint 8 — CI workflow gating PRs to main.
+# CI workflow gating PRs to main — the "is CI green?" check.
 #
-# Steps:
-#   1. Type-check (always runs; no secrets needed)
-#   2. Unit tests (always runs; no live DB)
-#   3. Integration tests (skipped per-test if SUPABASE secrets absent;
-#      runs full when secrets are present)
+# Steps (all run keyless — no secrets required):
+#   1. npm ci --legacy-peer-deps  (deterministic install; matches nixpacks.toml)
+#   2. npx tsc --noEmit           (type-check)
+#   3. npm test                   (full Jest suite)
 #
-# Sean action items:
-#   - In GitHub repo settings → Secrets and variables → Actions, add:
-#       SUPABASE_URL                     (project-public URL)
-#       SUPABASE_SERVICE_KEY             (service-role key — never log)
-#       SMOKE_BASE_URL                   (https://repid-engine-production.up.railway.app)
-#   - Enable Actions in the repo if not already on
-#   - Make this workflow a required check on the main branch in
-#     Settings → Branches → branch protection rule
+# Keyless design: src/config.ts throws "SUPABASE_URL … required" at import time, which would
+# crash every DB-touching suite at load. tests/jest.setup.env.ts (wired via jest.config.js
+# `setupFiles`) injects DUMMY Supabase creds so config loads, and raises REPID_TEST_DUMMY_DB=1
+# so live-DB integration tests skip cleanly instead of hanging on a fake host. It does NOT set
+# provider API keys, so the live golden-math tripwire (tests/hal/golden-math.test.ts) stays
+# skipped — GA's keyed CI runs it for real. Result: pure-logic tests (HAL family/quorum,
+# disjointness, decisioning, scoring) all run green without any secrets.
 #
-# Without those secrets the workflow still runs typecheck + unit tests,
-# which catch most regressions. Integration tests skip gracefully via
-# the env-guard pattern in tests/integration/*.
+# Optional (Sean): to also run the live-DB integration suite + golden-math tripwire in CI,
+# add repo secrets SUPABASE_URL / SUPABASE_SERVICE_KEY (+ provider keys) and a separate job.
+# Not required for this workflow to pass. Make this a required check on main in
+# Settings → Branches.
 
 name: CI
 
@@ -36,24 +35,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install (legacy peer deps per nixpacks.toml)
-        run: npm install --legacy-peer-deps
+        run: npm ci --legacy-peer-deps
 
       - name: Type-check
         run: npx tsc --noEmit
 
-      - name: Unit tests
-        env:
-          SUPABASE_URL: http://localhost:54321
-          SUPABASE_SERVICE_ROLE_KEY: dummy-key
+      - name: Test (keyless — dummy creds injected by tests/jest.setup.env.ts)
         run: npm test
-
-      - name: Integration tests
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
-        run: npm run test:integration
-        # Tests in tests/integration/* skip gracefully when env unset,
-        # so this step won't fail on PRs from forks without secrets access.

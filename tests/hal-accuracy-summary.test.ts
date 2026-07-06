@@ -14,7 +14,10 @@
 
 import { db } from '../src/db';
 
-const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+// REPID_TEST_DUMMY_DB is set by tests/jest.setup.env.ts when only dummy creds are present
+// (keyless CI). Real creds (.env / CI secrets) leave it unset, so this live-DB view test
+// runs for real when a DB is available and skips cleanly otherwise.
+const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) && process.env.REPID_TEST_DUMMY_DB !== '1';
 const describeIfDb = HAS_DB ? describe : describe.skip;
 
 describeIfDb('hal_accuracy_summary view', () => {
