@@ -52,15 +52,18 @@ export class RepIdAttestationService {
   constructor() {
     this.provider = getProvider();
 
-    const pk = process.env.HYPERDAG_ATTESTOR_PRIVATE_KEY;
+    // Signing key MUST come from the environment. Never fall back to a hardcoded
+    // key — signing attestations with a key committed to source is a
+    // forgeable-identity hole (RULE-4: fail loud, never fake-sign).
+    const pk =
+      process.env.HYPERDAG_ATTESTOR_PRIVATE_KEY ||
+      process.env.EAS_ATTESTER_PRIVATE_KEY;
     if (!pk) {
-      console.warn('[RepIdAttestationService] HYPERDAG_ATTESTOR_PRIVATE_KEY missing. Using dev key.');
-      // Hardcoded dev key for Phase 1
-      const devKey = "0x53baf8310afbbcc6f496514fb4ff2d011125bb9eba6d4d2964dcd7d95251b172";
-      this.attestorWallet = new ethers.Wallet(devKey, this.provider);
-    } else {
-      this.attestorWallet = new ethers.Wallet(pk, this.provider);
+      throw new Error(
+        '[RepIdAttestationService] No attestor signing key configured. Set HYPERDAG_ATTESTOR_PRIVATE_KEY (or EAS_ATTESTER_PRIVATE_KEY). Refusing to sign with a hardcoded key.'
+      );
     }
+    this.attestorWallet = new ethers.Wallet(pk, this.provider);
     console.log(`[RepIdAttestationService] Attestor Address: ${this.attestorWallet.address}`);
   }
 
