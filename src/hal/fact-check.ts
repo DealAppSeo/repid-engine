@@ -22,6 +22,13 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
 import crypto from 'crypto';
+// CROSS-FIX 2026-07-05 — hardened registry-family lookup (single source of family truth). resolveFamily
+// is REGISTRY-ONLY and THROWS on an unmapped/ambiguous model. HAL is a LIVE scoring path and MUST NOT
+// throw here, so it is consumed ONLY via familyOfResolved() below (registry-primary, regex-fallback,
+// loud flag). This import is safe against the family-registry <-> fact-check cycle: family-registry
+// imports the HOISTED familyOf() declaration at load time; fact-check calls resolveFamily() only at
+// runtime (inside functions), never at module init. See familyOfResolved() for the fallback contract.
+import { resolveFamily } from '../decisioning/family-registry';
 import {
   sbfaConsensus,
   votesFromVerdicts,
@@ -61,7 +68,11 @@ export function costTierOf(p: { name: string; family?: string }): 'free' | 'chea
  * independent vote, not two. Keyed by model so a host swapping models is reclassified automatically.
  */
 export function familyOf(model: string): string {
-  const m = (model || '').toLowerCase();
+  // V3 FIX 2026-07-05 (fuzz-hardening) — coerce to string at the root. `(model || '')` guards falsy
+  // inputs but a TRUTHY non-string (number/object/Symbol) still reaches `.toLowerCase()` and THROWS,
+  // escaping familyOfResolved()'s catch. `String(model ?? '')` makes familyOfResolved never-throw TOTAL
+  // on ANY input. Zero behavior change on the string path.
+  const m = String(model ?? '').toLowerCase();
   if (/deepseek/.test(m)) return 'deepseek';
   if (/llama/.test(m)) return 'llama';
   if (/glm|zai/.test(m)) return 'glm';
@@ -72,6 +83,52 @@ export function familyOf(model: string): string {
   if (/gpt|o1|o3|o4/.test(m)) return 'openai';
   if (/claude/.test(m)) return 'anthropic';
   return m.split(/[-/:]/)[0] || 'unknown';
+}
+
+/**
+ * CROSS-FIX 2026-07-05 — REGISTRY-PRIMARY family resolution for HAL's LIVE quorum.
+ *
+ * WHY: `familyOf()` is a FIRST-MATCH substring regex. A compound/aliased model name that carries
+ * tokens for >1 family (e.g. `deepseek-llama-3.3-70b` matches /deepseek/ BEFORE /llama/) silently
+ * mis-classifies — weakening HAL's family-independence quorum (a Llama-lineage model could count as a
+ * distinct 'deepseek' vote). The hardened `resolveFamily()` (src/decisioning/family-registry.ts) is a
+ * registry-only lookup that is right for known models AND rejects ambiguous ones instead of guessing.
+ *
+ * BUT: `resolveFamily()` THROWS (`UnmappedFamilyError`) on an unmapped/ambiguous model, and HAL runs on
+ * LIVE scoring — it must NEVER throw or hard-fail on an unmapped model (unlike the decisioning gate,
+ * which is designed to hard-fail). So this wrapper:
+ *   1) tries the REGISTRY first (accurate for the common, known case), and if that throws
+ *   2) FALLS BACK to the legacy `familyOf()` regex so the live path always produces a family, BUT
+ *   3) emits a LOUD degraded log AND flags the model via `onUnmapped(model, fallbackFamily)` so the
+ *      unmapped model is visible in signals/metadata for later registration.
+ * Registry-known models get accurate classification; unknowns still work (fallback) but are surfaced.
+ * Never throws in the live path.
+ *
+ * `onUnmapped` is an optional collector the caller passes to accumulate the unmapped models seen in a
+ * single quorum (so `families_unmapped` can be reported once, not logged per-lookup at high volume).
+ */
+export function familyOfResolved(
+  model: string,
+  onUnmapped?: (model: string, fallbackFamily: string) => void,
+): string {
+  try {
+    return resolveFamily(model); // registry-only, accurate; throws on unmapped/ambiguous
+  } catch {
+    // LIVE PATH — never throw. Fall back to the legacy regex and flag the model loudly.
+    const fallbackFamily = familyOf(model);
+    if (onUnmapped) {
+      onUnmapped(model, fallbackFamily);
+    } else {
+      // No collector supplied (e.g. boot audit) — log directly so the degrade is still visible.
+      // V3 FIX 2026-07-05 (fuzz-hardening) — String(model) is Symbol-safe; a raw `${model}` template
+      // interpolation THROWS on a Symbol input, which would re-escape this never-throw catch.
+      console.warn(
+        `[hal] hal_family_unmapped: model "${String(model)}" not in family registry — fell back to familyOf() regex -> "${fallbackFamily}". ` +
+          `Register it in src/decisioning/family-registry.ts (+ the migration seed) so the quorum uses the accurate, non-spoofable family.`,
+      );
+    }
+    return fallbackFamily;
+  }
 }
 
 export type Verdict = 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'ERROR';
@@ -101,6 +158,12 @@ export interface FactCheckResult {
   providers_used: number; // non-error responses
   families_used?: number; // R5 — distinct independent families among the non-error responses
   families?: string[];    // R5 — the distinct families that voted
+  // CROSS-FIX 2026-07-05 — models whose family came from the legacy familyOf() FALLBACK because they
+  // are NOT in the hardened family registry. Registry-known models are absent here; a non-empty list
+  // means at least one provider's family was regex-guessed (spoofable) and should be registered. Made
+  // visible so unmapped models surface in signals/metadata for later registration. `[]`/undefined = all
+  // families came from the accurate registry.
+  families_unmapped?: string[];
   agreement: number | null; // fraction sharing the modal non-error verdict
   degraded: boolean; // < 2 providers responded
   latency_ms: number;
@@ -399,7 +462,35 @@ export async function factCheck(
   const maxTokens = opts.maxTokens ?? 512;
 
   const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log
-  const familyByName = new Map(providers.map((p) => [p.name, p.family ?? familyOf(p.model)]));
+  // CROSS-FIX 2026-07-05 — REGISTRY-PRIMARY family classification for the live quorum. Each provider's
+  // family is resolved via the hardened registry (familyOfResolved); a model missing from the registry
+  // falls back to the legacy familyOf() regex and is collected into `unmappedModels` so it can be
+  // surfaced (families_unmapped) for later registration. An explicit p.family (set by the builder, which
+  // is itself now registry-primary) is honored first. LIVE PATH: familyOfResolved NEVER throws.
+  const unmappedModels = new Set<string>();
+  const flagUnmapped = (model: string, _fallback: string) => { unmappedModels.add(model); };
+  // V3 FIX 2026-07-05 — resolve EVERY provider's model through the collector so `families_unmapped`
+  // populates on the DEFAULT build→score path too. The prior `p.family ?? familyOfResolved(...)`
+  // short-circuited whenever the builder had already pre-tagged `.family` (which it always does at
+  // buildFactCheckProvidersWith:796), so flagUnmapped never ran and the field was theater. Now the
+  // single resolution point ALWAYS runs the collector on `p.model`; the pre-tagged `.family` is still
+  // honored for classification, but the unmapped set is authoritative regardless of entry path.
+  const familyByName = new Map(
+    providers.map((p) => {
+      const resolved = familyOfResolved(p.model, flagUnmapped); // always runs the collector
+      return [p.name, p.family ?? resolved];
+    }),
+  );
+  const familiesUnmapped = [...unmappedModels];
+  if (familiesUnmapped.length > 0) {
+    // LOUD, ONCE-per-quorum degrade log (the per-lookup path suppresses its own log via the collector).
+    console.warn(
+      `[hal] hal_family_unmapped: ${familiesUnmapped.length} model(s) not in the family registry — ` +
+        `family regex-guessed via familyOf() (spoofable): [${familiesUnmapped.join(', ')}]. ` +
+        `Register them in src/decisioning/family-registry.ts (+ migration seed) so the quorum's ` +
+        `family-independence is registry-accurate.`,
+    );
+  }
   const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId);
   const settle = async (ps: FactCheckProviderCfg[]): Promise<ProviderVerdict[]> => {
     const s = await Promise.allSettled(ps.map(callOne));
@@ -493,6 +584,7 @@ export async function factCheck(
       hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
       quorum, provider_health: { attempted: attempted, succeeded: 0, failed },
       quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
+      ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
     };
   }
 
@@ -623,6 +715,7 @@ export async function factCheck(
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
     ...(sbfaField ? { sbfa: sbfaField } : {}),
+    ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
   };
 }
 
@@ -711,8 +804,11 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   if (qw && enabled.qwen) {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
   }
-  // Tag the always-on hosts with their family (model-derived; explicit for clarity).
-  for (const p of out) if (!p.family) p.family = familyOf(p.model);
+  // Tag the always-on hosts with their family (model-derived; explicit for clarity). CROSS-FIX
+  // 2026-07-05 — registry-primary (familyOfResolved): accurate for registered models, legacy-regex
+  // fallback + hal_family_unmapped log for unknowns (never throws). Providers that already declared a
+  // .family above keep it.
+  for (const p of out) if (!p.family) p.family = familyOfResolved(p.model);
   return out;
 }
 
@@ -754,7 +850,9 @@ export function auditFamilyIndependence(providers: FactCheckProviderCfg[]): {
 } {
   const byFam = new Map<string, string[]>();
   for (const p of providers) {
-    const fam = p.family ?? familyOf(p.model);
+    // CROSS-FIX 2026-07-05 — registry-primary family classification so the independence audit sees the
+    // accurate (non-spoofable) family; unmapped models fall back to familyOf() + log (never throw).
+    const fam = p.family ?? familyOfResolved(p.model);
     byFam.set(fam, [...(byFam.get(fam) ?? []), p.name]);
   }
   const collapsed = [...byFam.entries()].filter(([, ps]) => ps.length > 1).map(([family, ps]) => ({ family, providers: ps }));

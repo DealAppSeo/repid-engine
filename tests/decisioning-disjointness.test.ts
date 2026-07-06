@@ -105,10 +105,12 @@ describe('family-registry lookup', () => {
     expect(() => checkDisjoint(candidate, qwenLineageJudge)).toThrow(UnmappedFamilyError);
   });
 
-  it('NO REGRESSION: the 20 unambiguous seeded telemetry models still resolve to their family', () => {
-    expect(FAMILY_REGISTRY_SEED.length).toBe(21); // seed table unchanged; sweep is at load time
+  it('NO REGRESSION: the unambiguous seeded models still resolve to their family', () => {
+    // 22 = 21 telemetry pairs + 1 hal-config-default (qwen-plus, HAL's live qwen default) added by the
+    // 2026-07-05 HAL cross-fix so HAL's live quorum hits the registry, not the spoofable regex fallback.
+    expect(FAMILY_REGISTRY_SEED.length).toBe(22); // seed table; sweep is at load time
     const legit = FAMILY_REGISTRY_SEED.filter((e) => !isAmbiguousFamily(e.model));
-    expect(legit.length).toBe(20); // exactly one (hf/deepseek-r1-qwen-32b) swept out
+    expect(legit.length).toBe(21); // exactly one (hf/deepseek-r1-qwen-32b) swept out; qwen-plus is unambiguous
     for (const e of legit) {
       expect(resolveFamily(e.model)).toBe(e.family);
     }

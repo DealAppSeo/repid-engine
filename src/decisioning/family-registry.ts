@@ -29,7 +29,12 @@ export interface FamilyRegistryEntry {
   provider: string;
   model: string;
   family: string;
-  source: 'familyOf';
+  // 'familyOf' = derived from a REAL telemetry pair via familyOf(). 'hal-config-default' = a model HAL
+  // is CONFIGURED to use (a HAL_S2_*_MODEL default in src/hal/fact-check.ts) but which had no telemetry
+  // rows at seed time — added [CROSS-FIX 2026-07-05] so HAL's live quorum hits the registry (accurate,
+  // non-spoofable) instead of the regex fallback. NOT invented: it is the literal HAL default string and
+  // an unambiguous single-family match. evidence_n=0 marks the honest "config, not telemetry" provenance.
+  source: 'familyOf' | 'hal-config-default';
   evidence_n: number;
 }
 
@@ -60,6 +65,11 @@ export const FAMILY_REGISTRY_SEED: readonly FamilyRegistryEntry[] = Object.freez
   { provider: 'qwen',              model: 'gpt-4o-mini',                         family: 'openai',    source: 'familyOf', evidence_n: 46 },
   { provider: 'litellm-qwen',      model: 'hf/qwen-2.5-72b',                     family: 'qwen',      source: 'familyOf', evidence_n: 9 },
   { provider: 'llama-3-2-1b',      model: 'Llama-3.2-1B-Instruct',               family: 'llama',     source: 'familyOf', evidence_n: 3 },
+  // CROSS-FIX 2026-07-05 — HAL's configured qwen default (HAL_S2_QWEN_MODEL ?? 'qwen-plus' in
+  // src/hal/fact-check.ts). No telemetry rows at seed time (qwen quorum is opt-in/unfunded), so it is
+  // CONFIG-sourced (evidence_n=0), NOT telemetry. Unambiguous single-family match (/qwen/ only) → seeding
+  // it is accurate, not a guess; without it HAL's live qwen provider would hit the spoofable regex fallback.
+  { provider: 'qwen',              model: 'qwen-plus',                           family: 'qwen',      source: 'hal-config-default', evidence_n: 0 },
 ]);
 
 /**
@@ -115,7 +125,8 @@ const FAMILY_TOKEN_PATTERNS: ReadonlyArray<{ family: string; re: RegExp }> = Obj
 
 /** All known families whose token appears in the model name (first-match agnostic). */
 export function matchedFamilies(model: string): string[] {
-  const m = (model || '').toLowerCase();
+  // V3 FIX 2026-07-05 (fuzz-hardening) — String() coercion; never throws on a non-string input.
+  const m = String(model ?? '').toLowerCase();
   const hits: string[] = [];
   for (const { family, re } of FAMILY_TOKEN_PATTERNS) if (re.test(m)) hits.push(family);
   return hits;
@@ -185,7 +196,9 @@ export function seedFamilyFor(model: string): { seed: true; family: string } | {
 /** Thrown when a model has no confident family — the caller MUST register it before using disjointness. */
 export class UnmappedFamilyError extends Error {
   constructor(public readonly model: string, public readonly familyOfResult: string) {
-    super(`[family-registry] UNMAPPED model "${model}" (familyOf -> "${familyOfResult}", not a known family). Register family first — disjointness will not guess.`);
+    // V3 FIX 2026-07-05 (fuzz-hardening) — String(model) is Symbol-safe; a raw `${model}` template
+    // interpolation throws on a Symbol, which would fault inside this error's own construction.
+    super(`[family-registry] UNMAPPED model "${String(model)}" (familyOf -> "${familyOfResult}", not a known family). Register family first — disjointness will not guess.`);
     this.name = 'UnmappedFamilyError';
   }
 }
@@ -203,7 +216,9 @@ export class UnmappedFamilyError extends Error {
  * the resolve decision (which is registry membership alone).
  */
 export function resolveFamily(model: string): string {
-  const key = (model || '').toLowerCase();
+  // V3 FIX 2026-07-05 (fuzz-hardening) — String() coercion so a truthy non-string input can't throw at
+  // `.toLowerCase()` (which would escape familyOfResolved()'s catch). Zero change on the string path.
+  const key = String(model ?? '').toLowerCase();
   const seeded = BY_MODEL.get(key);
   if (seeded) return seeded;
   // Not in the registry: register-first. familyOf() here is DIAGNOSTIC ONLY (never decides the result).
