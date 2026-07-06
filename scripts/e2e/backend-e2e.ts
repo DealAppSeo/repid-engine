@@ -245,10 +245,18 @@ async function runCoreLoop() {
       loopCtx.zk_proof_id = r.body.zk_proof_id ?? null;
       loopCtx.zk_proof_triggered = !!r.body.zk_proof_triggered;
       if (!loopCtx.hal_decision) loopCtx.hal_decision = r.body.hal_decision;
-      const hasEventId = typeof r.body.score_event_id === 'string' && r.body.score_event_id.length > 0;
+      // score_event_id is a BIGINT — arrives as a number (or numeric string).
+      // Accept either; presence is what proves the append-only audit row was written.
+      const eid = r.body.score_event_id;
+      const hasEventId = (typeof eid === 'number' && Number.isFinite(eid)) || (typeof eid === 'string' && eid.length > 0);
       if (hasEventId || r.body.idempotent_replay) {
+        // A veto correctly yields delta 0 (no RepID awarded for a hallucinated
+        // deliverable) — that is the loop WORKING, not a broken score. Note it
+        // so the receipt reads honestly.
+        const vetoNote = r.body.hal_decision === 'vetoed' && r.body.repid_delta === 0
+          ? ' [veto→delta0 is correct: no RepID for a vetoed deliverable]' : '';
         pass('LOOP', 'L2 RepID-score-event',
-          `hal_decision=${r.body.hal_decision} repid_delta=${r.body.repid_delta} (${r.body.old_repid}→${r.body.new_repid}) zk_triggered=${r.body.zk_proof_triggered}`, {
+          `event#${eid} hal_decision=${r.body.hal_decision} repid_delta=${r.body.repid_delta} (${r.body.old_repid}→${r.body.new_repid}) zk_triggered=${r.body.zk_proof_triggered}${vetoNote}`, {
           score_event_id: r.body.score_event_id,
           hal_decision: r.body.hal_decision,
           repid_delta: r.body.repid_delta,
