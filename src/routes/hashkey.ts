@@ -69,7 +69,8 @@ router.get('/hashkey/anchor/:agentId', async (req: Request, res: Response) => {
   const latest = events?.[0];
 
   // Deterministic Merkle-leaf commitment over the agent's current state.
-  // This is the exact byte sequence the Sprint 6 tx will sign.
+  // This is a real, verifiable local hash — the exact byte sequence a future
+  // on-chain tx would sign. It is NOT a transaction and is NOT anchored.
   const commitmentPayload = [
     HASHKEY_CONFIG.contractAddress,
     agent.id,
@@ -80,17 +81,30 @@ router.get('/hashkey/anchor/:agentId', async (req: Request, res: Response) => {
   const commitmentHex =
     '0x' + createHash('sha256').update(commitmentPayload).digest('hex');
 
-  // Mock tx hash (same hashing scheme so it looks realistic in the demo).
-  // When Sprint 6 lands, replace with actual tx receipt from viem writeContract.
-  const mockTxHash =
-    '0x' +
-    createHash('sha256')
-      .update(`tx|${commitmentPayload}|${Date.now()}`)
-      .digest('hex');
+  // HONESTY (RULE-4): the on-chain write is NOT implemented. Never fabricate a
+  // tx hash or explorer URL. Report the true state: the commitment leaf is
+  // computed, but nothing has been anchored on HashKey Chain yet.
+  // A simulated tx is only produced when MOCK_HASHKEY_ANCHOR=true (default OFF),
+  // and it is clearly labelled is_simulated so no caller mistakes it for real.
+  const mockEnabled = process.env.MOCK_HASHKEY_ANCHOR === 'true';
+  const simulatedTx = mockEnabled
+    ? {
+        is_simulated: true,
+        hash:
+          '0x' +
+          createHash('sha256')
+            .update(`sim-tx|${commitmentPayload}|${Date.now()}`)
+            .digest('hex'),
+        contractAddress: HASHKEY_CONFIG.contractAddress,
+        chainId: HASHKEY_CONFIG.chainId,
+        note: 'SIMULATED — MOCK_HASHKEY_ANCHOR is on. Not a real on-chain tx; no explorer URL.',
+      }
+    : null;
 
   return res.json({
-    anchored: true,
-    phase: 'sprint_5_demo_anchor',
+    anchored: false,
+    status: 'pending_onchain_anchor',
+    onchain_write_implemented: false,
     chain: HASHKEY_CONFIG,
     agent: {
       agentId: agent.id,
@@ -102,14 +116,9 @@ router.get('/hashkey/anchor/:agentId', async (req: Request, res: Response) => {
       schema: 'constitutional-compliance-v1',
       leafHash: commitmentHex,
       easAttestationId: latest?.eas_attestation_id ?? null,
+      note: 'Locally-computed commitment leaf. Not yet written to any chain.',
     },
-    transaction: {
-      hash: mockTxHash,
-      contractAddress: HASHKEY_CONFIG.contractAddress,
-      chainId: HASHKEY_CONFIG.chainId,
-      explorerUrl: `${HASHKEY_CONFIG.explorerBase}/tx/${mockTxHash}`,
-      note: 'Sprint 5: deterministic stub. Sprint 6: real viem writeContract.',
-    },
+    transaction: simulatedTx,
   });
 });
 
