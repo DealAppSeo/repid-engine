@@ -23,19 +23,25 @@
  *   env keys, NEVER a literal at the call site. Default rate 0.05 (the §7 "~5%").
  *
  * COMPLETED CALL [V Supabase qnnpjhlxljtqyigedwkb 2026-07-05]: llm_call_log.status is one of
- *   {'success','failed','rate_limited'} (322,062 rows: 163,708 failed / 157,025 success / 2,480 rate_limited).
- *   "Completed" = a TERMINAL status (any of the three) — a call that ran to completion. The floor samples
- *   over ALL completed calls, NOT only successes: excluding failures would re-introduce an outcome bias
- *   (we want failures labeled too). Outcome filtering is the CALLER's choice via `isCompleted`, defaulting
- *   to "has a terminal status".
+ *   {'success','failed','rate_limited','cap_hit'} (schema CHECK, 2026-05-07-llm-spend-tracking.sql:15).
+ *   "Completed" = a TERMINAL status (any of the four) — a call that ran to completion. The floor samples
+ *   over ALL completed calls, NOT only successes: excluding failures/cap_hits would re-introduce an outcome
+ *   bias (we want every terminal outcome labeled). Outcome filtering is the CALLER's choice via
+ *   `isCompleted`, defaulting to "has a terminal status".
  *
  * ADVISORY PURITY (R3): pure functions only. No DB writes, no routing. The label-queue table is a
  * migration FILE (migrations/2026-07-05-label-queue.sql); selecting a call marks it for later labeling,
  * it does NOT change any live behavior. PROMOTION-GATED.
  */
 
-/** Terminal statuses of llm_call_log [V 2026-07-05]. A call with one of these has COMPLETED. */
-export const TERMINAL_STATUSES = Object.freeze(['success', 'failed', 'rate_limited'] as const);
+/**
+ * Terminal statuses of llm_call_log [V 2026-07-05]. A call with one of these has COMPLETED.
+ * Must match the schema CHECK exactly (migrations/2026-05-07-llm-spend-tracking.sql:15
+ * `status IN ('success','failed','rate_limited','cap_hit')` + src/billing/log-call.ts:12 type).
+ * `cap_hit` IS terminal (spend cap reached mid-call) — omitting it dropped cap-hit calls out of the
+ * floor and biased the labeled subset toward the other outcomes (A1 outcome-subset bias). Included now.
+ */
+export const TERMINAL_STATUSES = Object.freeze(['success', 'failed', 'rate_limited', 'cap_hit'] as const);
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
 
 /** Minimal shape of a completed call the sampler needs. Deliberately excludes any suspicion signal. */
