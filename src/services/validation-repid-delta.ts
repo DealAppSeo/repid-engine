@@ -317,6 +317,9 @@ export async function applyServiceFulfilledDeltas(
               degraded: fc.degraded,
               latency_ms: fc.latency_ms,
               verdicts: fc.verdicts,
+              // V3 FIX 2026-07-05 — carry unmapped (regex-guessed) families into score-event metadata
+              // so an unregistered provider model is auditable at the delta level, not just in logs.
+              ...(fc.families_unmapped?.length ? { families_unmapped: fc.families_unmapped } : {}),
             },
           };
         } else {

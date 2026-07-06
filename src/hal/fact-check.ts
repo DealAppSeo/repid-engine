@@ -68,7 +68,11 @@ export function costTierOf(p: { name: string; family?: string }): 'free' | 'chea
  * independent vote, not two. Keyed by model so a host swapping models is reclassified automatically.
  */
 export function familyOf(model: string): string {
-  const m = (model || '').toLowerCase();
+  // V3 FIX 2026-07-05 (fuzz-hardening) — coerce to string at the root. `(model || '')` guards falsy
+  // inputs but a TRUTHY non-string (number/object/Symbol) still reaches `.toLowerCase()` and THROWS,
+  // escaping familyOfResolved()'s catch. `String(model ?? '')` makes familyOfResolved never-throw TOTAL
+  // on ANY input. Zero behavior change on the string path.
+  const m = String(model ?? '').toLowerCase();
   if (/deepseek/.test(m)) return 'deepseek';
   if (/llama/.test(m)) return 'llama';
   if (/glm|zai/.test(m)) return 'glm';
@@ -116,8 +120,10 @@ export function familyOfResolved(
       onUnmapped(model, fallbackFamily);
     } else {
       // No collector supplied (e.g. boot audit) — log directly so the degrade is still visible.
+      // V3 FIX 2026-07-05 (fuzz-hardening) — String(model) is Symbol-safe; a raw `${model}` template
+      // interpolation THROWS on a Symbol input, which would re-escape this never-throw catch.
       console.warn(
-        `[hal] hal_family_unmapped: model "${model}" not in family registry — fell back to familyOf() regex -> "${fallbackFamily}". ` +
+        `[hal] hal_family_unmapped: model "${String(model)}" not in family registry — fell back to familyOf() regex -> "${fallbackFamily}". ` +
           `Register it in src/decisioning/family-registry.ts (+ the migration seed) so the quorum uses the accurate, non-spoofable family.`,
       );
     }
@@ -463,8 +469,17 @@ export async function factCheck(
   // is itself now registry-primary) is honored first. LIVE PATH: familyOfResolved NEVER throws.
   const unmappedModels = new Set<string>();
   const flagUnmapped = (model: string, _fallback: string) => { unmappedModels.add(model); };
+  // V3 FIX 2026-07-05 — resolve EVERY provider's model through the collector so `families_unmapped`
+  // populates on the DEFAULT build→score path too. The prior `p.family ?? familyOfResolved(...)`
+  // short-circuited whenever the builder had already pre-tagged `.family` (which it always does at
+  // buildFactCheckProvidersWith:796), so flagUnmapped never ran and the field was theater. Now the
+  // single resolution point ALWAYS runs the collector on `p.model`; the pre-tagged `.family` is still
+  // honored for classification, but the unmapped set is authoritative regardless of entry path.
   const familyByName = new Map(
-    providers.map((p) => [p.name, p.family ?? familyOfResolved(p.model, flagUnmapped)]),
+    providers.map((p) => {
+      const resolved = familyOfResolved(p.model, flagUnmapped); // always runs the collector
+      return [p.name, p.family ?? resolved];
+    }),
   );
   const familiesUnmapped = [...unmappedModels];
   if (familiesUnmapped.length > 0) {

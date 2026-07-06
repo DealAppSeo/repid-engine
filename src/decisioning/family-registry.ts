@@ -125,7 +125,8 @@ const FAMILY_TOKEN_PATTERNS: ReadonlyArray<{ family: string; re: RegExp }> = Obj
 
 /** All known families whose token appears in the model name (first-match agnostic). */
 export function matchedFamilies(model: string): string[] {
-  const m = (model || '').toLowerCase();
+  // V3 FIX 2026-07-05 (fuzz-hardening) — String() coercion; never throws on a non-string input.
+  const m = String(model ?? '').toLowerCase();
   const hits: string[] = [];
   for (const { family, re } of FAMILY_TOKEN_PATTERNS) if (re.test(m)) hits.push(family);
   return hits;
@@ -195,7 +196,9 @@ export function seedFamilyFor(model: string): { seed: true; family: string } | {
 /** Thrown when a model has no confident family — the caller MUST register it before using disjointness. */
 export class UnmappedFamilyError extends Error {
   constructor(public readonly model: string, public readonly familyOfResult: string) {
-    super(`[family-registry] UNMAPPED model "${model}" (familyOf -> "${familyOfResult}", not a known family). Register family first — disjointness will not guess.`);
+    // V3 FIX 2026-07-05 (fuzz-hardening) — String(model) is Symbol-safe; a raw `${model}` template
+    // interpolation throws on a Symbol, which would fault inside this error's own construction.
+    super(`[family-registry] UNMAPPED model "${String(model)}" (familyOf -> "${familyOfResult}", not a known family). Register family first — disjointness will not guess.`);
     this.name = 'UnmappedFamilyError';
   }
 }
@@ -213,7 +216,9 @@ export class UnmappedFamilyError extends Error {
  * the resolve decision (which is registry membership alone).
  */
 export function resolveFamily(model: string): string {
-  const key = (model || '').toLowerCase();
+  // V3 FIX 2026-07-05 (fuzz-hardening) — String() coercion so a truthy non-string input can't throw at
+  // `.toLowerCase()` (which would escape familyOfResolved()'s catch). Zero change on the string path.
+  const key = String(model ?? '').toLowerCase();
   const seeded = BY_MODEL.get(key);
   if (seeded) return seeded;
   // Not in the registry: register-first. familyOf() here is DIAGNOSTIC ONLY (never decides the result).
