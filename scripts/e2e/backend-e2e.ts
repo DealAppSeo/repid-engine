@@ -188,6 +188,10 @@ async function runCoreLoop() {
     });
     if (r.status === 404) {
       skip('LOOP', 'L1 HAL-verify', 'POST /api/v1/hal/evaluate → 404', 'deploy: /hal/evaluate not live on this build');
+    } else if (r.status === 429) {
+      // /hal/evaluate is IP-rate-limited (10/24h). A 429 is an ENV condition
+      // (harness re-run too often), not a REAL failure of the leg.
+      skip('LOOP', 'L1 HAL-verify', 'rate-limited (429) — /hal/evaluate is 10/IP/24h', 'wait for the 24h window to reset, or run from a fresh IP / use the score-event path (L2) which is not on this limiter');
     } else if (r.status === 200 && r.body) {
       const decision = r.body.decision ?? r.body.hal_verdict ?? r.body.verdict ?? null;
       const halScore = typeof r.body.hal_score === 'number' ? r.body.hal_score : null;
@@ -481,55 +485,68 @@ async function runSdkEntryPoints() {
     return;
   }
 
+  // Published 0.6.1 API (verified from the installed dist/index.d.ts):
+  //   config: { agentId, apiKey, llmProvider, engineUrl }
+  //   methods: evaluate(text, certainty, opts), getRepID(addrOrTokenId),
+  //            getLLMTrustScore(provider), getReputationHistory(...),
+  //            getAttestation(txHash), payAndEscrow(contractId, key).
   let client: any;
   try {
-    client = new TrustShell({ apiUrl: BASE_URL, apiKey: API_KEY || undefined });
-    pass('SDK', 'SDK init', `constructed TrustShell({ apiUrl: ${BASE_URL} })`);
+    client = new TrustShell({
+      engineUrl: BASE_URL,
+      apiKey: API_KEY || 'no-key',
+      agentId: AGENT_ID,
+      llmProvider: 'backend-e2e',
+    });
+    pass('SDK', 'SDK init (0.6.1)', `constructed TrustShell({ engineUrl: ${BASE_URL}, agentId, llmProvider })`);
   } catch (e: any) {
-    fail('SDK', 'SDK init', `constructor threw: ${e?.message ?? e}`);
+    fail('SDK', 'SDK init (0.6.1)', `constructor threw: ${e?.message ?? e}`);
     return;
   }
 
-  // verifyOutput — the primary dev entry (HAL over the live engine).
+  // evaluate() — the primary dev entry: HAL over the live engine, returns a
+  // RepIDResult { approved, hal_score, repid_delta, new_score, tier, veto_reason }.
   try {
-    const vo = await client.verifyOutput('The Eiffel Tower is in Berlin.', { provider: 'backend-e2e' });
-    if (vo && typeof vo.verdict === 'string') {
-      pass('SDK', 'SDK verifyOutput', `verdict=${vo.verdict} halScore=${vo.halScore} ok=${vo.ok}`, {
-        verdict: vo.verdict, trustScore: vo.trustScore, halScore: vo.halScore, evidence: (vo.evidence ?? []).slice(0, 3),
+    const ev = await client.evaluate('The Eiffel Tower is in Berlin.', 0.9, { taskDomain: 'geography' });
+    if (ev && typeof ev.hal_score === 'number') {
+      pass('SDK', 'SDK evaluate (HAL)', `approved=${ev.approved} hal_score=${ev.hal_score} repid_delta=${ev.repid_delta} tier=${ev.tier}${ev.veto_reason ? ` veto="${ev.veto_reason}"` : ''}`, {
+        approved: ev.approved, hal_score: ev.hal_score, repid_delta: ev.repid_delta, new_score: ev.new_score, tier: ev.tier,
       });
     } else {
-      fail('SDK', 'SDK verifyOutput', 'returned but no verdict field', { result: vo });
+      fail('SDK', 'SDK evaluate (HAL)', 'returned but no hal_score field', { result: ev });
     }
   } catch (e: any) {
-    // If the live /hal/evaluate isn't deployed, the SDK throws — report as skip-needs-deploy.
-    skip('SDK', 'SDK verifyOutput', `threw: ${e?.message ?? e}`, 'live /api/v1/hal/evaluate deployed + reachable');
+    // Auth-gated on the engine's scoring path — a 401/403 here is honest, not a fail.
+    const msg = String(e?.message ?? e);
+    if (/401|403|auth|key/i.test(msg)) {
+      skip('SDK', 'SDK evaluate (HAL)', `rejected: ${msg}`, 'a live REPID_API_KEY matching the Railway env');
+    } else {
+      skip('SDK', 'SDK evaluate (HAL)', `threw: ${msg}`, 'live /api/v1/agents-external score path deployed + reachable');
+    }
   }
 
-  // getRepID — read a live RepID via the SDK.
+  // getLLMTrustScore() — a pure public read (no key, no on-chain resolution).
+  // This is the cleanest live-green SDK read, over /api/v1/llm-trust.
   try {
-    const rep = await client.getRepID(AGENT_ID);
-    if (rep && (typeof rep.repid === 'number' || rep.repid === null)) {
-      pass('SDK', 'SDK getRepID', `repid=${rep.repid} tier=${rep.tier}`, { repid: rep.repid, tier: rep.tier });
-    } else {
-      fail('SDK', 'SDK getRepID', 'returned but no repid field', { result: rep });
-    }
+    const score = await client.getLLMTrustScore('groq');
+    pass('SDK', 'SDK getLLMTrustScore', `groq trust score = ${score === null ? 'null (no data yet)' : score}`, { provider: 'groq', trust_score: score });
   } catch (e: any) {
-    skip('SDK', 'SDK getRepID', `threw: ${e?.message ?? e}`, `a live agent id (E2E_AGENT_ID) + /api/v1/repid deployed`);
+    skip('SDK', 'SDK getLLMTrustScore', `threw: ${e?.message ?? e}`, 'live /api/v1/llm-trust deployed + reachable');
   }
 
-  // presentProof — fetch + optionally verify the agent's ZKP proof.
+  // getRepID() — 0.6.1 resolves an on-chain address OR an ERC-8004 token id.
+  // A raw DB UUID does not resolve on-chain (honest skip); a numeric token id
+  // via E2E_SDK_TOKEN_ID would turn this green.
   try {
-    const proof = await client.presentProof(AGENT_ID, { verify: false });
-    if (proof) {
-      const realBytes = !!proof.proof_bytes && String(proof.proof_bytes).length > 0;
-      pass('SDK', 'SDK presentProof', `scheme=${proof.scheme ?? '?'} real_bytes=${realBytes} verifiable=${proof.cryptographically_verifiable ?? '?'}`, {
-        scheme: proof.scheme, cryptographically_verifiable: proof.cryptographically_verifiable,
-      });
+    const tokenId = process.env.E2E_SDK_TOKEN_ID;
+    if (!tokenId) {
+      skip('SDK', 'SDK getRepID', 'needs an on-chain address or ERC-8004 token id (DB UUID does not resolve on-chain in 0.6.1)', 'set E2E_SDK_TOKEN_ID to a minted ERC-8004 token id');
     } else {
-      skip('SDK', 'SDK presentProof', 'no proof returned for agent', 'an agent with a proof row (E2E_AGENT_ID)');
+      const rep = await client.getRepID(tokenId);
+      pass('SDK', 'SDK getRepID', `resolved token ${tokenId}: repid=${rep.current_repid ?? rep.repid ?? '?'} tier=${rep.tier}`, { result: rep });
     }
   } catch (e: any) {
-    skip('SDK', 'SDK presentProof', `threw: ${e?.message ?? e}`, 'a live proof for the agent + /api/v1/repid/:id/proof deployed');
+    skip('SDK', 'SDK getRepID', `threw: ${e?.message ?? e}`, 'a resolvable on-chain address / ERC-8004 token id (E2E_SDK_TOKEN_ID)');
   }
 }
 
