@@ -29,7 +29,12 @@ export interface FamilyRegistryEntry {
   provider: string;
   model: string;
   family: string;
-  source: 'familyOf';
+  // 'familyOf' = derived from a REAL telemetry pair via familyOf(). 'hal-config-default' = a model HAL
+  // is CONFIGURED to use (a HAL_S2_*_MODEL default in src/hal/fact-check.ts) but which had no telemetry
+  // rows at seed time — added [CROSS-FIX 2026-07-05] so HAL's live quorum hits the registry (accurate,
+  // non-spoofable) instead of the regex fallback. NOT invented: it is the literal HAL default string and
+  // an unambiguous single-family match. evidence_n=0 marks the honest "config, not telemetry" provenance.
+  source: 'familyOf' | 'hal-config-default';
   evidence_n: number;
 }
 
@@ -60,6 +65,11 @@ export const FAMILY_REGISTRY_SEED: readonly FamilyRegistryEntry[] = Object.freez
   { provider: 'qwen',              model: 'gpt-4o-mini',                         family: 'openai',    source: 'familyOf', evidence_n: 46 },
   { provider: 'litellm-qwen',      model: 'hf/qwen-2.5-72b',                     family: 'qwen',      source: 'familyOf', evidence_n: 9 },
   { provider: 'llama-3-2-1b',      model: 'Llama-3.2-1B-Instruct',               family: 'llama',     source: 'familyOf', evidence_n: 3 },
+  // CROSS-FIX 2026-07-05 — HAL's configured qwen default (HAL_S2_QWEN_MODEL ?? 'qwen-plus' in
+  // src/hal/fact-check.ts). No telemetry rows at seed time (qwen quorum is opt-in/unfunded), so it is
+  // CONFIG-sourced (evidence_n=0), NOT telemetry. Unambiguous single-family match (/qwen/ only) → seeding
+  // it is accurate, not a guess; without it HAL's live qwen provider would hit the spoofable regex fallback.
+  { provider: 'qwen',              model: 'qwen-plus',                           family: 'qwen',      source: 'hal-config-default', evidence_n: 0 },
 ]);
 
 /**
