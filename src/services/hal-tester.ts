@@ -8,7 +8,7 @@ const supabase = createClient(
 
 const ENGINE = process.env.REPID_API_URL || 'https://repid-engine-production.up.railway.app';
 const TEST_AGENT_ID = '51e8367b-a953-4361-a7b0-bb68e494c1bb';
-const TEST_AGENT_KEY = '675599f8-95ee-42df-bc8f-4f8b59243aa8';
+const TEST_AGENT_KEY = process.env.REPID_TEST_AGENT_KEY || '';
 
 // Score a prompt through HAL and record result
 async function scorePrompt(prompt: any) {

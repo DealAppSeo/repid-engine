@@ -14,11 +14,31 @@ hal-ground-truth-template.csv
 .firecrawl/
 verify-crosscheck-report.json
 
-# Secrets — never commit (dispatch hardening 2026-06-28, XC fix #5)
+# Secrets — never commit (dispatch hardening 2026-06-28, XC fix #5;
+# P0 secrets purge 2026-07-06 — CTO_CODE_AUDIT)
 service_role.txt
 railway_vars*.txt
+railway_env.json
+litellm_vars.txt
+*.env
 *.key
 *-key.txt
+*secret*
+*private*key*
 .sb-service-key
 .telegram-*
+.claude/settings.local.json
 scripts/dispatch/.dispatch.env
+
+# One-off seed / debug / register helper scripts (held live keys — untracked 2026-07-06)
+seed_phase1.js
+temp_seed.js
+run-register.ps1
+fix_db.js
+get_schema.js
+get_views.js
+run_backfill.js
+run_proofs.js
+run_sql.js
+run_track*.js
+scripts/deploy_staking.js
