@@ -24,6 +24,7 @@ import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
+import marketplacePublicRouter from './routes/v1/marketplace-public';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -62,6 +63,7 @@ import costsRouter from './routes/costs';
 import efficiencyRouter from './routes/efficiency';
 // S-CACHE — DragonflyDB cache stats (public read; graceful no-op without REDIS_URL).
 import cacheStatsRouter from './routes/cache-stats';
+import faucetRouter from './routes/faucet'; // E2E FAUCET step — public read-only faucet info + balance check (no key custody)
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
@@ -248,6 +250,11 @@ app.use('/api/v1/federation', federationRouter);
 // SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
 // earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
 app.use('/api/v1/marketplace', marketplaceRouter);
+// Buy-loop last mile (2026-07-06): PUBLIC read-only marketplace surface
+// (GET /recent-transactions). Mounted BEFORE authMiddleware so the /market page
+// can show real settled activity with no API key. Read-only; separate file so
+// it never touches the settlement-disabled marketplace router above.
+app.use('/api/v1/marketplace', marketplacePublicRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
@@ -331,6 +338,11 @@ app.use('/api/v1/subscribe', subscribeLimiter);
 app.use('/api/v1', subscribeRouter);
 app.use('/api/v1', referralTrackRouter);
 app.use('/api/v1', securityStatusRouter);
+
+// E2E FAUCET step — public, read-only. Points users at the PUBLIC Base-Sepolia faucets and
+// lets them confirm their own balance is enough to stake. No key custody, no writes, no tx.
+// Mounted BEFORE authMiddleware so new users (who have no API key yet) can reach it.
+app.use('/api/v1', faucetRouter);
 
 app.use(authMiddleware);
 

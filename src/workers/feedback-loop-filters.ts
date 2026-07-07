@@ -22,6 +22,38 @@ import { hasTruthySimFlag } from '../utils/truthy';
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * Event types the FeedbackLoopWorker consumes from repid_events (the on-chain
+ * outbox) to drive an ERC-8004 reputation write.
+ *
+ * Originally only the three x402/service settlement types. Broadened
+ * (2026-07-02, feat/verify-redteam-repid-erc8004) to include the RepID-moving
+ * VERIFICATION + RED-TEAM outbox events so that peer-verification and red-team
+ * adjudication outcomes — which already move current_repid via the
+ * repid_score_events trigger — also reach the chain. The worker writes a
+ * *snapshot* of the agent's current_repid on each eligible outbox row; the
+ * particular event_type only selects WHICH rows trigger a snapshot, so adding
+ * types here is safe and additive (no per-type on-chain semantics change).
+ *
+ * Kept as a single exported constant so the SQL poll, the JS re-check, the
+ * outbox emitters, and the unit tests all share one source of truth.
+ */
+export const ONCHAIN_ELIGIBLE_EVENT_TYPES = [
+  // Settlement / payment loop (original)
+  'x402_inbound_settled',
+  'x402_outbound_settled',
+  'service_fulfilled_settled',
+  // Verification loop (peer-verification verdicts)
+  'peer_verify_verified',
+  'peer_verify_disputed',
+  // Red-team adjudication loop (good catch / lazy subject / frivolous reject)
+  'redteam_good_catch',
+  'redteam_lazy_subject',
+  'redteam_frivolous_reject',
+] as const;
+
+export type OnChainEligibleEventType = typeof ONCHAIN_ELIGIBLE_EVENT_TYPES[number];
+
 // Placeholder / mock tx hashes: 0xmock..., 0xabc..., or 0x0000000000... (8+ zeros).
 // F-series patch (2026-05-22): case-insensitive so 0xMOCK.../0xABC... also match.
 export const MOCK_TX_RE = /^0x(mock|abc|0{8})/i;

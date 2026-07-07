@@ -530,7 +530,7 @@ export async function runScoreEvent(
 
 export async function applyValidationEvent(
   agent_id: string,
-  event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY' | 'SERVICE_FULFILLED' | 'SERVICE_SATISFIED',
+  event_type: 'VALIDATION_PASSED' | 'VALIDATION_FAILED' | 'VALIDATOR_REWARD' | 'VALIDATOR_PENALTY' | 'SERVICE_FULFILLED' | 'SERVICE_SATISFIED' | 'SERVICE_OUTCOME',
   delta: number,
   metadata: Record<string, any> = {},
   halOverride?: { hal_score: number; hal_decision: HALDecision; hal_signals?: any }
