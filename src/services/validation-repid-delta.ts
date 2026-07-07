@@ -210,6 +210,39 @@ export function buildFreeHalProviders(): HALProviderConfig[] {
   return out;
 }
 
+/**
+ * Anti-Sybil MVP (2026-07-07) — resolve whether a contract is SIMULATED, using
+ * the exact same surfaces `applyServiceFulfilledDeltas` already checks:
+ *   (a) a truthy is_simulated on metadata/payload (normalized via hasTruthySimFlag), OR
+ *   (b) the linked x402_settlements row (x402_payment_id) has is_simulated=true.
+ * Extracted so the SATISFIED delta path (T2 hole B) can share ONE definition of
+ * "simulated" with the FULFILLED path — no drift between the two gates.
+ * NOTE: service_contracts has NO is_simulated column (verified prod schema
+ * 2026-07-07); the flag lives in jsonb / on the settlement row only.
+ */
+export async function contractIsSimulated(
+  fullContract: { metadata?: any; payload?: any; x402_payment_id?: string | null } | null | undefined,
+): Promise<boolean> {
+  if (!fullContract) return false;
+  const meta: any = fullContract.metadata ?? {};
+  const payload: any = fullContract.payload ?? {};
+  let isSimulated = hasTruthySimFlag(meta) || hasTruthySimFlag(payload);
+
+  if (!isSimulated && fullContract.x402_payment_id) {
+    try {
+      const { data: settlement } = await db
+        .from('x402_settlements')
+        .select('is_simulated')
+        .eq('id', fullContract.x402_payment_id)
+        .maybeSingle();
+      if (settlement?.is_simulated) isSimulated = true;
+    } catch (e: any) {
+      console.error(`[contractIsSimulated] failed to fetch settlement details:`, e.message ?? String(e));
+    }
+  }
+  return isSimulated;
+}
+
 export async function applyServiceFulfilledDeltas(
   contract: { id: string, service_id: string, provider_agent_id: string, buyer_agent_id: string }
 ): Promise<void> {
@@ -444,8 +477,36 @@ export async function applyServiceSatisfiedDeltas(
   contract: { id: string, provider_agent_id: string, buyer_agent_id: string },
   satisfactionScore: number
 ): Promise<void> {
-  const providerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * satisfactionScore);
-  const buyerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * satisfactionScore);
+  let providerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * satisfactionScore);
+  let buyerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * satisfactionScore);
+
+  // Anti-Sybil MVP (2026-07-07) — T2 hole B: the +30×score SATISFIED delta had
+  // NO simulation gate, so self-dealt / simulated contracts minted real economic
+  // RepID (the single biggest free delta in the farm). Behind
+  // ECONOMIC_DELTA_REQUIRES_REAL_SETTLEMENT (default OFF → no behavior change),
+  // zero BOTH satisfied deltas on a simulated contract, mirroring the FULFILLED
+  // path's existing is_simulated gate. Sim detection is SHARED (contractIsSimulated).
+  if (process.env.ECONOMIC_DELTA_REQUIRES_REAL_SETTLEMENT === 'true') {
+    let fullContract: any = null;
+    try {
+      const { data } = await db
+        .from('service_contracts')
+        .select('metadata, payload, x402_payment_id')
+        .eq('id', contract.id)
+        .maybeSingle();
+      fullContract = data;
+    } catch (e: any) {
+      console.error(`[applyServiceSatisfiedDeltas] failed to fetch contract for sim gate:`, e.message ?? String(e));
+    }
+    // Fail-closed on the economic delta: if we can't confirm a REAL settlement,
+    // do not mint economic RepID (a missing/unreadable contract is not proof of
+    // real value). This is the point of the gate.
+    const isSimulated = fullContract ? await contractIsSimulated(fullContract) : true;
+    if (isSimulated) {
+      providerDelta = 0;
+      buyerDelta = 0;
+    }
+  }
 
   await applyValidationEvent(
     contract.provider_agent_id,
