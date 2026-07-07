@@ -3,6 +3,7 @@ import { db } from '../db';
 import { ethers } from 'ethers';
 import { getActiveNetwork } from '../config/network';
 import { getProvider } from '../clients/rpc-with-failover';
+import { getDecryptedPrivateKey } from './agent-wallet-manager';
 
 import crypto from 'crypto';
 
@@ -168,10 +169,18 @@ export class X402OutboundClient {
       }
       
       const agentName = agent?.agent_name || '';
-      const pk = process.env[`${agentName.toUpperCase()}_PRIVATE_KEY`];
-      
+      // Env key wins (unchanged for the 12 pre-keyed Trinity agents); fall back
+      // to the DB-custodied encrypted key for newly-registered agents.
+      let pk: string | null = process.env[`${agentName.toUpperCase()}_PRIVATE_KEY`] ?? null;
       if (!pk) {
-        throw new Error(`Private key for agent ${agentName} not found in env (${agentName.toUpperCase()}_PRIVATE_KEY)`);
+        pk = await getDecryptedPrivateKey(opts.agentId);
+      }
+
+      if (!pk) {
+        throw new Error(
+          `Private key for agent ${agentName} not found in env (${agentName.toUpperCase()}_PRIVATE_KEY) ` +
+          `or DB custody (agent_secrets for ${opts.agentId})`
+        );
       }
 
       wallet = new ethers.Wallet(pk);
