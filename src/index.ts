@@ -62,6 +62,7 @@ import costsRouter from './routes/costs';
 import efficiencyRouter from './routes/efficiency';
 // S-CACHE — DragonflyDB cache stats (public read; graceful no-op without REDIS_URL).
 import cacheStatsRouter from './routes/cache-stats';
+import faucetRouter from './routes/faucet'; // E2E FAUCET step — public read-only faucet info + balance check (no key custody)
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
@@ -331,6 +332,11 @@ app.use('/api/v1/subscribe', subscribeLimiter);
 app.use('/api/v1', subscribeRouter);
 app.use('/api/v1', referralTrackRouter);
 app.use('/api/v1', securityStatusRouter);
+
+// E2E FAUCET step — public, read-only. Points users at the PUBLIC Base-Sepolia faucets and
+// lets them confirm their own balance is enough to stake. No key custody, no writes, no tx.
+// Mounted BEFORE authMiddleware so new users (who have no API key yet) can reach it.
+app.use('/api/v1', faucetRouter);
 
 app.use(authMiddleware);
 
