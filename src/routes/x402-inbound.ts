@@ -66,23 +66,18 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
     }
   }
 
-  // 5. Deliver service
-  // In Stage 1, this is a mock analysis that simulates a high-value signal.
-  const analysis = {
-    agent: agent.agent_name,
-    timestamp: new Date().toISOString(),
-    status: 'success',
-    analysis: `Trade analysis for ${agent.agent_name} complete. Market conditions: Bullish. RepID leverage factor: ${(agent.current_repid / 1000).toFixed(2)}x.`,
-    is_verified_by_hyperdag: true
-  };
-
-  // 6. Settle payment
+  // 5. Settle payment FIRST — a resource server must not deliver the service
+  //    (nor claim it settled) unless the on-chain settlement actually
+  //    succeeds. Per x402: on settlement failure return 402 (payment not
+  //    completed), NOT 200 "settled" with an empty txHash.
   let txHash = '';
   try {
     const settleResult = await x402Facilitator.settlePayment(xPaymentHeader, requirements);
     txHash = settleResult.txHash;
   } catch (e: any) {
-    console.error('[x402-inbound] Settlement failed, queuing for recovery:', e.message);
+    console.error('[x402-inbound] Settlement failed:', e.message);
+    // Queue for out-of-band recovery, then tell the caller the truth: the
+    // payment was NOT settled. Do not fall through to a 200 "settled".
     await x402Facilitator.queueFailure({
       direction: 'inbound',
       agent_id: agent.id,
@@ -90,7 +85,53 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
       payment_requirements: requirements,
       facilitator_response: { error: e.message }
     });
+    res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settlement_failed', txHash: '' }));
+    return res.status(402).json({
+      x402Version: X402_VERSION,
+      accepts: requirements,
+      error: 'settlement_failed',
+      reason: e.message
+    });
   }
+
+  // Defensive: a facilitator that returns success but no tx hash is not a
+  // real settlement — never emit "settled" with an empty txHash.
+  if (!txHash) {
+    res.setHeader('X-PAYMENT-RESPONSE', JSON.stringify({ status: 'settlement_failed', txHash: '' }));
+    return res.status(402).json({
+      x402Version: X402_VERSION,
+      accepts: requirements,
+      error: 'settlement_failed',
+      reason: 'facilitator returned no transaction hash'
+    });
+  }
+
+  // 6. Deliver service — settlement confirmed above.
+  //    HONESTY (RULE-4): there is no real trade-analysis engine wired here
+  //    yet. Never return a fabricated verdict (e.g. a hardcoded "Bullish")
+  //    with is_verified_by_hyperdag:true to a paying caller. A canned demo
+  //    string is only emitted when X402_DEMO_ANALYSIS=true (default OFF), and
+  //    it is explicitly labelled is_demo:true / is_verified_by_hyperdag:false
+  //    so no caller mistakes it for a real signal.
+  const demoEnabled = process.env.X402_DEMO_ANALYSIS === 'true';
+  const analysis = demoEnabled
+    ? {
+        agent: agent.agent_name,
+        timestamp: new Date().toISOString(),
+        status: 'demo',
+        is_demo: true,
+        analysis: `DEMO ONLY (X402_DEMO_ANALYSIS=on) — not a real market signal. Sample output for ${agent.agent_name}. RepID leverage factor: ${(agent.current_repid / 1000).toFixed(2)}x.`,
+        is_verified_by_hyperdag: false,
+      }
+    : {
+        agent: agent.agent_name,
+        timestamp: new Date().toISOString(),
+        status: 'not_implemented',
+        error: 'trade_analysis_not_available',
+        message:
+          'Trade analysis is not yet implemented on this endpoint. Payment settlement below is real; no verified signal is produced.',
+        is_verified_by_hyperdag: false,
+      };
 
   // 7. Write to repid_events for reputation tracking
   await db.from('repid_events').insert({
