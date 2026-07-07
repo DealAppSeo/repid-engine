@@ -4,6 +4,7 @@ import { evaluate } from '../hal/lib/evaluate';
 import { hasTruthySimFlag } from '../utils/truthy';
 import type { HALProviderConfig } from '../hal/lib/types';
 import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal/fact-check';
+import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -376,7 +377,7 @@ export async function applyServiceFulfilledDeltas(
       if (taskType !== null) {
         const verdict = fullContract.result?.verdict || null;
 
-        const { error: insertErr } = await db.from('repid_events').insert({
+        const { data: insertedEvent, error: insertErr } = await db.from('repid_events').insert({
           subject_id: contract.provider_agent_id,
           subject_type: 'agent',
           event_type: 'service_fulfilled_settled',
@@ -392,7 +393,7 @@ export async function applyServiceFulfilledDeltas(
               verdict: verdict,
             },
           },
-        });
+        }).select('id').maybeSingle();
 
         if (insertErr) {
           console.error(
@@ -402,6 +403,31 @@ export async function applyServiceFulfilledDeltas(
           );
         } else {
           console.log(`[applyServiceFulfilledDeltas] repid_events bridge insert SUCCEEDED for contract ${contract.id}`);
+
+          // Buy-loop last mile (2026-07-06): best-effort INLINE ERC-8004 on-chain
+          // reputation write. Gated (real settlement + token + floor), idempotent,
+          // and NON-FATAL — any failure leaves this repid_events row unprocessed
+          // for FeedbackLoopWorker to drain. Ships OFF behind
+          // ONCHAIN_REPUTATION_TRIGGER_ENABLED. Never throws into the delta path.
+          try {
+            const outcome = await maybeWriteOnChainReputation({
+              contractId: contract.id,
+              providerAgentId: contract.provider_agent_id,
+              isSimulated,
+              repidEventId: insertedEvent?.id ?? null,
+            });
+            console.log(
+              `[applyServiceFulfilledDeltas] on-chain reputation trigger outcome for contract ${contract.id}:`,
+              JSON.stringify(outcome),
+            );
+          } catch (triggerErr: any) {
+            // Defense-in-depth: maybeWriteOnChainReputation already swallows,
+            // but never let the on-chain path break fulfillment.
+            console.error(
+              `[applyServiceFulfilledDeltas] on-chain reputation trigger threw (non-fatal):`,
+              triggerErr?.message ?? String(triggerErr),
+            );
+          }
         }
       }
     }
@@ -441,6 +467,102 @@ export async function applyServiceSatisfiedDeltas(
       role: 'buyer',
     }
   );
+}
+
+
+// === T3 — Delayed outcome signal ("held up in use?") ===================
+//
+// The THIRD and deepest RepID touchpoint for an A2A transaction, weight rising
+// across the three:
+//   T1 SERVICE_FULFILLED (settled, immediate, small)   provider +10 / buyer +5
+//   T2 SERVICE_SATISFIED (to-spec, mins–hrs)           provider +30×score / buyer +15
+//   T3 SERVICE_OUTCOME   (held-up-in-use, 24h–72h)  ← LARGEST weight, hardest to game
+//
+// 3-state rating → provider delta:
+//   good = full positive · ok = ~0 (small/none) · bad = negative (+ dispute flag)
+// The provider delta is scaled by the rater's own reputation (rater-weight): a
+// higher-rep rater moves the provider more. The multiplier is clamped to a sane
+// band so a whale can't nuke and a fresh account still counts a little.
+//
+// ── TUNING BLOCK (change these + log an audit line; Grok cross-validate for
+//    patent-surface impact per the file header rules) ─────────────────────
+const SERVICE_OUTCOME_BASE = {
+  good: 60,   // full positive — largest of the three touchpoints' base magnitude
+  ok:   0,    // honest middle — no move by default (small nudge possible via _OK_NUDGE)
+  bad: -80,   // negative — outweighs the earlier positive touchpoints combined
+} as const;
+
+// If you want 'ok' to carry a faint positive signal ("used it, was fine"), set a
+// small non-zero here. Kept 0 by design so the middle stays truly neutral.
+const SERVICE_OUTCOME_OK_NUDGE = 0;
+
+// Rater-weight: multiplier = clamp(rater_repid / PIVOT, MIN, MAX).
+// PIVOT is the ESTABLISHED-tier floor (1000) so a baseline agent rates at ~1.0×.
+const RATER_WEIGHT = {
+  pivot: 1000,   // rater_repid at which weight == 1.0
+  min:   0.25,   // floor — a brand-new rater still counts a quarter
+  max:   2.0,    // ceiling — a maxed rater counts at most double
+} as const;
+
+export type ServiceOutcomeRating = 'good' | 'ok' | 'bad';
+
+/** clamp(raterRepid / pivot) → the sane-band rater influence multiplier. */
+export function computeRaterWeight(raterRepid: number | null | undefined): number {
+  const r = typeof raterRepid === 'number' && Number.isFinite(raterRepid) ? raterRepid : 0;
+  const raw = r / RATER_WEIGHT.pivot;
+  return Math.min(RATER_WEIGHT.max, Math.max(RATER_WEIGHT.min, raw));
+}
+
+export interface ServiceOutcomeResult {
+  providerDelta: number;       // the rounded delta applied to the provider
+  baseDelta: number;           // pre-weight base for `rating`
+  raterWeight: number;         // the clamped multiplier used
+  disputeEligible: boolean;    // true iff rating === 'bad' (MAY open a dispute; never auto)
+  scoreEventApplied: boolean;  // whether a repid_score_events row was written (delta !== 0)
+}
+
+/**
+ * Apply the T3 outcome delta to the PROVIDER only. Rater-weighted and
+ * absence-neutral (only a real rating ever reaches here). Returns the applied
+ * numbers so the caller can persist the parallel service_outcomes row.
+ *
+ * The buyer/rater is NOT scored for rating — rating is a duty, not a
+ * reward-farming surface. bad → disputeEligible=true (flag only, no auto-dispute).
+ */
+export async function applyServiceOutcomeDeltas(
+  contract: { id: string; provider_agent_id: string; buyer_agent_id: string; service_id?: string },
+  rating: ServiceOutcomeRating,
+  raterRepid: number | null | undefined,
+): Promise<ServiceOutcomeResult> {
+  const baseDelta =
+    rating === 'ok' ? SERVICE_OUTCOME_OK_NUDGE : SERVICE_OUTCOME_BASE[rating];
+  const raterWeight = computeRaterWeight(raterRepid);
+  const providerDelta = Math.round(baseDelta * raterWeight);
+  const disputeEligible = rating === 'bad';
+
+  let scoreEventApplied = false;
+  if (providerDelta !== 0) {
+    await applyValidationEvent(
+      contract.provider_agent_id,
+      'SERVICE_OUTCOME',
+      providerDelta,
+      {
+        contract_id: contract.id,
+        service_id: contract.service_id,
+        role: 'provider',
+        outcome_rating: rating,
+        rater_agent_id: contract.buyer_agent_id,
+        rater_repid_at_rating: raterRepid ?? null,
+        rater_weight: raterWeight,
+        // Consensus-divergence hook: a later pass can set/read this to discount
+        // a rating that diverges from the T1/T2 signals. Not computed in T3 v1.
+        divergence_discounted: false,
+      },
+    );
+    scoreEventApplied = true;
+  }
+
+  return { providerDelta, baseDelta, raterWeight, disputeEligible, scoreEventApplied };
 }
 
 

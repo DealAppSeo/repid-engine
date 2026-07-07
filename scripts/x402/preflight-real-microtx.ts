@@ -13,6 +13,20 @@ export interface PreflightCheck {
 export async function runPreflight(): Promise<PreflightCheck[]> {
   const checks: PreflightCheck[] = [];
 
+  // Resolve the REAL payer wallet. Settlement sends from a per-agent key
+  // (`${AGENT}_PRIVATE_KEY`), NOT the deployer key. Checking the deployer
+  // wallet produces a false RED (0 ETH) while the actual payer is funded.
+  // PREFLIGHT_PAYER_AGENT selects the agent (default 'APM'); if that agent's
+  // key is absent we fall back to the legacy TRINITY_DEPLOYER_PK behavior.
+  const payerAgent = (process.env.PREFLIGHT_PAYER_AGENT || 'APM').toUpperCase();
+  const payerKeyEnv = `${payerAgent}_PRIVATE_KEY`;
+  const payerPk = process.env[payerKeyEnv];
+  const usingAgentKey = !!payerPk;
+  const payerPrivateKey = payerPk || process.env.TRINITY_DEPLOYER_PK || '0x0000000000000000000000000000000000000000000000000000000000000001';
+  const payerLabel = usingAgentKey
+    ? `agent ${payerAgent} (${payerKeyEnv})`
+    : `fallback TRINITY_DEPLOYER_PK (${payerKeyEnv} unset)`;
+
   // 1. Trinity swarm alive
   try {
     const { data: heartbeats } = await db
@@ -48,13 +62,13 @@ export async function runPreflight(): Promise<PreflightCheck[]> {
   try {
     const ethers = require('ethers');
     const provider = new ethers.JsonRpcProvider(process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org');
-    const wallet = new ethers.Wallet(process.env.TRINITY_DEPLOYER_PK || '0x0000000000000000000000000000000000000000000000000000000000000001', provider);
+    const wallet = new ethers.Wallet(payerPrivateKey, provider);
     const balance = await provider.getBalance(wallet.address);
     const ethBalance = Number(ethers.formatEther(balance));
     if (ethBalance >= 0.01) {
-      checks.push({ name: 'Wallet ETH balance', status: 'GREEN', detail: `>= 0.01 ETH`, remediation: '' });
+      checks.push({ name: 'Wallet ETH balance', status: 'GREEN', detail: `>= 0.01 ETH (${payerLabel})`, remediation: '' });
     } else {
-      checks.push({ name: 'Wallet ETH balance', status: 'RED', detail: `${ethBalance} ETH`, remediation: 'Fund wallet' });
+      checks.push({ name: 'Wallet ETH balance', status: 'RED', detail: `${ethBalance} ETH (${payerLabel})`, remediation: 'Fund wallet' });
     }
   } catch (e: any) {
     checks.push({ name: 'Wallet ETH balance', status: 'RED', detail: e.message, remediation: 'Check RPC or PK' });
@@ -64,16 +78,16 @@ export async function runPreflight(): Promise<PreflightCheck[]> {
   try {
     const ethers = require('ethers');
     const provider = new ethers.JsonRpcProvider(process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org');
-    const wallet = new ethers.Wallet(process.env.TRINITY_DEPLOYER_PK || '0x0000000000000000000000000000000000000000000000000000000000000001', provider);
+    const wallet = new ethers.Wallet(payerPrivateKey, provider);
     const usdcAddress = process.env.USDC_CONTRACT_ADDRESS || '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
     const erc20Abi = ['function balanceOf(address) view returns (uint256)'];
     const usdcContract = new ethers.Contract(usdcAddress, erc20Abi, provider);
     const balance = await usdcContract.balanceOf(wallet.address);
     const usdcBalance = Number(ethers.formatUnits(balance, 6));
     if (usdcBalance >= 1.0) {
-      checks.push({ name: 'Wallet USDC balance', status: 'GREEN', detail: `>= 1.0 USDC`, remediation: '' });
+      checks.push({ name: 'Wallet USDC balance', status: 'GREEN', detail: `>= 1.0 USDC (${payerLabel})`, remediation: '' });
     } else {
-      checks.push({ name: 'Wallet USDC balance', status: 'RED', detail: `${usdcBalance} USDC`, remediation: 'Fund wallet with USDC' });
+      checks.push({ name: 'Wallet USDC balance', status: 'RED', detail: `${usdcBalance} USDC (${payerLabel})`, remediation: 'Fund wallet with USDC' });
     }
   } catch (e: any) {
     checks.push({ name: 'Wallet USDC balance', status: 'RED', detail: e.message, remediation: 'Check RPC or contract' });
