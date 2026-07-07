@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
+import { ethers } from 'ethers';
 import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
@@ -7,6 +8,7 @@ import { deriveHalDecision } from '../scoring/pipeline';
 import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
 import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
+import { provisionWallet, persistProvisionedWallet } from '../services/agent-wallet-manager';
 
 const router = Router();
 
@@ -222,6 +224,32 @@ router.post('/register', async (req: Request, res: Response) => {
 
     const agentId = newAgent.id as string;
 
+    // Provision a real signing wallet unless the caller brought their own
+    // on-chain address. Historically new agents got a fake `external:<uuid>`
+    // erc8004_address and no key, so they could never sign/transact. Now the
+    // custodied EVM address lands on repid_agents.wallet_address and the private
+    // key is AES-GCM encrypted into agent_secrets. Custody is interim env-master
+    // key — flagged for KMS/Vault (see agent-wallet-manager.ts). Best-effort:
+    // never fail registration on a wallet error.
+    let provisionedWalletAddress: string | null = null;
+    if (!wallet_address) {
+      try {
+        const provisioned = provisionWallet();
+        const persisted = await persistProvisionedWallet(agentId, provisioned);
+        if (persisted.ok) {
+          provisionedWalletAddress = persisted.address ?? null;
+        } else {
+          console.error(`[agents-external/register] wallet provisioning failed for ${agentId}: ${persisted.error}`);
+        }
+      } catch (walletErr: any) {
+        console.error(`[agents-external/register] wallet provisioning threw for ${agentId}: ${walletErr?.message}`);
+      }
+    } else if (ethers.isAddress(wallet_address)) {
+      // Caller supplied a real EVM address — record it as their wallet too.
+      provisionedWalletAddress = wallet_address;
+      await db.from('repid_agents').update({ wallet_address }).eq('id', agentId);
+    }
+
     const { key: rawKey } = await issueAgentApiKey(agentId, 'default', ['score_event', 'llm_complete', 'read_card', 'admin']);
 
     await db.from('repid_verified_decisions').insert({
@@ -242,6 +270,7 @@ router.post('/register', async (req: Request, res: Response) => {
       // Existing v11 fields (unchanged for legacy callers)
       agent_id: agentId,
       api_key: rawKey, // Shown ONCE; SDK clients must save it.
+      wallet_address: provisionedWalletAddress, // Real EVM address (DB-custodied key) — null only if provisioning failed.
       starting_score: 200,
       tier: 'PROBATIONARY',
       vesting_cliff_ends_at: vestingCliff,
