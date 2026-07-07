@@ -36,6 +36,19 @@ export interface RepIdUpdateInput {
     paymentCurrency: string;
     x402RequestId: string;
   };
+  // Provenance for a VERIFIED on-chain stake. The STAKE delta (+5) only
+  // applies when this is present — a STAKE event without a verified on-chain
+  // stake yields delta 0 (honest: no verified stake, no +5). Populated by the
+  // /stake/onchain/verify route after verifyStakeOnChain() confirms the
+  // RepIDStaking `Staked` event on Base Sepolia.
+  stakeProof?: {
+    txHash: string;
+    stakeId?: string;
+    amountWei?: string;
+    contractAddress?: string;
+    onChainAgentId?: string;
+    blockNumber?: number;
+  };
 }
 
 export interface RepIdUpdateResult {
@@ -152,6 +165,14 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       daysAgo: input.predictionDaysAgo ?? 0,
       networkImportance: input.networkImportance ?? 1.0,
     }));
+  } else if (input.eventType === 'STAKE') {
+    // PROOF-GATED (2026-07-06): the STAKE delta is earned only by a VERIFIED
+    // on-chain stake against the canonical RepIDStaking contract. Without a
+    // stakeProof (tx of a confirmed `Staked` event, supplied by the
+    // /stake/onchain/verify route) the delta is 0 — no verified stake, no +5.
+    // This closes the prior hole where any /score {eventType:'STAKE'} call
+    // granted +5 with no real deposit backing it (RULE-4: honest scoring).
+    rawDelta = input.stakeProof?.txHash ? (FIXED_DELTAS.STAKE ?? 0) : 0;
   } else {
     rawDelta = FIXED_DELTAS[input.eventType] ?? 0;
   }
@@ -211,6 +232,10 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       },
       mirrorTest: input.mirrorTestMetadata ?? null,
       x402Context: input.x402Context ?? null,
+      // Provenance for a proof-gated STAKE delta: the verified on-chain stake
+      // that backs this +5. Null for every non-STAKE event and for any STAKE
+      // event that arrived without proof (delta 0).
+      stakeProof: input.eventType === 'STAKE' ? (input.stakeProof ?? null) : null,
     },
   });
 
