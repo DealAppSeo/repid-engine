@@ -48,7 +48,7 @@ describe('x402-server — createTipRequest', () => {
       prediction_topic: 'NBA Finals winner',
     });
     expect(r.status).toBe(402);
-    expect(r.body.x402Version).toBe(1);
+    expect(r.body.x402Version).toBe(2);
     expect(r.body.error).toBe('Payment required');
     expect(r.body.is_simulated).toBe(true);
     expect(r.body.tip_id).toMatch(/^tip_/);

@@ -7,6 +7,16 @@ import { getActiveNetwork } from '../config/network';
 import { x402Metrics } from '../observability/x402-metrics';
 import { getProvider } from '../clients/rpc-with-failover';
 
+// x402 protocol version advertised to clients and sent in the facilitator
+// request envelope. Current protocol is v2 (coinbase/x402 specs, transports-v2).
+export const X402_VERSION = 2;
+
+// Default authorization validity window (seconds) the server expects for the
+// `exact` scheme. Emitted as `maxTimeoutSeconds` so the buyer's EIP-3009
+// `validBefore` window and the server's expectation agree (x402 PaymentRequirements
+// field). 3600s matches trustshell's signing default.
+export const DEFAULT_MAX_TIMEOUT_SECONDS = 3600;
+
 export interface PaymentRequirements {
   scheme: 'exact';
   network: string;
@@ -16,6 +26,9 @@ export interface PaymentRequirements {
   resource: string;
   mimeType: string;
   description?: string;
+  // Authorization validity window in seconds (x402 spec field). The client
+  // must produce an authorization whose validity does not exceed this.
+  maxTimeoutSeconds: number;
   extra?: {
     name: string;
     version: string;
@@ -41,7 +54,8 @@ export class X402Facilitator {
     payTo: string,
     priceUsdc: string,
     network?: string,
-    description?: string
+    description?: string,
+    maxTimeoutSeconds?: number
   }): PaymentRequirements[] {
     const netConfig = getActiveNetwork();
     return [{
@@ -52,7 +66,8 @@ export class X402Facilitator {
       payTo: opts.payTo,
       resource: opts.resource,
       mimeType: "application/json",
-      description: opts.description
+      description: opts.description,
+      maxTimeoutSeconds: opts.maxTimeoutSeconds ?? DEFAULT_MAX_TIMEOUT_SECONDS
     }];
   }
 
@@ -110,9 +125,9 @@ export class X402Facilitator {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          x402Version: 1,
+          x402Version: X402_VERSION,
           paymentPayload: {
-            x402Version: 1,
+            x402Version: X402_VERSION,
             scheme: reqObj.scheme,
             network: reqObj.network,
             payload: {
@@ -217,9 +232,9 @@ export class X402Facilitator {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          x402Version: 1,
+          x402Version: X402_VERSION,
           paymentPayload: {
-            x402Version: 1,
+            x402Version: X402_VERSION,
             scheme: reqObj.scheme,
             network: reqObj.network,
             payload: {

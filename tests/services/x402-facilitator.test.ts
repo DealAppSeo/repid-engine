@@ -22,7 +22,8 @@ describe('X402Facilitator Envelope Shape Tests', () => {
     asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
     payTo: '0xf6eE1768868c3266868edcA78bC41C50309cb22A',
     resource: '/api/v1/test',
-    mimeType: 'application/json'
+    mimeType: 'application/json',
+    maxTimeoutSeconds: 3600
   };
 
   const sampleFlatPayment = {
@@ -50,9 +51,9 @@ describe('X402Facilitator Envelope Shape Tests', () => {
 
     // Validate SHAPE C compatibility
     expect(lastRequestBody).toBeDefined();
-    expect(lastRequestBody.x402Version).toBe(1);
+    expect(lastRequestBody.x402Version).toBe(2);
     expect(lastRequestBody.paymentPayload).toBeDefined();
-    expect(lastRequestBody.paymentPayload.x402Version).toBe(1);
+    expect(lastRequestBody.paymentPayload.x402Version).toBe(2);
     expect(lastRequestBody.paymentPayload.scheme).toBe('exact');
     expect(lastRequestBody.paymentPayload.network).toBe('base-sepolia');
     expect(lastRequestBody.paymentPayload.payload).toBeDefined();
@@ -90,9 +91,9 @@ describe('X402Facilitator Envelope Shape Tests', () => {
 
     // Validate SHAPE C compatibility
     expect(lastRequestBody).toBeDefined();
-    expect(lastRequestBody.x402Version).toBe(1);
+    expect(lastRequestBody.x402Version).toBe(2);
     expect(lastRequestBody.paymentPayload).toBeDefined();
-    expect(lastRequestBody.paymentPayload.x402Version).toBe(1);
+    expect(lastRequestBody.paymentPayload.x402Version).toBe(2);
     expect(lastRequestBody.paymentPayload.scheme).toBe('exact');
     expect(lastRequestBody.paymentPayload.network).toBe('base-sepolia');
     expect(lastRequestBody.paymentPayload.payload).toBeDefined();

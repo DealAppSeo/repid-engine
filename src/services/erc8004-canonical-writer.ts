@@ -1,125 +1,101 @@
-import { ethers } from 'ethers';
-import { createClient } from '@supabase/supabase-js';
-import * as dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
+// ERC-8004 canonical reputation write for the anonymous demo round.
+//
+// This module is a THIN ADAPTER over the canonical reputation writer in
+// `erc8004-reputation.ts`. It exists only to preserve the
+// `writeRepIDCanonical('APM'|'VERITAS', repid)` call shape that
+// `anonymous-round-runner.ts` depends on.
+//
+// CONFORMANCE HISTORY (2026-07-06): this file previously
+//   (F2) wrote to a NON-canonical reputation registry
+//        0xB5048e3ef1DA4E04deB6f7d0423D06F63869e322 (a stray deploy), and
+//   (F3) signed giveFeedback with the AGENT'S OWN key (APM_PRIVATE_KEY /
+//        VERITAS_PRIVATE_KEY) — i.e. the agent reviewing itself. The ERC-8004
+//        spec (ERC8004SPEC.md L217) prohibits self-review: "The feedback
+//        submitter MUST NOT be the agent owner or an approved operator for
+//        agentId." On a spec-faithful contract that call REVERTS.
+//
+// Both are fixed by delegating to `getReputationWriter()`, which:
+//   - targets the canonical Reputation Registry 0x8004B663…
+//     (network-config `reputationRegistry`), and
+//   - signs with the DEDICATED attestor wallet
+//     (ERC8004_REPUTATION_WRITER_KEY / minter / operator fallback chain),
+//     NEVER the reviewed agent's own key.
 
-dotenv.config();
+import { db } from '../db';
+import { getReputationWriter } from './erc8004-reputation';
 
-const REPUTATION_REGISTRY = '0xB5048e3ef1DA4E04deB6f7d0423D06F63869e322';
-const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
-
-// Load ABI
-const abiPath = path.resolve(__dirname, '../../../hyperdag-protocol/abi/canonical/ReputationRegistry.json');
-let reputationAbi: string[] = [];
-try {
-  reputationAbi = JSON.parse(fs.readFileSync(abiPath, 'utf8'));
-} catch (e) {
-  reputationAbi = [
-    "function giveFeedback(uint256 agentId, int128 value, uint8 valueDecimals, string calldata tag1, string calldata tag2, string calldata endpoint, string calldata feedbackURI, bytes32 feedbackHash) external"
-  ];
-}
-
-let provider: ethers.JsonRpcProvider;
-let db: any;
-
-function getDb() {
-  if (!db) {
-    db = createClient(process.env.SUPABASE_URL || 'http://localhost', process.env.SUPABASE_SERVICE_KEY || 'key');
-  }
-  return db;
-}
-
-function getProvider() {
-  if (!provider) {
-    provider = new ethers.JsonRpcProvider(RPC_URL);
-  }
-  return provider;
+interface CanonicalWriteResult {
+  tx_hash?: string;
+  basescan_url?: string;
+  status: string;
+  error?: string;
 }
 
 export async function writeRepIDCanonical(
-  agentName: 'APM' | 'VERITAS', 
+  agentName: 'APM' | 'VERITAS',
   newRepID: number
-): Promise<{ tx_hash?: string; basescan_url?: string; status: string; error?: string }> {
+): Promise<CanonicalWriteResult> {
   try {
     if (process.env.NODE_ENV === 'test') {
-      return { 
-        tx_hash: '0xtest', 
-        basescan_url: 'https://sepolia.basescan.org/tx/0xtest', 
-        status: 'skipped_in_test' 
+      return {
+        tx_hash: '0xtest',
+        basescan_url: 'https://sepolia.basescan.org/tx/0xtest',
+        status: 'skipped_in_test',
       };
     }
-    const supabase = getDb();
-    // Look up canonical_agent_id
-    const { data: agents, error: dbError } = await supabase
-      .from('repid_agents')
-      .select('canonical_agent_id')
-      .eq('agent_name', agentName)
-      .limit(1);
 
-    if (dbError || !agents || agents.length === 0) {
+    // The dedicated reviewer identity. Returns null when no signing key env
+    // var is set (engine boots read-only). Never the agent's own key.
+    const writer = getReputationWriter();
+    if (!writer) {
+      return {
+        status: 'failed',
+        error:
+          'No reputation writer configured (ERC8004_REPUTATION_WRITER_KEY / ERC8004_MINTER_PRIVATE_KEY / ERC8004_OPERATOR_KEY unset)',
+      };
+    }
+
+    // Look up the agent's ERC-8004 tokenId (agentId on the registry) + tier.
+    // tokenId is what the canonical writer feeds giveFeedback(agentId, …).
+    const { data: agent, error: dbError } = await db
+      .from('repid_agents')
+      .select('erc8004_token_id, current_repid, tier')
+      .eq('agent_name', agentName)
+      .maybeSingle();
+
+    if (dbError || !agent) {
       return { status: 'failed', error: `Agent ${agentName} not found in DB` };
     }
-
-    const agentId = agents[0].canonical_agent_id;
-    if (!agentId) {
-      return { status: 'failed', error: `Agent ${agentName} has no canonical_agent_id` };
+    if (!agent.erc8004_token_id) {
+      return {
+        status: 'failed',
+        error: `Agent ${agentName} has no erc8004_token_id (not minted on Identity Registry)`,
+      };
     }
 
-    // Get private key
-    const pk = agentName === 'APM' ? process.env.APM_PRIVATE_KEY : process.env.VERITAS_PRIVATE_KEY;
-    if (!pk) {
-      return { status: 'failed', error: `Missing private key for ${agentName}` };
-    }
+    // Prefer the freshly-computed round score; fall back to the stored score.
+    const repid = Number.isFinite(newRepID)
+      ? Math.round(newRepID)
+      : Number(agent.current_repid ?? 0);
 
-    const wallet = new ethers.Wallet(pk, provider);
-    const contract = new ethers.Contract(REPUTATION_REGISTRY, reputationAbi, wallet);
-
-    // Format newRepID for contract: int128 value, uint8 valueDecimals
-    // Let's assume newRepID is a float like 85.5. We can multiply by 100 to get 8550 with 2 decimals.
-    // Spec says: value (int128): Signed fixed-point value. valueDecimals (uint8): Decimal places
-    const decimals = 2;
-    const value = Math.round(newRepID * Math.pow(10, decimals));
-    
-    const tag1 = "RepID";
-    const tag2 = "";
-    const endpoint = "Trinity Demo";
-    const feedbackURI = "";
-    const feedbackHash = ethers.ZeroHash;
-
-    const executeTx = async () => {
-      // 30s timeout on the transaction promise
-      const contractAny = contract as any;
-      const txPromise = contractAny.giveFeedback(agentId, value, decimals, tag1, tag2, endpoint, feedbackURI, feedbackHash);
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30000));
-      const tx = await Promise.race([txPromise, timeoutPromise]) as ethers.ContractTransactionResponse;
-      await tx.wait();
-      return tx.hash;
-    };
-
-    let txHash: string;
-    try {
-      txHash = await executeTx();
-    } catch (e1: any) {
-      console.log(`First attempt failed: ${e1.message}. Retrying...`);
-      try {
-        txHash = await executeTx();
-      } catch (e2: any) {
-        // If it's a timeout or network error, return pending_retry
-        if (e2.message.includes('Timeout') || e2.message.includes('network') || e2.code === 'NETWORK_ERROR') {
-          return { status: 'pending_retry', error: e2.message };
-        }
-        return { status: 'failed', error: e2.message };
-      }
-    }
+    const result = await writer.writeRepIDFeedback({
+      agentTokenId: String(agent.erc8004_token_id),
+      repid,
+      tier: String(agent.tier ?? ''),
+    });
 
     return {
-      tx_hash: txHash,
-      basescan_url: `https://sepolia.basescan.org/tx/${txHash}`,
-      status: 'success'
+      tx_hash: result.txHash,
+      basescan_url: `https://sepolia.basescan.org/tx/${result.txHash}`,
+      status: 'success',
     };
-
   } catch (err: any) {
-    return { status: 'failed', error: err.message };
+    // Classify transient network/timeout errors as retryable, matching the
+    // prior contract that anonymous-round-runner surfaces as onchain_status.
+    const msg = String(err?.message ?? err);
+    if (/timeout/i.test(msg) || /network/i.test(msg) || err?.code === 'NETWORK_ERROR') {
+      return { status: 'pending_retry', error: msg };
+    }
+    return { status: 'failed', error: msg };
   }
 }

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../../services/validation-repid-delta';
-import { x402Facilitator } from '../../services/x402-facilitator';
+import { x402Facilitator, X402_VERSION } from '../../services/x402-facilitator';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
@@ -299,7 +299,7 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   if (!xPaymentHeader) {
     x402Metrics.increment('escrow.error.402');
     return res.status(402).json({
-      x402Version: 1,
+      x402Version: X402_VERSION,
       accepts: requirements,
       error: 'Payment required'
     });
@@ -330,7 +330,7 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     if (!verifyResult.valid) {
       x402Metrics.increment('escrow.error.402');
       return res.status(402).json({
-        x402Version: 1,
+        x402Version: X402_VERSION,
         accepts: requirements,
         error: 'Payment verification failed',
         reason: verifyResult.reason
