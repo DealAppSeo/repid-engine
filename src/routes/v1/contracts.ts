@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
-import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas } from '../../services/validation-repid-delta';
+import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas, applyServiceOutcomeDeltas, type ServiceOutcomeRating } from '../../services/validation-repid-delta';
+import { registerPendingOutcome } from '../../services/outcome-notifier';
 import { x402Facilitator } from '../../services/x402-facilitator';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
@@ -537,9 +538,177 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
     } catch (e) {
       console.error('Failed to apply satisfied deltas:', e);
     }
+    // T3: register the delayed-outcome nudge (flag-gated, default OFF — no-op
+    // when T3_OUTCOME_NUDGE_ENABLED !== 'true'). Never blocks satisfy.
+    try {
+      await registerPendingOutcome({
+        id: step2.id,
+        buyer_agent_id: step2.buyer_agent_id,
+        provider_agent_id: step2.provider_agent_id,
+        settled_at: step2.settled_at,
+      });
+    } catch (e) {
+      console.error('Failed to register pending outcome:', e);
+    }
   }
 
   res.json(step2);
+});
+
+// ── T3 — Delayed outcome signal ("held up in use?") ─────────────────────
+//
+// POST /api/v1/contracts/:id/outcome  body { rating: 'good'|'ok'|'bad', note?, rater_agent_id }
+//
+// The THIRD, deepest RepID touchpoint. Buyer-only, time-gated (24h..7d after the
+// contract SETTLED), provenance-bound to the exact contract + its x402
+// settlement. Optional + absence-neutral: only an actual rating moves RepID.
+// Rater-weighted; 'bad' sets a dispute-eligible flag but NEVER auto-disputes.
+const OUTCOME_WINDOW_OPEN_MS = 24 * 60 * 60 * 1000;       // opens 24h after settle
+const OUTCOME_WINDOW_CLOSE_MS = 7 * 24 * 60 * 60 * 1000;  // expires 7d after settle
+
+router.post('/:id/outcome', async (req: Request, res: Response) => {
+  try {
+    const { rating, note, rater_agent_id } = req.body ?? {};
+
+    // 1. Validate rating (3-state)
+    if (rating !== 'good' && rating !== 'ok' && rating !== 'bad') {
+      return res.status(400).json({ error: 'invalid_rating', message: "rating must be one of 'good' | 'ok' | 'bad'" });
+    }
+    if (!rater_agent_id) {
+      return res.status(400).json({ error: 'rater_agent_id required' });
+    }
+
+    // 2. Fetch contract
+    const { data: contract, error: getErr } = await db
+      .from('service_contracts')
+      .select('*')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (getErr || !contract) return res.status(404).json({ error: 'Contract not found' });
+
+    // 3. Buyer-only auth: the rater MUST be the party who paid.
+    if (rater_agent_id !== contract.buyer_agent_id) {
+      return res.status(403).json({ error: 'not_buyer', message: 'Only the buyer of this contract may rate its outcome' });
+    }
+
+    // 4. Provenance binding — the contract must have actually settled (via x402).
+    if (!contract.settled_at) {
+      return res.status(409).json({ error: 'not_settled', message: 'Contract has not settled yet; no outcome window' });
+    }
+
+    // 5. Time gate: only 24h..7d after settlement.
+    const settledMs = new Date(contract.settled_at).getTime();
+    const opensAt = new Date(settledMs + OUTCOME_WINDOW_OPEN_MS);
+    const expiresAt = new Date(settledMs + OUTCOME_WINDOW_CLOSE_MS);
+    const now = Date.now();
+    if (now < opensAt.getTime()) {
+      return res.status(425).json({
+        error: 'outcome_window_not_open',
+        message: `Outcome rating opens at ${opensAt.toISOString()}`,
+        opens_at: opensAt.toISOString(),
+      });
+    }
+    if (now > expiresAt.getTime()) {
+      return res.status(410).json({
+        error: 'outcome_window_expired',
+        message: `Outcome rating window closed at ${expiresAt.toISOString()}`,
+        expired_at: expiresAt.toISOString(),
+      });
+    }
+
+    // 6. One rating per contract (idempotent guard at the app layer; the unique
+    //    index on service_outcomes.contract_id is the DB backstop).
+    const { data: existing } = await db
+      .from('service_outcomes')
+      .select('id')
+      .eq('contract_id', contract.id)
+      .maybeSingle();
+    if (existing) {
+      return res.status(409).json({ error: 'outcome_already_recorded', message: 'This contract already has an outcome rating' });
+    }
+
+    // 7. Rater weight from the rater's CURRENT repid.
+    const { data: rater } = await db
+      .from('repid_agents')
+      .select('current_repid')
+      .eq('id', rater_agent_id)
+      .maybeSingle();
+    const raterRepid = rater?.current_repid ?? null;
+
+    // 8. Fetch the settlement tx for provenance record (best-effort).
+    let settlementTxHash: string | null = null;
+    if (contract.x402_payment_id) {
+      const { data: settlement } = await db
+        .from('x402_settlements')
+        .select('tx_hash')
+        .eq('id', contract.x402_payment_id)
+        .maybeSingle();
+      settlementTxHash = settlement?.tx_hash ?? null;
+    }
+
+    // 9. Apply the rater-weighted provider delta (absence-neutral: only reached
+    //    because a real rating arrived; 'ok' → 0 delta → no score event).
+    const outcome = await applyServiceOutcomeDeltas(
+      {
+        id: contract.id,
+        provider_agent_id: contract.provider_agent_id,
+        buyer_agent_id: contract.buyer_agent_id,
+        service_id: contract.service_id,
+      },
+      rating as ServiceOutcomeRating,
+      raterRepid,
+    );
+
+    // 10. Persist the parallel service_outcomes row (does not mutate contract).
+    //     Best-effort: if the table isn't migrated yet, the delta still applied.
+    let recordedId: number | null = null;
+    try {
+      const { data: row, error: insErr } = await db
+        .from('service_outcomes')
+        .insert({
+          contract_id: contract.id,
+          x402_payment_id: contract.x402_payment_id ?? null,
+          settlement_tx_hash: settlementTxHash,
+          provider_agent_id: contract.provider_agent_id,
+          buyer_agent_id: contract.buyer_agent_id,
+          rater_agent_id,
+          rating,
+          note: typeof note === 'string' ? note : null,
+          rater_repid_at_rating: raterRepid,
+          rater_weight: outcome.raterWeight,
+          provider_delta_applied: outcome.providerDelta,
+          dispute_eligible: outcome.disputeEligible,
+        })
+        .select('id')
+        .single();
+      if (insErr) {
+        console.error('[outcome] service_outcomes insert failed (delta already applied):', insErr.message);
+      } else {
+        recordedId = (row as any)?.id ?? null;
+      }
+    } catch (e: any) {
+      console.error('[outcome] service_outcomes insert error:', e?.message ?? String(e));
+    }
+
+    // 11. Mark the pending-outcome row resolved if present (flag-path bookkeeping).
+    try {
+      await db.from('service_outcome_pending').update({ status: 'recorded' }).eq('contract_id', contract.id);
+    } catch { /* pending queue is optional; non-fatal */ }
+
+    return res.json({
+      ok: true,
+      contract_id: contract.id,
+      rating,
+      provider_delta_applied: outcome.providerDelta,
+      rater_weight: outcome.raterWeight,
+      dispute_eligible: outcome.disputeEligible,
+      score_event_applied: outcome.scoreEventApplied,
+      outcome_id: recordedId,
+    });
+  } catch (err: any) {
+    console.error('ERROR IN OUTCOME:', err);
+    return res.status(500).json({ error: 'internal_error', message: err.message });
+  }
 });
 
 router.post('/:id/dispute', async (req: Request, res: Response) => {
