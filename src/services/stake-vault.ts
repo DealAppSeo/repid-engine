@@ -233,8 +233,25 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
       .eq('id', builderId)
       .maybeSingle();
 
-    // Record the withdrawal as REAL. The negative row keeps getCurrentStake /
-    // getRealStake consistent.
+    // FAIL-CLOSED: attempt the escrow->builder refund FIRST. The ledger debit
+    // (negative stake_deposits row) is only committed when a REAL, broadcast
+    // refund is confirmed. If the refund is still a stub (not broadcast
+    // on-chain) or otherwise did not actually initiate, we write NOTHING to the
+    // ledger and refuse — otherwise the ledger would show the stake withdrawn
+    // while the USDC was never sent (funds stranded).
+    const refund = await refundInitiator(builderId, amount, builder?.address ?? undefined);
+    if (refund.stub || !refund.initiated) {
+      return {
+        ok: false,
+        total_active_stake: total.toString(),
+        authority_after: '0',
+        error: 'refund_unavailable_stub',
+        refund,
+      };
+    }
+
+    // Refund is real + broadcast — safe to record the withdrawal as REAL. The
+    // negative row keeps getCurrentStake / getRealStake consistent.
     const { error: wErr } = await db.from('stake_deposits').insert({
       builder_id: builderId,
       amount: (-amount).toString(),
@@ -246,11 +263,6 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
     if (wErr) {
       return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: wErr.message };
     }
-
-    // STUB: initiate escrow -> builder refund. Real on-chain send (escrow
-    // signer transferring USDC back to the builder) is intentionally left
-    // unwired pending the custody-model decision. See report FLAGS.
-    const refund = await initiateEscrowRefund(builderId, amount, builder?.address ?? undefined);
 
     const newTotal = await getCurrentStake(builderId);
     const auth = await snapshotAuthority(builderId, newTotal);
@@ -318,6 +330,22 @@ export async function initiateEscrowRefund(
     to,
     note: 'escrow->builder refund not yet broadcast on-chain (custody model pending review)',
   };
+}
+
+// Injectable seam (mirrors deposit-verifier's __setProviderFactory) so the
+// fail-closed withdrawal guard can be exercised against a REAL (non-stub)
+// refund in unit tests without wiring a live escrow signer. Defaults to the
+// real stub above; production behavior is unchanged.
+type RefundInitiator = (
+  builderId: string,
+  amount: bigint,
+  to?: string,
+) => Promise<RefundInitiation>;
+
+let refundInitiator: RefundInitiator = initiateEscrowRefund;
+
+export function __setRefundInitiator(f?: RefundInitiator): void {
+  refundInitiator = f ?? initiateEscrowRefund;
 }
 
 export async function getCurrentStake(builderId: string): Promise<bigint> {

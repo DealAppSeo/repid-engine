@@ -367,26 +367,27 @@ describe('stake-vault — withdrawStake real-staking routing', () => {
     expect(r.error).toMatch(/open bets/i);
   });
 
-  it('flag ON: checks real stake and stub-initiates escrow refund', async () => {
+  it('flag ON + stub refund: FAILS CLOSED — refuses and writes no ledger debit', async () => {
+    // Fund-stranding guard (PR #133 fix): while initiateEscrowRefund is still a
+    // stub (never broadcasts on-chain), withdrawStake must NOT debit the ledger.
+    // Full happy/stub matrix lives in reponomics-withdraw-fail-closed.test.ts.
     mockConfig.realStakingEnabled = true;
     dbState.selectResults['linked_bets'] = [{ data: [], error: null }]; // no open bets
-    // getCurrentStake (total), getRealStake (real), then getCurrentStake (post)
+    // getCurrentStake (total), getRealStake (real)
     dbState.selectResults['stake_deposits'] = [
       { data: [{ amount: '100000000' }], error: null }, // getCurrentStake
       { data: [{ amount: '100000000' }], error: null }, // getRealStake
-      { data: [{ amount: '100000000' }, { amount: '-50000000' }], error: null }, // post
     ];
     dbState.selectResults['builders'] = [{ data: { address: BUILDER_ADDR }, error: null }];
     dbState.selectResults['repid_agents'] = [{ data: [], error: null }];
 
     const r = await withdrawStake('builder-1', 50_000_000n);
-    expect(r.ok).toBe(true);
-    expect(r.refund?.initiated).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('refund_unavailable_stub');
     expect(r.refund?.stub).toBe(true);
-    expect(r.refund?.to).toBe(BUILDER_ADDR);
+    // No negative stake_deposits row was written — ledger untouched.
     const w = dbState.inserts.find((i) => i.table === 'stake_deposits');
-    expect(w?.row.is_simulated).toBe(false);
-    expect(w?.row.status).toBe('withdrawn');
+    expect(w).toBeUndefined();
   });
 
   it('flag ON: rejects withdrawal exceeding real stake', async () => {
