@@ -444,6 +444,102 @@ export async function applyServiceSatisfiedDeltas(
 }
 
 
+// === T3 — Delayed outcome signal ("held up in use?") ===================
+//
+// The THIRD and deepest RepID touchpoint for an A2A transaction, weight rising
+// across the three:
+//   T1 SERVICE_FULFILLED (settled, immediate, small)   provider +10 / buyer +5
+//   T2 SERVICE_SATISFIED (to-spec, mins–hrs)           provider +30×score / buyer +15
+//   T3 SERVICE_OUTCOME   (held-up-in-use, 24h–72h)  ← LARGEST weight, hardest to game
+//
+// 3-state rating → provider delta:
+//   good = full positive · ok = ~0 (small/none) · bad = negative (+ dispute flag)
+// The provider delta is scaled by the rater's own reputation (rater-weight): a
+// higher-rep rater moves the provider more. The multiplier is clamped to a sane
+// band so a whale can't nuke and a fresh account still counts a little.
+//
+// ── TUNING BLOCK (change these + log an audit line; Grok cross-validate for
+//    patent-surface impact per the file header rules) ─────────────────────
+const SERVICE_OUTCOME_BASE = {
+  good: 60,   // full positive — largest of the three touchpoints' base magnitude
+  ok:   0,    // honest middle — no move by default (small nudge possible via _OK_NUDGE)
+  bad: -80,   // negative — outweighs the earlier positive touchpoints combined
+} as const;
+
+// If you want 'ok' to carry a faint positive signal ("used it, was fine"), set a
+// small non-zero here. Kept 0 by design so the middle stays truly neutral.
+const SERVICE_OUTCOME_OK_NUDGE = 0;
+
+// Rater-weight: multiplier = clamp(rater_repid / PIVOT, MIN, MAX).
+// PIVOT is the ESTABLISHED-tier floor (1000) so a baseline agent rates at ~1.0×.
+const RATER_WEIGHT = {
+  pivot: 1000,   // rater_repid at which weight == 1.0
+  min:   0.25,   // floor — a brand-new rater still counts a quarter
+  max:   2.0,    // ceiling — a maxed rater counts at most double
+} as const;
+
+export type ServiceOutcomeRating = 'good' | 'ok' | 'bad';
+
+/** clamp(raterRepid / pivot) → the sane-band rater influence multiplier. */
+export function computeRaterWeight(raterRepid: number | null | undefined): number {
+  const r = typeof raterRepid === 'number' && Number.isFinite(raterRepid) ? raterRepid : 0;
+  const raw = r / RATER_WEIGHT.pivot;
+  return Math.min(RATER_WEIGHT.max, Math.max(RATER_WEIGHT.min, raw));
+}
+
+export interface ServiceOutcomeResult {
+  providerDelta: number;       // the rounded delta applied to the provider
+  baseDelta: number;           // pre-weight base for `rating`
+  raterWeight: number;         // the clamped multiplier used
+  disputeEligible: boolean;    // true iff rating === 'bad' (MAY open a dispute; never auto)
+  scoreEventApplied: boolean;  // whether a repid_score_events row was written (delta !== 0)
+}
+
+/**
+ * Apply the T3 outcome delta to the PROVIDER only. Rater-weighted and
+ * absence-neutral (only a real rating ever reaches here). Returns the applied
+ * numbers so the caller can persist the parallel service_outcomes row.
+ *
+ * The buyer/rater is NOT scored for rating — rating is a duty, not a
+ * reward-farming surface. bad → disputeEligible=true (flag only, no auto-dispute).
+ */
+export async function applyServiceOutcomeDeltas(
+  contract: { id: string; provider_agent_id: string; buyer_agent_id: string; service_id?: string },
+  rating: ServiceOutcomeRating,
+  raterRepid: number | null | undefined,
+): Promise<ServiceOutcomeResult> {
+  const baseDelta =
+    rating === 'ok' ? SERVICE_OUTCOME_OK_NUDGE : SERVICE_OUTCOME_BASE[rating];
+  const raterWeight = computeRaterWeight(raterRepid);
+  const providerDelta = Math.round(baseDelta * raterWeight);
+  const disputeEligible = rating === 'bad';
+
+  let scoreEventApplied = false;
+  if (providerDelta !== 0) {
+    await applyValidationEvent(
+      contract.provider_agent_id,
+      'SERVICE_OUTCOME',
+      providerDelta,
+      {
+        contract_id: contract.id,
+        service_id: contract.service_id,
+        role: 'provider',
+        outcome_rating: rating,
+        rater_agent_id: contract.buyer_agent_id,
+        rater_repid_at_rating: raterRepid ?? null,
+        rater_weight: raterWeight,
+        // Consensus-divergence hook: a later pass can set/read this to discount
+        // a rating that diverges from the T1/T2 signals. Not computed in T3 v1.
+        divergence_discounted: false,
+      },
+    );
+    scoreEventApplied = true;
+  }
+
+  return { providerDelta, baseDelta, raterWeight, disputeEligible, scoreEventApplied };
+}
+
+
 export async function applyServiceDisputeResolution(
   contract: { id: string, provider_agent_id: string, buyer_agent_id: string },
   verdict: 'provider_at_fault' | 'buyer_at_fault' | 'no_fault'
