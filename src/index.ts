@@ -25,6 +25,7 @@ import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import observabilityPublicRouter from './routes/v1/observability-public';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
 import internalCronRouter from './routes/v1/internal-cron';
@@ -255,6 +256,13 @@ app.use('/api/v1/marketplace', marketplaceRouter);
 // can show real settled activity with no API key. Read-only; separate file so
 // it never touches the settlement-disabled marketplace router above.
 app.use('/api/v1/marketplace', marketplacePublicRouter);
+// Live-numbers (2026-07-07): PUBLIC read-only observability surface the
+// TrustShell.dev landing reads for its minted-agent leaderboard + on-chain
+// stats block. Two GETs: /api/v1/agents/minted and
+// /api/v1/observability/onchain-stats. Mounted BEFORE authMiddleware so the
+// landing renders real numbers with no API key. Read-only; separate file so it
+// never touches the authed productivity /observability router mounted later.
+app.use('/api/v1', observabilityPublicRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
