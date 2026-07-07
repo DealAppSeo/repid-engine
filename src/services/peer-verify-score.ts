@@ -3,6 +3,7 @@
  * Uses pgQuery so apply_repid_score_event trigger applies current_repid in-process.
  */
 import { pgQuery } from '../db/direct-pg';
+import { emitOnChainOutboxEvent } from './onchain-outbox';
 
 export interface PeerVerifyScoreInput {
   queueId: number | string;
@@ -97,6 +98,26 @@ export async function emitPeerVerifyScoreEvents(
       },
       certaintyAtClaim: input.certaintyAtClaim ?? undefined,
     });
+    // Bridge to the ERC-8004 outbox so the verifier's (and producer's) moved
+    // RepID reaches the chain via FeedbackLoopWorker. Best-effort + flag-gated
+    // (default OFF); never blocks the score path. Only for real inserts.
+    if (producer) {
+      await emitOnChainOutboxEvent({
+        subjectAgentId: input.producerAgentId,
+        eventType: 'peer_verify_verified',
+        reputationDelta: VERIFIED_DELTA,
+        context: { queue_id: qid, role: 'producer', claim: claimRef },
+      });
+    }
+    if (verifier) {
+      await emitOnChainOutboxEvent({
+        subjectAgentId: input.verifierAgentId,
+        eventType: 'peer_verify_verified',
+        reputationDelta: VERIFIED_DELTA,
+        context: { queue_id: qid, role: 'verifier', claim: claimRef },
+      });
+    }
+
     return {
       emitted: !!(producer || verifier),
       producerEventId: producer?.id,
@@ -119,6 +140,17 @@ export async function emitPeerVerifyScoreEvents(
       },
       certaintyAtClaim: input.certaintyAtClaim ?? undefined,
     });
+    // Bridge the disputed-verifier slash to the ERC-8004 outbox (flag-gated,
+    // best-effort). Snapshots the verifier's now-lower current_repid on-chain.
+    if (slash) {
+      await emitOnChainOutboxEvent({
+        subjectAgentId: input.verifierAgentId,
+        eventType: 'peer_verify_disputed',
+        reputationDelta: DISPUTED_VERIFIER_DELTA,
+        context: { queue_id: qid, role: 'verifier', claim: claimRef },
+      });
+    }
+
     return {
       emitted: !!slash,
       verifierEventId: slash?.id,
