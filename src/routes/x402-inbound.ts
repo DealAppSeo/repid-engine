@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { x402Facilitator } from '../services/x402-facilitator';
+import { x402Facilitator, X402_VERSION } from '../services/x402-facilitator';
 import { repIdAttestationService } from '../services/repid-attestation';
 import { db } from '../db';
 
@@ -35,7 +35,7 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   // 2. Check for payment header
   if (!xPaymentHeader) {
     return res.status(402).json({
-      x402Version: 1,
+      x402Version: X402_VERSION,
       accepts: requirements,
       error: 'Payment required'
     });
@@ -45,7 +45,7 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
   const verifyResult = await x402Facilitator.verifyPayment(xPaymentHeader, requirements);
   if (!verifyResult.valid) {
     return res.status(402).json({
-      x402Version: 1,
+      x402Version: X402_VERSION,
       accepts: requirements,
       error: 'Payment verification failed',
       reason: verifyResult.reason
@@ -58,7 +58,7 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
     const attestationResult = await repIdAttestationService.verifyAttestation(callerAttestation);
     if (!attestationResult.valid) {
       return res.status(402).json({
-        x402Version: 1,
+        x402Version: X402_VERSION,
         accepts: requirements,
         error: 'invalid_attestation',
         reason: attestationResult.reason
