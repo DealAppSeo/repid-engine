@@ -13,7 +13,7 @@
 
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
-import { x402Facilitator, PaymentRequirements } from './x402-facilitator';
+import { x402Facilitator, PaymentRequirements, X402_VERSION } from './x402-facilitator';
 
 const USDC_BASE_SEPOLIA = process.env.USDC_BASE_SEPOLIA_ADDRESS ?? '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const PROVIDER_WALLET = process.env.PROVIDER_AGENT_WALLET ?? '0x0000000000000000000000000000000000000000';
@@ -27,7 +27,7 @@ export interface TipRequestInput {
 export interface TipRequestResult {
   status: 402;
   body: {
-    x402Version: 1;
+    x402Version: number;
     accepts: Array<{
       scheme: 'exact';
       network: 'base-sepolia';
@@ -100,7 +100,7 @@ export async function createTipRequest(input: TipRequestInput): Promise<TipReque
   return {
     status: 402,
     body: {
-      x402Version: 1,
+      x402Version: X402_VERSION,
       accepts: [
         {
           scheme: 'exact',
