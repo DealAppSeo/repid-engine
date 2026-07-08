@@ -567,3 +567,24 @@ export function classifyInteraction(
 export function isConfirmed(d: DetectionResult): boolean {
   return d.class !== 'clean' && d.confidence >= DETECTION_CONFIRM_THRESHOLD;
 }
+
+/**
+ * Map an M2 deception class onto the M1 penalty eventType string (see
+ * src/engine/repid-update.ts DECEPTION_DELTAS). Kept here so the two modules
+ * share one vocabulary. Returns null for `clean`.
+ */
+export const CLASS_TO_EVENT_TYPE: Record<DeceptionClass, string> = {
+  'denial-of-prior-output': 'DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT',
+  'doubt-attack': 'DEFENDED_DECEPTION_DOUBT_ATTACK',
+  'fabricated-citation': 'DEFENDED_DECEPTION_FABRICATED_CITATION',
+  'fabricated-tool-result': 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+  'fabricated-benchmark': 'DEFENDED_DECEPTION_FABRICATED_BENCHMARK',
+  'threshold-dancing': 'DEFENDED_DECEPTION_THRESHOLD_DANCING',
+  'sycophantic-false-premise': 'DEFENDED_DECEPTION_SYCOPHANTIC_FALSE_PREMISE',
+  'story-change-across-turns': 'DEFENDED_DECEPTION_STORY_CHANGE',
+};
+
+export function detectionToEventType(d: DetectionResult): string | null {
+  if (d.class === 'clean') return null;
+  return CLASS_TO_EVENT_TYPE[d.class] ?? null;
+}
