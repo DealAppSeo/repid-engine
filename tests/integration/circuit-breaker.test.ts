@@ -11,6 +11,7 @@
  */
 
 import { breaker, flipBreaker, isTripped, readAllBreakers, BreakerKey } from '../../src/middleware/circuit-breaker';
+import { describeIfSchema } from '../helpers/describe-if-schema';
 
 const ALL_KEYS: BreakerKey[] = [
   'cb_disable_x402_settlements',
@@ -21,7 +22,7 @@ const ALL_KEYS: BreakerKey[] = [
   'cb_freeze_swarm_responses',
 ];
 
-describe('circuit-breaker', () => {
+describeIfSchema('circuit-breaker', () => {
   jest.setTimeout(20000);
 
   it('readAllBreakers returns a boolean for every known key', async () => {

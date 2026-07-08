@@ -74,6 +74,43 @@ export function canonicalizeProvider(provider: string | null | undefined): strin
   return clean;
 }
 
+/**
+ * HONEST HAL PROVENANCE (2026-07-08). The hal_classifications.model column
+ * previously HARDCODED 'deterministic-extractor' on EVERY row, so it lied about
+ * which HAL path actually produced a verdict (124,990 rows all labelled
+ * 'deterministic-extractor' even when a real cross-LLM fact-check quorum ran —
+ * flagged by the 06-28 BCBV blind pass). This maps the real path — from the
+ * SAME signals the score event records (halMode + quorumMet) — to an honest
+ * label:
+ *   - hal-error-fallback          : HAL threw; neutral 0.5 fail-soft (no real classification).
+ *   - fact-check-quorum[:fams]     : cross-LLM fact-check ran AND >= 2 independent families agreed
+ *                                    (the trustworthy path); families appended when known.
+ *   - fact-check-partial           : fact-check ran but no >= 2-family quorum formed.
+ *   - extractor-fallback           : fact-check path degraded to the deterministic extractor.
+ *   - deterministic-extractor      : the strictness-1 style extractor genuinely ran (honest here).
+ * Pure + deterministic → unit-testable without DB/HAL mocks.
+ */
+export function halClassificationModelLabel(args: {
+  halError: string | null | undefined;
+  halMode: string | undefined;
+  quorumMet: boolean;
+  families?: unknown;
+}): string {
+  if (args.halError) return 'hal-error-fallback';
+  if (args.halMode === 'fact-check') {
+    if (args.quorumMet) {
+      const famList = Array.isArray(args.families)
+        ? args.families.map((f) => String(f)).filter(Boolean)
+        : [];
+      return famList.length ? `fact-check-quorum:${famList.join('+')}` : 'fact-check-quorum';
+    }
+    return 'fact-check-partial'; // fact-check ran but no >= 2-family quorum formed
+  }
+  if (args.halMode === 'extractor-fallback') return 'extractor-fallback';
+  // strictness-1 path (halMode 'extractor' or unset) is the real deterministic extractor.
+  return 'deterministic-extractor';
+}
+
 export interface ScoreEventInput {
   agent_id: string;
   prompt: string;
@@ -457,13 +494,28 @@ export async function runScoreEvent(
     const taskTypeClean = String(input.task_domain || '').toLowerCase().trim();
     const category = categoryMapping[taskTypeClean] || 'factual';
 
+    // HONEST PROVENANCE (2026-07-08): this row previously HARDCODED
+    // model='deterministic-extractor' on EVERY inference, so anyone reading
+    // hal_classifications saw "extractor" even when a real cross-LLM fact-check
+    // quorum produced the verdict (the 06-28 BCBV blind pass flagged exactly
+    // this: 609/609 rows labelled deterministic-extractor). Record the ACTUAL
+    // path that ran, from the same signals the score event uses (halMode +
+    // quorumMet), so the label matches the truth already in the event metadata
+    // (decision_source / hal_mode).
+    const halModelLabel = halClassificationModelLabel({
+      halError,
+      halMode,
+      quorumMet,
+      families: (signals as Record<string, unknown>).families,
+    });
+
     await db.from('hal_classifications').insert({
       prompt_hash: promptHash,
       category,
       confidence: 'high',
       latency_ms: 0,
       provider: canonicalizeProvider(input.provider_used) || 'trinity-task-bridge',
-      model: 'deterministic-extractor',
+      model: halModelLabel,
     });
   } catch (err: any) {
     console.warn('[scoring/pipeline] Failed to write to hal_classifications:', err.message);

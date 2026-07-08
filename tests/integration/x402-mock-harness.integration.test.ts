@@ -1,9 +1,10 @@
 import { settleX402Payment } from '../../src/services/x402-real-settler';
 import { db } from '../../src/db';
+import { describeIfSchema } from '../helpers/describe-if-schema';
 import crypto from 'crypto';
 const uuidv4 = () => crypto.randomUUID();
 
-describe('X402 Mock Harness Extended Scenarios', () => {
+describeIfSchema('X402 Mock Harness Extended Scenarios', () => {
   afterEach(() => {
     process.env.MOCK_FACILITATOR = 'true';
   });
