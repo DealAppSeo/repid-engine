@@ -1,6 +1,7 @@
 import { processRecoveryQueue } from '../../src/services/x402-recovery-worker';
 import { db } from '../../src/db';
 import { x402Facilitator } from '../../src/services/x402-facilitator';
+import { describeIfSchema } from '../helpers/describe-if-schema';
 
 jest.mock('../../src/services/x402-facilitator', () => ({
   x402Facilitator: {
@@ -8,7 +9,7 @@ jest.mock('../../src/services/x402-facilitator', () => ({
   }
 }));
 
-describe('x402-recovery-flow-integration', () => {
+describeIfSchema('x402-recovery-flow-integration', () => {
   let failureId: number;
 
   beforeAll(async () => {
