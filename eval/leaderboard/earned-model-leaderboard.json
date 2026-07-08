@@ -1,0 +1,490 @@
+{
+  "title": "EARNED MODEL LEADERBOARD — provider ratings from verified canary fact-checks",
+  "generated_at": "2026-07-08T06:15:34.973Z",
+  "laws": {
+    "law1": "a rating exists only from a verified engagement (a provider must actually vote)",
+    "law2": "anchored to ground truth (scored against the corpus known TRUE/FALSE labels)",
+    "law3": "every rating carries its receipt (run + N verified claims + corpus hash)"
+  },
+  "receipt": {
+    "canary_run": "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json",
+    "canary_run_generated_at": "2026-07-08T02:17:06.804Z",
+    "canary_run_sha256": "b08740e560529b40cacb3a23a3fdc1dd9aa990b4c2baa29a414b02b6df1cb826",
+    "corpus": "eval/canary/canary-corpus-v1.1.jsonl",
+    "corpus_sha256": "b244c3c63d5d6f15cb4e48487b74ec9dcc861a5b4c0298e3d8c48be47edd7e1e",
+    "corpus_scope": "clean-oracle (v1.1)",
+    "n_claims": 47,
+    "filter": {
+      "clean_corpus_env": "eval/canary/canary-corpus-v1.1.jsonl",
+      "raw_run_size": 50,
+      "scored_rows": 47,
+      "dropped_count": 3,
+      "dropped_rows": [
+        {
+          "idx": 1,
+          "label": "TRUE",
+          "difficulty": "easy",
+          "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly."
+        },
+        {
+          "idx": 7,
+          "label": "FALSE",
+          "difficulty": "medium",
+          "claim": "Humans share approximately 50% of their DNA with bananas."
+        },
+        {
+          "idx": 8,
+          "label": "TRUE",
+          "difficulty": "hard",
+          "claim": "Humans share approximately 60% of their DNA with bananas."
+        }
+      ]
+    }
+  },
+  "quorum_manifest": [
+    {
+      "name": "groq",
+      "model": "llama-3.1-8b-instant",
+      "family": "llama"
+    },
+    {
+      "name": "cerebras",
+      "model": "zai-glm-4.7",
+      "family": "glm"
+    },
+    {
+      "name": "deepseek",
+      "model": "deepseek-chat",
+      "family": "deepseek"
+    },
+    {
+      "name": "gemini",
+      "model": "gemini-2.0-flash",
+      "family": "gemini"
+    },
+    {
+      "name": "mistral",
+      "model": "mistral-small-latest",
+      "family": "mistral"
+    },
+    {
+      "name": "openrouter",
+      "model": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "family": "qwen"
+    }
+  ],
+  "n_claims": 47,
+  "coverage_floor_pct": 80,
+  "low_n_threshold": 5,
+  "small_n_caveat": "N=47 known-answer claims — directional, not a benchmark leaderboard. Treat as an earned snapshot from one verified run, not a universal ranking.",
+  "leaderboard": [
+    {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "family": "deepseek",
+      "axes": {
+        "accuracy_pct": 100,
+        "correct": 47,
+        "committed": 47,
+        "abstains": 0,
+        "errors": 0,
+        "seen": 47,
+        "calibration": {
+          "easy": {
+            "pct": 100,
+            "n": 31,
+            "low_n": false
+          },
+          "hard": {
+            "pct": 100,
+            "n": 4,
+            "low_n": true
+          },
+          "hard_abstain_rate_pct": 0,
+          "mean_confidence_when_wrong": null,
+          "mean_confidence_when_correct": 98.5,
+          "abstains": 0
+        },
+        "coverage": {
+          "responded_pct": 100,
+          "committed_pct": 100,
+          "errors": 0,
+          "error_rate_pct": 0,
+          "seen": 47,
+          "meets_floor": true
+        },
+        "latency": {
+          "median_ms": 296,
+          "p95_ms": 350,
+          "samples": 47
+        }
+      },
+      "receipt": {
+        "canary_run": "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json",
+        "canary_run_generated_at": "2026-07-08T02:17:06.804Z",
+        "canary_run_sha256": "b08740e560529b40cacb3a23a3fdc1dd9aa990b4c2baa29a414b02b6df1cb826",
+        "corpus": "eval/canary/canary-corpus-v1.1.jsonl",
+        "corpus_sha256": "b244c3c63d5d6f15cb4e48487b74ec9dcc861a5b4c0298e3d8c48be47edd7e1e",
+        "corpus_scope": "clean-oracle (v1.1)",
+        "n_claims": 47,
+        "filter": {
+          "clean_corpus_env": "eval/canary/canary-corpus-v1.1.jsonl",
+          "raw_run_size": 50,
+          "scored_rows": 47,
+          "dropped_count": 3,
+          "dropped_rows": [
+            {
+              "idx": 1,
+              "label": "TRUE",
+              "difficulty": "easy",
+              "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly."
+            },
+            {
+              "idx": 7,
+              "label": "FALSE",
+              "difficulty": "medium",
+              "claim": "Humans share approximately 50% of their DNA with bananas."
+            },
+            {
+              "idx": 8,
+              "label": "TRUE",
+              "difficulty": "hard",
+              "claim": "Humans share approximately 60% of their DNA with bananas."
+            }
+          ]
+        },
+        "committed_votes": 47,
+        "total_claims": 47
+      }
+    },
+    {
+      "provider": "mistral",
+      "model": "mistral-small-latest",
+      "family": "mistral",
+      "axes": {
+        "accuracy_pct": 93.6,
+        "correct": 44,
+        "committed": 47,
+        "abstains": 0,
+        "errors": 0,
+        "seen": 47,
+        "calibration": {
+          "easy": {
+            "pct": 100,
+            "n": 31,
+            "low_n": false
+          },
+          "hard": {
+            "pct": 75,
+            "n": 4,
+            "low_n": true
+          },
+          "hard_abstain_rate_pct": 0,
+          "mean_confidence_when_wrong": 98.3,
+          "mean_confidence_when_correct": 99,
+          "abstains": 0
+        },
+        "coverage": {
+          "responded_pct": 100,
+          "committed_pct": 100,
+          "errors": 0,
+          "error_rate_pct": 0,
+          "seen": 47,
+          "meets_floor": true
+        },
+        "latency": {
+          "median_ms": 542,
+          "p95_ms": 668,
+          "samples": 47
+        }
+      },
+      "receipt": {
+        "canary_run": "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json",
+        "canary_run_generated_at": "2026-07-08T02:17:06.804Z",
+        "canary_run_sha256": "b08740e560529b40cacb3a23a3fdc1dd9aa990b4c2baa29a414b02b6df1cb826",
+        "corpus": "eval/canary/canary-corpus-v1.1.jsonl",
+        "corpus_sha256": "b244c3c63d5d6f15cb4e48487b74ec9dcc861a5b4c0298e3d8c48be47edd7e1e",
+        "corpus_scope": "clean-oracle (v1.1)",
+        "n_claims": 47,
+        "filter": {
+          "clean_corpus_env": "eval/canary/canary-corpus-v1.1.jsonl",
+          "raw_run_size": 50,
+          "scored_rows": 47,
+          "dropped_count": 3,
+          "dropped_rows": [
+            {
+              "idx": 1,
+              "label": "TRUE",
+              "difficulty": "easy",
+              "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly."
+            },
+            {
+              "idx": 7,
+              "label": "FALSE",
+              "difficulty": "medium",
+              "claim": "Humans share approximately 50% of their DNA with bananas."
+            },
+            {
+              "idx": 8,
+              "label": "TRUE",
+              "difficulty": "hard",
+              "claim": "Humans share approximately 60% of their DNA with bananas."
+            }
+          ]
+        },
+        "committed_votes": 47,
+        "total_claims": 47
+      }
+    },
+    {
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant",
+      "family": "llama",
+      "axes": {
+        "accuracy_pct": 91.5,
+        "correct": 43,
+        "committed": 47,
+        "abstains": 0,
+        "errors": 0,
+        "seen": 47,
+        "calibration": {
+          "easy": {
+            "pct": 96.8,
+            "n": 31,
+            "low_n": false
+          },
+          "hard": {
+            "pct": 100,
+            "n": 4,
+            "low_n": true
+          },
+          "hard_abstain_rate_pct": 0,
+          "mean_confidence_when_wrong": 92.5,
+          "mean_confidence_when_correct": 97.2,
+          "abstains": 0
+        },
+        "coverage": {
+          "responded_pct": 100,
+          "committed_pct": 100,
+          "errors": 0,
+          "error_rate_pct": 0,
+          "seen": 47,
+          "meets_floor": true
+        },
+        "latency": {
+          "median_ms": 274,
+          "p95_ms": 356,
+          "samples": 47
+        }
+      },
+      "receipt": {
+        "canary_run": "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json",
+        "canary_run_generated_at": "2026-07-08T02:17:06.804Z",
+        "canary_run_sha256": "b08740e560529b40cacb3a23a3fdc1dd9aa990b4c2baa29a414b02b6df1cb826",
+        "corpus": "eval/canary/canary-corpus-v1.1.jsonl",
+        "corpus_sha256": "b244c3c63d5d6f15cb4e48487b74ec9dcc861a5b4c0298e3d8c48be47edd7e1e",
+        "corpus_scope": "clean-oracle (v1.1)",
+        "n_claims": 47,
+        "filter": {
+          "clean_corpus_env": "eval/canary/canary-corpus-v1.1.jsonl",
+          "raw_run_size": 50,
+          "scored_rows": 47,
+          "dropped_count": 3,
+          "dropped_rows": [
+            {
+              "idx": 1,
+              "label": "TRUE",
+              "difficulty": "easy",
+              "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly."
+            },
+            {
+              "idx": 7,
+              "label": "FALSE",
+              "difficulty": "medium",
+              "claim": "Humans share approximately 50% of their DNA with bananas."
+            },
+            {
+              "idx": 8,
+              "label": "TRUE",
+              "difficulty": "hard",
+              "claim": "Humans share approximately 60% of their DNA with bananas."
+            }
+          ]
+        },
+        "committed_votes": 47,
+        "total_claims": 47
+      }
+    }
+  ],
+  "provisional": [
+    {
+      "provider": "cerebras",
+      "model": "zai-glm-4.7",
+      "family": "glm",
+      "axes": {
+        "accuracy_pct": 100,
+        "correct": 10,
+        "committed": 10,
+        "abstains": 10,
+        "errors": 27,
+        "seen": 47,
+        "calibration": {
+          "easy": {
+            "pct": 100,
+            "n": 6,
+            "low_n": false
+          },
+          "hard": {
+            "pct": 100,
+            "n": 1,
+            "low_n": true
+          },
+          "hard_abstain_rate_pct": 25,
+          "mean_confidence_when_wrong": null,
+          "mean_confidence_when_correct": 95.9,
+          "abstains": 10
+        },
+        "coverage": {
+          "responded_pct": 42.6,
+          "committed_pct": 21.3,
+          "errors": 27,
+          "error_rate_pct": 57.4,
+          "seen": 47,
+          "meets_floor": false
+        },
+        "latency": {
+          "median_ms": 3832,
+          "p95_ms": 4302,
+          "samples": 20
+        }
+      },
+      "receipt": {
+        "canary_run": "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json",
+        "canary_run_generated_at": "2026-07-08T02:17:06.804Z",
+        "canary_run_sha256": "b08740e560529b40cacb3a23a3fdc1dd9aa990b4c2baa29a414b02b6df1cb826",
+        "corpus": "eval/canary/canary-corpus-v1.1.jsonl",
+        "corpus_sha256": "b244c3c63d5d6f15cb4e48487b74ec9dcc861a5b4c0298e3d8c48be47edd7e1e",
+        "corpus_scope": "clean-oracle (v1.1)",
+        "n_claims": 47,
+        "filter": {
+          "clean_corpus_env": "eval/canary/canary-corpus-v1.1.jsonl",
+          "raw_run_size": 50,
+          "scored_rows": 47,
+          "dropped_count": 3,
+          "dropped_rows": [
+            {
+              "idx": 1,
+              "label": "TRUE",
+              "difficulty": "easy",
+              "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly."
+            },
+            {
+              "idx": 7,
+              "label": "FALSE",
+              "difficulty": "medium",
+              "claim": "Humans share approximately 50% of their DNA with bananas."
+            },
+            {
+              "idx": 8,
+              "label": "TRUE",
+              "difficulty": "hard",
+              "claim": "Humans share approximately 60% of their DNA with bananas."
+            }
+          ]
+        },
+        "committed_votes": 10,
+        "total_claims": 47
+      }
+    }
+  ],
+  "unrated": [
+    {
+      "provider": "gemini",
+      "model": "gemini-2.0-flash",
+      "family": "gemini",
+      "status": "UNRATED — no verified engagement",
+      "reason": "47/47 calls errored (429/quota/timeout); 0 real verdicts. Per LAW 1, no score is fabricated.",
+      "receipt": {
+        "canary_run": "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json",
+        "canary_run_generated_at": "2026-07-08T02:17:06.804Z",
+        "canary_run_sha256": "b08740e560529b40cacb3a23a3fdc1dd9aa990b4c2baa29a414b02b6df1cb826",
+        "corpus": "eval/canary/canary-corpus-v1.1.jsonl",
+        "corpus_sha256": "b244c3c63d5d6f15cb4e48487b74ec9dcc861a5b4c0298e3d8c48be47edd7e1e",
+        "corpus_scope": "clean-oracle (v1.1)",
+        "n_claims": 47,
+        "filter": {
+          "clean_corpus_env": "eval/canary/canary-corpus-v1.1.jsonl",
+          "raw_run_size": 50,
+          "scored_rows": 47,
+          "dropped_count": 3,
+          "dropped_rows": [
+            {
+              "idx": 1,
+              "label": "TRUE",
+              "difficulty": "easy",
+              "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly."
+            },
+            {
+              "idx": 7,
+              "label": "FALSE",
+              "difficulty": "medium",
+              "claim": "Humans share approximately 50% of their DNA with bananas."
+            },
+            {
+              "idx": 8,
+              "label": "TRUE",
+              "difficulty": "hard",
+              "claim": "Humans share approximately 60% of their DNA with bananas."
+            }
+          ]
+        },
+        "committed_votes": 0,
+        "total_claims": 47
+      }
+    },
+    {
+      "provider": "openrouter",
+      "model": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "family": "qwen",
+      "status": "UNRATED — no verified engagement",
+      "reason": "47/47 calls errored (429/quota/timeout); 0 real verdicts. Per LAW 1, no score is fabricated.",
+      "receipt": {
+        "canary_run": "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json",
+        "canary_run_generated_at": "2026-07-08T02:17:06.804Z",
+        "canary_run_sha256": "b08740e560529b40cacb3a23a3fdc1dd9aa990b4c2baa29a414b02b6df1cb826",
+        "corpus": "eval/canary/canary-corpus-v1.1.jsonl",
+        "corpus_sha256": "b244c3c63d5d6f15cb4e48487b74ec9dcc861a5b4c0298e3d8c48be47edd7e1e",
+        "corpus_scope": "clean-oracle (v1.1)",
+        "n_claims": 47,
+        "filter": {
+          "clean_corpus_env": "eval/canary/canary-corpus-v1.1.jsonl",
+          "raw_run_size": 50,
+          "scored_rows": 47,
+          "dropped_count": 3,
+          "dropped_rows": [
+            {
+              "idx": 1,
+              "label": "TRUE",
+              "difficulty": "easy",
+              "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly."
+            },
+            {
+              "idx": 7,
+              "label": "FALSE",
+              "difficulty": "medium",
+              "claim": "Humans share approximately 50% of their DNA with bananas."
+            },
+            {
+              "idx": 8,
+              "label": "TRUE",
+              "difficulty": "hard",
+              "claim": "Humans share approximately 60% of their DNA with bananas."
+            }
+          ]
+        },
+        "committed_votes": 0,
+        "total_claims": 47
+      }
+    }
+  ]
+}
