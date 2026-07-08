@@ -4,13 +4,20 @@ import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError,
  * OpenRouter adapter — OpenAI-compatible aggregator. Idle-but-LIVE key
  * (OPENROUTER_API_KEY) wired 2026-07-07 as the LAST tier-0 fallback so a burst
  * that 429s the free tiers still has an escape hatch before escalating to
- * tier-1 (anthropic/openai). Default model is a cheap :free variant so the
- * fallback stays $0; override via OPENROUTER_MODEL.
+ * tier-1 (anthropic/openai). Default model is a cheap PAID variant (~$0 per
+ * call) so the fallback actually resolves under load instead of 429-ing like a
+ * `:free` slug; override via OPENROUTER_MODEL.
  *
  * Per OpenRouter norms it sends HTTP-Referer (from OPENROUTER_REFERRER) and an
  * X-Title header — both optional on OpenRouter's side but recommended for
  * attribution/ranking. Key is read from req.apiKey (resolved from env by the
  * router, exactly like every peer adapter) — NEVER hardcoded.
+ *
+ * DEAD-SLUG FIX (2026-07-08): the prior default `meta-llama/llama-3.3-70b-instruct:free` 429s hard on
+ * the free tier (verified live) — self-defeating for a LAST-resort fallback whose whole job is to fire
+ * when the free tiers are already throttling. Default is now the cheap PAID `qwen/qwen-2.5-72b-instruct`
+ * (verified 200 + real content on the live /models list; ~$0 per call, we have OpenRouter balance).
+ * Override via OPENROUTER_MODEL — verify the slug is on the live /models list before setting it.
  */
 export class OpenRouterAdapter implements ProviderAdapter {
   name = 'openrouter';
@@ -21,7 +28,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+    const model = req.model || process.env.OPENROUTER_MODEL || 'qwen/qwen-2.5-72b-instruct';
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
