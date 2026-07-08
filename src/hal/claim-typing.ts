@@ -94,9 +94,22 @@ export function segmentClaims(output: string): string[] {
  * built only from numbers and + - * / ( ) % and the words "of"/"percent".
  * We deliberately require an explicit relational operator (= / == / equals /
  * is / </>/≈) so we only claim to check *assertions*, not bare expressions.
+ *
+ * Two-pass: SYMBOLIC relations first (=, <=, ≈, …) because they unambiguously
+ * split the math expression even inside prose ("The total is 2 + 2 = 5" locks
+ * on the '='). Only when NO symbolic relation is present do we fall back to the
+ * word operators ("equals" / "is"), which are prose-ambiguous.
  */
-const ARITH_RELATION =
-  /(.+?)\s*(=|==|equals|is equal to|is|≈|approximately|≠|!=|<=|>=|<|>)\s*(.+)/i;
+// Symbolic: match the LAST relation so "2 + 2 = 5" splits at '=', not a stray '<'.
+const ARITH_RELATION_SYMBOLIC =
+  /^(.*?)\s*(==|<=|>=|!=|≠|≈|=|<|>)\s*([^=<>≠≈]+)$/;
+// Word operators (fallback only): "X equals Y", "X is Y".
+const ARITH_RELATION_WORD =
+  /(.+?)\s+(equals|is equal to|is|approximately)\s+(.+)/i;
+
+function matchArithRelation(content: string): RegExpMatchArray | null {
+  return content.match(ARITH_RELATION_SYMBOLIC) ?? content.match(ARITH_RELATION_WORD);
+}
 
 /** A math-expression token set: digits, operators, parens, %, decimal points, whitespace, and the word "of". */
 const MATH_EXPR = /^[\s\d+\-*/().,%^]+$/;
@@ -113,12 +126,30 @@ function looksLikeMathExpr(s: string): boolean {
   return MATH_EXPR.test(cleaned);
 }
 
+/**
+ * Given one side of a relation that may carry leading/trailing prose
+ * ("The total is 2 + 2" → "2 + 2"), extract the contiguous math expression
+ * adjacent to the operator. For lhs we keep the TRAILING math run; for rhs the
+ * LEADING one. Returns the original string if no math run is found (the caller's
+ * looksLikeMathExpr guard then rejects it).
+ */
+function extractMathSide(side: string, which: 'lhs' | 'rhs'): string {
+  const normalized = side.replace(/\bpercent\b/gi, '%').replace(/\bof\b/gi, ' of ');
+  // A math run: numbers/operators/parens/%/of, possibly space-separated.
+  const runRe = /(?:\d[\d.,]*|[-+*/()^%]|\bof\b)(?:\s*(?:\d[\d.,]*|[-+*/()^%]|\bof\b))*/gi;
+  const runs = normalized.match(runRe);
+  if (!runs || runs.length === 0) return side;
+  const picked = which === 'lhs' ? runs[runs.length - 1]! : runs[0]!;
+  return picked.trim();
+}
+
 function recognizeArithmetic(content: string): TypedClaim | null {
-  const m = content.match(ARITH_RELATION);
+  const m = matchArithRelation(content);
   if (!m) return null;
-  const lhs = (m[1] ?? '').trim();
+  // Strip trailing prose/punctuation off both sides; keep only the math-relevant tail/head.
+  const lhs = extractMathSide((m[1] ?? '').trim(), 'lhs');
   const op = (m[2] ?? '').trim().toLowerCase();
-  const rhs = (m[3] ?? '').trim().replace(/[.!?]+$/, '');
+  const rhs = extractMathSide((m[3] ?? '').trim().replace(/[.!?]+$/, ''), 'rhs');
   // Both sides must look like math for this to be a checkable arithmetic claim.
   // (At least one side must be a compound expression, else it's a bare
   //  number identity like "x is 5" which we don't execute.)
