@@ -5,6 +5,7 @@ import { scorePrediction } from '../layers/prediction-scoring';
 import { applyDecay, computeRedemptionModifier } from '../layers/decay';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges, BadgeAward } from './badges';
+import { DETECTION_CONFIRM_THRESHOLD } from './behavioral-integrity';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -154,6 +155,70 @@ export function isDeceptionEvent(eventType: RepIdUpdateInput['eventType']): bool
   return eventType in DECEPTION_DELTAS;
 }
 
+/** The record-corrupting classes eligible for the heavy (-60) tier. */
+const RECORD_CORRUPTING_EVENTS = new Set<RepIdUpdateInput['eventType']>([
+  'DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT',
+  'DEFENDED_DECEPTION_FABRICATED_CITATION',
+  'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+  'DEFENDED_DECEPTION_FABRICATED_BENCHMARK',
+  'DEFENDED_DECEPTION_STORY_CHANGE',
+]);
+
+/**
+ * The advisory (light) delta a deception event collapses to when it is NOT
+ * backed by a confirmed, grounded detection. We route unproven / heuristic /
+ * below-threshold detections here rather than to the heavy tier — for a TRUST
+ * product a false heavy penalty on an honest agent is the worst outcome, so an
+ * unconfirmed signal is at most an ordinary-error-weight advisory.
+ */
+const DECEPTION_ADVISORY_DELTA = FIXED_DELTAS.UNSUPPORTED_CLAIM ?? -8;
+
+/**
+ * Gate a defended-deception penalty on a CONFIRMED, GROUNDED detection (M1
+ * findings 4+5). Returns the delta the event is ALLOWED to carry:
+ *   - The full heavy delta (-60 / -40) ONLY when a deceptionProof is present,
+ *     grounded === true, AND confidence >= the confirm threshold.
+ *   - Otherwise the light advisory delta — an unproven/heuristic/below-threshold
+ *     detection can NEVER reach the heavy tier, and specifically a -60
+ *     record-corrupting penalty requires a grounded proof (no -60 on heuristics).
+ *
+ * A missing proof is treated as UNCONFIRMED on purpose: the penalty bridge must
+ * supply the M2 detection that justifies the heavy delta; without it we do not
+ * assume guilt.
+ */
+export function gatedDeceptionDelta(input: RepIdUpdateInput): {
+  delta: number;
+  confirmed: boolean;
+  reason: string;
+} {
+  const heavy = DECEPTION_DELTAS[input.eventType] ?? 0;
+  const proof = input.deceptionProof;
+
+  if (!proof) {
+    return {
+      delta: DECEPTION_ADVISORY_DELTA,
+      confirmed: false,
+      reason: 'no deceptionProof supplied — advisory only (unconfirmed)',
+    };
+  }
+  if (proof.confidence < DETECTION_CONFIRM_THRESHOLD) {
+    return {
+      delta: DECEPTION_ADVISORY_DELTA,
+      confirmed: false,
+      reason: `below confirm threshold (${proof.confidence} < ${DETECTION_CONFIRM_THRESHOLD}) — advisory only`,
+    };
+  }
+  // A -60 record-corrupting penalty additionally REQUIRES a grounded proof.
+  if (RECORD_CORRUPTING_EVENTS.has(input.eventType) && !proof.grounded) {
+    return {
+      delta: DECEPTION_ADVISORY_DELTA,
+      confirmed: false,
+      reason: 'record-corrupting class without a grounded proof — advisory only (no -60 on heuristics)',
+    };
+  }
+  return { delta: heavy, confirmed: true, reason: 'confirmed grounded detection' };
+}
+
 /**
  * TRUST_DECEPTION_MODE gate (M1). SHADOW-FIRST by default: in `shadow` mode we
  * COMPUTE the (heavy) deception delta and write a replayable audit row tagged
@@ -250,11 +315,14 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     // granted +5 with no real deposit backing it (RULE-4: honest scoring).
     rawDelta = input.stakeProof?.txHash ? (FIXED_DELTAS.STAKE ?? 0) : 0;
   } else if (isDeceptionEvent(input.eventType)) {
-    // DEFENDED DECEPTION (M1). The heavy negative delta. This is COMPUTED here
-    // regardless of TRUST_DECEPTION_MODE; whether it MUTATES the score is
-    // decided below by the shadow/enforce gate. Computing it always is what
-    // lets shadow mode MEASURE the would-be penalty before enforcement.
-    rawDelta = DECEPTION_DELTAS[input.eventType] ?? 0;
+    // DEFENDED DECEPTION (M1). The negative delta is GATED on a confirmed,
+    // grounded M2 detection (findings 4+5): the heavy -60/-40 tier applies only
+    // when input.deceptionProof is present, grounded, and >= the confirm
+    // threshold. An unproven / heuristic / below-threshold detection collapses
+    // to the light advisory delta — never the heavy tier, and never -60 without
+    // a grounded proof. This is COMPUTED here regardless of TRUST_DECEPTION_MODE;
+    // whether it MUTATES the score is decided below by the shadow/enforce gate.
+    rawDelta = gatedDeceptionDelta(input).delta;
   } else {
     rawDelta = FIXED_DELTAS[input.eventType] ?? 0;
   }
@@ -271,11 +339,22 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // mutate: the mode label is written into the audit row below.
   const isDeception = isDeceptionEvent(input.eventType);
   const decMode = deceptionMode();
-  const finalDelta =
-    isDeception && decMode === 'shadow' ? 0 : computedDelta;
+  // SHADOW-DECEPTION must be TRULY INERT (finding 2): a shadow deception event
+  // may not move current_repid AT ALL — not via the delta AND not via decay —
+  // and may not increment activity_30d. We therefore short-circuit both the
+  // applied delta AND the decay on this path, leaving current_repid exactly as
+  // it was. The audit row then honestly reflects no move: delta 0 AND
+  // repid_after === repid_before, mode 'shadow-deception'. (Enforce mode and all
+  // non-deception events keep the normal decay + delta behavior.)
+  const isShadowDeception = isDeception && decMode === 'shadow';
+  const finalDelta = isShadowDeception ? 0 : computedDelta;
 
-  // 7 — New RepID and tier (uses the APPLIED delta; shadow deception => no move)
-  const newRepId = Math.max(10, Math.min(10000, decayedRepId + finalDelta));
+  // 7 — New RepID and tier (uses the APPLIED delta; shadow deception => no move).
+  // On the shadow-deception path the score is left UNCHANGED (no decay applied),
+  // so repid_after === repid_before and the event is a pure measurement.
+  const newRepId = isShadowDeception
+    ? agent.current_repid
+    : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
 
   // 8 — AUDIT ROW FIRST (atomicity reorder, 2026-06-29). Write the replayable ledger row BEFORE
@@ -322,7 +401,14 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // Provenance for a defended-deception penalty: the M2 detection that
       // triggered it (class/confidence/evidence + receipt refs). Null otherwise.
       deceptionProof: isDeception ? (input.deceptionProof ?? null) : null,
-      decayApplied: agent.current_repid - decayedRepId,
+      // M1 findings 4+5: whether the deception delta was backed by a CONFIRMED,
+      // grounded detection. When false, the event was routed to the light
+      // advisory delta (never the heavy -60/-40 tier) — recorded so a shadow
+      // measurement can distinguish real grounded hits from advisory ones.
+      deceptionConfirmed: isDeception ? gatedDeceptionDelta(input).confirmed : null,
+      deceptionGateReason: isDeception ? gatedDeceptionDelta(input).reason : null,
+      // Shadow-deception is inert: NO decay is applied on that path, so record 0.
+      decayApplied: isShadowDeception ? 0 : agent.current_repid - decayedRepId,
       redemptionModifier: redemptionMod,
       redemptionModifierApplied: redemptionApplied,
       constitutionalAudit: {
@@ -360,8 +446,14 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // 9 — Apply the score AFTER the audit row is safely written (atomicity reorder 2026-06-29, gated
   // by WRITER_DIRECT_APPLY for single-applier cutover). The ledger row already exists, so even if
   // this update fails the state stays reconcilable via replay — never a silent score-without-row drift.
+  //
+  // SHADOW-DECEPTION INERTNESS (finding 2): on the shadow-deception path we skip
+  // the repid_agents write ENTIRELY. Writing it would (a) re-persist current_repid
+  // (still risky if decay were ever reintroduced) and (b) increment activity_30d
+  // — a side effect that is NOT inert. A shadow measurement must leave both
+  // current_repid AND activity_30d untouched, so we do not write at all.
   const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
-  if (WRITER_DIRECT_APPLY) {
+  if (WRITER_DIRECT_APPLY && !isShadowDeception) {
     await db.from('repid_agents').update({
       current_repid: newRepId, tier: newTier,
       last_updated: new Date().toISOString(),
