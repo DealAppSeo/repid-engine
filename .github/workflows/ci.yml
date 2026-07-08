@@ -51,9 +51,13 @@ jobs:
 
       - name: Integration tests
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Disposable TEST Supabase project (ref ebiftjvrbsotpdthsyav) — NEVER prod.
+          # Integration tests insert/update/delete; they must only touch the test DB.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL_TEST }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY_TEST }}
           SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
         run: npm run test:integration
-        # Tests in tests/integration/* skip gracefully when env unset,
-        # so this step won't fail on PRs from forks without secrets access.
+        # Write-path suites gate on prod-guard + schema-presence
+        # (tests/helpers/describe-if-schema.ts): they SKIP (green) when the
+        # test project is unseeded/empty, and RUN once its schema is seeded.
+        # Tests also skip gracefully when env is unset (forks without secrets).

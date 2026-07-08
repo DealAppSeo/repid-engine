@@ -7,8 +7,10 @@ process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy-ke
 
 import request from 'supertest';
 import app from '../../src/index';
+import { integrationSchemaPresent } from '../helpers/describe-if-schema';
 
-const live = HAVE_CREDS ? describe : describe.skip;
+// Live-DB assertions run only with creds AND a seeded, non-prod test schema.
+const live = HAVE_CREDS && integrationSchemaPresent() ? describe : describe.skip;
 
 live('cost + efficiency dashboards (live llm_call_log)', () => {
   it('GET /costs/summary returns the 24h cost shape', async () => {

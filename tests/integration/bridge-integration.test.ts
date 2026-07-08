@@ -1,6 +1,7 @@
 import { db } from '../../src/db';
 import { applyServiceFulfilledDeltas } from '../../src/services/validation-repid-delta';
 import { FeedbackLoopWorker } from '../../src/workers/feedback-loop-worker';
+import { describeIfSchema } from '../helpers/describe-if-schema';
 import crypto from 'crypto';
 
 // Mock pgQuery to fetch from the actual db using supabase-js db client!
@@ -31,7 +32,7 @@ const mockWriter = {
   })
 };
 
-describe('Bridge Integration E2E Trace', () => {
+describeIfSchema('Bridge Integration E2E Trace', () => {
   const buyer_agent_id = '84f2d7de-5bb9-4f3b-92ca-aecc7c498271';
   const provider_agent_id = '32e0e809-c1c4-4405-913f-135c8a2d6626'; // trinity-shofet (Established, token 5863)
   const service_id = '0edfc364-ad2a-4b3a-bdc4-20b03ab92e21';
