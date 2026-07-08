@@ -810,22 +810,46 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   }
   // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
   // Auto-backfilled when their key is present (HAL_QUORUM_AUTOBACKFILL); else opt-in per enable flag.
+  //
+  // GEMINI RE-ROUTE (2026-07-08): the DIRECT Gemini endpoint 429s "credits depleted" (paid Gemini
+  // credits exhausted), so the gemini family contributed 0 real votes. When an OpenRouter key is
+  // present we re-route the gemini family THROUGH OpenRouter (funded, ~$9.68 balance) — same
+  // OpenAI-compatible shape, family stays 'gemini'. `google/gemini-3.5-flash` is verified LIVE on the
+  // OpenRouter /models list and returns real content (200, not the direct API's 429). This revives the
+  // second family without a separate provider. Falls back to the direct endpoint when no OpenRouter key
+  // (using the direct API's own default model). Reversible: HAL_S2_GEMINI_VIA_OPENROUTER=false forces
+  // the direct endpoint. Model override: HAL_S2_GEMINI_MODEL (must match the chosen endpoint's slugs).
   const gm = process.env.GEMINI_API_KEY?.trim();
-  if (gm && (enabled.gemini || ab)) {
-    out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
+  const orForGemini = process.env.OPENROUTER_API_KEY?.trim();
+  const geminiViaOpenRouter = orForGemini && process.env.HAL_S2_GEMINI_VIA_OPENROUTER !== 'false';
+  if ((gm || orForGemini) && (enabled.gemini || ab)) {
+    if (geminiViaOpenRouter) {
+      out.push({ name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini!, model: process.env.HAL_S2_GEMINI_MODEL ?? 'google/gemini-3.5-flash', family: 'gemini' });
+    } else if (gm) {
+      out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
+    }
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
   if (ms && (enabled.mistral || ab)) {
     out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
   }
-  // OpenRouter — LAST backfill resort (aggregator; a :free variant is $0). Its family derives from the
-  // configured model, so the DEFAULT is a QWEN free model — a family distinct from the always-on hosts
-  // (groq=llama, cerebras=glm) and the other backfill families (deepseek/gemini/mistral). A llama :free
-  // default would collapse with groq and break the family-independence quorum. Override via
-  // HAL_S2_OPENROUTER_MODEL (pick a family not already present, else it counts as ONE vote with it).
+  // OpenRouter — LAST backfill resort (aggregator). Its family derives from the configured model, so the
+  // DEFAULT is a QWEN model — a family distinct from the always-on hosts (groq=llama, cerebras=glm) and
+  // the other backfill families (deepseek/gemini/mistral). A llama default would collapse with groq and
+  // break the family-independence quorum.
+  //
+  // DEAD-SLUG FIX (2026-07-08): the prior default `qwen/qwen-2.5-72b-instruct:free` was RETIRED and 404s
+  // on the OpenRouter API (verified against the live /models list + a real completion call — 404), so
+  // OpenRouter contributed 0 votes and the quorum fell back to the extractor ~half the time. The live
+  // slugs are the PAID `qwen/qwen-2.5-72b-instruct` (verified 200 + real content) and the `:free`
+  // qwen3 variants — but the free variants 429 hard under any load (verified), which defeats a backfill
+  // whose whole job is to fire when the free tiers throttle. So the default is the cheap PAID qwen
+  // ($0.36/M in, ~$0 per verdict; we have OpenRouter balance). Override via HAL_S2_OPENROUTER_MODEL
+  // (pick a family not already present, else it counts as ONE vote with it) — verify the slug is on the
+  // live /models list first.
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
-    out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'qwen/qwen-2.5-72b-instruct:free' });
+    out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'qwen/qwen-2.5-72b-instruct' });
   }
   // qwen stays opt-in (endpoint region varies per key) — NOT auto-backfilled.
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
