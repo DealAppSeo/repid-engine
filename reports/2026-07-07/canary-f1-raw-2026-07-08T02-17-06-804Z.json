@@ -1,0 +1,3333 @@
+{
+  "generated_at": "2026-07-08T02:17:06.804Z",
+  "corpus_size": 50,
+  "quorum": [
+    {
+      "name": "groq",
+      "model": "llama-3.1-8b-instant",
+      "family": "llama"
+    },
+    {
+      "name": "cerebras",
+      "model": "zai-glm-4.7",
+      "family": "glm"
+    },
+    {
+      "name": "deepseek",
+      "model": "deepseek-chat",
+      "family": "deepseek"
+    },
+    {
+      "name": "gemini",
+      "model": "gemini-2.0-flash",
+      "family": "gemini"
+    },
+    {
+      "name": "mistral",
+      "model": "mistral-small-latest",
+      "family": "mistral"
+    },
+    {
+      "name": "openrouter",
+      "model": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "family": "qwen"
+    }
+  ],
+  "providers_that_voted": [
+    "cerebras",
+    "deepseek",
+    "groq",
+    "mistral"
+  ],
+  "overall": {
+    "precision": 0.8696,
+    "recall": 1,
+    "f1": 0.9302,
+    "accuracy": 0.94,
+    "decided": 50,
+    "abstain": 0
+  },
+  "confusion": {
+    "tp": 20,
+    "fp": 3,
+    "tn": 27,
+    "fn": 0,
+    "abstain": 0
+  },
+  "by_difficulty": {
+    "easy": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 32,
+      "abstain": 0,
+      "cell": {
+        "tp": 14,
+        "fp": 0,
+        "tn": 18,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "medium": {
+      "precision": 0.8333,
+      "recall": 1,
+      "f1": 0.9091,
+      "accuracy": 0.9231,
+      "decided": 13,
+      "abstain": 0,
+      "cell": {
+        "tp": 5,
+        "fp": 1,
+        "tn": 7,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "hard": {
+      "precision": 0.3333,
+      "recall": 1,
+      "f1": 0.5,
+      "accuracy": 0.6,
+      "decided": 5,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 2,
+        "tn": 2,
+        "fn": 0,
+        "abstain": 0
+      }
+    }
+  },
+  "by_domain": {
+    "history_of_science": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 3,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 2,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "physics": {
+      "precision": 0,
+      "recall": 0,
+      "f1": 0,
+      "accuracy": 1,
+      "decided": 4,
+      "abstain": 0,
+      "cell": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 4,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "common_misconception": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 7,
+      "abstain": 0,
+      "cell": {
+        "tp": 7,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "history": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 2,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "chemistry": {
+      "precision": 0,
+      "recall": 0,
+      "f1": 0,
+      "accuracy": 1,
+      "decided": 3,
+      "abstain": 0,
+      "cell": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 3,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "geography": {
+      "precision": 0.8,
+      "recall": 1,
+      "f1": 0.8889,
+      "accuracy": 0.9,
+      "decided": 10,
+      "abstain": 0,
+      "cell": {
+        "tp": 4,
+        "fp": 1,
+        "tn": 5,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "biology": {
+      "precision": 0.5,
+      "recall": 1,
+      "f1": 0.6667,
+      "accuracy": 0.6667,
+      "decided": 6,
+      "abstain": 0,
+      "cell": {
+        "tp": 2,
+        "fp": 2,
+        "tn": 2,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "medicine": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 1,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "mathematics": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 3,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 2,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "demographics": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 1,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "literature": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 1,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 0,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "geology": {
+      "precision": 0,
+      "recall": 0,
+      "f1": 0,
+      "accuracy": 1,
+      "decided": 1,
+      "abstain": 0,
+      "cell": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "art": {
+      "precision": 0,
+      "recall": 0,
+      "f1": 0,
+      "accuracy": 1,
+      "decided": 1,
+      "abstain": 0,
+      "cell": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 1,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "current_facts": {
+      "precision": 0,
+      "recall": 0,
+      "f1": 0,
+      "accuracy": 1,
+      "decided": 4,
+      "abstain": 0,
+      "cell": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 4,
+        "fn": 0,
+        "abstain": 0
+      }
+    },
+    "astronomy": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "accuracy": 1,
+      "decided": 3,
+      "abstain": 0,
+      "cell": {
+        "tp": 1,
+        "fp": 0,
+        "tn": 2,
+        "fn": 0,
+        "abstain": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "idx": 0,
+      "claim": "The Earth's circumference was first accurately calculated by Eratosthenes.",
+      "label": "TRUE",
+      "domain": "history_of_science",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 299
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 1361
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 385
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1344
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 659
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3536
+        }
+      ]
+    },
+    {
+      "idx": 1,
+      "claim": "The boiling point of water at standard sea-level atmospheric pressure is 100°C exactly.",
+      "label": "TRUE",
+      "domain": "physics",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 359
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 844
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 300
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1205
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 647
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3428
+        }
+      ]
+    },
+    {
+      "idx": 2,
+      "claim": "The Great Wall of China is visible from space with the naked eye.",
+      "label": "FALSE",
+      "domain": "common_misconception",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 4 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 90,
+          "latency_ms": 267
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 1158
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 276
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1374
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 520
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3503
+        }
+      ]
+    },
+    {
+      "idx": 3,
+      "claim": "Napoleon Bonaparte was notably short for his era.",
+      "label": "FALSE",
+      "domain": "history",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "2 of 4 independent model families judged this claim FALSE (deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 80,
+          "latency_ms": 388
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 1092
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 60,
+          "latency_ms": 300
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1210
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 600
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3418
+        }
+      ]
+    },
+    {
+      "idx": 4,
+      "claim": "The chemical symbol for gold is Au.",
+      "label": "TRUE",
+      "domain": "chemistry",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 280
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 812
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 287
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1191
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 533
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1371
+        }
+      ]
+    },
+    {
+      "idx": 5,
+      "claim": "The Amazon River is the longest river in the world.",
+      "label": "FALSE",
+      "domain": "geography",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 4 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 289
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 1192
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 285
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1266
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 501
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1199
+        }
+      ]
+    },
+    {
+      "idx": 6,
+      "claim": "The Nile River is approximately 6,650 km long.",
+      "label": "TRUE",
+      "domain": "geography",
+      "difficulty": "medium",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 205
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 4390
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 297
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1145
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 936
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1191
+        }
+      ]
+    },
+    {
+      "idx": 7,
+      "claim": "Humans share approximately 50% of their DNA with bananas.",
+      "label": "FALSE",
+      "domain": "biology",
+      "difficulty": "medium",
+      "hal_decision": "flagged",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "Only 1 family judged this FALSE (mistral) — no independent quorum. Flagged for review, not vetoed.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 271
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3185
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 384
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1292
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 517
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1422
+        }
+      ]
+    },
+    {
+      "idx": 8,
+      "claim": "Humans share approximately 60% of their DNA with bananas.",
+      "label": "TRUE",
+      "domain": "biology",
+      "difficulty": "hard",
+      "hal_decision": "flagged",
+      "prediction": "FALSE",
+      "outcome": "FP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "Only 1 family judged this FALSE (mistral) — no independent quorum. Flagged for review, not vetoed.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 238
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3189
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 293
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1276
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 497
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1369
+        }
+      ]
+    },
+    {
+      "idx": 9,
+      "claim": "Vaccines cause autism.",
+      "label": "FALSE",
+      "domain": "medicine",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 4 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 343
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 3853
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 279
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1045
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 515
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3500
+        }
+      ]
+    },
+    {
+      "idx": 10,
+      "claim": "Mount Everest is the tallest mountain on Earth measured from base to peak.",
+      "label": "FALSE",
+      "domain": "geography",
+      "difficulty": "medium",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 264
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3204
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 291
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1194
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 575
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3424
+        }
+      ]
+    },
+    {
+      "idx": 11,
+      "claim": "Mauna Kea is taller than Mount Everest when measured from its oceanic base.",
+      "label": "TRUE",
+      "domain": "geography",
+      "difficulty": "medium",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 239
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3203
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 304
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1255
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 608
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3420
+        }
+      ]
+    },
+    {
+      "idx": 12,
+      "claim": "The square root of 144 is 12.",
+      "label": "TRUE",
+      "domain": "mathematics",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 238
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 909
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 290
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1263
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 529
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3470
+        }
+      ]
+    },
+    {
+      "idx": 13,
+      "claim": "The population of Australia is greater than that of Canada.",
+      "label": "FALSE",
+      "domain": "demographics",
+      "difficulty": "medium",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "2 of 3 independent model families judged this claim FALSE (deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 90,
+          "latency_ms": 356
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3192
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 296
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1099
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 636
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1075
+        }
+      ]
+    },
+    {
+      "idx": 14,
+      "claim": "Canada has a larger land area than the United States.",
+      "label": "TRUE",
+      "domain": "geography",
+      "difficulty": "medium",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "FP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "2 of 4 independent model families judged this claim FALSE (llama/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 354
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 4120
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 304
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1108
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 628
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1463
+        }
+      ]
+    },
+    {
+      "idx": 15,
+      "claim": "Shakespeare wrote the novel 'The Great Gatsby'.",
+      "label": "FALSE",
+      "domain": "literature",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 340
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3211
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 329
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1280
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 668
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1125
+        }
+      ]
+    },
+    {
+      "idx": 16,
+      "claim": "The speed of light in a vacuum is approximately 299,792,458 meters per second.",
+      "label": "TRUE",
+      "domain": "physics",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 199
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3227
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 291
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1135
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 500
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1188
+        }
+      ]
+    },
+    {
+      "idx": 17,
+      "claim": "Bats are blind.",
+      "label": "FALSE",
+      "domain": "common_misconception",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 4 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 289
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 3917
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 285
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1290
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 653
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1127
+        }
+      ]
+    },
+    {
+      "idx": 18,
+      "claim": "The Pacific Ocean is the largest ocean on Earth.",
+      "label": "TRUE",
+      "domain": "geography",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 263
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3193
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 336
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1046
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 551
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1402
+        }
+      ]
+    },
+    {
+      "idx": 19,
+      "claim": "Thomas Edison invented the light bulb.",
+      "label": "FALSE",
+      "domain": "history_of_science",
+      "difficulty": "medium",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 80,
+          "latency_ms": 246
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3299
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 297
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1169
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 484
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1364
+        }
+      ]
+    },
+    {
+      "idx": 20,
+      "claim": "The light bulb was developed through contributions by multiple inventors including Swan, Edison, and others.",
+      "label": "TRUE",
+      "domain": "history_of_science",
+      "difficulty": "medium",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 90,
+          "latency_ms": 198
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 60,
+          "latency_ms": 3907
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 296
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1280
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 524
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1077
+        }
+      ]
+    },
+    {
+      "idx": 21,
+      "claim": "The atomic number of carbon is 6.",
+      "label": "TRUE",
+      "domain": "chemistry",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 210
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3205
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 312
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1295
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 1800
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 1469
+        }
+      ]
+    },
+    {
+      "idx": 22,
+      "claim": "Diamonds are formed from compressed coal.",
+      "label": "FALSE",
+      "domain": "common_misconception",
+      "difficulty": "hard",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 283
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3325
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 301
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1333
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 540
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3401
+        }
+      ]
+    },
+    {
+      "idx": 23,
+      "claim": "Most diamonds formed between 1 and 3.5 billion years ago in the Earth's mantle.",
+      "label": "TRUE",
+      "domain": "geology",
+      "difficulty": "hard",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 246
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 99,
+          "latency_ms": 4302
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 293
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1338
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 589
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3384
+        }
+      ]
+    },
+    {
+      "idx": 24,
+      "claim": "The Earth is flat.",
+      "label": "FALSE",
+      "domain": "common_misconception",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 250
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3184
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 343
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1055
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 603
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3376
+        }
+      ]
+    },
+    {
+      "idx": 25,
+      "claim": "Water expands when it freezes.",
+      "label": "TRUE",
+      "domain": "physics",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 328
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3192
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 301
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1165
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 557
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 3682
+        }
+      ]
+    },
+    {
+      "idx": 26,
+      "claim": "The Sahara Desert is the largest desert on Earth.",
+      "label": "FALSE",
+      "domain": "geography",
+      "difficulty": "medium",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "2 of 4 independent model families judged this claim FALSE (glm/deepseek).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 230
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 838
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 293
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1010
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 573
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1257
+        }
+      ]
+    },
+    {
+      "idx": 27,
+      "claim": "Antarctica is the largest desert on Earth by area.",
+      "label": "TRUE",
+      "domain": "geography",
+      "difficulty": "medium",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 223
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3203
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 296
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1331
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 478
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1358
+        }
+      ]
+    },
+    {
+      "idx": 28,
+      "claim": "Penguins can fly.",
+      "label": "FALSE",
+      "domain": "biology",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 322
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3212
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 296
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1148
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 457
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1272
+        }
+      ]
+    },
+    {
+      "idx": 29,
+      "claim": "Octopuses have three hearts.",
+      "label": "TRUE",
+      "domain": "biology",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 331
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 691
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 290
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1234
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 568
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1154
+        }
+      ]
+    },
+    {
+      "idx": 30,
+      "claim": "The Mona Lisa was painted by Leonardo da Vinci.",
+      "label": "TRUE",
+      "domain": "art",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 307
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3211
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 306
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1089
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 542
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1376
+        }
+      ]
+    },
+    {
+      "idx": 31,
+      "claim": "There are 50 states in the United States of America.",
+      "label": "TRUE",
+      "domain": "current_facts",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 604
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3187
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 293
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1280
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 572
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1029
+        }
+      ]
+    },
+    {
+      "idx": 32,
+      "claim": "The capital of Australia is Sydney.",
+      "label": "FALSE",
+      "domain": "geography",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 of 4 independent model families judged this claim FALSE (llama/glm/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 286
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 3811
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 292
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 998
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 490
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1343
+        }
+      ]
+    },
+    {
+      "idx": 33,
+      "claim": "The capital of Australia is Canberra.",
+      "label": "TRUE",
+      "domain": "geography",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 260
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3189
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 296
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1357
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 492
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1259
+        }
+      ]
+    },
+    {
+      "idx": 34,
+      "claim": "Lightning never strikes the same place twice.",
+      "label": "FALSE",
+      "domain": "common_misconception",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 80,
+          "latency_ms": 239
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3196
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 317
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1001
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 532
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1151
+        }
+      ]
+    },
+    {
+      "idx": 35,
+      "claim": "The Empire State Building is struck by lightning approximately 20-25 times per year.",
+      "label": "TRUE",
+      "domain": "current_facts",
+      "difficulty": "medium",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 80,
+          "latency_ms": 320
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 4079
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 284
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1153
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 494
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3432
+        }
+      ]
+    },
+    {
+      "idx": 36,
+      "claim": "Human blood is blue when deoxygenated, turning red when exposed to oxygen.",
+      "label": "FALSE",
+      "domain": "common_misconception",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 263
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3278
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 321
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1119
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 570
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3549
+        }
+      ]
+    },
+    {
+      "idx": 37,
+      "claim": "Human blood is always red; deoxygenated blood is dark red, not blue.",
+      "label": "TRUE",
+      "domain": "biology",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 272
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3232
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 298
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1261
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 555
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3389
+        }
+      ]
+    },
+    {
+      "idx": 38,
+      "claim": "The Earth revolves around the Sun in approximately 365.25 days.",
+      "label": "TRUE",
+      "domain": "astronomy",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 280
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 4084
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 294
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1225
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 596
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3370
+        }
+      ]
+    },
+    {
+      "idx": 39,
+      "claim": "Pluto is classified as a planet in our solar system.",
+      "label": "FALSE",
+      "domain": "astronomy",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 315
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3220
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 350
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1350
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 544
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1151
+        }
+      ]
+    },
+    {
+      "idx": 40,
+      "claim": "The mathematical constant pi (π) is exactly 22/7.",
+      "label": "FALSE",
+      "domain": "mathematics",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 220
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3201
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 291
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1086
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 502
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1008
+        }
+      ]
+    },
+    {
+      "idx": 41,
+      "claim": "The mathematical constant pi (π) is approximately 3.14159.",
+      "label": "TRUE",
+      "domain": "mathematics",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 238
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 849
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 288
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1285
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 579
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1359
+        }
+      ]
+    },
+    {
+      "idx": 42,
+      "claim": "Caffeine is a psychoactive substance found naturally in coffee and tea.",
+      "label": "TRUE",
+      "domain": "chemistry",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 286
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3212
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 298
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 954
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 516
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1399
+        }
+      ]
+    },
+    {
+      "idx": 43,
+      "claim": "Humans only use 10% of their brain.",
+      "label": "FALSE",
+      "domain": "common_misconception",
+      "difficulty": "easy",
+      "hal_decision": "vetoed",
+      "prediction": "FALSE",
+      "outcome": "TP",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 of 3 independent model families judged this claim FALSE (llama/deepseek/mistral).",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "FALSE",
+          "confidence": 90,
+          "latency_ms": 249
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3186
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 296
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1067
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 100,
+          "latency_ms": 498
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1032
+        }
+      ]
+    },
+    {
+      "idx": 44,
+      "claim": "The human nose can detect approximately 1 trillion different scents.",
+      "label": "TRUE",
+      "domain": "biology",
+      "difficulty": "hard",
+      "hal_decision": "flagged",
+      "prediction": "FALSE",
+      "outcome": "FP",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "Only 1 family judged this FALSE (mistral) — no independent quorum. Flagged for review, not vetoed.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 80,
+          "latency_ms": 236
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "UNCERTAIN",
+          "confidence": 50,
+          "latency_ms": 4104
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 289
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1339
+        },
+        {
+          "provider": "mistral",
+          "verdict": "FALSE",
+          "confidence": 95,
+          "latency_ms": 533
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1844
+        }
+      ]
+    },
+    {
+      "idx": 45,
+      "claim": "There are more atoms in a glass of water than there are stars in the observable universe.",
+      "label": "TRUE",
+      "domain": "physics",
+      "difficulty": "hard",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 90,
+          "latency_ms": 329
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3198
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 317
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1074
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 95,
+          "latency_ms": 529
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1320
+        }
+      ]
+    },
+    {
+      "idx": 46,
+      "claim": "The Battle of Hastings took place in 1066.",
+      "label": "TRUE",
+      "domain": "history",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 324
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3191
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 383
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1323
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 510
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1149
+        }
+      ]
+    },
+    {
+      "idx": 47,
+      "claim": "The United Kingdom left the European Union on 31 January 2020.",
+      "label": "TRUE",
+      "domain": "current_facts",
+      "difficulty": "medium",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 4,
+      "families_used": 4,
+      "families": [
+        "llama",
+        "glm",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "4 independent families judged this claim TRUE (llama/glm/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 243
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 3852
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 288
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1148
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 583
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Rate limit exceeded: limit_rpm/qwen/qwen3-next-80b-a3b-instruct-2509/94248808-ba97-4e3c-be60-1cb092",
+          "latency_ms": 1472
+        }
+      ]
+    },
+    {
+      "idx": 48,
+      "claim": "The social media platform formerly known as Twitter was acquired by Elon Musk in 2022.",
+      "label": "TRUE",
+      "domain": "current_facts",
+      "difficulty": "easy",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 331
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3198
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 300
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 1100
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 541
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 1373
+        }
+      ]
+    },
+    {
+      "idx": 49,
+      "claim": "Venus is the hottest planet in the solar system, even though Mercury is closer to the Sun.",
+      "label": "TRUE",
+      "domain": "astronomy",
+      "difficulty": "medium",
+      "hal_decision": "clean",
+      "prediction": "TRUE",
+      "outcome": "TN",
+      "providers_used": 3,
+      "families_used": 3,
+      "families": [
+        "llama",
+        "deepseek",
+        "mistral"
+      ],
+      "decision_reason": "3 independent families judged this claim TRUE (llama/deepseek/mistral); no FALSE verdicts.",
+      "attempts": 1,
+      "verdicts": [
+        {
+          "provider": "groq",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 274
+        },
+        {
+          "provider": "cerebras",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"message\":\"Requests per minute limit exceeded - too many requests sent.\",\"type\":\"too_many_requests_error\",\"param\":\"quot",
+          "latency_ms": 3224
+        },
+        {
+          "provider": "deepseek",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 300
+        },
+        {
+          "provider": "gemini",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: [{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing det",
+          "latency_ms": 980
+        },
+        {
+          "provider": "mistral",
+          "verdict": "TRUE",
+          "confidence": 100,
+          "latency_ms": 496
+        },
+        {
+          "provider": "openrouter",
+          "verdict": "ERROR",
+          "confidence": 0,
+          "error": "HTTP 429: {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"qwen/qwen3-next-80b-a3b-instruct:free is tem",
+          "latency_ms": 3858
+        }
+      ]
+    }
+  ]
+}
