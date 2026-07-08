@@ -289,6 +289,19 @@ function contradicts(a: string, b: string): boolean {
   const negA = /\b(not|never|no|didn't|did not|cannot|can't|isn't|wasn't)\b/.test(na);
   const negB = /\b(not|never|no|didn't|did not|cannot|can't|isn't|wasn't)\b/.test(nb);
   if (subjectOverlap && negA !== negB) return true;
+  // Antonym-pair flip on an overlapping subject. A small, DOCUMENTED outcome
+  // lexicon (not a model) — one side asserts an outcome, the other its opposite
+  // ("succeeded" vs "failed", "passed" vs "failed"). Interpretable and bounded.
+  const ANTONYMS: [RegExp, RegExp][] = [
+    [/\b(succeed(ed|s)?|success|passed|working|up|online)\b/, /\b(fail(ed|s)?|failure|broke(n)?|down|offline)\b/],
+    [/\b(approved|accepted|allowed)\b/, /\b(rejected|denied|blocked)\b/],
+    [/\b(increased|higher|rose|grew)\b/, /\b(decreased|lower|fell|dropped)\b/],
+  ];
+  if (subjectOverlap) {
+    for (const [x, y] of ANTONYMS) {
+      if ((x.test(na) && y.test(nb)) || (y.test(na) && x.test(nb))) return true;
+    }
+  }
   return false;
 }
 
