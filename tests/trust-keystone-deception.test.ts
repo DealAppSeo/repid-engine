@@ -52,6 +52,18 @@ jest.mock('../src/db', () => {
 
 import { updateRepId } from '../src/engine/repid-update';
 
+// A CONFIRMED, GROUNDED M2 detection — the provenance the M1 gate requires
+// before it will apply the heavy -60/-40 tier (findings 4+5). Record-corrupting
+// classes need grounded=true; supervision-evasion classes need only confidence
+// >= the 0.6 confirm threshold.
+const groundedProof = (cls: string, confidence = 0.9) => ({
+  class: cls,
+  confidence,
+  grounded: true,
+  evidence: `test grounded detection for ${cls}`,
+  receiptRefs: ['0xdeadbeef'],
+});
+
 const ORIGINAL_MODE = process.env.TRUST_DECEPTION_MODE;
 afterEach(() => {
   jest.clearAllMocks();
@@ -67,6 +79,7 @@ describe('M1 — shadow mode logs but does NOT mutate current_repid', () => {
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+      deceptionProof: groundedProof('fabricated-tool-result'),
     });
     // Applied delta is 0; score unchanged.
     expect(r.delta).toBe(0);
@@ -77,8 +90,11 @@ describe('M1 — shadow mode logs but does NOT mutate current_repid', () => {
     const row = inserted.find((i) => i.event_type === 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT');
     expect(row).toBeTruthy();
     expect(row.delta).toBe(0); // applied
+    expect(row.repid_before).toBe(1000);
+    expect(row.repid_after).toBe(1000); // honest: no move in shadow
     expect(row.metadata.mode).toBe('shadow-deception');
     expect(row.metadata.deltaComputed).toBe(-60); // would-be
+    expect(row.metadata.deceptionConfirmed).toBe(true);
   });
 
   it('explicit shadow => same (no mutation)', async () => {
@@ -86,35 +102,104 @@ describe('M1 — shadow mode logs but does NOT mutate current_repid', () => {
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT',
+      deceptionProof: groundedProof('denial-of-prior-output'),
     });
     expect(r.delta).toBe(0);
     expect(r.repIdAfter).toBe(1000);
   });
+
+  // FINDING 2 — shadow must be TRULY INERT: current_repid AND activity_30d are
+  // both unchanged before/after a shadow deception event.
+  it('shadow deception leaves current_repid AND activity_30d UNCHANGED', async () => {
+    delete process.env.TRUST_DECEPTION_MODE; // shadow
+    // agent starts at current_repid=1000, activity_30d=5 (see DB mock).
+    await updateRepId({
+      agentId: 'agent-1',
+      eventType: 'DEFENDED_DECEPTION_FABRICATED_BENCHMARK',
+      deceptionProof: groundedProof('fabricated-benchmark'),
+    });
+    // No repid_agents update was written at all on the shadow path — so neither
+    // current_repid nor activity_30d was touched.
+    expect(updated.length).toBe(0);
+    // And the ledger row is a pure measurement: applied 0, before === after.
+    const row = inserted.find((i) => i.event_type === 'DEFENDED_DECEPTION_FABRICATED_BENCHMARK');
+    expect(row.delta).toBe(0);
+    expect(row.repid_before).toBe(1000);
+    expect(row.repid_after).toBe(1000);
+    expect(row.metadata.decayApplied).toBe(0);
+  });
 });
 
-describe('M1 — enforce mode applies the heavy delta', () => {
+describe('M1 — enforce mode applies the heavy delta (with a confirmed grounded proof)', () => {
   it('enforce => -60 applied for a record-corrupting class', async () => {
     process.env.TRUST_DECEPTION_MODE = 'enforce';
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_FABRICATED_CITATION',
+      deceptionProof: groundedProof('fabricated-citation'),
     });
     expect(r.delta).toBe(-60);
     expect(r.repIdAfter).toBe(940); // 1000 - 60
     const row = inserted.find((i) => i.event_type === 'DEFENDED_DECEPTION_FABRICATED_CITATION');
     expect(row.metadata.mode).toBe('enforce-deception');
     expect(row.metadata.deltaComputed).toBe(-60);
+    expect(row.metadata.deceptionConfirmed).toBe(true);
     expect(row.delta).toBe(-60);
   });
 
-  it('enforce => -40 applied for a supervision-evasion class', async () => {
+  it('enforce => -40 applied for a supervision-evasion class (confidence >= 0.6)', async () => {
     process.env.TRUST_DECEPTION_MODE = 'enforce';
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_DOUBT_ATTACK',
+      // Supervision-evasion classes are heuristic; the gate needs only
+      // confidence >= the 0.6 confirm threshold (grounded not required here).
+      deceptionProof: { class: 'doubt-attack', confidence: 0.6, grounded: false, evidence: 'confirmed heuristic', receiptRefs: [] },
     });
     expect(r.delta).toBe(-40);
     expect(r.repIdAfter).toBe(960);
+  });
+});
+
+describe('M1 findings 4+5 — no heavy penalty without a confirmed grounded detection', () => {
+  it('below-threshold DOUBT_ATTACK@0.55 does NOT get -40 (advisory only)', async () => {
+    process.env.TRUST_DECEPTION_MODE = 'enforce'; // even in enforce, an unconfirmed hit is advisory
+    const r = await updateRepId({
+      agentId: 'agent-1',
+      eventType: 'DEFENDED_DECEPTION_DOUBT_ATTACK',
+      deceptionProof: { class: 'doubt-attack', confidence: 0.55, grounded: false, evidence: 'heuristic below confirm threshold', receiptRefs: [] },
+    });
+    // 0.55 < 0.6 confirm threshold → light advisory (-8), NOT the -40 tier.
+    expect(r.delta).toBe(-8);
+    expect(Math.abs(r.delta)).toBeLessThan(40);
+    expect(r.repIdAfter).toBe(992);
+    const row = inserted.find((i) => i.event_type === 'DEFENDED_DECEPTION_DOUBT_ATTACK');
+    expect(row.metadata.deceptionConfirmed).toBe(false);
+  });
+
+  it('a deception event with NO proof is advisory only (never -60)', async () => {
+    process.env.TRUST_DECEPTION_MODE = 'enforce';
+    const r = await updateRepId({
+      agentId: 'agent-1',
+      eventType: 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+      // no deceptionProof supplied
+    });
+    expect(r.delta).toBe(-8); // advisory, not -60
+    expect(r.repIdAfter).toBe(992);
+    const row = inserted.find((i) => i.event_type === 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT');
+    expect(row.metadata.deceptionConfirmed).toBe(false);
+  });
+
+  it('a record-corrupting class with an UNGROUNDED (heuristic) proof cannot reach -60', async () => {
+    process.env.TRUST_DECEPTION_MODE = 'enforce';
+    const r = await updateRepId({
+      agentId: 'agent-1',
+      eventType: 'DEFENDED_DECEPTION_STORY_CHANGE',
+      deceptionProof: { class: 'story-change-across-turns', confidence: 0.9, grounded: false, evidence: 'high conf but not grounded', receiptRefs: [] },
+    });
+    // -60 requires grounded=true. Ungrounded → advisory only.
+    expect(r.delta).toBe(-8);
+    expect(r.repIdAfter).toBe(992);
   });
 });
 
@@ -126,12 +211,13 @@ describe('M1 — asymmetry: ordinary error LIGHT, defended deception HEAVY', () 
     expect(r.repIdAfter).toBe(992);
   });
 
-  it('defended deception is markedly heavier than ordinary error', async () => {
+  it('defended deception (confirmed+grounded) is markedly heavier than ordinary error', async () => {
     process.env.TRUST_DECEPTION_MODE = 'enforce';
     const light = await updateRepId({ agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM' });
     const heavy = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_STORY_CHANGE',
+      deceptionProof: groundedProof('story-change-across-turns'),
     });
     expect(Math.abs(heavy.delta)).toBeGreaterThan(Math.abs(light.delta) * 3);
     expect(light.delta).toBe(-8);
