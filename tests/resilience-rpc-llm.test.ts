@@ -153,7 +153,8 @@ describe('B3 LLM wrapper', () => {
   });
 
   it('llmHealth lists the free chain providers', () => {
+    // 2026-07-07: fireworks RETIRED (account suspended 2026-06-04); sambanova is the 3rd free family.
     const h = llmHealth();
-    expect(h.map((x) => x.endpoint)).toEqual(expect.arrayContaining(['groq', 'cerebras', 'fireworks']));
+    expect(h.map((x) => x.endpoint)).toEqual(expect.arrayContaining(['groq', 'cerebras', 'sambanova']));
   });
 });

@@ -6,6 +6,8 @@ import { DeepSeekAdapter } from './deepseek';
 import { CohereAdapter } from './cohere';
 import { AnthropicAdapter } from './anthropic';
 import { OpenAIAdapter } from './openai';
+import { OpenRouterAdapter } from './openrouter';
+import { SambaNovaAdapter } from './sambanova';
 import { Llama321bAdapter, Gemma32bAdapter, Phi4Adapter } from './slm';
 import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
 import { checkCap } from '../billing/caps';
@@ -35,13 +37,39 @@ const slmAdapters: ProviderAdapter[] = [
   new Phi4Adapter()
 ];
 
-const tier0aAdapters: ProviderAdapter[] = [
-  new GroqAdapter(),
-  new CerebrasAdapter(),
-  new GeminiAdapter(),
-  new CohereAdapter(),
-  new DeepSeekAdapter()
-];
+/**
+ * Tier-0a chain, built once at module load. SambaNova (3rd FAST free Llama
+ * family) slots in right after cerebras so a burst that 429s groq+cerebras has
+ * another FREE fallback before the paid/aggregator tail. OpenRouter (aggregator)
+ * is the LAST tier-0 fallback — after the free + cheap providers, before we
+ * escalate to tier-1 (anthropic/openai).
+ *
+ * Both are wired 2026-07-07 to activate idle-but-LIVE keys and are each gated by
+ * an env flag (default ON) AND require their API key to be present — so a
+ * missing key or a `false` flag silently drops the provider from the chain.
+ * Reversible: ROUTER_ENABLE_SAMBANOVA=false / ROUTER_ENABLE_OPENROUTER=false.
+ */
+function buildTier0aAdapters(): ProviderAdapter[] {
+  const chain: ProviderAdapter[] = [
+    new GroqAdapter(),
+    new CerebrasAdapter(),
+  ];
+  if (process.env.ROUTER_ENABLE_SAMBANOVA !== 'false' && process.env.SAMBANOVA_API_KEY?.trim()) {
+    chain.push(new SambaNovaAdapter());
+  }
+  chain.push(
+    new GeminiAdapter(),
+    new CohereAdapter(),
+    new DeepSeekAdapter(),
+  );
+  // OpenRouter — LAST tier-0 fallback (after free + cheap, before tier-1 escalation).
+  if (process.env.ROUTER_ENABLE_OPENROUTER !== 'false' && process.env.OPENROUTER_API_KEY?.trim()) {
+    chain.push(new OpenRouterAdapter());
+  }
+  return chain;
+}
+
+const tier0aAdapters: ProviderAdapter[] = buildTier0aAdapters();
 
 const tier1Adapters: ProviderAdapter[] = [
   new AnthropicAdapter(),

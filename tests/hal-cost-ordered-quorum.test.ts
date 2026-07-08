@@ -11,7 +11,11 @@ import { factCheck, costTierOf, buildFactCheckProviders, FactCheckProviderCfg } 
 describe('buildFactCheckProviders reads enable flags (R5/R6 wiring)', () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; });
-  it('gemini/mistral/qwen appear only when key AND HAL_S2_ENABLE_<X>=true', () => {
+  it('with auto-backfill OFF, gemini/mistral/qwen appear only when key AND HAL_S2_ENABLE_<X>=true', () => {
+    // 2026-07-07: HAL_QUORUM_AUTOBACKFILL defaults ON (auto-includes deepseek/gemini/mistral/openrouter
+    // when their key is present). This test asserts the PER-PROVIDER opt-in gating, so it turns
+    // auto-backfill OFF to exercise the reversible legacy path.
+    process.env.HAL_QUORUM_AUTOBACKFILL = 'false';
     process.env.GEMINI_API_KEY = 'k'; process.env.MISTRAL_API_KEY = 'k'; process.env.QWEN_API_KEY = 'k';
     delete process.env.HAL_S2_ENABLE_GEMINI; delete process.env.HAL_S2_ENABLE_MISTRAL; delete process.env.HAL_S2_ENABLE_QWEN;
     expect(buildFactCheckProviders().map((p) => p.name)).not.toContain('gemini');
@@ -22,6 +26,14 @@ describe('buildFactCheckProviders reads enable flags (R5/R6 wiring)', () => {
     expect(fams.find((p) => p.name === 'gemini')?.family).toBe('gemini');
     // cost tiers classify correctly for the cheapest-first waves
     expect(costTierOf({ name: 'gemini', family: 'gemini' })).toBe('free');
+  });
+
+  it('auto-backfill ON (default) auto-includes gemini/mistral when their key is present', () => {
+    delete process.env.HAL_QUORUM_AUTOBACKFILL; // default → ON
+    process.env.GEMINI_API_KEY = 'k'; process.env.MISTRAL_API_KEY = 'k';
+    delete process.env.HAL_S2_ENABLE_GEMINI; delete process.env.HAL_S2_ENABLE_MISTRAL;
+    const names = buildFactCheckProviders().map((p) => p.name);
+    expect(names).toEqual(expect.arrayContaining(['gemini', 'mistral']));
   });
 });
 

@@ -117,17 +117,22 @@ describe('factCheck — env thresholds + provider builder', () => {
   });
 
   test('buildFactCheckProviders includes only keyed providers', () => {
-    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY, fw_en: process.env.HAL_S2_ENABLE_FIREWORKS };
+    // 2026-07-07: HAL_QUORUM_AUTOBACKFILL defaults ON. Disable it here to assert the pure per-provider
+    // opt-in set (groq+cerebras only), independent of which backfill keys the ambient .env happens to set.
+    const save = { g: process.env.GROQ_API_KEY, c: process.env.CEREBRAS_API_KEY, f: process.env.FIREWORKS_API_KEY, fw_en: process.env.HAL_S2_ENABLE_FIREWORKS, ab: process.env.HAL_QUORUM_AUTOBACKFILL, d: process.env.DEEPSEEK_API_KEY, gm: process.env.GEMINI_API_KEY, ms: process.env.MISTRAL_API_KEY, or: process.env.OPENROUTER_API_KEY };
+    process.env.HAL_QUORUM_AUTOBACKFILL = 'false';
+    delete process.env.DEEPSEEK_API_KEY; delete process.env.GEMINI_API_KEY; delete process.env.MISTRAL_API_KEY; delete process.env.OPENROUTER_API_KEY;
     process.env.GROQ_API_KEY = 'g'; process.env.CEREBRAS_API_KEY = 'c'; delete process.env.FIREWORKS_API_KEY;
     const ps = buildFactCheckProviders();
     expect(ps.map((p) => p.name)).toEqual(['groq', 'cerebras']);
     process.env.FIREWORKS_API_KEY = 'f'; process.env.HAL_S2_ENABLE_FIREWORKS = 'true';
     expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['groq', 'cerebras', 'fireworks']);
+    // restore
     process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f; process.env.HAL_S2_ENABLE_FIREWORKS = save.fw_en;
-    if (!save.g) delete process.env.GROQ_API_KEY;
-    if (!save.c) delete process.env.CEREBRAS_API_KEY;
-    if (!save.f) delete process.env.FIREWORKS_API_KEY;
-    if (!save.fw_en) delete process.env.HAL_S2_ENABLE_FIREWORKS;
+    process.env.HAL_QUORUM_AUTOBACKFILL = save.ab; process.env.DEEPSEEK_API_KEY = save.d; process.env.GEMINI_API_KEY = save.gm; process.env.MISTRAL_API_KEY = save.ms; process.env.OPENROUTER_API_KEY = save.or;
+    for (const [k, v] of [['GROQ_API_KEY', save.g], ['CEREBRAS_API_KEY', save.c], ['FIREWORKS_API_KEY', save.f], ['HAL_S2_ENABLE_FIREWORKS', save.fw_en], ['HAL_QUORUM_AUTOBACKFILL', save.ab], ['DEEPSEEK_API_KEY', save.d], ['GEMINI_API_KEY', save.gm], ['MISTRAL_API_KEY', save.ms], ['OPENROUTER_API_KEY', save.or]] as const) {
+      if (v === undefined) delete process.env[k];
+    }
   });
 });
 
