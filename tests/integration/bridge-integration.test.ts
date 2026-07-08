@@ -2,6 +2,16 @@ import { db } from '../../src/db';
 import { applyServiceFulfilledDeltas } from '../../src/services/validation-repid-delta';
 import { FeedbackLoopWorker } from '../../src/workers/feedback-loop-worker';
 import crypto from 'crypto';
+// PROD-SAFETY: this suite inserts/updates/deletes real rows in the resolved
+// Supabase project AND injects a mock on-chain writer. Run against production it
+// stamps live repid_events processed_at with a fake tx hash, so the real
+// FeedbackLoopWorker skips those settlements (they never hit chain). Refuse to run
+// against the prod project — ref is derived from SUPABASE_URL, never hardcoded here.
+// Reuses the shared guard in tests/helpers/prod-guard.ts.
+import {
+  assertNotProductionSupabase,
+  isProductionSupabase,
+} from '../helpers/prod-guard';
 
 // Mock pgQuery to fetch from the actual db using supabase-js db client!
 jest.mock('../../src/db/direct-pg', () => {
@@ -20,18 +30,37 @@ jest.mock('../../src/db/direct-pg', () => {
   };
 });
 
-// Setup mock writer
+// Setup mock writer.
+// PROD-SAFETY: even if the suite-level guard is bypassed, the mock writer itself
+// refuses to produce a fake tx hash when pointed at the prod Supabase project —
+// so it can NEVER cause a real repid_events row to be stamped processed_at with a
+// mock hash in production.
 const mockWriter = {
   chainId: 84532,
   getContractAddress: () => '0xMockContractAddress',
-  writeRepIDFeedback: jest.fn().mockResolvedValue({
-    txHash: '0xmock_confirmed_tx_hash_for_bridge',
-    blockNumber: 123456,
-    gasUsed: 150000n
+  writeRepIDFeedback: jest.fn().mockImplementation(async () => {
+    if (isProductionSupabase(process.env.SUPABASE_URL)) {
+      throw new Error(
+        'refusing to run mock reputation writer against production Supabase — ' +
+          'a mock tx hash must never be written to a real repid_events row',
+      );
+    }
+    return {
+      txHash: '0xmock_confirmed_tx_hash_for_bridge',
+      blockNumber: 123456,
+      gasUsed: 150000n
+    };
   })
 };
 
 describe('Bridge Integration E2E Trace', () => {
+  // HARD GUARD: refuse to run this write-path + mock-writer suite against the
+  // production Supabase project. Throwing here fails the suite loudly rather than
+  // silently corrupting the live on-chain reputation queue.
+  beforeAll(() => {
+    assertNotProductionSupabase(process.env.SUPABASE_URL);
+  });
+
   const buyer_agent_id = '84f2d7de-5bb9-4f3b-92ca-aecc7c498271';
   const provider_agent_id = '32e0e809-c1c4-4405-913f-135c8a2d6626'; // trinity-shofet (Established, token 5863)
   const service_id = '0edfc364-ad2a-4b3a-bdc4-20b03ab92e21';
@@ -45,6 +74,9 @@ describe('Bridge Integration E2E Trace', () => {
   let realEventId: string;
 
   afterAll(async () => {
+    // PROD-SAFETY: never issue cleanup deletes against the prod project (also
+    // covers the case where beforeAll threw before any test rows were created).
+    if (isProductionSupabase(process.env.SUPABASE_URL)) return;
     // Cleanup
     if (simEventId) {
       await db.from('repid_events').delete().eq('id', simEventId);
