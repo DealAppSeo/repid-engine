@@ -165,4 +165,105 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     expect(r.status).toBe(400);
     expect(r.body.valid).toBe(false);
   });
+
+  // --- GET /repid/:agentId/proof slug→UUID resolution (500-fix regression) ---
+
+  const UUID = '32e0e809-c1c4-4405-913f-135c8a2d6626';
+
+  // Fully-chainable mock so the proof route's .eq().not().order().limit()
+  // .maybeSingle() and the resolver's .eq().maybeSingle() both work. `route`
+  // decides which .maybeSingle() payload comes back per from() target.
+  function setupProofMock(opts: {
+    resolveTo: any; // repid_agents lookup { id } | null
+    proofRow: any; // repid_zkp_proofs row | null
+  }) {
+    mockedDb.from = jest.fn().mockImplementation((table: string) => {
+      const chain: any = {};
+      chain.select = jest.fn().mockReturnValue(chain);
+      chain.eq = jest.fn().mockReturnValue(chain);
+      chain.not = jest.fn().mockReturnValue(chain);
+      chain.order = jest.fn().mockReturnValue(chain);
+      chain.limit = jest.fn().mockReturnValue(chain);
+      chain.maybeSingle = jest.fn().mockImplementation(() => {
+        if (table === 'repid_agents') {
+          return Promise.resolve({ data: opts.resolveTo, error: null });
+        }
+        return Promise.resolve({ data: opts.proofRow, error: null });
+      });
+      return chain;
+    });
+  }
+
+  test('GET /repid/:agentId/proof — slug resolves to UUID and returns 200', async () => {
+    setupProofMock({
+      resolveTo: { id: UUID },
+      proofRow: {
+        agent_id: UUID,
+        scheme: 'plonky3_range_check',
+        proof_type: 'range',
+        proof_bytes: 'AAAA',
+        statement: { repid_score: 1000, threshold: 500 },
+        tier_proven: 'ESTABLISHED',
+        eas_attestation_uid: null,
+        eas_schema: null,
+        created_at: '2026-07-01T00:00:00Z',
+      },
+    });
+    const r = await request(buildApp()).get('/api/v1/repid/trinity-shofet/proof');
+    expect(r.status).toBe(200);
+    expect(r.body.agent_id).toBe(UUID);
+    expect(r.body.cryptographically_verifiable).toBe(true);
+    // Resolver queried repid_agents by trinity-prefixed name.
+    expect(mockedDb.from).toHaveBeenCalledWith('repid_agents');
+  });
+
+  test('GET /repid/:agentId/proof — bare slug gets trinity- prefix and resolves', async () => {
+    setupProofMock({
+      resolveTo: { id: UUID },
+      proofRow: {
+        agent_id: UUID,
+        scheme: 'plonky3_range_check',
+        proof_type: 'range',
+        proof_bytes: 'AAAA',
+        statement: {},
+        tier_proven: 'ESTABLISHED',
+        eas_attestation_uid: null,
+        eas_schema: null,
+        created_at: '2026-07-01T00:00:00Z',
+      },
+    });
+    const r = await request(buildApp()).get('/api/v1/repid/shofet/proof');
+    expect(r.status).toBe(200);
+    expect(r.body.agent_id).toBe(UUID);
+  });
+
+  test('GET /repid/:agentId/proof — bogus slug returns 404 (not 500)', async () => {
+    setupProofMock({ resolveTo: null, proofRow: null });
+    const r = await request(buildApp()).get('/api/v1/repid/not-a-real-agent/proof');
+    expect(r.status).toBe(404);
+    expect(r.body.error).toBe('No proof found for agent');
+    expect(r.body.agent_id).toBe('not-a-real-agent');
+  });
+
+  test('GET /repid/:agentId/proof — raw UUID passes through unchanged', async () => {
+    setupProofMock({
+      resolveTo: null, // must NOT be consulted for a raw UUID
+      proofRow: {
+        agent_id: UUID,
+        scheme: 'plonky3_range_check',
+        proof_type: 'range',
+        proof_bytes: 'AAAA',
+        statement: {},
+        tier_proven: 'ESTABLISHED',
+        eas_attestation_uid: null,
+        eas_schema: null,
+        created_at: '2026-07-01T00:00:00Z',
+      },
+    });
+    const r = await request(buildApp()).get(`/api/v1/repid/${UUID}/proof`);
+    expect(r.status).toBe(200);
+    expect(r.body.agent_id).toBe(UUID);
+    // No repid_agents lookup for a raw UUID — only the proofs table is queried.
+    expect(mockedDb.from).not.toHaveBeenCalledWith('repid_agents');
+  });
 });
