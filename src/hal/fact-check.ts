@@ -819,10 +819,13 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
   }
   // OpenRouter — LAST backfill resort (aggregator; a :free variant is $0). Its family derives from the
-  // configured model so it never collapses independence with an already-present family on that model.
+  // configured model, so the DEFAULT is a QWEN free model — a family distinct from the always-on hosts
+  // (groq=llama, cerebras=glm) and the other backfill families (deepseek/gemini/mistral). A llama :free
+  // default would collapse with groq and break the family-independence quorum. Override via
+  // HAL_S2_OPENROUTER_MODEL (pick a family not already present, else it counts as ONE vote with it).
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
-    out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'meta-llama/llama-3.3-70b-instruct:free' });
+    out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'qwen/qwen-2.5-72b-instruct:free' });
   }
   // qwen stays opt-in (endpoint region varies per key) — NOT auto-backfilled.
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();

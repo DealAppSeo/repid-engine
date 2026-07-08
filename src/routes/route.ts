@@ -30,6 +30,14 @@ llmRouter.get('/v1/llm/providers', (req: Request, res: Response) => {
     { name: "cohere", healthy: healths.cohere ? healths.cohere.state !== 'down' : true, default_model: "command-r", last_success: healths.cohere?.lastSuccess || null },
     { name: "deepseek", healthy: healths.deepseek ? healths.deepseek.state !== 'down' : true, default_model: "deepseek-chat", last_success: healths.deepseek?.lastSuccess || null }
   ];
+  // Idle-live keys wired 2026-07-07: surface sambanova/openrouter in the listing only when routable
+  // (env flag on AND key present) so the display matches buildTier0aAdapters() in the router.
+  if (process.env.ROUTER_ENABLE_SAMBANOVA !== 'false' && process.env.SAMBANOVA_API_KEY?.trim()) {
+    tier0a.push({ name: "sambanova", healthy: healths.sambanova ? healths.sambanova.state !== 'down' : true, default_model: "Meta-Llama-3.1-8B-Instruct", last_success: healths.sambanova?.lastSuccess || null });
+  }
+  if (process.env.ROUTER_ENABLE_OPENROUTER !== 'false' && process.env.OPENROUTER_API_KEY?.trim()) {
+    tier0a.push({ name: "openrouter", healthy: healths.openrouter ? healths.openrouter.state !== 'down' : true, default_model: "meta-llama/llama-3.3-70b-instruct:free", last_success: healths.openrouter?.lastSuccess || null });
+  }
 
   const tier1 = [
     { name: "anthropic", healthy: healths.anthropic ? healths.anthropic.state !== 'down' : true, requires_user_key: true, default_model: "claude-haiku-4-5", last_success: healths.anthropic?.lastSuccess || null },
@@ -41,7 +49,7 @@ llmRouter.get('/v1/llm/providers', (req: Request, res: Response) => {
     tier1,
     summary: {
       tier0a_healthy: tier0a.filter(p => p.healthy).length,
-      tier0a_total: 5,
+      tier0a_total: tier0a.length,
       tier1_total: 2
     }
   });

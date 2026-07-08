@@ -2,8 +2,8 @@
  * resilient-llm.ts — health-aware ordered free chain ending at a local Ollama floor (B3).
  *
  * Single entrypoint `resilientComplete()` that walks the working free triad
- * (groq llama-3.1-8b-instant → cerebras zai-glm-4.7 → fireworks kimi-k2p5, from
- * billing/free-providers.ts WORKING_FREE_PROVIDERS), skipping any provider the EXISTING health.ts
+ * (groq llama-3.1-8b-instant → cerebras zai-glm-4.7 → sambanova Meta-Llama-3.1-8B-Instruct, from
+ * billing/free-providers.ts WORKING_FREE_PROVIDERS; fireworks RETIRED 2026-06-04), skipping any provider the EXISTING health.ts
  * marks unhealthy, calling markRateLimit on 429 / markFailure on error / markSuccess on success, and
  * terminating at the Ollama floor (providers/ollama.ts, flag LLM_OLLAMA_FLOOR_ENABLED). If every cloud
  * provider AND the floor are down, it throws a single clear `AllLlmProvidersDown` (RULE-8 — no silent
@@ -48,7 +48,10 @@ interface FreeProviderWire {
 const PROVIDER_WIRES: Record<string, { endpoint: string; apiKeyEnv: string }> = {
   groq: { endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKeyEnv: 'GROQ_API_KEY' },
   cerebras: { endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKeyEnv: 'CEREBRAS_API_KEY' },
-  fireworks: { endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKeyEnv: 'FIREWORKS_API_KEY' },
+  // sambanova (2026-07-07) — 3rd FAST free Llama family, replaces retired fireworks in the free chain.
+  sambanova: { endpoint: 'https://api.sambanova.ai/v1/chat/completions', apiKeyEnv: 'SAMBANOVA_API_KEY' },
+  // fireworks RETIRED 2026-06-04 (account suspended → 100% fail). Wire kept out of the chain; any
+  // legacy WORKING_FREE_PROVIDERS entry naming it would resolve to no wire and be filtered out.
 };
 
 function freeChain(): FreeProviderWire[] {
