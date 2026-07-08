@@ -28,6 +28,35 @@ export const repidPublicRouter = Router();
 
 export const repidAdminRouter = Router();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve an agent path param to a repid_agents UUID.
+ *
+ * Accepts either a raw UUID (passed through unchanged), a numeric
+ * erc8004_token_id, or an agent name/slug (e.g. "trinity-shofet" or bare
+ * "shofet"). Mirrors the lookup already used by GET /repid/:agentId,
+ * /history, and /zkp so a slug OR a UUID both work.
+ *
+ * Returns the resolved UUID, or null if a non-UUID input matched no agent
+ * (caller should 404). A raw UUID is always returned as-is (no lookup).
+ */
+async function resolveAgentUuid(raw: string): Promise<string | null> {
+  const id = String(raw ?? '');
+  if (!id || UUID_RE.test(id)) return id || null;
+
+  let query = db.from('repid_agents').select('id');
+  if (/^\d+$/.test(id)) {
+    query = query.eq('erc8004_token_id', id);
+  } else {
+    const lcName = id.toLowerCase();
+    const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
+    query = query.eq('agent_name', lookupName);
+  }
+  const { data } = await query.maybeSingle();
+  return data && data.id ? (data.id as string) : null;
+}
+
 /* ------------------------ Public routes ----------------------------- */
 
 // GET /api/v1/repid/:agentId — current RepID for an agent
@@ -203,8 +232,16 @@ repidPublicRouter.get('/repid/proof/:job_id', async (req: Request, res: Response
 // accountability-public; mounted before authMiddleware). Registered AFTER /repid/proof/:job_id
 // so the literal 'proof' second segment never shadows this one.
 repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Response) => {
-  const agentId = String(req.params.agentId ?? '');
-  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+  const rawAgentId = String(req.params.agentId ?? '');
+  if (!rawAgentId) return res.status(400).json({ error: 'agentId required' });
+
+  // Resolve slug/name/token-id → UUID before the UUID-typed agent_id query.
+  // Without this a slug (e.g. "trinity-shofet") hits repid_zkp_proofs.agent_id
+  // (uuid column) and 500s with "invalid input syntax for type uuid".
+  const agentId = await resolveAgentUuid(rawAgentId);
+  if (!agentId) {
+    return res.status(404).json({ error: 'No proof found for agent', agent_id: rawAgentId });
+  }
 
   // Prefer a real, WASM-verifiable plonky3 proof; fall back to the latest row so callers
   // can see legacy (stub) state honestly rather than a 404.
