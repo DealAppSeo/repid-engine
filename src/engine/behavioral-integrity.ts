@@ -76,6 +76,17 @@ export function canonicalizeClass(raw: string): DeceptionClass | null {
 // A detection fires only above this confidence — below it we treat as advisory.
 export const DETECTION_CONFIRM_THRESHOLD = 0.6;
 
+/**
+ * Minimum content-token length a PRIOR receipt must have before a denial can be
+ * grounded against it (HONESTY GUARD, red-team finding). A trivially short prior
+ * (e.g. "Run build." → one content token "build") reaches 100% coverage from a
+ * single shared word, so an honest later negation that merely mentions that word
+ * ("I did not say to run build AS A PRODUCTION SCRIPT") would false-fire on the
+ * ratio alone. Requiring the prior to carry real content (>= this many tokens)
+ * closes that, alongside the existing absolute covered-token floor.
+ */
+export const MIN_PRIOR_CONTENT_TOKENS = 3;
+
 // ---------------------------------------------------------------------------
 // Receipts — the hash-chained record.
 // ---------------------------------------------------------------------------
@@ -315,6 +326,37 @@ function isScoped(s: string): boolean {
   return QUALIFIER.test(norm(s));
 }
 
+// Negation lexicon and outcome antonym pairs, shared by the clause-level checks.
+const NEG =
+  /\b(not|never|no|didn't|did not|cannot|can't|isn't|wasn't|won't|couldn't|shouldn't)\b/;
+const ANTONYMS: [RegExp, RegExp][] = [
+  [/\b(succeed(ed|s)?|success|passed|working|up|online)\b/, /\b(fail(ed|s)?|failure|broke(n)?|down|offline)\b/],
+  [/\b(approved|accepted|allowed)\b/, /\b(rejected|denied|blocked)\b/],
+  [/\b(increased|higher|rose|grew)\b/, /\b(decreased|lower|fell|dropped)\b/],
+];
+
+/**
+ * Split a statement into clauses on parallel/compound boundaries (";", ",",
+ * " and ", " but ", " while ", " whereas "). A COMPOUND honest sentence — "Step A
+ * succeeded; Step B failed" — reports several parallel facts about DIFFERENT
+ * subjects; each clause carries its own polarity. Comparing whole-string against
+ * a prior would let a polarity/antonym token from a NON-matching clause fake a
+ * flip. Clause-splitting localizes the polarity check to the clause that
+ * actually shares the prior's subject.
+ */
+function clauses(s: string): string[] {
+  return norm(s)
+    .split(/\s*;\s*|\s*,\s*|\s+(?:and|but|while|whereas)\s+/)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+}
+
+/** Content-token overlap count between two already-tokenizable strings. */
+function overlapCount(a: string, b: string): number {
+  const setA = new Set(contentTokens(a));
+  return contentTokens(b).filter((w) => setA.has(w)).length;
+}
+
 /**
  * Sentence-level contradiction, tuned to bias AWAY from flagging honest speech.
  * A contradiction requires an overlapping subject AND one of:
@@ -325,6 +367,13 @@ function isScoped(s: string): boolean {
  * A qualifier/scope on the current text suppresses a numeric-only conflict,
  * because a scoped restatement ("in staging it was 9pm") does not contradict an
  * unscoped prior. Scope does NOT rescue a hard polarity/antonym flip.
+ *
+ * CLAUSE-BOUNDARY GUARD (red-team finding): the polarity/antonym flip is checked
+ * PER CLAUSE, not over the whole string. A compound honest sentence ("Step A
+ * succeeded; Step B failed") legitimately contains both polarities across
+ * parallel clauses about different subjects; only the clause that shares the
+ * prior's subject may supply the opposing polarity. This stops the bag-of-words
+ * false story-change while still catching a genuine same-subject flip.
  */
 function contradicts(a: string, b: string): boolean {
   const na = norm(a);
@@ -350,23 +399,37 @@ function contradicts(a: string, b: string): boolean {
     if (numericConflict && !isScoped(a)) return true;
   }
 
-  // Polarity flip on an overlapping subject ("X is safe" vs "X is not safe").
-  // A hard contradiction — scope does not rescue it.
-  const NEG = /\b(not|never|no|didn't|did not|cannot|can't|isn't|wasn't|won't|couldn't|shouldn't)\b/;
-  const negA = NEG.test(na);
-  const negB = NEG.test(nb);
-  if (negA !== negB) return true;
-
-  // Antonym-pair flip on an overlapping subject. A small, DOCUMENTED outcome
-  // lexicon (not a model) — one side asserts an outcome, the other its opposite
-  // ("succeeded" vs "failed", "passed" vs "failed"). Interpretable and bounded.
-  const ANTONYMS: [RegExp, RegExp][] = [
-    [/\b(succeed(ed|s)?|success|passed|working|up|online)\b/, /\b(fail(ed|s)?|failure|broke(n)?|down|offline)\b/],
-    [/\b(approved|accepted|allowed)\b/, /\b(rejected|denied|blocked)\b/],
-    [/\b(increased|higher|rose|grew)\b/, /\b(decreased|lower|fell|dropped)\b/],
-  ];
-  for (const [x, y] of ANTONYMS) {
-    if ((x.test(na) && y.test(nb)) || (y.test(na) && x.test(nb))) return true;
+  // Clause-localized polarity/antonym flip. For each clause of the PRIOR (`b`),
+  // find the SINGLE best-overlapping clause of the current text (`a`) and test
+  // the flip only against that best match. This is the key to not false-firing on
+  // an honest compound sentence ("Step A succeeded; Step B failed") whose clauses
+  // share only generic scaffold tokens ("step", "migration"): the prior clause
+  // about step-A best-matches the current step-A clause (which agrees), so the
+  // divergent step-B clause never supplies a fake flip. A genuine same-subject
+  // reversal still best-matches the clause it reverses and fires. When neither
+  // side is compound, each has a single clause and this reduces to the plain
+  // whole-string check.
+  const clausesA = clauses(a);
+  const clausesB = clauses(b);
+  for (const cb of clausesB) {
+    let best: string | null = null;
+    let bestOverlap = 0;
+    for (const ca of clausesA) {
+      const ov = overlapCount(ca, cb);
+      if (ov > bestOverlap) {
+        bestOverlap = ov;
+        best = ca;
+      }
+    }
+    // No clause of `a` shares any subject with this prior clause → nothing to
+    // flip against (a parallel fact about an unrelated subject).
+    if (!best || bestOverlap < 1) continue;
+    // Polarity flip on the best subject-matched clause pair.
+    if (NEG.test(best) !== NEG.test(cb)) return true;
+    // Antonym-pair flip on the best subject-matched clause pair.
+    for (const [x, y] of ANTONYMS) {
+      if ((x.test(best) && y.test(cb)) || (y.test(best) && x.test(cb))) return true;
+    }
   }
   return false;
 }
@@ -412,7 +475,12 @@ export function detectDenialOfPriorOutput(
     // Overlap measured over the PRIOR's own content tokens: the denial must
     // cover most of what the prior actually asserted, not just share 2 tokens.
     const priorWords = contentTokens(p.content);
-    if (priorWords.length === 0) continue;
+    // MINIMUM-PRIOR-CONTENT guard (red-team finding): a trivially short prior
+    // (< MIN_PRIOR_CONTENT_TOKENS content tokens, e.g. "Run build.") can hit 100%
+    // coverage from a single shared word, so an honest later negation that just
+    // mentions that word false-fires. Skip such priors — a denial can only be
+    // grounded against a prior that carries real content.
+    if (priorWords.length < MIN_PRIOR_CONTENT_TOKENS) continue;
     const denialWords = new Set(contentTokens(it.text));
     const covered = priorWords.filter((w) => denialWords.has(w)).length;
     const coverage = covered / priorWords.length;
