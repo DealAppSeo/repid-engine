@@ -17,8 +17,10 @@ process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy-ke
 import request from 'supertest';
 import app from '../../src/index';
 import { db } from '../../src/db';
+import { integrationSchemaPresent } from '../helpers/describe-if-schema';
 
-const live = HAVE_CREDS ? describe : describe.skip;
+// live-DB block runs only with creds AND a seeded, non-prod test schema.
+const live = HAVE_CREDS && integrationSchemaPresent() ? describe : describe.skip;
 const uniq = `spine-test-${process.pid}-${Math.floor(process.hrtime()[1] / 1000)}`;
 
 describe('S-SPINE public endpoints (no DB needed)', () => {
