@@ -61,6 +61,21 @@ interface RawRun {
 }
 
 // --- Output shapes (single source of truth for the JSON + markdown) ---------
+// A calibration cell carries its own denominator + a low-N flag, so a "100%"
+// off 1 sample can never be read like a "100%" off the full-N set.
+interface CalCell {
+  pct: number | null;
+  n: number; // committed votes this cell is scored on
+  low_n: boolean; // true when n < LOW_N_THRESHOLD
+}
+// Filter provenance — everything needed to reconstruct WHICH rows were scored.
+interface FilterProvenance {
+  clean_corpus_env: string; // the CLEAN_CORPUS value used (or its default)
+  raw_run_size: number; // rows in the raw canary run (before the clean filter)
+  scored_rows: number; // rows actually scored (after the clean filter)
+  dropped_count: number;
+  dropped_rows: Array<{ idx: number; label: string; difficulty: string; claim: string }>;
+}
 interface Receipt {
   canary_run: string;
   canary_run_generated_at: string;
@@ -69,9 +84,11 @@ interface Receipt {
   corpus_sha256: string | null;
   corpus_scope: string;
   n_claims: number;
+  filter: FilterProvenance;
 }
 interface RowReceipt extends Receipt {
-  verified_claims: number;
+  committed_votes: number; // firm TRUE/FALSE votes this provider cast (was "verified_claims")
+  total_claims: number; // oracle claims the provider was asked (denominator)
 }
 interface LeaderboardRow {
   provider: string;
@@ -81,9 +98,12 @@ interface LeaderboardRow {
     accuracy_pct: number;
     correct: number;
     committed: number;
+    abstains: number;
+    errors: number;
+    seen: number;
     calibration: {
-      easy_accuracy_pct: number | null;
-      hard_accuracy_pct: number | null;
+      easy: CalCell;
+      hard: CalCell;
       hard_abstain_rate_pct: number | null;
       mean_confidence_when_wrong: number | null;
       mean_confidence_when_correct: number | null;
@@ -95,6 +115,7 @@ interface LeaderboardRow {
       errors: number;
       error_rate_pct: number;
       seen: number;
+      meets_floor: boolean;
     };
     latency: { median_ms: number | null; p95_ms: number | null; samples: number };
   };
@@ -115,10 +136,22 @@ interface LeaderboardOut {
   receipt: Receipt;
   quorum_manifest: Array<{ name: string; model: string; family: string }>;
   n_claims: number;
+  coverage_floor_pct: number;
+  low_n_threshold: number;
   small_n_caveat: string;
   leaderboard: LeaderboardRow[];
+  provisional: LeaderboardRow[];
   unrated: UnratedRow[];
 }
+
+// --- Gates / thresholds ------------------------------------------------------
+// Coverage is a GATE, not a tie-breaker: a provider must commit a firm vote on
+// at least this fraction of the oracle to appear in the MAIN ranked table.
+// Below it → "Provisional" (self-selected subset, not comparable to full-N).
+const COVERAGE_FLOOR_PCT = 80;
+// A calibration/difficulty cell scored on fewer than this many committed votes
+// is flagged ⚠ low-N — a "100%" off 1 sample is not a real 100%.
+const LOW_N_THRESHOLD = 5;
 
 // A committed verdict is a real TRUE/FALSE vote. Everything else (UNCERTAIN,
 // ERROR, empty) is NOT a commitment — we split abstentions from errors.
@@ -167,10 +200,15 @@ function sha256(file: string): string {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-function loadCleanClaims(): { file: string | null; sha: string | null; claims: Set<string> } {
+function loadCleanClaims(): {
+  file: string | null;
+  sha: string | null;
+  claims: Set<string>;
+  env: string;
+} {
   const rel = process.env.CLEAN_CORPUS || 'eval/canary/canary-corpus-v1.1.jsonl';
   const p = path.isAbsolute(rel) ? rel : path.join(REPO_ROOT, rel);
-  if (!fs.existsSync(p)) return { file: null, sha: null, claims: new Set() };
+  if (!fs.existsSync(p)) return { file: null, sha: null, claims: new Set(), env: rel };
   const claims = new Set<string>();
   for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
     const t = line.trim();
@@ -181,7 +219,7 @@ function loadCleanClaims(): { file: string | null; sha: string | null; claims: S
       /* skip malformed */
     }
   }
-  return { file: rel, sha: sha256(p), claims };
+  return { file: rel, sha: sha256(p), claims, env: rel };
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +296,22 @@ function main() {
     : run.results;
   const nClaims = rows.length;
 
+  // Finding #4: pin the filter into the receipt. Capture exactly which rows the
+  // clean-oracle filter dropped, by name, so the 50->47 delta is reconstructable
+  // from the receipt alone (never a silent "the numbers just changed").
+  const droppedRows = scoringOnClean
+    ? run.results
+        .filter((r) => !clean.claims.has(r.claim))
+        .map((r) => ({ idx: r.idx, label: r.label, difficulty: r.difficulty || 'unknown', claim: r.claim }))
+    : [];
+  const filterProvenance: FilterProvenance = {
+    clean_corpus_env: clean.env,
+    raw_run_size: run.results.length,
+    scored_rows: nClaims,
+    dropped_count: droppedRows.length,
+    dropped_rows: droppedRows,
+  };
+
   // model/family lookup from the quorum manifest
   const meta = new Map(run.quorum.map((q) => [q.name, q]));
 
@@ -321,60 +375,81 @@ function main() {
     corpus_sha256: scoringOnClean ? clean.sha : null,
     corpus_scope: scoringOnClean ? 'clean-oracle (v1.1)' : 'full-run (v1)',
     n_claims: nClaims,
+    filter: filterProvenance,
   };
 
-  const leaderboard: LeaderboardRow[] = rated
-    .map((a) => {
-      const hard = a.byDiff['hard'];
-      const easy = a.byDiff['easy'];
-      const hardAcc = hard && hard.committed > 0 ? pct(hard.correct, hard.committed) : null;
-      const easyAcc = easy && easy.committed > 0 ? pct(easy.correct, easy.committed) : null;
-      const overconfidence = mean(a.confWhenWrong); // mean confidence WHEN WRONG (lower = better calibrated)
-      const confWhenRight = mean(a.confWhenCorrect);
-      // hard-row abstain rate: appropriately hedging on the hardest rows is GOOD calibration.
-      const hardAbstainRate = hard && hard.seen > 0 ? pct(hard.abstains, hard.seen) : null;
-      return {
-        provider: a.provider,
-        model: a.model,
-        family: a.family,
-        axes: {
-          // --- ACCURACY: correctness on committed votes vs ground truth ---
-          accuracy_pct: pct(a.correct, a.committed),
-          correct: a.correct,
-          committed: a.committed,
-          // --- CALIBRATION: does it hedge on hard rows + not stay confident when wrong? ---
-          calibration: {
-            easy_accuracy_pct: easyAcc,
-            hard_accuracy_pct: hardAcc,
-            hard_abstain_rate_pct: hardAbstainRate,
-            mean_confidence_when_wrong: overconfidence, // lower is better
-            mean_confidence_when_correct: confWhenRight,
-            abstains: a.abstains,
-          },
-          // --- COVERAGE: how many claims it successfully engaged with ---
-          coverage: {
-            responded_pct: pct(a.committed + a.abstains, a.seen), // non-error responses
-            committed_pct: pct(a.committed, a.seen), // firm votes
-            errors: a.errors,
-            error_rate_pct: pct(a.errors, a.seen),
-            seen: a.seen,
-          },
-          // --- LATENCY (optional): responsiveness on real replies ---
-          latency: {
-            median_ms: median(a.latencies),
-            p95_ms: percentile(a.latencies, 95),
-            samples: a.latencies.length,
-          },
+  const calCell = (cell?: { committed: number; correct: number }): CalCell => {
+    const n = cell ? cell.committed : 0;
+    return {
+      pct: cell && cell.committed > 0 ? pct(cell.correct, cell.committed) : null,
+      n,
+      low_n: n > 0 && n < LOW_N_THRESHOLD,
+    };
+  };
+
+  const buildRow = (a: Acc): LeaderboardRow => {
+    const hard = a.byDiff['hard'];
+    const easy = a.byDiff['easy'];
+    const overconfidence = mean(a.confWhenWrong); // mean confidence WHEN WRONG (lower = better calibrated)
+    const confWhenRight = mean(a.confWhenCorrect);
+    // hard-row abstain rate: appropriately hedging on the hardest rows is GOOD calibration.
+    const hardAbstainRate = hard && hard.seen > 0 ? pct(hard.abstains, hard.seen) : null;
+    const committedPct = pct(a.committed, a.seen);
+    return {
+      provider: a.provider,
+      model: a.model,
+      family: a.family,
+      axes: {
+        // --- ACCURACY: correctness on committed votes vs ground truth ---
+        accuracy_pct: pct(a.correct, a.committed),
+        correct: a.correct,
+        committed: a.committed,
+        abstains: a.abstains,
+        errors: a.errors,
+        seen: a.seen,
+        // --- CALIBRATION: does it hedge on hard rows + not stay confident when wrong? ---
+        // Finding #5: each cell carries its denominator + a low-N flag.
+        calibration: {
+          easy: calCell(easy),
+          hard: calCell(hard),
+          hard_abstain_rate_pct: hardAbstainRate,
+          mean_confidence_when_wrong: overconfidence, // lower is better
+          mean_confidence_when_correct: confWhenRight,
+          abstains: a.abstains,
         },
-        receipt: { ...receiptBase, verified_claims: a.committed },
-      };
-    })
-    // Order by accuracy, then coverage — but the axes stay independent in the row.
-    .sort(
-      (x, y) =>
-        y.axes.accuracy_pct - x.axes.accuracy_pct ||
-        y.axes.coverage.committed_pct - x.axes.coverage.committed_pct,
-    );
+        // --- COVERAGE: how many claims it successfully engaged with ---
+        coverage: {
+          responded_pct: pct(a.committed + a.abstains, a.seen), // non-error responses
+          committed_pct: committedPct, // firm votes
+          errors: a.errors,
+          error_rate_pct: pct(a.errors, a.seen),
+          seen: a.seen,
+          meets_floor: committedPct >= COVERAGE_FLOOR_PCT, // Finding #1: the GATE
+        },
+        // --- LATENCY (optional): responsiveness on real replies ---
+        latency: {
+          median_ms: median(a.latencies),
+          p95_ms: percentile(a.latencies, 95),
+          samples: a.latencies.length,
+        },
+      },
+      // Finding #3: report the firm-vote count (committed) with its denominator
+      // (total oracle claims), never a bare number that reads like N verified=47.
+      receipt: { ...receiptBase, committed_votes: a.committed, total_claims: a.seen },
+    };
+  };
+
+  // Finding #1: COVERAGE IS A GATE. Only providers that committed a firm vote on
+  // >= COVERAGE_FLOOR_PCT of the oracle appear in the MAIN ranked table. Providers
+  // below the floor (e.g. cerebras 21.3%) go to a SEPARATE "Provisional" section —
+  // never interleaved with fully-covered providers, so nobody can win by
+  // abstaining/erroring on the hard rows.
+  const allRatedRows = rated.map(buildRow);
+  const byAccuracy = (x: LeaderboardRow, y: LeaderboardRow) =>
+    y.axes.accuracy_pct - x.axes.accuracy_pct ||
+    y.axes.coverage.committed_pct - x.axes.coverage.committed_pct;
+  const leaderboard = allRatedRows.filter((r) => r.axes.coverage.meets_floor).sort(byAccuracy);
+  const provisional = allRatedRows.filter((r) => !r.axes.coverage.meets_floor).sort(byAccuracy);
 
   const unratedNotes: UnratedRow[] = unrated
     .map((a) => ({
@@ -383,7 +458,7 @@ function main() {
       family: a.family,
       status: 'UNRATED — no verified engagement',
       reason: `${a.errors}/${a.seen} calls errored (429/quota/timeout); 0 real verdicts. Per LAW 1, no score is fabricated.`,
-      receipt: { ...receiptBase, verified_claims: 0 },
+      receipt: { ...receiptBase, committed_votes: 0, total_claims: a.seen },
     }))
     .sort((x, y) => x.provider.localeCompare(y.provider));
 
@@ -398,8 +473,11 @@ function main() {
     receipt: receiptBase,
     quorum_manifest: run.quorum,
     n_claims: nClaims,
+    coverage_floor_pct: COVERAGE_FLOOR_PCT,
+    low_n_threshold: LOW_N_THRESHOLD,
     small_n_caveat: `N=${nClaims} known-answer claims — directional, not a benchmark leaderboard. Treat as an earned snapshot from one verified run, not a universal ranking.`,
     leaderboard,
+    provisional,
     unrated: unratedNotes,
   };
 
@@ -415,18 +493,23 @@ function main() {
   fs.writeFileSync(mdPath, renderMarkdown(out));
 
   // ---- console summary ----
-  console.log('\n=== EARNED MODEL LEADERBOARD ===');
-  console.log(`scored on: ${receiptBase.corpus_scope}  N=${nClaims} verified claims`);
-  console.log(`run: ${receiptBase.canary_run}  (${receiptBase.canary_run_generated_at})`);
-  console.log('\nprovider           | acc%  (correct/committed) | coverage%(committed) | err | med.ms | conf.wrong');
-  for (const r of leaderboard) {
+  const line = (r: LeaderboardRow) => {
     const x = r.axes;
-    console.log(
-      `${r.provider.padEnd(18)} | ${String(x.accuracy_pct).padStart(5)}  (${x.correct}/${x.committed})`.padEnd(46) +
-        `| ${String(x.coverage.committed_pct).padStart(5)}%             | ${String(x.coverage.errors).padStart(3)} | ${String(
-          x.latency.median_ms ?? '—',
-        ).padStart(6)} | ${x.calibration.mean_confidence_when_wrong ?? '—'}`,
-    );
+    // Finding #2: accuracy ALWAYS shown with its committed denominator + the
+    // abstain/error tail — never a bare percentage.
+    const acc = `${x.accuracy_pct}% (${x.correct}/${x.committed} committed · ${x.abstains} abst · ${x.errors} err of ${x.seen})`;
+    return `${r.provider.padEnd(11)} | ${acc.padEnd(48)} | cov ${String(x.coverage.committed_pct).padStart(5)}% | med ${String(
+      x.latency.median_ms ?? '—',
+    ).padStart(5)}ms | conf.wrong ${x.calibration.mean_confidence_when_wrong ?? '—'}`;
+  };
+  console.log('\n=== EARNED MODEL LEADERBOARD ===');
+  console.log(`scored on: ${receiptBase.corpus_scope}  N=${nClaims} claims  (raw run ${filterProvenance.raw_run_size} - ${filterProvenance.dropped_count} dropped)`);
+  console.log(`run: ${receiptBase.canary_run}  (${receiptBase.canary_run_generated_at})`);
+  console.log(`\nMAIN (coverage >= ${COVERAGE_FLOOR_PCT}% committed):`);
+  for (const r of leaderboard) console.log('  ' + line(r));
+  if (provisional.length) {
+    console.log(`\nPROVISIONAL (coverage < ${COVERAGE_FLOOR_PCT}% — self-selected subset, NOT ranked with full-N):`);
+    for (const r of provisional) console.log('  ' + line(r));
   }
   if (unratedNotes.length) {
     console.log('\nUNRATED (no verified engagement — coverage note, NOT a score):');
@@ -441,20 +524,46 @@ function renderMarkdown(out: LeaderboardOut): string {
   const r = out.receipt;
   const fmt = (v: number | null | undefined) => (v === null || v === undefined ? '—' : String(v));
 
-  const rows = out.leaderboard
-    .map((p) => {
-      const a = p.axes;
-      return `| ${p.provider} | \`${p.model}\` | ${p.family} | **${a.accuracy_pct}%** (${a.correct}/${a.committed}) | ${fmt(
-        a.calibration.easy_accuracy_pct,
-      )}% / ${fmt(a.calibration.hard_accuracy_pct)}% | ${fmt(a.calibration.mean_confidence_when_wrong)} | ${a.coverage.committed_pct}% (${a.committed}/${a.coverage.seen}) | ${a.coverage.errors} | ${fmt(
-        a.latency.median_ms,
-      )} / ${fmt(a.latency.p95_ms)} | ${p.receipt.verified_claims} |`;
-    })
-    .join('\n');
+  // Finding #2: accuracy is ALWAYS rendered with its committed denominator AND
+  // the abstain/error tail — never a bare percentage that hides the subset.
+  const accWithTail = (a: LeaderboardRow['axes']) =>
+    `**${a.accuracy_pct}%** (${a.correct}/${a.committed} committed · ${a.abstains} abstain · ${a.errors} err of ${a.seen})`;
+
+  // Finding #5: a calibration cell shows its denominator + a ⚠ when N is low.
+  // n = committed votes the cell was scored on; the pct is correct/n, so the
+  // denominator is n (rendered as "%pct (n)"), and ⚠ flags n < LOW_N_THRESHOLD.
+  const renderCal = (c: CalCell) => (c.pct === null ? '—' : `${c.pct}% (n=${c.n})${c.low_n ? ' ⚠' : ''}`);
+
+  const rowMd = (p: LeaderboardRow) => {
+    const a = p.axes;
+    // Finding #3: the last column is committed/total (firm votes / oracle N),
+    // NOT a mislabeled "N verified" that contradicts the header.
+    return `| ${p.provider} | \`${p.model}\` | ${p.family} | ${accWithTail(a)} | ${renderCal(
+      a.calibration.easy,
+    )} / ${renderCal(a.calibration.hard)} | ${fmt(a.calibration.mean_confidence_when_wrong)} | ${a.coverage.committed_pct}% (${a.committed}/${a.coverage.seen}) | ${a.coverage.errors} | ${fmt(
+      a.latency.median_ms,
+    )} / ${fmt(a.latency.p95_ms)} | ${p.receipt.committed_votes}/${p.receipt.total_claims} |`;
+  };
+
+  const headerRow =
+    '| provider | model | family | accuracy (committed · tail) | calib: easy / hard acc (N) | conf-when-wrong ↓ | coverage (committed) | errors | latency med/p95 ms | committed/total |\n' +
+    '|---|---|---|---|---|---|---|---|---|---|';
+
+  const rows = out.leaderboard.map(rowMd).join('\n');
+
+  const provisionalRows = out.provisional.length
+    ? out.provisional.map(rowMd).join('\n')
+    : '| — | — | — | (none — every rated provider met the coverage floor) | — | — | — | — | — | — |';
 
   const unratedRows = out.unrated.length
     ? out.unrated.map((u) => `| ${u.provider} | \`${u.model}\` | ${u.status} | ${u.reason} |`).join('\n')
     : '| — | — | (all quorum members voted) | — |';
+
+  const droppedList = r.filter.dropped_rows.length
+    ? r.filter.dropped_rows
+        .map((d) => `  - idx ${d.idx} [${d.label}/${d.difficulty}]: "${d.claim}"`)
+        .join('\n')
+    : '  - (none — scored on the full raw run)';
 
   return `# ${out.title}
 
@@ -477,21 +586,37 @@ function renderMarkdown(out: LeaderboardOut): string {
 | canary run | \`${r.canary_run}\` |
 | run generated at | ${r.canary_run_generated_at} |
 | run sha256 | \`${r.canary_run_sha256}\` |
-| corpus | \`${r.corpus}\` |
+| corpus (oracle N) | \`${r.corpus}\` |
 | corpus scope | ${r.corpus_scope} |
 | corpus sha256 | ${r.corpus_sha256 ? `\`${r.corpus_sha256}\`` : '—'} |
-| **N verified claims** | **${r.n_claims}** |
+| \`CLEAN_CORPUS\` used | \`${r.filter.clean_corpus_env}\` |
+| raw run size → scored | ${r.filter.raw_run_size} → ${r.filter.scored_rows} (**${r.filter.dropped_count} dropped**) |
+| **oracle N (claims asked)** | **${r.n_claims}** |
+
+**Rows dropped by the clean-oracle filter (${r.filter.dropped_count}), named for reproducibility:**
+${droppedList}
 
 > **Small-N caveat.** ${out.small_n_caveat}
+> Per-provider **committed** votes vary (the oracle N=${r.n_claims}, but a provider only gets scored on the
+> claims it actually voted on) — every row below shows both.
 
-## Leaderboard (axes kept SEPARATE — "best" is multi-dimensional, not one number)
-Accuracy is correctness on the claims a provider actually committed a TRUE/FALSE vote on. Calibration shows
-easy-vs-hard accuracy and *mean confidence when wrong* (lower = better calibrated — it isn't loudly confident
-about mistakes). Coverage is how many claims it successfully engaged (committed a firm vote on) vs errored.
+## Leaderboard — MAIN (coverage ≥ ${out.coverage_floor_pct}% committed; axes kept SEPARATE)
+Only providers that committed a firm TRUE/FALSE vote on **≥ ${out.coverage_floor_pct}% of the oracle** appear here.
+Coverage is a **gate, not a tie-breaker** — a provider cannot rank by abstaining/erroring on the hard rows.
+Providers below the floor are in the **Provisional** section and are *not* comparable to full-coverage rows.
+Accuracy is always shown with its committed denominator and the abstain/error tail. Calibration cells show
+their own N; ⚠ = fewer than ${out.low_n_threshold} committed votes (a "100%" off 1 sample is not a real 100%).
 
-| provider | model | family | accuracy | calib: easy / hard acc | conf-when-wrong ↓ | coverage (committed) | errors | latency med/p95 ms | N verified |
-|---|---|---|---|---|---|---|---|---|---|
+${headerRow}
 ${rows}
+
+## Provisional — insufficient coverage to rank (coverage < ${out.coverage_floor_pct}% committed)
+> These providers voted on too small a self-selected subset of the oracle to be ranked against the fully-covered
+> providers above. A high accuracy here is on a **survivor subset** (the claims it did not error/abstain on),
+> not the full oracle — do **not** read it as "beats" a MAIN-table provider.
+
+${headerRow}
+${provisionalRows}
 
 ## Unrated providers (LAW 1 — no verified engagement, so no score)
 | provider | model | status | reason |
@@ -500,13 +625,16 @@ ${unratedRows}
 
 ## Axis definitions
 - **accuracy_pct** — of the claims where the provider committed a firm TRUE/FALSE verdict, the fraction that
-  matched the known label. Abstentions and errors are excluded (they can't be right or wrong).
-- **calibration** — two facets: (a) *easy vs hard accuracy* (does it degrade gracefully on the hard rows?),
-  and (b) *mean confidence when wrong* — a well-calibrated model is **less** confident on the answers it gets
-  wrong. Also tracks hard-row abstain rate: hedging on the hardest rows is good calibration, not a failure.
-- **coverage** — \`committed%\` = firm votes / claims seen; \`errors\` = 429/quota/timeout responses. A high
-  error rate caps how much its accuracy can be trusted (small denominator).
+  matched the known label. Always shown as \`% (correct/committed · abstain · err of seen)\` so the
+  self-selected denominator is visible. Abstentions and errors are excluded from the ratio (they can't be
+  right or wrong) but are always reported alongside it.
+- **coverage GATE** — \`committed%\` = firm votes / oracle claims seen. A provider must clear
+  **${out.coverage_floor_pct}%** to appear in the MAIN table; below it it's Provisional. \`errors\` = 429/quota/timeout.
+- **calibration** — two facets: (a) *easy vs hard accuracy*, each shown with its N and a ⚠ low-N flag
+  (< ${out.low_n_threshold} committed votes), so a 1/1 "100%" is never read like a full-N 100%; and
+  (b) *mean confidence when wrong* — a well-calibrated model is **less** confident on the answers it gets wrong.
 - **latency** — median / p95 ms on real (non-error) replies. Optional axis; captured because the run logged it.
+- **committed/total** — firm TRUE/FALSE votes the provider cast / oracle claims it was asked (the header's N).
 
 ## Quorum manifest (models under test this run)
 | provider | model | family |
@@ -517,8 +645,13 @@ ${out.quorum_manifest.map((q) => `| ${q.name} | \`${q.model}\` | ${q.family} |`)
 \`\`\`bash
 # 1. (re)generate the verified verdicts — real cross-LLM quorum, live keys:
 npx ts-node scripts/eval/canary-f1.ts
-# 2. re-score into this leaderboard (pure, deterministic, no LLM calls):
-npx ts-node scripts/eval/model-leaderboard.ts
+# 2. re-score into this leaderboard (pure, deterministic, no LLM calls).
+#    Pin the exact inputs so the numbers below are fully reconstructable:
+CANARY_RAW='${r.canary_run}' \\
+CLEAN_CORPUS='${r.filter.clean_corpus_env}' \\
+  npx ts-node scripts/eval/model-leaderboard.ts
+# The clean-oracle filter scores ${r.filter.scored_rows} of the raw run's ${r.filter.raw_run_size} rows
+# (drops ${r.filter.dropped_count}: idx ${r.filter.dropped_rows.map((d) => d.idx).join(', ') || '—'} — see the Receipt section for the named claims).
 \`\`\`
 
 _Generated by \`scripts/eval/model-leaderboard.ts\` — a deterministic re-scoring of already-verified verdicts._
