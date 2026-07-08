@@ -34,6 +34,17 @@ describe('prod-guard', () => {
     expect(() =>
       assertNotProductionSupabase('https://test-project.supabase.co'),
     ).not.toThrow();
-    expect(() => assertNotProductionSupabase(undefined)).not.toThrow();
+    // Passing an explicit URL of undefined means "no project" -> not prod.
+    // Clear the env first: assertNotProductionSupabase defaults its arg to
+    // process.env.SUPABASE_URL, so an explicit `undefined` would otherwise
+    // resolve to whatever SUPABASE_URL the runner has set (prod in CI).
+    const prevUrl = process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_URL;
+    try {
+      expect(() => assertNotProductionSupabase(undefined)).not.toThrow();
+    } finally {
+      if (prevUrl === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = prevUrl;
+    }
   });
 });
