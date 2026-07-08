@@ -5,6 +5,7 @@ import { scorePrediction } from '../layers/prediction-scoring';
 import { applyDecay, computeRedemptionModifier } from '../layers/decay';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges, BadgeAward } from './badges';
+import { DETECTION_CONFIRM_THRESHOLD } from './behavioral-integrity';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -16,7 +17,23 @@ export interface RepIdUpdateInput {
     | 'CODE_CONTRIBUTION' | 'WORKFLOW_CONTRIBUTION' | 'TOOL_PIONEER'
     | 'AGENT_TEACHING' | 'AUDIT_CONTRIBUTION'
     | 'HANDOFF_COSIGN_VERIFIED' | 'HANDOFF_COSIGN_FALSE_PASS_SLASH'
-    | 'PEER_VERIFY_WRONG_CALL'; // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN) + BFT panel divergence
+    | 'PEER_VERIFY_WRONG_CALL' // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN) + BFT panel divergence
+    // --- Ordinary error (light penalty) ------------------------------------
+    // An honest wrong answer / unsupported claim. Penalized, but LIGHTLY — it
+    // does not attack supervisability. Contrast with DEFENDED_DECEPTION_* below.
+    | 'UNSUPPORTED_CLAIM'
+    // --- Defended deception (heavy penalty) — Trust Harness P1 KEYSTONE M1 ---
+    // These attack the ability to supervise the agent (they corrupt the record
+    // itself), so they carry a markedly heavier negative delta than ordinary
+    // error. ENFORCEMENT is shadow-first behind TRUST_DECEPTION_MODE (below).
+    | 'DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT'
+    | 'DEFENDED_DECEPTION_DOUBT_ATTACK'
+    | 'DEFENDED_DECEPTION_FABRICATED_CITATION'
+    | 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT'
+    | 'DEFENDED_DECEPTION_FABRICATED_BENCHMARK'
+    | 'DEFENDED_DECEPTION_THRESHOLD_DANCING'
+    | 'DEFENDED_DECEPTION_SYCOPHANTIC_FALSE_PREMISE'
+    | 'DEFENDED_DECEPTION_STORY_CHANGE';
   certaintyAtClaim?: number;
   pStated?: number;
   pCorrect?: number;
@@ -48,6 +65,17 @@ export interface RepIdUpdateInput {
     contractAddress?: string;
     onChainAgentId?: string;
     blockNumber?: number;
+  };
+  // Provenance for a DEFENDED_DECEPTION_* event: the M2 behavioral-integrity
+  // detection (class/confidence/evidence + receipt refs) that produced this
+  // penalty. Recorded in the audit row so a shadow-mode measurement is fully
+  // replayable. Populated by the detector -> penalty bridge (see M2 module).
+  deceptionProof?: {
+    class: string;
+    confidence: number;
+    grounded: boolean;
+    evidence: string;
+    receiptRefs: string[];
   };
 }
 
@@ -89,7 +117,130 @@ const FIXED_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
   HANDOFF_COSIGN_VERIFIED: 10, // producer + verifier each get + on verified co-sign (calibrated)
   HANDOFF_COSIGN_FALSE_PASS_SLASH: -15, // slash the rubber-stamper (verifier) on false-PASS
   PEER_VERIFY_WRONG_CALL: -5, // BFT panel: reviewer diverged from majority (bounded; low-confidence self-flag exempt)
+  // Ordinary error — an honest wrong/unsupported claim. LIGHT penalty. This is
+  // the baseline the deception tiers below are deliberately heavier than.
+  UNSUPPORTED_CLAIM: -8,
 };
+
+// --- DECEPTION_DELTAS — Trust Harness P1 KEYSTONE (M1) --------------------
+// Defended deception attacks SUPERVISABILITY (it corrupts the record the whole
+// trust system depends on), so every class here is markedly heavier than the
+// ordinary-error baseline (UNSUPPORTED_CLAIM = -8). Two tiers within deception:
+//
+//   RECORD-CORRUPTING  (-60): the agent falsified the record itself — denied a
+//     receipted output, fabricated a tool result / citation / benchmark, or
+//     changed its story across turns. These are provable against the M2 chain
+//     and are the core of Sean's scar: an actor you cannot supervise.
+//   SUPERVISION-EVASION (-40): doubt-attack / sycophantic-false-premise /
+//     threshold-dancing — attacks on the supervisor's judgment rather than the
+//     record. Heavy, but the M2 detectors for these are heuristic (lower
+//     confidence), so the tier is one step below record-corrupting.
+//
+// These are ~5-8x the ordinary-error penalty by design. The asymmetry IS the
+// mechanism: honest error stays cheap so agents surface it; defended deception
+// is expensive so it is never the profitable move.
+const DECEPTION_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
+  DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT: -60,
+  DEFENDED_DECEPTION_FABRICATED_CITATION: -60,
+  DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT: -60,
+  DEFENDED_DECEPTION_FABRICATED_BENCHMARK: -60,
+  DEFENDED_DECEPTION_STORY_CHANGE: -60,
+  DEFENDED_DECEPTION_DOUBT_ATTACK: -40,
+  DEFENDED_DECEPTION_SYCOPHANTIC_FALSE_PREMISE: -40,
+  DEFENDED_DECEPTION_THRESHOLD_DANCING: -40,
+};
+
+/** True for the 8 defended-deception event classes (M1). */
+export function isDeceptionEvent(eventType: RepIdUpdateInput['eventType']): boolean {
+  return eventType in DECEPTION_DELTAS;
+}
+
+/** The record-corrupting classes eligible for the heavy (-60) tier. */
+const RECORD_CORRUPTING_EVENTS = new Set<RepIdUpdateInput['eventType']>([
+  'DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT',
+  'DEFENDED_DECEPTION_FABRICATED_CITATION',
+  'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+  'DEFENDED_DECEPTION_FABRICATED_BENCHMARK',
+  'DEFENDED_DECEPTION_STORY_CHANGE',
+]);
+
+/**
+ * The advisory delta a deception event collapses to when it is NOT backed by a
+ * confirmed detection. This is ZERO — LOG-ONLY, no penalty (M1 finding 3).
+ *
+ * An unconfirmed / heuristic / below-threshold deception signal must never dock
+ * an honest agent: for a TRUST product a false penalty on honest behavior is the
+ * worst outcome, and the ordinary-error weight (-8) is itself a real penalty, so
+ * collapsing to -8 still eroded reputation on a heuristic false-positive during
+ * honest debate. We therefore record the unconfirmed signal in the audit row as
+ * advisory but apply delta 0. A negative delta is reserved for CONFIRMED grounded
+ * detections (the -60 / -40 tiers) — never for a heuristic hunch.
+ */
+const DECEPTION_ADVISORY_DELTA = 0;
+
+/**
+ * Gate a defended-deception penalty on a CONFIRMED detection (M1 findings 4+5).
+ * Returns the delta the event is ALLOWED to carry:
+ *   - The heavy delta ONLY when a deceptionProof is present AND confidence >= the
+ *     confirm threshold. The -60 record-corrupting tier ADDITIONALLY requires
+ *     grounded === true (no -60 on heuristics); the -40 supervision-evasion tier
+ *     does NOT require grounded (its detectors are heuristic by design — a
+ *     confirmed heuristic at confidence >= threshold is enough for -40).
+ *   - Otherwise delta 0 (log-only advisory) — an unproven / heuristic /
+ *     below-threshold detection can NEVER reach the heavy tier and, for a trust
+ *     product, an UNCONFIRMED signal must NOT dock an honest agent at all: we
+ *     record it in the audit row as advisory but apply zero penalty. A negative
+ *     delta is reserved for CONFIRMED detections only.
+ *
+ * A missing proof is treated as UNCONFIRMED on purpose: the penalty bridge must
+ * supply the M2 detection that justifies the heavy delta; without it we do not
+ * assume guilt.
+ */
+export function gatedDeceptionDelta(input: RepIdUpdateInput): {
+  delta: number;
+  confirmed: boolean;
+  reason: string;
+} {
+  const heavy = DECEPTION_DELTAS[input.eventType] ?? 0;
+  const proof = input.deceptionProof;
+
+  if (!proof) {
+    return {
+      delta: DECEPTION_ADVISORY_DELTA,
+      confirmed: false,
+      reason: 'no deceptionProof supplied — advisory log-only, delta 0 (unconfirmed)',
+    };
+  }
+  if (proof.confidence < DETECTION_CONFIRM_THRESHOLD) {
+    return {
+      delta: DECEPTION_ADVISORY_DELTA,
+      confirmed: false,
+      reason: `below confirm threshold (${proof.confidence} < ${DETECTION_CONFIRM_THRESHOLD}) — advisory log-only, delta 0`,
+    };
+  }
+  // A -60 record-corrupting penalty additionally REQUIRES a grounded proof.
+  if (RECORD_CORRUPTING_EVENTS.has(input.eventType) && !proof.grounded) {
+    return {
+      delta: DECEPTION_ADVISORY_DELTA,
+      confirmed: false,
+      reason: 'record-corrupting class without a grounded proof — advisory log-only, delta 0 (no -60 on heuristics)',
+    };
+  }
+  return { delta: heavy, confirmed: true, reason: 'confirmed grounded detection' };
+}
+
+/**
+ * TRUST_DECEPTION_MODE gate (M1). SHADOW-FIRST by default: in `shadow` mode we
+ * COMPUTE the (heavy) deception delta and write a replayable audit row tagged
+ * mode='shadow-deception' with the would-be delta, but do NOT mutate
+ * current_repid. In `enforce` mode the delta is applied. Any value other than
+ * the explicit 'enforce' resolves to shadow — enforcement is never incidental.
+ */
+export function deceptionMode(): 'shadow' | 'enforce' {
+  return (process.env.TRUST_DECEPTION_MODE || '').toLowerCase() === 'enforce'
+    ? 'enforce'
+    : 'shadow';
+}
 
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
   // Phase 3 dogfooding gate: co-sign -> RepID only if flag ON (default OFF until CC honest-HAL merge)
@@ -173,6 +324,16 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     // This closes the prior hole where any /score {eventType:'STAKE'} call
     // granted +5 with no real deposit backing it (RULE-4: honest scoring).
     rawDelta = input.stakeProof?.txHash ? (FIXED_DELTAS.STAKE ?? 0) : 0;
+  } else if (isDeceptionEvent(input.eventType)) {
+    // DEFENDED DECEPTION (M1). The negative delta is GATED on a confirmed,
+    // grounded M2 detection (findings 4+5): the heavy -60/-40 tier applies only
+    // when input.deceptionProof is present, confirmed (and grounded for -60). An
+    // unproven / heuristic / below-threshold detection collapses to delta 0
+    // (log-only advisory — never penalize an honest agent on an unconfirmed
+    // signal), never the heavy tier, and never -60 without a grounded proof.
+    // This is COMPUTED here regardless of TRUST_DECEPTION_MODE;
+    // whether it MUTATES the score is decided below by the shadow/enforce gate.
+    rawDelta = gatedDeceptionDelta(input).delta;
   } else {
     rawDelta = FIXED_DELTAS[input.eventType] ?? 0;
   }
@@ -180,10 +341,31 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // 6 — Redemption modifier (Micah 6:8 as math)
   const redemptionMod = await computeRedemptionModifier(input.agentId);
   const redemptionApplied = redemptionMod < 1.0 && rawDelta < 0;
-  const finalDelta = redemptionApplied ? Math.round(rawDelta * redemptionMod) : rawDelta;
+  const computedDelta = redemptionApplied ? Math.round(rawDelta * redemptionMod) : rawDelta;
 
-  // 7 — New RepID and tier
-  const newRepId = Math.max(10, Math.min(10000, decayedRepId + finalDelta));
+  // 6b — SHADOW-FIRST gate (M1). For a deception event in shadow mode, the
+  // COMPUTED (would-be) delta is recorded in the audit row, but the APPLIED
+  // delta is 0 — current_repid is never mutated. Enforce mode applies it.
+  // Non-deception events are unaffected (applied === computed). Never silently
+  // mutate: the mode label is written into the audit row below.
+  const isDeception = isDeceptionEvent(input.eventType);
+  const decMode = deceptionMode();
+  // SHADOW-DECEPTION must be TRULY INERT (finding 2): a shadow deception event
+  // may not move current_repid AT ALL — not via the delta AND not via decay —
+  // and may not increment activity_30d. We therefore short-circuit both the
+  // applied delta AND the decay on this path, leaving current_repid exactly as
+  // it was. The audit row then honestly reflects no move: delta 0 AND
+  // repid_after === repid_before, mode 'shadow-deception'. (Enforce mode and all
+  // non-deception events keep the normal decay + delta behavior.)
+  const isShadowDeception = isDeception && decMode === 'shadow';
+  const finalDelta = isShadowDeception ? 0 : computedDelta;
+
+  // 7 — New RepID and tier (uses the APPLIED delta; shadow deception => no move).
+  // On the shadow-deception path the score is left UNCHANGED (no decay applied),
+  // so repid_after === repid_before and the event is a pure measurement.
+  const newRepId = isShadowDeception
+    ? agent.current_repid
+    : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
 
   // 8 — AUDIT ROW FIRST (atomicity reorder, 2026-06-29). Write the replayable ledger row BEFORE
@@ -198,7 +380,13 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // Mode label must mirror the ACTUAL behavioral gate (src/scoring/pipeline.ts): the gate uses the
   // SINGULAR var, default-ON (`!== 'false'`). Using the plural default-off spelling here mislabelled
   // the recorded mode. Metadata-accuracy fix only — the gate logic is untouched.
-  const halMode = process.env.DOGFOOD_REPID_FROM_COSIGN === 'true' ? 'shadow' : process.env.HAL_DECISION_REQUIRES_QUORUM !== 'false' ? 'live' : 'off';
+  // For a deception event the recorded mode is the deception gate's mode:
+  //   'shadow-deception' = delta COMPUTED + recorded, NOT applied (default)
+  //   'enforce-deception' = delta applied to current_repid
+  // For all other events the mode continues to mirror the HAL gate as before.
+  const halMode = isDeception
+    ? (decMode === 'enforce' ? 'enforce-deception' : 'shadow-deception')
+    : process.env.DOGFOOD_REPID_FROM_COSIGN === 'true' ? 'shadow' : process.env.HAL_DECISION_REQUIRES_QUORUM !== 'false' ? 'live' : 'off';
 
   const { error: auditError } = await db.from('repid_score_events').insert({
     agent_id: input.agentId,
@@ -215,8 +403,23 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     // (S-HONEST-HAL) record mode kept in metadata.mode — prod repid_score_events has NO top-level
     // `mode` column; a top-level write here silently failed the whole audit insert (see throw below).
     metadata: {
-      mode: halMode, // 'shadow' = test mode, 'live' = of-record, 'off' = HAL not wired
-      decayApplied: agent.current_repid - decayedRepId,
+      mode: halMode, // 'shadow' = test mode, 'live' = of-record, 'off' = HAL not wired;
+                     // 'shadow-deception'/'enforce-deception' for M1 defended-deception events
+      // M1 shadow-first: the would-be penalty. In shadow-deception mode the
+      // top-level `delta` above is 0 (score untouched) but deltaComputed is the
+      // heavy delta that WOULD apply under enforce mode — this is the measurement.
+      deltaComputed: computedDelta,
+      // Provenance for a defended-deception penalty: the M2 detection that
+      // triggered it (class/confidence/evidence + receipt refs). Null otherwise.
+      deceptionProof: isDeception ? (input.deceptionProof ?? null) : null,
+      // M1 findings 4+5: whether the deception delta was backed by a CONFIRMED,
+      // grounded detection. When false, the event was routed to the light
+      // advisory delta (never the heavy -60/-40 tier) — recorded so a shadow
+      // measurement can distinguish real grounded hits from advisory ones.
+      deceptionConfirmed: isDeception ? gatedDeceptionDelta(input).confirmed : null,
+      deceptionGateReason: isDeception ? gatedDeceptionDelta(input).reason : null,
+      // Shadow-deception is inert: NO decay is applied on that path, so record 0.
+      decayApplied: isShadowDeception ? 0 : agent.current_repid - decayedRepId,
       redemptionModifier: redemptionMod,
       redemptionModifierApplied: redemptionApplied,
       constitutionalAudit: {
@@ -254,8 +457,14 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // 9 — Apply the score AFTER the audit row is safely written (atomicity reorder 2026-06-29, gated
   // by WRITER_DIRECT_APPLY for single-applier cutover). The ledger row already exists, so even if
   // this update fails the state stays reconcilable via replay — never a silent score-without-row drift.
+  //
+  // SHADOW-DECEPTION INERTNESS (finding 2): on the shadow-deception path we skip
+  // the repid_agents write ENTIRELY. Writing it would (a) re-persist current_repid
+  // (still risky if decay were ever reintroduced) and (b) increment activity_30d
+  // — a side effect that is NOT inert. A shadow measurement must leave both
+  // current_repid AND activity_30d untouched, so we do not write at all.
   const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
-  if (WRITER_DIRECT_APPLY) {
+  if (WRITER_DIRECT_APPLY && !isShadowDeception) {
     await db.from('repid_agents').update({
       current_repid: newRepId, tier: newTier,
       last_updated: new Date().toISOString(),
@@ -263,15 +472,25 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     }).eq('id', input.agentId);
   }
 
-  // 10 — Update supply rate
-  await updateSupplyRate(input.eventType);
+  // 10 — Update supply rate. SHADOW-DECEPTION INERTNESS (finding 1): a shadow
+  // deception measurement must produce ZERO operational DB side-effects beyond
+  // the single audit row. updateSupplyRate() mutates repid_ecosystem_supply
+  // counters — an operational side-effect — so it is skipped on the shadow path.
+  if (!isShadowDeception) {
+    await updateSupplyRate(input.eventType);
+  }
 
-  // 11 — Badge milestone check (non-blocking — never fails score flow)
+  // 11 — Badge milestone check (non-blocking — never fails score flow).
+  // SHADOW-DECEPTION INERTNESS (finding 1): checkAndAwardBadges() can WRITE to
+  // repid_badges (another operational side-effect), so it is skipped on the
+  // shadow path too. A shadow event leaves badges untouched.
   let newBadges: BadgeAward[] = [];
-  try {
-    newBadges = await checkAndAwardBadges(input.agentId, agent.current_repid, newRepId);
-  } catch {
-    newBadges = [];
+  if (!isShadowDeception) {
+    try {
+      newBadges = await checkAndAwardBadges(input.agentId, agent.current_repid, newRepId);
+    } catch {
+      newBadges = [];
+    }
   }
 
   return {
