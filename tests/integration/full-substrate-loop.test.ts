@@ -15,8 +15,9 @@
 
 import { MockAgent } from '../../scripts/mock-harness/mock-agent';
 import { getDb } from '../../scripts/liveness-probes/_shared';
+import { describeIfSchema } from '../helpers/describe-if-schema';
 
-describe('full substrate loop (Protocol 1, mock pair)', () => {
+describeIfSchema('full substrate loop (Protocol 1, mock pair)', () => {
   jest.setTimeout(45000);
 
   let buyer: MockAgent;
