@@ -236,6 +236,9 @@ export async function runScoreEvent(
           gemini: halConfig.providers.HAL_S2_ENABLE_GEMINI,
           mistral: halConfig.providers.HAL_S2_ENABLE_MISTRAL,
           qwen: halConfig.providers.HAL_S2_ENABLE_QWEN,
+          // openrouter is not (yet) a repid_config knob; it rides the HAL_QUORUM_AUTOBACKFILL
+          // default (key-present → included). Explicit opt-in via HAL_S2_ENABLE_OPENROUTER env.
+          openrouter: process.env.HAL_S2_ENABLE_OPENROUTER === 'true',
         }),
       });
       hal_score = Number.isFinite(r.hal_score) ? r.hal_score : 0.5;

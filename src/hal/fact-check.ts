@@ -760,6 +760,23 @@ export interface FactCheckProviderEnable {
   gemini: boolean;
   mistral: boolean;
   qwen: boolean;
+  /** OpenRouter (aggregator) — last-resort backfill family; optional so existing callers compile. */
+  openrouter?: boolean;
+}
+
+/**
+ * HAL QUORUM AUTO-BACKFILL (2026-07-07, HAL_QUORUM_AUTOBACKFILL, default true).
+ * When groq AND cerebras both 429 under burst the base quorum drops below
+ * MIN_QUORUM_FOR_VETO=2 and NO verdict can form. To keep the quorum alive we
+ * auto-include the next cheapest LIVE families whenever their KEY is present —
+ * deepseek → gemini → mistral → openrouter (cheapest-first, so the R6
+ * cost-ordered assembly still only PAYS for them when the free tier can't form a
+ * quorum). A provider is only ever added if its API key is present.
+ * Reversible: set HAL_QUORUM_AUTOBACKFILL=false to restore pure per-provider
+ * gating (a passed `enabled.X=true` / HAL_S2_ENABLE_<X>=true still force-includes).
+ */
+function quorumAutoBackfillOn(): boolean {
+  return process.env.HAL_QUORUM_AUTOBACKFILL !== 'false';
 }
 
 /**
@@ -769,6 +786,10 @@ export interface FactCheckProviderEnable {
  */
 export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
+  // Auto-backfill: OR the passed enable flag with the default-on backfill so a backfill family is
+  // included when EITHER it was explicitly enabled OR (autobackfill on AND its key is present). This
+  // preserves cheapest-first ordering (deepseek → gemini → mistral → openrouter appear in that order).
+  const ab = quorumAutoBackfillOn();
   // S-QUORUM (2026-06-02): groq llama-3.3-70b-versatile 429s on the free tier under any burst;
   // llama-3.1-8b-instant has a far higher free RPM and returns the same clean JSON verdict.
   const g = process.env.GROQ_API_KEY?.trim();
@@ -777,29 +798,33 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // correct verdict (in the `reasoning` field — handled in queryProvider) given enough max_tokens.
   const c = process.env.CEREBRAS_API_KEY?.trim();
   if (c && enabled.cerebras) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
-  // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended → 100% fail, ~31% of calls
-  // wasted). Now opt-in: requires enable flag (default OFF). Reversible: flip the flag.
+  // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
+  // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
   if (f && enabled.fireworks) out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
-  // R4 — DeepSeek (cheap paid) as a reliable quorum anchor so a >= 2-provider quorum forms even when
-  // the free tiers (groq/cerebras) throttle under prod burst (today they fall back to the extractor,
-  // and the penalty then fail-safes to no-drain via HAL_PENALTY_REQUIRES_QUORUM). DeepSeek returns
-  // HTTP 402 (unfunded) as of 2026-06-03, so it is gated OFF by default; once funded, enable it and
-  // the quorum assembles reliably. Revertible via the flag.
+  // R4 — DeepSeek (cheap paid) is the most reliable quorum anchor so a >= 2-family quorum forms even
+  // when the free tiers (groq/cerebras) throttle under prod burst. Cheapest backfill member → first.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
-  if (d && enabled.deepseek) {
+  if (d && (enabled.deepseek || ab)) {
     out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
   }
   // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
-  // Each gated by key + an enable flag (opt-in, revertible): set the key AND enable it.
+  // Auto-backfilled when their key is present (HAL_QUORUM_AUTOBACKFILL); else opt-in per enable flag.
   const gm = process.env.GEMINI_API_KEY?.trim();
-  if (gm && enabled.gemini) {
+  if (gm && (enabled.gemini || ab)) {
     out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
-  if (ms && enabled.mistral) {
+  if (ms && (enabled.mistral || ab)) {
     out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
   }
+  // OpenRouter — LAST backfill resort (aggregator; a :free variant is $0). Its family derives from the
+  // configured model so it never collapses independence with an already-present family on that model.
+  const or = process.env.OPENROUTER_API_KEY?.trim();
+  if (or && (enabled.openrouter || ab)) {
+    out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'meta-llama/llama-3.3-70b-instruct:free' });
+  }
+  // qwen stays opt-in (endpoint region varies per key) — NOT auto-backfilled.
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
   if (qw && enabled.qwen) {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
@@ -834,6 +859,7 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
     gemini: process.env.HAL_S2_ENABLE_GEMINI === 'true',
     mistral: process.env.HAL_S2_ENABLE_MISTRAL === 'true',
     qwen: process.env.HAL_S2_ENABLE_QWEN === 'true',
+    openrouter: process.env.HAL_S2_ENABLE_OPENROUTER === 'true',
   });
 }
 
