@@ -13,6 +13,7 @@ import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
 import { checkCap } from '../billing/caps';
 import { db } from '../db';
 import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
+import { persistShadowDecision } from '../services/anfis-shadow-persist'; // persist shadow decision so ANFIS is measurable (shadow-only, no routing change)
 
 export interface RouteRequest {
   prompt: string;
@@ -255,8 +256,23 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     if (process.env.ROUTER_ANFIS_SHADOW !== 'false') {
       const staticStub = { chosen_provider: staticProvider, chosen_tier: staticTier as any, reason: 'static', tried: [] as string[] };
       shadow = computeShadowDecision(staticStub as any, req.prompt, req.task_hint);
-      // For now console (table insert after migration apply + tolerant db)
       console.log('[ANFIS-SHADOW]', JSON.stringify(shadow));
+
+      // PERSIST the shadow decision to anfis_routing_logs so ANFIS's would-be picks are queryable
+      // (this is the measurement step — ANFIS still does NOT decide routing). Gated by
+      // ANFIS_SHADOW_PERSIST (default ON). Fire-and-forget: tolerant insert, never blocks routing.
+      void persistShadowDecision({
+        prompt: req.prompt,
+        taskHint: req.task_hint,
+        staticProvider,
+        staticTier,
+        staticReason: foundStatic ? 'static_cost_order' : 'static_none',
+        anfisProvider,
+        anfisTier,
+        anfisConfidence,
+        selectedFeatures: anfisRec.lassoSelectedFeatures,
+        nProviders: tier0aAdapters.length + tier1Adapters.length,
+      });
     }
   } catch (e) {
     // tolerant for no key / no table yet
