@@ -51,6 +51,12 @@ jest.mock('../src/db', () => {
 });
 
 import { updateRepId } from '../src/engine/repid-update';
+// Pull the mocked operational side-effect fns so the shadow-inert test can assert
+// they are NEVER called on the shadow-deception path (finding 1).
+import { updateSupplyRate } from '../src/layers/ecosystem-need';
+import { checkAndAwardBadges } from '../src/engine/badges';
+const updateSupplyRateMock = updateSupplyRate as jest.Mock;
+const checkAndAwardBadgesMock = checkAndAwardBadges as jest.Mock;
 
 // A CONFIRMED, GROUNDED M2 detection — the provenance the M1 gate requires
 // before it will apply the heavy -60/-40 tier (findings 4+5). Record-corrupting
@@ -128,6 +134,37 @@ describe('M1 — shadow mode logs but does NOT mutate current_repid', () => {
     expect(row.repid_after).toBe(1000);
     expect(row.metadata.decayApplied).toBe(0);
   });
+
+  // FINDING 1 — shadow must be FULLY INERT: NO operational side-effects beyond the
+  // single audit row. updateSupplyRate() (repid_ecosystem_supply counters) and
+  // checkAndAwardBadges() (repid_badges writes) must NOT run on the shadow path.
+  it('shadow deception writes NO supply-rate and NO badge side-effect (only the audit row)', async () => {
+    delete process.env.TRUST_DECEPTION_MODE; // shadow
+    await updateRepId({
+      agentId: 'agent-1',
+      eventType: 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+      deceptionProof: groundedProof('fabricated-tool-result'),
+    });
+    // The two operational side-effects were skipped entirely.
+    expect(updateSupplyRateMock).not.toHaveBeenCalled();
+    expect(checkAndAwardBadgesMock).not.toHaveBeenCalled();
+    // No repid_agents write, and exactly one audit row was inserted.
+    expect(updated.length).toBe(0);
+    expect(inserted.filter((i) => i.event_type === 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT').length).toBe(1);
+  });
+
+  // CONTROL: in ENFORCE mode the same event DOES run the side-effects (proving the
+  // skip above is shadow-specific, not a blanket disable).
+  it('enforce deception DOES run supply-rate + badge side-effects (control)', async () => {
+    process.env.TRUST_DECEPTION_MODE = 'enforce';
+    await updateRepId({
+      agentId: 'agent-1',
+      eventType: 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+      deceptionProof: groundedProof('fabricated-tool-result'),
+    });
+    expect(updateSupplyRateMock).toHaveBeenCalledTimes(1);
+    expect(checkAndAwardBadgesMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('M1 — enforce mode applies the heavy delta (with a confirmed grounded proof)', () => {
@@ -161,45 +198,50 @@ describe('M1 — enforce mode applies the heavy delta (with a confirmed grounded
   });
 });
 
-describe('M1 findings 4+5 — no heavy penalty without a confirmed grounded detection', () => {
-  it('below-threshold DOUBT_ATTACK@0.55 does NOT get -40 (advisory only)', async () => {
+describe('M1 findings 3+4+5 — no penalty at all without a confirmed grounded detection', () => {
+  // FINDING 3: an UNCONFIRMED (no proof / below-threshold / ungrounded-heuristic)
+  // deception signal is LOG-ONLY, delta 0 — it must NOT dock an honest agent. The
+  // old behavior collapsed to the ordinary-error -8, which still eroded reputation
+  // on a heuristic false-positive during honest debate. A negative delta is now
+  // reserved for CONFIRMED grounded detections (the -60 / -40 tiers).
+  it('below-threshold DOUBT_ATTACK@0.55 gets delta 0 (advisory log-only), NOT -8/-40', async () => {
     process.env.TRUST_DECEPTION_MODE = 'enforce'; // even in enforce, an unconfirmed hit is advisory
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_DOUBT_ATTACK',
       deceptionProof: { class: 'doubt-attack', confidence: 0.55, grounded: false, evidence: 'heuristic below confirm threshold', receiptRefs: [] },
     });
-    // 0.55 < 0.6 confirm threshold → light advisory (-8), NOT the -40 tier.
-    expect(r.delta).toBe(-8);
-    expect(Math.abs(r.delta)).toBeLessThan(40);
-    expect(r.repIdAfter).toBe(992);
+    // 0.55 < 0.6 confirm threshold → log-only advisory (delta 0), never a penalty.
+    expect(r.delta).toBe(0);
+    expect(r.repIdAfter).toBe(1000); // honest agent NOT docked
     const row = inserted.find((i) => i.event_type === 'DEFENDED_DECEPTION_DOUBT_ATTACK');
     expect(row.metadata.deceptionConfirmed).toBe(false);
+    expect(row.delta).toBe(0); // advisory recorded, no penalty applied
   });
 
-  it('a deception event with NO proof is advisory only (never -60)', async () => {
+  it('a deception event with NO proof is log-only advisory (delta 0, never -60/-8)', async () => {
     process.env.TRUST_DECEPTION_MODE = 'enforce';
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
       // no deceptionProof supplied
     });
-    expect(r.delta).toBe(-8); // advisory, not -60
-    expect(r.repIdAfter).toBe(992);
+    expect(r.delta).toBe(0); // advisory log-only, not -60 and not -8
+    expect(r.repIdAfter).toBe(1000); // honest agent NOT docked
     const row = inserted.find((i) => i.event_type === 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT');
     expect(row.metadata.deceptionConfirmed).toBe(false);
   });
 
-  it('a record-corrupting class with an UNGROUNDED (heuristic) proof cannot reach -60', async () => {
+  it('a record-corrupting class with an UNGROUNDED (heuristic) proof gets delta 0 (cannot reach -60)', async () => {
     process.env.TRUST_DECEPTION_MODE = 'enforce';
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'DEFENDED_DECEPTION_STORY_CHANGE',
       deceptionProof: { class: 'story-change-across-turns', confidence: 0.9, grounded: false, evidence: 'high conf but not grounded', receiptRefs: [] },
     });
-    // -60 requires grounded=true. Ungrounded → advisory only.
-    expect(r.delta).toBe(-8);
-    expect(r.repIdAfter).toBe(992);
+    // -60 requires grounded=true. Ungrounded → log-only advisory, delta 0.
+    expect(r.delta).toBe(0);
+    expect(r.repIdAfter).toBe(1000); // honest agent NOT docked
   });
 });
 

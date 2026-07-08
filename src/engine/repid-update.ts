@@ -165,22 +165,32 @@ const RECORD_CORRUPTING_EVENTS = new Set<RepIdUpdateInput['eventType']>([
 ]);
 
 /**
- * The advisory (light) delta a deception event collapses to when it is NOT
- * backed by a confirmed, grounded detection. We route unproven / heuristic /
- * below-threshold detections here rather than to the heavy tier — for a TRUST
- * product a false heavy penalty on an honest agent is the worst outcome, so an
- * unconfirmed signal is at most an ordinary-error-weight advisory.
+ * The advisory delta a deception event collapses to when it is NOT backed by a
+ * confirmed detection. This is ZERO — LOG-ONLY, no penalty (M1 finding 3).
+ *
+ * An unconfirmed / heuristic / below-threshold deception signal must never dock
+ * an honest agent: for a TRUST product a false penalty on honest behavior is the
+ * worst outcome, and the ordinary-error weight (-8) is itself a real penalty, so
+ * collapsing to -8 still eroded reputation on a heuristic false-positive during
+ * honest debate. We therefore record the unconfirmed signal in the audit row as
+ * advisory but apply delta 0. A negative delta is reserved for CONFIRMED grounded
+ * detections (the -60 / -40 tiers) — never for a heuristic hunch.
  */
-const DECEPTION_ADVISORY_DELTA = FIXED_DELTAS.UNSUPPORTED_CLAIM ?? -8;
+const DECEPTION_ADVISORY_DELTA = 0;
 
 /**
- * Gate a defended-deception penalty on a CONFIRMED, GROUNDED detection (M1
- * findings 4+5). Returns the delta the event is ALLOWED to carry:
- *   - The full heavy delta (-60 / -40) ONLY when a deceptionProof is present,
- *     grounded === true, AND confidence >= the confirm threshold.
- *   - Otherwise the light advisory delta — an unproven/heuristic/below-threshold
- *     detection can NEVER reach the heavy tier, and specifically a -60
- *     record-corrupting penalty requires a grounded proof (no -60 on heuristics).
+ * Gate a defended-deception penalty on a CONFIRMED detection (M1 findings 4+5).
+ * Returns the delta the event is ALLOWED to carry:
+ *   - The heavy delta ONLY when a deceptionProof is present AND confidence >= the
+ *     confirm threshold. The -60 record-corrupting tier ADDITIONALLY requires
+ *     grounded === true (no -60 on heuristics); the -40 supervision-evasion tier
+ *     does NOT require grounded (its detectors are heuristic by design — a
+ *     confirmed heuristic at confidence >= threshold is enough for -40).
+ *   - Otherwise delta 0 (log-only advisory) — an unproven / heuristic /
+ *     below-threshold detection can NEVER reach the heavy tier and, for a trust
+ *     product, an UNCONFIRMED signal must NOT dock an honest agent at all: we
+ *     record it in the audit row as advisory but apply zero penalty. A negative
+ *     delta is reserved for CONFIRMED detections only.
  *
  * A missing proof is treated as UNCONFIRMED on purpose: the penalty bridge must
  * supply the M2 detection that justifies the heavy delta; without it we do not
@@ -198,14 +208,14 @@ export function gatedDeceptionDelta(input: RepIdUpdateInput): {
     return {
       delta: DECEPTION_ADVISORY_DELTA,
       confirmed: false,
-      reason: 'no deceptionProof supplied — advisory only (unconfirmed)',
+      reason: 'no deceptionProof supplied — advisory log-only, delta 0 (unconfirmed)',
     };
   }
   if (proof.confidence < DETECTION_CONFIRM_THRESHOLD) {
     return {
       delta: DECEPTION_ADVISORY_DELTA,
       confirmed: false,
-      reason: `below confirm threshold (${proof.confidence} < ${DETECTION_CONFIRM_THRESHOLD}) — advisory only`,
+      reason: `below confirm threshold (${proof.confidence} < ${DETECTION_CONFIRM_THRESHOLD}) — advisory log-only, delta 0`,
     };
   }
   // A -60 record-corrupting penalty additionally REQUIRES a grounded proof.
@@ -213,7 +223,7 @@ export function gatedDeceptionDelta(input: RepIdUpdateInput): {
     return {
       delta: DECEPTION_ADVISORY_DELTA,
       confirmed: false,
-      reason: 'record-corrupting class without a grounded proof — advisory only (no -60 on heuristics)',
+      reason: 'record-corrupting class without a grounded proof — advisory log-only, delta 0 (no -60 on heuristics)',
     };
   }
   return { delta: heavy, confirmed: true, reason: 'confirmed grounded detection' };
@@ -317,10 +327,11 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   } else if (isDeceptionEvent(input.eventType)) {
     // DEFENDED DECEPTION (M1). The negative delta is GATED on a confirmed,
     // grounded M2 detection (findings 4+5): the heavy -60/-40 tier applies only
-    // when input.deceptionProof is present, grounded, and >= the confirm
-    // threshold. An unproven / heuristic / below-threshold detection collapses
-    // to the light advisory delta — never the heavy tier, and never -60 without
-    // a grounded proof. This is COMPUTED here regardless of TRUST_DECEPTION_MODE;
+    // when input.deceptionProof is present, confirmed (and grounded for -60). An
+    // unproven / heuristic / below-threshold detection collapses to delta 0
+    // (log-only advisory — never penalize an honest agent on an unconfirmed
+    // signal), never the heavy tier, and never -60 without a grounded proof.
+    // This is COMPUTED here regardless of TRUST_DECEPTION_MODE;
     // whether it MUTATES the score is decided below by the shadow/enforce gate.
     rawDelta = gatedDeceptionDelta(input).delta;
   } else {
@@ -461,15 +472,25 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     }).eq('id', input.agentId);
   }
 
-  // 10 — Update supply rate
-  await updateSupplyRate(input.eventType);
+  // 10 — Update supply rate. SHADOW-DECEPTION INERTNESS (finding 1): a shadow
+  // deception measurement must produce ZERO operational DB side-effects beyond
+  // the single audit row. updateSupplyRate() mutates repid_ecosystem_supply
+  // counters — an operational side-effect — so it is skipped on the shadow path.
+  if (!isShadowDeception) {
+    await updateSupplyRate(input.eventType);
+  }
 
-  // 11 — Badge milestone check (non-blocking — never fails score flow)
+  // 11 — Badge milestone check (non-blocking — never fails score flow).
+  // SHADOW-DECEPTION INERTNESS (finding 1): checkAndAwardBadges() can WRITE to
+  // repid_badges (another operational side-effect), so it is skipped on the
+  // shadow path too. A shadow event leaves badges untouched.
   let newBadges: BadgeAward[] = [];
-  try {
-    newBadges = await checkAndAwardBadges(input.agentId, agent.current_repid, newRepId);
-  } catch {
-    newBadges = [];
+  if (!isShadowDeception) {
+    try {
+      newBadges = await checkAndAwardBadges(input.agentId, agent.current_repid, newRepId);
+    } catch {
+      newBadges = [];
+    }
   }
 
   return {
