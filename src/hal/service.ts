@@ -10,6 +10,7 @@
 import { factCheck, buildFactCheckProviders, type FactCheckProviderCfg, type FactCheckResult } from './fact-check';
 import { evaluate } from './lib/evaluate';
 import { markDegraded } from '../lib/degraded';
+import { applyExecutionFloor, type FloorReport } from './execution-floor';
 
 export type Product = 'trustshell' | 'trusttrader' | 'trustcre' | 'default';
 
@@ -45,6 +46,16 @@ export interface HalEvaluationResponse {
   // GLASS BOX — SBFA v0.2 belief/ignorance/confidence + the structured human-readable decision trace.
   // Surfaced to the wrapper verdict event + the HITL PWA. Present only on the fact-check (strictness-2) path.
   sbfa?: FactCheckResult['sbfa'];
+  // EXECUTION FLOOR (P0) — pre-HAL "execution beats explanation" verdicts. Present when the floor ran.
+  // In shadow mode (EXECUTION_FLOOR_ENABLED unset/false) this is COMPUTED + attached for measurement but
+  // the `decision` above is NOT changed by it. When the flag is live, an authoritative execution FAILURE
+  // can force `decision:'vetoed'` (LLM/HAL opinion on that claim is inadmissible).
+  execution_floor?: {
+    enabled: boolean;
+    overridden: boolean;
+    note: string;
+    report: FloorReport;
+  };
 }
 
 interface Profile {
@@ -77,7 +88,45 @@ function clamp01(v: string | undefined): number | undefined {
 export class HalService {
   constructor(private providersFn: () => FactCheckProviderCfg[] = buildFactCheckProviders) {}
 
+  /**
+   * Public evaluate — runs the HAL pipeline, then applies the EXECUTION FLOOR
+   * (P0 "execution beats explanation" law) as a post-check. Shadow-first:
+   * unless EXECUTION_FLOOR_ENABLED=true, the floor is COMPUTED + attached to
+   * `execution_floor` for measurement but the HAL `decision` is unchanged.
+   * When the flag is live, an authoritative execution FAILURE forces a veto.
+   */
   async evaluate(req: HalEvaluationRequest): Promise<HalEvaluationResponse> {
+    const hal = await this.evaluateHal(req);
+    try {
+      const applied = await applyExecutionFloor(req.text, {
+        decision: hal.decision,
+        ...(hal.decision_reason ? { decision_reason: hal.decision_reason } : {}),
+      });
+      const out: HalEvaluationResponse = {
+        ...hal,
+        decision: applied.decision.decision,
+        ...(applied.decision.decision_reason ? { decision_reason: applied.decision.decision_reason } : {}),
+        execution_floor: {
+          enabled: applied.floor.enabled,
+          overridden: applied.overridden,
+          note: applied.note,
+          report: applied.floor,
+        },
+      };
+      if (applied.overridden) {
+        console.warn(`[hal/execution-floor] OVERRIDE — ${applied.note}`);
+      }
+      return out;
+    } catch (e: unknown) {
+      // The floor must NEVER break HAL. On any error, return the untouched HAL result.
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[hal/execution-floor] floor failed (ignored, HAL unchanged):', msg);
+      return hal;
+    }
+  }
+
+  /** The core HAL pipeline (no execution-floor). */
+  private async evaluateHal(req: HalEvaluationRequest): Promise<HalEvaluationResponse> {
     const start = Date.now();
     const product: Product = req.context?.product && HAL_PROFILES[req.context.product] ? req.context.product : 'default';
     const profile = HAL_PROFILES[product];
