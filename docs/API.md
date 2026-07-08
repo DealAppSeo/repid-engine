@@ -49,3 +49,56 @@ LOWEST avg risk.
   to `UNVERIFIED` when `DATABASE_URL` is unset.
 - The global SQL-keyword body sanitizer rejects POST bodies containing `SELECT `, `DROP `, `--`, `;`
   etc. — `prompt`/`ref_code`/`email` payloads must avoid those tokens (broad, pre-existing behavior).
+
+---
+
+# Live-numbers observability surface (2026-07-07)
+
+Two additional **public read-only** GETs power TrustShell.dev's minted-agent leaderboard and its
+"What we've built" on-chain stats block. They mount **before** `authMiddleware` (their auth bypass is
+added in `middleware/auth.ts`, same posture as `GET /api/v1/repid/*`). Source:
+`src/routes/v1/observability-public.ts`. Both are read-only — no writes, no money, no secrets — and
+**fail loud** (HTTP 500 on a DB error) rather than reporting a silent empty result as truth.
+
+| Method | Path | Auth | Query | Success | Notes |
+|---|---|---|---|---|---|
+| GET | `/api/v1/agents/minted` | none | `?include_mock=true` (opt in mocks) | 200 / 500 | `repid_agents` WHERE `erc8004_token_id IS NOT NULL`, ordered by RepID desc; mock agents excluded by default |
+| GET | `/api/v1/observability/onchain-stats` | none | `?include_mock=true` | 200 / 500 | live minted count + `erc8004_reputation_writes` row count; replaces the old hard-coded `4` / `32` |
+
+## Shapes
+
+**GET /api/v1/agents/minted**
+```bash
+curl https://repid-engine-production.up.railway.app/api/v1/agents/minted
+```
+```json
+{
+  "agents": [
+    {
+      "name": "trinity-sophia",
+      "display_name": "SOPHIA",
+      "agent_id": "trinity-sophia",
+      "erc8004_token_id": "1",
+      "current_repid": 10000,
+      "tier": "VETERAN"
+    }
+  ],
+  "count": 1
+}
+```
+
+**GET /api/v1/observability/onchain-stats**
+```bash
+curl https://repid-engine-production.up.railway.app/api/v1/observability/onchain-stats
+```
+```json
+{
+  "agents_minted": 12,
+  "lifetime_onchain_writes": 32,
+  "as_of": "2026-07-08T00:00:00.000Z"
+}
+```
+
+- `agents_minted` counts `repid_agents` rows carrying an `erc8004_token_id` (mock agents excluded by
+  default via the canonical `isMockAgentId` filter); `lifetime_onchain_writes` is the exact row count of
+  `erc8004_reputation_writes`. No hard-coded constants — both read live from the database.
