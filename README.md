@@ -164,10 +164,12 @@ curl https://repid-engine-production.up.railway.app/api/v1/observability/onchain
 ```json
 {
   "agents_minted": 12,
-  "lifetime_onchain_writes": 32,
+  "lifetime_onchain_writes": 70,
   "as_of": "2026-07-08T00:00:00.000Z"
 }
 ```
+
+> Dated live snapshot: `lifetime_onchain_writes` = **70** (live as of 2026-07-08; source: `/api/v1/observability/onchain-stats`). The block above is a captured example — the endpoint always returns the current live count, so treat any number here as a dated snapshot, not a fixed constant.
 
 ### `GET /.well-known/agent.json` (+ `/agent.json` alias)
 
