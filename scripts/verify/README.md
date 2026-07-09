@@ -51,6 +51,33 @@ The concurrency extractor scans **cross-repo** — repid-engine `src/` **and** s
 (e.g. the swarm's atomic `claimed_by` claim is in trinity-symphony-shared, not repid-engine).
 Override roots with `VERIFY_CLAIMS_SCAN_DIRS` (comma-separated paths).
 
+## `npm run verify:deployed-sha`
+
+Deploy-drift guard that kills the **"green ≠ deployed"** hazard: Railway keeps the last
+*successful* build serving when a new deploy **fails**, so `/health` can read `ok` on stale
+code — a merged fix reads "live" but never actually runs.
+
+The live `/health` now surfaces `deployed_commit` (from Railway's `RAILWAY_GIT_COMMIT_SHA`,
+injected at build time) plus a 7-char `deployed_commit_short`. This script curls `/health`,
+reads `deployed_commit`, and compares it to the expected commit (`origin/main` HEAD by default).
+
+```bash
+npm run verify:deployed-sha                         # assert live == origin/main HEAD
+npm run verify:deployed-sha -- --expected <sha>     # assert against an explicit sha
+npm run verify:deployed-sha -- --url <health-url>   # probe a different deploy
+npm run verify:deployed-sha -- --ref origin/main    # assert against a git ref (default)
+```
+
+Env overrides (CI-friendly): `HEALTH_URL`, `EXPECTED_SHA`, `EXPECTED_REF`.
+
+Exit codes: **0** match · **1** DRIFT (deployed code is stale vs expected) · **2** INCONCLUSIVE
+(health unreachable, no `deployed_commit` field yet, `unknown` SHA, or git ref unresolvable —
+never a silent pass).
+
+> **Chicken-and-egg:** the check only becomes meaningful once a build carrying the new `/health`
+> (with `deployed_commit`) is actually deployed. Until then the live endpoint has no
+> `deployed_commit` field, so this reports **INCONCLUSIVE (exit 2)**, not a false pass.
+
 ## Adding a new invariant
 
 1. Write `scripts/verify/checks/<id>.ts` exporting `async function xCheck(): Promise<CheckResult>`.

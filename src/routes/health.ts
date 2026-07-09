@@ -5,6 +5,17 @@ import { testHashKeyConnection } from '../engine/hashkey-chain';
 
 const router = Router();
 
+// Deployed commit SHA — Railway injects RAILWAY_GIT_COMMIT_SHA at build time for
+// GitHub-linked services. Surfacing it here defeats the "green ≠ deployed" hazard:
+// Railway keeps the last SUCCESSFUL build serving when a new deploy fails, so the
+// health dot can read OK on stale code. Assert this against origin/main HEAD to
+// detect deploy drift (see scripts/verify/assert-deployed-sha.ts). Resolved once
+// per process (constant for the life of a deploy).
+const DEPLOYED_COMMIT: string =
+  process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || 'unknown';
+const DEPLOYED_COMMIT_SHORT: string =
+  DEPLOYED_COMMIT === 'unknown' ? 'unknown' : DEPLOYED_COMMIT.slice(0, 7);
+
 let cachedHealth: any = null;
 let cachedHealthTime = 0;
 
@@ -73,6 +84,8 @@ router.get('/health', async (req: Request, res: Response) => {
   const responseBody = {
     status: 'ok',
     version: config.version,
+    deployed_commit: DEPLOYED_COMMIT,
+    deployed_commit_short: DEPLOYED_COMMIT_SHORT,
     timestamp: new Date().toISOString(),
     supabaseConnected,
     hashkeyConnected: (hashkey as any).connected,
