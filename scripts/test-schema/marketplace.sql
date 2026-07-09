@@ -37,11 +37,22 @@ create table if not exists public.marketplace_listings (
   mode          text not null check (mode in ('buy','rent')),
   rent_period   text,
   status        text not null default 'open' check (status in ('open','matched','closed')),
+  -- poster_verified: TRUE only when the caller provably controls poster_id
+  -- (human JWT, DB-issued agent key, or an env key explicitly bound to this
+  -- poster_id). FALSE for an env-key poster declaring an unbound identity — its
+  -- card shows NO RepID/tier badge, so a trusted agent's badge can never be
+  -- impersonated. Default TRUE keeps the clean human/DB-key paths unchanged.
+  poster_verified boolean not null default true,
   repid_at_post integer,
   created_at    timestamptz not null default now(),
   expires_at    timestamptz
 );
 alter table public.marketplace_listings enable row level security;
+
+-- Idempotent backfill for an already-created table (CREATE TABLE IF NOT EXISTS
+-- above won't add columns to a pre-existing table). Existing rows default TRUE.
+alter table public.marketplace_listings
+  add column if not exists poster_verified boolean not null default true;
 
 -- Browse hits open listings newest-first; index the hot filter/sort path.
 create index if not exists marketplace_listings_open_recent_idx

@@ -33,15 +33,52 @@ export type PosterType = 'agent' | 'human';
 export interface PosterIdentity {
   poster_type: PosterType;
   poster_id: string;
+  /**
+   * Whether the caller provably CONTROLS this poster_id — i.e. the identity was
+   * established server-side (human JWT, DB-issued agent key) or the declared
+   * poster_id is explicitly authorized for the presenting env key. Only a
+   * verified identity may borrow a RepID/tier trust badge; an unverified poster
+   * is accepted but its listing carries NO badge (repid_at_post stays null).
+   */
+  verified: boolean;
+}
+
+/**
+ * Parse REPID_API_KEY_POSTER_BINDINGS — a comma-separated allowlist of
+ * `key:poster_id` pairs that authorize a specific env API key to post AS a
+ * specific identity (so it may inherit that identity's RepID badge). A key may
+ * appear multiple times to authorize multiple poster_ids. poster_id is taken as
+ * everything after the FIRST colon (agent names/uuids never contain a colon).
+ */
+function parsePosterBindings(): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  const raw = process.env.REPID_API_KEY_POSTER_BINDINGS || '';
+  for (const entry of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const idx = entry.indexOf(':');
+    if (idx <= 0) continue;
+    const key = entry.slice(0, idx).trim();
+    const pid = entry.slice(idx + 1).trim();
+    if (!key || !pid) continue;
+    if (!map.has(key)) map.set(key, new Set<string>());
+    map.get(key)!.add(pid);
+  }
+  return map;
 }
 
 /**
  * Resolve the poster identity from the request's own auth.
  *   - human: a full-account login_token (Authorization: Bearer <token>) →
  *     poster_id = builder_id (identity from the token, never client-spoofable).
- *   - agent: an API key. A DB-issued key (agent_api_keys) binds an agent_id,
- *     which becomes poster_id. An env REPID_API_KEYS key is not bound to a
- *     single agent, so the agent must declare `poster_id` in the body.
+ *     Always `verified` (identity is server-side).
+ *   - agent, DB-issued key (agent_api_keys): binds an agent_id → poster_id.
+ *     Always `verified` (identity is server-side).
+ *   - agent, env REPID_API_KEYS key: NOT bound to a single agent, so the caller
+ *     declares `poster_id` in the body. `verified` ONLY when that declared
+ *     poster_id is explicitly authorized for this key via
+ *     REPID_API_KEY_POSTER_BINDINGS — otherwise the listing is accepted but
+ *     `verified:false` (no borrowed badge). This closes the impersonation hole
+ *     where any env-key holder could declare `poster_id:"SOPHIA"` and inherit a
+ *     trusted agent's real RepID badge.
  * Returns null when no valid credential is present.
  */
 export async function resolvePosterIdentity(req: Request): Promise<PosterIdentity | null> {
@@ -53,7 +90,7 @@ export async function resolvePosterIdentity(req: Request): Promise<PosterIdentit
   if (bearer) {
     const payload = verifyFullAccountToken(bearer);
     if (payload && payload.builder_id) {
-      return { poster_type: 'human', poster_id: String(payload.builder_id) };
+      return { poster_type: 'human', poster_id: String(payload.builder_id), verified: true };
     }
   }
 
@@ -62,7 +99,10 @@ export async function resolvePosterIdentity(req: Request): Promise<PosterIdentit
   if (!candidateKey) return null;
 
   // 2a) env REPID_API_KEYS allowlist (key or key:tier). Unbound identity →
-  // the agent must declare which agent it posts as via body.poster_id.
+  // the agent must declare which agent it posts as via body.poster_id. The
+  // declared identity is trusted (verified) ONLY if the key is explicitly bound
+  // to it via REPID_API_KEY_POSTER_BINDINGS; otherwise the poster is unverified
+  // (accepted, but no borrowed RepID badge).
   const envKeys = (process.env.REPID_API_KEYS || '')
     .split(',')
     .map((s) => s.trim())
@@ -71,14 +111,16 @@ export async function resolvePosterIdentity(req: Request): Promise<PosterIdentit
   if (envKeys.includes(candidateKey)) {
     const declared = typeof req.body?.poster_id === 'string' ? req.body.poster_id.trim() : '';
     if (!declared) return null; // handled as 400 by caller (poster_id required for env keys)
-    return { poster_type: 'agent', poster_id: declared };
+    const allowed = parsePosterBindings().get(candidateKey);
+    const verified = !!allowed && allowed.has(declared);
+    return { poster_type: 'agent', poster_id: declared, verified };
   }
 
   // 2b) DB-issued key (hashed, bound to an agent_id).
   try {
     const dbKey = await validateAgentApiKey(candidateKey);
     if (dbKey && dbKey.agent_id) {
-      return { poster_type: 'agent', poster_id: String(dbKey.agent_id) };
+      return { poster_type: 'agent', poster_id: String(dbKey.agent_id), verified: true };
     }
   } catch {
     // DB unreachable → treat as unauthenticated.
@@ -166,8 +208,13 @@ router.post('/list', async (req: Request, res: Response) => {
     expires_at = d.toISOString();
   }
 
-  // Stamp the poster's current RepID at post time (agents; null if unresolvable).
-  const repid_at_post = await resolveCurrentRepid(identity.poster_type, identity.poster_id);
+  // Stamp the poster's current RepID at post time ONLY for a verified identity
+  // (agents; null if unresolvable). An unverified poster (env key declaring an
+  // identity it is not bound to) NEVER inherits a RepID badge → repid_at_post
+  // stays null so /browse cannot surface a borrowed badge for it.
+  const repid_at_post = identity.verified
+    ? await resolveCurrentRepid(identity.poster_type, identity.poster_id)
+    : null;
 
   const { data, error } = await db
     .from('marketplace_listings')
@@ -182,6 +229,7 @@ router.post('/list', async (req: Request, res: Response) => {
       mode,
       rent_period,
       status: 'open',
+      poster_verified: identity.verified,
       repid_at_post,
       expires_at,
     })
@@ -198,6 +246,7 @@ router.post('/list', async (req: Request, res: Response) => {
     status: 'open',
     poster_type: identity.poster_type,
     poster_id: identity.poster_id,
+    poster_verified: identity.verified,
     repid_at_post,
     created_at: (data as { created_at: string }).created_at,
   });
@@ -216,7 +265,7 @@ router.get('/browse', async (req: Request, res: Response) => {
 
   let query = db
     .from('marketplace_listings')
-    .select('id, poster_type, poster_id, kind, category, title, description, price_usdc, mode, rent_period, status, repid_at_post, created_at, expires_at')
+    .select('id, poster_type, poster_id, kind, category, title, description, price_usdc, mode, rent_period, status, poster_verified, repid_at_post, created_at, expires_at')
     .eq('status', 'open')
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -232,10 +281,16 @@ router.get('/browse', async (req: Request, res: Response) => {
 
   const listings = (data ?? []) as Array<Record<string, any>>;
 
-  // Enrich AGENT posters with live RepID + tier. Batch by id and by agent_name
+  // Enrich AGENT posters with live RepID + tier, but ONLY for VERIFIED posters —
+  // a listing whose poster identity was not proven (poster_verified=false) must
+  // never surface a borrowed RepID/tier badge. Batch by id and by agent_name
   // (poster_id can be either a uuid or a canonical agent_name).
   const agentPosterIds = Array.from(
-    new Set(listings.filter((l) => l.poster_type === 'agent' && l.poster_id).map((l) => String(l.poster_id))),
+    new Set(
+      listings
+        .filter((l) => l.poster_type === 'agent' && l.poster_id && l.poster_verified === true)
+        .map((l) => String(l.poster_id)),
+    ),
   );
   const repidById = new Map<string, { current_repid: number | null; tier: string | null }>();
   const repidByName = new Map<string, { current_repid: number | null; tier: string | null }>();
@@ -265,11 +320,17 @@ router.get('/browse', async (req: Request, res: Response) => {
   }
 
   const enriched = listings.map((l) => {
-    const live = l.poster_type === 'agent'
+    const verified = l.poster_verified === true;
+    // Only a verified poster may carry a trust badge. Unverified → no badge.
+    const live = verified && l.poster_type === 'agent'
       ? (repidById.get(String(l.poster_id)) ?? repidByName.get(String(l.poster_id)) ?? null)
       : null;
-    const repid = live?.current_repid ?? (typeof l.repid_at_post === 'number' ? l.repid_at_post : null);
-    const tier = live?.tier ?? (typeof repid === 'number' ? computeTier(repid) : null);
+    const repid = verified
+      ? (live?.current_repid ?? (typeof l.repid_at_post === 'number' ? l.repid_at_post : null))
+      : null;
+    const tier = verified
+      ? (live?.tier ?? (typeof repid === 'number' ? computeTier(repid) : null))
+      : null;
     return {
       id: l.id,
       kind: l.kind,
@@ -285,9 +346,10 @@ router.get('/browse', async (req: Request, res: Response) => {
       poster: {
         type: l.poster_type,
         id: l.poster_id,
-        repid,               // live RepID if resolvable, else the at-post snapshot
-        tier,                // the trust badge
-        repid_at_post: typeof l.repid_at_post === 'number' ? l.repid_at_post : null,
+        verified,            // whether the poster's identity was proven
+        repid,               // live RepID if verified+resolvable, else at-post snapshot; null if unverified
+        tier,                // the trust badge — null unless the poster is verified
+        repid_at_post: verified && typeof l.repid_at_post === 'number' ? l.repid_at_post : null,
       },
     };
   });

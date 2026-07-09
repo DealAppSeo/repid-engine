@@ -46,10 +46,12 @@ run('TrustMarket-light P0 — list→browse round-trip (live TEST Supabase)', ()
   const token = issueFullAccountToken(builderId, `${builderId}@example.com`);
   const marker = `P0-ROUNDTRIP-${builderId}`;
   let listingId: string | undefined;
+  let impersonateListingId: string | undefined;
 
   afterAll(async () => {
-    if (listingId) {
-      await db.from('marketplace_listings').delete().eq('id', listingId);
+    const ids = [listingId, impersonateListingId].filter(Boolean) as string[];
+    for (const id of ids) {
+      await db.from('marketplace_listings').delete().eq('id', id);
     }
   });
 
@@ -109,5 +111,40 @@ run('TrustMarket-light P0 — list→browse round-trip (live TEST Supabase)', ()
       .set('Authorization', `Bearer ${token}`)
       .send({ kind: 'have', mode: 'rent', title: 'rentable agent' });
     expect(res.status).toBe(400);
+  });
+
+  it('env-key caller CANNOT inherit another identity\'s RepID badge (impersonation blocked)', async () => {
+    // An externally-distributed env REPID_API_KEYS key that is NOT bound to any
+    // poster_id. resolvePosterIdentity re-reads process.env per call, so setting
+    // it here (marketplace router is mounted before authMiddleware) is enough.
+    process.env.REPID_API_KEYS = 'p0-impersonation-key:pro';
+    delete process.env.REPID_API_KEY_POSTER_BINDINGS; // key is unbound → unverified
+
+    const impMarker = `${marker}-IMPERSONATE`;
+    // Declare SOPHIA — a real, trusted, high-RepID agent the caller does NOT own.
+    const create = await request(app)
+      .post('/api/v1/marketplace/list')
+      .set('x-api-key', 'p0-impersonation-key')
+      .send({ kind: 'have', mode: 'buy', title: impMarker, poster_id: 'SOPHIA' });
+
+    // Listing is accepted (not hard-403'd) but flagged unverified with NO badge.
+    expect(create.status).toBe(201);
+    expect(create.body.poster_verified).toBe(false);
+    expect(create.body.repid_at_post).toBeNull();
+    impersonateListingId = create.body.listing_id;
+    expect(typeof impersonateListingId).toBe('string');
+
+    // On the public browse surface the borrowed badge must NOT appear: the
+    // poster is marked unverified and repid/tier are null even though SOPHIA has
+    // a real, high RepID in repid_agents.
+    const browse = await request(app).get('/api/v1/marketplace/browse?kind=have');
+    expect(browse.status).toBe(200);
+    const found = browse.body.listings.find((l: any) => l.id === impersonateListingId);
+    expect(found).toBeTruthy();
+    expect(found.title).toBe(impMarker);
+    expect(found.poster.verified).toBe(false);
+    expect(found.poster.repid).toBeNull();
+    expect(found.poster.tier).toBeNull();
+    expect(found.poster.repid_at_post).toBeNull();
   });
 });
