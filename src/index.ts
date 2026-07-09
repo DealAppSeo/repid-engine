@@ -25,6 +25,7 @@ import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse (self-authed; public keyless browse)
 import observabilityPublicRouter from './routes/v1/observability-public';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
@@ -164,6 +165,17 @@ app.use((err: any, req: any, res: any, next: any) => {
 // downstream are parameterized, so the sanitizer's blanket protection is
 // not load-bearing here.
 app.use('/api/v1', fullAccountRouter);
+
+// TrustMarket-light P0 (list/browse) — mounted BEFORE the SQL-keyword sanitizer
+// AND before authMiddleware, same precedent as fullAccountRouter above. POST
+// /list carries prose (title/description) that legitimately contains SQL-shaped
+// tokens, and the router does its OWN auth (human login_token OR agent API key)
+// so the blanket REPID_API_KEY authMiddleware must not gate it. GET /browse is
+// public/keyless. All Supabase writes downstream are parameterized. Distinct
+// paths (/list, /browse) from the V2 substrate marketplace router below
+// (/listings, /rentals) and the public marketplace router (/recent-transactions),
+// so there is no route collision. Offer/accept + x402 are P1 (not mounted here).
+app.use('/api/v1/marketplace', marketplaceP0Router);
 
 // Sanitize POST validator
 app.use((req, res, next) => {
