@@ -29,6 +29,18 @@ import crypto from 'crypto';
 // imports the HOISTED familyOf() declaration at load time; fact-check calls resolveFamily() only at
 // runtime (inside functions), never at module init. See familyOfResolved() for the fallback contract.
 import { resolveFamily } from '../decisioning/family-registry';
+// WEIGHT-DEDUP (2026-07-09, reports/2026-07-09 HAL eval): dedup the quorum by model CHECKPOINT
+// (weights identity) so two hosts serving the SAME weights (e.g. Groq + DeepInfra Llama-3.1-8B, eval
+// corr 0.881) can never count as two independent votes. Flag-gated (HAL_QUORUM_WEIGHT_DEDUP:
+// off|shadow|on), SHADOW-first — off/shadow do NOT change the live quorum. See src/hal/checkpoint-registry.ts.
+import {
+  resolveCheckpoint,
+  dedupByCheckpoint,
+  stochasticCheckpointDiverseSubset,
+  weightDedupMode,
+  stochasticK,
+  type WeightDedupMode,
+} from './checkpoint-registry';
 import {
   sbfaConsensus,
   votesFromVerdicts,
@@ -164,6 +176,22 @@ export interface FactCheckResult {
   // visible so unmapped models surface in signals/metadata for later registration. `[]`/undefined = all
   // families came from the accurate registry.
   families_unmapped?: string[];
+  // WEIGHT-DEDUP (2026-07-09) — checkpoint-level dedup of the quorum. Present only when
+  // HAL_QUORUM_WEIGHT_DEDUP != 'off'. In 'shadow' it reports what dedup/stochastic WOULD select vs the
+  // current set (mode='shadow', mutated=false); in 'on' it reports the deduped set actually used
+  // (mutated=true). `dropped_duplicates` = hosts removed for sharing a checkpoint with a kept host
+  // (fake diversity). `unmapped_checkpoints` = host+model pairs not in the checkpoint registry (each a
+  // distinct singleton — surfaced for registration, NEVER merged).
+  weight_dedup?: {
+    mode: Exclude<WeightDedupMode, 'off'>;
+    mutated: boolean;
+    stochastic_k: number;
+    checkpoints_before: number;
+    checkpoints_after: number;
+    dropped_duplicates: Array<{ provider?: string; model: string; checkpoint: string }>;
+    selected_checkpoints: string[];
+    unmapped_checkpoints: Array<{ provider?: string; model: string; checkpoint: string }>;
+  };
   agreement: number | null; // fraction sharing the modal non-error verdict
   degraded: boolean; // < 2 providers responded
   latency_ms: number;
@@ -462,6 +490,62 @@ export async function factCheck(
   const maxTokens = opts.maxTokens ?? 512;
 
   const quorumId = crypto.randomUUID(); // R5 — groups this quorum's provider calls in llm_call_log
+
+  // WEIGHT-DEDUP GATE (2026-07-09, reports/2026-07-09 HAL eval) — flag-gated, SHADOW-FIRST.
+  // Dedup the quorum by model CHECKPOINT so two hosts serving the SAME weights are never two votes.
+  // off (default): activeProviders == providers, no change. shadow: compute + log the would-be set,
+  // mutate nothing. on: replace the assembled set with the deduped (and optionally stochastic) subset.
+  // Seed = quorumId (random per check → varies in prod / anti-gaming; deterministic under a fixed seed
+  // in tests). NEVER throws: an unmapped host resolves to its own singleton checkpoint and is kept.
+  const dedupMode = weightDedupMode();
+  const kSubset = stochasticK();
+  let activeProviders: FactCheckProviderCfg[] = providers;
+  let weightDedupField: FactCheckResult['weight_dedup'];
+  if (dedupMode !== 'off') {
+    // Wrap each provider as a CheckpointRef whose `provider` is the HOST NAME (FactCheckProviderCfg
+    // identifies the host via `name`, not `provider`), carrying the original cfg through selection.
+    type Wrapped = { provider: string; model: string; cfg: FactCheckProviderCfg };
+    const wrapped: Wrapped[] = providers.map((p) => ({ provider: p.name, model: p.model, cfg: p }));
+    let sel: import('./checkpoint-registry').DedupResult<Wrapped>;
+    let wouldSelect: Wrapped[];
+    if (kSubset > 0) {
+      const s = stochasticCheckpointDiverseSubset(wrapped, kSubset, quorumId);
+      sel = s;
+      wouldSelect = s.selected;
+    } else {
+      const d = dedupByCheckpoint(wrapped, quorumId);
+      sel = d;
+      wouldSelect = d.kept;
+    }
+    const ckOf = (w: Wrapped) => resolveCheckpoint(w.provider, w.model).checkpoint;
+    const selectedCheckpoints = wouldSelect.map(ckOf);
+    const checkpointsBefore = new Set(wrapped.map(ckOf)).size;
+    const checkpointsAfter = new Set(selectedCheckpoints).size;
+    const droppedDuplicates = sel.dropped.map((w) => ({ provider: w.provider, model: w.model, checkpoint: ckOf(w) }));
+    const selectedDistinct = [...new Set(selectedCheckpoints)];
+    weightDedupField = {
+      mode: dedupMode,
+      mutated: dedupMode === 'on',
+      stochastic_k: kSubset,
+      checkpoints_before: checkpointsBefore,
+      checkpoints_after: checkpointsAfter,
+      dropped_duplicates: droppedDuplicates,
+      selected_checkpoints: selectedDistinct,
+      unmapped_checkpoints: sel.unmapped,
+    };
+    // LOUD, once-per-quorum glass-box log (shadow AND on).
+    console.warn(
+      `[hal] hal_weight_dedup mode=${dedupMode} mutated=${dedupMode === 'on'} k=${kSubset} ` +
+        `checkpoints ${checkpointsBefore}->${checkpointsAfter} ` +
+        `dropped=[${droppedDuplicates.map((d) => `${d.provider}/${d.model}~${d.checkpoint}`).join(', ')}] ` +
+        `selected=[${selectedDistinct.join(', ')}]` +
+        (sel.unmapped.length
+          ? ` UNMAPPED(register in checkpoint-registry.ts)=[${sel.unmapped.map((u) => `${u.provider ?? '?'}/${u.model}`).join(', ')}]`
+          : ''),
+    );
+    if (dedupMode === 'on') activeProviders = wouldSelect.map((w) => w.cfg);
+  }
+
   // CROSS-FIX 2026-07-05 — REGISTRY-PRIMARY family classification for the live quorum. Each provider's
   // family is resolved via the hardened registry (familyOfResolved); a model missing from the registry
   // falls back to the legacy familyOf() regex and is collected into `unmappedModels` so it can be
@@ -476,7 +560,7 @@ export async function factCheck(
   // single resolution point ALWAYS runs the collector on `p.model`; the pre-tagged `.family` is still
   // honored for classification, but the unmapped set is authoritative regardless of entry path.
   const familyByName = new Map(
-    providers.map((p) => {
+    activeProviders.map((p) => {
       const resolved = familyOfResolved(p.model, flagUnmapped); // always runs the collector
       return [p.name, p.family ?? resolved];
     }),
@@ -508,15 +592,15 @@ export async function factCheck(
   let attempted = 0;
   if (costOrdered) {
     const rank = (p: FactCheckProviderCfg) => ({ free: 0, cheap: 1, escalation: 2 })[p.tier ?? costTierOf({ name: p.name, family: familyByName.get(p.name) })];
-    const waves = [0, 1, 2].map((r) => providers.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
+    const waves = [0, 1, 2].map((r) => activeProviders.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
     for (const wave of waves) {
       verdicts.push(...(await settle(wave)));
       attempted += wave.length;
       if (distinctFamilies(verdicts) >= MIN_QUORUM_FOR_VETO) break; // quorum formed — don't escalate to pricier tiers
     }
   } else {
-    verdicts = await settle(providers);
-    attempted = providers.length;
+    verdicts = await settle(activeProviders);
+    attempted = activeProviders.length;
   }
 
   verdicts.forEach(v => {
@@ -585,6 +669,7 @@ export async function factCheck(
       quorum, provider_health: { attempted: attempted, succeeded: 0, failed },
       quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
       ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
+      ...(weightDedupField ? { weight_dedup: weightDedupField } : {}),
     };
   }
 
@@ -716,6 +801,7 @@ export async function factCheck(
     ...(quorum_note ? { quorum_note } : {}),
     ...(sbfaField ? { sbfa: sbfaField } : {}),
     ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
+    ...(weightDedupField ? { weight_dedup: weightDedupField } : {}),
   };
 }
 
