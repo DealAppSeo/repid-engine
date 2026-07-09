@@ -243,7 +243,21 @@ Two re-runnable, known-answer harnesses keep the accuracy claims honest and repr
 npx ts-node scripts/eval/canary-f1.ts   # keys auto-load from repo-root .env.master
 ```
 
-Latest directional snapshot (clean-47 oracle): **F1 ≈ 0.95** (precision 0.905, recall 1.00, accuracy 0.957; TP 19 / FP 2 / TN 26 / FN 0 — zero false negatives, no false claim passed). This is a **directional snapshot on N=47, not a universal benchmark**. Full run: [`reports/2026-07-07/CANARY_HAL_F1_BASELINE.md`](reports/2026-07-07/CANARY_HAL_F1_BASELINE.md).
+Latest directional snapshot (clean-47 oracle): **F1 ≈ 0.95 (N=47 canary; harder 337-set F1 ~0.80)** (precision 0.905, recall 1.00, accuracy 0.957; TP 19 / FP 2 / TN 26 / FN 0 — zero false negatives, no false claim passed). This is a **directional snapshot on an easy N=47 known-answer set, not a universal benchmark** — see the rigorous 337-item eval below for the honest headline number. Full run: [`reports/2026-07-07/CANARY_HAL_F1_BASELINE.md`](reports/2026-07-07/CANARY_HAL_F1_BASELINE.md).
+
+### Rigorous 337-item HAL eval (headline, provenanced)
+
+The honest, harder-corpus measurement of the same real cross-LLM quorum over a **337-item fully-provenanced corpus** (FEVER + HaluEval + TruthfulQA + the in-repo canary), bootstrap 95% CIs:
+
+- **F1 ≈ 0.80 [0.75–0.84]**, **recall ≈ 0.95**, **AUC ≈ 0.90**, well-calibrated (**ECE 0.056**).
+
+Honest caveats (state these wherever the number appears):
+
+- The quorum's real edge is **recall + vendor-independence, NOT raw accuracy** — a single strong model (DeepSeek, F1 ≈ 0.86 at full coverage) edges the quorum on F1; the quorum's value is not depending on any one vendor's uptime or honesty.
+- Model **independence is partial** — some hosts serve identical weights (e.g. Groq + DeepInfra both run Llama-3.1-8B; error-correlation ≈ 0.88), so "6 providers" overstates diversity. **Weight-deduplication is in progress.**
+- **Independent replication is in progress** before this number is headlined externally.
+
+Full run + methodology, CIs, ablations, and the family-independence experiment: [`reports/2026-07-09/HAL_RIGOROUS_EVAL.md`](reports/2026-07-09/HAL_RIGOROUS_EVAL.md).
 
 ### Earned model leaderboard
 
