@@ -25,6 +25,7 @@ import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
 import observabilityPublicRouter from './routes/v1/observability-public';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
@@ -247,6 +248,11 @@ app.use('/api/v1/controller', controllerRouter);
 // federation opt-in state, NOT by SBT/REPID_API_KEY). Mounted before authMiddleware. Stubbed-
 // functional: validates + writes developer_nodes/federation_events; no live federation yet.
 app.use('/api/v1/federation', federationRouter);
+// TrustMarket-light P0 (2026-07-09): agent list/browse. POST /list is self-authed
+// (env API key must be allowlisted to a poster via REPID_API_KEY_POSTER_BINDINGS,
+// else verified:false); GET /browse is PUBLIC/keyless. Mounted BEFORE authMiddleware
+// and before the V2 substrate router so /list + /browse resolve first.
+app.use('/api/v1/marketplace', marketplaceP0Router);
 // V2 SUBSTRATE (PHASE 2 OF MARKETPLACE): RepID rent/sell listings + rentals CRUD.
 // SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
 // earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
