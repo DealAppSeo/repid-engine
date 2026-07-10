@@ -5,6 +5,7 @@ import {
   PANEL_VERIFIER_POOL,
   PANEL_PROVIDER_HINTS,
 } from './peer-verify-consensus';
+import { classifyPeerVerifyClaim, prefilterMode } from './peer-verify-prefilter';
 
 const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
 const POLL_INTERVAL_MS = 30000;
@@ -56,6 +57,29 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       }
 
       const queueEntry = claimed as PeerVerificationQueueEntry;
+
+      // 2b. PREQUALIFYING FILTER — skip non-verifiable claims (drill/cron status
+      // summaries, recursive peer-verify outputs, empty) before spending any
+      // verifier LLM call. ~91% of enqueued claims are non-verifiable garbage
+      // (reports/2026-07-09/PEER_VERIFY_FINDINGS.md). Mode: off | shadow | enforce.
+      const cls = classifyPeerVerifyClaim(queueEntry.claim_text, queueEntry.certainty_at_claim);
+      if (!cls.verifiable) {
+        const mode = prefilterMode();
+        if (mode !== 'off') {
+          console.log(
+            `[PeerVerificationReader] PREFILTER(${mode}) queue ${queueEntry.id} non-verifiable (${cls.reason})` +
+              (mode === 'enforce' ? ' — skipped, no panel spawned.' : ' — would skip (shadow).')
+          );
+        }
+        if (mode === 'enforce') {
+          await db
+            .from('peer_verification_queue')
+            .update({ verification_status: 'skipped', completed_at: new Date().toISOString() })
+            .eq('id', queueEntry.id);
+          continue;
+        }
+      }
+
       const sourceAgentName = await getAgentName(db, queueEntry.source_agent_id);
 
       // 3. UUID-based verifier selection (excluding the source agent)
