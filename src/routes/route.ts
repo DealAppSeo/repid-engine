@@ -263,12 +263,13 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
 
       const startTime = Date.now();
       try {
-        const result = await adapter.complete({
+        const result = await runLaoOrchestration(
+          adapter,
           prompt,
-          maxTokens: max_tokens,
+          max_tokens,
           temperature,
           apiKey
-        });
+        );
 
         const cost_usd = calculateCost(adapter.name, result.model || 'default', result.tokensIn, result.tokensOut);
         
@@ -436,3 +437,219 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     res.status(500).json({ error: error.message });
   }
 });
+
+interface LaoConfig {
+  laoEnabled: boolean;
+  laoLatencyThresholdMs: number;
+  laoFoldConfidenceMin: number;
+}
+
+let laoConfigCache: { config: LaoConfig; fetchedAt: number } | null = null;
+
+async function getLaoConfig(): Promise<LaoConfig> {
+  const now = Date.now();
+  if (laoConfigCache && now - laoConfigCache.fetchedAt < 15000) {
+    return laoConfigCache.config;
+  }
+
+  try {
+    const { data } = await db
+      .from('repid_config')
+      .select('key, value')
+      .in('key', ['lao_enabled', 'lao_latency_threshold_ms', 'lao_fold_confidence_min']);
+
+    const config: LaoConfig = {
+      laoEnabled: false,
+      laoLatencyThresholdMs: 3000,
+      laoFoldConfidenceMin: 0.80,
+    };
+
+    if (data) {
+      for (const row of data) {
+        if (row.key === 'lao_enabled') {
+          config.laoEnabled = row.value === 'true' || row.value === '1';
+        } else if (row.key === 'lao_latency_threshold_ms') {
+          const val = parseInt(row.value);
+          if (!isNaN(val)) config.laoLatencyThresholdMs = val;
+        } else if (row.key === 'lao_fold_confidence_min') {
+          const val = parseFloat(row.value);
+          if (!isNaN(val)) config.laoFoldConfidenceMin = val;
+        }
+      }
+    }
+
+    laoConfigCache = { config, fetchedAt: now };
+    return config;
+  } catch (err) {
+    console.error('[LAO] Failed to fetch config, using defaults:', err);
+    return {
+      laoEnabled: false,
+      laoLatencyThresholdMs: 3000,
+      laoFoldConfidenceMin: 0.80,
+    };
+  }
+}
+
+interface LlmCompleteResult {
+  answer: string;
+  tokensIn: number;
+  tokensOut: number;
+  latencyMs: number;
+  provider: string;
+  model: string;
+}
+
+async function runLaoOrchestration(
+  adapter: any,
+  prompt: string,
+  maxTokens: number | undefined,
+  temperature: number | undefined,
+  apiKey: string,
+): Promise<LlmCompleteResult> {
+  const config = await getLaoConfig();
+
+  if (!config.laoEnabled) {
+    const start = Date.now();
+    const result = await adapter.complete({ prompt, maxTokens, temperature, apiKey });
+    return {
+      answer: result.answer,
+      tokensIn: result.tokensIn,
+      tokensOut: result.tokensOut,
+      latencyMs: Date.now() - start,
+      provider: result.provider || adapter.name,
+      model: result.model || 'unknown',
+    };
+  }
+
+  const startTime = Date.now();
+  let primaryDone = false;
+  let primaryResult: any = null;
+
+  const primaryPromise = adapter.complete({ prompt, maxTokens, temperature, apiKey })
+    .then((res: any) => {
+      primaryDone = true;
+      primaryResult = res;
+      return { type: 'primary', res };
+    });
+
+  const timerPromise = new Promise((resolve) => setTimeout(resolve, config.laoLatencyThresholdMs))
+    .then(() => ({ type: 'timer' }));
+
+  const winner = await Promise.race([primaryPromise, timerPromise]);
+
+  if (winner.type === 'primary') {
+    const res = winner.res;
+    return {
+      answer: res.answer,
+      tokensIn: res.tokensIn,
+      tokensOut: res.tokensOut,
+      latencyMs: Date.now() - startTime,
+      provider: res.provider || adapter.name,
+      model: res.model || 'unknown',
+    };
+  }
+
+  console.log(`[LAO] Latency crossed threshold of ${config.laoLatencyThresholdMs}ms. Orchestrating two-agent flow.`);
+
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
+
+  const engagePrompt = `The primary search is taking longer than expected. Based on the user's prompt: "${prompt}", ask a single relevant qualifying or clarifying question to refine their intent, get fresh details, or specify scope. Keep it concise, natural, and helpful. Do not mention any technical details or that you are waiting.`;
+  
+  let engageQuestion = '';
+  try {
+    const engageResult = await adapter.complete({ prompt: engagePrompt, maxTokens: 100, temperature: 0.7, apiKey });
+    engageQuestion = engageResult.answer;
+    totalTokensIn += engageResult.tokensIn;
+    totalTokensOut += engageResult.tokensOut;
+  } catch (err) {
+    console.error('[LAO] Engage question generation failed:', err);
+    engageQuestion = 'Could you clarify if you need a quick summary or a detailed breakdown?';
+  }
+
+  const userSimPrompt = `You are a user who wrote the prompt: "${prompt}". An AI assistant asks you the clarifying question: "${engageQuestion}". Provide a natural, concise, helpful reply answering their question.`;
+  let userRepliedText = '';
+  try {
+    const userSimResult = await adapter.complete({ prompt: userSimPrompt, maxTokens: 100, temperature: 0.7, apiKey });
+    userRepliedText = userSimResult.answer;
+    totalTokensIn += userSimResult.tokensIn;
+    totalTokensOut += userSimResult.tokensOut;
+  } catch (err) {
+    console.error('[LAO] User reply simulation failed:', err);
+    userRepliedText = 'A comprehensive breakdown, please.';
+  }
+
+  const refinedPrompt = `Original request: "${prompt}"\nUser clarification: "${userRepliedText}"\nPlease provide the final, refined, highly accurate response.`;
+  const refinedPromise = adapter.complete({ prompt: refinedPrompt, maxTokens, temperature, apiKey });
+
+  let refinedResult: any = null;
+  try {
+    const [pRes, rRes] = await Promise.all([primaryPromise, refinedPromise]);
+    primaryResult = pRes.res;
+    refinedResult = rRes;
+    totalTokensIn += primaryResult.tokensIn + refinedResult.tokensIn;
+    totalTokensOut += primaryResult.tokensOut + refinedResult.tokensOut;
+  } catch (err) {
+    console.error('[LAO] Parallel searches failed, falling back to primary:', err);
+    primaryResult = await primaryPromise.then((x: any) => x.res);
+    return {
+      answer: primaryResult.answer,
+      tokensIn: primaryResult.tokensIn + totalTokensIn,
+      tokensOut: primaryResult.tokensOut + totalTokensOut,
+      latencyMs: Date.now() - startTime,
+      provider: primaryResult.provider || adapter.name,
+      model: primaryResult.model || 'unknown',
+    };
+  }
+
+  const evaluatorPrompt = `Evaluate the following two answers to the prompt: "${prompt}"\nPrimary Answer: "${primaryResult.answer}"\nRefined Answer: "${refinedResult.answer}"\nProvide a score between 0.0 and 1.0 representing your confidence in their combined accuracy and intent alignment. Return ONLY the number (e.g., 0.85).`;
+  let foldConfidence = 0.85;
+  try {
+    const evalResult = await adapter.complete({ prompt: evaluatorPrompt, maxTokens: 10, temperature: 0.0, apiKey });
+    const parsed = parseFloat(evalResult.answer.trim());
+    if (!isNaN(parsed)) foldConfidence = parsed;
+    totalTokensIn += evalResult.tokensIn;
+    totalTokensOut += evalResult.tokensOut;
+  } catch (err) {
+    console.error('[LAO] Confidence evaluation failed:', err);
+  }
+
+  let finalFoldedText = '';
+  if (foldConfidence >= config.laoFoldConfidenceMin) {
+    const foldPrompt = `Merge and compile the following two responses into a single, cohesive, high-quality final answer:\nResponse 1: "${primaryResult.answer}"\nResponse 2: "${refinedResult.answer}"`;
+    try {
+      const foldResult = await adapter.complete({ prompt: foldPrompt, maxTokens, temperature, apiKey });
+      finalFoldedText = foldResult.answer;
+      totalTokensIn += foldResult.tokensIn;
+      totalTokensOut += foldResult.tokensOut;
+    } catch (err) {
+      console.error('[LAO] Answer folding failed, using refined answer:', err);
+      finalFoldedText = refinedResult.answer;
+    }
+  } else {
+    finalFoldedText = primaryResult.answer;
+  }
+
+  const finalLatencyMs = Date.now() - startTime;
+
+  try {
+    await db.from('lao_events').insert({
+      trigger_latency_ms: finalLatencyMs,
+      engage_question: engageQuestion,
+      user_replied: userRepliedText,
+      fold_confidence: foldConfidence,
+      final_folded: finalFoldedText,
+    });
+  } catch (dbErr) {
+    console.error('[LAO] Failed to log telemetry to lao_events:', dbErr);
+  }
+
+  return {
+    answer: finalFoldedText,
+    tokensIn: totalTokensIn,
+    tokensOut: totalTokensOut,
+    latencyMs: finalLatencyMs,
+    provider: primaryResult.provider || adapter.name,
+    model: primaryResult.model || 'unknown',
+  };
+}
