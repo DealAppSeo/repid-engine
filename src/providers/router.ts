@@ -14,6 +14,17 @@ import { checkCap } from '../billing/caps';
 import { db } from '../db';
 import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
 import { persistShadowDecision } from '../services/anfis-shadow-persist'; // persist shadow decision so ANFIS is measurable (shadow-only, no routing change)
+import { getColdStartConfig, type ColdStartConfig, type ColdStartScope } from './cold-start-config'; // task 22 — cold-start premium routing
+
+/**
+ * Cold-start context (task 22): the caller tells the router which "cold-start" bucket this request
+ * falls in and its 0-based position in the session, so the first N questions of a new user / new
+ * chat / testing session can be routed to frontier/premium LLMs. Optional — omitted = no cold-start.
+ */
+export interface ColdStartContext {
+  scope: ColdStartScope;
+  question_index: number; // 0-based index of this question within the session
+}
 
 export interface RouteRequest {
   prompt: string;
@@ -23,13 +34,30 @@ export interface RouteRequest {
   model_override?: string;
   maxTokens?: number;
   temperature?: number;
+  cold_start?: ColdStartContext; // task 22 — premium (frontier-first) window for new sessions/testing
 }
 
 export interface RouteDecision {
   chosen_provider: string;
   chosen_tier: '0a' | '1' | 'none' | 'slm';
-  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit' | 'slm_low_complexity';
+  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit' | 'slm_low_complexity' | 'cold_start_premium';
   tried: string[];
+}
+
+/**
+ * Decide whether this request gets the cold-start PREMIUM (frontier-first) treatment. Pure +
+ * synchronous given the resolved config; returns a reason either way (observability). The ANFIS
+ * difficulty gate (cfg.anfisGate) spares trivially-easy questions so we don't burn a frontier call
+ * on a one-word/classification prompt that Groq/Cerebras answer just as well.
+ */
+export function shouldColdStartPremium(req: RouteRequest, cfg: ColdStartConfig): { active: boolean; reason: string } {
+  if (!cfg.enabled) return { active: false, reason: 'disabled' };
+  const ctx = req.cold_start;
+  if (!ctx) return { active: false, reason: 'no_cold_start_context' };
+  if (!cfg.scopes.has(ctx.scope)) return { active: false, reason: `scope_not_covered:${ctx.scope}` };
+  if (!(ctx.question_index < cfg.maxQuestions)) return { active: false, reason: `past_window(${ctx.question_index}>=${cfg.maxQuestions})` };
+  if (cfg.anfisGate && isLowComplexity(req.prompt, req.task_hint)) return { active: false, reason: 'anfis_gate_trivial' };
+  return { active: true, reason: 'cold_start_premium' };
 }
 
 const slmAdapters: ProviderAdapter[] = [
@@ -276,6 +304,37 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     }
   } catch (e) {
     // tolerant for no key / no table yet
+  }
+
+  // COLD-START PREMIUM (task 22): route the first N questions of a new-user / new-chat / testing
+  // session straight to frontier/premium LLMs (best foot forward), EXCEPT when the ANFIS difficulty
+  // gate says the question is trivially easy (then keep it on the free tier). Config is resolved from
+  // repid_config (MASTER default OFF, fail-safe), so this whole block is inert until
+  // cold_start_premium_enabled is flipped. Falls through to normal routing if no premium provider is
+  // currently available (never worse than baseline).
+  let coldStart = { active: false, reason: 'disabled' };
+  try {
+    coldStart = shouldColdStartPremium(req, await getColdStartConfig());
+  } catch { /* config resolver is fail-safe; treat as disabled */ }
+  if (coldStart.active) {
+    for (const adapter of tier1Adapters) {
+      if (excludeProviders.includes(adapter.name)) continue;
+      const key = resolveTier1Key(adapter.name, req.user_paid_keys);
+      if (!key) continue;
+      if (isHealthy(adapter.name)) {
+        const cap = await checkCap(adapter.name);
+        if (!cap.allowed) { tried.push(adapter.name); continue; }
+        console.log(`[cold-start-premium] frontier-first: ${adapter.name} (scope=${req.cold_start?.scope} q=${req.cold_start?.question_index})`);
+        return {
+          adapter,
+          decision: { chosen_provider: adapter.name, chosen_tier: '1', reason: 'cold_start_premium', tried },
+          staticProvider, staticTier, anfisProvider, anfisTier, anfisConfidence,
+        };
+      } else {
+        tried.push(adapter.name);
+      }
+    }
+    console.warn('[cold-start-premium] active but no premium provider available — falling through to normal routing.');
   }
 
   // Intercept for low-complexity SLM routing
