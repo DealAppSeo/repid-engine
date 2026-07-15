@@ -29,3 +29,5 @@ terminals/
 mcps/
 __pycache__/
 .env.master
+railway_env.json
+.env.railway
