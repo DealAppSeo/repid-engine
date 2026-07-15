@@ -22,3 +22,10 @@ railway_vars*.txt
 .sb-service-key
 .telegram-*
 scripts/dispatch/.dispatch.env
+
+# Local dev sprawl — never commit (secret-hygiene 2026-07-15)
+scratch/
+terminals/
+mcps/
+__pycache__/
+.env.master
