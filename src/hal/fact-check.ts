@@ -810,6 +810,13 @@ export async function factCheck(
     }
   }
 
+  // ESCALATE-ONCE tracker (cycles 2/3/4). Cycle-2's even-split tiebreak folds a 'grok' family into the
+  // quorum, so it is already reflected in `families`; cycles 3/4 do NOT push their vote into `families`,
+  // so this mutable flag is the single source of truth for "has this quorum already spent its one Grok
+  // call?". Initialized from the cycle-2 outcome; set true by cycle-3 (below) and cycle-4 whenever they
+  // escalate, so at most ONE Grok escalation happens per fact-check regardless of which cycle fires.
+  let grokEscalated = families.includes('grok');
+
   // --- CYCLE3 (precision) — CONFIDENCE-GATED PRE-VETO GROK OVERRIDE. Env-gated (HAL_ESCALATE_GROK,
   // the SAME flag as the cycle-2 tiebreak; default OFF) and FAIL-SAFE. Targets the residual false
   // positives that cycle-2's plurality guard CANNOT help: genuine FREE-PANEL ERRORS where the free 8B
@@ -832,7 +839,7 @@ export async function factCheck(
     decision === 'vetoed' &&
     process.env.HAL_ESCALATE_GROK === 'true' &&
     process.env.GROK_API_KEY?.trim() &&
-    !families.includes('grok') // escalate-once — the cycle-2 tiebreak may have already cast a grok vote
+    !grokEscalated // escalate-once — the cycle-2 tiebreak may have already cast a grok vote
   ) {
     // Local, clamped env parse (no redeploy to tune). BAND in [0,1]; confidences in [0,100].
     const bandNum = Number(process.env.HAL_UNCERTAIN_VETO_BAND);
@@ -855,6 +862,7 @@ export async function factCheck(
           `FALSE ${falseN}/${units} >= ceil(0.75*${units})=${Math.ceil(0.75 * units)} ? ${strongFalseCount}) — escalating ONCE to Grok`,
       );
       const gv = await grokTiebreak(deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+      grokEscalated = true; // escalate-once — cycle-4 must NOT call Grok again for this quorum
       attempted += 1;
       if (gv && gv.verdict === 'TRUE' && gv.confidence >= overrideConf) {
         // Grok (higher-weight) confidently confirms TRUE → override the weak veto. clean if VERY
@@ -868,6 +876,76 @@ export async function factCheck(
         console.log(`  - [grok-override] Grok did NOT confidently confirm TRUE (verdict ${gv.verdict} @${gv.confidence}%) — veto STANDS`);
       } else {
         console.warn(`  - [grok-override] Grok unavailable/errored — veto STANDS (fail-safe, no-op)`);
+      }
+    }
+  }
+
+  // --- CYCLE4 (recall) — CONFIDENCE-GATED PRE-PASS GROK UPGRADE. The exact MIRROR of the cycle-3
+  // pre-veto override. Env-gated (HAL_ESCALATE_GROK, the SAME flag as cycles 2/3; default OFF) and
+  // FAIL-SAFE. Targets the residual FALSE NEGATIVES the plurality guard + veto path let through: a false
+  // claim the free panel is confidently WRONG about (a TRUE plurality, e.g. 4 TRUE / 2 FALSE → the
+  // cycle-2 plurality guard downgraded any veto to 'clean'), OR a claim the panel ABSTAINS on / is
+  // majority-UNCERTAIN. In both there IS a real FALSE signal (>= 2 dissenting families) or high
+  // uncertainty, but no FALSE quorum, so the aggregate PASSES. When the pass carries genuine FALSE
+  // dissent / abstain, escalate ONCE to a stronger model (Grok, reusing grokTiebreak→queryProvider,
+  // grok-3-mini) as a HIGHER-WEIGHT vote; a confident Grok FALSE UPGRADES the pass.
+  //
+  // ELIGIBLE (a pass that carries a real FALSE signal) := >= MIN_QUORUM_FOR_VETO responding families
+  // voted FALSE (genuine dissent that did not form a veto), OR the panel abstained, OR UNCERTAIN is a
+  // strict family majority. PROTECT PRECISION (critical): a CONFIDENT-CLEAN pass — strong TRUE consensus
+  // with essentially no FALSE dissent (0-1 FALSE families) AND low uncertainty — is NEVER eligible, so a
+  // confidently-true claim is never escalated and the precision gained in cycles 2/3 is held. Requires
+  // the high Grok-FALSE confidence below to actually upgrade. Reuses the SAME family-aware tallies
+  // (falseFams/trueFams) computed above + an UNCERTAIN tally. Applies in BOTH decision modes. hal_score
+  // and the patent comma-BFT lib (src/hal/lib/*) are untouched — only `decision` (and its
+  // reason/quorum_note) changes. Escalate-ONCE: skipped if Grok already voted via the cycle-2 tiebreak OR
+  // the cycle-3 override (grokEscalated). FAIL-SAFE: flag off / no key / Grok error / non-confident-FALSE
+  // → pass STANDS unchanged (queryProvider never throws → ERROR verdict → no-op). Reversible via HAL_ESCALATE_GROK.
+  if (
+    (decision === 'clean' || decision === 'flagged' || decision === 'abstain') &&
+    process.env.HAL_ESCALATE_GROK === 'true' &&
+    process.env.GROK_API_KEY?.trim() &&
+    !grokEscalated // escalate-once — cycles 2/3 may have already spent this quorum's single Grok call
+  ) {
+    // Local, clamped env parse (no redeploy to tune). Confidences in [0,100].
+    const upConfNum = Number(process.env.HAL_GROK_UPGRADE_CONF);
+    const upgradeConf = Number.isFinite(upConfNum) && upConfNum >= 0 && upConfNum <= 100 ? upConfNum : 80;
+    const upVetoNum = Number(process.env.HAL_GROK_UPGRADE_VETO_CONF);
+    const upgradeVetoConf = Number.isFinite(upVetoNum) && upVetoNum >= 0 && upVetoNum <= 100 ? upVetoNum : 95;
+
+    const units = familyAware ? families_used : providers_used;
+    const uncertainFams = famsOf('UNCERTAIN');
+    const falseN = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
+    const trueN = familyAware ? trueFams.length : ok.filter((v) => v.verdict === 'TRUE').length;
+    const uncertainN = familyAware ? uncertainFams.length : ok.filter((v) => v.verdict === 'UNCERTAIN').length;
+
+    // A pass "carries a real FALSE signal" when >= MIN_QUORUM_FOR_VETO families dissented FALSE (a genuine
+    // minority the plurality guard/quorum let pass), OR the panel abstained, OR UNCERTAIN is a STRICT
+    // family majority. A confident-clean pass (0-1 FALSE, low uncertainty) matches none of these → never escalated.
+    const hasFalseDissent = falseN >= MIN_QUORUM_FOR_VETO; // >= 2 FALSE families, but no veto formed
+    const uncertainMajority = uncertainN * 2 > units; // UNCERTAIN is a strict majority of responding families
+    const eligible = hasFalseDissent || decision === 'abstain' || uncertainMajority;
+
+    if (eligible) {
+      console.log(
+        `  - [grok-upgrade] PASS carries a real FALSE signal (decision '${decision}': FALSE ${falseN}, TRUE ${trueN}, UNCERTAIN ${uncertainN} of ${units} ${familyAware ? 'families' : 'providers'}; ` +
+          `falseDissent=${hasFalseDissent} abstain=${decision === 'abstain'} uncertainMajority=${uncertainMajority}) — escalating ONCE to Grok`,
+      );
+      const gv = await grokTiebreak(deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+      grokEscalated = true; // escalate-once — no further Grok calls for this quorum
+      attempted += 1;
+      if (gv && gv.verdict === 'FALSE' && gv.confidence >= upgradeConf) {
+        // Grok (higher-weight) confidently judges the claim FALSE → upgrade the pass. vetoed if VERY
+        // confident (>= upgradeVetoConf), else flagged (a soft signal, short of a full veto).
+        const upgraded: HalDecision = gv.confidence >= upgradeVetoConf ? 'vetoed' : 'flagged';
+        console.log(`  - [grok-upgrade] Grok says FALSE @${gv.confidence}% (>= ${upgradeConf}) — upgrading pass -> '${upgraded}'`);
+        decision = upgraded;
+        decision_reason = `A higher-weight verifier (Grok) judged this claim FALSE at ${gv.confidence}% confidence, upgrading a free-panel PASS that carried an unquorumed FALSE signal (${falseN} of ${units} ${familyAware ? 'families' : 'providers'} FALSE${uncertainN ? `, ${uncertainN} UNCERTAIN` : ''}). Upgraded to '${upgraded}'.`;
+        quorum_note = `Cycle4 Grok upgrade: pass (FALSE ${falseN}/${units}, UNCERTAIN ${uncertainN}/${units}) upgraded by Grok FALSE @${gv.confidence}% → '${upgraded}'.`;
+      } else if (gv && gv.verdict !== 'ERROR') {
+        console.log(`  - [grok-upgrade] Grok did NOT confidently judge FALSE (verdict ${gv.verdict} @${gv.confidence}%) — pass STANDS`);
+      } else {
+        console.warn(`  - [grok-upgrade] Grok unavailable/errored — pass STANDS (fail-safe, no-op)`);
       }
     }
   }
