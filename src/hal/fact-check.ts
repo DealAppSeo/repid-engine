@@ -449,6 +449,35 @@ function providerRisk(v: ProviderVerdict): number {
 }
 
 /**
+ * CYCLE2 (precision) — GROK TIEBREAK. Optional, env-gated `HAL_ESCALATE_GROK` (default OFF), additive.
+ * Called ONLY when the responding families are EVENLY split (equal TRUE and FALSE family counts, no
+ * plurality) — a single independent tiebreak vote from Grok (xAI, api.x.ai, OpenAI-compatible). Its
+ * verdict is folded back into the quorum as one more 'grok'-family vote; the normal aggregation +
+ * plurality guard then resolve the (now un-tied) decision.
+ *
+ * FAIL-SAFE: returns null if the flag is off or no key is present, and `queryProvider` NEVER throws
+ * (it returns an ERROR verdict on any failure), so any Grok error simply falls back to the current
+ * (tied) behavior with no effect on the live path. Small + self-contained; does NOT touch src/hal/lib/*.
+ */
+async function grokTiebreak(
+  deliverable: string,
+  maxTokens: number,
+  quorumId: string,
+): Promise<ProviderVerdict | null> {
+  const key = process.env.GROK_API_KEY?.trim();
+  if (!key) return null;
+  const cfg: FactCheckProviderCfg = {
+    name: 'grok',
+    endpoint: process.env.HAL_ESCALATE_GROK_ENDPOINT ?? 'https://api.x.ai/v1/chat/completions',
+    apiKey: key,
+    model: process.env.HAL_ESCALATE_GROK_MODEL ?? 'grok-3-mini',
+    family: 'grok',
+    tier: 'escalation',
+  };
+  return queryProvider(cfg, deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+}
+
+/**
  * CC1 2026-05-23 — provider-failure hardening. Closes CC1's own launch-
  * verification RULE-4 caveat: strictness:2 was verified only on the happy path
  * (providers_used=2, agree=1.0); under partial provider outage (e.g. cerebras
@@ -611,6 +640,31 @@ export async function factCheck(
     }
   });
 
+  // CYCLE2 (precision) — GROK TIEBREAK. When the responding families are EVENLY split (equal distinct
+  // TRUE and FALSE family counts, ≥1 each → no plurality), escalate ONCE to Grok for a single
+  // independent tiebreak vote, folded in as a 'grok'-family verdict before the quorum is tallied.
+  // Env-gated (HAL_ESCALATE_GROK, default off) and FAIL-SAFE (flag off / no key / Grok error → no-op,
+  // current tied behavior preserved). Done here so the tiebreak vote flows through ALL downstream math.
+  if (process.env.HAL_ESCALATE_GROK === 'true' && process.env.GROK_API_KEY?.trim()) {
+    const okPre = verdicts.filter((v) => v.verdict !== 'ERROR');
+    const famCount = (want: Verdict) =>
+      new Set(okPre.filter((v) => v.verdict === want).map((v) => familyByName.get(v.provider) ?? v.provider)).size;
+    const fN = famCount('FALSE');
+    const tN = famCount('TRUE');
+    if (fN >= 1 && fN === tN) {
+      console.log(`  - [grok-tiebreak] evenly split (${tN} TRUE / ${fN} FALSE families) — escalating to Grok`);
+      const gv = await grokTiebreak(deliverable, maxTokens, quorumId);
+      attempted += 1;
+      if (gv && gv.verdict !== 'ERROR') {
+        familyByName.set(gv.provider, 'grok'); // distinct family → breaks the tie
+        verdicts.push(gv);
+        console.log(`  - Provider grok (tiebreak) returned ${gv.verdict} (confidence ${gv.confidence}%) in ${gv.latency_ms}ms`);
+      } else {
+        console.warn(`  - [grok-tiebreak] Grok unavailable/errored — falling back to current (tied) behavior`);
+      }
+    }
+  }
+
   const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
@@ -732,6 +786,27 @@ export async function factCheck(
         decision = 'flagged';
         quorum_note = `Verdict-driven gate: no FALSE quorum (${falseQuorum} FALSE < ${MIN_QUORUM_FOR_VETO}); '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'flagged' — UNCERTAIN/opinion, not a confirmed factual error.`;
       }
+    }
+  }
+
+  // --- CYCLE2 (precision) — PLURALITY GUARD. A FALSE minority must NEVER veto a TRUE plurality.
+  // After the aggregate decision, if it is 'vetoed' but among the responding (non-ERROR) families
+  // MORE voted TRUE than FALSE, downgrade the veto: to 'clean' when TRUE is an outright majority of the
+  // responding families (trueN*2 > units), else to 'flagged'. This is a principled vote-count rule
+  // (not a per-case lookup / no tuning to a test set); hal_score and the patent comma-BFT lib
+  // (src/hal/lib/*) are untouched — only `decision` changes. Reversible via HAL_PLURALITY_GUARD=false.
+  // Uses the SAME family-aware tallies (falseFams/trueFams) already computed above. Applies in BOTH
+  // decision modes. ---
+  if (decision === 'vetoed' && process.env.HAL_PLURALITY_GUARD !== 'false') {
+    const falseN = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
+    const trueN = familyAware ? trueFams.length : ok.filter((v) => v.verdict === 'TRUE').length;
+    const units = familyAware ? families_used : providers_used;
+    if (trueN > falseN) {
+      const label = familyAware ? 'families' : 'providers';
+      const downgraded: HalDecision = trueN * 2 > units ? 'clean' : 'flagged';
+      decision = downgraded;
+      decision_reason = `${trueN} of ${units} independent model ${label} judged this claim TRUE and only ${falseN} judged it FALSE — a minority may not veto a TRUE plurality (downgraded to '${downgraded}').`;
+      quorum_note = `Plurality guard: TRUE plurality (${trueN} TRUE > ${falseN} FALSE of ${units} ${label}) overruled a FALSE-minority veto; would-be 'vetoed' downgraded to '${downgraded}'.`;
     }
   }
 
