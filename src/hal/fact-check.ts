@@ -810,6 +810,68 @@ export async function factCheck(
     }
   }
 
+  // --- CYCLE3 (precision) — CONFIDENCE-GATED PRE-VETO GROK OVERRIDE. Env-gated (HAL_ESCALATE_GROK,
+  // the SAME flag as the cycle-2 tiebreak; default OFF) and FAIL-SAFE. Targets the residual false
+  // positives that cycle-2's plurality guard CANNOT help: genuine FREE-PANEL ERRORS where the free 8B
+  // models agree FALSE on an obscure-but-true fact — there is NO TRUE plurality to protect, so the guard
+  // above is a no-op. When the aggregate decision IS 'vetoed' but the veto is WEAK/UNCERTAIN, escalate
+  // ONCE to a stronger model (Grok, reusing grokTiebreak→queryProvider, grok-3-mini) as a HIGHER-WEIGHT
+  // override vote; a confident Grok TRUE downgrades the veto.
+  //
+  // WEAK veto := the aggregate hal_score is only MARGINALLY over vetoThreshold (score − veto <= BAND,
+  // default HAL_UNCERTAIN_VETO_BAND=0.15), OR the responding families do NOT reach a strong FALSE
+  // consensus (FALSE families < ceil(0.75 * responding families)). A STRONG-consensus veto
+  // (>= 75% families FALSE AND score comfortably over threshold) is NEVER escalated/overridden — those
+  // are real hallucinations, so recall is protected. Reuses the SAME family-aware tallies
+  // (falseFams/trueFams) already computed above. Applies in BOTH decision modes. hal_score and the
+  // patent comma-BFT lib (src/hal/lib/*) are untouched — only `decision` (and its reason/quorum_note)
+  // changes. Escalate-ONCE: skipped if Grok already voted via the cycle-2 even-split tiebreak (a 'grok'
+  // family is already present). FAIL-SAFE: flag off / no key / Grok error / non-confident-TRUE → veto
+  // STANDS unchanged (queryProvider never throws → ERROR verdict → no-op). Reversible via HAL_ESCALATE_GROK.
+  if (
+    decision === 'vetoed' &&
+    process.env.HAL_ESCALATE_GROK === 'true' &&
+    process.env.GROK_API_KEY?.trim() &&
+    !families.includes('grok') // escalate-once — the cycle-2 tiebreak may have already cast a grok vote
+  ) {
+    // Local, clamped env parse (no redeploy to tune). BAND in [0,1]; confidences in [0,100].
+    const bandNum = Number(process.env.HAL_UNCERTAIN_VETO_BAND);
+    const band = Number.isFinite(bandNum) && bandNum >= 0 && bandNum <= 1 ? bandNum : 0.15;
+    const confNum = Number(process.env.HAL_GROK_OVERRIDE_CONF);
+    const overrideConf = Number.isFinite(confNum) && confNum >= 0 && confNum <= 100 ? confNum : 80;
+    const cleanNum = Number(process.env.HAL_GROK_OVERRIDE_CLEAN_CONF);
+    const cleanConf = Number.isFinite(cleanNum) && cleanNum >= 0 && cleanNum <= 100 ? cleanNum : 95;
+
+    const units = familyAware ? families_used : providers_used;
+    const falseN = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
+    const strongFalseCount = falseN >= Math.ceil(0.75 * units); // >= 75% of responding families said FALSE
+    const weakByScore = hal_score - vetoThreshold <= band; // veto is only marginally over threshold
+    const isWeakVeto = weakByScore || !strongFalseCount;
+
+    if (isWeakVeto) {
+      console.log(
+        `  - [grok-override] WEAK veto (score ${hal_score.toFixed(3)} vs veto ${vetoThreshold.toFixed(3)}, ` +
+          `margin ${(hal_score - vetoThreshold).toFixed(3)} <= band ${band} ? ${weakByScore}; ` +
+          `FALSE ${falseN}/${units} >= ceil(0.75*${units})=${Math.ceil(0.75 * units)} ? ${strongFalseCount}) — escalating ONCE to Grok`,
+      );
+      const gv = await grokTiebreak(deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+      attempted += 1;
+      if (gv && gv.verdict === 'TRUE' && gv.confidence >= overrideConf) {
+        // Grok (higher-weight) confidently confirms TRUE → override the weak veto. clean if VERY
+        // confident (>= cleanConf), else flagged (keep a soft signal for review).
+        const downgraded: HalDecision = gv.confidence >= cleanConf ? 'clean' : 'flagged';
+        console.log(`  - [grok-override] Grok says TRUE @${gv.confidence}% (>= ${overrideConf}) — downgrading veto -> '${downgraded}'`);
+        decision = downgraded;
+        decision_reason = `A higher-weight verifier (Grok) judged this claim TRUE at ${gv.confidence}% confidence, overriding a WEAK free-panel FALSE veto (${falseN} of ${units} ${familyAware ? 'families' : 'providers'} FALSE, score ${hal_score.toFixed(3)}). Downgraded to '${downgraded}'.`;
+        quorum_note = `Cycle3 Grok override: weak veto (score ${hal_score.toFixed(3)}, FALSE ${falseN}/${units}) overridden by Grok TRUE @${gv.confidence}% → '${downgraded}'.`;
+      } else if (gv && gv.verdict !== 'ERROR') {
+        console.log(`  - [grok-override] Grok did NOT confidently confirm TRUE (verdict ${gv.verdict} @${gv.confidence}%) — veto STANDS`);
+      } else {
+        console.warn(`  - [grok-override] Grok unavailable/errored — veto STANDS (fail-safe, no-op)`);
+      }
+    }
+  }
+
   // --- SBFA v0.2 SHADOW + GLASS BOX (default ON). ZERO extra inference: it reuses the per-provider
   // verdicts already computed and makes NO new LLM calls. The decision trace is pure DST math (sub-ms),
   // attached to EVERY decision so the wrapper + HITL PWA always have the Glass Box (§7 CC, task 3).
