@@ -50,6 +50,14 @@ import {
   type StakesLevel,
   type ActionKind,
 } from './sbfa-consensus';
+// WS1.2a DUAL-PATH RETRIEVAL (2026-07-18, reports/2026-07-18/ANTIFRAGILE_PROVENANCE_PROGRAM_v0.md
+// §ARCHITECTURE — SETTLED). The confidence-triggered SLOW PATH: when the fast parametric quorum is
+// uncertain/high-stakes, retrieve web evidence and grade it (CRAG) to REFINE the decision. Entirely
+// behind HAL_RETRIEVAL_ENABLED (default OFF/shadow) — importing these modules changes nothing until
+// the flag is on, and both modules NEVER throw (failure → fast-path decision preserved). See the
+// gated block near the end of factCheck() and src/hal/retrieval.ts + src/hal/crag.ts.
+import { retrieveEvidence } from './retrieval';
+import { gradeEvidence, type CragResult, type CragGrade } from './crag';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -223,6 +231,33 @@ export interface FactCheckResult {
     enforced: boolean; // true only if SBFA actually changed the live decision (A6-gated)
     trace: SbfaTrace; // GLASS BOX — structured + human-readable decision trace (wrapper + HITL PWA)
   };
+  // --- WS1.2a DUAL-PATH RETRIEVAL (additive; present ONLY when HAL_RETRIEVAL_ENABLED==='true' AND the
+  // slow path was triggered). Reports the trigger, the CRAG grade + provenance, and whether the grade
+  // refined the fast-path decision. Absent by default → live HAL is byte-identical when the flag is
+  // off. ---
+  retrieval?: {
+    triggered: boolean;
+    trigger_reason: string; // human-readable: which trigger(s) fired
+    evidence_count: number; // snippets retrieved
+    pre_retrieval_decision: HalDecision; // the fast-path decision before refinement
+    refined: boolean; // did the CRAG grade change `decision`?
+    latency_ms: number; // slow-path added latency (retrieval + grading)
+    crag?: {
+      grade: CragGrade;
+      verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN';
+      confidence: number;
+      corroboration_count: number;
+      contradiction_count: number;
+      disclosure_flag: boolean;
+      grader: 'model' | 'heuristic';
+      grader_model?: string;
+      reasons: string[];
+      // provenance of the graded sources (url/domain/hash/timestamp) — the glass box for the CRAG call.
+      sources: Array<{ url: string; registrable_domain: string; stance: string; content_hash: string; timestamp: string }>;
+    };
+  };
+  // WS1.2a — the RRL scoring-hook record captured at the CRAG decision point (log only; no RepID write).
+  rrl?: RrlHookRecord;
 }
 
 /**
@@ -268,6 +303,66 @@ export interface FactCheckOpts {
   flagThreshold?: number; // default 0.35
   perProviderTimeoutMs?: number; // default 12000
   maxTokens?: number; // default 120
+  // WS1.2a — SLOW-PATH controls (all optional; ignored unless HAL_RETRIEVAL_ENABLED==='true').
+  forceRetrieval?: boolean; // explicit "verify this" — always trigger the slow path
+  highStakes?: boolean; // caller-declared high-stakes (RepID/financial/code/on-chain) claim → trigger
+}
+
+/**
+ * WS1.2a — RRL SCORING HOOK record. Emitted at the CRAG decision point of the slow path — the exact
+ * fields a future Response-Reputation-Layer delta (reports/2026-07-18/RRL_DESIGN_v0.md) will consume:
+ * source credibility (the CRAG grade), how many INDEPENDENT sources corroborated, the grader's
+ * confidence, and whether the disclosure/abstain protections fired. THIS IS A LOG ONLY — no RepID is
+ * mutated here (WS2.x wires the delta). Surfaced so the signal is captured from day one.
+ */
+export interface RrlHookRecord {
+  claim_hash: string; // sha256 of the deliverable — links the record to the claim without storing prose
+  source_credibility_grade: CragGrade; // Correct | Ambiguous | Incorrect — the credibility signal
+  crag_verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN';
+  corroboration_count: number; // distinct INDEPENDENT domains that supported the claim (the ≥2 lever)
+  contradiction_count: number;
+  grader_confidence: number; // 0..100
+  disclosure_fired: boolean; // single-source/uncorroborated → downstream must disclose uncertainty
+  abstain_fired: boolean; // HAL abstained (not a checkable claim) at the CRAG point
+  retrieval_source_count: number; // evidence snippets retrieved before grading
+  hal_decision: HalDecision; // final live decision after any slow-path refinement
+  refined: boolean; // did the CRAG grade change the fast-path decision?
+}
+
+/**
+ * WS1.2a — RRL telemetry sink. Pluggable, OFF the hot path (default logs a structured one-liner, zero
+ * DB dependency — same pattern as the SBFA shadow sink). GA/WS2.x can swap in a DB/repid_score_events
+ * writer for the real RRL delta. NEVER mutates RepID here.
+ */
+export type RrlTelemetry = (row: RrlHookRecord) => void;
+let rrlTelemetrySink: RrlTelemetry = (row) => {
+  console.log(
+    `[rrl-hook] grade=${row.source_credibility_grade} verdict=${row.crag_verdict} ` +
+      `corroboration=${row.corroboration_count} contradiction=${row.contradiction_count} ` +
+      `conf=${row.grader_confidence} disclosure=${row.disclosure_fired} abstain=${row.abstain_fired} ` +
+      `sources=${row.retrieval_source_count} decision=${row.hal_decision} refined=${row.refined}`,
+  );
+};
+/** Test/WS2.x seam to swap the RRL telemetry sink (e.g. a repid_score_events writer). */
+export function setRrlTelemetrySink(sink: RrlTelemetry): void {
+  rrlTelemetrySink = sink;
+}
+
+/** Default high-stakes trigger keywords (config-extensible via HAL_RETRIEVAL_STAKES_KEYWORDS). */
+const DEFAULT_STAKES_KEYWORDS = [
+  'repid', 'reputation', 'stake', 'staking',
+  'financial', 'payment', 'usd', 'usdc', 'price', 'invest', 'trade', 'transfer', 'refund',
+  'on-chain', 'onchain', 'transaction', 'wallet', 'contract address', 'erc-8004', 'erc8004', 'attestation',
+  'exploit', 'vulnerability', 'cve', 'security', 'private key',
+];
+
+/** True when the deliverable mentions a high-stakes term (RepID/financial/code/on-chain/security). */
+function isHighStakesText(deliverable: string): boolean {
+  const extra = (process.env.HAL_RETRIEVAL_STAKES_KEYWORDS ?? '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const kws = [...DEFAULT_STAKES_KEYWORDS, ...extra];
+  const t = String(deliverable ?? '').toLowerCase();
+  return kws.some((k) => t.includes(k));
 }
 
 const FACT_CHECK_SYSTEM =
@@ -931,6 +1026,125 @@ export async function factCheck(
     }
   }
 
+  // --- WS1.2a DUAL-PATH RETRIEVAL SLOW PATH (gated, additive). After the FAST parametric quorum has
+  // produced its decision above, when HAL_RETRIEVAL_ENABLED==='true' AND this case is a SLOW-PATH
+  // TRIGGER, retrieve web evidence and CRAG-grade it to REFINE the decision (upgrade a low-confidence
+  // veto/flag to clean on ≥2-independent-source corroboration; downgrade a clean/flag to vetoed on
+  // ≥2-independent contradiction). The fast path is UNCHANGED when the trigger is not met or the flag
+  // is off. Thresholds are env/config with safe defaults. retrieveEvidence + gradeEvidence NEVER throw;
+  // the whole block is additionally try/guarded so the slow path can never break a live decision.
+  // Also emits the RRL scoring-hook record at the CRAG decision point (log only — no RepID mutation). ---
+  let retrievalField: FactCheckResult['retrieval'];
+  let rrlField: RrlHookRecord | undefined;
+  if (process.env.HAL_RETRIEVAL_ENABLED === 'true') {
+    const slowStart = Date.now();
+    try {
+      const ctNum = Number(process.env.HAL_RETRIEVAL_CONF_TRIGGER);
+      const confTrigger = Number.isFinite(ctNum) && ctNum >= 0 && ctNum <= 1 ? ctNum : 0.67;
+      // Trigger 1 — low panel confidence / no strong quorum.
+      const lowConfidence =
+        (agreement !== null && agreement < confTrigger) || decision === 'abstain' || quorum === 'low' || quorum === 'outage';
+      // Trigger 2 — family disagreement (both TRUE and FALSE families present → no strong quorum).
+      const familyDisagreement = falseFams.length > 0 && trueFams.length > 0;
+      // Trigger 3 — high-stakes flag (caller-declared OR a high-stakes keyword in the claim).
+      const highStakes = opts.highStakes === true || isHighStakesText(deliverable);
+      // Trigger 4 — explicit forceRetrieval.
+      const force = opts.forceRetrieval === true;
+
+      const triggers: string[] = [];
+      if (force) triggers.push('forceRetrieval');
+      if (lowConfidence)
+        triggers.push(`low-confidence(agree=${agreement === null ? 'n/a' : agreement.toFixed(2)}<${confTrigger}|decision=${decision}|quorum=${quorum})`);
+      if (familyDisagreement) triggers.push(`family-disagreement(${trueFams.length}T/${falseFams.length}F)`);
+      if (highStakes) triggers.push('high-stakes');
+
+      if (triggers.length > 0) {
+        const preDecision = decision;
+        const evidence = await retrieveEvidence(deliverable);
+        let crag: CragResult | undefined;
+        let refined = false;
+
+        if (evidence.length > 0) {
+          crag = await gradeEvidence(deliverable, evidence);
+          // REFINE: a confident CRAG grade (Correct/Incorrect, each already gated on ≥2 independent
+          // domains) overrides the fast-path decision. Ambiguous never changes the decision (only sets
+          // the disclosure flag). hal_score and the patent comma-BFT lib (src/hal/lib/*) are untouched.
+          if (crag.grade === 'Correct' && (decision === 'vetoed' || decision === 'flagged' || decision === 'abstain')) {
+            decision = 'clean';
+            refined = true;
+            decision_reason = `Slow-path retrieval: ${crag.corroboration_count} INDEPENDENT web source(s) corroborate this claim (CRAG Correct, ${crag.grader} verdict ${crag.verdict} @${crag.confidence}%) — upgraded '${preDecision}' → 'clean'.`;
+            quorum_note = `WS1.2a retrieval refine: CRAG Correct (${crag.corroboration_count} independent domains) upgraded '${preDecision}' → 'clean'.`;
+            console.log(`  - [hal-retrieval] REFINE Correct: '${preDecision}' → 'clean' (${crag.corroboration_count} independent sources)`);
+          } else if (crag.grade === 'Incorrect' && decision !== 'vetoed') {
+            decision = 'vetoed';
+            refined = true;
+            decision_reason = `Slow-path retrieval: ${crag.contradiction_count} INDEPENDENT web source(s) contradict this claim (CRAG Incorrect, ${crag.grader} verdict ${crag.verdict} @${crag.confidence}%) — downgraded '${preDecision}' → 'vetoed'.`;
+            quorum_note = `WS1.2a retrieval refine: CRAG Incorrect (${crag.contradiction_count} independent domains) downgraded '${preDecision}' → 'vetoed'.`;
+            console.log(`  - [hal-retrieval] REFINE Incorrect: '${preDecision}' → 'vetoed' (${crag.contradiction_count} independent sources)`);
+          } else {
+            console.log(`  - [hal-retrieval] CRAG ${crag.grade} (verdict ${crag.verdict} @${crag.confidence}%) — decision '${decision}' unchanged${crag.disclosure_flag ? ' (disclosure flagged)' : ''}`);
+          }
+        } else {
+          console.log(`  - [hal-retrieval] triggered (${triggers.join('; ')}) but 0 evidence retrieved — decision '${decision}' unchanged`);
+        }
+
+        retrievalField = {
+          triggered: true,
+          trigger_reason: triggers.join('; '),
+          evidence_count: evidence.length,
+          pre_retrieval_decision: preDecision,
+          refined,
+          latency_ms: Date.now() - slowStart,
+          ...(crag
+            ? {
+                crag: {
+                  grade: crag.grade,
+                  verdict: crag.verdict,
+                  confidence: crag.confidence,
+                  corroboration_count: crag.corroboration_count,
+                  contradiction_count: crag.contradiction_count,
+                  disclosure_flag: crag.disclosure_flag,
+                  grader: crag.grader,
+                  ...(crag.grader_model ? { grader_model: crag.grader_model } : {}),
+                  reasons: crag.reasons,
+                  sources: crag.graded_sources.map((g) => ({
+                    url: g.url,
+                    registrable_domain: g.registrable_domain,
+                    stance: g.stance,
+                    content_hash: g.content_hash,
+                    timestamp: g.timestamp,
+                  })),
+                },
+              }
+            : {}),
+        };
+
+        // RRL SCORING HOOK — capture the fields a future RRL delta consumes (log only, no RepID write).
+        rrlField = {
+          claim_hash: crypto.createHash('sha256').update(String(deliverable ?? '')).digest('hex'),
+          source_credibility_grade: crag?.grade ?? 'Ambiguous',
+          crag_verdict: crag?.verdict ?? 'UNCERTAIN',
+          corroboration_count: crag?.corroboration_count ?? 0,
+          contradiction_count: crag?.contradiction_count ?? 0,
+          grader_confidence: crag?.confidence ?? 0,
+          disclosure_fired: crag?.disclosure_flag ?? true,
+          abstain_fired: decision === 'abstain',
+          retrieval_source_count: evidence.length,
+          hal_decision: decision,
+          refined,
+        };
+        try {
+          rrlTelemetrySink(rrlField);
+        } catch {
+          /* telemetry must never affect the request */
+        }
+      }
+    } catch (e) {
+      // The slow path must NEVER break the live decision. Any unexpected error → keep the fast path.
+      console.warn(`[hal-retrieval] slow path degraded (ignored, fast-path decision kept): ${(e as Error)?.message ?? String(e)}`);
+    }
+  }
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
@@ -939,6 +1153,8 @@ export async function factCheck(
     ...(sbfaField ? { sbfa: sbfaField } : {}),
     ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
     ...(weightDedupField ? { weight_dedup: weightDedupField } : {}),
+    ...(retrievalField ? { retrieval: retrievalField } : {}),
+    ...(rrlField ? { rrl: rrlField } : {}),
   };
 }
 
