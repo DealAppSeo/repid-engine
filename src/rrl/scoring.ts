@@ -314,6 +314,15 @@ export class RRLScorer {
   readonly agentId: string;
   private P: RRLParams;
   private mech: Mechanisms;
+  /**
+   * OPTIONAL per-provider confidence calibrator (WS2.3 calibration-correction, default OFF).
+   * When undefined the scorer is byte-identical to the LOCKED WS2.2 core (the anti-drift
+   * invariant vs honesty-sim.ts holds). When supplied, ONLY the proper-scoring (Brier)
+   * calibration term is scored on the recalibrated confidence — the M9 credential and all raw
+   * self-report stats (confSumOnAnswered) stay on RAW confidence, so honest reporting is still
+   * what the credential rewards. See src/rrl/calibration.ts + RRL_CALIBRATION_DESIGN.md.
+   */
+  private calibrator?: (conf: number) => number;
   cumDelta = 0;
   answered = 0;
   abstained = 0;
@@ -324,10 +333,16 @@ export class RRLScorer {
   private pendingRepairs: PendingRepair[] = [];
   private repairLog = new Map<number, number[]>(); // errorClass -> rounds repaired
 
-  constructor(agentId: string, P: RRLParams = defaultRRLParams(), mech: Mechanisms = allMechanismsOn()) {
+  constructor(
+    agentId: string,
+    P: RRLParams = defaultRRLParams(),
+    mech: Mechanisms = allMechanismsOn(),
+    calibrator?: (conf: number) => number,
+  ) {
     this.agentId = agentId;
     this.P = P;
     this.mech = mech;
+    this.calibrator = calibrator;
   }
 
   /** Would-be RepID from a 1000 baseline, clamped to the live [10,10000] band. */
@@ -382,8 +397,11 @@ export class RRLScorer {
     this.confSumOnAnswered += ev.confidence;
     if (ev.correct) this.correctOnAnswered++;
 
-    let cal = calibrationDelta(ev.confidence, ev.correct, P);
-    fired.push('calibration');
+    // Brier proper-scoring on the (optionally) recalibrated confidence. Default: raw (no
+    // calibrator) => identical to the locked core. Raw stats below stay on ev.confidence.
+    const scoredConf = this.calibrator ? clamp(this.calibrator(ev.confidence), 0, 1) : ev.confidence;
+    let cal = calibrationDelta(scoredConf, ev.correct, P);
+    fired.push(this.calibrator ? 'calibration(recal)' : 'calibration');
 
     // M9 credential scaling of positive gains, once enough history exists.
     if (mech.m9_calibrationCredential && cal > 0 && this.answered > 20) {
