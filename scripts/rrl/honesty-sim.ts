@@ -21,39 +21,30 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-
-// ----------------------------------------------------------------------------
-// Deterministic RNG (Mulberry32) + Gaussian (Box-Muller). Seeded -> reproducible.
-// ----------------------------------------------------------------------------
-class RNG {
-  private s: number;
-  constructor(seed: number) {
-    this.s = seed >>> 0;
-  }
-  next(): number {
-    this.s = (this.s + 0x6d2b79f5) >>> 0;
-    let t = this.s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  }
-  bernoulli(p: number): number {
-    return this.next() < p ? 1 : 0;
-  }
-  gauss(mu: number, sigma: number): number {
-    const u1 = Math.max(this.next(), 1e-12);
-    const u2 = this.next();
-    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-    return mu + sigma * z;
-  }
-  int(nExclusive: number): number {
-    return Math.floor(this.next() * nExclusive);
-  }
-}
-
-function clamp(x: number, lo: number, hi: number): number {
-  return x < lo ? lo : x > hi ? hi : x;
-}
+// WS2.3: the scoring CORE is now imported from the production module `src/rrl/scoring.ts`
+// (extracted verbatim from this sim). The sim keeps the game-theoretic ORCHESTRATION
+// (agent strategies, round loop, cross-agent panel) but every reward-math primitive comes
+// from the shared module, so the sim and the shadow scorer are provably the same code.
+// Re-running seed 1337 to identical honesty-#1 output is the anti-drift check.
+import {
+  RNG,
+  clamp,
+  type Mechanisms,
+  allMechanismsOn as allOn,
+  allMechanismsOff as allOff,
+  MECH_KEYS,
+  MECH_LABEL,
+  type RRLParams as Params,
+  defaultRRLParams as defaultParams,
+  calibrationDelta,
+  credentialFactor,
+  disclosureBonusFor,
+  learningAdjustedRepairBonus,
+  concealmentPenalty,
+  settleEscrow,
+  independentCorrectBonus,
+  btsBonusFor,
+} from '../../src/rrl/scoring';
 
 // ----------------------------------------------------------------------------
 // Strategies. Each dishonest one targets a specific mechanism (per the task).
@@ -77,148 +68,9 @@ const STRATEGIES: Strategy[] = [
   'concealer',
 ];
 
-// ----------------------------------------------------------------------------
-// The 9 anti-gaming mechanisms — each behind a toggle so it can be ABLATED.
-// ----------------------------------------------------------------------------
-interface Mechanisms {
-  m1_learningAdjustedRepair: boolean;
-  m2_peerPredictionBTS: boolean;
-  m3_residualCorrelation: boolean;
-  m4_lazyCoveragePenalty: boolean;
-  m5_rewardIndependentCorrect: boolean;
-  m6_rotatingRedteam: boolean;
-  m7_ecosystemMultiplier: boolean;
-  m8_retrospectiveEscrow: boolean;
-  m9_calibrationCredential: boolean;
-}
-
-function allOn(): Mechanisms {
-  return {
-    m1_learningAdjustedRepair: true,
-    m2_peerPredictionBTS: true,
-    m3_residualCorrelation: true,
-    m4_lazyCoveragePenalty: true,
-    m5_rewardIndependentCorrect: true,
-    m6_rotatingRedteam: true,
-    m7_ecosystemMultiplier: true,
-    m8_retrospectiveEscrow: true,
-    m9_calibrationCredential: true,
-  };
-}
-function allOff(): Mechanisms {
-  return {
-    m1_learningAdjustedRepair: false,
-    m2_peerPredictionBTS: false,
-    m3_residualCorrelation: false,
-    m4_lazyCoveragePenalty: false,
-    m5_rewardIndependentCorrect: false,
-    m6_rotatingRedteam: false,
-    m7_ecosystemMultiplier: false,
-    m8_retrospectiveEscrow: false,
-    m9_calibrationCredential: false,
-  };
-}
-
-const MECH_KEYS: (keyof Mechanisms)[] = [
-  'm1_learningAdjustedRepair',
-  'm2_peerPredictionBTS',
-  'm3_residualCorrelation',
-  'm4_lazyCoveragePenalty',
-  'm5_rewardIndependentCorrect',
-  'm6_rotatingRedteam',
-  'm7_ecosystemMultiplier',
-  'm8_retrospectiveEscrow',
-  'm9_calibrationCredential',
-];
-
-const MECH_LABEL: Record<keyof Mechanisms, string> = {
-  m1_learningAdjustedRepair: 'M1 learning-adjusted repair',
-  m2_peerPredictionBTS: 'M2 peer-prediction / BTS',
-  m3_residualCorrelation: 'M3 residual-correlation detector',
-  m4_lazyCoveragePenalty: 'M4 lazy/sandbag coverage penalty',
-  m5_rewardIndependentCorrect: 'M5 reward independent-correct',
-  m6_rotatingRedteam: 'M6 rotating red-team',
-  m7_ecosystemMultiplier: 'M7 ecosystem-contribution multiplier',
-  m8_retrospectiveEscrow: 'M8 retrospective/escrow scoring',
-  m9_calibrationCredential: 'M9 calibration-over-time credential',
-};
-
-// ----------------------------------------------------------------------------
-// Parameters — a-priori from the design doc's approved values. Documented, not tuned.
-// ----------------------------------------------------------------------------
-interface Params {
-  competence: number;
-  sigmaBelief: number;
-  K_cal: number;
-  R_participation: number;
-  repairBonus0: number;
-  repairDecayLambda: number;
-  repairRecencyWindow: number; // recency window (rounds) for learning-adjusted decay
-  nonLearnThreshold: number; // recent same-class repairs above this -> stagnation penalty
-  nonLearnPenalty: number;
-  repairRecoverFrac: number;
-  honestNoticeProb: number;
-  concealMult: number;
-  detectBase: number;
-  detectRedteam: number;
-  farmDetectRedteam: number;
-  escrowFrac: number;
-  escrowMatureLag: number;
-  baseDifficulty: number;
-  baseTrapProb: number;
-  coverageFloor: number;
-  easyThreshold: number;
-  lazyEasyPenalty: number;
-  lazyFloorPenalty: number;
-  discloseThreshold: number;
-  disclosureBonus: number;
-  independentBonus: number;
-  btsBonus: number;
-  collusionPenalty: number;
-  ecosystemSelf: number;
-  ecosystemIndep: number;
-  credentialWeight: number; // M9 strength: scales positive gains by calibration reliability
-  agentsPerStrategy: number;
-  cliqueSize: number;
-}
-
-function defaultParams(): Params {
-  return {
-    competence: 0.8,
-    sigmaBelief: 0.06,
-    K_cal: 20,
-    R_participation: 4.0, // break-even Brier 0.20 (honest @ b=0.8 has Brier ~0.16 -> net positive)
-    repairBonus0: 3.0,
-    repairDecayLambda: 0.9,
-    repairRecencyWindow: 40,
-    nonLearnThreshold: 3,
-    nonLearnPenalty: 2.5,
-    repairRecoverFrac: 1.0,
-    honestNoticeProb: 0.6,
-    concealMult: 3.0,
-    detectBase: 0.35,
-    detectRedteam: 0.7,
-    farmDetectRedteam: 0.6,
-    escrowFrac: 0.4,
-    escrowMatureLag: 5,
-    baseDifficulty: 0.25,
-    baseTrapProb: 0.2,
-    coverageFloor: 0.6,
-    easyThreshold: 0.3,
-    lazyEasyPenalty: 1.2,
-    lazyFloorPenalty: 2.5,
-    discloseThreshold: 0.62,
-    disclosureBonus: 0.6,
-    independentBonus: 1.5,
-    btsBonus: 0.8,
-    collusionPenalty: 4.0,
-    ecosystemSelf: 0.7,
-    ecosystemIndep: 1.1,
-    credentialWeight: 0.5,
-    agentsPerStrategy: 8,
-    cliqueSize: 4,
-  };
-}
+// NOTE (WS2.3): Mechanisms / allOn / allOff / MECH_KEYS / MECH_LABEL / Params /
+// defaultParams now live in `src/rrl/scoring.ts` and are imported above. The sim uses
+// the module's definitions unchanged — single source of truth for the locked config.
 
 // ----------------------------------------------------------------------------
 // Agent state
@@ -311,12 +163,7 @@ function buildPopulation(P: Params): Agent[] {
   return agents;
 }
 
-// ----------------------------------------------------------------------------
-// Proper scoring rule:  delta = R - K*(p - outcome)^2  (strictly proper).
-// ----------------------------------------------------------------------------
-function calibrationDelta(p: number, outcome: number, P: Params): number {
-  return P.R_participation - P.K_cal * (p - outcome) * (p - outcome);
-}
+// Proper scoring rule `calibrationDelta` is imported from src/rrl/scoring (locked core).
 
 function mkAction(
   verdict: number,
@@ -443,14 +290,11 @@ function runRound(
       if (mech.m9_calibrationCredential && cal > 0 && a.answered > 20) {
         const realized = a.correctOnAnswered / a.answered;
         const stated = a.confSumOnAnswered / a.answered;
-        const miscal = Math.abs(stated - realized); // 0 = perfectly calibrated
-        const factor = clamp(1 - P.credentialWeight * miscal * 4, 0.4, 1); // 4x makes it bite
-        cal *= factor;
+        cal *= credentialFactor(stated, realized, P);
       }
 
       act.brierDelta = cal;
-      let discBonus = 0;
-      if (act.disclosed && difficulty >= P.easyThreshold) discBonus = P.disclosureBonus;
+      const discBonus = disclosureBonusFor(act.disclosed, difficulty, P);
 
       if (mech.m8_retrospectiveEscrow && cal > 0) {
         const held = cal * P.escrowFrac;
@@ -484,15 +328,7 @@ function runRound(
       const log = a.repairLog.get(r.errorClass) ?? [];
       // recent same-class repairs within the recency window -> recurrence speed proxy
       const recent = log.filter((rr) => t - rr <= P.repairRecencyWindow).length;
-      let bonus: number;
-      if (mech.m1_learningAdjustedRepair) {
-        bonus =
-          recent >= P.nonLearnThreshold
-            ? -P.nonLearnPenalty // re-fixing the SAME class fast & often = non-learning
-            : P.repairBonus0 * Math.exp(-P.repairDecayLambda * recent);
-      } else {
-        bonus = P.repairBonus0; // flat -> error-farming pays
-      }
+      const bonus = learningAdjustedRepairBonus(recent, mech.m1_learningAdjustedRepair, P);
       let redteamPenalty = 0;
       if (mech.m6_rotatingRedteam && r.manufactured && recent >= 2 && rng.next() < P.farmDetectRedteam)
         redteamPenalty = P.concealMult * P.repairBonus0;
@@ -510,15 +346,12 @@ function runRound(
     if (a.escrow.length) {
       const matured = a.escrow.filter((e) => e.matureRound === t);
       a.escrow = a.escrow.filter((e) => e.matureRound !== t);
-      for (const e of matured) {
-        if (e.verdictCorrect === 1) a.cumDelta += e.amount;
-        else a.cumDelta -= e.amount * (0.5 + e.stated); // confident-wrong clawback
-      }
+      for (const e of matured) a.cumDelta += settleEscrow(e.verdictCorrect, e.amount, e.stated);
     }
     if (a.concealed.length) {
       const res = a.concealed.filter((c) => c.resolveRound === t);
       a.concealed = a.concealed.filter((c) => c.resolveRound !== t);
-      for (const c of res) if (c.detected) a.cumDelta -= P.concealMult * c.basePenalty;
+      for (const c of res) if (c.detected) a.cumDelta -= concealmentPenalty(c.basePenalty, P);
     }
   }
 }
@@ -540,12 +373,12 @@ function crossAgent(agents: Agent[], mech: Mechanisms, P: Params): void {
     // M5: reward independent-correct (broke from majority AND right), scaled by rarity
     if (mech.m5_rewardIndependentCorrect && act.correct === 1 && act.brokeFromPublic) {
       const myFreq = act.verdict === 1 ? freq1 : freq0;
-      a.cumDelta += P.independentBonus * (1 - myFreq);
+      a.cumDelta += independentCorrectBonus(myFreq, P);
     }
     // M2: BTS proxy — reward "surprisingly common correct" (non-degenerate), truth-inducing
     if (mech.m2_peerPredictionBTS && act.correct === 1) {
       const myFreq = act.verdict === 1 ? freq1 : freq0;
-      a.cumDelta += P.btsBonus * (0.5 - Math.abs(myFreq - 0.5));
+      a.cumDelta += btsBonusFor(myFreq, P);
     }
   }
 
