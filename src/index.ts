@@ -234,10 +234,13 @@ app.use((req, res, next) => {
 app.use('/api/v1/telegram', telegramRouter);
 app.use('/api/v1/hal-benchmark', halTestRouter);
 app.use('/api/v1/audit', auditRouter);
-// S-CACHE — per-IP rate limit (10/24h) on the public HAL "ask" surface. trustchat-backend's
-// server-to-server path is /hal/signals (not throttled); the user-facing /chat lives in
-// trustchat-backend (no Redis there yet — same middleware should be added when it gets Redis).
-app.use('/api/v1/hal/evaluate', ipRateLimit(10, 86400));
+// S-CACHE — per-IP rate limit on the public HAL "ask" surface. Env-configurable so the keyless
+// demo budget can be raised for a launch/showcase without a code change (HAL_PUBLIC_RATE_LIMIT,
+// default 10; HAL_PUBLIC_RATE_WINDOW_SEC, default 86400 = 24h). trustchat-backend's server-to-server
+// path is /hal/signals (not throttled); the user-facing /chat lives in trustchat-backend.
+const halPublicLimit = Number(process.env.HAL_PUBLIC_RATE_LIMIT) > 0 ? Number(process.env.HAL_PUBLIC_RATE_LIMIT) : 10;
+const halPublicWindow = Number(process.env.HAL_PUBLIC_RATE_WINDOW_SEC) > 0 ? Number(process.env.HAL_PUBLIC_RATE_WINDOW_SEC) : 86400;
+app.use('/api/v1/hal/evaluate', ipRateLimit(halPublicLimit, halPublicWindow));
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
