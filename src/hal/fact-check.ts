@@ -50,6 +50,14 @@ import {
   type StakesLevel,
   type ActionKind,
 } from './sbfa-consensus';
+// WS1.2a DUAL-PATH RETRIEVAL (2026-07-18, reports/2026-07-18/ANTIFRAGILE_PROVENANCE_PROGRAM_v0.md
+// §ARCHITECTURE — SETTLED). The confidence-triggered SLOW PATH: when the fast parametric quorum is
+// uncertain/high-stakes, retrieve web evidence and grade it (CRAG) to REFINE the decision. Entirely
+// behind HAL_RETRIEVAL_ENABLED (default OFF/shadow) — importing these modules changes nothing until
+// the flag is on, and both modules NEVER throw (failure → fast-path decision preserved). See the
+// gated block near the end of factCheck() and src/hal/retrieval.ts + src/hal/crag.ts.
+import { retrieveEvidence } from './retrieval';
+import { gradeEvidence, type CragResult, type CragGrade } from './crag';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -223,6 +231,33 @@ export interface FactCheckResult {
     enforced: boolean; // true only if SBFA actually changed the live decision (A6-gated)
     trace: SbfaTrace; // GLASS BOX — structured + human-readable decision trace (wrapper + HITL PWA)
   };
+  // --- WS1.2a DUAL-PATH RETRIEVAL (additive; present ONLY when HAL_RETRIEVAL_ENABLED==='true' AND the
+  // slow path was triggered). Reports the trigger, the CRAG grade + provenance, and whether the grade
+  // refined the fast-path decision. Absent by default → live HAL is byte-identical when the flag is
+  // off. ---
+  retrieval?: {
+    triggered: boolean;
+    trigger_reason: string; // human-readable: which trigger(s) fired
+    evidence_count: number; // snippets retrieved
+    pre_retrieval_decision: HalDecision; // the fast-path decision before refinement
+    refined: boolean; // did the CRAG grade change `decision`?
+    latency_ms: number; // slow-path added latency (retrieval + grading)
+    crag?: {
+      grade: CragGrade;
+      verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN';
+      confidence: number;
+      corroboration_count: number;
+      contradiction_count: number;
+      disclosure_flag: boolean;
+      grader: 'model' | 'heuristic';
+      grader_model?: string;
+      reasons: string[];
+      // provenance of the graded sources (url/domain/hash/timestamp) — the glass box for the CRAG call.
+      sources: Array<{ url: string; registrable_domain: string; stance: string; content_hash: string; timestamp: string }>;
+    };
+  };
+  // WS1.2a — the RRL scoring-hook record captured at the CRAG decision point (log only; no RepID write).
+  rrl?: RrlHookRecord;
 }
 
 /**
@@ -268,6 +303,66 @@ export interface FactCheckOpts {
   flagThreshold?: number; // default 0.35
   perProviderTimeoutMs?: number; // default 12000
   maxTokens?: number; // default 120
+  // WS1.2a — SLOW-PATH controls (all optional; ignored unless HAL_RETRIEVAL_ENABLED==='true').
+  forceRetrieval?: boolean; // explicit "verify this" — always trigger the slow path
+  highStakes?: boolean; // caller-declared high-stakes (RepID/financial/code/on-chain) claim → trigger
+}
+
+/**
+ * WS1.2a — RRL SCORING HOOK record. Emitted at the CRAG decision point of the slow path — the exact
+ * fields a future Response-Reputation-Layer delta (reports/2026-07-18/RRL_DESIGN_v0.md) will consume:
+ * source credibility (the CRAG grade), how many INDEPENDENT sources corroborated, the grader's
+ * confidence, and whether the disclosure/abstain protections fired. THIS IS A LOG ONLY — no RepID is
+ * mutated here (WS2.x wires the delta). Surfaced so the signal is captured from day one.
+ */
+export interface RrlHookRecord {
+  claim_hash: string; // sha256 of the deliverable — links the record to the claim without storing prose
+  source_credibility_grade: CragGrade; // Correct | Ambiguous | Incorrect — the credibility signal
+  crag_verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN';
+  corroboration_count: number; // distinct INDEPENDENT domains that supported the claim (the ≥2 lever)
+  contradiction_count: number;
+  grader_confidence: number; // 0..100
+  disclosure_fired: boolean; // single-source/uncorroborated → downstream must disclose uncertainty
+  abstain_fired: boolean; // HAL abstained (not a checkable claim) at the CRAG point
+  retrieval_source_count: number; // evidence snippets retrieved before grading
+  hal_decision: HalDecision; // final live decision after any slow-path refinement
+  refined: boolean; // did the CRAG grade change the fast-path decision?
+}
+
+/**
+ * WS1.2a — RRL telemetry sink. Pluggable, OFF the hot path (default logs a structured one-liner, zero
+ * DB dependency — same pattern as the SBFA shadow sink). GA/WS2.x can swap in a DB/repid_score_events
+ * writer for the real RRL delta. NEVER mutates RepID here.
+ */
+export type RrlTelemetry = (row: RrlHookRecord) => void;
+let rrlTelemetrySink: RrlTelemetry = (row) => {
+  console.log(
+    `[rrl-hook] grade=${row.source_credibility_grade} verdict=${row.crag_verdict} ` +
+      `corroboration=${row.corroboration_count} contradiction=${row.contradiction_count} ` +
+      `conf=${row.grader_confidence} disclosure=${row.disclosure_fired} abstain=${row.abstain_fired} ` +
+      `sources=${row.retrieval_source_count} decision=${row.hal_decision} refined=${row.refined}`,
+  );
+};
+/** Test/WS2.x seam to swap the RRL telemetry sink (e.g. a repid_score_events writer). */
+export function setRrlTelemetrySink(sink: RrlTelemetry): void {
+  rrlTelemetrySink = sink;
+}
+
+/** Default high-stakes trigger keywords (config-extensible via HAL_RETRIEVAL_STAKES_KEYWORDS). */
+const DEFAULT_STAKES_KEYWORDS = [
+  'repid', 'reputation', 'stake', 'staking',
+  'financial', 'payment', 'usd', 'usdc', 'price', 'invest', 'trade', 'transfer', 'refund',
+  'on-chain', 'onchain', 'transaction', 'wallet', 'contract address', 'erc-8004', 'erc8004', 'attestation',
+  'exploit', 'vulnerability', 'cve', 'security', 'private key',
+];
+
+/** True when the deliverable mentions a high-stakes term (RepID/financial/code/on-chain/security). */
+function isHighStakesText(deliverable: string): boolean {
+  const extra = (process.env.HAL_RETRIEVAL_STAKES_KEYWORDS ?? '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const kws = [...DEFAULT_STAKES_KEYWORDS, ...extra];
+  const t = String(deliverable ?? '').toLowerCase();
+  return kws.some((k) => t.includes(k));
 }
 
 const FACT_CHECK_SYSTEM =
@@ -449,6 +544,35 @@ function providerRisk(v: ProviderVerdict): number {
 }
 
 /**
+ * CYCLE2 (precision) — GROK TIEBREAK. Optional, env-gated `HAL_ESCALATE_GROK` (default OFF), additive.
+ * Called ONLY when the responding families are EVENLY split (equal TRUE and FALSE family counts, no
+ * plurality) — a single independent tiebreak vote from Grok (xAI, api.x.ai, OpenAI-compatible). Its
+ * verdict is folded back into the quorum as one more 'grok'-family vote; the normal aggregation +
+ * plurality guard then resolve the (now un-tied) decision.
+ *
+ * FAIL-SAFE: returns null if the flag is off or no key is present, and `queryProvider` NEVER throws
+ * (it returns an ERROR verdict on any failure), so any Grok error simply falls back to the current
+ * (tied) behavior with no effect on the live path. Small + self-contained; does NOT touch src/hal/lib/*.
+ */
+async function grokTiebreak(
+  deliverable: string,
+  maxTokens: number,
+  quorumId: string,
+): Promise<ProviderVerdict | null> {
+  const key = process.env.GROK_API_KEY?.trim();
+  if (!key) return null;
+  const cfg: FactCheckProviderCfg = {
+    name: 'grok',
+    endpoint: process.env.HAL_ESCALATE_GROK_ENDPOINT ?? 'https://api.x.ai/v1/chat/completions',
+    apiKey: key,
+    model: process.env.HAL_ESCALATE_GROK_MODEL ?? 'grok-3-mini',
+    family: 'grok',
+    tier: 'escalation',
+  };
+  return queryProvider(cfg, deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+}
+
+/**
  * CC1 2026-05-23 — provider-failure hardening. Closes CC1's own launch-
  * verification RULE-4 caveat: strictness:2 was verified only on the happy path
  * (providers_used=2, agree=1.0); under partial provider outage (e.g. cerebras
@@ -611,6 +735,31 @@ export async function factCheck(
     }
   });
 
+  // CYCLE2 (precision) — GROK TIEBREAK. When the responding families are EVENLY split (equal distinct
+  // TRUE and FALSE family counts, ≥1 each → no plurality), escalate ONCE to Grok for a single
+  // independent tiebreak vote, folded in as a 'grok'-family verdict before the quorum is tallied.
+  // Env-gated (HAL_ESCALATE_GROK, default off) and FAIL-SAFE (flag off / no key / Grok error → no-op,
+  // current tied behavior preserved). Done here so the tiebreak vote flows through ALL downstream math.
+  if (process.env.HAL_ESCALATE_GROK === 'true' && process.env.GROK_API_KEY?.trim()) {
+    const okPre = verdicts.filter((v) => v.verdict !== 'ERROR');
+    const famCount = (want: Verdict) =>
+      new Set(okPre.filter((v) => v.verdict === want).map((v) => familyByName.get(v.provider) ?? v.provider)).size;
+    const fN = famCount('FALSE');
+    const tN = famCount('TRUE');
+    if (fN >= 1 && fN === tN) {
+      console.log(`  - [grok-tiebreak] evenly split (${tN} TRUE / ${fN} FALSE families) — escalating to Grok`);
+      const gv = await grokTiebreak(deliverable, maxTokens, quorumId);
+      attempted += 1;
+      if (gv && gv.verdict !== 'ERROR') {
+        familyByName.set(gv.provider, 'grok'); // distinct family → breaks the tie
+        verdicts.push(gv);
+        console.log(`  - Provider grok (tiebreak) returned ${gv.verdict} (confidence ${gv.confidence}%) in ${gv.latency_ms}ms`);
+      } else {
+        console.warn(`  - [grok-tiebreak] Grok unavailable/errored — falling back to current (tied) behavior`);
+      }
+    }
+  }
+
   const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
@@ -735,6 +884,89 @@ export async function factCheck(
     }
   }
 
+  // --- CYCLE2 (precision) — PLURALITY GUARD. A FALSE minority must NEVER veto a TRUE plurality.
+  // After the aggregate decision, if it is 'vetoed' but among the responding (non-ERROR) families
+  // MORE voted TRUE than FALSE, downgrade the veto: to 'clean' when TRUE is an outright majority of the
+  // responding families (trueN*2 > units), else to 'flagged'. This is a principled vote-count rule
+  // (not a per-case lookup / no tuning to a test set); hal_score and the patent comma-BFT lib
+  // (src/hal/lib/*) are untouched — only `decision` changes. Reversible via HAL_PLURALITY_GUARD=false.
+  // Uses the SAME family-aware tallies (falseFams/trueFams) already computed above. Applies in BOTH
+  // decision modes. ---
+  if (decision === 'vetoed' && process.env.HAL_PLURALITY_GUARD !== 'false') {
+    const falseN = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
+    const trueN = familyAware ? trueFams.length : ok.filter((v) => v.verdict === 'TRUE').length;
+    const units = familyAware ? families_used : providers_used;
+    if (trueN > falseN) {
+      const label = familyAware ? 'families' : 'providers';
+      const downgraded: HalDecision = trueN * 2 > units ? 'clean' : 'flagged';
+      decision = downgraded;
+      decision_reason = `${trueN} of ${units} independent model ${label} judged this claim TRUE and only ${falseN} judged it FALSE — a minority may not veto a TRUE plurality (downgraded to '${downgraded}').`;
+      quorum_note = `Plurality guard: TRUE plurality (${trueN} TRUE > ${falseN} FALSE of ${units} ${label}) overruled a FALSE-minority veto; would-be 'vetoed' downgraded to '${downgraded}'.`;
+    }
+  }
+
+  // --- CYCLE3 (precision) — CONFIDENCE-GATED PRE-VETO GROK OVERRIDE. Env-gated (HAL_ESCALATE_GROK,
+  // the SAME flag as the cycle-2 tiebreak; default OFF) and FAIL-SAFE. Targets the residual false
+  // positives that cycle-2's plurality guard CANNOT help: genuine FREE-PANEL ERRORS where the free 8B
+  // models agree FALSE on an obscure-but-true fact — there is NO TRUE plurality to protect, so the guard
+  // above is a no-op. When the aggregate decision IS 'vetoed' but the veto is WEAK/UNCERTAIN, escalate
+  // ONCE to a stronger model (Grok, reusing grokTiebreak→queryProvider, grok-3-mini) as a HIGHER-WEIGHT
+  // override vote; a confident Grok TRUE downgrades the veto.
+  //
+  // WEAK veto := the aggregate hal_score is only MARGINALLY over vetoThreshold (score − veto <= BAND,
+  // default HAL_UNCERTAIN_VETO_BAND=0.15), OR the responding families do NOT reach a strong FALSE
+  // consensus (FALSE families < ceil(0.75 * responding families)). A STRONG-consensus veto
+  // (>= 75% families FALSE AND score comfortably over threshold) is NEVER escalated/overridden — those
+  // are real hallucinations, so recall is protected. Reuses the SAME family-aware tallies
+  // (falseFams/trueFams) already computed above. Applies in BOTH decision modes. hal_score and the
+  // patent comma-BFT lib (src/hal/lib/*) are untouched — only `decision` (and its reason/quorum_note)
+  // changes. Escalate-ONCE: skipped if Grok already voted via the cycle-2 even-split tiebreak (a 'grok'
+  // family is already present). FAIL-SAFE: flag off / no key / Grok error / non-confident-TRUE → veto
+  // STANDS unchanged (queryProvider never throws → ERROR verdict → no-op). Reversible via HAL_ESCALATE_GROK.
+  if (
+    decision === 'vetoed' &&
+    process.env.HAL_ESCALATE_GROK === 'true' &&
+    process.env.GROK_API_KEY?.trim() &&
+    !families.includes('grok') // escalate-once — the cycle-2 tiebreak may have already cast a grok vote
+  ) {
+    // Local, clamped env parse (no redeploy to tune). BAND in [0,1]; confidences in [0,100].
+    const bandNum = Number(process.env.HAL_UNCERTAIN_VETO_BAND);
+    const band = Number.isFinite(bandNum) && bandNum >= 0 && bandNum <= 1 ? bandNum : 0.15;
+    const confNum = Number(process.env.HAL_GROK_OVERRIDE_CONF);
+    const overrideConf = Number.isFinite(confNum) && confNum >= 0 && confNum <= 100 ? confNum : 80;
+    const cleanNum = Number(process.env.HAL_GROK_OVERRIDE_CLEAN_CONF);
+    const cleanConf = Number.isFinite(cleanNum) && cleanNum >= 0 && cleanNum <= 100 ? cleanNum : 95;
+
+    const units = familyAware ? families_used : providers_used;
+    const falseN = familyAware ? falseFams.length : ok.filter((v) => v.verdict === 'FALSE').length;
+    const strongFalseCount = falseN >= Math.ceil(0.75 * units); // >= 75% of responding families said FALSE
+    const weakByScore = hal_score - vetoThreshold <= band; // veto is only marginally over threshold
+    const isWeakVeto = weakByScore || !strongFalseCount;
+
+    if (isWeakVeto) {
+      console.log(
+        `  - [grok-override] WEAK veto (score ${hal_score.toFixed(3)} vs veto ${vetoThreshold.toFixed(3)}, ` +
+          `margin ${(hal_score - vetoThreshold).toFixed(3)} <= band ${band} ? ${weakByScore}; ` +
+          `FALSE ${falseN}/${units} >= ceil(0.75*${units})=${Math.ceil(0.75 * units)} ? ${strongFalseCount}) — escalating ONCE to Grok`,
+      );
+      const gv = await grokTiebreak(deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+      attempted += 1;
+      if (gv && gv.verdict === 'TRUE' && gv.confidence >= overrideConf) {
+        // Grok (higher-weight) confidently confirms TRUE → override the weak veto. clean if VERY
+        // confident (>= cleanConf), else flagged (keep a soft signal for review).
+        const downgraded: HalDecision = gv.confidence >= cleanConf ? 'clean' : 'flagged';
+        console.log(`  - [grok-override] Grok says TRUE @${gv.confidence}% (>= ${overrideConf}) — downgrading veto -> '${downgraded}'`);
+        decision = downgraded;
+        decision_reason = `A higher-weight verifier (Grok) judged this claim TRUE at ${gv.confidence}% confidence, overriding a WEAK free-panel FALSE veto (${falseN} of ${units} ${familyAware ? 'families' : 'providers'} FALSE, score ${hal_score.toFixed(3)}). Downgraded to '${downgraded}'.`;
+        quorum_note = `Cycle3 Grok override: weak veto (score ${hal_score.toFixed(3)}, FALSE ${falseN}/${units}) overridden by Grok TRUE @${gv.confidence}% → '${downgraded}'.`;
+      } else if (gv && gv.verdict !== 'ERROR') {
+        console.log(`  - [grok-override] Grok did NOT confidently confirm TRUE (verdict ${gv.verdict} @${gv.confidence}%) — veto STANDS`);
+      } else {
+        console.warn(`  - [grok-override] Grok unavailable/errored — veto STANDS (fail-safe, no-op)`);
+      }
+    }
+  }
+
   // --- SBFA v0.2 SHADOW + GLASS BOX (default ON). ZERO extra inference: it reuses the per-provider
   // verdicts already computed and makes NO new LLM calls. The decision trace is pure DST math (sub-ms),
   // attached to EVERY decision so the wrapper + HITL PWA always have the Glass Box (§7 CC, task 3).
@@ -794,6 +1026,125 @@ export async function factCheck(
     }
   }
 
+  // --- WS1.2a DUAL-PATH RETRIEVAL SLOW PATH (gated, additive). After the FAST parametric quorum has
+  // produced its decision above, when HAL_RETRIEVAL_ENABLED==='true' AND this case is a SLOW-PATH
+  // TRIGGER, retrieve web evidence and CRAG-grade it to REFINE the decision (upgrade a low-confidence
+  // veto/flag to clean on ≥2-independent-source corroboration; downgrade a clean/flag to vetoed on
+  // ≥2-independent contradiction). The fast path is UNCHANGED when the trigger is not met or the flag
+  // is off. Thresholds are env/config with safe defaults. retrieveEvidence + gradeEvidence NEVER throw;
+  // the whole block is additionally try/guarded so the slow path can never break a live decision.
+  // Also emits the RRL scoring-hook record at the CRAG decision point (log only — no RepID mutation). ---
+  let retrievalField: FactCheckResult['retrieval'];
+  let rrlField: RrlHookRecord | undefined;
+  if (process.env.HAL_RETRIEVAL_ENABLED === 'true') {
+    const slowStart = Date.now();
+    try {
+      const ctNum = Number(process.env.HAL_RETRIEVAL_CONF_TRIGGER);
+      const confTrigger = Number.isFinite(ctNum) && ctNum >= 0 && ctNum <= 1 ? ctNum : 0.67;
+      // Trigger 1 — low panel confidence / no strong quorum.
+      const lowConfidence =
+        (agreement !== null && agreement < confTrigger) || decision === 'abstain' || quorum === 'low' || quorum === 'outage';
+      // Trigger 2 — family disagreement (both TRUE and FALSE families present → no strong quorum).
+      const familyDisagreement = falseFams.length > 0 && trueFams.length > 0;
+      // Trigger 3 — high-stakes flag (caller-declared OR a high-stakes keyword in the claim).
+      const highStakes = opts.highStakes === true || isHighStakesText(deliverable);
+      // Trigger 4 — explicit forceRetrieval.
+      const force = opts.forceRetrieval === true;
+
+      const triggers: string[] = [];
+      if (force) triggers.push('forceRetrieval');
+      if (lowConfidence)
+        triggers.push(`low-confidence(agree=${agreement === null ? 'n/a' : agreement.toFixed(2)}<${confTrigger}|decision=${decision}|quorum=${quorum})`);
+      if (familyDisagreement) triggers.push(`family-disagreement(${trueFams.length}T/${falseFams.length}F)`);
+      if (highStakes) triggers.push('high-stakes');
+
+      if (triggers.length > 0) {
+        const preDecision = decision;
+        const evidence = await retrieveEvidence(deliverable);
+        let crag: CragResult | undefined;
+        let refined = false;
+
+        if (evidence.length > 0) {
+          crag = await gradeEvidence(deliverable, evidence);
+          // REFINE: a confident CRAG grade (Correct/Incorrect, each already gated on ≥2 independent
+          // domains) overrides the fast-path decision. Ambiguous never changes the decision (only sets
+          // the disclosure flag). hal_score and the patent comma-BFT lib (src/hal/lib/*) are untouched.
+          if (crag.grade === 'Correct' && (decision === 'vetoed' || decision === 'flagged' || decision === 'abstain')) {
+            decision = 'clean';
+            refined = true;
+            decision_reason = `Slow-path retrieval: ${crag.corroboration_count} INDEPENDENT web source(s) corroborate this claim (CRAG Correct, ${crag.grader} verdict ${crag.verdict} @${crag.confidence}%) — upgraded '${preDecision}' → 'clean'.`;
+            quorum_note = `WS1.2a retrieval refine: CRAG Correct (${crag.corroboration_count} independent domains) upgraded '${preDecision}' → 'clean'.`;
+            console.log(`  - [hal-retrieval] REFINE Correct: '${preDecision}' → 'clean' (${crag.corroboration_count} independent sources)`);
+          } else if (crag.grade === 'Incorrect' && decision !== 'vetoed') {
+            decision = 'vetoed';
+            refined = true;
+            decision_reason = `Slow-path retrieval: ${crag.contradiction_count} INDEPENDENT web source(s) contradict this claim (CRAG Incorrect, ${crag.grader} verdict ${crag.verdict} @${crag.confidence}%) — downgraded '${preDecision}' → 'vetoed'.`;
+            quorum_note = `WS1.2a retrieval refine: CRAG Incorrect (${crag.contradiction_count} independent domains) downgraded '${preDecision}' → 'vetoed'.`;
+            console.log(`  - [hal-retrieval] REFINE Incorrect: '${preDecision}' → 'vetoed' (${crag.contradiction_count} independent sources)`);
+          } else {
+            console.log(`  - [hal-retrieval] CRAG ${crag.grade} (verdict ${crag.verdict} @${crag.confidence}%) — decision '${decision}' unchanged${crag.disclosure_flag ? ' (disclosure flagged)' : ''}`);
+          }
+        } else {
+          console.log(`  - [hal-retrieval] triggered (${triggers.join('; ')}) but 0 evidence retrieved — decision '${decision}' unchanged`);
+        }
+
+        retrievalField = {
+          triggered: true,
+          trigger_reason: triggers.join('; '),
+          evidence_count: evidence.length,
+          pre_retrieval_decision: preDecision,
+          refined,
+          latency_ms: Date.now() - slowStart,
+          ...(crag
+            ? {
+                crag: {
+                  grade: crag.grade,
+                  verdict: crag.verdict,
+                  confidence: crag.confidence,
+                  corroboration_count: crag.corroboration_count,
+                  contradiction_count: crag.contradiction_count,
+                  disclosure_flag: crag.disclosure_flag,
+                  grader: crag.grader,
+                  ...(crag.grader_model ? { grader_model: crag.grader_model } : {}),
+                  reasons: crag.reasons,
+                  sources: crag.graded_sources.map((g) => ({
+                    url: g.url,
+                    registrable_domain: g.registrable_domain,
+                    stance: g.stance,
+                    content_hash: g.content_hash,
+                    timestamp: g.timestamp,
+                  })),
+                },
+              }
+            : {}),
+        };
+
+        // RRL SCORING HOOK — capture the fields a future RRL delta consumes (log only, no RepID write).
+        rrlField = {
+          claim_hash: crypto.createHash('sha256').update(String(deliverable ?? '')).digest('hex'),
+          source_credibility_grade: crag?.grade ?? 'Ambiguous',
+          crag_verdict: crag?.verdict ?? 'UNCERTAIN',
+          corroboration_count: crag?.corroboration_count ?? 0,
+          contradiction_count: crag?.contradiction_count ?? 0,
+          grader_confidence: crag?.confidence ?? 0,
+          disclosure_fired: crag?.disclosure_flag ?? true,
+          abstain_fired: decision === 'abstain',
+          retrieval_source_count: evidence.length,
+          hal_decision: decision,
+          refined,
+        };
+        try {
+          rrlTelemetrySink(rrlField);
+        } catch {
+          /* telemetry must never affect the request */
+        }
+      }
+    } catch (e) {
+      // The slow path must NEVER break the live decision. Any unexpected error → keep the fast path.
+      console.warn(`[hal-retrieval] slow path degraded (ignored, fast-path decision kept): ${(e as Error)?.message ?? String(e)}`);
+    }
+  }
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
@@ -802,6 +1153,8 @@ export async function factCheck(
     ...(sbfaField ? { sbfa: sbfaField } : {}),
     ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
     ...(weightDedupField ? { weight_dedup: weightDedupField } : {}),
+    ...(retrievalField ? { retrieval: retrievalField } : {}),
+    ...(rrlField ? { rrl: rrlField } : {}),
   };
 }
 
