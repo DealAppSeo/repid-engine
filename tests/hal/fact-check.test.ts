@@ -111,9 +111,18 @@ describe('factCheck — env thresholds + provider builder', () => {
   });
 
   test('lower veto threshold flips flagged→vetoed', async () => {
-    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'TRUE', confidence: 60 }, m3: { verdict: 'TRUE', confidence: 60 } }; // 0.467
-    expect((await factCheck('x', P, { vetoThreshold: 0.5, flagThreshold: 0.35 })).decision).toBe('flagged');
-    expect((await factCheck('x', P, { vetoThreshold: 0.4, flagThreshold: 0.3 })).decision).toBe('vetoed');
+    // Isolate pure threshold mechanics from the default-ON plurality guard (cycle2). This mock has a
+    // TRUE plurality (2 TRUE > 1 FALSE), which the guard would otherwise use to downgrade the
+    // low-threshold veto — so disable it here. The guard has its own dedicated coverage below.
+    const savedPG = process.env.HAL_PLURALITY_GUARD;
+    process.env.HAL_PLURALITY_GUARD = 'false';
+    try {
+      byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'TRUE', confidence: 60 }, m3: { verdict: 'TRUE', confidence: 60 } }; // 0.467
+      expect((await factCheck('x', P, { vetoThreshold: 0.5, flagThreshold: 0.35 })).decision).toBe('flagged');
+      expect((await factCheck('x', P, { vetoThreshold: 0.4, flagThreshold: 0.3 })).decision).toBe('vetoed');
+    } finally {
+      if (savedPG === undefined) delete process.env.HAL_PLURALITY_GUARD; else process.env.HAL_PLURALITY_GUARD = savedPG;
+    }
   });
 
   test('buildFactCheckProviders includes only keyed providers', () => {
@@ -216,5 +225,37 @@ describe('A1 verdict-count decision mode (HAL_DECISION_MODE=verdict)', () => {
     byModel = { m1: { verdict: 'TRUE', confidence: 100 }, m2: { verdict: 'TRUE', confidence: 100 }, m3: { verdict: 'UNCERTAIN', confidence: 100 } };
     const r = await factCheck('Paris is the capital of France.', P);
     expect(r.decision).toBe('clean');
+  });
+});
+
+// CYCLE2 plurality guard — DEFAULT-ON (opt-out via HAL_PLURALITY_GUARD=false). A FALSE minority must
+// never veto a TRUE plurality: a would-be 'vetoed' is downgraded to 'clean' (TRUE outright majority)
+// or 'flagged' (TRUE plurality but not majority). Guards the precision win from feat/hal-precision-cycle3.
+describe('plurality guard (cycle2, default-on)', () => {
+  const savedPG = process.env.HAL_PLURALITY_GUARD;
+  afterEach(() => {
+    if (savedPG === undefined) delete process.env.HAL_PLURALITY_GUARD;
+    else process.env.HAL_PLURALITY_GUARD = savedPG;
+  });
+
+  test('default ON: FALSE minority (2 TRUE > 1 FALSE) → veto downgraded to clean', async () => {
+    delete process.env.HAL_PLURALITY_GUARD; // exercise the default
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'TRUE', confidence: 60 }, m3: { verdict: 'TRUE', confidence: 60 } }; // 0.467
+    const r = await factCheck('x', P, { vetoThreshold: 0.4, flagThreshold: 0.3 });
+    expect(r.decision).toBe('clean'); // 2 TRUE is an outright majority of 3 → clean
+  });
+
+  test('opt-out (=false): same input vetoes at the low threshold', async () => {
+    process.env.HAL_PLURALITY_GUARD = 'false';
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'TRUE', confidence: 60 }, m3: { verdict: 'TRUE', confidence: 60 } }; // 0.467
+    const r = await factCheck('x', P, { vetoThreshold: 0.4, flagThreshold: 0.3 });
+    expect(r.decision).toBe('vetoed');
+  });
+
+  test('does NOT rescue a genuine FALSE majority', async () => {
+    delete process.env.HAL_PLURALITY_GUARD;
+    byModel = { m1: { verdict: 'FALSE', confidence: 100 }, m2: { verdict: 'FALSE', confidence: 90 }, m3: { verdict: 'TRUE', confidence: 60 } };
+    const r = await factCheck('x', P);
+    expect(r.decision).toBe('vetoed'); // FALSE is the plurality → guard is a no-op
   });
 });
