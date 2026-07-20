@@ -136,6 +136,80 @@ router.get('/leaderboard', async (_req: Request, res: Response) => {
   }
 });
 
+// GET /leaderboard/agents — AGENT RepID ranking from real ground-truthed eval rounds
+// (repid_agent_trust_leaderboard view over repid_eval_rounds; Brier-calibrated). Ranks by
+// cumulative RepID; unscored agents (0 rounds) sink to the bottom. Defined BEFORE the
+// /:provider route below so Express doesn't match provider='agents'.
+let agentsCache: { at: number; payload: any } | null = null;
+router.get('/leaderboard/agents', async (_req: Request, res: Response) => {
+  try {
+    if (agentsCache && Date.now() - agentsCache.at < CACHE_TTL_MS) return res.json(agentsCache.payload);
+    const { data, error } = await db
+      .from('repid_agent_trust_leaderboard')
+      .select('agent_id, model, rounds_scored, repid_total, avg_brier, avg_accuracy, avg_rater_reliability, total_errors, last_round');
+    if (error) throw error;
+    const numOrNull = (v: any) => (v === null || v === undefined ? null : Number(v));
+    const agents = (data ?? []).map((a: any) => ({
+      agent_id: a.agent_id,
+      model: a.model,
+      repid_total: Number(a.repid_total ?? 0),
+      rounds_scored: Number(a.rounds_scored ?? 0),
+      avg_brier: numOrNull(a.avg_brier),
+      avg_accuracy: numOrNull(a.avg_accuracy),
+      avg_rater_reliability: numOrNull(a.avg_rater_reliability),
+      errors: Number(a.total_errors ?? 0),
+      last_round: a.last_round ?? null,
+      verified: false, // on-chain attestation of the delta not yet wired for these
+    }));
+    agents.sort((x, y) =>
+      (x.rounds_scored === 0 ? 1 : 0) - (y.rounds_scored === 0 ? 1 : 0) || y.repid_total - x.repid_total);
+    const payload = { agents, total_agents: agents.length, last_updated: new Date().toISOString() };
+    agentsCache = { at: Date.now(), payload };
+    return res.json(payload);
+  } catch (e: any) {
+    return res.status(500).json({ error: 'agent_leaderboard_failed', detail: e?.message ?? String(e) });
+  }
+});
+
+// GET /leaderboard/models — the two-lens AI model leaderboard (code-review discrimination,
+// Brier-calibrated). PERFORMANCE (money no object, ranked by accuracy) + VALUE (cost+speed
+// composite), from the repid_leaderboard_performance / repid_leaderboard_value views. Includes a
+// `narrative` field so every surface renders the same honest current-story copy (one messaging
+// source of truth). Labeled "code-review discrimination", NOT "trustworthiness" (a narrow proxy
+// until validated). Defined before /:provider so Express doesn't match provider='models'.
+let modelsCache: { at: number; payload: any } | null = null;
+router.get('/leaderboard/models', async (_req: Request, res: Response) => {
+  try {
+    if (modelsCache && Date.now() - modelsCache.at < CACHE_TTL_MS) return res.json(modelsCache.payload);
+    const [perf, val] = await Promise.all([
+      db.from('repid_leaderboard_performance').select('*'),
+      db.from('repid_leaderboard_value').select('*'),
+    ]);
+    if (perf.error) throw perf.error;
+    if (val.error) throw val.error;
+    const performance = perf.data ?? [];
+    const value = val.data ?? [];
+    const topPerf: any = performance[0], topVal: any = value[0];
+    const narrative = (topPerf && topVal)
+      ? `On code-review discrimination (Brier-calibrated): most accurate is ${topPerf.model_id}; best value is ${topVal.model_id}. The most accurate and the best-value model are not the same. This measures code-review discrimination — one narrow proxy — not general trustworthiness.`
+      : 'Model benchmark pending.';
+    const payload = {
+      metric: 'code-review discrimination (Brier-calibrated)',
+      disclaimer: 'A narrow proxy, not general AI trustworthiness. Early results; N is small; methodology is public and inviting red-team.',
+      lenses: {
+        performance: { label: 'Performance (money no object)', ranked_by: 'calibration (Brier)', models: performance },
+        value: { label: 'Value (per dollar)', ranked_by: 'accuracy·speed·cost composite (55/20/25)', models: value },
+      },
+      narrative,
+      last_updated: new Date().toISOString(),
+    };
+    modelsCache = { at: Date.now(), payload };
+    return res.json(payload);
+  } catch (e: any) {
+    return res.status(500).json({ error: 'models_leaderboard_failed', detail: e?.message ?? String(e) });
+  }
+});
+
 // GET /leaderboard/:provider — per-provider detail + recent evaluations.
 router.get('/leaderboard/:provider', async (req: Request, res: Response) => {
   const provider = String(req.params.provider);
