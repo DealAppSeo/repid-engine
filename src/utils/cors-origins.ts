@@ -19,10 +19,16 @@ export const allowedOrigins = [
 ];
 
 export const TRUST_DEV_ORIGIN = /^https:\/\/(www\.)?trust[a-z0-9-]*\.dev$/;
+// Any hyperdag.org host — apex or a subdomain (leaderboard.hyperdag.org, etc.). Anchored to the
+// exact registrable domain so a look-alike (hyperdag.org.evil.com) can't match.
+export const HYPERDAG_ORG_ORIGIN = /^https:\/\/([a-z0-9-]+\.)?hyperdag\.org$/;
 // hyperdag.org's Vercel deploys (production alias + preview builds), e.g. hyperdag-org.vercel.app,
 // hyperdag-<hash>-dealappseos-projects.vercel.app. The `hyperdag` prefix is anchored to prevent spoofing.
 export const HYPERDAG_VERCEL_ORIGIN = /^https:\/\/hyperdag[a-z0-9-]*\.vercel\.app$/;
 
 export function isAllowedOrigin(origin: string): boolean {
-  return allowedOrigins.includes(origin) || TRUST_DEV_ORIGIN.test(origin) || HYPERDAG_VERCEL_ORIGIN.test(origin);
+  return allowedOrigins.includes(origin)
+    || TRUST_DEV_ORIGIN.test(origin)
+    || HYPERDAG_ORG_ORIGIN.test(origin)
+    || HYPERDAG_VERCEL_ORIGIN.test(origin);
 }
