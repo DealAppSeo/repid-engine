@@ -195,7 +195,7 @@ router.get('/leaderboard/models', async (_req: Request, res: Response) => {
       : 'Model benchmark pending.';
     const payload = {
       metric: 'code-review discrimination (Brier-calibrated)',
-      disclaimer: 'A narrow proxy, not general AI trustworthiness. Early results; N is small; methodology is public and inviting red-team.',
+      disclaimer: 'A narrow proxy, not general AI trustworthiness. Early results; N is small; methodology is public and inviting red-team. Single-shot base API, default settings — not multi-agent products or scaffolding.',
       lenses: {
         performance: { label: 'Performance (money no object)', ranked_by: 'calibration (Brier)', models: performance },
         value: { label: 'Value (per dollar)', ranked_by: 'accuracy·speed·cost composite (55/20/25)', models: value },
