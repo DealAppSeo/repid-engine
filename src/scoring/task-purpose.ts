@@ -110,10 +110,16 @@ function matchTailNonDeliverable(d: string): PurposeVerdict | null {
  * Classify a task's scoring purpose from its domain (= task.task_type on the bridge)
  * and, secondarily, the prompt text. Default = real deliverable (full HAL scoring) so
  * an unknown/new domain is scored normally, not silently excused.
+ *
+ * `includeV3Tails` (default FALSE) gates the v3 CC-2 prefix-aware tail domains. Default
+ * OFF keeps the output BYTE-IDENTICAL to v1 — SHADOW-FIRST: no live scoring delta changes
+ * until Sean flips REPID_PURPOSE_GATE_V3=true (the pipeline reads the env; the classifier
+ * stays a pure function of its arguments — no env access inside).
  */
 export function classifyTaskPurpose(
   taskDomain: string | null | undefined,
   prompt?: string | null,
+  includeV3Tails: boolean = false,
 ): PurposeVerdict {
   const d = (taskDomain || 'general').toLowerCase();
   const p = (prompt || '').toLowerCase();
@@ -130,8 +136,11 @@ export function classifyTaskPurpose(
   // deliverable is never down-classified) and before the prompt heuristics (task_domain is the
   // reliable signal). Additive — only tail families the v1 exact set missed (evergreen_audit,
   // diag_probe, capability_gap, shadow_reject, cait_eval, research/critique/investigation).
-  const tail = matchTailNonDeliverable(d);
-  if (tail) return tail;
+  // SHADOW-FIRST: gated OFF by default; enable via REPID_PURPOSE_GATE_V3 at the pipeline.
+  if (includeV3Tails) {
+    const tail = matchTailNonDeliverable(d);
+    if (tail) return tail;
+  }
 
   // Adversarial drills — tests. Never score reputation; keep telemetry for HAL calibration.
   if (d === 'cait' || /\bhal veto self-test|jailbreak|prompt.?injection|red.?team|adversarial\b/.test(p)) {

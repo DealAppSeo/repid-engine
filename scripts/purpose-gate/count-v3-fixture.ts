@@ -35,7 +35,9 @@ let newlyNonDeliverable = 0;
 const newly: string[] = [];
 
 for (const r of rows) {
-  const verdict = classifyTaskPurpose(r.domain, r.prompt);
+  // includeV3Tails=true → measure the v3-ON behavior (the shadow flag flipped on). With the flag
+  // OFF (default) every row is deliverable, so this "after" count is the effect of enabling v3.
+  const verdict = classifyTaskPurpose(r.domain, r.prompt, true);
   const v3IsDeliverable = verdict.halVetoApplies; // deliverable ⇔ HAL veto applies
   if (!r.v1_deliverable) v1NonDeliverable++;
   if (!v3IsDeliverable) v3NonDeliverable++;

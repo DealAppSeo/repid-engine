@@ -129,30 +129,45 @@ const V3_TAILS: Case[] = [
     expectedPurpose: 'investigation', halVetoApplies: false },
 ];
 
-describe('classifyTaskPurpose — v3 tail non-deliverable domains (prefix-aware)', () => {
+describe('classifyTaskPurpose — v3 tail non-deliverable domains (prefix-aware, flag ON)', () => {
   it.each(V3_TAILS)('$name', (c) => {
-    const v = classifyTaskPurpose(c.domain, c.prompt);
+    const v = classifyTaskPurpose(c.domain, c.prompt, true); // includeV3Tails ON
     expect(v.purpose).toBe(c.expectedPurpose);
     expect(v.halVetoApplies).toBe(false);
     expect(v.weight).toBe(0);
   });
 
   // No-false-positive guard: v3 prefixes must NOT down-classify a real deliverable. An explicit
-  // deliverable domain, and an unknown default domain, stay scored (halVetoApplies=true).
+  // deliverable domain, and an unknown default domain, stay scored (halVetoApplies=true) even with
+  // the v3 flag ON and ops-vocab bait present.
   it('does not suppress explicit deliverable domains (no v3 false positive)', () => {
     for (const domain of ['service_contract', 'code', 'build', 'implement', 'deploy', 'engineering']) {
-      const v = classifyTaskPurpose(domain, 'count tasks by status'); // ops vocab + would-be bait
+      const v = classifyTaskPurpose(domain, 'count tasks by status', true); // v3 ON + bait
       expect(v.purpose).toBe('deliverable');
       expect(v.halVetoApplies).toBe(true);
       expect(v.weight).toBe(1);
     }
   });
 
-  it('does not suppress an unknown/default domain', () => {
-    const v = classifyTaskPurpose('some_new_domain', 'ship the widget');
+  it('does not suppress an unknown/default domain (v3 ON)', () => {
+    const v = classifyTaskPurpose('some_new_domain', 'ship the widget', true);
     expect(v.purpose).toBe('deliverable');
     expect(v.halVetoApplies).toBe(true);
     expect(v.weight).toBe(1);
+  });
+});
+
+// SHADOW-FIRST guard: with the v3 flag OFF (default), every tail domain must classify EXACTLY as v1
+// did — i.e. fall through to the DEFAULT deliverable (HAL veto applies). This proves merging the PR
+// changes NO live scoring until REPID_PURPOSE_GATE_V3 is flipped on.
+describe('classifyTaskPurpose — v3 tails are SHADOW (flag OFF by default = v1 behavior)', () => {
+  it.each(V3_TAILS)('$name → deliverable when v3 flag OFF', (c) => {
+    const vDefault = classifyTaskPurpose(c.domain, c.prompt);          // no 3rd arg → default false
+    const vExplicitOff = classifyTaskPurpose(c.domain, c.prompt, false);
+    expect(vDefault).toEqual(vExplicitOff);
+    expect(vDefault.purpose).toBe('deliverable');
+    expect(vDefault.halVetoApplies).toBe(true);
+    expect(vDefault.weight).toBe(1);
   });
 });
 
