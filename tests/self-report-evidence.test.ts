@@ -169,6 +169,46 @@ describe('self-report evidence gate', () => {
     expect(r.delta).toBe(0);
   });
 
+  // --- coverage-gap close (2026-07-21 amend): AGENT_TEACHING + AUDIT_CONTRIBUTION ---
+
+  it('(e) shadow: unproven AGENT_TEACHING → +15 (NO live change) AND records would_gate', async () => {
+    const updateRepId = loadEngineWithMode(undefined); // default shadow
+    const r = await updateRepId({ agentId: 'agent-1', eventType: 'AGENT_TEACHING' });
+    expect(r.delta).toBe(15);
+    expect(r.repIdAfter).toBe(1015);
+    const meta = capturedInserts[0]?.metadata?.self_report_evidence;
+    expect(meta).toEqual({ mode: 'shadow', required: true, present: false, would_gate: true });
+  });
+
+  it('(f) enforce: unproven AGENT_TEACHING → 0 (gated, no internal emitter)', async () => {
+    const updateRepId = loadEngineWithMode('enforce');
+    const r = await updateRepId({ agentId: 'agent-1', eventType: 'AGENT_TEACHING' });
+    expect(r.delta).toBe(0);
+    expect(r.repIdAfter).toBe(1000);
+    const meta = capturedInserts[0]?.metadata?.self_report_evidence;
+    expect(meta).toEqual({ mode: 'enforce', required: true, present: false, would_gate: true });
+  });
+
+  it('(g) shadow: unproven AUDIT_CONTRIBUTION → +15 AND records would_gate + enforce_exempt', async () => {
+    const updateRepId = loadEngineWithMode('shadow');
+    const r = await updateRepId({ agentId: 'agent-1', eventType: 'AUDIT_CONTRIBUTION' });
+    expect(r.delta).toBe(15);
+    expect(r.repIdAfter).toBe(1015);
+    const meta = capturedInserts[0]?.metadata?.self_report_evidence;
+    expect(meta).toEqual({ mode: 'shadow', required: true, present: false, would_gate: true, enforce_exempt: true });
+  });
+
+  it('(h) enforce: unproven AUDIT_CONTRIBUTION → +15 (EXEMPT — bounty payout path) but still records would_gate', async () => {
+    const updateRepId = loadEngineWithMode('enforce');
+    const r = await updateRepId({ agentId: 'agent-1', eventType: 'AUDIT_CONTRIBUTION' });
+    // Exempt: enforce does NOT zero it — the internal bounty-verify emitter is legit.
+    expect(r.delta).toBe(15);
+    expect(r.repIdAfter).toBe(1015);
+    const meta = capturedInserts[0]?.metadata?.self_report_evidence;
+    // ...but the unproven measurement is STILL recorded for the record.
+    expect(meta).toEqual({ mode: 'enforce', required: true, present: false, would_gate: true, enforce_exempt: true });
+  });
+
   it('off: unproven REFERRAL → +20 (gate disabled), metadata mode off', async () => {
     const updateRepId = loadEngineWithMode('off');
     const r = await updateRepId({ agentId: 'agent-1', eventType: 'REFERRAL' });
