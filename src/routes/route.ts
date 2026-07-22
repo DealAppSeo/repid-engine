@@ -135,7 +135,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
               }
             : {
                 error: 'verification_required',
-                message: `You've used your ${meter.limit} free runs today. Save your progress and keep going free — it just takes an email.`,
+                message: `You've used your ${meter.limit} free runs today. Save your progress and keep going free — all it takes is an email.`,
               }
         );
         return;
