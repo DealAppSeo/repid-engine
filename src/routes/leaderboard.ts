@@ -11,11 +11,29 @@
  * Mounted BEFORE authMiddleware (public). Rating/vote writes use the service-role db client.
  */
 import { Router, Request, Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { db } from '../db';
 import { verifyChainBreaks } from '../services/audit/verify-chain-db';
 import { getCachedLeaderboard, cacheLeaderboard } from '../cache/leaderboard-cache'; // S-CACHE — shared L2
 
 const router = Router();
+
+// HARDEN (2026-07-21): the public write routes below (PATCH /session/:id/rate,
+// POST /comparison/vote) mount BEFORE authMiddleware AND before the global
+// rateLimitMiddleware, so on their own they have NO throttle — a caller can
+// ballot-stuff the public provider trust scores and (via disagree ratings) spam
+// HAL's calibration feed. Anonymous rating is intentional product, so we don't
+// require an API key; instead we cap each IP to a modest per-minute budget as
+// defense-in-depth. The durable fix (bind each write to a session-owner /
+// attestation token) is a Sean-gated product decision — see the PR.
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+  message: { error: 'rate_limited', detail: 'too many rating/vote writes — slow down' },
+});
 
 const SIGNAL_KEYS = [
   'harm_probability', 'epistemic_uncertainty', 'evidence_quality',
@@ -245,7 +263,7 @@ router.get('/leaderboard/:provider', async (req: Request, res: Response) => {
 });
 
 // POST /comparison/vote — store a head-to-head preference into comparison_votes.
-router.post('/comparison/vote', async (req: Request, res: Response) => {
+router.post('/comparison/vote', writeLimiter, async (req: Request, res: Response) => {
   const { session_id_left, session_id_right, winner, prompt } = req.body ?? {};
   if (!session_id_left || !session_id_right || !['left', 'right', 'tie'].includes(winner)) {
     return res.status(400).json({ error: 'invalid_vote', expected: 'session_id_left, session_id_right, winner in {left,right,tie}' });
@@ -268,7 +286,7 @@ const HAL_AGREEMENT_VALUES = ['agree', 'disagree', 'partial'] as const;
 // PATCH /session/:sessionId/rate — update an existing session's rating.
 // S-FIX: writes the real `hal_agreement` column (was stashed in rating_feedback) and, when the user
 // DISAGREES with HAL's verdict, logs a learning event so HAL miscalls feed calibration.
-router.patch('/session/:sessionId/rate', async (req: Request, res: Response) => {
+router.patch('/session/:sessionId/rate', writeLimiter, async (req: Request, res: Response) => {
   const sessionId = String(req.params.sessionId);
   const { rating, rating_feedback, hal_agreement } = req.body ?? {};
   if (rating !== undefined && (typeof rating !== 'number' || rating < 1 || rating > 5)) {
@@ -294,15 +312,27 @@ router.patch('/session/:sessionId/rate', async (req: Request, res: Response) => 
 
     // S-FIX Phase 1.4 — when a user says HAL got it wrong, capture it as a learning event.
     // Non-blocking: a logging failure must never fail the rating.
+    // HARDEN (2026-07-21): this rating path is UNAUTHENTICATED (public product), so the
+    // learning event it emits is crowd-sourced, unverified signal that must NOT be trusted
+    // as a high-confidence calibration input — otherwise an attacker spams `disagree`
+    // ratings to poison HAL. We keep the signal (it's useful in aggregate) but tag it
+    // `verified: false` with a low confidence so any calibration consumer can down-weight
+    // or filter it. Durable fix = bind the rating to a session-owner / attestation token
+    // (Sean-gated product decision), after which verified feedback can carry full weight.
     if (hal_agreement === 'disagree') {
       const row: any = data;
       void db.from('agent_learning_events').insert({
-        source_agent: 'user-feedback',
+        source_agent: 'user-feedback-unverified',
         event_type: 'hal_verdict_disputed',
         lesson: `User disagreed with HAL verdict on session ${sessionId}. HAL said "${row.hal_verdict ?? 'unknown'}"`
           + ` (risk ${row.hal_score ?? '?'}); user rated ${rating ?? 'n/a'}/5.`,
-        evidence: { session_id: sessionId, hal_score: row.hal_score, hal_verdict: row.hal_verdict, user_rating: rating ?? null },
-        confidence: 0.7,
+        evidence: {
+          session_id: sessionId, hal_score: row.hal_score, hal_verdict: row.hal_verdict,
+          user_rating: rating ?? null,
+          verified: false,
+          source_kind: 'unauthenticated-public-rating',
+        },
+        confidence: 0.2,
       }).then(({ error: lerr }: any) => { if (lerr) console.error('[rate] learning-event insert failed:', lerr.message); });
     }
     return res.json({ ok: true, session_id: sessionId, hal_agreement: hal_agreement ?? null });
