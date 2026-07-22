@@ -317,13 +317,18 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       networkImportance: input.networkImportance ?? 1.0,
     }));
   } else if (input.eventType === 'STAKE') {
-    // PROOF-GATED (2026-07-06): the STAKE delta is earned only by a VERIFIED
-    // on-chain stake against the canonical RepIDStaking contract. Without a
-    // stakeProof (tx of a confirmed `Staked` event, supplied by the
-    // /stake/onchain/verify route) the delta is 0 — no verified stake, no +5.
-    // This closes the prior hole where any /score {eventType:'STAKE'} call
-    // granted +5 with no real deposit backing it (RULE-4: honest scoring).
-    rawDelta = input.stakeProof?.txHash ? (FIXED_DELTAS.STAKE ?? 0) : 0;
+    // STOPGAP (2026-07-21): a client-supplied stakeProof is UNVERIFIED → delta 0.
+    // The prior comment claimed a `/stake/onchain/verify` route confirmed a
+    // `Staked` event before awarding +5. That route DOES NOT EXIST anywhere in
+    // this repo (grep: only these comments), so the old truthiness gate
+    // (`stakeProof?.txHash ? +5 : 0`) awarded +5 for ANY caller-supplied string
+    // on the auth-gated /score path — repeatable to inflate RepID. Until a real
+    // server-side verifier lands (fetch the Base-Sepolia receipt, confirm the
+    // RepIDStaking `Staked` event, bind it to agentId, and guard txHash replay),
+    // STAKE earns nothing here — no fake-verified scoring (RULE-4). The client
+    // `stakeProof` is retained on the input only for that future verify route.
+    // TODO(STAKE-VERIFY, Sean-gated: on-chain): implement verifyStakeOnChain().
+    rawDelta = 0;
   } else if (isDeceptionEvent(input.eventType)) {
     // DEFENDED DECEPTION (M1). The negative delta is GATED on a confirmed,
     // grounded M2 detection (findings 4+5): the heavy -60/-40 tier applies only

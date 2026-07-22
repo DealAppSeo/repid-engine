@@ -1,13 +1,19 @@
 /**
- * stake-delta-gate — engine-level proof gate for the STAKE delta (2026-07-06).
+ * stake-delta-gate — engine-level proof gate for the STAKE delta.
  *
  * Drives the REAL updateRepId() with its layer + DB dependencies mocked, and
- * asserts the core honesty invariant:
+ * asserts the corrected honesty invariant (2026-07-21):
  *
- *   STAKE event WITHOUT a stakeProof  → delta 0  (no verified stake, no +5)
- *   STAKE event WITH    a stakeProof  → delta +5 (FIXED_DELTAS.STAKE)
+ *   STAKE event WITHOUT a stakeProof            → delta 0
+ *   STAKE event WITH a client-supplied stakeProof → delta 0  (UNVERIFIED, no +5)
  *
- * This closes the prior hole where any /score {eventType:'STAKE'} granted +5.
+ * The prior version of this test asserted "+5 with a stakeProof" and called a raw
+ * client-supplied txHash "verified" — that was the bug: the engine awarded +5 for
+ * ANY caller string because no on-chain verifier existed (the advertised
+ * /stake/onchain/verify route is not in the repo). Until a real server-side
+ * verifier lands (fetch receipt → confirm `Staked` event → bind agentId → replay
+ * guard), a client stakeProof earns nothing. The +5-on-genuinely-verified case is
+ * captured as a pending TODO below and should be un-skipped when that route ships.
  */
 
 // Neutralize the scoring layers so only the STAKE branch matters.
@@ -60,13 +66,19 @@ describe('STAKE delta is proof-gated', () => {
     expect(r.repIdAfter).toBe(1000); // unchanged
   });
 
-  it('STAKE with a verified stakeProof → delta +5', async () => {
+  it('STAKE with a client-supplied (UNVERIFIED) stakeProof → still delta 0', async () => {
+    // A caller-controlled txHash is NOT proof of an on-chain stake. It must earn
+    // nothing until a server-side verifier confirms the `Staked` event on-chain.
     const r = await updateRepId({
       agentId: 'agent-1',
       eventType: 'STAKE',
       stakeProof: { txHash: '0x' + 'b'.repeat(64), amountWei: '100000000000000' },
     });
-    expect(r.delta).toBe(5);
-    expect(r.repIdAfter).toBe(1005);
+    expect(r.delta).toBe(0);
+    expect(r.repIdAfter).toBe(1000); // unchanged — no free +5 from a client string
   });
+
+  // TODO(STAKE-VERIFY): un-skip when verifyStakeOnChain() exists and updateRepId
+  // awards +5 only for a server-verified `Staked` event bound to this agentId.
+  it.todo('STAKE with a SERVER-VERIFIED on-chain stake → delta +5');
 });
