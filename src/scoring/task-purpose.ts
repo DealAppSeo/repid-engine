@@ -22,7 +22,8 @@ export type TaskPurpose =
   | 'monitoring'    // review/monitoring chores — not a deliverable
   | 'verification'  // verify-a-claim task — cross-LLM cannot verify DB/code claims
   | 'generation'    // generating adversarial/test content — adversarial by design, not a hallucination
-  | 'panel_review'; // BFT verification-panel review of a code artifact — scored via HANDOFF_COSIGN, not HAL veto
+  | 'panel_review'  // BFT verification-panel review of a code artifact — scored via HANDOFF_COSIGN, not HAL veto
+  | 'investigation'; // v3: research/critique/investigation/capability-gap — exploratory analysis, not a verifiable deliverable
 
 export interface PurposeVerdict {
   purpose: TaskPurpose;
@@ -60,6 +61,52 @@ const DELIVERABLE_DOMAINS = new Set<string>([
 ]);
 
 /**
+ * CLASSIFIER v3 (CC-2) — PREFIX-AWARE tail non-deliverable domains.
+ *
+ * The v1 gate keyed off EXACT task_domain strings ('evergreen', 'cait', …). Live traffic
+ * carries suffixed variants of the same families — 'EVERGREEN_AUDIT', 'diag_probe',
+ * 'capability_gap', 'SHADOW_REJECT', 'cait_eval' — plus research/critique/investigation
+ * chores. Exact-match let every one of those fall through to the DEFAULT (deliverable),
+ * so a HAL cross-LLM veto could still drain RepID on a task that has no world-knowledge
+ * ground truth (the same false-positive the purpose gate exists to stop).
+ *
+ * v3 matches a task_domain PREFIX. This is purely ADDITIVE: it only ever moves a task
+ * from deliverable → non-deliverable (weight 0, both directions), never the reverse.
+ * DELIVERABLE_DOMAINS is still checked FIRST (exact), so a real contracted deliverable
+ * can never be down-classified by a prefix here. Epoch-tunable — Sean owns the final set.
+ *
+ * Rules are ordered longest/most-specific family first so a prefix never shadows a more
+ * specific one (this table has no overlaps today, but the order documents the invariant).
+ * Every prefix below is checked only against task_domain, never prompt text.
+ */
+interface DomainPrefixRule { prefixes: string[]; purpose: TaskPurpose; reason: string; }
+const NON_DELIVERABLE_DOMAIN_PREFIXES: DomainPrefixRule[] = [
+  // Operational / DB-fact / health-check / diagnostic — cross-LLM has no ground truth.
+  // 'evergreen' also covers the v1 exact 'evergreen'; 'diag' covers diag_probe;
+  // 'shadow_reject' covers a shadow-mode rejection record (telemetry, not a deliverable).
+  { prefixes: ['evergreen', 'diag', 'shadow_reject'], purpose: 'operational',
+    reason: 'operational/DB-fact/health-check/diagnostic domain — verify against source not cross-LLM; no world-knowledge ground truth' },
+  // Adversarial CAIT evaluation — a test, not work. Distinct from the v1 exact 'cait' (drill)
+  // so it never shadows that case; both are logged for calibration, never scored.
+  { prefixes: ['cait_eval'], purpose: 'drill',
+    reason: 'CAIT evaluation domain — adversarial drill; logged for calibration, not scored' },
+  // Exploratory analysis — research / critique / investigation / capability-gap surveys.
+  // No verifiable single-truth deliverable; a cross-LLM hallucination veto does not apply.
+  { prefixes: ['capability_gap', 'research', 'critique', 'investigation'], purpose: 'investigation',
+    reason: 'exploratory analysis (research/critique/investigation/capability-gap) — not a verifiable deliverable; cross-LLM veto does not apply' },
+];
+
+/** Prefix-aware lookup for a tail non-deliverable domain. Returns null when no family matches. */
+function matchTailNonDeliverable(d: string): PurposeVerdict | null {
+  for (const rule of NON_DELIVERABLE_DOMAIN_PREFIXES) {
+    if (rule.prefixes.some((prefix) => d.startsWith(prefix))) {
+      return { purpose: rule.purpose, halVetoApplies: false, weight: 0, reason: rule.reason };
+    }
+  }
+  return null;
+}
+
+/**
  * Classify a task's scoring purpose from its domain (= task.task_type on the bridge)
  * and, secondarily, the prompt text. Default = real deliverable (full HAL scoring) so
  * an unknown/new domain is scored normally, not silently excused.
@@ -78,6 +125,13 @@ export function classifyTaskPurpose(
     return { purpose: 'deliverable', halVetoApplies: true, weight: 1,
       reason: `explicit deliverable domain (${d}) — HAL cross-LLM veto applies at full weight; prompt heuristics do not override` };
   }
+
+  // v3 (CC-2): PREFIX-AWARE tail non-deliverable domains. Runs after DELIVERABLE (so a real
+  // deliverable is never down-classified) and before the prompt heuristics (task_domain is the
+  // reliable signal). Additive — only tail families the v1 exact set missed (evergreen_audit,
+  // diag_probe, capability_gap, shadow_reject, cait_eval, research/critique/investigation).
+  const tail = matchTailNonDeliverable(d);
+  if (tail) return tail;
 
   // Adversarial drills — tests. Never score reputation; keep telemetry for HAL calibration.
   if (d === 'cait' || /\bhal veto self-test|jailbreak|prompt.?injection|red.?team|adversarial\b/.test(p)) {

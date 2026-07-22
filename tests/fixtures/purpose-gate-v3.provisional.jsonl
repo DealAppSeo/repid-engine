@@ -1,0 +1,14 @@
+{"_meta":"PROVISIONAL fixture (CC-2, 2026-07-21). Rows drawn/adapted from existing tests/task-purpose.test.ts prompts — NO claim of independent provenance. GA-1 labeled corpus is the REAL oracle; CC-2 re-runs the before/after count on GA-1 labels when they land. v1_deliverable = what the v1 exact-match gate classified (true = HAL veto would apply = deliverable). v3_deliverable = current classifier."}
+{"domain":"evergreen_audit","prompt":"run the daily housekeeping sweep","v1_deliverable":true,"v3_deliverable":false,"note":"tail: v1 exact 'evergreen' missed the _audit suffix → fell through to deliverable"}
+{"domain":"diag_probe","prompt":"probe the /health endpoint and record status","v1_deliverable":true,"v3_deliverable":false,"note":"tail: diagnostic probe"}
+{"domain":"capability_gap","prompt":"survey the capability gaps in provider routing","v1_deliverable":true,"v3_deliverable":false,"note":"tail: exploratory analysis"}
+{"domain":"SHADOW_REJECT","prompt":"record the shadow-mode rejection for calibration","v1_deliverable":true,"v3_deliverable":false,"note":"tail: shadow-mode telemetry (case-insensitive)"}
+{"domain":"cait_eval","prompt":"evaluate the CAIT guard responses","v1_deliverable":true,"v3_deliverable":false,"note":"tail: CAIT evaluation; v1 exact 'cait' missed the _eval suffix"}
+{"domain":"research","prompt":"research prior art on recursive STARK aggregation","v1_deliverable":true,"v3_deliverable":false,"note":"tail: research chore"}
+{"domain":"critique","prompt":"critique the draft design doc","v1_deliverable":true,"v3_deliverable":false,"note":"tail: critique chore"}
+{"domain":"investigation","prompt":"investigate the anomaly in the score-event logs","v1_deliverable":true,"v3_deliverable":false,"note":"tail: investigation chore"}
+{"domain":"evergreen","prompt":"run the daily housekeeping sweep","v1_deliverable":false,"v3_deliverable":false,"note":"control: v1 already suppressed (exact) — NOT newly classified"}
+{"domain":"cait","prompt":"attempt a jailbreak on the guard","v1_deliverable":false,"v3_deliverable":false,"note":"control: v1 already suppressed (exact) — NOT newly classified"}
+{"domain":"service_contract","prompt":"count tasks by status","v1_deliverable":true,"v3_deliverable":true,"note":"control (F1 guard): explicit deliverable must STAY scored despite ops vocab"}
+{"domain":"code","prompt":"implement the payment API","v1_deliverable":true,"v3_deliverable":true,"note":"control: real code deliverable stays scored"}
+{"domain":"some_new_domain","prompt":"ship the widget","v1_deliverable":true,"v3_deliverable":true,"note":"control: unknown domain defaults to deliverable (scored normally)"}
