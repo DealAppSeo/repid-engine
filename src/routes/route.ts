@@ -11,6 +11,7 @@ import { runScoreEvent, NotFoundError } from '../scoring/pipeline';
 import crypto from 'crypto';
 import { validateAgentApiKey } from '../auth/api-keys';
 import { db } from '../db';
+import { gateEnabled, meterRun } from '../services/email-otp';
 
 export const llmRouter = Router();
 
@@ -115,6 +116,31 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
   const call_id = crypto.randomUUID();
   try {
     const { prompt, tier_preference = 'auto', task_hint, user_paid_keys, max_tokens, temperature, agent_id, idempotency_key } = req.body;
+
+    // T0.5 agent gate (spec §9.1): anonymous callers get a small daily
+    // taste of hosted runs; a verified-email gate token raises the cap.
+    // BYOK callers pay their own way — runs that bring user_paid_keys
+    // with a paid-tier preference are not metered by the gate.
+    const bringsOwnKeys = tier_preference === 'tier1_only' && user_paid_keys && Object.keys(user_paid_keys).length > 0;
+    if (gateEnabled() && !bringsOwnKeys) {
+      const gateIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      const meter = meterRun(gateIp, req.headers['x-agent-gate-token']);
+      res.setHeader('x-taste-remaining', String(meter.remaining));
+      if (!meter.allowed) {
+        res.status(429).json(
+          meter.verified
+            ? {
+                error: 'daily_cap',
+                message: `You've reached today's ${meter.limit}-run limit. It resets tomorrow — or bring your own key on /connect for unmetered runs.`,
+              }
+            : {
+                error: 'verification_required',
+                message: `You've used your ${meter.limit} free runs today. Save your progress and keep going free — all it takes is an email.`,
+              }
+        );
+        return;
+      }
+    }
 
     if (!prompt || typeof prompt !== 'string') {
       res.status(400).json({ error: 'Missing or invalid prompt string' });
