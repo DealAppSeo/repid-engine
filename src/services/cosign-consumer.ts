@@ -34,22 +34,44 @@ export const doneStatus = (): string => process.env.COSIGN_DONE_STATUS || 'done'
 const POLL_INTERVAL_MS = parseInt(process.env.COSIGN_CONSUMER_POLL_MS || '300000', 10);
 const BATCH = parseInt(process.env.COSIGN_CONSUMER_BATCH || '25', 10);
 
-/** Verdict tokens that count as an explicit PASS. Everything else fails closed. */
-const PASS_TOKENS = new Set(['pass', 'passed', 'verified', 'approved', 'ok', 'true', 'accept', 'accepted']);
+/**
+ * Verdict tokens that count as an explicit PASS. Everything else fails closed.
+ * DELIBERATELY TIGHT: bare 'ok' and the stringy 'true' were removed — an ambiguous
+ * acknowledgement ('ok') or a coerced-to-string boolean is NOT an explicit positive
+ * verdict. A genuine boolean verdict `=== true` is handled separately (see isPassVerdict).
+ */
+const PASS_TOKENS = new Set(['pass', 'passed', 'verified', 'approved', 'confirmed', 'accept', 'accepted']);
+
+/**
+ * Is this verdict an explicit positive PASS? Only two things qualify:
+ *   - a genuine boolean `true` (a structured verdict field), or
+ *   - one of the explicit PASS token strings above.
+ * Everything else — `false`, null, numbers, the string 'true', 'ok', '', unknown tokens — HOLDS.
+ */
+const isPassVerdict = (verdict: string | boolean | null | undefined): boolean => {
+  if (verdict === true) return true; // genuine structured boolean PASS
+  if (typeof verdict !== 'string') return false; // false / null / number / object → hold
+  return PASS_TOKENS.has(norm(verdict));
+};
 
 // ---- pure, DB-free decision core (unit-testable) ---------------------------
 
 /** A co-sign record distilled from a task row: who signed and what they said. */
 export interface CosignRecord {
   cosigner: string | null;
-  verdict: string | null;
+  /** Either an explicit verdict token, or a genuine boolean verdict. */
+  verdict: string | boolean | null;
 }
 
 /** The minimal shape the decision needs — decoupled from the full DB row. */
 export interface CosignTask {
   id: number | string;
-  /** The agent that produced the artifact (claimed_by / completed_by / agent_assigned). */
-  producer: string | null;
+  /**
+   * EVERY present producer identity on the row — the union of {claimed_by, completed_by,
+   * agent_assigned}. Disjointness is checked against ALL of them, not just the first non-null,
+   * so a co-signer that matches any producer field is rejected. Empty array = producer unknown.
+   */
+  producers: string[];
   /** The artifact under review (artifact_url / external_artifact_url). */
   artifactUrl: string | null;
   /** The disjoint co-sign, if any. */
@@ -63,26 +85,37 @@ export interface CosignDecision {
 
 const norm = (s: string | null | undefined): string => (s || '').trim().toLowerCase();
 
+/** Preserve a genuine boolean verdict; otherwise stringify (or null). Keeps `true`/`false` distinct
+ * from the strings 'true'/'false' so only a real structured boolean can PASS via isPassVerdict. */
+const normVerdict = (v: unknown): string | boolean | null =>
+  typeof v === 'boolean' ? v : v != null ? String(v) : null;
+
 /**
  * The fail-closed gate. Returns advance:true ONLY when every condition holds:
  *  1. an artifact exists to co-sign,
  *  2. a co-sign record with a named co-signer exists,
- *  3. the producer is known (else disjointness is unprovable → fail closed),
- *  4. the co-signer is DISJOINT from the producer (no self-cosign / rubber-stamp),
- *  5. the verdict is an explicit PASS token.
+ *  3. at least one producer identity is known (else disjointness is unprovable → fail closed),
+ *  4. the co-signer is DISJOINT from EVERY present producer identity — it must match NONE of
+ *     {claimed_by, completed_by, agent_assigned} (no self-cosign / rubber-stamp), case-insensitive,
+ *  5. the verdict is an explicit PASS token, or a genuine boolean `true`.
  * Any other case → advance:false with a reason. Never throws.
  */
 export function evaluateCosign(task: CosignTask): CosignDecision {
   if (!task || !task.artifactUrl) return { advance: false, reason: 'no-artifact' };
   const cosign = task.cosign;
   if (!cosign || !cosign.cosigner) return { advance: false, reason: 'no-cosign-record' };
-  if (!task.producer) return { advance: false, reason: 'unknown-producer:disjointness-unprovable' };
 
-  // Disjointness is the load-bearing check: the co-signer must not be the producer.
-  if (norm(cosign.cosigner) === norm(task.producer)) {
-    return { advance: false, reason: `self-cosign-not-disjoint:${cosign.cosigner}` };
+  // Collect every present producer identity (defensive: tolerate a non-array/garbage field).
+  const producers = (Array.isArray(task.producers) ? task.producers : []).filter((p) => norm(p) !== '');
+  if (producers.length === 0) return { advance: false, reason: 'unknown-producer:disjointness-unprovable' };
+
+  // Disjointness is the load-bearing check: the co-signer must not match ANY producer field.
+  const signer = norm(cosign.cosigner);
+  const clash = producers.find((p) => norm(p) === signer);
+  if (clash) {
+    return { advance: false, reason: `self-cosign-not-disjoint:${clash}` };
   }
-  if (!PASS_TOKENS.has(norm(cosign.verdict))) {
+  if (!isPassVerdict(cosign.verdict)) {
     return { advance: false, reason: `cosign-not-pass:${cosign.verdict ?? 'null'}` };
   }
   return { advance: true, reason: `cosign-pass by ${cosign.cosigner}` };
@@ -102,8 +135,8 @@ export function extractCosignRecord(row: any): CosignRecord | null {
     if (c && typeof c === 'object') {
       const cosigner = c.cosigner ?? c.agent ?? c.verifier ?? c.reviewer ?? null;
       const verdict = c.verdict ?? c.result ?? c.vote ?? c.decision ?? null;
-      if (cosigner || verdict) {
-        return { cosigner: cosigner ? String(cosigner) : null, verdict: verdict != null ? String(verdict) : null };
+      if (cosigner || verdict != null) {
+        return { cosigner: cosigner ? String(cosigner) : null, verdict: normVerdict(verdict) };
       }
     }
     const sigs = row?.signatures;
@@ -112,8 +145,8 @@ export function extractCosignRecord(row: any): CosignRecord | null {
         if (s && typeof s === 'object') {
           const cosigner = s.cosigner ?? s.agent ?? s.verifier ?? s.reviewer ?? null;
           const verdict = s.verdict ?? s.result ?? s.vote ?? s.decision ?? null;
-          if (cosigner || verdict) {
-            return { cosigner: cosigner ? String(cosigner) : null, verdict: verdict != null ? String(verdict) : null };
+          if (cosigner || verdict != null) {
+            return { cosigner: cosigner ? String(cosigner) : null, verdict: normVerdict(verdict) };
           }
         }
       }
@@ -124,11 +157,17 @@ export function extractCosignRecord(row: any): CosignRecord | null {
   }
 }
 
-/** Map a raw trinity_tasks row to the decision shape. Producer = first non-null identity. */
+/**
+ * Map a raw trinity_tasks row to the decision shape. Producers = EVERY present identity among
+ * {claimed_by, completed_by, agent_assigned} (not just the first non-null) — disjointness is then
+ * checked against all of them, so a co-signer matching any producer field is rejected.
+ */
 export function toCosignTask(row: any): CosignTask {
+  const producers = [row?.claimed_by, row?.completed_by, row?.agent_assigned]
+    .filter((p): p is string => typeof p === 'string' && p.trim() !== '');
   return {
     id: row?.id,
-    producer: row?.claimed_by ?? row?.completed_by ?? row?.agent_assigned ?? null,
+    producers,
     artifactUrl: row?.artifact_url ?? row?.external_artifact_url ?? null,
     cosign: extractCosignRecord(row),
   };

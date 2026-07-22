@@ -17,7 +17,7 @@ import {
 
 const base = (over: Partial<CosignTask> = {}): CosignTask => ({
   id: 1,
-  producer: 'trinity-torch',
+  producers: ['trinity-torch'],
   artifactUrl: 'https://example.com/report.md',
   cosign: { cosigner: 'trinity-mel', verdict: 'pass' },
   ...over,
@@ -29,12 +29,16 @@ describe('evaluateCosign (fail-closed gate)', () => {
     expect(d.advance).toBe(true);
   });
 
-  it.each(['pass', 'PASS', 'verified', 'Approved', 'ok', 'accepted'])(
+  it.each(['pass', 'PASS', 'verified', 'Approved', 'confirmed', 'accepted'])(
     'accepts pass-token %s',
     (verdict) => {
       expect(evaluateCosign(base({ cosign: { cosigner: 'trinity-mel', verdict } })).advance).toBe(true);
     }
   );
+
+  it('accepts a genuine boolean verdict === true', () => {
+    expect(evaluateCosign(base({ cosign: { cosigner: 'trinity-mel', verdict: true } })).advance).toBe(true);
+  });
 
   it('HOLDS when there is no artifact', () => {
     expect(evaluateCosign(base({ artifactUrl: null })).advance).toBe(false);
@@ -49,7 +53,7 @@ describe('evaluateCosign (fail-closed gate)', () => {
   });
 
   it('HOLDS when the producer is unknown (disjointness unprovable)', () => {
-    const d = evaluateCosign(base({ producer: null }));
+    const d = evaluateCosign(base({ producers: [] }));
     expect(d.advance).toBe(false);
     expect(d.reason).toMatch(/disjointness-unprovable/);
   });
@@ -60,12 +64,41 @@ describe('evaluateCosign (fail-closed gate)', () => {
     expect(d.reason).toMatch(/self-cosign-not-disjoint/);
   });
 
-  it.each(['fail', 'reject', 'rejected', 'disputed', '', 'maybe', null])(
+  // ---- all-fields disjointness: cosigner must match NONE of the producer fields ----
+  it('HOLDS when cosigner matches completed_by (not just the first producer field)', () => {
+    const d = evaluateCosign(
+      base({ producers: ['trinity-torch', 'trinity-mel'], cosign: { cosigner: 'trinity-mel', verdict: 'pass' } })
+    );
+    expect(d.advance).toBe(false);
+    expect(d.reason).toMatch(/self-cosign-not-disjoint/);
+  });
+
+  it('HOLDS when cosigner matches agent_assigned (not just the first producer field)', () => {
+    const d = evaluateCosign(
+      base({ producers: ['trinity-torch', 'trinity-mel', 'trinity-gcm'], cosign: { cosigner: 'trinity-gcm', verdict: 'pass' } })
+    );
+    expect(d.advance).toBe(false);
+    expect(d.reason).toMatch(/self-cosign-not-disjoint/);
+  });
+
+  it('ADVANCES only when the co-signer is disjoint from ALL producer fields', () => {
+    const d = evaluateCosign(
+      base({ producers: ['trinity-torch', 'trinity-gcm'], cosign: { cosigner: 'trinity-mel', verdict: 'pass' } })
+    );
+    expect(d.advance).toBe(true);
+  });
+
+  // ---- tightened tokens: bare 'ok' and stringy 'true' no longer PASS ----
+  it.each(['fail', 'reject', 'rejected', 'disputed', '', 'maybe', 'ok', 'OK', 'true', null])(
     'HOLDS on non-PASS verdict %s',
     (verdict) => {
       expect(evaluateCosign(base({ cosign: { cosigner: 'trinity-mel', verdict } })).advance).toBe(false);
     }
   );
+
+  it('HOLDS on a genuine boolean verdict === false', () => {
+    expect(evaluateCosign(base({ cosign: { cosigner: 'trinity-mel', verdict: false } })).advance).toBe(false);
+  });
 
   it('never throws on a garbage task', () => {
     // @ts-expect-error deliberately malformed
@@ -102,14 +135,76 @@ describe('extractCosignRecord (tolerant, fail-closed on parse trouble)', () => {
 });
 
 describe('toCosignTask (row → decision shape)', () => {
-  it('picks producer from claimed_by, then completed_by, then agent_assigned', () => {
-    expect(toCosignTask({ id: 5, claimed_by: 'a', completed_by: 'b', agent_assigned: 'c' }).producer).toBe('a');
-    expect(toCosignTask({ id: 5, completed_by: 'b', agent_assigned: 'c' }).producer).toBe('b');
-    expect(toCosignTask({ id: 5, agent_assigned: 'c' }).producer).toBe('c');
+  it('collects ALL present producer identities (claimed_by, completed_by, agent_assigned)', () => {
+    expect(toCosignTask({ id: 5, claimed_by: 'a', completed_by: 'b', agent_assigned: 'c' }).producers).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+    expect(toCosignTask({ id: 5, completed_by: 'b', agent_assigned: 'c' }).producers).toEqual(['b', 'c']);
+    expect(toCosignTask({ id: 5, agent_assigned: 'c' }).producers).toEqual(['c']);
+    expect(toCosignTask({ id: 5 }).producers).toEqual([]);
   });
 
   it('picks artifact from artifact_url then external_artifact_url', () => {
     expect(toCosignTask({ id: 5, external_artifact_url: 'x' }).artifactUrl).toBe('x');
+  });
+
+  // The closed gap: a cosigner matching a NON-first producer field must be rejected end-to-end.
+  it('HOLDS a row whose cosigner == completed_by (would have advanced under first-non-null)', () => {
+    const row = {
+      id: 9,
+      claimed_by: 'trinity-torch',
+      completed_by: 'trinity-mel',
+      agent_assigned: 'trinity-gcm',
+      artifact_url: 'https://a/x.md',
+      metadata: { cosign: { cosigner: 'trinity-mel', verdict: 'pass' } },
+    };
+    expect(evaluateCosign(toCosignTask(row)).advance).toBe(false);
+  });
+
+  it('HOLDS a row whose cosigner == agent_assigned', () => {
+    const row = {
+      id: 10,
+      claimed_by: 'trinity-torch',
+      agent_assigned: 'trinity-gcm',
+      artifact_url: 'https://a/y.md',
+      metadata: { cosign: { cosigner: 'trinity-gcm', verdict: 'pass' } },
+    };
+    expect(evaluateCosign(toCosignTask(row)).advance).toBe(false);
+  });
+
+  it('HOLDS a row whose only PASS signal is bare "ok" (tightened tokens)', () => {
+    const row = {
+      id: 11,
+      claimed_by: 'trinity-torch',
+      artifact_url: 'https://a/z.md',
+      metadata: { cosign: { cosigner: 'trinity-mel', verdict: 'ok' } },
+    };
+    expect(evaluateCosign(toCosignTask(row)).advance).toBe(false);
+  });
+
+  it('ADVANCES a fully-disjoint explicit-PASS row', () => {
+    const row = {
+      id: 12,
+      claimed_by: 'trinity-torch',
+      completed_by: 'trinity-torch',
+      agent_assigned: 'trinity-gcm',
+      artifact_url: 'https://a/ok.md',
+      metadata: { cosign: { cosigner: 'trinity-mel', verdict: 'pass' } },
+    };
+    expect(evaluateCosign(toCosignTask(row)).advance).toBe(true);
+  });
+
+  it('preserves a genuine boolean verdict through extraction', () => {
+    expect(extractCosignRecord({ metadata: { cosign: { cosigner: 'trinity-mel', verdict: true } } })).toEqual({
+      cosigner: 'trinity-mel',
+      verdict: true,
+    });
+    expect(extractCosignRecord({ metadata: { cosign: { cosigner: 'trinity-mel', verdict: false } } })).toEqual({
+      cosigner: 'trinity-mel',
+      verdict: false,
+    });
   });
 });
 
@@ -171,6 +266,24 @@ describe('processAwaitingCosign (DB-mocked sweep flips only the clean row)', () 
         artifact_url: 'https://a/4.md',
         metadata: { cosign: { cosigner: 'trinity-mel', verdict: 'fail' } },
       },
+      // cosigner matches completed_by (non-first producer field) → hold (all-fields disjointness)
+      {
+        id: 105,
+        status: 'awaiting_cosign',
+        claimed_by: 'trinity-torch',
+        completed_by: 'trinity-mel',
+        agent_assigned: 'trinity-gcm',
+        artifact_url: 'https://a/5.md',
+        metadata: { cosign: { cosigner: 'trinity-mel', verdict: 'pass' } },
+      },
+      // only PASS signal is bare 'ok' → hold (tightened tokens)
+      {
+        id: 106,
+        status: 'awaiting_cosign',
+        claimed_by: 'trinity-torch',
+        artifact_url: 'https://a/6.md',
+        metadata: { cosign: { cosigner: 'trinity-mel', verdict: 'ok' } },
+      },
     ];
 
     const updateCalls: any[] = [];
@@ -205,9 +318,9 @@ describe('processAwaitingCosign (DB-mocked sweep flips only the clean row)', () 
 
     const r = await processAwaitingCosign(db);
 
-    expect(r.scanned).toBe(4);
+    expect(r.scanned).toBe(6);
     expect(r.advanced).toBe(1);
-    expect(r.held).toBe(3);
+    expect(r.held).toBe(5);
 
     // Only task 101 was updated, to 'done', guarded on the awaiting status.
     expect(updateCalls).toHaveLength(1);
