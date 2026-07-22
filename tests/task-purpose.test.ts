@@ -98,6 +98,79 @@ describe('classifyTaskPurpose — deliverables (full HAL scoring)', () => {
   });
 });
 
+// ── v3 (CC-2): PREFIX-AWARE tail non-deliverable domains ──────────────────────────────
+// Suffixed variants of a non-deliverable family (EVERGREEN_AUDIT, diag_probe, cait_eval, …)
+// and research/critique/investigation chores must classify non-deliverable (weight 0). v1's
+// exact-match let these fall through to the DEFAULT deliverable, exposing them to a HAL veto.
+const V3_TAILS: Case[] = [
+  { name: 'evergreen_audit (suffix) → operational',
+    domain: 'evergreen_audit', prompt: 'run the daily housekeeping sweep',
+    expectedPurpose: 'operational', halVetoApplies: false },
+  { name: 'diag_probe → operational',
+    domain: 'diag_probe', prompt: 'probe the /health endpoint',
+    expectedPurpose: 'operational', halVetoApplies: false },
+  { name: 'SHADOW_REJECT (case-insensitive) → operational',
+    domain: 'SHADOW_REJECT', prompt: 'record the shadow-mode rejection',
+    expectedPurpose: 'operational', halVetoApplies: false },
+  { name: 'cait_eval (suffix) → drill',
+    domain: 'cait_eval', prompt: 'evaluate the CAIT guard responses',
+    expectedPurpose: 'drill', halVetoApplies: false },
+  { name: 'capability_gap → investigation',
+    domain: 'capability_gap', prompt: 'survey the capability gaps in routing',
+    expectedPurpose: 'investigation', halVetoApplies: false },
+  { name: 'research → investigation',
+    domain: 'research', prompt: 'research prior art on recursive STARK aggregation',
+    expectedPurpose: 'investigation', halVetoApplies: false },
+  { name: 'critique → investigation',
+    domain: 'critique', prompt: 'critique the draft design doc',
+    expectedPurpose: 'investigation', halVetoApplies: false },
+  { name: 'investigation → investigation',
+    domain: 'investigation', prompt: 'investigate the anomaly in the logs',
+    expectedPurpose: 'investigation', halVetoApplies: false },
+];
+
+describe('classifyTaskPurpose — v3 tail non-deliverable domains (prefix-aware, flag ON)', () => {
+  it.each(V3_TAILS)('$name', (c) => {
+    const v = classifyTaskPurpose(c.domain, c.prompt, true); // includeV3Tails ON
+    expect(v.purpose).toBe(c.expectedPurpose);
+    expect(v.halVetoApplies).toBe(false);
+    expect(v.weight).toBe(0);
+  });
+
+  // No-false-positive guard: v3 prefixes must NOT down-classify a real deliverable. An explicit
+  // deliverable domain, and an unknown default domain, stay scored (halVetoApplies=true) even with
+  // the v3 flag ON and ops-vocab bait present.
+  it('does not suppress explicit deliverable domains (no v3 false positive)', () => {
+    for (const domain of ['service_contract', 'code', 'build', 'implement', 'deploy', 'engineering']) {
+      const v = classifyTaskPurpose(domain, 'count tasks by status', true); // v3 ON + bait
+      expect(v.purpose).toBe('deliverable');
+      expect(v.halVetoApplies).toBe(true);
+      expect(v.weight).toBe(1);
+    }
+  });
+
+  it('does not suppress an unknown/default domain (v3 ON)', () => {
+    const v = classifyTaskPurpose('some_new_domain', 'ship the widget', true);
+    expect(v.purpose).toBe('deliverable');
+    expect(v.halVetoApplies).toBe(true);
+    expect(v.weight).toBe(1);
+  });
+});
+
+// SHADOW-FIRST guard: with the v3 flag OFF (default), every tail domain must classify EXACTLY as v1
+// did — i.e. fall through to the DEFAULT deliverable (HAL veto applies). This proves merging the PR
+// changes NO live scoring until REPID_PURPOSE_GATE_V3 is flipped on.
+describe('classifyTaskPurpose — v3 tails are SHADOW (flag OFF by default = v1 behavior)', () => {
+  it.each(V3_TAILS)('$name → deliverable when v3 flag OFF', (c) => {
+    const vDefault = classifyTaskPurpose(c.domain, c.prompt);          // no 3rd arg → default false
+    const vExplicitOff = classifyTaskPurpose(c.domain, c.prompt, false);
+    expect(vDefault).toEqual(vExplicitOff);
+    expect(vDefault.purpose).toBe('deliverable');
+    expect(vDefault.halVetoApplies).toBe(true);
+    expect(vDefault.weight).toBe(1);
+  });
+});
+
 describe('classifyTaskPurpose — F1: explicit deliverable domains beat prompt heuristics', () => {
   // Every deliverable domain, paired with vocabulary that WOULD otherwise trip a suppressor,
   // must still resolve to a scored deliverable. This is the "read the gate logic" property (XC gate #2).

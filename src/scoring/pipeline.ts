@@ -377,7 +377,11 @@ export async function runScoreEvent(
   // (cross-LLM has no ground truth for "count tasks by status"). This is w_purpose in the §7.1 chain.
   // Reversible via REPID_PURPOSE_GATE_ENABLED. Suppressed penalties are logged (telemetry kept).
   const purposeGateEnabled = process.env.REPID_PURPOSE_GATE_ENABLED !== 'false';
-  const purposeVerdict = classifyTaskPurpose(input.task_domain, input.prompt);
+  // v3 (CC-2) tail non-deliverable domains ride the SAME purpose gate but behind their own
+  // SHADOW-FIRST sub-flag REPID_PURPOSE_GATE_V3 (default OFF) so merging changes NO live scoring
+  // delta by default. Flip to true only after the GA-1 --no-floor replay clears the go-live gate.
+  const purposeGateV3 = process.env.REPID_PURPOSE_GATE_V3 === 'true';
+  const purposeVerdict = classifyTaskPurpose(input.task_domain, input.prompt, purposeGateV3);
   let purposeSuppressed = false;
   if (purposeGateEnabled && effectiveDeltaApplied !== 0 && !purposeVerdict.halVetoApplies) {
     // Symmetric w_purpose (XC asymmetry red-team): a non-deliverable purpose zeroes the HAL delta in
