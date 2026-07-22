@@ -77,6 +77,16 @@ export interface RepIdUpdateInput {
     evidence: string;
     receiptRefs: string[];
   };
+  // OPTIONAL evidence for a self-reported, caller-asserted positive event
+  // (REFERRAL / CODE_CONTRIBUTION / PEACEMAKER / WORKFLOW_CONTRIBUTION /
+  // TOOL_PIONEER / SELF_MONITOR / AGENT_TEACHING / AUDIT_CONTRIBUTION).
+  // These deltas flow from FIXED_DELTAS on a
+  // caller-supplied eventType with NO proof today — any API-key holder can
+  // self-award them on POST /api/v1/score. `evidence.ref` is a co-sign /
+  // artifact / tx / attestation reference that backs the claim. It is NEVER
+  // required (adding it does not break any caller); the SELF_REPORT_EVIDENCE_MODE
+  // gate below only USES it: in `enforce` mode an unproven self-report earns 0.
+  evidence?: { kind: string; ref: string };
 }
 
 export interface RepIdUpdateResult {
@@ -242,6 +252,85 @@ export function deceptionMode(): 'shadow' | 'enforce' {
     : 'shadow';
 }
 
+// --- SELF-REPORT EVIDENCE GATE (CC-1, 2026-07-21) ------------------------
+// Closes the systemic root the STAKE fix (#171) exposed: the FIXED_DELTAS
+// positives below are awarded for a CALLER-ASSERTED eventType with NO proof —
+// any API-key holder can self-award REFERRAL(+20), CODE_CONTRIBUTION(+25), etc.
+// on the auth-gated POST /api/v1/score. This gate makes an evidence reference
+// (co-sign / artifact / tx / attestation) matter for those self-reported types.
+//
+// SHADOW-FIRST: SELF_REPORT_EVIDENCE_MODE ∈ { off | shadow | enforce }, DEFAULT
+// 'shadow'. The default must change NO live delta — it only MEASURES how many
+// self-reports arrive unproven (would_gate), so Sean can size the enforce flip.
+// Only the explicit 'enforce' zeroes an unproven delta; enforcement is never
+// incidental. Read once at module scope; logged LOUDLY at first use.
+export type SelfReportEvidenceMode = 'off' | 'shadow' | 'enforce';
+
+function resolveSelfReportEvidenceMode(): SelfReportEvidenceMode {
+  const v = (process.env.SELF_REPORT_EVIDENCE_MODE || '').toLowerCase();
+  if (v === 'off') return 'off';
+  if (v === 'enforce') return 'enforce';
+  return 'shadow'; // DEFAULT (safe: computes/records, does NOT change any delta)
+}
+const SELF_REPORT_EVIDENCE_MODE: SelfReportEvidenceMode = resolveSelfReportEvidenceMode();
+
+let _selfReportModeLogged = false;
+function logSelfReportModeOnce(): void {
+  if (_selfReportModeLogged) return;
+  _selfReportModeLogged = true;
+  // No silent modes: announce the resolved gate + its consequence exactly once.
+  console.log(
+    `[repid-engine] SELF_REPORT_EVIDENCE_MODE='${SELF_REPORT_EVIDENCE_MODE}' ` +
+    `(default 'shadow'; off|shadow|enforce). ` +
+    (SELF_REPORT_EVIDENCE_MODE === 'enforce'
+      ? 'ENFORCE: an unproven self-reported delta (no evidence.ref) is zeroed.'
+      : SELF_REPORT_EVIDENCE_MODE === 'off'
+      ? 'OFF: self-report evidence gate disabled — deltas apply as before.'
+      : 'SHADOW: deltas UNCHANGED; only would_gate is recorded for measurement.'),
+  );
+}
+
+// The caller-asserted positive events whose FIXED_DELTAS award has no proof
+// today. STAKE is excluded (already gated to 0 above); GENESIS is 0;
+// challenge/prediction/deception have their own scorers/gates. This is the
+// MEASURED set: in shadow every type here records would_gate; in enforce every
+// type here is zeroed when unproven UNLESS it is also in ENFORCE_EXEMPT below.
+// (2026-07-21 amend) AGENT_TEACHING + AUDIT_CONTRIBUTION added to close the
+// coverage gap the adversarial verify found — both are +15 caller-assertable
+// positives on POST /api/v1/score, so both must at least be MEASURED here.
+const SELF_REPORTED_EVIDENCE_TYPES = new Set<RepIdUpdateInput['eventType']>([
+  'REFERRAL', 'CODE_CONTRIBUTION', 'PEACEMAKER',
+  'WORKFLOW_CONTRIBUTION', 'TOOL_PIONEER', 'SELF_MONITOR',
+  'AGENT_TEACHING', 'AUDIT_CONTRIBUTION',
+]);
+
+// ENFORCE-EXEMPT subset (measured in shadow, NOT zeroed in enforce). A type
+// belongs here when it ALSO has a legitimate INTERNAL emitter that carries its
+// own proof and cannot attach an `evidence.ref`. AUDIT_CONTRIBUTION is emitted
+// server-side by the bounty-verification path (src/routes/bounties.ts:118) only
+// AFTER a bounty is marked VERIFIED — that server-side verification IS the
+// proof, but the internal call supplies no `evidence.ref`. Zeroing it in
+// enforce would silently break real bounty payouts. So enforce records the
+// would_gate measurement for it but still applies the delta. (The caller-facing
+// POST /api/v1/score can also assert AUDIT_CONTRIBUTION unproven; hardening that
+// public path needs a real ref/verifier — the pre-enforce follow-up, disclosed
+// in reports/2026-07-21/CC1_SELF_REPORT_EVIDENCE.md.)
+const ENFORCE_EXEMPT = new Set<RepIdUpdateInput['eventType']>([
+  'AUDIT_CONTRIBUTION',
+]);
+
+/**
+ * True when the input carries an evidence-ish signal that backs a self-reported
+ * positive: a non-empty `evidence.ref` (co-sign / artifact / tx / attestation
+ * reference). Kept intentionally liberal — any non-blank ref counts; VERIFYING
+ * that ref (on-chain / co-sign lookup) is a follow-up, mirroring how STAKE first
+ * gated on presence before a real verifier landed.
+ */
+export function evidencePresent(input: RepIdUpdateInput): boolean {
+  const ref = input.evidence?.ref;
+  return typeof ref === 'string' && ref.trim().length > 0;
+}
+
 export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateResult> {
   // Phase 3 dogfooding gate: co-sign -> RepID only if flag ON (default OFF until CC honest-HAL merge)
   const isDogfoodCoSignEvent = input.eventType === 'HANDOFF_COSIGN_VERIFIED' || input.eventType === 'HANDOFF_COSIGN_FALSE_PASS_SLASH';
@@ -291,6 +380,17 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
 
   // 5 — Delta by event type
   let rawDelta: number;
+  // Recorded in the audit row for self-reported positive events; null otherwise.
+  let selfReportEvidenceMeta: {
+    mode: SelfReportEvidenceMode;
+    required?: boolean;
+    present?: boolean;
+    would_gate?: boolean;
+    // Present (and true) ONLY for ENFORCE_EXEMPT types (e.g. AUDIT_CONTRIBUTION):
+    // shadow still records would_gate, but enforce does NOT zero them because they
+    // have a legitimate internal (proof-carrying) emitter. Absent === not exempt.
+    enforce_exempt?: boolean;
+  } | null = null;
   const challengeTypes = new Set([
     'CHALLENGE_WIN','CHALLENGE_LOSS','CHALLENGE_DRAW',
     'EPISTEMIC_VIOLATION','CONSTITUTIONAL_VIOLATION'
@@ -339,6 +439,36 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     // This is COMPUTED here regardless of TRUST_DECEPTION_MODE;
     // whether it MUTATES the score is decided below by the shadow/enforce gate.
     rawDelta = gatedDeceptionDelta(input).delta;
+  } else if (SELF_REPORTED_EVIDENCE_TYPES.has(input.eventType)) {
+    // SELF-REPORTED POSITIVE (CC-1). The delta comes from FIXED_DELTAS on a
+    // caller-asserted eventType with no proof. Gate it on an evidence.ref:
+    //   off     → apply the delta exactly as today (gate disabled).
+    //   shadow  → apply the delta exactly as today (NO live change), but record
+    //             would_gate so we can MEASURE how many self-reports are unproven.
+    //   enforce → an unproven self-report (no evidence.ref) earns 0 (mirrors the
+    //             STAKE stopgap); a proven one is unchanged.
+    // ENFORCE_EXEMPT types (AUDIT_CONTRIBUTION) are the exception: they are still
+    // MEASURED in shadow (would_gate recorded) but enforce does NOT zero them,
+    // because they have a legitimate internal proof-carrying emitter (bounty
+    // verification, bounties.ts:118) that cannot attach an evidence.ref. Zeroing
+    // that would break real payouts — so exempt = record metadata, apply delta.
+    logSelfReportModeOnce();
+    const baseDelta = FIXED_DELTAS[input.eventType] ?? 0;
+    if (SELF_REPORT_EVIDENCE_MODE === 'off') {
+      selfReportEvidenceMeta = { mode: 'off' };
+      rawDelta = baseDelta;
+    } else {
+      const present = evidencePresent(input);
+      const wouldGate = !present; // required is always true for these types
+      const enforceExempt = ENFORCE_EXEMPT.has(input.eventType);
+      selfReportEvidenceMeta = {
+        mode: SELF_REPORT_EVIDENCE_MODE, required: true, present, would_gate: wouldGate,
+        // Only surface the flag for exempt types; non-exempt metadata shape is unchanged.
+        ...(enforceExempt ? { enforce_exempt: true } : {}),
+      };
+      // Enforce zeroes an unproven self-report — UNLESS the type is enforce-exempt.
+      rawDelta = (SELF_REPORT_EVIDENCE_MODE === 'enforce' && wouldGate && !enforceExempt) ? 0 : baseDelta;
+    }
   } else {
     rawDelta = FIXED_DELTAS[input.eventType] ?? 0;
   }
@@ -444,6 +574,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // that backs this +5. Null for every non-STAKE event and for any STAKE
       // event that arrived without proof (delta 0).
       stakeProof: input.eventType === 'STAKE' ? (input.stakeProof ?? null) : null,
+      // CC-1 self-report evidence gate. For a self-reported positive event this
+      // records { mode, required, present, would_gate } so shadow mode is a
+      // replayable measurement of unproven self-reports; null for other events.
+      // In shadow (default) the top-level `delta` is UNCHANGED — would_gate only
+      // flags what enforce WOULD have zeroed.
+      self_report_evidence: selfReportEvidenceMeta,
     },
   });
 
