@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
+import { computeDefensibility } from '../services/reliability';
 import { todayPT } from '../lib/time';
 
 const router = Router();
@@ -443,6 +444,18 @@ router.get('/agents/:id/ethics', async (req: Request, res: Response) => {
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   const ethics = await computeEthics(id);
   return res.json(ethics);
+});
+
+// GET /agents/:id/reliability — peer-assessed defensibility (P0 of the
+// defensibility × discernment lens). Read-only, PROVISIONAL (methodology +
+// disputed-semantics under Grok cross-val); not yet a public leaderboard lens.
+router.get('/agents/:id/reliability', async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const { data: agent } = await db
+    .from('repid_agents').select('id').eq('id', id).single();
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  const result = await computeDefensibility(id);
+  return res.json(result);
 });
 
 // GET /suggested-rules?role=trading — constitutional rule suggestions (Cerebras stub)
