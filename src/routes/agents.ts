@@ -219,7 +219,9 @@ router.get('/agents/:id/history', async (req: Request, res: Response) => {
     challengeId: e.metadata?.challengeId ?? null,
     created_at: e.created_at,
     createdAt: e.created_at,
-    metadata: e.metadata,
+    // NOTE: the raw `metadata` blob is deliberately NOT echoed — this
+    // endpoint is public (auth bypass), so only the curated reputation
+    // fields above are exposed, never internal metadata.
   }));
   return res.json(enriched);
 });
