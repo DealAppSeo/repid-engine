@@ -413,11 +413,24 @@ router.get('/events/recent', async (req: Request, res: Response) => {
     };
   }
 
-  const enriched = (data ?? []).map((e: any) => ({
-    ...e,
-    agentName: agentMap[e.agent_id]?.name ?? 'Unknown',
-    isHuman: agentMap[e.agent_id]?.isHuman ?? false,
-  }));
+  // Public feed: curated fields only. The raw `metadata` blob is NOT
+  // echoed (only the verdict/claim it may carry), and human agents are
+  // anonymized server-side rather than trusting the client to hide names.
+  const enriched = (data ?? []).map((e: any) => {
+    const isHuman = agentMap[e.agent_id]?.isHuman ?? false;
+    return {
+      id: e.id,
+      event_type: e.event_type,
+      delta: e.delta,
+      repid_before: e.repid_before,
+      repid_after: e.repid_after,
+      created_at: e.created_at,
+      eas_attestation_id: e.eas_attestation_id,
+      verdict: e.metadata?.verdict ?? null,
+      agentName: isHuman ? '[Anonymous Human]' : (agentMap[e.agent_id]?.name ?? 'Unknown'),
+      isHuman,
+    };
+  });
 
   return res.json(enriched);
 });

@@ -43,6 +43,8 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // optional /api/v1 prefix keeps the bypass robust to either mount.
   if (req.method === 'GET' && /^(\/api\/v1)?\/agents\/[^/]+\/(history|badges|ethics)$/.test(req.path)) return next();
   if (req.method === 'GET' && /^(\/api\/v1)?\/agents\/[^/]+\/zkp\/[A-Za-z]+$/.test(req.path)) return next();
+  // Public activity feed (curated fields, human agents anonymized server-side).
+  if (req.method === 'GET' && /^(\/api\/v1)?\/events\/recent$/.test(req.path)) return next();
   // Sprint 6: public ERC-8004 verification surface (mint-status, onchain)
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/(mint-status|onchain)$/.test(req.path)) return next();
   // Sprint 12 (megasprint): public Graph RAG recall surface
