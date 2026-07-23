@@ -25,6 +25,7 @@
 import { createHash, randomInt, timingSafeEqual } from 'crypto';
 import jwt, { JwtPayload, SignOptions } from 'jsonwebtoken';
 import { emitAuditEvent } from './audit-emit';
+import { db } from '../db';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
@@ -190,13 +191,87 @@ export async function verifyOtp(
     return { ok: false, error: 'server_config' };
   }
 
+  const emailHash = createHash('sha256').update(email).digest('hex').slice(0, 16);
+  const dedupeSourceId = `agent-gate-verified-${emailHash}`;
+
+  // First-ever verification for this email → one-time welcome email.
+  // Dedup is durable via the audit chain's deterministic source_id, so a
+  // redeploy (which clears the in-memory maps) never re-welcomes anyone.
+  const firstTime = !(await hasPriorVerification(dedupeSourceId));
+
   await emitAuditEvent({
     event_type: 'agent_gate_email_verified',
     source_table: 'none',
-    payload: { email_hash: createHash('sha256').update(email).digest('hex').slice(0, 16) },
+    source_id: dedupeSourceId,
+    payload: { email_hash: emailHash },
   }).catch(() => {});
 
+  if (firstTime) {
+    // Fire-and-forget: a welcome hiccup must never block the token.
+    sendWelcomeEmail(email).catch((err) =>
+      console.warn(`[agent-gate] welcome email failed: ${err?.message ?? err}`)
+    );
+  }
+
   return { ok: true, token };
+}
+
+async function hasPriorVerification(sourceId: string): Promise<boolean> {
+  try {
+    const { data } = await db
+      .from('hal_audit_chain')
+      .select('id')
+      .eq('source_id', sourceId)
+      .limit(1);
+    return Array.isArray(data) && data.length > 0;
+  } catch {
+    // On lookup failure err toward NOT sending — a missing welcome is
+    // recoverable; a duplicate one reads as spam on a trust product.
+    return true;
+  }
+}
+
+/**
+ * One-time welcome after first verification (Sean 2026-07-22). Scope is
+ * honest: this welcome + the agent's trust reports are the only automatic
+ * emails; anything recurring would be a separate explicit opt-in. The OTP
+ * itself was the double opt-in (typing a code proves inbox ownership more
+ * strongly than a confirmation click).
+ */
+export function buildWelcomeEmail(): { subject: string; text: string } {
+  return {
+    subject: "You're in — welcome aboard",
+    text:
+      `You're verified — welcome aboard.\n\n` +
+      `Congratulations on being one of the early adopters helping build the trust ecosystem for AI. ` +
+      `Your agent, its history, and its RepID progress are now saved, and your daily limit is raised to 100 HAL-scored runs.\n\n` +
+      `What's next:\n` +
+      `- Run prompts and watch your agent earn reputation: https://trustshell.dev/run\n` +
+      `- See where it stands on the live leaderboard: https://trustshell.dev/leaderboard\n` +
+      `- Have opinions on how reputation SHOULD work? The formula is public and open for debate — ` +
+      `join the conversation at Trust Commons: https://github.com/DealAppSeo/trust-commons\n\n` +
+      `About email: this welcome and your agent's trust reports are the only emails we send automatically. ` +
+      `No newsletter unless you ask for one, no spam, no selling your address. Reply STOP and we'll never email you again.\n\n` +
+      `— TrustShell · receipts, not promises\n` +
+      `https://trustshell.dev\n`,
+  };
+}
+
+async function sendWelcomeEmail(email: string): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return;
+  const from = process.env.RESEND_FROM || 'TrustShell <onboarding@resend.dev>';
+  const { subject, text } = buildWelcomeEmail();
+  const resp = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ from, to: [email], subject, text }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(`Resend welcome failed ${resp.status}: ${body.slice(0, 200)}`);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────

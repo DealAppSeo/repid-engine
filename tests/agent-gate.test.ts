@@ -95,3 +95,23 @@ describe('agent gate — metering', () => {
     expect(after.remaining).toBe(before.remaining);
   });
 });
+
+describe('agent gate — welcome email copy', () => {
+  const { buildWelcomeEmail } = require('../src/services/email-otp');
+
+  test('carries the early-adopter message + trust-commons invitation', () => {
+    const { subject, text } = buildWelcomeEmail();
+    expect(subject.length).toBeLessThanOrEqual(60);
+    expect(text).toContain('early adopters');
+    expect(text).toContain('trust ecosystem');
+    expect(text).toContain('https://github.com/DealAppSeo/trust-commons');
+    expect(text).toContain('https://trustshell.dev/run');
+  });
+
+  test('honest email-scope promise, no banned canon words', () => {
+    const { text } = buildWelcomeEmail();
+    expect(text).toContain('only emails we send automatically');
+    expect(text).toContain('Reply STOP');
+    expect(text.toLowerCase()).not.toMatch(/\bsimply\b|\bjust\b|\beasy\b/);
+  });
+});
