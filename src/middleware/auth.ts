@@ -35,6 +35,14 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/(repid|vdr)$/.test(req.path)) return next();
   // Sprint A5: public agent card (no private fields exposed)
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/card$/.test(req.path)) return next();
+  // 2026-07-23: public per-agent reputation reads for the trustrepid.dev
+  // glass-box surface — history (curated fields only, no raw metadata),
+  // badges (public achievements), ethics (same computeEthics as /card),
+  // zkp tiered disclosure (self-redacting for humans). All read-only.
+  // routes/agents.ts is mounted at root, so these are BARE paths; the
+  // optional /api/v1 prefix keeps the bypass robust to either mount.
+  if (req.method === 'GET' && /^(\/api\/v1)?\/agents\/[^/]+\/(history|badges|ethics)$/.test(req.path)) return next();
+  if (req.method === 'GET' && /^(\/api\/v1)?\/agents\/[^/]+\/zkp\/[A-Za-z]+$/.test(req.path)) return next();
   // Sprint 6: public ERC-8004 verification surface (mint-status, onchain)
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/(mint-status|onchain)$/.test(req.path)) return next();
   // Sprint 12 (megasprint): public Graph RAG recall surface
