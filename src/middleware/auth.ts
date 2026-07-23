@@ -41,7 +41,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // zkp tiered disclosure (self-redacting for humans). All read-only.
   // routes/agents.ts is mounted at root, so these are BARE paths; the
   // optional /api/v1 prefix keeps the bypass robust to either mount.
-  if (req.method === 'GET' && /^(\/api\/v1)?\/agents\/[^/]+\/(history|badges|ethics)$/.test(req.path)) return next();
+  if (req.method === 'GET' && /^(\/api\/v1)?\/agents\/[^/]+\/(history|badges|ethics|reliability)$/.test(req.path)) return next();
   if (req.method === 'GET' && /^(\/api\/v1)?\/agents\/[^/]+\/zkp\/[A-Za-z]+$/.test(req.path)) return next();
   // Public activity feed (curated fields, human agents anonymized server-side).
   if (req.method === 'GET' && /^(\/api\/v1)?\/events\/recent$/.test(req.path)) return next();
