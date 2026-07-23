@@ -71,6 +71,55 @@ export class X402Facilitator {
     }];
   }
 
+  /**
+   * Build the x402 v2 facilitator request envelope for /verify and /settle.
+   *
+   * The public x402.org facilitator migrated to the v2 wire shape (verified
+   * 2026-07-22 against the live /verify endpoint + specs/schemes/exact/
+   * scheme_exact_evm.md). Differences from the v1 body we used to send:
+   *   - requirements use `amount` (not `maxAmountRequired`); no top-level
+   *     resource/mimeType/description
+   *   - the PaymentPayload embeds the requirements as `accepted` and no longer
+   *     carries top-level scheme/network (that omission was the live
+   *     "Cannot read properties of undefined (reading 'scheme')" 500)
+   *   - authorization numeric fields are strings
+   *   - extra carries assetTransferMethod:"eip3009" + name/version
+   */
+  private buildV2Envelope(
+    reqObj: PaymentRequirements,
+    signature: string,
+    auth: { from: string; to: string; value: unknown; validAfter: unknown; validBefore: unknown; nonce: string },
+    tokenName: string,
+    tokenVersion: string,
+  ): Record<string, unknown> {
+    const accepted = {
+      scheme: reqObj.scheme,
+      network: reqObj.network,
+      amount: reqObj.maxAmountRequired,
+      asset: reqObj.asset,
+      payTo: reqObj.payTo,
+      maxTimeoutSeconds: reqObj.maxTimeoutSeconds,
+      extra: { assetTransferMethod: 'eip3009', name: tokenName, version: tokenVersion },
+    };
+    const authorization = {
+      from: auth.from,
+      to: auth.to,
+      value: auth.value != null ? String(auth.value) : undefined,
+      validAfter: auth.validAfter != null ? String(auth.validAfter) : '0',
+      validBefore: auth.validBefore != null ? String(auth.validBefore) : undefined,
+      nonce: auth.nonce,
+    };
+    return {
+      x402Version: X402_VERSION,
+      paymentPayload: {
+        x402Version: X402_VERSION,
+        accepted,
+        payload: { signature: signature || '', authorization },
+      },
+      paymentRequirements: accepted,
+    };
+  }
+
   async verifyPayment(
     xPaymentHeader: string,
     requirements: PaymentRequirements | PaymentRequirements[]
@@ -124,32 +173,9 @@ export class X402Facilitator {
       const response = await fetch(`${netConfig.x402.facilitatorUrl}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          x402Version: X402_VERSION,
-          paymentPayload: {
-            x402Version: X402_VERSION,
-            scheme: reqObj.scheme,
-            network: reqObj.network,
-            payload: {
-              signature: signature || '',
-              authorization: {
-                from: paymentPayload.from,
-                to: paymentPayload.to,
-                value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
-                validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
-                validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
-                nonce: paymentPayload.nonce
-              }
-            }
-          },
-          paymentRequirements: {
-            ...reqObj,
-            extra: {
-              name,
-              version
-            }
-          }
-        })
+        body: JSON.stringify(
+          this.buildV2Envelope(reqObj, signature, paymentPayload, name, version),
+        )
       });
 
       if (!response.ok) {
@@ -231,32 +257,9 @@ export class X402Facilitator {
       const response = await fetch(`${netConfig.x402.facilitatorUrl}/settle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          x402Version: X402_VERSION,
-          paymentPayload: {
-            x402Version: X402_VERSION,
-            scheme: reqObj.scheme,
-            network: reqObj.network,
-            payload: {
-              signature: signature || '',
-              authorization: {
-                from: paymentPayload.from,
-                to: paymentPayload.to,
-                value: paymentPayload.value ? paymentPayload.value.toString() : undefined,
-                validAfter: paymentPayload.validAfter !== undefined ? Number(paymentPayload.validAfter) : undefined,
-                validBefore: paymentPayload.validBefore !== undefined ? Number(paymentPayload.validBefore) : undefined,
-                nonce: paymentPayload.nonce
-              }
-            }
-          },
-          paymentRequirements: {
-            ...reqObj,
-            extra: {
-              name,
-              version
-            }
-          }
-        })
+        body: JSON.stringify(
+          this.buildV2Envelope(reqObj, signature, paymentPayload, name, version),
+        )
       });
 
       if (!response.ok) {
@@ -270,15 +273,16 @@ export class X402Facilitator {
       if (!data.success) {
         x402Metrics.increment('facilitator.settle.failure');
         x402Metrics.recordLatency('facilitator.settle', Date.now() - startTime);
-        throw new Error(data.reason || 'Settlement failed');
+        throw new Error(data.errorMessage || data.errorReason || data.reason || 'Settlement failed');
       }
 
       x402Metrics.increment('facilitator.settle.success');
       x402Metrics.recordLatency('facilitator.settle', Date.now() - startTime);
 
+      // v2 settle returns `transaction` (v1 was `txHash`); accept both.
       return {
         success: data.success,
-        txHash: data.txHash,
+        txHash: data.transaction ?? data.txHash,
         network: data.network,
         payer: data.payer
       };
