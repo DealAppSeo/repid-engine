@@ -81,6 +81,7 @@ interface Flags {
   serviceType: string;
   base: string;
   satisfaction: number;
+  providerWallet?: string;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -100,6 +101,9 @@ function parseFlags(argv: string[]): Flags {
     serviceType: get('service-type') ?? 'verification',
     base: (get('base') ?? DEFAULT_BASE).replace(/\/+$/, ''),
     satisfaction: Number.isFinite(satRaw) ? Math.min(Math.max(satRaw, 0), 1) : 1,
+    // The public surface doesn't expose provider wallet_address; an operator
+    // who has read it from the DB can supply it directly for --real payTo.
+    providerWallet: get('provider-wallet') ?? process.env.X402_PROVIDER_WALLET,
   };
 }
 
@@ -287,7 +291,8 @@ async function preflight(flags: Flags): Promise<Preflight> {
 
   // provider wallet (needed for a real settlement payTo). We can read it from the minted list if present.
   const provMinted = minted.find((m) => m.agent_id === providerName || m.name === providerName);
-  const providerWallet: string | null = provMinted?.wallet_address ?? null; // not exposed publicly → may be null
+  const providerWallet: string | null =
+    flags.providerWallet ?? provMinted?.wallet_address ?? null; // operator override, else minted list, else null
 
   const pf: Preflight = {
     apiKey,
