@@ -55,7 +55,11 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     },
     x402: {
       facilitatorUrl: 'https://x402.org/facilitator',
-      networkParam: 'base-sepolia',
+      // CAIP-2 id. The public facilitator re-keyed its registry to CAIP-2
+      // (verified 2026-07-22 via GET /facilitator/supported): "base-sepolia"
+      // now returns "No facilitator registered" — this silently broke every
+      // real settlement after the x402 Foundation launch (2026-07-14).
+      networkParam: process.env.X402_NETWORK_PARAM || 'eip155:84532',
     },
   },
   'base': {
@@ -74,7 +78,8 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     },
     x402: {
       facilitatorUrl: process.env.X402_MAINNET_FACILITATOR_URL || 'https://x402.org/facilitator',
-      networkParam: 'base',
+      // CAIP-2 (see base-sepolia note): "base" → "eip155:8453".
+      networkParam: process.env.X402_MAINNET_NETWORK_PARAM || 'eip155:8453',
     },
     caps: {
       perContractUsdCap: process.env.MAINNET_PER_CONTRACT_USD_CAP ? Number(process.env.MAINNET_PER_CONTRACT_USD_CAP) : 10,
