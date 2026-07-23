@@ -208,9 +208,17 @@ router.get('/leaderboard/models', async (_req: Request, res: Response) => {
     const performance = perf.data ?? [];
     const value = val.data ?? [];
     const topPerf: any = performance[0], topVal: any = value[0];
-    const narrative = (topPerf && topVal)
-      ? `On code-review discrimination (Brier-calibrated): most accurate is ${topPerf.model_id}; best value is ${topVal.model_id}. The most accurate and the best-value model are not the same. This measures code-review discrimination — one narrow proxy — not general trustworthiness.`
-      : 'Model benchmark pending.';
+    // When the same model tops both lenses, "they're not the same" is a
+    // self-contradiction — handle that case explicitly (both said gpt-4o then
+    // called them different). Otherwise state the divergence, which is the point.
+    let narrative: string;
+    if (topPerf && topVal) {
+      narrative = (topPerf.model_id === topVal.model_id)
+        ? `On code-review discrimination (Brier-calibrated): ${topPerf.model_id} currently leads on both accuracy and value — though the two usually diverge. This measures code-review discrimination — one narrow proxy — not general trustworthiness.`
+        : `On code-review discrimination (Brier-calibrated): the most accurate model (${topPerf.model_id}) and the best-value one (${topVal.model_id}) aren't the same — which is exactly the point. This measures code-review discrimination — one narrow proxy — not general trustworthiness.`;
+    } else {
+      narrative = 'Model benchmark pending.';
+    }
     const payload = {
       metric: 'code-review discrimination (Brier-calibrated)',
       disclaimer: 'A narrow proxy, not general AI trustworthiness. Early results; N is small; methodology is public and inviting red-team. Single-shot base API, default settings — not multi-agent products or scaffolding.',
