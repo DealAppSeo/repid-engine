@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
+import { buildFactCheckProviders, auditFamilyIndependence } from '../hal/fact-check';
 
 const router = Router();
 
@@ -161,6 +162,18 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     (classifications.last_24h ?? 0) > 0 ||
     (productionEvents.last_24h ?? 0) > 0;
 
+  // Cross-family quorum shape — the SBFA differentiator, surfaced for the
+  // public "independent cross-examination" card. Families are generic
+  // lineage names (llama, glm, …), not provider secrets.
+  let quorum = { providers: 0, families: 0, family_names: [] as string[] };
+  try {
+    const cfgs = buildFactCheckProviders();
+    const a = auditFamilyIndependence(cfgs);
+    quorum = { providers: cfgs.length, families: a.families.length, family_names: a.families };
+  } catch {
+    // Leave zeros — the frontend renders an honest fallback, never a mock.
+  }
+
   res.json({
     // Headline counts — what a Magician running curl sees first.
     total_inferences,
@@ -169,6 +182,11 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     peer_verification_queue_size,
     last_24h_inferences,
     last_24h_classifications,
+
+    // Cross-family quorum (live config, not a constant).
+    quorum_providers: quorum.providers,
+    quorum_families: quorum.families,
+    quorum_family_names: quorum.family_names,
 
     // Per-table breakdown for the curious reader.
     breakdown: {
