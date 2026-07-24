@@ -17,6 +17,29 @@ export function normalizeAgentName(assigned: string | null | undefined): string 
   return name;
 }
 
+// Verdicts that mean an independent verifier UPHELD the claim.
+const PASS_VERDICTS = new Set(['pass', 'verified', 'approved', 'confirmed', 'upheld']);
+
+/**
+ * repid_verified = true ONLY when an INDEPENDENT verifier checked the task and it
+ * PASSED. The peer-verify system guarantees verifier != source, so the presence of
+ * a verifier_agent_id + a pass verdict means someone other than the claimant signed
+ * off. Self-completion alone is NEVER "verified" — that is the hard rule (an agent
+ * may not validate its own work). Exposed for tests.
+ */
+export function isIndependentlyVerified(task: {
+  verifier_agent_id?: string | null;
+  verify_count?: number | null;
+  final_verdict?: string | null;
+  verifier_verdict?: string | null;
+}): boolean {
+  const hasIndependentVerifier = !!task.verifier_agent_id && (task.verify_count ?? 0) >= 1;
+  if (!hasIndependentVerifier) return false;
+  const fv = String(task.final_verdict ?? '').toLowerCase();
+  const vv = String(task.verifier_verdict ?? '').toLowerCase();
+  return PASS_VERDICTS.has(fv) || PASS_VERDICTS.has(vv);
+}
+
 function generateDeterministicUuid(taskId: number | string): string {
   const hash = crypto.createHash('sha256').update(String(taskId)).digest('hex');
   return [
@@ -51,9 +74,13 @@ async function pollCompletedTasks() {
     // Query recently completed done, shadow_reject, or verified tasks that are not yet repid_verified
     const { data: tasks, error: fetchErr } = await db
       .from('trinity_tasks')
-      .select('id, agent_assigned, claimed_by, agent_name, completed_by, status, result, belief, uncertainty, certainty, title, description, task_type, metadata, completed_at, updated_at')
+      .select('id, agent_assigned, claimed_by, agent_name, completed_by, status, result, belief, uncertainty, certainty, title, description, task_type, metadata, completed_at, updated_at, verifier_agent_id, verifier_verdict, final_verdict, verify_count')
       .in('status', ['done', 'shadow_reject', 'verified'])
-      .eq('repid_verified', false)
+      // Dedup on the bridge's OWN marker (metadata.repid_bridged), NOT repid_verified.
+      // repid_verified is now reserved to mean, honestly, "an INDEPENDENT peer verifier
+      // checked this and it passed" — self-completion is never "verified". (runScoreEvent
+      // is idempotent per idempotency_key, so a missed dedup can never double-score.)
+      .or('metadata->>repid_bridged.is.null,metadata->>repid_bridged.neq.true')
       .or(`completed_at.gt.${startTimestamp},updated_at.gt.${startTimestamp}`)
       .order('completed_at', { ascending: true })
       .limit(10);
@@ -190,17 +217,22 @@ async function markTaskBridged(task: any) {
       currentMetadata = task.metadata;
     }
   }
+  // HARD RULE: an agent may not validate its own work. repid_verified reflects
+  // INDEPENDENT peer verification only; being scored/bridged is tracked separately
+  // via metadata.repid_bridged (the dedup marker).
+  const verified = isIndependentlyVerified(task);
   const updatedMetadata = {
     ...currentMetadata,
     repid_bridged: 'true',
-    repid_bridged_at: new Date().toISOString()
+    repid_bridged_at: new Date().toISOString(),
+    independently_verified: verified,
   };
 
   const { error: updateErr } = await db
     .from('trinity_tasks')
     .update({
       metadata: updatedMetadata,
-      repid_verified: true
+      repid_verified: verified, // true ONLY when an independent verifier passed it
     })
     .eq('id', task.id);
 
