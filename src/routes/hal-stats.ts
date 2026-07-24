@@ -140,11 +140,12 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     }
   };
 
-  const [classifications, auditChain, productionEvents, pvqPendingCount, sample, externalBenchmark] = await Promise.all([
+  const [classifications, auditChain, productionEvents, pvqPendingCount, peerVerification, sample, externalBenchmark] = await Promise.all([
     safeCount('hal_classifications', true),
     safeCount('hal_audit_chain', true),
     safeCount('hal_production_events', true),
     pvqPending(),
+    safeCount('peer_verification_queue', true), // total (all statuses) + 24h growth
     productionSample(),
     getExternalBenchmark(),
   ]);
@@ -154,6 +155,10 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
   const total_classifications = classifications.lifetime ?? 0;
   const audit_chain_length = auditChain.lifetime ?? 0;
   const peer_verification_queue_size = pvqPendingCount ?? 0;
+  // Total peer-verifications ever recorded (all statuses), for the public
+  // "N checks and counting" copy — distinct from the *pending* queue size.
+  const peer_verification_total = peerVerification.lifetime ?? 0;
+  const peer_verification_last_24h = peerVerification.last_24h ?? 0;
   const last_24h_inferences = classifications.last_24h ?? 0;
   const last_24h_classifications = classifications.last_24h ?? 0;
 
@@ -180,6 +185,8 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     total_classifications,
     audit_chain_length,
     peer_verification_queue_size,
+    peer_verification_total,
+    peer_verification_last_24h,
     last_24h_inferences,
     last_24h_classifications,
 
@@ -196,7 +203,11 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
         ...productionEvents,
         sample: { in_last_1000: sample.lifetime_in_sample, caught: sample.caught_in_sample },
       },
-      peer_verification_queue: { pending: peer_verification_queue_size },
+      peer_verification_queue: {
+        total: peer_verification_total,
+        pending: peer_verification_queue_size,
+        last_24h: peer_verification_last_24h,
+      },
     },
 
     // Verifiable external benchmark statistics
