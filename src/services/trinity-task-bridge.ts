@@ -3,6 +3,7 @@ import { db } from '../db';
 import { runScoreEvent } from '../scoring/pipeline';
 import { enqueueVerification } from './peer-verification-writer';
 import { classifyPeerVerifyClaim, isPeerVerificationTask } from './peer-verify-prefilter';
+import { isProducerHalted } from './producer-halt';
 
 const POLL_INTERVAL_MS = parseInt(process.env.TRINITY_BRIDGE_POLL_MS || '30000', 10);
 const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
@@ -208,9 +209,21 @@ async function pollCompletedTasks() {
               `(task_type=${task.task_type}) — suppressing recursive re-verification (breaker 2.3)`
           );
         }
+        // L2 breaker 2.1 — producer kill-switch: when peer_verify producers are
+        // halted (PRODUCER_HALT_CLASSES), do not enqueue new peer-verifications.
+        // Scoring above still ran (that is draining, not producing); only the
+        // spawn is suppressed. Drain-only, fail-loud.
+        const peerVerifyHalted = isProducerHalted('peer_verify');
+        if (wantsPeer && !isPeerVerificationTask(task) && peerVerifyHalted) {
+          console.log(
+            `[TrinityTaskBridge] peer_verify producer halted (PRODUCER_HALT_CLASSES) ` +
+              `— not enqueuing verification for task ${task.id} (breaker 2.1)`
+          );
+        }
         if (
           wantsPeer &&
           !isPeerVerificationTask(task) &&
+          !peerVerifyHalted &&
           !isIndependentlyVerified(task) &&
           classifyPeerVerifyClaim(answer, certainty).verifiable
         ) {

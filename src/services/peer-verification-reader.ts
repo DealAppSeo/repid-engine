@@ -6,6 +6,7 @@ import {
   PANEL_PROVIDER_HINTS,
 } from './peer-verify-consensus';
 import { classifyPeerVerifyClaim, prefilterMode } from './peer-verify-prefilter';
+import { isProducerHalted } from './producer-halt';
 
 const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
 const POLL_INTERVAL_MS = 30000;
@@ -26,6 +27,20 @@ async function getAgentName(db: SupabaseClient, agentId: string): Promise<string
 
 export async function processPeerVerificationQueue(db: SupabaseClient): Promise<void> {
   try {
+    // L2 breaker 2.1 — producer kill-switch (drain-only). The reader turns queue
+    // entries into new peer_verify trinity_tasks; that is a producer action. When
+    // peer_verify producers are halted (PRODUCER_HALT_CLASSES), do not claim or
+    // spawn — leave entries 'pending' so they resume the moment the lever is
+    // cleared, while workers keep draining any peer_verify tasks already in
+    // flight. Fail-safe (only ever skips a spawn), fail-loud.
+    if (isProducerHalted('peer_verify')) {
+      console.log(
+        '[PeerVerificationReader] peer_verify producer halted (PRODUCER_HALT_CLASSES) ' +
+          '— skipping spawn cycle; queued entries left pending (breaker 2.1)'
+      );
+      return;
+    }
+
     // 1. Fetch pending queue entries
     const { data: pending, error } = await db
       .from('peer_verification_queue')
