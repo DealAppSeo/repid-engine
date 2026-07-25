@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { runScoreEvent } from '../scoring/pipeline';
 import { enqueueVerification } from './peer-verification-writer';
-import { classifyPeerVerifyClaim } from './peer-verify-prefilter';
+import { classifyPeerVerifyClaim, isPeerVerificationTask } from './peer-verify-prefilter';
 
 const POLL_INTERVAL_MS = parseInt(process.env.TRINITY_BRIDGE_POLL_MS || '30000', 10);
 const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
@@ -198,7 +198,22 @@ async function pollCompletedTasks() {
         // (drill/status) and skip if already independently verified. (Before this, those flags
         // were cosmetic — tasks self-completed with no peer, per the 2026-07-24 dogfood.)
         const wantsPeer = task.verification_required === true || task.needs_peer === true;
-        if (wantsPeer && !isIndependentlyVerified(task) && classifyPeerVerifyClaim(answer, certainty).verifiable) {
+        // L2 breaker 2.3 — self-referential ban: a peer-verify task must never
+        // spawn a further peer-verification of itself (the recursion that drove
+        // the 85% [PEER_VERIFY_PANEL] churn; see peer-verify-prefilter.ts).
+        // Fail-loud: log the suppression so the skip is never silent.
+        if (wantsPeer && isPeerVerificationTask(task)) {
+          console.log(
+            `[TrinityTaskBridge] Task ${task.id} is itself a peer-verification ` +
+              `(task_type=${task.task_type}) — suppressing recursive re-verification (breaker 2.3)`
+          );
+        }
+        if (
+          wantsPeer &&
+          !isPeerVerificationTask(task) &&
+          !isIndependentlyVerified(task) &&
+          classifyPeerVerifyClaim(answer, certainty).verifiable
+        ) {
           const enq = await enqueueVerification(db, {
             source_response_id: generateDeterministicUuid(task.id),
             source_agent_id: agentInfo.id,

@@ -45,6 +45,57 @@ const RE_REPORT_HEADER = /^\s{0,3}#{1,3}\s/;
 const RE_INTERNAL = /\b(evergreen|CAIT|WSCE)\b/i;
 
 /**
+ * Structural self-referential guard (L2 breaker 2.3).
+ *
+ * WHY: the peer-verify loop is a fork-bomb risk. The bridge enqueues a
+ * peer-verification for a completed task; peer-verification-reader turns each
+ * queue entry into up to 3 `trinity_tasks` (task_type='peer_verify'); those
+ * complete and re-enter the bridge. If a *peer-verify* task is allowed to spawn
+ * a further peer-verification of itself, the queue recurses without bound —
+ * this is the 85% `[PEER_VERIFY_PANEL] Verify response from trinity-*`
+ * self-referential churn root-caused 2026-07-25 (reports/2026-07-25/
+ * BEAT2_PEER_VERIFY_STALL_AND_GATE_ROOTCAUSE.md).
+ *
+ * Today the recursion is only *incidentally* closed because reader-spawned
+ * tasks don't set verification_required/needs_peer. That is fragile — one field
+ * change reopens it. This is the durable structural ban: a task that is itself
+ * a peer-verification NEVER spawns further peer-verification. It complements the
+ * content heuristic (RE_RECURSIVE) above with a robust structural signal.
+ *
+ * Detection (any one is sufficient):
+ *   - task_type === 'peer_verify' (set by peer-verification-reader on spawn), or
+ *   - metadata.peer_verification_queue_id present (the reader stamps this), or
+ *   - title begins with '[PEER_VERIFY' / '[PEER_VERIFY_PANEL'.
+ *
+ * Fail-safe: this only ever SUPPRESSES a spawn, never adds one, so a
+ * false-positive costs at most one skipped (redundant) re-verification, while a
+ * false-negative is the unbounded loop. Bias to detect.
+ */
+export function isPeerVerificationTask(task: {
+  task_type?: string | null;
+  title?: string | null;
+  metadata?: unknown;
+}): boolean {
+  if ((task.task_type ?? '').toLowerCase() === 'peer_verify') return true;
+
+  const title = (task.title ?? '').trimStart();
+  if (/^\[PEER_VERIFY(_PANEL)?\b/i.test(title)) return true;
+
+  let meta: any = task.metadata;
+  if (typeof meta === 'string') {
+    try {
+      meta = JSON.parse(meta);
+    } catch {
+      meta = null;
+    }
+  }
+  if (meta && typeof meta === 'object' && meta.peer_verification_queue_id != null) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * True = a real, checkable claim worth spending verification on.
  * False = drill/status/recursive/empty — skip.
  */
