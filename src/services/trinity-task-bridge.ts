@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { db } from '../db';
 import { runScoreEvent } from '../scoring/pipeline';
+import { enqueueVerification } from './peer-verification-writer';
+import { classifyPeerVerifyClaim } from './peer-verify-prefilter';
 
 const POLL_INTERVAL_MS = parseInt(process.env.TRINITY_BRIDGE_POLL_MS || '30000', 10);
 const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
@@ -74,7 +76,7 @@ async function pollCompletedTasks() {
     // Query recently completed done, shadow_reject, or verified tasks that are not yet repid_verified
     const { data: tasks, error: fetchErr } = await db
       .from('trinity_tasks')
-      .select('id, agent_assigned, claimed_by, agent_name, completed_by, status, result, belief, uncertainty, certainty, title, description, task_type, metadata, completed_at, updated_at, verifier_agent_id, verifier_verdict, final_verdict, verify_count')
+      .select('id, agent_assigned, claimed_by, agent_name, completed_by, status, result, belief, uncertainty, certainty, title, description, task_type, metadata, completed_at, updated_at, verifier_agent_id, verifier_verdict, final_verdict, verify_count, verification_required, needs_peer')
       .in('status', ['done', 'shadow_reject', 'verified'])
       // Dedup on the bridge's OWN marker (metadata.repid_bridged), NOT repid_verified.
       // repid_verified is now reserved to mean, honestly, "an INDEPENDENT peer verifier
@@ -189,6 +191,22 @@ async function pollCompletedTasks() {
         });
 
         console.log(`[TrinityTaskBridge] Score event successfully created: id=${scoreResult.score_event_id}, hal_score=${scoreResult.hal_score}, delta=${scoreResult.repid_delta_applied}`);
+
+        // Wire: a task flagged verification_required / needs_peer must go to an INDEPENDENT
+        // verifier (the bilateral loop), not rest on HAL alone. Enqueue a peer-verification so
+        // peer-verification-reader assigns a verifier != source. Skip non-verifiable claims
+        // (drill/status) and skip if already independently verified. (Before this, those flags
+        // were cosmetic — tasks self-completed with no peer, per the 2026-07-24 dogfood.)
+        const wantsPeer = task.verification_required === true || task.needs_peer === true;
+        if (wantsPeer && !isIndependentlyVerified(task) && classifyPeerVerifyClaim(answer, certainty).verifiable) {
+          const enq = await enqueueVerification(db, {
+            source_response_id: generateDeterministicUuid(task.id),
+            source_agent_id: agentInfo.id,
+            certainty_at_claim: certainty,
+            claim_text: answer,
+          });
+          if (enq) console.log(`[TrinityTaskBridge] Task ${task.id} → peer-verification queued (${enq.id}) for independent check`);
+        }
 
         await markTaskBridged(task);
 
