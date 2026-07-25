@@ -32,7 +32,8 @@ describe('X402OutboundClient Idempotency', () => {
     mockFetch.mockResolvedValueOnce({
       status: 402,
       json: jest.fn().mockResolvedValue({
-        accepts: [{ network: 'base-sepolia', scheme: 'exact', maxAmountRequired: '100', asset: '0x0000000000000000000000000000000000000000', payTo: '0x0000000000000000000000000000000000000000' }]
+        // CAIP-2 (2026-07-22): offer.network must match netConfig.x402.networkParam.
+        accepts: [{ network: 'eip155:84532', scheme: 'exact', maxAmountRequired: '100', asset: '0x0000000000000000000000000000000000000000', payTo: '0x0000000000000000000000000000000000000000' }]
       })
     });
     
