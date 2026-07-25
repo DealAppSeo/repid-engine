@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
-import { computeDefensibility } from '../services/reliability';
+import { computeDefensibilitySpec } from '../services/reliability';
 import { todayPT } from '../lib/time';
 
 const router = Router();
@@ -447,15 +447,27 @@ router.get('/agents/:id/ethics', async (req: Request, res: Response) => {
 });
 
 // GET /agents/:id/reliability — peer-assessed defensibility (P0 of the
-// defensibility × discernment lens). Read-only, PROVISIONAL (methodology +
-// disputed-semantics under Grok cross-val); not yet a public leaderboard lens.
+// defensibility × discernment lens). Read-only, PROVISIONAL + SHADOW.
+// v0.2 (Grok CONCUR): re-sourced from service-contract FINAL dispositions — the
+// old HAL/peer-verify-queue feed (~91–98% drill noise) is RETIRED, not dual-written.
+// Channel-labelled (never one scalar). pred/chat = P0.5, discernment = P1.
+// Returns insufficient_sample until enough real adjudicated contracts accrue.
 router.get('/agents/:id/reliability', async (req: Request, res: Response) => {
   const id = String(req.params.id);
   const { data: agent } = await db
     .from('repid_agents').select('id').eq('id', id).single();
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  const result = await computeDefensibility(id);
-  return res.json(result);
+  const spec = await computeDefensibilitySpec(id);
+  return res.json({
+    defensibility_spec: spec, // service-contract to-spec (primary)
+    defensibility_pred: null, // resolved predictions — P0.5
+    defensibility_chat: null, // staked TrustChat facts — P0.5
+    discernment: null, // verifier-vs-final-truth — P1
+    provisional: true,
+    note:
+      'Re-sourced from service-contract final dispositions; HAL/peer-verify feed retired. ' +
+      'Shadow — not a public leaderboard lens; returns insufficient_sample until real adjudicated contracts accrue.',
+  });
 });
 
 // GET /suggested-rules?role=trading — constitutional rule suggestions (Cerebras stub)
