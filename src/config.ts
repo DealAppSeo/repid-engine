@@ -3,7 +3,13 @@ dotenv.config();
 
 export const config = {
   supabaseUrl: process.env.SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY!,
+  // Canonical DB secret = SUPABASE_SERVICE_ROLE_KEY. The others are transition
+  // fallbacks only (SUPABASE_SERVICE_KEY, SUPABASE_KEY) — set/rotate the canonical
+  // one and the fallbacks can be deleted. Collapses the 3-name sprawl to 1.
+  supabaseKey:
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_KEY!,
   port: parseInt(process.env.PORT || '3000'),
   version: process.env.REPID_ENGINE_VERSION || '1.0.0',
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -34,5 +40,5 @@ export const config = {
 };
 
 if (!config.supabaseUrl || !config.supabaseKey) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_KEY are required');
+  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
 }
