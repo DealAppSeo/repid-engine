@@ -7,6 +7,7 @@ import {
 } from './peer-verify-consensus';
 import { classifyPeerVerifyClaim, prefilterMode } from './peer-verify-prefilter';
 import { isProducerHalted } from './producer-halt';
+import { checkBirthRate } from './birth-rate-breaker';
 
 const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
 const POLL_INTERVAL_MS = 30000;
@@ -39,6 +40,21 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
           '— skipping spawn cycle; queued entries left pending (breaker 2.1)'
       );
       return;
+    }
+
+    // L2 breaker 2.0 — automatic birth-rate control (drain-only). Before spawning
+    // this cycle's peer_verify tasks, check whether peer_verify producers are
+    // already outpacing drainage (pending vs completed-in-window). In enforce mode
+    // an exceeded rate skips the spawn cycle (queued entries left pending, workers
+    // keep draining); in shadow mode we only log what WOULD halt. Fail-open on any
+    // count error (never wedge the producer on a flaky query). Fail-loud.
+    const birthRate = await checkBirthRate(db, 'peer_verify');
+    if (birthRate.exceeded) {
+      console.log(
+        `[PeerVerificationReader] peer_verify birth-rate ${birthRate.mode === 'enforce' ? 'HALTED' : 'WOULD halt'} ` +
+          `(${birthRate.reason}; pending=${birthRate.pending} completed=${birthRate.completed}) (breaker 2.0)`
+      );
+      if (birthRate.halted) return;
     }
 
     // 1. Fetch pending queue entries
