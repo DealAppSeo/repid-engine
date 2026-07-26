@@ -44,7 +44,9 @@ describe('X402OutboundClient Governor', () => {
         // Initial 402
         return Promise.resolve(new Response(JSON.stringify({
           accepts: [{
-            network: 'base-sepolia',
+            // CAIP-2 (2026-07-22): offer.network must equal netConfig.x402.networkParam
+            // (eip155:84532), else the client rejects it as "no compatible offer".
+            network: 'eip155:84532',
             scheme: 'exact',
             asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
             payTo: '0x1111111111111111111111111111111111111111',
