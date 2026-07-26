@@ -41,7 +41,8 @@ describe('X402OutboundClient Circuit Breaker', () => {
       if (!init?.headers?.['X-PAYMENT']) {
         return Promise.resolve(new Response(JSON.stringify({
           accepts: [{
-            network: 'base-sepolia',
+            // CAIP-2 (2026-07-22): offer.network must match netConfig.x402.networkParam.
+            network: 'eip155:84532',
             scheme: 'exact',
             asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
             payTo: '0x1111111111111111111111111111111111111111',

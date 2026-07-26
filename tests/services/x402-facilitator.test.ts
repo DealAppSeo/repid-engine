@@ -49,27 +49,39 @@ describe('X402Facilitator Envelope Shape Tests', () => {
     expect(result.valid).toBe(true);
     expect(result.payer).toBe(sampleFlatPayment.from);
 
-    // Validate SHAPE C compatibility
+    // Validate x402 v2 envelope (migrated 2026-07-22, PR #178 — see buildV2Envelope).
+    // The live x402.org facilitator rejected the old top-level scheme/network shape
+    // (that omission was the live "reading 'scheme'" 500). In v2: scheme/network/amount
+    // live inside paymentPayload.accepted, authorization numeric fields are strings,
+    // and paymentRequirements mirrors `accepted` (uses `amount`, not maxAmountRequired).
     expect(lastRequestBody).toBeDefined();
     expect(lastRequestBody.x402Version).toBe(2);
     expect(lastRequestBody.paymentPayload).toBeDefined();
     expect(lastRequestBody.paymentPayload.x402Version).toBe(2);
-    expect(lastRequestBody.paymentPayload.scheme).toBe('exact');
-    expect(lastRequestBody.paymentPayload.network).toBe('base-sepolia');
+    expect(lastRequestBody.paymentPayload.accepted).toBeDefined();
+    expect(lastRequestBody.paymentPayload.accepted.scheme).toBe('exact');
+    expect(lastRequestBody.paymentPayload.accepted.network).toBe('base-sepolia');
+    expect(lastRequestBody.paymentPayload.accepted.amount).toBe('100000');
     expect(lastRequestBody.paymentPayload.payload).toBeDefined();
     expect(lastRequestBody.paymentPayload.payload.signature).toBe('0xsignaturestring');
     expect(lastRequestBody.paymentPayload.payload.authorization).toEqual({
       from: sampleFlatPayment.from,
       to: sampleFlatPayment.to,
-      value: sampleFlatPayment.value,
-      validAfter: 0,
-      validBefore: 1716500000,
+      value: '100000',
+      validAfter: '0',
+      validBefore: '1716500000',
       nonce: sampleFlatPayment.nonce
     });
     expect(lastRequestBody.paymentRequirements).not.toBeInstanceOf(Array);
     expect(lastRequestBody.paymentRequirements).toEqual({
-      ...mockRequirements,
+      scheme: 'exact',
+      network: 'base-sepolia',
+      amount: '100000',
+      asset: mockRequirements.asset,
+      payTo: mockRequirements.payTo,
+      maxTimeoutSeconds: mockRequirements.maxTimeoutSeconds,
       extra: {
+        assetTransferMethod: 'eip3009',
         name: 'USDC',
         version: '2'
       }
@@ -89,20 +101,27 @@ describe('X402Facilitator Envelope Shape Tests', () => {
     expect(result.success).toBe(true);
     expect(result.txHash).toBe('0xsettledtx');
 
-    // Validate SHAPE C compatibility
+    // Validate x402 v2 envelope (see verifyPayment test above for the full rationale).
     expect(lastRequestBody).toBeDefined();
     expect(lastRequestBody.x402Version).toBe(2);
     expect(lastRequestBody.paymentPayload).toBeDefined();
     expect(lastRequestBody.paymentPayload.x402Version).toBe(2);
-    expect(lastRequestBody.paymentPayload.scheme).toBe('exact');
-    expect(lastRequestBody.paymentPayload.network).toBe('base-sepolia');
+    expect(lastRequestBody.paymentPayload.accepted.scheme).toBe('exact');
+    expect(lastRequestBody.paymentPayload.accepted.network).toBe('base-sepolia');
     expect(lastRequestBody.paymentPayload.payload).toBeDefined();
     expect(lastRequestBody.paymentPayload.payload.signature).toBe('0xsignaturestring');
-    expect(lastRequestBody.paymentPayload.payload.authorization.validBefore).toBe(1716500000);
+    // v2: authorization numeric fields are strings on the wire.
+    expect(lastRequestBody.paymentPayload.payload.authorization.validBefore).toBe('1716500000');
     expect(lastRequestBody.paymentRequirements).not.toBeInstanceOf(Array);
     expect(lastRequestBody.paymentRequirements).toEqual({
-      ...mockRequirements,
+      scheme: 'exact',
+      network: 'base-sepolia',
+      amount: '100000',
+      asset: mockRequirements.asset,
+      payTo: mockRequirements.payTo,
+      maxTimeoutSeconds: mockRequirements.maxTimeoutSeconds,
       extra: {
+        assetTransferMethod: 'eip3009',
         name: 'USDC',
         version: '2'
       }
