@@ -1,7 +1,7 @@
 /**
  * Hash-agnostic Merkle root/inclusion tests (sprint 2026-05-29, continues PR #73).
  * Proves the tree shape is identical across hash schemes (keccak256, sha256) and
- * that the poseidon2 placeholder fails loudly until the migration lands.
+ * that poseidon2 is the real parity-gated field hash (backlog 4.0-c), not a stub.
  */
 import { keccak256, sha256, toUtf8Bytes } from 'ethers';
 import {
@@ -25,8 +25,16 @@ describe('hash schemes', () => {
     expect(getHashScheme('sha256').leaf('c0')).toBe(sha256(toUtf8Bytes('c0')));
   });
 
-  it('poseidon2 is a flagged placeholder that throws (no mock-as-real)', () => {
-    expect(() => getHashScheme('poseidon2').leaf('x')).toThrow(/poseidon2 scheme not available/);
+  it('poseidon2 is the REAL field hash (backlog 4.0-c), not a throwing placeholder', () => {
+    // The pre-4.0-c placeholder threw /poseidon2 scheme not available/. It is now
+    // wired to the parity-gated Poseidon2-BabyBear leaf/pair (see poseidon2-leaf).
+    const p = getHashScheme('poseidon2');
+    const leaf = p.leaf('x');
+    expect(leaf).toMatch(/^0x[0-9a-f]{64}$/i);         // 8 u32 field-element limbs
+    expect(p.leaf('x')).toBe(leaf);                    // deterministic
+    expect(p.leaf('y')).not.toBe(leaf);                // input-sensitive
+    expect(leaf).not.toBe(getHashScheme('keccak256').leaf('x')); // distinct hash family
+    expect(p.pair(leaf, leaf)).toMatch(/^0x[0-9a-f]{64}$/i);     // pair over digests → digest
   });
 
   it('unknown scheme throws', () => {
