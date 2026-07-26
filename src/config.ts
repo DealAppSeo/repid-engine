@@ -3,10 +3,13 @@ dotenv.config();
 
 export const config = {
   supabaseUrl: process.env.SUPABASE_URL!,
-  // Canonical DB secret = SUPABASE_SERVICE_ROLE_KEY. The others are transition
-  // fallbacks only (SUPABASE_SERVICE_KEY, SUPABASE_KEY) — set/rotate the canonical
-  // one and the fallbacks can be deleted. Collapses the 3-name sprawl to 1.
+  // Canonical DB secret = SUPABASE_SECRET_KEY (Supabase's new-format `sb_secret_…`
+  // key). The legacy JWT names (SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY,
+  // SUPABASE_KEY) remain as transition fallbacks — set/rotate SUPABASE_SECRET_KEY
+  // in Railway and the legacy ones can be deleted. New name is tried FIRST so a
+  // rotation is a single env add; behavior is unchanged until it is set.
   supabaseKey:
+    process.env.SUPABASE_SECRET_KEY ||
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_SERVICE_KEY ||
     process.env.SUPABASE_KEY!,
@@ -40,5 +43,7 @@ export const config = {
 };
 
 if (!config.supabaseUrl || !config.supabaseKey) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
+  throw new Error(
+    'SUPABASE_URL and SUPABASE_SECRET_KEY (or a legacy SUPABASE_SERVICE_ROLE_KEY / SUPABASE_SERVICE_KEY fallback) are required',
+  );
 }

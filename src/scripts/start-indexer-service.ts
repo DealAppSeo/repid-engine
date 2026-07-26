@@ -24,7 +24,10 @@ async function main(): Promise<void> {
   const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
   const contractAddress = requireEnv('HYPERDAG_RECEIPT_ADAPTER_ADDRESS');
   const supabaseUrl = requireEnv('SUPABASE_URL');
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || requireEnv('SUPABASE_SERVICE_KEY');
+  const supabaseKey =
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    requireEnv('SUPABASE_SERVICE_KEY');
 
   const chainId = process.env.CHAIN_ID ? parseInt(process.env.CHAIN_ID, 10) : 84532;
   const pollIntervalMs = process.env.INDEXER_POLL_INTERVAL_MS ? parseInt(process.env.INDEXER_POLL_INTERVAL_MS, 10) : 10000;
