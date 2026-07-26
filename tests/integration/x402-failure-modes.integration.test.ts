@@ -41,7 +41,12 @@ describe('X402 Failure Modes Integration', () => {
       if (!xPayment) {
         return new Response(JSON.stringify({
           accepts: [{
-            network: 'base-sepolia',
+            // CAIP-2 migration (2026-07-22, PR #178): the client matches an offer on
+            // a.network === netConfig.x402.networkParam, which is now the CAIP-2 chain
+            // id ('eip155:84532'), not the human network name. The old 'base-sepolia'
+            // value made every case here throw "No compatible x402 offer found" before
+            // reaching the behavior under test. Aligns with the unit fixtures fixed in #190.
+            network: 'eip155:84532',
             scheme: 'exact',
             asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
             payTo: '0x1111111111111111111111111111111111111111',
