@@ -23,7 +23,10 @@ function requireEnv(name: string, fallback?: string): string {
 
 async function main(): Promise<void> {
   const supabaseUrl = requireEnv('SUPABASE_URL');
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || requireEnv('SUPABASE_SERVICE_KEY');
+  const supabaseKey =
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    requireEnv('SUPABASE_SERVICE_KEY');
   const zkpServiceUrl = process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app';
 
   const pollIntervalMs = process.env.PROOF_DRAIN_POLL_INTERVAL_MS ? parseInt(process.env.PROOF_DRAIN_POLL_INTERVAL_MS, 10) : 2000;

@@ -68,7 +68,7 @@ let db: any;
 
 function getDb() {
   if (!db) {
-    db = createClient(process.env.SUPABASE_URL || 'http://localhost', process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || 'key');
+    db = createClient(process.env.SUPABASE_URL || 'http://localhost', process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || 'key');
   }
   return db;
 }
