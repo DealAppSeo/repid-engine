@@ -161,28 +161,64 @@ export interface VerifyLegResult {
  * `([0-9a-f]{40})+` consumes exactly 40 characters per repetition and cannot blow up,
  * and it is a realistic contract pattern. `{n,}` / `{n,m}` are variable and are flagged.
  *
+ * The body is scanned at EVERY nesting depth, not just the group's own level. An
+ * earlier version skipped characters at depth > 1, which left a third bypass class
+ * wide open: `((a+))+$` — a redundant double-wrap of case 1 above — was accepted and
+ * MEASURED here at n=30 (24.6 s), n=27 (2.9 s), n=24 (0.37 s), clean exponential
+ * growth, reachable straight through `parseContract`. `(((a+)))+$`, `((a|aa))+$`,
+ * `((a*))*$` and `((a{2,}))+$` all walked through the same hole. Depth is not a
+ * safety property: wrapping a dangerous body in parentheses does not tame it.
+ *
+ * Scanning all depths does mean the `?` in a GROUP PREFIX must not be mistaken for
+ * the `?` quantifier, so `(?:`, `(?=`, `(?!`, `(?<=`, `(?<!` and `(?<name>` are
+ * stepped over wherever they occur. That also fixes a pre-existing false positive:
+ * `(?:abc)+` — fixed-width, entirely safe — used to be rejected, because the `?`
+ * opening the non-capturing group read as a quantifier. An unrecognised `(?…` is
+ * left alone on purpose, so its `?` still counts as variable (fail closed).
+ *
  * Still deliberately conservative elsewhere: `{` after a group counts as a repetition
  * even when it is a literal brace (JS allows `(ab){x}`), and a repeated alternation is
- * rejected even when its branches are disjoint (`(cat|dog)+`). A false rejection
- * surfaces as a loud `contract_invalid`; a false acceptance parks the bridge poller.
+ * rejected even when its branches are disjoint (`(cat|dog)+`) or fixed-width
+ * (`((a|b))+`). A false rejection surfaces as a loud `contract_invalid`; a false
+ * acceptance parks the bridge poller, so the asymmetry is deliberate.
  * This remains a heuristic, not a proof of termination — which is why regexes are also
  * capped at MAX_PATTERN_LEN and subjects at MAX_SUBJECT_LEN.
  */
+
+/**
+ * Index of the first character of a group's BODY, given `k` = the index just after
+ * its `(`. Steps over `?:`, `?=`, `?!`, `?<=`, `?<!` and `?<name>`. An unrecognised
+ * `?` is not stepped over, so it keeps counting as a quantifier (fail closed).
+ */
+function groupBodyStart(pattern: string, k: number): number {
+  if (pattern[k] !== '?') return k;
+  const c = pattern[k + 1];
+  if (c === ':' || c === '=' || c === '!') return k + 2;
+  if (c === '<') {
+    const c2 = pattern[k + 2];
+    if (c2 === '=' || c2 === '!') return k + 3; // lookbehind
+    const close = pattern.indexOf('>', k + 2); // named group
+    if (close !== -1) return close + 1;
+  }
+  return k;
+}
+
 export function hasBacktrackingRisk(pattern: string): boolean {
   for (let i = 0; i < pattern.length; i++) {
     if (pattern[i] !== '(') continue;
     if (i > 0 && pattern[i - 1] === '\\') continue;
     let depth = 1;
-    let j = i + 1;
     let bodyVariable = false;
     let bodyAlternation = false;
+    let j = groupBodyStart(pattern, i + 1);
     for (; j < pattern.length && depth > 0; j++) {
       const c = pattern[j];
       if (c === '\\') { j++; continue; }
-      if (c === '(') depth++;
-      else if (c === ')') depth--;
-      else if (depth !== 1) continue;
-      else if (c === '*' || c === '+' || c === '?') bodyVariable = true;
+      // Nested group: descend, and step past ITS prefix so `(?:` contributes no `?`.
+      if (c === '(') { depth++; j = groupBodyStart(pattern, j + 1) - 1; continue; }
+      if (c === ')') { depth--; continue; }
+      // Everything below is counted at ANY depth — see the depth note above.
+      if (c === '*' || c === '+' || c === '?') bodyVariable = true;
       else if (c === '|') bodyAlternation = true;
       else if (c === '{') {
         const close = pattern.indexOf('}', j);

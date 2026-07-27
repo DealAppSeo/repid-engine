@@ -250,6 +250,59 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     expect(hasBacktrackingRisk('"deployed_commit":"[0-9a-f]{40}"')).toBe(false);
   });
 
+  /**
+   * Regression #2, found by the INDEPENDENT verifier of the beat that shipped the fix
+   * above — and then re-measured here before being acted on, because a verifier's
+   * example has been wrong before.
+   *
+   * The detector scanned the body only at depth 1 (`else if (depth !== 1) continue`),
+   * so wrapping a dangerous body in one extra pair of parentheses hid it completely.
+   * `((a+))+$` — a redundant double-wrap of `(a+)+` — was ACCEPTED by `parseContract`
+   * and measured on this Node build at n=24 → 0.37 s, n=27 → 2.9 s, n=30 → 24.6 s:
+   * clean exponential growth, far below the MAX_SUBJECT_LEN=20,000 backstop.
+   *
+   * Depth is not a safety property. Each shape below is the depth-wrapped form of a
+   * shape already pinned above, and every one of them walked through.
+   */
+  test('REGRESSION: a quantifier or alternation NESTED deeper than one group is still flagged', () => {
+    expect(hasBacktrackingRisk('((a+))+$')).toBe(true);      // the verifier's find
+    expect(hasBacktrackingRisk('(((a+)))+$')).toBe(true);    // depth 3
+    expect(hasBacktrackingRisk('((a*))*$')).toBe(true);
+    expect(hasBacktrackingRisk('((a{2,}))+$')).toBe(true);   // variable brace, depth 2
+    expect(hasBacktrackingRisk('((a|aa))+$')).toBe(true);    // alternation, depth 2
+    expect(hasBacktrackingRisk('(?:a(b+)c)+')).toBe(true);   // inside a non-capturing wrap
+  });
+
+  /**
+   * The depth fix had to not be a blanket "count every `?`", because the `?` that
+   * OPENS `(?:` … `(?<name>` is not a quantifier. Stepping over group prefixes also
+   * closes a pre-existing FALSE POSITIVE: `(?:abc)+` is fixed-width and entirely
+   * safe, and the detector used to reject it.
+   */
+  test('group prefixes are not mistaken for quantifiers (and the old false positive is gone)', () => {
+    expect(hasBacktrackingRisk('(?:abc)+')).toBe(false);
+    expect(hasBacktrackingRisk('(?:pass)*')).toBe(false);
+    expect(hasBacktrackingRisk('(?<sha>[0-9a-f]{40})')).toBe(false);
+    expect(hasBacktrackingRisk('((a){2})+')).toBe(false); // fixed sub-group, fixed brace
+    // A prefix on a NESTED group must be stepped over too. These were added because a
+    // mutation that removed the nested-prefix step killed no test — the suite had a gap
+    // at exactly the depth the fix was about.
+    expect(hasBacktrackingRisk('(a(?:bc)d)+')).toBe(false);   // fixed width throughout
+    expect(hasBacktrackingRisk('(a(?<n>b)c)+')).toBe(false);  // nested named group
+    expect(hasBacktrackingRisk('(x(?:ab)*y)+')).toBe(true);   // ...but a real `*` still counts
+    // An unrecognised `(?…` is deliberately NOT stepped over — its `?` keeps counting,
+    // so the detector stays fail-closed on syntax it does not model.
+    expect(hasBacktrackingRisk('(?#weird)+')).toBe(true);
+  });
+
+  test('the depth-2 bypass is refused end-to-end by parseContract, not just by the guard', () => {
+    // The guard is internal; this is the surface an operator's contract actually hits.
+    const r = parseContract('{"matches":"((a+))+$"}');
+    expect(r).not.toBeNull();
+    expect('invalid' in r!).toBe(true);
+    expect((r as { invalid: string }).invalid).toMatch(/backtracking/);
+  });
+
   test('a flagged pattern is rejected fast — the detector itself never runs the regex', () => {
     const t0 = Date.now();
     const r = verifyTaskDeterministically({
