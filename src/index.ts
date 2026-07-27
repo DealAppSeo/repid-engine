@@ -996,10 +996,16 @@ if (!IS_TEST) {
 }
 
 import { startHitlExpirationJob } from './services/hitl-expiration-job';
+import { startHitlReconciliationJob } from './services/hitl-reconciliation-job';
 import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 
 startValidationWorker();
 startHitlExpirationJob();
+// Closes out validation_queue rows stranded in 'processing' by an EXPIRED hitl
+// request (the expiration job flips the request; nothing reconciled the queue
+// row → /health counted them as pending forever). Shadow-first; mutates only
+// under HITL_RECONCILE_MODE=enforce. Not started in tests (zero test-runtime change).
+if (!IS_TEST) startHitlReconciliationJob();
 
 if (!IS_TEST && process.env.ENGINE_WORKERS_ENABLED !== 'false') {
   startTrinityTaskBridge();
