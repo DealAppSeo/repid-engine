@@ -3,6 +3,8 @@
  * Mocks Supabase client + fetch. Placed under tests/ per jest.config.js roots.
  */
 import { createProofDrainService } from '../src/services/proof-drain-service';
+import { ENGINE_LEAF_SCHEME } from '../src/zkp/leaf-dual-write';
+import { poseidon2LeafHash } from '../src/zkp/poseidon2-leaf';
 
 type Row = { id: string; job_id: string; agent_id: string; event_id: string; status: string };
 
@@ -213,6 +215,80 @@ describe('proof-drain-service', () => {
     } finally {
       if (prev === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
       else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prev;
+    }
+  });
+
+  // --- backlog 4.2: engine-derived Poseidon2 leaf when the prover doesn't send one ---
+  // The deployed prover has NEVER emitted poseidon2_leaf ([V 2026-07-26]: non-null on
+  // 0 of 78,783 rows), so the A5 pipe above has always carried null in production. These
+  // two tests cover the path that actually fires.
+
+  async function drainWithProver(
+    proverJson: Record<string, unknown>,
+    id: string
+  ): Promise<Record<string, unknown>> {
+    const state: MockSupabaseState = {
+      pending: [{ id, job_id: `j-${id}`, agent_id: `a-${id}`, event_id: `e-${id}`, status: 'pending' }],
+      scoreById: { [`e-${id}`]: 2280 },
+      updates: [], hitlInserts: [], zkpInserts: [], agentTier: 'ESTABLISHED'
+    };
+    const svc = createProofDrainService({
+      supabase: makeMockSupabase(state),
+      pgQueryImpl: (async () => state.pending) as any,
+      zkpServiceUrl: 'http://zkp.test',
+      routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
+      fetchImpl: jest.fn().mockResolvedValue({ ok: true, json: async () => proverJson, text: async () => '' }) as any
+    });
+    await svc.drainOnce();
+    expect(state.zkpInserts!.length).toBe(1);
+    return state.zkpInserts![0]!;
+  }
+
+  const PROVER_WITHOUT_LEAF = {
+    commitment: '0xreal', proof_type: 'plonky3_range_check', proof_bytes: 'QkFTRTY0',
+    public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED'
+  };
+
+  test('4.2 dual-write ON: engine derives the leaf over the ACTUAL stored zk_commitment', async () => {
+    const prevA5 = process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+    const prevDW = process.env.POSEIDON2_LEAF_DUAL_WRITE;
+    process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = 'true';
+    process.env.POSEIDON2_LEAF_DUAL_WRITE = 'on';
+    try {
+      const row = await drainWithProver(PROVER_WITHOUT_LEAF, 'r42on');
+      // The invariant that makes the column foldable: the stored leaf is the Poseidon2
+      // merkle leaf OF THE STORED COMMITMENT — not of the prover's raw commitment, and
+      // not of some other string. zk_commitment is nonce-bound, so this can only pass if
+      // the leaf was taken after the canonical commitment was built.
+      expect(typeof row.zk_commitment).toBe('string');
+      expect(row.poseidon2_leaf).toBe(poseidon2LeafHash(row.zk_commitment as string));
+      expect(row.leaf_scheme).toBe(ENGINE_LEAF_SCHEME);
+      // The primary is untouched — still the sha256 commitment family, not the leaf.
+      expect(row.zk_commitment).not.toBe(row.poseidon2_leaf);
+      expect(row.zk_commitment).toMatch(/^0x[0-9a-f]{64}$/);
+    } finally {
+      if (prevA5 === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+      else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prevA5;
+      if (prevDW === undefined) delete process.env.POSEIDON2_LEAF_DUAL_WRITE;
+      else process.env.POSEIDON2_LEAF_DUAL_WRITE = prevDW;
+    }
+  });
+
+  test('4.2 dual-write unset (deployed default): no leaf is written even with A5 ON', async () => {
+    const prevA5 = process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+    const prevDW = process.env.POSEIDON2_LEAF_DUAL_WRITE;
+    process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = 'true';
+    delete process.env.POSEIDON2_LEAF_DUAL_WRITE;
+    try {
+      const row = await drainWithProver(PROVER_WITHOUT_LEAF, 'r42off');
+      expect(row.scheme).toBe('plonky3_range_check'); // A5 still records what it always did
+      expect(row.poseidon2_leaf).toBeUndefined();     // 4.2 adds nothing until enabled
+      expect(row.leaf_scheme).toBeUndefined();
+    } finally {
+      if (prevA5 === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+      else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prevA5;
+      if (prevDW === undefined) delete process.env.POSEIDON2_LEAF_DUAL_WRITE;
+      else process.env.POSEIDON2_LEAF_DUAL_WRITE = prevDW;
     }
   });
 
