@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { rootLineage } from './task-lineage';
 
 /**
  * HyperDAGReceiptAdapter event ABI fragment — must match the deployed contract's
@@ -173,7 +174,11 @@ async function handleReceiptRevealed(
       agentId,
       txHash: log.transactionHash,
       blockNumber: log.blockNumber
-    }
+    },
+    // L2 breaker 2.2 — an indexed on-chain receipt is a genuine ROOT: the
+    // trigger is a blockchain event, not another task. Written explicitly so
+    // the row asserts its lineage rather than leaving it to a column default.
+    ...rootLineage()
   });
 
   if (insErr) {

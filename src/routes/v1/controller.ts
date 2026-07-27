@@ -3,6 +3,7 @@ import { db } from '../../db';
 import { requireRole, mintQrToken } from '../../middleware/controller-auth';
 import { setAgentEnabled } from '../../services/agent-controls';
 import { hitlService, HitlResolution } from '../../services/hitl-service';
+import { guardedLineage, rootLineage, formatLineageLog } from '../../services/task-lineage';
 
 // Controller API (CC2 2026-05-26) — backend for the aitc controller-UI rebuild
 // (v0.app). All routes are gated by role permissions.
@@ -206,6 +207,11 @@ router.post('/wake/:agent_id', requireRole('admin'), async (req, res) => {
       status: 'pending',
       insert_source: 'controller',
       created_at: new Date().toISOString(),
+      // L2 breaker 2.2 — a manual wake signal is always a ROOT: it originates
+      // with a human at the controller, not with another task. Written
+      // explicitly (rather than left to the column default) so that a row's
+      // lineage always states what it is instead of being inferred from a NULL.
+      ...rootLineage(),
     })
     .select('id')
     .single();
@@ -232,7 +238,7 @@ router.post('/sprint/:agent_id', requireRole('admin'), async (req, res) => {
     return res.status(400).json({ error: 'Invalid agent identity' });
   }
 
-  const { title, description, priority } = req.body || {};
+  const { title, description, priority, parent_task_id: parentTaskId } = req.body || {};
   if (
     typeof title !== 'string' || title.length < 1 || title.length > 255 ||
     typeof description !== 'string' || description.length < 1 || description.length > 5000
@@ -248,6 +254,41 @@ router.post('/sprint/:agent_id', requireRole('admin'), async (req, res) => {
     validatedPriority = priority;
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // L2 breaker 2.2 — lineage + depth budget (fork-bomb prevention).
+  // A sprint MAY declare a parent task, which is what makes this endpoint a
+  // spawner rather than only a root. When it does, the child inherits
+  // parent.generation + 1 and is refused once the tree exceeds the budget.
+  // The parent's depth is READ FROM THE DB, never taken from the request body —
+  // a caller-supplied depth would let any client reset its own lineage to 0 and
+  // walk straight through the breaker.
+  // ───────────────────────────────────────────────────────────────────────────
+  let lineage = rootLineage();
+  if (parentTaskId !== undefined && parentTaskId !== null) {
+    if (typeof parentTaskId !== 'number' || !Number.isSafeInteger(parentTaskId) || parentTaskId < 1) {
+      return res.status(400).json({ error: 'parent_task_id must be a positive integer task id' });
+    }
+    const { data: parentRow, error: parentErr } = await db
+      .from('trinity_tasks')
+      .select('id,generation')
+      .eq('id', parentTaskId)
+      .maybeSingle();
+    if (parentErr) return res.status(500).json({ error: parentErr.message });
+    if (!parentRow) return res.status(400).json({ error: 'parent_task_id does not exist' });
+
+    const guarded = guardedLineage({ id: parentRow.id, generation: parentRow.generation });
+    console.log(formatLineageLog(`[Controller] /sprint/${agent}`, guarded.decision));
+    if (guarded.decision.halted) {
+      return res.status(400).json({
+        error: 'lineage_depth_exceeded',
+        detail: guarded.decision.reason,
+        depth: guarded.decision.malformed ? null : guarded.decision.depth,
+        max_depth: guarded.decision.maxDepth,
+      });
+    }
+    lineage = guarded.fields;
+  }
+
   const { data, error } = await db
     .from('trinity_tasks')
     .insert({
@@ -260,6 +301,7 @@ router.post('/sprint/:agent_id', requireRole('admin'), async (req, res) => {
       priority: validatedPriority,
       insert_source: 'controller',
       created_at: new Date().toISOString(),
+      ...lineage,
     })
     .select('id')
     .single();
