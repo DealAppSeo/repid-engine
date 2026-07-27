@@ -1,0 +1,57 @@
+{
+  "scheme": "poseidon2_babybear16_2to1",
+  "source": "p3-baby-bear 0.3.0 default_babybear_poseidon2_16 (Horizen-Labs constants), H_p2(a,b) = permute([a,b,0..])[0]",
+  "field_prime": 2013265921,
+  "width": 16,
+  "note": "2-scalar -> 1-field hash for the ownership circuit leaf/nullifier; inputs in lanes 0,1; output lane 0",
+  "vectors": [
+    {
+      "name": "zeros",
+      "a": 0,
+      "b": 0,
+      "output": 1168947398
+    },
+    {
+      "name": "one_two",
+      "a": 1,
+      "b": 2,
+      "output": 509865809
+    },
+    {
+      "name": "leaf_777_555",
+      "a": 777,
+      "b": 555,
+      "output": 422725277
+    },
+    {
+      "name": "secret_agent",
+      "a": 123456789,
+      "b": 42,
+      "output": 896117012
+    },
+    {
+      "name": "scope_secret_ctx1",
+      "a": 999983,
+      "b": 1,
+      "output": 943144322
+    },
+    {
+      "name": "scope_secret_ctx2",
+      "a": 999983,
+      "b": 2,
+      "output": 1841904044
+    },
+    {
+      "name": "max_max",
+      "a": 2013265920,
+      "b": 2013265920,
+      "output": 1470936837
+    },
+    {
+      "name": "max_zero",
+      "a": 2013265920,
+      "b": 0,
+      "output": 429449726
+    }
+  ]
+}

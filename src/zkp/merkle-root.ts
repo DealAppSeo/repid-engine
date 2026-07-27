@@ -10,14 +10,16 @@
  * Schemes provided:
  *   - keccak256 (default; matches PR #73 + the live audit-merkle-anchor, EAS-anchorable on Base)
  *   - sha256    (matches the current commitment family; drop-in if the chain side moves to sha256)
- *   - poseidon2 (FLAGGED placeholder — throws until the Plonky3-native prover lands; no mock [rule:7])
+ *   - poseidon2 (REAL as of backlog 4.0-c: Poseidon2-BabyBear sponge/compression,
+ *     parity-gated vs the audited Rust oracle; NOT the default, selected by name)
  *
  * MIGRATION SWAP POINT: when Sean applies the dual-prover migration, change the
  * default scheme name passed by the epoch anchor (one argument) — nothing else
- * in the tree logic changes. The poseidon2 entry is where the real field hash
- * gets wired.
+ * in the tree logic changes. The poseidon2 entry now holds the real field hash
+ * (see ./poseidon2-leaf); it stays non-default until the epoch anchor selects it.
  */
 import { keccak256, sha256 as ethersSha256, getBytes, concat, toUtf8Bytes } from 'ethers';
+import { poseidon2LeafHash, poseidon2PairHash } from './poseidon2-leaf';
 
 export type LeafHashFn = (commitment: string) => string;
 export type PairHashFn = (aHex: string, bHex: string) => string;
@@ -40,13 +42,17 @@ const sha256Scheme: HashScheme = {
   pair: (a, b) => ethersSha256(concat([getBytes(a), getBytes(b)])),
 };
 
-// FLAGGED: Poseidon2 over a Plonky3-native field is the eventual leaf/pair hash
-// (Invariant 1). Wiring it requires the migrated prover; until then this throws
-// rather than silently substituting a different hash (no mock-as-real).
+// Poseidon2 over BabyBear (Plonky3-native field), Invariant 1. This is the real
+// field hash now (backlog 4.0-c): leaf = PaddingFreeSponge<16,8,8>, pair =
+// TruncatedPermutation<2,8,16>, both element-for-element parity-gated against the
+// audited Rust oracle (`zkp-vault/kat/poseidon2_babybear16_leaf_kat.json`). It is
+// NOT the default (keccak256 remains DEFAULT_HASH_SCHEME) — this is the wired-in
+// migration-swap target that the epoch anchor selects by name when Sean moves the
+// tree to the Plonky3-native family. No production path changes by populating it.
 const poseidon2Scheme: HashScheme = {
   name: 'poseidon2',
-  leaf: () => { throw new Error('[merkle-root] poseidon2 scheme not available until the dual-prover migration lands'); },
-  pair: () => { throw new Error('[merkle-root] poseidon2 scheme not available until the dual-prover migration lands'); },
+  leaf: (c) => poseidon2LeafHash(c),
+  pair: (a, b) => poseidon2PairHash(a, b),
 };
 
 export const HASH_SCHEMES: Record<string, HashScheme> = {
