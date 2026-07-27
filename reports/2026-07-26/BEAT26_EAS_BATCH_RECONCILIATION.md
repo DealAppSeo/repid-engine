@@ -144,6 +144,15 @@ where not exists (
 - **Why `error` is now left NULL (verifier finding B9):** `error` is an *operational failure* field — `eas-anchor-worker.ts:276` writes it only on the `status='failed'` path, and **0 of 219 rows carry a non-NULL value [V]**. Putting provenance prose there would make this the table's only `status='anchored' AND error IS NOT NULL` row, which any "did a batch fail?" query reads as a failure. The batch did not fail; a *separate* bookkeeping insert did, 40 days earlier. Provenance instead lives in the SQL comment above, in this report, and in the loop ledger. **Trade-off stated honestly:** the row is then not self-marking as a backfill — the cost of not planting a false alarm in a monitored column. (The table has no metadata/notes column; `hash_scheme`/`eas_schema`/`status` are all load-bearing, so there is no honest third place to put it.)
 - **Why `order by created_at, id` (verifier finding B9):** `selectBatch()` orders `ORDER BY created_at ASC, id ASC` (`eas-anchor-worker.ts:183`) and the worker stores `proof_ids` in exactly that order, so this makes the backfilled row match the leaf-order contract **by construction** rather than by coincidence. For this particular batch both orderings happen to produce the same array (Beat 27's verifier proved that), so this changes no value today — it removes a latent inconsistency, it does not fix a wrong one.
 - Post-condition to check: `batch_rows = 220`, `sum(proof_count) = 21,960`, orphan query returns 0 rows.
+- **Dry-run validated against live prod, Beat 28 [V].** `EXPLAIN` (no `ANALYZE` — plans, does not execute) returns a plan, which proves the statement parses, every column name exists, and every literal's type resolves against the real schema:
+  ```
+  Insert on eas_anchor_batches  (cost=6037.28..6037.29 rows=0 width=0)
+    InitPlan 1 -> Aggregate -> Sort  Sort Key: repid_zkp_proofs.created_at, repid_zkp_proofs.id
+    InitPlan 2 -> Index Only Scan using idx_eas_anchor_batches_eas_uid
+    -> Result  One-Time Filter: (NOT (InitPlan 2).col1)
+  ```
+  The `One-Time Filter` is the idempotency guard: if the row already exists the insert produces zero rows, so a **re-run is a genuine no-op**, not a duplicate. The sort key confirms the new `created_at, id` leaf ordering reached the plan.
+  **Honest limit:** `EXPLAIN` does not evaluate `CHECK` constraints or `NOT NULL` at runtime — it proves the statement is *well-formed against the schema*, not that every value will be accepted. Beat 27's verifier separately audited the constraint side and found all NOT NULLs supplied and the CHECK satisfied.
 
 **Recommendation: apply it.** Risk is as close to zero as a prod write gets — additive, guarded, reversible, every consequential value chain-proven, and **no code path reads this table** (re-confirmed repo-wide by Beat 27's verifier). The alternative is leaving a permanent 1-in-220 hole in the audit trail that certifies 21,960 proofs.
 
