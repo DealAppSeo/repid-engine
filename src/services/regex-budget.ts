@@ -46,19 +46,39 @@
 import { Worker } from 'worker_threads';
 
 /**
- * Default wall-clock budget for one match. Deliberately generous: a legitimate
+ * Default wall-clock budget for one MATCH. Deliberately generous: a legitimate
  * pattern over a 20 KB subject completes in well under a millisecond, so 250 ms
  * is ~3 orders of magnitude of headroom and cannot produce a false timeout on
  * honest input. It exists to separate "slow" from "never", not to be tight.
+ *
+ * THE WORD "MATCH" IS LOAD-BEARING AND WAS WRONG IN THE FIRST VERSION.
+ * That version started this clock before `new Worker(...)`, so the budget was
+ * spent on thread startup as well as matching. Measured on this hardware,
+ * construct->online is 98–142 ms idle and was observed at 136–1172 ms under a
+ * parallel test load — i.e. between 40% and 470% of the entire budget, before
+ * the regex had run a single step. The consequence is not a slow test but a
+ * WRONG VERDICT: an honest pattern on a busy box reads as pathological. A
+ * timeout has to mean "this pattern does not terminate", never "this machine
+ * was busy". The clock therefore starts on the worker's `online` event, and
+ * thread startup gets its own separate, far looser ceiling below.
  */
 export const DEFAULT_REGEX_BUDGET_MS = 250;
+
+/**
+ * Separate ceiling for getting the thread running at all. Loose on purpose —
+ * it is not a property of the pattern and must never be tight enough to depend
+ * on machine load. It exists only so a wedged spawn cannot hang the grader
+ * forever, and it reports as `error`, never as `timeout`: an infrastructure
+ * fault is not evidence about the operator's regex.
+ */
+export const WORKER_STARTUP_CEILING_MS = 30_000;
 
 export type RegexBudgetResult =
   /** The match ran to completion inside the budget. */
   | { status: 'ok'; matched: boolean }
-  /** The budget expired and the worker was terminated. NOT a match failure. */
+  /** The MATCH exceeded its budget and the worker was terminated. NOT a match failure. */
   | { status: 'timeout'; budgetMs: number }
-  /** The pattern was invalid, or the worker itself failed. */
+  /** The pattern was invalid, the thread never started, or the worker itself failed. */
   | { status: 'error'; message: string };
 
 /**
@@ -86,15 +106,18 @@ const WORKER_SRC = `
  * event, so every failure mode is returned as a value the caller can record.
  */
 /**
- * Number of match workers currently alive.
+ * Number of match workers currently alive. OPERATIONAL AID ONLY — a number that
+ * does not return to zero is the signature of a leak, which is worth having on
+ * a dashboard.
  *
- * This exists because terminating on timeout is the half of the budget that is
- * invisible from the outside: a version that resolves the promise but leaves the
- * thread running passes every behavioural test above, while the runaway match
- * keeps burning a core for as long as it takes — a leak that looks exactly like
- * a working budget. The counter is what lets a test see the difference. It is
- * also worth having operationally: a number that does not return to zero is the
- * signature of that leak.
+ * IT IS EXPLICITLY NOT THE PROOF THAT TERMINATION HAPPENS, and the first version
+ * of this file used it as exactly that. It is module-private state read by a test
+ * of the same module, so it reports what this file BELIEVES about the thread, not
+ * what the thread is doing: two mutations that leave a genuinely unterminated
+ * worker burning a core kept the suite green, one of them verbatim the mutant the
+ * comment claimed the counter existed to catch. A module cannot be its own witness.
+ * The load-bearing pin is now `process.cpuUsage()` — an OS-level measurement of
+ * the whole process that this file has no way to fabricate. See the CPU test.
  */
 let liveWorkers = 0;
 export function activeWorkerCount(): number {
@@ -118,6 +141,7 @@ export async function matchWithBudget(
   return new Promise<RegexBudgetResult>((resolve) => {
     let settled = false;
     let worker: Worker;
+    let timer: NodeJS.Timeout;
 
     // One `finish` for every exit path, so termination is guaranteed no matter
     // which of message/error/exit/timeout gets there first.
@@ -137,11 +161,21 @@ export async function matchWithBudget(
       resolve(result);
     };
 
-    const timer = setTimeout(() => {
-      finish({ status: 'timeout', budgetMs });
-    }, budgetMs);
-    // Do not let the budget timer hold the process open on shutdown.
-    if (typeof timer.unref === 'function') timer.unref();
+    /** Arm a deadline. Never lets the timer hold the process open on shutdown. */
+    const arm = (ms: number, onExpiry: () => void) => {
+      clearTimeout(timer);
+      timer = setTimeout(onExpiry, ms);
+      if (typeof timer.unref === 'function') timer.unref();
+    };
+
+    // Phase 1 — getting the thread up. Loose ceiling, and it resolves as an
+    // `error`, so a wedged spawn can never be misreported as a bad pattern.
+    arm(WORKER_STARTUP_CEILING_MS, () =>
+      finish({
+        status: 'error',
+        message: `worker did not start within ${WORKER_STARTUP_CEILING_MS}ms`,
+      })
+    );
 
     try {
       worker = new Worker(WORKER_SRC, {
@@ -163,6 +197,13 @@ export async function matchWithBudget(
       finish({ status: 'error', message: `worker spawn failed: ${err?.message ?? 'unknown'}` });
       return;
     }
+
+    // Phase 2 — the match itself. `online` fires on the PARENT's loop when the
+    // worker thread has begun executing JS, which is the last instant before the
+    // regex can start consuming time, and it is delivered even while the worker
+    // is spinning (that is the whole reason the match is over there). From here
+    // the clock measures the pattern and nothing else.
+    worker.on('online', () => arm(budgetMs, () => finish({ status: 'timeout', budgetMs })));
 
     // Decrement on exit rather than in `finish`: the thread outlives the promise
     // by however long termination takes, and counting it as gone before it is
