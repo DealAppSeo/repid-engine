@@ -20,6 +20,7 @@
  * CHECK constraint may reject, and we do not touch prod DDL. Not-advance == leave the row alone.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { shouldParkForHalt } from './emergency-halt';
 
 // ---- config (all env-driven, safe defaults) --------------------------------
 /** Master switch. DEFAULT OFF — must be the literal string 'true' to run. */
@@ -188,6 +189,10 @@ export interface SweepResult {
  */
 export async function processAwaitingCosign(db: SupabaseClient): Promise<SweepResult> {
   const result: SweepResult = { scanned: 0, advanced: 0, held: 0 };
+  // L0 gate 0.4 — GLOBAL EMERGENCY HALT. This sweep ADVANCES task status;
+  // a parked fleet must not keep moving work forward. Returns the zeroed
+  // result rather than throwing, so callers see 'did nothing', not an error.
+  if (await shouldParkForHalt(db, 'CosignConsumer')) return result;
   const awaiting = awaitingStatus();
 
   const { data: rows, error } = await db

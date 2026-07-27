@@ -669,3 +669,104 @@ describe('emergencyHaltMiddleware — synchronous, zero DB reads on the request 
     expect(peekHaltState().initialized).toBe(true);
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COVERAGE PIN (added after an independent verifier found 11 uncovered tick
+// loops, including the default-on on-chain ERC-8004 writer).
+//
+// The defect was not in any single file — it was that the module ASSERTED
+// "worker tick loops PARK" while covering three of fourteen. Prose cannot hold
+// that line. This test walks the filesystem: every `setInterval`-driven source
+// file must either CALL the halt gate or appear on the EXEMPT list, whose
+// reasons are written in the emergency-halt.ts header. A new worker added next
+// month fails here until someone makes that choice on purpose.
+//
+// Built so it cannot pass vacuously — see the anti-vacuity cases below. The
+// FIRST version of this very block was vacuous: it substring-matched
+// `shouldParkForHalt` against the whole file, so deleting the CALL still left
+// the IMPORT and the check reported the worker as covered. Two mutations that
+// removed and then mis-ordered the gate both passed green against it. Imports
+// are stripped before matching, and the matcher requires a call.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('emergency halt — tick-loop coverage (filesystem-pinned)', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+
+  const SRC = path.join(__dirname, '..', 'src');
+  const NEWLINE = String.fromCharCode(10);
+
+  // Exempt, each justified in the emergency-halt.ts header:
+  //   health.ts                       — read-only liveness polling
+  //   hitl-notification-dispatcher.ts — informs humans during an incident
+  //   emergency-halt.ts               — IS the gate (its own refresher loop)
+  //   index.ts                        — mounts the middleware; not a worker
+  const EXEMPT = new Set([
+    'providers/health.ts',
+    'services/hitl-notification-dispatcher.ts',
+    'services/emergency-halt.ts',
+    'index.ts',
+  ]);
+
+  const stripImports = (body: string) =>
+    body.split(NEWLINE).filter((l) => !/^\s*import\b/.test(l)).join(NEWLINE);
+
+  const CALLS_GATE = /\b(shouldParkForHalt|checkEmergencyHalt)\s*\(/;
+
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p, out);
+      else if (e.name.endsWith('.ts')) out.push(p);
+    }
+    return out;
+  }
+
+  const files = walk(SRC).map((f) => {
+    const body = fs.readFileSync(f, 'utf8');
+    return {
+      rel: path.relative(SRC, f).split(path.sep).join('/'),
+      code: stripImports(body),
+    };
+  });
+  const loops = files.filter((f) => /setInterval\s*\(/.test(f.code));
+
+  it('ANTI-VACUITY: the matcher matches a CALL and not a bare import', () => {
+    expect(CALLS_GATE.test("import { shouldParkForHalt } from './emergency-halt';")).toBe(false);
+    expect(CALLS_GATE.test("if (await shouldParkForHalt(db, 'W')) return;")).toBe(true);
+    expect(stripImports(["import { x } from 'y';", 'const a = 1;'].join(NEWLINE)))
+      .not.toContain('import');
+  });
+
+  it('ANTI-VACUITY: the scan actually finds the tick loops', () => {
+    expect(loops.length).toBeGreaterThanOrEqual(15);
+    const rels = loops.map((l) => l.rel);
+    expect(rels).toContain('workers/feedback-loop-worker.ts');
+    expect(rels).toContain('workers/eas-anchor-worker.ts');
+    expect(rels).toContain('services/x402-recovery-worker.ts');
+  });
+
+  it('the exempt list is real (each entry exists and really is a tick loop)', () => {
+    for (const rel of EXEMPT) {
+      expect(loops.map((l) => l.rel)).toContain(rel);
+    }
+  });
+
+  it('EVERY tick-loop file either gates on the halt or is explicitly exempt', () => {
+    const uncovered = loops
+      .filter((l) => !EXEMPT.has(l.rel))
+      .filter((l) => !CALLS_GATE.test(l.code))
+      .map((l) => l.rel);
+    expect(uncovered).toEqual([]);
+  });
+
+  it('the on-chain writer gates BEFORE its circuit breaker', () => {
+    // Ordering matters: a halt must not be maskable by breaker state.
+    const code = files.find((f) => f.rel === 'workers/feedback-loop-worker.ts')!.code;
+    const halt = code.search(CALLS_GATE);
+    const breaker = code.indexOf('circuitOpenUntil > Date.now()');
+    expect(halt).toBeGreaterThan(-1);
+    expect(breaker).toBeGreaterThan(-1);
+    expect(halt).toBeLessThan(breaker);
+  });
+});

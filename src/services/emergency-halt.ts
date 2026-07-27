@@ -31,6 +31,35 @@
  *   - already-running in-flight work is NOT killed — this parks the loops, it is
  *     not a process kill. Rollback is flipping the same boolean back to false.
  *
+ * ── WHICH LOOPS "worker tick loops" MEANS — ENUMERATED, NOT IMPLIED ───────
+ * The first version of this module said "worker tick loops PARK" and wired
+ * exactly three of them. An independent verifier enumerated every
+ * `setInterval`-driven loop in this repo and found 11 uncovered, including
+ * `feedback-loop-worker` — which is enabled BY DEFAULT and writes real
+ * ERC-8004 reputation deltas on-chain every 60 s. That was reproduced and
+ * fixed: with the flag SET, the on-chain writer had kept spending gas. A kill
+ * switch whose scope is asserted rather than enumerated is a kill switch that
+ * quietly stops covering things.
+ *
+ * COVERED (call `shouldParkForHalt` before doing any work):
+ *   trinity-task-bridge · validation-queue-worker · peer-verification-reader ·
+ *   feedback-loop-worker · cascade-settlement-worker · eas-anchor-worker ·
+ *   x402-recovery-worker · repid-sync-aggregator · cosign-consumer ·
+ *   receipt-indexer-service (both ticks) · hitl-expiration-job ·
+ *   hitl-expiry-sweeper · hitl-reconciliation-job
+ *
+ * DELIBERATELY EXEMPT, each for a stated reason (NOT an oversight):
+ *   - `hitl-notification-dispatcher` — it TELLS HUMANS things. Silencing your
+ *     operators' notifications during the incident they are responding to is
+ *     the wrong default; a halt should stop the machine acting, not stop it
+ *     talking.
+ *   - `providers/health.ts` — read-only liveness polling; it mutates nothing,
+ *     and observability must survive a halt or the operator is blind exactly
+ *     when they need to watch the system come to rest.
+ * `tests/emergency-halt.test.ts` pins this list against the filesystem, so a
+ * NEW tick loop added later fails the suite until it is covered or explicitly
+ * exempted here.
+ *
  * DEFAULT BEHAVIOUR IS UNCHANGED. The column defaults to false, so with nothing
  * flipped this module reads false and every caller behaves exactly as before.
  *

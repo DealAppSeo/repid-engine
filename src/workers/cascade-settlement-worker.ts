@@ -31,6 +31,7 @@
  */
 
 import { db } from '../db';
+import { shouldParkForHalt } from '../services/emergency-halt';
 import { VerificationServiceHandler } from '../services/verification-service-handler';
 import { CrossValidationServiceHandler } from '../services/cross-validation-service-handler';
 import { AnfisRoutingServiceHandler } from '../services/anfis-routing-service-handler';
@@ -57,6 +58,12 @@ export class CascadeSettlementWorker {
   private timer: NodeJS.Timeout | null = null;
 
   async runOnce(): Promise<{ processed: number }> {
+    // L0 gate 0.4 — GLOBAL EMERGENCY HALT, checked FIRST. This worker
+    // settles escrowed contracts and drives RepID deltas; a halt must stop
+    // settlement before it stops anything cosmetic.
+    if (await shouldParkForHalt(db, 'CascadeSettlementWorker')) {
+      return { processed: 0 };
+    }
     let processed = 0;
     try {
       // Find providers that currently own escrowed contracts. Bounded select;

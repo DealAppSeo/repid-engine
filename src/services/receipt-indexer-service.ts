@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { indexOnce, checkBftAggregation, type IndexOnceResult } from './receipt-indexer';
+import { shouldParkForHalt } from './emergency-halt';
 
 export interface IndexerServiceConfig {
   rpcUrl: string;
@@ -160,6 +161,11 @@ export function createIndexerService(config: IndexerServiceConfig): IndexerServi
     mainTickInFlight = true;
     const prevLastBlock = state.lastBlock;
     try {
+      // L0 gate 0.4 — GLOBAL EMERGENCY HALT. This tick ENQUEUES trinity_tasks
+      // (receipt_validation) — it is a producer. Inside the try so the
+      // in-flight flag is released by the finally. Nothing is lost: the next
+      // tick after the halt lifts resumes from the same `fromBlock`.
+      if (await shouldParkForHalt(config.supabase, 'Indexer')) return;
       const tip: number = await withRetry<number>('eth_blockNumber', () => provider.getBlockNumber());
       const safeTip = Math.max(0, tip - tipLagBlocks);
       const fromBlock = await determineFromBlock();
@@ -214,6 +220,9 @@ export function createIndexerService(config: IndexerServiceConfig): IndexerServi
     if (bftTickInFlight) return;
     bftTickInFlight = true;
     try {
+      // L0 gate 0.4 — GLOBAL EMERGENCY HALT (inside the try so the
+      // in-flight flag is released by the finally).
+      if (await shouldParkForHalt(config.supabase, 'Indexer/bft')) return;
       await checkBftAggregation(config.supabase);
       state.bftTicksTotal += 1;
     } catch (err) {

@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { shouldParkForHalt } from './emergency-halt';
 import { x402Facilitator, PaymentRequirements } from './x402-facilitator';
 
 export interface RecoveryResult {
@@ -148,6 +149,10 @@ export function startRecoveryWorker(opts?: { pollIntervalMs?: number }): { stop:
     if (running) return; // previous pass still in flight — skip this tick
     running = true;
     try {
+      // L0 gate 0.4 — GLOBAL EMERGENCY HALT. This loop moves MONEY (x402
+      // settlement recovery); it is the last loop that should keep running
+      // through an incident.
+      if (await shouldParkForHalt(db, 'x402-recovery')) return;
       await processRecoveryQueue();
     } catch (err) {
       console.error('[x402-recovery] processRecoveryQueue threw:', err instanceof Error ? err.message : err);
