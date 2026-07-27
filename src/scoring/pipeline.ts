@@ -37,6 +37,10 @@ import { strictModeOrFallback } from '../hal/lib/strict-mode';
 import { classifyTaskPurpose } from './task-purpose';
 import { getHalConfig } from '../hal/config';
 import { buildFactCheckProvidersWith } from '../hal/fact-check';
+import {
+  parseProofEnqueueMode,
+  evaluateProofEnqueue,
+} from '../services/proof-enqueue-filter';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -398,10 +402,32 @@ export async function runScoreEvent(
   const new_repid = old_repid + effectiveDeltaApplied;
 
   // 5. ZK proof trigger logic (decided pre-insert so we can record on the row).
-  const triggerProof = await shouldTriggerProof(
+  //
+  // runScoreEvent ALWAYS emits event_type='HAL_SCORE_EVENT' — internal-scoring
+  // proof churn (Beat 8: ~99.3% of repid_proof_queue). The producer-side filter
+  // (PROOF_ENQUEUE_HAL_MODE, shadow-first) can suppress that churn so a future
+  // proof-drain restart yields a clean, gas-worthy economic set. Folding it into
+  // the trigger keeps the score-event row, zk_proof_id, and the enqueue all
+  // consistent — no "triggered but never queued" row. Economic events flow
+  // through applyValidationEvent (below) and are untouched by this filter.
+  const rawTriggerProof = await shouldTriggerProof(
     input.agent_id,
     Math.abs(delta.delta_applied)
   );
+  const proofFilter = evaluateProofEnqueue(
+    'HAL_SCORE_EVENT',
+    parseProofEnqueueMode(process.env.PROOF_ENQUEUE_HAL_MODE)
+  );
+  if (rawTriggerProof && proofFilter.shadow) {
+    console.log(
+      '[scoring/pipeline] proof-enqueue filter: WOULD-SKIP HAL_SCORE_EVENT churn proof (shadow mode; set PROOF_ENQUEUE_HAL_MODE=enforce to gate)'
+    );
+  } else if (rawTriggerProof && proofFilter.skip) {
+    console.log(
+      '[scoring/pipeline] proof-enqueue filter: SKIP HAL_SCORE_EVENT churn proof (enforce mode)'
+    );
+  }
+  const triggerProof = rawTriggerProof && !proofFilter.skip;
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 
   // 6. Insert score event.
