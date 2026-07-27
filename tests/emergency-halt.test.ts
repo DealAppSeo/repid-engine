@@ -856,20 +856,59 @@ describe('emergency halt — tick-loop coverage (filesystem-pinned)', () => {
     }
   });
 
-  it('every exemption is named in emergency-halt.ts, not just in this test', () => {
+  it('every exemption is named in the EXEMPT SECTION of emergency-halt.ts, not just in this test', () => {
     // The module header claims each exemption is there "for a stated reason".
-    // That claim is now machine-checked: a new exemption has to be argued in
-    // the safety module itself, so it cannot be added by editing one line of a
-    // test file. `emergency-halt.ts` is excluded — it IS the gate, and a module
+    // That claim is machine-checked: a new exemption has to be argued in the
+    // safety module itself, so it cannot be added by editing one line of a test
+    // file. `emergency-halt.ts` is excluded — it IS the gate, and a module
     // naming itself in its own header would be circular.
+    //
+    // THE SECTION BOUND IS THE WHOLE POINT, and its absence made the first
+    // version of this check VACUOUS for every file that exists today. It
+    // searched the entire module, and the header ALSO carries a COVERED list
+    // naming all 13 gated loops — so `includes(base)` was satisfied for any of
+    // them whether or not the exemption had ever been argued. An independent
+    // verifier demonstrated it: adding a real mutating loop to both EXEMPT and
+    // EXEMPT_WITH_WRITES, touching only this test file, still passed 101/101.
+    // Scoping the search to the DELIBERATELY EXEMPT section is what makes the
+    // claim real: being *covered* must not read as being *excused*.
     const header = fs.readFileSync(path.join(SRC, 'services', 'emergency-halt.ts'), 'utf8');
+    const start = header.indexOf('DELIBERATELY EXEMPT');
+    // Fail closed: if the section is renamed or removed, this test fails rather than
+    // silently degrading to "search the whole file" — the exact failure it exists to prevent.
+    expect(start).toBeGreaterThan(-1);
+    const after = header.slice(start);
+    const endMarker = after.indexOf('pins this list against the filesystem');
+    expect(endMarker).toBeGreaterThan(-1);
+    const exemptSection = after.slice(0, endMarker);
+
     const undocumented = [...EXEMPT]
       .filter((rel) => rel !== 'services/emergency-halt.ts')
       .filter((rel) => {
         const base = rel.split('/').pop()!.replace(/\.ts$/, '');
-        return !header.includes(base);
+        return !exemptSection.includes(base);
       });
     expect(undocumented).toEqual([]);
+  });
+
+  it('being in the COVERED list does not satisfy the exemption-justification check', () => {
+    // Direct anti-vacuity pin for the hole above: a name that appears ONLY in the
+    // COVERED list must NOT read as an argued exemption. Asserted against the real
+    // header so it keeps its meaning if the header is reorganised.
+    const header = fs.readFileSync(path.join(SRC, 'services', 'emergency-halt.ts'), 'utf8');
+    const covStart = header.indexOf('COVERED (');
+    const exStart = header.indexOf('DELIBERATELY EXEMPT');
+    expect(covStart).toBeGreaterThan(-1);
+    expect(exStart).toBeGreaterThan(covStart);
+    const coveredSection = header.slice(covStart, exStart);
+    const exemptSection = header.slice(exStart, header.indexOf('pins this list against the filesystem'));
+
+    // A gated loop that is named in COVERED and NOT argued in the exempt section.
+    const covered = 'hitl-expiration-job';
+    expect(coveredSection).toContain(covered);
+    expect(exemptSection).not.toContain(covered);
+    // …and it must not be exempt in the first place.
+    expect([...EXEMPT].some((r) => r.includes(covered))).toBe(false);
   });
 
   it('index.ts is gated, not exempt (regression pin for the verifier finding)', () => {
