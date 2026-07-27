@@ -74,14 +74,35 @@ Each completed job writes a `repid_zkp_proofs` row, and **where the prover retur
 are two such attest paths in that function (the S-ONCHAIN Phase 2 block and the R3
 block). That is real Base Sepolia gas per attestation.
 
-> `[R]`, and it matters: whether the deployed prover actually returns `merkle_root` on
-> this path is **not** verified here. The 21,960 historical proofs were anchored in
-> 100-proof *batches* by `eas-anchor-worker.ts` (220 attestations — content-audited
-> 220/220 in Beat 28), which is consistent with the drain path producing no per-proof
-> attestation. If that holds, the blind-restart cost is ~40k proof rows and the batch
-> worker's ~403 additional batch attestations rather than ~40k individual ones. Either
-> way the artifact is the same lie: **certifying internal HAL scoring as if it were
-> economic activity.** Verify before relying on the smaller number.
+> **`[V]` — SETTLED by probing the live prover, 2026-07-27.** This was written as an open
+> `[R]` and then closed rather than left hanging. `POST https://zkp-postcard-production.up.railway.app/zkp/repid-proof`
+> with a real `agent_id` returns HTTP 200 / 14,770 bytes whose keys are exactly:
+> `proof_type, public_statement, commitment, verified, agent_id, erc8004_token_id, tier,
+> timestamp, protocol, proving_time_ms, proof_size_bytes, proof_bytes, repid_score_actual,
+> repid_score_supplied, score_source`.
+>
+> **There is no `merkle_root` field** (`grep -c merkle_root` → 0). Both per-proof EAS
+> paths in `insertCanonicalProof` are gated on `args.merkleRoot`, so **neither fires on
+> the drain path**. A blind restart would therefore mint ~40k `repid_zkp_proofs` rows and
+> **zero per-proof on-chain attestations**; the on-chain cost would arrive later through
+> `eas-anchor-worker.ts`'s 100-proof batches (~403 additional Base Sepolia attestations),
+> not ~40k individual ones. That is a materially smaller gas story than the worst case —
+> now measured, not assumed.
+>
+> It does not change the decision. The artifact is the same lie either way: **~40k proofs
+> and ~403 attestations certifying internal HAL scoring as if it were economic activity**,
+> permanently, on a public chain, buried on top of the 261 jobs that are real.
+>
+> Two by-products of the same probe, both `[V]`:
+> - The prover is **healthy and real**: `/health` → `{"status":"healthy","service":"zkp-postcard","version":"0.2.0","proof_types":["plonky3_range_check","sha256_commitment_poc"]}`,
+>   and the probe returned a genuine `plonky3_range_check` proof of 10,673 bytes. It also
+>   ignores the client-supplied score exactly as the code comment claims
+>   (`repid_score_supplied: null`, `repid_score_actual: 2027`, `score_source: "server_side_lookup"`).
+>   Precondition 3 in §5 is satisfied.
+> - **No `poseidon2_leaf` / `leaf_scheme` in the response** — independent live confirmation
+>   of Beat 27's finding that the deployed prover has never emitted the aggregation-ready
+>   leaf, which is precisely why 4.2 (PR #201) derives it engine-side instead of waiting
+>   on a prover redeploy.
 
 ---
 
@@ -114,8 +135,8 @@ Measured on live prod `[V, EXPLAIN ANALYZE 2026-07-27]`:
 
 1. `[V]` #192 merged (`proof-enqueue-filter.ts` on `main`).
 2. PR **#204** (this guard) merged.
-3. `[R] — verify first` the prover service `zkp-postcard-production.up.railway.app` is
-   healthy, and confirm whether it returns `merkle_root` (drives §3's gas question).
+3. `[V]` the prover `zkp-postcard-production.up.railway.app` is healthy and returns real
+   `plonky3_range_check` proofs — probed 2026-07-27, see §3. No further check needed.
 
 **Sean-only actions (Railway, on `proof-drain-worker`)**
 
@@ -175,8 +196,11 @@ npx ts-node scripts/diag/verify-anchor-batch.ts --sample 5
 - The Railway runtime state of `proof-drain-worker` is `[R]` — the Railway MCP had no API
   token in this session, and I did not chase it. What is `[V]` is that **no job has
   completed since 2026-06-16**, which is the fact the restart actually depends on.
-- §3's per-proof-attestation gas figure is `[R]` and explicitly flagged; it needs one
-  prover response inspected to settle.
+- §3's per-proof-attestation question was opened as `[R]` in the first draft of this
+  document and **closed to `[V]` before publishing** by probing the live prover. The
+  remaining inference there is one step deep: no `merkle_root` in the response ⇒ neither
+  `insertCanonicalProof` attest branch can fire, since both are gated on it. That gating
+  is read from source, not observed at runtime — the worker is stopped.
 - The guard is verified by unit tests + `EXPLAIN ANALYZE` against prod. It has **not**
   run against the live queue in a real worker process — by construction, since the worker
   is stopped and starting it is Sean's action.
