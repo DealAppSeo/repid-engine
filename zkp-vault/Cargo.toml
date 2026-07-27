@@ -2,7 +2,7 @@
 name = "zkp-vault"
 version = "0.1.0"
 edition = "2021"
-description = "Real Plonky3 zero-knowledge vault for RepID — prove a tier/score is valid without revealing the score."
+description = "Real Plonky3 zero-knowledge vault — prove human-anonymous control of a registered agent identity (Semaphore-style membership + scoped nullifier). No reputation values appear in the circuit."
 
 [dependencies]
 p3-air = "0.3.0"
