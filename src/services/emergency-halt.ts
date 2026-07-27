@@ -219,9 +219,17 @@ async function withTimeout<T>(p: PromiseLike<T>, ms: number): Promise<T> {
     return await Promise.race([
       p,
       new Promise<never>((_resolve, reject) => {
+        // NOT unref'd, deliberately. The first version unref'd this timer, and
+        // the live acceptance run caught the consequence: with a hung read, the
+        // timeout was the only thing left on the event loop, so Node considered
+        // the loop empty and **exited cleanly (code 0) in the middle of the
+        // await** — the caller's `finally` never ran. In a server the HTTP
+        // listener hides this; in any short-lived worker or script it means a
+        // hung check silently ends the process instead of failing open. The
+        // timer lives at most `ms` (default 1s), which cannot meaningfully
+        // delay a shutdown. The REFRESHER's interval is the one that must be
+        // unref'd — it is a background poller, not work in flight.
         timer = setTimeout(() => reject(new Error(`${TIMEOUT_MARKER} after ${ms}ms`)), ms);
-        // Don't hold the event loop open on this timer alone.
-        if (typeof timer.unref === 'function') timer.unref();
       }),
     ]);
   } finally {

@@ -26,7 +26,7 @@ The env levers are the wrong shape for an emergency: flipping them means a Railw
 ## 2. What shipped
 
 - **`src/services/emergency-halt.ts`** — reads `trinity_system_config.emergency_halt` (singleton `id=1`), cached ~5s per process. Exports `checkEmergencyHalt`, `shouldParkForHalt` (the identical guard every worker uses), `resolveHaltMode`, `isHaltTruthy`.
-- **`src/middleware/emergency-halt.ts`** — 503 + `Retry-After: 30` on POST/PUT/PATCH/DELETE while halted. Mounted in `src/index.ts` ahead of every API router, including `fullAccountRouter`.
+- **`src/middleware/emergency-halt.ts`** — 503 + `Retry-After: 30` on POST/PUT/PATCH/DELETE while halted. Mounted in `src/index.ts` ahead of every API router, including `fullAccountRouter`. **Synchronous — it never queries** (§4a); mounting it starts a background refresher that reads the flag once per ~5s for the whole process regardless of traffic.
 - **Three tick loops park:** `trinity-task-bridge` (`pollCompletedTasks`), `validation-queue-worker` (`processQueue`), `peer-verification-reader` (`processPeerVerificationQueue`, checked *before* the per-class breakers so a halted fleet does not spend a birth-rate count query per tick).
 - **DDL applied to prod** (additive, reversible, logged — §5).
 
@@ -53,7 +53,9 @@ The env levers are the wrong shape for an emergency: flipping them means a Railw
 
 ## 3. Verification
 
-**[V] 76 new tests, 134/134 across the 7 affected suites, `tsc --noEmit` clean.**
+**[V] 94 tests in the new suite; 106/106 across the 5 suites touched by the final diff; `tsc --noEmit` clean.**
+
+**[V] The FULL local suite was run after the §4a fixes — 2,267 passed.** The only two failing suites (`hal-accuracy-summary`, `trinity-swarm-health`) fail **identically at baseline `a1b6e7f`** with the same 10 assertions, in a clean worktree at that commit: pre-existing ENV/CONFIG needing real credentials, not this diff (CI has the credentials, which is why CI's run of them was green). **This full run is itself a correction** — the first commit was pushed on the strength of a 7-suite local run, and CI immediately found two real failures in suites that run had never touched.
 
 **[V] Eight mutations, each with a landing assertion, each killing at least one test.** Both prior-beat harness lessons are now encoded in the harness itself: restore happens in a `finally` (Beat 32 — a mutation designed to hang takes a next-statement restore down with it) and every mutation carries a unique marker asserted 0 times before / exactly 1 time after, or the result is discarded as NOT-LANDED (Beat 33 — three mutations once reported green having never applied).
 
@@ -70,25 +72,43 @@ The env levers are the wrong shape for an emergency: flipping them means a Railw
 
 Baseline 76/76 → post-restore 76/76, **zero `MUTMARK` residue on disk** (checked, not assumed).
 
-**[V] LIVE acceptance against the real database — 8/8.** The unit tests all use a fake client; this answers the different question they cannot: does a real `supabase-js` client, against the real column, through PostgREST's schema cache, behave as the module expects?
+**[V] LIVE acceptance against the real database — 9/9**, re-run against the *final* code. (The first 8/8 run exercised the pre-redesign middleware; a verified claim about code that has since been replaced is a stale claim, so it was re-run rather than cited.) The unit tests all use a fake client; this answers the different question they cannot: does a real `supabase-js` client, against the real column, through PostgREST's schema cache, behave as the module expects?
 
 ```
-PASS  baseline reads the real column          source=db flag=false halted=false
-PASS  baseline POST passes                    nexted=true status=0
-PASS  flipped true → halted                   source=db flag=true halted=true
-PASS  halted POST → 503 + Retry-After         status=503 err=emergency_halt retry=30
-PASS  halted GET still passes                 nexted=true
-PASS  audit columns populated                 reason/by round-tripped
-PASS  shadow mode flags but does not park     flag=true halted=false
-PASS  restored to false → resumed             source=db flag=false
+PASS  baseline reads the real column            source=db flag=false halted=false
+PASS  guard makes ZERO db calls, allows write   dbCalls=0 nexted=true
+PASS  background refresher notices the flip     peek={halted:true,initialized:true}
+PASS  halted POST → 503 + Retry-After           status=503 retry=30 dbCalls=0
+PASS  halted GET still passes                   nexted=true
+PASS  worker tick check parks                   halted=true source=db
+PASS  audit columns populated                   reason/by round-tripped
+PASS  a hung read is bounded and fails open     elapsed=314ms source=error_open
+PASS  restored to false → resumed               source=db flag=false
 ```
+
+Two of those nine exist only because of the defects in §4a — the zero-db-calls assertion and the bounded-hung-read assertion. Both are checks the first version would have failed.
 
 **Safety of running that live:** verified *first*, not assumed — `GET /health` reports `deployed_commit=a1b6e7f`, which predates this code entirely, so **no deployed process reads `emergency_halt`** and the flip could not affect production. The restore runs in a `finally`; the flag is confirmed `false`.
+
+## 4a. Three defects found AFTER the first commit — two by CI, one by the live run
+
+The first version of this module passed 76 unit tests, 8 mutations and an 8/8 live acceptance run, and was still wrong in three ways. Recording them in order, because the pattern is the point: **each was found by a check operating at a level the previous one could not see.**
+
+**(1) CI — an unbounded read.** The middleware `await`ed a Supabase read with no timeout. Two suites that POST through the app hung to jest's 5-second limit. The test failure is the small version of the real one: a config read that can hang means a slow database stalls **every write request and every worker tick**. A kill switch must never be able to wedge the system it protects. Reads are now bounded by `EMERGENCY_HALT_TIMEOUT_MS` (default 1000) and an overrun is treated exactly like a failed read — fail open, or sticky if a halt was already known. A failure also sets a short backoff, so an outage costs one timeout per interval rather than one per caller.
+
+**(2) CI — the guard consumed a DB call per request, and this is the one that changed the design.** `tests/routes/v1/agent.test.ts` went 200 → 404 because the middleware's read ate the first sequenced mock the route needed. Easy to dismiss as a test-mock artifact; it is not. It is a loud instance of a real property — **an extra round-trip on the write path is a new dependency for every write in the system**, and a global boolean does not need one. The middleware is now synchronous and never queries; a background refresher owns all reads. Stated cost of the trade: a flip takes effect within one refresh interval rather than instantly, which is exactly the behaviour the existing `cb_*` breakers already have.
+
+**(3) The live run — an `unref()` that let the process exit mid-`await`.** After the redesign the acceptance script printed 7 of 9 checks and exited **cleanly, code 0**, without running its `finally` — so it left `emergency_halt = true` in the database. Cause: `withTimeout` called `timer.unref()`, so with a hung read the timeout was the only thing left on the event loop, Node judged the loop empty, and the process ended in the middle of the await. In a server the HTTP listener hides this; in any short-lived worker or script it means a hung check **silently ends the process instead of failing open**. The timer is no longer unref'd (it lives at most 1s and cannot delay a shutdown); the refresher's interval still is, because that one genuinely is a background poller. Confirmed by re-running: checks 8 and 9 then executed and the `finally` restored the flag.
+
+**Honest limit:** (3) is not covered by a unit test. It is a process-lifecycle property, not a behavioural one — jest cannot meaningfully assert "the process did not exit". The reasoning is written where the code is, and the acceptance script is what catches it. Saying so beats a test that pretends to cover it.
+
+**The leftover, and how it was handled:** because the `finally` never ran, production briefly held `emergency_halt = true`. **Blast radius zero and verified, not assumed** — `/health` reports `deployed_commit=a1b6e7f`, which predates this column, so no deployed process reads it. Restored by direct statement the moment it was noticed, then re-verified `false` after the final run.
 
 ## 4. Mistakes and corrections this beat
 
 - **A contradictory log line in my own code, caught by reading my own live output rather than by a test.** The halt banner printed "Workers park, mutating HTTP returns 503" in *both* modes, so shadow mode announced a consequence it was not having — an operator reading that during an incident concludes the fleet is parked when it is running. Fixed so the consequence clause matches the mode, and **pinned with a regression test that asserts the shadow message does *not* contain "Workers park" / "returns 503"**. Worth noting the shape: 76 passing tests and 8 killed mutations did not catch it, because every one of them asserted on *behaviour*, and this was a defect in what the system *says about itself*.
 - **The module's own doc contradicted its code on first write** — the header claimed a trailing space in `EMERGENCY_HALT_MODE` would resolve to `enforce`, while `resolveHaltMode` trims. Resolved in favour of the code (trim + lowercase, matching `parseHaltClasses`), because a Railway field with a trailing space is a typo in the operator's fingers, not their intent.
+- **I shipped on a 7-suite local run and CI caught two real failures in suites I had not run.** The narrow run was not a shortcut taken knowingly — I believed the affected surface was those seven files, and mounting a global middleware makes the affected surface *every test that boots the app*. The rule that follows: **a change to `src/index.ts`'s middleware stack has no small blast radius; run the full suite.**
 - **I nearly built a parallel system.** The pre-existing `cb_*` circuit breakers were found by a check-first sweep *after* the module was already written, not before. The design survived the comparison, but the sequencing was backwards: CLAUDE-RULE-1 says show what exists *first*.
 - **A prompt imprecision of mine, surfaced by the verifier:** I briefed it to check `.github/workflows/test.yml`; the file is `ci.yml` (its *job* is named `test`). Beat 33's ledger prose never named the file, so the record is not wrong — my instruction was.
 - Worktree discipline held: dedicated worktree with its own `npm install`, **no junction anywhere**, live checkout never switched (confirmed `feat/cc-2026-07-27-anfis-enablement-staging` @ `0696751` at start and end by an independent verifier). Scratch artifacts (a copied `.env`, the acceptance script) deleted before commit; `.env` confirmed untracked.
