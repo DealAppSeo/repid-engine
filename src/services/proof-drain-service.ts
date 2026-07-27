@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
+import { resolveLeafDualWrite } from '../zkp/leaf-dual-write'; // backlog 4.2 (Inv-1): Poseidon2 leaf dual-write
 import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
 import { routeProofRequest } from '../zkp/proof-router'; // S-ONCHAIN: routing classification (owned)
 import type { RouteDecision } from '../zkp/proof-router';
@@ -553,15 +554,6 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
           }
         : null;
 
-    // B-2 (Inv-1): capture the aggregation-ready Poseidon2 leaf + lineage tag from the leaf-aware
-    // prover. The leaf is deterministic over the statement (that determinism is what lets a future
-    // PACKAGE-tier fold it), so it is stored in its OWN column — NOT zk_commitment (which stays
-    // nonce-bound for row uniqueness). Empty/absent ⇒ null (sha256 fallback, no Poseidon2 lineage).
-    const poseidon2Leaf =
-      typeof proof.poseidon2_leaf === 'string' && proof.poseidon2_leaf.length > 0 ? proof.poseidon2_leaf : null;
-    const leafScheme =
-      typeof proof.leaf_scheme === 'string' && proof.leaf_scheme.length > 0 ? proof.leaf_scheme : null;
-
     // Bind the per-proof nonce into the stored canonical commitment so every
     // proof's zk_commitment is unique (root-cause fix: was deterministic per
     // agent → 18.1% unique). The prover's commitment is bound in too, preserving
@@ -573,6 +565,24 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       nonce,
       proverCommitment: commitment,
     });
+
+    // B-2 (Inv-1) / backlog 4.2 — the aggregation-ready Poseidon2 leaf + lineage tag.
+    // Stored in its OWN column, never in zk_commitment (which stays nonce-bound for row
+    // uniqueness, and which the 220 on-chain keccak256 merkle anchors already commit to).
+    //
+    // Source order: a leaf-aware prover's own `poseidon2_leaf` wins outright; otherwise the
+    // engine derives it with the parity-gated TS hash (4.0-c). Deliberately computed AFTER
+    // `uniqueCommitment` so the leaf is taken over the EXACT string that lands in
+    // zk_commitment — i.e. it equals `merkle-root.ts`'s `poseidon2` scheme leaf for this row,
+    // which is what makes the column foldable by a future PACKAGE-tier proof rather than
+    // merely populated. Mode is off/shadow/on, default OFF ⇒ byte-identical to before.
+    const leafWrite = resolveLeafDualWrite(
+      uniqueCommitment,
+      proof.poseidon2_leaf,
+      proof.leaf_scheme
+    );
+    const poseidon2Leaf = leafWrite.leaf;
+    const leafScheme = leafWrite.scheme;
 
     await withRetry(`markCompleted[${job.id}]`, () =>
       markCompleted({
