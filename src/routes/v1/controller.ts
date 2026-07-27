@@ -152,6 +152,19 @@ router.post('/directives', requireRole('operator'), async (req, res) => {
       priority: validatedPriority,
       insert_source: 'controller',
       created_at: new Date().toISOString(),
+      // L2 breaker 2.2 — an operator directive is a ROOT: it originates with a
+      // human at the controller, not with another task. Written explicitly
+      // rather than left to the column default, because "the default happens to
+      // be 0" is an accident of the schema, not a stated property — and a row's
+      // lineage should say what it is.
+      //
+      // CAVEAT, STATED RATHER THAN DISCOVERED LATER: root means this endpoint
+      // is exempt from the depth budget by construction. That is correct while
+      // `operator` is a HUMAN credential. It stops being correct the moment an
+      // autonomous caller holds an operator token — at which point this becomes
+      // an unbounded spawn path, and the fix is to accept an optional
+      // `parent_task_id` here exactly as POST /sprint/:agent_id does.
+      ...rootLineage(),
     })
     .select('id')
     .single();
