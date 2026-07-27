@@ -7,10 +7,7 @@ import {
 } from './peer-verify-consensus';
 import { classifyPeerVerifyClaim, prefilterMode } from './peer-verify-prefilter';
 import { isProducerHalted } from './producer-halt';
-<<<<<<< HEAD
 import { checkBirthRate } from './birth-rate-breaker';
-=======
->>>>>>> cf71ec96651899bc04ee658794435e638b64c3b5
 
 const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
 const POLL_INTERVAL_MS = 30000;
@@ -45,7 +42,6 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       return;
     }
 
-<<<<<<< HEAD
     // L2 breaker 2.0 — automatic birth-rate control (drain-only). Before spawning
     // this cycle's peer_verify tasks, check whether peer_verify producers are
     // already outpacing drainage (pending vs completed-in-window). In enforce mode
@@ -61,8 +57,6 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       if (birthRate.halted) return;
     }
 
-=======
->>>>>>> cf71ec96651899bc04ee658794435e638b64c3b5
     // 1. Fetch pending queue entries
     const { data: pending, error } = await db
       .from('peer_verification_queue')
