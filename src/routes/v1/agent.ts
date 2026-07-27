@@ -5,6 +5,7 @@ import { CrossValidationServiceHandler } from '../../services/cross-validation-s
 import { AnfisRoutingServiceHandler } from '../../services/anfis-routing-service-handler';
 import { ReputationAuditServiceHandler } from '../../services/reputation-audit-service-handler';
 import { StorageServiceHandler } from '../../services/storage-service-handler';
+import { SecurityAuditServiceHandler } from '../../services/security-audit-service-handler';
 
 /**
  * Phase 2.10 — Option A cross-repo integration (mirrors the Phase 2.8
@@ -52,6 +53,7 @@ router.post('/agent/process-contracts', async (req: Request, res: Response) => {
       new AnfisRoutingServiceHandler(),
       new ReputationAuditServiceHandler(),
       new StorageServiceHandler(),
+      new SecurityAuditServiceHandler(),
     ];
 
     for (const handler of handlers) {
