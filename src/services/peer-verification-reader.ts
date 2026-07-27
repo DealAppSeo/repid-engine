@@ -8,6 +8,7 @@ import {
 import { classifyPeerVerifyClaim, prefilterMode } from './peer-verify-prefilter';
 import { isProducerHalted } from './producer-halt';
 import { checkBirthRate } from './birth-rate-breaker';
+import { rootLineage } from './task-lineage';
 
 const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
 const POLL_INTERVAL_MS = 30000;
@@ -181,6 +182,16 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
                 panel_verifier: verifierName,
                 provider_hint: provider,
               },
+              // L2 breaker 2.2 — lineage. Recorded as a ROOT, and that is a
+              // MEASURED LIMIT, not an assumption: `peer_verification_queue`
+              // carries no task reference of any kind (12 columns enumerated
+              // 2026-07-27; `source_response_id` has no FK), so the task that
+              // produced this claim is genuinely unknown here. Inventing a
+              // parent would be worse than recording the truth. See the KNOWN
+              // GAP section in task-lineage.ts — closing it needs the upstream
+              // producer to carry the originating task id into the queue row.
+              // Until then breaker 2.3 bounds this specific recursion.
+              ...rootLineage(),
             });
           if (panelTaskErr) {
             console.error(
@@ -222,6 +233,9 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
             certainty_at_claim: queueEntry.certainty_at_claim,
             claim_text: queueEntry.claim_text,
           },
+          // L2 breaker 2.2 — ROOT for the same measured reason as the panel
+          // path above (the queue row carries no task reference).
+          ...rootLineage(),
         })
         .select('id')
         .single();

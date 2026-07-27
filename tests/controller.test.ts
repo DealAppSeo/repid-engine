@@ -27,6 +27,11 @@ jest.mock('../src/db', () => ({
         order: () => chain,
         limit: () => chain,
         single: () => Promise.resolve(h.single ?? { data: null }),
+        // Added for L2 breaker 2.2: /sprint reads the declared parent row with
+        // .maybeSingle(). Distinct handle so a test can make the parent lookup
+        // and the insert return different rows; falls back to `single` so every
+        // pre-existing mock keeps behaving exactly as before.
+        maybeSingle: () => Promise.resolve(h.maybeSingle ?? h.single ?? { data: null }),
         then: (res: any, rej: any) => Promise.resolve(h.await ?? { data: [] }).then(res, rej),
       };
       return chain;
@@ -112,4 +117,134 @@ test('sprint: master, missing title → 400', async () => {
   setMock({ human_sbt_registry: { await: { data: [SBT_ROW] } } });
   const r = await request(app).post('/api/v1/controller/sprint/trinity-mel').set('x-sbt-token', 't1').send({ description: 'x' });
   expect(r.status).toBe(400);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// L2 breaker 2.2 — lineage + depth budget, at the HTTP surface.
+// The unit suite (tests/task-lineage.test.ts) pins the library. These pin the
+// WIRING: that /sprint actually reads the parent from the DB, actually writes
+// the lineage columns, and actually returns 400 at the budget — the backlog's
+// stated acceptance criterion ("5-deep succeeds; depth 6 → 400").
+// ─────────────────────────────────────────────────────────────────────────────
+
+function sprintMock(parentRow: any, inserts: any[]) {
+  setMock({
+    human_sbt_registry: { await: { data: [SBT_ROW] } },
+    trinity_tasks: {
+      maybeSingle: { data: parentRow },
+      single: { data: { id: 9001 } },
+      _insert: (v: any) => inserts.push(v),
+    },
+  });
+}
+
+const SPRINT_BODY = { title: 'child sprint', description: 'do the thing' };
+
+test('sprint: no parent declared → ROOT lineage written (parent null, generation 0)', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock(null, inserts);
+  const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+    .set('x-sbt-token', 't1').send(SPRINT_BODY);
+  expect(r.status).toBe(200);
+  expect(inserts[0].parent_task_id).toBeNull();
+  expect(inserts[0].generation).toBe(0);
+});
+
+test('sprint: parent at generation 0 → child written at generation 1', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock({ id: 77, generation: 0 }, inserts);
+  const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+    .set('x-sbt-token', 't1').send({ ...SPRINT_BODY, parent_task_id: 77 });
+  expect(r.status).toBe(200);
+  expect(inserts[0].parent_task_id).toBe(77);
+  expect(inserts[0].generation).toBe(1);
+});
+
+test('sprint: parent at the budget edge (gen 4) still succeeds → child gen 5', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock({ id: 77, generation: 4 }, inserts);
+  const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+    .set('x-sbt-token', 't1').send({ ...SPRINT_BODY, parent_task_id: 77 });
+  expect(r.status).toBe(200);
+  expect(inserts[0].generation).toBe(5);
+});
+
+test('sprint: ACCEPTANCE — a child that would be generation 6 → 400 lineage_depth_exceeded, nothing inserted', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock({ id: 77, generation: 5 }, inserts);
+  const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+    .set('x-sbt-token', 't1').send({ ...SPRINT_BODY, parent_task_id: 77 });
+  expect(r.status).toBe(400);
+  expect(r.body.error).toBe('lineage_depth_exceeded');
+  expect(r.body.depth).toBe(6);
+  expect(r.body.max_depth).toBe(5);
+  // the refusal must be a REFUSAL, not a 400 after the row already landed
+  expect(inserts).toHaveLength(0);
+});
+
+test('sprint: a caller-supplied generation is IGNORED — depth comes from the DB row only', async () => {
+  // The laundering bypass: if the body could set its own depth, any client
+  // could reset to 0 and walk through the breaker forever.
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock({ id: 77, generation: 5 }, inserts);
+  const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+    .set('x-sbt-token', 't1')
+    .send({ ...SPRINT_BODY, parent_task_id: 77, generation: 0 });
+  expect(r.status).toBe(400);
+  expect(inserts).toHaveLength(0);
+});
+
+test('sprint: a non-existent parent → 400, and no task is created', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock(null, inserts);
+  const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+    .set('x-sbt-token', 't1').send({ ...SPRINT_BODY, parent_task_id: 12345 });
+  expect(r.status).toBe(400);
+  expect(r.body.error).toBe('parent_task_id does not exist');
+  expect(inserts).toHaveLength(0);
+});
+
+test('sprint: a malformed parent_task_id is rejected before any DB read', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock({ id: 77, generation: 0 }, inserts);
+  for (const bad of ['77', -1, 0, 1.5, {}, []]) {
+    const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+      .set('x-sbt-token', 't1').send({ ...SPRINT_BODY, parent_task_id: bad });
+    expect(r.status).toBe(400);
+  }
+  expect(inserts).toHaveLength(0);
+});
+
+test('sprint: a parent row with a corrupt generation is REFUSED (fail-closed at the HTTP edge)', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  sprintMock({ id: 77, generation: -4 }, inserts);
+  const r = await request(app).post('/api/v1/controller/sprint/trinity-mel')
+    .set('x-sbt-token', 't1').send({ ...SPRINT_BODY, parent_task_id: 77 });
+  expect(r.status).toBe(400);
+  expect(r.body.error).toBe('lineage_depth_exceeded');
+  // depth is nulled rather than leaking the sentinel integer to a client
+  expect(r.body.depth).toBeNull();
+  expect(inserts).toHaveLength(0);
+});
+
+test('wake: writes explicit ROOT lineage', async () => {
+  process.env.CONTROLLER_MASTER_SBT = 't1';
+  const inserts: any[] = [];
+  setMock({
+    human_sbt_registry: { await: { data: [SBT_ROW] } },
+    trinity_tasks: { single: { data: { id: 4243 } }, _insert: (v: any) => inserts.push(v) },
+  });
+  const r = await request(app).post('/api/v1/controller/wake/trinity-mel')
+    .set('x-sbt-token', 't1').send({});
+  expect(r.status).toBe(200);
+  expect(inserts[0].parent_task_id).toBeNull();
+  expect(inserts[0].generation).toBe(0);
 });
