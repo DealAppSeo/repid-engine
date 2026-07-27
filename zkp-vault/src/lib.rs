@@ -78,7 +78,7 @@ use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{PrimeCharacteristicRing, PrimeField32};
+use p3_field::PrimeCharacteristicRing;
 use p3_fri::{FriParameters, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
@@ -119,11 +119,18 @@ pub const P2_PARTIAL_ROUNDS: usize = 13;
 /// Trace height. Row 0 is the leaf permutation, every later row the nullifier
 /// permutation (identical, so the transition constraints are satisfied uniformly).
 ///
-/// The statement itself needs only 2 rows, but FRI requires
-/// `log2(HEIGHT) + log_blowup > log_final_poly_len + log_blowup`, i.e.
-/// `log2(HEIGHT) > log_final_poly_len = 2` — so 8 is the smallest legal height under
-/// the config below (verified: HEIGHT=2 panics in `p3-fri` prover.rs:65). Unchanged
-/// from the MiMC version, so the height is not a regression.
+/// The statement itself needs only 2 rows, but FRI imposes a floor:
+/// `p3-fri` prover.rs:65 asserts `log_min_height > log_final_poly_len + log_blowup`,
+/// where `log_min_height` is the smallest folding input — NOT `log2(HEIGHT)` directly.
+///
+/// Measured, not derived (an earlier comment here claimed 8 was the floor; that was
+/// wrong): HEIGHT=2 panics at that assertion, HEIGHT=4 is legal and passes the full
+/// suite (prove ~3.0ms, proof 19,014 B vs 8's ~5.3ms / 19,734 B).
+///
+/// 8 is kept deliberately. The win is ~2ms on a circuit with no call sites outside
+/// this crate, and lowering a FRI-adjacent parameter belongs in its own change with
+/// its own soundness note — not folded into a hardening pass. Also unchanged from
+/// the MiMC version, so the height is not a regression either way.
 const HEIGHT: usize = 8;
 
 type LinearLayers = GenericPoseidon2LinearLayersBabyBear;
@@ -330,8 +337,12 @@ fn make_config() -> VaultConfig {
     let val_mmcs = ValHidingMmcs::new(field_hash, compress, SmallRng::seed_from_u64(1));
     let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    // log_blowup=3 (blowup 8) so the LDE covers the quotient domain for our
-    // degree-7 MiMC constraints (default test params use log_blowup=2, max deg 5).
+    // log_blowup=3 (blowup 8) so the LDE covers the quotient domain. Inherited from
+    // the MiMC version, whose x^7 S-box gave degree-7 constraints; the Poseidon2
+    // gadget with SBOX_REGISTERS=1 is degree <= 3, so this blowup is now more
+    // headroom than the constraints need. Left as-is: it is conservative (higher
+    // blowup = better FRI soundness per query), and tightening it is a proving-cost
+    // optimisation that belongs with the HEIGHT question above, not here.
     let fri_params = FriParameters {
         log_blowup: 3,
         log_final_poly_len: 2,
@@ -416,6 +427,7 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<Proof<VaultConfig>, bincode::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p3_field::PrimeField32;
     use std::time::Instant;
 
     // A group whose member #1 is the real owner; others are arbitrary commitments.

@@ -28,6 +28,45 @@ on:
     branches: [main]
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # zkp-vault (Rust) — the Poseidon2 parity gate.
+  #
+  # WHY THIS EXISTS: until 2026-07-26 no workflow ran `cargo` at all, so the
+  # entire ZKP parity chain (backlog 4.0-a..d) was gated only on a developer
+  # machine. That chain is what makes ZKP_ARCHITECTURE_INVARIANTS Invariant 1
+  # ("one hash, one field, in- and off-circuit") checkable rather than asserted:
+  #   - poseidon2_2to1_kat.rs  — the committed KAT artifact vs a locally
+  #     recomputed raw permutation (catches oracle drift)
+  #   - poseidon2_leaf_kat.rs  — the leaf/pair KATs the TS port is gated against
+  #   - lib.rs unit tests      — circuit <-> off-circuit H_p2 parity, plus the
+  #     forgery test that gates the nullifier secret-binding constraint
+  # A silent drift in any of these would previously reach main unchallenged.
+  #
+  # Deliberately NOT path-filtered: the TS side (src/zkp/poseidon2-*.ts) is
+  # gated against the SAME committed KAT JSON, so a TS-only PR that edits the
+  # artifact must still face the Rust gate.
+  # ---------------------------------------------------------------------------
+  zkp-vault:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zkp-vault
+
+      - name: Build (warnings are failures — keeps the crate clean)
+        working-directory: zkp-vault
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo build --locked
+
+      - name: Parity + KAT + soundness tests
+        working-directory: zkp-vault
+        run: cargo test --locked
+
   test:
     runs-on: ubuntu-latest
     steps:
