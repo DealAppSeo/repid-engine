@@ -199,3 +199,6 @@ describe('CI PR gates must run on every PR, including stacked ones', () => {
     });
   }
 });
+
+// Throwaway commit to prove the widened trigger fires on a STACKED PR.
+// This branch and its PR are deleted immediately after the observation.
