@@ -141,28 +141,59 @@ export interface VerifyLegResult {
 }
 
 /**
- * Conservative nested-quantifier detector: a quantified group whose own body is
- * quantified is the classic catastrophic-backtracking shape. Rejecting these
- * outright (as `contract_invalid`, loudly) is cheaper than defending against
- * them, and no honest contract in this codebase needs one.
+ * Conservative catastrophic-backtracking detector. A REPEATED group whose body can
+ * match the same text more than one way is the blow-up shape; rejecting these outright
+ * (as `contract_invalid`, loudly) is cheaper than defending against them, and no honest
+ * contract in this codebase needs one.
+ *
+ * Two ambiguity sources are flagged, both MEASURED on this Node build rather than
+ * assumed (`i` flag, subject `'a'.repeat(n) + 'b'`):
+ *   1. a quantifier inside the body — `(a+)+$` / `(a+){10}$` (33 chars: 2.8 s) /
+ *      `(a+){2,}$` (29 chars: 61 s);
+ *   2. an ALTERNATION inside the body — `(a|aa)+$` (43 chars: >30 s), which has no
+ *      body quantifier at all.
+ *
+ * The repetition operator itself may be `*`, `+`, or a BRACED form `{n}` / `{n,}` /
+ * `{n,m}` — the braced forms blow up exactly like `+` and an earlier version of this
+ * function only looked for `*`/`+`, so `(a+){10}$` walked straight through.
+ *
+ * What makes a body ambiguous is VARIABLE width, so a FIXED brace is not flagged:
+ * `([0-9a-f]{40})+` consumes exactly 40 characters per repetition and cannot blow up,
+ * and it is a realistic contract pattern. `{n,}` / `{n,m}` are variable and are flagged.
+ *
+ * Still deliberately conservative elsewhere: `{` after a group counts as a repetition
+ * even when it is a literal brace (JS allows `(ab){x}`), and a repeated alternation is
+ * rejected even when its branches are disjoint (`(cat|dog)+`). A false rejection
+ * surfaces as a loud `contract_invalid`; a false acceptance parks the bridge poller.
+ * This remains a heuristic, not a proof of termination — which is why regexes are also
+ * capped at MAX_PATTERN_LEN and subjects at MAX_SUBJECT_LEN.
  */
-export function hasNestedQuantifier(pattern: string): boolean {
-  // Walk groups; flag `( ... quantifier ... )` immediately followed by a quantifier.
+export function hasBacktrackingRisk(pattern: string): boolean {
   for (let i = 0; i < pattern.length; i++) {
     if (pattern[i] !== '(') continue;
     if (i > 0 && pattern[i - 1] === '\\') continue;
     let depth = 1;
     let j = i + 1;
-    let bodyQuantified = false;
+    let bodyVariable = false;
+    let bodyAlternation = false;
     for (; j < pattern.length && depth > 0; j++) {
       const c = pattern[j];
       if (c === '\\') { j++; continue; }
       if (c === '(') depth++;
       else if (c === ')') depth--;
-      else if (depth === 1 && (c === '*' || c === '+')) bodyQuantified = true;
+      else if (depth !== 1) continue;
+      else if (c === '*' || c === '+' || c === '?') bodyVariable = true;
+      else if (c === '|') bodyAlternation = true;
+      else if (c === '{') {
+        const close = pattern.indexOf('}', j);
+        // A variable brace (`{n,}` / `{n,m}`) is a risk; a fixed `{n}` is not; anything
+        // else is a literal brace and consumes exactly itself.
+        if (close !== -1 && /^\d+,\d*$/.test(pattern.slice(j + 1, close))) bodyVariable = true;
+      }
     }
     const after = pattern[j];
-    if (depth === 0 && bodyQuantified && (after === '*' || after === '+')) return true;
+    const repeated = after === '*' || after === '+' || after === '{';
+    if (depth === 0 && repeated && (bodyVariable || bodyAlternation)) return true;
   }
   return false;
 }
@@ -206,8 +237,8 @@ export function parseContract(
     if (obj.matches.length > MAX_PATTERN_LEN) {
       return { invalid: `matches exceeds ${MAX_PATTERN_LEN} chars` };
     }
-    if (hasNestedQuantifier(obj.matches)) {
-      return { invalid: 'matches contains a nested quantifier (backtracking risk)' };
+    if (hasBacktrackingRisk(obj.matches)) {
+      return { invalid: 'matches has catastrophic-backtracking risk (repeated variable-width or alternating group)' };
     }
     try {
       new RegExp(obj.matches, 'i');

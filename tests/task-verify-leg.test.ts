@@ -12,7 +12,7 @@ import {
   PLACEHOLDER_MARKERS,
   VERIFIER_VERDICTS,
   VERIFY_METHOD,
-  hasNestedQuantifier,
+  hasBacktrackingRisk,
   parseContract,
   resolveVerifyLegMode,
   verifyTaskDeterministically,
@@ -201,6 +201,9 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     ['matches not a valid regex', '{"matches":"([a-z"}'],
     ['matches too long', `{"matches":"${'a'.repeat(201)}"}`],
     ['matches with a nested quantifier', '{"matches":"(a+)+$"}'],
+    ['matches with a BRACED repetition of a quantified group', '{"matches":"(a+){10}$"}'],
+    ['matches with an open-ended braced repetition', '{"matches":"(a+){2,}$"}'],
+    ['matches with a repeated alternation', '{"matches":"(a|aa)+$"}'],
   ])('%s → unclear/unverified with a reason', (_label, expected_output) => {
     const r = verifyTaskDeterministically({ expected_output, result: 'whatever' })!;
     expect(r.verifier_verdict).toBe('unclear');
@@ -210,13 +213,51 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     expect(r.verified_output.checks[0]!.detail.length).toBeGreaterThan(0);
   });
 
-  test('nested-quantifier detector: flags the catastrophic shapes, allows ordinary ones', () => {
-    expect(hasNestedQuantifier('(a+)+')).toBe(true);
-    expect(hasNestedQuantifier('(x*)*')).toBe(true);
-    expect(hasNestedQuantifier('([0-9a-f]{40})+')).toBe(false);
-    expect(hasNestedQuantifier('^[0-9a-f]{40}$')).toBe(false);
-    expect(hasNestedQuantifier('(deployed_commit)')).toBe(false);
-    expect(hasNestedQuantifier('\\(a+\\)+')).toBe(false);
+  test('backtracking detector: flags the catastrophic shapes, allows ordinary ones', () => {
+    expect(hasBacktrackingRisk('(a+)+')).toBe(true);
+    expect(hasBacktrackingRisk('(x*)*')).toBe(true);
+    expect(hasBacktrackingRisk('([0-9a-f]{40})+')).toBe(false);
+    expect(hasBacktrackingRisk('^[0-9a-f]{40}$')).toBe(false);
+    expect(hasBacktrackingRisk('(deployed_commit)')).toBe(false);
+    expect(hasBacktrackingRisk('\\(a+\\)+')).toBe(false);
+  });
+
+  /**
+   * Regression: the first version of this detector only looked for `*`/`+` AFTER the
+   * group and only for `*`/`+` INSIDE it, so a braced repetition and a repeated
+   * alternation both walked through. Both were measured catastrophic on this Node
+   * build before the fix — `(a+){10}$` took 2.8 s on a 33-char subject and `(a+){2,}$`
+   * took 61 s on 29 chars, growing exponentially; `(a|aa)+$` exceeded 30 s at 43 chars.
+   * These are the exact shapes that would have parked the 30-second bridge poller.
+   */
+  test('REGRESSION: braced repetitions and repeated alternations are flagged', () => {
+    expect(hasBacktrackingRisk('(a+){10}$')).toBe(true);
+    expect(hasBacktrackingRisk('(a+){2,}$')).toBe(true);
+    expect(hasBacktrackingRisk('(a*){5}')).toBe(true);
+    expect(hasBacktrackingRisk('(a|aa)+$')).toBe(true);
+    expect(hasBacktrackingRisk('(a|a)*')).toBe(true);
+    expect(hasBacktrackingRisk('(x|y){3}')).toBe(true);
+    expect(hasBacktrackingRisk('(a?)+')).toBe(true);
+    expect(hasBacktrackingRisk('([a-z]{2,4})+')).toBe(true);
+  });
+
+  test('...without rejecting fixed-width or unrepeated groups a real contract would use', () => {
+    // Fixed width per repetition: no ambiguity, cannot blow up.
+    expect(hasBacktrackingRisk('(\\d{4}){2}')).toBe(false);
+    // Alternation that is never repeated.
+    expect(hasBacktrackingRisk('^(pass|fail)$')).toBe(false);
+    // The real smoke assertion this leg exists to grade.
+    expect(hasBacktrackingRisk('"deployed_commit":"[0-9a-f]{40}"')).toBe(false);
+  });
+
+  test('a flagged pattern is rejected fast — the detector itself never runs the regex', () => {
+    const t0 = Date.now();
+    const r = verifyTaskDeterministically({
+      expected_output: '{"matches":"(a|aa)+$"}',
+      result: 'a'.repeat(2_000) + 'b',
+    })!;
+    expect(r.verified_output.reason).toBe('contract_invalid');
+    expect(Date.now() - t0).toBeLessThan(1_000);
   });
 });
 
