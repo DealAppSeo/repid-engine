@@ -66,6 +66,28 @@ describe('ProofCarryingMemory — answer-binding roundtrip + tamper detection', 
     expect(v.verified_citations).toBeLessThan(v.total_citations);
   });
 
+  it('swapping a citation\'s CONTENT while keeping its value/witness fails the binding', () => {
+    // The sibling of the witness-tampering test above, one layer up: the attack that
+    // leaves every proof artefact intact and only rewrites the human-readable claim
+    // the proof is supposed to be standing behind.
+    //
+    // Found by an independent verifier probing the answer-binding layer: with the
+    // citation content dropped from the binding digest, a forged claim verifies as
+    // {grounded: true, binding_ok: true, verified_citations: 1}. The property holds in
+    // the shipped code — but nothing pinned it, so a refactor of `citationsDigest`
+    // could have removed it silently. Absence of a test is not absence of the property;
+    // it is absence of the alarm.
+    const good = emitGroundedAnswer('cites one fact', mem, [v1]);
+    const forged = {
+      ...good,
+      citations: good.citations.map((c, i) =>
+        i === 0 ? { ...c, content: 'a fact nobody ever committed' } : c),
+    };
+    const v = verifyProofCarryingAnswer(forged);
+    expect(v.binding_ok).toBe(false);
+    expect(v.grounded).toBe(false);
+  });
+
   it('is adversarial-input safe: a malformed (garbage-hex) witness yields not-grounded, never throws', () => {
     const good = emitGroundedAnswer('one fact', mem, [v1]);
     const garbage = good.citations.map((c) => ({ ...c, witness: { ...c.witness, path: [{ sibling: '0xzz', siblingOnLeft: false }] } }));
