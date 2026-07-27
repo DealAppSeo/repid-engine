@@ -168,7 +168,18 @@ export function emitGroundedAnswer(
   for (const v of citedValues) {
     const entry = memory.get(v);
     if (!entry) throw new Error(`abstain: cited value ${v.slice(0, 12)}… is not in memory`);
-    const witness = memory.membershipWitness(v); // throws if revoked → abstain
+    // A REVOKED citation is the abstain case this primitive exists for, and it must surface as an
+    // ABSTENTION — not as the accumulator's internal "not active" error. `membershipProof` throws
+    // its own low-level message, and a caller that distinguishes a principled abstain from a bug
+    // (the whole point of the `abstain:` contract) would mis-classify a retraction as a fault.
+    // The underlying cause is preserved in the message rather than swallowed.
+    let witness: InclusionWitness;
+    try {
+      witness = memory.membershipWitness(v);
+    } catch (e) {
+      const cause = e instanceof Error ? e.message : String(e);
+      throw new Error(`abstain: cited value ${v.slice(0, 12)}… is not currently valid (${cause})`);
+    }
     citations.push({ content: entry.content, value: v, witness });
   }
   const pca = bindAnswer(answer, citations, root, leafHash, pair);

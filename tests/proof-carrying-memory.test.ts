@@ -105,4 +105,44 @@ describe('ProofCarryingMemory — provable retraction + abstain', () => {
     mem.add(entry('a fact'));
     expect(() => emitGroundedAnswer('no citations', mem, [])).toThrow(/abstain/);
   });
+
+  /**
+   * Regression pin. The revoked-citation path used to let the ACCUMULATOR's own error escape
+   * ("LeanIMTPlus.membershipProof: value … not active"), so the one abstain case this primitive
+   * exists for — provable retraction forcing abstention — was the one case NOT signalled as an
+   * abstention. A caller that branches on the `abstain:` contract (which is the documented way to
+   * tell a principled refusal from an internal fault) mis-classified a retraction as a bug.
+   */
+  it('signals EVERY abstain path with the `abstain:` contract, including a revoked citation', () => {
+    const mem = new ProofCarryingMemory();
+    const vRevoked = mem.add(entry('to be retracted'));
+    mem.add(entry('durable claim')); // a second entry, so revoke() has a predecessor to relink
+    mem.revoke(vRevoked);
+
+    const cases: Array<[string, () => unknown]> = [
+      ['no citations', () => emitGroundedAnswer('x', mem, [])],
+      ['never committed', () => emitGroundedAnswer('x', mem, ['123456789'])],
+      ['revoked citation', () => emitGroundedAnswer('x', mem, [vRevoked])],
+    ];
+    for (const [name, run] of cases) {
+      let message = '';
+      expect(() => { try { run(); } catch (e) { message = (e as Error).message; throw e; } }).toThrow();
+      // Compared as a pair so a failure names WHICH path leaked instead of just showing a bad prefix.
+      expect([name, message.slice(0, 8)]).toEqual([name, 'abstain:']);
+    }
+  });
+
+  it('the revoked-citation abstention states why AND preserves the underlying cause', () => {
+    const mem = new ProofCarryingMemory();
+    const vRevoked = mem.add(entry('to be retracted'));
+    mem.add(entry('durable claim'));
+    mem.revoke(vRevoked);
+
+    let message = '';
+    try { emitGroundedAnswer('cites a retracted fact', mem, [vRevoked]); }
+    catch (e) { message = (e as Error).message; }
+    expect(message).toMatch(/^abstain: /);          // the contract callers branch on
+    expect(message).toMatch(/not currently valid/); // WHY it abstained, in this layer's vocabulary
+    expect(message).toMatch(/not active/);          // the accumulator's cause, kept for diagnosis
+  });
 });
