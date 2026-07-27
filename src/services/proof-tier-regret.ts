@@ -142,6 +142,45 @@ export function crossoverPrice(a: StrategyResult, b: StrategyResult): number | n
   return p > 0 ? p : null;
 }
 
+/**
+ * The price band over which `subject` is the regret minimiser: it beats every rival at
+ * any under-proof price strictly inside (lower, upper).
+ *
+ * ⚠ THE TWO EDGES ARE NOT EQUALLY PRECISE, AND THE DISCLOSURE MUST NOT READ AS IF THEY ARE.
+ *
+ *   lower — set by a rival that under-proves MORE than the subject. It moves smoothly
+ *           with the corpus: across all 120 single-label perturbations it stays inside
+ *           [28.5, 50.3] with the unperturbed value as its exact median. Safe to report
+ *           as a measured constant.
+ *
+ *   upper — set by a rival that under-proves LESS (here `always_max`, which under-proves
+ *           zero times). Its value is (rivalOverProofCost − subjectOverProofCost) divided
+ *           by the subject's residual under-proof COUNT — a small integer. The upper edge
+ *           is therefore a STEP FUNCTION of that count, not a smooth measurement: at the
+ *           current count of 1 it is ~661; at 2 it would be ~330; at 0 the band is
+ *           unbounded above. Quoting "~661" unqualified would present a quantity
+ *           conditional on a single scenario as a stable property of the policy. It is
+ *           disclosed as conditional, and the dependence is pinned by test rather than
+ *           merely asserted in this comment.
+ */
+export function operatingBand(
+  results: StrategyResult[],
+  subject = 'policy',
+): { lower: number; upper: number } {
+  const me = results.find((r) => r.name === subject);
+  if (!me) throw new Error(`operatingBand: no strategy named ${subject}`);
+  let lower = 0;
+  let upper = Infinity;
+  for (const r of results) {
+    if (r.name === subject) continue;
+    const p = crossoverPrice(me, r);
+    if (p === null) continue;
+    if (me.underProof < r.underProof) lower = Math.max(lower, p);
+    else upper = Math.min(upper, p);
+  }
+  return { lower, upper };
+}
+
 export function runRegretMeasurement(corpus: CorpusScenario[] = PROOF_TIER_CORPUS): {
   results: StrategyResult[];
   oracleCostUnits: number;

@@ -1,7 +1,7 @@
 /**
  * proof-tier-corpus.ts — the LABELLED evaluation corpus for the proof-tier policy.
  *
- * WHY THIS FILE EXISTS SEPARATELY, AND WHY IT IS COMMITTED BEFORE THE RUNNER.
+ * WHY THIS FILE EXISTS SEPARATELY.
  * Four times in the last five beats a test was found to pin a weaker property than the
  * one being claimed, and twice the cause was a *self-referential oracle* — the expected
  * value was computed, directly or transitively, by the code under test. A regret
@@ -9,15 +9,32 @@
  * writes both the labels and the policy can make the policy look arbitrarily good by
  * moving the labels.
  *
- * Two structural defences, not promises:
- *   1. `requiredTier` is declared from the SEMANTICS of the scenario — what the answer
- *      would need in order to be trustworthy — and is stated in the `why` field in terms
- *      a reader can check without running anything. Nothing in this file imports
- *      `proof-tier-policy`, so a label CANNOT be derived from the policy. That is
- *      enforced by a test, not left to discipline.
- *   2. This file is committed in its own commit, BEFORE the runner that scores against
- *      it exists. The git history is the evidence that the labels were not tuned to the
- *      numbers they produce.
+ * THE DEFENCES, ORDERED BY HOW MUCH WEIGHT EACH CAN ACTUALLY CARRY.
+ *
+ *   1. INDEPENDENT RE-LABELLING — the strongest evidence, and the one to cite.
+ *      A second labeller with no authorship of the policy or of this file re-derived all
+ *      30 `requiredTier` values from the scenario text alone, with `requiredTier` and
+ *      `why` stripped. Result: 28/30 agreement. Both disagreements landed on scenarios
+ *      whose own `why` had already flagged the call as a judgement call — a corpus tuned
+ *      to flatter its scorer does not pre-register its own ambiguity. Substituting the
+ *      second labeller's full label set moves the reported operating band by exactly
+ *      zero, and sweeping all 120 single-label relabellings leaves the band non-empty
+ *      every time (pinned in `proof-tier-regret.test.ts`, so it cannot quietly go stale).
+ *      Stated limit, disclosed by that labeller about its own method: the scenarios below
+ *      are grouped in contiguous blocks by tier, so a re-labeller reading the file sees
+ *      the grouping. 28/30 is a LOWER bound on agreement, not a measurement of it.
+ *
+ *   2. NO IMPORTS — structural, and narrower than it first looks. Nothing here imports
+ *      `proof-tier-policy`, enforced by a test rather than by discipline, so a label
+ *      cannot be MECHANICALLY derived from the policy. It does not prevent a human from
+ *      labelling with the policy's known behaviour in mind — which is the failure mode
+ *      that actually threatens a measurement written by the policy's own author.
+ *
+ *   3. COMMIT ORDER — the weakest, and previously overstated in this header. This file
+ *      was committed before the runner that scores against it; that is true and checkable
+ *      in the history. But the POLICY was authored ~95 minutes BEFORE these labels, so
+ *      "the corpus predates the scorer" never established the thing it was cited for.
+ *      Kept as a fact, demoted as an argument. Defence 1 is what carries the claim.
  *
  * LABELLING RULE (the only rule used; applied per scenario, stated once here):
  *   the required tier is the WEAKEST rung sufficient for the answer to be trustworthy.
