@@ -35,6 +35,8 @@ import { extractHALSignals } from '../hal/lib/extract';
 import { halService } from '../hal/service';
 import { strictModeOrFallback } from '../hal/lib/strict-mode';
 import { classifyTaskPurpose } from './task-purpose';
+import { computeGroundingSignal, groundingMode } from '../hal/hal-grounding';
+import type { ProofCarryingAnswer } from '../memory/proof-carrying-memory';
 import { getHalConfig } from '../hal/config';
 import { buildFactCheckProvidersWith } from '../hal/fact-check';
 import {
@@ -127,6 +129,8 @@ export interface ScoreEventInput {
   certainty?: number;
   idempotency_key?: string;
   contract_id?: string;
+  /** P2 proof-carrying answer (optional) — enables the HAL grounding / abstain signal (shadow-first). */
+  proof_carrying_answer?: ProofCarryingAnswer;
 }
 
 export interface ScoreEventResult {
@@ -398,6 +402,21 @@ export async function runScoreEvent(
     if (wasPenalty) penaltySuppressed = true; // keep penalty-specific S-DRAIN observability intact
   }
 
+  // GROUNDING / ABSTAIN (proof-carrying retrieval P2) — SHADOW-FIRST via HAL_GROUNDING_MODE.
+  // If the answer carries a proof-carrying binding, verify it. 'shadow' (default) logs only;
+  // 'enforce' (Sean GO, after measurement) neutralizes a POSITIVE delta when an answer CLAIMED
+  // grounding but can't prove it (no proof ⇒ no reward). No current traffic carries a PCA →
+  // applicable:false → byte-identical to today. Runs BEFORE new_repid so enforce can zero the delta.
+  const gMode = groundingMode();
+  const grounding = gMode === 'off'
+    ? null
+    : computeGroundingSignal({ proof_carrying_answer: input.proof_carrying_answer ?? null }, gMode);
+  let groundingAbstained = false;
+  if (grounding && grounding.mode === 'enforce' && grounding.applicable && grounding.would_abstain && effectiveDeltaApplied > 0) {
+    effectiveDeltaApplied = 0; // claimed grounding, unprovable → earns nothing
+    groundingAbstained = true;
+  }
+
   const old_repid = agent.current_repid;
   const new_repid = old_repid + effectiveDeltaApplied;
 
@@ -458,6 +477,8 @@ export async function runScoreEvent(
     idempotency_key: input.idempotency_key ?? null,
     metadata: {
       hal_signals: signals,
+      grounding: grounding ?? undefined,
+      grounding_abstained: groundingAbstained,
       hal_error: halError,
       delta_reason: penaltySuppressed
         ? `${delta.reason} (S-DRAIN: penalty suppressed — ${quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught'})`
