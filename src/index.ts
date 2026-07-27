@@ -165,6 +165,9 @@ app.use((err: any, req: any, res: any, next: any) => {
 // trinity_system_config.emergency_halt is true no mutating request reaches a
 // handler. GET/HEAD are untouched: /health, dashboards and every read surface
 // stay up so the operator can watch the system come to rest.
+// The guard is SYNCHRONOUS and never queries: mounting it also starts a
+// background refresher that reads the flag once per ~5s for the whole process,
+// so this adds no per-request latency and no per-request DB dependency.
 // Inert by default (the column defaults to false) and fail-open on read error.
 // See src/services/emergency-halt.ts for the failure semantics.
 app.use(emergencyHaltMiddleware(db));

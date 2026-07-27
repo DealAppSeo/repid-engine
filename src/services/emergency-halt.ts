@@ -60,7 +60,9 @@
  *     is safe to deploy before (or without) the DDL, and safe if the column is
  *     ever rolled back.
  *
- * LEVERS: EMERGENCY_HALT_MODE (above) · EMERGENCY_HALT_CACHE_MS (default 5000).
+ * LEVERS: EMERGENCY_HALT_MODE (above) · EMERGENCY_HALT_CACHE_MS (default 5000)
+ * · EMERGENCY_HALT_TIMEOUT_MS (default 1000 — the hard ceiling on how long this
+ * check may block a request or a tick; overrun is treated as a failed read).
  *
  * OPERATOR RUNBOOK — no CLI on purpose; one statement each way, runnable from
  * the Supabase SQL editor with nothing installed:
@@ -108,12 +110,32 @@ export interface HaltDecision {
 }
 
 const DEFAULT_CACHE_MS = 5000;
+/**
+ * Hard ceiling on how long the halt check may block its caller.
+ *
+ * This exists because the first cut of this module did NOT have it, and CI
+ * caught the consequence: two suites that POST through the app hung to the
+ * 5-second jest timeout, because the middleware awaited a Supabase read with no
+ * bound. The test failure is the small version of the real one — a config read
+ * that can hang means a slow database stalls EVERY write request and every tick.
+ * A kill switch must never be able to wedge the system it exists to protect, so
+ * a read that overruns is treated exactly like a read that failed.
+ */
+const DEFAULT_TIMEOUT_MS = 1000;
 
 /** Postgres/PostgREST codes meaning "that column isn't there". */
 const MISSING_COLUMN_CODES = new Set(['42703', 'PGRST204']);
 
 let cachedFlag: boolean | null = null;
 let cachedAt = 0;
+/**
+ * While a read is failing, don't retry (and re-pay the timeout) on every single
+ * request. Distinct from `cachedAt` on purpose: a failure must not extend the
+ * life of a stale SUCCESSFUL value past its TTL, but it may suppress repeated
+ * doomed reads for the same interval.
+ */
+let failBackoffUntil = 0;
+let lastFailReason = '';
 /** Last value from a SUCCESSFUL read; drives the sticky-halt rule. */
 let lastKnownGood: boolean | null = null;
 let warnedBadMode = false;
@@ -174,6 +196,39 @@ export function isHaltTruthy(value: unknown): boolean {
   return typeof value === 'string' && value.trim().toLowerCase() === 'true';
 }
 
+function resolveTimeoutMs(raw: string | null | undefined): number {
+  const n = parseInt(raw ?? '', 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TIMEOUT_MS;
+  return n;
+}
+
+/** Marker error so a timeout is distinguishable from a genuine query error. */
+const TIMEOUT_MARKER = 'emergency-halt read timed out';
+
+/**
+ * Bound a promise. The timer is always cleared — a dangling handle here would
+ * keep a jest worker (and, worse, a graceful shutdown) alive.
+ *
+ * Note this does not CANCEL the underlying request; supabase-js gives us no
+ * handle to abort. It stops the CALLER waiting on it, which is the property
+ * that matters: no request and no tick can be pinned by this check.
+ */
+async function withTimeout<T>(p: PromiseLike<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${TIMEOUT_MARKER} after ${ms}ms`)), ms);
+        // Don't hold the event loop open on this timer alone.
+        if (typeof timer.unref === 'function') timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** True when the supabase error object says the column does not exist. */
 function isMissingColumn(err: { code?: string | null; message?: string | null } | null): boolean {
   if (!err) return false;
@@ -191,7 +246,7 @@ function isMissingColumn(err: { code?: string | null; message?: string | null } 
  */
 export async function checkEmergencyHalt(
   client: Pick<SupabaseClient, 'from'>,
-  opts: { mode?: EmergencyHaltMode; cacheMs?: number; now?: number } = {},
+  opts: { mode?: EmergencyHaltMode; cacheMs?: number; now?: number; timeoutMs?: number } = {},
 ): Promise<HaltDecision> {
   const mode = opts.mode ?? resolveHaltMode(process.env.EMERGENCY_HALT_MODE);
   if (mode === 'off') {
@@ -205,18 +260,23 @@ export async function checkEmergencyHalt(
   }
 
   const cacheMs = opts.cacheMs ?? resolveCacheMs(process.env.EMERGENCY_HALT_CACHE_MS);
+  const timeoutMs = opts.timeoutMs ?? resolveTimeoutMs(process.env.EMERGENCY_HALT_TIMEOUT_MS);
   const now = opts.now ?? Date.now();
 
   if (cachedFlag !== null && now - cachedAt < cacheMs) {
     return decide(cachedFlag, mode, 'cache', `cached ${now - cachedAt}ms ago`);
   }
 
+  // A read is currently failing; don't re-pay the timeout on every caller.
+  if (now < failBackoffUntil) {
+    return failDecision(mode, lastFailReason, { silent: true });
+  }
+
   try {
-    const { data, error } = await client
-      .from('trinity_system_config')
-      .select('emergency_halt')
-      .eq('id', 1)
-      .maybeSingle();
+    const { data, error } = await withTimeout(
+      client.from('trinity_system_config').select('emergency_halt').eq('id', 1).maybeSingle(),
+      timeoutMs,
+    );
 
     if (error) {
       if (isMissingColumn(error)) {
@@ -229,7 +289,7 @@ export async function checkEmergencyHalt(
         }
         return decide(false, mode, 'column_absent', 'column missing; switch inert');
       }
-      return failRead(mode, error.message ?? 'unknown error');
+      return failRead(mode, error.message ?? 'unknown error', now, cacheMs);
     }
 
     // No config row at all is the same shape of problem as a missing column:
@@ -238,26 +298,42 @@ export async function checkEmergencyHalt(
     cachedFlag = flag;
     cachedAt = now;
     lastKnownGood = flag;
+    failBackoffUntil = 0;
     return decide(flag, mode, 'db', data ? 'read from trinity_system_config id=1' : 'no config row (id=1 absent)');
   } catch (e: unknown) {
-    return failRead(mode, e instanceof Error ? e.message : String(e));
+    return failRead(mode, e instanceof Error ? e.message : String(e), now, cacheMs);
   }
 }
 
 /**
- * Read failed. Never start a halt on an error; never lift one either.
- * Deliberately does NOT refresh the cache — a failed read must not extend the
- * life of a stale value past its TTL.
+ * Read failed (or timed out). Never start a halt on an error; never lift one
+ * either. Deliberately does NOT refresh `cachedAt` — a failed read must not
+ * extend the life of a stale SUCCESSFUL value past its TTL — but it does set a
+ * short backoff so a database outage costs one timeout per interval rather than
+ * one per request.
  */
-function failRead(mode: EmergencyHaltMode, message: string): HaltDecision {
+function failRead(mode: EmergencyHaltMode, message: string, now: number, cacheMs: number): HaltDecision {
+  lastFailReason = message;
+  failBackoffUntil = now + cacheMs;
+  return failDecision(mode, message, { silent: false });
+}
+
+function failDecision(mode: EmergencyHaltMode, message: string, opts: { silent: boolean }): HaltDecision {
+  const timedOut = message.includes(TIMEOUT_MARKER);
   if (lastKnownGood === true) {
-    console.error(
-      `[EmergencyHalt] read FAILED (${message}) — last successful read was HALTED, ` +
-        'staying halted (sticky). Only a successful read of false resumes.',
-    );
+    if (!opts.silent) {
+      console.error(
+        `[EmergencyHalt] read ${timedOut ? 'TIMED OUT' : 'FAILED'} (${message}) — last successful read was ` +
+          'HALTED, staying halted (sticky). Only a successful read of false resumes.',
+      );
+    }
     return decide(true, mode, 'error_sticky', `read failed: ${message}; sticky from last known halt`);
   }
-  console.error(`[EmergencyHalt] read FAILED (${message}) — failing OPEN (not halted).`);
+  if (!opts.silent) {
+    console.error(
+      `[EmergencyHalt] read ${timedOut ? 'TIMED OUT' : 'FAILED'} (${message}) — failing OPEN (not halted).`,
+    );
+  }
   return decide(false, mode, 'error_open', `read failed: ${message}; failing open`);
 }
 
@@ -302,6 +378,64 @@ function logTransition(flag: boolean, halted: boolean, mode: EmergencyHaltMode, 
 }
 
 /**
+ * SYNCHRONOUS read of the last known halt state. Never touches the database.
+ *
+ * WHY THIS EXISTS — the HTTP path must not query. The first version had the
+ * middleware `await` the check on every mutating request, and CI found two
+ * consequences: a hung read stalled the request (fixed by the timeout above),
+ * and — the deeper one — the extra query CONSUMED a sequenced mock that a route
+ * test needed, turning a 200 into a 404. That second failure is a small, loud
+ * instance of a real property: an extra DB round-trip on the write path is a new
+ * dependency for every write in the system. A global halt flag does not need it.
+ * The refresher below owns all reads; the request path only ever peeks at memory.
+ *
+ * `initialized: false` means nothing has ever been read — treated as NOT halted
+ * (fail open, consistent with everything else here), and the middleware says so
+ * loudly once rather than silently guarding nothing.
+ */
+export function peekHaltState(): { halted: boolean; initialized: boolean; mode: EmergencyHaltMode } {
+  const mode = resolveHaltMode(process.env.EMERGENCY_HALT_MODE);
+  if (mode === 'off') return { halted: false, initialized: true, mode };
+  const known = lastKnownGood ?? cachedFlag;
+  return { halted: known === true && mode === 'enforce', initialized: known !== null, mode };
+}
+
+let refresherTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Start the background poll that keeps `peekHaltState` current. One query per
+ * interval for the whole process regardless of request volume — as opposed to
+ * one per request, which is what reading on the hot path would cost.
+ *
+ * Idempotent. Does an immediate first read so the state is warm within one
+ * round-trip of boot rather than one interval.
+ */
+export function startEmergencyHaltRefresher(
+  client: Pick<SupabaseClient, 'from'>,
+  intervalMs = resolveCacheMs(process.env.EMERGENCY_HALT_CACHE_MS),
+): void {
+  if (refresherTimer) return;
+  const tick = () => {
+    void checkEmergencyHalt(client, { cacheMs: 0 }).catch(() => {
+      /* checkEmergencyHalt never rejects; this is belt-and-braces so an unhandled
+         rejection can never take the process down from a background timer. */
+    });
+  };
+  tick();
+  refresherTimer = setInterval(tick, Math.max(1000, intervalMs));
+  if (typeof refresherTimer.unref === 'function') refresherTimer.unref();
+  console.log(`[EmergencyHalt] refresher started (every ${Math.max(1000, intervalMs)}ms, mode=${peekHaltState().mode})`);
+}
+
+/** Test-only: stop the background poll. */
+export function __stopEmergencyHaltRefresher(): void {
+  if (refresherTimer) {
+    clearInterval(refresherTimer);
+    refresherTimer = null;
+  }
+}
+
+/**
  * Convenience for tick loops: returns true when the caller should park, and
  * emits the caller-specific log line. Keeps the three-line guard identical at
  * every call site so a new worker cannot get it subtly wrong.
@@ -321,6 +455,8 @@ export async function shouldParkForHalt(client: Pick<SupabaseClient, 'from'>, wo
 export function __resetEmergencyHaltState(): void {
   cachedFlag = null;
   cachedAt = 0;
+  failBackoffUntil = 0;
+  lastFailReason = '';
   lastKnownGood = null;
   warnedBadMode = false;
   warnedMissingColumn = false;

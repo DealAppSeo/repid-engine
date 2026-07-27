@@ -11,12 +11,18 @@
 
 import {
   __resetEmergencyHaltState,
+  __stopEmergencyHaltRefresher,
   checkEmergencyHalt,
   isHaltTruthy,
+  peekHaltState,
   resolveHaltMode,
   shouldParkForHalt,
+  startEmergencyHaltRefresher,
 } from '../src/services/emergency-halt';
-import { emergencyHaltMiddleware } from '../src/middleware/emergency-halt';
+import {
+  __resetEmergencyHaltMiddlewareState,
+  emergencyHaltMiddleware,
+} from '../src/middleware/emergency-halt';
 
 /** Minimal stand-in for the supabase query chain this module uses. */
 function fakeClient(result: { data?: any; error?: any } | (() => { data?: any; error?: any })) {
@@ -52,6 +58,8 @@ let logSpy: jest.SpyInstance;
 
 beforeEach(() => {
   __resetEmergencyHaltState();
+  __stopEmergencyHaltRefresher();
+  __resetEmergencyHaltMiddlewareState();
   delete process.env.EMERGENCY_HALT_MODE;
   delete process.env.EMERGENCY_HALT_CACHE_MS;
   warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -326,6 +334,105 @@ describe('failure semantics — an error can never LIFT a halt (sticky)', () => 
   });
 });
 
+describe('timeout — the check can never wedge the system it protects', () => {
+  /** A client whose read never settles, the way a hung connection behaves. */
+  function hangingClient() {
+    const calls = { from: 0 };
+    const client = {
+      from() {
+        calls.from += 1;
+        return {
+          select: () => ({
+            eq: () => ({ maybeSingle: () => new Promise(() => {}) }),
+          }),
+        };
+      },
+    };
+    return { client: client as any, calls };
+  }
+
+  // This is the regression test for the defect CI caught: without a bound, a
+  // POST through the app hung to jest's 5s timeout, and in production a slow
+  // database would have stalled every write.
+  it('a read that never settles fails open within the timeout', async () => {
+    const { client } = hangingClient();
+    const started = Date.now();
+    const d = await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0, timeoutMs: 50 });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(d.halted).toBe(false);
+    expect(d.source).toBe('error_open');
+    expect(d.reason).toContain('timed out');
+  });
+
+  it('a timeout does not lift an existing halt', async () => {
+    let phase: 'halted' | 'hang' = 'halted';
+    const client = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              phase === 'halted'
+                ? Promise.resolve({ data: { emergency_halt: true }, error: null })
+                : new Promise(() => {}),
+          }),
+        }),
+      }),
+    } as any;
+    expect((await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0, now: 1, timeoutMs: 50 })).halted).toBe(true);
+    phase = 'hang';
+    const d = await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0, now: 2, timeoutMs: 50 });
+    expect(d.halted).toBe(true);
+    expect(d.source).toBe('error_sticky');
+  });
+
+  it('an outage costs one timeout per interval, not one per caller', async () => {
+    const { client, calls } = hangingClient();
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 5000, now: 1_000, timeoutMs: 30 });
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 5000, now: 1_100, timeoutMs: 30 });
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 5000, now: 1_200, timeoutMs: 30 });
+    expect(calls.from).toBe(1);
+  });
+
+  it('the backoff expires so a recovered database is noticed', async () => {
+    let broken = true;
+    const { client } = fakeClient(() =>
+      broken ? { data: null, error: { code: '08006', message: 'gone' } } : { data: { emergency_halt: true }, error: null },
+    );
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 5000, now: 1_000 });
+    broken = false;
+    // still inside the backoff window — not retried
+    expect((await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 5000, now: 2_000 })).source).toBe('error_open');
+    // past it — retried, and the real value comes through
+    const recovered = await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 5000, now: 7_000 });
+    expect(recovered.source).toBe('db');
+    expect(recovered.halted).toBe(true);
+  });
+
+  it('a successful read clears the backoff immediately', async () => {
+    let broken = true;
+    const { client, calls } = fakeClient(() =>
+      broken ? { data: null, error: { message: 'gone' } } : { data: { emergency_halt: false }, error: null },
+    );
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0, now: 1_000 });
+    broken = false;
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0, now: 9_000 });
+    expect(calls.from).toBe(2);
+    // with cacheMs=0 the next call must reach the DB again, not a stale backoff
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0, now: 9_001 });
+    expect(calls.from).toBe(3);
+  });
+
+  it('a garbage EMERGENCY_HALT_TIMEOUT_MS falls back to the default rather than 0 or NaN', async () => {
+    process.env.EMERGENCY_HALT_TIMEOUT_MS = 'quickly';
+    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
+    // a 0 or NaN timeout would abort the read instantly and fail open
+    const d = await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0 });
+    expect(d.source).toBe('db');
+    expect(d.halted).toBe(true);
+    delete process.env.EMERGENCY_HALT_TIMEOUT_MS;
+  });
+});
+
 describe('the DDL has not landed yet — the switch is inert, not broken', () => {
   it.each([
     ['42703', 'column trinity_system_config.emergency_halt does not exist'],
@@ -387,9 +494,61 @@ describe('shouldParkForHalt — the identical three-line guard every worker uses
   });
 });
 
+// -------------------------------------------------- peek + background refresher
+
+describe('peekHaltState — synchronous, never queries', () => {
+  it('reports uninitialized before anything has been read', () => {
+    const s = peekHaltState();
+    expect(s.initialized).toBe(false);
+    expect(s.halted).toBe(false);
+  });
+
+  it('reflects the last successful read', async () => {
+    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
+    await checkEmergencyHalt(client, { mode: 'enforce', cacheMs: 0 });
+    const s = peekHaltState();
+    expect(s.initialized).toBe(true);
+    expect(s.halted).toBe(true);
+  });
+
+  it('does not report halted in shadow mode', async () => {
+    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
+    await checkEmergencyHalt(client, { mode: 'shadow', cacheMs: 0 });
+    process.env.EMERGENCY_HALT_MODE = 'shadow';
+    expect(peekHaltState().halted).toBe(false);
+  });
+
+  it('reports not-halted and initialized when the mode is off', () => {
+    process.env.EMERGENCY_HALT_MODE = 'off';
+    expect(peekHaltState()).toMatchObject({ halted: false, initialized: true, mode: 'off' });
+  });
+});
+
+describe('startEmergencyHaltRefresher — one query per interval for the whole process', () => {
+  afterEach(() => __stopEmergencyHaltRefresher());
+
+  it('primes the state immediately rather than after one interval', async () => {
+    const { client, calls } = fakeClient({ data: { emergency_halt: true }, error: null });
+    startEmergencyHaltRefresher(client, 60_000);
+    await new Promise((r) => setImmediate(r));
+    expect(calls.from).toBe(1);
+    expect(peekHaltState()).toMatchObject({ initialized: true, halted: true });
+  });
+
+  it('is idempotent — a second start does not add a second poller', async () => {
+    const { client, calls } = fakeClient({ data: { emergency_halt: false }, error: null });
+    startEmergencyHaltRefresher(client, 60_000);
+    startEmergencyHaltRefresher(client, 60_000);
+    startEmergencyHaltRefresher(client, 60_000);
+    await new Promise((r) => setImmediate(r));
+    expect(calls.from).toBe(1);
+  });
+});
+
 // ------------------------------------------------------------- the middleware
 
-describe('emergencyHaltMiddleware', () => {
+
+describe('emergencyHaltMiddleware — synchronous, zero DB reads on the request path', () => {
   function reqres(method: string, path = '/api/v1/agents/register') {
     const headers: Record<string, string> = {};
     const res = {
@@ -411,67 +570,102 @@ describe('emergencyHaltMiddleware', () => {
     return { req: { method, path } as any, res: res as any, next, headers };
   }
 
-  it('refuses a mutating request with 503 + Retry-After while halted', async () => {
-    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
-    const { req, res, next, headers } = reqres('POST');
-    await emergencyHaltMiddleware(client)(req, res, next);
+  /** Prime the module's state without letting the middleware start a refresher. */
+  async function primed(flag: boolean, mode: 'enforce' | 'shadow' = 'enforce') {
+    const { client, calls } = fakeClient({ data: { emergency_halt: flag }, error: null });
+    await checkEmergencyHalt(client, { mode, cacheMs: 0 });
+    calls.from = 0; // only count reads made from here on
+    return { client, calls };
+  }
+
+  afterEach(() => __stopEmergencyHaltRefresher());
+
+  // THE regression test for what CI caught: the guard must not consume a DB
+  // call, because doing so shifted a route test's sequenced mocks (200 -> 404)
+  // and, in production, added a round-trip to every write in the system.
+  it('makes ZERO database calls while guarding a mutating request', async () => {
+    const { client, calls } = await primed(false);
+    const { req, res, next } = reqres('POST');
+    emergencyHaltMiddleware(client, { autoStartRefresher: false })(req, res, next);
+    expect(calls.from).toBe(0);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('makes zero database calls while halted, too', async () => {
+    const { client, calls } = await primed(true);
+    const { req, res, next } = reqres('POST');
+    emergencyHaltMiddleware(client, { autoStartRefresher: false })(req, res, next);
+    expect(calls.from).toBe(0);
+    expect(res.statusCode).toBe(503);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mutating request with 503 + Retry-After while halted', async () => {
+    const { client } = await primed(true);
+    const { req, res, next, headers } = reqres('POST');
+    emergencyHaltMiddleware(client, { autoStartRefresher: false })(req, res, next);
     expect(res.statusCode).toBe(503);
     expect(res.body.error).toBe('emergency_halt');
     expect(headers['Retry-After']).toBe('30');
   });
 
   it.each(['POST', 'PUT', 'PATCH', 'DELETE'])('%s is refused while halted', async (method) => {
-    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
+    const { client } = await primed(true);
     const { req, res, next } = reqres(method);
-    await emergencyHaltMiddleware(client)(req, res, next);
+    emergencyHaltMiddleware(client, { autoStartRefresher: false })(req, res, next);
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(503);
   });
 
   it.each(['GET', 'HEAD', 'OPTIONS'])('%s passes through while halted — reads stay up', async (method) => {
-    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
+    const { client } = await primed(true);
     const { req, res, next } = reqres(method, '/health');
-    await emergencyHaltMiddleware(client)(req, res, next);
+    emergencyHaltMiddleware(client, { autoStartRefresher: false })(req, res, next);
     expect(next).toHaveBeenCalled();
     expect(res.statusCode).toBe(0);
   });
 
-  it('does not touch the DB for a read request — no latency on the hot read path', async () => {
-    const { client, calls } = fakeClient({ data: { emergency_halt: true }, error: null });
-    const { req, res, next } = reqres('GET');
-    await emergencyHaltMiddleware(client)(req, res, next);
-    expect(calls.from).toBe(0);
-    expect(next).toHaveBeenCalled();
-  });
-
   it('passes a mutating request through on the normal path', async () => {
-    const { client } = fakeClient({ data: { emergency_halt: false }, error: null });
+    const { client } = await primed(false);
     const { req, res, next } = reqres('POST');
-    await emergencyHaltMiddleware(client)(req, res, next);
+    emergencyHaltMiddleware(client, { autoStartRefresher: false })(req, res, next);
     expect(next).toHaveBeenCalled();
     expect(res.statusCode).toBe(0);
   });
 
   it('honours an explicit allowPaths bypass', async () => {
-    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
+    const { client } = await primed(true);
     const { req, res, next } = reqres('POST', '/api/v1/ops/unhalt');
-    await emergencyHaltMiddleware(client, { allowPaths: ['/api/v1/ops/unhalt'] })(req, res, next);
+    emergencyHaltMiddleware(client, { autoStartRefresher: false, allowPaths: ['/api/v1/ops/unhalt'] })(req, res, next);
     expect(next).toHaveBeenCalled();
-  });
-
-  it('allows the request when the check itself throws — a broken switch must not 500 the API', async () => {
-    const { req, res, next } = reqres('POST');
-    await emergencyHaltMiddleware(throwingClient('boom'))(req, res, next);
-    expect(next).toHaveBeenCalled();
-    expect(res.statusCode).toBe(0);
   });
 
   it('does not block writes in shadow mode', async () => {
+    const { client } = await primed(true, 'shadow');
     process.env.EMERGENCY_HALT_MODE = 'shadow';
-    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
     const { req, res, next } = reqres('POST');
-    await emergencyHaltMiddleware(client)(req, res, next);
+    emergencyHaltMiddleware(client, { autoStartRefresher: false })(req, res, next);
     expect(next).toHaveBeenCalled();
+  });
+
+  it('allows writes but SAYS SO ONCE when state has never been read', () => {
+    const { client } = fakeClient({ data: { emergency_halt: true }, error: null });
+    const mw = emergencyHaltMiddleware(client, { autoStartRefresher: false });
+    const a = reqres('POST');
+    const b = reqres('POST');
+    mw(a.req, a.res, a.next);
+    mw(b.req, b.res, b.next);
+    expect(a.next).toHaveBeenCalled();
+    expect(b.next).toHaveBeenCalled();
+    const warnings = warnSpy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('NOT protecting'));
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('starts the refresher by default so a mounted guard is never left unfed', async () => {
+    const { client, calls } = fakeClient({ data: { emergency_halt: false }, error: null });
+    emergencyHaltMiddleware(client);
+    await new Promise((r) => setImmediate(r));
+    expect(calls.from).toBe(1);
+    expect(peekHaltState().initialized).toBe(true);
   });
 });
