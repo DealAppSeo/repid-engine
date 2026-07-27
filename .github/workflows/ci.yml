@@ -38,6 +38,65 @@ on:
     branches: [main]
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # zkp-vault (Rust) — the Poseidon2 parity gate.
+  #
+  # WHY THIS EXISTS: until 2026-07-26 no workflow ran `cargo` at all, so the
+  # entire ZKP parity chain (backlog 4.0-a..d) was gated only on a developer
+  # machine. That chain is what makes ZKP_ARCHITECTURE_INVARIANTS Invariant 1
+  # ("one hash, one field, in- and off-circuit") checkable rather than asserted:
+  #   - poseidon2_2to1_kat.rs  — the committed KAT artifact vs a locally
+  #     recomputed raw permutation (catches oracle drift)
+  #   - poseidon2_leaf_kat.rs  — the leaf/pair KATs the TS port is gated against
+  #   - lib.rs unit tests      — circuit <-> off-circuit H_p2 parity, plus the
+  #     forgery test that gates the nullifier secret-binding constraint
+  # A silent drift in any of these would previously reach main unchallenged.
+  #
+  # Deliberately NOT path-filtered: the TS side (src/zkp/poseidon2-*.ts) is
+  # gated against the SAME committed KAT JSON, so a TS-only PR that edits the
+  # artifact must still face the Rust gate.
+  #
+  # WHAT `--locked` DOES AND DOES NOT DO (corrected 2026-07-27): it freezes this
+  # crate's tracked Cargo.lock, so a PR cannot silently move a p3-* version. It is
+  # NOT the CANON P-026 / Invariant-5 Plonky3 pin — that pin is the git rev
+  # 27d59f7350 used by the live prover, whereas zkp-vault depends on the crates.io
+  # 0.3.0 family. Same family, different mechanism; don't conflate them.
+  #
+  # ACCEPTED RISK: `rust-toolchain@stable` floats, and with `-D warnings` on both
+  # steps a future rustc that adds a lint can turn an unrelated PR red. Taken
+  # knowingly — a loud, dated, one-line fix is preferred here over pinning a
+  # toolchain that would then quietly rot against the p3 crates.
+  # ---------------------------------------------------------------------------
+  zkp-vault:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zkp-vault
+
+      - name: Build (warnings are failures — keeps the crate clean)
+        working-directory: zkp-vault
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo build --locked
+
+      # RUSTFLAGS is repeated here ON PURPOSE. `cargo build` never compiles
+      # `#[cfg(test)]` code, so a build-only `-D warnings` leaves every test and
+      # example module unguarded. That blind spot was proven by mutation
+      # (2026-07-27): an unused import injected inside `mod tests` passed the
+      # build step and merely warned during the test step — CI green. Which is
+      # exactly where the warning this gate was written to catch had just been
+      # moved to. Both steps carry the flag now.
+      - name: Parity + KAT + soundness tests
+        working-directory: zkp-vault
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --locked
+
   test:
     runs-on: ubuntu-latest
     steps:

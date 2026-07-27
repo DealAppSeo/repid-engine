@@ -101,6 +101,64 @@ fn committed_kat_json_matches_ground_truth() {
     }
 }
 
+/// The artifact's DECLARATIVE HEADER must be pinned too, not just its vectors.
+///
+/// Found by the Beat 26 verifier (2026-07-27): editing `field_prime` from 2013265921
+/// to 2013265922 left all 21 tests green. The vector gate above recomputes outputs, so
+/// it is blind to the header — yet the header is what a reader (and the TS port's
+/// orientation comments) trust to say WHICH field and width these numbers live in. A
+/// wrong `field_prime` in a committed cryptographic artifact is exactly the kind of
+/// quiet falsehood that costs someone a day later.
+///
+/// The expected values are DERIVED from the audited primitive (`BabyBear`'s own modulus,
+/// the permutation's own width), not retyped, so this cannot drift into a tautology.
+#[test]
+fn committed_kat_json_header_matches_the_primitive() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/kat/poseidon2_babybear16_2to1_kat.json"
+    );
+    let json = std::fs::read_to_string(path).expect("committed 2-to-1 KAT oracle unreadable");
+
+    fn header_field<'a>(json: &'a str, key: &str) -> &'a str {
+        json.lines()
+            .map(str::trim)
+            .find_map(|l| l.strip_prefix(key))
+            .unwrap_or_else(|| panic!("committed KAT header is missing `{key}`"))
+            .trim()
+            .trim_end_matches(',')
+            .trim()
+            .trim_matches('"')
+    }
+
+    // Derived from the field itself — if p3 ever changed BabyBear's modulus this would
+    // fail here rather than leave a stale constant sitting in a "known-answer" file.
+    let expected_prime = <BabyBear as PrimeField32>::ORDER_U32;
+    let declared_prime: u32 = header_field(&json, "\"field_prime\":")
+        .parse()
+        .expect("`field_prime` is not a u32");
+    assert_eq!(
+        declared_prime, expected_prime,
+        "committed KAT declares field_prime {declared_prime}, but BabyBear's modulus is {expected_prime}"
+    );
+
+    // Derived from the permutation actually used to produce the vectors.
+    let expected_width = raw_permute([0u32; 16]).len();
+    let declared_width: usize = header_field(&json, "\"width\":")
+        .parse()
+        .expect("`width` is not a usize");
+    assert_eq!(
+        declared_width, expected_width,
+        "committed KAT declares width {declared_width}, but the permutation is width {expected_width}"
+    );
+
+    assert_eq!(
+        header_field(&json, "\"scheme\":"),
+        "poseidon2_babybear16_2to1",
+        "committed KAT scheme label changed — the TS gate keys its orientation off this string"
+    );
+}
+
 /// Determinism: pure function of its two inputs.
 #[test]
 fn h_p2_is_deterministic() {
