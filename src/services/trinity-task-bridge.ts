@@ -4,6 +4,7 @@ import { runScoreEvent } from '../scoring/pipeline';
 import { enqueueVerification } from './peer-verification-writer';
 import { classifyPeerVerifyClaim, isPeerVerificationTask } from './peer-verify-prefilter';
 import { isProducerHalted } from './producer-halt';
+import { resolveVerifyLegMode, verifyTaskDeterministically } from './task-verify-leg';
 
 const POLL_INTERVAL_MS = parseInt(process.env.TRINITY_BRIDGE_POLL_MS || '30000', 10);
 const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
@@ -20,8 +21,34 @@ export function normalizeAgentName(assigned: string | null | undefined): string 
   return name;
 }
 
-// Verdicts that mean an independent verifier UPHELD the claim.
-const PASS_VERDICTS = new Set(['pass', 'verified', 'approved', 'confirmed', 'upheld']);
+/**
+ * Verdicts that mean an independent verifier UPHELD the claim.
+ *
+ * These are split by COLUMN because the two columns have different CHECK
+ * constraints in prod, and the original single set was wrong for one of them
+ * (read 2026-07-27):
+ *   verifier_verdict ∈ {approved, rejected, unclear}
+ *   final_verdict    ∈ {verified_done, disputed_done, rejected, unverified, spot_audited}
+ * The old set — pass/verified/approved/confirmed/upheld — has an EMPTY
+ * intersection with the `final_verdict` vocabulary, so the `final_verdict`
+ * branch below could never fire against a value the database would accept:
+ * a peer verifier writing the legitimate pass value `verified_done` was read as
+ * "not verified". Fails closed, so nothing was ever over-credited — but a real
+ * pass signal was being silently discarded.
+ *
+ * The loose legacy strings are kept because the agent runtime lives in another
+ * repo (`trinity-symphony-shared`) and cannot be grepped from here; if it ever
+ * wrote 'pass' the write would have been rejected by the constraint, but a
+ * future non-column consumer of this helper should not regress.
+ */
+const LEGACY_PASS_VERDICTS = ['pass', 'verified', 'confirmed', 'upheld'];
+/** DB-legal `verifier_verdict` values meaning upheld. */
+const PASS_VERIFIER_VERDICTS = new Set([...LEGACY_PASS_VERDICTS, 'approved']);
+/**
+ * DB-legal `final_verdict` values meaning upheld. `disputed_done` is
+ * deliberately absent: work that completed under dispute is not a clean pass.
+ */
+const PASS_FINAL_VERDICTS = new Set([...LEGACY_PASS_VERDICTS, 'verified_done', 'spot_audited']);
 
 /**
  * repid_verified = true ONLY when an INDEPENDENT verifier checked the task and it
@@ -40,7 +67,7 @@ export function isIndependentlyVerified(task: {
   if (!hasIndependentVerifier) return false;
   const fv = String(task.final_verdict ?? '').toLowerCase();
   const vv = String(task.verifier_verdict ?? '').toLowerCase();
-  return PASS_VERDICTS.has(fv) || PASS_VERDICTS.has(vv);
+  return PASS_FINAL_VERDICTS.has(fv) || PASS_VERIFIER_VERDICTS.has(vv);
 }
 
 function generateDeterministicUuid(taskId: number | string): string {
@@ -63,6 +90,9 @@ export async function startTrinityTaskBridge() {
   // Start from 10 minutes before the worker booted to catch anything that was done recently
   startTimestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
   console.log(`[TrinityTaskBridge] Starting task bridge worker, polling tasks completed since ${startTimestamp}`);
+  // Print the resolved verify-leg mode loudly: the failure this guards against is
+  // someone deploying with TASK_VERIFY_LEG_MODE set and nobody knowing it is on.
+  console.log(`[TrinityTaskBridge] verify-leg mode: ${resolveVerifyLegMode()} (TASK_VERIFY_LEG_MODE)`);
   
   setInterval(pollCompletedTasks, POLL_INTERVAL_MS);
   // Run once immediately on startup
@@ -77,7 +107,7 @@ async function pollCompletedTasks() {
     // Query recently completed done, shadow_reject, or verified tasks that are not yet repid_verified
     const { data: tasks, error: fetchErr } = await db
       .from('trinity_tasks')
-      .select('id, agent_assigned, claimed_by, agent_name, completed_by, status, result, belief, uncertainty, certainty, title, description, task_type, metadata, completed_at, updated_at, verifier_agent_id, verifier_verdict, final_verdict, verify_count, verification_required, needs_peer')
+      .select('id, agent_assigned, claimed_by, agent_name, completed_by, status, result, belief, uncertainty, certainty, title, description, task_type, metadata, completed_at, updated_at, verifier_agent_id, verifier_verdict, final_verdict, verify_count, verification_required, needs_peer, expected_output')
       .in('status', ['done', 'shadow_reject', 'verified'])
       // Dedup on the bridge's OWN marker (metadata.repid_bridged), NOT repid_verified.
       // repid_verified is now reserved to mean, honestly, "an INDEPENDENT peer verifier
@@ -274,12 +304,46 @@ async function markTaskBridged(task: any) {
     independently_verified: verified,
   };
 
+  const update: Record<string, unknown> = {
+    metadata: updatedMetadata,
+    repid_verified: verified, // true ONLY when an independent verifier passed it
+  };
+
+  // Deterministic verify leg. Off by default; `shadow` computes and logs without
+  // writing; `enforce` persists the four verification columns. It NEVER feeds
+  // `repid_verified` above — a code check is not an independent agent, and the
+  // two signals must stay distinguishable (verification_method = 'deterministic-v1').
+  const verifyMode = resolveVerifyLegMode();
+  if (verifyMode !== 'off') {
+    try {
+      const leg = verifyTaskDeterministically(task);
+      if (!leg) {
+        console.log(
+          `[TrinityTaskBridge] verify-leg (${verifyMode}): task ${task.id} ships no contract in ` +
+            `expected_output — leaving verification columns NULL`
+        );
+      } else {
+        console.log(
+          `[TrinityTaskBridge] verify-leg (${verifyMode}): task ${task.id} → ` +
+            `${leg.verifier_verdict}/${leg.final_verdict} (${leg.verified_output.reason}, ` +
+            `${leg.verified_output.substantive_checks} substantive)`
+        );
+        if (verifyMode === 'enforce') {
+          update.verification_method = leg.verification_method;
+          update.verifier_verdict = leg.verifier_verdict;
+          update.final_verdict = leg.final_verdict;
+          update.verified_output = leg.verified_output;
+        }
+      }
+    } catch (err: any) {
+      // A grader fault must never cost the task its score event.
+      console.error(`[TrinityTaskBridge] verify-leg threw for task ${task.id}:`, err?.message);
+    }
+  }
+
   const { error: updateErr } = await db
     .from('trinity_tasks')
-    .update({
-      metadata: updatedMetadata,
-      repid_verified: verified, // true ONLY when an independent verifier passed it
-    })
+    .update(update)
     .eq('id', task.id);
 
   if (updateErr) {
