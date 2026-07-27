@@ -21,9 +21,19 @@
 
 name: CI
 
+# NOTE on the `pull_request` trigger having NO `branches:` filter (2026-07-27):
+# it used to read `pull_request: branches: [main]`, which meant a STACKED PR — one
+# whose base is another feature branch, not `main` — never ran this workflow at all.
+# PR #210 (base `feat/cc-2026-07-27-pcr-p2-retrieval`) sat green on `gitleaks` alone
+# while `test` and `crosscheck` had literally never executed against it. The green
+# checkmark was reporting on secret-scanning only, which is exactly the "a check that
+# cannot fail proves nothing" failure mode in a new costume.
+# Unfiltered = this runs on every PR regardless of base. That costs a couple of extra
+# jobs per stacked-PR push and is the point. It is also a PRECONDITION for putting
+# branch protection on `main`: required checks that never run on stacked PRs would
+# block them permanently. `tests/ci-workflow-triggers.test.ts` pins this open.
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
