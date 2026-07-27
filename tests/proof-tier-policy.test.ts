@@ -112,6 +112,43 @@ describe('proof-tier policy — non-degeneracy (anti-vacuity)', () => {
     expect(seen.size).toBeGreaterThan(1);
   });
 
+  it('P2b: the decisions come from the ANFIS fabric specifically, not from any non-constant model', () => {
+    // WHY THIS EXISTS. An independent verifier (Beat 42) replaced the `anfisForward` call
+    // with a plain one-rule linear sum — deleting the gaussian antecedents, the golden-ratio
+    // centers/spreads, the rule firing and the normalisation, i.e. the entire thing this
+    // module's header calls "the shared fabric IS the claim" — and ALL 18 tests still passed,
+    // while the learned distribution moved on ~11k of 32,768 grid points.
+    //
+    // P2 above could not see it: `seen.size > 1` distinguishes CONSTANT from NON-CONSTANT,
+    // not ANFIS from LINEAR. So the sentence P2 was written to earn — "without this the floors
+    // could be doing 100% of the work and the policy is a lookup table wearing a fuzzy-logic
+    // costume" — was true of P2 itself. Patent #2's whole claim is that ONE fabric decides both
+    // routing and proof strength; a suite that ships green with the fabric removed is not
+    // evidence for that claim.
+    //
+    // These literals are frozen characterisation values, generated once from the real
+    // implementation and pasted here. That is deliberate and is NOT the self-referential trap
+    // P3 fell into: nothing here calls the code under test to compute its own expectation, so
+    // a change in the model moves the actual and leaves the expected where it is.
+    // `confidence` is the sharpest probe, because it reads `ruleWeights` — which only exist
+    // if the rules actually fired.
+    const GOLDEN: Array<[string, PolicyAxes, { tierIndex: number; learnedTierIndex: number; confidence: number }]> = [
+      ['low-everything', { stakes: 0.1, costPressure: 0.1, privacy: 0.1, latencyUrgency: 0.1, reliabilityRequired: 0.1 }, { tierIndex: 1, learnedTierIndex: 1, confidence: 0.8941 }],
+      ['cost-pressed-midlow', { stakes: 0.3, costPressure: 0.9, privacy: 0.1, latencyUrgency: 0.1, reliabilityRequired: 0.1 }, { tierIndex: 0, learnedTierIndex: 0, confidence: 0.8638 }],
+      ['balanced-mid', { stakes: 0.5, costPressure: 0.5, privacy: 0.5, latencyUrgency: 0.5, reliabilityRequired: 0.5 }, { tierIndex: 2, learnedTierIndex: 2, confidence: 0.7441 }],
+      ['learned-no-gates', { stakes: 0.3, costPressure: 0.3, privacy: 0.1, latencyUrgency: 0.1, reliabilityRequired: 0.1 }, { tierIndex: 1, learnedTierIndex: 1, confidence: 0.8605 }],
+      ['learned-cheap', { stakes: 0.3, costPressure: 0, privacy: 0.1, latencyUrgency: 0.1, reliabilityRequired: 0.1 }, { tierIndex: 2, learnedTierIndex: 2, confidence: 0.8359 }],
+      ['high-privacy-midlow', { stakes: 0.3, costPressure: 0.2, privacy: 0.95, latencyUrgency: 0.2, reliabilityRequired: 0.2 }, { tierIndex: 2, learnedTierIndex: 2, confidence: 0.8534 }],
+    ];
+    for (const [name, axes, want] of GOLDEN) {
+      const d = selectProofTier(axes);
+      expect(`${name}:${d.tierIndex}`).toBe(`${name}:${want.tierIndex}`);
+      expect(`${name}:${d.learnedTierIndex}`).toBe(`${name}:${want.learnedTierIndex}`);
+      // Exact, not approximate: an approximate match here would re-admit the linear model.
+      expect(`${name}:${d.confidence}`).toBe(`${name}:${want.confidence}`);
+    }
+  });
+
   it('both gates actually fire somewhere in the space (they are not dead code)', () => {
     let floors = 0;
     let ceilings = 0;
@@ -251,6 +288,29 @@ describe('proof-tier policy — privacy axis is orthogonal to the ladder', () =>
     expect(above.zkRequired).toBe(true);
     // Crossing the ZK threshold is a statement about disclosure, not about proof strength.
     expect(above.tierIndex).toBe(below.tierIndex);
+  });
+
+  it('the disclosure thresholds are pinned to literals, not to themselves', () => {
+    // The test above feeds `PRIVACY_ZK_THRESHOLD ± 0.01` as its input, so both sides move
+    // together and the constant can drift freely — the identical self-referential hole that
+    // P3 had for the floors, surviving one line to the left of where it was fixed. An
+    // independent verifier (Beat 42) moved PRIVACY_ZK_THRESHOLD 0.6 → 0.95 and URGENT_LATENCY
+    // 0.85 → 0.60 and the whole suite stayed green.
+    //
+    // These are not arbitrary numbers to leave unguarded: `zkRequired` is the switch that
+    // decides whether content may be revealed at all (ZKP_ARCHITECTURE_INVARIANTS 2/4 — PHI
+    // never in the clear). Raising it silently means content that should have been proven in
+    // zero-knowledge is disclosed instead.
+    expect(PRIVACY_ZK_THRESHOLD).toBe(0.6);
+    expect(URGENT_LATENCY).toBe(0.85);
+
+    // And the constants must actually drive behaviour at those literal values.
+    const axes = (privacy: number, latencyUrgency: number): PolicyAxes =>
+      ({ stakes: 0.5, costPressure: 0.5, privacy, latencyUrgency, reliabilityRequired: 0.5 });
+    expect(selectProofTier(axes(0.59, 0.5)).zkRequired).toBe(false);
+    expect(selectProofTier(axes(0.6, 0.5)).zkRequired).toBe(true);
+    // At/above the urgent threshold the ladder is capped at current_validity (index 2).
+    expect(selectProofTier(axes(0.1, 0.85)).tierIndex).toBeLessThanOrEqual(2);
   });
 });
 
