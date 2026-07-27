@@ -53,7 +53,9 @@ The env levers are the wrong shape for an emergency: flipping them means a Railw
 
 ## 3. Verification
 
-**[V] 94 tests in the new suite; 106/106 across the 5 suites touched by the final diff; `tsc --noEmit` clean.**
+**[V] 91 tests in the new suite (96 after this branch's coverage pin); 113/113 across the 5 suites touched by the final diff; `tsc --noEmit` clean.**
+
+> **CORRECTION (2026-07-27).** This line originally read "94 tests … 106/106". Both numbers were wrong. An independent verifier derived **91** two ways — jest's JSON reporter and by hand (48 bare `it(` + 7 `it.each` expanding to 43 cases) — and found the fifth touched suite I had mis-scoped, making the true cross-suite total **113**. It also pointed out that the mutation table in §5 of this same report says "Baseline 91/91": the report contradicted itself and shipped anyway. Recorded rather than quietly edited, because a stale number carried forward is exactly the failure this loop's record exists to catch.
 
 **[V] The FULL local suite was run after the §4a fixes — 2,267 passed.** The only two failing suites (`hal-accuracy-summary`, `trinity-swarm-health`) fail **identically at baseline `a1b6e7f`** with the same 10 assertions, in a clean worktree at that commit: pre-existing ENV/CONFIG needing real credentials, not this diff (CI has the credentials, which is why CI's run of them was green). **This full run is itself a correction** — the first commit was pushed on the strength of a 7-suite local run, and CI immediately found two real failures in suites that run had never touched.
 
