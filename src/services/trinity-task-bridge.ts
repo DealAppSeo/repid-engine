@@ -316,7 +316,7 @@ async function markTaskBridged(task: any) {
   const verifyMode = resolveVerifyLegMode();
   if (verifyMode !== 'off') {
     try {
-      const leg = verifyTaskDeterministically(task);
+      const leg = await verifyTaskDeterministically(task);
       if (!leg) {
         console.log(
           `[TrinityTaskBridge] verify-leg (${verifyMode}): task ${task.id} ships no contract in ` +

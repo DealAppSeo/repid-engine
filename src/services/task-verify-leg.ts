@@ -43,6 +43,8 @@
  * the constraint, transcribed once, and a test pins every emitted value to them.
  */
 
+import { matchWithBudget } from './regex-budget';
+
 /** Exactly the values `trinity_tasks_verifier_verdict_check` permits. */
 export const VERIFIER_VERDICTS = ['approved', 'rejected', 'unclear'] as const;
 export type VerifierVerdict = (typeof VERIFIER_VERDICTS)[number];
@@ -318,10 +320,10 @@ function findPlaceholders(subject: string): string[] {
  * Returns null when there is nothing to grade (no contract) — the caller must
  * then leave all four columns NULL rather than writing a manufactured verdict.
  */
-export function verifyTaskDeterministically(task: {
+export async function verifyTaskDeterministically(task: {
   expected_output?: string | null;
   result?: string | null;
-}): VerifyLegResult | null {
+}): Promise<VerifyLegResult | null> {
   const parsedContract = parseContract(task.expected_output);
   if (parsedContract === null) return null;
 
@@ -350,13 +352,27 @@ export function verifyTaskDeterministically(task: {
 
   if (c.matches !== undefined) {
     substantive++;
+    // Run under a hard wall-clock budget in a terminable worker. The pattern is
+    // operator-supplied — anything that can insert a task can write it — and a
+    // catastrophically-backtracking regex against a 20 KB subject does not fail,
+    // it pegs the event loop and takes the bridge poller with it.
+    // `hasBacktrackingRisk` already rejected the shapes it recognises at parse
+    // time, but it has been bypassed four times across Beats 32/33/38, so it is
+    // the advisory layer and this is the guarantee. See `regex-budget.ts`.
+    const outcome = await matchWithBudget(c.matches, 'i', subject);
     let ok = false;
     let detail: string;
-    try {
-      ok = new RegExp(c.matches, 'i').test(subject);
+    if (outcome.status === 'ok') {
+      ok = outcome.matched;
       detail = ok ? `result matches /${c.matches}/i` : `result does not match /${c.matches}/i`;
-    } catch (err: any) {
-      detail = `regex threw: ${err?.message ?? 'unknown'}`;
+    } else if (outcome.status === 'timeout') {
+      // NOT a failed match, and deliberately not silent: a timeout means the
+      // pattern is pathological, which is an operator error worth surfacing in
+      // the same way a malformed contract is. `ok` stays false — a check that
+      // could not be evaluated must never read as having passed.
+      detail = `regex exceeded the ${outcome.budgetMs}ms budget (catastrophic backtracking) — pattern rejected, not failed`;
+    } else {
+      detail = `regex threw: ${outcome.message}`;
     }
     checks.push({ kind: 'matches', ok, detail });
   }
