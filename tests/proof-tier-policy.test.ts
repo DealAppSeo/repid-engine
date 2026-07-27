@@ -24,6 +24,7 @@ import {
   PROOF_TIERS,
   TIER_COST_UNITS,
   TIER_LATENCY_MS,
+  ANY_STAKES_FLOOR,
   HIGH_STAKES_FLOOR,
   RELIABILITY_FLOOR,
   PRIVACY_ZK_THRESHOLD,
@@ -309,8 +310,72 @@ describe('proof-tier policy — privacy axis is orthogonal to the ladder', () =>
       ({ stakes: 0.5, costPressure: 0.5, privacy, latencyUrgency, reliabilityRequired: 0.5 });
     expect(selectProofTier(axes(0.59, 0.5)).zkRequired).toBe(false);
     expect(selectProofTier(axes(0.6, 0.5)).zkRequired).toBe(true);
-    // At/above the urgent threshold the ladder is capped at current_validity (index 2).
-    expect(selectProofTier(axes(0.1, 0.85)).tierIndex).toBeLessThanOrEqual(2);
+  });
+
+  it('the URGENT_LATENCY ceiling is pinned as BEHAVIOUR, not only as a number', () => {
+    // The previous version of this assertion — `selectProofTier(axes(0.1, 0.85)).tierIndex
+    // <= 2` — was VACUOUS: it was evaluated at axes where the learned tier is already ≤ 2,
+    // so the ceiling never had to act. An independent verifier proved it two ways: deleting
+    // the ceiling entirely passed it, and raising `rawCeiling` 2 → 3 — which moves 2,161
+    // grid points — survived the whole suite.
+    //
+    // The fix is to evaluate where the ceiling must BIND: learned selection strictly above
+    // the cap, so `ceilingApplied` is forced true and the cap value itself is observable.
+    const hot = (latencyUrgency: number): PolicyAxes => ({
+      stakes: 0.9, costPressure: 0.55, privacy: 0.5, latencyUrgency, reliabilityRequired: 0.9,
+    });
+
+    const capped = selectProofTier(hot(0.85)); // exactly AT the literal threshold
+    expect(capped.learnedTierIndex).toBe(3); // the learned layer wanted authenticated_walk
+    expect(capped.ceilingApplied).toBe(true); // …and the ceiling had to overrule it
+    expect(capped.tierIndex).toBe(2); // capped at current_validity, not 3
+
+    const uncapped = selectProofTier(hot(0.84)); // one hundredth below it
+    expect(uncapped.ceilingApplied).toBe(false);
+    expect(uncapped.tierIndex).toBe(3); // the same call, uncapped, goes higher
+  });
+
+  it('the SAFETY floors are pinned to literals — the half of the self-referential hole that was left open', () => {
+    // Beat 42 fixed this construct for PRIVACY_ZK_THRESHOLD and URGENT_LATENCY and stopped
+    // there. An independent verifier found the identical pattern still sitting eleven and
+    // twenty-seven lines away, on the two constants that carry the SAFETY property rather
+    // than the disclosure one: the tests fed `HIGH_STAKES_FLOOR` and `RELIABILITY_FLOOR` as
+    // their own inputs, so both sides moved together and the constants could drift freely.
+    //
+    // The `expectedFloor` oracle elsewhere in this file does not cover it, because that test
+    // only samples the 8-value GRID — and 0.7 and 0.8 are not grid values. Drift that lands
+    // in a grid gap is invisible to it.
+    //
+    // Measured consequence, with both floors raised by 0.05 (suite stayed 20/20 green):
+    //   stakes = 0.72, max cost+urgency        current_validity → inclusion
+    //   reliabilityRequired = 0.82, ditto      current_validity → NONE, floorApplied false
+    // A claim above the documented 0.8 reliability floor shipping with NO cryptographic
+    // backing is exactly what the module header calls the thing that makes the learned
+    // layer safe to ship. This is the fifth instance of this failure in six beats, and the
+    // first where it sits on the safety property rather than a disclosure one.
+    expect(ANY_STAKES_FLOOR).toBe(0.35);
+    expect(HIGH_STAKES_FLOOR).toBe(0.7);
+    expect(RELIABILITY_FLOOR).toBe(0.8);
+
+    // Boundary behaviour at LITERAL inputs — nothing here reads the constants, so a drifted
+    // constant changes one side only. Max cost+urgency pressure throughout, so the learned
+    // layer selects `none` and every tier below is the floor's doing alone.
+    const pressure = (stakes: number, reliabilityRequired: number): PolicyAxes => ({
+      stakes, costPressure: 1, privacy: 0, latencyUrgency: 1, reliabilityRequired,
+    });
+    expect(floorTierIndex(pressure(0.34, 0))).toBe(0);
+    expect(floorTierIndex(pressure(0.35, 0))).toBe(1);
+    expect(floorTierIndex(pressure(0.69, 0))).toBe(1);
+    expect(floorTierIndex(pressure(0.7, 0))).toBe(2);
+    expect(floorTierIndex(pressure(0, 0.79))).toBe(0);
+    expect(floorTierIndex(pressure(0, 0.8))).toBe(2);
+
+    // …and end-to-end, because a floor that computes correctly but is not applied is the
+    // same outage. These are the exact points the verifier showed silently dropping.
+    expect(selectProofTier(pressure(0.7, 0)).tier).toBe('current_validity');
+    expect(selectProofTier(pressure(0.69, 0)).tier).toBe('inclusion');
+    expect(selectProofTier(pressure(0, 0.8)).tier).toBe('current_validity');
+    expect(selectProofTier(pressure(0, 0.79)).tier).toBe('none');
   });
 });
 
