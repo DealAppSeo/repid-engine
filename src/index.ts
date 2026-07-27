@@ -86,6 +86,7 @@ import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 import { rateLimitMiddleware as globalRateLimit } from './middleware/rate-limit';
 import { attestationExtractorMiddleware } from './middleware/attestation-extractor';
 import { versioningMiddleware } from './middleware/versioning';
+import { emergencyHaltMiddleware } from './middleware/emergency-halt';
 import { scoreMonitor } from './engine/score-monitor';
 
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
@@ -158,6 +159,15 @@ app.use((err: any, req: any, res: any, next: any) => {
   }
   next(err);
 });
+
+// L0 gate 0.4 — GLOBAL EMERGENCY HALT (kill switch). Mounted here, ahead of
+// EVERY API router including full-account, so that when
+// trinity_system_config.emergency_halt is true no mutating request reaches a
+// handler. GET/HEAD are untouched: /health, dashboards and every read surface
+// stay up so the operator can watch the system come to rest.
+// Inert by default (the column defaults to false) and fail-open on read error.
+// See src/services/emergency-halt.ts for the failure semantics.
+app.use(emergencyHaltMiddleware(db));
 
 // Full-account routes (signup/login/mint/agent/trade/dashboard) are mounted
 // BEFORE the SQL-keyword sanitizer because passwords and trade rationales

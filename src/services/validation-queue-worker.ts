@@ -4,6 +4,7 @@ import { runAdversarialJudge } from './adversarial-judge';
 import { applyValidationDeltas } from './validation-repid-delta';
 import { HitlReason, HitlResolution, hitlService } from './hitl-service';
 import { appendToAuditChain } from './auditChainWriter';
+import { shouldParkForHalt } from './emergency-halt';
 
 const POLL_INTERVAL_MS = parseInt(process.env.VALIDATION_WORKER_POLL_MS || '30000', 10);
 const BATCH_SIZE = parseInt(process.env.VALIDATION_BATCH_SIZE || '5', 10);
@@ -25,6 +26,10 @@ export async function startValidationWorker() {
 
 async function processQueue() {
   try {
+    // L0 gate 0.4 — global emergency halt. Park before claiming: entries stay
+    // 'pending' and are picked up unchanged when the switch is flipped back.
+    if (await shouldParkForHalt(db, 'ValidationWorker')) return;
+
     // Fetch pending entries (atomic claim via UPDATE RETURNING is not directly supported by supabase js without rpc, but we can do a select then update)
     // Actually, Supabase `.update()` doesn't easily act as a row-lock queue out of the box without RPC, but we'll approximate atomic claim:
     const { data: claims, error: claimErr } = await db

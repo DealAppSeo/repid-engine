@@ -8,6 +8,7 @@ import {
 import { classifyPeerVerifyClaim, prefilterMode } from './peer-verify-prefilter';
 import { isProducerHalted } from './producer-halt';
 import { checkBirthRate } from './birth-rate-breaker';
+import { shouldParkForHalt } from './emergency-halt';
 
 const VERIFIER_POOL = ['trinity-mel', 'trinity-shofet', 'trinity-gcm'];
 const POLL_INTERVAL_MS = 30000;
@@ -28,6 +29,11 @@ async function getAgentName(db: SupabaseClient, agentId: string): Promise<string
 
 export async function processPeerVerificationQueue(db: SupabaseClient): Promise<void> {
   try {
+    // L0 gate 0.4 — global emergency halt, checked BEFORE the per-class breakers
+    // below: the global switch subsumes them, and checking it first means a
+    // halted fleet does not spend a birth-rate count query per tick.
+    if (await shouldParkForHalt(db, 'PeerVerificationReader')) return;
+
     // L2 breaker 2.1 — producer kill-switch (drain-only). The reader turns queue
     // entries into new peer_verify trinity_tasks; that is a producer action. When
     // peer_verify producers are halted (PRODUCER_HALT_CLASSES), do not claim or
