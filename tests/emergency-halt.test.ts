@@ -805,6 +805,73 @@ describe('emergency halt — tick-loop coverage (filesystem-pinned)', () => {
     expect(overBroad).toEqual([]);
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE THIRD INSTANCE OF THE SAME FAMILY, found by an independent verifier's
+  // OWN mutation (not one of mine) and reproduced by hand before this was
+  // written: it exempted `workers/eas-anchor-worker.ts` — a real, DB-writing
+  // anchoring loop — and stripped its gate, and all 99 tests still passed. The
+  // per-loop rule above only defends against a MULTI-loop file hiding behind
+  // one justification. A SINGLE-loop file could be added to EXEMPT for the
+  // first time and nothing would notice, because the only defence against a new
+  // exemption was a pin named specifically for `index.ts`, which does not
+  // generalise. Twice the word "global" was an assertion instead of an
+  // enumeration; this is the same shape one level up, in the exemption list.
+  //
+  // Two general rules replace that specific one. Either alone kills the
+  // verifier's mutation; both are stated because they fail for different
+  // reasons and a reader should know which one they tripped.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // Exempt files that DO write, each individually justified. This map is the
+  // only way a mutating loop may sit on the exempt list, and adding to it is a
+  // deliberate, reviewable act rather than one more line in a Set.
+  const EXEMPT_WITH_WRITES = new Map([
+    [
+      'services/hitl-notification-dispatcher.ts',
+      'inserts notification rows only — telling humans what is happening IS the ' +
+        'reason it is exempt; a halt stops the machine acting, not the alarm.',
+    ],
+  ]);
+
+  const MUTATES = ['.insert(', '.update(', '.delete(', '.upsert(', 'sendTransaction('];
+
+  it('an exempt file may not MUTATE unless it is individually justified', () => {
+    // "It only reads" is the property that makes an exemption safe. Anything
+    // that writes has to say why, in writing.
+    //
+    // HONEST LIMIT, stated rather than implied: this does not follow the call
+    // graph. A file that mutates only through a helper module would still pass.
+    // It catches the direct case, which is the one that just got through.
+    const writingExemptions = [...EXEMPT]
+      .map((rel) => files.find((f) => f.rel === rel)!)
+      .filter(Boolean)
+      .filter((f) => MUTATES.some((m) => f.code.includes(m)))
+      .filter((f) => !EXEMPT_WITH_WRITES.has(f.rel))
+      .map((f) => f.rel);
+    expect(writingExemptions).toEqual([]);
+    // and a justification may not be an empty string standing in for one
+    for (const [rel, why] of EXEMPT_WITH_WRITES) {
+      expect(EXEMPT.has(rel)).toBe(true);
+      expect(why.trim().length).toBeGreaterThan(20);
+    }
+  });
+
+  it('every exemption is named in emergency-halt.ts, not just in this test', () => {
+    // The module header claims each exemption is there "for a stated reason".
+    // That claim is now machine-checked: a new exemption has to be argued in
+    // the safety module itself, so it cannot be added by editing one line of a
+    // test file. `emergency-halt.ts` is excluded — it IS the gate, and a module
+    // naming itself in its own header would be circular.
+    const header = fs.readFileSync(path.join(SRC, 'services', 'emergency-halt.ts'), 'utf8');
+    const undocumented = [...EXEMPT]
+      .filter((rel) => rel !== 'services/emergency-halt.ts')
+      .filter((rel) => {
+        const base = rel.split('/').pop()!.replace(/\.ts$/, '');
+        return !header.includes(base);
+      });
+    expect(undocumented).toEqual([]);
+  });
+
   it('index.ts is gated, not exempt (regression pin for the verifier finding)', () => {
     const idx = files.find((f) => f.rel === 'index.ts')!;
     expect(EXEMPT.has('index.ts')).toBe(false);
