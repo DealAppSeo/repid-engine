@@ -4,6 +4,14 @@ import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
 import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
 import { routeProofRequest } from '../zkp/proof-router'; // S-ONCHAIN: routing classification (owned)
 import type { RouteDecision } from '../zkp/proof-router';
+// L4 breaker (consumer side): keep a restart from proving the internal-scoring
+// churn backlog that #192 only stopped at the producer end. Default 'off'.
+import {
+  buildPendingBatchQuery,
+  describeChurnGuard,
+  parseProofDrainChurnMode,
+  type ProofDrainChurnMode
+} from './proof-drain-churn-guard';
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -22,6 +30,10 @@ export interface ProofDrainServiceConfig {
   // the drain (proof-drain-service.test 5s timeout). Inject a stub in tests;
   // defaults to the real router so production behaviour is unchanged.
   routeProofRequestImpl?: (proofType: string, context?: { agentRepId?: number; sensitivityHint?: number }) => Promise<RouteDecision>;
+  // L4 breaker: consumer-side churn guard. Defaults to PROOF_DRAIN_CHURN_MODE
+  // (itself defaulting to 'off' = legacy). Injectable so tests never depend on
+  // ambient env.
+  churnMode?: ProofDrainChurnMode;
 }
 
 export interface ProofDrainServiceStatus {
@@ -101,6 +113,10 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
   // circuit breaker trips, instead of the loop hanging.
   const proverTimeoutMs = Number(process.env.PROOF_DRAIN_PROVER_TIMEOUT_MS ?? 20000);
   const routeProof = config.routeProofRequestImpl ?? routeProofRequest;
+  // L4 breaker (consumer side). 'off' by default → the hot poll runs the legacy
+  // statement character-for-character. See proof-drain-churn-guard.ts for the
+  // measured backlog composition this exists for.
+  const churnMode: ProofDrainChurnMode = config.churnMode ?? parseProofDrainChurnMode(process.env.PROOF_DRAIN_CHURN_MODE);
 
   const state: ProofDrainServiceStatus = {
     status: 'stopped',
@@ -163,14 +179,24 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     // breaker (RULE-8), so the Phase-7B withQueryTimeout wrapper is no longer
     // needed here; the drainOnce-level withRetry still provides outer retry, so
     // we keep retries:1 (single attempt) to preserve that structure.
-    const rows = await pgq<{ id: string; job_id: string; agent_id: string; event_id: string; status: string }>(
-      `SELECT id, job_id, agent_id, event_id, status
-       FROM repid_proof_queue
-       WHERE status = $1 AND zkp_service_url = $2
-       LIMIT $3`,
-      ['pending', config.zkpServiceUrl, batchSize],
+    // L4 breaker: 'off' returns the legacy SQL + legacy 3 params verbatim.
+    const plan = buildPendingBatchQuery(churnMode, {
+      status: 'pending',
+      zkpServiceUrl: config.zkpServiceUrl,
+      batchSize
+    });
+    const rows = await pgq<{ id: string; job_id: string; agent_id: string; event_id: string; status: string; is_churn?: boolean }>(
+      plan.sql,
+      plan.params as any[],
       { retries: 1, label: 'fetchPendingBatch' }
     );
+    // Shadow mode proves everything it fetches — the log is the whole point of it.
+    if (plan.reportsChurn && !plan.excludesChurn) {
+      const churnInBatch = rows.filter(r => r.is_churn === true).length;
+      if (churnInBatch > 0) {
+        console.warn(`[ProofDrain] churn-guard SHADOW — ${churnInBatch}/${rows.length} jobs in this batch are internal-scoring churn and WILL be proved (set PROOF_DRAIN_CHURN_MODE=enforce to exclude them)`);
+      }
+    }
     return rows;
   }
 
@@ -690,6 +716,8 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       stallNotified = false;
       stopped = false;
       console.log(`[ProofDrain] starting service zkp=${config.zkpServiceUrl} (poll=${pollIntervalMs}ms, idle=${idleSleepMs}ms, batch=${batchSize})`);
+      // Fail-loud: a restart that forgot the lever says so in the first lines of its log.
+      console.log(describeChurnGuard(churnMode));
       state.status = 'running';
       void loop();
     },
