@@ -201,6 +201,9 @@ async function processSingleTask(claim: any) {
 }
 
 export async function checkTimeouts() {
+  // L0 gate 0.4 — reaps stuck claims and writes them back. Its own
+  // setInterval, so it needs its own gate.
+  if (await shouldParkForHalt(db, 'ValidationWorker:checkTimeouts')) return;
   try {
     // Default timeout to 15 minutes if TIMEOUT_HOURS is missing or invalid
     const TIMEOUT_MINUTES = typeof TIMEOUT_HOURS !== 'undefined' ? TIMEOUT_HOURS * 60 : 15;
@@ -244,6 +247,11 @@ export async function checkTimeouts() {
 }
 
 async function pollResolvedHitlEntries(): Promise<void> {
+  // L0 gate 0.4 — finalizes HITL-resolved entries (mutates validation_queue
+  // and task status). Scheduled by its OWN setInterval; the gate in
+  // processQueue does not cover it. Found by making the coverage pin count
+  // per LOOP instead of per FILE.
+  if (await shouldParkForHalt(db, 'ValidationWorker:pollResolvedHitl')) return;
   const { data: entries, error } = await db.from('validation_queue')
     .select('*')
     .in('status', ['processing', 'completed'])

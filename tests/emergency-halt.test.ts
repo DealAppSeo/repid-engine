@@ -700,12 +700,21 @@ describe('emergency halt — tick-loop coverage (filesystem-pinned)', () => {
   //   health.ts                       — read-only liveness polling
   //   hitl-notification-dispatcher.ts — informs humans during an incident
   //   emergency-halt.ts               — IS the gate (its own refresher loop)
-  //   index.ts                        — mounts the middleware; not a worker
+  //
+  // `index.ts` USED TO BE ON THIS LIST, with the reason "mounts the middleware;
+  // not a worker". That reason was FALSE and an independent verifier caught it:
+  // index.ts defines and schedules SIX real tick loops inline, including
+  // processCascadeQueue (a default-ON financial transition to 'escrowed' every
+  // 60s) and runDailyAuditAnchor (an unconditional ON-CHAIN send). All six ran
+  // straight through an active halt. It is now gated, and the rule below makes
+  // that class of mistake un-repeatable: a blanket file exemption may cover AT
+  // MOST ONE loop, so a multi-loop file can never again hide behind a single
+  // justification. Coverage is counted PER LOOP, not per file — file
+  // granularity is precisely what let six loops hide behind one line.
   const EXEMPT = new Set([
     'providers/health.ts',
     'services/hitl-notification-dispatcher.ts',
     'services/emergency-halt.ts',
-    'index.ts',
   ]);
 
   const stripImports = (body: string) =>
@@ -722,14 +731,29 @@ describe('emergency halt — tick-loop coverage (filesystem-pinned)', () => {
     return out;
   }
 
+  // Counted with plain string splits, NOT a regex. Two regex-based versions of
+  // this counter returned 0 gates for EVERY file while the loop count stayed
+  // correct — which reads as "nothing is gated" rather than as a broken
+  // counter, i.e. the failure mode of a safety pin is to lie in the alarming
+  // direction and waste the reader's time. The whitespace-tolerant regex is
+  // still exercised by CALLS_GATE below; this counter just has to be right.
+  const countOccurrences = (body: string, needle: string) =>
+    body.split(needle).length - 1;
+  const GATE_NAMES = ['shouldParkForHalt(', 'checkEmergencyHalt('];
+  const countGates = (body: string) =>
+    GATE_NAMES.reduce((n, name) => n + countOccurrences(body, name), 0);
+
   const files = walk(SRC).map((f) => {
     const body = fs.readFileSync(f, 'utf8');
+    const code = stripImports(body);
     return {
       rel: path.relative(SRC, f).split(path.sep).join('/'),
-      code: stripImports(body),
+      code,
+      loopCount: countOccurrences(code, 'setInterval('),
+      gateCount: countGates(code),
     };
   });
-  const loops = files.filter((f) => /setInterval\s*\(/.test(f.code));
+  const loops = files.filter((f) => f.loopCount > 0);
 
   it('ANTI-VACUITY: the matcher matches a CALL and not a bare import', () => {
     expect(CALLS_GATE.test("import { shouldParkForHalt } from './emergency-halt';")).toBe(false);
@@ -758,6 +782,38 @@ describe('emergency halt — tick-loop coverage (filesystem-pinned)', () => {
       .filter((l) => !CALLS_GATE.test(l.code))
       .map((l) => l.rel);
     expect(uncovered).toEqual([]);
+  });
+
+  // THE FIX FOR THE index.ts DEFECT. Presence of ONE gate in a file says
+  // nothing about a file with SIX loops. Coverage is counted per loop.
+  it('every tick-loop file has AT LEAST as many gate calls as loops', () => {
+    const underGated = loops
+      .filter((l) => !EXEMPT.has(l.rel))
+      .filter((l) => l.gateCount < l.loopCount)
+      .map((l) => `${l.rel} (${l.loopCount} loops, ${l.gateCount} gates)`);
+    expect(underGated).toEqual([]);
+  });
+
+  // A blanket exemption is only honest over a single loop. index.ts carried one
+  // justification over six loops and three of them mutated state or sent a
+  // transaction; this makes that shape impossible rather than merely discouraged.
+  it('no blanket exemption covers more than one loop', () => {
+    const overBroad = [...EXEMPT]
+      .map((rel) => files.find((f) => f.rel === rel)!)
+      .filter((f) => f && f.loopCount > 1)
+      .map((f) => `${f.rel} (${f.loopCount} loops under one exemption)`);
+    expect(overBroad).toEqual([]);
+  });
+
+  it('index.ts is gated, not exempt (regression pin for the verifier finding)', () => {
+    const idx = files.find((f) => f.rel === 'index.ts')!;
+    expect(EXEMPT.has('index.ts')).toBe(false);
+    expect(idx.loopCount).toBeGreaterThanOrEqual(6);
+    expect(idx.gateCount).toBeGreaterThanOrEqual(idx.loopCount);
+    // the three consequential ones, by name, so deleting any single gate fails
+    for (const fn of ['processCascadeQueue', 'runDailyAuditAnchor', 'checkStalledAndAlert']) {
+      expect(idx.code).toContain("shouldParkForHalt(db, '" + fn + "')");
+    }
   });
 
   it('the on-chain writer gates BEFORE its circuit breaker', () => {
