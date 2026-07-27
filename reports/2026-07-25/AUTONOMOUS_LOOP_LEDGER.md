@@ -1672,3 +1672,44 @@ Chosen on Beat 38's criterion — generation-only (the swarm has no HTTP client)
 **Next beat:** (0) Read the backlog first. (1) **Root-cause and fix the claim race** — start at the claim query in `trinity-symphony-shared`'s V4 loop; check whether it is a blind `UPDATE` or a conditional one that checks affected-rows, and whether the artifact writeback keys `artifact_url` to the writer's own task. It multiplies every future dispatch and it corrupts the completion signal. (2) **Verify #220 independently** — I authored it, so by rule 3 it is unverified — and re-check the 4 dispatched artifacts. (3) **Do not dispatch T12 volume until (1) lands**; the channel currently produces 6× waste and an unreliable `done`. (4) Backlog **2.3** from `peer-verify-prefilter.ts` (built, shadow, peer-verify-scoped; the gap is the ceiling-of-10 + allowlist). (5) **Replace `hasBacktrackingRisk` with a timeout budget** — carried unactioned from Beats 33/35/37/38; four beats is enough. (6) If #216 lands, the live halt acceptance against the 12 agents. (7) Cheap and carried: the dead `jest` key in `package.json` · `verify-anchor-batch --sample` into the verify suite.
 
 ---
+
+---
+
+## Beat 40 — 2026-07-27 (the convergence artifact independently verified — and the one leg the patent turns on was passing for the wrong reason; pinned, plus the anchor given a real `--live` path)
+
+**Objective:** the sprint brief's #1 — *the integrated E2E proof-carrying run* — which Beat 39 built and which landed as **#222** while this beat was starting. So the job was not to build it but to **verify it, independently**, and then close what verification found. **Queue at beat start [V]:** `origin/main` = **`63a0f31`** (was `ddc43f8`); **#222 merged 16:37Z**; four PRs open — #220, #216, and the long-parked #155/#157. The merge freeze stays lifted.
+
+**STEP 0 — the working tree was 38 commits behind, with a forked ledger and two ORPHANED reports.** Local `main` sat at `83b8c88`; the untracked `reports/` tree was a stale fork (ledger 1355 lines vs main's 1674). Two files existed **only** in the untracked working copy and on no branch at all: `E2E_PHYSICAL_TEST_PLAN.md` and — the one that matters — **`PATENT_ALIGNED_BUILD_BACKLOG.md`, which this contract names as a per-beat read.** *A file the loop is required to read every beat had no committed home; the next beat on a clean clone would have run blind.* Backed up, stashed the fork, fast-forwarded, and **rescued both in #223**. Same class as the three in `203555b` and the catalog in Beat 39 — the third time this pattern has bitten, and each time it was found by accident rather than by a check.
+
+**STEP 1 — #222 verified INDEPENDENTLY (I did not produce it), by execution and mutation rather than by reading. Penalty: NONE.**
+- **[V]** `npx tsx scripts/demo/proof-carrying-e2e.ts` → full narrated transcript, **exit 0**. The abstain message is real and specific (`abstain: cited value 267408660741… is not currently valid`), the naive agent does still assert the retracted fact. The transcript is not staged output.
+- **[V]** the CI suite passes **2/2**; **50/50 across the 7 memory/HAL suites**; `tsc` clean. Runs under real Poseidon2-BabyBear via module defaults — the leaf/pair hashes are `poseidon2LeafHash`/`poseidon2PairHash`, not injected fakes, so the pass is evidence about the shipped cryptography.
+- **[V] MUTANT M1 — `revoke()` made a no-op: KILLED** (suite fails, demo exits 1). The artifact is not vacuous.
+
+**STEP 2 — [X] THE FINDING: the current-validity leg was passing for the wrong reason.** #222 asserts that a stale answer re-rooted at the post-revocation root has `grounded === false`. But swapping in the new root **also breaks the binding** — so `binding_mismatch` alone satisfies that assertion, and the **inclusion proof against the new root was never exercised**.
+
+Measured, not argued. **MUTANT M2 — `verifyInclusion` mutated to ignore `root` entirely (`return acc === root || true`): every one of #222's tests still PASSED.** A verifier that had stopped checking the root at all would have shipped green.
+
+*The property was real in the code. Nothing pinned it.* — and it is precisely the property the patent claim rests on: retraction must be **cryptographic**, not string-deep.
+
+**The probe that separated the two.** Rather than reason about it, I built the realistic adversary — one who **re-binds honestly** at the new root, leaving the proof as the only obstacle:
+
+| | binding_ok | verified citations | reasons |
+|---|---|---|---|
+| stale, original binding (what #222 asserted) | false | 0/1 | `binding_mismatch`, `citation_unverified` |
+| stale, **re-bound at the new root** | **true** | **0/1** | `citation_unverified` only |
+
+The adversary's binding is genuinely valid and the proof **still fails**. The property holds; it was simply untested.
+
+**STEP 3 — SHIPPED: PR #223, `MERGEABLE`, auto-merge armed (safe-class: additive tests + a default-off flag).**
+1. **The re-binding adversary is now a test.** Under M2 it is the **only** test that dies — the pre-existing five keep passing — which is the cleanest possible evidence that it covers something nothing else did.
+2. **`--live` gives the anchor a real on-chain path.** Stage 5 hardcoded `0xDEMO_UID_replace_with_live_attester`; a live anchor meant hand-editing the script, and that placeholder reads badly on a demo screen. Now `--live` uses the real attester and **refuses to run without a funded key rather than degrading to the mock** — *printing a fake UID as if it were on-chain is the exact failure this whole artifact exists to argue against.* The offline mock UID is self-labelling (`0xMOCK_UID_offline_demo_not_on_chain`) and asserted to be un-mistakable for an EAS UID. Stages 1–4 are pure crypto and never touch the network, so the demo's substance is unchanged.
+- **[V]** offline exit 0 · `--live` without a key exit 1 with a loud refusal · 6/6 suite · 50/50 across 7 suites · `tsc` clean. **No attester key is present locally** (checked by variable NAME only, never a value), so `--live` could only reach the refusal path — **no chain write was possible from this machine**, by construction rather than by care.
+
+**STEP 4 — T12 DISPATCH: 3 tasks (`435033`–`435035`), queue was drained to 0 pending.** Backlog items 11 (proof-tier policy — **Patent #2 keystone**), 13 (heat-based tiering), 8 (speculative-cascade predicate). All three are **generation-only with self-contained context** — the swarm has no HTTP client, so anything tool-requiring returns fabrication — and each carries an explicit *"do not claim you ran, measured, or benchmarked anything; inventing numbers is how this task fails."* **Attribution must be checked next beat by JOINing `trinity_artifacts.task_id → trinity_tasks.id`, never `artifact_url`** — Beat 39's claim race made `artifact_url` untrustworthy, and this batch has not been checked yet. Not claiming delivery.
+
+**MISTAKES / process notes.**
+- The orphaned-backlog problem (STEP 0) has now recurred three beats running in different forms. It keeps being caught by luck. *The check that would catch it is cheap — `git ls-tree origin/main` on the files the contract says to read — and no beat has yet added it.*
+- **`npx jest tests/<file>` — the exact command `CLAUDE.md` documents — is broken.** Both `jest.config.js` and a `jest` key in `package.json` exist, so jest refuses with "Multiple configurations found". `npm test` is unaffected (it passes `--config` explicitly). Pre-existing, harmless to CI, wrong in the onboarding docs Beat 33 was already correcting. Not fixed here — it is out of this PR's scope and belongs with a docs pass.
+
+**NEXT.** (1) Independently verify **this** beat, #223 in particular, and check the `435033`–`435035` artifacts by task_id JOIN. (2) **Reduction-to-practice gap (c) — one real Base Sepolia anchor of a memory root — is now a single command** (`npx tsx scripts/demo/proof-carrying-e2e.ts --live`) needing only the funded attester in env; the key is a hard line for this loop, so it runs where the key already lives, not here. (3) Backlog #11, proof-tier selection, whose design the swarm is drafting.
