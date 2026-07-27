@@ -1,0 +1,178 @@
+/**
+ * proof-carrying-memory.ts — P2 of PROOF_CARRYING_RETRIEVAL_v0 (D-094).
+ *
+ * The retrieval API + ANSWER-BINDING — the Patent #1 keystone
+ * ("binding the verified proof set into the agent's output"):
+ *   • retrieval returns each entry WITH an inclusion / current-validity proof
+ *     against the committed memory root (revoked entries are excluded — a
+ *     retracted fact can no longer be retrieved or cited);
+ *   • an agent's answer is BOUND to the exact proof-set it cited, so the answer
+ *     is grounded, tamper-evident, non-repudiable, and (after a cited entry is
+ *     revoked) provably stale;
+ *   • `emitGroundedAnswer` ABSTAINS (throws) unless every citation verifies —
+ *     the HAL knowledge-boundary primitive: no proof ⇒ no answer.
+ *
+ * Built on P1 `LeanIMTPlus` (membership + provable retraction) + the Poseidon2
+ * leaf. Hashes are injected (default = real Poseidon2) so it is free + testable.
+ * Content lives OFF-index; only its commitment (the derived value) is in the tree.
+ */
+import {
+  LeanIMTPlus, verifyMembership,
+  type InclusionWitness, type NonMembershipWitness, type Hex, type LeafHash,
+} from './leanimt-plus';
+import { poseidon2LeafHash, poseidon2PairHash } from '../zkp/poseidon2-leaf';
+import type { Hash2 } from './proof-carrying-index';
+
+/** A reputation-weighted memory entry. `content` is stored off-index; its commitment is the tree value. */
+export interface MemoryEntry {
+  content: string;
+  source_id: string;
+  source_repid: number;
+  hal_verdict: string; // clean | flagged | vetoed | …
+  epoch: number;
+}
+export interface RetrievedEntry { entry: MemoryEntry; value: string; witness: InclusionWitness; }
+export interface Citation { content: string; value: string; witness: InclusionWitness; }
+export interface ProofCarryingAnswer {
+  answer: string;
+  memory_root: Hex;
+  citations: Citation[];
+  binding: Hex; // commitment over answer ‖ root ‖ citation-set
+}
+export interface AnswerVerification {
+  grounded: boolean;
+  binding_ok: boolean;
+  verified_citations: number;
+  total_citations: number;
+  reasons: string[];
+}
+export interface PcmOptions { leafHash?: LeafHash; pairHash?: Hash2; }
+
+const dfltLeaf: LeafHash = poseidon2LeafHash;
+const dfltPair: Hash2 = (a, b) => poseidon2PairHash(a, b);
+
+/** Canonical, domain-separated serialization of an entry → its committed value key. */
+function encodeEntry(e: MemoryEntry): string {
+  return `pcr.entry.v0|${e.content}|${e.source_id}|${e.source_repid}|${e.hal_verdict}|${e.epoch}`;
+}
+
+// ── The memory: an append-only, revocable, proof-carrying index ────────────────
+export class ProofCarryingMemory {
+  private readonly tree: LeanIMTPlus;
+  private readonly store = new Map<string, MemoryEntry>(); // value(string) → entry (off-index content)
+  private readonly leafHash: LeafHash;
+  private readonly pair: Hash2;
+
+  constructor(opts: PcmOptions = {}) {
+    this.leafHash = opts.leafHash ?? dfltLeaf;
+    this.pair = opts.pairHash ?? dfltPair;
+    this.tree = new LeanIMTPlus({ leafHash: this.leafHash, pairHash: this.pair });
+  }
+
+  /** Content-addressed value = numeric interpretation of the entry's leaf commitment. */
+  private valueOf(e: MemoryEntry): bigint {
+    return BigInt(this.leafHash(encodeEntry(e)));
+  }
+
+  /** Commit an entry. Idempotent (re-adding identical content returns the same value). */
+  add(e: MemoryEntry): string {
+    const v = this.valueOf(e);
+    const key = v.toString();
+    if (!this.store.has(key)) {
+      this.tree.insert(v);
+      this.store.set(key, e);
+    }
+    return key;
+  }
+
+  /** Provable retraction — the entry can no longer be retrieved or cited; non-membership now proves. */
+  revoke(value: string): void {
+    this.tree.revoke(BigInt(value));
+  }
+
+  root(): Hex { return this.tree.root(); }
+  get(value: string): MemoryEntry | undefined { return this.store.get(value); }
+
+  /** Membership witness for an ACTIVE entry (throws if revoked/absent — used by the abstain path). */
+  membershipWitness(value: string): InclusionWitness { return this.tree.membershipProof(BigInt(value)); }
+  /** Non-membership witness — proves a value is absent (never added, or revoked). */
+  nonMembershipWitness(value: string): NonMembershipWitness { return this.tree.nonMembershipProof(BigInt(value)); }
+
+  /** Retrieve active entries matching `predicate`, each WITH a verifying inclusion proof. */
+  retrieve(predicate: (e: MemoryEntry) => boolean): RetrievedEntry[] {
+    const out: RetrievedEntry[] = [];
+    for (const [value, entry] of this.store) {
+      if (!predicate(entry)) continue;
+      try {
+        const witness = this.membershipWitness(value); // throws if revoked → excluded
+        out.push({ entry, value, witness });
+      } catch { /* revoked/absent → not retrievable */ }
+    }
+    return out;
+  }
+}
+
+// ── Answer-binding (pure, stateless — what an agent emits and a peer/HAL verifies) ──
+
+/** Order-sensitive digest over the cited (value, content) pairs. */
+function citationsDigest(citations: Citation[], leafHash: LeafHash, pair: Hash2): Hex {
+  let acc = leafHash('pcr.citations.v0');
+  for (const c of citations) acc = pair(acc, leafHash(`${c.value}|${c.content}`));
+  return acc;
+}
+
+/** Bind an answer to the exact proof-set it cited. The binding commits answer ‖ root ‖ citations. */
+export function bindAnswer(
+  answer: string, citations: Citation[], memory_root: Hex,
+  leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair,
+): ProofCarryingAnswer {
+  const binding = pair(leafHash(`pcr.answer.v0|${answer}`), pair(memory_root, citationsDigest(citations, leafHash, pair)));
+  return { answer, memory_root, citations, binding };
+}
+
+/** Verify a proof-carrying answer: the binding is intact AND every citation is a current member of memory_root. */
+export function verifyProofCarryingAnswer(
+  pca: ProofCarryingAnswer, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair,
+): AnswerVerification {
+  const reasons: string[] = [];
+  const expected = bindAnswer(pca.answer, pca.citations, pca.memory_root, leafHash, pair).binding;
+  const binding_ok = expected === pca.binding;
+  if (!binding_ok) reasons.push('binding_mismatch');
+
+  let verified = 0;
+  for (const c of pca.citations) {
+    // Adversarial-input safe: a malformed value/witness (e.g. non-canonical hex) counts as
+    // UNVERIFIED, it never crashes the verifier — a peer/HAL checks untrusted answers.
+    let ok = false;
+    try { ok = verifyMembership(BigInt(c.value), c.witness, pca.memory_root, leafHash, pair); }
+    catch { ok = false; }
+    if (ok) verified++;
+    else reasons.push(`citation_unverified:${c.value.slice(0, 12)}…`);
+  }
+  const grounded = binding_ok && pca.citations.length > 0 && verified === pca.citations.length;
+  return { grounded, binding_ok, verified_citations: verified, total_citations: pca.citations.length, reasons };
+}
+
+/**
+ * Guarded emit (HAL knowledge-boundary / abstain): build a proof-carrying answer only if EVERY cited
+ * value is a current member of memory. If any is revoked/absent, THROW — the agent must abstain rather
+ * than answer ungrounded. This is the enforcement that makes "grounded" the default, not the exception.
+ */
+export function emitGroundedAnswer(
+  answer: string, memory: ProofCarryingMemory, citedValues: string[],
+  leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair,
+): ProofCarryingAnswer {
+  if (citedValues.length === 0) throw new Error('abstain: an answer must cite at least one committed memory entry');
+  const root = memory.root();
+  const citations: Citation[] = [];
+  for (const v of citedValues) {
+    const entry = memory.get(v);
+    if (!entry) throw new Error(`abstain: cited value ${v.slice(0, 12)}… is not in memory`);
+    const witness = memory.membershipWitness(v); // throws if revoked → abstain
+    citations.push({ content: entry.content, value: v, witness });
+  }
+  const pca = bindAnswer(answer, citations, root, leafHash, pair);
+  const check = verifyProofCarryingAnswer(pca, leafHash, pair);
+  if (!check.grounded) throw new Error(`abstain: answer not grounded (${check.reasons.join(', ')})`);
+  return pca;
+}
