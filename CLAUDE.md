@@ -15,21 +15,30 @@ npm install --legacy-peer-deps   # required — plain `npm install` will fail (m
 npm run dev                       # ts-node src/index.ts
 npm run build                     # tsc → dist/
 npm start                         # node dist/index.js (production entry, also Railway start command)
-npm test                          # jest, runs everything under tests/
-npx jest tests/repid-score.test.ts            # single file
-npx jest -t "<test name substring>"           # single test by name
+npm test                          # jest --config jest.config.js --forceExit
+npx jest --config jest.config.js tests/repid-score.test.ts   # single file
+npx jest --config jest.config.js -t "<test name substring>"  # single test by name
 ```
 
-`SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are required at boot (`src/config.ts` throws if missing). A dummy `.env` is committed for local boot-without-DB; real credentials come from Railway env vars at deploy.
+**`--config jest.config.js` is not optional.** The repo has *both* a `jest.config.js` and a vestigial `jest` key in `package.json`, so a bare `npx jest ...` aborts with *"Multiple configurations found … Implicit config resolution does not allow multiple configuration files."* `npm test` works only because the script already passes the flag. (The real fix is to delete one of the two configs; until someone does, pass the flag.)
+
+`SUPABASE_URL` and a service key are required at boot — `src/config.ts:46` throws otherwise (it accepts `SUPABASE_SECRET_KEY`, or a legacy `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SERVICE_KEY` fallback). **No `.env` is committed, and `.env` is gitignored** — `.env.example` is the only env file in the tree and it ships those two values *empty*. So a fresh clone does **not** boot, and several test suites fail at import rather than skipping. Export dummies yourself for local work:
+
+```bash
+export SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_KEY=dummy
+```
+
+Real credentials come from Railway env vars at deploy; never commit them.
 
 ## Test layout — important quirk
 
-There are **two** test directory conventions in this repo:
+There are **three** categories of test directory in this repo, and only two of them run:
 
-- `tests/*.test.ts` — the only location Jest actually runs (`jest.config.js` pins `roots: ['<rootDir>/tests']`).
-- `src/**/__tests__/*.test.ts` — exists for several layers (`challenge-scoring`, `decay`, `prediction-scoring`) but is **not picked up by `npm test`**. These files also get compiled into `dist/` because `tsconfig.json` only excludes the top-level `tests/` directory, not `__tests__` subfolders.
+- `tests/*.test.ts` — runs. This is where new tests belong.
+- `src/hal/lib/__tests__/*.test.ts` — **also runs.** `jest.config.js` pins `roots: ['<rootDir>/tests', '<rootDir>/src/hal/lib/__tests__']`, so this one `__tests__` directory (2 files: `adversarial`, `comma-override`) is covered. Don't assume changes under it are untested.
+- Every *other* `src/**/__tests__/` — **not picked up by `npm test`.** There are six such directories (`src/billing`, `src/layers`, `src/providers`, `src/routes`, `src/services`, `src/services/reputation`) and jest never sees them. They also get compiled into `dist/` because `tsconfig.json` only excludes the top-level `tests/` directory, not `__tests__` subfolders.
 
-If you add tests, put them under `tests/` to make them run. If you touch `__tests__` files, decide explicitly whether to relocate or extend the jest `roots`.
+If you add tests, put them under `tests/` to make them run. If you touch a file under one of the six unrooted `__tests__` folders, decide explicitly whether to relocate it or extend the jest `roots` — a green `npm test` says nothing about it.
 
 ## Architecture
 
