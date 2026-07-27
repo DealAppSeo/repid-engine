@@ -1,0 +1,41 @@
+# Patent-Aligned Build Backlog — deep queue for the swarm
+**Created:** 2026-07-26 · **Purpose:** the always-there queue so when tasks/phases/loops finish faster than expected, agents pull the *next* highest-value, dependency-ordered, patent-relevant work — much of the eventual feature is then already built + tested when we decide to complete it.
+**Prioritization rule (Sean 2026-07-26):** favor what (a) unblocks downstream work, (b) is a **reduction-to-practice for a filed patent** (building + proving a claim materially helps grant), (c) is free/cheap. Frontier/exotic stays gated. Ties: [[project_proof_carrying_retrieval]], spec `03_specs/PROOF_CARRYING_RETRIEVAL_v0.md`, D-094.
+
+## Three patents (Grok analysis; Sean filing) — build/file order
+- **Patent #1 — Current-valid, revocable, proof-carrying agent memory.** Indexed Merkle (LeanIMT+) + reputation-weighted leaves + on-chain root + **binding the inclusion/current-validity proof into the agent's answer**. *File first.* Reduction-to-practice = P0–P3 + answer-binding.
+- **Patent #2 — Policy-gated proof-tier selection via unified ANFIS/LASSO fabric.** One policy model decides the 5 axes AND the required cryptographic proof strength (inclusion → current-validity → authenticated walk → ranking integrity) from cost/stakes/privacy/latency/reliability. *File second.*
+- **Patent #3 — Hybrid: verifiable GraphRAG over current-valid memory + knowledge-boundary abstention + hierarchical durable harness.** *File as continuation / continuation-in-part; builds on #1+#2.*
+
+## Status snapshot
+- ✅ **P0** proof-carrying leaf + fork-independent inclusion verify — PR #198 (verified vs real Poseidon2).
+- ✅ **P1** LeanIMT+ accumulator: membership + non-membership + **provable retraction** — PR #203 (9/9 props under real Poseidon2). ← Patent #1 core, reduced to practice.
+- Poseidon2 BabyBear leaf merged (#195/#196/#197). Breakers 2.0/2.3 merged (#188/#191); #189/#192/#193/#194 in flight.
+
+## Dependency-ordered queue
+| # | Task | Patent | Phase | Tier | Acceptance test | When |
+|---|---|---|---|---|---|---|
+| 1 | Land #198 → rebase #203 to main | #1 | P0/P1 | Sean+CC | both green on main; #203 diff = P1 only | NOW |
+| 2 | **P0.1 two-primitive refactor** — inject `hashLeaf`(sponge)+`hashPair`(compress) instead of one Hash2 | #1 | P0.1 | CC | leaf commitment uses sponge; existing tests pass | NOW |
+| 3 | **P2 retrieval API** — return `(content, inclusionProof, currentValidityProof, root)`; verifier endpoint | #1 | P2 | CC/GA | retrieved entry's proof verifies; revoked entry → non-membership | NOW |
+| 4 | **Answer-binding** — gate answer emit on successful verify; answer carries commitment to its proof set | #1 | P2 | CC | answer w/o valid proof set is refused/flagged; binding is checkable | NOW (Patent #1 keystone) |
+| 5 | `agent_memory_leaves` + `agent_memory_roots` tables (additive DDL) | #1 | P1 | CC | append→root deterministic; recompute matches | NOW |
+| 6 | **HAL abstain / knowledge-boundary** — refuse/flag when cited evidence lacks a valid inclusion+current-validity proof | #1/#3 | — | GA/CC | ungrounded answer → abstain in shadow; measured hallucination drop | NOW (non-crypto, cheap) |
+| 7 | **ANFIS enablement** — mint 12 agent keys + `ENGINE_LLM_PROXY` + `ROUTER_STRICT_COST_ORDER` (staged; flips = Sean GO) + 5 acceptance tests | #2 | — | CC | no-leak/injection/ANFIS-decision/live-routing/job-token tests green | NOW (stage) / Sean GO (flip) |
+| 8 | **ANFIS speculative cascade** — cheap draft → escalate on low confidence/high stakes | #2 | — | GA | cost drop measured vs always-full; quality held | NOW |
+| 9 | **ANFIS SCHEDULE axis** — free-tier quota tracking + off-peak windows for EAS anchoring + non-urgent work | #2 | — | GA | non-urgent work batched off-peak; $ drop measured | NOW |
+| 10 | **P3 EAS anchoring** of `memory_root` per epoch, batched off-peak | #1 | P3 | CC | `agent_memory_roots.eas_uid` populated; on-chain matches local root | NEXT (after P2) |
+| 11 | **Proof-tier selection in ANFIS** — proof strength as a first-class policy output | #2 | — | CC | policy picks inclusion vs current-validity vs walk by stakes/cost | NEXT (Patent #2 keystone) |
+| 12 | **GraphRAG-native leaves** — entity/relation/episode/skill schemas on leaves; authenticated subgraph walk (chain of inclusions + edge hashes) | #3 | P4 | CC | a multi-hop walk verifies hop-by-hop against the root | LATER |
+| 13 | **Hierarchical durable memory** — heat-based promotion/eviction, dormancy/night consolidation, tiered storage (hot/warm/cold/on-chain) | #3 | — | GA | low-heat leaves flushed to cold; root preserved; reactivation triggers | LATER |
+| 14 | **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership → one STARK (reuse Poseidon2 Merkle AIR) | #1/#2 | P4 | CC | AIR proof verifies; wrong witness fails | LATER (first crypto apex) |
+| 15 | **WHIR aggregation PCS** (+ frontier Merkle pruning, PR #1919) for the aggregation tier | #2 | P4 | CC | recursive proof size ↓ vs FRI baseline (measure) | LATER (verify PR#1919 numbers first) |
+| 16 | **P5 ZK inclusion/property proofs** for sensitive/health data (domain-scoped nullifiers) | #1/#3 | P5 | CC | property proven w/o revealing content; PHI off Trinity prod | LATER (health vertical) |
+| 17 | **Verifiable ranking** — VeriRAG sort-bypass / V3DB multiset / zkRAG PQ-checkers | #3 | P4+ | CC | top-k correctness proof; ANFIS-gated, offline/high-stakes only | GATED (needs committed vector index) |
+| 18 | **KoalaBear A/B** vs BabyBear on the LeanIMT+/non-membership AIRs | — | — | CC+XC | measured prover-time/AIR-width delta; Invariant-1/5 + Sean GO to switch | GATED |
+
+## Verify-before-depend (post-cutoff claims to confirm when each item activates)
+WHIR PR #1919 −13/−22% numbers · MoE routing papers (MoSE/AdaMoE/MoE++/RouteMoA) · PAGE-RAG · zkRAG/VeriRAG/V3DB benchmark seconds. (LeanIMT+, zkRAG, WHIR, V3DB, VeriRAG existence already verified 2026-07-26.)
+
+## Enabling-disclosure note (helps patent grant)
+For #1 and #2, document as we build: exact leaf schema (`encodeLeaf`), the low-leaf non-membership + revocation algorithm (leanimt-plus.ts), the answer→proof binding, and the ANFIS feature vector + decision logic — each with **measured cost/reliability numbers** (hallucination drop, RepID delta grounded vs ungrounded, amortized gas/epoch, ANFIS regret vs shadow). Working+tested code = reduction to practice.
