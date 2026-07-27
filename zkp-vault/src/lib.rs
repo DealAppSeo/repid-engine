@@ -35,10 +35,21 @@
 //! - **Double-action detectable within a context:** same `(secret, context)` ⇒
 //!   identical nullifier, so a registry can reject a second action in that context.
 //!
-//! ## Hash (in-AIR)
-//! MiMC with the S-box `x^7`. For BabyBear, `p − 1 = 2^27 · 3 · 5`, so the minimal
-//! permutation exponent coprime to `p − 1` is 7 (`x^5` is NOT a permutation here).
-//! `H(a, b) = perm(a, b) + a + b` (Miyaguchi–Preneel style), `perm` = R MiMC rounds.
+//! ## Hash (in-AIR) — Poseidon2-BabyBear (backlog 4.0-d.3)
+//! `H_p2(a, b) := Perm16([a, b, 0, …, 0])[0]` — the width-16 Poseidon2 permutation
+//! over BabyBear with the published Horizen-Labs round constants, absorbing the two
+//! scalars in lanes 0/1 and reading lane 0. The single off-circuit definition lives in
+//! [`poseidon2_hash2::h_p2_field`]; the KAT oracle (`kat/poseidon2_babybear16_2to1_kat.json`)
+//! and the TypeScript port are gated against it.
+//!
+//! The in-AIR constraints are **not hand-rolled**: they come from the audited
+//! `p3-poseidon2-air` 0.3.0 `Poseidon2Air` gadget at the same pinned 0.3.0 family, fed
+//! `RoundConstants` built from `BABYBEAR_RC16_*` — the *same* constants
+//! `default_babybear_poseidon2_16()` uses, so in-AIR and off-circuit agree by
+//! construction. `circuit_matches_off_circuit_h_p2` in the test module is the gate.
+//!
+//! This replaces the previous hand-written MiMC (`x^7`, R=12, Miyaguchi–Preneel),
+//! which was flagged in the crate's own scope note as non-production.
 //!
 //! Zero-knowledge comes from the **hiding** FRI PCS (`HidingFriPcs` +
 //! `MerkleTreeHidingMmcs`), reused verbatim from the PR #95 machinery.
@@ -47,56 +58,117 @@
 //! - Membership uses a vanishing-polynomial product over a small public set
 //!   (degree = group size). Production should use a Merkle tree (log-depth path)
 //!   for large groups.
-//! - MiMC over BabyBear gives ~field-size security; production should use Poseidon2
-//!   over a larger field and audited round constants/counts.
+//! - The hash is now Poseidon2 with audited constants (4.0-d.3). Remaining: the field
+//!   is still BabyBear (~31 bits) — soundness rests on the FRI/extension parameters,
+//!   not the base field, but a larger field remains the conservative production choice.
 //! - FRI uses `create_test_fri_params` (low blowup): correct for the correctness
 //!   gate + benchmark, not production soundness.
 //! - Court-order reveal (D-020): the human↔commitment link is sealed off-circuit
 //!   (encrypted to a custodian/court key); this circuit proves control anonymously,
 //!   the reveal is a custodian decryption gated by court order. No circuit change.
 
-use p3_air::{Air, AirBuilderWithPublicValues, BaseAir};
-use p3_baby_bear::BabyBear;
+use core::borrow::Borrow;
+
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
+use p3_baby_bear::{
+    BabyBear, GenericPoseidon2LinearLayersBabyBear, BABYBEAR_RC16_EXTERNAL_FINAL,
+    BABYBEAR_RC16_EXTERNAL_INITIAL, BABYBEAR_RC16_INTERNAL,
+};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_fri::{FriParameters, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
+use p3_poseidon2::GenericPoseidon2LinearLayers;
+use p3_poseidon2_air::{
+    generate_trace_rows, num_cols, Poseidon2Air, Poseidon2Cols, RoundConstants,
+};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 
-/// Canonical off-circuit Poseidon2-BabyBear 2-scalar hash (backlog 4.0-d.1). Not yet
-/// used by `OwnershipAir` — the in-AIR swap from MiMC is backlog 4.0-d.3; this is the
-/// frozen definition that rewrite must reproduce bit-for-bit.
+/// Canonical off-circuit Poseidon2-BabyBear 2-scalar hash `H_p2` (backlog 4.0-d.1).
+/// Since 4.0-d.3 this is also the in-clear witness generator for `OwnershipAir`, so
+/// circuit and off-circuit share one definition.
 pub mod poseidon2_hash2;
 
-/// MiMC rounds. ≥ ceil(log_7(p)) ≈ 11 for full security over BabyBear; 12 here.
-pub const R: usize = 12;
+use poseidon2_hash2::h_p2_field;
+
 /// Public group size (number of registered commitments). Demo/gate value.
 pub const GROUP_SIZE: usize = 4;
-/// Trace height (power of two). The statement is single-row; we replicate it.
+
+// ---- Poseidon2 instance (must match `default_babybear_poseidon2_16()`) --------
+/// Permutation width. 16 lanes; the 2-scalar hash absorbs in lanes 0/1.
+pub const P2_WIDTH: usize = 16;
+/// S-box degree. `x^7` — the minimal permutation exponent for BabyBear
+/// (`p − 1 = 2^27 · 3 · 5`, so `x^5` is not a permutation).
+pub const P2_SBOX_DEGREE: u64 = 7;
+/// Helper columns per S-box. 1 commits `x^3` and keeps every constraint at degree ≤ 3.
+pub const P2_SBOX_REGISTERS: usize = 1;
+/// Full rounds per half (4 initial + 4 final = 8 full rounds).
+pub const P2_HALF_FULL_ROUNDS: usize = 4;
+/// Partial rounds for the BabyBear width-16 instance.
+pub const P2_PARTIAL_ROUNDS: usize = 13;
+
+/// Trace height. Row 0 is the leaf permutation, every later row the nullifier
+/// permutation (identical, so the transition constraints are satisfied uniformly).
+///
+/// The statement itself needs only 2 rows, but FRI requires
+/// `log2(HEIGHT) + log_blowup > log_final_poly_len + log_blowup`, i.e.
+/// `log2(HEIGHT) > log_final_poly_len = 2` — so 8 is the smallest legal height under
+/// the config below (verified: HEIGHT=2 panics in `p3-fri` prover.rs:65). Unchanged
+/// from the MiMC version, so the height is not a regression.
 const HEIGHT: usize = 8;
 
-// Column layout (width = 2R + 3):
-//   [0] secret  [1] agent_id
-//   [2 ..= R+1]      leaf MiMC states  L_1..L_R      (L_0 = secret)
-//   [R+2 ..= 2R+1]   nullifier MiMC states N_1..N_R  (N_0 = secret)
-//   [2R+2]           leaf
-const W: usize = 2 * R + 3;
-const LEAF_COL: usize = 2 * R + 2;
+type LinearLayers = GenericPoseidon2LinearLayersBabyBear;
+type P2Constants =
+    RoundConstants<Val, P2_WIDTH, P2_HALF_FULL_ROUNDS, P2_PARTIAL_ROUNDS>;
+type P2Air = Poseidon2Air<
+    Val,
+    LinearLayers,
+    P2_WIDTH,
+    P2_SBOX_DEGREE,
+    P2_SBOX_REGISTERS,
+    P2_HALF_FULL_ROUNDS,
+    P2_PARTIAL_ROUNDS,
+>;
+type P2Cols<T> = Poseidon2Cols<
+    T,
+    P2_WIDTH,
+    P2_SBOX_DEGREE,
+    P2_SBOX_REGISTERS,
+    P2_HALF_FULL_ROUNDS,
+    P2_PARTIAL_ROUNDS,
+>;
 
-/// MiMC round constants (same u64 seeds used in-trace and in-AIR).
-const RC: [u64; R] = [
-    0x6d6f_6e65, 0x726f_3031, 0x9e37_79b1, 0x1234_5678, 0xabcd_ef01, 0x0f0f_0f0f, 0xdead_beef,
-    0xfeed_face, 0xc0ff_ee11, 0x5a5a_a5a5, 0x1357_9bdf, 0x2468_ace0,
-];
+/// Trace width = the gadget's own column count. The ownership glue adds **no**
+/// columns: `secret`/`agent_id`/`context` are the permutation input lanes and
+/// `leaf`/`nullifier` are its output lanes.
+const W: usize = num_cols::<
+    P2_WIDTH,
+    P2_SBOX_DEGREE,
+    P2_SBOX_REGISTERS,
+    P2_HALF_FULL_ROUNDS,
+    P2_PARTIAL_ROUNDS,
+>();
+
+/// The published Horizen-Labs BabyBear width-16 round constants — **the same ones**
+/// `default_babybear_poseidon2_16()` (and therefore `h_p2`) uses. Feeding the gadget a
+/// different set would silently break circuit↔off-circuit parity; that is the single
+/// highest-risk integration point, gated by `circuit_matches_off_circuit_h_p2`.
+fn p2_round_constants() -> P2Constants {
+    P2Constants::new(
+        BABYBEAR_RC16_EXTERNAL_INITIAL,
+        BABYBEAR_RC16_INTERNAL,
+        BABYBEAR_RC16_EXTERNAL_FINAL,
+    )
+}
 
 // ---- Plonky3 config (BabyBear + Keccak hiding MMCS + hiding FRI PCS) ----------
 // Reused verbatim from PR #95 (Plonky3's own test_zk construction).
@@ -121,57 +193,71 @@ type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>
 type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
 type VaultConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
-// ---- MiMC in the clear (witness generation) ----------------------------------
-#[inline]
-fn pow7(x: Val) -> Val {
-    let x2 = x * x;
-    let x4 = x2 * x2;
-    x4 * x2 * x
-}
+// ---- H_p2 in the clear (witness generation) ----------------------------------
 
-/// MiMC permutation states `L_1..L_R` for input `inp` with key `key`.
-fn mimc_states(inp: Val, key: Val) -> [Val; R] {
-    let mut st = [Val::ZERO; R];
-    let mut x = inp;
-    for r in 0..R {
-        x = pow7(x + key + Val::from_u64(RC[r]));
-        st[r] = x;
-    }
-    st
-}
-
-/// `H(a, b) = perm(a, b) + a + b` (Miyaguchi–Preneel style).
-fn mimc_hash(a: Val, b: Val) -> Val {
-    let st = mimc_states(a, b);
-    st[R - 1] + a + b
-}
-
-/// Identity commitment for an owner: `C = H(secret, agent_id)`.
+/// Identity commitment for an owner: `C = H_p2(secret, agent_id)`.
 pub fn commitment(secret: u64, agent_id: u64) -> Val {
-    mimc_hash(Val::from_u64(secret), Val::from_u64(agent_id))
+    h_p2_field(Val::from_u64(secret), Val::from_u64(agent_id))
 }
 
-/// Per-context nullifier: `N = H(secret, context)`.
+/// Per-context nullifier: `N = H_p2(secret, context)`.
 pub fn nullifier(secret: u64, context: u64) -> Val {
-    mimc_hash(Val::from_u64(secret), Val::from_u64(context))
+    h_p2_field(Val::from_u64(secret), Val::from_u64(context))
 }
 
 // ---- AIR ---------------------------------------------------------------------
-pub struct OwnershipAir;
 
-impl<F> BaseAir<F> for OwnershipAir {
+/// The ownership statement, built on the audited `Poseidon2Air` gadget.
+///
+/// Every trace row **is** one Poseidon2 permutation (the gadget's own column layout),
+/// so the round constraints are the audited ones verbatim — nothing about the
+/// permutation is re-derived here. The ownership statement is expressed purely as
+/// boundary/transition constraints over the permutation's input and output lanes:
+///
+/// | row | permutation | inputs | output lane 0 |
+/// |---|---|---|---|
+/// | 0 (first) | leaf | `[secret, agent_id, 0…]` | `leaf`, constrained ∈ `{C_j}` |
+/// | 1.. | nullifier | `[secret, context, 0…]` | must equal the public nullifier |
+///
+/// The transition constraint carries `secret` from the leaf row into the nullifier
+/// row, which is what binds the two hashes to the *same* human.
+pub struct OwnershipAir {
+    p2: P2Air,
+}
+
+impl OwnershipAir {
+    pub fn new() -> Self {
+        Self {
+            p2: P2Air::new(p2_round_constants()),
+        }
+    }
+}
+
+impl Default for OwnershipAir {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BaseAir<Val> for OwnershipAir {
     fn width(&self) -> usize {
         W
     }
 }
 
-impl<AB: AirBuilderWithPublicValues> Air<AB> for OwnershipAir {
+impl<AB> Air<AB> for OwnershipAir
+where
+    AB: AirBuilderWithPublicValues<F = Val>,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, P2_WIDTH>,
+{
     fn eval(&self, builder: &mut AB) {
-        let main = builder.main();
-        let row = main.row_slice(0).expect("trace has no rows");
+        // 1. The audited Poseidon2 round constraints, applied to every row.
+        //    (`Poseidon2Air::eval` borrows the whole row as `Poseidon2Cols`, which is
+        //    exactly why the trace width is `num_cols` and the glue adds no columns.)
+        self.p2.eval(builder);
 
-        // Copy out the public vars (Copy) so the immutable borrow of `builder`
-        // from public_values() ends before the mutable assert_* calls below.
+        // 2. Copy out the public vars (they are `Copy`) so the immutable borrow of
+        //    `builder` from `public_values()` ends before the mutable assert_* calls.
         let (context_pv, null_pv, group_pv) = {
             let pis = builder.public_values();
             let group: Vec<AB::PublicVar> = (0..GROUP_SIZE).map(|j| pis[2 + j]).collect();
@@ -180,52 +266,58 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for OwnershipAir {
         let context: AB::Expr = context_pv.into();
         let null_pub: AB::Expr = null_pv.into();
 
-        let secret: AB::Expr = row[0].into();
-        let agent_id: AB::Expr = row[1].into();
-
-        let pow7 = |e: AB::Expr| -> AB::Expr {
-            let e2 = e.clone() * e.clone();
-            let e4 = e2.clone() * e2.clone();
-            e4 * e2 * e
+        let (local, next) = {
+            let main = builder.main();
+            let local_row = main.row_slice(0).expect("trace has no rows");
+            let next_row = main.row_slice(1).expect("trace has no next row");
+            let local: &P2Cols<AB::Var> = (*local_row).borrow();
+            let next: &P2Cols<AB::Var> = (*next_row).borrow();
+            (local_to_owned(local), local_to_owned(next))
         };
 
-        // Leaf MiMC rounds: L_0 = secret, L_{r+1} = (L_r + agent_id + RC[r])^7.
-        for r in 0..R {
-            let prev: AB::Expr = if r == 0 {
-                secret.clone()
-            } else {
-                row[1 + r].into() // L_r at index 2+(r-1) = 1+r
-            };
-            let cur: AB::Expr = row[2 + r].into(); // L_{r+1} at index 2+r
-            let rc = AB::Expr::from(AB::F::from_u64(RC[r]));
-            builder.assert_eq(cur, pow7(prev + agent_id.clone() + rc));
+        // 3. First row = the LEAF permutation: lanes 2.. are the zero padding of the
+        //    2-scalar hash, and its output must be a member of the public group.
+        {
+            let mut first = builder.when_first_row();
+            for lane in 2..P2_WIDTH {
+                first.assert_zero(local.inputs[lane].clone());
+            }
+            // Membership: ∏_j (leaf − C_j) == 0. `leaf` is never a public input, so
+            // *which* member the prover is stays hidden.
+            let leaf: AB::Expr = local.out0.clone();
+            let mut prod: AB::Expr = leaf.clone() - group_pv[0].into();
+            for j in 1..GROUP_SIZE {
+                prod = prod * (leaf.clone() - group_pv[j].into());
+            }
+            first.assert_zero(prod);
         }
-        // leaf = L_R + secret + agent_id  (L_R at index R+1)
-        let l_last: AB::Expr = row[R + 1].into();
-        let leaf: AB::Expr = row[LEAF_COL].into();
-        builder.assert_eq(leaf.clone(), l_last + secret.clone() + agent_id);
 
-        // Nullifier MiMC rounds: N_0 = secret, N_{r+1} = (N_r + context + RC[r])^7.
-        for r in 0..R {
-            let prev: AB::Expr = if r == 0 {
-                secret.clone()
-            } else {
-                row[R + 1 + r].into() // N_r at index (R+2)+(r-1) = R+1+r
-            };
-            let cur: AB::Expr = row[R + 2 + r].into(); // N_{r+1} at index (R+2)+r
-            let rc = AB::Expr::from(AB::F::from_u64(RC[r]));
-            builder.assert_eq(cur, pow7(prev + context.clone() + rc));
+        // 4. Every subsequent row = the NULLIFIER permutation on the SAME secret.
+        {
+            let mut trans = builder.when_transition();
+            // The binding that makes the statement sound: same `secret` lane.
+            trans.assert_eq(next.inputs[0].clone(), local.inputs[0].clone());
+            trans.assert_eq(next.inputs[1].clone(), context.clone());
+            for lane in 2..P2_WIDTH {
+                trans.assert_zero(next.inputs[lane].clone());
+            }
+            trans.assert_eq(next.out0.clone(), null_pub.clone());
         }
-        // nullifier(public) = N_R + secret + context  (N_R at index 2R+1)
-        let n_last: AB::Expr = row[2 * R + 1].into();
-        builder.assert_eq(null_pub, n_last + secret + context);
+    }
+}
 
-        // Membership: ∏_j (leaf - C_j) == 0  (leaf is one of the public commitments).
-        let mut prod: AB::Expr = leaf.clone() - group_pv[0].into();
-        for j in 1..GROUP_SIZE {
-            prod = prod * (leaf.clone() - group_pv[j].into());
-        }
-        builder.assert_zero(prod);
+/// The handful of lanes the ownership glue actually reads, lifted out of the
+/// gadget's column struct into owned expressions (the borrow of `builder.main()`
+/// must end before any `assert_*`).
+struct Lanes<E> {
+    inputs: Vec<E>,
+    out0: E,
+}
+
+fn local_to_owned<V: Copy + Into<E>, E: Clone>(cols: &P2Cols<V>) -> Lanes<E> {
+    Lanes {
+        inputs: cols.inputs.iter().map(|v| (*v).into()).collect(),
+        out0: cols.ending_full_rounds[P2_HALF_FULL_ROUNDS - 1].post[0].into(),
     }
 }
 
@@ -252,27 +344,34 @@ fn make_config() -> VaultConfig {
     VaultConfig::new(pcs, challenger)
 }
 
+/// Build the witness with the gadget's own trace generator, so the committed columns
+/// are by construction the ones its constraints expect.
+///
+/// Row 0 absorbs `(secret, agent_id)` → leaf; rows 1.. absorb `(secret, context)` →
+/// nullifier. Every row is a full permutation, which is why `HEIGHT` is kept minimal.
 fn generate_trace(secret: u64, agent_id: u64, context: u64) -> RowMajorMatrix<Val> {
-    let s = Val::from_u64(secret);
-    let aid = Val::from_u64(agent_id);
-    let ctx = Val::from_u64(context);
-    let l_states = mimc_states(s, aid);
-    let n_states = mimc_states(s, ctx);
-    let leaf = l_states[R - 1] + s + aid;
+    let pad = |a: u64, b: u64| {
+        let mut lanes = [Val::ZERO; P2_WIDTH];
+        lanes[0] = Val::from_u64(a);
+        lanes[1] = Val::from_u64(b);
+        lanes
+    };
 
-    let mut one = Vec::with_capacity(W);
-    one.push(s);
-    one.push(aid);
-    one.extend_from_slice(&l_states);
-    one.extend_from_slice(&n_states);
-    one.push(leaf);
-    debug_assert_eq!(one.len(), W);
-
-    let mut values = Vec::with_capacity(W * HEIGHT);
-    for _ in 0..HEIGHT {
-        values.extend_from_slice(&one);
+    let mut inputs = Vec::with_capacity(HEIGHT);
+    inputs.push(pad(secret, agent_id));
+    for _ in 1..HEIGHT {
+        inputs.push(pad(secret, context));
     }
-    RowMajorMatrix::new(values, W)
+
+    generate_trace_rows::<
+        Val,
+        LinearLayers,
+        P2_WIDTH,
+        P2_SBOX_DEGREE,
+        P2_SBOX_REGISTERS,
+        P2_HALF_FULL_ROUNDS,
+        P2_PARTIAL_ROUNDS,
+    >(inputs, &p2_round_constants(), 0)
 }
 
 fn public_values(context: u64, nullifier: Val, group: &[Val; GROUP_SIZE]) -> Vec<Val> {
@@ -292,7 +391,7 @@ pub fn prove_ownership(
     let config = make_config();
     let trace = generate_trace(secret, agent_id, context);
     let n = nullifier(secret, context);
-    prove(&config, &OwnershipAir, trace, &public_values(context, n, group))
+    prove(&config, &OwnershipAir::new(), trace, &public_values(context, n, group))
 }
 
 /// Verify an ownership proof. Verifier learns only `(context, nullifier, group)`.
@@ -303,7 +402,7 @@ pub fn verify_ownership(
     group: &[Val; GROUP_SIZE],
 ) -> Result<(), VerificationError<impl core::fmt::Debug>> {
     let config = make_config();
-    verify(&config, &OwnershipAir, proof, &public_values(context, nullifier, group))
+    verify(&config, &OwnershipAir::new(), proof, &public_values(context, nullifier, group))
 }
 
 pub fn proof_to_bytes(proof: &Proof<VaultConfig>) -> Vec<u8> {
@@ -327,6 +426,115 @@ mod tests {
             commitment(33, 303),
             commitment(44, 404),
         ]
+    }
+
+    // GATE 0 (4.0-d.3 make-or-break) — the CIRCUIT and the OFF-CIRCUIT hash must agree.
+    //
+    // If the in-AIR permutation ever drifts from `h_p2` (wrong round constants, wrong
+    // linear layer, wrong lane convention), a proof would still verify against its own
+    // trace while failing against a commitment set computed off-circuit — the exact
+    // silent-break ZKP_ARCHITECTURE_INVARIANTS Inv 1 warns about. This reads the real
+    // witness the prover commits to and compares it with the frozen definition.
+    #[test]
+    fn circuit_matches_off_circuit_h_p2() {
+        for (secret, agent_id, context) in
+            [(777u64, 555u64, 9001u64), (1, 2, 3), (0, 0, 0), (123456789, 987654321, 42)]
+        {
+            let trace = generate_trace(secret, agent_id, context);
+
+            let leaf_row = trace.row_slice(0).expect("leaf row");
+            let leaf_cols: &P2Cols<Val> = (*leaf_row).borrow();
+            let null_row = trace.row_slice(1).expect("nullifier row");
+            let null_cols: &P2Cols<Val> = (*null_row).borrow();
+
+            // The witness the AIR constrains == the value the group set is built from.
+            assert_eq!(
+                leaf_cols.ending_full_rounds[P2_HALF_FULL_ROUNDS - 1].post[0],
+                commitment(secret, agent_id),
+                "in-AIR leaf != off-circuit commitment for ({secret}, {agent_id})"
+            );
+            assert_eq!(
+                null_cols.ending_full_rounds[P2_HALF_FULL_ROUNDS - 1].post[0],
+                nullifier(secret, context),
+                "in-AIR nullifier != off-circuit nullifier for ({secret}, {context})"
+            );
+
+            // The 2-scalar convention: absorb in lanes 0/1, zero-pad the rest. The AIR
+            // constrains lanes 2.. to zero, so a drift here would make traces unprovable
+            // rather than silently wrong — assert it anyway so the intent is pinned.
+            assert_eq!(leaf_cols.inputs[0], Val::from_u64(secret));
+            assert_eq!(leaf_cols.inputs[1], Val::from_u64(agent_id));
+            assert_eq!(null_cols.inputs[0], Val::from_u64(secret));
+            assert_eq!(null_cols.inputs[1], Val::from_u64(context));
+            for lane in 2..P2_WIDTH {
+                assert_eq!(leaf_cols.inputs[lane], Val::ZERO, "leaf lane {lane} not padded");
+                assert_eq!(null_cols.inputs[lane], Val::ZERO, "null lane {lane} not padded");
+            }
+        }
+    }
+
+    // GATE 0b — the crate-level `h_p2` (what the KAT oracle commits, and what the TS
+    // port is gated against) is the SAME function the circuit's witness uses. Guards
+    // against the u32/field wrappers diverging.
+    #[test]
+    fn commitment_agrees_with_kat_level_h_p2() {
+        for (a, b) in [(0u32, 0u32), (1, 2), (777, 555), (2013265920, 123456789)] {
+            assert_eq!(
+                commitment(a as u64, b as u64).as_canonical_u32(),
+                poseidon2_hash2::h_p2(a, b),
+                "commitment() diverged from the KAT-gated h_p2 for ({a}, {b})"
+            );
+        }
+    }
+
+    // GATE 0c (4.0-d.3 soundness) — the ONE new mechanism this rewrite introduces.
+    //
+    // Under MiMC both hashes shared a literal `secret` cell on a single row. Poseidon2
+    // needs one permutation per row, so the binding moved to a transition constraint
+    // (`next.inputs[0] == local.inputs[0]`). If that constraint were missing or wrong, a
+    // prover could prove membership with one human's secret while emitting a *different*
+    // human's nullifier — defeating double-action detection entirely. Forge exactly that
+    // trace and require the prover to reject it.
+    // Mutation-tested: deleting the `next.inputs[0] == local.inputs[0]` constraint makes
+    // this forgery *provable*, so the test really does gate that one line.
+    #[test]
+    #[should_panic(expected = "constraints had nonzero value")]
+    fn nullifier_must_use_the_same_secret_as_the_leaf() {
+        let (secret, agent_id, context) = (777u64, 555u64, 9001u64);
+        let impostor_secret = 888u64;
+        let group = group_with(secret, agent_id);
+
+        let pad = |a: u64, b: u64| {
+            let mut lanes = [Val::ZERO; P2_WIDTH];
+            lanes[0] = Val::from_u64(a);
+            lanes[1] = Val::from_u64(b);
+            lanes
+        };
+        // Row 0 is a genuine member leaf; rows 1.. hash a DIFFERENT secret.
+        let mut inputs = vec![pad(secret, agent_id)];
+        for _ in 1..HEIGHT {
+            inputs.push(pad(impostor_secret, context));
+        }
+        let forged = generate_trace_rows::<
+            Val,
+            LinearLayers,
+            P2_WIDTH,
+            P2_SBOX_DEGREE,
+            P2_SBOX_REGISTERS,
+            P2_HALF_FULL_ROUNDS,
+            P2_PARTIAL_ROUNDS,
+        >(inputs, &p2_round_constants(), 0);
+
+        // Publish the impostor's nullifier, so only the secret-binding constraint stands
+        // between this trace and a valid-looking proof.
+        let config = make_config();
+        let n = nullifier(impostor_secret, context);
+        let _ = prove(
+            &config,
+            &OwnershipAir::new(),
+            forged,
+            &public_values(context, n, &group),
+        );
     }
 
     // GATE 1 — accept a valid owner proof.
@@ -430,8 +638,8 @@ mod tests {
         verify_ownership(&proof, context, n, &group).expect("verify");
         let verify_ms = t1.elapsed().as_secs_f64() * 1e3;
         eprintln!(
-            "[zkp-vault bench] prove={:.1}ms verify={:.1}ms proof_size={} bytes (R={}, group={}, height={})",
-            prove_ms, verify_ms, bytes.len(), R, GROUP_SIZE, HEIGHT
+            "[zkp-vault bench] prove={:.1}ms verify={:.1}ms proof_size={} bytes (hash=poseidon2-babybear16, width={}, group={}, height={})",
+            prove_ms, verify_ms, bytes.len(), W, GROUP_SIZE, HEIGHT
         );
     }
 }
