@@ -57,20 +57,24 @@ The env levers are the wrong shape for an emergency: flipping them means a Railw
 
 **[V] The FULL local suite was run after the §4a fixes — 2,267 passed.** The only two failing suites (`hal-accuracy-summary`, `trinity-swarm-health`) fail **identically at baseline `a1b6e7f`** with the same 10 assertions, in a clean worktree at that commit: pre-existing ENV/CONFIG needing real credentials, not this diff (CI has the credentials, which is why CI's run of them was green). **This full run is itself a correction** — the first commit was pushed on the strength of a 7-suite local run, and CI immediately found two real failures in suites that run had never touched.
 
-**[V] Eight mutations, each with a landing assertion, each killing at least one test.** Both prior-beat harness lessons are now encoded in the harness itself: restore happens in a `finally` (Beat 32 — a mutation designed to hang takes a next-statement restore down with it) and every mutation carries a unique marker asserted 0 times before / exactly 1 time after, or the result is discarded as NOT-LANDED (Beat 33 — three mutations once reported green having never applied).
+**[V] Ten mutations, each with a landing assertion, each killing at least one test — re-measured against the FINAL code.** The original eight ran against the pre-redesign module; quoting those for code that has since changed would repeat the stale-claim error. Both prior-beat harness lessons are encoded in the harness itself: restore happens in a `finally` (Beat 32 — a mutation designed to hang takes a next-statement restore down with it) and every mutation carries a unique marker asserted 0 times before / exactly 1 after, or the result is discarded as NOT-LANDED (Beat 33 — three mutations once reported green having never applied).
+
+**That guard fired for real this run.** The first re-run reported `MUT2 NOT-LANDED`, because the redesign had moved the line it patched. Under the pre-Beat-33 harness that would have printed a clean green and read as a passing mutation.
 
 | mutation | kills | what it proves |
 |---|---|---|
-| sticky rule removed | 3 | an error cannot lift a halt |
+| sticky rule removed | 4 | an error cannot lift a halt |
 | fail-open removed | 4 | an error cannot start one |
 | unknown mode → `off` | **11** | the switch is not typo-disableable |
 | missing column → halted | 2 | inert, not catastrophic, before the DDL |
 | `isHaltTruthy` → any truthy | 7 | a stray value cannot park the fleet |
-| cache never expires | 6 | a flipped switch is actually noticed |
-| middleware drops the method check | 4 | reads survive a halt |
+| cache never expires | 8 | a flipped switch is actually noticed |
+| middleware drops the method check | 3 | reads survive a halt |
 | `halted = flag` (shadow parks) | 4 | shadow has no production effect |
+| `peekHaltState` blinded | **10** | the guard genuinely reads the state |
+| uninitialized guards silently | 1 | an unfed guard says so instead of pretending |
 
-Baseline 76/76 → post-restore 76/76, **zero `MUTMARK` residue on disk** (checked, not assumed).
+Baseline 91/91 → post-restore 91/91, **zero `MUTMARK` residue on disk** (checked, not assumed).
 
 **[V] LIVE acceptance against the real database — 9/9**, re-run against the *final* code. (The first 8/8 run exercised the pre-redesign middleware; a verified claim about code that has since been replaced is a stale claim, so it was re-run rather than cited.) The unit tests all use a fake client; this answers the different question they cannot: does a real `supabase-js` client, against the real column, through PostgREST's schema cache, behave as the module expects?
 
