@@ -37,20 +37,10 @@
 //! Deterministic and machine-independent (no rng; fixed published constants).
 //! No Cargo.toml change: `p3-baby-bear` + `p3-symmetric` are already base deps.
 
-use p3_baby_bear::{default_babybear_poseidon2_16, BabyBear};
-use p3_field::PrimeField32;
-use p3_symmetric::Permutation;
-
-/// H_p2(a, b) = Perm16([a, b, 0..])[0] over canonical u32 field elements.
-fn h_p2(a: u32, b: u32) -> u32 {
-    let perm = default_babybear_poseidon2_16();
-    let mut input = [0u32; 16];
-    input[0] = a;
-    input[1] = b;
-    let mut state: [BabyBear; 16] = BabyBear::new_array(input);
-    perm.permute_mut(&mut state);
-    state[0].as_canonical_u32()
-}
+// The definition lives in the crate (`src/poseidon2_hash2.rs`) so this generator and
+// its gate (`tests/poseidon2_2to1_kat.rs`) cannot drift apart — the gate would
+// otherwise be validating its own copy rather than the code that produced this KAT.
+use zkp_vault::poseidon2_hash2::h_p2;
 
 // Fixed (a, b) inputs. Chosen to cover: zeros; small iota; the leaf-shaped (777,555)
 // pair the other KATs reuse; a shared-secret pair sharing lane 0 (membership-style);

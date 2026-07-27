@@ -6,20 +6,16 @@
 //! zero padding. `H_p2` is definitionally the raw permutation's lane 0, so we cross-check
 //! it against a raw permute computed independently here — the wrapper can't be subtly
 //! wrong (wrong lane / wrong output index / non-zero padding) without a test failing.
+//!
+//! `h_p2` is imported from the crate, NOT re-declared here: the generator and this gate
+//! share one definition, so this file validates the code that actually produced the
+//! committed KAT. `committed_kat_json_matches_ground_truth` closes the remaining half of
+//! that loop by checking the committed ARTIFACT against a locally computed raw permute.
 
 use p3_baby_bear::{default_babybear_poseidon2_16, BabyBear};
 use p3_field::PrimeField32;
 use p3_symmetric::Permutation;
-
-fn h_p2(a: u32, b: u32) -> u32 {
-    let perm = default_babybear_poseidon2_16();
-    let mut input = [0u32; 16];
-    input[0] = a;
-    input[1] = b;
-    let mut state: [BabyBear; 16] = BabyBear::new_array(input);
-    perm.permute_mut(&mut state);
-    state[0].as_canonical_u32()
-}
+use zkp_vault::poseidon2_hash2::h_p2;
 
 fn raw_permute(input: [u32; 16]) -> [u32; 16] {
     let perm = default_babybear_poseidon2_16();
@@ -37,6 +33,71 @@ fn h_p2_equals_raw_permutation_lane0() {
         padded[0] = a;
         padded[1] = b;
         assert_eq!(h_p2(a, b), raw_permute(padded)[0], "H_p2 convention drift for ({a},{b})");
+    }
+}
+
+/// Pull the `(a, b, output)` triples out of the committed KAT JSON without a serde
+/// dependency (the generator emits one field per line, so a line scan is exact).
+fn parse_kat_vectors(json: &str) -> Vec<(u32, u32, u32)> {
+    fn num(line: &str, key: &str) -> Option<u32> {
+        line.strip_prefix(key)?
+            .trim()
+            .trim_end_matches(',')
+            .trim()
+            .parse::<u32>()
+            .ok()
+    }
+    let mut vectors = Vec::new();
+    let (mut a, mut b) = (None, None);
+    for line in json.lines() {
+        let line = line.trim();
+        if let Some(v) = num(line, "\"a\":") {
+            a = Some(v);
+        } else if let Some(v) = num(line, "\"b\":") {
+            b = Some(v);
+        } else if let Some(out) = num(line, "\"output\":") {
+            let a = a.take().expect("KAT vector has `output` before `a`");
+            let b = b.take().expect("KAT vector has `output` before `b`");
+            vectors.push((a, b, out));
+        }
+    }
+    vectors
+}
+
+/// The committed KAT JSON is what the TypeScript gate (`tests/poseidon2-hash2.test.ts`,
+/// 4.0-d.2) asserts against, so the ARTIFACT itself must be pinned to ground truth —
+/// not just the function that writes it. Every committed vector is re-derived here from
+/// a raw permutation, so a drifted or hand-edited KAT fails loudly instead of silently
+/// re-defining the convention on both sides of the language boundary.
+#[test]
+fn committed_kat_json_matches_ground_truth() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/kat/poseidon2_babybear16_2to1_kat.json"
+    );
+    let json = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "committed 2-to-1 KAT oracle unreadable at {path}: {e}\n\
+             regenerate: cargo run --example poseidon2_2to1_kat --manifest-path zkp-vault/Cargo.toml \
+             > zkp-vault/kat/poseidon2_babybear16_2to1_kat.json"
+        )
+    });
+    let vectors = parse_kat_vectors(&json);
+    assert_eq!(
+        vectors.len(),
+        8,
+        "expected 8 committed KAT vectors, parsed {} — truncated or malformed oracle",
+        vectors.len()
+    );
+    for (a, b, output) in vectors {
+        let mut padded = [0u32; 16];
+        padded[0] = a;
+        padded[1] = b;
+        assert_eq!(
+            output,
+            raw_permute(padded)[0],
+            "committed KAT vector ({a},{b}) does not match the raw permutation — the oracle drifted"
+        );
     }
 }
 

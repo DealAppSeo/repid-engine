@@ -72,6 +72,11 @@ use p3_uni_stark::{prove, verify, Proof, StarkConfig, VerificationError};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 
+/// Canonical off-circuit Poseidon2-BabyBear 2-scalar hash (backlog 4.0-d.1). Not yet
+/// used by `OwnershipAir` — the in-AIR swap from MiMC is backlog 4.0-d.3; this is the
+/// frozen definition that rewrite must reproduce bit-for-bit.
+pub mod poseidon2_hash2;
+
 /// MiMC rounds. ≥ ceil(log_7(p)) ≈ 11 for full security over BabyBear; 12 here.
 pub const R: usize = 12;
 /// Public group size (number of registered commitments). Demo/gate value.

@@ -10,8 +10,9 @@
  * The expected vectors below are copied verbatim from that committed oracle JSON.
  * Because the underlying TS permutation already reproduces p3's permutation
  * element-for-element (#196, gated on #195's raw KAT), matching these is genuine
- * cross-language parity — not "both wrong the same way". If the oracle JSON is present
- * on disk we ALSO cross-check against it directly (belt and suspenders).
+ * cross-language parity — not "both wrong the same way". We ALSO cross-check against the
+ * committed oracle JSON itself (belt and suspenders), and fail loud if it is missing —
+ * a gate that can silently skip its own oracle is not a gate.
  */
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -40,7 +41,7 @@ describe('Poseidon2-BabyBear 2-to-1 scalar hash H_p2 (backlog 4.0-d.2)', () => {
     }
   });
 
-  it('cross-checks against the committed oracle JSON when present on disk', () => {
+  it('cross-checks against the committed oracle JSON', () => {
     const katPath = join(
       __dirname,
       '..',
@@ -48,11 +49,10 @@ describe('Poseidon2-BabyBear 2-to-1 scalar hash H_p2 (backlog 4.0-d.2)', () => {
       'kat',
       'poseidon2_babybear16_2to1_kat.json',
     );
-    if (!existsSync(katPath)) {
-      // File lives on the 4.0-d.1 oracle track; may be absent on a fresh off-main
-      // checkout. The embedded KAT above is the authoritative copy — nothing to do.
-      return;
-    }
+    // Fail loud, never vacuously pass: this JSON is committed alongside this test (both
+    // landed in the same 4.0-d.1/4.0-d.2 change) and is the oracle the whole gate rests
+    // on. Skipping it on absence would turn a missing oracle into a green run.
+    expect(existsSync(katPath)).toBe(true);
     const parsed = JSON.parse(readFileSync(katPath, 'utf8')) as {
       scheme: string;
       field_prime: number;
@@ -60,6 +60,8 @@ describe('Poseidon2-BabyBear 2-to-1 scalar hash H_p2 (backlog 4.0-d.2)', () => {
       vectors: Array<{ name: string; a: number; b: number; output: number }>;
     };
     expect(parsed.field_prime).toBe(Number(BABYBEAR_P));
+    // Guards against a truncated/emptied oracle silently satisfying the loop below.
+    expect(parsed.vectors).toHaveLength(KAT.length);
     for (const v of parsed.vectors) {
       expect(poseidon2Hash2u32(v.a, v.b)).toBe(v.output);
     }
