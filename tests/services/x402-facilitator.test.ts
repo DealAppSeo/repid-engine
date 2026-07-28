@@ -1,6 +1,31 @@
 import { x402Facilitator, PaymentRequirements } from '../../src/services/x402-facilitator';
 import { ethers } from 'ethers';
 
+// verifyPayment/settlePayment call resolveAndVerifyDomain(), which reads name()/version()
+// off a real ethers Contract bound to a live Base Sepolia JsonRpcProvider from getProvider().
+// Mocking global.fetch does NOT intercept that — ethers uses its own transport — so before
+// this mock the suite made a real RPC call and only reached its assertions once that call
+// FAILED into the NODE_ENV==='test' fallback inside the catch. When the endpoint was slow to
+// fail instead of fast, the test blew jest's 5s limit: a required check whose result depended
+// on public-RPC latency, not on any code under test. Observed as an intermittent
+// "Exceeded timeout of 5000 ms" on an unrelated docs-only PR (#266).
+//
+// The two sibling x402 suites already stub this boundary (x402-recovery-worker mocks the
+// facilitator, x402-outbound-client mocks ethers); this file was the only one left live.
+// The returned name/version are exactly what the catch-fallback produced, so the envelope
+// assertions below are unchanged — this pins the value instead of racing for it.
+// ethers itself is deliberately NOT mocked: the v,r,s test needs real signing.
+jest.mock('../../src/services/x402-outbound-client', () => ({
+  resolveAndVerifyDomain: jest.fn(async (tokenAddress: string, chainId: number) => ({
+    name: 'USDC',
+    version: '2',
+    chainId,
+    verifyingContract: tokenAddress,
+    domainSeparator: '0x'.padEnd(66, '0'),
+    verifiedAt: Date.now(),
+  })),
+}));
+
 describe('X402Facilitator Envelope Shape Tests', () => {
   let originalFetch: typeof global.fetch;
   let lastRequestBody: any = null;
