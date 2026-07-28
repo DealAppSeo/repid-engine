@@ -49,9 +49,15 @@ export function shouldLogEvent(
   return roll < sampleRate;
 }
 
-export interface AgentLogRow {
-  [column: string]: unknown;
-}
+/**
+ * The row contract lives in `agent-log-row.ts` — dependency-free so that pure modules can use it
+ * without pulling in the `db` singleton (which throws at import without credentials). Re-exported
+ * here so existing importers of `agent-log` keep working.
+ */
+export { buildAgentLogRow } from './agent-log-row';
+export type { AgentLogRow } from './agent-log-row';
+import { buildAgentLogRow as buildRow } from './agent-log-row';
+import type { AgentLogRow } from './agent-log-row';
 
 /**
  * Gated best-effort insert into trinity_agent_logs. Returns true if the row was written (or
@@ -65,7 +71,7 @@ export async function logAgentEvent(
     if (!shouldLogEvent(level, parseMinLevel(), parseSampleRate(), Math.random())) {
       return false;
     }
-    const { error } = await db.from('trinity_agent_logs').insert(row);
+    const { error } = await db.from('trinity_agent_logs').insert(buildRow(row));
     if (error) console.error(error);
     return true;
   } catch (err) {

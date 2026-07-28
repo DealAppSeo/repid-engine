@@ -11,6 +11,7 @@
 
 import { createHmac } from 'crypto';
 import { markDegraded } from '../lib/degraded';
+import { buildAgentLogRow } from '../engine/agent-log-row';
 
 const HMAC_SECRET = process.env.PROOF_SECRET || 'repid-default-secret';
 const PROVER_URL = process.env.PLONKY3_PROVER_URL || process.env.ZKP_SERVICE_URL || '';
@@ -133,11 +134,13 @@ export function generateProofRealSync(
 }
 
 export async function logProofGeneration(supabase: any, agentId: string, tier: string): Promise<void> {
-  const { error } = await supabase.from('trinity_agent_logs').insert([{
+  const { error } = await supabase.from('trinity_agent_logs').insert([buildAgentLogRow({
+    // `agent` is NOT NULL with no default — omitting it failed 23502 on every call, silently.
+    agent: agentId,
     agent_name: 'repid-engine',
     action: 'zkp_proof_generated',
     message: `Proof generated for agent ${agentId} at tier ${tier}`,
     created_at: new Date().toISOString(),
-  }]);
+  })]);
   if (error) console.error('[zkp] Log error:', error);
 }

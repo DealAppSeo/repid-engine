@@ -9,6 +9,8 @@
  *   PROBATIONARY 0–499 · EARNING 500–999 · ESTABLISHED 1000–4999 · AUTONOMOUS 5000–7999 · VETERAN 8000–10000
  */
 
+import { buildAgentLogRow } from '../engine/agent-log-row';
+
 export type Tier = 'PROBATIONARY' | 'EARNING' | 'ESTABLISHED' | 'AUTONOMOUS' | 'VETERAN';
 
 export function tierOf(repid: number): Tier {
@@ -122,10 +124,20 @@ export async function logGateShadow(
     if (!error) return;
   } catch { /* table not present yet — fall through */ }
   try {
-    await db.from('trinity_agent_logs').insert({
+    // `agent` is NOT NULL, and there is no `event_type` column — the discriminator is `action`.
+    // The previous shape named `event_type` (fails 42703) AND omitted `agent` (fails 23502), so
+    // BOTH paths of this "best-effort" logger failed and the catch hid it. The gate's shadow
+    // evidence was discarded in full — which reads as "nothing to see" rather than "not measured".
+    const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({
+      agent: evalResult.agent_id,
       agent_name: evalResult.agent_id,
-      event_type: 'repid_gate_shadow',
+      action: 'repid_gate_shadow',
       metadata: row,
-    });
-  } catch { /* never throw from the shadow logger */ }
+    }));
+    // Fail-LOUD to the console (D-032): still never throws, but a silently-empty shadow log is
+    // the failure mode that made this bug survive, so it must not be invisible a second time.
+    if (error) console.error('[repid-gate:shadow] fallback log FAILED:', error.message);
+  } catch (err) {
+    console.error('[repid-gate:shadow] fallback log threw:', (err as Error)?.message);
+  }
 }

@@ -12,6 +12,7 @@ export async function generateProofStub(agentId: string, requesterPubkey: string
   await logAgentEvent(
     {
       action: 'zkp_proof_generated',
+      agent: agentId,
       metadata: {
         agent_id: agentId,
         requester_pubkey: requesterPubkey,
