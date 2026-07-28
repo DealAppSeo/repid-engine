@@ -175,6 +175,28 @@ export interface CommitmentAudit { ok: boolean; violations: string[]; activeCoun
 const MAX_VIOLATIONS = 32;
 
 /**
+ * Default bound on how large a published list this audit will process. NOT a property of the
+ * construction — a wall-clock budget, and the only thing standing between an untrusted `length`
+ * and unbounded work.
+ *
+ * Chosen against a measurement, not invented. A WELL-FORMED audit costs ~250us/leaf, dominated by
+ * the Poseidon2 re-derivation of the root (measured on the default hashes: n=256 61ms, n=1024
+ * 276ms, n=4096 997ms, n=16384 4.4s — linear). So 16384 is "a peer audits a root in a few
+ * seconds"; 1e6 leaves would be ~4 minutes of honest work, which is a denial of service whether or
+ * not the list is malformed.
+ *
+ * That measurement is also why the obvious cheap fix is the wrong one. A sparse array costs the
+ * publisher nothing (`new Array(4e9)` is O(1)) and the shape scan ~69ns/element, so early-exiting
+ * that scan looks like the fix — but at 3,600x cheaper per element than hashing, the scan is not
+ * where the time goes. Only bounding `n` before any work bounds the work.
+ *
+ * Raise it deliberately via `opts.maxLeaves` if you accept the cost for a larger memory; the
+ * default refuses rather than hangs. Bounds the NUMBER of element accesses, not the cost of each:
+ * an exotic accessor that does unbounded work per read is out of reach of any in-process cap.
+ */
+export const MAX_AUDIT_LEAVES = 16384;
+
+/**
  * A published element must be SHAPED like a leaf before any invariant about it means anything.
  *
  * Every step of the audit indexes the array and dereferences the element; a hole, a `null`, or a
@@ -223,8 +245,16 @@ function isLeafShape(x: unknown): x is IndexedLeaf {
  *     increase, terminate at 0, and REACH EVERY ACTIVE LEAF. The coverage clause is the one that
  *     catches a sentinel whose `next` skips over a live value — the gap no single witness sees.
  *
- * Pure and TOTAL: the input is untrusted, so anything unprocessable is a `false`, not an exception
- * (a verifier that throws on hostile input is a denial-of-service, cf. #240/#245).
+ *   - `leaf-set-too-large@n>max` — the list exceeds `opts.maxLeaves` (default `MAX_AUDIT_LEAVES`).
+ *     Checked FIRST, before the shape scan and before a single hash, because it is the only clause
+ *     that bounds the work the others cost.
+ *
+ * Pure, TOTAL, and TERMINATING on untrusted input — three properties, and the first two do not
+ * imply the third. A verifier that throws on hostile input is a denial-of-service (#240/#245); so
+ * is one that returns eventually. `auditCommitment` reads a `length` it does not control, so
+ * "never throws" bought nothing against `new Array(4e9)`: no exception, no result, ~5 minutes of
+ * scanning a verdict already decided at index 0. Liveness needs its own bound, and the bound is
+ * the size cap.
  *
  * Totality is enforced HERE, at the boundary, and not by the shape check alone. `isLeafShape` reads
  * properties off an untrusted object, so it is itself a throw site — an element with a throwing
@@ -235,35 +265,43 @@ function isLeafShape(x: unknown): x is IndexedLeaf {
  * the distinct `audit-threw` violation keeps it visible rather than silently indistinguishable from
  * a structural finding.
  */
-export function auditCommitment(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair): CommitmentAudit {
-  try { return auditCommitmentInner(leaves, root, leafHash, pair); }
+export function auditCommitment(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair, opts: AuditOpts = {}): CommitmentAudit {
+  try { return auditCommitmentInner(leaves, root, leafHash, pair, opts); }
   catch { return { ok: false, violations: ['audit-threw'], activeCount: 0 }; }
 }
 
-function auditCommitmentInner(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHash, pair: Hash2): CommitmentAudit {
+/** `maxLeaves`: opt into a larger (slower) audit with eyes open — see `MAX_AUDIT_LEAVES`. */
+export interface AuditOpts { maxLeaves?: number }
+
+function auditCommitmentInner(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHash, pair: Hash2, opts: AuditOpts): CommitmentAudit {
   const violations: string[] = [];
   const flag = (m: string): void => { if (violations.length < MAX_VIOLATIONS) violations.push(m); };
   const done = (activeCount: number): CommitmentAudit => ({ ok: violations.length === 0, violations, activeCount });
 
   if (!Array.isArray(leaves) || leaves.length === 0) { flag('empty-leaf-set'); return done(0); }
 
-  // 1. Shape, before anything dereferences an element. Checked FIRST and returned on, so every
-  //    `leaves[i]!` below is a real leaf by construction rather than by hope.
+  // 1. Size, before the shape scan and before a single hash. This is the liveness bound: every
+  //    clause below is O(n) in a length the publisher chose, so it is the first thing checked.
+  const maxLeaves = opts.maxLeaves ?? MAX_AUDIT_LEAVES;
+  if (leaves.length > maxLeaves) { flag(`leaf-set-too-large@${leaves.length}>${maxLeaves}`); return done(0); }
+
+  // 2. Shape, before anything dereferences an element. Returned on, so every `leaves[i]!` below is
+  //    a real leaf by construction rather than by hope.
   let shaped = true;
   for (let i = 0; i < leaves.length; i++) if (!isLeafShape(leaves[i])) { flag(`malformed-leaf@${i}`); shaped = false; }
   if (!shaped) return done(0);
 
-  // 2. Bind the audit to the commitment. Everything below is about THIS root only if this passes.
+  // 3. Bind the audit to the commitment. Everything below is about THIS root only if this passes.
   let derived: Hex | null = null;
   try { derived = referenceRoot(leaves.map((l) => leafHash(encodeLeaf(l))), pair); } catch { flag('leaf-set-unhashable'); }
   if (derived !== root) flag('root-mismatch');
 
-  // 3. Sentinel slot.
+  // 4. Sentinel slot.
   const sentinel = leaves[0]!;
   if (sentinel.tombstoned) flag('sentinel-tombstoned');
   if (sentinel.value !== 0n) flag('sentinel-value-not-zero');
 
-  // 4. Per-leaf invariants, and the active set the chain must cover.
+  // 5. Per-leaf invariants, and the active set the chain must cover.
   const active = new Set<number>();
   const byValue = new Map<string, number>();
   for (let i = 1; i < leaves.length; i++) {
@@ -278,7 +316,7 @@ function auditCommitmentInner(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHa
     active.add(i);
   }
 
-  // 5. Walk the next-chain from the sentinel. Bounded by the leaf count, so a cycle terminates.
+  // 6. Walk the next-chain from the sentinel. Bounded by the leaf count, so a cycle terminates.
   const visited = new Set<number>();
   let cur: IndexedLeaf = sentinel;
   let prev = 0n;
@@ -294,7 +332,7 @@ function auditCommitmentInner(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHa
     cur = leaves[idx]!;
   }
 
-  // 6. Coverage — an active leaf the chain never reaches is a value the sentinel skipped.
+  // 7. Coverage — an active leaf the chain never reaches is a value the sentinel skipped.
   for (const i of active) if (!visited.has(i)) flag(`active-leaf-not-in-chain@${i}`);
 
   return done(visited.size);
