@@ -135,22 +135,30 @@ export function verifyProofCarryingAnswer(
   pca: ProofCarryingAnswer, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair,
 ): AnswerVerification {
   const reasons: string[] = [];
-  const expected = bindAnswer(pca.answer, pca.citations, pca.memory_root, leafHash, pair).binding;
-  const binding_ok = expected === pca.binding;
-  if (!binding_ok) reasons.push('binding_mismatch');
+  // Adversarial-input safe applies to the BINDING too, not just the citation loop below: a peer/HAL
+  // runs this on UNTRUSTED agent output, so a malformed root (or a citations field that isn't a list)
+  // must make the binding UNCOMPUTABLE — it must never throw out of the verifier. Reported under its
+  // own reason: "we could not compute a binding" is a different claim from "we computed one and it
+  // disagreed", and an abstain decision should not misreport which one happened.
+  const citations: Citation[] = Array.isArray(pca?.citations) ? pca.citations : [];
+  let expected: Hex | null = null;
+  try { expected = bindAnswer(pca.answer, citations, pca.memory_root, leafHash, pair).binding; }
+  catch { expected = null; }
+  const binding_ok = expected !== null && expected === pca.binding;
+  if (!binding_ok) reasons.push(expected === null ? 'binding_uncomputable' : 'binding_mismatch');
 
   let verified = 0;
-  for (const c of pca.citations) {
+  for (const c of citations) {
     // Adversarial-input safe: a malformed value/witness (e.g. non-canonical hex) counts as
     // UNVERIFIED, it never crashes the verifier — a peer/HAL checks untrusted answers.
     let ok = false;
     try { ok = verifyMembership(BigInt(c.value), c.witness, pca.memory_root, leafHash, pair); }
     catch { ok = false; }
     if (ok) verified++;
-    else reasons.push(`citation_unverified:${c.value.slice(0, 12)}…`);
+    else reasons.push(`citation_unverified:${String(c?.value ?? '').slice(0, 12)}…`);
   }
-  const grounded = binding_ok && pca.citations.length > 0 && verified === pca.citations.length;
-  return { grounded, binding_ok, verified_citations: verified, total_citations: pca.citations.length, reasons };
+  const grounded = binding_ok && citations.length > 0 && verified === citations.length;
+  return { grounded, binding_ok, verified_citations: verified, total_citations: citations.length, reasons };
 }
 
 /**
