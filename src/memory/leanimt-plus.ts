@@ -14,6 +14,19 @@
  * Verifiers are STATELESS pure functions: what a peer / HAL / an on-chain check runs against a
  * committed root. No I/O. Full-rebuild-per-op here favors provable correctness; O(log n)
  * incremental update is the noted production optimization.
+ *
+ * ## What a stateless verifier can and cannot establish (threat model — read before relying on it)
+ * A verifier sees ONE witness against ONE root; the root's producer is NOT assumed honest. Two
+ * different things follow:
+ *   - BOUND, so soundly checkable here: the leaf's contents (value/next/tombstone are folded into
+ *     the digest) and its POSITION relative to the root (the path's direction bits). Anything a
+ *     witness merely *claims* alongside those — notably `InclusionWitness.index` — is not.
+ *   - NOT checkable from one witness: global well-formedness of the committed list. A committer
+ *     who forges the whole tree can still publish a sentinel whose `next` skips over live values,
+ *     and a single non-membership witness cannot detect it. Indexed Merkle trees normally close
+ *     this by constraining INSERTION in-circuit; this reference has no such constraint, so
+ *     non-membership is sound relative to a well-formed commitment, not against an arbitrary one.
+ *     Tracked as the commitment-well-formedness gap — do not read the guards below as covering it.
  */
 import { poseidon2LeafHash, poseidon2PairHash } from '../zkp/poseidon2-leaf';
 import { referenceRoot, referenceProof, verifyInclusion, type Hash2, type ProofStep } from './proof-carrying-index';
@@ -23,6 +36,12 @@ export type LeafHash = (commitment: string) => Hex;
 
 /** A linked, indexed leaf: `value` with a pointer to the `next` larger active value (0 = tail). */
 export interface IndexedLeaf { value: bigint; next: bigint; tombstoned: boolean; }
+/**
+ * `index` is ADVISORY — prover-side bookkeeping. It is NOT authenticated: `verifyInclusion`
+ * folds `path` and never reads it, so an untrusted peer can set it to anything at zero cost.
+ * No verifier here may branch on it for a soundness decision (a `path`-derived test is bound;
+ * a claimed index is not). See the leftmost-slot check in `verifyNonMembership`.
+ */
 export interface InclusionWitness { index: number; leaf: IndexedLeaf; path: ProofStep[]; }
 export interface NonMembershipWitness { lowLeaf: InclusionWitness; }
 
@@ -125,11 +144,21 @@ export function verifyMembership(v: bigint, w: InclusionWitness, root: Hex, leaf
   return verifyInclusion(leafHash(encodeLeaf(w.leaf)), w.path, root, pair);
 }
 
+/** Leftmost-slot test derived from data the ROOT binds. See `isSentinelSlot` note in verifyNonMembership. */
+function pathIsLeftmost(path: ProofStep[]): boolean {
+  return path.every((s) => !s.siblingOnLeft);
+}
+
 /** v is provably ABSENT from the memory committed to `root` (never inserted, or revoked). */
 export function verifyNonMembership(v: bigint, w: NonMembershipWitness, root: Hex, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair): boolean {
   const L = w.lowLeaf.leaf;
   if (L.tombstoned) return false;
-  if (L.value === 0n && w.lowLeaf.index !== 0) return false; // tombstone guard
+  // A value-0 low leaf can only honestly be the SENTINEL — and `w.lowLeaf.index` cannot establish
+  // that, because it is SELF-REPORTED and bound by nothing: `verifyInclusion` folds the path and
+  // never reads the index, so an adversary claims 0 for free. Derive the slot from the PATH, which
+  // the root DOES bind: a leaf is leftmost iff its sibling is on the right at EVERY level (a lone
+  // promoted node always sits at an even position, so promotion never hides a left-sibling step).
+  if (L.value === 0n && !pathIsLeftmost(w.lowLeaf.path)) return false;
   const ordered = L.value < v && (L.next > v || L.next === 0n);
   if (!ordered) return false;
   return verifyInclusion(leafHash(encodeLeaf(L)), w.lowLeaf.path, root, pair);
