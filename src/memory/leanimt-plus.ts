@@ -124,6 +124,11 @@ export class LeanIMTPlus {
 
   /** Provable retraction: unlink v from the active chain and tombstone its leaf (history preserved). */
   revoke(v: bigint): void {
+    // Mirrors insert()'s domain. Without this, revoke(0) matches the SENTINEL (the one active
+    // value-0 leaf), tombstones it, and relinks its predecessor onto its own value — a self-loop
+    // that freezes the tree: every later insert fails "no low leaf". The sentinel is structural,
+    // not a fact, so retracting it is never a meaningful request.
+    if (v <= 0n) throw new Error('LeanIMTPlus.revoke: value must be > 0 (0 reserved for sentinel)');
     const vi = this.activeValueIndex(v);
     if (vi === -1) throw new Error(`LeanIMTPlus.revoke: value ${v} not active`);
     let pi = -1;
