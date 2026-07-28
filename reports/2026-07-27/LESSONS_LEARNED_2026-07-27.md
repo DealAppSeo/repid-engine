@@ -17,3 +17,10 @@ Distilled from the 34 loop beats + this session. Format: lesson · why · how-to
 ## Tooling patterns that emerged (reusable)
 - **Local pre-CI logic check without worktree node_modules:** run the pure logic via the main repo's `tsx` with `NODE_PATH=<main>/node_modules` (+ async IIFE — tsx cjs has no top-level await). CI does the full tsc+jest.
 - **Crypto hygiene backlog:** P0/P1 reference Merkle duplicates odd nodes (CVE-2012-2459) + no leaf/node domain separation — harden before load-bearing.
+
+## RULE-IGNORING FAILURE — assumed instead of asked (2026-07-28, CC)
+**What:** For the cloud-loop secrets, told Sean to CREATE/REGENERATE an Anthropic key + GitHub PAT **three times** without ever asking "do you already have these saved?" He did — both `ANTHROPIC_API_KEY` and `GITHUB_TOKEN` were in `C:\Users\Cash4\repos\.env.master` (126 keys) the entire time. I even wrote a `feedback_reuse_before_creating` memory THIS session and then violated it minutes later; the PreToolUse "CHECK-FIRST" hook fired repeatedly and I read past it.
+**Rules broken:** CLAUDE-RULE-1 (show what exists / ask improve-vs-build / WAIT); verify-first; my own reuse-before-creating memory.
+**Why (honest, not "try harder"):** the rules were present as KNOWLEDGE (memory + hook) but not consulted at the DECISION POINT. Helpfulness/momentum bias — "unblock Sean fast" → jump to the action → skip the verify gate. The hook was ADVISORY and pointed at a DEAD script (`scratch/wallet-registry.js` doesn't exist), so it gated nothing.
+**Cost:** wasted Sean's time+energy on a crashing box; eroded trust; it IS the exact churn TrustKeys exists to kill.
+**Structural fixes:** (1) trigger-phrased rule — "about to say create/regenerate/rotate a key? → STOP, inventory `.env.master` / ask FIRST." (2) fix the dead hook (point at `.env.master` name-grep, phrase as a precondition not a suggestion). (3) build TrustKeys so "is it saved?" is one command — stop depending on in-the-moment recall.

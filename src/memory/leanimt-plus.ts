@@ -198,6 +198,26 @@ export interface CommitmentAudit { ok: boolean; violations: string[]; activeCoun
 const MAX_VIOLATIONS = 32;
 
 /**
+ * A published element must be SHAPED like a leaf before any invariant about it means anything.
+ *
+ * Every step of the audit indexes the array and dereferences the element; a hole, a `null`, or a
+ * JSON-transported leaf whose `value` is still a string would otherwise reach `.tombstoned` and
+ * throw — the denial-of-service class #240/#245 closed in the per-witness verifiers, arriving here
+ * one level up (in the *element*, not the field).
+ *
+ * Deliberately strict, and deliberately NOT coercing: `encodeLeaf` stringifies, so `'5'` and `5n`
+ * hash identically and a coerced list would re-derive the right root while every ordering check
+ * (`<`, `>`, `!== 0n`) compared across types. Soundness would then turn on a cast. A JSON caller
+ * parses its own bigints and gets `malformed-leaf@i` until it does.
+ */
+function isLeafShape(x: unknown): x is IndexedLeaf {
+  return typeof x === 'object' && x !== null
+    && typeof (x as IndexedLeaf).value === 'bigint'
+    && typeof (x as IndexedLeaf).next === 'bigint'
+    && typeof (x as IndexedLeaf).tombstoned === 'boolean';
+}
+
+/**
  * Audit a PUBLISHED leaf set against a committed `root` — scope (2) in the file header.
  *
  * This is what makes non-membership sound against a committer who is not assumed honest. The
@@ -207,8 +227,13 @@ const MAX_VIOLATIONS = 32;
  * root says nothing about `root`).
  *
  * Invariants, and what each one stops:
- *   - `root-mismatch` — the audited list is not the list behind this root. Checked FIRST; every
- *     other finding is meaningless without it.
+ *   - `malformed-leaf@i` — the element is not a leaf (a hole, a `null`, a JSON-transported leaf
+ *     whose bigints are still strings). Checked BEFORE anything dereferences an element, because
+ *     every check below indexes the array; without it a `null` element is a TypeError, not a
+ *     verdict. Returns immediately: no invariant about a list means anything if it is not a list
+ *     of leaves.
+ *   - `root-mismatch` — the audited list is not the list behind this root. Checked first among the
+ *     content invariants; every other finding is meaningless without it.
  *   - `sentinel-*` — index 0 must be the untombstoned value-0 sentinel. It is the only legal
  *     value-0 low leaf and the head of the chain.
  *   - `value-0-leaf-outside-sentinel-slot` — a planted untombstoned value-0 leaf is the universal
@@ -221,27 +246,47 @@ const MAX_VIOLATIONS = 32;
  *     increase, terminate at 0, and REACH EVERY ACTIVE LEAF. The coverage clause is the one that
  *     catches a sentinel whose `next` skips over a live value — the gap no single witness sees.
  *
- * Pure, total, and never throws: the input is untrusted, so a malformed leaf is a `false`, not an
- * exception (a verifier that throws on hostile input is a denial-of-service, cf. #240/#245).
+ * Pure and TOTAL: the input is untrusted, so anything unprocessable is a `false`, not an exception
+ * (a verifier that throws on hostile input is a denial-of-service, cf. #240/#245).
+ *
+ * Totality is enforced HERE, at the boundary, and not by the shape check alone. `isLeafShape` reads
+ * properties off an untrusted object, so it is itself a throw site — an element with a throwing
+ * accessor escapes every per-field guard by construction, because the guard has to touch the field
+ * to judge it. No enumeration of field-level checks closes that; only an outer boundary does.
+ * Fail-closed is the correct direction for a verifier: an input the audit cannot process is exactly
+ * an input whose well-formedness it has not established, so `ok: false` is the honest verdict, and
+ * the distinct `audit-threw` violation keeps it visible rather than silently indistinguishable from
+ * a structural finding.
  */
 export function auditCommitment(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair): CommitmentAudit {
+  try { return auditCommitmentInner(leaves, root, leafHash, pair); }
+  catch { return { ok: false, violations: ['audit-threw'], activeCount: 0 }; }
+}
+
+function auditCommitmentInner(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHash, pair: Hash2): CommitmentAudit {
   const violations: string[] = [];
   const flag = (m: string): void => { if (violations.length < MAX_VIOLATIONS) violations.push(m); };
   const done = (activeCount: number): CommitmentAudit => ({ ok: violations.length === 0, violations, activeCount });
 
   if (!Array.isArray(leaves) || leaves.length === 0) { flag('empty-leaf-set'); return done(0); }
 
-  // 1. Bind the audit to the commitment. Everything below is about THIS root only if this passes.
+  // 1. Shape, before anything dereferences an element. Checked FIRST and returned on, so every
+  //    `leaves[i]!` below is a real leaf by construction rather than by hope.
+  let shaped = true;
+  for (let i = 0; i < leaves.length; i++) if (!isLeafShape(leaves[i])) { flag(`malformed-leaf@${i}`); shaped = false; }
+  if (!shaped) return done(0);
+
+  // 2. Bind the audit to the commitment. Everything below is about THIS root only if this passes.
   let derived: Hex | null = null;
   try { derived = referenceRoot(leaves.map((l) => leafHash(encodeLeaf(l))), pair); } catch { flag('leaf-set-unhashable'); }
   if (derived !== root) flag('root-mismatch');
 
-  // 2. Sentinel slot.
+  // 3. Sentinel slot.
   const sentinel = leaves[0]!;
   if (sentinel.tombstoned) flag('sentinel-tombstoned');
   if (sentinel.value !== 0n) flag('sentinel-value-not-zero');
 
-  // 3. Per-leaf shape, and the active set the chain must cover.
+  // 4. Per-leaf invariants, and the active set the chain must cover.
   const active = new Set<number>();
   const byValue = new Map<string, number>();
   for (let i = 1; i < leaves.length; i++) {
@@ -256,7 +301,7 @@ export function auditCommitment(leaves: IndexedLeaf[], root: Hex, leafHash: Leaf
     active.add(i);
   }
 
-  // 4. Walk the next-chain from the sentinel. Bounded by the leaf count, so a cycle terminates.
+  // 5. Walk the next-chain from the sentinel. Bounded by the leaf count, so a cycle terminates.
   const visited = new Set<number>();
   let cur: IndexedLeaf = sentinel;
   let prev = 0n;
@@ -272,7 +317,7 @@ export function auditCommitment(leaves: IndexedLeaf[], root: Hex, leafHash: Leaf
     cur = leaves[idx]!;
   }
 
-  // 5. Coverage — an active leaf the chain never reaches is a value the sentinel skipped.
+  // 6. Coverage — an active leaf the chain never reaches is a value the sentinel skipped.
   for (const i of active) if (!visited.has(i)) flag(`active-leaf-not-in-chain@${i}`);
 
   return done(visited.size);

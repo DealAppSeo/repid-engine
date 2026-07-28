@@ -207,6 +207,27 @@ describe('chain pathologies terminate and are reported', () => {
 });
 
 describe('the audit is total — hostile input yields a verdict, never a throw', () => {
+  /**
+   * Two levels of malformation, and the second is the one that was missing. Cases 3-6 corrupt a
+   * FIELD of a leaf that exists; cases 7-10 corrupt the ELEMENT itself. Every step of the audit
+   * dereferences `leaves[i]`, so a hole or a `null` reached `.tombstoned` and threw a TypeError —
+   * the denial-of-service class #240/#245 closed in the per-witness verifiers, arriving one level
+   * up. A suite that only malforms fields demonstrates totality exactly where it is not at risk.
+   */
+  const sparse: unknown[] = []; sparse.length = 2; sparse[1] = { value: 0n, next: 0n, tombstoned: false };
+  const elementLevel: unknown[] = [
+    [null],                                                              // element is null at the sentinel slot
+    [{ value: 0n, next: 0n, tombstoned: false }, null],                  // ...and past it
+    sparse,                                                              // a hole (present length, absent element)
+    [{ value: '0', next: '0', tombstoned: false }],                      // JSON round-trip: bigints arrive as strings
+  ];
+  /**
+   * The third level, and the one the shape check CANNOT reach. `isLeafShape` has to read `.value`
+   * to judge it, so an element with a throwing accessor throws inside the guard that exists to
+   * prevent throwing. No amount of per-field checking closes this — only the outer boundary does.
+   */
+  const throwingLeaf = (): unknown => new Proxy({}, { get() { throw new Error('hostile accessor'); } });
+
   const hostile: unknown[] = [
     [],
     null,
@@ -215,7 +236,60 @@ describe('the audit is total — hostile input yields a verdict, never a throw',
     [{ value: 0n, next: undefined, tombstoned: false }, { value: 3n, next: 0n, tombstoned: false }],
     [{ value: 0n, next: 'not-a-bigint', tombstoned: false }],
     [{ value: 0n, next: 0n, tombstoned: false }, {}],
+    ...elementLevel,
+    [throwingLeaf()],
+    [{ value: 0n, next: 0n, tombstoned: false }, throwingLeaf()],
   ];
+
+  it('the hostile set actually exercises element-level malformation, not only field-level', () => {
+    // Guard on the guard: without this, deleting `elementLevel` leaves a green suite that proves
+    // nothing about the case that threw.
+    expect(hostile).toEqual(expect.arrayContaining(elementLevel));
+    expect(elementLevel.length).toBeGreaterThanOrEqual(4);
+    expect(hostile.some((h) => Array.isArray(h) && h.some((e) => e === null || e === undefined))).toBe(true);
+  });
+
+  it('element-level malformation is DIAGNOSED, not merely survived', () => {
+    /**
+     * The two guards are not interchangeable, and asserting only `ok === false` cannot tell them
+     * apart: with the outer boundary in place, deleting the shape check turns `malformed-leaf@1`
+     * into `audit-threw` and every `ok === false` assertion still passes. Naming the violation is
+     * what pins the shape check — and the JSON case is the one it alone can reach, because a
+     * string-valued leaf never throws at all; it re-derives a plausible root and then compares
+     * across types, which the boundary would let through as a structural verdict.
+     */
+    expect(audit([null] as unknown as IndexedLeaf[], '0xdeadbeef').violations).toEqual(['malformed-leaf@0']);
+    expect(audit([{ value: 0n, next: 0n, tombstoned: false }, null] as unknown as IndexedLeaf[], '0xdeadbeef').violations)
+      .toEqual(['malformed-leaf@1']);
+    expect(audit(sparse as IndexedLeaf[], '0xdeadbeef').violations).toContain('malformed-leaf@0');
+  });
+
+  it('the throwing-accessor fixture is genuinely hostile — reading its shape DOES throw', () => {
+    // Without this, the case below passes against a fixture that never threatened anything, and
+    // the boundary it exists to pin could be deleted with the suite still green.
+    const el = throwingLeaf();
+    expect(() => typeof (el as { value: unknown }).value).toThrow('hostile accessor');
+  });
+
+  it('an element whose property access throws yields a verdict, not an exception', () => {
+    // The shape check cannot catch this: it has to touch `.value` to judge it, so it throws inside
+    // the guard. Only the outer boundary makes the documented totality claim true.
+    const a = audit([throwingLeaf()] as IndexedLeaf[], '0xdeadbeef');
+    expect(a.ok).toBe(false);
+    expect(a.violations).toEqual(['audit-threw']);
+    expect(a.activeCount).toBe(0);
+  });
+
+  it('a JSON-transported list is REJECTED, not coerced — soundness must not turn on a cast', () => {
+    // `encodeLeaf` stringifies, so '5' and 5n hash identically: a coerced list would re-derive the
+    // correct root while every ordering comparison ran across types. The caller parses its bigints.
+    const t = new LeanIMTPlus(opts);
+    t.insert(5n);
+    const overTheWire = JSON.parse(JSON.stringify(t.leafSet(), (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
+    const a = audit(overTheWire, t.root());
+    expect(a.ok).toBe(false);
+    expect(a.violations).toContain('malformed-leaf@0');
+  });
 
   it.each(hostile.map((h, i) => [i, h]))('case %i returns ok=false without throwing', (_i, h) => {
     let out: ReturnType<typeof audit> | undefined;
