@@ -18,7 +18,7 @@
  */
 import {
   LeanIMTPlus, verifyMembership,
-  type InclusionWitness, type NonMembershipWitness, type Hex, type LeafHash,
+  type InclusionWitness, type NonMembershipWitness, type IndexedLeaf, type Hex, type LeafHash,
 } from './leanimt-plus';
 import { poseidon2LeafHash, poseidon2PairHash } from '../zkp/poseidon2-leaf';
 import type { Hash2 } from './proof-carrying-index';
@@ -92,6 +92,20 @@ export class ProofCarryingMemory {
 
   root(): Hex { return this.tree.root(); }
   get(value: string): MemoryEntry | undefined { return this.store.get(value); }
+
+  /**
+   * The committed leaf set — the AUDIT'S INPUT, and the only thing that makes non-membership sound
+   * against a committer who is not assumed honest (`auditCommitment`, scope 2).
+   *
+   * Until this existed the memory exposed `root()` and nothing else, so a peer could obtain a root
+   * but never the list behind it: the whole-commitment audit was reachable only from tests, and the
+   * deployed non-membership guarantee stayed scope-1 — sound only *relative to* a well-formed
+   * commitment that nothing could check. Defensive copy (`LeanIMTPlus.leafSet` copies each leaf), so
+   * a published list cannot be aliased back into the tree.
+   *
+   * Leaks no content: leaves carry the derived value only, and content lives off-index in `store`.
+   */
+  leafSet(): IndexedLeaf[] { return this.tree.leafSet(); }
 
   /** Membership witness for an ACTIVE entry (throws if revoked/absent — used by the abstain path). */
   membershipWitness(value: string): InclusionWitness { return this.tree.membershipProof(BigInt(value)); }
