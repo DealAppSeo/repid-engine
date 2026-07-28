@@ -9,7 +9,7 @@
  */
 import { AbiCoder } from 'ethers';
 import { ProofCarryingMemory, type MemoryEntry } from '../src/memory/proof-carrying-memory';
-import { publishMemory, verifyPublication, type MemoryPublication } from '../src/memory/memory-publication';
+import { publishMemory, verifyPublication, type MemoryPublication, type PublicationExpectation } from '../src/memory/memory-publication';
 import {
   buildMemoryRootAttest, decodeAnchorFields, anchorMemoryRoot,
   MEMORY_ROOT_PROOF_TYPE, type AnchorFields, type AttestFn,
@@ -235,6 +235,69 @@ describe('totality and liveness on untrusted input', () => {
     expect(v.ok).toBe(false);
     expect(v.audit.violations.join(',')).toContain('leaf-set-too-large');
     expect(ms).toBeLessThan(2000);
+  });
+});
+
+describe('the epoch clause is a term of the verdict, not just a reported reason', () => {
+  /**
+   * Found by an independent probe (Beat 55), not by this suite's author. The clause is documented as
+   * refusing a publication that cannot be placed in time, and for a FRACTIONAL epoch it happens to:
+   * `BigInt(1.5)` would throw, so the anchor guard short-circuits to `anchor-epoch-mismatch` and the
+   * verdict falls out of the anchor half. For a NEGATIVE epoch nothing short-circuits — `BigInt(-5)`
+   * is a fine bigint — so an anchor carrying `proofId: -5n` binds cleanly and the publication used to
+   * verify `ok: true` while carrying `epoch-not-a-safe-integer` in its own reasons.
+   */
+  const anchorAt = (root: string, proofId: bigint): AnchorFields =>
+    ({ agentId: AGENT, tier: TIER, merkleRoot: root, repidSnapshot: 1200n, proofType: MEMORY_ROOT_PROOF_TYPE, proofId });
+
+  it.each([-1, -5, -9007199254740991])('a negative epoch (%p) is refused — and the other two halves PASS, so only this clause can refuse it', (epoch) => {
+    const m = freshMemory();
+    const pub: MemoryPublication = { epoch, root: m.root(), leaves: m.leafSet() };
+    const anchor = anchorAt(pub.root, BigInt(epoch));
+
+    // The fixture demonstrates its own hostility: nothing else here is wrong.
+    expect(auditCommitment(pub.leaves, pub.root).ok).toBe(true);          // well-formed
+    expect(legacyThreeFieldMatch(anchor, pub.root)).toBe(true);           // the anchor is the agent's own
+
+    const v = verifyPublication(pub, { anchor, agentId: AGENT, tier: TIER });
+    expect(v.anchorBound).toBe(true);      // the anchor DID bind — it is the time that is not a time
+    expect(v.audit.ok).toBe(true);         // and the list IS a well-formed commitment
+    expect(v.reasons).toContain('epoch-not-a-safe-integer');
+    expect(v.ok).toBe(false);              // ← the clause has to carry this on its own
+  });
+
+  it('a fractional epoch is refused too (the anchor half catches this one; the clause must not rely on that)', () => {
+    const m = freshMemory();
+    const pub: MemoryPublication = { epoch: 1.5, root: m.root(), leaves: m.leafSet() };
+    const v = verifyPublication(pub, { anchor: anchorAt(pub.root, 0n), agentId: AGENT, tier: TIER });
+    expect(v.ok).toBe(false);
+    expect(v.reasons).toEqual(expect.arrayContaining(['epoch-not-a-safe-integer', 'anchor-epoch-mismatch']));
+  });
+
+  it('INVARIANT over every case in this suite: ok === true implies reasons is empty', () => {
+    const m = freshMemory();
+    const good = publishMemory(m, EPOCH);
+    const cases: Array<[MemoryPublication, PublicationExpectation]> = [
+      [good, { anchor: anchorFor(good), agentId: AGENT, tier: TIER }],
+      [good, {}],
+      [good, { anchor: anchorFor(good, { proofType: 'POSTCARD' }) }],
+      [good, { anchor: anchorFor(good, { proofId: 3n }) }],
+      [good, { anchor: anchorFor(good, { merkleRoot: '0x' + 'ef'.repeat(32) }) }],
+      [good, { anchor: anchorFor(good, { agentId: 'someone-else' }), agentId: AGENT }],
+      [{ ...good, epoch: -1 }, { anchor: anchorAt(good.root, -1n) }],
+      [{ ...good, epoch: 1.5 }, { anchor: anchorAt(good.root, 0n) }],
+      [{ ...good, root: '0x' + 'cd'.repeat(32) }, { anchor: anchorAt('0x' + 'cd'.repeat(32), BigInt(EPOCH)) }],
+      [{ ...good, leaves: [] }, { anchor: anchorFor(good) }],
+    ];
+    let okCount = 0;
+    for (const [pub, expectation] of cases) {
+      const v = verifyPublication(pub, expectation);
+      if (v.ok) okCount++;
+      expect({ case: JSON.stringify(expectation.anchor?.proofType ?? null), ok: v.ok, empty: v.reasons.length === 0 })
+        .toEqual({ case: JSON.stringify(expectation.anchor?.proofType ?? null), ok: v.ok, empty: v.ok ? true : v.reasons.length === 0 });
+      if (v.ok) expect(v.reasons).toEqual([]);
+    }
+    expect(okCount).toBe(1);   // exactly the honest case — so the invariant is not held vacuously
   });
 });
 

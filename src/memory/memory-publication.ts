@@ -88,7 +88,17 @@ const MAX_REASONS = 32;
  *                                      means anything otherwise.
  *   - `epoch-not-a-safe-integer`     — the epoch is compared to a `uint64` as a bigint, and
  *                                      `BigInt(1.5)` throws. A publication that cannot be placed in
- *                                      time is refused rather than coerced into a time.
+ *                                      time is refused rather than coerced into a time. This clause
+ *                                      is a TERM OF `ok` in its own right, not merely a reported
+ *                                      reason: for a FRACTIONAL epoch the anchor comparison happens
+ *                                      to refuse too (`BigInt` would throw, so the guard short-
+ *                                      circuits to a mismatch), but for a NEGATIVE one it does not —
+ *                                      `BigInt(-5)` is a perfectly good bigint, so an anchor carrying
+ *                                      `proofId: -5n` binds cleanly and the publication verified
+ *                                      `ok: true` while carrying this very reason. A clause that is
+ *                                      computed, named, and then not read is the exact defect this
+ *                                      module was written to close on `proofType`/`proofId`; it is
+ *                                      not permitted one level up in the module's own verdict.
  *   - `commitment-audit-failed`      — the leaf set is not a well-formed commitment to this root.
  *                                      Delegated whole to `auditCommitment`; its findings are
  *                                      carried in `audit.violations`, not duplicated here.
@@ -138,9 +148,8 @@ function verifyPublicationInner(
   if (typeof pub !== 'object' || pub === null || typeof pub.root !== 'string' || !Array.isArray(pub.leaves)) {
     return { ok: false, anchorBound: false, reasons: ['publication-malformed'], audit: noAudit };
   }
-  if (typeof pub.epoch !== 'number' || !Number.isSafeInteger(pub.epoch) || pub.epoch < 0) {
-    flag('epoch-not-a-safe-integer');
-  }
+  const epochOk = typeof pub.epoch === 'number' && Number.isSafeInteger(pub.epoch) && pub.epoch >= 0;
+  if (!epochOk) flag('epoch-not-a-safe-integer');
 
   // Well-formedness. Delegated whole — this module adds no invariant of its own about leaves.
   const opts = expect.maxLeaves === undefined ? {} : { maxLeaves: expect.maxLeaves };
@@ -162,7 +171,14 @@ function verifyPublicationInner(
     anchorBound = reasons.length === before;
   }
 
-  return { ok: audit.ok && anchorBound, audit, anchorBound, reasons };
+  // `anchorBound` deliberately stays a report of the anchor↔publication relation as checked: with a
+  // negative epoch the anchor really does carry the matching `proofId`, so the binding held — it is
+  // the TIME that is not a time. The verdict is where that has to bite, so the terms are spelled out.
+  // The trailing `reasons.length === 0` is the structural half: it makes every clause above, and
+  // every clause a later beat adds, verdict-bearing by construction rather than by remembering to
+  // wire it in. Fail-closed is the right default for a term nobody has thought about yet.
+  const ok = audit.ok && anchorBound && epochOk && reasons.length === 0;
+  return { ok, audit, anchorBound, reasons };
 }
 
 /** Re-exported so a caller wiring a publication channel does not have to know where the cap lives. */
