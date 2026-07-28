@@ -1,0 +1,81 @@
+# HyperDAG autonomous build-loop — FULLY CLOUD (zero local footprint).
+# Runs ONE "beat" of the loop inside GitHub Actions. Setup: docs/CLOUD_BUILD_LOOP_SETUP.md
+#
+# BEFORE ENABLING — add two repo secrets (Settings → Secrets and variables → Actions):
+#   ANTHROPIC_API_KEY  — Anthropic API key. THIS BILLS: the loop calls Claude each run.
+#   LOOP_GH_PAT        — a fine-grained PAT (this repo: Contents = Read/Write, Pull requests = Read/Write).
+#                        A PAT (not the default GITHUB_TOKEN) is REQUIRED so the PRs the loop opens
+#                        actually trigger the CI / crosscheck / gitleaks checks (github-actions[bot]
+#                        pushes do NOT trigger downstream workflows — a GitHub anti-recursion rule).
+#
+# Test with "Run workflow" (workflow_dispatch) FIRST. Once a beat looks good, uncomment the schedule
+# below AND disable the LOCAL scheduled task, so the loop never runs in two places at once.
+name: hyperdag-build-loop-cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: 'Optional focus/override for this beat'
+        required: false
+  # schedule:                 # ← uncomment for hands-off hourly (after a good dispatch test)
+  #   - cron: '7 * * * *'     #   :07 every hour (UTC) — matches the old local loop
+
+concurrency:
+  group: hyperdag-build-loop-cloud
+  cancel-in-progress: false   # never interrupt a beat mid-flight
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30       # hard per-beat cap (cost + runaway guard)
+    steps:
+      - name: Checkout (PAT so opened PRs trigger CI)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.LOOP_GH_PAT }}
+
+      - name: Git identity
+        run: |
+          git config user.name "hyperdag-loop[bot]"
+          git config user.email "loop@users.noreply.github.com"
+
+      - name: Run one autonomous beat
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.LOOP_GH_PAT }}
+          prompt: |
+            You are the HyperDAG autonomous build-loop, executing ONE beat inside GitHub Actions
+            (fully cloud — nothing runs on Sean's machine). Working repo = this checkout.
+
+            FIRST read: reports/2026-07-25/AUTONOMOUS_LOOP_CONTRACT.md, the last 2 beats of
+            reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md, and reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md.
+
+            PRIORITY (Sean 2026-07-27): patent-proof first (filing imminent); favor the work that touches
+            the MOST SURFACES ("do more with less"). Optional extra focus this run: ${{ github.event.inputs.focus }}
+
+            THE BEAT:
+              (a) INDEPENDENTLY verify the prior beat by reading its diff + its CI conclusion (gh) — never rubber-stamp.
+              (b) advance the highest-priority OPEN backlog item on a NEW branch cut from origin/main.
+              (c) you are in the cloud runner — you MAY run `npm install --legacy-peer-deps` + `tsc`/`npm test`
+                  here to sanity-check (it costs runner minutes, not Sean's box); the required CI is the authority.
+              (d) push the branch, open a PR, and — ONLY if SAFE-CLASS (docs / shadow-inert / additive-tested) —
+                  run `gh pr merge <n> --auto --squash` WHILE its checks are still pending, so GitHub lands it on green.
+              (e) append a Beat entry to reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md and push it.
+
+            HARD LINES: verify before asserting ([V] not [R]); SHADOW-FIRST — NEVER flip Sean-gated enable flags
+            (ENGINE_LLM_PROXY, ROUTER_STRICT_COST_ORDER, HAL_GROUNDING_MODE=enforce, REPID_PURPOSE_GATE_V3,
+            real-money X402/STAKE); no secrets in code; NEVER an immediate/manual merge (only --auto on safe-class);
+            never bulk-delete trinity_tasks; surface to Sean (in the ledger) ONLY a ready-merge-needing-him, a
+            secret/infra flip, or a real fork. Keep this beat bounded and STOP when it is done.
+          claude_args: |
+            --max-turns 40
+            --model claude-sonnet-5
+            --allowedTools Edit,Read,Write,Bash,Glob,Grep
