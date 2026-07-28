@@ -324,3 +324,60 @@ describe('what the audit buys: after it passes, the cheap per-witness proofs are
     }
   });
 });
+
+/**
+ * Liveness — a third property, and the first two do not imply it.
+ *
+ * The Beat-52 boundary bought "never throws". It did not bound the WORK: `auditCommitment` reads a
+ * `length` it does not control, and every clause is O(n) in it. `new Array(4e9)` costs the
+ * publisher one integer (sparse, no backing store) and the audit ~5 minutes of scanning a verdict
+ * already decided at index 0 — no exception, no result. That is the same denial-of-service class
+ * #240/#245 closed for the per-witness verifiers, surviving as a hang instead of a throw.
+ *
+ * These cases assert TIME, not just the violation string. A verdict-only assertion cannot tell a
+ * bounded audit from an unbounded one, which is precisely the weakness the Beat-52 mutation battery
+ * found in the totality tests. Each fixture also demonstrates its own hostility first — the
+ * unbounded path is measured via `maxLeaves` — so the cap is shown to be load-bearing, not assumed.
+ */
+describe('the audit terminates on a length it does not control', () => {
+  const cheapAudit = (ls: unknown[], max?: number) =>
+    auditCommitment(ls as IndexedLeaf[], '0xdeadbeef', leaf, pair, max === undefined ? {} : { maxLeaves: max });
+
+  it('the unbounded path really is expensive per element (fixture hostility, measured)', () => {
+    const n = 4_000_000;
+    const t0 = Date.now();
+    const a = cheapAudit(new Array(n), Number.MAX_SAFE_INTEGER);   // cap deliberately lifted
+    const elapsed = Date.now() - t0;
+    expect(a.ok).toBe(false);
+    expect(a.violations).toContain('malformed-leaf@0');            // decided at index 0 …
+    expect(elapsed).toBeGreaterThan(20);                           // … and still scanned all 4e6
+  });
+
+  it('a sparse array at the maximum JS length is refused before a single element is touched', () => {
+    const t0 = Date.now();
+    const a = cheapAudit(new Array(4_294_967_294));                // O(1) for the publisher
+    const elapsed = Date.now() - t0;
+    expect(a).toMatchObject({ ok: false, activeCount: 0 });
+    expect(a.violations).toEqual(['leaf-set-too-large@4294967294>16384']);
+    expect(a.violations).not.toContain('malformed-leaf@0');        // the size clause ran FIRST
+    expect(elapsed).toBeLessThan(2000);                            // ~5 minutes before the cap
+  });
+
+  it('a materialised over-cap list is refused too, and costs nothing to refuse', () => {
+    const many: IndexedLeaf[] = [];
+    for (let i = 0; i <= 16384; i++) many.push({ value: 0n, next: 0n, tombstoned: false });
+    expect(cheapAudit(many).violations).toEqual(['leaf-set-too-large@16385>16384']);
+  });
+
+  it('the bound is exact, and raising it deliberately still audits honestly', () => {
+    const t = new LeanIMTPlus(opts);
+    [3n, 5n].forEach((v) => t.insert(v));
+    const ls = t.leafSet();                                        // sentinel + 2 = 3 leaves
+    expect(ls.length).toBe(3);
+
+    expect(auditCommitment(ls, t.root(), leaf, pair, { maxLeaves: 2 }).violations)
+      .toEqual(['leaf-set-too-large@3>2']);                        // n > max  → refused
+    expect(auditCommitment(ls, t.root(), leaf, pair, { maxLeaves: 3 }))
+      .toMatchObject({ ok: true, violations: [], activeCount: 2 }); // n === max → allowed, and CLEAN
+  });
+});
