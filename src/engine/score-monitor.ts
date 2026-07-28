@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { fireWebhook } from '../services/webhook';
+import { buildAgentLogRow } from './agent-log-row';
 
 const lastScores = new Map<string, number>();
 
@@ -12,10 +13,11 @@ export async function scoreMonitor() {
       if (oldScore !== undefined && Math.abs(agent.current_repid - oldScore) > 100) {
         const delta = agent.current_repid - oldScore;
         fireWebhook('repid.score_changed', { agent_id: agent.id, old_score: oldScore, new_score: agent.current_repid, delta });
-        const { error } = await db.from('trinity_agent_logs').insert({
+        const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({
           action: 'repid_score_changed',
+          agent: String(agent.id),
           metadata: { agent_id: agent.id, old_score: oldScore, new_score: agent.current_repid, delta }
-        });
+        }));
     if (error) console.error(error);
       }
       lastScores.set(agent.id, agent.current_repid);

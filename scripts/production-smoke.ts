@@ -94,7 +94,7 @@ async function runSmoke(): Promise<TestResult[]> {
     {
       path: '/api/v1/marketplace/browse', method: 'GET', expected: [200],
       bodyMustMatch: /"listings"\s*:\s*\[/,
-      notes: 'PUBLIC keyless TrustMarket browse — 500s while marketplace_listings is absent from prod (scripts/test-schema/marketplace.sql is Sean-gated)'
+      notes: 'PUBLIC keyless TrustMarket browse — GREEN since 2026-07-27: marketplace_listings + marketplace_offers were created in prod (scripts/prod-schema/2026-07-27_marketplace_p0.sql). This expectation was RED for weeks and was deliberately never loosened to make it pass; it is the check that carried the outage.'
     }
   ];
 

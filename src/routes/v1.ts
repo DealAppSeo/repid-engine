@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
+import { buildAgentLogRow } from '../engine/agent-log-row';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { fireWebhook } from '../services/webhook';
@@ -199,15 +200,16 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
   const result = await verifyProofCryptographically(proofRow, req.body);
 
   // Preserve logging/webhook shape for downstream consumers
-  const { error: logError } = await db.from('trinity_agent_logs').insert({
+  const { error: logError } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({
     action: 'zkp_proof_verified',
+    agent: agent_id,
     metadata: {
       ...result,
       agent_id,
       tier,
       proof_row_id: proofRow.id,
     },
-  });
+  }));
   if (logError) console.error(logError);
 
   fireWebhook('proof.verified', {
@@ -248,7 +250,7 @@ router.post('/dag/verify-node', async (req: Request, res: Response) => {
 
   const node_hash = createHash('sha256').update(`${node_id}${parent_hash}${agent_id}${JSON.stringify(payload)}`).digest('hex');
   
-  const { error } = await db.from('trinity_agent_logs').insert({ action: 'dag_node_verified', metadata: { node_id, parent_hash, agent_id } });
+  const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({ action: 'dag_node_verified', agent: agent_id, metadata: { node_id, parent_hash, agent_id } }));
     if (error) console.error(error);
   fireWebhook('dag.node_verified', { node_id, parent_hash, agent_id, node_hash });
 
@@ -291,7 +293,7 @@ router.post('/batch/prove', async (req: Request, res: Response) => {
     return { ...r, proof: result.proof, proof_source: result.proof_source, timestamp };
   }));
 
-  const { error } = await db.from('trinity_agent_logs').insert({ action: 'zkp_batch_generated', metadata: { batch_size: requests.length } });
+  const { error } = await db.from('trinity_agent_logs').insert(buildAgentLogRow({ action: 'zkp_batch_generated', agent: 'repid-engine', metadata: { batch_size: requests.length } }));
     if (error) console.error(error);
 
   res.json({ batch_id: `batch_${Date.now()}`, proofs, processed_at: new Date().toISOString(), total: proofs.length });
