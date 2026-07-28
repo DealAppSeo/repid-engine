@@ -33,6 +33,7 @@
 | 16 | **P5 ZK inclusion/property proofs** for sensitive/health data (domain-scoped nullifiers) | #1/#3 | P5 | CC | property proven w/o revealing content; PHI off Trinity prod | LATER (health vertical) |
 | 17 | **Verifiable ranking** — VeriRAG sort-bypass / V3DB multiset / zkRAG PQ-checkers | #3 | P4+ | CC | top-k correctness proof; ANFIS-gated, offline/high-stakes only | GATED (needs committed vector index) |
 | 18 | **KoalaBear A/B** vs BabyBear on the LeanIMT+/non-membership AIRs | — | — | CC+XC | measured prover-time/AIR-width delta; Invariant-1/5 + Sean GO to switch | GATED |
+| 19 | **ANFIS COMPUTE-PLACEMENT axis (resource-aware routing)** — autodetect resource pressure (RAM/CPU/queue depth/free-tier quota) → route heavy jobs (build/test, tsc, jest, ZK proving, HAL verification) to the cheapest CAPABLE compute (local → GitHub Actions/Codespaces → cheap VPS/spot → proving service), the SAME pattern as the LLM cost/capability router. Sean's idea 2026-07-27. | #2 | — | GA/CC | policy picks placement by measured cost/capability/availability; measured $ + wall-clock vs always-local | LATER (PRODUCT fabric only). ⚠ NOT a dev-machine fix — CI/Codespaces already solve the laptop today (RULE-10 arbitrage-first); do not build a bespoke router to fix local dev. |
 
 ## Verify-before-depend (post-cutoff claims to confirm when each item activates)
 WHIR PR #1919 −13/−22% numbers · MoE routing papers (MoSE/AdaMoE/MoE++/RouteMoA) · PAGE-RAG · zkRAG/VeriRAG/V3DB benchmark seconds. (LeanIMT+, zkRAG, WHIR, V3DB, VeriRAG existence already verified 2026-07-26.)
