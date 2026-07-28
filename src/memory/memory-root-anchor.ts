@@ -14,9 +14,57 @@
  * offline. Off-peak batching (isOffPeakHour/selectOffPeakBatch) is the ANFIS SCHEDULE
  * axis: anchoring is non-urgent → defer to low-gas windows.
  */
+import { AbiCoder } from 'ethers';
 import { attestProof, redTeamPayloadMatch, type ProofAttestInput } from '../services/eas-attestation-service';
 
 export const MEMORY_ROOT_PROOF_TYPE = 'PCR_MEMORY_ROOT';
+
+/**
+ * The full decoded `constitutional-compliance-v1` payload — ALL SIX fields.
+ *
+ * Six are written; the existing verification path (`redTeamPayloadMatch`) decodes six and compares
+ * three (agentId, tier, merkleRoot), discarding `proofType` and `proofId`. That is sound for what it
+ * was written to do — red-team a merkle root against its DB row — and it is exactly one field short
+ * of what a memory-root anchor needs, twice over:
+ *
+ *   • `proofType` is the DOMAIN. Without it, an attestation of any other kind (the encoder's default
+ *     is `'POSTCARD'`) carrying the same agent/tier/root verifies as a memory-root anchor.
+ *   • `proofId` is the EPOCH — the field `buildMemoryRootAttest` deliberately carries so a root can
+ *     be placed in time. Without it, an anchor made at epoch M satisfies a publication claiming
+ *     epoch N. Freshness is the property the epoch exists to provide, and it was written but never
+ *     read.
+ *
+ * So this type exists to make all six available to a checker that wants them. See
+ * `verifyPublication` in `memory-publication.ts`, which is the checker that does.
+ */
+export interface AnchorFields {
+  agentId: string;
+  tier: string;
+  merkleRoot: string;
+  repidSnapshot: bigint;
+  proofType: string;
+  proofId: bigint;
+}
+
+/** ABI types of `PROOF_SCHEMA_DEF`, in order. Kept adjacent to the decoder that consumes them. */
+const ANCHOR_ABI_TYPES = ['string', 'string', 'bytes32', 'uint256', 'string', 'uint64'];
+
+/**
+ * Decode an on-chain attestation's `data` blob into all six fields. Pure and TOTAL: the input comes
+ * off-chain from an untrusted `getAttestation` response, so a truncated, mis-schema'd, or non-hex
+ * blob yields `null` — never a throw. `null` means "not a payload of this schema", which a caller
+ * must treat as a failed binding, not as an absent constraint.
+ */
+export function decodeAnchorFields(dataHex: string): AnchorFields | null {
+  if (typeof dataHex !== 'string' || !/^0x[0-9a-fA-F]*$/.test(dataHex)) return null;
+  try {
+    const d = AbiCoder.defaultAbiCoder().decode(ANCHOR_ABI_TYPES, dataHex);
+    return {
+      agentId: String(d[0]), tier: String(d[1]), merkleRoot: String(d[2]),
+      repidSnapshot: BigInt(d[3]), proofType: String(d[4]), proofId: BigInt(d[5]),
+    };
+  } catch { return null; }
+}
 
 export interface MemoryRootAnchorParams {
   agentId: string;
