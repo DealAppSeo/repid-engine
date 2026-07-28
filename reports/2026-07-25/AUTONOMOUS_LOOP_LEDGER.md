@@ -2346,3 +2346,48 @@ throwing-getter   OLD  THREW Error: boom      ← and NEW threw too
 7. **Carried unchanged:** Patent #1 RTP gap (c) — one real Base Sepolia anchor with the funded attester · #231 and #216 conflicting · branch protection requires only `test` · `PROOF_ENQUEUE_HAL_MODE=enforce` · the dead `jest` key in `package.json` · `repid_gate_shadow_log` absent from prod.
 
 **Next beat:** (1) independently verify `de8ff0c` — I wrote both the fix and the battery that graded it. (2) The pipeline trusted-root wiring, **starting from the schema** (which root, stored where, written by whom) — carried from Beats 50 and 51 and still the right next build; it is the last structural piece between the audit and anything in production consuming it. (3) `auditCommitment` gates nothing today; wiring it into `hal-grounding` is a behavior change and needs a measurement packet before it moves. (4) If #34 merges, resume T12.
+
+## Beat 53 — 2026-07-28 · "never throws" was verified and holds; it just is not "terminates", and the cheap fix for that was wrong
+
+**STEP 1 — independently verified Beat 52's deliverable (`de8ff0c` on #250) by reading the diff and reasoning about the construction [V]. CI green on that commit: `test` / `crosscheck` / `zkp-vault` / `gitleaks` all pass, `mergeable=CLEAN`.**
+
+- **Both guards are correctly placed and the ordering is right.** `isLeafShape` runs before anything dereferences an element (a hole is `undefined` → refused; `null` → refused; a JSON-transported leaf → `typeof 'string'` → refused), and it returns before the root derivation, so every later `leaves[i]!` is a real leaf by construction. The outer boundary catches the one class the shape check cannot — a throwing accessor — and is **fail-closed**, so no hostile input can produce a false `ok: true`. Refusing to coerce is right for the reason the source gives: `encodeLeaf` stringifies, so a coerced `'5'` would re-derive the correct root while every ordering comparison ran across types.
+- **The claim I could not confirm is the one in the doc comment.** It says *pure, total, never throws*. Totality and **termination** are different properties, and the boundary buys only the first. `auditCommitment` reads a `length` it does not control.
+
+**STEP 2 — reproduced the gap rather than asserting it, and the measurement changed the fix.**
+
+```
+sparse len=2e6   91ms    sparse len=2e7  1039ms    sparse len=2e8  13778ms     (~69ns/element, linear)
+```
+
+- `new Array(4_294_967_294)` is **O(1) for the publisher** (sparse, no backing store) and **~5 minutes inside the audit** — no exception, no result. The verdict is fixed at index 0 (`malformed-leaf@0`, `shaped=false`, `return done(0)`); every iteration after it is waste. This is the **#240/#245 denial-of-service class surviving as a hang instead of a throw** — the half that "never throws" does not address.
+- **[X] The obvious fix is the wrong one, and I was one edit from writing it.** Early-exiting the shape scan looks like the closure. Measuring the **honest** path killed it: a well-formed audit costs **~250 µs/leaf** (n=256 61 ms · n=1024 276 ms · n=4096 997 ms · n=16384 4.4 s), dominated by the Poseidon2 root re-derivation — **3,600× the per-element cost of the scan**. The expensive path is the *legitimate* one, so bounding the scan bounds nothing. Only bounding `n` **before any work** bounds the work.
+- **`MAX_AUDIT_LEAVES = 16384`, checked first** — before the shape scan, before a single hash. Explicitly **not** a property of the construction: a wall-clock budget (~4 s per root), and the constant is **traceable to those numbers rather than invented**. Overridable via `opts.maxLeaves`. Stated limit written into the source: it bounds the **number** of element accesses, not the cost of each — an accessor doing unbounded work per read is beyond any in-process cap. After: the 2e8 case goes **13,778 ms → 0 ms**, and the 4.29e9 case that was previously unreachable is refused instantly.
+
+**STEP 3 — the mutation battery, run against tests written to assert TIME.**
+
+A verdict-only assertion cannot distinguish a bounded audit from an unbounded one — the exact weakness the Beat-52 battery found in the totality tests — so the new cases assert elapsed wall-clock, and each fixture **demonstrates its own hostility first** (the unbounded path is measured through `maxLeaves` before the bounded one is asserted).
+
+- **Mutant A — size clause deleted: HUNG the runner past 120 s.** Not a clean failure: a synchronous scan **is not interruptible by jest's own timeout**. That is the sharpest available statement of the bug.
+- **Mutant B — clause moved after the shape scan: HUNG past a 75 s watchdog.** Ordering is load-bearing, not cosmetic.
+- **Mutant C — `>` relaxed to `>=`: 1 failed.** Bound exactness pinned.
+- Source restored from a byte-compared golden copy after each mutant (`cmp -s` clean, re-verified after the timeout kill). Bounded local run per the contract: 8 memory/grounding suites, **91/91**; `tsc --noEmit` clean on both touched files.
+- **→ pushed to repid-engine #250 as `88c4a3e`.** NOT auto-merged — I wrote it, and it is a soundness surface.
+
+**STEP 4 — NO T12 DISPATCH. Fourteenth beat of the hold** — [V sql] `claude-sprint` tasks: 54 done, 4 shadow_reject, **0 pending, 0 in flight, max claim_count 0**. `trinity-symphony-shared` #34 (the claim cap) still OPEN and MERGEABLE.
+
+**MISTAKES / process notes.**
+- **The measurement is the whole beat.** I had the wrong fix drafted (early-exit the scan) and it would have shipped as a plausible closure while leaving a well-formed 1M-leaf list — ~4 minutes of honest work — completely unbounded. **A fix aimed at the hostile path when the cost lives in the honest path is a fix aimed at the wrong number.**
+- **Two mutants failed by hanging, which is not a normal test failure.** An unbounded synchronous verifier degrades the test framework itself: the timeout eventually kills the *job*, not the *test*. Worth remembering when a CI run mysteriously times out.
+- **Weaker-property count: seventeen in seventeen beats.** This one's shape: **two properties collapsed into one word.** "Total" was doing duty for both *returns a value* and *returns at all*, and only the first was ever demonstrated.
+
+**Open for Sean (rule-4):**
+1. **`trinity-symphony-shared` #34 — passed independent verification eight rounds ago, still open. Merging it ends fourteen beats of T12 idle.** Unchanged, and still the single highest-leverage merge available.
+2. **repid-engine #250** — the whole-commitment audit, now with a liveness bound (`88c4a3e`). Patent #1 material: the claim boundary for provable retraction. Not auto-merged (I wrote it).
+3. **repid-engine #247** — independently verified green in Beat 51. Additive to #250, no conflict, no ordering constraint.
+4. **repid-engine #249** — cloud build-loop scaffold, green and inert; needs two GitHub secrets, and it is the standing fix for two cron instances sharing one checkout.
+5. **#243, #242, #245 open, green, unmerged** — Patent #1 / grounding material; #245 gates `HAL_GROUNDING_MODE=enforce`.
+6. **#225 + #233 — merge order still matters** (#225 alone ships the unpinned `regretAtPrice` column).
+7. **Carried unchanged:** Patent #1 RTP gap (c) — one real Base Sepolia anchor with the funded attester · #231 and #216 conflicting · branch protection requires only `test` · `PROOF_ENQUEUE_HAL_MODE=enforce` · the dead `jest` key in `package.json` · `repid_gate_shadow_log` absent from prod.
+
+**Next beat:** (1) independently verify `88c4a3e` — I wrote the bound, the tests, and the battery that graded them; **the constant especially deserves a second opinion, since a cap set too low silently refuses honest lists.** (2) The pipeline trusted-root wiring, **starting from the schema** (which root, stored where, written by whom) — carried from Beats 50–52; still the last structural piece between the audit and anything in production consuming it, and now deferred three beats by findings on the audit itself. (3) `auditCommitment` gates nothing today; wiring it into `hal-grounding` is a behavior change and needs a measurement packet. (4) If #34 merges, resume T12.
