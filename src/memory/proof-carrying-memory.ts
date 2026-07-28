@@ -151,11 +151,18 @@ export function verifyProofCarryingAnswer(
   for (const c of citations) {
     // Adversarial-input safe: a malformed value/witness (e.g. non-canonical hex) counts as
     // UNVERIFIED, it never crashes the verifier — a peer/HAL checks untrusted answers.
+    // The failure LABEL is built inside the guard too. Stringifying `c.value` is itself untrusted
+    // work — an accessor or a throwing `toString` escapes a catch that only wraps the verification,
+    // which would throw out of computeGroundingSignal ("Never throws") and out of the scoring
+    // pipeline. A citation we cannot even name is still just an unverified citation.
     let ok = false;
-    try { ok = verifyMembership(BigInt(c.value), c.witness, pca.memory_root, leafHash, pair); }
-    catch { ok = false; }
+    let label = '?';
+    try {
+      label = String(c?.value ?? '').slice(0, 12);
+      ok = verifyMembership(BigInt(c.value), c.witness, pca.memory_root, leafHash, pair);
+    } catch { ok = false; }
     if (ok) verified++;
-    else reasons.push(`citation_unverified:${String(c?.value ?? '').slice(0, 12)}…`);
+    else reasons.push(`citation_unverified:${label}…`);
   }
   const grounded = binding_ok && citations.length > 0 && verified === citations.length;
   return { grounded, binding_ok, verified_citations: verified, total_citations: citations.length, reasons };
