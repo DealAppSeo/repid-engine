@@ -29,9 +29,11 @@ export interface CommitterRow {
   seed: number;
   agents: number;
   maxEpochLag: number;
+  /** Share of agents whose anchors appear in the verifier's stream at all. */
+  coverage: number;
   /** Refusal rate against the raw multi-committer stream. */
   unfilteredRefusalPct: number;
-  /** Refusal rate against the same stream filtered to the presenting agent. */
+  /** Refusal rate against the same stream pre-filtered to the presenting agent by the CALLER. */
   filteredRefusalPct: number;
   /** Share of presentations refused with each reason, against the unfiltered stream. */
   reasonPct: Record<string, number>;
@@ -50,10 +52,15 @@ export function runMultiCommitter(
   answers: number,
   maxEpochLag: number,
   ticks = 200,
+  coverage = 1,
 ): CommitterRow {
   const rnd = lcg(seed);
   // Agents commit at different cadences — the ordinary case, not an adversarial one.
   const cadence = Array.from({ length: agents }, () => 1 + Math.floor(rnd() * 5));
+  // Which agents this verifier has seen ANY anchor of. Coverage 1 is #262's original assumption and
+  // is where the fix looks free; below 1 it is not, and that is the cost the scoped check relocates
+  // from a false accusation to a stated missing precondition.
+  const covered = Array.from({ length: agents }, () => rnd() < coverage);
   const stream: AnchorObservation[] = [];
   const currentEpoch = new Array<number>(agents).fill(0);
 
@@ -62,7 +69,7 @@ export function runMultiCommitter(
       if (t % (cadence[a] ?? 1) === 0) {
         const next = (currentEpoch[a] ?? 0) + 1;
         currentEpoch[a] = next;
-        stream.push({ epoch: next, root: rootOf(a, next), source: `chain:agent${a}` });
+        if (covered[a]) stream.push({ epoch: next, root: rootOf(a, next), committer: `agent${a}`, source: `chain:agent${a}` });
       }
     }
   }
@@ -76,7 +83,7 @@ export function runMultiCommitter(
   for (let i = 0; i < answers; i++) {
     const a = Math.floor(rnd() * agents);
     const epoch = currentEpoch[a] ?? 0;
-    const presented = { epoch, root: rootOf(a, epoch) };
+    const presented = { epoch, root: rootOf(a, epoch), committer: `agent${a}` };
 
     const unfiltered = checkEpochFreshness(presented, stream, { maxEpochLag });
     const filtered = checkEpochFreshness(presented, own(a), { maxEpochLag });
@@ -95,6 +102,7 @@ export function runMultiCommitter(
     seed,
     agents,
     maxEpochLag,
+    coverage,
     unfilteredRefusalPct: 100 * (1 - unfilteredOk / answers),
     filteredRefusalPct: 100 * (1 - filteredOk / answers),
     reasonPct,
@@ -112,17 +120,40 @@ export function sweep(): CommitterRow[] {
   return rows;
 }
 
-if (require.main === module) {
-  console.log('Every publication presented below is honest and maximally fresh (the agent\'s own');
-  console.log('current epoch, its own root). "filtered" = the same stream reduced to that agent.\n');
-  console.log('seed agents maxLag |  unfiltered   filtered | reasons (share of all presentations)');
-  for (const r of sweep()) {
+/**
+ * What the FIX costs (Beat 60). #262's filtered column reads 0.0% everywhere and invites the reading
+ * that scoping is free; it was measured with every agent's anchors present. Scoping narrows the
+ * evidence base from stream-wide to per-committer, so a verifier that has never seen THIS committer
+ * now refuses for want of evidence — `no-usable-observation`, the honest boundary — where before it
+ * refused with a false accusation. Strictly better, and not nothing.
+ */
+export function coverageSweep(): CommitterRow[] {
+  const rows: CommitterRow[] = [];
+  for (const coverage of [1, 0.75, 0.5, 0.25]) {
+    for (const seed of [1, 2, 3]) rows.push(runMultiCommitter(seed, 12, 500, 1, 200, coverage));
+  }
+  return rows;
+}
+
+const table = (rows: CommitterRow[]): void => {
+  console.log('seed agents maxLag   cov |  unfiltered   filtered | reasons (share of all presentations)');
+  for (const r of rows) {
     const reasons = Object.entries(r.reasonPct)
       .map(([k, v]) => `${k}:${v.toFixed(1)}%`)
       .join(' ');
     console.log(
-      `${String(r.seed).padStart(4)} ${String(r.agents).padStart(6)} ${String(r.maxEpochLag).padStart(6)} | ` +
-        `${`${r.unfilteredRefusalPct.toFixed(1)}%`.padStart(11)} ${`${r.filteredRefusalPct.toFixed(1)}%`.padStart(10)} | ${reasons}`,
+      `${String(r.seed).padStart(4)} ${String(r.agents).padStart(6)} ${String(r.maxEpochLag).padStart(6)} ` +
+        `${String(r.coverage).padStart(5)} | ${`${r.unfilteredRefusalPct.toFixed(1)}%`.padStart(11)} ` +
+        `${`${r.filteredRefusalPct.toFixed(1)}%`.padStart(10)} | ${reasons}`,
     );
   }
+};
+
+if (require.main === module) {
+  console.log('Every publication presented below is honest and maximally fresh (the agent\'s own');
+  console.log('current epoch, its own root). "filtered" = the same stream reduced to that agent BY THE');
+  console.log('CALLER — since Beat 60 the module scopes internally, so the two columns must agree.\n');
+  table(sweep());
+  console.log('\nWhat scoping costs when the verifier has not seen every committer (12 agents, lag 1):');
+  table(coverageSweep());
 }
