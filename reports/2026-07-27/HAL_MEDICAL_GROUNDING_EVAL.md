@@ -162,3 +162,39 @@ Controls — still-valid guidance:
   advice; they were chosen for being well-documented reversals, not for representativeness of clinical Q&A.
 - `HAL_GROUNDING_MODE` was left at its default (`shadow`) — the HAL `would_abstain` signal is recorded but
   does not (and in this eval must not) steer any score. Nothing here flips an enforcement flag.
+
+---
+
+## ADDENDUM — 2026-07-28 (Beat 49): which call shape these numbers were measured against
+
+**Added by a later beat. The measurements above are not retracted — they are scoped.** This note exists
+because the report is patent-adjacent material and a reader would otherwise take F1 = 1.000 as a
+statement about production behaviour. It is not one.
+
+**What was measured.** Step 4 of the method builds the post-update answer as
+`staleAtCurrentRoot = { ...pca, memory_root: pcm.root() }` (`scripts/hal/medical-grounding-eval.ts:76`)
+and verifies *that*. The current root is substituted **by the harness**.
+
+**What production does.** The only production caller,
+`src/scoring/pipeline.ts:413`, passes the agent's answer straight through with no root:
+`computeGroundingSignal({ proof_carrying_answer: input.proof_carrying_answer ?? null }, gMode)`.
+
+**Why the difference matters.** The substituted object asserts a root it holds no witness for, so it
+fails on the *crypto* — it is a forgery, and forgery is a different threat from replay. An agent that
+simply **re-sends its original pre-revocation answer unchanged** carries a root and a witness that still
+agree, and at the time of this eval that replay verified as `grounded: true, would_abstain: false`
+against a fact that had been revoked. **[V] measured on `origin/main` @ `2afa45a`.**
+
+**So, precisely:** these numbers measure **the mechanism** — that a cryptographic retraction is provable
+and that a naive agent cannot match it — which is what the report's Objective claims and its Limitations
+already frame as "a correctness demonstration, not a statistical benchmark". They do **not** measure the
+integrated production path, and **F1 = 1.000 should not be read as "HAL abstains on superseded guidance
+in production."**
+
+**Status of the gap:** `computeGroundingSignal` now accepts a `current_memory_root` and reports
+`root_current: true | false | null` (`null` = never checked), abstaining with `ungrounded:stale_root` on a
+superseded root — repid-engine **#242**. The pipeline does not yet supply a root, so production remains on
+the honest `root_current: null` path; wiring one is an open integration question. Until this eval is
+re-run through the real API, treat the numbers above as mechanism-level.
+
+Full finding: `reports/2026-07-27/BEAT49_ROOT_CURRENCY_REPLAY_GAP.md`.
