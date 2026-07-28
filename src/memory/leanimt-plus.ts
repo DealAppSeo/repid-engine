@@ -16,17 +16,32 @@
  * incremental update is the noted production optimization.
  *
  * ## What a stateless verifier can and cannot establish (threat model — read before relying on it)
- * A verifier sees ONE witness against ONE root; the root's producer is NOT assumed honest. Two
- * different things follow:
- *   - BOUND, so soundly checkable here: the leaf's contents (value/next/tombstone are folded into
- *     the digest) and its POSITION relative to the root (the path's direction bits). Anything a
- *     witness merely *claims* alongside those — notably `InclusionWitness.index` — is not.
- *   - NOT checkable from one witness: global well-formedness of the committed list. A committer
- *     who forges the whole tree can still publish a sentinel whose `next` skips over live values,
- *     and a single non-membership witness cannot detect it. Indexed Merkle trees normally close
- *     this by constraining INSERTION in-circuit; this reference has no such constraint, so
- *     non-membership is sound relative to a well-formed commitment, not against an arbitrary one.
- *     Tracked as the commitment-well-formedness gap — do not read the guards below as covering it.
+ * A verifier sees ONE witness against ONE root; the root's producer is NOT assumed honest. What the
+ * root BINDS is soundly checkable from one witness: the leaf's contents (value/next/tombstone are
+ * folded into the digest) and its POSITION relative to the root (the path's direction bits).
+ * Anything a witness merely *claims* alongside those — notably `InclusionWitness.index` — is NOT
+ * bound, and must never gate a soundness decision.
+ *
+ * ## Two soundness scopes — do not conflate them
+ * A single witness and a published list are different trust surfaces, and non-membership needs
+ * BOTH to be sound against a committer who is not assumed honest:
+ *
+ *   1. PER-WITNESS (`verifyMembership` / `verifyNonMembership` / `verifyCurrentValidity`) — cheap,
+ *      O(log n), needs only the root. It can establish what the root BINDS: a leaf's contents and
+ *      its position (via the path's direction bits). It cannot establish anything about leaves it
+ *      was not shown. A committer who forges the whole tree can publish a sentinel whose `next`
+ *      skips a live value; every witness derived from that tree verifies. This is the
+ *      commitment-well-formedness gap, and no single witness closes it.
+ *   2. WHOLE-COMMITMENT (`auditCommitment`) — O(n), needs the PUBLISHED leaf set. It re-derives the
+ *      root from the list (binding the audit to the commitment) and then checks the structural
+ *      invariants the per-witness verifiers must assume: one sentinel, canonical tombstones, no
+ *      duplicate active values, and a strictly-increasing `next`-chain from the sentinel that
+ *      reaches EVERY active leaf. That last clause is the one that catches a skipped live value.
+ *
+ * An indexed Merkle tree normally gets (2) for free by constraining INSERTION in-circuit. This
+ * reference has no such constraint, so it is bought explicitly instead: a peer audits the published
+ * list once per root, and thereafter every cheap per-witness proof against that root is sound.
+ * State the scope whenever a non-membership result is relied on.
  */
 import { poseidon2LeafHash, poseidon2PairHash } from '../zkp/poseidon2-leaf';
 import { referenceRoot, referenceProof, verifyInclusion, type Hash2, type ProofStep } from './proof-carrying-index';
@@ -69,6 +84,13 @@ export class LeanIMTPlus {
   private digests(): Hex[] { return this.leaves.map((l) => this.digest(l)); }
   root(): Hex { return referenceRoot(this.digests(), this.pair); }
   size(): number { return this.leaves.length; }
+  /**
+   * The published leaf set for this root — what a peer feeds to `auditCommitment`. Copies, so an
+   * auditor holding a snapshot cannot be mutated out from under (and cannot mutate the tree).
+   * Publishing it costs nothing in privacy here: the values are already committed, and the audit
+   * is the only way a peer establishes the list is well-formed (file header, scope 2).
+   */
+  leafSet(): IndexedLeaf[] { return this.leaves.map((l) => ({ ...l })); }
 
   /** Active low leaf for v: not tombstoned, value < v, and (next > v OR next == 0 tail). Value-0 only if sentinel. */
   private lowLeafIndex(v: bigint): number {
@@ -167,4 +189,91 @@ export function verifyNonMembership(v: bigint, w: NonMembershipWitness, root: He
 /** Current-validity = active membership. After revoke(v) this FAILS while non-membership(v) succeeds. */
 export function verifyCurrentValidity(v: bigint, w: InclusionWitness, root: Hex, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair): boolean {
   return verifyMembership(v, w, root, leafHash, pair);
+}
+
+/** Result of a whole-commitment audit. `violations` is diagnostic, not a security boundary — trust `ok`. */
+export interface CommitmentAudit { ok: boolean; violations: string[]; activeCount: number }
+
+/** Cap so a hostile list cannot make the report itself the payload. */
+const MAX_VIOLATIONS = 32;
+
+/**
+ * Audit a PUBLISHED leaf set against a committed `root` — scope (2) in the file header.
+ *
+ * This is what makes non-membership sound against a committer who is not assumed honest. The
+ * per-witness verifiers must assume the committed list is well-formed; nothing in a single witness
+ * establishes that. Here the whole list is checked once, and the check is bound to the commitment
+ * by re-deriving the root from the same leaves (a list that audits clean but hashes to a different
+ * root says nothing about `root`).
+ *
+ * Invariants, and what each one stops:
+ *   - `root-mismatch` — the audited list is not the list behind this root. Checked FIRST; every
+ *     other finding is meaningless without it.
+ *   - `sentinel-*` — index 0 must be the untombstoned value-0 sentinel. It is the only legal
+ *     value-0 low leaf and the head of the chain.
+ *   - `value-0-leaf-outside-sentinel-slot` — a planted untombstoned value-0 leaf is the universal
+ *     absence oracle of the Beat-50 forgery. Refused here at the list level, independent of the
+ *     per-witness path check.
+ *   - `tombstone-not-canonical` — `revoke` zeroes a tombstoned leaf; a tombstone that kept a value
+ *     is a leaf that never came from this construction.
+ *   - `duplicate-active-value` — two active leaves with one value make membership ambiguous.
+ *   - `chain-*` / `active-leaf-not-in-chain` — the `next` chain must start at the sentinel, strictly
+ *     increase, terminate at 0, and REACH EVERY ACTIVE LEAF. The coverage clause is the one that
+ *     catches a sentinel whose `next` skips over a live value — the gap no single witness sees.
+ *
+ * Pure, total, and never throws: the input is untrusted, so a malformed leaf is a `false`, not an
+ * exception (a verifier that throws on hostile input is a denial-of-service, cf. #240/#245).
+ */
+export function auditCommitment(leaves: IndexedLeaf[], root: Hex, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair): CommitmentAudit {
+  const violations: string[] = [];
+  const flag = (m: string): void => { if (violations.length < MAX_VIOLATIONS) violations.push(m); };
+  const done = (activeCount: number): CommitmentAudit => ({ ok: violations.length === 0, violations, activeCount });
+
+  if (!Array.isArray(leaves) || leaves.length === 0) { flag('empty-leaf-set'); return done(0); }
+
+  // 1. Bind the audit to the commitment. Everything below is about THIS root only if this passes.
+  let derived: Hex | null = null;
+  try { derived = referenceRoot(leaves.map((l) => leafHash(encodeLeaf(l))), pair); } catch { flag('leaf-set-unhashable'); }
+  if (derived !== root) flag('root-mismatch');
+
+  // 2. Sentinel slot.
+  const sentinel = leaves[0]!;
+  if (sentinel.tombstoned) flag('sentinel-tombstoned');
+  if (sentinel.value !== 0n) flag('sentinel-value-not-zero');
+
+  // 3. Per-leaf shape, and the active set the chain must cover.
+  const active = new Set<number>();
+  const byValue = new Map<string, number>();
+  for (let i = 1; i < leaves.length; i++) {
+    const l = leaves[i]!;
+    if (l.tombstoned) {
+      if (l.value !== 0n || l.next !== 0n) flag(`tombstone-not-canonical@${i}`);
+      continue;
+    }
+    if (l.value === 0n) { flag(`value-0-leaf-outside-sentinel-slot@${i}`); active.add(i); continue; }
+    const k = String(l.value);
+    if (byValue.has(k)) flag(`duplicate-active-value:${k}`); else byValue.set(k, i);
+    active.add(i);
+  }
+
+  // 4. Walk the next-chain from the sentinel. Bounded by the leaf count, so a cycle terminates.
+  const visited = new Set<number>();
+  let cur: IndexedLeaf = sentinel;
+  let prev = 0n;
+  for (let steps = 0; cur.next !== 0n; steps++) {
+    if (steps >= leaves.length) { flag('chain-longer-than-leaf-set'); break; }
+    const nxt = cur.next;
+    if (!(nxt > prev)) { flag(`chain-not-strictly-increasing:${String(prev)}->${String(nxt)}`); break; }
+    const idx = byValue.get(String(nxt));
+    if (idx === undefined) { flag(`chain-points-at-non-active-value:${String(nxt)}`); break; }
+    if (visited.has(idx)) { flag(`chain-revisits-leaf@${idx}`); break; }
+    visited.add(idx);
+    prev = nxt;
+    cur = leaves[idx]!;
+  }
+
+  // 5. Coverage — an active leaf the chain never reaches is a value the sentinel skipped.
+  for (const i of active) if (!visited.has(i)) flag(`active-leaf-not-in-chain@${i}`);
+
+  return done(visited.size);
 }
