@@ -83,6 +83,8 @@ Making `otherCommitterObservations > 0` verdict-bearing under `requireObservatio
 
 **The dispatch encodes Step 1 as a prediction.** Its output rules now name the two real rejection causes explicitly — ≥400 chars of substance **in the final chat response** (not a pointer), and **no double-brace sequences** — citing the two discarded artifacts by size. If the root cause is right, this passes; if it is rejected anyway, Step 1 is wrong and the recorded `failure_reasons` will say so.
 
+**PREDICTION RESOLVED, same beat [V sql]: #435045 → `done`, `claimed_by = trinity-gcm`, `result` 519 chars.** The same agent whose 48-char pointer produced `output_too_short: 48/200` on #435042 cleared the gate on the next task, with the only difference being an instruction to write the substance into the response. That is confirmation of the mechanism, not merely of the correlation — and it means the six `shadow_reject` rows in this loop's record are a **dispatch-format defect, now fixed**, not six caught fabrications.
+
 ---
 
 ## MISTAKES / process notes
