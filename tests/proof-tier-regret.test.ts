@@ -372,16 +372,18 @@ describe('proof-tier regret — CLAIM: what Patent #2’s value argument actuall
 describe('proof-tier regret — ROBUSTNESS: how much of the result rests on my own labels', () => {
   /**
    * The whole measurement rests on 30 labels that the author of the policy also wrote.
-   * Beat 44 commissioned a second labeller with no authorship, who re-labelled all 30 from
-   * the scenario text alone: 28/30 agreement, and both disagreements landed on scenarios
-   * whose own `why` field had pre-registered the call as a judgement call. Substituting the
-   * full second label set moved the band by exactly zero.
    *
-   * That result lived in a report, which means it decays the moment the corpus is edited.
-   * This sweep makes it a standing property instead: perturb EVERY scenario to EVERY other
-   * rung, one at a time, and check the qualitative claim survives all 120. It is strictly
-   * stronger than re-checking one alternative label set, because it does not depend on
-   * which labels the second labeller happened to change.
+   * THIS SWEEP IS THE ANSWER TO THAT, and it is the only part of the answer this repository
+   * can prove. Perturb EVERY scenario to EVERY other rung, one at a time, and check the
+   * qualitative claim survives all 120. It is strictly stronger than re-checking one
+   * alternative label set, because it does not depend on which labels any particular second
+   * opinion happened to change — and unlike a report, it fails loudly when the corpus moves.
+   *
+   * Beat 44 also commissioned a second labeller with no authorship, which reported 28/30
+   * agreement. That figure is [REPORTED, NOT REPRODUCIBLE HERE] — a Beat 46 verifier
+   * enumerated every branch's history and found no committed artifact carrying those 30
+   * values, so nothing in this repo can recompute or falsify it. It was previously written
+   * up as the leading, citable defence; it is corroboration. See `proof-tier-corpus.ts`.
    */
   const perturbations = (() => {
     const out: { id: string; to: string; lower: number; upper: number }[] = [];
@@ -439,5 +441,36 @@ describe('proof-tier regret — ROBUSTNESS: how much of the result rests on my o
     const order = PROOF_TIER_CORPUS.map((s) => s.requiredTier);
     const blocks = order.filter((t, i) => i === 0 || t !== order[i - 1]).length;
     expect(blocks).toBeLessThan(order.length);
+  });
+
+  it('the 28/30 figure is marked REPORTED, because nothing here can recompute it', () => {
+    // Beat 46 verifier, MEDIUM-HIGH. The corpus header used to rank the second-labeller
+    // result FIRST and call it "the strongest evidence, and the one to cite" — while no
+    // data file, fixture or test anywhere in any branch carries that labeller's 30 values.
+    // For patent enabling-disclosure material that distinction is the whole game: an
+    // unpinned FACT is the same defect as an unpinned column, one level up.
+    //
+    // Prose is the thing that drifts, so the disclosure is pinned as a property. If someone
+    // restores the confident wording, this fails. If someone later commits the 30 labels
+    // and a test that recomputes the count, this fails too — correctly, because the caveat
+    // must then be removed rather than left standing as a false apology.
+    const header = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'services', 'proof-tier-corpus.ts'),
+      'utf8'
+    ).slice(0, 4000);
+
+    expect(header).toMatch(/NOT REPRODUCIBLE FROM THIS REPOSITORY/);
+    expect(header).toMatch(/MUST NOT BE CITED/);
+
+    // …and the sweep, which IS reproducible, is what now leads.
+    const sweepAt = header.indexOf('120-RELABELLING SWEEP');
+    const relabelAt = header.indexOf('INDEPENDENT RE-LABELLING');
+    expect(sweepAt).toBeGreaterThan(-1);
+    expect(relabelAt).toBeGreaterThan(-1);
+    expect(sweepAt).toBeLessThan(relabelAt);
+
+    // Guard on the guard: if the corpus is ever renamed or moved, the reads above would
+    // throw rather than silently pass — but an empty/short read would not, so pin that too.
+    expect(header.length).toBeGreaterThan(2000);
   });
 });
