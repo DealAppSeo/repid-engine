@@ -18,6 +18,7 @@ import { PROOF_TIER_CORPUS } from '../../src/services/proof-tier-corpus';
 import {
   UNDER_PROOF_PRICES,
   crossoverPrice,
+  operatingBand,
   requiredIndexOf,
   runRegretMeasurement,
   type StrategyResult,
@@ -87,6 +88,22 @@ function main(): void {
       );
     }
   }
+
+  const band = operatingBand(results);
+  const max = results.find((r) => r.name === 'always_max') as StrategyResult;
+  const numerator = max.overProofCostUnits - policy.overProofCostUnits;
+  console.log(
+    `\n-- operating band: policy is the regret minimiser for an under-proof price in ` +
+      `(${band.lower.toFixed(1)}, ${band.upper === Infinity ? '∞' : band.upper.toFixed(1)}) --`,
+  );
+  console.log(
+    `  the LOWER edge is a stable measurement: across all 120 single-label relabellings of\n` +
+      `  the corpus it stays inside [28.5, 50.3], with this value as its exact median.\n` +
+      `  the UPPER edge is NOT. It is (${max.overProofCostUnits} − ${policy.overProofCostUnits}) ÷ ${policy.underProof} residual under-proof(s) — a STEP function\n` +
+      `  of a small integer, not a smooth measurement. At 2 it would be ${(numerator / 2).toFixed(1)}; at 0 there would\n` +
+      `  be no upper edge at all (4 of the 120 relabellings do exactly that). Quote it as\n` +
+      `  conditional on that count, never as a constant of the policy.`,
+  );
 
   console.log(
     `\n-- gate activity on REAL scenarios: floor fired ${floorFirings}/${n}, ceiling fired ${ceilingFirings}/${n} --`,
