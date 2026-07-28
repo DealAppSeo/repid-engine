@@ -2295,3 +2295,54 @@ Both at one root [V]. The sentinel is a **genuine** leaf at a **genuine** index 
 7. **Carried unchanged:** Patent #1 RTP gap (c) — one real Base Sepolia anchor with the funded attester · #231 and #216 conflicting · branch protection requires only `test` · `PROOF_ENQUEUE_HAL_MODE=enforce` · the dead `jest` key in `package.json` · `repid_gate_shadow_log` absent from prod.
 
 **Next beat:** (1) independently verify **#250**. (2) The pipeline trusted-root wiring, **starting from the schema** (which root, stored where, written by whom) — carried from Beat 50 and still the right next build. (3) Decide whether `auditCommitment` should gate anything in `hal-grounding` (today it gates nothing; wiring it is a behavior change and needs a measurement packet). (4) If #34 merges, resume T12.
+
+## Beat 52 — 2026-07-28 · the guard added to make a verifier total was itself a throw site; and the mutation battery corrected my own tests before the PR moved
+
+**STEP 1 — independently verified Beat 51's deliverable (#250) by reading source and reasoning about the construction, not by re-running its tests [V].**
+
+- **The coverage clause does catch the Beat-51 forgery, traced by hand.** `leaves = [{0→0} sentinel, {7→0} live]`: step 4 puts index 1 in `active`; step 5's loop never executes (`sentinel.next === 0n`) so `visited` stays empty; step 6 flags `active-leaf-not-in-chain@1`. The forgery this PR exists to refuse is refused for the stated reason.
+- **The clause set is sufficient, not merely suggestive — checked in the direction the PR does not spell out.** If the audit passes, membership and non-membership are mutually exclusive for every `v`. The chain is strictly increasing and reaches every active leaf, so it enumerates the active values in increasing order; for active `v`, any active `L` with `L.value < v` has `L.next` equal to the *next* active value, which is `≤ v` — so `L.next > v` is false, and `L.next === 0n` only for the maximum, which `v` being active and larger excludes. No active leaf can serve as a low leaf for a live value. Tombstoned leaves are refused by the `L.tombstoned` guard; planted value-0 leaves cannot exist in a passing list. **The committed memory is a function iff the audit passes.** That is the claim boundary for provable retraction, and it holds.
+- `leafSet()` returns a defensive copy (`this.leaves.map((l) => ({ ...l }))`), so the published list cannot be aliased back into the tree. Green. **Not merged — I wrote it.**
+
+**STEP 2 — the advance, which began as finishing an interrupted draft and turned into a finding about the draft.**
+
+The working tree carried an uncommitted element-shape check from an interrupted beat. Rather than trust it, I reproduced its premise **against the committed version** (`git show HEAD:` into a sibling module, both imported side by side):
+
+```
+[null]            OLD  THREW TypeError: Cannot read properties of null (reading 'tombstoned')
+[sentinel,null]   OLD  THREW TypeError
+hole              OLD  THREW TypeError
+json-strings      OLD  ok=false v=["root-mismatch","sentinel-value-not-zero","chain-not-strictly-increasing:0->0"]
+throwing-getter   OLD  THREW Error: boom      ← and NEW threw too
+```
+
+- **The premise is real: `auditCommitment` documented "pure, total, never throws" and its seven hostile inputs all malform a FIELD of a leaf that exists.** Every step of the audit indexes the array and dereferences the element, so the element level — the level that throws — was never exercised. **A property demonstrated exactly where it is not at risk**, which is Beat 51's shape one level down.
+- **The JSON case is the one that does not throw, and it is the worse one.** A string-valued list re-derives a *plausible* root (`encodeLeaf` stringifies, so `'5'` and `5n` hash identically) and then compares across types — `'0' !== 0n` enters the chain loop a bigint list would skip, emitting the nonsense `chain-not-strictly-increasing:0->0`. Coercing would make soundness turn on a cast. Strict rejection is the right call and is now argued in the source rather than assumed.
+- **[X] The fix's own first line reintroduced the class it closes.** `isLeafShape` has to read `.value` to judge it, so an element with a throwing accessor throws *inside the guard that exists to prevent throwing* — confirmed above (`NEW` threw on the Proxy). **No enumeration of per-field checks closes this**; only an outer boundary does. Added one, returning a distinct `audit-threw` so a boundary catch stays visible rather than indistinguishable from a structural finding. Fail-closed is the correct direction for a verifier: an input it cannot process is precisely an input whose well-formedness it has not established.
+
+**STEP 3 — the mutation battery corrected the tests, and this is the part worth recording.**
+
+- Mutant A (outer boundary removed): **3 fail.** Expected.
+- Mutant B (shape check removed, boundary kept): **1 fail.** Not expected — and the honest reading is that my new tests were weak. With the boundary in place, deleting the shape check turns `malformed-leaf@1` into `audit-threw` and **every `ok === false` assertion still passes**. The `it.each` totality cases could not tell the two guards apart. Only the JSON case survived the mutant, because it alone demands a specific violation from a list that never throws.
+- Tightened the element-level cases to assert the violation *by name*. **Mutant B now fails 2.** The two guards are not interchangeable and the suite now says which is which: the shape check buys diagnosis and covers the non-throwing-but-wrong class; the boundary buys totality.
+- Fixtures assert their own hostility first — the throwing accessor is shown to throw when its shape is read — so no case can pass by being toothless.
+- Source restored from a byte-compared golden copy after each mutant (`cmp -s` clean). Bounded local run per the contract: 8 memory/grounding suites, **87/87**; `tsc --noEmit` clean on both touched files.
+- **→ pushed to repid-engine #250 as `de8ff0c`.** NOT auto-merged — I wrote it, and it is a soundness surface.
+
+**STEP 4 — NO T12 DISPATCH. Thirteenth beat of the hold** — [V sql] `claude-sprint` tasks: 54 done, 4 shadow_reject, **0 pending, 0 in flight, max claim_count 0**. `trinity-symphony-shared` #34 (the claim cap) still OPEN and MERGEABLE, seven rounds after passing independent verification.
+
+**MISTAKES / process notes.**
+- **I inherited an uncommitted draft and nearly shipped it as finished work.** It was mine, from an interrupted beat, and it was *correct as far as it went* — which is the condition under which a draft is most likely to be waved through. Reproducing its premise against the committed version cost one probe script and found that the fix's own guard still threw.
+- **The mutation battery graded my tests, not just my code, and it failed them.** Beat 49's verifier logged mutants surviving jest; this is the same lesson applied inward one beat later. A test that asserts only `ok === false` cannot distinguish two guards that both produce `ok === false` — and I had written exactly that, immediately after adding a second guard.
+- **Weaker-property count: sixteen in sixteen beats.** This one's shape: **a guard whose own precondition is the thing it guards against** — a totality check that must dereference untrusted input to decide whether dereferencing it is safe.
+
+**Open for Sean (rule-4):**
+1. **`trinity-symphony-shared` #34 — passed independent verification seven rounds ago, still open. Merging it ends thirteen beats of T12 idle.** Unchanged, and still the single highest-leverage merge available.
+2. **repid-engine #250** — the whole-commitment audit, independently verified green this beat and now hardened to actual totality (`de8ff0c`). Patent #1 material: it is the claim boundary for provable retraction. Not auto-merged (I wrote it).
+3. **repid-engine #247** — independently verified green in Beat 51. Additive to #250, no conflict, no ordering constraint.
+4. **repid-engine #249** — cloud build-loop scaffold, green and inert; needs two GitHub secrets, and it is the standing fix for two cron instances sharing one checkout.
+5. **#243, #242, #245 open, green, unmerged** — Patent #1 / grounding material; #245 gates `HAL_GROUNDING_MODE=enforce`.
+6. **#225 + #233 — merge order still matters** (#225 alone ships the unpinned `regretAtPrice` column).
+7. **Carried unchanged:** Patent #1 RTP gap (c) — one real Base Sepolia anchor with the funded attester · #231 and #216 conflicting · branch protection requires only `test` · `PROOF_ENQUEUE_HAL_MODE=enforce` · the dead `jest` key in `package.json` · `repid_gate_shadow_log` absent from prod.
+
+**Next beat:** (1) independently verify `de8ff0c` — I wrote both the fix and the battery that graded it. (2) The pipeline trusted-root wiring, **starting from the schema** (which root, stored where, written by whom) — carried from Beats 50 and 51 and still the right next build; it is the last structural piece between the audit and anything in production consuming it. (3) `auditCommitment` gates nothing today; wiring it into `hal-grounding` is a behavior change and needs a measurement packet before it moves. (4) If #34 merges, resume T12.
