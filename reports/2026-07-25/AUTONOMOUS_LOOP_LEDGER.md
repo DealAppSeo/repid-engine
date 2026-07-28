@@ -2251,3 +2251,47 @@ Beat 49's next-item (4) asked whether the witness `index` should be bound by the
 7. **Carried unchanged:** Patent #1 RTP gap (c) — one real Base Sepolia anchor with the funded attester (a hard line for this loop) · the new **commitment-well-formedness gap** · #231 and #216 CONFLICTING · branch protection requires only `test` · `PROOF_ENQUEUE_HAL_MODE=enforce` · the dead `jest` key in `package.json` · `repid_gate_shadow_log` absent from prod.
 
 **Next beat:** (1) independently verify **#247** — I wrote it and it is a soundness claim, and the same "battery cannot see a wrong variable" limit applies to my own tests. (2) Start the **commitment-well-formedness** question from the spec: what, if anything, a peer can check about a committed list it did not build — this is the honest boundary of Patent #1's non-membership claim and it is now the largest open crypto question in the stack. (3) The pipeline trusted-root wiring, **starting from the schema** (which root, stored where, written by whom). (4) If #34 merges, resume T12 dispatch and watch the cap's first live reaps.
+
+---
+
+## Beat 51 — 2026-07-28 · the gap no witness can see: the audit scope Patent #1's non-membership claim needs
+
+**STEP 1 — independently verified Beat 50's deliverable (#247) by reading source + the builder it depends on, not by re-running its tests [V].**
+- **CONFIRMED, and the reasoning checks out in both directions.** `verifyInclusion` (`proof-carrying-index.ts:113-119`) folds `path` and takes no index parameter — the unbound-field claim follows from the signature alone. The replacement predicate (*leftmost iff no step has `siblingOnLeft`*) is exact **for this builder**, and the two directions have different reasons: index 0 stays even at every level so `referenceProof` only ever emits the `siblingOnLeft: false` branch (no honest sentinel is rejected); and for any `i > 0` with lowest set bit `b`, `i >> b` is odd, so level `b` emits a left-sibling step that promotion **cannot** elide — promotion fires only in the `else` arm, which requires an even position. Level `b` exists because `i >> b >= 1` implies at least 2 nodes there.
+- **One angle the PR did not state, checked here:** a path need not *be* a `referenceProof` output. But an all-right-siblings path folding to `root` places the leaf at position 0 under collision resistance — so the predicate is bound by the root, not by the builder's honesty. Holds.
+- Tests are **not vacuous**: each poison case asserts the tombstone guard does **not** fire and the target **is** provably a member first. CI green on all five checks. **Not merged** — I wrote it.
+- **Un-ledgered arrival:** **#249** (cloud build-loop scaffold) showed up since Beat 50 — green, additive, `.github/workflows/` + docs only, inert until Sean adds two secrets. It is also the standing fix for the two-crons-one-checkout problem. Flagged, not merged.
+
+**STEP 2 — the advance: Beat 50 named a residual gap and carried it as a note. Measured it, and it is worse than a note.**
+
+The gap needs no planted leaf and no tombstone trickery — and **#247 does not touch it**:
+
+```
+leaves = [ {0→0} sentinel — "the active set is empty" , {7→0} LIVE, untombstoned, a real leaf ]
+verifyMembership(7n, witness@1, root) = true      verifyNonMembership(7n, {lowLeaf: witness@0}, root) = true
+```
+
+Both at one root [V]. The sentinel is a **genuine** leaf at a **genuine** index 0 with a **genuine** path, so Beat 50's new path check passes it — correctly. Nothing about this witness is forged. The lie sits in a leaf the verifier was **never shown**, and no single witness of any design sees it. Same shape at depth (unlink a middle value without tombstoning) behaves identically.
+
+- **Built `auditCommitment(leaves, root)`** — O(n), pure, total; plus `LeanIMTPlus.leafSet()` to publish the list. A peer runs it **once per root**; thereafter every cheap O(log n) per-witness proof against that root is sound. Bound to the commitment first (the root is re-derived from the audited leaves). **Coverage is the clause that closes the gap:** the `next`-chain must start at the sentinel, strictly increase, terminate at 0, and **reach every active leaf** — a skipped live value is an active leaf the chain never visits. Plus the invariants the per-witness verifiers *assume*: one untombstoned value-0 sentinel at slot 0, no untombstoned value-0 leaf elsewhere (the Beat-50 oracle, refused a second way at list level), canonical tombstones, no duplicate active values, no cycles. **Total per #240/#245** — untrusted input yields a verdict, never a throw; violations capped at 32 so a hostile list cannot make the report the payload.
+- **Reproduced, not asserted:** every forgery test asserts the per-witness verifier **is** fooled before asserting the audit refuses it — a test that only checked `ok === false` would pass against a rejector that refuses everything. **Mutation-checked:** with only the coverage clause removed and the tests kept, **2 of 26 fail**, precisely the two skipped-live-value cases; the other 24 hold either way. Source restored from a byte-compared golden copy — `git diff --stat` shows **115 insertions, 0 deletions**, so the line #247 rewrites is untouched and there is no conflict. Bounded local run per the contract: 8 memory/grounding suites, **76/76**.
+- **What it does NOT claim, now written into the source header as two named scopes:** it buys well-formedness for a **published** list. It is not the in-circuit insertion constraint a production indexed Merkle tree uses — that remains the durable answer. Non-membership relied on without a passing audit is still *sound-relative-to-a-well-formed-commitment*, and must be stated that way.
+- **→ repid-engine #250. NOT auto-merged — I wrote it, and the mutation battery is my own.**
+
+**STEP 3 — NO T12 DISPATCH. Twelfth beat of the hold** — [V sql] `claude-sprint` tasks: 54 done, 4 shadow_reject, **0 pending, 0 in flight, max claim_count 0**. `trinity-symphony-shared` #34 (the claim cap) still OPEN and CLEAN.
+
+**MISTAKES / process notes.**
+- **I nearly built the wrong thing** — the first framing was "add a well-formedness flag to the witness", which is Beat 50's exact mistake one level up: a self-reported claim cannot establish a property about leaves the verifier never sees. The gap is not a missing check on the witness; it is a different **scope**. Writing the two scopes into the header first is what made the shape obvious.
+- **The gap survives a fix that looks like it should have covered it.** #247 hardened precisely the guard an attacker would have to beat — and this forgery never touches that guard, because its sentinel is entirely honest. Stated plainly: *hardening a check does not bound what the check is about.*
+- **Weaker-property count: fifteen in fifteen beats.** This one's shape: **a property demonstrated at the wrong scope** — every per-witness test in the suite passes on a commitment that is not a function.
+
+**Open for Sean (rule-4):**
+1. **`trinity-symphony-shared` #34 — passed independent verification six rounds ago, still open. Merging it ends twelve beats of T12 idle.** Still the highest-leverage merge available.
+2. **repid-engine #250 (new)** — the whole-commitment audit. Patent #1 material: it is the claim boundary for provable retraction. Green, additive, no conflict with #247.
+3. **repid-engine #247** — independently verified green this beat. Not auto-merged (I wrote it).
+4. **repid-engine #249** — cloud build-loop scaffold, green and inert; needs two GitHub secrets from Sean, and it is the fix for two cron instances sharing one checkout.
+5. **#243, #242, #245 open, green, unmerged** — Patent #1 / grounding material; #245 gates `HAL_GROUNDING_MODE=enforce`.
+6. **#225 + #233 — merge order still matters** (#225 alone ships the unpinned `regretAtPrice` column).
+7. **Carried unchanged:** Patent #1 RTP gap (c) — one real Base Sepolia anchor with the funded attester · #231 and #216 conflicting · branch protection requires only `test` · `PROOF_ENQUEUE_HAL_MODE=enforce` · the dead `jest` key in `package.json` · `repid_gate_shadow_log` absent from prod.
+
+**Next beat:** (1) independently verify **#250**. (2) The pipeline trusted-root wiring, **starting from the schema** (which root, stored where, written by whom) — carried from Beat 50 and still the right next build. (3) Decide whether `auditCommitment` should gate anything in `hal-grounding` (today it gates nothing; wiring it is a behavior change and needs a measurement packet). (4) If #34 merges, resume T12.
