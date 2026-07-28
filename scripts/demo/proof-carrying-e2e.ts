@@ -85,10 +85,15 @@ export async function runProofCarryingE2E(verbose = true, live = false): Promise
   let pcMsg = '(answered — BUG)';
   try { emitGroundedAnswer(FACT, pcm, [v]); }
   catch (e: any) { pcAbstained = true; pcMsg = e.message; }
-  const staleGrounded = verifyProofCarryingAnswer({ ...pca, memory_root: pcm.root() }).grounded;
-  const gsig = computeGroundingSignal({ proof_carrying_answer: { ...pca, memory_root: pcm.root() } }, 'shadow');
+  // THE REPLAY. A stale or dishonest agent does not rebuild anything — it re-sends the ORIGINAL
+  // answer, untouched, whose root and witness still agree with each other. That answer is still
+  // valid evidence about the superseded state, and the pure verifier says so. Currency is the
+  // separate check: HAL holds the root it trusts as current and refuses the superseded one.
+  const replayAtOwnRoot = verifyProofCarryingAnswer(pca).grounded;
+  const gsig = computeGroundingSignal({ proof_carrying_answer: pca, current_memory_root: pcm.root() }, 'shadow');
   line(`  proof-carrying agent → ABSTAINS: "${pcMsg}"`);
-  line(`     the earlier answer, re-checked against the new root: grounded=${staleGrounded}  (HAL would_abstain=${gsig.would_abstain})`);
+  line(`     replay of the earlier answer: still valid at its OWN (now superseded) root → grounded=${replayAtOwnRoot}`);
+  line(`     HAL, holding the current root → root_current=${gsig.root_current}  would_abstain=${gsig.would_abstain}  (${gsig.reason})`);
   line(`  naive agent          → "${naive.answer(KEY)}"   ← STILL asserts the RETRACTED fact (hallucination, no audit trail)`);
 
   stage(5, 'ANCHOR the memory root on-chain (EAS / Base Sepolia)');
@@ -107,7 +112,8 @@ export async function runProofCarryingE2E(verbose = true, live = false): Promise
 
   const ok = ver1.grounded === true
     && pcAbstained === true
-    && staleGrounded === false
+    && replayAtOwnRoot === true      // the attack is real — the replay is not self-defeating
+    && gsig.root_current === false   // ...and it is caught by currency, not by luck
     && gsig.would_abstain === true
     && anchor.anchored === true;
 
