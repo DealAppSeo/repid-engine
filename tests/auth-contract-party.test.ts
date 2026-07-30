@@ -34,11 +34,13 @@ jest.mock('../src/db', () => ({
         };
         return b;
       }
-      // repid_agents lookup for boundAgentName — return nothing.
+      // repid_agents lookup for boundAgentName — a bound name must exist so
+      // the last-segment name check is actually exercised (the live failure
+      // required boundAgentName to be set).
       const b: any = {
         select: () => b,
         eq: () => b,
-        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        maybeSingle: () => Promise.resolve({ data: { agent_name: 'trinity-bound-agent' }, error: null }),
       };
       return b;
     },
@@ -121,5 +123,18 @@ describe('authMiddleware — contract-party authz for bound keys', () => {
     const { res, next } = await run(`/api/v1/agents/${OTHER_AGENT}/mint`, 'bound-key');
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(403);
+  });
+
+  test('bound key may call collection routes (/services, /contracts) — body binding governs', async () => {
+    // Verified live 2026-07-30: the last-segment name check 403'd every
+    // bound-key call to POST /api/v1/services ("agent identity in path
+    // mismatch") because 'services' isn't in the word whitelist. The check
+    // is now scoped to /agents/ paths.
+    for (const path of ['/api/v1/services', '/api/v1/contracts']) {
+      const { res, next } = await run(path, 'bound-key');
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(res.statusCode).toBe(0);
+      (next as jest.Mock).mockClear();
+    }
   });
 });

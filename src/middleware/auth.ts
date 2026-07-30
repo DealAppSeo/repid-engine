@@ -222,10 +222,20 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       return res.status(403).json({ error: 'Forbidden: agent_id in path mismatch (API key is bound to a different agent identity)' });
     }
 
+    // 2026-07-30: the last-segment name check exists to catch
+    // /agents/<name>-style paths where <name> isn't the bound agent. It was
+    // applied to EVERY path, so any collection route whose final word wasn't
+    // in the whitelist (e.g. POST /api/v1/services, POST /api/v1/contracts)
+    // 403'd for all bound keys — verified live; that plus the UUID misread
+    // made A2A operator-only. Scope it to /agents/ paths, where a trailing
+    // name actually denotes an agent. Collection routes stay protected by
+    // the body-level binding checks above (buyer/provider/requestor/agent
+    // fields must match the bound agent).
+    const isAgentScopedPath = /^(?:\/api\/v1)?\/agents\//.test(req.path);
     const lastPart = pathParts[pathParts.length - 1];
-    if (lastPart && lastPart.length > 0 && !uuidRe.test(lastPart)) {
+    if (isAgentScopedPath && lastPart && lastPart.length > 0 && !uuidRe.test(lastPart)) {
       // If lastPart is not a UUID, check if it matches the bound agent name
-      if (boundAgentName && lastPart.toLowerCase() !== boundAgentName.toLowerCase() && 
+      if (boundAgentName && lastPart.toLowerCase() !== boundAgentName.toLowerCase() &&
           // filter out generic route paths
           !['verify', 'complete', 'status', 'receipts', 'register', 'score-event', 'card', 'mint-status', 'onchain', 'recall', 'recent', 'registration.json', 'payload.json', 'keys'].includes(lastPart.toLowerCase())) {
         return res.status(403).json({ error: 'Forbidden: agent identity in path mismatch (API key is bound to a different agent identity)' });
