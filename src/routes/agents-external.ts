@@ -563,6 +563,14 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       .insert({
         agent_id: agentId,
         event_type: 'PREDICTION_RESOLVE',
+        // 2026-07-30: REQUIRED for delta-carrying events. The DB trigger
+        // apply_repid_score_event() mirrors every applied delta into
+        // agent_repid_history.payment_proof_hash, falling back from
+        // metadata tx_hash -> idempotency_key -> a CONSTANT simulated-payment
+        // literal — and that column is UNIQUE. The constant's slot was
+        // consumed once in history, so every keyless non-payment event since
+        // died with a duplicate-key 500 (unmasked by #274; verified live).
+        idempotency_key: crypto.randomUUID(),
         delta: rawDelta,
         repid_before: currentRepid,
         repid_after: newScore,
