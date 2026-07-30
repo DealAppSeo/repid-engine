@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { ethers } from 'ethers';
 import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
+import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-normalize';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
 import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
@@ -477,7 +478,19 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
     const alignExp = alignmentExponentFor(alignment_category ?? 'other');
     const currentRepid: number = (agent as any).current_repid ?? 1000;
     const vdrCount: number = (agent as any).vdr_count ?? 0;
-    const wisdomScore: number = (agent as any).wisdom_score ?? 1.0;
+    // 2026-07-30 hardening: repid_agents.wisdom_score carries three scale
+    // conventions in prod (1.0-centered / 0-100 DB default / canonical
+    // 1000-centered). The formula's wisdom factor is exponential and unclamped,
+    // so a raw read exploded rewards to ~4e11 and int4-overflowed the score
+    // event insert — killing scoring for ~65% of agents. Normalize + bound at
+    // the call site; the formula itself stays untouched.
+    const wisdomNorm = normalizeWisdomForReward((agent as any).wisdom_score);
+    if (wisdomNorm.adjusted) {
+      console.warn(
+        `[score-event] wisdom_score normalized for ${agentId}: raw=${(agent as any).wisdom_score} → ${wisdomNorm.value} (${wisdomNorm.interpretedAs})`
+      );
+    }
+    const wisdomScore: number = wisdomNorm.value;
     const vestedRepid: number = (agent as any).vested_repid ?? 0;
     const vestingCliffEndsAt: string | null = (agent as any).vesting_cliff_ends_at ?? null;
     const isHuman: boolean = !!(agent as any).is_human;
@@ -508,7 +521,16 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       impactCap,
     );
 
-    const rawDelta = halApproved ? Math.round(rewardResult.reward) : -Math.abs(baseDelta);
+    // Antifragile backstop: no single event may exceed the full score-range
+    // width, and a non-finite reward becomes delta 0 — the event records a
+    // sane number instead of 500ing the whole scoring path on insert.
+    const preClamp = halApproved ? rewardResult.reward : -Math.abs(baseDelta);
+    const { delta: rawDelta, clamped: deltaClamped } = clampEventDelta(preClamp);
+    if (deltaClamped) {
+      console.error(
+        `[score-event] delta clamped for ${agentId}: raw=${preClamp} → ${rawDelta} (reward-factor explosion? breakdown=${JSON.stringify(rewardResult.breakdown ?? {})})`
+      );
+    }
     const courageBonus = calculateChallengerCourageBonus(currentRepid, currentRepid, phi);
 
     // 9. Vesting gate
