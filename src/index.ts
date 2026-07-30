@@ -42,6 +42,7 @@ import fullAccountRouter from './routes/full-account';
 import receiptsRouter from './routes/receipts';
 import mvpApiRouter from './routes/mvp-api'; // S-WIRE-MVP — provider-trust/capabilities/dna/x402-gate/disputes/staking/zkp
 import { repidPublicRouter, repidAdminRouter } from './routes/repid';
+import agentPassportRouter from './routes/v1/agent-passport';
 import stakeRouter from './routes/stake';
 import { llmRouter } from './routes/route';
 import { adminCapsRouter } from './routes/admin-caps';
@@ -275,6 +276,11 @@ app.use('/api/v1/marketplace', marketplacePublicRouter);
 app.use('/api/v1', observabilityPublicRouter);
 // Sprint R-C: RepID public endpoints (lookup, history, verify) — no auth
 app.use('/api/v1', repidPublicRouter);
+// 2026-07-29: Agent Trust Passport — the public composite (RepID + ERC-8004
+// identity + x402 real-vs-simulated history + on-chain writes + latest ZKP,
+// all labeled honestly) that TrustShell.dev / TrustMarket.dev render for
+// "should I authorize this agent?". DB-first, no per-request RPC.
+app.use('/api/v1', agentPassportRouter);
 // CC1 2026-05-25: public launch status + hero receipt (mounted pre-auth; distinct
 // exact paths from the authed /api/v1/status/* observability + /api/v1/receipts/:id).
 app.use('/api/v1', launchStatusRouter);

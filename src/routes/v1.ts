@@ -13,6 +13,7 @@ import { getTwoBuilderSnapshot, getTimeseries, bootstrapDemoSnapshots } from '..
 import { createAnonymousBuilder } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
 import { generateCard } from '../services/zkp-card-generator';
+import { buildAgentPassport, PassportQueryError } from '../services/agent-passport';
 import { renderCardHtml } from '../services/zkp-card-renderer';
 import substanceGateRouter from './v1/substance-gate';
 import hitlRouter from './v1/hitl';
@@ -257,27 +258,43 @@ router.post('/dag/verify-node', async (req: Request, res: Response) => {
   res.json({ node_hash, valid: true, dag_depth: 1, verified_at: new Date().toISOString() });
 });
 
+// HONEST REWRITE (2026-07-29): this endpoint used to fabricate
+// validation_status:"verified" + conservator_bonded:true with zero chain
+// reads, and returned sha256(agent_id) as an "identity_hash" — pure theater
+// on the exact public surface a merchant would use to decide whether to
+// authorize an agent (RULE-4: no fake-pass may be reported as a real
+// measurement). It now reports recorded ERC-8004 mint state from the DB and
+// LINKS live verification instead of claiming it. Fabricated fields
+// (identity_hash, conservator_bonded) are gone, not renamed.
 router.get('/erc8004/validate/:agent_id', async (req: Request, res: Response) => {
-  const { agent_id } = req.params;
-  const { data: agent, error } = await db.from('repid_agents').select('*').eq('id', agent_id).single();
-  if (error || !agent) return res.status(404).json({ error: 'Agent not found' });
+  try {
+    const passport = await buildAgentPassport(db, String(req.params.agent_id ?? ''));
+    if (!passport) return res.status(404).json({ error: 'Agent not found' });
 
-  let tier = 'PROBATIONARY';
-  if (agent.current_repid >= 8000) tier = 'VETERAN';
-  else if (agent.current_repid >= 5000) tier = 'AUTONOMOUS';
-  else if (agent.current_repid >= 1000) tier = 'ESTABLISHED';
-  else if (agent.current_repid >= 500) tier = 'EARNING';
-
-  res.json({
-    erc8004_version: "1.0",
-    agent_id,
-    identity_hash: createHash('sha256').update(String(agent_id)).digest('hex'),
-    reputation_score: agent.current_repid,
-    validation_status: "verified",
-    tier,
-    conservator_bonded: true,
-    created_at: agent.created_at
-  });
+    res.json({
+      erc8004_version: '1.0',
+      agent_id: passport.agent.agent_id,
+      reputation_score: passport.reputation.repid_score,
+      tier: passport.reputation.tier,
+      created_at: passport.agent.created_at,
+      // 'registered_onchain' = a mint tx is recorded for this agent;
+      // 'offchain_only' = no ERC-8004 identity recorded. Never "verified"
+      // without a chain read — use live_verification_endpoint for that.
+      validation_status: passport.identity_erc8004.registered_onchain
+        ? 'registered_onchain'
+        : 'offchain_only',
+      identity: passport.identity_erc8004,
+      passport_url: `/api/v1/passport/${passport.agent.agent_id}`,
+    });
+  } catch (e: unknown) {
+    if (e instanceof PassportQueryError) {
+      console.error(`[erc8004/validate] ${e.message}`);
+      return res.status(500).json({ error: 'query_failed', step: e.step });
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[erc8004/validate] unexpected: ${msg}`);
+    return res.status(500).json({ error: 'internal' });
+  }
 });
 
 router.post('/batch/prove', async (req: Request, res: Response) => {
