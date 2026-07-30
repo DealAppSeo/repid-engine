@@ -181,6 +181,39 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       }
     }
 
+    // 2026-07-30 (A2A self-serve): /contracts/<uuid>/* paths carry a CONTRACT
+    // id, not an agent id — the generic path-UUID check below misread it and
+    // 403'd every agent-bound key, making the whole A2A lifecycle
+    // (escrow/fulfill/satisfy/outcome) operator-key-only in practice
+    // (verified live). Proper authz instead: a bound key may act on a
+    // contract iff its agent is a PARTY (buyer or provider). Unknown
+    // contract ids fall through so the route returns its own 404.
+    const contractMatch = req.path.match(
+      /^(?:\/api\/v1)?\/contracts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i
+    );
+    if (contractMatch) {
+      try {
+        const { data: contractRow } = await db
+          .from('service_contracts')
+          .select('buyer_agent_id, provider_agent_id')
+          .eq('id', contractMatch[1])
+          .maybeSingle();
+        if (contractRow) {
+          const partyIds = [contractRow.buyer_agent_id, contractRow.provider_agent_id]
+            .filter(Boolean)
+            .map((x: string) => String(x).toLowerCase());
+          if (!partyIds.includes(dbAgentId.toLowerCase())) {
+            return res.status(403).json({
+              error: 'Forbidden: API key agent is not a party to this contract',
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[authMiddleware] contract party lookup failed (possibly mocked DB):', e);
+      }
+      return next();
+    }
+
     // Check for UUID or name in URL path
     const pathParts = req.path.split('/');
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
