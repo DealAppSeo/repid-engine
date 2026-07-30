@@ -177,6 +177,71 @@ const SERVICE_DISPUTE_DELTAS = {
   no_fault:          { provider: 0, buyer: 0 },
 } as const;
 
+// === Simulation gate (shared across all four contract touchpoints) ===
+//
+// G1 extension (2026-07-29): the T1 fulfilled path has gated RepID deltas on
+// simulated contracts since the F-series patch, but T2 (/satisfy), T3
+// (/outcome), and dispute resolution applied deltas unconditionally — a
+// simulated contract could still move real RepID through those paths
+// (2 of 10 simulated demo contracts did, −100 provider, per
+// 2026-05-27 CC2_MARKETPLACE_DEMO). All four paths now share this check:
+// sim flags on the contract's metadata/payload (F-series normalized) plus the
+// linked x402 settlement's is_simulated column.
+
+/**
+ * Sim check for an already-fetched service_contracts row. The settlement
+ * lookup fails OPEN (log + continue), matching the original T1 behavior — a
+ * transient DB error must not silently zero a legitimate delta.
+ */
+export async function contractRowIsSimulated(
+  row: { metadata?: any; payload?: any; x402_payment_id?: string | null }
+): Promise<boolean> {
+  if (hasTruthySimFlag(row.metadata ?? {}) || hasTruthySimFlag(row.payload ?? {})) {
+    return true;
+  }
+  if (row.x402_payment_id) {
+    try {
+      const { data: settlement } = await db
+        .from('x402_settlements')
+        .select('is_simulated')
+        .eq('id', row.x402_payment_id)
+        .maybeSingle();
+
+      if (settlement?.is_simulated) {
+        return true;
+      }
+    } catch (e: any) {
+      console.error(`[contractRowIsSimulated] failed to fetch settlement details:`, e.message ?? String(e));
+    }
+  }
+  return false;
+}
+
+/**
+ * By-id variant for callers that don't hold the full row (T2/T3/dispute).
+ * Fetch failures fail OPEN (same rationale as above).
+ */
+export async function isContractSimulated(contractId: string): Promise<boolean> {
+  try {
+    const { data, error } = await db
+      .from('service_contracts')
+      .select('metadata, payload, x402_payment_id')
+      .eq('id', contractId)
+      .maybeSingle();
+
+    if (error || !data) {
+      if (error) {
+        console.error(`[isContractSimulated] failed to fetch contract ${contractId}:`, error.message ?? error);
+      }
+      return false;
+    }
+    return contractRowIsSimulated(data);
+  } catch (e: any) {
+    console.error(`[isContractSimulated] unexpected error for contract ${contractId}:`, e.message ?? String(e));
+    return false;
+  }
+}
+
 // Free-tier cross-LLM providers for HAL strictness:2 (cross-LLM consensus /
 // Comma-BFT). Uses the fixed free-LLM router's providers (groq + cerebras) —
 // never paid. Only providers with a key set are included; <2 degrades to the
@@ -244,27 +309,10 @@ export async function applyServiceFulfilledDeltas(
 
   // F-series patch (2026-05-22): normalize is_simulated across case/type
   // ("True"/"TRUE"/1/"1"/"yes") and nested/mislocated flags via
-  // hasTruthySimFlag (src/utils/truthy.ts).
-  let isSimulated =
-    hasTruthySimFlag(meta) ||
-    hasTruthySimFlag(payload);
-
-  // Check if settlement is simulated
-  if (fullContract.x402_payment_id) {
-    try {
-      const { data: settlement } = await db
-        .from('x402_settlements')
-        .select('is_simulated')
-        .eq('id', fullContract.x402_payment_id)
-        .maybeSingle();
-
-      if (settlement?.is_simulated) {
-        isSimulated = true;
-      }
-    } catch (e: any) {
-      console.error(`[applyServiceFulfilledDeltas] failed to fetch settlement details:`, e.message ?? String(e));
-    }
-  }
+  // hasTruthySimFlag (src/utils/truthy.ts). Extracted to the shared
+  // contractRowIsSimulated helper (2026-07-29) so T2/T3/dispute use the
+  // identical gate.
+  const isSimulated = await contractRowIsSimulated(fullContract);
 
   // G1: gate RepID delta on !isSimulated. If simulated, delta applied is 0.
   const providerDelta = isSimulated ? 0 : SERVICE_FULFILLED_DELTAS.provider;
@@ -444,8 +492,12 @@ export async function applyServiceSatisfiedDeltas(
   contract: { id: string, provider_agent_id: string, buyer_agent_id: string },
   satisfactionScore: number
 ): Promise<void> {
-  const providerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * satisfactionScore);
-  const buyerDelta = Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * satisfactionScore);
+  // G1 (T2, 2026-07-29): same simulation gate as the fulfilled path — a
+  // simulated contract's /satisfy writes 0-delta events (audit trail kept,
+  // no RepID movement), mirroring T1.
+  const isSimulated = await isContractSimulated(contract.id);
+  const providerDelta = isSimulated ? 0 : Math.round(SERVICE_SATISFIED_DELTA_BASE.provider * satisfactionScore);
+  const buyerDelta = isSimulated ? 0 : Math.round(SERVICE_SATISFIED_DELTA_BASE.buyer * satisfactionScore);
 
   await applyValidationEvent(
     contract.provider_agent_id,
@@ -534,10 +586,15 @@ export async function applyServiceOutcomeDeltas(
   rating: ServiceOutcomeRating,
   raterRepid: number | null | undefined,
 ): Promise<ServiceOutcomeResult> {
+  // G1 (T3, 2026-07-29): same simulation gate as T1/T2 — a simulated
+  // contract's outcome rating never moves the provider (delta forced to 0, so
+  // no score event is written below). disputeEligible is left as-is: it is a
+  // flag, not a score move, and dispute deltas are gated separately.
+  const isSimulated = await isContractSimulated(contract.id);
   const baseDelta =
     rating === 'ok' ? SERVICE_OUTCOME_OK_NUDGE : SERVICE_OUTCOME_BASE[rating];
   const raterWeight = computeRaterWeight(raterRepid);
-  const providerDelta = Math.round(baseDelta * raterWeight);
+  const providerDelta = isSimulated ? 0 : Math.round(baseDelta * raterWeight);
   const disputeEligible = rating === 'bad';
 
   let scoreEventApplied = false;
@@ -570,8 +627,17 @@ export async function applyServiceDisputeResolution(
   contract: { id: string, provider_agent_id: string, buyer_agent_id: string },
   verdict: 'provider_at_fault' | 'buyer_at_fault' | 'no_fault'
 ): Promise<void> {
+  // G1 (dispute, 2026-07-29): same simulation gate as T1/T2/T3. This is the
+  // exact path the 2026-05-27 marketplace demo leaked through (−100 provider
+  // on simulated contracts).
+  const isSimulated = await isContractSimulated(contract.id);
+  if (isSimulated) {
+    console.log(`[applyServiceDisputeResolution] contract ${contract.id} is simulated — skipping dispute deltas (verdict: ${verdict})`);
+    return;
+  }
+
   const deltas = SERVICE_DISPUTE_DELTAS[verdict];
-  
+
   if (deltas.provider !== 0) {
     await applyValidationEvent(
       contract.provider_agent_id,
