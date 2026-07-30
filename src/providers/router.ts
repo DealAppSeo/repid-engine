@@ -13,6 +13,7 @@ import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
 import { checkCap } from '../billing/caps';
 import { db } from '../db';
 import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
+import { applyEscalationOnly } from '../services/anfis-escalation-gate'; // 2026-07-30 bounded live authority (PR #281)
 import { persistShadowDecision } from '../services/anfis-shadow-persist'; // persist shadow decision so ANFIS is measurable (shadow-only, no routing change)
 
 export interface RouteRequest {
@@ -28,7 +29,7 @@ export interface RouteRequest {
 export interface RouteDecision {
   chosen_provider: string;
   chosen_tier: '0a' | '1' | 'none' | 'slm';
-  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit' | 'slm_low_complexity';
+  reason: 'priority_healthy' | 'fallback_after_failure' | 'tier1_required' | 'all_exhausted' | 'cap_hit' | 'slm_low_complexity' | 'anfis_escalation' | 'anfis_lateral';
   tried: string[];
 }
 
@@ -276,6 +277,52 @@ export async function routeRequest(req: RouteRequest, excludeProviders: string[]
     }
   } catch (e) {
     // tolerant for no key / no table yet
+  }
+
+  // 2026-07-30 — escalation-only ANFIS authority (PR #281 gate, wired here).
+  // Inert unless ANFIS_ROUTING_MODE=escalate_only. The gate can only move
+  // routing UP the capability ladder or laterally within a tier — never below
+  // the static pick (the unfitted-policy silent-failure direction). If the
+  // escalation target is unavailable (key/health/cap), we warn LOUDLY and fall
+  // through to the normal static path — never a silent degradation.
+  const escGate = applyEscalationOnly({ staticProvider, staticTier, anfisProvider, anfisTier });
+  if (
+    escGate.mode === 'escalate_only' &&
+    !escGate.deescalation_blocked &&
+    (escGate.escalated || escGate.provider !== staticProvider)
+  ) {
+    if (escGate.tier === '1' && req.tier_preference !== 'tier0_only') {
+      for (const adapter of tier1Adapters) {
+        if (adapter.name !== escGate.provider) continue;
+        const key = resolveTier1Key(adapter.name, req.user_paid_keys);
+        if (key && !excludeProviders.includes(adapter.name) && isHealthy(adapter.name)) {
+          const cap = await checkCap(adapter.name);
+          if (cap.allowed) {
+            return {
+              adapter,
+              decision: { chosen_provider: adapter.name, chosen_tier: '1', reason: 'anfis_escalation', tried },
+              staticProvider, staticTier, anfisProvider, anfisTier, anfisConfidence,
+            };
+          }
+        }
+      }
+      console.warn(`[router] ANFIS escalation to ${escGate.provider}/tier1 unavailable (key/health/cap) — using static path`);
+    } else if (escGate.tier === '0a' && req.tier_preference !== 'tier1_only') {
+      for (const adapter of tier0aAdapters) {
+        if (adapter.name !== escGate.provider) continue;
+        if (!excludeProviders.includes(adapter.name) && isHealthy(adapter.name)) {
+          const cap = await checkCap(adapter.name);
+          if (cap.allowed) {
+            return {
+              adapter,
+              decision: { chosen_provider: adapter.name, chosen_tier: '0a', reason: 'anfis_lateral', tried },
+              staticProvider, staticTier, anfisProvider, anfisTier, anfisConfidence,
+            };
+          }
+        }
+      }
+      console.warn(`[router] ANFIS lateral to ${escGate.provider}/tier0a unavailable (health/cap) — using static path`);
+    }
   }
 
   // Intercept for low-complexity SLM routing
