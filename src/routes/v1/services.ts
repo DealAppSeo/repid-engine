@@ -15,7 +15,9 @@ router.post('/', async (req: Request, res: Response) => {
     service_name,
     description,
     base_price_usdc_raw,
-    min_repid_to_purchase: min_repid_to_purchase || 500,
+    // ?? not ||: 0 is a legitimate open-to-everyone floor (verified live
+    // 2026-07-30: `0 || 500` silently stored 500 and 403'd a fresh buyer).
+    min_repid_to_purchase: min_repid_to_purchase ?? 500,
     capability_metadata: capability_metadata || {}
   }).select().single();
 

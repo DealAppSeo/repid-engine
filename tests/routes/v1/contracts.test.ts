@@ -117,7 +117,9 @@ describe('Contracts Routes', () => {
           return {
             select: jest.fn().mockReturnThis(),
             eq: jest.fn().mockReturnThis(),
-            maybeSingle: jest.fn().mockResolvedValue({ data: { wallet_address: '0xProviderWallet' }, error: null }),
+            // Must be a REAL EVM address: the 2026-07-30 burn-trap guard
+            // validates payTo with ethers.isAddress and refuses otherwise.
+            maybeSingle: jest.fn().mockResolvedValue({ data: { wallet_address: '0xdf6b8215D193b11B4903d223729c3CF7A6de271d' }, error: null }),
           } as any;
         } else if (table === 'x402_settlements') {
           return {

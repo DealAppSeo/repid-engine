@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { ethers } from 'ethers';
 import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas, applyServiceOutcomeDeltas, type ServiceOutcomeRating } from '../../services/validation-repid-delta';
 import { registerPendingOutcome } from '../../services/outcome-notifier';
@@ -285,12 +286,32 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     .eq('id', contract.provider_agent_id)
     .maybeSingle();
 
+  // 2026-07-30 burn-trap guard (found by the live A2A E2E): wallet
+  // provisioning at registration is best-effort and silently failing in
+  // prod (all fresh agents have wallet_address NULL), and this route then
+  // fell back to the ZERO ADDRESS as payTo — issuing a payable x402
+  // challenge that would BURN the buyer's USDC. Never issue a payment
+  // request without a real recipient.
+  const payTo = provider?.wallet_address ?? null;
+  const payToValid =
+    typeof payTo === 'string' &&
+    ethers.isAddress(payTo) &&
+    payTo.toLowerCase() !== '0x0000000000000000000000000000000000000000';
+  if (!payToValid) {
+    x402Metrics.increment('escrow.error.409');
+    return res.status(409).json({
+      error: 'provider_wallet_missing',
+      message:
+        'The provider agent has no valid on-chain wallet address, so an x402 payment cannot be requested (refusing to direct funds to the zero address). The provider must attach or provision a wallet first.',
+    });
+  }
+
   const priceUsdc = String(contract.agreed_price_usdc_raw);
   const resource = `/api/v1/contracts/${contract.id}/escrow`;
 
   const requirements = x402Facilitator.buildPaymentRequirements({
     resource,
-    payTo: provider?.wallet_address || '0x0000000000000000000000000000000000000000',
+    payTo,
     priceUsdc,
     description: `Service Contract ${contract.id} Escrow payment`
   });
