@@ -440,12 +440,49 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
          0.2 * (1 - halSignals.evidence_quality) +
          0.1 * (1 - halSignals.scope_appropriateness)) *
         PYTHAGOREAN_COMMA;
-    const halApproved = dissonance <= halApproveThreshold;
+    // NOTE: refined below — a 'flagged' fact-check quorum verdict also denies
+    // the positive reward (see the 2026-07-30 discrimination fix).
+    let halApproved = dissonance <= halApproveThreshold;
     // Phase 1.5 ext (CC1) — Pythagorean Comma BFT hard veto (P-003).
     // When 3+ providers respond with high agreement AND tiny gap (coordinated
     // bias signature), force constitutional block regardless of dissonance.
     const commaVeto = (halSignals as any).comma_veto === true;
-    const constitutionalBlock = commaVeto || dissonance > halBlockThreshold;
+
+    // 2026-07-30 HAL discrimination fix (verified live): the cross-LLM
+    // agreement signal judges whether providers agree WITH EACH OTHER about
+    // the prompt — the agent's ANSWER is never judged, so a fabricated
+    // decision_text ("Eiffel Tower is in Berlin, built 1611 by Newton")
+    // scored hal_score 0.326 and earned +19. The calibrated fact-check
+    // quorum (src/hal/fact-check.ts, the same evaluator behind
+    // `trustshell verify`, discrimination gap +0.617) judges the CLAIM
+    // TEXT. Run it on decision_text for verifiable categories and let its
+    // verdict gate the reward: vetoed → constitutional block (like the
+    // comma veto); flagged → no positive reward. Degrades loudly and
+    // narrowly: quorum unavailable → dissonance path unchanged.
+    // Kill-switch: HAL_FACTCHECK_SCORE_EVENTS=false.
+    let factCheckDecision: string | null = null;
+    const factCheckEnabled = process.env.HAL_FACTCHECK_SCORE_EVENTS !== 'false';
+    const verifiableCategory =
+      (halSignals as any).prompt_category === 'factual' ||
+      (halSignals as any).prompt_category === 'time-sensitive' ||
+      (halSignals as any).prompt_category === 'math';
+    if (factCheckEnabled && verifiableCategory) {
+      try {
+        const { halService } = require('../hal/service');
+        const fc = await halService.evaluate({ text: decision_text, strictness: 2 });
+        if (fc && fc.mode === 'fact-check') {
+          factCheckDecision = fc.decision ?? null;
+        }
+      } catch (e: any) {
+        console.error('[score-event] fact-check quorum failed (dissonance path unchanged):', e?.message ?? e);
+      }
+    }
+
+    const factCheckVeto = factCheckDecision === 'vetoed';
+    // 'flagged' = the quorum could not verify the claim — don't reward it
+    // (the negative-side −baseDelta semantics of non-approval apply).
+    if (factCheckDecision === 'flagged') halApproved = false;
+    const constitutionalBlock = commaVeto || factCheckVeto || dissonance > halBlockThreshold;
 
     if (constitutionalBlock) {
       return res.status(403).json({
@@ -453,8 +490,11 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
         hal_score: dissonance,
         reason: commaVeto
           ? `Pythagorean Comma BFT veto (P-003): coordinated-bias signature — comma_gap=${(halSignals as any).comma_gap}, severity=critical`
-          : `dissonance exceeds constitutional block threshold (${halBlockThreshold})`,
+          : factCheckVeto
+            ? 'fact-check quorum veto: the cross-provider quorum judged the decision text false'
+            : `dissonance exceeds constitutional block threshold (${halBlockThreshold})`,
         comma_veto: commaVeto,
+        fact_check_decision: factCheckDecision,
         comma_gap: (halSignals as any).comma_gap ?? null,
         comma_severity: (halSignals as any).comma_severity ?? null,
       });
@@ -594,6 +634,7 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
           decision_text,
           hal_signals: halSignals,
           hal_approved: halApproved,
+          fact_check_decision: factCheckDecision,
           challenge_mode: challenge_mode ?? 'immediate',
           challenge_opens_at: challenge_mode === 'time_locked' ? resolution_at ?? null : null,
           reward_breakdown: rewardResult.breakdown,
