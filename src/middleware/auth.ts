@@ -57,6 +57,16 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // Sprint 1: x402 inbound demo bypass
   if (req.method === 'POST' && /^\/api\/v1\/agents\/[^/]+\/trade-analysis$/.test(req.path)) return next();
 
+  // 2026-07-29: T0.5 agent gate (spec §9.1) — /llm/complete carries its OWN
+  // anonymous metering (meterRun: 5 runs/day/IP, email verification → 100,
+  // BYOK unmetered; default-ON via AGENT_GATE_ENABLED) plus a 30 req/min
+  // limiter, and anonymous callers only ever reach the free tier0 pool.
+  // Without this bypass the global auth 401s before the gate ever runs, which
+  // broke TrustShell's entire "Try it, no code" onboarding path (verified
+  // live 2026-07-29: create-agent succeeded, first run failed with
+  // "Unauthorized: API key required").
+  if (req.method === 'POST' && req.path === '/api/v1/llm/complete') return next();
+
   // Sprint A8: bypass global auth for keys (key-management.ts handles it)
   if (/^\/api\/v1\/agents\/[^/]+\/keys/.test(req.path)) {
     return next();
