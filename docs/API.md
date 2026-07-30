@@ -52,6 +52,26 @@ LOWEST avg risk.
 
 ---
 
+# Agent Trust Passport (2026-07-29)
+
+The composite public answer to "should I authorize this agent?" — built for the
+merchant-side agent-authorization question (post Amazon v. Perplexity: user
+permission ≠ merchant authorization). Composes only recorded facts, DB-first
+(no per-request RPC): RepID + DB-derived tier, ERC-8004 mint metadata with a
+**linked** live `ownerOf()` cross-check, x402 real-vs-simulated settlement
+counts, on-chain reputation write count, and the latest ZKP proof labeled
+honestly (range proof over the score — it does not attest agent behavior).
+Source: `src/services/agent-passport.ts`, `src/routes/v1/agent-passport.ts`.
+
+| Method | Path | Auth | Success | Notes |
+|---|---|---|---|---|
+| GET | `/api/v1/passport/:agentId` | none | 200 / 404 / 500 | `:agentId` = UUID, ERC-8004 token id, or agent name/slug; fail-loud 500 `{error:"query_failed", step}` on any sub-query error; `Cache-Control: public, max-age=30` |
+| GET | `/api/v1/erc8004/validate/:agent_id` | none | 200 / 404 / 500 | **honest rewrite 2026-07-29** — previously fabricated `validation_status:"verified"` + `conservator_bonded:true` with zero chain reads. Now derives `registered_onchain` \| `offchain_only` from recorded mint state, links the passport + live verification, and the fabricated fields are gone |
+
+```bash
+curl https://repid-engine-production.up.railway.app/api/v1/passport/trinity-shofet
+```
+
 # Live-numbers observability surface (2026-07-07)
 
 Two additional **public read-only** GETs power TrustShell.dev's minted-agent leaderboard and its

@@ -34,6 +34,14 @@ Production base URL: `https://repid-engine-production.up.railway.app`
 
 All endpoints below are **public — no API key required**. CORS allows `trustrepid.dev`, `trustshell.dev`, and localhost.
 
+### `GET /api/v1/passport/:agentId`
+
+**Agent Trust Passport** — the one-call composite for "should I authorize this agent?": RepID + tier, ERC-8004 identity metadata with a linked live `ownerOf()` cross-check, x402 real-vs-simulated settlement history, on-chain reputation write count, and the latest ZKP proof labeled honestly (a range proof over the score; it does not attest agent behavior). `:agentId` accepts a UUID, an ERC-8004 token id, or an agent name.
+
+```bash
+curl https://repid-engine-production.up.railway.app/api/v1/passport/trinity-shofet
+```
+
 ### `GET /api/v1/status`
 
 Consolidated health + 24h economic activity.

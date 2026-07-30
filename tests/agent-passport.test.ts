@@ -1,0 +1,290 @@
+/**
+ * Agent Trust Passport (2026-07-29).
+ *
+ * Verifies the composite public surface TrustShell.dev / TrustMarket.dev
+ * render for "should I authorize this agent?":
+ *   - buildAgentPassport composes ONLY recorded facts: RepID + DB-derived tier
+ *     (never recomputed app-side), ERC-8004 mint metadata, x402 real-vs-
+ *     simulated settlement counts, on-chain reputation write count, latest
+ *     ZKP proof labeled honestly (D-019: range proof, not behavior attestation).
+ *   - No fabricated fields: nothing says "verified" without a chain read —
+ *     live verification is a linked endpoint, not a claim.
+ *   - Sub-query failures throw PassportQueryError (fail-loud, never a
+ *     silently-zeroed passport) → route maps to 500 query_failed.
+ *   - GET /api/v1/passport/:agentId is public (mounted pre-auth in index.ts).
+ */
+import request from 'supertest';
+import express from 'express';
+import {
+  buildAgentPassport,
+  PassportQueryError,
+} from '../src/services/agent-passport';
+
+jest.mock('../src/db', () => ({
+  get db() {
+    return (global as any).__passportDb;
+  },
+}));
+
+// eslint-disable-next-line import/first
+import agentPassportRouter from '../src/routes/v1/agent-passport';
+
+/* ------------------------------ scripted db ------------------------------ */
+
+/** Chainable thenable: every builder method returns the chain; awaiting the
+ *  chain (or .maybeSingle()) resolves to the scripted result. */
+function chainResult(result: any) {
+  const chain: any = {};
+  for (const m of ['select', 'eq', 'or', 'order', 'limit', 'not']) {
+    chain[m] = () => chain;
+  }
+  chain.maybeSingle = () => Promise.resolve(result);
+  chain.then = (onF: any, onR: any) => Promise.resolve(result).then(onF, onR);
+  return chain;
+}
+
+/** db.from(table) pops the next scripted result for that table, in order. */
+function makeDb(script: Record<string, any[]>) {
+  const queues: Record<string, any[]> = Object.fromEntries(
+    Object.entries(script).map(([k, v]) => [k, [...v]])
+  );
+  return {
+    from: (table: string) => {
+      const q = queues[table];
+      if (!q || q.length === 0) {
+        throw new Error(`unexpected query on table ${table}`);
+      }
+      return chainResult(q.shift());
+    },
+  } as any;
+}
+
+const MINTED_AGENT = {
+  id: '11111111-2222-3333-4444-555555555555',
+  agent_name: 'trinity-shofet',
+  display_name: null,
+  current_repid: 1390,
+  tier: 'ESTABLISHED',
+  activity_30d: 12,
+  created_at: '2026-04-01T00:00:00.000Z',
+  erc8004_token_id: '5863',
+  erc8004_address: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+  mint_tx_hash: '0xminttx',
+  mint_chain_id: 84532,
+  minted_at: '2026-05-10T00:00:00.000Z',
+  conservator_address: '0xdf6b82150000000000000000000000000000271d',
+};
+
+/** The standard scripted sequence for one successful buildAgentPassport call
+ *  on a minted agent. Order matters: real count, sim count, last real. */
+function happyScript(agentRow: any = MINTED_AGENT) {
+  return {
+    repid_agents: [{ data: agentRow, error: null }],
+    x402_settlements: [
+      { count: 7, error: null },
+      { count: 3, error: null },
+      {
+        data: {
+          tx_hash: '0xrealsettle',
+          created_at: '2026-07-23T04:33:00.000Z',
+          amount: 10000,
+          asset: 'USDC',
+        },
+        error: null,
+      },
+    ],
+    erc8004_reputation_writes: [
+      { count: 5, error: null },
+      { data: { tx_hash: '0xfeedback', created_at: '2026-07-22T00:00:00.000Z' }, error: null },
+    ],
+    repid_zkp_proofs: [
+      {
+        data: {
+          scheme: 'plonky3_range_check',
+          proof_bytes: 'AAAA',
+          eas_attestation_uid: '0xeas',
+          created_at: '2026-07-01T00:00:00.000Z',
+        },
+        error: null,
+      },
+    ],
+  };
+}
+
+/* --------------------------- service-level tests -------------------------- */
+
+describe('buildAgentPassport', () => {
+  test('composes the honest passport for a minted agent', async () => {
+    const p = await buildAgentPassport(makeDb(happyScript()), MINTED_AGENT.id);
+    expect(p).not.toBeNull();
+
+    expect(p!.agent.agent_id).toBe(MINTED_AGENT.id);
+    // tier is passed through from the DB (trg_sync_tier is source of truth).
+    expect(p!.reputation).toEqual({
+      repid_score: 1390,
+      tier: 'ESTABLISHED',
+      activity_30d: 12,
+    });
+
+    expect(p!.identity_erc8004.registered_onchain).toBe(true);
+    expect(p!.identity_erc8004.token_id).toBe('5863');
+    expect(p!.identity_erc8004.network).toBe('base-sepolia');
+    expect(p!.identity_erc8004.mint_basescan_url).toBe(
+      'https://sepolia.basescan.org/tx/0xminttx'
+    );
+    expect(p!.identity_erc8004.live_verification_endpoint).toBe(
+      `/api/v1/agents/${MINTED_AGENT.id}/onchain`
+    );
+
+    expect(p!.payments_x402.real_settlements).toBe(7);
+    expect(p!.payments_x402.simulated_settlements).toBe(3);
+    expect(p!.payments_x402.last_real_settlement).toEqual({
+      tx_hash: '0xrealsettle',
+      basescan_url: 'https://sepolia.basescan.org/tx/0xrealsettle',
+      amount_base_units: 10000,
+      asset: 'USDC',
+      at: '2026-07-23T04:33:00.000Z',
+    });
+
+    expect(p!.reputation_onchain.writes).toBe(5);
+    expect(p!.reputation_onchain.last_write!.tx_hash).toBe('0xfeedback');
+
+    expect(p!.zkp.latest_proof).toEqual({
+      scheme: 'plonky3_range_check',
+      cryptographically_verifiable: true,
+      eas_attestation_uid: '0xeas',
+      created_at: '2026-07-01T00:00:00.000Z',
+    });
+    // D-019: the disclosure must scope the proof to a score range claim.
+    expect(p!.zkp.disclosure).toMatch(/range proofs over the RepID score/);
+    expect(p!.zkp.disclosure).toMatch(/do not yet bind agent execution/);
+  });
+
+  test('never fabricates: unminted agent reads offchain-honest, empty history reads zero', async () => {
+    const unminted = {
+      ...MINTED_AGENT,
+      erc8004_token_id: null,
+      erc8004_address: null,
+      mint_tx_hash: null,
+      mint_chain_id: null,
+      minted_at: null,
+      conservator_address: null,
+    };
+    const script = {
+      repid_agents: [{ data: unminted, error: null }],
+      x402_settlements: [
+        { count: 0, error: null },
+        { count: 0, error: null },
+        { data: null, error: null },
+      ],
+      erc8004_reputation_writes: [
+        { count: 0, error: null },
+        { data: null, error: null },
+      ],
+      repid_zkp_proofs: [{ data: null, error: null }],
+    };
+    const p = await buildAgentPassport(makeDb(script), MINTED_AGENT.id);
+
+    expect(p!.identity_erc8004.registered_onchain).toBe(false);
+    expect(p!.identity_erc8004.token_id).toBeNull();
+    expect(p!.identity_erc8004.mint_basescan_url).toBeNull();
+    expect(p!.payments_x402.real_settlements).toBe(0);
+    expect(p!.payments_x402.last_real_settlement).toBeNull();
+    expect(p!.reputation_onchain.writes).toBe(0);
+    expect(p!.reputation_onchain.last_write).toBeNull();
+    expect(p!.zkp.latest_proof).toBeNull();
+
+    // The old validate stub's fabricated fields must not exist anywhere.
+    const flat = JSON.stringify(p);
+    expect(flat).not.toContain('conservator_bonded');
+    expect(flat).not.toContain('identity_hash');
+    expect(flat).not.toContain('"verified"');
+  });
+
+  test('a stub/HMAC proof row is NOT labeled cryptographically verifiable', async () => {
+    const script = happyScript();
+    script.repid_zkp_proofs = [
+      {
+        data: {
+          scheme: 'plonky3-babybear-stub-v1',
+          proof_bytes: 'AAAA',
+          eas_attestation_uid: null,
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
+        error: null,
+      },
+    ];
+    const p = await buildAgentPassport(makeDb(script), MINTED_AGENT.id);
+    expect(p!.zkp.latest_proof!.cryptographically_verifiable).toBe(false);
+  });
+
+  test('returns null for an unknown agent (UUID form)', async () => {
+    const db = makeDb({ repid_agents: [{ data: null, error: null }] });
+    expect(await buildAgentPassport(db, '99999999-9999-9999-9999-999999999999')).toBeNull();
+  });
+
+  test('resolves a numeric token id via erc8004_token_id', async () => {
+    const p = await buildAgentPassport(makeDb(happyScript()), '5863');
+    expect(p!.agent.agent_id).toBe(MINTED_AGENT.id);
+  });
+
+  test('resolves a bare slug via the trinity- prefix fallback', async () => {
+    const script = happyScript();
+    // exact-name lookup misses, trinity-prefixed lookup hits
+    script.repid_agents = [
+      { data: null, error: null },
+      { data: MINTED_AGENT, error: null },
+    ];
+    const p = await buildAgentPassport(makeDb(script), 'shofet');
+    expect(p!.agent.agent_id).toBe(MINTED_AGENT.id);
+  });
+
+  test('fails loud with PassportQueryError when a sub-query errors', async () => {
+    const script = happyScript();
+    script.x402_settlements = [{ count: null, error: { message: 'boom' } }];
+    await expect(
+      buildAgentPassport(makeDb(script), MINTED_AGENT.id)
+    ).rejects.toThrow(PassportQueryError);
+  });
+});
+
+/* ---------------------------- route-level tests --------------------------- */
+
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', agentPassportRouter);
+  return app;
+}
+
+describe('GET /api/v1/passport/:agentId', () => {
+  test('200 with the passport + cache header', async () => {
+    (global as any).__passportDb = makeDb(happyScript());
+    const res = await request(makeApp()).get(`/api/v1/passport/${MINTED_AGENT.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.passport_version).toBe('1');
+    expect(res.body.identity_erc8004.registered_onchain).toBe(true);
+    expect(res.headers['cache-control']).toBe('public, max-age=30');
+  });
+
+  test('404 for an unknown agent', async () => {
+    (global as any).__passportDb = makeDb({
+      repid_agents: [{ data: null, error: null }],
+    });
+    const res = await request(makeApp()).get(
+      '/api/v1/passport/99999999-9999-9999-9999-999999999999'
+    );
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('agent_not_found');
+  });
+
+  test('500 query_failed (with the failing step) on a sub-query error', async () => {
+    const script = happyScript();
+    script.erc8004_reputation_writes = [{ count: null, error: { message: 'boom' } }];
+    (global as any).__passportDb = makeDb(script);
+    const res = await request(makeApp()).get(`/api/v1/passport/${MINTED_AGENT.id}`);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('query_failed');
+    expect(res.body.step).toBe('reputation_writes_count');
+  });
+});
