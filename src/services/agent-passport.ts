@@ -175,13 +175,20 @@ export async function buildAgentPassport(
     .or(settlementParty);
   if (simErr) throw new PassportQueryError('x402_sim_count', simErr.message);
 
+  // Live-prod finding (2026-07-30, trinity-shofet): real_settlements=47 but
+  // the newest real row can carry a null tx_hash / created_at, and Postgres
+  // DESC sorts nulls first — which made last_real_settlement read null next
+  // to a non-zero count. Skip hash-less rows and pin nulls last so the field
+  // shows the latest INSPECTABLE settlement (the row count above still counts
+  // every real row).
   const { data: lastReal, error: lastRealErr } = await db
     .from('x402_settlements')
     .select('tx_hash, created_at, amount, asset')
     .eq('status', 'settled')
     .eq('is_simulated', false)
     .or(settlementParty)
-    .order('created_at', { ascending: false })
+    .not('tx_hash', 'is', null)
+    .order('created_at', { ascending: false, nullsFirst: false })
     .limit(1)
     .maybeSingle();
   if (lastRealErr) throw new PassportQueryError('x402_last_real', lastRealErr.message);

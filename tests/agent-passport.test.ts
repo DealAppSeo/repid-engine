@@ -239,6 +239,40 @@ describe('buildAgentPassport', () => {
     expect(p!.agent.agent_id).toBe(MINTED_AGENT.id);
   });
 
+  test('last-real-settlement query skips hash-less rows and pins nulls last', async () => {
+    // Live-prod finding (trinity-shofet, 2026-07-30): 47 real settlements but
+    // last_real_settlement=null, because the newest real row had a null
+    // tx_hash and DESC sorts nulls first. Pin the query shape that fixes it.
+    const calls: Array<{ method: string; args: any[] }> = [];
+    const script = happyScript();
+    let x402Query = 0;
+    const db: any = {
+      from: (table: string) => {
+        const q = (script as any)[table];
+        if (!q || q.length === 0) throw new Error(`unexpected query on ${table}`);
+        const result = q.shift();
+        if (table === 'x402_settlements') x402Query++;
+        const chain: any = {};
+        for (const m of ['select', 'eq', 'or', 'order', 'limit', 'not']) {
+          chain[m] = (...args: any[]) => {
+            if (table === 'x402_settlements' && x402Query === 3) calls.push({ method: m, args });
+            return chain;
+          };
+        }
+        chain.maybeSingle = () => Promise.resolve(result);
+        chain.then = (onF: any, onR: any) => Promise.resolve(result).then(onF, onR);
+        return chain;
+      },
+    };
+    const p = await buildAgentPassport(db, MINTED_AGENT.id);
+    expect(p!.payments_x402.last_real_settlement!.tx_hash).toBe('0xrealsettle');
+    expect(calls).toContainEqual({ method: 'not', args: ['tx_hash', 'is', null] });
+    expect(calls).toContainEqual({
+      method: 'order',
+      args: ['created_at', { ascending: false, nullsFirst: false }],
+    });
+  });
+
   test('fails loud with PassportQueryError when a sub-query errors', async () => {
     const script = happyScript();
     script.x402_settlements = [{ count: null, error: { message: 'boom' } }];
