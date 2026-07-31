@@ -92,7 +92,9 @@ describe('Mainnet Value Caps Enforcement', () => {
           select: jest.fn().mockReturnThis(),
           eq: jest.fn().mockReturnThis(),
           maybeSingle: jest.fn().mockResolvedValue({
-            data: { wallet_address: '0xProviderWallet' },
+            // Must be a REAL EVM address: the 2026-07-30 burn-trap guard
+            // validates payTo with ethers.isAddress and 409s otherwise.
+            data: { wallet_address: '0xdf6b8215D193b11B4903d223729c3CF7A6de271d' },
             error: null,
           }),
         } as any;
