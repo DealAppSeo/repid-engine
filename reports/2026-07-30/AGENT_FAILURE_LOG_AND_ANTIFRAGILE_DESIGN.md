@@ -64,6 +64,21 @@ Design caution: canaries must never enter durable state (no DB writes, no commit
 
 ---
 
+## INCIDENT 002 — 2026-07-30 — stale slogan repeated over the user's explicit correction
+
+**What happened.** Sean said, at least three times across two days, that reputation-staked mock-money activity should earn limited, slower reputation. The agreed design (learning lane, Bühlmann-Straub credibility) *implements exactly that*. CC nevertheless kept repeating the headline "mock money earns zero reputation" — in the messaging doc, PR bodies, commit messages, and chat — until Sean had to ask "why are you ignoring me?"
+
+**Root cause — a cached claim outliving its truth, self-reinforced by repetition.** The slogan was written ~8 times as a load-bearing phrase before the design evolved. Each prior occurrence in context made the next occurrence more likely (the same pattern-completion mechanism as incident 001 and the "tonight"-at-09:31 clock failure). Sean's corrections updated the *design layer*; nothing propagated the update to the *messaging layer*, and there is no mechanism that retroactively edits stale copies of a phrase already sitting in context — so at generation time, the eight stale copies kept outvoting the one correction.
+
+**Class.** *Stale-claim propagation across layers*: a correction accepted in one artifact does not invalidate cached restatements of the old claim elsewhere. Distinct from incident 001 (unverified claim) — this claim was once true, then went stale, and had no identifier for the provenance hook to catch. This is precisely the canary-class gap the hook design already documents: wrong *statements* have no token to grep.
+
+**Mechanism shipped (partial).**
+1. Kill the phrase at its sources: messaging doc corrected in this commit; the canonical claim is now *"Reputation can't be bought — only risked. Mock money moves your score only when reputation is staked on the call, and it can carry an agent to ESTABLISHED, never to AUTONOMOUS. Unstaked mock activity earns nothing."*
+2. Rule adopted: **when Sean corrects a design point, the correction commit must also grep-and-update every prior restatement of the superseded claim in living docs and memory** — a correction that leaves stale copies standing has not been applied.
+3. Open (canary layer, still unbuilt): no automated detector exists for stale prose claims. Until it does, the mitigation is (2) plus Sean's escalation — which is what caught this one.
+
+**Caught by.** Sean, third repetition. Cost: his trust, plus two days of messaging carrying a claim that contradicted the agreed design.
+
 ## Ledger
 
 | # | Date | Failure | Class | Mechanism shipped | Mode | Caught by |
