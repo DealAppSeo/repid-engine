@@ -35,6 +35,32 @@
  *      tuned, it is DERIVED: `maxEpochLag = ceil(max verification latency / epoch period)`. Picking
  *      it by feel lands either on "free" or on "broken", with almost no ground in between.
  *
+ * ── THE PRECONDITION THAT MAKES ANY OF THAT MEAN ANYTHING (added Beat 60, from #262's finding)
+ *
+ * `epoch` is a PER-COMMITTER counter, not a clock. The first version of this module compared bare
+ * numbers, and #262 measured what that costs: on an unfiltered stream, **100% of honest, maximally
+ * fresh publications are refused**, ~all of them with `epoch-equivocation` — the module's strongest
+ * accusation, the one documented as evidence an honest committer cannot produce. Two agents reaching
+ * epoch 5 with different roots is not an attack, it is two agents having committed five times. Beat
+ * 60 reproduced it under a different generator (2 and 12 agents, seeds 1/2/3) and extended the sweep
+ * to `maxEpochLag = 50`: still 100%. The lag bound — the entire subject of the measurement above —
+ * is INOPERATIVE on an unscoped stream, because equivocation refuses before lag is weighed.
+ *
+ * So `committer` is a required field on both sides and both comparisons scope to it. And the fix is
+ * NOT free, which is worth stating because the obvious reading of #262's filtered column (0.0%
+ * everywhere) is that it is: that column was measured with every agent's anchors present in the
+ * stream. Scoping narrows the evidence base from stream-wide to per-committer, so the honest
+ * boundary (`no-usable-observation`) becomes reachable in proportion to committers this verifier has
+ * never seen. Measured over the same workload, 12 agents, `maxEpochLag = 1`:
+ *
+ *   per-committer coverage |  100%   |   75%    |   50%    |   25%
+ *   refusal after scoping  |  0.0%   | 8-25%    | 43-53%   | 67-93%   (entirely no-usable-observation)
+ *
+ * The trade is still overwhelmingly worth making — the unscoped column is 100% refusal at EVERY
+ * coverage — but it relocates the cost from a false accusation to a stated missing precondition, and
+ * it turns "what feeds the observations" into an operational requirement rather than a detail. A
+ * verifier that scans the whole EAS schema meets it; one that samples does not.
+ *
  * ── WHAT THIS BUYS, PRECISELY
  *
  * Detection is MONOTONE IN OBSERVERS: a withholder is refused by any single verifier that has seen
@@ -65,13 +91,20 @@
 import type { Hex } from './leanimt-plus';
 
 /**
- * One already-decoded anchor seen by this verifier. `epoch` and `root` are what the anchor asserts;
+ * One already-decoded anchor seen by this verifier.
+ *
+ * `epoch` and `root` are what the anchor asserts. `committer` is WHOSE epoch counter it is — the
+ * `agentId` the anchor already carries (`memory-root-anchor.ts:22,38`, on-chain as the first field
+ * of `PROOF_SCHEMA_DEF`); it is COMPARED, and it is what makes the other two comparable at all.
  * `source` is where the verifier got it (a chain scan, a peer, a prior interaction) and exists to be
- * reported back in evidence, never to be compared.
+ * reported back in evidence, never to be compared. The two are different questions — WHO committed
+ * versus WHO TOLD ME — and a verifier holds many sources per committer and many committers per
+ * source, so neither substitutes for the other.
  */
 export interface AnchorObservation {
   epoch: number;
   root: Hex;
+  committer: string;
   source: string;
 }
 
@@ -112,6 +145,13 @@ export interface FreshnessVerdict {
   equivocation: EquivocationEvidence | null;
   /** Observations skipped as malformed. Reported, deliberately NOT a term of `ok` — see below. */
   skippedObservations: number;
+  /**
+   * Well-formed observations about a DIFFERENT committer, skipped as irrelevant. Counted apart from
+   * `skippedObservations` on purpose: one is noise, the other is somebody else's perfectly good
+   * anchor, and folding them together would make the noise counter read as ~the whole stream on any
+   * real chain scan — which is precisely the confusion that produced the defect this field fixes.
+   */
+  otherCommitterObservations: number;
 }
 
 /**
@@ -124,10 +164,11 @@ const MAX_REASONS = 16;
 
 function usable(o: unknown): o is AnchorObservation {
   if (typeof o !== 'object' || o === null) return false;
-  const c = o as { epoch?: unknown; root?: unknown; source?: unknown };
+  const c = o as { epoch?: unknown; root?: unknown; committer?: unknown; source?: unknown };
   return (
     typeof c.epoch === 'number' && Number.isSafeInteger(c.epoch) && c.epoch >= 0 &&
     typeof c.root === 'string' && c.root.length > 0 &&
+    typeof c.committer === 'string' && c.committer.length > 0 &&
     typeof c.source === 'string'
   );
 }
@@ -148,13 +189,22 @@ const sameRoot = (a: string, b: string): boolean => a.toLowerCase() === b.toLowe
  *     do the six `EPOCH IS A TIME` cases die. The explicit term is defence in depth, and it is
  *     described as such rather than credited with a guarantee another clause is providing.
  *   - `presented-root-malformed`         — nothing below can mean anything without a root to compare.
+ *   - `presented-committer-malformed`    — and nothing below can mean anything without a SCOPE. With
+ *     no committer every observation is out of scope, so the run also reaches `no-usable-observation`;
+ *     the explicit clause is kept so the verdict says WHICH precondition failed rather than reporting
+ *     a missing identity as missing evidence. Measured (Beat 60 battery): the FLAG is the guard —
+ *     `committerOk` in the `ok` terms kills no test (M3), because the reason list already refuses.
+ *     Under `requireObservation: false` the flag is all that stands between a committerless
+ *     presentation and `ok: true`, which is why a case pins exactly that.
  *   - `observations-not-an-array`        — the stream is not a stream.
  *   - `observation-stream-too-large`     — refuse rather than scan an unbounded list.
  *   - `no-usable-observation`            — the honest boundary: withholding is undetectable from
  *     here. Verdict-bearing only under `requireObservation` (default true).
- *   - `epoch-equivocation`               — two roots for one epoch, from any pair of sources INCLUDING
- *     the presentation itself. Strictly stronger evidence than lag: a withholder can be explained by
- *     latency, an equivocator cannot.
+ *   - `epoch-equivocation`               — two roots for one epoch OF THE SAME COMMITTER, from any pair
+ *     of sources INCLUDING the presentation itself. Strictly stronger evidence than lag: a withholder
+ *     can be explained by latency, an equivocator cannot — which is exactly why it must be scoped.
+ *     Unscoped, that sentence was false, and the module levelled its gravest charge at every honest
+ *     agent in a twelve-agent fleet.
  *   - `stale-epoch`                      — the presented epoch lags the newest observed one by more
  *     than the policy allows. This is the withholding detection proper.
  *
@@ -166,7 +216,7 @@ const sameRoot = (a: string, b: string): boolean => a.toLowerCase() === b.toLowe
  * evidence rather than through the presence of noise.
  */
 export function checkEpochFreshness(
-  presented: { epoch: number; root: Hex },
+  presented: { epoch: number; root: Hex; committer: string },
   observations: readonly AnchorObservation[],
   policy: FreshnessPolicy,
 ): FreshnessVerdict {
@@ -175,13 +225,13 @@ export function checkEpochFreshness(
   } catch {
     return {
       ok: false, reasons: ['freshness-check-threw'], latestKnownEpoch: null, epochLag: null,
-      latestKnownSource: null, equivocation: null, skippedObservations: 0,
+      latestKnownSource: null, equivocation: null, skippedObservations: 0, otherCommitterObservations: 0,
     };
   }
 }
 
 function checkEpochFreshnessInner(
-  presented: { epoch: number; root: Hex },
+  presented: { epoch: number; root: Hex; committer: string },
   observations: readonly AnchorObservation[],
   policy: FreshnessPolicy,
 ): FreshnessVerdict {
@@ -189,7 +239,7 @@ function checkEpochFreshnessInner(
   const flag = (m: string): void => { if (reasons.length < MAX_REASONS) reasons.push(m); };
   const bare = (extra: Partial<FreshnessVerdict> = {}): FreshnessVerdict => ({
     ok: false, reasons, latestKnownEpoch: null, epochLag: null, latestKnownSource: null,
-    equivocation: null, skippedObservations: 0, ...extra,
+    equivocation: null, skippedObservations: 0, otherCommitterObservations: 0, ...extra,
   });
 
   if (typeof presented !== 'object' || presented === null) { flag('presented-malformed'); return bare(); }
@@ -197,6 +247,10 @@ function checkEpochFreshnessInner(
   if (!epochOk) flag('presented-epoch-not-a-safe-integer');
   const rootOk = typeof presented.root === 'string' && presented.root.length > 0;
   if (!rootOk) flag('presented-root-malformed');
+  // Without a committer there is no scope, and an unscoped comparison is the defect below. Refuse
+  // rather than fall back to comparing every committer's counter — the fallback IS the bug.
+  const committerOk = typeof presented.committer === 'string' && presented.committer.length > 0;
+  if (!committerOk) flag('presented-committer-malformed');
 
   if (!Array.isArray(observations)) { flag('observations-not-an-array'); return bare(); }
   if (observations.length > MAX_OBSERVATIONS) { flag('observation-stream-too-large'); return bare(); }
@@ -210,13 +264,19 @@ function checkEpochFreshnessInner(
   let latestKnownSource: string | null = null;
   let equivocation: EquivocationEvidence | null = null;
   let skippedObservations = 0;
+  let otherCommitterObservations = 0;
   // First root seen per epoch, so a conflict is reported against the observation that established it.
   const rootByEpoch = new Map<number, { root: string; source: string }>();
 
-  if (epochOk && rootOk) rootByEpoch.set(presented.epoch, { root: presented.root, source: 'presentation' });
+  if (epochOk && rootOk && committerOk) rootByEpoch.set(presented.epoch, { root: presented.root, source: 'presentation' });
 
   for (const o of observations) {
     if (!usable(o)) { skippedObservations++; continue; }
+    // SCOPE FIRST. Exact match, not case-folded: two ids differing only in case are two ids, and
+    // inventing an identity equivalence here would silently merge two agents' counters — the very
+    // thing this clause exists to prevent. A casing mismatch therefore costs observations (→ toward
+    // refusal), never comparability (→ toward acceptance).
+    if (!committerOk || o.committer !== presented.committer) { otherCommitterObservations++; continue; }
     const seen = rootByEpoch.get(o.epoch);
     if (seen === undefined) {
       rootByEpoch.set(o.epoch, { root: o.root, source: o.source });
@@ -238,9 +298,9 @@ function checkEpochFreshnessInner(
     // same defect Beat 56 found next door: a term computed, named, and never read.)
     if (requireObservation) flag('no-usable-observation');
     return {
-      ok: !requireObservation && epochOk && rootOk && reasons.length === 0,
+      ok: !requireObservation && epochOk && rootOk && committerOk && reasons.length === 0,
       reasons, latestKnownEpoch: null, epochLag: null, latestKnownSource: null,
-      equivocation, skippedObservations,
+      equivocation, skippedObservations, otherCommitterObservations,
     };
   }
 
@@ -253,8 +313,8 @@ function checkEpochFreshnessInner(
   // and the battery does not validate it. The explicit terms beside it are kept so a reader can see
   // WHICH properties are required without reading every `flag` call site — `epochOk` among them is
   // redundant with `epochLag !== null` (mutant D1), and is defence in depth, not the load-bearing guard.
-  const ok = epochOk && rootOk && equivocation === null && epochLag !== null && epochLag <= maxLag && reasons.length === 0;
-  return { ok, reasons, latestKnownEpoch, epochLag, latestKnownSource, equivocation, skippedObservations };
+  const ok = epochOk && rootOk && committerOk && equivocation === null && epochLag !== null && epochLag <= maxLag && reasons.length === 0;
+  return { ok, reasons, latestKnownEpoch, epochLag, latestKnownSource, equivocation, skippedObservations, otherCommitterObservations };
 }
 
 /**
