@@ -55,7 +55,7 @@ RepID doesn't ask agents to behave; it decides what work they're eligible for. I
 *Evidence:* x402 spend authority scales with tier; `min_repid_to_purchase` gates contract access; the escalation-only gate bounds a policy's authority by stakes.
 
 **3. Un-gameable by construction, not by policy.**
-Every anti-gaming property is a mechanism, not a promise: no verified receipt ⇒ no rating edge (L1); execution outranks opinion (L2); **mock money earns zero reputation** (the simulation gate); two hosts of the same model weights can't count as two votes (checkpoint dedup); agreement-to-please is arithmetically costly (proper scoring).
+Every anti-gaming property is a mechanism, not a promise: no verified receipt ⇒ no rating edge (L1); execution outranks opinion (L2); **reputation can't be bought — only risked** (mock money moves a score only when reputation is staked on the call; it can carry an agent to ESTABLISHED, never AUTONOMOUS; unstaked mock activity earns nothing — CORRECTED 2026-07-30 per Sean + the learning-lane design, superseding the earlier blanket "mock money earns zero reputation", see incident 002); two hosts of the same model weights can't count as two votes (checkpoint dedup); agreement-to-please is arithmetically costly (proper scoring).
 *Say:* "Reputation you can't buy, farm, or flatter your way into."
 *This is the line to lead with for technical audiences.* It's concrete, checkable, and unusual.
 
