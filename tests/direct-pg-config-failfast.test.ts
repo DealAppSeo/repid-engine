@@ -62,3 +62,37 @@ describe('pgQuery — missing DATABASE_URL fails fast and loud', () => {
     err.mockRestore();
   });
 });
+
+/**
+ * The SECOND silent-death path (2026-07-31, found when DATABASE_URL turned out
+ * to be already SET on both Railway services).
+ *
+ * A *missing* connection string throws at pool creation — covered above. A
+ * *wrong* one does not: the Pool is created fine and the failure happens at
+ * query time, landing in the retry loop's backoff sleep. That sleep used to run
+ * on an `unref()`'d timer, so whenever it was the only thing on the event loop
+ * Node exited 0 mid-retry — the await never resumed and the final throw never
+ * ran. Schedule is [1s,4s,16s,64s,256s], so the silent window is ~5.7 minutes.
+ *
+ * This pins that a connection-level failure REJECTS (with the loop intact),
+ * which is the property the removed unref() was destroying.
+ */
+describe('pgQuery — an unreachable host rejects instead of dying silently', () => {
+  const ORIGINAL = process.env.DATABASE_URL;
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = ORIGINAL;
+  });
+
+  test('rejects after exhausting retries (never resolves, never vanishes)', async () => {
+    jest.resetModules();
+    // Port 1 on loopback refuses immediately → fast, deterministic, offline-safe.
+    process.env.DATABASE_URL = 'postgresql://u:p@127.0.0.1:1/postgres';
+    const { pgQuery } = require('../src/db/direct-pg');
+    const err = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(
+      pgQuery('SELECT 1', [], { label: 'unreachable', retries: 2, timeoutMs: 2000 })
+    ).rejects.toThrow();
+    err.mockRestore();
+  }, 20_000);
+});

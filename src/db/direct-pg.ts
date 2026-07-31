@@ -183,12 +183,19 @@ export async function pgQuery<T extends QueryResultRow = any>(
       lastErr = err;
       if (attempt < maxAttempts - 1) {
         const delay = BACKOFF_SCHEDULE_MS[attempt] ?? BACKOFF_SCHEDULE_MS[BACKOFF_SCHEDULE_MS.length - 1]!;
-        await new Promise((r) => {
-          const t = setTimeout(r, delay);
-          if (t && typeof t.unref === 'function') {
-            t.unref();
-          }
-        });
+        // 2026-07-31 — DO NOT unref() THIS TIMER. It used to be unref'd, which
+        // meant that whenever the retry sleep was the only thing left on the
+        // event loop, Node considered the process idle and EXITED 0 mid-retry:
+        // the caller's await never resumed, the final throw below never ran, and
+        // the failure produced no error, no log, and no stack.
+        //
+        // That is not hypothetical — it is how a bad DATABASE_URL kills this
+        // process, and the schedule here is [1s, 4s, 16s, 64s, 256s], so the
+        // silent-death window is up to ~5.7 minutes wide. A ref'd timer costs at
+        // most that much delay on shutdown (and hot-path callers pass
+        // { retries: 1 }, so they never sleep here at all); a silent exit costs
+        // an entire pipeline, which is exactly what happened to the proof drain.
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   }
