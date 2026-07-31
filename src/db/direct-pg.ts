@@ -138,6 +138,29 @@ export async function pgQuery<T extends QueryResultRow = any>(
   const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
   const callStart = Date.now();
 
+  // 2026-07-31 — CONFIG ERRORS ARE NOT TRANSIENT, and retrying one is fatal in a
+  // way that hides itself. resolveConnectionString() throws when DATABASE_URL /
+  // SUPABASE_DB_URL is unset; that throw used to be caught by the retry loop
+  // below, which then slept on an `unref()`'d timer. With no pool ever created
+  // there are NO handles left holding the event loop, so Node empties it and the
+  // PROCESS EXITS 0 MID-RETRY — no error, no log, no stack, exit code 0.
+  //
+  // That is the root cause of the proof-drain stall: 40,546 jobs pending since
+  // 2026-06-16 while the worker reported "Online" and the prover was healthy
+  // (verified 2026-07-31). resolveConnectionString's own comment already demanded
+  // this behaviour — "must surface at boot (pgPing) or first call, not degrade
+  // invisibly" — and the retry loop was silently overriding it. Fail fast, fail
+  // loud, and always before any unref()'d sleep can swallow the process.
+  //
+  // getPgPool() is memoized, so this costs nothing on the happy path.
+  try {
+    getPgPool();
+  } catch (cfgErr) {
+    const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr);
+    console.error(`[direct-pg] FATAL CONFIG ERROR (not retryable) for ${label}: ${msg}`);
+    throw cfgErr instanceof Error ? cfgErr : new Error(msg);
+  }
+
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let timer: NodeJS.Timeout | null = null;
