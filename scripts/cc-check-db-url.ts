@@ -25,10 +25,31 @@ function describeMasked(raw: string): string {
   }
 }
 
+/**
+ * Build a connection string from parts, percent-encoding the password for you.
+ * This removes the single most common false negative: a CORRECT password that
+ * contains @ : / ? # [ ] fails auth when pasted raw into a URI, and looks
+ * identical to a wrong password. Set DB_PASSWORD and let this do the escaping.
+ */
+function fromParts(): string | null {
+  const pw = process.env.DB_PASSWORD;
+  if (!pw) return null;
+  const ref = process.env.DB_REF || 'qnnpjhlxljtqyigedwkb';
+  const mode = (process.env.DB_MODE || 'shared').toLowerCase(); // 'shared' | 'dedicated'
+  const host =
+    process.env.DB_HOST ||
+    (mode === 'dedicated'
+      ? `db.${ref}.supabase.co`
+      : `aws-0-${process.env.DB_REGION || 'us-west-1'}.pooler.supabase.com`);
+  const user = process.env.DB_USER || (mode === 'dedicated' ? 'postgres' : `postgres.${ref}`);
+  const port = process.env.DB_PORT || '6543';
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pw)}@${host}:${port}/${process.env.DB_NAME || 'postgres'}`;
+}
+
 async function main() {
-  const raw = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || '';
+  const raw = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || fromParts() || '';
   if (!raw) {
-    console.error('FAIL: set DATABASE_URL (or SUPABASE_DB_URL) in the environment first.');
+    console.error('FAIL: set DATABASE_URL, or set DB_PASSWORD (+ optional DB_MODE=shared|dedicated) and let this script build + encode the URL.');
     process.exitCode = 1;
     return;
   }
