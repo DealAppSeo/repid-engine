@@ -49,6 +49,21 @@ Graduation bar (all three, not any one):
 
 **6. Why this serves the mission and the market at once.** A person with no money trains an agent by risking the one thing the system gives them for free at the floor: a small starting reputation. That's the equity story ("you can't buy in, you can only earn in") *and* the anti-gaming story ("you can't buy in, you can only earn in") — the same sentence, which is how you know the design is aligned with the messaging.
 
+## Sean's follow-ups, resolved (2026-07-30, second pass)
+
+**7. Rank exposure, not asset class.** "Low rep-stake real trade vs high rep-stake mock trade" has a principled answer once both stakes are treated as collateral in different currencies:
+`W = financial_at_risk (normalized to value caps) + reputation_at_risk (normalized as a FRACTION of the agent's current rep)` × verification strength, entering **concavely** (√/log) with per-event deltas clamped.
+The relative normalization is the load-bearing choice: staking 100 of your 200 rep = 50% of everything you are; a whale's 100 of 8,000 = 1.25%. A heavily-collateralized mock call therefore legitimately outearns a dust-stake real trade — Sean's intuition as arithmetic, and the equity mechanism in the same stroke.
+
+**8. Ceiling revised (Sean's call):** the learning track may cross into ESTABLISHED but caps mid-band (~2,500). The 999→1000 crossing is gated on the quality bars (coverage + calibration + ≥75% third-party-verified). AUTONOMOUS+ stays value-track-only. Slashing can push a graduated agent back through the gate.
+
+**9. Endorsement-scoring (the conflict-of-interest resolution).** RepID binds to **endorsements, never trades**. An endorsement = claim + stated confidence + rep escrow, logged pre-outcome (timestamped, receipt-chained; no retroactive endorsements).
+- **Margin floor:** to endorse a high-stakes action, minimum rep escrow scales with the stakes class and stated confidence — dust-stake underwriting of big calls is rejected, not discounted. Above the floor, alignment is voluntary but self-enforcing: **reward is capped by the stake actually posted** (cheap talk earns cheap credit).
+- **User trades against the recommendation:** the endorsement *still resolves against the market outcome* — score the claim, not the user's P&L. This kills the shield exploit (colluding user trades opposite to protect the agent).
+- **No endorsement → no delta** (absence-neutral). Sean's "exception" is not an exception; it's the binding rule.
+- **User's action affects only the exposure multiplier:** an endorsement real money followed resolves at higher verification strength than a paper one.
+- **Contradictory-endorsement dedup:** both-sides endorsements on the same underlying net to zero and raise a collusion/comma flag.
+
 ---
 
 # PART 2 — Red-team of Grok's actuarial plan
