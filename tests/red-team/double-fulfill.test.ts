@@ -23,6 +23,28 @@ jest.mock('../../src/services/validation-repid-delta', () => ({
   applyServiceSatisfiedDeltas: jest.fn().mockResolvedValue(undefined)
 }));
 
+/**
+ * 2026-08-01: /fulfill now requires an agent-bound caller who IS the provider.
+ * Before that it accepted `{result: <anything>}` from anyone, which let a
+ * provider fulfil its own contract with a self-declared PASS and then release
+ * its own payment.
+ *
+ * This suite mounts the real app and sends no Authorization header, so
+ * `req.agent_id` was undefined and every fulfil 403'd. The binding is mocked
+ * here — `x-test-agent-id` stands in for the identity authMiddleware would
+ * attach — so these tests keep exercising DOUBLE-FULFILL prevention, which is
+ * what they are actually for. The provider gate itself is asserted separately
+ * below rather than being mocked away.
+ */
+jest.mock('../../src/middleware/auth', () => ({
+  authMiddleware: (req: any, _res: any, next: any) => {
+    const bound = req.headers['x-test-agent-id'];
+    if (bound) req.agent_id = bound;
+    req.apiKey = { key: 'test', tier: 'pro' };
+    next();
+  },
+}));
+
 // Mock authentication middleware
 jest.mock('../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
@@ -177,11 +199,37 @@ describe('Red Team Security Hardening Tests (H1-H4 & P-B)', () => {
 
       const res = await request(app)
         .post('/api/v1/contracts/contract-1/fulfill')
+        .set('x-test-agent-id', 'provider-123')   // the contract's provider
         .send({ result: 'done' });
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('fulfilled');
       expect(applyServiceFulfilledDeltas).toHaveBeenCalledTimes(1);
+    });
+
+    it('REFUSES a fulfil from anyone who is not the provider', async () => {
+      mockDbForRedTeam({ contractStatus: 'escrowed' });
+
+      const res = await request(app)
+        .post('/api/v1/contracts/contract-1/fulfill')
+        .set('x-test-agent-id', 'buyer-456')      // the BUYER, not the provider
+        .send({ result: 'done' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('not_the_provider');
+    });
+
+    it('REFUSES a fulfil from an unbound caller (shared tier key)', async () => {
+      mockDbForRedTeam({ contractStatus: 'escrowed' });
+
+      // No x-test-agent-id: a shared REPID_API_KEYS tier key proves nothing
+      // about who is asking, so it cannot deliver on a provider's behalf.
+      const res = await request(app)
+        .post('/api/v1/contracts/contract-1/fulfill')
+        .send({ result: 'done' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('unbound_caller');
     });
 
     it('idempotently returns existing contract if already fulfilled', async () => {
