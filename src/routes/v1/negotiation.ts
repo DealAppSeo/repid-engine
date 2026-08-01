@@ -1194,6 +1194,28 @@ router.post('/rfqs/:id/accept', async (req: Request, res: Response) => {
     if (Date.parse(round.expires_at) <= now.getTime()) {
       return fail(res, 410, 'round_expired', 'That offer has expired');
     }
+    // The awarded round must be the PROVIDER's offer.
+    //
+    // Found by independent verification 2026-07-31: this path checked
+    // not_current_round, expiry and the offer hash, but never `offered_by` —
+    // so a buyer could award its own counter-offer. That is not an agreement,
+    // it is the buyer setting the price unilaterally, which is exactly the
+    // condition this whole feature exists to remove. `agreed_price_usdc_raw`
+    // would have gone back to meaning "whatever the buyer typed".
+    //
+    // There is no legitimate case for awarding a buyer-offered round: when a
+    // provider accepts a buyer's counter, /respond appends a NEW round with
+    // offered_by='provider' (see the accept branch above), and THAT is the
+    // round which becomes current and awardable.
+    if (round.offered_by !== 'provider') {
+      return fail(
+        res,
+        409,
+        'not_a_provider_offer',
+        'Only a PROVIDER offer can be awarded. This round is the buyer\'s own counter — awarding it would set the price unilaterally, which is not a negotiated agreement. Wait for the provider to accept or re-bid.',
+        { offered_by: round.offered_by },
+      );
+    }
     if (!verifyStoredOfferHash(round)) {
       return fail(
         res,

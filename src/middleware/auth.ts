@@ -252,6 +252,21 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       return next();
     }
 
+    // 2026-07-31 (A2A negotiation): /negotiation/rfqs/<uuid>/... paths carry an
+    // RFQ or BID id, never an agent id. The generic path-UUID check below would
+    // read one as a mismatched agent id and 403 every agent-bound key — the
+    // identical failure that made the whole contract lifecycle operator-key-only
+    // until the /contracts carve-out above was added.
+    //
+    // Authorization is NOT skipped, it moves to where the facts are: the router
+    // resolves the RFQ and enforces that a buyer may only act on its own RFQ and
+    // a provider only on its own bid thread. Party membership here would be a
+    // second, weaker copy of that check — and the identity fields in the body
+    // are already validated above.
+    if (/^(?:\/api\/v1)?\/negotiation\//i.test(req.path)) {
+      return next();
+    }
+
     // Check for UUID or name in URL path
     const pathParts = req.path.split('/');
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

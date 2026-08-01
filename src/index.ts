@@ -25,6 +25,7 @@ import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import negotiationRouter from './routes/v1/negotiation';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
 import observabilityPublicRouter from './routes/v1/observability-public';
 import v1Router from './routes/v1';
@@ -195,6 +196,11 @@ app.use((req, res, next) => {
   // in descriptions, payloads, and results which may contain SQL-like syntax.
   // All downstream Supabase writes are parameterized.
   if (req.path.startsWith('/api/v1/services') || req.path.startsWith('/api/v1/contracts')) return next();
+  // Same reason for /api/v1/negotiation: RFQ scope, bid terms and award
+  // rationale are free-form prose. The award rationale is REQUIRED to be >= 24
+  // characters by a DB CHECK, so a blanket SQL-keyword scan would 400 exactly
+  // the explanations the anti-collusion constraint exists to collect.
+  if (req.path.startsWith('/api/v1/negotiation')) return next();
   // Phase 2.10: /api/v1/agent/process-contracts carries buyer payload content
   // (free-form prose/code) processed by PCP/judge; downstream writes parameterized.
   if (req.path === '/api/v1/agent/process-contracts') return next();
@@ -262,6 +268,13 @@ app.use('/api/v1/marketplace', marketplaceP0Router);
 // SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
 // earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
 app.use('/api/v1/marketplace', marketplaceRouter);
+// A2A NEGOTIATION (2026-07-31): RFQ -> sealed bids -> bounded counter-rounds
+// -> single atomic award. Mounted AFTER authMiddleware: every endpoint needs a
+// bound agent identity, because an unbound caller could bid as anyone. The
+// accept path returns 501 unless the a2a_accept_and_award RPC is installed,
+// rather than doing a non-atomic award that could strand an un-provenanced
+// payable contract.
+app.use('/api/v1/negotiation', negotiationRouter);
 // Buy-loop last mile (2026-07-06): PUBLIC read-only marketplace surface
 // (GET /recent-transactions). Mounted BEFORE authMiddleware so the /market page
 // can show real settled activity with no API key. Read-only; separate file so
