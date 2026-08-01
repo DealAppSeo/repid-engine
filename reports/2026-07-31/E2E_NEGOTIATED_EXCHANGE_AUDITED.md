@@ -72,3 +72,33 @@ It surfaced now only because that same fix made `direct-pg` report `FATAL CONFIG
 ## 5. Reproduce
 
 `scripts/e2e/negotiated-zkp-exchange.mjs` against a local engine on the production DB. It has no mock branch: any leg that cannot run for real halts and is reported, never faked.
+
+---
+
+## 6. Churn filter landed in enforce mode — 2026-07-31 23:4x PDT
+
+Both halves set **service-level** on `repid-engine` AND `proof-drain-worker`, read back through each service to confirm the write took effect (service-level vars shadow shared ones):
+
+| flag | side | before | after |
+|---|---|---|---|
+| `PROOF_ENQUEUE_HAL_MODE` | producer — stops NEW churn entering the queue | unset (→ `shadow`) | **`enforce`** |
+| `PROOF_DRAIN_CHURN_MODE` | consumer — excludes EXISTING churn from the drain | unset (→ `off`) | **`enforce`** |
+
+The env change triggered a redeploy of both services; both reached `SUCCESS`, and prod `/health` is green on `f6496b9` with `supabaseConnected=true`.
+
+**Verified behaviorally, not just "the variable is set".** The guard's own `CHURN_AWARE_PENDING_BATCH_SQL` was run read-only against production with `$5=true`:
+
+| | legacy (`off`) | **enforce** |
+|---|---|---|
+| `HAL_SCORE_EVENT` | 40,277 | **0** |
+| `SERVICE_FULFILLED` | 258 | 258 |
+| `SERVICE_SATISFIED` / `VALIDATION_FAILED` / `VALIDATOR_REWARD` / `PREDICTION_RESOLVE` | 13 | 13 |
+| rows with a NULL `event_id` | 22 | 22 — reported, never silently swallowed |
+
+**When the drain restarts it will prove 271 economic jobs instead of 40,548.**
+
+Two honest caveats:
+- The **producer** flag currently has nothing to bite on: zero churn has been enqueued in 48 hours (the only recent queue rows are the 10 economic events from this E2E). It is preventive, and cannot be behaviorally confirmed until HAL scoring traffic resumes.
+- The residual cost documented in the guard is real: with the backlog 99.4% churn, an idle poll walks ~40.5k rows (~300 ms) each cycle. It disappears once the backlog is dispositioned, and it is the price of not minting 40k proofs.
+
+**Step 1 of 2 is complete.** `DATABASE_URL` on those two services is still the dead `db7ee7009754` value (§3) and is now the only thing standing between here and a working proof drain — but it is a Sean call, and the churn guard had to land first.
