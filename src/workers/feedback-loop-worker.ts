@@ -205,7 +205,13 @@ export class FeedbackLoopWorker {
           gas_used: result.gasUsed,
           chain_id: writer.chainId,
           contract_address: writer.getContractAddress(),
-          repid_event_id: event.id
+          repid_event_id: event.id,
+          // Carry the contract through so the write is queryable BY CONTRACT.
+          // It was already present in event_data; putting it in a column is
+          // what lets a receipt prove "this on-chain write came from this
+          // exchange" instead of hedging.
+          contract_id:
+            (event.event_data as { contract_id?: string } | null)?.contract_id ?? null,
         });
 
       } catch (e: any) {
