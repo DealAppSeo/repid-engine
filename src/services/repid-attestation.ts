@@ -46,22 +46,48 @@ const TYPES = {
 };
 
 export class RepIdAttestationService {
-  private attestorWallet: ethers.Wallet;
+  private attestorWallet: ethers.Wallet | null;
   private provider: ethers.Provider;
 
   constructor() {
     this.provider = getProvider();
 
+    // SECURITY (2026-07-31): this branch used to fall back to a private key
+    // written literally into this file. That key was committed on 2026-05-11
+    // and controls 0xf6eE1768868c3266868edcA78bC41C50309cb22A — the SAME wallet
+    // as DEPLOYER_PRIVATE_KEY, funded on Base Sepolia. Anyone who could read
+    // the repo could sign as the attestor and drain it.
+    //
+    // The fallback is removed rather than replaced. A missing signing key must
+    // never be papered over with a shared one: signing with the wrong identity
+    // is worse than not signing, because the attestation still looks valid.
+    //
+    // It fails at USE, not at construction, because this module is instantiated
+    // at import time (bottom of this file) and a constructor throw would take
+    // the whole process down at boot over a capability most requests never need.
     const pk = process.env.HYPERDAG_ATTESTOR_PRIVATE_KEY;
     if (!pk) {
-      console.warn('[RepIdAttestationService] HYPERDAG_ATTESTOR_PRIVATE_KEY missing. Using dev key.');
-      // Hardcoded dev key for Phase 1
-      const devKey = "0x53baf8310afbbcc6f496514fb4ff2d011125bb9eba6d4d2964dcd7d95251b172";
-      this.attestorWallet = new ethers.Wallet(devKey, this.provider);
+      console.warn(
+        '[RepIdAttestationService] HYPERDAG_ATTESTOR_PRIVATE_KEY is not set. ' +
+          'Attestation signing is DISABLED — calls will throw rather than sign with a shared key.'
+      );
+      this.attestorWallet = null;
     } else {
       this.attestorWallet = new ethers.Wallet(pk, this.provider);
+      console.log(`[RepIdAttestationService] Attestor Address: ${this.attestorWallet.address}`);
     }
-    console.log(`[RepIdAttestationService] Attestor Address: ${this.attestorWallet.address}`);
+  }
+
+  /** The signer, or a loud failure. Never a fallback identity. */
+  private requireWallet(): ethers.Wallet {
+    if (!this.attestorWallet) {
+      throw new Error(
+        'HYPERDAG_ATTESTOR_PRIVATE_KEY is not configured — refusing to sign a RepID attestation. ' +
+          'Set it on the repid-engine service. (The hardcoded dev-key fallback was removed 2026-07-31: ' +
+          'it was a committed key controlling a funded wallet.)'
+      );
+    }
+    return this.attestorWallet;
   }
 
   async generateAttestation(agentId: string): Promise<ZkpRepIdAttestation> {
@@ -89,7 +115,7 @@ export class RepIdAttestationService {
     };
 
     const net = getActiveNetwork();
-    const signature = await this.attestorWallet.signTypedData(getEip712Domain(), TYPES, message);
+    const signature = await this.requireWallet().signTypedData(getEip712Domain(), TYPES, message);
 
     const attestation: RepIdAttestation = {
       version: "1",
@@ -142,7 +168,7 @@ export class RepIdAttestationService {
 
     try {
       const recoveredAddress = ethers.verifyTypedData(getEip712Domain(), TYPES, message, attestation.signature);
-      const expectedAddress = process.env.HYPERDAG_ATTESTOR_ADDRESS || this.attestorWallet.address;
+      const expectedAddress = process.env.HYPERDAG_ATTESTOR_ADDRESS || this.requireWallet().address;
 
       if (recoveredAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
         return { valid: false, reason: 'Invalid signature' };
@@ -157,7 +183,7 @@ export class RepIdAttestationService {
         const net = getActiveNetwork();
         const reputationContract = net.contracts.reputationRegistry || '0x8004B663056A597Dffe9eCcC1965A193B7388713';
         const contract = new ethers.Contract(reputationContract, REPUTATION_ABI, this.provider);
-        const hyperdagWallet = this.attestorWallet.address; // Assuming attestor is the one who wrote the feedback
+        const hyperdagWallet = this.requireWallet().address; // Assuming attestor is the one who wrote the feedback
         
         // getSummary(tokenId, clientAddresses, tag1, tag2)
         const summary = await (contract as any).getSummary?.(
