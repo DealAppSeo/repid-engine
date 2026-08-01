@@ -253,6 +253,19 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     statement?: Record<string, unknown> | null;
     poseidon2Leaf?: string | null;
     leafScheme?: string | null;
+    /**
+     * PROVENANCE (2026-08-01). Until now a proof row carried only `agent_id`,
+     * so it was a dead end: you could not ask which job produced it, which
+     * score event it certifies, or which contract earned it. The queue row knew
+     * all three; the proof did not, and nothing joined them.
+     *
+     * Carried through so a proof can be traced to the work that paid for it.
+     * Read the honesty note on `statement` below before over-claiming what
+     * this proves.
+     */
+    jobId?: string | null;
+    eventId?: string | null;
+    contractId?: string | null;
   }): Promise<void> {
     try {
       let tierProven = 'PROBATIONARY';
@@ -277,6 +290,12 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
 
       const insertRow: Record<string, unknown> = {
         agent_id: args.agentId,
+        // Provenance. Nullable by design: a job with no event_id (the 22
+        // dead-letter rows) legitimately has nothing to point at, and writing a
+        // placeholder there would be inventing a link that does not exist.
+        ...(args.jobId ? { job_id: args.jobId } : {}),
+        ...(args.eventId ? { event_id: args.eventId } : {}),
+        ...(args.contractId ? { contract_id: args.contractId } : {}),
         proof_type: 'POSTCARD',
         tier_proven: tierProven,
         merkle_root: args.merkleRoot,
@@ -431,6 +450,10 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     statement?: Record<string, unknown> | null;
     poseidon2Leaf?: string | null;
     leafScheme?: string | null;
+    /** Provenance carried from the queue row — see insertCanonicalProof. */
+    jobId?: string | null;
+    eventId?: string | null;
+    contractId?: string | null;
   }): Promise<void> {
     const { error } = await config.supabase
       .from('repid_proof_queue')
@@ -454,6 +477,9 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       statement: args.statement ?? null,
       poseidon2Leaf: args.poseidon2Leaf ?? null,
       leafScheme: args.leafScheme ?? null,
+      jobId: args.jobId ?? null,
+      eventId: args.eventId ?? null,
+      contractId: args.contractId ?? null,
     });
 
     // Write through to Dragonfly proof cache and zkp_proofs_staged table
@@ -623,6 +649,12 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         statement,
         poseidon2Leaf,
         leafScheme,
+        // Provenance from the queue row the prover was run for. contract_id is
+        // read off the job (backfilled from repid_score_events), so a proof can
+        // finally be traced to the contract that paid for it.
+        jobId: job.job_id ?? null,
+        eventId: (job as { event_id?: string | null }).event_id ?? null,
+        contractId: (job as { contract_id?: string | null }).contract_id ?? null,
       })
     );
     return 'completed';

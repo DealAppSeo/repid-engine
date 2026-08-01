@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { VerificationServiceHandler } from '../../services/verification-service-handler';
+import { ZkpAuditServiceHandler } from '../../services/handlers/zkp-audit-handler';
 import { CrossValidationServiceHandler } from '../../services/cross-validation-service-handler';
 import { AnfisRoutingServiceHandler } from '../../services/anfis-routing-service-handler';
 import { ReputationAuditServiceHandler } from '../../services/reputation-audit-service-handler';
@@ -54,6 +55,7 @@ router.post('/agent/process-contracts', async (req: Request, res: Response) => {
       new ReputationAuditServiceHandler(),
       new StorageServiceHandler(),
       new SecurityAuditServiceHandler(),
+      new ZkpAuditServiceHandler(),
     ];
 
     for (const handler of handlers) {
