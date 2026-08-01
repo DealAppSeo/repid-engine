@@ -284,6 +284,27 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       if (!apiKey) {
         markFailure(adapter.name, new AuthError(`No key found for ${adapter.name}`));
         excludeProviders.push(adapter.name);
+        // LOG IT. This branch previously `continue`d silently, so a provider with
+        // no key burned one of the three routing attempts and left NO trace in
+        // llm_call_log. A live smoke test returned 503 "Max routing attempts
+        // reached" having written exactly ONE log row for three attempts, which
+        // made the cause invisible — the two silent no-key skips looked like
+        // they never happened. An unroutable provider must be as visible as a
+        // failing one.
+        logLlmCall({
+          call_id,
+          provider: adapter.name,
+          tier: adapter.tier === 0 ? '0a' : '1',
+          model: 'unknown',
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cost_usd: 0,
+          latency_ms: 0,
+          status: 'failed',
+          error_message: `no API key configured for ${adapter.name} — provider skipped, routing attempt consumed`,
+          task_hint,
+          agent_id: (resolvedAgentId && isUuid(resolvedAgentId)) ? resolvedAgentId : undefined
+        });
         continue;
       }
 
