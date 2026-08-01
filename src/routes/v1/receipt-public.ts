@@ -99,6 +99,24 @@ ${caveats}
 </footer></body></html>`;
 }
 
+/**
+ * `/receipt/latest.json` MUST be declared before `/receipt/:id.json`, or Express
+ * matches the parameterised route with id="latest", buildTrustReceipt looks up a
+ * contract called "latest", finds nothing, and returns 404.
+ *
+ * That is exactly what shipped: I documented "add .json to any receipt URL" and
+ * the alias 404'd in production. Found by an independent red-team pass, not by
+ * me — the documented contract and the deployed behaviour disagreed, which is
+ * the failure mode this whole project is supposed to be about.
+ */
+router.get('/receipt/latest.json', async (_req: Request, res: Response) => {
+  const id = await latestRealSettledContractId();
+  if (!id) return res.status(404).json({ error: 'no_settled_exchange', message: 'No real settled exchange yet. This endpoint will not invent one.' });
+  const receipt = await buildTrustReceipt(id);
+  if (!receipt) return res.status(404).json({ error: 'not_found' });
+  return res.json(receipt);
+});
+
 router.get('/receipt/latest', async (_req: Request, res: Response) => {
   const id = await latestRealSettledContractId();
   if (!id) return res.status(404).type('text/plain').send('No real settled exchange yet. This page will not invent one.');
