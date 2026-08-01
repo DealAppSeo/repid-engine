@@ -3,6 +3,12 @@ import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas, applyServiceOutcomeDeltas, type ServiceOutcomeRating } from '../../services/validation-repid-delta';
 import { registerPendingOutcome } from '../../services/outcome-notifier';
 import { x402Facilitator, X402_VERSION } from '../../services/x402-facilitator';
+import {
+  isSettleOnDeliveryEnabled,
+  recordAuthorization,
+  releaseHeldPayment,
+  voidAuthorization,
+} from '../../services/x402-deferred-settlement';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
@@ -345,6 +351,60 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
     x402Metrics.increment('facilitator.verify.success');
   }
 
+  // PAY-ON-VERIFIED-DELIVERY (X402_SETTLE_ON_DELIVERY=true).
+  //
+  // The payment has now been VERIFIED but is deliberately NOT broadcast. An
+  // EIP-3009 authorization is a signature, not a transfer — holding it costs
+  // nothing, locks nothing, and can be broadcast later by whoever holds it.
+  // So escrow ends here, and the money only moves at /satisfy, after the
+  // deliverable has actually been verified. A rejected deliverable is never
+  // paid for, which is what "escrow" was always supposed to mean.
+  //
+  // Default OFF: unset the flag and the legacy settle-at-escrow path below
+  // runs unchanged.
+  if (isSettleOnDeliveryEnabled()) {
+    const held = await recordAuthorization({
+      contractId: String(contractId),
+      buyerAgentId: contract.buyer_agent_id,
+      providerAgentId: contract.provider_agent_id,
+      amountRaw: Number(contract.agreed_price_usdc_raw),
+      topic: String((contract.payload as any)?.service_type || 'service_escrow'),
+      xPaymentHeader,
+      payerAddress: payerAddress || null,
+      isSimulated,
+    });
+
+    if ('error' in held) {
+      x402Metrics.increment('escrow.error.500');
+      return res.status(500).json({ error: 'authorization_record_failed', message: held.error });
+    }
+
+    // NOTE: settled_at is deliberately NOT set here. The legacy path back-dates
+    // it at escrow, which is why a contract could look settled before anyone
+    // was paid. On this path settled_at means what it says.
+    const { data: heldContract, error: heldErr } = await db.from('service_contracts')
+      .update({
+        status: 'escrowed',
+        x402_payment_id: held.settlementId,
+        escrowed_at: new Date().toISOString(),
+      })
+      .eq('id', contractId)
+      .select().single();
+
+    if (heldErr) {
+      x402Metrics.increment('escrow.error.500');
+      return res.status(500).json({ error: 'contract_update_failed', message: heldErr.message });
+    }
+
+    x402Metrics.increment('escrow.success');
+    x402Metrics.increment('escrow.authorized_not_settled');
+    return res.json({
+      ...heldContract,
+      payment_state: 'AUTHORIZED_NOT_SETTLED',
+      note: 'Payment verified and held. No funds have moved. Settlement occurs after the deliverable is verified.',
+    });
+  }
+
   if (!isSimulated) {
     try {
       const settleResult = await x402Facilitator.settlePayment(xPaymentHeader, requirements);
@@ -516,6 +576,81 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
   const { satisfaction_score } = req.body;
   if (satisfaction_score === undefined) return res.status(400).json({ error: 'satisfaction_score required' });
 
+  // PAY-ON-VERIFIED-DELIVERY: this is where money actually moves.
+  //
+  // The authorization taken at escrow is broadcast here, and ONLY here, once
+  // the deliverable has been verified. If verification failed we void the
+  // authorization instead — the buyer keeps the funds and the provider is not
+  // paid for work that did not pass. That is the whole point of the change.
+  let releaseResult: unknown = null;
+  if (isSettleOnDeliveryEnabled()) {
+    const { data: pre, error: preErr } = await db.from('service_contracts')
+      .select('id, status, provider_agent_id, agreed_price_usdc_raw, result')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (preErr) return res.status(400).json({ error: preErr.message });
+    if (!pre) return res.status(404).json({ error: 'contract not found' });
+
+    // A satisfy on a contract that never reached 'fulfilled' would be paying
+    // for a deliverable that does not exist. The DB trigger rejects the
+    // transition, but the payment must be gated here too — the money leaves
+    // before the trigger would ever see it.
+    if (pre.status !== 'fulfilled') {
+      return res.status(409).json({
+        error: 'not_fulfilled',
+        message: `contract is '${pre.status}', not 'fulfilled' — refusing to release payment for an undelivered service`,
+      });
+    }
+
+    const verdict = String((pre.result as any)?.verdict ?? '').toUpperCase();
+    const passed = verdict === 'PASS' && Number(satisfaction_score) > 0;
+
+    if (!passed) {
+      const voided = await voidAuthorization(
+        String(req.params.id),
+        `deliverable rejected: verdict=${verdict || 'NONE'} satisfaction=${satisfaction_score}`
+      );
+      return res.status(409).json({
+        error: 'deliverable_rejected',
+        message: 'payment authorization voided — no funds moved; the buyer keeps them',
+        verdict: verdict || null,
+        satisfaction_score,
+        voided,
+      });
+    }
+
+    const { data: provider } = await db.from('repid_agents')
+      .select('wallet_address')
+      .eq('id', pre.provider_agent_id)
+      .maybeSingle();
+
+    const requirements = x402Facilitator.buildPaymentRequirements({
+      resource: `/api/v1/contracts/${pre.id}/escrow`,
+      payTo: provider?.wallet_address || '0x0000000000000000000000000000000000000000',
+      priceUsdc: String(pre.agreed_price_usdc_raw),
+      description: `Service Contract ${pre.id} Escrow payment`,
+    });
+
+    const released = await releaseHeldPayment({
+      contractId: String(req.params.id),
+      requirements,
+      deliverableVerified: true,
+      verificationEvidence: `verdict=${verdict} satisfaction=${satisfaction_score}`,
+    });
+    releaseResult = released;
+
+    // No payment, no settlement. Marking a contract settled when the transfer
+    // failed is exactly the silent-success lie this codebase keeps paying for.
+    if (released.status !== 'SETTLED' && released.status !== 'ALREADY_SETTLED') {
+      return res.status(409).json({
+        error: 'payment_release_failed',
+        message: 'the deliverable passed but the payment could not be released — contract left fulfilled, not settled',
+        release: released,
+      });
+    }
+  }
+
   // Two-step update to honor trigger logic ('satisfied' then 'settled')
   const { data: step1, error: err1 } = await db.from('service_contracts')
     .update({ status: 'satisfied', buyer_satisfaction_score: satisfaction_score, satisfied_at: new Date().toISOString() })
@@ -552,7 +687,9 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
     }
   }
 
-  res.json(step2);
+  // Surface the on-chain receipt on the same response that reports settlement,
+  // so a caller never has to infer that money moved.
+  res.json(releaseResult ? { ...step2, payment_release: releaseResult } : step2);
 });
 
 // ── T3 — Delayed outcome signal ("held up in use?") ─────────────────────
