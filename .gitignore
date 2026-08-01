@@ -35,3 +35,11 @@ railway_env.json
 reports/2026-07-18/rrl-shadow-ledger.jsonl
 .env.e2e.local
 .env.canary.local
+
+# Delegated-agent scratch files. A free agent investigating the DB wrote
+# credential-bearing dumps into the repo root on 2026-08-01; gitleaks caught
+# them at commit. Ignore by pattern so the next one cannot be staged by accident.
+scratch_*.js
+scratch_*.json
+db_raw_results.json
+pvq_results.json
