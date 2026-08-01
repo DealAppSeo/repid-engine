@@ -71,18 +71,18 @@ const { data: events } = await sb.from('repid_score_events')
   .select('agent_id, event_type, delta, repid_before, repid_after')
   .eq('contract_id', contract.id).order('created_at');
 
-// The on-chain reputation write that FOLLOWED this settlement.
+// The on-chain reputation write CAUSED BY this contract.
 //
-// HONESTY: erc8004_reputation_writes.repid_event_id does NOT resolve to this
-// contract (contract_id is null on those rows), so we cannot PROVE this write
-// was caused by this exchange. What we can say is that it is the provider's
-// most recent on-chain write and its repid_value matches this contract's
-// outcome. The receipt says exactly that and no more. Recording the per-contract
-// link is a real gap worth closing.
+// This is now a proven link, not a temporal guess. `contract_id` was promoted
+// out of repid_events.event_data into a real column on 2026-08-01 and
+// backfilled by matching transaction hashes — a tx hash identifies exactly one
+// on-chain write. Before that the receipt had to hedge.
+//
+// If it is null the receipt says so rather than falling back to "nearest write
+// in time", which would be a guess dressed as a fact.
 const { data: onchain } = await sb.from('erc8004_reputation_writes')
   .select('tx_hash, repid_value, block_number, created_at, agent_id')
-  .in('agent_id', [contract.buyer_agent_id, contract.provider_agent_id])
-  .gte('created_at', contract.settled_at ?? '1970-01-01')
+  .eq('contract_id', contract.id)
   .order('created_at', { ascending: false }).limit(1).maybeSingle();
 
 // Any ZK proof linked to this contract.
@@ -107,7 +107,7 @@ const receipt = {
   onchain_reputation_tx: onchain?.tx_hash ?? null,
   onchain_reputation_url: onchain ? scan(onchain.tx_hash) : null,
   onchain_repid_value: onchain?.repid_value ?? null,
-  onchain_link_is_proven: false,
+  onchain_link_is_proven: !!onchain,
   zk_proofs: (proofs ?? []).map((p) => ({ scheme: p.scheme, real: p.is_real, statement: p.statement })),
 };
 
@@ -138,13 +138,11 @@ if (receipt.reputation_events.length) {
   }
 }
 if (receipt.onchain_reputation_url) {
-  const matches = receipt.reputation_events.some((e) => e.to === receipt.onchain_repid_value);
-  console.log(`\n  6. WRITTEN WHERE WE CANNOT EDIT IT — ERC-8004 on Base Sepolia`);
+  console.log(`
+  6. WRITTEN WHERE WE CANNOT EDIT IT — ERC-8004 on Base Sepolia`);
   console.log(`     ${receipt.onchain_reputation_url}`);
-  console.log(`     Reputation ${receipt.onchain_repid_value} recorded on-chain${matches ? ` — matches this exchange's outcome.` : `.`}`);
+  console.log(`     Reputation ${receipt.onchain_repid_value} recorded on-chain, caused by THIS contract.`);
   console.log(`     Not our database. Anyone can check it without asking us.`);
-  console.log(`     NOTE: the per-contract link is not recorded on these rows yet, so this`);
-  console.log(`     is the provider's latest write — not PROVEN to be caused by this one.`);
 }
 if (receipt.zk_proofs.length) {
   const p = receipt.zk_proofs[0];

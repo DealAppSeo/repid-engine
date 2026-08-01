@@ -25,6 +25,7 @@ import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import receiptPublicRouter from './routes/v1/receipt-public';
 import negotiationRouter from './routes/v1/negotiation';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
 import observabilityPublicRouter from './routes/v1/observability-public';
@@ -273,6 +274,12 @@ app.use('/api/v1/marketplace', marketplaceRouter);
 // can show real settled activity with no API key. Read-only; separate file so
 // it never touches the settlement-disabled marketplace router above.
 app.use('/api/v1/marketplace', marketplacePublicRouter);
+// TRUST RECEIPT (2026-08-01): the shareable proof that the harness did its job.
+// PUBLIC and mounted BEFORE authMiddleware on purpose — the whole claim is "you
+// can check this without trusting us", and a receipt behind an API key does not
+// make that claim. Read-only; serves facts ABOUT an exchange, never the work
+// itself (no payload, no result). See services/trust-receipt.ts.
+app.use('/api/v1', receiptPublicRouter);
 // Live-numbers (2026-07-07): PUBLIC read-only observability surface the
 // TrustShell.dev landing reads for its minted-agent leaderboard + on-chain
 // stats block. Two GETs: /api/v1/agents/minted and

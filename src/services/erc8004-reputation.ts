@@ -304,7 +304,28 @@ export async function persistReputationWrite(
     chain_id: number;
     contract_address: string;
     repid_event_id?: number;
+    /**
+     * The service_contract whose settlement caused this write.
+     *
+     * Until 2026-08-01 this was recorded ONLY inside
+     * `repid_events.event_data`, so the link existed but lived in a JSON blob
+     * no index or foreign key could reach — the trust receipt had to say "this
+     * is the provider's latest write, not proven caused by this exchange".
+     * Recording it as a column is what lets a receipt make the causal claim
+     * honestly.
+     */
+    contract_id?: string | null;
   }
 ): Promise<void> {
-  await supabase.from('erc8004_reputation_writes').insert(args);
+  const { error } = await supabase.from('erc8004_reputation_writes').insert(args);
+  if (error) {
+    // An unchecked insert here is how the on-chain audit trail silently drifts
+    // from the chain. The transfer already happened; failing to record it is
+    // not fatal to the payment, but it must never pass in silence.
+    console.error(
+      `[erc8004] FAILED to persist the reputation write for tx ${args.tx_hash} ` +
+        `(agent ${args.agent_id}): ${error.message}. The on-chain write SUCCEEDED — ` +
+        `the ledger is now behind the chain and needs reconciling.`
+    );
+  }
 }
