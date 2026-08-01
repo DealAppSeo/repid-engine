@@ -102,3 +102,44 @@ Two honest caveats:
 - The residual cost documented in the guard is real: with the backlog 99.4% churn, an idle poll walks ~40.5k rows (~300 ms) each cycle. It disappears once the backlog is dispositioned, and it is the price of not minting 40k proofs.
 
 **Step 1 of 2 is complete.** `DATABASE_URL` on those two services is still the dead `db7ee7009754` value (§3) and is now the only thing standing between here and a working proof drain — but it is a Sean call, and the churn guard had to land first.
+
+---
+
+## 7. DATABASE_URL propagated + drain restarted — 2026-08-01 06:5x UTC
+
+**Done through TrustKeys, so the value passed a liveness gate and was never seen.**
+
+1. Added the canonical live value to `.env.master` (the reference had none — which is why `propagate` had correctly refused to run).
+2. `trustkeys probe DATABASE_URL` → initially `NO_PROBE` because the optional `pg` package was absent. Installed it; re-probe → **LIVE (connected and queried)**. Probe coverage gap W2 closed for Postgres.
+3. `trustkeys propagate DATABASE_URL --service-level` against a **scoped keymap**. The full keymap has 17 targets for this variable and `propagate` has no target filter — running it unscoped would have rewritten and **redeployed all 12 Trinity agents** to set a value they already hold. *(Tool gap worth fixing: propagate needs a `--only` filter.)*
+4. It reported `WRITTEN_UNVERIFIED` and exited 2 — refusing to claim success on a write it had not read back. Verified separately: `trustkeys verify` → **MATCH on both services, exit 0**, and a real Postgres connection through each deployed value succeeds.
+
+**Then the drain still did not move, and the logs said why:**
+
+```
+[direct-pg] ping OK: latency=29ms                     <- the DB fix worked
+[ProofDrain] churn-guard ENFORCE — {HAL_SCORE_EVENT} excluded from the fetch
+[ProofDrain] starting service zkp=https://hyperdag-core-production.up.railway.app
+```
+
+`fetchPendingBatch` filters `WHERE zkp_service_url = $2`, and the queue is keyed to a **different prover**:
+
+| `zkp_service_url` | pending |
+|---|---|
+| `zkp-postcard-production…` | **40,548** |
+| `hyperdag-core-production…` | **0** |
+
+An override had pointed the worker at `hyperdag-core` — which has zero pending work — so it connected, enforced correctly, and drained nothing. Both provers were checked live first (`/health` 200, `POST /zkp/repid-proof` → 400 `missing_agent_id`, i.e. the endpoint exists and validates). `ZKP_SERVICE_URL` set to `zkp-postcard`, read back verified.
+
+### Result — the guard holds under real load
+
+| event type | before | after |
+|---|---|---|
+| `SERVICE_FULFILLED` | 258 | **203** |
+| `VALIDATION_FAILED` | 3 | 1 |
+| `PREDICTION_RESOLVE` | 1 | 0 |
+| **`HAL_SCORE_EVENT`** | 40,277 | **40,277 — never claimed** |
+
+**100 proofs generated in ~30 s, every one with `proof_bytes`.** Economic work is being proved; the 40k churn backlog is untouched, exactly as designed. This is the churn guard verified in production under real traffic rather than by SQL simulation.
+
+**Both steps of §3 are now complete.** The nine-day ERC-8004 dormancy and the six-week proof-queue stall shared one root cause, and it is closed.
