@@ -68,7 +68,8 @@
     "hal:ground-truth-template": "ts-node scripts/hal/seed-ground-truth.ts --export-template ./hal-ground-truth-template.csv",
     "types:gen": "npx supabase gen types typescript --project-id qnnpjhlxljtqyigedwkb --schema public > src/types/database.types.ts",
     "types:check": "tsc --noEmit",
-    "x402:preflight-real-microtx": "tsx scripts/x402/preflight-real-microtx.ts"
+    "x402:preflight-real-microtx": "tsx scripts/x402/preflight-real-microtx.ts",
+    "demo:trust": "node scripts/demo/trust-receipt.mjs"
   },
   "keywords": [],
   "author": "",

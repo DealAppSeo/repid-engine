@@ -61,6 +61,15 @@ jest.mock('../../src/db', () => {
 jest.mock('../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
     req.apiKey = { key: 'test-key', tier: 'premium' };
+    // /fulfill and /satisfy now require a caller BOUND to a party on the
+    // contract — that closed a bypass where a provider could fulfil its own
+    // contract with a self-declared PASS and then release its own payment.
+    // This lifecycle test drives BOTH endpoints, so it needs an identity:
+    // the provider delivers, the buyer accepts. Real authMiddleware attaches
+    // this from a DB-issued agent key; here the test states which party is
+    // acting via `x-test-party`, defaulting to the provider.
+    const party = req.headers['x-test-party'];
+    req.agent_id = party === 'buyer' ? 'buyer-456' : 'provider-123';
     next();
   }
 }));

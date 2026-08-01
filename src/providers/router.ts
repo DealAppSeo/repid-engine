@@ -78,6 +78,69 @@ const tier1Adapters: ProviderAdapter[] = [
   new OpenAIAdapter()
 ];
 
+/**
+ * Resolve the API key for an adapter — THE ONE PLACE that knows how.
+ *
+ * This logic used to live only inside the routing loop in routes/route.ts, so
+ * nothing could ask "is this provider even usable?" before selecting it. The
+ * result: a keyless provider was chosen, consumed one of three routing
+ * attempts, was excluded, and the request 503'd having never tried a provider
+ * that actually works. A live smoke call did exactly that (2026-08-01).
+ *
+ * Exported so the pre-filter and the loop share one definition. Two copies of
+ * key-resolution logic would drift the same way the two handler registries did.
+ */
+export function resolveAdapterKey(
+  adapterName: string,
+  adapterTier: number,
+  userPaidKeys?: Record<string, string> | undefined
+): string {
+  if (adapterName === 'llama-3-2-1b' || adapterName === 'gemma-3-2b') {
+    return process.env['HUGGINGFACE_API_TOKEN'] || process.env['HF_API_KEY'] || process.env['HF_TOKEN'] || '';
+  }
+  if (adapterName === 'phi-4') return process.env['CEREBRAS_API_KEY'] || '';
+  if (adapterTier === 0) return process.env[`${adapterName.toUpperCase()}_API_KEY`] || '';
+  return resolveTier1Key(adapterName, userPaidKeys) || '';
+}
+
+/**
+ * Providers that CANNOT be used right now because no key resolves for them.
+ *
+ * Seeded into `excludeProviders` before the first selection, so `maxAttempts`
+ * means that many REAL attempts instead of being spent on providers that were
+ * never viable. Computed per-request because caller-supplied keys can make a
+ * tier-1 adapter viable for one request and not the next.
+ */
+/**
+ * Providers explicitly disabled by config, e.g.
+ *   LLM_DISABLED_PROVIDERS=llama-3-2-1b,gemma-3-2b
+ *
+ * WHY THIS EXISTS AND NOT A HARDCODED LIST: a key can be PRESENT and DEAD. On
+ * 2026-08-01 `HUGGINGFACE_API_TOKEN` was set both in the reference file and on
+ * the deployed engine, so every presence-based check said "fine" — while
+ * HuggingFace answered 400 "not supported by any provider you have enabled".
+ * The cheapest tier routed there first, so real requests burned attempts on a
+ * provider that could never succeed.
+ *
+ * Liveness is not knowable from config, so the operator states it. Config-driven
+ * rather than hardcoded because which providers are entitled changes with the
+ * account, not with the code, and this must be reversible in one env change.
+ */
+export function disabledProviders(): string[] {
+  return (process.env['LLM_DISABLED_PROVIDERS'] ?? '')
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function keylessProviders(userPaidKeys?: Record<string, string> | undefined): string[] {
+  const out: string[] = [...disabledProviders()];
+  for (const a of [...tier0aAdapters, ...tier1Adapters]) {
+    if (!resolveAdapterKey(a.name, a.tier, userPaidKeys)) out.push(a.name);
+  }
+  return [...new Set(out)];
+}
+
 export function isLowComplexity(prompt: string, taskHint?: string): boolean {
   const p = prompt.toLowerCase();
   

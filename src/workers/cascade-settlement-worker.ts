@@ -35,6 +35,8 @@ import { VerificationServiceHandler } from '../services/verification-service-han
 import { CrossValidationServiceHandler } from '../services/cross-validation-service-handler';
 import { AnfisRoutingServiceHandler } from '../services/anfis-routing-service-handler';
 import { ReputationAuditServiceHandler } from '../services/reputation-audit-service-handler';
+import { SecurityAuditServiceHandler } from '../services/security-audit-service-handler';
+import { ZkpAuditServiceHandler } from '../services/handlers/zkp-audit-handler';
 import { StorageServiceHandler } from '../services/storage-service-handler';
 
 const POLL_MS = parseInt(process.env.CASCADE_SETTLEMENT_POLL_MS ?? '60000', 10);
@@ -47,12 +49,20 @@ export class CascadeSettlementWorker {
   // + storage were registered in agent.ts (Gemini handler-registry PR, merged
   // 2026-05-22); added here so those two service types also drain server-side
   // rather than only via the HTTP /agent/process-contracts path.
+  // PARITY WITH agent.ts IS THE POINT. This list drifted: SecurityAuditServiceHandler
+  // was registered in src/routes/v1/agent.ts on 2026-07-27 but never added here, so
+  // `security_audit` contracts NEVER drained server-side — they only completed if
+  // something happened to POST /agent/process-contracts for that provider. Silent,
+  // and it went unnoticed until an independent audit compared the two lists.
+  // If you add a handler, add it to BOTH or the service type is half-wired.
   private readonly handlers = [
     new VerificationServiceHandler(),
     new CrossValidationServiceHandler(),
     new AnfisRoutingServiceHandler(),
     new ReputationAuditServiceHandler(),
     new StorageServiceHandler(),
+    new SecurityAuditServiceHandler(),
+    new ZkpAuditServiceHandler(),
   ];
   private timer: NodeJS.Timeout | null = null;
 

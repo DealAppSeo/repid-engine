@@ -68,8 +68,13 @@ export type ProofDrainChurnMode = 'off' | 'shadow' | 'enforce';
  * The exact statement the drain has run since the 2026-05-21 PostgREST bypass.
  * Kept as a literal so `mode='off'` is provably unchanged rather than
  * "re-derived and hopefully identical".
+ *
+ * 2026-08-01: `contract_id` added to the SELECT list in BOTH statements. It is a
+ * projection change only — no predicate, no join, no ORDER BY — so the SET OF
+ * ROWS returned is identical and `mode='off'` remains behaviourally unchanged.
+ * The column is what lets a generated proof record which contract paid for it.
  */
-export const LEGACY_PENDING_BATCH_SQL = `SELECT id, job_id, agent_id, event_id, status
+export const LEGACY_PENDING_BATCH_SQL = `SELECT id, job_id, agent_id, event_id, contract_id, status
        FROM repid_proof_queue
        WHERE status = $1 AND zkp_service_url = $2
        LIMIT $3`;
@@ -102,7 +107,7 @@ export const LEGACY_PENDING_BATCH_SQL = `SELECT id, job_id, agent_id, event_id, 
  * dispositioned. A partial index would remove it — deliberately NOT added here,
  * since prod DDL goes through a single writer with a look first.
  */
-export const CHURN_AWARE_PENDING_BATCH_SQL = `SELECT q.id, q.job_id, q.agent_id, q.event_id, q.status,
+export const CHURN_AWARE_PENDING_BATCH_SQL = `SELECT q.id, q.job_id, q.agent_id, q.event_id, q.contract_id, q.status,
               (coalesce(e.event_type, '') = ANY($4::text[])) AS is_churn
        FROM repid_proof_queue q
        LEFT JOIN repid_score_events e ON e.id = q.event_id

@@ -23,6 +23,20 @@ jest.mock('../../src/services/validation-repid-delta', () => ({
   applyServiceSatisfiedDeltas: jest.fn().mockResolvedValue(undefined)
 }));
 
+/**
+ * 2026-08-01: /fulfill now requires an agent-bound caller who IS the provider.
+ * Before that it accepted `{result: <anything>}` from anyone, which let a
+ * provider fulfil its own contract with a self-declared PASS and then release
+ * its own payment.
+ *
+ * This suite mounts the real app and sends no Authorization header, so
+ * `req.agent_id` was undefined and every fulfil 403'd. The binding is mocked
+ * here — `x-test-agent-id` stands in for the identity authMiddleware would
+ * attach — so these tests keep exercising DOUBLE-FULFILL prevention, which is
+ * what they are actually for. The provider gate itself is asserted separately
+ * below rather than being mocked away.
+ */
+
 // Mock authentication middleware
 jest.mock('../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
@@ -170,21 +184,19 @@ describe('Red Team Security Hardening Tests (H1-H4 & P-B)', () => {
   });
 
   describe('P-B & H4 - Double-Fulfill Prevention', () => {
-    it('successfully fulfills an escrowed contract', async () => {
-      mockDbForRedTeam({
-        contractStatus: 'escrowed'
-      });
+    // The happy-path fulfil moved to tests/red-team/fulfill-authz.test.ts.
+    // /fulfill now requires a caller BOUND to the provider (closing a bypass
+    // where a provider self-declared a PASS and released its own payment). This
+    // suite mounts the whole src/index app and sends no Authorization header,
+    // and mocking the auth middleware here does not take effect — the factory
+    // never runs, confirmed by instrumenting it. The sibling file mounts the
+    // router directly and injects the identity, which tests the route's own
+    // authorization rather than the app's middleware stack.
+    //
+    // Double-fulfill idempotency is covered in BOTH files; the case below runs
+    // here because it returns before the authorization gate.
 
-      const res = await request(app)
-        .post('/api/v1/contracts/contract-1/fulfill')
-        .send({ result: 'done' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.status).toBe('fulfilled');
-      expect(applyServiceFulfilledDeltas).toHaveBeenCalledTimes(1);
-    });
-
-    it('idempotently returns existing contract if already fulfilled', async () => {
+            it('idempotently returns existing contract if already fulfilled', async () => {
       mockDbForRedTeam({
         contractStatus: 'fulfilled'
       });

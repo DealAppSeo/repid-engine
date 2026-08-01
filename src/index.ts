@@ -25,6 +25,7 @@ import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import negotiationRouter from './routes/v1/negotiation';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
 import observabilityPublicRouter from './routes/v1/observability-public';
 import v1Router from './routes/v1';
@@ -195,6 +196,11 @@ app.use((req, res, next) => {
   // in descriptions, payloads, and results which may contain SQL-like syntax.
   // All downstream Supabase writes are parameterized.
   if (req.path.startsWith('/api/v1/services') || req.path.startsWith('/api/v1/contracts')) return next();
+  // Same reason for /api/v1/negotiation: RFQ scope, bid terms and award
+  // rationale are free-form prose. The award rationale is REQUIRED to be >= 24
+  // characters by a DB CHECK, so a blanket SQL-keyword scan would 400 exactly
+  // the explanations the anti-collusion constraint exists to collect.
+  if (req.path.startsWith('/api/v1/negotiation')) return next();
   // Phase 2.10: /api/v1/agent/process-contracts carries buyer payload content
   // (free-form prose/code) processed by PCP/judge; downstream writes parameterized.
   if (req.path === '/api/v1/agent/process-contracts') return next();
@@ -380,6 +386,17 @@ app.use('/api', llmRouter);
 app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
 
+// A2A NEGOTIATION (2026-07-31): RFQ -> sealed bids -> bounded counter-rounds
+// -> single atomic award.
+//
+// MOUNT ORDER IS LOAD-BEARING. This sits AFTER authMiddleware on purpose. It was
+// briefly mounted up with the marketplace routers, which are deliberately
+// PRE-auth so the public /market page can read them with no key — that left
+// every negotiation endpoint unauthenticated, and a live probe with a
+// deliberately bogus key got the router's own error instead of a 401. An
+// unbound caller could have bid as anyone, which is the one thing that makes a
+// bid non-repudiable.
+app.use('/api/v1/negotiation', negotiationRouter);
 app.use('/api/v1', v1Router);
 // CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
 app.use('/api/v1/observability', productivityRouter);

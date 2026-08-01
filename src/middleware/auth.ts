@@ -141,16 +141,38 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (dbAgentId) {
     (req as any).agent_id = dbAgentId;
 
-    // f2-authz: reject agent_id that doesn't match the key's bound identity
-    const targetAgentId = req.body?.agent_id || 
-                          req.body?.buyer_agent_id || 
-                          req.body?.requestor_agent_id || 
-                          req.body?.provider_agent_id ||
-                          req.body?.agent ||
-                          req.query?.agent_id ||
-                          req.query?.agent ||
-                          req.query?.buyer_agent_id ||
-                          req.query?.provider_agent_id;
+    // f2-authz: reject any agent identity in the request that isn't the one this
+    // key is bound to.
+    //
+    // SECURITY FIX 2026-07-31 — this was an OR-chain:
+    //     req.body?.agent_id || req.body?.buyer_agent_id || ... || req.body?.provider_agent_id
+    // which collapses to the FIRST TRUTHY VALUE and checks only that one. Every
+    // other identity in the same request went unexamined.
+    //
+    // The exploit: hold a valid key bound to your own agent, then send
+    //     { agent_id: <your own id>, provider_agent_id: <victim's id>, ... }
+    // The check reads agent_id, matches, passes — and provider_agent_id is never
+    // looked at. That let a caller act under another agent's identity: submit a
+    // bid or list a service as a rival, poisoning their pricing and delivery
+    // record. Worse, where a UNIQUE(rfq_id, provider_agent_id) constraint exists,
+    // one forged request permanently locks the real agent out of that auction.
+    //
+    // Now EVERY identity-bearing field is collected and each must match. A
+    // request naming two different agents is refused, whichever order they
+    // appear in. Verified before changing: no route in src/routes reads two
+    // different agent-id fields from one body, so nothing legitimate sends two.
+    const IDENTITY_FIELDS = ['agent_id', 'buyer_agent_id', 'requestor_agent_id', 'provider_agent_id', 'agent'] as const;
+    const claimedIdentities: Array<{ field: string; source: 'body' | 'query'; value: string }> = [];
+    for (const field of IDENTITY_FIELDS) {
+      const fromBody = (req.body as Record<string, unknown> | undefined)?.[field];
+      if (typeof fromBody === 'string' && fromBody.trim()) {
+        claimedIdentities.push({ field, source: 'body', value: fromBody.trim() });
+      }
+      const fromQuery = (req.query as Record<string, unknown> | undefined)?.[field];
+      if (typeof fromQuery === 'string' && fromQuery.trim()) {
+        claimedIdentities.push({ field, source: 'query', value: fromQuery.trim() });
+      }
+    }
 
     const targetAgentName = req.body?.agent_name || 
                             req.body?.agent_assigned || 
@@ -167,17 +189,33 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       console.warn('[authMiddleware] repid_agents lookup failed (possibly mocked DB):', e);
     }
 
-    if (targetAgentId || targetAgentName) {
-      if (targetAgentId && String(targetAgentId).trim().toLowerCase() !== String(dbAgentId).trim().toLowerCase()) {
-        if (!boundAgentName || String(targetAgentId).trim().toLowerCase() !== boundAgentName.toLowerCase()) {
-          return res.status(403).json({ error: 'Forbidden: agent_id mismatch (API key is bound to a different agent identity)' });
-        }
-      }
+    // A claimed identity is acceptable only if it IS the bound agent — by id or
+    // by that agent's own name. EVERY claim is checked, not just the first.
+    const boundId = String(dbAgentId).trim().toLowerCase();
+    const boundName = boundAgentName ? boundAgentName.trim().toLowerCase() : null;
+    const isBoundIdentity = (value: string): boolean => {
+      const v = value.trim().toLowerCase();
+      return v === boundId || (boundName !== null && v === boundName);
+    };
 
-      if (targetAgentName && boundAgentName && String(targetAgentName).trim().toLowerCase() !== boundAgentName.toLowerCase()) {
-        if (String(targetAgentName).trim().toLowerCase() !== dbAgentId.toLowerCase()) {
-          return res.status(403).json({ error: 'Forbidden: agent_name mismatch (API key is bound to a different agent identity)' });
-        }
+    for (const claim of claimedIdentities) {
+      if (!isBoundIdentity(claim.value)) {
+        // Named loudly: a 403 whose cause is invisible is the kind of auth
+        // failure people work around by widening the check.
+        console.warn(
+          `[authMiddleware] f2-authz REJECT — ${claim.source}.${claim.field} names an agent this key is not bound to ` +
+            `(path=${req.path}, bound=${boundId})`
+        );
+        return res.status(403).json({
+          error: 'Forbidden: agent identity mismatch (API key is bound to a different agent identity)',
+          field: `${claim.source}.${claim.field}`,
+        });
+      }
+    }
+
+    if (targetAgentName && boundAgentName && String(targetAgentName).trim().toLowerCase() !== boundAgentName.toLowerCase()) {
+      if (String(targetAgentName).trim().toLowerCase() !== boundId) {
+        return res.status(403).json({ error: 'Forbidden: agent_name mismatch (API key is bound to a different agent identity)' });
       }
     }
 
@@ -211,6 +249,21 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       } catch (e) {
         console.warn('[authMiddleware] contract party lookup failed (possibly mocked DB):', e);
       }
+      return next();
+    }
+
+    // 2026-07-31 (A2A negotiation): /negotiation/rfqs/<uuid>/... paths carry an
+    // RFQ or BID id, never an agent id. The generic path-UUID check below would
+    // read one as a mismatched agent id and 403 every agent-bound key — the
+    // identical failure that made the whole contract lifecycle operator-key-only
+    // until the /contracts carve-out above was added.
+    //
+    // Authorization is NOT skipped, it moves to where the facts are: the router
+    // resolves the RFQ and enforces that a buyer may only act on its own RFQ and
+    // a provider only on its own bid thread. Party membership here would be a
+    // second, weaker copy of that check — and the identity fields in the body
+    // are already validated above.
+    if (/^(?:\/api\/v1)?\/negotiation\//i.test(req.path)) {
       return next();
     }
 
