@@ -78,6 +78,13 @@ export const SETTLEMENT_STATUS = {
 
 export type ReleaseOutcome =
   | { status: 'SETTLED'; txHash: string; settlementId: string }
+  /**
+   * MONEY MOVED BUT WE FAILED TO RECORD IT. The rarest and worst state: the
+   * transfer is on-chain and irreversible, yet our row does not say so. A human
+   * must reconcile. Never collapse this into SETTLED — the ledger is wrong, and
+   * pretending otherwise is how a double-spend gets authorised later.
+   */
+  | { status: 'SETTLED_UNRECORDED'; txHash: string; settlementId: string; reason: string }
   | { status: 'ALREADY_SETTLED'; txHash: string; settlementId: string }
   | { status: 'REFUSED'; reason: string }
   | { status: 'EXPIRED'; reason: string }
@@ -224,7 +231,7 @@ export async function releaseHeldPayment(args: {
   if (!window.ok) {
     await db
       .from('x402_settlements')
-      .update({ status: SETTLEMENT_STATUS.VOIDED, facilitator_response: { voided_reason: window.reason } })
+      .update({ status: SETTLEMENT_STATUS.VOIDED })
       .eq('id', held.id)
       .eq('status', SETTLEMENT_STATUS.AUTHORIZED);
     return { status: 'EXPIRED', reason: window.reason };
@@ -246,16 +253,40 @@ export async function releaseHeldPayment(args: {
 
   try {
     const result = await x402Facilitator.settlePayment(header, args.requirements);
-    await db
+
+    // THE WRITE THAT RECORDS AN IRREVERSIBLE FACT. Its error was previously
+    // unchecked, and it silently failed on a column (`facilitator_response`)
+    // that the GENERATED TYPES claim exists but the live table does not have.
+    // Result, observed on a real Base Sepolia settlement: 0.10 USDC moved,
+    // the caller was told SETTLED, and the row stayed 'settling' with a null
+    // tx_hash. That is precisely the silent-success failure this module was
+    // written to prevent, committed by the module itself.
+    //
+    // Columns here are now only those verified to exist on the live table.
+    const { error: recordErr } = await db
       .from('x402_settlements')
       .update({
         status: SETTLEMENT_STATUS.SETTLED,
         tx_hash: result.txHash,
         delivered_at: new Date().toISOString(),
         settlement_attempt_count: 1,
-        facilitator_response: { released_after_verification: args.verificationEvidence },
       })
       .eq('id', held.id);
+
+    if (recordErr) {
+      // Do NOT claim SETTLED. The transfer is real and cannot be undone, but our
+      // ledger disagrees with the chain and only a human can close that gap.
+      console.error(
+        `[x402-deferred] SETTLED_UNRECORDED contract=${args.contractId} tx=${result.txHash} — ` +
+          `the transfer succeeded but the settlement row could NOT be updated: ${recordErr.message}`
+      );
+      return {
+        status: 'SETTLED_UNRECORDED',
+        txHash: result.txHash,
+        settlementId: String(held.id),
+        reason: `on-chain transfer ${result.txHash} SUCCEEDED but the settlement row could not be updated (${recordErr.message}). The ledger is behind the chain — reconcile manually.`,
+      };
+    }
 
     return { status: 'SETTLED', txHash: result.txHash, settlementId: String(held.id) };
   } catch (e: unknown) {
@@ -264,7 +295,7 @@ export async function releaseHeldPayment(args: {
     // strand a provider who genuinely earned the money.
     await db
       .from('x402_settlements')
-      .update({ status: SETTLEMENT_STATUS.AUTHORIZED, facilitator_response: { last_error: message } })
+      .update({ status: SETTLEMENT_STATUS.AUTHORIZED })
       .eq('id', held.id)
       .eq('status', SETTLEMENT_STATUS.SETTLING);
     return { status: 'FAILED', reason: `settlement broadcast failed: ${message}` };
@@ -298,7 +329,7 @@ export async function voidAuthorization(
 
   const { data: updated } = await db
     .from('x402_settlements')
-    .update({ status: SETTLEMENT_STATUS.VOIDED, facilitator_response: { voided_reason: reason } })
+    .update({ status: SETTLEMENT_STATUS.VOIDED })
     .eq('id', row.id)
     .neq('status', SETTLEMENT_STATUS.SETTLED)
     .select('id')

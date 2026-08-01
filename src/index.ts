@@ -268,13 +268,6 @@ app.use('/api/v1/marketplace', marketplaceP0Router);
 // SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
 // earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
 app.use('/api/v1/marketplace', marketplaceRouter);
-// A2A NEGOTIATION (2026-07-31): RFQ -> sealed bids -> bounded counter-rounds
-// -> single atomic award. Mounted AFTER authMiddleware: every endpoint needs a
-// bound agent identity, because an unbound caller could bid as anyone. The
-// accept path returns 501 unless the a2a_accept_and_award RPC is installed,
-// rather than doing a non-atomic award that could strand an un-provenanced
-// payable contract.
-app.use('/api/v1/negotiation', negotiationRouter);
 // Buy-loop last mile (2026-07-06): PUBLIC read-only marketplace surface
 // (GET /recent-transactions). Mounted BEFORE authMiddleware so the /market page
 // can show real settled activity with no API key. Read-only; separate file so
@@ -393,6 +386,17 @@ app.use('/api', llmRouter);
 app.use(rateLimitMiddleware);
 app.use(versioningMiddleware);
 
+// A2A NEGOTIATION (2026-07-31): RFQ -> sealed bids -> bounded counter-rounds
+// -> single atomic award.
+//
+// MOUNT ORDER IS LOAD-BEARING. This sits AFTER authMiddleware on purpose. It was
+// briefly mounted up with the marketplace routers, which are deliberately
+// PRE-auth so the public /market page can read them with no key — that left
+// every negotiation endpoint unauthenticated, and a live probe with a
+// deliberately bogus key got the router's own error instead of a 401. An
+// unbound caller could have bid as anyone, which is the one thing that makes a
+// bid non-repudiable.
+app.use('/api/v1/negotiation', negotiationRouter);
 app.use('/api/v1', v1Router);
 // CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
 app.use('/api/v1/observability', productivityRouter);

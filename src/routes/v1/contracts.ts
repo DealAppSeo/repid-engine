@@ -675,7 +675,17 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
 
     // No payment, no settlement. Marking a contract settled when the transfer
     // failed is exactly the silent-success lie this codebase keeps paying for.
-    if (released.status !== 'SETTLED' && released.status !== 'ALREADY_SETTLED') {
+    //
+    // SETTLED_UNRECORDED counts as paid: the transfer IS on-chain and the
+    // provider HAS the money. Refusing here would leave the contract 'fulfilled'
+    // after the buyer was debited — strictly worse than proceeding, because the
+    // provider would also lose the RepID it earned. It proceeds, loudly, and the
+    // response carries the discrepancy so a human can reconcile the ledger.
+    if (
+      released.status !== 'SETTLED' &&
+      released.status !== 'ALREADY_SETTLED' &&
+      released.status !== 'SETTLED_UNRECORDED'
+    ) {
       return res.status(409).json({
         error: 'payment_release_failed',
         message: 'the deliverable passed but the payment could not be released — contract left fulfilled, not settled',
