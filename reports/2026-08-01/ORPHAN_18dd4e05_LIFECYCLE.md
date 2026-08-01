@@ -133,3 +133,44 @@ This table tracks and compares the transaction flows of both contracts executed 
 2. **Client Aborted Before `/satisfy` Execution:** As a consequence of the timeout, the E2E test runner client terminated with an HTTP 502/504 error. Because the client died, the sequential execution flow never reached the next step, which was to call `POST /api/v1/contracts/18dd4e05-121e-4a80-9c1e-2a538dacd9e0/satisfy`.
 3. **Server Succeeded in Background:** Despite the client disconnect, the server completed the handler processing in the background, updating the database status to `fulfilled`. Since the client was already dead, the contract was left orphaned in `fulfilled` state.
 4. **`2eccd820` Succeeded Due to Bypass:** The second contract (`2eccd820`) used direct fulfillment (`--direct-fulfill` flag), which processed instantly (60ms) and successfully completed before hitting any network/gateway timeouts, thereby allowing the `/satisfy` call to proceed normally.
+
+---
+
+## CC verification addendum (2026-08-01)
+
+Report authored by GA. Claims re-run against prod Supabase before acceptance, per the
+rule that an agent's report is `[reported]` until a query makes it `[verified]`.
+
+**CONFIRMED [V]** — single query over `service_contracts` LEFT JOIN `x402_settlements`:
+
+| contract | settled | fulfilled | delta |
+|---|---|---|---|
+| `18dd4e05` | 04:32:31.72 | 04:33:23.54 | fulfilled **53.7s** after creation, **51.8s** after payment |
+| `2eccd820` | 04:33:36.87 | 04:33:37.02 | 1.16s |
+
+The stall is real, the 50s-order latency is real, and `18dd4e05` is still `fulfilled`
+with a genuine on-chain payment (`0x3270e29c…`, is_simulated=false).
+
+**NARROWED — point 4 does not generalise.** The report concludes that settle-on-delivery
+was "disabled or bypassed". That holds for the two **July** contracts, but not as a
+statement about the system:
+
+| contract | settled | fulfilled | order |
+|---|---|---|---|
+| `e2dfb4ca` (Aug 1) | 05:04:28.00 | 05:04:27.32 | settled **after** delivery ✓ |
+| `97c2d308` (Aug 1) | 05:09:07.74 | 05:09:06.93 | settled **after** delivery ✓ |
+
+Deferred settlement landed 2026-08-01 and works. July exchanges paid at escrow because
+that is what the code did then — not because a working gate was bypassed.
+
+**WHAT THIS FOUND DOWNSTREAM.** The public receipt asserted pay-on-delivery for every
+exchange unconditionally, which made it false for exactly these July rows. Fixed in
+repid-engine PR #299: the ordering is now derived per exchange and the narrative follows
+it. That defect was worth more than the orphan itself, and it came out of checking the
+report rather than accepting it.
+
+**STILL OPEN — the structural point.** Loop completion depends on the CLIENT staying
+connected long enough to call `/satisfy`. Any slow verification orphans a paid contract,
+and the money has already moved. `npm run ops:reconcile` detects this class; nothing
+closes it. Fixing that means making finalisation server-side rather than caller-driven —
+a live behaviour change, so it is flagged, not made here.
