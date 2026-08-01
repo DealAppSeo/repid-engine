@@ -36,18 +36,6 @@ jest.mock('../../src/services/validation-repid-delta', () => ({
  * what they are actually for. The provider gate itself is asserted separately
  * below rather than being mocked away.
  */
-const testAuth: { boundAgentId: string | null } = { boundAgentId: null };
-
-jest.mock('../../src/middleware/auth', () => ({
-  authMiddleware: (req: any, _res: any, next: any) => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const state = (global as any).__testAuth as { boundAgentId: string | null };
-    if (state?.boundAgentId) req.agent_id = state.boundAgentId;
-    req.apiKey = { key: 'test', tier: 'pro' };
-    next();
-  },
-}));
-(global as any).__testAuth = testAuth;
 
 // Mock authentication middleware
 jest.mock('../../src/middleware/auth', () => ({
@@ -196,20 +184,17 @@ describe('Red Team Security Hardening Tests (H1-H4 & P-B)', () => {
   });
 
   describe('P-B & H4 - Double-Fulfill Prevention', () => {
-    it('successfully fulfills an escrowed contract', async () => {
-      testAuth.boundAgentId = 'provider-123';   // the contract's provider
-      mockDbForRedTeam({
-        contractStatus: 'escrowed'
-      });
-
-      const res = await request(app)
-        .post('/api/v1/contracts/contract-1/fulfill')
-        .send({ result: 'done' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.status).toBe('fulfilled');
-      expect(applyServiceFulfilledDeltas).toHaveBeenCalledTimes(1);
-    });
+    // The happy-path fulfil moved to tests/red-team/fulfill-authz.test.ts.
+    // /fulfill now requires a caller BOUND to the provider (closing a bypass
+    // where a provider self-declared a PASS and released its own payment). This
+    // suite mounts the whole src/index app and sends no Authorization header,
+    // and mocking the auth middleware here does not take effect — the factory
+    // never runs, confirmed by instrumenting it. The sibling file mounts the
+    // router directly and injects the identity, which tests the route's own
+    // authorization rather than the app's middleware stack.
+    //
+    // Double-fulfill idempotency is covered in BOTH files; the case below runs
+    // here because it returns before the authorization gate.
 
             it('idempotently returns existing contract if already fulfilled', async () => {
       mockDbForRedTeam({
