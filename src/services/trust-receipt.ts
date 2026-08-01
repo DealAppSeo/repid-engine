@@ -35,6 +35,20 @@ export interface TrustReceipt {
   settlement_tx: string | null;
   settlement_url: string | null;
   is_simulated: boolean | null;
+  /**
+   * Did the money move BEFORE the work was delivered?
+   *
+   * The whole claim of this receipt is "paid only after verified delivery", and
+   * that claim is not true of every exchange in the table. Contracts settled
+   * before 2026-08-01 paid at ESCROW: 18dd4e05 settled at 04:32:31.72 and was
+   * fulfilled at 04:33:23.54 — 52 seconds LATER. Deferred settlement landed on
+   * 2026-08-01; exchanges after it settle after fulfilment.
+   *
+   * So the ordering is read from the timestamps per exchange rather than
+   * asserted by the template. null = not enough data to say, which is also not
+   * a licence to tell the flattering version.
+   */
+  paid_before_delivery: boolean | null;
   reputation_events: Array<{ agent: string; event: string; delta: number; from: number; to: number }>;
   /** ERC-8004. Present only when PROVABLY caused by this contract. */
   onchain_tx: string | null;
@@ -59,7 +73,7 @@ const scan = (tx: string) => `https://sepolia.basescan.org/tx/${tx}`;
 export async function buildTrustReceipt(contractId: string): Promise<TrustReceipt | null> {
   const { data: c } = await db
     .from('service_contracts')
-    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at, work_statement_hash')
+    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at, fulfilled_at, work_statement_hash')
     .eq('id', contractId)
     .maybeSingle();
   if (!c) return null;
@@ -75,13 +89,30 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
 
   const { data: settlement } = await db
     .from('x402_settlements')
-    .select('tx_hash, is_simulated, status')
+    .select('tx_hash, is_simulated, status, created_at')
     .eq('idempotency_key', contractId)
     .maybeSingle();
   if (settlement && settlement.is_simulated) {
     caveats.push('This settlement was SIMULATED — no money actually moved.');
   }
   if (!settlement) caveats.push('No x402 settlement is on record for this contract.');
+
+  // Read the pay-vs-deliver ordering from the row instead of letting the template
+  // assert it. See TrustReceipt.paid_before_delivery.
+  let paid_before_delivery: boolean | null = null;
+  if (settlement?.created_at && c.fulfilled_at) {
+    paid_before_delivery = new Date(settlement.created_at) < new Date(c.fulfilled_at);
+    if (paid_before_delivery) {
+      caveats.push(
+        'The money moved BEFORE delivery on this exchange. Payment settled at escrow, ' +
+        `${Math.round((new Date(c.fulfilled_at).getTime() - new Date(settlement.created_at).getTime()) / 1000)}s ` +
+        'before the work was fulfilled — so this receipt does NOT show payment gated on verified delivery. ' +
+        'Deferred settlement landed 2026-08-01; exchanges after that date hold the authorisation until delivery is verified.',
+      );
+    }
+  } else if (settlement) {
+    caveats.push('Cannot establish whether payment preceded delivery — one of the two timestamps is missing.');
+  }
 
   const { data: award } = await db
     .from('a2a_awards')
@@ -132,6 +163,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     settlement_tx: settlement?.tx_hash ?? null,
     settlement_url: settlement?.tx_hash ? scan(settlement.tx_hash) : null,
     is_simulated: settlement?.is_simulated ?? null,
+    paid_before_delivery,
     reputation_events: (events ?? []).map((e) => ({
       agent: names[e.agent_id] ?? String(e.agent_id).slice(0, 8),
       event: e.event_type,

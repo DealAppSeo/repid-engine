@@ -61,7 +61,7 @@ describe('public trust receipt', () => {
       'negotiated', 'competing_bids', 'won_on_price', 'uncontested',
       'settlement_tx', 'settlement_url', 'is_simulated', 'reputation_events',
       'onchain_tx', 'onchain_url', 'onchain_repid', 'onchain_link_is_proven',
-      'zk_proofs', 'caveats',
+      'zk_proofs', 'caveats', 'paid_before_delivery',
       // ZK BIND T1. Deliberately allowed: it is a HASH over digests, never the
       // work — work-statement.test.ts proves the preimage cannot contain the
       // deliverable body. Publishing it is the point, since a third party must
@@ -71,6 +71,44 @@ describe('public trust receipt', () => {
     // A new field is not automatically safe to publish — this fails until
     // someone decides it is, which is the point.
     for (const k of Object.keys(receipt!)) expect(allowed.has(k)).toBe(true);
+  });
+
+  /**
+   * The receipt's central claim is "paid only after verified delivery". It was
+   * printed for every exchange regardless of the data, and it was false for the
+   * pre-2026-08-01 rows: 18dd4e05 settled at 04:32:31.72 and was fulfilled at
+   * 04:33:23.54, 52s later. A receipt that tells the flattering version is the
+   * exact failure it exists to expose.
+   */
+  describe('pay-vs-deliver ordering is read from the row, never assumed', () => {
+    const withTimes = (settleAt: string | null, fulfilledAt: string | null) => {
+      Object.assign(dbMock.__rows, {
+        service_contracts: { ...(rows.service_contracts as object), fulfilled_at: fulfilledAt },
+        x402_settlements: { tx_hash: '0xsettle', is_simulated: false, status: 'settled', created_at: settleAt },
+      });
+    };
+    afterEach(() => Object.assign(dbMock.__rows, rows));
+
+    it('flags an exchange that paid at escrow, and says how early', async () => {
+      withTimes('2026-07-23T04:32:31.723Z', '2026-07-23T04:33:23.538Z');
+      const r = await buildTrustReceipt('c1');
+      expect(r!.paid_before_delivery).toBe(true);
+      expect(r!.caveats.join(' ')).toMatch(/moved BEFORE delivery.*52s/);
+    });
+
+    it('does not flag an exchange settled after fulfilment', async () => {
+      withTimes('2026-08-01T05:09:07.741Z', '2026-08-01T05:09:06.934Z');
+      const r = await buildTrustReceipt('c1');
+      expect(r!.paid_before_delivery).toBe(false);
+      expect(r!.caveats.join(' ')).not.toMatch(/BEFORE delivery/);
+    });
+
+    it('says it cannot tell rather than guessing when a timestamp is missing', async () => {
+      withTimes('2026-08-01T05:09:07.741Z', null);
+      const r = await buildTrustReceipt('c1');
+      expect(r!.paid_before_delivery).toBeNull();
+      expect(r!.caveats.join(' ')).toMatch(/Cannot establish whether payment preceded delivery/);
+    });
   });
 
   it('returns null for an unknown contract rather than an empty shell', async () => {
