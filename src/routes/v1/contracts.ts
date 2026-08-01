@@ -585,7 +585,7 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
   let releaseResult: unknown = null;
   if (isSettleOnDeliveryEnabled()) {
     const { data: pre, error: preErr } = await db.from('service_contracts')
-      .select('id, status, provider_agent_id, agreed_price_usdc_raw, result')
+      .select('id, status, buyer_agent_id, provider_agent_id, agreed_price_usdc_raw, result')
       .eq('id', req.params.id)
       .maybeSingle();
 
@@ -600,6 +600,39 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
       return res.status(409).json({
         error: 'not_fulfilled',
         message: `contract is '${pre.status}', not 'fulfilled' — refusing to release payment for an undelivered service`,
+      });
+    }
+
+    // WHO IS ALLOWED TO RELEASE THE MONEY.
+    //
+    // An adversarial review of this path found the hole: /fulfill accepts any
+    // `result` body, including `{verdict:'PASS'}`, and /satisfy carried no
+    // rater identity at all. So a provider could fulfil its own contract with a
+    // self-declared PASS, then call /satisfy and pay itself. Every downstream
+    // protection is irrelevant if the counterparty signs its own cheque.
+    //
+    // Releasing funds therefore requires a caller BOUND to the buyer agent by a
+    // DB-registered agent key (auth.ts f2-authz sets req.agent_id). A shared
+    // tier key from REPID_API_KEYS proves nothing about who is asking, so it
+    // cannot move money — it can still drive every non-payment path.
+    const callerAgentId = (req as any).agent_id as string | undefined;
+    if (!callerAgentId) {
+      return res.status(403).json({
+        error: 'unbound_caller',
+        message:
+          'releasing payment requires an agent-bound API key; a shared tier key cannot authorise a transfer',
+      });
+    }
+    if (callerAgentId === pre.provider_agent_id) {
+      return res.status(403).json({
+        error: 'self_satisfaction_forbidden',
+        message: 'the provider cannot mark its own deliverable satisfactory and release its own payment',
+      });
+    }
+    if (callerAgentId !== pre.buyer_agent_id) {
+      return res.status(403).json({
+        error: 'not_the_buyer',
+        message: 'only the buyer on this contract may accept the deliverable and release payment',
       });
     }
 
