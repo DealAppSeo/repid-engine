@@ -9,6 +9,7 @@ import {
   releaseHeldPayment,
   voidAuthorization,
 } from '../../services/x402-deferred-settlement';
+import { isHandledServiceType, directFulfillAllowed } from '../../services/handled-service-types';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
@@ -537,6 +538,56 @@ router.post('/:id/fulfill', async (req: Request, res: Response) => {
   // 3. Precondition check: only escrowed contracts can be fulfilled
   if (existingContract.status !== 'escrowed') {
     return res.status(400).json({ error: `Cannot fulfill contract in status: ${existingContract.status}` });
+  }
+
+  // 3a. WHO MAY DELIVER. This route previously accepted `{result: <anything>}`
+  // from any authenticated caller, with no provider check at all. Combined with
+  // /satisfy, that let a provider fulfil its own contract with a self-declared
+  // {verdict:'PASS'} and release its own payment. Only the provider may deliver.
+  const fulfilCaller = (req as any).agent_id as string | undefined;
+  if (!fulfilCaller) {
+    return res.status(403).json({
+      error: 'unbound_caller',
+      message: 'delivering a contract requires an agent-bound API key; a shared tier key cannot deliver on behalf of a provider',
+    });
+  }
+  if (fulfilCaller !== existingContract.provider_agent_id) {
+    return res.status(403).json({
+      error: 'not_the_provider',
+      message: 'only the provider named on this contract may deliver it',
+    });
+  }
+
+  // 3b. THE BYPASS ITSELF. For a service type that HAS a registered handler, the
+  // deliverable must come from the handler path — which runs the PCP/HAL verdict
+  // gate and routes a VETO to the dispute queue. Accepting a provider's own
+  // `result` here skips every one of those checks, which makes the verdict the
+  // buyer later sees nothing more than what the provider chose to type.
+  //
+  // Service types with no handler still need a way through, so this refuses only
+  // where a handler exists. ALLOW_DIRECT_FULFILL re-opens it for testing and is
+  // logged LOUDLY per use, because it is a genuine weakening.
+  const { data: fulfilService } = await db.from('agent_services')
+    .select('service_type')
+    .eq('id', existingContract.service_id)
+    .maybeSingle();
+  const fulfilType = fulfilService?.service_type ?? null;
+
+  if (isHandledServiceType(fulfilType)) {
+    if (!directFulfillAllowed()) {
+      return res.status(409).json({
+        error: 'handler_delivery_required',
+        message:
+          `'${fulfilType}' is delivered by a registered handler. Deliver it via POST /api/v1/agent/process-contracts ` +
+          `(or let the cascade settlement worker drain it) so the PCP/HAL verdict gate actually runs. ` +
+          `A self-declared result would make the buyer's verdict equal to whatever the provider typed.`,
+        service_type: fulfilType,
+      });
+    }
+    console.warn(
+      `[contracts/fulfill] ALLOW_DIRECT_FULFILL — bypassing the handler gate for contract ${existingContract.id} ` +
+        `(service_type=${fulfilType}, provider=${fulfilCaller}). The verdict in this result is SELF-DECLARED and ungated.`
+    );
   }
 
   // 4. Atomic state machine guard: update only if status is still escrowed (race prevention)

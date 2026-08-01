@@ -21,6 +21,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { HANDLED_SERVICE_TYPES, isHandledServiceType, directFulfillAllowed } from '../src/services/handled-service-types';
 
 const ROOT = join(__dirname, '..');
 
@@ -47,6 +48,62 @@ describe('service handler registry parity', () => {
     for (const required of ['SecurityAuditServiceHandler', 'ZkpAuditServiceHandler']) {
       expect(httpPath).toContain(required);
       expect(workerPath).toContain(required);
+    }
+  });
+
+  // THIRD consumer: POST /contracts/:id/fulfill refuses a self-declared result
+  // for any type that has a handler. If a handler is registered but its type is
+  // missing from HANDLED_SERVICE_TYPES, the bypass silently re-opens for it.
+  it('every registered handler has its service type listed in HANDLED_SERVICE_TYPES', () => {
+    const expectedTypes: Record<string, string> = {
+      VerificationServiceHandler: 'verification',
+      CrossValidationServiceHandler: 'cross_validation',
+      AnfisRoutingServiceHandler: 'anfis_routing',
+      ReputationAuditServiceHandler: 'reputation_audit',
+      StorageServiceHandler: 'decentralized_storage',
+      SecurityAuditServiceHandler: 'security_audit',
+      ZkpAuditServiceHandler: 'zkp_audit',
+    };
+    for (const handler of httpPath) {
+      const type = expectedTypes[handler];
+      expect(type).toBeDefined();
+      expect(HANDLED_SERVICE_TYPES.has(type!)).toBe(true);
+    }
+    // and nothing is listed that has no handler
+    expect(HANDLED_SERVICE_TYPES.size).toBe(httpPath.length);
+  });
+});
+
+describe('direct-fulfil bypass', () => {
+  it('recognises every handled type, case- and whitespace-insensitively', () => {
+    expect(isHandledServiceType('verification')).toBe(true);
+    expect(isHandledServiceType('  ZKP_Audit ')).toBe(true);
+    expect(isHandledServiceType('security_audit')).toBe(true);
+  });
+
+  it('does NOT claim a type is handled when it is not', () => {
+    // A type with no handler must remain directly fulfillable, or those
+    // contracts become permanently undeliverable.
+    expect(isHandledServiceType('fact_check')).toBe(false);
+    expect(isHandledServiceType('')).toBe(false);
+    expect(isHandledServiceType(null)).toBe(false);
+    expect(isHandledServiceType(undefined)).toBe(false);
+  });
+
+  it('the escape hatch is OFF unless explicitly set to the exact string', () => {
+    const prev = process.env['ALLOW_DIRECT_FULFILL'];
+    try {
+      delete process.env['ALLOW_DIRECT_FULFILL'];
+      expect(directFulfillAllowed()).toBe(false);
+      process.env['ALLOW_DIRECT_FULFILL'] = 'TRUE';   // a typo must not weaken it
+      expect(directFulfillAllowed()).toBe(false);
+      process.env['ALLOW_DIRECT_FULFILL'] = '1';
+      expect(directFulfillAllowed()).toBe(false);
+      process.env['ALLOW_DIRECT_FULFILL'] = 'true';
+      expect(directFulfillAllowed()).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env['ALLOW_DIRECT_FULFILL'];
+      else process.env['ALLOW_DIRECT_FULFILL'] = prev;
     }
   });
 });
