@@ -43,25 +43,68 @@ export const GOLDEN_MATH_TRUE = [
 ];
 
 const HAS_KEYS = !!(process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || process.env.DEEPSEEK_API_KEY);
+
+/**
+ * MEASURED WIDTH — the number of independent families the F1 0.94 / zero-FP claim was
+ * established at. A result gathered at fewer families is a result about a DIFFERENT
+ * configuration, so it can neither confirm nor refute the frozen number.
+ */
+const MEASURED_AT_FAMILIES = 3;
+
+/**
+ * Run the set once and report the width it actually ran at alongside the outcome.
+ *
+ * WHY THE WIDTH IS RETURNED, not just the verdicts (2026-08-01): this tripwire failed
+ * locally and read as "math accuracy regressed". It had not. A stale GROQ key 401'd and
+ * gemini 404'd, so HAL answered on 2 families — exactly MIN_QUORUM_FOR_VETO, so it was
+ * never marked degraded and returned ordinary verdicts. The quality assertion then failed
+ * for a reason that had nothing to do with quality.
+ *
+ * A tripwire that reports a provider outage as a quality regression costs more than it
+ * saves: it sends whoever reads it hunting for a bug in the scoring path. And a bare
+ * pass is just as misleading in the other direction — green at 2 families does not
+ * re-establish a number measured at 3. Same defect as the HAL F1 spread (0.34 / 0.74 /
+ * 0.886 / 0.890): different rulers reported as one scale.
+ *
+ * So the width is asserted FIRST and separately. A dead key now fails as a dead key.
+ */
+async function runGoldenSet(claims: string[], providers: ReturnType<typeof buildFactCheckProviders>) {
+  const results: Array<{ claim: string; decision: string; families: number }> = [];
+  let minFamilies = Infinity;
+  for (const claim of claims) {
+    const r = await factCheck(claim, providers);
+    const width = r.families_used ?? r.providers_used;
+    minFamilies = Math.min(minFamilies, width);
+    results.push({ claim, decision: r.decision, families: width });
+  }
+  return { results, minFamilies };
+}
+
+const widthFailure = (minFamilies: number, claimName: string, results: Array<{ claim: string; decision: string }>) =>
+  new Error(
+    `PROVIDER FLEET DEGRADED, NOT A QUALITY REGRESSION: HAL answered on ${minFamilies} independent ` +
+    `famil${minFamilies === 1 ? 'y' : 'ies'}, but the frozen ${claimName} claim was measured at ` +
+    `${MEASURED_AT_FAMILIES}. Fix the provider keys, then re-read this result. ` +
+    `Decisions at this width: ${results.map((r) => `${r.claim} -> ${r.decision}`).join(' | ')}`,
+  );
+
 (HAS_KEYS ? describe : describe.skip)('GOLDEN-MATH TRIPWIRE (real providers)', () => {
   const providers = buildFactCheckProviders();
-  jest.setTimeout(120_000);
+  jest.setTimeout(180_000);
 
   it('recall = 1.0 — every false arithmetic claim is vetoed', async () => {
-    const missed: string[] = [];
-    for (const claim of GOLDEN_MATH_FALSE) {
-      const r = await factCheck(claim, providers);
-      if (r.decision !== 'vetoed') missed.push(`${claim} -> ${r.decision}`);
-    }
-    expect(missed).toEqual([]); // any miss = math recall dropped below 1.0
+    const { results, minFamilies } = await runGoldenSet(GOLDEN_MATH_FALSE, providers);
+    // Width first: below this, a quality result is uninterpretable either way.
+    if (minFamilies < MEASURED_AT_FAMILIES) throw widthFailure(minFamilies, 'recall=1.0', results);
+    const missed = results.filter((r) => r.decision !== 'vetoed').map((r) => `${r.claim} -> ${r.decision}`);
+    // atFamilies rides along so a green tick records the width it was green AT.
+    expect({ missed, atFamilies: minFamilies }).toEqual({ missed: [], atFamilies: minFamilies });
   });
 
   it('0 false positives — no true arithmetic claim is vetoed', async () => {
-    const falsePos: string[] = [];
-    for (const claim of GOLDEN_MATH_TRUE) {
-      const r = await factCheck(claim, providers);
-      if (r.decision === 'vetoed') falsePos.push(`${claim} -> ${r.decision}`);
-    }
-    expect(falsePos).toEqual([]); // any veto on true math = a math false positive
+    const { results, minFamilies } = await runGoldenSet(GOLDEN_MATH_TRUE, providers);
+    if (minFamilies < MEASURED_AT_FAMILIES) throw widthFailure(minFamilies, 'zero-false-positive', results);
+    const falsePos = results.filter((r) => r.decision === 'vetoed').map((r) => `${r.claim} -> ${r.decision}`);
+    expect({ falsePos, atFamilies: minFamilies }).toEqual({ falsePos: [], atFamilies: minFamilies });
   });
 });
