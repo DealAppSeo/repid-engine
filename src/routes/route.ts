@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { routeRequest, RouteRequest, resolveTier1Key } from '../providers/router';
+import { routeRequest, RouteRequest, resolveTier1Key, keylessProviders, resolveAdapterKey} from '../providers/router';
 import { logToolCall } from '../utils/tool-call-logger';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
 import { RateLimitError, AuthError } from '../providers/types';
@@ -235,7 +235,18 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
 
     let attempts = 0;
     const maxAttempts = 3;
-    let excludeProviders: string[] = [];
+    // PRE-FILTER: never spend a routing attempt on a provider that has no key.
+    // Previously the loop selected a keyless provider, excluded it, and burned
+    // one of three attempts — a live smoke call 503'd having made exactly ONE
+    // real provider call. Seeding the exclusion list makes maxAttempts mean
+    // that many genuine attempts.
+    let excludeProviders: string[] = keylessProviders(user_paid_keys as Record<string, string> | undefined);
+    if (excludeProviders.length) {
+      console.warn(
+        `[llm/complete] ${excludeProviders.length} provider(s) have NO key and were excluded before selection: ` +
+          excludeProviders.join(', ')
+      );
+    }
     let lastDecision: any = null;
 
     while (attempts < maxAttempts) {
@@ -267,19 +278,8 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         return;
       }
 
-      let apiKey = '';
-      if (adapter.name === 'llama-3-2-1b' || adapter.name === 'gemma-3-2b') {
-        apiKey = process.env.HUGGINGFACE_API_TOKEN || process.env.HF_API_KEY || process.env.HF_TOKEN || '';
-      } else if (adapter.name === 'phi-4') {
-        apiKey = process.env.CEREBRAS_API_KEY || '';
-      } else if (adapter.tier === 0) {
-        const envKey = `${adapter.name.toUpperCase()}_API_KEY`;
-        apiKey = process.env[envKey] || '';
-      } else {
-        // Tier-1: prefer caller's user_paid_keys; fall back to deployed env key
-        // (ANTHROPIC_API_KEY / OPENAI_API_KEY) so tier1_only works without a caller key.
-        apiKey = resolveTier1Key(adapter.name, user_paid_keys) || '';
-      }
+      // Same resolver the pre-filter uses — one definition, so they cannot drift.
+      const apiKey = resolveAdapterKey(adapter.name, adapter.tier, user_paid_keys as Record<string, string> | undefined);
 
       if (!apiKey) {
         markFailure(adapter.name, new AuthError(`No key found for ${adapter.name}`));
