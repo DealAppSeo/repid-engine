@@ -22,9 +22,46 @@ const router = Router();
 const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-function render(r: TrustReceipt): string {
-  const step = (n: number, title: string, body: string) => `
+const step = (n: number, title: string, body: string) => `
     <div class="step"><div class="n">${n}</div><div><h3>${title}</h3>${body}</div></div>`;
+
+/**
+ * Steps 2 and 4 used to state, for every exchange, that the money was held and
+ * released only after verified delivery. That is the product's central claim,
+ * and it was not true of every row: exchanges before 2026-08-01 settled at
+ * ESCROW. Contract 18dd4e05 paid at 04:32:31.72 and was fulfilled at 04:33:23.54
+ * — 52 seconds LATER. Rendering the pay-on-delivery story over that data would
+ * be the exact failure this receipt exists to expose, printed on the page that
+ * exists to prove we do not do it.
+ *
+ * The narrative now follows `paid_before_delivery`, which is derived from the
+ * timestamps. An older exchange still gets a receipt; it gets the true one.
+ */
+function payFlow(r: TrustReceipt): string {
+  if (r.paid_before_delivery === true) {
+    return step(2, 'The money moved up front — this one was not delivery-gated',
+      `<p>Payment settled when the contract was escrowed, <strong>before</strong> the work was delivered.</p>
+       <p class="muted">Delivery-gated settlement landed on 2026-08-01. This exchange predates it, so the buyer carried the risk. Shown rather than smoothed over.</p>`);
+  }
+  if (r.paid_before_delivery === null) {
+    return step(2, 'Payment timing could not be established',
+      `<p class="muted">One of the two timestamps needed to say whether payment preceded delivery is missing, so this receipt does not claim either way.</p>`);
+  }
+  return step(2, 'The money was promised, not paid',
+    `<p>The buyer signed a payment authorisation. Nothing moved yet.</p>
+     <p class="muted">An EIP-3009 authorisation is a signature, not a transfer — so this needs no escrow contract and no extra gas.</p>`);
+}
+
+function paidStep(r: TrustReceipt): string {
+  const tx = r.settlement_url
+    ? `<p><a href="${esc(r.settlement_url)}">${esc(r.settlement_tx)}</a></p>`
+    : '<p class="muted">No settlement on record.</p>';
+  const sim = `<p class="muted">simulated: <code>${r.is_simulated}</code> — if this said true, none of it counted.</p>`;
+  const title = r.paid_before_delivery === false ? 'Only then was it paid' : 'The payment';
+  return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${tx}${sim}`);
+}
+
+function render(r: TrustReceipt): string {
 
   const negotiation = r.negotiated
     ? step(1, 'The price was negotiated, not announced',
@@ -93,9 +130,9 @@ function render(r: TrustReceipt): string {
 <p class="muted">One agent hired another. Every claim below is checkable without trusting us.</p>
 <div class="flow"><strong>${esc(r.buyer)}</strong> &nbsp;──&nbsp; ${esc(r.price_usdc)} &nbsp;──▶&nbsp; <strong>${esc(r.provider)}</strong></div>
 ${negotiation}
-${step(2, 'The money was promised, not paid', `<p>The buyer signed a payment authorisation. Nothing moved yet.</p><p class="muted">An EIP-3009 authorisation is a signature, not a transfer — so this needs no escrow contract and no extra gas.</p>`)}
+${payFlow(r)}
 ${step(3, 'The work was checked by someone who did not do it', `<p>Independent verifiers on deliberately different model families reviewed the deliverable.</p><p class="muted">Two copies of one model make the same mistakes, so agreement between them proves nothing.</p>`)}
-${step(4, 'Only then was it paid', `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${r.settlement_url ? `<p><a href="${esc(r.settlement_url)}">${esc(r.settlement_tx)}</a></p>` : '<p class="muted">No settlement on record.</p>'}<p class="muted">simulated: <code>${r.is_simulated}</code> — if this said true, none of it counted.</p>`)}
+${paidStep(r)}
 ${rep}
 ${onchain}
 ${zk}
