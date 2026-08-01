@@ -62,6 +62,11 @@ describe('public trust receipt', () => {
       'settlement_tx', 'settlement_url', 'is_simulated', 'reputation_events',
       'onchain_tx', 'onchain_url', 'onchain_repid', 'onchain_link_is_proven',
       'zk_proofs', 'caveats',
+      // ZK BIND T1. Deliberately allowed: it is a HASH over digests, never the
+      // work — work-statement.test.ts proves the preimage cannot contain the
+      // deliverable body. Publishing it is the point, since a third party must
+      // be able to recompute and compare it.
+      'work_statement_hash',
     ]);
     // A new field is not automatically safe to publish — this fails until
     // someone decides it is, which is the point.

@@ -42,6 +42,14 @@ export interface TrustReceipt {
   onchain_repid: number | null;
   onchain_link_is_proven: boolean;
   zk_proofs: Array<{ scheme: string | null; is_real: boolean | null; statement: unknown }>;
+  /**
+   * ZK BIND T1. Commits this exchange's immutable facts. Recomputable by anyone
+   * from the receipt (see services/work-statement.ts) — a mismatch means the
+   * contract was edited after settlement.
+   *
+   * It binds a proof to THIS work. It does NOT assert the work is correct.
+   */
+  work_statement_hash: string | null;
   /** Anything we could not establish, stated rather than omitted. */
   caveats: string[];
 }
@@ -51,7 +59,7 @@ const scan = (tx: string) => `https://sepolia.basescan.org/tx/${tx}`;
 export async function buildTrustReceipt(contractId: string): Promise<TrustReceipt | null> {
   const { data: c } = await db
     .from('service_contracts')
-    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at')
+    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at, work_statement_hash')
     .eq('id', contractId)
     .maybeSingle();
   if (!c) return null;
@@ -97,6 +105,9 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     .eq('contract_id', contractId)
     .order('created_at', { ascending: false })
     .maybeSingle();
+  if (!c.work_statement_hash) {
+    caveats.push('No work-statement binding recorded — this exchange settled before ZK BIND T1, so no proof is committed to it.');
+  }
   if (!onchain) {
     caveats.push('No ERC-8004 write is provably linked to this contract. Writes made before 2026-08-01 did not record which contract caused them.');
   }
@@ -133,6 +144,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     onchain_repid: onchain?.repid_value ?? null,
     onchain_link_is_proven: !!onchain,
     zk_proofs: (proofs ?? []).map((p) => ({ scheme: p.scheme, is_real: p.is_real, statement: p.statement })),
+    work_statement_hash: c.work_statement_hash ?? null,
     caveats,
   };
 }

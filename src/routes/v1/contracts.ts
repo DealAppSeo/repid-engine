@@ -10,6 +10,7 @@ import {
   voidAuthorization,
 } from '../../services/x402-deferred-settlement';
 import { isHandledServiceType, directFulfillAllowed } from '../../services/handled-service-types';
+import { workStatementHash } from '../../services/work-statement';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
@@ -778,6 +779,46 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
       });
     } catch (e) {
       console.error('Failed to register pending outcome:', e);
+    }
+  }
+
+  // ZK BIND T1 — commit this exchange at the moment it settles.
+  //
+  // Recorded HERE and not earlier because the hash covers the settlement tx and
+  // the buyer's acceptance, which do not exist until now. Recorded ONCE: a later
+  // edit to the contract changes the recomputation and no longer matches, and
+  // that disagreement is the tamper-detection, not a bug to paper over.
+  //
+  // Best-effort by design. A binding that failed to record is a weaker receipt;
+  // a settlement rolled back because a hash write failed would be worse. It logs
+  // loudly so the gap is visible rather than silent.
+  if (step2) {
+    try {
+      const { data: full } = await db.from('service_contracts')
+        .select('id, service_id, buyer_agent_id, provider_agent_id, agreed_price_usdc_raw, payload, result')
+        .eq('id', req.params.id).maybeSingle();
+      const releaseTx = (releaseResult as { txHash?: string } | null)?.txHash ?? null;
+      if (full) {
+        const hash = workStatementHash({
+          contract_id: String(full.id),
+          service_id: String(full.service_id),
+          buyer_agent_id: String(full.buyer_agent_id),
+          provider_agent_id: String(full.provider_agent_id),
+          agreed_price_usdc_raw: Number(full.agreed_price_usdc_raw),
+          settlement_tx: releaseTx,
+          verdict: String((full.result as any)?.verdict ?? '') || null,
+          satisfaction_score: Number(satisfaction_score),
+          payload: full.payload,
+          result: full.result,
+        });
+        const { error: bindErr } = await db.from('service_contracts')
+          .update({ work_statement_hash: hash })
+          .eq('id', req.params.id)
+          .is('work_statement_hash', null);
+        if (bindErr) console.error(`[zk-bind] FAILED to record work_statement_hash for ${req.params.id}: ${bindErr.message}`);
+      }
+    } catch (e) {
+      console.error('[zk-bind] work statement binding threw (settlement unaffected):', e);
     }
   }
 

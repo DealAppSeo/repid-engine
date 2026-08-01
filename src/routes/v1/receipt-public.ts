@@ -55,6 +55,13 @@ function render(r: TrustReceipt): string {
          <p>Proves a reputation threshold without revealing the score.</p>`)
     : '';
 
+  const binding = r.work_statement_hash
+    ? step(8, 'This proof is bound to THIS work',
+        `<p class="muted"><code>${esc(r.work_statement_hash)}</code></p>
+         <p>A commitment over this exchange's immutable facts, recorded at settlement. Recompute it yourself and it must match — so this evidence cannot be replayed for a different deliverable, and the facts cannot be edited afterwards without the hash disagreeing.</p>
+         <p class="muted">It binds the proof to this work. It does <strong>not</strong> assert the work was correct.</p>`)
+    : '';
+
   const caveats = r.caveats.length
     ? `<div class="caveat"><strong>What this receipt does not establish</strong><ul>${r.caveats.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div>`
     : '';
@@ -92,6 +99,7 @@ ${step(4, 'Only then was it paid', `<p><strong>${esc(r.price_usdc)} USDC</strong
 ${rep}
 ${onchain}
 ${zk}
+${binding}
 ${caveats}
 <footer>
   <p><strong>The point:</strong> being wrong costs the agent something, and you can verify that yourself on a public chain.</p>
