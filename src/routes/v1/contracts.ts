@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
-import { applyServiceFulfilledDeltas, applyServiceSatisfiedDeltas, applyServiceOutcomeDeltas, type ServiceOutcomeRating } from '../../services/validation-repid-delta';
-import { registerPendingOutcome } from '../../services/outcome-notifier';
+import { applyServiceFulfilledDeltas, applyServiceOutcomeDeltas, type ServiceOutcomeRating } from '../../services/validation-repid-delta';
 import { x402Facilitator, X402_VERSION } from '../../services/x402-facilitator';
 import {
   isSettleOnDeliveryEnabled,
@@ -10,7 +9,7 @@ import {
   voidAuthorization,
 } from '../../services/x402-deferred-settlement';
 import { isHandledServiceType, directFulfillAllowed } from '../../services/handled-service-types';
-import { workStatementHash } from '../../services/work-statement';
+import { finalizeSettledContract } from '../../services/contract-settlement-finalize';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
@@ -746,84 +745,16 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
     }
   }
 
-  // Two-step update to honor trigger logic ('satisfied' then 'settled')
-  const { data: step1, error: err1 } = await db.from('service_contracts')
-    .update({ status: 'satisfied', buyer_satisfaction_score: satisfaction_score, satisfied_at: new Date().toISOString() })
-    .eq('id', req.params.id)
-    .select().single();
-  
-  if (err1) return res.status(400).json({ error: err1.message });
+  // Everything after the money moves is shared with the retry worker, so the
+  // two can never drift on the money path. See contract-settlement-finalize.ts.
+  const finalized = await finalizeSettledContract({
+    contractId: String(req.params.id),
+    satisfactionScore: satisfaction_score,
+    releaseResult: releaseResult as { txHash?: string } | null,
+  });
+  if (!finalized.ok) return res.status(400).json({ error: finalized.error });
+  const step2 = finalized.contract;
 
-  const { data: step2, error: err2 } = await db.from('service_contracts')
-    .update({ status: 'settled', settled_at: new Date().toISOString() })
-    .eq('id', req.params.id)
-    .select().single();
-    
-  if (err2) return res.status(400).json({ error: err2.message });
-
-  // Apply RepID deltas for satisfaction
-  if (step2) {
-    try {
-      await applyServiceSatisfiedDeltas(step2, satisfaction_score);
-    } catch (e) {
-      console.error('Failed to apply satisfied deltas:', e);
-    }
-    // T3: register the delayed-outcome nudge (flag-gated, default OFF — no-op
-    // when T3_OUTCOME_NUDGE_ENABLED !== 'true'). Never blocks satisfy.
-    try {
-      await registerPendingOutcome({
-        id: step2.id,
-        buyer_agent_id: step2.buyer_agent_id,
-        provider_agent_id: step2.provider_agent_id,
-        settled_at: step2.settled_at,
-      });
-    } catch (e) {
-      console.error('Failed to register pending outcome:', e);
-    }
-  }
-
-  // ZK BIND T1 — commit this exchange at the moment it settles.
-  //
-  // Recorded HERE and not earlier because the hash covers the settlement tx and
-  // the buyer's acceptance, which do not exist until now. Recorded ONCE: a later
-  // edit to the contract changes the recomputation and no longer matches, and
-  // that disagreement is the tamper-detection, not a bug to paper over.
-  //
-  // Best-effort by design. A binding that failed to record is a weaker receipt;
-  // a settlement rolled back because a hash write failed would be worse. It logs
-  // loudly so the gap is visible rather than silent.
-  if (step2) {
-    try {
-      const { data: full } = await db.from('service_contracts')
-        .select('id, service_id, buyer_agent_id, provider_agent_id, agreed_price_usdc_raw, payload, result')
-        .eq('id', req.params.id).maybeSingle();
-      const releaseTx = (releaseResult as { txHash?: string } | null)?.txHash ?? null;
-      if (full) {
-        const hash = workStatementHash({
-          contract_id: String(full.id),
-          service_id: String(full.service_id),
-          buyer_agent_id: String(full.buyer_agent_id),
-          provider_agent_id: String(full.provider_agent_id),
-          agreed_price_usdc_raw: Number(full.agreed_price_usdc_raw),
-          settlement_tx: releaseTx,
-          verdict: String((full.result as any)?.verdict ?? '') || null,
-          satisfaction_score: Number(satisfaction_score),
-          payload: full.payload,
-          result: full.result,
-        });
-        const { error: bindErr } = await db.from('service_contracts')
-          .update({ work_statement_hash: hash })
-          .eq('id', req.params.id)
-          .is('work_statement_hash', null);
-        if (bindErr) console.error(`[zk-bind] FAILED to record work_statement_hash for ${req.params.id}: ${bindErr.message}`);
-      }
-    } catch (e) {
-      console.error('[zk-bind] work statement binding threw (settlement unaffected):', e);
-    }
-  }
-
-  // Surface the on-chain receipt on the same response that reports settlement,
-  // so a caller never has to infer that money moved.
   res.json(releaseResult ? { ...step2, payment_release: releaseResult } : step2);
 });
 
