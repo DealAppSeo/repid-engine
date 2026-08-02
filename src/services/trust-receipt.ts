@@ -89,7 +89,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
 
   const { data: settlement } = await db
     .from('x402_settlements')
-    .select('tx_hash, is_simulated, status, created_at')
+    .select('tx_hash, is_simulated, status, created_at, delivered_at')
     .eq('idempotency_key', contractId)
     .maybeSingle();
   if (settlement && settlement.is_simulated) {
@@ -99,13 +99,33 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
 
   // Read the pay-vs-deliver ordering from the row instead of letting the template
   // assert it. See TrustReceipt.paid_before_delivery.
+  //
+  // WHICH TIMESTAMP IS "WHEN THE MONEY MOVED". `created_at` is when the
+  // settlement ROW was written, which under deferred settlement is escrow time —
+  // the moment the EIP-3009 authorization was taken, when nothing has moved yet.
+  // `delivered_at` is stamped at the instant the transfer is actually broadcast
+  // (x402-deferred-settlement.ts, the same update that sets tx_hash).
+  //
+  // Using created_at made the receipt report pay-up-front for exactly the
+  // exchanges that correctly paid on delivery — the mirror image of #299, which
+  // claimed pay-on-delivery for exchanges that had paid up front. Verified on a
+  // live pair: an immediate-settle run had created_at 18:12:20.803 /
+  // delivered_at 18:12:20.789 (same instant, genuinely paid first), while a
+  // deferred run had created_at 18:32:53 / delivered_at 18:34:08 against a
+  // fulfilled_at of 18:33:20 — money 48s AFTER delivery, reported as before it.
+  //
+  // Fall back to created_at when delivered_at is null: rows written before the
+  // deferred path existed settled on creation, so for those the two coincide.
+  const paidAtRaw = settlement?.delivered_at ?? settlement?.created_at ?? null;
   let paid_before_delivery: boolean | null = null;
-  if (settlement?.created_at && c.fulfilled_at) {
-    paid_before_delivery = new Date(settlement.created_at) < new Date(c.fulfilled_at);
+  if (paidAtRaw && c.fulfilled_at) {
+    const paidAt = new Date(paidAtRaw);
+    const deliveredAt = new Date(c.fulfilled_at);
+    paid_before_delivery = paidAt < deliveredAt;
     if (paid_before_delivery) {
       caveats.push(
         'The money moved BEFORE delivery on this exchange. Payment settled at escrow, ' +
-        `${Math.round((new Date(c.fulfilled_at).getTime() - new Date(settlement.created_at).getTime()) / 1000)}s ` +
+        `${Math.round((deliveredAt.getTime() - paidAt.getTime()) / 1000)}s ` +
         'before the work was fulfilled — so this receipt does NOT show payment gated on verified delivery. ' +
         'Deferred settlement landed 2026-08-01; exchanges after that date hold the authorisation until delivery is verified.',
       );

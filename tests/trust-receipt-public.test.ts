@@ -81,10 +81,15 @@ describe('public trust receipt', () => {
    * exact failure it exists to expose.
    */
   describe('pay-vs-deliver ordering is read from the row, never assumed', () => {
-    const withTimes = (settleAt: string | null, fulfilledAt: string | null) => {
+    const withTimes = (settleAt: string | null, fulfilledAt: string | null, deliveredAt?: string | null) => {
       Object.assign(dbMock.__rows, {
         service_contracts: { ...(rows.service_contracts as object), fulfilled_at: fulfilledAt },
-        x402_settlements: { tx_hash: '0xsettle', is_simulated: false, status: 'settled', created_at: settleAt },
+        x402_settlements: {
+          tx_hash: '0xsettle', is_simulated: false, status: 'settled',
+          created_at: settleAt,
+          // Legacy rows predate the deferred path and have no delivered_at.
+          delivered_at: deliveredAt === undefined ? null : deliveredAt,
+        },
       });
     };
     afterEach(() => Object.assign(dbMock.__rows, rows));
@@ -108,6 +113,42 @@ describe('public trust receipt', () => {
       const r = await buildTrustReceipt('c1');
       expect(r!.paid_before_delivery).toBeNull();
       expect(r!.caveats.join(' ')).toMatch(/Cannot establish whether payment preceded delivery/);
+    });
+
+    // DEFERRED SETTLEMENT. The settlement row is CREATED at escrow (authorization
+    // taken, nothing moved) and only BROADCAST later at satisfy. Judging by
+    // created_at therefore reported pay-up-front for exactly the exchanges that
+    // correctly held the money until delivery — the mirror of #299.
+    // Timestamps below are the real ones from contract
+    // ad357681-bbe2-40ad-82ff-d2fcd067a7fb, whose tx 0x0caffacc… mined at
+    // 18:34:10, 50s after the work was delivered.
+    it('does NOT flag a deferred settlement whose row was created at escrow', async () => {
+      withTimes(
+        '2026-08-02T18:32:53.223Z', // row created at escrow — money still still
+        '2026-08-02T18:33:20.252Z', // delivered
+        '2026-08-02T18:34:08.423Z', // broadcast, after delivery
+      );
+      const r = await buildTrustReceipt('c1');
+      expect(r!.paid_before_delivery).toBe(false);
+      expect(r!.caveats.join(' ')).not.toMatch(/BEFORE delivery/);
+    });
+
+    it('still flags an immediate settle, where broadcast and row creation coincide', async () => {
+      withTimes(
+        '2026-08-02T18:12:20.803Z',
+        '2026-08-02T18:13:02.623Z',
+        '2026-08-02T18:12:20.789Z', // broadcast at escrow — genuinely paid first
+      );
+      const r = await buildTrustReceipt('c1');
+      expect(r!.paid_before_delivery).toBe(true);
+      expect(r!.caveats.join(' ')).toMatch(/moved BEFORE delivery/);
+    });
+
+    it('falls back to created_at for legacy rows that have no delivered_at', async () => {
+      withTimes('2026-07-23T04:32:31.723Z', '2026-07-23T04:33:23.538Z', null);
+      const r = await buildTrustReceipt('c1');
+      expect(r!.paid_before_delivery).toBe(true);
+      expect(r!.caveats.join(' ')).toMatch(/moved BEFORE delivery.*52s/);
     });
   });
 
