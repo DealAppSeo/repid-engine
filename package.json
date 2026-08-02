@@ -70,6 +70,7 @@
     "types:check": "tsc --noEmit",
     "x402:preflight-real-microtx": "tsx scripts/x402/preflight-real-microtx.ts",
     "demo:trust": "node scripts/demo/trust-receipt.mjs",
+    "demo:own-agent": "node scripts/demo/own-your-agent.mjs",
     "ops:reconcile": "ts-node scripts/ops/reconcile-settlements.ts"
   },
   "keywords": [],
