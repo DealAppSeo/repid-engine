@@ -20,6 +20,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
+import agentKeysRouter from './routes/v1/agent-keys';
 import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
@@ -255,6 +256,11 @@ app.use('/api/v1/hal/evaluate', ipRateLimit(halPublicLimit, halPublicWindow));
 app.use('/api/v1/hal', halEvaluateRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
+// Self-serve agent API keys (2026-08-02) — challenge/response over the wallet an
+// agent is registered under. Mounted BEFORE authMiddleware because the caller has
+// no key yet; that is the wall this removes. Default OFF
+// (AGENT_SELF_SERVE_KEYS_ENABLED); the GET says so rather than 404ing.
+app.use('/api/v1/agent-keys', agentKeysRouter);
 // Controller API (CC2 2026-05-26) — SBT-gated (its own controller-auth middleware),
 // so mounted before the REPID_API_KEYS authMiddleware. Backend for the v0.app controller rebuild.
 app.use('/api/v1/controller', controllerRouter);
