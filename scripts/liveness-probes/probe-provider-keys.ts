@@ -30,42 +30,18 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-type Status = 'LIVE' | 'DEAD' | 'INCONCLUSIVE' | 'ABSENT';
-
-interface Probe {
-  /** Env var name. Values are read from it and never emitted. */
-  env: string;
-  /** The independent model family this key buys, for HAL quorum width. */
-  family: string;
-  url: string;
-  /** Builds headers from the key. */
-  headers: (key: string) => Record<string, string>;
-  /** Cheapest call that proves the credential works. */
-  body?: (model: string) => unknown;
-  model?: string;
-}
+import {
+  PROVIDER_PROBES, probeProviderKey, independentFamilies, type KeyProbeStatus,
+} from '../../src/services/provider-key-probe';
 
 /**
- * The FAMILY column is the point. HAL counts distinct families, not hosts — two
- * Llama endpoints are one vote, not two (fact-check.ts R5). A dead key does not
- * just cost a provider, it can collapse the quorum width below the width an
- * accuracy claim was measured at.
+ * The probe table and the LIVE/DEAD/INCONCLUSIVE mapping live in
+ * src/services/provider-key-probe.ts, NOT here. BYOK custody refuses to store a
+ * key this same code has not seen work, and two copies would drift — an ops
+ * report that disagrees with the BYOK gate about whether a key is dead is worse
+ * than having neither.
  */
-const PROBES: Probe[] = [
-  { env: 'GROQ_API_KEY', family: 'llama', url: 'https://api.groq.com/openai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'CEREBRAS_API_KEY', family: 'llama', url: 'https://api.cerebras.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'GEMINI_API_KEY', family: 'gemini', url: 'https://generativelanguage.googleapis.com/v1beta/models', headers: (k) => ({ 'x-goog-api-key': k }) },
-  { env: 'DEEPSEEK_API_KEY', family: 'deepseek', url: 'https://api.deepseek.com/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'MISTRAL_API_KEY', family: 'mistral', url: 'https://api.mistral.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'GROK_API_KEY', family: 'grok', url: 'https://api.x.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'ANTHROPIC_API_KEY', family: 'claude', url: 'https://api.anthropic.com/v1/models', headers: (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01' }) },
-  { env: 'OPENAI_API_KEY', family: 'gpt', url: 'https://api.openai.com/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'FIREWORKS_API_KEY', family: 'mixed', url: 'https://api.fireworks.ai/inference/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'DEEPINFRA_API_KEY', family: 'mixed', url: 'https://api.deepinfra.com/v1/openai/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'OPENROUTER_API_KEY', family: 'mixed', url: 'https://openrouter.ai/api/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'COHERE_API_KEY', family: 'cohere', url: 'https://api.cohere.com/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { env: 'HUGGINGFACE_API_TOKEN', family: 'mixed', url: 'https://huggingface.co/api/whoami-v2', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-];
+type Status = KeyProbeStatus | 'ABSENT';
 
 /** Reads .env.master WITHOUT importing it into process.env, so nothing downstream can leak it. */
 function loadMasterEnv(path: string): Record<string, string> {
@@ -85,30 +61,9 @@ function loadMasterEnv(path: string): Record<string, string> {
   return out;
 }
 
-async function probeOne(p: Probe, key: string | undefined): Promise<{ status: Status; detail: string }> {
+async function probeOne(env: string, provider: string, key: string | undefined): Promise<{ status: Status; detail: string }> {
   if (!key) return { status: 'ABSENT', detail: 'not set' };
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12_000);
-  try {
-    const res = await fetch(p.url, { headers: p.headers(key), signal: ctrl.signal });
-    if (res.ok) return { status: 'LIVE', detail: `HTTP ${res.status}` };
-
-    // 401/403 is the credential itself being rejected — that is a real DEAD.
-    if (res.status === 401 || res.status === 403) {
-      return { status: 'DEAD', detail: `HTTP ${res.status} — credential rejected` };
-    }
-    // 402/429 mean the key is VALID and the account is out of money or over
-    // quota. Reporting those as DEAD would send someone to rotate a good key.
-    if (res.status === 402) return { status: 'LIVE', detail: 'HTTP 402 — key valid, account unfunded' };
-    if (res.status === 429) return { status: 'LIVE', detail: 'HTTP 429 — key valid, rate limited' };
-    return { status: 'INCONCLUSIVE', detail: `HTTP ${res.status}` };
-  } catch (e) {
-    // Network, DNS, TLS, timeout. NOT evidence about the key.
-    return { status: 'INCONCLUSIVE', detail: (e as Error)?.name === 'AbortError' ? 'timeout 12s' : 'network error' };
-  } finally {
-    clearTimeout(timer);
-  }
+  return probeProviderKey(provider, key);
 }
 
 async function main() {
@@ -118,9 +73,9 @@ async function main() {
   const keyFor = (name: string) => process.env[name] || master[name];
 
   const results = await Promise.all(
-    PROBES.map(async (p) => {
-      const { status, detail } = await probeOne(p, keyFor(p.env));
-      return { key: p.env, family: p.family, status, detail };
+    PROVIDER_PROBES.map(async (p) => {
+      const { status, detail } = await probeOne(p.env, p.provider, keyFor(p.env));
+      return { key: p.env, provider: p.provider, family: p.family, status, detail };
     }),
   );
 
@@ -139,8 +94,8 @@ async function main() {
   // The number that actually matters for HAL: how many INDEPENDENT families are
   // reachable. Quorum counts families, so 5 live keys across 2 families is a
   // 2-family fleet, and any accuracy claim measured wider than that is unreadable.
-  const liveFamilies = new Set(results.filter((r) => r.status === 'LIVE' && r.family !== 'mixed').map((r) => r.family));
-  console.log(`\n  Independent families reachable: ${liveFamilies.size} [${[...liveFamilies].sort().join(', ')}]`);
+  const liveFamilies = independentFamilies(results.filter((r) => r.status === 'LIVE').map((r) => r.provider));
+  console.log(`\n  Independent families reachable: ${liveFamilies.length} [${liveFamilies.join(', ')}]`);
   console.log('  (\'mixed\' hosts are excluded — they resell several families and cannot be counted as one independent vote.)');
 
   const dead = results.filter((r) => r.status === 'DEAD');

@@ -26,6 +26,7 @@ import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
 import receiptPublicRouter from './routes/v1/receipt-public';
+import byokRouter from './routes/v1/byok';
 import negotiationRouter from './routes/v1/negotiation';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
 import observabilityPublicRouter from './routes/v1/observability-public';
@@ -280,6 +281,15 @@ app.use('/api/v1/marketplace', marketplacePublicRouter);
 // make that claim. Read-only; serves facts ABOUT an exchange, never the work
 // itself (no payload, no result). See services/trust-receipt.ts.
 app.use('/api/v1', receiptPublicRouter);
+// BYOK CUSTODY + HUMAN↔AGENT BINDING (2026-08-01). Mounted before
+// authMiddleware because it does NOT use the API-key identity — every request
+// proves control of a wallet by signing the method+path+timestamp, and the owner
+// is the RECOVERED signer. An API key would be the wrong identity here (it says
+// which application is calling, not which human owns the keys), and a header
+// would be no identity at all: wallet addresses are public, so trusting
+// x-sbt-wallet would let anyone list or overwrite another person's provider
+// keys. Both features are behind default-OFF flags. See routes/v1/byok.ts.
+app.use('/api/v1', byokRouter);
 // Live-numbers (2026-07-07): PUBLIC read-only observability surface the
 // TrustShell.dev landing reads for its minted-agent leaderboard + on-chain
 // stats block. Two GETs: /api/v1/agents/minted and
