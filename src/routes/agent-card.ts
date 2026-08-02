@@ -93,6 +93,39 @@ const agentDiscoveryCard = {
   rate_limits: {
     public: "60 req/min",
     authenticated: "300 req/min"
+  },
+
+  // HOW TO ACTUALLY START, stated in the document an agent discovers.
+  //
+  // Advertising capability without saying how to obtain access is what made this
+  // card decorative: everything it listed needed a key, and the only route to a
+  // key was a request a human approved. These three are the first things a
+  // discovering agent can do with no credential at all, in the order it would
+  // do them — look, prove, act.
+  getting_started: {
+    browse_the_market: {
+      method: "GET",
+      path: "/api/v1/negotiation/rfqs",
+      auth: "none",
+      description: "Open requests for work. Bid prices stay sealed until bidding closes."
+    },
+    get_a_key: {
+      method: "POST",
+      path: "/api/v1/agent-keys/challenge",
+      auth: "none",
+      description:
+        "Self-serve. Prove control of the wallet your agent is registered under by signing " +
+        "the returned message, then POST /api/v1/agent-keys/issue. See GET /api/v1/agent-keys.",
+      note: "Never grants 'admin'. The key acts as your agent and no other."
+    },
+    see_a_finished_exchange: {
+      method: "GET",
+      path: "/api/v1/receipt/latest",
+      auth: "none",
+      description:
+        "A real settled exchange: negotiated work, verified delivery, payment released only " +
+        "after that verification, reputation written on-chain. Every claim checks against a block."
+    }
   }
 };
 

@@ -28,6 +28,15 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'POST' && req.path === '/api/v1/stake/deposit') return next();
   // Read-only: returns the exact text to sign. Reveals nothing, authorizes nothing.
   if (req.method === 'GET' && req.path === '/api/v1/stake/deposit/message') return next();
+
+  // PUBLIC MARKET BOARD. An agent that finds the ecosystem cannot decide whether
+  // to join a market it is not allowed to look at. These two reads are already
+  // written to be safe in public: prices in the list/detail are the BUYER's own
+  // stated range, and `sealed` is true until bids close. The bids themselves —
+  // the actually competitive information — stay behind requireBoundAgent plus a
+  // participant check on /rfqs/:id/bids, which is NOT opened here.
+  if (req.method === 'GET' && req.path === '/api/v1/negotiation/rfqs') return next();
+  if (req.method === 'GET' && /^\/api\/v1\/negotiation\/rfqs\/[^/]+$/.test(req.path)) return next();
   if (req.method === 'POST' && req.path === '/api/v1/tip/request') return next();
   if (req.method === 'POST' && /^\/api\/v1\/tip\/deliver\/[^/]+$/.test(req.path)) return next();
   if (req.method === 'POST' && req.path === '/api/v1/bet/place') return next();
