@@ -6,6 +6,11 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { fireWebhook } from '../services/webhook';
 import { getBuilderProfile, registerBuilder } from '../services/builder-registry';
 import { depositStake, withdrawStake, snapshotAuthority, getCurrentStake } from '../services/stake-vault';
+import {
+  authorizeStakeDeposit,
+  stakeDepositMessage,
+  isRealDepositClaim,
+} from '../services/stake-authorization';
 import { createTipRequest, deliverTip } from '../services/x402-server';
 import { placeBet, resolveBet, signOracleOutcome } from '../services/linked-bet-resolver';
 import { startTradingRound, resolveOpenRounds, getTraderState } from '../services/agent-trader';
@@ -389,20 +394,70 @@ router.post('/builder/token-signup', async (_req: Request, res: Response) => {
 
 // --- Stake -----------------------------------------------------------------
 
+/**
+ * GET /stake/deposit/message — the exact text a wallet must sign to claim a real
+ * deposit. Mirrors /human/bind/message so a front end never has to reconstruct
+ * the string itself; any drift between client and server becomes a bad signature
+ * rather than a subtly wrong prompt shown to a user about to sign.
+ * Public and read-only: it reveals nothing and authorizes nothing.
+ */
+router.get('/stake/deposit/message', (req: Request, res: Response) => {
+  const wallet = String(req.query.wallet ?? req.query.builder_address ?? '');
+  const amount = String(req.query.amount ?? '');
+  const txHash = String(req.query.tx_hash ?? '');
+  if (!wallet || !amount || !txHash) {
+    return res.status(400).json({
+      error: 'bad_request',
+      message: 'wallet, amount and tx_hash are all required — each one is inside the signed text.',
+    });
+  }
+  return res.json({
+    message: stakeDepositMessage({ wallet, amount, txHash }),
+    note: 'Sign this with the wallet that made the deposit, then POST it as `signature`.',
+  });
+});
+
 router.post('/stake/deposit', async (req: Request, res: Response) => {
-  let { builder_address, amount, tx_hash } = req.body ?? {};
+  let { builder_address, amount, tx_hash, signature } = req.body ?? {};
   if (!builder_address || !amount) return res.status(400).json({ error: 'builder_address and amount required' });
-  
+
   // Fix for demo flow: frontend says "Stake 100 testnet USDC" and sends "100".
   // We need to store 6-decimal raw (100_000_000) so authority math works.
+  // NOTE: only ever reached on the simulated path — a real deposit is checked
+  // against the on-chain transfer, so an inflated claim fails verification.
   if (String(amount) === '100') {
     amount = '100000000';
+  }
+
+  // AUTHORIZATION. This route is on the global auth bypass list because it serves
+  // both signed-out demo traffic and wallet-bearing real deposits, which the
+  // single-API-key middleware cannot tell apart. It therefore does its own,
+  // stricter check — and the signature is verified over the POST-COERCION amount,
+  // so what the user signed is what gets credited.
+  const authz = await authorizeStakeDeposit({
+    builderAddress: String(builder_address),
+    amount: String(amount),
+    txHash: tx_hash ? String(tx_hash) : undefined,
+    signature: signature ? String(signature) : undefined,
+    authorizationHeader: req.headers['authorization'] as string | undefined,
+    apiKeyHeader: req.headers['x-api-key'] as string | undefined,
+  });
+  if (!authz.ok) {
+    const status = authz.reason === 'account_not_found' ? 404 : 401;
+    return res.status(status).json({
+      ok: false,
+      error: authz.reason,
+      message: authz.detail,
+      ...(isRealDepositClaim(tx_hash ? String(tx_hash) : undefined)
+        ? { sign_message_at: '/api/v1/stake/deposit/message' }
+        : {}),
+    });
   }
 
   try {
     const r = await depositStake(builder_address, BigInt(String(amount)), tx_hash);
     if (!r.ok) return res.status(400).json(r);
-    return res.json(r);
+    return res.json({ ...r, authorized_by: authz.tier });
   } catch (e: any) {
     return res.status(400).json({ error: e?.message ?? 'deposit failed' });
   }

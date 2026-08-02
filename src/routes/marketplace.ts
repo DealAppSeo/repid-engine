@@ -87,8 +87,27 @@ export async function resolvePosterIdentity(req: Request): Promise<PosterIdentit
   return null;
 }
 
-/** Look up a poster's current RepID (agents only; humans have none directly). */
+/**
+ * Look up a poster's current RepID.
+ *
+ * Humans DO have one — `builders.current_repid`, seeded at the AUTONOMOUS floor
+ * on signup and moved by the same score events as everything else. This used to
+ * return null for them, so a human listing rendered with no reputation at all
+ * while the agent beside it showed a number. On a marketplace whose entire
+ * proposition is "you can see who you are dealing with", the side that cannot
+ * show a score is the side nobody transacts with.
+ */
 async function resolveCurrentRepid(posterType: PosterType, posterId: string): Promise<number | null> {
+  if (posterType === 'human') {
+    const { data, error } = await db
+      .from('builders')
+      .select('current_repid')
+      .eq('id', posterId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const v = (data as { current_repid: number | null }).current_repid;
+    return typeof v === 'number' ? v : null;
+  }
   if (posterType !== 'agent') return null;
   const col = UUID_RE.test(posterId) ? 'id' : 'agent_name';
   const { data, error } = await db
@@ -232,13 +251,32 @@ router.get('/browse', async (req: Request, res: Response) => {
 
   const listings = (data ?? []) as Array<Record<string, any>>;
 
-  // Enrich AGENT posters with live RepID + tier. Batch by id and by agent_name
-  // (poster_id can be either a uuid or a canonical agent_name).
+  // Enrich posters with live RepID + tier. Agents batch by id and by agent_name
+  // (poster_id can be either a uuid or a canonical agent_name); humans batch by
+  // builders.id. Both sides of the market get a visible score — see
+  // resolveCurrentRepid on why a scoreless human listing is a dead listing.
   const agentPosterIds = Array.from(
     new Set(listings.filter((l) => l.poster_type === 'agent' && l.poster_id).map((l) => String(l.poster_id))),
   );
+  const humanPosterIds = Array.from(
+    new Set(listings.filter((l) => l.poster_type === 'human' && l.poster_id).map((l) => String(l.poster_id))),
+  );
   const repidById = new Map<string, { current_repid: number | null; tier: string | null }>();
   const repidByName = new Map<string, { current_repid: number | null; tier: string | null }>();
+  const repidByBuilder = new Map<string, { current_repid: number | null; tier: string | null }>();
+
+  if (humanPosterIds.length > 0) {
+    // builders has no tier column — it is derived from current_repid the same
+    // way compute_tier() derives the agent one, so the badge means the same thing.
+    const { data: rows } = await db
+      .from('builders')
+      .select('id, current_repid')
+      .in('id', humanPosterIds.filter((x) => UUID_RE.test(x)));
+    for (const r of (rows ?? []) as Array<any>) {
+      const v = typeof r.current_repid === 'number' ? r.current_repid : null;
+      repidByBuilder.set(String(r.id), { current_repid: v, tier: v === null ? null : computeTier(v) });
+    }
+  }
 
   if (agentPosterIds.length > 0) {
     const uuidIds = agentPosterIds.filter((x) => UUID_RE.test(x));
@@ -267,7 +305,9 @@ router.get('/browse', async (req: Request, res: Response) => {
   const enriched = listings.map((l) => {
     const live = l.poster_type === 'agent'
       ? (repidById.get(String(l.poster_id)) ?? repidByName.get(String(l.poster_id)) ?? null)
-      : null;
+      : l.poster_type === 'human'
+        ? (repidByBuilder.get(String(l.poster_id)) ?? null)
+        : null;
     const repid = live?.current_repid ?? (typeof l.repid_at_post === 'number' ? l.repid_at_post : null);
     const tier = live?.tier ?? (typeof repid === 'number' ? computeTier(repid) : null);
     return {

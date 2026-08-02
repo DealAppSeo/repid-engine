@@ -19,7 +19,15 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/run-round-anonymous') return next();
   if (req.method === 'POST' && req.path === '/api/v1/builder/token-signup') return next();
+  // /stake/deposit serves BOTH signed-out demo traffic and wallet-bearing real
+  // deposits, which a single API-key check cannot tell apart — so it is bypassed
+  // here and does its own, stricter authorization in the route
+  // (services/stake-authorization.ts: session for simulated stake, wallet
+  // signature for real). It is NOT unauthenticated. /stake/withdraw is not on
+  // this list and stays API-key gated.
   if (req.method === 'POST' && req.path === '/api/v1/stake/deposit') return next();
+  // Read-only: returns the exact text to sign. Reveals nothing, authorizes nothing.
+  if (req.method === 'GET' && req.path === '/api/v1/stake/deposit/message') return next();
   if (req.method === 'POST' && req.path === '/api/v1/tip/request') return next();
   if (req.method === 'POST' && /^\/api\/v1\/tip\/deliver\/[^/]+$/.test(req.path)) return next();
   if (req.method === 'POST' && req.path === '/api/v1/bet/place') return next();

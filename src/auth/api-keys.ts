@@ -1,6 +1,28 @@
 import crypto from 'crypto';
 import { db } from '../db';
 
+/**
+ * Is this one of the operator keys in the REPID_API_KEYS env allowlist?
+ *
+ * The allowlist format is `key:tier` pairs, comma separated, where `:tier` is
+ * optional (`secret123:pro,corp_key:enterprise,plainkey`). Returns the resolved
+ * tier on a match, or null.
+ *
+ * middleware/auth.ts parses the same env var inline. This is the reusable
+ * definition for callers that need the check OUTSIDE the global middleware —
+ * routes on the auth bypass list that do their own, stricter authorization
+ * (see services/stake-authorization.ts).
+ */
+export function matchEnvOperatorKey(key: string): { tier: string } | null {
+  if (!key) return null;
+  const rawKeys = process.env.REPID_API_KEYS || '';
+  for (const entry of rawKeys.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const [candidate, keyTier] = entry.split(':');
+    if (candidate === key) return { tier: keyTier || 'free' };
+  }
+  return null;
+}
+
 export async function issueAgentApiKey(agentId: string, name: string = 'default', scopes: string[] = []): Promise<{key: string, key_prefix: string}> {
   const rawKey = "ts_live_" + crypto.randomBytes(16).toString('hex');
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
