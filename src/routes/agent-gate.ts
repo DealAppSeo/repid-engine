@@ -44,7 +44,21 @@ agentGateRouter.post('/v1/agent-gate/verify-otp', otpLimiter, async (req: Reques
     res.status(status).json(result);
     return;
   }
-  res.json({ ok: true, token: result.token });
+  // login_token / builder_* appear only when GATE_PROVISIONS_ACCOUNT is on, so a
+  // client can treat "I got an account" as feature-detection rather than needing
+  // to know the deployment's flags.
+  res.json({
+    ok: true,
+    token: result.token,
+    ...(result.login_token
+      ? {
+          login_token: result.login_token,
+          builder_id: result.builder_id,
+          builder_address: result.builder_address,
+          account_created: result.account_created,
+        }
+      : {}),
+  });
 });
 
 agentGateRouter.get('/v1/agent-gate/status', (req: Request, res: Response): void => {

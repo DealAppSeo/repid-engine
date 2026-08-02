@@ -151,12 +151,56 @@ export const openApiSpec = {
         responses: { "200": { description: "Proof generated" } }
       }
     },
+    "/api/v1/stake/deposit/message": {
+      get: {
+        tags: ["Reponomics & Staking"],
+        summary: "Exact text to sign when claiming a real deposit",
+        description:
+          "Returns the message a wallet must sign to credit an on-chain deposit. Fetch it rather " +
+          "than reconstructing the string client-side: any drift becomes a bad signature instead " +
+          "of a subtly wrong prompt shown to someone about to sign. Public, read-only.",
+        parameters: [
+          { name: "wallet", in: "query", required: true, schema: { type: "string" } },
+          { name: "amount", in: "query", required: true, schema: { type: "string" }, description: "USDC smallest unit (6 decimals)" },
+          { name: "tx_hash", in: "query", required: true, schema: { type: "string" } }
+        ],
+        responses: { "200": { description: "Message to sign" }, "400": { description: "Missing parameter" } }
+      }
+    },
     "/api/v1/stake/deposit": {
       post: {
         tags: ["Reponomics & Staking"],
         summary: "Deposit stake for a builder",
-        requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { builder_address: { type: "string" }, amount: { type: "string" } } } } } },
-        responses: { "200": { description: "Deposit recorded" } }
+        description:
+          "Authorization scales with what is being credited. SIMULATED stake (no tx_hash) requires " +
+          "a full-account session (`Authorization: Bearer <login_token>`) for that same account, or " +
+          "an operator API key. A REAL deposit (tx_hash present) additionally requires `signature` " +
+          "— an EIP-191 personal_sign over GET /api/v1/stake/deposit/message. A session alone is " +
+          "never enough for a real deposit: a session proves an email login, a deposit credits " +
+          "value against a wallet.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["builder_address", "amount"],
+                properties: {
+                  builder_address: { type: "string" },
+                  amount: { type: "string", description: "USDC smallest unit (6 decimals)" },
+                  tx_hash: { type: "string", description: "Base Sepolia tx of the USDC transfer into escrow. Omit for simulated stake." },
+                  signature: { type: "string", description: "Required whenever tx_hash is present." }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Deposit recorded (response carries `authorized_by`: session | wallet_signature | operator)" },
+          "400": { description: "Bad request, or on-chain verification failed" },
+          "401": { description: "Not authorized to credit this account (no_credential / invalid_session / not_your_account / signature_required / bad_signature)" },
+          "404": { description: "No account registered under that address" }
+        }
       }
     },
     "/api/v1/bet/place": {

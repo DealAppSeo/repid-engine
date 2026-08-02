@@ -26,6 +26,7 @@ import { createHash, randomInt, timingSafeEqual } from 'crypto';
 import jwt, { JwtPayload, SignOptions } from 'jsonwebtoken';
 import { emitAuditEvent } from './audit-emit';
 import { db } from '../db';
+import { provisionAccountFromVerifiedEmail, GATE_PROVISIONS_ACCOUNT } from './gate-account';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
@@ -163,7 +164,16 @@ export function verifyAgentGateToken(token: unknown): AgentGatePayload | null {
 export async function verifyOtp(
   emailRaw: unknown,
   code: unknown
-): Promise<{ ok: boolean; token?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  token?: string;
+  error?: string;
+  /** Full-account login token. Present only when GATE_PROVISIONS_ACCOUNT is on. */
+  login_token?: string;
+  builder_id?: string;
+  builder_address?: string;
+  account_created?: boolean;
+}> {
   if (!validGateEmail(emailRaw)) return { ok: false, error: 'invalid_email' };
   if (typeof code !== 'string' || !/^\d{6}$/.test(code)) return { ok: false, error: 'invalid_code' };
   const email = emailRaw.toLowerCase();
@@ -211,6 +221,31 @@ export async function verifyOtp(
     sendWelcomeEmail(email).catch((err) =>
       console.warn(`[agent-gate] welcome email failed: ${err?.message ?? err}`)
     );
+  }
+
+  // The same proof that raises the run allowance also earns an account, so the
+  // human leg of the loop starts with one code instead of a second signup form.
+  // ADDITIVE ONLY: the gate token above is unchanged and metering never depends
+  // on this. If provisioning fails the caller still gets their verified session
+  // — losing the account is recoverable on the next verify, losing the token
+  // would strand someone who did everything right.
+  if (GATE_PROVISIONS_ACCOUNT) {
+    try {
+      const account = await provisionAccountFromVerifiedEmail(email);
+      if (account.ok) {
+        return {
+          ok: true,
+          token,
+          login_token: account.login_token,
+          builder_id: account.builder_id,
+          builder_address: account.builder_address,
+          account_created: account.created,
+        };
+      }
+      console.warn(`[agent-gate] account provisioning declined: ${account.reason}`);
+    } catch (err: any) {
+      console.warn(`[agent-gate] account provisioning failed: ${err?.message ?? err}`);
+    }
   }
 
   return { ok: true, token };
