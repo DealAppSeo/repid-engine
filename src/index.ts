@@ -21,6 +21,7 @@ import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import agentKeysRouter from './routes/v1/agent-keys';
+import serviceManifestRouter from './routes/v1/service-manifest';
 import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
@@ -261,6 +262,14 @@ app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
 // no key yet; that is the wall this removes. Default OFF
 // (AGENT_SELF_SERVE_KEYS_ENABLED); the GET says so rather than 404ing.
 app.use('/api/v1/agent-keys', agentKeysRouter);
+// MACHINE SURFACE (spec TRUSTMARKET_UX_MERGED_SPEC_v1 §4) — the canonical service
+// manifest and its renderers. Mounted at root AND under /api/v1 because
+// /.well-known/* and /llms.txt are root-relative by convention while
+// /api/v1/services/:id/manifest.json belongs with the rest of the API. Both hit
+// the same builder, so the two paths cannot drift.
+// BEFORE authMiddleware: a discovery surface behind a key is not a discovery surface.
+app.use('/', serviceManifestRouter);
+app.use('/api/v1', serviceManifestRouter);
 // Controller API (CC2 2026-05-26) — SBT-gated (its own controller-auth middleware),
 // so mounted before the REPID_API_KEYS authMiddleware. Backend for the v0.app controller rebuild.
 app.use('/api/v1/controller', controllerRouter);
