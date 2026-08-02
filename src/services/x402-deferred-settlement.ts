@@ -298,7 +298,77 @@ export async function releaseHeldPayment(args: {
       .update({ status: SETTLEMENT_STATUS.AUTHORIZED })
       .eq('id', held.id)
       .eq('status', SETTLEMENT_STATUS.SETTLING);
+
+    // A FAILED RELEASE MUST LEAVE A TRACE. Observed live 2026-08-02 on contract
+    // 2e89cea0-c540-4a19-8adc-47df56cf5be1: the facilitator threw, this branch
+    // handed the row back correctly, an immediate retry settled, and nothing
+    // was double-spent — the state machine did its job. But the failure was
+    // written NOWHERE. Not here, not to x402_settlement_failures (whose newest
+    // row was from June), not to the audit chain. It existed only in the body
+    // of the HTTP response that failed.
+    //
+    // Two consequences, both bad on a money path. You cannot ask "how often
+    // does release fail?" after the fact. And the contract sits `fulfilled`
+    // with the provider delivered-and-unpaid until somebody happens to call
+    // satisfy again — on the UI path, a user who sees one error and walks away
+    // leaves it stranded silently.
+    //
+    // The sibling SETTLED_UNRECORDED branch above already shouts via
+    // console.error. This one said nothing at all, which is the exact
+    // fail-silent behaviour this module's own header sets out to prevent.
+    console.error(
+      `[x402-deferred] RELEASE FAILED contract=${args.contractId} settlement=${held.id} — ` +
+        `authorization handed back to '${SETTLEMENT_STATUS.AUTHORIZED}' and is retryable. Reason: ${message}`,
+    );
+    await recordReleaseFailure(args.contractId, held.id, header, args.requirements, message);
+
     return { status: 'FAILED', reason: `settlement broadcast failed: ${message}` };
+  }
+}
+
+/**
+ * Durable record of a failed release, so the gap is queryable later.
+ *
+ * Best-effort by construction: this runs on a path that has ALREADY failed, and
+ * a bookkeeping error must never mask the real one or throw out of the catch
+ * that is busy handing the authorization back. Columns are only those verified
+ * present on the live table (the generated types are stale — see the standing
+ * rule and the SETTLED_UNRECORDED comment above).
+ */
+async function recordReleaseFailure(
+  contractId: string,
+  settlementId: string | number,
+  paymentHeader: string,
+  requirements: unknown,
+  message: string,
+): Promise<void> {
+  try {
+    // VERIFIED AGAINST information_schema, not the generated types: direction,
+    // payment_payload_b64, payment_requirements, attempt_count and
+    // last_attempted_at are all NOT NULL. The first draft of this omitted
+    // payment_payload_b64 and would have thrown a not-null violation inside the
+    // very catch meant to make the failure visible — losing the record twice
+    // over. Storing the header matches what every existing row holds, and the
+    // authorization is nonce-bound and single-use.
+    const { error } = await db.from('x402_settlement_failures').insert({
+      direction: 'outbound',
+      idempotency_key: contractId,
+      payment_payload_b64: paymentHeader,
+      payment_requirements: requirements ?? [],
+      facilitator_response: { error: message, settlement_id: String(settlementId) },
+      attempt_count: 1,
+      last_attempted_at: new Date().toISOString(),
+    });
+    if (error) {
+      console.error(
+        `[x402-deferred] could not record the release failure for contract=${contractId}: ${error.message}`,
+      );
+    }
+  } catch (err: unknown) {
+    console.error(
+      `[x402-deferred] could not record the release failure for contract=${contractId}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
