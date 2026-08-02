@@ -42,9 +42,40 @@ export async function processRecoveryQueue(opts?: { dryRun?: boolean }): Promise
       return result;
     }
 
+    // OWNERSHIP GUARD — do not touch a deferred release.
+    //
+    // This worker recovers the old inbound-tip flow: it re-settles from the
+    // stored payload and INSERTS a new x402_settlements row. That is wrong for a
+    // deferred release, where an authorization row already exists keyed on the
+    // contract. Inserting a second row with the same idempotency_key would make
+    // `.eq('idempotency_key').maybeSingle()` ambiguous for every future read,
+    // leave the held row 'authorized' forever, and never settle the contract —
+    // and calling the facilitator directly bypasses the atomic
+    // `.eq('status','authorized')` claim that guarantees a single broadcast.
+    //
+    // Those rows belong to x402-release-retry-worker, which drives
+    // releaseHeldPayment and owns that claim. A failure row is deferred-owned
+    // exactly when a settlement row already exists under the same key.
+    const failureKeys = failures
+      .map((f: any) => f.idempotency_key)
+      .filter((k: unknown): k is string => typeof k === 'string' && k.length > 0);
+    const deferredOwned = new Set<string>();
+    if (failureKeys.length > 0) {
+      const { data: existing } = await db
+        .from('x402_settlements')
+        .select('idempotency_key')
+        .in('idempotency_key', failureKeys);
+      for (const e of (existing ?? []) as any[]) {
+        if (e.idempotency_key) deferredOwned.add(String(e.idempotency_key));
+      }
+    }
+
     const now = Date.now();
 
     for (const row of failures) {
+      if (row.idempotency_key && deferredOwned.has(String(row.idempotency_key))) {
+        continue; // owned by the deferred-release retry worker
+      }
       // 3. Apply exponential backoff
       const lastAttempt = new Date(row.last_attempted_at).getTime();
       let backoffMs = 30000; // default 30s for attempt 1

@@ -75,6 +75,7 @@ import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { startRecoveryWorker } from './services/x402-recovery-worker';
+import { startReleaseRetryWorker } from './services/x402-release-retry-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { easAnchorWorker } from './workers/eas-anchor-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -871,6 +872,15 @@ if (!IS_TEST && process.env.X402_RECOVERY_WORKER_ENABLED === 'true') {
   const intervalMs = Number(process.env.X402_RECOVERY_POLL_MS ?? 30000);
   startRecoveryWorker({ pollIntervalMs: intervalMs });
   console.log(`[x402-recovery] recovery worker started (poll ${intervalMs}ms)`);
+}
+
+// x402 DEFERRED-RELEASE retry (2026-08-02) — self-heal for a delivered contract
+// whose payment release failed. Distinct from the recovery worker above: that
+// one re-settles the old inbound-tip flow, this one drives releaseHeldPayment so
+// the atomic single-broadcast claim is honoured, then finalizes through the same
+// path /satisfy uses. Default OFF; 'shadow' reports what it would do.
+if (!IS_TEST) {
+  startReleaseRetryWorker();
 }
 
 // EAS Anchor Worker (2026-07-04) — anchors the 21,960 real, un-anchored Plonky3
