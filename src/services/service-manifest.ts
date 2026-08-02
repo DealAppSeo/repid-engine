@@ -172,33 +172,48 @@ export async function buildServiceCatalog(limit = 200): Promise<ServiceManifest[
   return out;
 }
 
-async function assembleManifest(svc: {
-  id: string;
-  provider_agent_id: string;
-  service_type: string;
-  service_name: string | null;
-  description: string | null;
-  base_price_usdc_raw: number | null;
-  min_repid_to_purchase: number | null;
-}): Promise<ServiceManifest> {
+/**
+ * Everything trustworthy we can say about one provider, computed once.
+ *
+ * Extracted so the manifest and the TrustBadge (§10) cannot disagree about the
+ * same agent. A badge that says "99% verified" beside a manifest that says
+ * "too few jobs to tell" would be worse than having no badge — the badge is the
+ * artifact that travels off-site, so it is the one that must not drift.
+ */
+export interface ProviderTrust {
+  agent_id: string;
+  agent_name: string | null;
+  repid: number | null;
+  tier: string | null;
+  erc8004_token_id: string | null;
+  stake_at_risk_usdc: number | null;
+  stake_status: 'recorded' | 'none_recorded';
+  stake_note: string;
+  track_record: TrackRecord;
+  sample_receipt: { contract_id: string; settled_at: string | null; url: string } | null;
+  caveats: string[];
+}
+
+export async function buildProviderTrust(agentId: string): Promise<ProviderTrust | null> {
   const caveats: string[] = [];
 
   const { data: agent } = await db
     .from('repid_agents')
     .select('id, agent_name, current_repid, tier, erc8004_token_id')
-    .eq('id', svc.provider_agent_id)
+    .eq('id', agentId)
     .maybeSingle();
+  if (!agent) return null;
 
   // Track record: settled vs disputed, for THIS provider.
   const { count: settledCount } = await db
     .from('service_contracts')
     .select('*', { count: 'exact', head: true })
-    .eq('provider_agent_id', svc.provider_agent_id)
+    .eq('provider_agent_id', agentId)
     .eq('status', 'settled');
   const { count: disputedCount } = await db
     .from('service_contracts')
     .select('*', { count: 'exact', head: true })
-    .eq('provider_agent_id', svc.provider_agent_id)
+    .eq('provider_agent_id', agentId)
     .not('disputed_at', 'is', null);
 
   const track_record = buildTrackRecord(settledCount ?? 0, disputedCount ?? 0);
@@ -216,14 +231,13 @@ async function assembleManifest(svc: {
   const { data: stakeRows } = await db
     .from('agent_stakes')
     .select('stake_amount, status')
-    .eq('staker_agent', svc.provider_agent_id)
+    .eq('staker_agent', agentId)
     .eq('status', 'active');
   const staked = (stakeRows ?? []).reduce(
     (sum: number, r: any) => sum + Number(r.stake_amount ?? 0),
     0,
   );
   const hasStake = (stakeRows ?? []).length > 0 && staked > 0;
-
   if (!hasStake) {
     caveats.push(
       'No stake is recorded against this provider, so nothing of theirs is financially at risk ' +
@@ -235,12 +249,49 @@ async function assembleManifest(svc: {
   const { data: sample } = await db
     .from('service_contracts')
     .select('id, settled_at')
-    .eq('provider_agent_id', svc.provider_agent_id)
+    .eq('provider_agent_id', agentId)
     .eq('status', 'settled')
     .order('settled_at', { ascending: false })
     .limit(1);
   const sampleRow = (sample ?? [])[0] as any;
+  const base = publicBase();
 
+  return {
+    agent_id: String(agentId),
+    agent_name: (agent as any)?.agent_name ?? null,
+    repid: (agent as any)?.current_repid ?? null,
+    tier: (agent as any)?.tier ?? null,
+    erc8004_token_id: (agent as any)?.erc8004_token_id ?? null,
+    stake_at_risk_usdc: hasStake ? Number((staked / 1e6).toFixed(6)) : null,
+    stake_status: hasStake ? 'recorded' : 'none_recorded',
+    stake_note: hasStake
+      ? 'Stake recorded against this provider and slashable on proven underdelivery.'
+      : "No stake recorded. Nothing of the provider's is financially at risk on this service.",
+    track_record,
+    sample_receipt: sampleRow
+      ? {
+          contract_id: String(sampleRow.id),
+          settled_at: sampleRow.settled_at ?? null,
+          url: `${base}/api/v1/receipt/${sampleRow.id}.json`,
+        }
+      : null,
+    caveats,
+  };
+}
+
+async function assembleManifest(svc: {
+  id: string;
+  provider_agent_id: string;
+  service_type: string;
+  service_name: string | null;
+  description: string | null;
+  base_price_usdc_raw: number | null;
+  min_repid_to_purchase: number | null;
+}): Promise<ServiceManifest> {
+  const trust = await buildProviderTrust(svc.provider_agent_id);
+  const caveats = [...(trust?.caveats ?? [])];
+  const track_record = trust?.track_record ?? buildTrackRecord(0, 0);
+  const sampleRow = trust?.sample_receipt ?? null;
   const base = publicBase();
   const priceRaw = Number(svc.base_price_usdc_raw ?? 0);
 
@@ -261,15 +312,15 @@ async function assembleManifest(svc: {
 
     provider: {
       agent_id: String(svc.provider_agent_id),
-      agent_name: (agent as any)?.agent_name ?? null,
-      repid: (agent as any)?.current_repid ?? null,
-      tier: (agent as any)?.tier ?? null,
-      erc8004_token_id: (agent as any)?.erc8004_token_id ?? null,
-      stake_at_risk_usdc: hasStake ? Number((staked / 1e6).toFixed(6)) : null,
-      stake_status: hasStake ? 'recorded' : 'none_recorded',
-      stake_note: hasStake
-        ? 'Stake recorded against this provider and slashable on proven underdelivery.'
-        : 'No stake recorded. Nothing of the provider\'s is financially at risk on this service.',
+      agent_name: trust?.agent_name ?? null,
+      repid: trust?.repid ?? null,
+      tier: trust?.tier ?? null,
+      erc8004_token_id: trust?.erc8004_token_id ?? null,
+      stake_at_risk_usdc: trust?.stake_at_risk_usdc ?? null,
+      stake_status: trust?.stake_status ?? 'none_recorded',
+      stake_note:
+        trust?.stake_note ??
+        "No stake recorded. Nothing of the provider's is financially at risk on this service.",
     },
 
     track_record,
@@ -278,13 +329,7 @@ async function assembleManifest(svc: {
       min_repid_to_purchase: svc.min_repid_to_purchase ?? null,
     },
 
-    sample_receipt: sampleRow
-      ? {
-          contract_id: String(sampleRow.id),
-          settled_at: sampleRow.settled_at ?? null,
-          url: `${base}/api/v1/receipt/${sampleRow.id}.json`,
-        }
-      : null,
+    sample_receipt: sampleRow,
 
     renderers: {
       machine: `${base}/api/v1/services/${svc.id}/manifest.json`,

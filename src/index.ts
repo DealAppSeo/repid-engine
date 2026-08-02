@@ -22,6 +22,7 @@ import halEvaluateRouter from './routes/hal-evaluate';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import agentKeysRouter from './routes/v1/agent-keys';
 import serviceManifestRouter from './routes/v1/service-manifest';
+import trustBadgeRouter from './routes/v1/trust-badge';
 import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
@@ -270,6 +271,10 @@ app.use('/api/v1/agent-keys', agentKeysRouter);
 // BEFORE authMiddleware: a discovery surface behind a key is not a discovery surface.
 app.use('/', serviceManifestRouter);
 app.use('/api/v1', serviceManifestRouter);
+// TRUSTBADGE (spec §10) — reputation portability AS distribution. Public and
+// CORS-open because it is an <img> loaded by third-party sites; an auth check
+// here would silently break every page that embeds it.
+app.use('/api/v1', trustBadgeRouter);
 // Controller API (CC2 2026-05-26) — SBT-gated (its own controller-auth middleware),
 // so mounted before the REPID_API_KEYS authMiddleware. Backend for the v0.app controller rebuild.
 app.use('/api/v1/controller', controllerRouter);
