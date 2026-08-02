@@ -39,7 +39,7 @@ import { probeProviderKey, probeFor, supportedProviders, independentFamilies } f
 
 export const BYOK_CUSTODY_ENABLED = process.env.BYOK_CUSTODY_ENABLED === 'true';
 
-export type OwnerKind = 'human_sbt' | 'agent';
+export type OwnerKind = 'human_sbt' | 'builder' | 'agent';
 
 export interface KeyOwner {
   kind: OwnerKind;

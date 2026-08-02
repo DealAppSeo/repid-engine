@@ -182,7 +182,7 @@ describe('identity is proven, never claimed', () => {
     expect(res.body.error).toBe('stale_signature');
   });
 
-  it('a proven wallet that is not a verified human still gets nothing', async () => {
+  it('a proven wallet with no account here still gets nothing', async () => {
     const w = Wallet.createRandom();
     const ts = new Date().toISOString();
     const sig = await w.signMessage(authMessage('GET', '/api/v1/byok/keys', w.address, ts));
@@ -191,7 +191,29 @@ describe('identity is proven, never claimed', () => {
       .get('/api/v1/byok/keys')
       .set('x-hd-wallet', w.address).set('x-hd-timestamp', ts).set('x-hd-signature', sig);
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe('human_not_verified');
+    expect(res.body.error).toBe('no_account');
+  });
+});
+
+describe('getting an account is self-serve, but not a faucet', () => {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1', byokRouter);
+
+  it('is inert until deliberately enabled — a new PUBLIC write surface does not ship on by merging', async () => {
+    const res = await request(app).post('/api/v1/account/connect').send({ display_name: 'x' });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('disabled');
+  });
+
+  it('checks the flag BEFORE doing any work, so a disabled endpoint is not a free oracle', async () => {
+    // Answering "no account here" to an unauthenticated caller would leak
+    // whether a wallet is registered. Disabled means disabled.
+    const res = await request(app)
+      .post('/api/v1/account/connect')
+      .set('x-hd-wallet', '0x000000000000000000000000000000000000dEaD')
+      .send({});
+    expect(res.status).toBe(503);
   });
 });
 
@@ -210,7 +232,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.human_sbt_registry = { token_id: 'h1', wallet_address: '0x000000000000000000000000000000000000dEaD' };
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     const wrong = await Wallet.createRandom().signMessage('something else entirely');
-    const r = await bind.bindHumanToAgent({ humanTokenId: 'h1', agentId: 'agent-1', signature: wrong });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: wrong });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('bad_signature');
   });
@@ -220,7 +242,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.human_sbt_registry = { token_id: 'h1', wallet_address: w.address };
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
-    const r = await bind.bindHumanToAgent({ humanTokenId: 'h1', agentId: 'agent-1', signature: sig });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig });
     expect(r.ok).toBe(true);
   });
 
@@ -230,10 +252,56 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     mockRows.__insertError = { message: 'duplicate key value violates unique constraint (23505)' };
     const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
-    const r = await bind.bindHumanToAgent({ humanTokenId: 'h1', agentId: 'agent-1', signature: sig });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig });
     expect(r.reason).toBe('already_bound');
     expect(r.detail).toMatch(/already has a live owner/i);
     delete mockRows.__insertError;
+  });
+
+  /**
+   * The first version required a proof-of-human SBT. Live counts said that was
+   * wrong: 73 builders (all wallet-bearing) against 5 SBT humans, so ownership
+   * was unreachable for ~94% of real accounts — including every viewer who
+   * follows the video. The fix must widen WHO can own without weakening WHAT a
+   * proof-of-human means.
+   */
+  it('lets a builder — the identity almost everyone actually has — own an agent', async () => {
+    const w = Wallet.createRandom();
+    mockRows.builders = { id: 'b1', address: w.address };
+    mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
+    const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: sig });
+    expect(r.ok).toBe(true);
+    const row = mockInserted.find((i) => i.table === 'human_agent_bindings')!.row;
+    expect(row.owner_kind).toBe('builder');
+    expect(row.builder_id).toBe('b1');
+    // The CHECK constraint permits exactly one owner reference.
+    expect(row.human_token_id).toBeNull();
+  });
+
+  it('takes the wallet from the ACCOUNT, not from the caller', async () => {
+    // Otherwise anyone could bind on someone else's account by naming a wallet
+    // they happen to control.
+    const attacker = Wallet.createRandom();
+    mockRows.builders = { id: 'b1', address: '0x000000000000000000000000000000000000dEaD' };
+    mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
+    const sig = await attacker.signMessage(
+      bind.bindingMessage({ wallet: attacker.address, agentId: 'agent-1', scope: 'ownership' }),
+    );
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: sig });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('bad_signature');
+  });
+
+  it('never dresses a wallet proof up as proof of humanity', () => {
+    const builder = bind.assuranceOf('builder');
+    const human = bind.assuranceOf('human_sbt');
+    expect(builder.label).toBe('wallet-proven');
+    expect(builder.means).toMatch(/not a proof they are a distinct human/i);
+    expect(human.label).toBe('proof-of-human');
+    // The two levels must stay distinguishable — collapsing them into
+    // "verified" is how a weak claim gets read as a strong one.
+    expect(builder.level).not.toEqual(human.level);
   });
 
   it('carries scope and domain so the ZK ownership proof can land without reshaping rows', async () => {
@@ -241,7 +309,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.human_sbt_registry = { token_id: 'h1', wallet_address: w.address };
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
-    await bind.bindHumanToAgent({ humanTokenId: 'h1', agentId: 'agent-1', signature: sig });
+    await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig });
     const row = mockInserted.find((i) => i.table === 'human_agent_bindings')!.row;
     // ZKP invariants 2/3/6 — scope is a parameter, domain is namespaced.
     expect(row.scope).toBe('ownership');

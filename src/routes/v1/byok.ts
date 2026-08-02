@@ -26,8 +26,9 @@ import {
   BYOK_CUSTODY_ENABLED, type KeyOwner,
 } from '../../services/byok-custody';
 import {
-  bindHumanToAgent, revokeBinding, ownerOfAgent, agentsOfHuman, bindingMessage,
-  HUMAN_AGENT_BIND_ENABLED, SCOPE_OWNERSHIP,
+  bindOwnerToAgent, revokeBinding, ownerOfAgent, agentsOfOwner, linkedButUnbound,
+  bindingMessage, assuranceOf,
+  HUMAN_AGENT_BIND_ENABLED, SCOPE_OWNERSHIP, type OwnerRef,
 } from '../../services/human-agent-binding';
 import { supportedProviders } from '../../services/provider-key-probe';
 
@@ -50,13 +51,16 @@ export function authMessage(method: string, path: string, wallet: string, timest
   ].join('\n');
 }
 
-interface Principal { wallet: string; humanTokenId: string; }
+interface Principal { wallet: string; owner: OwnerRef; }
 
 /**
- * Resolve WHO is calling, from cryptography rather than assertion.
- * Returns null and writes the response on any failure.
+ * Prove the caller controls a wallet. Says nothing about who they are here.
+ *
+ * Split out from principalOf so that connecting an account can require the same
+ * proof without needing an account to already exist — otherwise creating your
+ * first account would require having one.
  */
-async function principalOf(req: Request, res: Response): Promise<Principal | null> {
+async function provenWallet(req: Request, res: Response): Promise<string | null> {
   const wallet = String(req.headers['x-hd-wallet'] ?? '').trim();
   const signature = String(req.headers['x-hd-signature'] ?? '').trim();
   const timestamp = String(req.headers['x-hd-timestamp'] ?? '').trim();
@@ -87,25 +91,97 @@ async function principalOf(req: Request, res: Response): Promise<Principal | nul
     res.status(401).json({ error: 'bad_signature', message: 'Signature did not recover to the wallet it claims.' });
     return null;
   }
-
-  // Proving a wallet is not the same as being a verified human. Both are required.
-  const { data } = await db
-    .from('human_sbt_registry')
-    .select('token_id, wallet_address')
-    .ilike('wallet_address', wallet)
-    .limit(1);
-  const row = data?.[0];
-  if (!row) {
-    res.status(403).json({
-      error: 'human_not_verified',
-      message: 'That wallet proved control but is not a verified human. Complete human verification first.',
-    });
-    return null;
-  }
-  return { wallet, humanTokenId: row.token_id };
+  return wallet;
 }
 
-const ownerFor = (p: Principal): KeyOwner => ({ kind: 'human_sbt', id: p.humanTokenId });
+/**
+ * Resolve WHO is calling, from cryptography rather than assertion.
+ * Returns null and writes the response on any failure.
+ */
+async function principalOf(req: Request, res: Response): Promise<Principal | null> {
+  const wallet = await provenWallet(req, res);
+  if (!wallet) return null;
+
+  // The wallet is proven. Now find WHICH account it is — checking the stronger
+  // registry first, so someone who holds a proof-of-human SBT is recognised as
+  // one rather than being downgraded to a plain builder.
+  const { data: sbt } = await db
+    .from('human_sbt_registry')
+    .select('token_id')
+    .ilike('wallet_address', wallet)
+    .limit(1);
+  if (sbt?.[0]) return { wallet, owner: { kind: 'human_sbt', id: sbt[0].token_id, wallet } };
+
+  const { data: builder } = await db.from('builders').select('id').ilike('address', wallet).limit(1);
+  if (builder?.[0]) return { wallet, owner: { kind: 'builder', id: builder[0].id, wallet } };
+
+  // Proving a wallet is not the same as having an account. This used to demand a
+  // proof-of-human SBT, which only 5 accounts hold against 73 builders — so the
+  // whole feature was unreachable for almost every real user.
+  res.status(403).json({
+    error: 'no_account',
+    message: 'That wallet proved control but has no account here yet. Connect it once to create one.',
+  });
+  return null;
+}
+
+// Keys are custodied under the SAME identity that owns the agents, and the kind
+// is carried through unchanged. Storing a builder as an "agent" would make the
+// owner column lie about who holds the key.
+const ownerFor = (p: Principal): KeyOwner => ({ kind: p.owner.kind, id: p.owner.id });
+
+// ── Getting an account at all ───────────────────────────────────────────────
+
+const SELF_SERVE_ACCOUNTS_ENABLED = process.env.SELF_SERVE_ACCOUNTS_ENABLED === 'true';
+
+/**
+ * Connect a wallet and get an account.
+ *
+ * This was the one genuinely missing step. Everything downstream — custody,
+ * ownership, a receipt with your name on it — needed an account, and there was
+ * no way to obtain one without an operator creating it by hand. A walkthrough
+ * that opens with "first, email me" is not a walkthrough.
+ *
+ * IDEMPOTENT. Connecting twice returns the same account rather than a second
+ * one; the wallet is the identity.
+ *
+ * IT GRANTS NO REPUTATION. A new account starts with nothing, deliberately. If
+ * connecting a wallet minted RepID, then RepID would measure how many wallets
+ * someone can generate — which is free — instead of how they behaved. Reputation
+ * has to be earned by doing something someone else verified.
+ *
+ * FLAG: SELF_SERVE_ACCOUNTS_ENABLED (default OFF). This is a new PUBLIC write
+ * surface, so it lands inert per CLAUDE_RULES 23 and gets switched on
+ * deliberately rather than by merging.
+ */
+router.post('/account/connect', async (req: Request, res: Response) => {
+  if (!SELF_SERVE_ACCOUNTS_ENABLED) {
+    return res.status(503).json({ error: 'disabled', message: 'Self-serve accounts are not enabled on this deployment.' });
+  }
+  const wallet = await provenWallet(req, res);
+  if (!wallet) return;
+
+  const { data: existing } = await db.from('builders').select('id, address, created_at').ilike('address', wallet).limit(1);
+  if (existing?.[0]) {
+    return res.json({ created: false, account: existing[0], note: 'You already had an account. The wallet is the identity.' });
+  }
+
+  const display = typeof req.body?.display_name === 'string' ? req.body.display_name.slice(0, 60) : null;
+  const { data, error } = await db
+    .from('builders')
+    .insert({ address: wallet, auth_method: 'wallet', display_name: display })
+    .select('id, address, created_at')
+    .maybeSingle();
+
+  if (error || !data) {
+    return res.status(500).json({ error: 'write_failed', message: error?.message ?? 'insert returned no row' });
+  }
+  return res.status(201).json({
+    created: true,
+    account: data,
+    reputation: 'none yet — RepID is earned by work someone else verified, never granted for signing up',
+  });
+});
 
 // ── BYOK custody ────────────────────────────────────────────────────────────
 
@@ -178,8 +254,8 @@ router.post('/human/bind', async (req: Request, res: Response) => {
 
   // The human is taken from the proven principal, never from the body — a caller
   // may not bind an agent on somebody else's behalf.
-  const result = await bindHumanToAgent({
-    humanTokenId: p.humanTokenId,
+  const result = await bindOwnerToAgent({
+    owner: p.owner,
     agentId: agent_id,
     signature: typeof signature === 'string' ? signature : undefined,
     scope: typeof scope === 'string' ? scope : undefined,
@@ -193,7 +269,7 @@ router.delete('/human/bind/:agentId', async (req: Request, res: Response) => {
 
   // Only the current owner may revoke.
   const owner = await ownerOfAgent(String(req.params.agentId));
-  if (!owner || owner.human_token_id !== p.humanTokenId) {
+  if (!owner || owner.owner_id !== p.owner.id) {
     return res.status(403).json({ error: 'not_owner', message: 'You do not currently own this agent.' });
   }
   return res.json(await revokeBinding(String(req.params.agentId)));
@@ -203,16 +279,52 @@ router.delete('/human/bind/:agentId', async (req: Request, res: Response) => {
 router.get('/human/agents', async (req: Request, res: Response) => {
   const p = await principalOf(req, res);
   if (!p) return;
-  return res.json({ enabled: HUMAN_AGENT_BIND_ENABLED, agents: await agentsOfHuman(p.humanTokenId) });
+  return res.json({
+    enabled: HUMAN_AGENT_BIND_ENABLED,
+    owner: { kind: p.owner.kind, assurance: assuranceOf(p.owner.kind) },
+    agents: await agentsOfOwner(p.owner),
+  });
 });
 
-/** Public: who owns this agent. Ownership is meant to be checkable. */
+/**
+ * Public: who owns this agent, and on what evidence. Ownership is meant to be
+ * checkable by someone who does not trust us.
+ *
+ * Deliberately separates two things a UI could easily conflate:
+ *   PROVEN   a binding — somebody signed a statement naming this exact agent.
+ *   LINKED   repid_agents.builder_id — an administrative association nobody
+ *            signed. Real, useful, and NOT evidence of ownership.
+ * Showing "linked" as ownership would be the same overclaim the receipt made
+ * when it printed pay-on-delivery for exchanges that paid up front.
+ */
 router.get('/agents/:agentId/owner', async (req: Request, res: Response) => {
-  const owner = await ownerOfAgent(String(req.params.agentId));
-  if (!owner) return res.json({ owned: false, owner: null });
+  const agentId = String(req.params.agentId);
+  const owner = await ownerOfAgent(agentId);
+  const link = await linkedButUnbound(agentId);
+
+  if (!owner) {
+    return res.json({
+      owned: false,
+      owner: null,
+      linked_account: link.builder_id,
+      note: link.builder_id
+        ? 'This agent is linked to an account, but nobody has proved ownership by signature. Linked is not owned.'
+        : 'No owner and no linked account.',
+    });
+  }
   return res.json({
     owned: true,
-    owner: { human_token_id: owner.human_token_id, wallet: owner.human_wallet, bound_at: owner.bound_at, scope: owner.scope },
+    owner: {
+      kind: owner.owner_kind,
+      id: owner.owner_id,
+      wallet: owner.human_wallet,
+      bound_at: owner.bound_at,
+      scope: owner.scope,
+    },
+    // Never flattened to "verified" — a wallet proof and a proof-of-human are
+    // different claims and the receipt has to be able to tell them apart.
+    assurance: owner.assurance,
+    proof: 'A signature over a message naming this agent, this wallet and this scope.',
   });
 });
 

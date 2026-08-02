@@ -38,6 +38,51 @@ export const HUMAN_AGENT_BIND_ENABLED = process.env.HUMAN_AGENT_BIND_ENABLED ===
 export const SCOPE_OWNERSHIP = 'ownership';
 export const DOMAIN_IDENTITY = 'identity';
 
+/**
+ * WHO can own, and HOW STRONGLY that was established.
+ *
+ * The first version of this required a proof-of-human SBT. The live numbers said
+ * that was wrong: 73 builders (every one wallet-bearing) against 5 SBT humans,
+ * so ownership was unreachable for ~94% of real accounts — and it duplicated
+ * repid_agents.builder_id, which 43 agents already carry.
+ *
+ * The fix is NOT to let an email count as proof of humanity. It is to record
+ * which kind of owner this is and let every surface state it, so a strong claim
+ * is never made on weak evidence:
+ *
+ *   builder    a wallet whose control was PROVEN by signature. Self-serve, and
+ *              what a viewer following the video will have. Proves someone holds
+ *              that key — not that they are a distinct human.
+ *   human_sbt  additionally passed proof-of-human. Strictly stronger.
+ *
+ * Distinct from `repid_agents.builder_id`, which is an administrative link that
+ * nobody signed. A binding is a CLAIM SOMEONE MADE AND PROVED, and can be
+ * revoked. Both can exist; only one of them is evidence.
+ */
+export type OwnerKind = 'builder' | 'human_sbt';
+
+export interface OwnerRef {
+  kind: OwnerKind;
+  /** builders.id for a builder, human_sbt_registry.token_id for an SBT human. */
+  id: string;
+  wallet?: string;
+}
+
+/** Plain-language assurance, for receipts and UI. Never collapses the two levels. */
+export function assuranceOf(kind: OwnerKind): { level: OwnerKind; label: string; means: string } {
+  return kind === 'human_sbt'
+    ? {
+        level: 'human_sbt',
+        label: 'proof-of-human',
+        means: 'The owner passed human verification and proved control of their wallet.',
+      }
+    : {
+        level: 'builder',
+        label: 'wallet-proven',
+        means: 'The owner proved control of this wallet by signature. That is not a proof they are a distinct human.',
+      };
+}
+
 export interface BindResult {
   ok: boolean;
   reason?:
@@ -48,7 +93,14 @@ export interface BindResult {
     | 'bad_signature'
     | 'write_failed';
   detail: string;
-  binding?: { agent_id: string; human_token_id: string; scope: string; bound_at: string };
+  binding?: {
+    agent_id: string;
+    owner_kind: OwnerKind;
+    human_token_id: string | null;
+    builder_id: string | null;
+    scope: string;
+    bound_at: string;
+  };
 }
 
 /**
@@ -80,8 +132,8 @@ export function signatureMatches(wallet: string, message: string, signature: str
   }
 }
 
-export async function bindHumanToAgent(params: {
-  humanTokenId: string;
+export async function bindOwnerToAgent(params: {
+  owner: OwnerRef;
   agentId: string;
   signature?: string;
   scope?: string;
@@ -90,20 +142,29 @@ export async function bindHumanToAgent(params: {
 }): Promise<BindResult> {
   const scope = params.scope ?? SCOPE_OWNERSHIP;
   if (!HUMAN_AGENT_BIND_ENABLED) {
-    return { ok: false, reason: 'disabled', detail: 'Human↔agent binding is not enabled on this deployment.' };
+    return { ok: false, reason: 'disabled', detail: 'Ownership binding is not enabled on this deployment.' };
   }
 
-  const { data: human } = await db
-    .from('human_sbt_registry')
-    .select('token_id, wallet_address, qualification_tier')
-    .eq('token_id', params.humanTokenId)
-    .maybeSingle();
-  if (!human) {
-    return {
-      ok: false,
-      reason: 'human_not_verified',
-      detail: 'No verified human is registered under that token. Complete human verification first.',
-    };
+  // Resolve the owner against whichever registry actually holds them, and take
+  // the wallet FROM THAT ROW — never from the caller, who could otherwise name a
+  // wallet they happen to control and bind on someone else's account.
+  let wallet: string | null = null;
+  if (params.owner.kind === 'human_sbt') {
+    const { data } = await db
+      .from('human_sbt_registry')
+      .select('token_id, wallet_address')
+      .eq('token_id', params.owner.id)
+      .maybeSingle();
+    if (!data) {
+      return { ok: false, reason: 'human_not_verified', detail: 'No verified human is registered under that token.' };
+    }
+    wallet = data.wallet_address ?? null;
+  } else {
+    const { data } = await db.from('builders').select('id, address').eq('id', params.owner.id).maybeSingle();
+    if (!data) {
+      return { ok: false, reason: 'human_not_verified', detail: 'No account found. Connect a wallet first.' };
+    }
+    wallet = data.address ?? null;
   }
 
   const { data: agent } = await db
@@ -116,12 +177,11 @@ export async function bindHumanToAgent(params: {
   // Proof of control. Skipped only for a trusted caller, and the skip is a
   // parameter rather than an env flag so it can never be on by accident in prod.
   if (!params.trustedCaller) {
-    const wallet = human.wallet_address;
     if (!wallet) {
       return {
         ok: false,
         reason: 'bad_signature',
-        detail: 'This human has no wallet on record, so control cannot be proven.',
+        detail: 'This account has no wallet on record, so control cannot be proven.',
       };
     }
     const msg = bindingMessage({ wallet, agentId: params.agentId, scope });
@@ -129,7 +189,7 @@ export async function bindHumanToAgent(params: {
       return {
         ok: false,
         reason: 'bad_signature',
-        detail: 'Signature did not recover to the registered wallet for this exact agent and scope.',
+        detail: 'Signature did not recover to the wallet on record for this exact agent and scope.',
       };
     }
   }
@@ -137,14 +197,17 @@ export async function bindHumanToAgent(params: {
   const { data, error } = await db
     .from('human_agent_bindings')
     .insert({
-      human_token_id: human.token_id,
-      human_wallet: human.wallet_address ?? null,
+      owner_kind: params.owner.kind,
+      // The CHECK constraint permits exactly one of these to be set.
+      human_token_id: params.owner.kind === 'human_sbt' ? params.owner.id : null,
+      builder_id: params.owner.kind === 'builder' ? params.owner.id : null,
+      human_wallet: wallet,
       agent_id: params.agentId,
       scope,
       domain: DOMAIN_IDENTITY,
       binding_sig: params.signature ?? null,
     })
-    .select('agent_id, human_token_id, scope, bound_at')
+    .select('agent_id, owner_kind, human_token_id, builder_id, scope, bound_at')
     .maybeSingle();
 
   if (error) {
@@ -174,26 +237,51 @@ export async function revokeBinding(agentId: string, scope = SCOPE_OWNERSHIP, re
   return { ok: !error, detail: error?.message ?? 'revoked' };
 }
 
-/** Who owns this agent right now, if anyone. */
+/**
+ * Who owns this agent right now, if anyone — and on what evidence.
+ *
+ * Returns the assurance level alongside the owner so no caller has to guess,
+ * and so a wallet-proven owner is never rendered as "verified human".
+ */
 export async function ownerOfAgent(agentId: string, scope = SCOPE_OWNERSHIP) {
   const { data } = await db
     .from('human_agent_bindings')
-    .select('human_token_id, human_wallet, scope, bound_at')
+    .select('owner_kind, human_token_id, builder_id, human_wallet, scope, bound_at')
     .eq('agent_id', agentId)
     .eq('scope', scope)
     .is('revoked_at', null)
     .maybeSingle();
-  return data ?? null;
+  if (!data) return null;
+  const kind = (data.owner_kind ?? 'human_sbt') as OwnerKind;
+  return {
+    ...data,
+    owner_id: kind === 'builder' ? data.builder_id : data.human_token_id,
+    assurance: assuranceOf(kind),
+  };
 }
 
-/** Every agent this human owns — the "my team of experts" list. */
-export async function agentsOfHuman(humanTokenId: string, scope = SCOPE_OWNERSHIP) {
+/** Every agent this owner owns — the "my team of experts" list. */
+export async function agentsOfOwner(owner: OwnerRef, scope = SCOPE_OWNERSHIP) {
+  const col = owner.kind === 'builder' ? 'builder_id' : 'human_token_id';
   const { data } = await db
     .from('human_agent_bindings')
-    .select('agent_id, scope, bound_at')
-    .eq('human_token_id', humanTokenId)
+    .select('agent_id, owner_kind, scope, bound_at')
+    .eq(col, owner.id)
     .eq('scope', scope)
     .is('revoked_at', null)
     .order('bound_at');
   return data ?? [];
+}
+
+/**
+ * The administrative link that is NOT proof. repid_agents.builder_id is set by
+ * whatever created the agent; nobody signed it. Surfaced separately so a UI can
+ * say "linked to this account, ownership not yet claimed" instead of implying a
+ * proof that does not exist — and so a viewer can see the difference the moment
+ * they sign.
+ */
+export async function linkedButUnbound(agentId: string): Promise<{ builder_id: string | null; is_proven: boolean }> {
+  const { data: agent } = await db.from('repid_agents').select('builder_id').eq('id', agentId).maybeSingle();
+  const owner = await ownerOfAgent(agentId);
+  return { builder_id: agent?.builder_id ?? null, is_proven: !!owner };
 }
