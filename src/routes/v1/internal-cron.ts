@@ -14,6 +14,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { captureTelemetry, healthSummary24h, runAuditProbe } from '../../observability/cron-runners';
+import { runStatusDigest } from '../../services/status-digest';
 import { retuneAnfisRoutingRunner } from '../../services/anfis-retune';
 
 const router = Router();
@@ -25,6 +26,9 @@ const MIN_INTERVAL_MS: Record<string, number> = {
   'health-24h': 23 * 60 * 60 * 1000,        // ~daily
   'audit-probe': 23 * 60 * 60 * 1000,       // ~daily
   'anfis-retune': 6 * 60 * 60 * 1000,       // ~every 6h (task 21 — routing adaptation loop)
+  // ~daily. A digest that arrives twice is worse than one that arrives late — it
+  // trains you to skim it.
+  'status-digest': 23 * 60 * 60 * 1000,
 };
 
 async function lastRun(trigger: string): Promise<{ at: string; summary: any } | null> {
@@ -70,6 +74,11 @@ function handle(trigger: string, runner: (sb: any, opts: any) => Promise<any>) {
 router.post('/capture-telemetry', handle('capture-telemetry', captureTelemetry));
 router.post('/health-24h', handle('health-24h', healthSummary24h));
 router.post('/audit-probe', handle('audit-probe', runAuditProbe));
+// STATUS DIGEST — the scheduled "is anyone out there / did the loop run / what
+// needs a human" message. Same handle() wrapper as every other cron: X-Cron-Token,
+// idempotency window, and the run logged to repid_telemetry_snapshots so the
+// numbers are recoverable even if Telegram was down.
+router.post('/status-digest', handle('status-digest', async () => runStatusDigest()));
 // task 21 — ANFIS routing re-tune. The runner is a no-op-write (dry-run) unless
 // ANFIS_RETUNE_ENABLED=true, so wiring the trigger is inert until the flag is flipped.
 router.post('/anfis-retune', handle('anfis-retune', retuneAnfisRoutingRunner));
