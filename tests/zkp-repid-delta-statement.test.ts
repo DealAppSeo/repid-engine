@@ -32,6 +32,21 @@ import {
 } from '../src/zkp/repid-delta-statement';
 import { computeDelta } from '../src/scoring/repid-delta';
 import { REPID_MAX, REPID_MIN } from '../src/scoring/repid-clamp';
+import {
+  IDENTITY_SECRET_WIDTH,
+  identitySecretFromFelts,
+  nullifierMatchesSecret,
+} from '../src/zkp/nullifier-identity';
+
+/**
+ * A fixed 8-element identity secret (~248 bits). Was a single `bigint` derived from the
+ * formula salt; see `src/zkp/nullifier-identity.ts` for why one element could not work
+ * regardless of where it came from.
+ */
+const TEST_IDENTITY_SECRET = identitySecretFromFelts({
+  felts: Array.from({ length: IDENTITY_SECRET_WIDTH }, (_, i) => 0x5eed_beefn + BigInt(i)),
+  domain: REPID_DELTA_DOMAIN,
+});
 
 const SALT = 'test-salt-not-the-production-one';
 const withSalt = <T>(fn: () => T): T => {
@@ -55,7 +70,7 @@ const cleanParams = (over: Partial<BuildStatementParams> = {}): BuildStatementPa
     current_repid: 1611,
     agent_tier: 'ESTABLISHED',
     vesting_cliff_active: false,
-    eventSecret: 0x5eed_beefn % 2013265921n,
+    identitySecret: TEST_IDENTITY_SECRET,
   },
   deltaApplied: 2,
   scoreBefore: 1611,
@@ -195,7 +210,16 @@ describe('the published band actually bounds the formula (Invariant: no unfalsif
 // Scoped nullifiers (Invariant 2)
 // ---------------------------------------------------------------------------
 
-describe('scoped nullifiers — one identity, scope as a parameter', () => {
+/**
+ * These four pin the DEPRECATED narrow construction (`nullifierScope` +
+ * `deriveNullifier`), which is retained only as an off-circuit oracle for the zkp-vault
+ * ownership AIR. They are kept because that parity still needs an oracle — NOT because
+ * the construction is safe. It is not: the output is one BabyBear element, so the
+ * secret is brute-forceable and the nullifier collides at ~63,000 events. The live
+ * statement uses the wide construction, and the attacks are demonstrated in
+ * `tests/zkp-nullifier-identity.test.ts`.
+ */
+describe('narrow nullifier (deprecated, parity oracle only)', () => {
   it('the same secret gives DIFFERENT nullifiers in different scopes', () => {
     const secret = 12345n;
     const a = deriveNullifier(secret, nullifierScope(REPID_DELTA_DOMAIN, 'event-1'));
@@ -239,6 +263,7 @@ describe('canonical digest (KAT — a reorder must break the build)', () => {
   const fixed = {
     domain: REPID_DELTA_DOMAIN,
     agent_commitment: '0x' + '11'.repeat(32),
+    identity_commitment: '0x' + '55'.repeat(32),
     // Stored values: integers. repid_after / repid_delta_applied are integer columns
     // and pipeline.ts writes Math.round(...) into both.
     delta_applied: 3,
@@ -247,7 +272,7 @@ describe('canonical digest (KAT — a reorder must break the build)', () => {
     band_min: DELTA_BAND_MIN,
     band_max: DELTA_BAND_MAX,
     formula_commitment: '0x' + '22'.repeat(32),
-    nullifier: '0xdeadbeef',
+    nullifier: '0x' + '66'.repeat(32),
   };
 
   it('is stable across runs', () => {
@@ -260,8 +285,24 @@ describe('canonical digest (KAT — a reorder must break the build)', () => {
     // the statement format, you reordered statementFelts() and every future proof
     // would have failed verification with no visible cause. If you DID intend it, the
     // circuit spec must change in the same commit.
+    //
+    // ── FORMAT v2, 2026-08-03. The KAT moved, and here is exactly why. ──
+    // Two changes, both to the nullifier's identity binding:
+    //   1. `identity_commitment` was ADDED (absorbed after `agent_commitment`). Without
+    //      it the nullifier is a bare tag: nothing in the statement says which identity
+    //      it belongs to, so no circuit could ever prove the derivation.
+    //   2. `nullifier` WIDENED from 32 bits (`0xdeadbeef`) to 248
+    //      (`0x`+64 hex). The old width collides between honest events — first
+    //      collision at the 62,852nd secret, against 152,084 rows already in
+    //      `repid_score_events` [V SQL 2026-08-03].
+    // Both change the absorbed field sequence, so the digest necessarily moves. This is
+    // safe to do exactly ONCE, now: `repid_zkp_proofs` holds ZERO `REPID_DELTA` rows
+    // [V SQL 2026-08-03] and no circuit exists, so nothing on disk or in an AIR is
+    // invalidated. The previous v1 value was
+    // 0x3216b95a5fa32d7b5a1e2503763512636184daf5318610fd35bf77d56375e0c8.
+    // From here it is append-only.
     expect(statementDigest(fixed)).toBe(
-      '0x3216b95a5fa32d7b5a1e2503763512636184daf5318610fd35bf77d56375e0c8',
+      '0x4283a34d6a69a7e608af3e5c471ddaa45b7ed8d8275757b5641daaa774f58166',
     );
   });
 
@@ -274,6 +315,7 @@ describe('canonical digest (KAT — a reorder must break the build)', () => {
     expect(statementDigest({ ...fixed, nullifier: '0xfeedface' })).not.toBe(base);
     expect(statementDigest({ ...fixed, formula_commitment: '0x' + '33'.repeat(32) })).not.toBe(base);
     expect(statementDigest({ ...fixed, agent_commitment: '0x' + '44'.repeat(32) })).not.toBe(base);
+    expect(statementDigest({ ...fixed, identity_commitment: '0x' + '77'.repeat(32) })).not.toBe(base);
   });
 });
 
@@ -376,6 +418,45 @@ describe('building the statement', () => {
       expect(blob).not.toContain('clean'); // hal_decision
       expect(blob).not.toContain('ESTABLISHED'); // tier
       expect(blob).not.toContain(p.agentId); // raw identity
+      // And not one element of the identity secret.
+      for (const f of TEST_IDENTITY_SECRET.felts) expect(blob).not.toContain(f.toString());
+    });
+  });
+
+  it('binds the nullifier to the identity commitment (Invariant 2, end to end)', () => {
+    withSalt(() => {
+      const s = buildRepidDeltaStatement(cleanParams());
+      expect(s.public.identity_commitment).toBe(TEST_IDENTITY_SECRET.commitment);
+      expect(s.public.nullifier).toMatch(/^0x[0-9a-f]{64}$/);
+      // The honest-prover recheck: someone holding the secret can confirm the
+      // derivation. Someone holding only the commitment cannot — that is the circuit's
+      // job and `unproven` says so.
+      expect(
+        nullifierMatchesSecret({
+          secret: TEST_IDENTITY_SECRET,
+          domain: REPID_DELTA_DOMAIN,
+          scopeLabel: cleanParams().scopeLabel,
+          nullifier: s.public.nullifier,
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it('the same event in two scopes gives two nullifiers; the same scope gives one', () => {
+    withSalt(() => {
+      const a = buildRepidDeltaStatement(cleanParams({ scopeLabel: 'score_event:1' }));
+      const b = buildRepidDeltaStatement(cleanParams({ scopeLabel: 'score_event:2' }));
+      const a2 = buildRepidDeltaStatement(cleanParams({ scopeLabel: 'score_event:1' }));
+      expect(a.public.nullifier).not.toBe(b.public.nullifier);
+      expect(a.public.nullifier).toBe(a2.public.nullifier);
+    });
+  });
+
+  it('reports who can link the nullifier, and never claims it is proven', () => {
+    withSalt(() => {
+      const s = buildRepidDeltaStatement(cleanParams());
+      expect(s.unlinkability.proven).toBe(false);
+      expect(s.unlinkability.linkable_by.length).toBeGreaterThan(0);
     });
   });
 });
@@ -407,6 +488,15 @@ describe('external verification — honest about its own limits', () => {
     expect(v.failures).toContain('domain_expected');
   });
 
+  it('REJECTS a narrow nullifier — a colliding tag is a rejectable statement', () => {
+    // An outside verifier must be able to refuse the old 32-bit form without reading
+    // the source, because at live ledger volume it produces false replay verdicts.
+    const s = built();
+    const v = verifyRepidDeltaStatement({ ...s.public, nullifier: '0xdeadbeef' });
+    expect(v.valid).toBe(false);
+    expect(v.failures).toContain('nullifier_is_wide');
+  });
+
   it('NEVER claims to have proven the formula — the list of unknowns is non-empty', () => {
     // The whole overclaim risk of this module. A verifier without the witness cannot
     // know the delta came from the formula; only the circuit can carry that.
@@ -414,6 +504,8 @@ describe('external verification — honest about its own limits', () => {
     expect(v.valid).toBe(true);
     expect(v.unproven.length).toBeGreaterThan(0);
     expect(v.unproven.join(' ')).toMatch(/Plonky3 circuit/);
+    // Format v2's new honest limit: the identity binding is ASSERTED, not proven.
+    expect(v.unproven.join(' ')).toMatch(/binding is asserted, not proven/);
   });
 });
 
