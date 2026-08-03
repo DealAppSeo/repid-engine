@@ -29,6 +29,7 @@
  */
 
 import { computeDecayFactor, applyDecay } from '../layers/decay';
+import { clampRepid } from './repid-clamp';
 
 export type DecayMode = 'off' | 'shadow' | 'enforce';
 
@@ -85,7 +86,13 @@ export function assessDecay(params: {
   }
 
   const factor = computeDecayFactor({ currentRepId: from, activity30d: activity_30d });
-  const decayed = applyDecay(from, activity_30d);
+  // INTEGRAL BY CONTRACT. `repid_before`/`repid_after`/`repid_delta_applied` are all
+  // `integer` columns [verified against information_schema 2026-08-03], so the decayed
+  // base has to be a whole number or the stored delta cannot equal the stored movement.
+  // `layers/decay.ts::applyDecay` already rounds, so this is a no-op today (asserted in
+  // tests/scoring-floor-and-decay-reconcile.test.ts) — it is here so the ledger identity
+  // does not silently depend on the internals of a module outside this directory.
+  const decayed = Math.round(applyDecay(from, activity_30d));
   const would_remove = Math.max(0, from - decayed);
 
   return {
@@ -105,6 +112,106 @@ export function assessDecay(params: {
  */
 export function decayedScoreFor(a: DecayAssessment): number {
   return a.applied ? a.decayed_to : a.from;
+}
+
+/**
+ * THE DECAY / ROUNDING COUPLING, AND WHY THE LEDGER STOPPED ADDING UP.
+ *
+ * `score-event-writer.ts::reconciles` states the invariant every audit row owes:
+ *
+ *     repid_after - repid_before === repid_delta_applied
+ *
+ * and its comment names the exact way to satisfy it — "if something other than the
+ * delta moved the score (e.g. decay), it must be included in repid_delta_applied or
+ * recorded as its own event." `applyValidationEvent` includes it. `runScoreEvent`
+ * stored the HAL delta instead, so two things could move the score without appearing
+ * in the delta:
+ *
+ *   DECAY. Under REPID_DECAY_MODE=enforce the base is the DECAYED score while
+ *     repid_before is the un-decayed one, so the row is off by `would_remove`.
+ *   THE CLAMP. #314's clampRepid pins the score at 10 / 10000. An agent AT the
+ *     ceiling taking +2 moves 0 points and recorded +2. Verified 2026-08-03: one
+ *     live agent sits at exactly 10000, so this half is reachable with decay OFF.
+ *     (Both halves are latent, not historical — the 25,418 non-reconciling rows in
+ *     prod are all HAL_SCORE_EVENTs from 2026-05-29..06-03, a different defect.)
+ *
+ * ROUNDING ORDER: round the DECAYED BASE first, then add the delta.
+ * `Math.round(before + d) === before + Math.round(d)` holds only while `before` is an
+ * integer. If the base were left fractional, `repid_after` would be a single rounded
+ * number that cannot be decomposed — the half-point residue would land entirely on
+ * whichever component you chose to attribute it to, and `decay_points + delta_points`
+ * would miss `after - before` by up to 1 with no record of which one absorbed it.
+ * Rounding the base makes `decay_points` an exact integer, so each component is
+ * independently auditable and the three of them sum to the movement EXACTLY.
+ */
+export interface AppliedScore {
+  /** The agent's score before anything was applied. Integer. */
+  before: number;
+  /** Points decay removed. <= 0, and 0 unless mode is 'enforce'. Integer. */
+  decay_points: number;
+  /** Points the event's delta moved, rounded ONCE. Integer. */
+  delta_points: number;
+  /** Points given up to the [REPID_MIN, REPID_MAX] clamp. Integer. */
+  clamp_points: number;
+  /** The score actually written. Integer, always in range. */
+  after: number;
+  /**
+   * What `repid_delta_applied` must be for the row to reconcile.
+   * Always exactly `decay_points + delta_points + clamp_points`.
+   */
+  total_applied: number;
+}
+
+/**
+ * Decompose "the score moved" into the components that moved it.
+ *
+ * `clamp` is injectable only so the pipeline can keep `clampRepidLoud`'s operator
+ * warning without clamping twice; the default is the plain clamp.
+ */
+export function applyToScore(params: {
+  before: number;
+  decay: DecayAssessment;
+  rawDelta: number;
+  clamp?: (raw: number) => number;
+}): AppliedScore {
+  const clamp = params.clamp ?? ((raw: number) => clampRepid(raw).value);
+  const before = Math.round(params.before);
+  const decayBase = decayedScoreFor(params.decay);
+  const decay_points = decayBase - before;
+  const delta_points = Math.round(Number.isFinite(params.rawDelta) ? params.rawDelta : 0);
+  const after = clamp(decayBase + delta_points);
+  const clamp_points = after - (decayBase + delta_points);
+  return {
+    before,
+    decay_points,
+    delta_points,
+    clamp_points,
+    after,
+    total_applied: after - before,
+  };
+}
+
+/** The invariant `score-event-writer.ts::reconciles` will check on the row. */
+export function appliedScoreReconciles(a: AppliedScore): boolean {
+  return (
+    a.after - a.before === a.total_applied &&
+    a.decay_points + a.delta_points + a.clamp_points === a.total_applied
+  );
+}
+
+/** Compact record for metadata, so the decomposition survives into the audit row. */
+export function appliedScoreMetadata(a: AppliedScore): Record<string, unknown> {
+  return {
+    applied: {
+      before: a.before,
+      after: a.after,
+      decay_points: a.decay_points,
+      delta_points: a.delta_points,
+      clamp_points: a.clamp_points,
+      total_applied: a.total_applied,
+      reconciles: appliedScoreReconciles(a),
+    },
+  };
 }
 
 /** Compact record for metadata, so a shadow run is measurable after the fact. */
