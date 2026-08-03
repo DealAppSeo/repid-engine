@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
+import { insertScoreEvent } from '../scoring/score-event-writer';
+import { scoreEventGuardEnforced } from './score-event-guard';
 
 const router = Router();
 
@@ -86,27 +88,48 @@ router.post('/mirror-test', async (req: Request, res: Response) => {
 
   if (autoMode7) {
     // Fire MIRROR_TEST_MODE7 score event — educational, zero delta.
-    await db.from('repid_score_events').insert({
-      agent_id: agentId,
-      event_type: 'MIRROR_TEST_MODE7',
-      delta: 0,
-      repid_before: 0,
-      repid_after: 0,
+    // Event-only writer: it never touches current_repid, and delta 0 makes the
+    // trigger early-return before applying anything. Lowest-risk writer on the
+    // map; guarded anyway so `applier` is explicit at the call site.
+    const mirrorMetadata = {
+      reason: 'mirror_test_failed',
+      framingA,
+      framingB,
+      verdictA: verdictA ?? null,
+      verdictB: verdictB ?? null,
+      auditAScore: auditActive ? auditA.complianceScore : null,
+      auditBScore: auditActive ? auditB.complianceScore : null,
+      autoMode: 7,
+      educational: true,
+    };
+    const mirrorExtra = {
       ecosystem_need_weight: 1.0,
       mirror_test_triggered: true,
       eas_attestation_id: auditA.easAttestationId,
-      metadata: {
-        reason: 'mirror_test_failed',
-        framingA,
-        framingB,
-        verdictA: verdictA ?? null,
-        verdictB: verdictB ?? null,
-        auditAScore: auditActive ? auditA.complianceScore : null,
-        auditBScore: auditActive ? auditB.complianceScore : null,
-        autoMode: 7,
-        educational: true,
-      },
-    });
+    };
+    if (scoreEventGuardEnforced()) {
+      await insertScoreEvent({
+        applier: 'caller',
+        agent_id: agentId,
+        event_type: 'MIRROR_TEST_MODE7',
+        delta: 0,
+        repid_before: 0,
+        repid_after: 0,
+        repid_delta_applied: 0,
+        metadata: mirrorMetadata,
+        extra: mirrorExtra,
+      });
+    } else {
+      await db.from('repid_score_events').insert({
+        agent_id: agentId,
+        event_type: 'MIRROR_TEST_MODE7',
+        delta: 0,
+        repid_before: 0,
+        repid_after: 0,
+        ...mirrorExtra,
+        metadata: mirrorMetadata,
+      });
+    }
   }
 
   return res.json({

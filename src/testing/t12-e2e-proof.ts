@@ -20,6 +20,8 @@ import { db } from '../db';
 import { halService } from '../hal/service';
 import { resolveHalStrictness } from '../scoring/pipeline';
 import { settleX402Payment } from '../services/x402-real-settler';
+import { insertScoreEvent } from '../scoring/score-event-writer';
+import { scoreEventGuardEnforced } from '../routes/score-event-guard';
 
 export const T12_E2E_TASK_CLASS = 't12_onchain_e2e_proof'; // pairs with the T12 empowerment-seed E2E patrol
 
@@ -52,9 +54,28 @@ async function applyRepidReward(agent: string, delta: number, meta: any): Promis
   const { id, current_repid: before } = await resolveAgent(agent);
   await db.from('repid_agents').update({ current_repid: Math.max(0, Math.round(before + delta)), last_updated: new Date().toISOString() }).eq('agent_name', agent);
   const after = (await resolveAgent(agent)).current_repid;
+  const proofMetadata = { ...meta, source: 'T12_E2E_PROOF' };
+  if (scoreEventGuardEnforced()) {
+    // DOUBLE-APPLY SITE — same shape as redteam-adjudication.ts: current_repid is
+    // written above, then an event without repid_delta_applied lets the trigger
+    // re-read and add `delta` again. Proven on prod (rolled back): +7 drift.
+    const r = await insertScoreEvent({
+      applier: 'caller',
+      agent_id: id as string,
+      event_type: 'SERVICE_FULFILLED',
+      delta,
+      repid_before: before,
+      repid_after: after,
+      repid_delta_applied: after - before,
+      repid_delta_calculated: Math.round(delta),
+      metadata: proofMetadata,
+    });
+    if (!r.ok) throw new Error(`repid_score_events insert failed: ${r.error}`);
+    return r.id ? Number(r.id) : null;
+  }
   const { data, error } = await db.from('repid_score_events').insert({
     agent_id: id, event_type: 'SERVICE_FULFILLED', delta, repid_before: before, repid_after: after,
-    metadata: { ...meta, source: 'T12_E2E_PROOF' },
+    metadata: proofMetadata,
   }).select('id').maybeSingle();
   if (error) throw new Error(`repid_score_events insert failed: ${error.message}`);
   return (data as any)?.id ?? null;

@@ -17,6 +17,8 @@
 import { db } from '../db';
 import { halService } from '../hal/service';
 import { createHash } from 'crypto';
+import { insertScoreEvent } from '../scoring/score-event-writer';
+import { scoreEventGuardEnforced } from '../routes/score-event-guard';
 
 // ============================================================================
 // INTERFACES (verbatim from sprint spec + extensions for 200+ impl)
@@ -388,16 +390,43 @@ async function applyRepIdDelta(agentName: string, delta: number, eventType: stri
   // Direct apply (matches WRITER_DIRECT_APPLY pattern in engine)
   await db.from('repid_agents').update({ current_repid: after, last_updated: new Date().toISOString() }).eq('agent_name', agentName);
 
-  await db.from('repid_score_events').insert({
-    agent_id: null, // name-based for redteam (or resolve to uuid if needed)
-    agent_name: agentName,
-    event_type: eventType,
-    delta,
-    repid_before: before,
-    repid_after: after,
-    metadata: { ...metadata, redteam: true, source: 'S-REDTEAM' },
-    created_at: new Date().toISOString(),
-  });
+  if (scoreEventGuardEnforced()) {
+    // TWO defects in the legacy branch below, both verified against prod:
+    //  1. `repid_score_events` has NO `agent_name` column (information_schema,
+    //     2026-08-03). PostgREST rejects the row, and the error is never read —
+    //     so this harness has silently written ZERO score events for its whole
+    //     life while still moving current_repid above. The agent name moves into
+    //     metadata, where the sibling harnesses already put it.
+    //  2. No repid_delta_applied. With agent_id null the trigger happens to
+    //     early-return (`IF NOT FOUND`), so it does not double-apply today — but
+    //     that safety is a side effect of the row being unattributable. Resolve
+    //     agent_id and it double-applies instantly.
+    const r = await insertScoreEvent({
+      applier: 'caller',
+      agent_id: null as unknown as string,
+      event_type: eventType,
+      delta,
+      repid_before: before,
+      repid_after: after,
+      repid_delta_applied: after - before,
+      repid_delta_calculated: Math.round(delta),
+      metadata: { ...metadata, redteam: true, source: 'S-REDTEAM', agent_name: agentName },
+      extra: { created_at: new Date().toISOString() },
+    });
+    // Fail loud: the legacy branch's swallowed error is what hid defect 1.
+    if (!r.ok) console.error(`[redteam] score event insert failed for ${agentName}: ${r.error}`);
+  } else {
+    await db.from('repid_score_events').insert({
+      agent_id: null, // name-based for redteam (or resolve to uuid if needed)
+      agent_name: agentName,
+      event_type: eventType,
+      delta,
+      repid_before: before,
+      repid_after: after,
+      metadata: { ...metadata, redteam: true, source: 'S-REDTEAM' },
+      created_at: new Date().toISOString(),
+    });
+  }
 }
 
 async function logRedTeamResult(row: any) {

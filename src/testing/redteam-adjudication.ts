@@ -16,6 +16,8 @@
 import { db } from '../db';
 import { emitOnChainOutboxEvent } from '../services/onchain-outbox';
 import type { OnChainEligibleEventType } from '../workers/feedback-loop-filters';
+import { insertScoreEvent } from '../scoring/score-event-writer';
+import { scoreEventGuardEnforced } from '../routes/score-event-guard';
 
 export const REDTEAM_REWARDS = {
   FINDER_REWARD: 5,    // upheld REJECT-with-evidence
@@ -61,12 +63,34 @@ async function applyDelta(agent: string, role: AppliedDelta['role'], delta: numb
   // Direct apply (engine WRITER_DIRECT_APPLY pattern); trg_repid_earned_floor enforces the floor.
   await db.from('repid_agents').update({ current_repid: Math.max(0, Math.round(before + delta)), last_updated: new Date().toISOString() }).eq('agent_name', agent);
   const after = (await resolveAgent(agent)).current_repid; // read back the post-trigger value
-  const { error } = await db.from('repid_score_events').insert({
-    agent_id: id, event_type: eventType,
-    delta, repid_before: before, repid_after: after,
-    metadata: { ...meta, redteam: true, role, agent_name: agent, source: 'S-REDTEAM-R2' },
-  });
-  if (error) throw new Error(`repid_score_events insert failed for ${agent}: ${error.message}`);
+  const eventMetadata = { ...meta, redteam: true, role, agent_name: agent, source: 'S-REDTEAM-R2' };
+  if (scoreEventGuardEnforced()) {
+    // DOUBLE-APPLY SITE. current_repid was already written above, so omitting
+    // repid_delta_applied lets trg_apply_repid_score_event re-read the updated
+    // value and add `delta` a SECOND time. Proven on prod in a rolled-back
+    // transaction using this exact sequence: 699 → caller 706 → final 713.
+    // `after` is read back post-write, so (after - before) is the movement that
+    // actually happened including the earned-floor trigger's clamp.
+    const r = await insertScoreEvent({
+      applier: 'caller',
+      agent_id: id as string,
+      event_type: eventType,
+      delta,
+      repid_before: before,
+      repid_after: after,
+      repid_delta_applied: after - before,
+      repid_delta_calculated: Math.round(delta),
+      metadata: eventMetadata,
+    });
+    if (!r.ok) throw new Error(`repid_score_events insert failed for ${agent}: ${r.error}`);
+  } else {
+    const { error } = await db.from('repid_score_events').insert({
+      agent_id: id, event_type: eventType,
+      delta, repid_before: before, repid_after: after,
+      metadata: eventMetadata,
+    });
+    if (error) throw new Error(`repid_score_events insert failed for ${agent}: ${error.message}`);
+  }
   return { agent, agentId: id, role, delta, before, after, event_type: eventType };
 }
 

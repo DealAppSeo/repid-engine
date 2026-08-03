@@ -6,6 +6,8 @@ import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-
 import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-normalize';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
+import { insertScoreEvent } from '../scoring/score-event-writer';
+import { scoreEventGuardEnforced } from './score-event-guard';
 import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
 import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
@@ -598,52 +600,98 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
     );
 
     // 11. Insert score event
-    const { data: eventRow, error: evErr } = await db
-      .from('repid_score_events')
-      .insert({
+    //
+    // 2026-07-30: idempotency_key is REQUIRED for delta-carrying events. The DB
+    // trigger apply_repid_score_event() mirrors every applied delta into
+    // agent_repid_history.payment_proof_hash, falling back from metadata tx_hash
+    // -> idempotency_key -> a CONSTANT simulated-payment literal — and that
+    // column is UNIQUE. The constant's slot was consumed once in history, so
+    // every keyless non-payment event since died with a duplicate-key 500
+    // (unmasked by #274; verified live).
+    const predictionIdempotencyKey = crypto.randomUUID();
+    const predictionMetadata = {
+      decision_text,
+      hal_signals: halSignals,
+      hal_approved: halApproved,
+      fact_check_decision: factCheckDecision,
+      challenge_mode: challenge_mode ?? 'immediate',
+      challenge_opens_at: challenge_mode === 'time_locked' ? resolution_at ?? null : null,
+      reward_breakdown: rewardResult.breakdown,
+      courage_bonus: courageBonus,
+      vesting_active: vestingActive,
+    };
+    const predictionExtra = {
+      certainty_at_claim: certainty,
+      ecosystem_need_weight: 1.0,
+      eas_attestation_id: `eas-stub-v11-${Date.now()}`,
+      llm_provider,
+      llm_model: llm_model ?? null,
+      hal_score: dissonance,
+      hal_decision,
+      decision_outcome: outcome,
+      task_domain,
+      hallucination_caught: !!hallucination_caught,
+      economic_impact_usdc: economic_impact_usdc ?? 0,
+      alignment_category: alignment_category ?? 'other',
+      collusion_risk: collusionRisk,
+      information_parity: 1.0,
+      challenger_repid_at_event: currentRepid,
+      vdr_count_at_event: vdrCount,
+    };
+
+    let eventRow: { id?: unknown } | null = null;
+    let evErr: { message: string } | null = null;
+
+    if (scoreEventGuardEnforced()) {
+      // Unlike challenge.ts / the src/testing harnesses, this writer updates
+      // current_repid AFTER the insert, so today the trigger's relative apply and
+      // the caller's absolute overwrite happen to land on the same number.
+      //
+      // Two things the guard fixes anyway:
+      //  1. The trigger currently OVERWRITES repid_before/repid_after with its own
+      //     pair, so the audit row is the DB's account of the event, not the
+      //     route's — they diverge the moment a concurrent event lands between the
+      //     two writes.
+      //  2. VESTING. When vestingActive && rawDelta > 0 the route deliberately
+      //     leaves current_repid alone and routes the reward to vested_repid, but
+      //     the trigger has already added rawDelta to current_repid. Today the
+      //     caller's absolute write undoes that. With WRITER_DIRECT_APPLY=false —
+      //     the intended D-054 cutover — nothing undoes it and vesting is
+      //     silently defeated. repid_delta_applied below is (after - before),
+      //     which is 0 in the vesting case, so the ledger states the truth.
+      const res2 = await insertScoreEvent({
+        applier: 'caller',
         agent_id: agentId,
         event_type: 'PREDICTION_RESOLVE',
-        // 2026-07-30: REQUIRED for delta-carrying events. The DB trigger
-        // apply_repid_score_event() mirrors every applied delta into
-        // agent_repid_history.payment_proof_hash, falling back from
-        // metadata tx_hash -> idempotency_key -> a CONSTANT simulated-payment
-        // literal — and that column is UNIQUE. The constant's slot was
-        // consumed once in history, so every keyless non-payment event since
-        // died with a duplicate-key 500 (unmasked by #274; verified live).
-        idempotency_key: crypto.randomUUID(),
         delta: rawDelta,
+        idempotency_key: predictionIdempotencyKey,
         repid_before: currentRepid,
         repid_after: newScore,
-        certainty_at_claim: certainty,
-        ecosystem_need_weight: 1.0,
-        eas_attestation_id: `eas-stub-v11-${Date.now()}`,
-        llm_provider,
-        llm_model: llm_model ?? null,
-        hal_score: dissonance,
-        hal_decision,
-        decision_outcome: outcome,
-        task_domain,
-        hallucination_caught: !!hallucination_caught,
-        economic_impact_usdc: economic_impact_usdc ?? 0,
-        alignment_category: alignment_category ?? 'other',
-        collusion_risk: collusionRisk,
-        information_parity: 1.0,
-        challenger_repid_at_event: currentRepid,
-        vdr_count_at_event: vdrCount,
-        metadata: {
-          decision_text,
-          hal_signals: halSignals,
-          hal_approved: halApproved,
-          fact_check_decision: factCheckDecision,
-          challenge_mode: challenge_mode ?? 'immediate',
-          challenge_opens_at: challenge_mode === 'time_locked' ? resolution_at ?? null : null,
-          reward_breakdown: rewardResult.breakdown,
-          courage_bonus: courageBonus,
-          vesting_active: vestingActive,
-        },
-      })
-      .select('id')
-      .single();
+        repid_delta_applied: newScore - currentRepid,
+        repid_delta_calculated: rawDelta,
+        metadata: predictionMetadata,
+        extra: predictionExtra,
+      });
+      if (res2.ok) eventRow = { id: res2.id };
+      else evErr = { message: res2.error ?? 'insert failed' };
+    } else {
+      const legacy = await db
+        .from('repid_score_events')
+        .insert({
+          agent_id: agentId,
+          event_type: 'PREDICTION_RESOLVE',
+          idempotency_key: predictionIdempotencyKey,
+          delta: rawDelta,
+          repid_before: currentRepid,
+          repid_after: newScore,
+          ...predictionExtra,
+          metadata: predictionMetadata,
+        })
+        .select('id')
+        .single();
+      eventRow = legacy.data as { id?: unknown } | null;
+      evErr = legacy.error ? { message: legacy.error.message } : null;
+    }
 
     if (evErr) {
       return res.status(500).json({ error: `score event insert failed: ${evErr.message}` });

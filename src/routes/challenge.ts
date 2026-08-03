@@ -6,6 +6,8 @@ import { HASHKEY_CONFIG } from './hashkey';
 import { anchorRepIdEvent } from '../engine/hashkey-chain';
 import { logHalProductionEvent, hashPrompt } from '../engine/production-logger';
 import { extractHALSignals } from '../hal/lib/extract';
+import { insertScoreEvent } from '../scoring/score-event-writer';
+import { scoreEventGuardEnforced } from './score-event-guard';
 
 const router = Router();
 
@@ -220,56 +222,100 @@ router.post('/challenge', async (req: Request, res: Response) => {
     console.error('[challenge] Failed to extract HAL signals:', err.message);
   }
 
-  await db.from('repid_score_events').insert({
-    agent_id: challengerId,
-    event_type: challengerEventType,
-    delta: challengerDelta,
-    repid_before: challenger.current_repid,
-    repid_after: challengerNewRepId,
+  // DOUBLE-APPLY SITE. The `WRITER_DIRECT_APPLY` block above already wrote
+  // current_repid = before + delta for BOTH parties. These inserts omit
+  // repid_delta_applied, so trg_apply_repid_score_event re-reads the (already
+  // updated) current_repid and adds the delta a SECOND time, then overwrites the
+  // repid_before/repid_after below with its own pair. Proven on prod in a
+  // rolled-back transaction: 699 → caller 706 → final 713, +7 drift, and the row
+  // still reconciles (713-706 == 7) so #316's invariant does not catch it.
+  //
+  // Setting repid_delta_applied makes the trigger stand down and the caller's
+  // single absolute write is the only apply. That changes live RepID arithmetic,
+  // so it is behind SCORE_EVENT_GUARD_MODE=enforce (default off).
+  const challengeCommonExtra = {
     certainty_at_claim: computedCertainty,
     ecosystem_need_weight: 1.0,
     eas_attestation_id: easAttestationId,
     answer_text: claimStr,
-    metadata: {
-      challengeId,
-      claim,
-      verdict,
-      halMode,
-      reasoning,
-      defenderId,
-      defenderName: defender.agent_name,
-      easSchema: 'constitutional-compliance-v1',
-      hashkeyContract: HASHKEY_CONFIG.contractAddress,
-      chainId: HASHKEY_CONFIG.chainId,
-      hal_signals: halSignals,
-    },
-  });
+  };
+  const challengerMetadata = {
+    challengeId,
+    claim,
+    verdict,
+    halMode,
+    reasoning,
+    defenderId,
+    defenderName: defender.agent_name,
+    easSchema: 'constitutional-compliance-v1',
+    hashkeyContract: HASHKEY_CONFIG.contractAddress,
+    chainId: HASHKEY_CONFIG.chainId,
+    hal_signals: halSignals,
+  };
+  const defenderMetadata = {
+    challengeId,
+    claim,
+    verdict,
+    halMode,
+    reasoning,
+    challengerId,
+    challengerName: challenger.agent_name,
+    easSchema: 'constitutional-compliance-v1',
+    role: 'DEFENDER',
+    hashkeyContract: HASHKEY_CONFIG.contractAddress,
+    chainId: HASHKEY_CONFIG.chainId,
+    hal_signals: halSignals,
+  };
 
-  await db.from('repid_score_events').insert({
-    agent_id: defenderId,
-    event_type: defenderEventType,
-    delta: defenderDelta,
-    repid_before: defender.current_repid,
-    repid_after: defenderNewRepId,
-    certainty_at_claim: computedCertainty,
-    ecosystem_need_weight: 1.0,
-    eas_attestation_id: easAttestationId,
-    answer_text: claimStr,
-    metadata: {
-      challengeId,
-      claim,
-      verdict,
-      halMode,
-      reasoning,
-      challengerId,
-      challengerName: challenger.agent_name,
-      easSchema: 'constitutional-compliance-v1',
-      role: 'DEFENDER',
-      hashkeyContract: HASHKEY_CONFIG.contractAddress,
-      chainId: HASHKEY_CONFIG.chainId,
-      hal_signals: halSignals,
-    },
-  });
+  if (scoreEventGuardEnforced()) {
+    // repid_delta_applied is the movement the caller actually made, which is
+    // (after - before) after the [10, 10000] clamp — not the raw delta. Quoting
+    // the raw delta here would fail the reconciliation check on a clamped event.
+    await insertScoreEvent({
+      applier: 'caller',
+      agent_id: challengerId,
+      event_type: challengerEventType,
+      delta: challengerDelta,
+      repid_before: challenger.current_repid,
+      repid_after: challengerNewRepId,
+      repid_delta_applied: challengerNewRepId - challenger.current_repid,
+      repid_delta_calculated: challengerDelta,
+      metadata: challengerMetadata,
+      extra: challengeCommonExtra,
+    });
+    await insertScoreEvent({
+      applier: 'caller',
+      agent_id: defenderId,
+      event_type: defenderEventType,
+      delta: defenderDelta,
+      repid_before: defender.current_repid,
+      repid_after: defenderNewRepId,
+      repid_delta_applied: defenderNewRepId - defender.current_repid,
+      repid_delta_calculated: defenderDelta,
+      metadata: defenderMetadata,
+      extra: challengeCommonExtra,
+    });
+  } else {
+    await db.from('repid_score_events').insert({
+      agent_id: challengerId,
+      event_type: challengerEventType,
+      delta: challengerDelta,
+      repid_before: challenger.current_repid,
+      repid_after: challengerNewRepId,
+      ...challengeCommonExtra,
+      metadata: challengerMetadata,
+    });
+
+    await db.from('repid_score_events').insert({
+      agent_id: defenderId,
+      event_type: defenderEventType,
+      delta: defenderDelta,
+      repid_before: defender.current_repid,
+      repid_after: defenderNewRepId,
+      ...challengeCommonExtra,
+      metadata: defenderMetadata,
+    });
+  }
 
   // Non-blocking HAL production logging — Track A always-running data collection
   logHalProductionEvent({
