@@ -31,7 +31,14 @@ import {
 } from '../hal/lib/constants';
 import { computeDelta, HALDecision } from './repid-delta';
 import { clampRepidLoud } from './repid-clamp';
-import { assessDecay, decayedScoreFor, decayMetadata } from './decay-bridge';
+import {
+  assessDecay,
+  decayedScoreFor,
+  decayMetadata,
+  applyToScore,
+  appliedScoreReconciles,
+  appliedScoreMetadata,
+} from './decay-bridge';
 import { recordDeltaStatementDetached } from '../zkp/repid-delta-bridge';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
@@ -428,11 +435,30 @@ export async function runScoreEvent(
   // changes nothing; only 'enforce' moves the score. The base is the decayed
   // score, so the delta lands on top of decay exactly as updateRepId did it.
   const decay = assessDecay({ currentRepid: old_repid, activity30d: agent.activity_30d });
-  const decayBase = decayedScoreFor(decay);
-  const new_repid = clampRepidLoud(decayBase + effectiveDeltaApplied, {
-    agentId: String(input.agent_id),
-    eventType: 'HAL_SCORE_EVENT',
+  // Decompose the movement so the row can reconcile. See decay-bridge.ts::applyToScore
+  // for why the base is rounded before the delta lands, and for the two ways the score
+  // could move without appearing in repid_delta_applied (decay, and the #314 clamp).
+  const applied = applyToScore({
+    before: old_repid,
+    decay,
+    rawDelta: effectiveDeltaApplied,
+    clamp: (raw) =>
+      clampRepidLoud(raw, {
+        agentId: String(input.agent_id),
+        eventType: 'HAL_SCORE_EVENT',
+      }),
   });
+  const new_repid = applied.after;
+  // Impossible by construction; a tripwire, not a branch. If it ever fires, the
+  // decomposition and the stored row have diverged and the ledger is lying.
+  if (!appliedScoreReconciles(applied)) {
+    console.error(
+      `[scoring/pipeline] LEDGER DOES NOT RECONCILE agent=${input.agent_id} ` +
+        `before=${applied.before} after=${applied.after} decay=${applied.decay_points} ` +
+        `delta=${applied.delta_points} clamp=${applied.clamp_points} ` +
+        `total_applied=${applied.total_applied} — repid_delta_applied will not equal the movement.`
+    );
+  }
 
   // 5. ZK proof trigger logic (decided pre-insert so we can record on the row).
   //
@@ -467,9 +493,13 @@ export async function runScoreEvent(
   const insertPayload: Record<string, unknown> = {
     agent_id: input.agent_id,
     event_type: 'HAL_SCORE_EVENT',
-    delta: Math.round(effectiveDeltaApplied),
-    repid_before: old_repid,
-    repid_after: Math.round(new_repid),
+    // `delta` and `repid_delta_calculated` stay the delta the EVENT EARNED.
+    // `repid_delta_applied` is what actually MOVED the score — the two diverge
+    // exactly when decay or the clamp took a bite, and that divergence is the
+    // audit signal, not a bug (repid-delta.ts header: calculated vs applied).
+    delta: applied.delta_points,
+    repid_before: applied.before,
+    repid_after: applied.after,
     certainty_at_claim:
       typeof input.certainty === 'number' ? input.certainty : 0.85,
     contract_id: input.contract_id ?? null,
@@ -479,7 +509,7 @@ export async function runScoreEvent(
     hal_decision: scoringDecision,
     hallucination_caught,
     repid_delta_calculated: Math.round(delta.delta_calculated),
-    repid_delta_applied: Math.round(effectiveDeltaApplied),
+    repid_delta_applied: applied.total_applied,
     tier_used: input.tier_used ?? null,
     prompt_text: input.prompt,
     answer_text: input.answer,
@@ -493,6 +523,9 @@ export async function runScoreEvent(
       // Decay counterfactual (Option C step 1). In shadow this is the ONLY trace —
       // the score is untouched — so it must be recorded or the measurement is lost.
       ...decayMetadata(decay),
+      // The decomposition behind repid_delta_applied. Without it a reader can see
+      // that the delta and the movement differ but not which component did it.
+      ...appliedScoreMetadata(applied),
       hal_signals: signals,
       grounding: grounding ?? undefined,
       grounding_abstained: groundingAbstained,
@@ -545,10 +578,12 @@ export async function runScoreEvent(
     agentId: String(input.agent_id),
     eventLabel: `score_event:${score_event_id}`,
     // The STORED integers — matching what went into the row above, not the
-    // pre-rounding floats. The statement attests to the ledger.
-    deltaApplied: Math.round(effectiveDeltaApplied),
-    scoreBefore: old_repid,
-    scoreAfter: Math.round(new_repid),
+    // pre-rounding floats. The statement attests to the ledger, so it takes the
+    // same total_applied the row does; attesting the HAL delta would have the
+    // proof claim a movement the score never made.
+    deltaApplied: applied.total_applied,
+    scoreBefore: applied.before,
+    scoreAfter: applied.after,
     halScore: hal_score,
     halDecision: scoringDecision as HALDecision,
     agentTier: agent.tier,
@@ -658,7 +693,10 @@ export async function runScoreEvent(
     hal_decision: scoringDecision,
     signals,
     repid_delta_calculated: delta.delta_calculated,
-    repid_delta_applied: effectiveDeltaApplied,
+    // The STORED applied delta, not the pre-decay/pre-clamp float. Callers surface
+    // this as `repid_delta` on the API (routes/route.ts, agents-external-score.ts);
+    // returning the earned delta there would report a movement the score never made.
+    repid_delta_applied: applied.total_applied,
     old_repid,
     new_repid: Math.round(new_repid),
     zk_proof_triggered: triggerProof,

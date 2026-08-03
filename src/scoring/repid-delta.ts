@@ -9,6 +9,8 @@
  * Tuning thresholds will move in Sprint D2.
  */
 
+import { REPID_MIN } from './repid-clamp';
+
 export type HALDecision = 'clean' | 'flagged' | 'vetoed' | 'abstain';
 
 export interface DeltaInput {
@@ -28,7 +30,37 @@ export interface DeltaOutput {
 
 const MAX_POSITIVE = 5;
 const MAX_NEGATIVE = -10;
-const FLOOR = 0;
+
+/**
+ * TWO FLOORS, ONE SCORING PATH.
+ *
+ * This module used to carry `const FLOOR = 0` while `repid-clamp.ts` exports
+ * `REPID_MIN = 10` and `repid_agents_current_repid_check` requires
+ * `current_repid >= 10`. So the delta formula believed 0 was reachable and the
+ * database did not. The literal is now gone: the reconciled floor is imported
+ * from the same module the clamp uses, so there is exactly one place `10` is
+ * written down.
+ *
+ * WHY THE LEGACY 0 IS STILL THE DEFAULT. Raising the floor to 10 changes a
+ * STORED ledger value (`repid_delta_applied`) for any agent whose projected
+ * score lands in 0..9 — i.e. `current_repid` in 10..19 taking a negative delta.
+ * It cannot change the resulting score, because `clampRepid` already pins that
+ * window to 10 either way; it changes the recorded delta from a movement that
+ * could not have happened (-10 against a 5-point drop) to the one that did.
+ * That is still a live-path behaviour change, so it lands inert behind
+ * `REPID_DELTA_FLOOR_RECONCILED` (default OFF) and is Sean's flip, not ours.
+ *
+ * Measured 2026-08-03 against Trinity prod: `SELECT count(*) FROM repid_agents
+ * WHERE current_repid BETWEEN 10 AND 19` = 0, and `min(current_repid)` = 60 —
+ * so the flip has no live witness today. That is a reason it is cheap to flip,
+ * not a reason to flip it here.
+ */
+const LEGACY_FLOOR = 0;
+
+/** The floor a delta is protected against. `REPID_MIN` once the flag is flipped. */
+export function deltaFloor(): number {
+  return process.env.REPID_DELTA_FLOOR_RECONCILED === 'true' ? REPID_MIN : LEGACY_FLOOR;
+}
 
 function clampDelta(d: number): number {
   if (d > MAX_POSITIVE) return MAX_POSITIVE;
@@ -78,11 +110,22 @@ export function computeDelta(input: DeltaInput): DeltaOutput {
     delta_applied = delta_calculated;
   }
 
-  // Floor protection: never push current_repid below FLOOR.
+  // Floor protection: never push current_repid below the floor.
+  //
+  // Two guards that are no-ops at the legacy floor and load-bearing at the
+  // reconciled one:
+  //   `delta_applied < 0` — floor protection exists to soften a PENALTY. At
+  //     FLOOR=0 a non-negative delta could only trip this with current_repid<0;
+  //     at FLOOR=10 an agent already below 10 would trip it on any delta.
+  //   `Math.min(0, …)` — never let floor protection flip a penalty into a
+  //     REWARD. `FLOOR - current_repid` is <= 0 for every in-range agent, but is
+  //     POSITIVE for a sub-floor one (current_repid=2 → +8), which would turn a
+  //     veto into an +8 gift. It clamps the magnitude, it never changes the sign.
+  const floor = deltaFloor();
   const projected = current_repid + delta_applied;
-  if (projected < FLOOR) {
-    delta_applied = FLOOR - current_repid; // bring exactly to floor
-    reason += ` (floor-protected: projected=${projected} clamped to ${FLOOR})`;
+  if (delta_applied < 0 && projected < floor) {
+    delta_applied = Math.min(0, floor - current_repid); // bring at most to the floor
+    reason += ` (floor-protected: projected=${projected} clamped to ${floor})`;
   }
 
   return { delta_calculated, delta_applied, reason };
