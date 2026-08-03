@@ -32,6 +32,7 @@ import {
 import { computeDelta, HALDecision } from './repid-delta';
 import { clampRepidLoud } from './repid-clamp';
 import { assessDecay, decayedScoreFor, decayMetadata } from './decay-bridge';
+import { recordDeltaStatementDetached } from '../zkp/repid-delta-bridge';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
 import { halService } from '../hal/service';
@@ -536,6 +537,24 @@ export async function runScoreEvent(
   }
   const score_event_id = Number((eventRow as any).id);
 
+  // ZKP RepID — build the delta statement for this event. Gated by
+  // REPID_DELTA_STATEMENT_MODE (default `off`, so this is a single early return today).
+  // Placed AFTER the event insert so the nullifier can be scoped to a real event id,
+  // and detached so an audit artefact can never delay or fail a score write.
+  recordDeltaStatementDetached({
+    agentId: String(input.agent_id),
+    eventLabel: `score_event:${score_event_id}`,
+    // The STORED integers — matching what went into the row above, not the
+    // pre-rounding floats. The statement attests to the ledger.
+    deltaApplied: Math.round(effectiveDeltaApplied),
+    scoreBefore: old_repid,
+    scoreAfter: Math.round(new_repid),
+    halScore: hal_score,
+    halDecision: scoringDecision as HALDecision,
+    agentTier: agent.tier,
+    vestingCliffActive: agent.vesting_cliff_active,
+  });
+
   // S-HARDEN Phase 3 — audit the HAL evaluation as a tool call (gated by TOOL_CALL_LOGGING; no-op default; never throws).
   void logToolCall({
     agentName: 'hal-pipeline',
@@ -763,6 +782,22 @@ export async function applyValidationEvent(
   if (evErr) throw new Error(`score event insert failed: ${evErr.message}`);
 
   const score_event_id = (eventRow as any).id;
+
+  // ZKP RepID — same wire on the second write site. This path carries a raw `delta`
+  // rather than one from computeDelta, so in `shadow` it is the site most likely to
+  // report an inconsistency — which is the point: an event whose delta did not come
+  // from the formula is exactly what the statement is meant to surface.
+  recordDeltaStatementDetached({
+    agentId: String(agent_id),
+    eventLabel: `score_event:${score_event_id}`,
+    deltaApplied: Math.round(new_repid - old_repid),
+    scoreBefore: old_repid,
+    scoreAfter: Math.round(new_repid),
+    halScore: typeof halScore === 'number' ? halScore : 0.5,
+    halDecision: (halDecision ?? 'clean') as HALDecision,
+    agentTier: String((agent as any).tier ?? 'ESTABLISHED'),
+    vestingCliffActive: Boolean((agent as any).vesting_cliff_active),
+  });
 
   // Gated by WRITER_DIRECT_APPLY for the single-applier cutover (D-054). When false: insert-event-only
   // (the event row above carries delta + repid_before/after); the aggregator applies it from the
