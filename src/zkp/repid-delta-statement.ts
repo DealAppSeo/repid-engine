@@ -63,10 +63,13 @@
  * 1. ONE HASH/FIELD — Poseidon2 over BabyBear only, via `poseidon2-babybear.ts`,
  *    which is parity-gated bit-exact against Plonky3's own
  *    `default_babybear_poseidon2_16()`. No sha256, no keccak, anywhere in this file.
- * 2. SCOPED NULLIFIERS — `nullifier = H_p2(secret, scope)`, and `scope` is a
- *    PARAMETER derived from (domain, scopeLabel). Nothing here is hardcoded to
- *    ownership OR to reputation, so the same construction serves a study-consent
- *    nullifier in Vertical B unchanged.
+ * 2. SCOPED NULLIFIERS — `nullifier = Sponge(tag ‖ identity_secret ‖ domain ‖ scope)`
+ *    from `nullifier-identity.ts`, where the secret is PER-IDENTITY and `scope` is a
+ *    caller-supplied PARAMETER. Nothing here is hardcoded to ownership OR to
+ *    reputation, so the same construction serves a study-consent nullifier in
+ *    Vertical B unchanged. See that module's header for the two defects this
+ *    replaced (a salt-derived secret, and a 31-bit nullifier that collides at
+ *    ~63,000 events) and for exactly what unlinkability is and is not claimed.
  * 3. DOMAIN-PARAMETERIZED — `domain` is an explicit field in the statement and is
  *    absorbed into the digest, so one verifier serves many domains and a proof from
  *    one domain cannot be replayed into another.
@@ -78,6 +81,12 @@
 import { poseidon2Hash2 } from './poseidon2-hash2';
 import { poseidon2Sponge, fieldsToHex } from './poseidon2-leaf';
 import { BABYBEAR_P } from './poseidon2-babybear';
+import {
+  scopedNullifier,
+  unlinkabilityOf,
+  type IdentitySecret,
+  type UnlinkabilityStatement,
+} from './nullifier-identity';
 import { computeDelta, type DeltaInput, type HALDecision } from '../scoring/repid-delta';
 import { REPID_MIN, REPID_MAX } from '../scoring/repid-clamp';
 
@@ -267,12 +276,30 @@ export function formulaCommitment(
 // ---------------------------------------------------------------------------
 
 /**
- * Derive the nullifier scope from a domain and a caller-chosen label.
+ * ⚠ NARROW-FORM NULLIFIER — RETAINED FOR CIRCUIT PARITY, UNSAFE FOR UNLINKABILITY.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * `nullifierScope` + `deriveNullifier` are the 2-scalar → 1-field construction the
+ * zkp-vault ownership AIR is written against (`poseidon2-hash2.ts`). They are kept so
+ * that swap (backlog 4.0-d.3) has an off-circuit oracle to match, and for no other
+ * reason. **The statement below no longer uses them, and new code must not.**
  *
- * The scope is a PARAMETER, which is the whole of Invariant 2. Reputation passes
- * `scopeLabel = eventId` so a score event can be claimed once. A future health
- * vertical passes `scopeLabel = studyId` and gets study-scoped consent from the same
- * two lines. Nothing here knows what reputation is.
+ * The reason is arithmetic, not taste: the output is ONE BabyBear element, so
+ *   - the secret has at most ~31 bits and is recoverable by exhaustive search — an
+ *     attacker who recovers it then links that identity across every scope; and
+ *   - the nullifier itself collides. Sweeping distinct one-element secrets against a
+ *     fixed scope, the first collision lands at the 62,852nd — measured, 4.2 s. With
+ *     152,084 rows already in `repid_score_events` [V SQL 2026-08-03] and the
+ *     nullifier scoped per event, the expected number of colliding pairs at current
+ *     volume is n²/2p ≈ 5.7. That is ~6 honest events reported as replays of
+ *     unrelated ones.
+ *
+ * The ownership circuit inherits the same two defects and should be widened in the
+ * same way when 4.0-d.3 is written; that is a zkp-vault change, out of scope here, and
+ * is recorded so nobody re-derives it from scratch.
+ *
+ * Use `scopedNullifier` from `./nullifier-identity` instead.
+ *
+ * @deprecated unlinkability-unsafe; parity oracle only.
  */
 export function nullifierScope(domain: string, scopeLabel: string): bigint {
   const felts = [...feltsFromString(domain), ...feltsFromString(scopeLabel)];
@@ -281,12 +308,16 @@ export function nullifierScope(domain: string, scopeLabel: string): bigint {
 }
 
 /**
- * `nullifier = H_p2(secret, scope)` — Semaphore-style, matching the ownership circuit's
- * construction exactly so both verticals share one nullifier notion (Invariant 2).
+ * `nullifier = H_p2(secret, scope)` — the ownership AIR's construction.
+ *
+ * @deprecated unlinkability-unsafe (31-bit output). See `nullifierScope` above.
  */
 export function deriveNullifier(secret: bigint, scope: bigint): bigint {
   return poseidon2Hash2(secret, scope);
 }
+
+/** Bits of pre-image resistance the narrow form actually has. Named so a test can pin it. */
+export const NARROW_NULLIFIER_BITS = 31;
 
 // ---------------------------------------------------------------------------
 // The statement
@@ -300,15 +331,41 @@ export interface RepidDeltaWitness {
   agent_tier: string;
   vesting_cliff_active: boolean;
   task_complexity?: number;
-  /** Per-event secret backing the nullifier. High entropy — not the agent id. */
-  eventSecret: bigint;
+  /**
+   * The PER-IDENTITY secret backing the nullifier (Invariant 2), from
+   * `nullifier-identity.ts`. Was a per-event `bigint` derived from the formula salt;
+   * that made the nullifier recomputable from public inputs plus one shared secret,
+   * and gave the identity axis no representation at all.
+   */
+  identitySecret: IdentitySecret;
 }
 
 /** Everything the verifier sees. Safe to publish in full. */
 export interface RepidDeltaPublicInputs {
   domain: string;
-  /** Commitment to the agent, not the agent id — so a delta can be published alone. */
+  /**
+   * `H(domain ‖ agentId)`.
+   *
+   * ⚠ NOT pseudonymity, and it never was: the agent id is public, so anyone can
+   * recompute this. It keeps the raw id out of the row and hides it from a casual
+   * reader — nothing more. `identity_commitment` below is the field whose pre-image is
+   * actually secret.
+   */
   agent_commitment: string;
+  /**
+   * Commitment to the per-identity nullifier secret: `H(tag ‖ secret)`.
+   *
+   * This is what turns the nullifier from a de-duplication tag into a nullifier. It
+   * publishes a value whose pre-image only the secret-holder knows, so a future
+   * Plonky3 circuit can prove "this nullifier was derived from the secret behind this
+   * registered commitment" without revealing either — the Semaphore shape. Today it is
+   * a binding, not a proof.
+   *
+   * Stable per identity per domain, so all of one identity's statements link to each
+   * other by construction. Per-statement unlinkability would need a fresh commitment
+   * per epoch and is deliberately not claimed here.
+   */
+  identity_commitment: string;
   /**
    * The delta AS STORED — an integer. `repid_score_events.repid_delta_applied` is an
    * integer column and `pipeline.ts` writes `Math.round(...)` into it, so the
@@ -321,7 +378,13 @@ export interface RepidDeltaPublicInputs {
   band_min: number;
   band_max: number;
   formula_commitment: string;
-  /** Hex of the scoped nullifier. Reveals nothing; collides only on a replay. */
+  /**
+   * The scoped nullifier, `0x`+64 hex (~248 bits).
+   *
+   * WIDE ON PURPOSE. The previous 32-bit form collided in practice, not in theory —
+   * see the deprecation note on `deriveNullifier`. At this width a collision between
+   * two honest events is ~2^-248, so equality really does mean replay.
+   */
   nullifier: string;
   /** Poseidon2 digest over every field above, in the canonical order below. */
   statement_digest: string;
@@ -343,11 +406,19 @@ export function agentCommitment(agentId: string, domain: string = REPID_DELTA_DO
  * A circuit and an engine that absorb the same values in a different order compute
  * different digests and every proof fails verification for no visible reason. The
  * order is fixed here, in one place, and pinned by a KAT test. Do not reorder — append.
+ *
+ * FORMAT v2 (2026-08-03): `identity_commitment` inserted after `agent_commitment`, and
+ * `nullifier` widened from 32 to 248 bits. Both change the digest, so the KAT in
+ * `tests/zkp-repid-delta-statement.test.ts` moved in the same commit — which is what
+ * that test is for. Safe to do now precisely because no circuit exists yet and
+ * `repid_zkp_proofs` holds ZERO `REPID_DELTA` rows [V SQL 2026-08-03]: there is nothing
+ * on disk or in a circuit to invalidate. Once either exists, this is append-only.
  */
 function statementFelts(p: Omit<RepidDeltaPublicInputs, 'statement_digest'>): bigint[] {
   return [
     ...feltsFromString(p.domain),
     ...feltsFromString(p.agent_commitment),
+    ...feltsFromString(p.identity_commitment),
     feltFromDelta(p.delta_applied),
     feltFromSigned(p.score_before),
     feltFromSigned(p.score_after),
@@ -381,6 +452,12 @@ export interface BuiltStatement {
   consistent: boolean;
   /** Populated when it does not — the whole reason to build this before a circuit. */
   inconsistency: string | null;
+  /**
+   * Exactly who can and cannot link this nullifier, derived from where its secret came
+   * from. Returned in shape so a caller cannot accidentally publish a stronger claim
+   * than the construction supports.
+   */
+  unlinkability: UnlinkabilityStatement;
 }
 
 /**
@@ -395,19 +472,25 @@ export function buildRepidDeltaStatement(params: BuildStatementParams): BuiltSta
   const domain = params.domain ?? REPID_DELTA_DOMAIN;
   const w = params.witness;
 
-  const scope = nullifierScope(domain, params.scopeLabel);
-  const nullifier = deriveNullifier(w.eventSecret, scope);
+  // Invariant 2: one per-identity secret, scope as a free parameter. `scopeLabel` is
+  // opaque here — a score-event id for reputation, a studyId for the health vertical.
+  const nullifier = scopedNullifier({
+    secret: w.identitySecret,
+    domain,
+    scopeLabel: params.scopeLabel,
+  });
 
   const publicNoDigest: Omit<RepidDeltaPublicInputs, 'statement_digest'> = {
     domain,
     agent_commitment: agentCommitment(params.agentId, domain),
+    identity_commitment: w.identitySecret.commitment,
     delta_applied: params.deltaApplied,
     score_before: params.scoreBefore,
     score_after: params.scoreAfter,
     band_min: DELTA_BAND_MIN,
     band_max: DELTA_BAND_MAX,
     formula_commitment: params.formulaCommitmentOverride ?? formulaCommitment(),
-    nullifier: `0x${nullifier.toString(16).padStart(8, '0')}`,
+    nullifier,
   };
 
   const pub: RepidDeltaPublicInputs = {
@@ -416,7 +499,12 @@ export function buildRepidDeltaStatement(params: BuildStatementParams): BuiltSta
   };
 
   const check = checkConsistency(params);
-  return { public: pub, consistent: check === null, inconsistency: check };
+  return {
+    public: pub,
+    consistent: check === null,
+    inconsistency: check,
+    unlinkability: unlinkabilityOf(w.identitySecret),
+  };
 }
 
 /**
@@ -515,6 +603,11 @@ export function verifyRepidDeltaStatement(
     formula_commitment_matches: opts.expectedFormulaCommitment
       ? pub.formula_commitment === opts.expectedFormulaCommitment
       : true,
+    // A narrow nullifier is a REJECTABLE statement, not a cosmetic issue: at 32 bits
+    // it collides between honest events (~6 expected pairs at current ledger volume),
+    // so an outside verifier must be able to refuse one without reading this file.
+    nullifier_is_wide: /^0x[0-9a-f]{64}$/.test(pub.nullifier),
+    identity_commitment_present: /^0x[0-9a-f]{64}$/.test(pub.identity_commitment),
   };
 
   const failures = Object.entries(checks)
@@ -528,6 +621,15 @@ export function verifyRepidDeltaStatement(
     unproven: [
       'that the delta was derived from the committed formula (needs the Plonky3 circuit)',
       'that the witness inputs were themselves honest (needs HAL attestation binding)',
+      // Added with statement format v2. The nullifier is now BOUND to an identity
+      // commitment, which is a different thing from being PROVEN to be: a verifier
+      // holding only the commitment cannot recheck the derivation. Saying otherwise
+      // would be exactly the overclaim this whole module is arranged to avoid.
+      'that the nullifier was derived from the secret behind identity_commitment ' +
+        '(binding is asserted, not proven — needs the Plonky3 circuit)',
+      'that the identity behind identity_commitment is a distinct human or an ' +
+        'independently-registered agent (needs populated identity material; see ' +
+        'nullifier-identity.ts on the live-database enumeration)',
     ],
   };
 }

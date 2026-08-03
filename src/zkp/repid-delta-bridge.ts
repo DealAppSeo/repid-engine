@@ -29,6 +29,13 @@
  * Default off because building a statement runs Poseidon2 on every score event, and
  * that cost belongs in a measurement before it belongs in a write path.
  *
+ * ## TWO SECRETS, TWO JOBS (changed 2026-08-03)
+ * `REPID_FORMULA_COMMITMENT_SALT` hides the scoring formula. `REPID_IDENTITY_MASTER_SECRET`
+ * backs the nullifier. They were ONE secret and that was a defect, not a shortcut —
+ * see `resolveIdentitySecret` below and `nullifier-identity.ts` for the full account.
+ * Neither has a default and neither degrades quietly: with either missing, shadow/on
+ * builds nothing and says which variable is absent.
+ *
  * ## HONEST LABELLING IS LOAD-BEARING
  * Rows written here carry `proof_type='REPID_DELTA'`, `scheme='poseidon2-statement-v1'`,
  * `is_real=false`, `proof_bytes=NULL`. There is no proof. The 56,823 sha256 stub rows
@@ -51,6 +58,14 @@ import {
   type DeltaStatementMode,
   type RepidDeltaPublicInputs,
 } from './repid-delta-statement';
+import {
+  IDENTITY_MASTER_ENV,
+  deriveIdentitySecret,
+  identityMaster,
+  identitySecretFromHolderSeed,
+  type IdentitySecret,
+  type UnlinkabilityStatement,
+} from './nullifier-identity';
 import type { HALDecision } from '../scoring/repid-delta';
 
 export interface DeltaBridgeInput {
@@ -66,6 +81,17 @@ export interface DeltaBridgeInput {
   agentTier: string;
   vestingCliffActive: boolean;
   taskComplexity?: number;
+  /**
+   * OPTIONAL holder-derived nullifier seed, >=32 bytes of hex.
+   *
+   * When present the nullifier secret comes from the holder and the engine master is
+   * not used, which is the only configuration where the nullifier is unlinkable by the
+   * operator as well as by the public. The live scoring pipeline has no holder in the
+   * loop, so it never passes this today; the parameter exists so that when
+   * `human_agent_bindings` starts carrying real rows the wire is already the right
+   * shape. Never persisted — see `nullifier-identity.ts`.
+   */
+  identitySeedHex?: string;
 }
 
 export interface DeltaBridgeResult {
@@ -78,6 +104,8 @@ export interface DeltaBridgeResult {
   persisted: boolean;
   /** Why nothing happened, when nothing happened. Never a silent no-op. */
   skipped: string | null;
+  /** Who can and cannot link this nullifier. Null when no statement was built. */
+  unlinkability: UnlinkabilityStatement | null;
 }
 
 const inert = (mode: DeltaStatementMode, skipped: string | null): DeltaBridgeResult => ({
@@ -87,31 +115,50 @@ const inert = (mode: DeltaStatementMode, skipped: string | null): DeltaBridgeRes
   inconsistency: null,
   persisted: false,
   skipped,
+  unlinkability: null,
 });
 
 /**
- * Derive the per-event nullifier secret.
+ * Resolve the nullifier secret for this event (Invariant 2).
  *
- * ⚠ THIS IS THE WEAKEST PART OF THE CURRENT WIRE AND IS DELIBERATELY NOT PRETENDING
- * OTHERWISE. A nullifier is only unlinkable if its secret is unpredictable. Here the
- * secret is derived from the salt and the event label, which means anyone holding the
- * salt can recompute it. That is adequate for its ONE current job — detecting that the
- * same event was recorded twice — and it is NOT adequate for hiding which agent a
- * nullifier belongs to.
+ * ## What this replaced
+ * The previous version folded `${formula_salt}|${eventLabel}` through a 131-multiplier
+ * rolling hash mod p. Three separate problems, in ascending order of severity:
+ *   1. the secret keyed the per-EVENT axis, so "one identity, many scopes" — the thing
+ *      Invariant 2 is about, and what the health vertical needs — had no encoding;
+ *   2. it reused the FORMULA salt, so one secret guarded two unrelated properties and
+ *      handing the salt to a formula auditor handed them every nullifier;
+ *   3. it produced ONE BabyBear element (~31 bits), which is both brute-forceable and
+ *      collision-prone at live volume. See `nullifier-identity.ts` for the measured
+ *      numbers — the first collision is at the 62,852nd secret and
+ *      `repid_score_events` already holds 152,084 rows.
  *
- * A real per-agent identity secret (the `human_sbt_mints.commitment_hash` line from
- * ZKP invariant 2) is what makes this unlinkable, and that binding is a separate beat.
- * Until then: treat the nullifier as a de-duplication tag, not as a privacy guarantee,
- * and do not publish a claim that it is one.
+ * ## Now
+ * Per-identity, per-domain, 248-bit, from a DEDICATED master
+ * (`REPID_IDENTITY_MASTER_SECRET`) — or, when the caller supplies one, from a
+ * holder-derived seed the engine never stores.
+ *
+ * ## FAILS CLOSED
+ * No master and no holder seed ⇒ no statement. Not a fallback to the old derivation:
+ * a silently-weaker secret that still produces a plausible-looking nullifier is the
+ * exact shape of failure this module is arranged to prevent. The mode gate already
+ * defaults `off`, so the only way to reach this is to have deliberately enabled
+ * shadow/on, and in that case the operator wants to hear about the missing variable.
  */
-function eventSecret(salt: string, eventLabel: string): bigint {
-  let h = 0n;
-  const src = `${salt}|${eventLabel}`;
-  for (let i = 0; i < src.length; i++) {
-    h = (h * 131n + BigInt(src.charCodeAt(i))) % 2013265921n;
+function resolveIdentitySecret(input: DeltaBridgeInput, formulaSaltValue: string): IdentitySecret {
+  if (input.identitySeedHex) {
+    return identitySecretFromHolderSeed({
+      seedHex: input.identitySeedHex,
+      domain: REPID_DELTA_DOMAIN,
+    });
   }
-  // Never 0: a zero secret makes the nullifier a function of the scope alone.
-  return h === 0n ? 1n : h;
+  return deriveIdentitySecret({
+    identityId: input.agentId,
+    domain: REPID_DELTA_DOMAIN,
+    // Key separation is enforced, not documented: if the two secrets are the same
+    // string this throws rather than quietly collapsing back to one secret, two jobs.
+    formulaSaltForSeparationCheck: formulaSaltValue,
+  });
 }
 
 /**
@@ -136,6 +183,32 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
     return inert(mode, 'no-formula-salt');
   }
 
+  // The identity secret is resolved BEFORE the statement build so a missing master is
+  // reported as itself rather than as a generic build failure — an operator who enabled
+  // shadow mode and set only one of two variables needs to be told which one.
+  if (!input.identitySeedHex && !identityMaster()) {
+    console.warn(
+      `[repid-delta-bridge] REPID_DELTA_STATEMENT_MODE is set but ${IDENTITY_MASTER_ENV} ` +
+        `is not, and no holder seed was supplied. No statement built — deriving the ` +
+        `nullifier secret from public inputs is the linkable construction this wire ` +
+        `replaced, and falling back to it silently would look like it worked.`,
+    );
+    return inert(mode, 'no-identity-master');
+  }
+
+  let identitySecret: IdentitySecret;
+  try {
+    identitySecret = resolveIdentitySecret(input, salt);
+  } catch (e) {
+    // Reached when the master is too short, equals the formula salt, or a holder seed
+    // is malformed/too small. All three are configuration errors that must be loud.
+    console.error(
+      `[repid-delta-bridge] identity secret unavailable: ` +
+        `${e instanceof Error ? e.message : String(e)}`,
+    );
+    return inert(mode, 'identity-secret-rejected');
+  }
+
   let built;
   try {
     built = buildRepidDeltaStatement({
@@ -148,7 +221,7 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
         agent_tier: input.agentTier,
         vesting_cliff_active: input.vestingCliffActive,
         ...(input.taskComplexity !== undefined ? { task_complexity: input.taskComplexity } : {}),
-        eventSecret: eventSecret(salt, input.eventLabel),
+        identitySecret,
       },
       deltaApplied: input.deltaApplied,
       scoreBefore: input.scoreBefore,
@@ -179,6 +252,7 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
       inconsistency: built.inconsistency,
       persisted: false,
       skipped: null,
+      unlinkability: built.unlinkability,
     };
   }
 
@@ -196,9 +270,15 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
         ...built.public,
         consistent: built.consistent,
         inconsistency: built.inconsistency,
+        // The honest label travels WITH the row. A downstream reader (a receipt, a
+        // dashboard, an outside auditor) must not have to find this file to learn that
+        // an engine-derived nullifier is linkable by the master holder.
+        unlinkability: built.unlinkability,
         note:
           'STATEMENT ONLY — no ZK proof. This row records the public inputs a Plonky3 ' +
-          'circuit must prove; it does not prove them.',
+          'circuit must prove; it does not prove them. The nullifier is BOUND to ' +
+          'identity_commitment, not PROVEN to be — see the unlinkability field for who ' +
+          'can link it.',
       },
     });
     if (error) {
@@ -210,6 +290,7 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
         inconsistency: built.inconsistency,
         persisted: false,
         skipped: 'insert-error',
+        unlinkability: built.unlinkability,
       };
     }
   } catch (e) {
@@ -223,6 +304,7 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
       inconsistency: built.inconsistency,
       persisted: false,
       skipped: 'insert-threw',
+      unlinkability: built.unlinkability,
     };
   }
 
@@ -233,6 +315,7 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
     inconsistency: built.inconsistency,
     persisted: true,
     skipped: null,
+    unlinkability: built.unlinkability,
   };
 }
 
