@@ -4,6 +4,8 @@ import { registerAgent, computeTier } from '../engine/repid-update';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
 import { computeDefensibilitySpec } from '../services/reliability';
 import { todayPT } from '../lib/time';
+import { insertScoreEvent } from '../scoring/score-event-writer';
+import { scoreEventGuardEnforced } from './score-event-guard';
 
 const router = Router();
 
@@ -68,21 +70,44 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       return res.status(500).json({ error: error?.message ?? 'insert failed' });
     }
 
-    await db.from('repid_score_events').insert({
-      agent_id: newAgent.id,
-      event_type: 'GENESIS',
-      delta: 0,
-      repid_before: 200,
-      repid_after: 200,
+    // GENESIS carries delta 0. The trigger's `IF v_delta = 0 THEN RETURN NEW`
+    // means it never applies and never stamps repid_before/after here, so the
+    // caller's 200/200 survives either way — this writer cannot double-count.
+    // It is still routed through the guard so the choice of applier is stated
+    // rather than left to a coincidence of the delta being zero.
+    const genesisMetadata = {
+      type: 'HUMAN_ANONYMOUS',
+      zkpCommitment,
+      easSchema: 'constitutional-compliance-v1',
+      note: 'Human identity — ZKP anonymous. No PII stored.',
+    };
+    const genesisExtra = {
       ecosystem_need_weight: 1.0,
       eas_attestation_id: `eas-stub-genesis-${String(newAgent.id).slice(0, 8)}`,
-      metadata: {
-        type: 'HUMAN_ANONYMOUS',
-        zkpCommitment,
-        easSchema: 'constitutional-compliance-v1',
-        note: 'Human identity — ZKP anonymous. No PII stored.',
-      },
-    });
+    };
+    if (scoreEventGuardEnforced()) {
+      await insertScoreEvent({
+        applier: 'caller',
+        agent_id: newAgent.id,
+        event_type: 'GENESIS',
+        delta: 0,
+        repid_before: 200,
+        repid_after: 200,
+        repid_delta_applied: 0,
+        metadata: genesisMetadata,
+        extra: genesisExtra,
+      });
+    } else {
+      await db.from('repid_score_events').insert({
+        agent_id: newAgent.id,
+        event_type: 'GENESIS',
+        delta: 0,
+        repid_before: 200,
+        repid_after: 200,
+        ...genesisExtra,
+        metadata: genesisMetadata,
+      });
+    }
 
     // Genesis badge for human DBTs
     await db.from('repid_badges').insert({
