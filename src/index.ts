@@ -23,6 +23,7 @@ import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import agentKeysRouter from './routes/v1/agent-keys';
 import serviceManifestRouter from './routes/v1/service-manifest';
 import trustBadgeRouter from './routes/v1/trust-badge';
+import openaiCompatRouter from './routes/v1/openai-compat';
 import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
@@ -277,6 +278,11 @@ app.use('/api/v1', serviceManifestRouter);
 // CORS-open because it is an <img> loaded by third-party sites; an auth check
 // here would silently break every page that embeds it.
 app.use('/api/v1', trustBadgeRouter);
+// OPENAI-COMPATIBLE SURFACE — mounted at /v1 (not /api/v1) because that is the path
+// every OpenAI client appends to a base URL. Lets Odysseus / Open WebUI / Cursor /
+// LangChain / the OpenAI SDKs point at us with one config change and get HAL
+// scoring + family provenance for free. Default OFF (OPENAI_COMPAT_ENABLED).
+app.use('/v1', openaiCompatRouter);
 // Controller API (CC2 2026-05-26) — SBT-gated (its own controller-auth middleware),
 // so mounted before the REPID_API_KEYS authMiddleware. Backend for the v0.app controller rebuild.
 app.use('/api/v1/controller', controllerRouter);
