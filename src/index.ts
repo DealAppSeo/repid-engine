@@ -32,6 +32,7 @@ import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import negotiationRouter from './routes/v1/negotiation';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
+import listingOffersRouter from './routes/v1/listing-offers';
 import observabilityPublicRouter from './routes/v1/observability-public';
 import v1Router from './routes/v1';
 import launchStatusRouter from './routes/v1/launch-status';
@@ -287,6 +288,13 @@ app.use('/api/v1/federation', federationRouter);
 // else verified:false); GET /browse is PUBLIC/keyless. Mounted BEFORE authMiddleware
 // and before the V2 substrate router so /list + /browse resolve first.
 app.use('/api/v1/marketplace', marketplaceP0Router);
+// LISTING → CONTRACT BRIDGE (2026-08-02) — the "buy" button's destination. Offers
+// on listings, and accept, which creates a real service_contract that the existing
+// escrow/verify/settle path then drives unchanged. Mounted next to the P0
+// list/browse router and BEFORE authMiddleware for the same reason: it does its own
+// identity resolution (human login token OR agent key) via resolvePosterIdentity.
+// Default OFF (LISTING_BRIDGE_ENABLED).
+app.use('/api/v1/marketplace', listingOffersRouter);
 // V2 SUBSTRATE (PHASE 2 OF MARKETPLACE): RepID rent/sell listings + rentals CRUD.
 // SETTLEMENT DISABLED — no money moves, nothing on-chain; rentals only record a row. RepID
 // earned during a rental attributes to the AGENT, not the renter. Full UI defers to TrustMarket.dev.
