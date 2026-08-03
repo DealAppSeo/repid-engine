@@ -43,3 +43,16 @@ scratch_*.js
 scratch_*.json
 db_raw_results.json
 pvq_results.json
+.claude/settings.local.json
+
+# One-off agent scratch at the repo root. Every one of these that has ever existed
+# carried a live credential inline (2026-08-03: 3 held a service_role JWT for
+# Trinity prod, 9 held the anon key). Ignoring the pattern is the only thing that
+# survives the next agent running `git add -A`.
+/fix_db.js
+/get_*.js
+/get_impl.ts
+/run_*.js
+/run_*.ps1
+/seed_*.js
+/temp_*.js

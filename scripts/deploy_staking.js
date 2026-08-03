@@ -35,8 +35,13 @@ async function run() {
   console.log("Tx Hash:", txHash);
 
   // Update supabase
-  const SUPA_URL = 'https://qnnpjhlxljtqyigedwkb.supabase.co';
-  const apikey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFubnBqaGx4bGp0cXlpZ2Vkd2tiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE5Mzk1OTEsImV4cCI6MjA2NzUxNTU5MX0.6oG2DU_BD1uBnBrDoQFauvN1ZnkKo2ywkuwY-tPaQFw';
+  const SUPA_URL = process.env.SUPABASE_URL;
+  // Read from the environment. This was a hardcoded anon JWT for Trinity prod until
+  // 2026-08-03 — a key in a script is a key in the repo, whatever its privilege level.
+  const apikey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY;
+  if (!SUPA_URL || !apikey) {
+    throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY (or SUPABASE_SERVICE_KEY) must be set");
+  }
   
   await fetch(`${SUPA_URL}/rest/v1/repid_config`, {
     method: "POST",
