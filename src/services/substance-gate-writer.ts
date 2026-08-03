@@ -1,6 +1,8 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { appendToAuditChain } from './auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
+import { scoreEventGuardEnforced } from '../routes/score-event-guard';
+import { insertScoreEvent } from '../scoring/score-event-writer';
 
 /**
  * Extract provenance tags from a task for propagation to derivative events.
@@ -166,35 +168,116 @@ export async function slashRepIDForGateFail(
       console.error('[GateWriter] Failed to extract HAL signals:', err.message);
     }
 
-    // Step 3: Write score event
-    const { error: insertError } = await db.from('repid_score_events').insert({
-      agent_id: agentUuid,
-      event_type: 'EPISTEMIC_VIOLATION',
-      delta: delta,
-      repid_before: repidBefore,
-      repid_after: repidAfter,
-      certainty_at_claim: certaintyAtClaim,
-      hal_score: halScore,
-      hal_decision: 'flagged',
-      answer_text: task.result || null,
-      prompt_text: task.description || task.title || null,
-      task_domain: task.task_type || null,
-      idempotency_key: gateEventId,  // From A3
-      metadata: {
-        failure_subtype: 'substance_gate_fast_path',
-        fast_path_failure: true,
-        task_id: task.id,
-        reap_count: reapCount,
-        gate_event_id: gateEventId,
-        agent_name: agentName,
-        provenance: provenance,  // NEW: full provenance propagation
-        hal_signals: halSignals
-      }
-    });
+    const scoreEventMetadata = {
+      failure_subtype: 'substance_gate_fast_path',
+      fast_path_failure: true,
+      task_id: task.id,
+      reap_count: reapCount,
+      gate_event_id: gateEventId,
+      agent_name: agentName,
+      provenance: provenance,  // NEW: full provenance propagation
+      hal_signals: halSignals
+    };
 
-    if (insertError) {
-      console.error('[GateWriter] Error inserting repid_score_events:', insertError.message);
-      return delta;
+    // Step 3: Write score event
+    //
+    // ORDER, NOT ARITHMETIC, IS WHAT DECIDES THE DOUBLE-APPLY. #326 classified this
+    // writer benign because its `current_repid` write (Step 4) happens AFTER the
+    // insert. Re-verified independently on prod 2026-08-03 in a rolled-back
+    // transaction, replaying this exact sequence:
+    //
+    //     before=499  callerComputedAfter=449
+    //     after INSERT only:  current_repid=449   (trigger applied -50)
+    //     row: before=499 after=449 applied=-50   (trigger stamped both)
+    //     after caller UPDATE: current_repid=449  == single-apply  => DOUBLE=false
+    //
+    // Confirmed: NOT a double-apply. The trigger applies relatively, the caller then
+    // writes the same absolute value on top. Still worth migrating, because the two
+    // appliers agree only by arithmetic — one concurrent event between the Step-2
+    // read and this insert and the Step-4 absolute write silently clobbers it.
+    //
+    // AND THE TWO APPLIERS DO NOT AGREE ON THE FLOOR. Line 137 clamps with
+    // `Math.max(0, ...)`; the trigger's UPDATE has no clamp at all; and the DB
+    // enforces `CHECK (current_repid >= 10 AND current_repid <= 10000)`. So for any
+    // agent whose score is below the slash, the trigger's unclamped UPDATE trips
+    // the constraint and takes the whole insert down with it:
+    //
+    //     ERROR 23514: new row for relation "repid_agents" violates check
+    //                  constraint "repid_agents_current_repid_check"
+    //     CONTEXT: SQL statement "UPDATE repid_agents SET current_repid = ..."
+    //              PL/pgSQL function apply_repid_score_event() line 25
+    //
+    // caught by the outer catch, logged, and `delta` returned as though the slash
+    // landed. 2 active agents sit below 150 right now, so a reap_count>3 (-150)
+    // slash on either is a silent no-op today. `src/services/repid-earning.ts:173`
+    // is the writer that gets this right — it clamps to [10, 10000], the DB's own
+    // range, and records `appliedDelta = after - before` rather than the intended
+    // delta. The guarded branch below follows it.
+    const appliedDelta = repidAfter - repidBefore;
+
+    if (scoreEventGuardEnforced()) {
+      // Refuse rather than land a row the score cannot match. In enforce mode the
+      // trigger stands down, so a repidAfter outside the DB's range no longer
+      // aborts the insert — it would leave an audit row claiming a score that
+      // Step 4 then fails to write. A missing entry beats a lying one.
+      if (repidAfter < 10 || repidAfter > 10000) {
+        console.error(
+          `[GateWriter] refusing score event for ${agentName}: repid_after=${repidAfter} is outside ` +
+          `repid_agents_current_repid_check [10, 10000] (before=${repidBefore}, delta=${delta}). ` +
+          `The Math.max(0, ...) floor at line 137 disagrees with the DB floor of 10.`
+        );
+        return delta;
+      }
+
+      const res = await insertScoreEvent({
+        applier: 'caller',
+        agent_id: agentUuid,
+        event_type: 'EPISTEMIC_VIOLATION',
+        delta: delta,
+        idempotency_key: gateEventId,
+        metadata: scoreEventMetadata,
+        repid_before: repidBefore,
+        repid_after: repidAfter,
+        // The clamp means the applied movement can be smaller than the intended
+        // delta. Recording `delta` here instead would break the helper's
+        // reconciliation invariant, which is the whole point of the guard.
+        repid_delta_applied: appliedDelta,
+        repid_delta_calculated: delta,
+        extra: {
+          certainty_at_claim: certaintyAtClaim,
+          hal_score: halScore,
+          hal_decision: 'flagged',
+          answer_text: task.result || null,
+          prompt_text: task.description || task.title || null,
+          task_domain: task.task_type || null,
+        },
+      });
+
+      if (!res.ok) {
+        console.error('[GateWriter] Error inserting repid_score_events:', res.error);
+        return delta;
+      }
+    } else {
+      const { error: insertError } = await db.from('repid_score_events').insert({
+        agent_id: agentUuid,
+        event_type: 'EPISTEMIC_VIOLATION',
+        delta: delta,
+        repid_before: repidBefore,
+        repid_after: repidAfter,
+        certainty_at_claim: certaintyAtClaim,
+        hal_score: halScore,
+        hal_decision: 'flagged',
+        answer_text: task.result || null,
+        prompt_text: task.description || task.title || null,
+        task_domain: task.task_type || null,
+        idempotency_key: gateEventId,  // From A3
+        metadata: scoreEventMetadata
+      });
+
+      if (insertError) {
+        console.error('[GateWriter] Error inserting repid_score_events:', insertError.message);
+        return delta;
+      }
     }
 
     // Step 4: Update current_repid (gated by WRITER_DIRECT_APPLY for single-applier cutover D-054/D-055)
