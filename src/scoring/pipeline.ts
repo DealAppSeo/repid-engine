@@ -31,6 +31,7 @@ import {
 } from '../hal/lib/constants';
 import { computeDelta, HALDecision } from './repid-delta';
 import { clampRepidLoud } from './repid-clamp';
+import { assessDecay, decayedScoreFor, decayMetadata } from './decay-bridge';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
 import { halService } from '../hal/service';
@@ -174,10 +175,12 @@ async function loadAgent(agentId: string): Promise<{
   current_repid: number;
   tier: string;
   vesting_cliff_active: boolean;
+  /** Needed by decay — see scoring/decay-bridge.ts. */
+  activity_30d: number;
 } | null> {
   const { data, error } = await db
     .from('repid_agents')
-    .select('id, current_repid, tier, vesting_cliff_ends_at')
+    .select('id, current_repid, tier, vesting_cliff_ends_at, activity_30d')
     .eq('id', agentId)
     .single();
   if (error || !data) return null;
@@ -189,6 +192,7 @@ async function loadAgent(agentId: string): Promise<{
     current_repid: Number((data as any).current_repid ?? 1000),
     tier: String((data as any).tier ?? 'PROBATIONARY'),
     vesting_cliff_active,
+    activity_30d: Number((data as any).activity_30d ?? 0),
   };
 }
 
@@ -419,10 +423,12 @@ export async function runScoreEvent(
   }
 
   const old_repid = agent.current_repid;
-  // Clamped to the range repid_agents actually accepts. Previously unclamped, so
-  // an out-of-range result was REJECTED by the DB CHECK and the score silently did
-  // not move — see scoring/repid-clamp.ts.
-  const new_repid = clampRepidLoud(old_repid + effectiveDeltaApplied, {
+  // DECAY (Option C step 1). In shadow this computes the counterfactual and
+  // changes nothing; only 'enforce' moves the score. The base is the decayed
+  // score, so the delta lands on top of decay exactly as updateRepId did it.
+  const decay = assessDecay({ currentRepid: old_repid, activity30d: agent.activity_30d });
+  const decayBase = decayedScoreFor(decay);
+  const new_repid = clampRepidLoud(decayBase + effectiveDeltaApplied, {
     agentId: String(input.agent_id),
     eventType: 'HAL_SCORE_EVENT',
   });
@@ -483,6 +489,9 @@ export async function runScoreEvent(
     zk_proof_id,
     idempotency_key: input.idempotency_key ?? null,
     metadata: {
+      // Decay counterfactual (Option C step 1). In shadow this is the ONLY trace —
+      // the score is untouched — so it must be recorded or the measurement is lost.
+      ...decayMetadata(decay),
       hal_signals: signals,
       grounding: grounding ?? undefined,
       grounding_abstained: groundingAbstained,
@@ -652,8 +661,10 @@ export async function applyValidationEvent(
   if (!agent) throw new Error(`Agent not found: ${agent_id}`);
 
   const old_repid = agent.current_repid;
+  const decay = assessDecay({ currentRepid: old_repid, activity30d: agent.activity_30d });
+  const decayBase = decayedScoreFor(decay);
   // Was Math.max(0, …): floor 0 against a DB floor of 10, and no ceiling at all.
-  const new_repid = clampRepidLoud(old_repid + delta, {
+  const new_repid = clampRepidLoud(decayBase + delta, {
     agentId: String(agent_id),
     eventType: event_type,
   });
@@ -736,7 +747,7 @@ export async function applyValidationEvent(
     zk_proof_triggered: triggerProof,
     zk_proof_id,
     decision_outcome: halDecision,
-    metadata: enrichedMetadata,
+    metadata: { ...decayMetadata(decay), ...(enrichedMetadata as Record<string, unknown>) },
     contract_id: metadata?.contract_id ?? null,
     answer_text: answerText,
     prompt_text: promptText,

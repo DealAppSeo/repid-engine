@@ -80,6 +80,7 @@ import { ipRateLimit } from './middleware/ip-rate-limit';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { startReleaseRetryWorker } from './services/x402-release-retry-worker';
+import { startStatusDigest } from './services/status-digest';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { easAnchorWorker } from './workers/eas-anchor-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -909,6 +910,15 @@ if (!IS_TEST && process.env.X402_RECOVERY_WORKER_ENABLED === 'true') {
 // path /satisfy uses. Default OFF; 'shadow' reports what it would do.
 if (!IS_TEST) {
   startReleaseRetryWorker();
+}
+
+// STATUS DIGEST — daily status + alerts to Telegram. In-process rather than via the
+// cron endpoint because repid_telemetry_snapshots shows exactly ONE cron_trigger
+// row ever (2026-05-26): no external scheduler is pulling those triggers, so wiring
+// the digest to one would ship a report that never arrives. Idempotent across
+// restarts via the same snapshot table. Default OFF.
+if (!IS_TEST) {
+  startStatusDigest();
 }
 
 // EAS Anchor Worker (2026-07-04) — anchors the 21,960 real, un-anchored Plonky3
