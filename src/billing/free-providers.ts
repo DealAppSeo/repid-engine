@@ -14,6 +14,8 @@
  */
 export const FREE_PROVIDERS = new Set<string>([
   'groq', 'groq-llama', 'cerebras', 'sambanova', 'openrouter', 'fireworks', 'together', 'local_slm',
+  // Z.AI direct — GLM-4.5-Flash / GLM-4.7 on the vendor's permanent free tier.
+  'zai',
 ]);
 
 /** Providers we actually have working free-tier keys for AND a routed adapter (route peer_verify across these). */
@@ -22,6 +24,10 @@ export const WORKING_FREE_PROVIDERS: { provider: string; model: string }[] = [
   { provider: 'cerebras', model: 'zai-glm-4.7' },
   // fireworks RETIRED 2026-06-04 (account suspended → 100% fail); replaced by sambanova below.
   { provider: 'sambanova', model: 'Meta-Llama-3.1-8B-Instruct' },
+  // Second, independent route to the GLM family. Until now GLM reached us only via
+  // the cerebras key, which cannot serve llama at all — so a single key held up a
+  // whole HAL quorum voice.
+  { provider: 'zai', model: 'glm-4.5-flash' },
 ];
 
 export function isFreeProvider(provider: string | null | undefined): boolean {
