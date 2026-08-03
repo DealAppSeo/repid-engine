@@ -314,6 +314,8 @@ describe('the hook and the module agree (duplication is only safe if pinned)', (
     cwd?: string;
     /** Overrides the `cwd` field written into the payload, to test bad values. */
     payloadCwd?: string;
+    /** The clock the fixture's timestamps are expressed against. Defaults to NOW. */
+    refNow?: number;
   }): { code: number; stderr: string } {
     const fs = require('node:fs') as typeof import('node:fs');
     const cp = require('node:child_process') as typeof import('node:child_process');
@@ -328,7 +330,24 @@ describe('the hook and the module agree (duplication is only safe if pinned)', (
     const had = fs.existsSync(leasePath);
     const backup = had ? fs.readFileSync(leasePath, 'utf8') : null;
     try {
-      fs.writeFileSync(leasePath, JSON.stringify({ version: 1, leases: args.leases }));
+      // ⚠ THE SUBPROCESS HAS ITS OWN CLOCK. The pure-module tests use a FIXED `NOW`
+      // for determinism, but the hook reads `Date.now()`. A lease written with a
+      // fixed expiry is active only while the wall clock happens to be before it —
+      // which is exactly the bug this shifted-timestamp mapping fixes: these tests
+      // passed when written at 12:0x UTC and began failing at 13:00 UTC when the
+      // fixture's one-hour lease elapsed in real time. A test that depends on the
+      // time of day is worse than no test, because it lands green and rots.
+      //
+      // Preserve each lease's offset RELATIVE to the fixed NOW, re-based onto real
+      // time. An intentionally-expired fixture (offset -1ms) stays expired; an
+      // active one stays active, at any hour.
+      const ref = args.refNow ?? NOW;
+      const rebased = args.leases.map((l) => ({
+        ...l,
+        expiresAt: new Date(Date.now() + (Date.parse(l.expiresAt) - ref)).toISOString(),
+        acquiredAt: new Date(Date.now() + (Date.parse(l.acquiredAt) - ref)).toISOString(),
+      }));
+      fs.writeFileSync(leasePath, JSON.stringify({ version: 1, leases: rebased }));
       const env = { ...process.env };
       if (args.lane) env.HYPERDAG_LANE = args.lane;
       else delete env.HYPERDAG_LANE;
@@ -364,12 +383,10 @@ describe('the hook and the module agree (duplication is only safe if pinned)', (
 
   for (const c of cases) {
     it(`agrees: ${c.name}`, () => {
-      const expected = evaluateWrite({
-        registry: reg(...c.leases),
-        lane: c.lane,
-        file: c.file,
-        now: Date.now(),
-      });
+      // Compare against the FIXED clock, since runHook rebases the fixture onto real
+      // time by the same offset. Using Date.now() here would make both sides agree on
+      // "expired" and quietly stop testing anything.
+      const expected = evaluateWrite({ registry: reg(...c.leases), lane: c.lane, file: c.file, now: NOW });
       const got = runHook(c);
       // deny → exit 2 (the harness's blocking signal); everything else → exit 0.
       expect(got.code).toBe(expected.verdict === 'deny' ? 2 : 0);
@@ -412,6 +429,43 @@ describe('the hook and the module agree (duplication is only safe if pinned)', (
       .join('\\');
     const got = runHook({ lane: 'XC', file: `${root}\\src\\hal\\fact-check.ts`, leases: [lease()] });
     expect(got.code).toBe(2);
+  });
+
+  it('THE TIME BOMB: enforcement holds against any reference clock', () => {
+    // The three tests above were merged GREEN and began failing 22 minutes later, when
+    // the fixture's fixed one-hour lease elapsed in real time. A test that depends on
+    // the time of day is worse than no test: it lands green and rots.
+    //
+    // runHook now re-bases the fixture onto real time, preserving each lease's offset
+    // from its own reference clock. Proving that means running the SAME case against a
+    // clock far in the past and one far in the future — both must block, because in
+    // both the lease is active relative to its own reference.
+    for (const [label, ref] of [
+      ['past', Date.parse('2020-01-01T00:00:00.000Z')],
+      ['future', Date.parse('2030-01-01T00:00:00.000Z')],
+    ] as const) {
+      const l = lease();
+      const span = Date.parse(l.expiresAt) - NOW; // +1h, active
+      const got = runHook({
+        lane: 'XC',
+        file: 'src/hal/fact-check.ts',
+        refNow: ref,
+        leases: [{ ...l, acquiredAt: new Date(ref - 60_000).toISOString(), expiresAt: new Date(ref + span).toISOString() }],
+      });
+      expect({ label, code: got.code }).toEqual({ label, code: 2 });
+    }
+  });
+
+  it('an intentionally-expired fixture stays expired under re-basing', () => {
+    // The other half of the rebase: a negative offset must not become active.
+    const ref = Date.parse('2030-01-01T00:00:00.000Z');
+    const got = runHook({
+      lane: 'XC',
+      file: 'src/hal/fact-check.ts',
+      refNow: ref,
+      leases: [{ ...lease(), acquiredAt: new Date(ref - 60_000).toISOString(), expiresAt: new Date(ref - 1).toISOString() }],
+    });
+    expect(got.code).toBe(0);
   });
 
   it('exits 0 on empty stdin — a malformed invocation must not block a write', () => {
