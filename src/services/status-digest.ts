@@ -269,3 +269,102 @@ export async function runStatusDigest(): Promise<{ sent: boolean; digest: Digest
   if (!r.ok) console.warn(`[status-digest] telegram send failed: ${r.error}`);
   return { sent: r.ok, digest, error: r.error };
 }
+
+// ---------------------------------------------------------------------------
+// Scheduling
+// ---------------------------------------------------------------------------
+
+/**
+ * In-process daily scheduler.
+ *
+ * WHY NOT THE CRON ENDPOINT. /internal-cron/status-digest exists and works, but it
+ * needs CRON_TRIGGER_TOKEN set plus an external monitor to call it — and the
+ * evidence says that path is not in use: repid_telemetry_snapshots holds exactly
+ * ONE cron_trigger row ever, from 2026-05-26. Wiring the digest to a trigger
+ * nobody pulls would mean shipping a report that never arrives.
+ *
+ * The engine already runs its own schedulers (HITL expiration, release retry), so
+ * this needs no secret and no third party. The endpoint stays for whenever an
+ * external scheduler is actually wired.
+ *
+ * IDEMPOTENT ACROSS RESTARTS. A redeploy must not re-send today's digest — a
+ * report that arrives twice trains you to skim it. The last-sent time lives in
+ * repid_telemetry_snapshots, the same table the cron handler uses, so both paths
+ * share one notion of "already sent today".
+ */
+const DIGEST_TRIGGER = 'status-digest';
+const DIGEST_MIN_INTERVAL_MS = 23 * 60 * 60 * 1000;
+
+export const STATUS_DIGEST_ENABLED = process.env.STATUS_DIGEST_ENABLED === 'true';
+
+async function lastDigestAt(): Promise<number | null> {
+  try {
+    const { data } = await db
+      .from('repid_telemetry_snapshots')
+      .select('snapshot_at')
+      .eq('metric_family', 'cron_trigger')
+      .eq('metric_name', DIGEST_TRIGGER)
+      .order('snapshot_at', { ascending: false })
+      .limit(1);
+    const at = (data ?? [])[0]?.snapshot_at;
+    return at ? new Date(at).getTime() : null;
+  } catch {
+    // Unreadable history → err toward NOT sending. A missed digest is recoverable
+    // tomorrow; a duplicate one costs the report its credibility.
+    return Date.now();
+  }
+}
+
+export async function maybeSendDigest(): Promise<{ sent: boolean; reason?: string }> {
+  const last = await lastDigestAt();
+  if (last != null && Date.now() - last < DIGEST_MIN_INTERVAL_MS) {
+    return { sent: false, reason: 'already sent within the window' };
+  }
+  const r = await runStatusDigest();
+  try {
+    await db.from('repid_telemetry_snapshots').insert({
+      snapshot_at: new Date().toISOString(),
+      metric_family: 'cron_trigger',
+      metric_name: DIGEST_TRIGGER,
+      metric_value: { ok: r.sent, summary: r.digest, error: r.error ?? null },
+      metadata: { snapshot_type: 'cron_trigger', source: 'in-process-scheduler' },
+    });
+  } catch {
+    /* logging is best-effort; the digest already went out */
+  }
+  return { sent: r.sent, reason: r.error };
+}
+
+let digestTimer: NodeJS.Timeout | null = null;
+
+export function startStatusDigest(): { stop: () => void } {
+  if (!STATUS_DIGEST_ENABLED) {
+    console.log('[status-digest] disabled (STATUS_DIGEST_ENABLED not true), skipping');
+    return { stop: () => undefined };
+  }
+  // Check hourly, send at most daily. Hourly ticks make the send time robust to
+  // restarts without needing to persist a schedule.
+  const everyMs = Number(process.env.STATUS_DIGEST_CHECK_MS ?? 60 * 60 * 1000);
+  console.log(`[status-digest] enabled — checking every ${Math.round(everyMs / 60000)}m, sending at most daily`);
+
+  let running = false;
+  digestTimer = setInterval(async () => {
+    if (running) return;
+    running = true;
+    try {
+      const r = await maybeSendDigest();
+      if (r.sent) console.log('[status-digest] sent');
+    } catch (e) {
+      console.error('[status-digest] scheduler threw:', e);
+    } finally {
+      running = false;
+    }
+  }, everyMs);
+
+  return {
+    stop: () => {
+      if (digestTimer) clearInterval(digestTimer);
+      digestTimer = null;
+    },
+  };
+}
