@@ -9,9 +9,23 @@
       "Bash(railway variables *)",
       "Bash(railway deployment *)",
       "Bash(railway whoami)",
+      "Bash(node scripts/lane.js *)",
       "mcp__claude_ai_Vercel__list_deployments",
       "mcp__railway__project_list",
       "mcp__claude_ai_Supabase__list_tables"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/lane-write-guard.js"
+          }
+        ]
+      }
     ]
   }
 }
