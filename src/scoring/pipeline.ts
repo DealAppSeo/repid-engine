@@ -30,6 +30,7 @@ import {
   HAL_CONSTITUTIONAL_BLOCK_THRESHOLD,
 } from '../hal/lib/constants';
 import { computeDelta, HALDecision } from './repid-delta';
+import { clampRepidLoud } from './repid-clamp';
 import { appendToAuditChain } from '../services/auditChainWriter';
 import { extractHALSignals } from '../hal/lib/extract';
 import { halService } from '../hal/service';
@@ -418,7 +419,13 @@ export async function runScoreEvent(
   }
 
   const old_repid = agent.current_repid;
-  const new_repid = old_repid + effectiveDeltaApplied;
+  // Clamped to the range repid_agents actually accepts. Previously unclamped, so
+  // an out-of-range result was REJECTED by the DB CHECK and the score silently did
+  // not move — see scoring/repid-clamp.ts.
+  const new_repid = clampRepidLoud(old_repid + effectiveDeltaApplied, {
+    agentId: String(input.agent_id),
+    eventType: 'HAL_SCORE_EVENT',
+  });
 
   // 5. ZK proof trigger logic (decided pre-insert so we can record on the row).
   //
@@ -645,7 +652,11 @@ export async function applyValidationEvent(
   if (!agent) throw new Error(`Agent not found: ${agent_id}`);
 
   const old_repid = agent.current_repid;
-  const new_repid = Math.max(0, old_repid + delta); // simple floor 0
+  // Was Math.max(0, …): floor 0 against a DB floor of 10, and no ceiling at all.
+  const new_repid = clampRepidLoud(old_repid + delta, {
+    agentId: String(agent_id),
+    eventType: event_type,
+  });
 
   const triggerProof = await shouldTriggerProof(agent_id, Math.abs(delta));
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
