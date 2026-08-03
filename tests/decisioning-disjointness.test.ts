@@ -106,11 +106,21 @@ describe('family-registry lookup', () => {
   });
 
   it('NO REGRESSION: the unambiguous seeded models still resolve to their family', () => {
-    // 22 = 21 telemetry pairs + 1 hal-config-default (qwen-plus, HAL's live qwen default) added by the
-    // 2026-07-05 HAL cross-fix so HAL's live quorum hits the registry, not the spoofable regex fallback.
-    expect(FAMILY_REGISTRY_SEED.length).toBe(22); // seed table; sweep is at load time
+    // 24 = 21 telemetry pairs
+    //    + 1 hal-config-default (qwen-plus, HAL's live qwen default) from the 2026-07-05 HAL cross-fix,
+    //      so HAL's live quorum hits the registry rather than the spoofable regex fallback
+    //    + 2 hal-config-default (zai/glm-4.5-flash, zai/glm-4.7) from the 2026-08-03 Z.AI adapter.
+    //
+    // The Z.AI rows add NO new family — glm was already known via cerebras/zai-glm-4.7. They exist so a
+    // call served by the new direct-vendor route resolves to 'glm' instead of reporting 'unverified' and
+    // being silently dropped from quorum-diversity counting. Registering them is what keeps the family
+    // count honest: a second route to a family must not read as a second family.
+    //
+    // This count is a deliberate tripwire — it caught the addition, which is the point. Bumping it
+    // requires saying what was added and why, never just making the number match.
+    expect(FAMILY_REGISTRY_SEED.length).toBe(24); // seed table; sweep is at load time
     const legit = FAMILY_REGISTRY_SEED.filter((e) => !isAmbiguousFamily(e.model));
-    expect(legit.length).toBe(21); // exactly one (hf/deepseek-r1-qwen-32b) swept out; qwen-plus is unambiguous
+    expect(legit.length).toBe(23); // exactly one (hf/deepseek-r1-qwen-32b) swept out; the rest unambiguous
     for (const e of legit) {
       expect(resolveFamily(e.model)).toBe(e.family);
     }

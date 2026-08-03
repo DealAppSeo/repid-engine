@@ -2,6 +2,7 @@ import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError,
 import { GroqAdapter } from './groq';
 import { GeminiAdapter } from './gemini';
 import { CerebrasAdapter } from './cerebras';
+import { ZaiAdapter } from './zai';
 import { DeepSeekAdapter } from './deepseek';
 import { CohereAdapter } from './cohere';
 import { AnthropicAdapter } from './anthropic';
@@ -56,6 +57,22 @@ function buildTier0aAdapters(): ProviderAdapter[] {
     new GroqAdapter(),
     new CerebrasAdapter(),
   ];
+  // Z.AI (Zhipu) direct — GLM on the vendor's free tier. Same gating convention as
+  // sambanova/openrouter below: joins the chain when the key is present, one env var
+  // to remove it.
+  //
+  // NOT a cost play. The $1.44 that motivated this was a pricing-table artifact
+  // (see billing/pricing.ts) and cerebras GLM was always free. The real reasons:
+  //   1. GLM is SINGLE-SOURCED today. Our cerebras key 404s on llama, so GLM is the
+  //      only model that key can reach — and HAL's cerebras voice depends on it. If
+  //      that one key or account lapses, a whole HAL quorum voice disappears.
+  //   2. Second independent route to the same family, from the vendor rather than a
+  //      reseller.
+  // Placed AFTER groq/cerebras deliberately: a brand-new free tier that rate-limits
+  // would otherwise put a 429 + retry in front of every request.
+  if (process.env.ROUTER_ENABLE_ZAI !== 'false' && process.env.ZAI_API_KEY?.trim()) {
+    chain.push(new ZaiAdapter());
+  }
   if (process.env.ROUTER_ENABLE_SAMBANOVA !== 'false' && process.env.SAMBANOVA_API_KEY?.trim()) {
     chain.push(new SambaNovaAdapter());
   }

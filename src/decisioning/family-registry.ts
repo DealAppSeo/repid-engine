@@ -46,6 +46,13 @@ export interface FamilyRegistryEntry {
 export const FAMILY_REGISTRY_SEED: readonly FamilyRegistryEntry[] = Object.freeze([
   { provider: 'groq',              model: 'llama-3.1-8b-instant',                family: 'llama',     source: 'familyOf', evidence_n: 77536 },
   { provider: 'cerebras',          model: 'zai-glm-4.7',                         family: 'glm',       source: 'familyOf', evidence_n: 68287 },
+  // Z.AI direct — same GLM family, second independent route. source='hal-config-default'
+  // because these are declared adapter defaults with no telemetry yet (evidence_n 0),
+  // the same honest provenance marker the HAL defaults use. Registered explicitly so a
+  // zai call resolves to 'glm' instead of reporting 'unverified' and being dropped from
+  // quorum-diversity counting.
+  { provider: 'zai',               model: 'glm-4.5-flash',                       family: 'glm',       source: 'hal-config-default', evidence_n: 0 },
+  { provider: 'zai',               model: 'glm-4.7',                             family: 'glm',       source: 'hal-config-default', evidence_n: 0 },
   { provider: 'mistral',           model: 'mistral-small-latest',                family: 'mistral',   source: 'familyOf', evidence_n: 61974 },
   { provider: 'gemini',            model: 'gemini-2.0-flash',                    family: 'gemini',    source: 'familyOf', evidence_n: 60767 },
   { provider: 'fireworks',         model: 'accounts/fireworks/models/kimi-k2p5', family: 'kimi',      source: 'familyOf', evidence_n: 9713 },
