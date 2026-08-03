@@ -64,6 +64,41 @@ export interface CallerAppliedEvent extends ScoreEventBase {
 
 export type ScoreEventInsert = TriggerAppliedEvent | CallerAppliedEvent;
 
+/**
+ * THE ZERO-DELTA TRAP.
+ *
+ * `applier: 'trigger'` used to be a guaranteed `23502` for any zero-delta event.
+ * Verified live 2026-08-03 against `pg_proc` and by probe, not from a report:
+ *
+ *     v_delta := COALESCE(NEW.repid_delta_calculated, NEW.delta, 0);
+ *     IF v_delta = 0 THEN RETURN NEW; END IF;   -- ← returns BEFORE stamping
+ *
+ * and `repid_before` / `repid_after` are both `integer NOT NULL` with **no
+ * default** (`information_schema.columns`). So the trigger hands back a row with
+ * NULL in a NOT NULL column and the insert dies:
+ *
+ *     null value in column "repid_before" ... violates not-null constraint
+ *
+ * Zero-delta is not an edge case here. 79,842 of 152,084 rows (52.5%) of
+ * `repid_score_events` are zero-delta, the most recent from today, and 54,392 of
+ * those carry `repid_delta_applied = 0` with `repid_before = repid_after`. The
+ * purpose gate's entire evidence that it works is zero-delta rows — a
+ * non-deliverable HAL veto is *supposed* to apply 0 instead of −10. So the helper
+ * SUPPLIES the numbers rather than refusing zero-delta: refusing would reject the
+ * largest class of audit event in the ledger, and because most call sites
+ * `await insertScoreEvent(...)` without reading `ok`, a refusal would make the
+ * event silently disappear — the one outcome worse than the crash.
+ *
+ * Note the precedence: the trigger tests `COALESCE(repid_delta_calculated, delta)`,
+ * so `delta: 5` with `repid_delta_calculated: 0` is ALSO a zero-delta event and
+ * also died. Probed: both shapes returned 23502.
+ */
+export function effectiveTriggerDelta(e: ScoreEventInsert): number {
+  const calc = (e.extra ?? {})['repid_delta_calculated'];
+  if (calc !== undefined && calc !== null) return Math.round(Number(calc));
+  return Math.round(e.delta);
+}
+
 export interface WriteResult {
   ok: boolean;
   id?: string;
@@ -119,6 +154,73 @@ export async function insertScoreEvent(e: ScoreEventInsert): Promise<WriteResult
   }
   // applier === 'trigger': repid_delta_applied is deliberately ABSENT so
   // trg_apply_repid_score_event applies the delta and stamps before/after itself.
+  //
+  // ...EXCEPT when the effective delta is 0, where the trigger returns early and
+  // stamps nothing. Then we must supply the snapshot ourselves or hit 23502.
+  if (e.applier === 'trigger' && effectiveTriggerDelta(e) === 0) {
+    const extra = e.extra ?? {};
+    const givenBefore = extra['repid_before'];
+    const givenAfter = extra['repid_after'];
+    const hasBefore = givenBefore !== undefined && givenBefore !== null;
+    const hasAfter = givenAfter !== undefined && givenAfter !== null;
+
+    if (hasBefore && hasAfter) {
+      // Respect a caller-supplied snapshot, but never write a row that contradicts
+      // itself: a zero-delta event whose before/after differ does not add up, and
+      // the same reasoning as `reconciles()` applies — a ledger that does not add
+      // up is worse than a gap, because it looks like data.
+      if (Number(givenAfter) - Number(givenBefore) !== 0) {
+        return {
+          ok: false,
+          applier: 'trigger',
+          error:
+            `zero-delta score event does not reconcile: repid_after(${String(givenAfter)}) - ` +
+            `repid_before(${String(givenBefore)}) is not 0. The effective delta is 0, so ` +
+            `nothing was applied; if something else moved the score it must be recorded ` +
+            `as its own event with applier: 'caller'.`,
+        };
+      }
+    } else {
+      // Read the current score for the snapshot. This is a NON-MUTATING read: the
+      // row we then write carries repid_delta_applied = 0, so the trigger stands
+      // down at its FIRST guard and `repid_agents` is never UPDATEd.
+      //
+      // Honest limit: another event can move the score between this read and the
+      // insert. That can only make the recorded snapshot stale by a few points —
+      // it can never move a score or mis-state what THIS event applied, because
+      // this event applies exactly 0. The race is cosmetic, not economic. Closing
+      // it properly means letting the trigger stamp zero-delta rows itself, which
+      // is a migration, not an application change.
+      const { data: agent, error: readErr } = await db
+        .from('repid_agents')
+        .select('current_repid')
+        .eq('id', e.agent_id)
+        .single();
+
+      if (readErr || !agent) {
+        // Say why, rather than firing a doomed insert and reporting 23502 as if the
+        // schema were at fault.
+        return {
+          ok: false,
+          applier: 'trigger',
+          error:
+            `zero-delta score event needs a repid_before snapshot (repid_before is NOT NULL ` +
+            `and the trigger does not stamp it when the delta is 0), but reading ` +
+            `repid_agents.current_repid for agent ${e.agent_id} failed: ` +
+            `${readErr?.message ?? 'agent not found'}`,
+        };
+      }
+
+      const current = Math.round(Number((agent as any).current_repid ?? 0));
+      row.repid_before = current;
+      row.repid_after = current;
+    }
+
+    // Non-NULL repid_delta_applied makes the trigger return at its first guard, so
+    // the outcome no longer depends on the zero-check at all. It also states the
+    // truth: exactly 0 was applied.
+    row.repid_delta_applied = 0;
+  }
 
   const { data, error } = await db
     .from('repid_score_events')
