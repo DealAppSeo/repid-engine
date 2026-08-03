@@ -22,6 +22,13 @@
  * the downloaded dataset. Provider+model strings + run_id + dataset version are logged for repro.
  */
 
+import {
+  MeasurementRuler,
+  RuledMeasurement,
+  recordMeasurement,
+} from './measurement-ruler';
+import { CorpusCase, buildCorpusManifest, CorpusManifest } from './corpus-manifest';
+
 export interface BenchmarkItem {
   /** stable id for the sample (dataset id + which answer, for HaluEval's right/hallucinated split). */
   id: string;
@@ -49,6 +56,20 @@ export interface BenchmarkSummary {
   tp: number; fp: number; fn: number; tn: number;
   precision: number; recall: number; f1: number; accuracy: number;
   samples: BenchmarkSampleResult[];
+  /**
+   * Whether this summary's numbers carry the ruler they were taken with.
+   *
+   * 'UNRULED' means the caller did not supply a `ruler`, so `f1`/`precision`/`recall` here describe an
+   * unidentified population at an unidentified configuration — the exact condition that made HAL's
+   * 0.34 / 0.74 / 0.886 / 0.890 mutually incomparable. An UNRULED summary must not be persisted,
+   * published, or trended; `recordMeasurement` will refuse it.
+   */
+  rulerStatus: 'ruled' | 'UNRULED';
+  /**
+   * The ruled measurement, present only when a ruler was supplied. Carries the canonical citation
+   * string ("F1 = x on corpus <id>@<hash> at N families, strictness s").
+   */
+  ruled?: RuledMeasurement;
 }
 
 /** Minimal shape of the HAL evaluation we depend on (halService.evaluate's result). */
@@ -94,11 +115,46 @@ export function normalizeFever(rec: any, idx: number): BenchmarkItem[] {
   return []; // NOT ENOUGH INFO — no gold truth value, excluded (counted as dropped by the runner)
 }
 
-/** Run the (real) HAL evaluate over items and compute the confusion matrix + F1. */
+/**
+ * Turn benchmark items into corpus cases, so a run can mint the manifest that identifies exactly the
+ * population it scored. Order is preserved — the hash is order-sensitive by design.
+ */
+export function itemsToCorpusCases(items: readonly BenchmarkItem[]): CorpusCase[] {
+  return items.map((it) => ({
+    id: it.id,
+    text: it.statement,
+    expectedHallucination: it.goldHallucination,
+    ...(it.context === undefined ? {} : { context: it.context }),
+  }));
+}
+
+/**
+ * Build the corpus manifest for a set of benchmark items. Use this to produce the `corpus` half of a
+ * ruler for the items you are actually about to score (post-slicing, post-limit) rather than for the
+ * dataset you nominally loaded — a `--limit 1000` run measures 1000 cases, not the whole file.
+ */
+export function manifestForItems(corpusId: string, items: readonly BenchmarkItem[]): CorpusManifest {
+  const dataset = items[0]?.dataset ?? 'unknown';
+  return buildCorpusManifest({
+    corpusId,
+    cases: itemsToCorpusCases(items),
+    sources: [{ source: String(dataset), caseCount: items.length }],
+  });
+}
+
+/**
+ * Run the (real) HAL evaluate over items and compute the confusion matrix + F1.
+ *
+ * Supplying `opts.ruler` is what makes the resulting numbers quotable: it attaches the corpus identity
+ * and configuration width, and the returned summary gains `ruled` (with its citation string) and
+ * `rulerStatus: 'ruled'`. Omitting it yields `rulerStatus: 'UNRULED'`, and any attempt to record or
+ * compare that summary's metrics is refused downstream. Prefer `scoreBenchmarkRuled`, which makes the
+ * ruler a required argument rather than an easily-forgotten option.
+ */
 export async function scoreBenchmark(
   items: BenchmarkItem[],
   evaluate: EvaluateFn,
-  opts: { onSample?: (r: BenchmarkSampleResult) => void } = {},
+  opts: { onSample?: (r: BenchmarkSampleResult) => void; ruler?: MeasurementRuler } = {},
 ): Promise<BenchmarkSummary> {
   let tp = 0, fp = 0, fn = 0, tn = 0;
   const samples: BenchmarkSampleResult[] = [];
@@ -128,5 +184,43 @@ export async function scoreBenchmark(
   const recall = tp / (tp + fn || 1);
   const f1 = (2 * precision * recall) / (precision + recall || 1);
   const accuracy = (tp + tn) / (items.length || 1);
-  return { dataset: String(dataset), n: items.length, tp, fp, fn, tn, precision, recall, f1, accuracy, samples };
+
+  // Attach the ruler when one was supplied. `recordMeasurement` validates it and throws if it is
+  // incomplete — a bad ruler fails here rather than producing a number that looks authoritative.
+  const ruled = opts.ruler
+    ? recordMeasurement({ matrix: { tp, fp, fn, tn }, ruler: opts.ruler })
+    : undefined;
+
+  return {
+    dataset: String(dataset),
+    n: items.length,
+    tp, fp, fn, tn,
+    precision, recall, f1, accuracy,
+    samples,
+    rulerStatus: ruled ? 'ruled' : 'UNRULED',
+    ...(ruled ? { ruled } : {}),
+  };
+}
+
+/**
+ * The sanctioned measurement entry point: identical to `scoreBenchmark` except the ruler is REQUIRED.
+ *
+ * `scoreBenchmark` keeps its optional-ruler signature so existing callers continue to compile, but new
+ * measurement code should use this one — a required argument is the difference between a rule and a
+ * suggestion, and the suggestion is what left every historical F1 unattributable.
+ *
+ * The returned summary always has `rulerStatus === 'ruled'` and a populated `ruled.citation`.
+ */
+export async function scoreBenchmarkRuled(
+  items: BenchmarkItem[],
+  evaluate: EvaluateFn,
+  opts: { ruler: MeasurementRuler; onSample?: (r: BenchmarkSampleResult) => void },
+): Promise<BenchmarkSummary & { ruled: RuledMeasurement }> {
+  const summary = await scoreBenchmark(items, evaluate, opts);
+  // Unreachable unless scoreBenchmark's contract is broken; asserted so a future refactor cannot
+  // silently downgrade this path to UNRULED.
+  if (!summary.ruled) {
+    throw new Error('[hal-benchmark] scoreBenchmarkRuled produced an UNRULED summary — contract violated');
+  }
+  return summary as BenchmarkSummary & { ruled: RuledMeasurement };
 }
