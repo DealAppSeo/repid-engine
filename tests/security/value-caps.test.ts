@@ -18,10 +18,17 @@ jest.mock('../../src/db', () => ({
   }
 }));
 
-// Mock authentication middleware
+// Mock authentication middleware.
+//
+// `agent_id` added 2026-08-04: /escrow now requires a caller bound to an agent that
+// is a PARTY to the contract, so a mock that set `apiKey` alone (the shared
+// REPID_API_KEYS shape) is refused with 403 before any cap logic runs. 'buyer-456'
+// is the buyer on this suite's contract fixture. This suite is about value caps —
+// the authorization refusal is covered in tests/contracts-party-routes.test.ts.
 jest.mock('../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
     req.apiKey = { key: 'test-key', tier: 'premium' };
+    req.agent_id = 'buyer-456';
     next();
   }
 }));

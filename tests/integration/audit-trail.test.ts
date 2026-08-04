@@ -2,10 +2,16 @@ import request from 'supertest';
 import app from '../../src/index';
 import { db } from '../../src/db';
 
-// Mock authentication
+// Mock authentication.
+//
+// `agent_id` added 2026-08-04: /escrow now requires a caller bound to an agent that
+// is a PARTY to the contract, and `apiKey` alone is the shared-REPID_API_KEYS shape
+// that carries no identity. 'buyer-123' is the buyer on this suite's contract
+// fixture.
 jest.mock('../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
     req.apiKey = { key: 'test-key', tier: 'premium' };
+    req.agent_id = 'buyer-123';
     next();
   }
 }));
