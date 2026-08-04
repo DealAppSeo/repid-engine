@@ -161,3 +161,176 @@ export function partyGuardLogLine(a: UnboundAccessAssessment): string {
     `mode=${a.mode} contract=${a.contractId} action=${a.action ?? 'root'} — ${a.reason}`
   );
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * THE SAME HOLE, ONE RESOURCE UPSTREAM: SERVICE LISTINGS
+ * ══════════════════════════════════════════════════════════════════════════════
+ * The guard above closes `/contracts/<uuid>/…`. It does not close the listings
+ * those contracts are created FROM, and there the nesting bug is not merely a
+ * gap — it is INVERTED. On `PATCH /services/<id>` and `DELETE /services/<id>`
+ * the bound-key path fails the generic path-UUID equality check in `auth.ts`
+ * (a service id is a UUID and is never equal to the caller's agent id), so an
+ * identified agent is refused on every row INCLUDING ITS OWN. The unidentified
+ * caller skips that check with the rest of the block and reaches every row.
+ * The only caller who can mutate a listing is the one nobody can attribute.
+ *
+ * On `POST /services` the shape is the ordinary one: `provider_agent_id` comes
+ * from the body, `auth.ts` checks it against the bound identity (it is in
+ * IDENTITY_FIELDS), and an unbound caller is not checked at all — so a listing
+ * can be created under another agent's provider identity.
+ *
+ * Why this is worth closing and not just noting: the listing row is read back
+ * as authority at award time. `routes/v1/negotiation.ts` re-asserts `active`
+ * and `min_repid_to_purchase` from `agent_services` when a buyer accepts a bid
+ * (`service_inactive` / `buyer_repid_below_service_minimum`). So flipping one
+ * boolean on a rival's row denies an award that was already won — no forged
+ * identity, no signature, no payment involved. `agent_services.provider_agent_id`
+ * is a NOT NULL uuid and is the ownership column (verified against
+ * information_schema, not the generated types, which are stale).
+ *
+ * SAME SWITCH, DELIBERATELY. The condition is identical — an authenticated
+ * caller with no bound agent identity performing an identity-scoped mutation —
+ * so this reads `CONTRACT_PARTY_ENFORCEMENT` rather than adding a second knob.
+ * One shadow run measures both surfaces; one flip enforces both. A second flag
+ * for the same condition is how half a rule ends up enabled.
+ *
+ * The bound-key path is again untouched: `hasBoundAgent` short-circuits first.
+ * Note that this means the INVERTED refusal above is NOT fixed here — a bound
+ * agent still cannot edit its own listing. That is a real defect, it lives in
+ * the load-bearing bound-key block, and widening that block is exactly the
+ * change this lane was told not to make. It is reported, not patched.
+ */
+
+/** `/services/<uuid>` — the mutate/delist target. Both mount prefixes. */
+const SERVICE_ITEM_PATH =
+  /^(?:\/api\/v1)?\/services\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
+
+/** `/services` — the collection root, where a listing is created. */
+const SERVICE_COLLECTION_PATH = /^(?:\/api\/v1)?\/services\/?$/i;
+
+export type ServiceMutationAction = 'create' | 'update' | 'delist';
+
+export interface UnboundServiceAssessment {
+  /** True when this request is an unidentified caller mutating a service listing. */
+  isUnboundServiceMutation: boolean;
+  serviceId: string | null;
+  action: ServiceMutationAction | null;
+  mode: PartyEnforcementMode;
+  /**
+   * True only when the observation should be LOGGED — i.e. `shadow` or `enforce`.
+   *
+   * Deliberately different from `assessUnboundContractAccess`, which its caller
+   * logs whenever it matches, including at `off`. That means a listing mutation
+   * would start emitting warn lines in production the moment this merged, with
+   * no flag flipped — and it would make `shadow` unmeasurable, because `off`
+   * would already produce the identical line. `off` here means off: silent,
+   * behaviourally identical, nothing to grep. Logging is what you opt INTO.
+   *
+   * (That the contract assessor logs at `off` is a real inconsistency, but it
+   * belongs to the PR that added it and is reported rather than changed here.)
+   */
+  observe: boolean;
+  /** True only when the request should actually be refused. */
+  refuse: boolean;
+  reason: string | null;
+}
+
+/**
+ * Assess one request against the service-listing surface. Pure — no express, no
+ * database, no I/O.
+ *
+ * Only the three shapes that correspond to real routes are matched
+ * (`POST /services`, `PATCH /services/<id>`, `DELETE /services/<id>`). Flagging
+ * shapes that 404 anyway would only add noise to the shadow log that has to be
+ * read to make the enforce decision.
+ *
+ * GET is absent for the same reason it is absent above, and more so here:
+ * `/services` browse and `/services/<id>` detail are the marketplace discovery
+ * surface — `/services/<id>/manifest.json` is even mounted BEFORE auth on the
+ * stated grounds that a discovery surface behind a key is not a discovery
+ * surface. Blocking reads would break discovery without closing anything.
+ */
+export function assessUnboundServiceMutation(input: {
+  path: string;
+  method: string;
+  hasBoundAgent: boolean;
+  mode?: PartyEnforcementMode;
+}): UnboundServiceAssessment {
+  const mode = input.mode ?? partyEnforcementMode();
+  const base: UnboundServiceAssessment = {
+    isUnboundServiceMutation: false,
+    serviceId: null,
+    action: null,
+    mode,
+    observe: false,
+    refuse: false,
+    reason: null,
+  };
+
+  // A bound key is the other path's responsibility. Stated explicitly so the two
+  // can never both claim one request.
+  if (input.hasBoundAgent) return base;
+
+  const method = input.method.toUpperCase();
+  const path = input.path.split('?')[0] ?? input.path;
+
+  let serviceId: string | null = null;
+  let action: ServiceMutationAction | null = null;
+
+  if (method === 'POST' && SERVICE_COLLECTION_PATH.test(path)) {
+    action = 'create';
+  } else {
+    const m = SERVICE_ITEM_PATH.exec(path);
+    if (m) {
+      if (method === 'PATCH') action = 'update';
+      else if (method === 'DELETE') action = 'delist';
+      if (action) serviceId = m[1] ?? null;
+    }
+  }
+
+  if (!action) return base;
+
+  return {
+    ...base,
+    isUnboundServiceMutation: true,
+    serviceId,
+    action,
+    observe: mode !== 'off',
+    refuse: mode === 'enforce',
+    reason:
+      action === 'create'
+        ? `caller is authenticated but has no bound agent identity, so the ` +
+          `provider_agent_id it declares for this listing cannot be checked ` +
+          `against it`
+        : `caller is authenticated but has no bound agent identity, so it cannot ` +
+          `be checked against this listing's provider`,
+  };
+}
+
+/** Refusal body — same `unbound_caller` code, so one condition keeps one name. */
+export function unboundServiceRefusalBody(a: UnboundServiceAssessment) {
+  return {
+    error: 'unbound_caller',
+    message:
+      a.action === 'create'
+        ? `This API key is not bound to an agent, so it cannot create a service ` +
+          `listing on another agent's behalf. Use an agent-issued key.`
+        : `This API key is not bound to an agent, so it cannot ${a.action} service ` +
+          `listing ${a.serviceId}. Use an agent-issued key.`,
+    service_id: a.serviceId,
+    action: a.action,
+  };
+}
+
+/**
+ * Same `[contract-party-guard]` prefix and same REFUSED/WOULD-REFUSE verbs as the
+ * contract line, so the single grep that answers "is anything still doing this?"
+ * covers both surfaces. `resource=` tells them apart.
+ */
+export function serviceGuardLogLine(a: UnboundServiceAssessment): string {
+  return (
+    `[contract-party-guard] ${a.refuse ? 'REFUSED' : 'WOULD-REFUSE'} ` +
+    `resource=service mode=${a.mode} service=${a.serviceId ?? 'new'} ` +
+    `action=${a.action} — ${a.reason}`
+  );
+}
