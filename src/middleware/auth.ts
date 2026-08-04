@@ -4,8 +4,11 @@ import { validateAgentApiKey } from '../auth/api-keys';
 import { logAgentEvent } from '../engine/agent-log';
 import {
   assessUnboundContractAccess,
+  assessUnboundServiceMutation,
   partyGuardLogLine,
+  serviceGuardLogLine,
   unboundRefusalBody,
+  unboundServiceRefusalBody,
 } from './contract-party-guard';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
@@ -341,6 +344,40 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     if (partyAssessment.refuse) {
       return res.status(403).json(unboundRefusalBody(partyAssessment));
     }
+  }
+
+  // ── THE SAME HOLE, ONE RESOURCE UPSTREAM ───────────────────────────────────
+  // The guard above covers `/contracts/<uuid>`. It does not cover the LISTINGS
+  // those contracts are created from, and on `PATCH`/`DELETE /services/<id>` the
+  // nesting bug is inverted rather than merely absent: the generic path-UUID
+  // check inside `if (dbAgentId)` compares a SERVICE id to the caller's AGENT id,
+  // so a bound agent is refused on every listing including its own — while the
+  // unidentified caller skips that check with the rest of the block and reaches
+  // every row. The only caller who can edit a listing is the one nobody can
+  // attribute.
+  //
+  // It is not cosmetic: `routes/v1/negotiation.ts` re-reads `active` and
+  // `min_repid_to_purchase` from `agent_services` when a buyer accepts a bid, so
+  // flipping one boolean on a rival's row denies an award that was already won.
+  //
+  // Same env switch on purpose — the condition is identical (authenticated,
+  // no bound identity, identity-scoped mutation), so one shadow run measures both
+  // surfaces and one flip enforces both. GET is untouched: /services browse and
+  // detail are the discovery surface.
+  const serviceAssessment = assessUnboundServiceMutation({
+    path: req.path,
+    method: req.method,
+    hasBoundAgent: Boolean(dbAgentId),
+  });
+  // `observe` (not merely `isUnboundServiceMutation`) gates the log, so `off`
+  // stays silent — otherwise this would start writing warn lines in production
+  // with no flag flipped, and `shadow` would measure nothing that `off` did not
+  // already emit.
+  if (serviceAssessment.observe) {
+    console.warn(serviceGuardLogLine(serviceAssessment));
+  }
+  if (serviceAssessment.refuse) {
+    return res.status(403).json(unboundServiceRefusalBody(serviceAssessment));
   }
 
   next();
