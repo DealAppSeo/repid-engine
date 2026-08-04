@@ -6,7 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `repid-engine` is the proprietary behavioral reputation scoring backend for the HyperDAG Protocol Trust* ecosystem (`trustrepid.dev` · github.com/DealAppSeo/hyperdag-protocol). It is an Express API that mutates agent reputation (`repid`) scores in Supabase and stubs out an EAS / ERC-8004 / ZKP attestation pipeline.
 
-Private, proprietary — not for public distribution.
+> ## ⚠ THIS REPOSITORY IS **PUBLIC**
+>
+> Verified 2026-08-04: `gh api repos/DealAppSeo/repid-engine --jq .visibility` → **`public`**.
+>
+> This line previously read *"Private, proprietary — not for public distribution."*
+> **That was false**, and `INFRA_INVENTORY.md` repeats the same error. Every agent that
+> read this file inherited the wrong premise — including one that published a detailed
+> account of a committed production key, naming the file and the project, in a public
+> pull request body.
+>
+> **Consequences that are not optional:**
+> - Everything in this repo, every PR title, body and comment, and every commit message
+>   is world-readable and permanent. A published secret cannot be withdrawn.
+> - State FINDINGS, not inventories. *"A production key was committed and must be
+>   rotated"* is actionable. The key, the project id, the row counts and the service
+>   names are an incident.
+> - Secrets in git HISTORY are public even after the file is deleted from `HEAD`.
+>   Deletion is not rotation.
+> - `scripts/hooks/publication-guard.js` blocks the shapes it can recognise. It cannot
+>   recognise prose, so the judgement about metrics and identifiers is yours.
+>
+> The code remains proprietary by licence; it is not private by access.
 
 ## Commands
 

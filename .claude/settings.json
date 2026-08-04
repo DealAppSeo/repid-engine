@@ -25,6 +25,15 @@
             "command": "node scripts/hooks/lane-write-guard.js"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/publication-guard.js"
+          }
+        ]
       }
     ]
   }
