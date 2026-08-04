@@ -6,6 +6,7 @@ import { applyDecay, computeRedemptionModifier } from '../layers/decay';
 import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges, BadgeAward } from './badges';
 import { DETECTION_CONFIRM_THRESHOLD } from './behavioral-integrity';
+import { assessLedger, ledgerColumns, ledgerMetadata, logLedger } from './ledger-reconcile';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -503,6 +504,27 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
 
+  // 7b — LEDGER RECONCILIATION (see engine/ledger-reconcile.ts for the full rationale).
+  // The `delta` column below records the delta the EVENT earned. Decay (step 3, which
+  // runs unconditionally on this path) and the [10, 10000] clamp can both move the
+  // score WITHOUT appearing in it — so an event whose penalty was correctly withheld
+  // (finalDelta 0) can still land a row whose score went down, and the row reads
+  // "nothing was applied". Assess the decomposition here and log any contradiction
+  // LOUDLY in every mode; only ENGINE_LEDGER_RECONCILE_MODE=enforce changes the row.
+  //
+  // WRITER_DIRECT_APPLY is resolved here rather than at the update below because the
+  // assessment depends on WHO applies: with the app applying, the movement is
+  // after-before; without it, the DB trigger applies the bare delta.
+  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  const ledger = assessLedger({
+    before: agent.current_repid,
+    decayedTo: isShadowDeception ? agent.current_repid : decayedRepId,
+    delta: finalDelta,
+    after: newRepId,
+    scoreMutated: WRITER_DIRECT_APPLY && !isShadowDeception,
+  });
+  logLedger(ledger, { agentId: input.agentId, eventType: input.eventType });
+
   // 8 — AUDIT ROW FIRST (atomicity reorder, 2026-06-29). Write the replayable ledger row BEFORE
   // mutating the score, so a failed insert can NEVER leave current_repid changed without an audit
   // row (the drift proven live: a constraint-failed insert had mutated the score first). If the
@@ -535,6 +557,10 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     ecosystem_need_weight: ecosystemNeedWeight,
     mirror_test_triggered: input.mirrorTestTriggered ?? !audit.mirrorTestPassed,
     eas_attestation_id: audit.easAttestationId,
+    // ENFORCE-ONLY column: repid_delta_applied = the REAL movement, which also makes
+    // the DB trigger apply_repid_score_event back off so there is exactly one applier.
+    // Empty object in off/shadow — the payload is unchanged by default.
+    ...ledgerColumns(ledger),
     // (S-HONEST-HAL) record mode kept in metadata.mode — prod repid_score_events has NO top-level
     // `mode` column; a top-level write here silently failed the whole audit insert (see throw below).
     metadata: {
@@ -580,6 +606,10 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // In shadow (default) the top-level `delta` is UNCHANGED — would_gate only
       // flags what enforce WOULD have zeroed.
       self_report_evidence: selfReportEvidenceMeta,
+      // Decomposition of what actually moved the score (decay / delta / clamp) and
+      // whether this row reconciles. Empty object in `off` — no key is added to any
+      // event by default; shadow records it so the enforce flip can be sized.
+      ...ledgerMetadata(ledger),
     },
   });
 
@@ -604,7 +634,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // (still risky if decay were ever reintroduced) and (b) increment activity_30d
   // — a side effect that is NOT inert. A shadow measurement must leave both
   // current_repid AND activity_30d untouched, so we do not write at all.
-  const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  // (WRITER_DIRECT_APPLY resolved at step 7b — the ledger assessment needs it too.)
   if (WRITER_DIRECT_APPLY && !isShadowDeception) {
     await db.from('repid_agents').update({
       current_repid: newRepId, tier: newTier,
