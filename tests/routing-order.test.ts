@@ -27,6 +27,27 @@ jest.mock('../src/billing/caps', () => ({
     .mockResolvedValue({ allowed: true, monthly_limit: 0, current_spent: 0, hard_disabled: false }),
 }));
 
+/**
+ * NEUTRALISE dotenv. This test asserts the routing chain for a CONTROLLED set of keys,
+ * and without this it silently asserts the chain for whatever is in the developer's
+ * `.env` instead.
+ *
+ * The mechanism, because it is not obvious: the cases below `delete process.env[k]`
+ * and then `jest.resetModules()` + `require('../src/providers/router')`. That re-runs
+ * `src/config.ts`, which calls `dotenv.config()` — and dotenv only skips keys that are
+ * ALREADY PRESENT, so it cheerfully re-injects the variable the test just deleted.
+ *
+ * It was hermetic only while `.env` happened to lack those keys. Adding a real
+ * `ZAI_API_KEY` on 2026-08-04 broke it immediately, which is the good outcome: a test
+ * that passes because of what is MISSING from a machine is not testing anything. It
+ * would equally have gone green on CI and red for one developer, with no explanation.
+ */
+jest.mock('dotenv', () => ({
+  __esModule: true,
+  config: () => ({ parsed: {} }),
+  default: { config: () => ({ parsed: {} }) },
+}));
+
 /** Env keys that gate the three optional tier-0a providers. */
 const OPTIONAL_KEYS = ['ZAI_API_KEY', 'SAMBANOVA_API_KEY', 'OPENROUTER_API_KEY'] as const;
 const FLAGS = [
