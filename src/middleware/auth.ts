@@ -2,6 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
 import { validateAgentApiKey } from '../auth/api-keys';
 import { logAgentEvent } from '../engine/agent-log';
+import {
+  assessUnboundContractAccess,
+  partyGuardLogLine,
+  unboundRefusalBody,
+} from './contract-party-guard';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   if (req.method === 'OPTIONS') return next();
@@ -312,6 +317,32 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       }
     }
   }
+
+  // ── THE BRANCH THAT WAS MISSING ────────────────────────────────────────────
+  // Everything above is inside `if (dbAgentId)`. A shared REPID_API_KEYS env key
+  // authenticates fine and leaves `dbAgentId` undefined, so a caller with NO agent
+  // identity skipped every party check and could mutate anyone's contract.
+  // `/fulfill` and `/satisfy` noticed and self-defend with `unbound_caller`;
+  // `/escrow`, `/cancel`, `/dispute` and `/resolve` did not — and `/escrow` is the
+  // one that moves a contract to `escrowed` without payment when
+  // `X402_ENFORCEMENT_ENABLED` is unset (it is compared to the literal 'true').
+  //
+  // Default OFF: byte-identical to today. `shadow` logs what it would refuse so the
+  // real question — does any live integration still drive contracts with a shared
+  // key? — is answered from traffic rather than from argument. Only `enforce`
+  // refuses, and it reuses the `unbound_caller` code the other two already return.
+  const partyAssessment = assessUnboundContractAccess({
+    path: req.path,
+    method: req.method,
+    hasBoundAgent: Boolean(dbAgentId),
+  });
+  if (partyAssessment.isUnboundContractMutation) {
+    console.warn(partyGuardLogLine(partyAssessment));
+    if (partyAssessment.refuse) {
+      return res.status(403).json(unboundRefusalBody(partyAssessment));
+    }
+  }
+
   next();
 };
 
