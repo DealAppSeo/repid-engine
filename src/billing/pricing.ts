@@ -19,6 +19,16 @@ export const PRICING_PER_1M_TOKENS: Record<string, Record<string, { in: number; 
     'glm-4.7': { in: 0, out: 0 }
   },
   gemini: {
+    // 2026-08-04: `gemini-2.0-flash` is RETIRED (HTTP 404 on every call) and the HAL
+    // default moved to `gemini-2.5-flash`, which had NO row — so every call emitted
+    // "UNPRICED MODEL" and ledgered at 0. Left alone that is the same shape as the
+    // phantom $1.44, pointed the other way: instead of inventing a cost it hides one.
+    // Priced explicitly at the published paid rate rather than 0, because 0 here would
+    // assert a free tier this key has not been shown to be on.
+    'gemini-2.5-flash': { in: 0.30, out: 2.50 },
+    'gemini-2.5-flash-lite': { in: 0.10, out: 0.40 },
+    // Retired upstream. Kept so historical rows stay costable — deleting a row would
+    // silently reprice the past.
     'gemini-2.0-flash': { in: 0.075, out: 0.30 },
     'gemini-1.5-flash': { in: 0.075, out: 0.30 },
     'gemini-1.5-pro': { in: 1.25, out: 5.00 }
