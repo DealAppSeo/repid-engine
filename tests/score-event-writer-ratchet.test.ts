@@ -18,6 +18,29 @@
  *
  * If it fails because you MIGRATED one: delete its line from ALLOWED. That is the
  * intended direction and the only edit that should ever shrink this list.
+ *
+ * ─── AMENDED 2026-08-03 (services lane) ─────────────────────────────────────
+ * "Writer #12 fails this test on arrival" was not true, and writer #12 had
+ * already arrived. `hasRawInsert()` matched only the supabase-js dialect
+ * (`from('repid_score_events') … .insert(`), so `src/services/peer-verify-score.ts`
+ * — which inserts with raw SQL through `pgQuery` — was invisible to it, absent
+ * from ALLOWED, and uncounted. `<= 11` was the count of writers this test could
+ * SEE, presented as the count of writers that exist.
+ *
+ * Two changes, both narrow:
+ *   1. `hasRawInsert()` now recognises BOTH dialects, so a raw-SQL writer can
+ *      never again be added without failing this test.
+ *   2. `src/services/peer-verify-score.ts` is listed, and the bound is the true
+ *      12. Direction of travel is still DOWN and only migrations may shrink it.
+ *
+ * Counted independently rather than inherited: 16 insert sites across 13 files
+ * under `src/` in both dialects, of which one file is the helper itself → 15
+ * sites across 12 writer files. Under `src/services/**` specifically: 3 sites in
+ * 3 files (`peer-verify-score.ts:47` raw-SQL, `repid-earning.ts:178`,
+ * `substance-gate-writer.ts:170`).
+ *
+ * NOTE this test is file-level by design and stays that way; the SITE-level and
+ * per-dialect count lives in `tests/writers-raw-insert-ratchet.test.ts`.
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs';
@@ -47,6 +70,12 @@ const ALLOWED_RAW_INSERTERS = new Set<string>([
   'src/testing/t12-e2e-proof.ts',
   // ── event-only (never writes current_repid) — lowest risk ────────────────────
   'src/routes/mirror-test.ts',
+  // ── raw SQL via pgQuery — writer #12, which the supabase-js-only regex above
+  //    could not see. Never writes current_repid, so the trigger is its sole
+  //    applier and it cannot double-apply on any ordering. It also cannot insert
+  //    at all today (42P10 on an unresolvable ON CONFLICT, then 23514 on the
+  //    event_type whitelist) — see the header of that file.
+  'src/services/peer-verify-score.ts',
   // ── documented but dormant: zero events in 30 days (see REPID_TWO_PATH_DIVERGENCE)
   'src/engine/repid-update.ts',
 ]);
@@ -66,10 +95,17 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Matches an insert on the table, tolerating whitespace and chained calls. */
+/**
+ * Matches an unguarded insert on the table in EITHER dialect.
+ *
+ * The supabase-js arm tolerates whitespace and chained calls. The raw-SQL arm is
+ * the one this test was missing: a writer using `pgQuery` never mentions
+ * `.from(...)`, so it slipped past entirely.
+ */
 function hasRawInsert(source: string): boolean {
-  const re = /from\(\s*['"]repid_score_events['"]\s*\)[\s\S]{0,200}?\.insert\(/;
-  return re.test(source);
+  const supabaseJs = /from\(\s*['"`]repid_score_events['"`]\s*\)[\s\S]{0,400}?\.\s*insert\s*\(/;
+  const rawSql = /INSERT\s+INTO\s+(?:public\.)?repid_score_events/i;
+  return supabaseJs.test(source) || rawSql.test(source);
 }
 
 describe('raw score-event inserts are a ratchet, not a habit', () => {
@@ -98,6 +134,24 @@ describe('raw score-event inserts are a ratchet, not a habit', () => {
     // Not an assertion about quality — a tripwire on the number, so a silent
     // increase is impossible even if someone edits the list.
     expect(found.size).toBe(ALLOWED_RAW_INSERTERS.size);
-    expect(found.size).toBeLessThanOrEqual(11);
+    // 12, not 11. The old bound was the count of writers this test could see.
+    expect(found.size).toBeLessThanOrEqual(12);
+  });
+
+  it('sees the raw-SQL dialect, not just supabase-js', () => {
+    // Guards the hole itself. `peer-verify-score.ts` has no `.from(...)` call at
+    // all, so if this file is ever absent from `found` the widened regex has
+    // regressed and writer #13 could arrive by pgQuery unnoticed.
+    expect(found.has('src/services/peer-verify-score.ts')).toBe(true);
+  });
+
+  it('every writer under src/services/** is accounted for', () => {
+    // Counted independently, both dialects, sites not files: 3 sites / 3 files.
+    const services = [...found].filter((f) => f.startsWith('src/services/')).sort();
+    expect(services).toEqual([
+      'src/services/peer-verify-score.ts',
+      'src/services/repid-earning.ts',
+      'src/services/substance-gate-writer.ts',
+    ]);
   });
 });
