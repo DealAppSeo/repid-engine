@@ -1,0 +1,82 @@
+-- 2026-08-04-drop-vacuous-success-criteria-default.sql   (D-101 · APPLIED 2026-08-04)
+--
+-- Drop the DEFAULT on trinity_tasks.success_criteria.
+--
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- WHY NULL IS BETTER THAN THE STRING
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 'Pass default checks.' is worse than NULL because it DISGUISES ABSENCE AS A
+-- STATEMENT. A verifier, gate, or human reading the column sees text and concludes
+-- an acceptance bar exists. NULL says "nobody stated one" — which is the truth, and
+-- which every reader already handles.
+--
+-- This is the structural companion to D-100 (which hoisted real criteria into
+-- dispatch_e2e_smoke). D-100 fixed the one live producer; this makes the next
+-- producer that forgets fail loudly instead of silently inheriting a fake bar.
+--
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- DEPENDENCY AUDIT BEFORE APPLYING  [V 2026-08-04]
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- Database:  is_nullable already YES. No CHECK constraint, no index, no view or
+--            matview, no RLS policy references the column. Two functions matched a
+--            text search: dispatch_e2e_smoke (sets it explicitly — unaffected) and
+--            prune_trinity_logs_batch, which is a FALSE POSITIVE — it matches the
+--            log action name 'success_criteria_skipped' in trinity_agent_logs, not
+--            this column.
+--
+-- repid-engine: ZERO readers of the DB column. index.ts:228 is a sanitizer key-name
+--            set; routes/v1/controller.ts reads req.body on the insert path and
+--            always supplies a value; database.types.ts already types it
+--            `string | null`.
+--
+-- trinity-symphony-shared: all readers already null-safe.
+--   ConstitutionalAgentV4.js:1072 understandTask() — `!task.success_criteria`
+--       returns { ok:false, reason:'success_criteria_missing' } EXPLICITLY.
+--   V4.js:2327 / ConstitutionalAgent.ts:1489 — truthiness-guarded.
+--   V4.js:872 — copies parent's value to an EVERGREEN child; NULL propagates.
+--   substance-gate-client.js:55 — reason-string prefix check.
+--   V4.js:1500 `CRITERIA: ${task.success_criteria}` is the only interpolation and
+--       would render the literal "null" — but it is UNREACHABLE with NULL:
+--       understandTask() has exactly one call site (V4.js:978, STEP 2) and on
+--       failure fires insertHitlRequest + releaseTask + continue, so the executor
+--       never runs.
+--   Already covered by tests/escalation-contract.test.js:36, which asserts
+--       success_criteria:'' -> 'success_criteria_missing' — the branch NULL takes.
+--
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- BEHAVIOUR CHANGE — INTENDED, AND NOT A NO-OP
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- BEFORE: an insert omitting the column got 'Pass default checks.' — truthy and
+--         non-empty — so it PASSED understandTask and the task RAN against a
+--         meaningless bar.
+-- AFTER:  it gets NULL, FAILS understandTask, and routes to HITL
+--         ('clarification_needed') with the task released back to the pool.
+--
+-- ⚠ SEQUENCING NOTE FOR WHOEVER REVIVES A BULK PRODUCER — READ THIS FIRST.
+-- That is ONE HITL ROW PER TASK. fn_regenerate_monitoring_tasks alone wrote 62,718
+-- rows in 30 days; the HITL queue currently holds ~13 items. Give a producer real
+-- success_criteria BEFORE reviving it, not after, or the queue is buried.
+-- Currently dormant producers (no cron, no trigger, explicit caller required):
+--   fn_regenerate_monitoring_tasks (peer_verify), auto_recur, spawn_evergreen_tasks,
+--   spawn_next_stage, maybe_spawn_harder_variant, record_failure,
+--   trigger_buddy_system, trigger_buddy_on_empty_artifact
+-- plus the JS producers in trinity-symphony-shared (ConstitutionalAgent.ts x6,
+-- constitutional-agent-base.js:805, ConstitutionalAgentV4.js:879).
+--
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- BLAST RADIUS AT APPLY TIME: ZERO
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- Touches no existing row. Pre-apply [V]: 340,958 rows carry the default text,
+-- 0 rows NULL, 363,015 total. Post-apply [V]: identical, column_default = (none).
+-- Every producer that could hit the new path is dormant; the one live producer
+-- (dispatch_e2e_smoke, D-100) sets the column explicitly.
+
+ALTER TABLE public.trinity_tasks ALTER COLUMN success_criteria DROP DEFAULT;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ROLLBACK — one statement, no data change:
+--
+--   ALTER TABLE public.trinity_tasks
+--     ALTER COLUMN success_criteria SET DEFAULT 'Pass default checks.'::text;
+-- ═══════════════════════════════════════════════════════════════════════════════
