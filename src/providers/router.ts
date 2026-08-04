@@ -16,6 +16,8 @@ import { db } from '../db';
 import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
 import { applyEscalationOnly } from '../services/anfis-escalation-gate'; // 2026-07-30 bounded live authority (PR #281)
 import { persistShadowDecision } from '../services/anfis-shadow-persist'; // persist shadow decision so ANFIS is measurable (shadow-only, no routing change)
+import { operationalCostClass, declaredFree } from './cost-class';
+import { buildRoutingRecord, summarizeRoutingRecord, RoutingRecord } from '../decisioning/routing-record';
 
 export interface RouteRequest {
   prompt: string;
@@ -85,7 +87,42 @@ function buildTier0aAdapters(): ProviderAdapter[] {
   if (process.env.ROUTER_ENABLE_OPENROUTER !== 'false' && process.env.OPENROUTER_API_KEY?.trim()) {
     chain.push(new OpenRouterAdapter());
   }
-  return chain;
+  return applyFreeFirstOrder(chain);
+}
+
+/**
+ * OPT-IN free-first reordering. DEFAULT OFF — the chain returned is byte-identical to
+ * the one above unless ROUTER_FREE_FIRST_ORDER=true.
+ *
+ * WHY IT IS NEEDED: the comment above claims OpenRouter sits "after the free + cheap
+ * providers". It does not. OpenRouter is in FREE_PROVIDERS, and the three providers
+ * placed ahead of it — gemini, cohere, deepseek — are NOT. So on the current chain a
+ * burst that exhausts groq/cerebras reaches PAID gemini while a free provider is still
+ * untried. The repo's own test encodes this: tests/providers/router.test.ts:22
+ * "groq unhealthy picks gemini" asserts the paid pick as correct behaviour.
+ *
+ * WHY IT IS OFF BY DEFAULT: this is live routing. Which provider serves production
+ * traffic is not a change to make from a static reading — OpenRouter's own adapter
+ * comment (openrouter.ts:16-20) documents that its earlier `:free` slug 429'd hard, and
+ * moving it ahead of three working providers could trade cost for availability. The
+ * flip wants a canary and Sean's GO, and it reverses in one env change.
+ *
+ * The ordering is a STABLE partition on free-tier entitlement (FREE_PROVIDERS), not on
+ * list price — see cost-class.ts:operationalCostClass for why those differ. Relative
+ * order within each group is preserved, so the deliberate placements above (zai after
+ * groq/cerebras because a brand-new free tier would put a 429+retry in front of every
+ * request) survive intact.
+ */
+export function applyFreeFirstOrder(chain: ProviderAdapter[]): ProviderAdapter[] {
+  if (process.env.ROUTER_FREE_FIRST_ORDER !== 'true') return chain;
+  const free = chain.filter((a) => declaredFree(a.name));
+  const rest = chain.filter((a) => !declaredFree(a.name));
+  const reordered = [...free, ...rest];
+  console.log(
+    '[router] ROUTER_FREE_FIRST_ORDER=true — tier-0a chain reordered free-tier-first: ' +
+      `${chain.map((a) => a.name).join(' > ')}  =>  ${reordered.map((a) => a.name).join(' > ')}`,
+  );
+  return reordered;
 }
 
 const tier0aAdapters: ProviderAdapter[] = buildTier0aAdapters();
@@ -94,6 +131,53 @@ const tier1Adapters: ProviderAdapter[] = [
   new AnthropicAdapter(),
   new OpenAIAdapter()
 ];
+
+/**
+ * The routing order, as data.
+ *
+ * The chains above are module-private consts built once at import, so until now the
+ * only way to learn what order production actually walks was to read the source and
+ * mentally evaluate four env-gated `if` blocks. That is not something a test, a health
+ * endpoint, or an operator preparing a flip can do. These accessors expose the chain
+ * AS BUILT in this process — including which optional providers actually joined.
+ *
+ * INERT: read-only views over the existing arrays. They copy, so a caller cannot mutate
+ * the live chain through them.
+ */
+export function tier0aChainNames(): string[] {
+  return tier0aAdapters.map((a) => a.name);
+}
+export function tier1ChainNames(): string[] {
+  return tier1Adapters.map((a) => a.name);
+}
+export function slmChainNames(): string[] {
+  return slmAdapters.map((a) => a.name);
+}
+
+/**
+ * `ProviderAdapter.free` as each adapter declares it — surfaced ONLY so
+ * cost-class.ts:costClassDisagreements can audit it against the other two
+ * classifications. Nothing reads this field for routing; see cost-class.ts for why it
+ * is dead metadata rather than a cost fact.
+ */
+export function adapterFreeFlags(): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const a of [...tier0aAdapters, ...tier1Adapters, ...slmAdapters]) out[a.name] = a.free;
+  return out;
+}
+
+/**
+ * The full ordered candidate list a request would walk, with tiers — the input the
+ * routing record needs. Mirrors the walk order in routeRequest: SLM (low-complexity
+ * only) → tier-0a → tier-1.
+ */
+export function routingChain(includeSlm: boolean): { provider: string; tier: '0a' | '1' | 'slm' }[] {
+  const chain: { provider: string; tier: '0a' | '1' | 'slm' }[] = [];
+  if (includeSlm) for (const a of slmAdapters) chain.push({ provider: a.name, tier: 'slm' });
+  for (const a of tier0aAdapters) chain.push({ provider: a.name, tier: '0a' });
+  for (const a of tier1Adapters) chain.push({ provider: a.name, tier: '1' });
+  return chain;
+}
 
 /**
  * Resolve the API key for an adapter — THE ONE PLACE that knows how.
@@ -260,7 +344,78 @@ async function getAnfisRecommendation(domain: string): Promise<string | null> {
   }
 }
 
-export async function routeRequest(req: RouteRequest, excludeProviders: string[] = []): Promise<{
+export interface RouteResult {
+  adapter: ProviderAdapter | null;
+  decision: RouteDecision;
+  staticProvider: string;
+  staticTier: string;
+  anfisProvider: string;
+  anfisTier: string;
+  anfisConfidence: number;
+  /**
+   * Observability record for this decision — the candidate chain, each candidate's cost
+   * class, and why each one lost. Always computed (it is a pure map over ~10 names);
+   * only LOGGED when ROUTER_DECISION_RECORD=true, so log volume is unchanged by default.
+   *
+   * Additive optional field: existing callers destructure `{ adapter, decision }` and are
+   * unaffected.
+   */
+  routingRecord?: RoutingRecord;
+}
+
+/**
+ * Public entry point. Delegates to the unchanged selection logic, then attaches the
+ * observability record.
+ *
+ * INERT: the record is DESCRIPTIVE. It is built after selection is complete and cannot
+ * influence which adapter was chosen — `selectRoute` neither receives it nor knows it
+ * exists.
+ */
+export async function routeRequest(
+  req: RouteRequest,
+  excludeProviders: string[] = [],
+): Promise<RouteResult> {
+  const result = await selectRoute(req, excludeProviders);
+
+  let record: RoutingRecord;
+  try {
+    // `excludeProviders` is mutated by selectRoute (cap-hit / unhealthy providers are
+    // pushed onto it), so by now it holds the accumulated exclusion set.
+    const includeSlm = req.tier_preference === 'auto' && isLowComplexity(req.prompt, req.task_hint);
+    const chain = routingChain(includeSlm);
+    const keyless = keylessProviders(req.user_paid_keys);
+    const disabled = disabledProviders();
+    // isHealthy() is a synchronous in-memory map read (providers/health.ts) — safe to
+    // consult here without I/O. A provider the walk never reached still reports its true
+    // health, which is exactly what distinguishes "skipped, unusable" from "never tried".
+    const unhealthy = chain.map((c) => c.provider).filter((p) => !isHealthy(p));
+
+    record = buildRoutingRecord({
+      chosen: result.decision.chosen_provider,
+      chosenTier: result.decision.chosen_tier,
+      reason: result.decision.reason,
+      chain,
+      excluded: result.decision.tried,
+      disabledByConfig: disabled,
+      keyless,
+      unhealthy,
+      classify: operationalCostClass,
+    });
+
+    if (process.env.ROUTER_DECISION_RECORD === 'true') {
+      console.log('[router-record]', summarizeRoutingRecord(record));
+    }
+  } catch (e: any) {
+    // Observability must never break routing. A failed record is logged and dropped;
+    // the selected adapter is returned regardless.
+    console.warn('[router-record] failed to build routing record:', e?.message ?? e);
+    return result;
+  }
+
+  return { ...result, routingRecord: record };
+}
+
+async function selectRoute(req: RouteRequest, excludeProviders: string[] = []): Promise<{
   adapter: ProviderAdapter | null;
   decision: RouteDecision;
   staticProvider: string;
