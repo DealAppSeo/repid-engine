@@ -110,6 +110,24 @@ describe('could-not-run is a distinct outcome from hold', () => {
     expect(gradeLaneReport(bad).exit).toBe(EXIT_COULD_NOT_RUN);
   });
 
+  // Left to fall through, this would reach certifyDelta and come back as "phases are
+  // wrong" — a verdict about content, when the truth is the gate could not read it.
+  it('refuses a malformed run block instead of holding on it', () => {
+    const r = goodReport();
+    const g = gradeLaneReport({ ...r, runs: { ...r.runs, before: { phase: 'before' } } });
+    expect(g.exit).toBe(EXIT_COULD_NOT_RUN);
+    expect(formatGateResult(g)).toMatch(/numeric suites/);
+  });
+
+  it('refuses a run that does not say whether it finished', () => {
+    const r = goodReport();
+    const { complete, ...partial } = before;
+    void complete;
+    const g = gradeLaneReport({ ...r, runs: { ...r.runs, after: { ...partial, phase: 'after' } } });
+    expect(g.exit).toBe(EXIT_COULD_NOT_RUN);
+    expect(formatGateResult(g)).toMatch(/floor, not a count/);
+  });
+
   it('refuses a voice whose agreement is not true/false/null', () => {
     const r = { ...goodReport(), voices: [{ lane: 'GA', agrees: 'yes' }] };
     expect(gradeLaneReport(r).exit).toBe(EXIT_COULD_NOT_RUN);

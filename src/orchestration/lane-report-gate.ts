@@ -182,6 +182,23 @@ const couldNotRun = (...lines: string[]): GateResult => ({
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** Describe what is wrong with a recorded run, or null if it is well formed. */
+function malformedRun(r: Record<string, unknown>): string | null {
+  for (const k of ['suites', 'tests', 'passedTests'] as const) {
+    if (typeof r[k] !== 'number' || !Number.isFinite(r[k])) {
+      return `is missing a numeric ${k} — record it with \`lane-report record\`, which reads it out of jest.`;
+    }
+  }
+  if (typeof r['commit'] !== 'string' || r['commit'].length === 0) return 'has no commit';
+  if (typeof r['environmentId'] !== 'string' || r['environmentId'].length === 0) {
+    return 'has no environmentId, so it cannot be shown to come from this checkout';
+  }
+  if (typeof r['complete'] !== 'boolean') {
+    return 'does not say whether the run finished — an interrupted run\'s counts are a floor, not a count';
+  }
+  return null;
+}
+
 /**
  * Validate the envelope. Deliberately strict and deliberately EXIT 2 on failure: a
  * report the gate cannot read has not been judged, and saying "HOLD" would claim
@@ -240,6 +257,13 @@ export function parseReport(raw: unknown): Parsed<LaneReport> {
   if (runs !== undefined) {
     if (!isRecord(runs) || !isRecord(runs['before']) || !isRecord(runs['after'])) {
       return { ok: false, error: 'report.runs must contain a before and an after run' };
+    }
+    for (const phase of ['before', 'after'] as const) {
+      const bad = malformedRun(runs[phase] as Record<string, unknown>);
+      // A malformed run block is COULD_NOT_RUN, not HOLD. Left to fall through, it
+      // would reach `certifyDelta` and come back as "phases are wrong" — a verdict
+      // about the report's content, when the truth is that the gate could not read it.
+      if (bad) return { ok: false, error: `report.runs.${phase} ${bad}` };
     }
     const expected = runs['expectedSuiteDelta'];
     if (typeof expected !== 'number' || !Number.isInteger(expected)) {
