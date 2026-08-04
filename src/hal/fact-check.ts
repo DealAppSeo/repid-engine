@@ -1265,7 +1265,24 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     if (geminiViaOpenRouter) {
       out.push({ name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini!, model: process.env.HAL_S2_GEMINI_MODEL ?? 'google/gemini-3.5-flash', family: 'gemini' });
     } else if (gm) {
-      out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.0-flash', family: 'gemini' });
+      // RETIRED-MODEL FIX 2026-08-04. The default was `gemini-2.0-flash`, which Google
+      // has retired: every call on this endpoint returns HTTP 404 "This model is no
+      // longer available". So the gemini family was keyed, enabled, correctly
+      // registered — and contributed ZERO votes to every quorum, silently. That is one
+      // of the reasons live quorum width fell from 5 families to 3 (see
+      // `hal/quorum-width-monitor.ts`), and nothing surfaced it because a provider that
+      // always fails looks identical to a provider that was never configured.
+      //
+      // Verified on THIS endpoint 2026-08-04: gemini-2.5-flash, gemini-flash-latest,
+      // gemini-2.5-flash-lite and gemini-3.5-flash all return 200; gemini-2.0-flash
+      // returns 404. Note the /models list still ADVERTISES the retired slug, so the
+      // list endpoint cannot be used to check this — only a real call can.
+      //
+      // PINNED, not `-latest`, deliberately. HAL's frozen accuracy claims are stated at
+      // a fixed configuration; a floating alias silently changes the model underneath
+      // them and turns every comparison into a measurement without its ruler
+      // (CLAUDE_RULES 24). Bump it explicitly when re-measuring.
+      out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.5-flash', family: 'gemini' });
     }
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
