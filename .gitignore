@@ -56,3 +56,39 @@ pvq_results.json
 /run_*.ps1
 /seed_*.js
 /temp_*.js
+
+# THE .ts GAP IN THE RULES ABOVE (closed 2026-08-04).
+# The patterns above cover scratch_*.js / scratch_*.json / run_*.js — but NOT the
+# TypeScript equivalents. This repo is a TypeScript project, so every one-off an
+# agent or a human actually wrote landed as .ts and slipped straight past them:
+# 82 unreferenced one-off scripts, logs and dumps had accumulated in the ROOT of a
+# repo that is PUBLIC. Verified before removal — that batch held no credentials
+# (0 hardcoded project ids, 0 JWT-shaped literals, 24/38 read process.env), so it
+# was hygiene debt rather than an incident. The earlier batches this file already
+# describes were not so lucky, which is the reason to close the gap now.
+#
+# Root-scoped (leading /) on purpose: src/check-*.ts and similar are legitimate
+# module names and must stay tracked.
+/scratch_*
+/check_*.ts
+/check-*.ts
+/force_deposit*
+/find_*.ts
+/fetch_*.ts
+/test_*.ts
+/test-*.ts
+/verify*.ts
+/verify*.js
+/run_*.ts
+/step[0-9]*.ts
+/backfill_*.ts
+# Logs and terminal dumps: never belong in a repo, least of all a public one.
+/*.log
+/push_*.txt
+/pull_*.txt
+/all_ts_files.txt
+# Railway variable dumps. The one removed on 2026-08-04 held NO secret values, but
+# it did publish internal service topology and a private domain. It was UTF-16, so
+# a naive grep scan reported it clean — check the encoding before trusting a scan.
+/railway_vars.txt
+/railway_env.json
