@@ -54,6 +54,8 @@
 
 const { execFileSync } = require('node:child_process');
 const { readFileSync, existsSync } = require('node:fs');
+const { join } = require('node:path');
+const { tmpdir } = require('node:os');
 
 /** Commands that make text visible outside this machine. */
 const PUBLISHING = [
@@ -102,20 +104,43 @@ function isPublishing(cmd) {
  * Everything this command would publish: the command text itself (heredocs and
  * `--body "…"` both live here) plus any file named by `--body-file`.
  */
+/**
+ * Resolve a path the shell understands but Node may not, returning null when nothing
+ * exists.
+ *
+ * The Bash tool here is Git Bash (MSYS), so `/tmp/x.md` and `/c/Users/...` are ordinary
+ * paths to the shell and meaningless to Node on Windows. The guard blocked its OWN PR
+ * over `/tmp/pgbody.md` — correct behaviour (it genuinely could not read the file) and
+ * a usability defect at the same time. A guard that misfires on the most ordinary path
+ * in the repo gets switched off, and then it protects nothing.
+ *
+ * Mapping is tried in order and never guesses: if no candidate exists on disk we
+ * return null and the caller still fails closed.
+ */
+function resolveCandidate(raw) {
+  const candidates = [raw];
+  if (raw.startsWith('/tmp/')) candidates.push(join(tmpdir(), raw.slice(5)));
+  // MSYS drive form: /c/Users/... -> C:/Users/...
+  const drive = raw.match(/^\/([a-zA-Z])\/(.*)$/);
+  if (drive) candidates.push(`${drive[1].toUpperCase()}:/${drive[2]}`);
+  return candidates.find((c) => existsSync(c)) ?? null;
+}
+
 function gatherText(cmd) {
   const parts = [cmd];
   const notes = [];
   for (const m of cmd.matchAll(/--body-file[=\s]+("[^"]+"|'[^']+'|\S+)/g)) {
     const raw = m[1].replace(/^['"]|['"]$/g, '');
     if (raw === '-') continue; // stdin: already in the heredoc, captured above
-    if (!existsSync(raw)) {
+    const found = resolveCandidate(raw);
+    if (!found) {
       // FAIL CLOSED. We cannot scan what we cannot read, and the cost of guessing
       // wrong is a published key.
       notes.push(`--body-file ${raw} could not be read`);
       continue;
     }
     try {
-      parts.push(readFileSync(raw, 'utf8'));
+      parts.push(readFileSync(found, 'utf8'));
     } catch (e) {
       notes.push(`--body-file ${raw} unreadable: ${e.message}`);
     }
