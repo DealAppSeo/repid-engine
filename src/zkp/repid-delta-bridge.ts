@@ -62,10 +62,10 @@ import {
   IDENTITY_MASTER_ENV,
   deriveIdentitySecret,
   identityMaster,
-  identitySecretFromHolderSeed,
   type IdentitySecret,
   type UnlinkabilityStatement,
 } from './nullifier-identity';
+import { holderSecretFromSeed } from './holder-identity-binding';
 import type { HALDecision } from '../scoring/repid-delta';
 
 export interface DeltaBridgeInput {
@@ -92,6 +92,16 @@ export interface DeltaBridgeInput {
    * shape. Never persisted — see `nullifier-identity.ts`.
    */
   identitySeedHex?: string;
+  /**
+   * The signature that will be (or was) written to `human_agent_bindings.binding_sig`.
+   *
+   * Supplied ONLY so the seed can be checked against it. That column is PERSISTED, so a
+   * seed derived from it has a pre-image readable by anyone with SELECT — every
+   * nullifier for that identity, in every scope and every domain, becomes recomputable.
+   * Passing it here makes the check possible; omitting it just means the check cannot
+   * run. Never absorbed, never stored by this module.
+   */
+  identityBindingSig?: string;
 }
 
 export interface DeltaBridgeResult {
@@ -147,9 +157,13 @@ const inert = (mode: DeltaStatementMode, skipped: string | null): DeltaBridgeRes
  */
 function resolveIdentitySecret(input: DeltaBridgeInput, formulaSaltValue: string): IdentitySecret {
   if (input.identitySeedHex) {
-    return identitySecretFromHolderSeed({
+    // Via `holderSecretFromSeed`, NOT `identitySecretFromHolderSeed` directly: the
+    // former applies the binding-signature guard, and this is the live wire — a guard
+    // that only runs where someone remembers to call it is not a guard.
+    return holderSecretFromSeed({
       seedHex: input.identitySeedHex,
       domain: REPID_DELTA_DOMAIN,
+      bindingSig: input.identityBindingSig ?? null,
     });
   }
   return deriveIdentitySecret({
