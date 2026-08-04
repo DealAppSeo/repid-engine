@@ -4,6 +4,7 @@ import { requireRole, mintQrToken } from '../../middleware/controller-auth';
 import { setAgentEnabled } from '../../services/agent-controls';
 import { hitlService, HitlResolution } from '../../services/hitl-service';
 import { guardedLineage, rootLineage, formatLineageLog } from '../../services/task-lineage';
+import { assessCriteriaGate, criteriaGateLogLine } from '../../services/goal-ancestry';
 
 // Controller API (CC2 2026-05-26) — backend for the aitc controller-UI rebuild
 // (v0.app). All routes are gated by role permissions.
@@ -122,6 +123,26 @@ router.post('/directives', requireRole('operator'), async (req, res) => {
     typeof expected_output !== 'string' || expected_output.length < 1 || expected_output.length > 5000
   ) {
     return res.status(400).json({ error: 'Invalid string field types or lengths (max 255 for title, 5000 for text)' });
+  }
+
+  // CRITERIA GATE. The length check above accepts 'Pass default checks.' — the
+  // literal column DEFAULT that 93.9% of trinity_tasks carry [V sql 2026-08-04].
+  // Length is not a standard, and a task with an unstated acceptance bar cannot
+  // be verified by anyone, agent or human.
+  //
+  // Default `shadow`: this logs and still inserts. Only TASK_CRITERIA_GATE=enforce
+  // turns it into a 400, because refusing writes on an operator endpoint is a live
+  // behaviour change that should follow a measured refusal rate, not precede it.
+  const criteriaDecision = assessCriteriaGate(success_criteria);
+  if (criteriaDecision.vacuous) {
+    console.warn(criteriaGateLogLine('[controller/directives]', criteriaDecision));
+  }
+  if (criteriaDecision.refuse) {
+    return res.status(400).json({
+      error: 'vacuous_success_criteria',
+      message: criteriaDecision.reason,
+      field: 'success_criteria',
+    });
   }
 
   // Validate agent name format (alphanumeric, dashes, underscores, and UUIDs)

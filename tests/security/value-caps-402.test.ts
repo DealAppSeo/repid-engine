@@ -19,10 +19,16 @@ jest.mock('../../src/db', () => ({
   }
 }));
 
-// Mock authentication middleware to bypass auth issues in unit tests
+// Mock authentication middleware to bypass auth issues in unit tests.
+//
+// `agent_id` added 2026-08-04: /escrow now requires a caller bound to an agent that
+// is a PARTY to the contract. Setting `apiKey` alone is the shared-REPID_API_KEYS
+// shape, which is now refused with 403 before the cap checks are reached.
+// 'buyer-456' is the buyer on this suite's service_contracts fixtures.
 jest.mock('../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
     req.apiKey = { key: 'test-key', tier: 'premium' };
+    req.agent_id = 'buyer-456';
     next();
   }
 }));

@@ -11,6 +11,7 @@ import { OpenRouterAdapter } from './openrouter';
 import { SambaNovaAdapter } from './sambanova';
 import { Llama321bAdapter, Gemma32bAdapter, Phi4Adapter } from './slm';
 import { isHealthy, markFailure, markSuccess, markRateLimit } from './health';
+import { deadProviders, livenessMode } from './provider-liveness';
 import { checkCap } from '../billing/caps';
 import { db } from '../db';
 import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
@@ -390,6 +391,17 @@ export async function routeRequest(
     // health, which is exactly what distinguishes "skipped, unusable" from "never tried".
     const unhealthy = chain.map((c) => c.provider).filter((p) => !isHealthy(p));
 
+    // Fresh probe verdicts, if any have been recorded. This is a synchronous
+    // in-memory ledger read — the refresh that fills it never runs on this path.
+    //
+    // Purely observational here: `assessLiveness` is not consulted for exclusion
+    // (that is `livenessExcludedProviders`, which the selection path does not call
+    // yet). What this buys today is the comparison that answers whether the
+    // hand-maintained LLM_DISABLED_PROVIDERS list still matches reality — a
+    // provider appearing in deadByProbe but not disabledByConfig is a live key
+    // rotting in the chain, which is how the HuggingFace outage happened.
+    const deadByProbe = livenessMode() === 'off' ? [] : deadProviders();
+
     record = buildRoutingRecord({
       chosen: result.decision.chosen_provider,
       chosenTier: result.decision.chosen_tier,
@@ -398,6 +410,7 @@ export async function routeRequest(
       excluded: result.decision.tried,
       disabledByConfig: disabled,
       keyless,
+      deadByProbe,
       unhealthy,
       classify: operationalCostClass,
     });

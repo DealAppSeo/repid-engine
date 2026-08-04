@@ -12,6 +12,40 @@
  *        or POST /api/v1/contracts/:id/fulfill    (direct, no PCP gate) [--direct-fulfill]
  *   satisfy POST /api/v1/contracts/:id/satisfy    (buyer rates 0..1 → settled)
  *
+ * WHICH KEY DRIVES WHICH CALL — AND WHY THERE IS MORE THAN ONE
+ * ============================================================
+ * This script used to drive every call with one shared `REPID_API_KEYS` env key.
+ * That key authenticates but carries NO agent identity (`authMiddleware` only sets
+ * `req.agent_id` for a DB-issued key from `agent_api_keys`), and the contract
+ * lifecycle now refuses an unidentified caller on the routes where identity is the
+ * whole point:
+ *
+ *   escrow  → 403 unbound_caller   (must be a PARTY to the contract)
+ *   satisfy → 403 unbound_caller   (must be the BUYER — it releases the money)
+ *   fulfill → 403 unbound_caller   (must be the PROVIDER — it is the delivery)
+ *
+ * So the run needs three keys, and they are genuinely three different authorities —
+ * collapsing them back into one is the bug, not the convenience:
+ *
+ *   REPID_API_KEY             OPERATOR (shared env key). Discovery + provider-side
+ *                             dispatch: GET /services, GET /agents/minted,
+ *                             POST /agent/process-contracts, marketplace reads.
+ *                             MUST stay the operator key — /agents/minted and
+ *                             process-contracts (which names the PROVIDER in
+ *                             `agent_name`) are both REFUSED for a buyer-bound key.
+ *   REPID_BUYER_AGENT_KEY     BUYER-bound (agent_api_keys). create, escrow, satisfy.
+ *   REPID_PROVIDER_AGENT_KEY  PROVIDER-bound. Only --direct-fulfill needs it.
+ *
+ * ISSUING A BOUND KEY (one-off, per agent):
+ *   POST /api/v1/agents/<agent-uuid>/keys  {"name":"e2e","scopes":[]}
+ *     Authorization: Bearer <that agent's registration token, or an existing
+ *                            admin-scoped key already bound to that same agent>
+ *   → responds { key, key_prefix, ... }; `key` is shown ONCE. A shared operator key
+ *     is NOT accepted here — key issuance requires authority over that one agent.
+ *   (scripts/e2e/negotiated-zkp-exchange.mjs mints its keys the other way, by
+ *   inserting into agent_api_keys with service-role creds. This script deliberately
+ *   holds no DB creds, so it takes the issued key from env instead.)
+ *
  * TWO MODES — HONEST BY CONSTRUCTION:
  *
  *   default (SIMULATED)  — escrow runs WITHOUT X402_REAL_RPC on the server, so
@@ -47,7 +81,11 @@
  *   --satisfaction=<0..1> buyer satisfaction score at satisfy (default 1)
  *
  *   ENV always needed:
- *     REPID_API_KEY        a valid engine API key (REPID_API_KEYS entry, key only)
+ *     REPID_API_KEY            operator key (a REPID_API_KEYS entry, key part only)
+ *     REPID_BUYER_AGENT_KEY    agent-bound key for --buyer (see "issuing" above)
+ *
+ *   ENV needed only for --direct-fulfill:
+ *     REPID_PROVIDER_AGENT_KEY agent-bound key for the SERVICE'S PROVIDER agent
  *
  *   ENV additionally needed for --real:
  *     X402_BUYER_PRIVATE_KEY   funded Base-Sepolia wallet key that PAYS (>= price in test-USDC)
@@ -198,13 +236,22 @@ async function buildX402Payment(opts: {
 // ---------------------------------------------------------------------------
 
 interface Preflight {
+  /** OPERATOR key (shared REPID_API_KEYS entry). Carries no agent identity. */
   apiKey: string;
+  /** BUYER-bound agent key. Required — escrow and satisfy refuse anything else. */
+  buyerApiKey: string;
+  /** PROVIDER-bound agent key. Only --direct-fulfill needs one. */
+  providerApiKey?: string;
   buyerId: string;
   buyerName: string;
   serviceId: string;
   providerName: string;
   providerWallet: string | null;
   priceRaw: string;
+  /**
+   * NOTE: an ETHEREUM private key that signs the EIP-3009 payment — NOT an API key.
+   * Distinct from `buyerApiKey` above despite the similar name.
+   */
   buyerKey?: string; // real mode only
 }
 
@@ -213,9 +260,51 @@ async function preflight(flags: Flags): Promise<Preflight> {
   const apiKey = process.env.REPID_API_KEY ?? '';
   if (!apiKey) {
     throw new CleanExit(
-      'Missing REPID_API_KEY. This is a valid engine API key (an entry in the server\'s ' +
-        'REPID_API_KEYS, key part only). Every contract call needs it. Set it and re-run.',
+      'Missing REPID_API_KEY. This is the OPERATOR key (an entry in the server\'s ' +
+        'REPID_API_KEYS, key part only). It drives discovery and the provider-side ' +
+        'dispatch (/agent/process-contracts). Set it and re-run.',
     );
+  }
+
+  // The buyer-bound key is validated here, before any network call, so a run that
+  // cannot possibly complete says so immediately instead of failing three steps in
+  // with a 403 that reads like a server fault.
+  const buyerApiKey = process.env.REPID_BUYER_AGENT_KEY ?? '';
+  if (!buyerApiKey) {
+    throw new CleanExit(
+      'Missing REPID_BUYER_AGENT_KEY — an AGENT-BOUND key for the buyer.\n\n' +
+        'The operator key in REPID_API_KEY authenticates but carries no agent identity, and\n' +
+        '/escrow and /satisfy both refuse an unidentified caller (403 unbound_caller): escrow\n' +
+        'must come from a PARTY to the contract, and satisfy releases the payment so it must\n' +
+        'come from the BUYER. This is not a config nuisance — a shared key that could escrow\n' +
+        "and settle anyone's contract is the hole those checks exist to close.\n\n" +
+        'Issue one for the buyer agent (shown once):\n' +
+        '  curl -X POST "$ENGINE_BASE_URL/api/v1/agents/<buyer-agent-uuid>/keys" \\\n' +
+        '       -H "Authorization: Bearer <buyer registration token or its admin-scoped key>" \\\n' +
+        '       -H "Content-Type: application/json" -d \'{"name":"e2e-buyer"}\'\n\n' +
+        'It must be bound to the SAME agent as --buyer (default trinity-nexus), or the very\n' +
+        'first contract create will 403 with an agent identity mismatch.',
+    );
+  }
+
+  // Only --direct-fulfill posts to /:id/fulfill, which requires the PROVIDER. The
+  // default path dispatches through /agent/process-contracts on the operator key,
+  // so most runs need no provider key at all.
+  let providerApiKey: string | undefined;
+  if (flags.directFulfill) {
+    providerApiKey = process.env.REPID_PROVIDER_AGENT_KEY ?? '';
+    if (!providerApiKey) {
+      throw new CleanExit(
+        '--direct-fulfill is missing REPID_PROVIDER_AGENT_KEY — an AGENT-BOUND key for the\n' +
+          "SERVICE'S PROVIDER agent.\n\n" +
+          'POST /:id/fulfill is the delivery step, so it requires a caller bound to the provider\n' +
+          '(403 not_the_provider otherwise). Neither the operator key nor the buyer key can stand\n' +
+          'in for it. Issue one against the provider agent exactly as for the buyer key above.\n\n' +
+          'Or drop --direct-fulfill: the default path delivers through the provider handler at\n' +
+          'POST /agent/process-contracts, which runs the PCP/HAL verdict gate that --direct-fulfill\n' +
+          'skips, and needs no provider key.',
+      );
+    }
   }
 
   // Validate --real client env BEFORE any network calls, so a missing signing key
@@ -296,6 +385,8 @@ async function preflight(flags: Flags): Promise<Preflight> {
 
   const pf: Preflight = {
     apiKey,
+    buyerApiKey,
+    providerApiKey,
     buyerId,
     buyerName,
     serviceId: service.id,
@@ -336,13 +427,20 @@ async function runOne(flags: Flags, pf: Preflight, i: number): Promise<LoopResul
     criteria: ['factual accuracy'],
     service_type: flags.serviceType,
   };
-  const create = await api(flags.base, 'POST', '/api/v1/contracts', pf.apiKey, {
+  // Buyer key: the buyer creates its own contract, and `buyer_agent_id` in the body
+  // is checked against the key's bound agent. This is also the earliest point a
+  // mis-bound key shows up, so the failure note says so explicitly.
+  const create = await api(flags.base, 'POST', '/api/v1/contracts', pf.buyerApiKey, {
     service_id: pf.serviceId,
     buyer_agent_id: pf.buyerId,
     payload,
   });
   if (create.status !== 201 || !create.json?.id) {
-    return { contractId: null, reachedStatus: 'create_failed', isSimulated: null, txHash: null, ok: false, note: `create → ${create.status} ${JSON.stringify(create.json)}` };
+    const hint =
+      create.status === 403
+        ? ` — REPID_BUYER_AGENT_KEY looks bound to a different agent than --buyer (${pf.buyerName}/${pf.buyerId}); issue the key against that agent`
+        : '';
+    return { contractId: null, reachedStatus: 'create_failed', isSimulated: null, txHash: null, ok: false, note: `create → ${create.status} ${JSON.stringify(create.json)}${hint}` };
   }
   const contractId: string = create.json.id;
   console.log(`${tag} created contract ${contractId} (status=${create.json.status})`);
@@ -362,7 +460,14 @@ async function runOne(flags: Flags, pf: Preflight, i: number): Promise<LoopResul
     });
     escrowHeaders = { 'X-PAYMENT': header };
   }
-  const escrow = await api(flags.base, 'POST', `/api/v1/contracts/${contractId}/escrow`, pf.apiKey, {}, escrowHeaders);
+  // Buyer key: /escrow requires a caller who is a PARTY to the contract.
+  const escrow = await api(flags.base, 'POST', `/api/v1/contracts/${contractId}/escrow`, pf.buyerApiKey, {}, escrowHeaders);
+  if (escrow.status === 403) {
+    return { contractId, reachedStatus: 'pending', isSimulated: null, txHash: null, ok: false,
+      note: `escrow → 403 ${JSON.stringify(escrow.json)}. /escrow requires an agent-bound key ` +
+        `belonging to the contract's buyer or provider — check REPID_BUYER_AGENT_KEY is bound to ` +
+        `${pf.buyerName} (${pf.buyerId}).` };
+  }
   if (escrow.status === 402) {
     return { contractId, reachedStatus: 'pending', isSimulated: null, txHash: null, ok: false,
       note: `escrow → 402 payment required. In --real mode this means the header was missing/invalid or the ` +
@@ -377,13 +482,20 @@ async function runOne(flags: Flags, pf: Preflight, i: number): Promise<LoopResul
 
   // 3. FULFILL
   if (flags.directFulfill) {
-    const fulfill = await api(flags.base, 'POST', `/api/v1/contracts/${contractId}/fulfill`, pf.apiKey, {
+    // Provider key: delivery must come from the provider named on the contract.
+    const fulfill = await api(flags.base, 'POST', `/api/v1/contracts/${contractId}/fulfill`, pf.providerApiKey!, {
       result: { verdict: 'PASS', note: 'e2e direct fulfill' },
     });
     if (fulfill.status !== 200) {
-      return { contractId, reachedStatus: 'escrowed', isSimulated: null, txHash: null, ok: false, note: `fulfill → ${fulfill.status} ${JSON.stringify(fulfill.json)}` };
+      const hint =
+        fulfill.status === 403
+          ? ` — /fulfill requires a key bound to the PROVIDER (${pf.providerName}); check REPID_PROVIDER_AGENT_KEY`
+          : '';
+      return { contractId, reachedStatus: 'escrowed', isSimulated: null, txHash: null, ok: false, note: `fulfill → ${fulfill.status} ${JSON.stringify(fulfill.json)}${hint}` };
     }
   } else {
+    // OPERATOR key, deliberately: this names the PROVIDER in `agent_name`, which a
+    // buyer-bound key is refused for (agent_name must match the key's bound agent).
     const fulfill = await api(flags.base, 'POST', '/api/v1/agent/process-contracts', pf.apiKey, {
       agent_name: pf.providerName,
     });
@@ -395,12 +507,17 @@ async function runOne(flags: Flags, pf: Preflight, i: number): Promise<LoopResul
   }
   console.log(`${tag} fulfilled`);
 
-  // 4. SATISFY
-  const satisfy = await api(flags.base, 'POST', `/api/v1/contracts/${contractId}/satisfy`, pf.apiKey, {
+  // 4. SATISFY — buyer key: this releases the payment, so it must be the BUYER.
+  // (The provider is refused here by name: self_satisfaction_forbidden.)
+  const satisfy = await api(flags.base, 'POST', `/api/v1/contracts/${contractId}/satisfy`, pf.buyerApiKey, {
     satisfaction_score: flags.satisfaction,
   });
   if (satisfy.status !== 200) {
-    return { contractId, reachedStatus: 'fulfilled', isSimulated: null, txHash: null, ok: false, note: `satisfy → ${satisfy.status} ${JSON.stringify(satisfy.json)}` };
+    const hint =
+      satisfy.status === 403
+        ? ` — /satisfy releases the payment and requires a key bound to the BUYER (${pf.buyerName}); check REPID_BUYER_AGENT_KEY`
+        : '';
+    return { contractId, reachedStatus: 'fulfilled', isSimulated: null, txHash: null, ok: false, note: `satisfy → ${satisfy.status} ${JSON.stringify(satisfy.json)}${hint}` };
   }
   const finalStatus: string = satisfy.json?.status ?? 'satisfied';
   console.log(`${tag} satisfied → ${finalStatus}`);
@@ -466,6 +583,17 @@ async function main() {
   }
 
   console.log('preflight OK:');
+  // Presence only — never a key value or prefix.
+  //
+  // Written as `role (VAR_NAME)` rather than `role=VAR_NAME` on purpose: the
+  // `name=SOMETHING_KEY` shape trips gitleaks' generic-api-key rule, and the
+  // honest fix for a line that only ever prints variable NAMES is to stop
+  // looking like an assignment — not to add a scanner exception, which would
+  // outlive this line and cover every future edit to this file.
+  console.log(
+    `  keys:     operator (REPID_API_KEY) · buyer, bound (REPID_BUYER_AGENT_KEY)` +
+      `${pf.providerApiKey ? ' · provider, bound (REPID_PROVIDER_AGENT_KEY)' : ''}`,
+  );
   console.log(`  buyer:    ${pf.buyerName} (${pf.buyerId})`);
   console.log(`  service:  ${pf.serviceId} (${flags.serviceType}, ${Number(pf.priceRaw) / 1e6} USDC)`);
   console.log(`  provider: ${pf.providerName}${flags.real ? ` (payTo=${pf.providerWallet ?? 'UNKNOWN — see note'})` : ''}`);

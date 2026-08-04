@@ -9,12 +9,92 @@ import {
   voidAuthorization,
 } from '../../services/x402-deferred-settlement';
 import { isHandledServiceType, directFulfillAllowed } from '../../services/handled-service-types';
+import { boundAgentId, sameAgent } from '../../services/a2a-negotiation';
 import { finalizeSettledContract } from '../../services/contract-settlement-finalize';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
 
 const router = Router();
+
+/**
+ * WHO MAY ACT ON A CONTRACT — the check that was missing from four of six mutations.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * THE HOLE, EXACTLY
+ * ════════════════════════════════════════════════════════════════════════════════
+ * `authMiddleware` does contain a party check — "a bound key may act on a contract
+ * iff its agent is a PARTY" (src/middleware/auth.ts:254-278). But that check lives
+ * inside `if (dbAgentId) { … }` (opened at auth.ts:166, closed at auth.ts:322), and
+ * `dbAgentId` is set ONLY by `validateAgentApiKey` — a DB-issued, agent-bound key.
+ *
+ * A caller presenting a shared `REPID_API_KEYS` env key is `valid = true` with
+ * `dbAgentId` undefined. Every line of party checking is skipped. The caller is
+ * authenticated, unidentified, and — before this guard — unrestricted on a contract
+ * it has nothing to do with.
+ *
+ * `/escrow` was the expensive one: `X402_ENFORCEMENT_ENABLED` is compared against
+ * the literal string `'true'`, so with it unset the legacy branch moved a contract
+ * `pending → escrowed` with no payment presented at all, on anyone's contract.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * WHY THE GUARD IS HERE AND NOT IN THE MIDDLEWARE
+ * ════════════════════════════════════════════════════════════════════════════════
+ * `/fulfill` and `/satisfy` already defend themselves this way — an explicit
+ * `unbound_caller` refusal plus a party check, read straight off the contract row
+ * they just fetched. They are correct precisely BECAUSE they do not delegate to a
+ * middleware branch that fires for one key type. This makes the other four match.
+ *
+ * `src/middleware/contract-party-guard.ts` covers the same condition, but it is
+ * default-OFF (`CONTRACT_PARTY_ENFORCEMENT` unset ⇒ `off`), so with no flag set the
+ * hole is open. It is left exactly as it is: it is the fleet-wide measuring
+ * instrument, this is the per-route lock, and the middleware nesting is untouched.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * RESIDUAL, STATED RATHER THAN QUIETLY LEFT
+ * ════════════════════════════════════════════════════════════════════════════════
+ * This answers "are you one of the two parties?", not "are you the RIGHT one of the
+ * two?". So a provider can still `/escrow` its own contract, and a party can still
+ * `/resolve` a dispute it is itself in — judging its own case. Both are strictly
+ * narrower than the "any shared key" state this replaces, and neither can be closed
+ * by a party check: `/resolve` needs an arbiter role that does not exist in this
+ * codebase today. The real dispute path already bypasses this route entirely
+ * (`src/workers/dispute-resolution-worker.ts:119` writes `status: 'resolved'`
+ * straight to the DB), so it is unaffected either way.
+ *
+ * Pure and exported so the rule can be tested without standing up the app.
+ *
+ * @returns a refusal body to send with 403, or `null` when the caller may proceed.
+ */
+export function contractPartyRefusal(
+  req: { agent_id?: unknown },
+  contract: { buyer_agent_id?: unknown; provider_agent_id?: unknown },
+  action: string,
+): { error: string; message: string; action: string } | null {
+  const caller = boundAgentId(req);
+
+  // Same `unbound_caller` code /fulfill and /satisfy already return, so one
+  // condition keeps one name across the whole contract surface.
+  if (!caller) {
+    return {
+      error: 'unbound_caller',
+      message:
+        `${action} requires an agent-bound API key. A shared tier key carries no agent ` +
+        `identity, so it cannot be checked against this contract's buyer or provider.`,
+      action,
+    };
+  }
+
+  if (!sameAgent(caller, contract.buyer_agent_id) && !sameAgent(caller, contract.provider_agent_id)) {
+    return {
+      error: 'not_a_party',
+      message: `only the buyer or provider named on this contract may ${action} it`,
+      action,
+    };
+  }
+
+  return null;
+}
 
 function checkGlobalValueCaps(priceUsdcRaw: number, settledTodayRaw: number): { allowed: boolean; error?: string; cap?: number; requested?: number } {
   const enforcement = process.env.VALUE_CAP_ENFORCEMENT || 'enforce';
@@ -142,6 +222,17 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   if (getErr || !contract) {
     x402Metrics.increment('escrow.error.400');
     return res.status(404).json({ error: 'contract_not_found' });
+  }
+
+  // WHO MAY ESCROW. Deliberately BEFORE the enforcement toggle: the legacy
+  // branch below is the one that flips pending → escrowed with no payment
+  // presented, so a guard placed after the toggle would leave the cheaper
+  // attack open in exactly the configuration that is live today
+  // (X402_ENFORCEMENT_ENABLED unset ⇒ legacy).
+  const escrowRefusal = contractPartyRefusal(req as any, contract, 'escrow');
+  if (escrowRefusal) {
+    x402Metrics.increment('escrow.error.403');
+    return res.status(403).json(escrowRefusal);
   }
 
   // Toggle check
@@ -507,11 +598,25 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
 
 
 router.post('/:id/cancel', async (req: Request, res: Response) => {
+  // The contract has to be READ before it can be authorized against — this route
+  // previously issued the UPDATE blind, so there was nothing to compare a caller
+  // to. A side effect of reading first: a cancel on a contract that does not
+  // exist now returns 404 rather than the 400 the blind UPDATE produced.
+  const { data: contract, error: getErr } = await db.from('service_contracts')
+    .select('*')
+    .eq('id', req.params.id)
+    .maybeSingle();
+
+  if (getErr || !contract) return res.status(404).json({ error: 'Contract not found' });
+
+  const refusal = contractPartyRefusal(req as any, contract, 'cancel');
+  if (refusal) return res.status(403).json(refusal);
+
   const { data, error } = await db.from('service_contracts')
     .update({ status: 'cancelled' })
     .eq('id', req.params.id)
     .select().single();
-  
+
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
 });
@@ -920,6 +1025,13 @@ router.post('/:id/dispute', async (req: Request, res: Response) => {
   const { data: contract, error: getErr } = await db.from('service_contracts').select('*').eq('id', req.params.id).single();
   if (getErr || !contract) return res.status(404).json({ error: 'Contract not found' });
 
+  // Either side may raise a dispute — but only a side. Opening a dispute moves
+  // the contract to `disputed` and enqueues validation work, so an unrelated
+  // caller could otherwise freeze someone else's exchange and spend the panel's
+  // attention on it.
+  const refusal = contractPartyRefusal(req as any, contract, 'dispute');
+  if (refusal) return res.status(403).json(refusal);
+
   const { data, error } = await db.from('service_contracts')
     .update({ status: 'disputed', disputed_at: new Date().toISOString() })
     .eq('id', req.params.id)
@@ -945,6 +1057,25 @@ router.post('/:id/dispute', async (req: Request, res: Response) => {
 router.post('/:id/resolve', async (req: Request, res: Response) => {
   const { dispute_verdict } = req.body;
   if (!dispute_verdict) return res.status(400).json({ error: 'dispute_verdict required' });
+
+  // As with /cancel, the row must be read before the caller can be checked
+  // against it; this route also updated blind. Unknown contract now 404s.
+  const { data: contract, error: getErr } = await db.from('service_contracts')
+    .select('*')
+    .eq('id', req.params.id)
+    .maybeSingle();
+
+  if (getErr || !contract) return res.status(404).json({ error: 'Contract not found' });
+
+  // NOTE THE LIMIT OF THIS CHECK. A party is not an arbiter, so this stops an
+  // unrelated key from writing a verdict but does NOT stop a party from writing
+  // its own. There is no arbiter role in this codebase to require instead, and
+  // inventing one here would be a new mechanism rather than a fix. The real
+  // resolution path does not come through here at all — the dispute worker
+  // (src/workers/dispute-resolution-worker.ts:119) writes `resolved` directly to
+  // the database and is unaffected by this guard.
+  const refusal = contractPartyRefusal(req as any, contract, 'resolve');
+  if (refusal) return res.status(403).json(refusal);
 
   const { data, error } = await db.from('service_contracts')
     .update({ status: 'resolved', dispute_verdict, resolved_at: new Date().toISOString() })

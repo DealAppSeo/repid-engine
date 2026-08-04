@@ -77,6 +77,15 @@ export interface RoutingRecord {
   disabledByConfig: string[];
   /** Providers that could never have been tried because no key resolved. */
   keyless: string[];
+  /**
+   * Providers a FRESH probe verdict says are dead (providers/provider-liveness.ts).
+   *
+   * Observational: this is what the hand-maintained `LLM_DISABLED_PROVIDERS` list
+   * would need to contain to match reality. Comparing the two answers "is the
+   * manual list current?" from traffic instead of from memory. Empty unless
+   * PROVIDER_LIVENESS_MODE is set and the ledger has been refreshed.
+   */
+  deadByProbe?: string[];
 }
 
 export interface BuildRoutingRecordInput {
@@ -89,6 +98,8 @@ export interface BuildRoutingRecordInput {
   excluded?: string[];
   disabledByConfig?: string[];
   keyless?: string[];
+  /** Fresh-DEAD probe verdicts. Observational only — see RoutingRecord.deadByProbe. */
+  deadByProbe?: string[];
   /** Providers the router walked past because health said no. */
   unhealthy?: string[];
   /** Providers skipped because their spend cap was hit. */
@@ -168,6 +179,9 @@ export function buildRoutingRecord(input: BuildRoutingRecordInput): RoutingRecor
     keyless: [...keyless],
   };
   if (violation) record.freeFirstViolation = violation;
+  // Omitted entirely when empty so an unrefreshed ledger reads as "no observation"
+  // rather than as "observed, nothing dead" — those are different facts.
+  if (input.deadByProbe && input.deadByProbe.length > 0) record.deadByProbe = [...input.deadByProbe];
   return record;
 }
 

@@ -37,10 +37,19 @@ jest.mock('../../src/services/validation-repid-delta', () => ({
  * below rather than being mocked away.
  */
 
-// Mock authentication middleware
+// Mock authentication middleware.
+//
+// The `x-test-agent-id` mechanism described above was documented but never
+// actually implemented — the mock set `apiKey` only, which is the shared
+// REPID_API_KEYS shape with no bound agent. That went unnoticed while only
+// /fulfill checked the caller (the two fulfil tests here both short-circuit on
+// status before the identity check). /escrow now checks it too, so the header is
+// wired up for real: a test may name its caller, and the default is the buyer on
+// this suite's contract fixture.
 jest.mock('../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
     req.apiKey = { key: 'test-key', tier: 'premium' };
+    req.agent_id = (req.headers['x-test-agent-id'] as string) || 'buyer-456';
     next();
   }
 }));

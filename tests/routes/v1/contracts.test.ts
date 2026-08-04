@@ -21,10 +21,22 @@ jest.mock('../../../src/db', () => ({
   }
 }));
 
-// Mock authentication
+// Mock authentication.
+//
+// CHANGED 2026-08-04: this mock used to set `apiKey` ONLY, which is precisely the
+// shared-`REPID_API_KEYS`-key shape — authenticated, but with no bound agent
+// identity. Every escrow test below therefore asserted that an unidentified caller
+// could escrow someone else's contract, i.e. the suite encoded the authorization
+// hole as expected behavior. `/escrow` now refuses that caller, so the mock supplies
+// a bound identity and the contract rows name it as the buyer.
+//
+// The refusal itself is NOT tested here — it is tested against a deliberately
+// unbound caller in tests/contracts-party-routes.test.ts, so that this suite keeps
+// testing escrow's payment logic and that one keeps testing who may reach it.
 jest.mock('../../../src/middleware/auth', () => ({
   authMiddleware: (req: any, res: any, next: any) => {
     req.apiKey = { key: 'test-key', tier: 'premium' };
+    req.agent_id = 'buyer-123';
     next();
   }
 }));
@@ -65,7 +77,9 @@ describe('Contracts Routes', () => {
         select: jest.fn().mockReturnThis(),
         update: jest.fn().mockReturnThis(),
         eq: jest.fn().mockReturnThis(),
-        maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'pending' }, error: null }),
+        // buyer_agent_id matches the bound caller in the auth mock — without it
+        // the party guard refuses before the legacy branch is ever reached.
+        maybeSingle: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'pending', buyer_agent_id: 'buyer-123', provider_agent_id: 'provider-123' }, error: null }),
         single: jest.fn().mockResolvedValue({ data: { id: 'test-id', status: 'escrowed' }, error: null }),
         gte: jest.fn().mockReturnThis(),
         lte: jest.fn().mockResolvedValue({ data: [], error: null }),
@@ -99,6 +113,9 @@ describe('Contracts Routes', () => {
                 id: 'test-id',
                 status: opts.contractStatus,
                 agreed_price_usdc_raw: 10000,
+                // buyer_agent_id added 2026-08-04: the party guard reads it, and
+                // the bound caller in the auth mock is the buyer.
+                buyer_agent_id: 'buyer-123',
                 provider_agent_id: 'provider-123',
                 wallet_address: '0xProviderWallet'
               },
