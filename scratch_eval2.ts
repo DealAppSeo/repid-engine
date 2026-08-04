@@ -1,1 +1,0 @@
-import { extractHALSignals } from './src/hal/lib/extract'; const res = extractHALSignals({ text: '', domain: 'test', certainty: 0.9 }); console.log(res); const score = (0.4 * res.harm_probability + 0.3 * res.epistemic_uncertainty + 0.2 * (1 - res.evidence_quality) + 0.1 * (1 - res.scope_appropriateness)) * (531441/524288); console.log(score);
