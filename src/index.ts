@@ -89,6 +89,7 @@ import { x402Metrics } from './observability/x402-metrics';
 import { runTier1Benchmark } from './services/hal-tester';
 import { anchorDailyRoot } from './services/audit-merkle-anchor';
 import { db } from './db';
+import { shouldParkForHalt } from './services/emergency-halt';
 import { pgPing } from './db/direct-pg';
 
 import { authMiddleware } from './middleware/auth';
@@ -97,6 +98,7 @@ import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 import { rateLimitMiddleware as globalRateLimit } from './middleware/rate-limit';
 import { attestationExtractorMiddleware } from './middleware/attestation-extractor';
 import { versioningMiddleware } from './middleware/versioning';
+import { emergencyHaltMiddleware } from './middleware/emergency-halt';
 import { scoreMonitor } from './engine/score-monitor';
 
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
@@ -169,6 +171,18 @@ app.use((err: any, req: any, res: any, next: any) => {
   }
   next(err);
 });
+
+// L0 gate 0.4 — GLOBAL EMERGENCY HALT (kill switch). Mounted here, ahead of
+// EVERY API router including full-account, so that when
+// trinity_system_config.emergency_halt is true no mutating request reaches a
+// handler. GET/HEAD are untouched: /health, dashboards and every read surface
+// stay up so the operator can watch the system come to rest.
+// The guard is SYNCHRONOUS and never queries: mounting it also starts a
+// background refresher that reads the flag once per ~5s for the whole process,
+// so this adds no per-request latency and no per-request DB dependency.
+// Inert by default (the column defaults to false) and fail-open on read error.
+// See src/services/emergency-halt.ts for the failure semantics.
+app.use(emergencyHaltMiddleware(db));
 
 // Full-account routes (signup/login/mint/agent/trade/dashboard) are mounted
 // BEFORE the SQL-keyword sanitizer because passwords and trade rationales
@@ -681,7 +695,12 @@ if (!IS_TEST) {
     }
 
     // Score monitor Task 8
-    setInterval(scoreMonitor, 300000);
+    // L0 gate 0.4 — scoreMonitor is imported, so it is wrapped here rather
+    // than gated internally; it writes trinity_agent_logs on every tick.
+    setInterval(async () => {
+      if (await shouldParkForHalt(db, 'scoreMonitor')) return;
+      await scoreMonitor();
+    }, 300000);
 
     // PostgREST bypass (2026-05-21) — boot diagnostic for the direct-pg client
     // (used by the feedback-loop poll). Loud, non-fatal: the API itself serves
@@ -699,6 +718,10 @@ if (!IS_TEST) {
 
 // Stalled task monitor — runs every hour
 async function checkStalledAndAlert() {
+  // L0 gate 0.4 — this UPDATEs trinity_tasks back to 'pending'. Gated inside
+  // the function, not at the setInterval, because it is ALSO invoked once at
+  // boot; gating only the schedule would leave that call live during a halt.
+  if (await shouldParkForHalt(db, 'checkStalledAndAlert')) return;
   const supabase = db;
   const { data: stalled } = await supabase
     .from('trinity_tasks')
@@ -744,6 +767,10 @@ if (!IS_TEST) {
 // so a race against the manual /escrow endpoint or another worker instance
 // loses cleanly (0 rows updated → skip).
 async function processCascadeQueue() {
+  // L0 gate 0.4 — this performs a FINANCIAL state transition
+  // (service_contracts -> 'escrowed') every 60s and is default-ON with no
+  // env flag. It must not run through an active halt.
+  if (await shouldParkForHalt(db, 'processCascadeQueue')) return;
   try {
     const enforcementOn = process.env.X402_ENFORCEMENT_ENABLED === 'true';
 
@@ -959,6 +986,10 @@ if (!IS_TEST) {
 
 // Daily health check at 6am UTC
 async function dailyHealthAlert() {
+  // L0 gate 0.4 — read + notify. Gated for consistency; the halt banner is
+  // itself the signal an operator wants, and hitl-notification-dispatcher
+  // remains the deliberately-exempt human-notification path.
+  if (await shouldParkForHalt(db, 'dailyHealthAlert')) return;
   const supabase = db;
   const { data } = await supabase.rpc('daily_system_health_check');
   const alerts = (data||[]).filter((r:any)=>r.action_required);
@@ -983,6 +1014,8 @@ if (!IS_TEST) {
 
 // HAEE Epoch: runs HAL benchmark every 24 hours
 async function runHAEEEpoch() {
+  // L0 gate 0.4 — writes hal_antifragility_metrics.
+  if (await shouldParkForHalt(db, 'runHAEEEpoch')) return;
   console.log('[HAEE] Starting epoch...');
   
   try {
@@ -1058,6 +1091,10 @@ if (!IS_TEST && RUN_HAL_BENCHMARK) {
 // (audit_merkle_anchors UNIQUE constraint), so a missed run + manual
 // re-trigger just upserts.
 async function runDailyAuditAnchor(): Promise<void> {
+  // L0 gate 0.4 — this SENDS AN ON-CHAIN TRANSACTION (anchorDailyRoot posts
+  // a Merkle root to Base Sepolia) and is unconditional. An emergency halt
+  // that does not stop an on-chain writer is not an emergency halt.
+  if (await shouldParkForHalt(db, 'runDailyAuditAnchor')) return;
   try {
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const r = await anchorDailyRoot(yesterday);

@@ -36,6 +36,7 @@
  */
 
 import { db } from '../../db';
+import { shouldParkForHalt } from '../emergency-halt';
 
 export interface SyncReport {
   startedAt: string;
@@ -334,6 +335,9 @@ export async function startRepidSyncWorker() {
 
   const tick = async () => {
     try {
+      // L0 gate 0.4 — GLOBAL EMERGENCY HALT. Enabled by default and it
+      // mutates RepID state; park it with the rest of the fleet.
+      if (await shouldParkForHalt(db, 'RepIDSync')) return;
       await runRepidSync({ dryRun: getDryRun() });
       // Also opportunity for cheap rollup check (still stub)
       if (Math.random() < 0.05) await rollupAgentRepidScores(true);

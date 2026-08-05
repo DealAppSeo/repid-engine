@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { shouldParkForHalt } from './emergency-halt';
 import {
   HitlReconcileMode,
   ReconcileCandidate,
@@ -91,6 +92,8 @@ async function markSkipped(id: string, reason: string): Promise<void> {
 }
 
 export async function runReconcileSweep(): Promise<void> {
+  // L0 gate 0.4 — GLOBAL EMERGENCY HALT. Mutates validation_queue rows.
+  if (await shouldParkForHalt(db, 'HitlReconcileJob')) return;
   await reconcileExpiredHitlRows({ fetchCandidates, markSkipped }, mode(), BATCH_LIMIT);
 }
 
