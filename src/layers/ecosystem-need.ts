@@ -1,11 +1,8 @@
 import { db } from '../db';
 
-// Patent pending P-023 — do not expose constants in public repos
-const PHI_INV = 0.618;
-const PHI_COMP = 0.382;
-const EPSILON = 0.01;
-const WEIGHT_FLOOR = 0.5;
-const WEIGHT_CAP = 3.0;
+// Patent pending P-023 — TUNED constants come from config/scoring-params.ts
+// (environment-sourced); they are deliberately absent from this public repo.
+import { scoringParams } from '../config/scoring-params';
 
 const EPISTEMIC_SIGNALS = new Set([
   'CHALLENGE','PREDICTION_RESOLVE','FACT_CHECK',
@@ -17,8 +14,8 @@ const SOCIAL_SIGNALS = new Set([
 ]);
 
 export function getBaseWeight(signalType: string): number {
-  if (EPISTEMIC_SIGNALS.has(signalType)) return PHI_INV;
-  if (SOCIAL_SIGNALS.has(signalType)) return PHI_COMP;
+  if (EPISTEMIC_SIGNALS.has(signalType)) return scoringParams().needPhiInv;
+  if (SOCIAL_SIGNALS.has(signalType)) return scoringParams().needPhiComp;
   return 1.0;
 }
 
@@ -30,8 +27,8 @@ export async function getEcosystemNeedWeight(signalType: string): Promise<number
       .eq('signal_type', signalType)
       .single();
     if (error || !data) return 1.0;
-    const raw = getBaseWeight(signalType) / (data.supply_rate_7d + EPSILON);
-    return Math.min(WEIGHT_CAP, Math.max(WEIGHT_FLOOR, raw));
+    const raw = getBaseWeight(signalType) / (data.supply_rate_7d + scoringParams().needEpsilon);
+    return Math.min(scoringParams().needWeightCap, Math.max(scoringParams().needWeightFloor, raw));
   } catch { return 1.0; }
 }
 
