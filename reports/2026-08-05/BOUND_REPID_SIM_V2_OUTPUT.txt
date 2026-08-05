@@ -1,0 +1,54 @@
+
+BOUND REPID SIM v2 — 200 actions, 400 trials, start 1000, agent acts 80%
+loss branch: actor always eats 100% (the v1 recommendation)
+
+=== Q1 — RATIO SWEEP: good human + BAD agent (0.95 / 0.30) ===
+Does the split ratio actually change the outcome?
+
+gain split    HUMAN mean      p5   tier@mean      AGENT mean   tier        
+100/0               1442    1298   ESTABLISHED           323   PROBATIONARY
+90/10               1328    1188   ESTABLISHED           309   PROBATIONARY
+80/20               1213    1076   ESTABLISHED           295   PROBATIONARY
+67/33               1065     933   ESTABLISHED           277   PROBATIONARY
+50/50                870     724   EARNING               254   PROBATIONARY
+
+
+=== Q3 — TAIL RISK at 67/33: what does the unlucky owner see? ===
+"holds their tier" is a claim about the MEAN. Checking the tail.
+
+scenario                      mean     p50      p5  P(demoted <1000)  
+good human + BAD agent        1065    1069     933  19.5%             
+good human + mediocre         1438    1437    1313  0.0%              
+good human + good agent       1868    1869    1774  0.0%              
+
+
+=== Q2 — SYBIL: owner takes ZERO actions, binds N good agents ===
+additive (v1) vs 33%/N normalisation. Owner earns nothing themselves.
+
+N       additive   tier               33%/N   tier         
+1           1651   ESTABLISHED         1651   ESTABLISHED  
+3           2953   ESTABLISHED         1651   ESTABLISHED  
+10          7510   AUTONOMOUS          1651   ESTABLISHED  
+25         10000   VETERAN             1651   ESTABLISHED  
+
+
+=== Q4 — ADOPTION: what does binding COST a good agent? ===
+A good agent (0.95) bound to owners of varying quality, vs staying solo.
+If binding is strictly worse for good agents, only bad ones will bind.
+
+owner quality     agent solo  agent bound     cost  verdict
+good (0.95)             2757         2293     -464  STRONG disincentive to bind
+average (0.60)          2757         2184     -573  STRONG disincentive to bind
+bad (0.30)              2757         2090     -667  STRONG disincentive to bind
+
+
+=== Q5 — MIRROR (100/+33) vs SPLIT (67/33), both with actor eating 100% of loss ===
+mirror: each keeps ALL of its own, and absorbs 33% of its partner's, both ways.
+
+test                                split 67/33     mirror  what it means                 
+good agent cost to bind                    -464        146  mirror: no cost -> agents opt in
+bad agent vs acting alone                    -3          0  0 = penalty fully intact      
+good owner w/ bad agent (mean)             1065       1218  exposure must stay REAL       
+  ...their p5 (unlucky owner)               933       1045  the rage-quit case            
+  ...P(demoted below 1000)                19.5%       1.8%  lower is kinder, 0% = no stake
+
