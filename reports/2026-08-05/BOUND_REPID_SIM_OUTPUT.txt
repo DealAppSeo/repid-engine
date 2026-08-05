@@ -1,0 +1,63 @@
+
+BOUND REPID SIMULATION — 200 actions, 400 trials, start 1000 each
+agent takes 80% of actions (agents are busier than their owners)
+ruler: rewards +5..+25, penalties -10/-15, clamp [10,10000]
+
+
+=== good human + BAD agent  (P(good): human 0.95, agent 0.3) ===
+model           HUMAN tier              AGENT tier          
+unbound          1442 ESTABLISHED         323 PROBATIONARY  
+split            1072 ESTABLISHED         692 EARNING       
+mirror           1218 ESTABLISHED         468 PROBATIONARY  
+asymmetric       1065 ESTABLISHED         277 PROBATIONARY  
+
+=== BAD human + good agent  (P(good): human 0.3, agent 0.95) ===
+model           HUMAN tier              AGENT tier          
+unbound           826 EARNING            2757 ESTABLISHED   
+split            1464 ESTABLISHED        2120 ESTABLISHED   
+mirror           1406 ESTABLISHED        2700 ESTABLISHED   
+asymmetric       1358 ESTABLISHED        2090 ESTABLISHED   
+
+=== good human + good agent  (P(good): human 0.95, agent 0.95) ===
+model           HUMAN tier              AGENT tier          
+unbound          1442 ESTABLISHED        2757 ESTABLISHED   
+split            1876 ESTABLISHED        2323 ESTABLISHED   
+mirror           2022 ESTABLISHED        2903 ESTABLISHED   
+asymmetric       1868 ESTABLISHED        2293 ESTABLISHED   
+
+=== BAD human + BAD agent  (P(good): human 0.3, agent 0.3) ===
+model           HUMAN tier              AGENT tier          
+unbound           826 EARNING             323 PROBATIONARY  
+split             660 EARNING             489 PROBATIONARY  
+mirror            603 EARNING             267 PROBATIONARY  
+asymmetric        555 EARNING              99 PROBATIONARY  
+
+
+=== DILUTION TEST — does binding soften a bad agent's own penalty? ===
+A deliberately bad agent (P(good)=0.20), agent takes 100% of actions.
+
+model         AGENT ends  tier           verdict
+unbound               16  PROBATIONARY   (baseline)
+split                125  PROBATIONARY   DILUTED — 109 higher than acting alone. Binding SOFTENS the penalty.
+mirror                16  PROBATIONARY   penalty intact
+asymmetric            13  PROBATIONARY   penalty intact
+
+
+=== ESCAPE-HATCH TEST — can an owner dump the downside? ===
+good human + BAD agent, human unbinds after losing 100 RepID.
+
+model         stays bound   can unbind  escaped?  
+split                1072         1076  4% of runs
+mirror               1218         1218  0% of runs
+asymmetric           1065         1071  5% of runs
+
+
+=== SYBIL TEST — owner binds N good agents and does nothing themselves ===
+Owner takes 0% of actions. Inbound 33% from each agent, additive.
+
+N agents    owner ends  tier          
+1                 1651  ESTABLISHED   
+3                 2953  ESTABLISHED   
+10                7510  AUTONOMOUS    
+25               10000  VETERAN       
+
