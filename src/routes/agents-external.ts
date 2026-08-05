@@ -3,6 +3,17 @@ import crypto from 'crypto';
 import { ethers } from 'ethers';
 import { db } from '../db';
 import { calculateFullReward, calculateChallengerCourageBonus } from '../reward-formula';
+import { summarizeProvenance, describeProvenance, type ScoreEventRow } from '../repid/ledger-provenance';
+
+/**
+ * Rows sampled for the public card's provenance decomposition.
+ *
+ * Bounded because this endpoint is public and unauthenticated, and one agent can
+ * carry six figures of internal scoring events — an unbounded scan here is a free
+ * table-scan for anyone with the URL. The response reports `sampled` and
+ * `sample_size` so the decomposition is never read as a lifetime total.
+ */
+const PROVENANCE_SAMPLE = 500;
 import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-normalize';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
@@ -336,6 +347,26 @@ router.get('/:id/card', async (req: Request, res: Response) => {
       .eq('agent_id', agentId).order('created_at', { ascending: false }).limit(1),
   ]);
 
+  // PROVENANCE — what actually backs this agent's score.
+  //
+  // The card previously answered "how big is the number". The question an auditor
+  // asks first is "who can mint it, and from what", and nothing here answered it.
+  //
+  // Bounded to the most recent PROVENANCE_SAMPLE rows on purpose: an agent with
+  // 147k internal scoring events would otherwise make this a full-table read on a
+  // public, unauthenticated endpoint. `sampled` and `sample_size` are returned so
+  // the number is never mistaken for a lifetime total — a decomposition that
+  // silently describes a subset is the same class of lie this endpoint exists to
+  // remove.
+  const { data: provRows } = await db
+    .from('repid_score_events')
+    .select('event_type, delta, contract_id, eas_attestation_id, zk_proof_id, economic_impact_usdc, metadata')
+    .eq('agent_id', agentId)
+    .order('created_at', { ascending: false })
+    .limit(PROVENANCE_SAMPLE);
+
+  const prov = summarizeProvenance((provRows ?? []) as ScoreEventRow[]);
+
   const last100Rows = (last100Res.data ?? []) as Array<{ hal_score: number | string | null }>;
   let avgHalScore: number | null = null;
   if (last100Rows.length > 0) {
@@ -371,6 +402,25 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     total_vetoed: vetoedRes.count ?? 0,
     avg_hal_score: avgHalScore,
     last_event_at: lastEventAt,
+    // WHAT BACKS THE SCORE. Stated as a decomposition rather than a claim, so a
+    // reader can check it instead of trusting it.
+    //
+    // `internal_scoring` is included deliberately even though it is the least
+    // flattering row. Omitting a category is how a decomposition becomes a
+    // marketing number, and the honest fact is strong on its own: across the whole
+    // ledger those events have produced +5 of positive delta in total, so engine
+    // scoring can only ever penalise — it structurally cannot mint reputation.
+    provenance: {
+      sampled: (provRows ?? []).length >= PROVENANCE_SAMPLE,
+      sample_size: (provRows ?? []).length,
+      // Share of GAINS (positive delta only) that a third party could verify
+      // independently. Positive-only because penalties are not credibility.
+      verifiable_share_of_gains: prov.verifiableShareOfGains,
+      externally_verifiable: prov.externallyVerifiable,
+      unbacked_self_reported: prov.unbackedSelfReported,
+      by_class: prov.byClass,
+      summary: describeProvenance(prov),
+    },
   });
 });
 
