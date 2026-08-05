@@ -121,10 +121,36 @@ function loadEngineWithMode(mode?: string): typeof updateRepId {
 }
 
 describe('self-report evidence gate', () => {
-  it('(a) shadow (DEFAULT): unproven REFERRAL still yields +20 AND records would_gate', async () => {
-    const updateRepId = loadEngineWithMode(undefined); // no env → default shadow
+  // Pins the DEFAULT itself, so it can never be flipped silently in either
+  // direction. The unset-env case is the one that ships to production.
+  it('DEFAULT (no env) is enforce: an unproven REFERRAL is zeroed', async () => {
+    const updateRepId = loadEngineWithMode(undefined);
     const r = await updateRepId({ agentId: 'agent-1', eventType: 'REFERRAL' });
-    // DEFAULT changes NO live delta — the crux of shadow-first.
+    expect(r.delta).toBe(0);
+    expect(r.repIdAfter).toBe(1000);
+    const meta = capturedInserts[0]?.metadata?.self_report_evidence;
+    expect(meta).toEqual({ mode: 'enforce', required: true, present: false, would_gate: true });
+  });
+
+  it('DEFAULT (no env) still pays an unproven claim that carries evidence.ref', async () => {
+    // Enforcing must not punish an honest caller — evidence is the whole exit.
+    const updateRepId = loadEngineWithMode(undefined);
+    const r = await updateRepId({
+      agentId: 'agent-1', eventType: 'REFERRAL',
+      evidence: { kind: 'cosign', ref: 'artifact-1' },
+    } as any);
+    expect(r.delta).toBe(20);
+  });
+
+  // DEFAULT CHANGED 2026-08-04: shadow -> enforce, after the shadow period
+  // measured the exposure at 38 events / +111 (0.08% of all RepID ever gained).
+  // Shadow remains a supported mode, so this now requests it EXPLICITLY rather
+  // than relying on the ambient default — a test that asserts behaviour should
+  // name the mode it is asserting, not inherit it.
+  it('(a) shadow (explicit): unproven REFERRAL still yields +20 AND records would_gate', async () => {
+    const updateRepId = loadEngineWithMode('shadow');
+    const r = await updateRepId({ agentId: 'agent-1', eventType: 'REFERRAL' });
+    // shadow changes NO live delta — the crux of shadow-first.
     expect(r.delta).toBe(20);
     expect(r.repIdAfter).toBe(1020);
     const meta = capturedInserts[0]?.metadata?.self_report_evidence;
@@ -171,8 +197,8 @@ describe('self-report evidence gate', () => {
 
   // --- coverage-gap close (2026-07-21 amend): AGENT_TEACHING + AUDIT_CONTRIBUTION ---
 
-  it('(e) shadow: unproven AGENT_TEACHING → +15 (NO live change) AND records would_gate', async () => {
-    const updateRepId = loadEngineWithMode(undefined); // default shadow
+  it('(e) shadow (explicit): unproven AGENT_TEACHING → +15 (NO live change) AND records would_gate', async () => {
+    const updateRepId = loadEngineWithMode('shadow');
     const r = await updateRepId({ agentId: 'agent-1', eventType: 'AGENT_TEACHING' });
     expect(r.delta).toBe(15);
     expect(r.repIdAfter).toBe(1015);
