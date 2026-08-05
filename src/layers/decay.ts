@@ -1,23 +1,21 @@
 import { db } from '../db';
 
-// Patent pending P-023 — do not expose constants in public repos
-const LAMBDA = 0.05;
-const K = 0.1;
+// Patent pending P-023 — the TUNED constants are supplied by the environment
+// (config/scoring-params.ts) and are deliberately absent from this public repo.
+// REPID_MAX / REPID_MIN stay here: they are the published tier bounds, not tuning.
+import { scoringParams } from '../config/scoring-params';
+
 const REPID_MAX = 10000;
 const REPID_MIN = 10;
-const DECAY_FLOOR = 0.90;
-const DECAY_CAP = 1.00;
-const REDEMPTION_WINDOW_DAYS = 30;
-const REDEMPTION_PROSOCIAL_THRESHOLD = 5;
-const REDEMPTION_MODIFIER = 0.80; // 20% penalty reduction
 
 export function computeDecayFactor(params: {
   currentRepId: number; activity30d: number;
 }): number {
-  const raw = 1 - (LAMBDA
-    * Math.exp(-K * params.activity30d)
+  const p = scoringParams();
+  const raw = 1 - (p.decayLambda
+    * Math.exp(-p.decayK * params.activity30d)
     * Math.sqrt(params.currentRepId / REPID_MAX));
-  return Math.min(DECAY_CAP, Math.max(DECAY_FLOOR, raw));
+  return Math.min(p.decayCap, Math.max(p.decayFloor, raw));
 }
 
 export function applyDecay(currentRepId: number, activity30d: number): number {
@@ -31,7 +29,7 @@ export function applyDecay(currentRepId: number, activity30d: number): number {
 export async function computeRedemptionModifier(agentId: string): Promise<number> {
   try {
     const ninetyDaysAgo = new Date(Date.now() - 90*24*60*60*1000).toISOString();
-    const windowStart = new Date(Date.now() - REDEMPTION_WINDOW_DAYS*24*60*60*1000).toISOString();
+    const windowStart = new Date(Date.now() - scoringParams().redemptionWindowDays*24*60*60*1000).toISOString();
     const { count: violations } = await db.from('repid_score_events')
       .select('id', { count:'exact', head:true })
       .eq('agent_id', agentId)
@@ -44,8 +42,8 @@ export async function computeRedemptionModifier(agentId: string): Promise<number
       .in('event_type', ['CHALLENGE_WIN','PEACEMAKER','SELF_MONITOR',
                          'REFERRAL','CONSTITUTIONAL_PASS'])
       .gte('created_at', windowStart);
-    return (prosocial ?? 0) >= REDEMPTION_PROSOCIAL_THRESHOLD
-      ? REDEMPTION_MODIFIER : 1.0;
+    return (prosocial ?? 0) >= scoringParams().redemptionProsocialThreshold
+      ? scoringParams().redemptionModifier : 1.0;
   } catch { return 1.0; } // fail open — never punish harder due to DB error
 }
 
