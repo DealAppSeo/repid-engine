@@ -36,10 +36,39 @@ interface Row extends DecayAgentInput {
   lifecycle_status: string;
 }
 
+/**
+ * Should this run WRITE, or only report?
+ *
+ * `--apply` is the operator's flag and stays exactly as it was. `REPID_DECAY_APPLY`
+ * exists so the Railway cron can be flipped between reporting and writing with ONE
+ * variable, without editing a start command or shipping code — the same reversible
+ * shape every other gate in this engine uses.
+ *
+ * DRY-RUN IS THE DEFAULT AND MUST STAY THE DEFAULT. This job walks every active
+ * agent and lowers scores; a cron that silently starts writing because someone
+ * mistyped a start command is precisely the failure the original author guarded
+ * against by leaving it operator-run. Only the exact string 'true' enables writes —
+ * '1', 'yes' and 'TRUE ' do not, because a half-recognised truthy value is how an
+ * ambiguous flag becomes an unintended mutation.
+ *
+ * Exported for test; the parse is the whole safety property.
+ */
+export function shouldApply(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (argv.includes('--apply')) return true;
+  return env.REPID_DECAY_APPLY === 'true';
+}
+
 async function main() {
-  const apply = process.argv.includes('--apply');
+  const apply = shouldApply();
   const nowMs = Date.now();
-  console.log(`[repid-decay] mode=${apply ? 'APPLY (writes)' : 'DRY-RUN (no writes)'} at ${new Date(nowMs).toISOString()}`);
+  console.log(
+    `[repid-decay] mode=${apply ? 'APPLY (writes)' : 'DRY-RUN (no writes)'} ` +
+    `at ${new Date(nowMs).toISOString()} ` +
+    `(source=${process.argv.includes('--apply') ? '--apply flag' : apply ? 'REPID_DECAY_APPLY=true' : 'default'})`,
+  );
 
   // ACTIVE-ONLY select [rule:8 direct pg].
   const rows = await pgQuery<Row>(
@@ -117,4 +146,11 @@ async function main() {
   console.log(`\n[repid-decay] APPLIED decay to ${applied} agents; ${anomalies.length} skipped/flagged.`);
 }
 
-main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+// Run only when executed directly. Without this guard the script executes — and
+// calls process.exit — the moment anything IMPORTS it, which makes the apply-gate
+// untestable and would let a stray import trigger a live decay pass. The gate is
+// the safety property of promoting this to a cron, so it has to be reachable
+// without running the job.
+if (require.main === module) {
+  main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+}
