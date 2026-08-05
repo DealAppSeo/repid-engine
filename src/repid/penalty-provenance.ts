@@ -65,7 +65,39 @@ export type PenaltyClass =
   /** Shape we do not recognise. Never silently folded into a softer class. */
   | 'unclassified';
 
-const INTEGRITY_TYPES = new Set(['EPISTEMIC_VIOLATION', 'VALIDATOR_PENALTY', 'COLLUSION', 'SLASH', 'DECEPTION']);
+/**
+ * Integrity breaches — matched by PREFIX/substring, not exact equality.
+ *
+ * FOUND BY XC RED-TEAM 2026-08-05, verified independently before fixing. This was
+ * a Set with bare 'DECEPTION' and 'SLASH' matched by `Set.has()` — exact equality.
+ * The names the engine actually writes are `DEFENDED_DECEPTION_FABRICATED_CITATION`,
+ * `HANDOFF_COSIGN_FALSE_PASS_SLASH`, `CONSTITUTIONAL_VIOLATION` … none of which
+ * equal those strings. So the HEAVIEST penalties in the system — fabricated
+ * citations and tool results (−60), false-pass co-signs (−15) — classified as
+ * `unclassified`, and `isBehavioral()` excludes unclassified by design.
+ *
+ * Net effect, exactly backwards from intent: an agent caught fabricating evidence
+ * would have dodged the HITL gate, while one that merely went quiet would not.
+ * Wiring isBehavioral() into authority was the very next planned task.
+ *
+ * Substring matching is used deliberately rather than enumerating every variant:
+ * the engine's deception taxonomy grows (8 DEFENDED_DECEPTION_* types today), and
+ * an exact-match list silently fails open for every type added after it was
+ * written. Failing open is the whole defect being fixed here.
+ */
+const INTEGRITY_PATTERNS = [
+  'DECEPTION',            // DEFENDED_DECEPTION_* (all 8), DECEPTION
+  'SLASH',                // HANDOFF_COSIGN_FALSE_PASS_SLASH, SLASH
+  'COLLUSION',
+  'EPISTEMIC_VIOLATION',
+  'CONSTITUTIONAL_VIOLATION',
+  'VALIDATOR_PENALTY',
+  'UNSUPPORTED_CLAIM',    // -8, caller asserted something it could not back
+] as const;
+
+function isIntegrityType(type: string): boolean {
+  return INTEGRITY_PATTERNS.some((p) => type.includes(p));
+}
 const DORMANCY_TYPES = new Set(['DORMANCY_DECAY', 'DECAY']);
 const ADMIN_TYPES = new Set(['GENESIS', 'EPOCH_RESET', 'BASELINE']);
 
@@ -106,7 +138,7 @@ export function classifyPenalty(row: PenaltyEventRow): PenaltyClass | null {
   if (DORMANCY_TYPES.has(type)) return 'dormancy_decay';
   if (ADMIN_TYPES.has(type)) return 'administrative';
 
-  if (INTEGRITY_TYPES.has(type)) return 'integrity_violation';
+  if (isIntegrityType(type)) return 'integrity_violation';
 
   // Evidence-first for the two behavioral classes that dominate.
   if (row.hallucination_caught === true || txt(row.hal_decision).toLowerCase() === 'vetoed') {

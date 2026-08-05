@@ -79,6 +79,33 @@ describe('evidence outranks the label', () => {
       .toBe('challenge_loss');
   });
 
+  // REGRESSION — XC red-team, 2026-08-05. These are the names the ENGINE actually
+  // writes (repid-update.ts), not the tidy ones a classifier author imagines. An
+  // exact-match Set of {'DECEPTION','SLASH'} matched NONE of them, so the heaviest
+  // penalties in the system classified as `unclassified` and dodged isBehavioral().
+  it('classifies the REAL engine event names, not idealised ones', () => {
+    const realNames = [
+      'DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT',
+      'DEFENDED_DECEPTION_FABRICATED_CITATION',
+      'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT',
+      'DEFENDED_DECEPTION_FABRICATED_BENCHMARK',
+      'DEFENDED_DECEPTION_STORY_CHANGE',
+      'DEFENDED_DECEPTION_DOUBT_ATTACK',
+      'DEFENDED_DECEPTION_SYCOPHANTIC_FALSE_PREMISE',
+      'DEFENDED_DECEPTION_THRESHOLD_DANCING',
+      'CONSTITUTIONAL_VIOLATION',
+      'HANDOFF_COSIGN_FALSE_PASS_SLASH',
+      'UNSUPPORTED_CLAIM',
+    ];
+    for (const t of realNames) {
+      const c = classifyPenalty(row({ event_type: t, delta: -60 }));
+      expect(c).toBe('integrity_violation');
+      // The whole point: these must gate. Fabricating evidence cannot be the
+      // thing that lets an agent through a gate that dormancy would not.
+      expect(isBehavioral(c!)).toBe(true);
+    }
+  });
+
   it('treats integrity breaches as their own most-serious class', () => {
     for (const t of ['EPISTEMIC_VIOLATION', 'VALIDATOR_PENALTY', 'COLLUSION', 'SLASH', 'DECEPTION']) {
       expect(classifyPenalty(row({ event_type: t, delta: -60 }))).toBe('integrity_violation');
