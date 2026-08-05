@@ -267,11 +267,35 @@ export function deceptionMode(): 'shadow' | 'enforce' {
 // incidental. Read once at module scope; logged LOUDLY at first use.
 export type SelfReportEvidenceMode = 'off' | 'shadow' | 'enforce';
 
+// DEFAULT CHANGED 2026-08-04: 'shadow' -> 'enforce', after measuring the exposure
+// the shadow period existed to size.
+//
+// THE MEASUREMENT [V sql 2026-08-04], across the ENTIRE ledger, not a window:
+//   AGENT_TEACHING          39 events   +126
+//   PEACEMAKER               2 events    +30
+//   every other self-awardable type — CODE_CONTRIBUTION, REFERRAL, STAKE,
+//   WORKFLOW_CONTRIBUTION, TOOL_PIONEER, SELF_MONITOR, AUDIT_CONTRIBUTION —
+//   has NEVER been used. Not once.
+//
+// Classified by provenance (repid/ledger-provenance.ts), unbacked self-report is
+// 38 events and +111 of RepID — 0.08% of all reputation ever GAINED, against
+// 130,843 from on-chain-anchored events. So enforcing costs almost nothing today
+// and closes a surface that repid-update.ts:84-90 describes plainly: any API-key
+// holder can self-award CODE_CONTRIBUTION (+25) or REFERRAL (+20) with no proof.
+//
+// The asymmetry is what decides it. Leaving it shadow risks an unbounded future
+// hole for zero present benefit; flipping it forfeits +111 of already-earned score
+// that nobody is claiming. `enforce` ZEROES an unproven delta — it never refuses a
+// request and never errors — so the failure mode of being wrong here is "an honest
+// agent earns 0 until it attaches evidence.ref", not a broken caller.
+//
+// Reversible in one env change: SELF_REPORT_EVIDENCE_MODE=shadow (or off).
+// AUDIT_CONTRIBUTION stays ENFORCE_EXEMPT — measured, never zeroed.
 function resolveSelfReportEvidenceMode(): SelfReportEvidenceMode {
   const v = (process.env.SELF_REPORT_EVIDENCE_MODE || '').toLowerCase();
   if (v === 'off') return 'off';
-  if (v === 'enforce') return 'enforce';
-  return 'shadow'; // DEFAULT (safe: computes/records, does NOT change any delta)
+  if (v === 'shadow') return 'shadow';
+  return 'enforce'; // DEFAULT (measured: 0.08% of gains; zeroes unproven deltas only)
 }
 const SELF_REPORT_EVIDENCE_MODE: SelfReportEvidenceMode = resolveSelfReportEvidenceMode();
 
@@ -282,7 +306,7 @@ function logSelfReportModeOnce(): void {
   // No silent modes: announce the resolved gate + its consequence exactly once.
   console.log(
     `[repid-engine] SELF_REPORT_EVIDENCE_MODE='${SELF_REPORT_EVIDENCE_MODE}' ` +
-    `(default 'shadow'; off|shadow|enforce). ` +
+    `(default 'enforce' since 2026-08-04; off|shadow|enforce). ` +
     (SELF_REPORT_EVIDENCE_MODE === 'enforce'
       ? 'ENFORCE: an unproven self-reported delta (no evidence.ref) is zeroed.'
       : SELF_REPORT_EVIDENCE_MODE === 'off'
