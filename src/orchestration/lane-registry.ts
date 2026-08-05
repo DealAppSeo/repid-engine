@@ -45,6 +45,34 @@ export type Capability =
   | 'db_read'
   /** Can write to the production database, including DDL. */
   | 'db_write'
+  /**
+   * Can READ files in the repository it is working in.
+   *
+   * Added 2026-08-05 after wiring this registry to its first real caller. The
+   * vocabulary had `repo_write` and no read, which made "can this agent look at
+   * the code?" unaskable — and that is the precise question whose absence let a
+   * reviewer be dispatched at a file it could not open.
+   */
+  | 'repo_read'
+  /**
+   * Can read files in a DIFFERENT repository than its own workspace.
+   *
+   * Deliberately separate from `repo_read`. Both CLI harnesses sandbox to a single
+   * workspace root and refuse paths outside it — *"Path not in workspace"* — so an
+   * agent that can read its own repo perfectly may be blind to the one under
+   * review. Collapsing the two is what made the 2026-08-05 fabricated review
+   * possible.
+   */
+  | 'cross_repo_read'
+  /**
+   * Can execute a shell command — run tests, run a build, run the thing.
+   *
+   * The capability that separates "I reviewed it" from "I ran it". A reviewer
+   * without this cannot honour requirement 1 of the cross-family review contract
+   * (PARALLEL_AGENT_LANES §3: *run it, do not read it*), and will report test
+   * results it inferred.
+   */
+  | 'shell'
   /** Can create branches and commits in a repo. */
   | 'repo_write'
   /** Can merge a pull request. */
@@ -109,18 +137,30 @@ export const LANES: readonly Lane[] = [
   {
     id: 'GA',
     role: 'Backend/frontend implementation on a branch, measurement harnesses, doc sweeps.',
-    capabilities: ['reasoning', 'http', 'db_read', 'repo_write'],
+    // CORRECTED 2026-08-05 — the previous list was over-broad and its source line
+    // ("Headless CLI verified") is the exact over-generalisation this registry is
+    // supposed to prevent: the CLI starting is not evidence of what it can reach.
+    // `http` and `cross_repo_read` REMOVED, `repo_read` and `shell` recorded as
+    // measured-absent. See `source`.
+    capabilities: ['reasoning', 'repo_read', 'db_read', 'repo_write'],
     costTier: 1,
     handsTo: ['XC', 'CC'],
     source:
-      'Headless CLI verified (`gemini -p`). db_write withheld: single-writer discipline ' +
-      'on existing tables (CLAUDE_RULES 5/6). repo_write is branch-only — merge is SEAN.',
+      'MEASURED 2026-08-05 from the gemini CLI’s own stderr during a live dispatch, ' +
+      'not inferred: `run_shell_command` -> "not available to this agent" (NO shell); ' +
+      '`web_fetch` -> "not available to this agent" (NO http); `read_file`/`grep` on a ' +
+      'path outside the workspace root -> "Path not in workspace" (repo_read is ' +
+      'workspace-scoped, so NO cross_repo_read). The prior entry claimed http and was ' +
+      'sourced only to "`gemini -p` runs", which is a claim about the process starting, ' +
+      'not about what it can reach — and dispatching a review on that basis produced a ' +
+      'report with fabricated test output. db_write withheld: single-writer discipline ' +
+      '(CLAUDE_RULES 5/6). repo_write is branch-only — merge is SEAN.',
   },
   {
     id: 'XC',
     role: 'Adversarial review, red-team, cross-family verification of another lane‘s claim.',
     // NOT db_read either: XC is DB-blind, so a DB claim from XC is unsourceable.
-    capabilities: ['reasoning', 'http', 'repo_write'],
+    capabilities: ['reasoning', 'repo_read', 'http', 'repo_write'],
     costTier: 1,
     handsTo: ['CC'],
     source:
@@ -130,7 +170,7 @@ export const LANES: readonly Lane[] = [
   {
     id: 'CC',
     role: 'Frontier work, prod SQL, security-sensitive changes, and final synthesis.',
-    capabilities: ['reasoning', 'http', 'db_read', 'db_write', 'repo_write', 'chain_read'],
+    capabilities: ['reasoning', 'repo_read', 'cross_repo_read', 'shell', 'http', 'db_read', 'db_write', 'repo_write', 'chain_read'],
     costTier: 2,
     handsTo: ['XC', 'SEAN'],
     source:
@@ -142,6 +182,9 @@ export const LANES: readonly Lane[] = [
     role: 'Merges, infrastructure, secrets, spending real money, and every original call.',
     capabilities: [
       'reasoning',
+      'repo_read',
+      'cross_repo_read',
+      'shell',
       'http',
       'db_read',
       'db_write',
