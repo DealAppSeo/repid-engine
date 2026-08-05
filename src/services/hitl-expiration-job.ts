@@ -1,5 +1,6 @@
 import { hitlService } from './hitl-service';
 import { db } from '../db';
+import { shouldParkForHalt } from './emergency-halt';
 import { HitlResolution } from './hitl-service';
 
 const POLL_INTERVAL_MS = parseInt(process.env.HITL_EXPIRATION_POLL_MS || '300000', 10);
@@ -29,6 +30,10 @@ export function stopHitlExpirationJob() {
 
 async function runExpirationSweep() {
   try {
+    // L0 gate 0.4 — GLOBAL EMERGENCY HALT. This sweep writes resolutions to
+    // HITL requests; nothing is lost by deferring it, since expiry is
+    // evaluated from timestamps on the next tick after the halt lifts.
+    if (await shouldParkForHalt(db, 'HitlExpirationJob')) return;
     const { expired, expiredIds } = await hitlService.expireStaleRequests();
     if (expired === 0) return;
 

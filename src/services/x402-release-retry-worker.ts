@@ -44,6 +44,7 @@
  */
 
 import { db } from '../db';
+import { shouldParkForHalt } from './emergency-halt';
 import { releaseHeldPayment, SETTLEMENT_STATUS } from './x402-deferred-settlement';
 import { finalizeSettledContract } from './contract-settlement-finalize';
 import { x402Facilitator } from './x402-facilitator';
@@ -375,6 +376,9 @@ export function startReleaseRetryWorker(): { stop: () => void } {
     if (running) return; // re-entrancy guard
     running = true;
     try {
+      // Inside the try so `running` is still released by the finally when parked.
+      // This loop MOVES MONEY, so an ungated one is the worst kind to miss.
+      if (await shouldParkForHalt(db, 'X402ReleaseRetry')) return;
       const r = await runRetrySweepLive();
       if (r.examined > 0) {
         console.log(

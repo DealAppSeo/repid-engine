@@ -1,4 +1,6 @@
 import { pgQuery } from '../db/direct-pg';
+import { db } from '../db';
+import { shouldParkForHalt } from './emergency-halt';
 
 // V1.6 — HITL expiry sweeper (CC2 2026-05-27).
 // Periodically flips trinity_hitl_requests rows from 'pending' → 'expired' when
@@ -31,6 +33,10 @@ export async function pollOnce(): Promise<void> {
   if (isRunning) return;
   isRunning = true;
   try {
+    // L0 gate 0.4 — GLOBAL EMERGENCY HALT. This sweep runs an UPDATE that
+    // resolves HITL requests. Inside the try so the isRunning flag is still
+    // released by the finally when the fleet is parked.
+    if (await shouldParkForHalt(db, 'HitlExpirySweeper')) return;
     // Atomic flip: lock + mark in one statement; FOR UPDATE SKIP LOCKED is multi-instance safe.
     const expired = await pgQuery<{ id: string }>(
       `UPDATE trinity_hitl_requests

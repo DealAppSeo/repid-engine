@@ -49,6 +49,7 @@ import { pgQuery as realPgQuery } from '../db/direct-pg';
 import { easService as realEasService } from '../services/eas-attestation-service';
 import { rootFromCommitments, DEFAULT_HASH_SCHEME } from '../zkp/merkle-root';
 import { markDegraded } from '../lib/degraded';
+import { shouldParkForHalt } from '../services/emergency-halt';
 
 /* -------------------------------------------------------------------------- */
 /* Types + injectable dependencies (so unit tests need no network / DB)        */
@@ -401,7 +402,13 @@ export class EasAnchorWorker {
   private tickGuarded(): void {
     if (this.running) return; // no overlapping ticks
     this.running = true;
-    void this.runBatch()
+    // L0 gate 0.4 — GLOBAL EMERGENCY HALT. This worker posts REAL EAS
+    // attestations to Base Sepolia; a halt must stop it before it spends gas.
+    // Folded INSIDE the existing running/finally chain rather than added as an
+    // early return, so a halted tick still releases the re-entrancy flag — an
+    // early `return` here would leave `this.running` true forever and wedge the
+    // worker permanently after the halt was lifted.
+    void this.tickBody()
       .then((r) => {
         if (r.status === 'anchored') {
           console.log(`[eas-anchor] tick anchored ${r.rowsWrittenBack} proof(s) (batch ${r.batchCount}).`);
@@ -411,6 +418,28 @@ export class EasAnchorWorker {
       .finally(() => {
         this.running = false;
       });
+  }
+
+  /**
+   * One tick's work, halt-gated. Returns a well-formed RunBatchResult in the
+   * halted case (status 'deferred' + an explicit reason) so every caller of a
+   * tick sees the same shape whether or not the fleet is parked.
+   */
+  private async tickBody(): Promise<RunBatchResult> {
+    if (await shouldParkForHalt(realDb, 'eas-anchor')) {
+      return {
+        status: 'deferred',
+        batchCount: 0,
+        merkleRoot: null,
+        easUid: null,
+        txHash: null,
+        proofIdMin: null,
+        proofIdMax: null,
+        rowsWrittenBack: 0,
+        reason: 'emergency_halt',
+      };
+    }
+    return this.runBatch();
   }
 
   stop(): void {

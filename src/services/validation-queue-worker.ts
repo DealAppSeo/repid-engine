@@ -4,6 +4,7 @@ import { runAdversarialJudge } from './adversarial-judge';
 import { applyValidationDeltas } from './validation-repid-delta';
 import { HitlReason, HitlResolution, hitlService } from './hitl-service';
 import { appendToAuditChain } from './auditChainWriter';
+import { shouldParkForHalt } from './emergency-halt';
 
 const POLL_INTERVAL_MS = parseInt(process.env.VALIDATION_WORKER_POLL_MS || '30000', 10);
 const BATCH_SIZE = parseInt(process.env.VALIDATION_BATCH_SIZE || '5', 10);
@@ -25,6 +26,10 @@ export async function startValidationWorker() {
 
 async function processQueue() {
   try {
+    // L0 gate 0.4 — global emergency halt. Park before claiming: entries stay
+    // 'pending' and are picked up unchanged when the switch is flipped back.
+    if (await shouldParkForHalt(db, 'ValidationWorker')) return;
+
     // Fetch pending entries (atomic claim via UPDATE RETURNING is not directly supported by supabase js without rpc, but we can do a select then update)
     // Actually, Supabase `.update()` doesn't easily act as a row-lock queue out of the box without RPC, but we'll approximate atomic claim:
     const { data: claims, error: claimErr } = await db
@@ -196,6 +201,9 @@ async function processSingleTask(claim: any) {
 }
 
 export async function checkTimeouts() {
+  // L0 gate 0.4 — reaps stuck claims and writes them back. Its own
+  // setInterval, so it needs its own gate.
+  if (await shouldParkForHalt(db, 'ValidationWorker:checkTimeouts')) return;
   try {
     // Default timeout to 15 minutes if TIMEOUT_HOURS is missing or invalid
     const TIMEOUT_MINUTES = typeof TIMEOUT_HOURS !== 'undefined' ? TIMEOUT_HOURS * 60 : 15;
@@ -239,6 +247,11 @@ export async function checkTimeouts() {
 }
 
 async function pollResolvedHitlEntries(): Promise<void> {
+  // L0 gate 0.4 — finalizes HITL-resolved entries (mutates validation_queue
+  // and task status). Scheduled by its OWN setInterval; the gate in
+  // processQueue does not cover it. Found by making the coverage pin count
+  // per LOOP instead of per FILE.
+  if (await shouldParkForHalt(db, 'ValidationWorker:pollResolvedHitl')) return;
   const { data: entries, error } = await db.from('validation_queue')
     .select('*')
     .in('status', ['processing', 'completed'])

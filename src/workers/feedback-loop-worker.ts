@@ -2,6 +2,7 @@ import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { isEligibleForOnChainWrite, POLL_EVENT_FILTER_SQL, ONCHAIN_ELIGIBLE_EVENT_TYPES } from './feedback-loop-filters';
 import { getReputationWriter, persistReputationWrite, type WriteRepIDResult } from '../services/erc8004-reputation';
+import { shouldParkForHalt } from '../services/emergency-halt';
 
 // Phase 8 — drain-mode rate limit. For the first 24h after worker boot, cap
 // on-chain writes at 1 per 60s so a backlog drain (e.g., the 10 unprocessed
@@ -45,6 +46,19 @@ function withRpcTimeout<T>(label: string, call: PromiseLike<T>, ms: number = RPC
 
 export class FeedbackLoopWorker {
   async runOnce(injectedWriter?: any) {
+    // L0 gate 0.4 — GLOBAL EMERGENCY HALT, checked FIRST.
+    // This worker writes real ERC-8004 reputation deltas ON-CHAIN (Base
+    // Sepolia) every 60s and is enabled BY DEFAULT (ENGINE_WORKERS_ENABLED
+    // !== 'false'), which makes it the most consequential loop in the process.
+    // Its omission was found by the independent Beat-35 verifier and then
+    // reproduced: with emergency_halt SET, this loop kept spending gas. A kill
+    // switch that does not reach the on-chain writer is not a kill switch.
+    // Checked BEFORE the circuit-breaker early-return so a halt can never be
+    // masked by breaker state.
+    if (await shouldParkForHalt(db, 'FeedbackLoopWorker')) {
+      return;
+    }
+
     // Phase 8 — circuit-open early-return. Suppress polling entirely during
     // cool-down. Resumes naturally on the next setInterval tick after the
     // window passes; first successful write resets the breaker.

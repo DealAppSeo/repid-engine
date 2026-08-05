@@ -5,6 +5,7 @@ import { enqueueVerification } from './peer-verification-writer';
 import { classifyPeerVerifyClaim, isPeerVerificationTask } from './peer-verify-prefilter';
 import { isProducerHalted } from './producer-halt';
 import { resolveVerifyLegMode, verifyTaskDeterministically } from './task-verify-leg';
+import { shouldParkForHalt } from './emergency-halt';
 
 const POLL_INTERVAL_MS = parseInt(process.env.TRINITY_BRIDGE_POLL_MS || '30000', 10);
 const ENABLED = () => process.env.TRINITY_BRIDGE_ENABLED !== 'false';
@@ -104,6 +105,14 @@ async function pollCompletedTasks() {
   isRunning = true;
 
   try {
+    // L0 gate 0.4 — global emergency halt. Park this tick: claim nothing, score
+    // nothing, spawn nothing. Nothing is lost — the bridge selects by
+    // completed_at/updated_at, so rows skipped while halted are picked up on the
+    // first tick after the switch is flipped back.
+    if (await shouldParkForHalt(db, 'TrinityTaskBridge')) {
+      return;
+    }
+
     // Query recently completed done, shadow_reject, or verified tasks that are not yet repid_verified
     const { data: tasks, error: fetchErr } = await db
       .from('trinity_tasks')
