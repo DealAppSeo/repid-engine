@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db';
+import { summarizeFleet } from '../observability/agent-liveness';
 
 const router = Router();
 
@@ -10,15 +11,20 @@ router.get('/api/health/agents', async (req, res) => {
       db.from('repid_agents').select('agent_name,current_repid,tier,last_active_at'),
     ]);
     const repidByName = new Map((agents.data || []).map((a: any) => [a.agent_name, a]));
-    const now = Date.now();
-    const grid = (hb.data || []).map((h: any) => {
-      const a: any = repidByName.get(h.agent_name);
-      const mins = h.last_ping ? (now - new Date(h.last_ping).getTime()) / 60000 : null;
+    const fleet = summarizeFleet(hb.data || []);
+    // `status` used to be emitted raw next to a correctly-derived `live`, so the
+    // same object carried both the right answer and a contradicting one. It is now
+    // named `self_reported_status` — kept for diagnosis, never authoritative.
+    const grid = fleet.agents.map((l) => {
+      const h: any = (hb.data || []).find((x: any) => x.agent_name === l.agentName) ?? {};
+      const a: any = repidByName.get(l.agentName);
       return {
-        agent_name: h.agent_name,
-        status: h.status,
-        live: mins != null && mins < 5,
-        minutes_since_ping: mins != null ? Number(mins.toFixed(1)) : null,
+        agent_name: l.agentName,
+        state: l.state,
+        live: l.live,
+        minutes_since_ping: l.minutesSinceLastPing,
+        self_reported_status: l.selfReportedStatus,
+        self_report_contradicted: l.selfReportContradicted,
         loop_count: h.loop_count,
         code_version: h.code_version,
         current_task_id: h.current_task_id,
@@ -26,8 +32,16 @@ router.get('/api/health/agents', async (req, res) => {
         tier: a?.tier ?? null,
       };
     });
-    const live = grid.filter((g) => g.live).length;
-    res.json({ count: grid.length, live, uptime_pct: grid.length ? Math.round((live / grid.length) * 100) : 0, agents: grid });
+    res.json({
+      count: fleet.total,
+      live: fleet.live,
+      stale: fleet.stale,
+      dead: fleet.dead,
+      uptime_pct: fleet.uptimePct,
+      // Loud on purpose: non-zero means agents died without being able to say so.
+      self_report_contradictions: fleet.contradictions,
+      agents: grid,
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -38,17 +52,11 @@ router.get('/api/health/system', async (req, res) => {
     const [hb] = await Promise.all([
       db.from('agent_heartbeat').select('agent_name,status,last_ping'),
     ]);
-    const now = Date.now();
-    const grid = (hb.data || []).map((h: any) => {
-      const mins = h.last_ping ? (now - new Date(h.last_ping).getTime()) / 60000 : null;
-      return {
-        agent_name: h.agent_name,
-        live: mins != null && mins < 5,
-      };
-    });
-    const liveCount = grid.filter((g) => g.live).length;
-    const totalCount = grid.length;
-    const uptime_pct = totalCount ? Math.round((liveCount / totalCount) * 100) : 0;
+    const fleet = summarizeFleet(hb.data || []);
+    const grid = fleet.agents.map((l) => ({ agent_name: l.agentName, live: l.live, state: l.state }));
+    const liveCount = fleet.live;
+    const totalCount = fleet.total;
+    const uptime_pct = fleet.uptimePct;
 
     res.json({
       status: uptime_pct > 50 ? 'healthy' : 'degraded',
