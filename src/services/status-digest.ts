@@ -29,6 +29,7 @@
  */
 
 import { db } from '../db';
+import { shouldParkForHalt } from './emergency-halt';
 
 /**
  * Is this agent plausibly not ours?
@@ -352,6 +353,8 @@ export function startStatusDigest(): { stop: () => void } {
     if (running) return;
     running = true;
     try {
+      // Inside the try so `running` is still released by the finally when parked.
+      if (await shouldParkForHalt(db, 'StatusDigest')) return;
       const r = await maybeSendDigest();
       if (r.sent) console.log('[status-digest] sent');
     } catch (e) {
