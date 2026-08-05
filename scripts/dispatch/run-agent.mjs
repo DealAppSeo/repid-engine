@@ -175,6 +175,71 @@ function evidenceRefusal(cmd) {
  * where the cause is legible — not produce a plausible transcript that someone
  * later cites as a review.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════════
+ * SEAM 3 — THE CLAIM MANIFEST. A claim carries what the claimant could reach.
+ * ════════════════════════════════════════════════════════════════════════════════
+ * Seam 1 refuses a task the agent cannot do. Seam 2 supplies real evidence. This
+ * is the third: after the fact, record what was ACTUALLY reachable, and flag any
+ * claim the agent could not have earned.
+ *
+ * WHY IT NEEDS TEETH RATHER THAN BEING A LOG. On 2026-08-05 GA returned a review
+ * asserting test results, with invented line numbers, for a file it never opened.
+ * A human reading that transcript could not tell — the report was well-formed and
+ * confident, and its own stderr (which nobody reads) was the only contradiction.
+ * A record nobody checks reproduces exactly that.
+ *
+ * So this does the check. A `[V]` — "I verified this myself" — next to an
+ * EXECUTION claim, from an agent that held no `shell` and was given no evidence,
+ * is not possible. It is reported as UNSUPPORTED at the top of the transcript,
+ * where a reviewer starts reading.
+ *
+ * IT DETECTS ARTIFACTS, NOT ASSERTIONS — and that is the correction that made it
+ * work. My first version looked for a `[V]` tag beside "I ran the tests", and
+ * MEASURED AGAINST THE REAL FABRICATED TRANSCRIPT IT MISSED COMPLETELY. GA never
+ * wrote `[V]` and never said it ran anything: it tagged its section `[R]` and
+ * framed invented output as "Expected Failure Output". The dishonesty was not in
+ * the claim — it was in the SPECIFICS.
+ *
+ * What gives it away is that those specifics can only be OBSERVED:
+ *
+ *     AssertionError [ERR_ASSERTION]: Expected request to succeed
+ *       at file:///.../tests/swarm-toolbelt.test.mjs:42:12
+ *
+ * A stack frame, a `file:line`, an exit code, a test count — nobody derives those
+ * by reading source. Their presence in a transcript from an agent that ran
+ * nothing is the contradiction, regardless of how the surrounding prose is
+ * hedged. So: EXECUTION ARTIFACT + no shell + no evidence = flag.
+ *
+ * Still conservative — it flags, it does not fail the run. A false positive would
+ * train people to ignore the banner, which is worse than not having it.
+ */
+const EXECUTION_ARTIFACT = [
+  /\bAssertionError\b/,
+  /\bat .*?:\d+:\d+/,                       // a stack frame with line:col
+  /\b[\w./-]+\.(test|spec)\.[jt]sx?:\d+/,   // testfile.test.ts:42
+  /\bexit (?:code )?[:=]? ?\d+\b/i,
+  /\bTests?:\s+\d+ (passed|failed)/i,
+  /\b\d+ (passing|failing|passed|failed)\b/i,
+  /\bERR_[A-Z_]+\b/,
+];
+
+function auditClaims({ output, capabilities, evidenceCount }) {
+  const couldExecute = capabilities.includes('shell') || evidenceCount > 0;
+  const artifacts = EXECUTION_ARTIFACT.filter((re) => re.test(output));
+  const hasArtifacts = artifacts.length > 0;
+  return {
+    couldExecute,
+    hasArtifacts,
+    artifactCount: artifacts.length,
+    // The contradiction: output that could only come from running something, from
+    // an agent that ran nothing and was shown nothing.
+    unsupported: hasArtifacts && !couldExecute,
+    // Nothing in a transcript with no evidence and no shell can exceed [R].
+    maxGrade: couldExecute ? 'V' : 'R',
+  };
+}
+
 function capabilityRefusal(agentKey, agent, required) {
   const unknown = required.filter((c) => !KNOWN_CAPABILITIES.includes(c));
   if (unknown.length) {
@@ -418,15 +483,59 @@ function main() {
   const out = scrub(res.stdout);
   const err = scrub(res.stderr);
 
+  // SEAM 3 — the manifest goes FIRST in the file, before the agent's prose.
+  // A reviewer must meet "this agent could not run anything" before meeting its
+  // confident paragraph about test results, not after.
+  const audit = auditClaims({ output: out, capabilities: agent.capabilities, evidenceCount: evidence.length });
+  const headSha = (() => {
+    try { return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); }
+    catch { return 'unknown'; }
+  })();
+
+  const manifest = [
+    '## Claim manifest — what this agent could actually reach',
+    '',
+    '| | |',
+    '|---|---|',
+    `| agent / cli | ${agentKey.toUpperCase()} · ${agent.cli} |`,
+    `| lane | ${agent.lane} |`,
+    `| capabilities held | ${agent.capabilities.join(', ')} |`,
+    `| capabilities required by task | ${required.join(', ')} |`,
+    `| shell | **no** — the harness holds it, the agent never does |`,
+    `| evidence commands run FOR it | ${evidence.length === 0 ? '**none**' : evidenceCmds.map((c) => `\`${c}\``).join(', ')} |`,
+    `| repo / branch / HEAD | ${branch} @ ${headSha} |`,
+    `| duration · exit | ${secs}s · ${res.status} |`,
+    `| **highest grade any claim here can carry** | **[${audit.maxGrade}]** |`,
+    '',
+    audit.unsupported
+      ? '> ### ⚠ EXECUTION ARTIFACTS WITH NO EXECUTION\n' +
+        '>\n' +
+        `> This transcript contains ${audit.artifactCount} pattern(s) that can only be OBSERVED by\n` +
+        '> running something — a stack frame, a `file:line`, an exit code, a test\n' +
+        '> count. **This agent held no `shell` and was given no evidence.** Nobody\n' +
+        '> derives those by reading source.\n' +
+        '>\n' +
+        '> Note this fires regardless of how the prose is hedged. The 2026-08-05\n' +
+        '> fabricated review tagged itself `[R]` and called its invented output\n' +
+        '> "Expected Failure Output" — the dishonesty was in the SPECIFICS, not the\n' +
+        '> claim. Re-run anything here before citing it.'
+      : evidence.length > 0
+        ? '> Execution claims below are backed by harness-run evidence, quoted verbatim in the prompt.\n' +
+          '> The agent did not run these itself — it was shown the real output.'
+        : '> No execution capability and none claimed. Reasoning-only report; grade [R].',
+    '',
+  ].join('\n');
+
   const dir = join('reports', new Date().toISOString().slice(0, 10));
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `DISPATCH_${agentKey.toUpperCase()}_${Date.now()}.md`);
   writeFileSync(
     file,
     `# Dispatch — ${agentKey.toUpperCase()}\n\n` +
-      `- agent: ${agent.cli}\n- lane: ${agent.lane}\n- branch: ${branch}\n` +
-      `- duration: ${secs}s\n- exit: ${res.status}\n\n` +
-      `## Task\n\n${task}\n\n## Output\n\n${out}\n` +
+      `${manifest}\n` +
+      `## Task\n\n${task}\n\n` +
+      (evidence.length ? `## Evidence supplied (run by the harness)\n\n\`\`\`\n${evidence.join('\n\n')}\n\`\`\`\n\n` : '') +
+      `## Output\n\n${out}\n` +
       (err.trim() ? `\n## stderr\n\n${err}\n` : ''),
     'utf8',
   );
@@ -434,6 +543,14 @@ function main() {
   console.log(out);
   if (err.trim()) console.error(err);
   console.log(`\n[dispatch] ${secs}s · exit ${res.status} · transcript: ${file}`);
+  console.log(`[dispatch] max claim grade: [${audit.maxGrade}] · evidence runs: ${evidence.length}`);
+  if (audit.unsupported) {
+    console.error(
+      '[dispatch] ⚠ UNSUPPORTED EXECUTION CLAIM — the output asserts something was run,\n' +
+        '           tagged [V], from an agent with no shell and no evidence supplied.\n' +
+        '           Do not accept the execution claims without re-running them yourself.',
+    );
+  }
 
   // A dispatch that produced NOTHING must not read like a review that found
   // nothing. GA failed this way silently: exit null, 0 seconds, empty output, and

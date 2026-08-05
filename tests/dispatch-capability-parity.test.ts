@@ -161,3 +161,83 @@ describe('evidence fence — a permitted prefix cannot smuggle a second command'
     expect(src).toMatch(/exit \$\{r\.status/);
   });
 });
+
+/**
+ * SEAM 3 — the claim manifest, and the detector correction that made it work.
+ *
+ * The first version of `auditClaims` looked for a `[V]` tag beside "I ran the
+ * tests". Measured against the REAL fabricated transcript from 2026-08-05, it
+ * missed completely: GA never wrote `[V]` and never said it ran anything. It
+ * tagged its section `[R]` and labelled its invented output "Expected Failure
+ * Output". The dishonesty was not in the claim — it was in the SPECIFICS.
+ *
+ * The fixture below is taken verbatim from that transcript. Those specifics can
+ * only be OBSERVED by running something; nobody derives a stack frame with a
+ * line:col by reading source. That is what the detector keys on, and it is why it
+ * fires regardless of how the surrounding prose is hedged.
+ */
+describe('claim manifest — execution artifacts without execution', () => {
+  const src = readFileSync(RUNNER, 'utf8');
+
+  // Verbatim from reports/2026-08-05 — the review that never opened the file.
+  const FABRICATED = [
+    '     * **Expected Failure Output:** Tests that assert formatting compliance will fail:',
+    '       ```',
+    '       AssertionError [ERR_ASSERTION]: Expected response to start with \'OK\'',
+    '       at file:///C:/Users/Cash4/repos/trinity-symphony-shared/tests/swarm-toolbelt.test.mjs:78:8',
+    '       ```',
+    '* **Vulnerability Analysis [R]:**',
+  ].join('\n');
+
+  function audit(output: string, capabilities: string[], evidenceCount: number) {
+    const body = src.slice(src.indexOf('const EXECUTION_ARTIFACT'), src.indexOf('function capabilityRefusal'));
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+    const fn = new Function(`${body}; return auditClaims;`)() as (a: unknown) => {
+      unsupported: boolean; maxGrade: string; artifactCount: number; couldExecute: boolean;
+    };
+    return fn({ output, capabilities, evidenceCount });
+  }
+
+  it('THE REGRESSION: flags the real fabricated review, which the first detector missed', () => {
+    const r = audit(FABRICATED, ['reasoning', 'repo_read'], 0);
+    expect(r.unsupported).toBe(true);
+    expect(r.artifactCount).toBeGreaterThan(0);
+    expect(r.maxGrade).toBe('R');
+  });
+
+  it('fires on hedged prose — the text is tagged [R] and still flagged', () => {
+    // This is the whole correction. A detector keyed on confident assertions is
+    // blind to a fabrication that hedges, and hedging is cheap.
+    expect(FABRICATED).toMatch(/\[R\]/);
+    expect(FABRICATED).not.toMatch(/\[V\]/);
+    expect(audit(FABRICATED, ['reasoning'], 0).unsupported).toBe(true);
+  });
+
+  it('does NOT flag the same text once evidence was actually supplied', () => {
+    // Artifacts are expected when the harness ran something — that is the point.
+    const r = audit(FABRICATED, ['reasoning', 'repo_read'], 1);
+    expect(r.unsupported).toBe(false);
+    expect(r.maxGrade).toBe('V');
+  });
+
+  it('does NOT flag reasoning-only output that claims nothing it cannot back', () => {
+    const r = audit('The design looks sound. I could not run anything; recommend npm test.', ['reasoning'], 0);
+    expect(r.unsupported).toBe(false);
+    expect(r.maxGrade).toBe('R');
+  });
+
+  it('caps the grade at [R] whenever nothing could be executed', () => {
+    expect(audit('anything', ['reasoning', 'repo_read'], 0).maxGrade).toBe('R');
+    expect(audit('anything', ['reasoning', 'shell'], 0).maxGrade).toBe('V');
+  });
+
+  it('puts the manifest ABOVE the agent prose, where a reviewer starts reading', () => {
+    const manifestAt = src.indexOf('Claim manifest — what this agent could actually reach');
+    const outputAt = src.indexOf('## Output');
+    expect(manifestAt).toBeGreaterThan(-1);
+    expect(manifestAt).toBeLessThan(outputAt);
+    // And it must state the two facts that make the contradiction visible.
+    expect(src).toMatch(/evidence commands run FOR it/);
+    expect(src).toMatch(/highest grade any claim here can carry/);
+  });
+});
