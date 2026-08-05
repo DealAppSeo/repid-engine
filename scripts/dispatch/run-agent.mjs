@@ -46,9 +46,20 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+/**
+ * `mode` is not a style preference — it is what each CLI actually accepts,
+ * measured rather than assumed [V 2026-08-05]:
+ *
+ *   grok   -p "<prompt>"      works. Piping to stdin opens its interactive TUI.
+ *   gemini  <prompt on stdin> works. (`-p` works too, but see resolveBin below.)
+ *
+ * The first version of this file used `-p` for both and GA NEVER RAN ONCE — see
+ * resolveBin for why, and why I did not catch it.
+ */
 const AGENTS = {
   xc: {
     cli: 'grok',
+    mode: 'argv',
     args: (p) => ['-p', p],
     keyVar: 'GROK_API_KEY',
     inbox: 'E:/dev/handoffs/INBOX_XC.md',
@@ -56,12 +67,52 @@ const AGENTS = {
   },
   ga: {
     cli: 'gemini',
-    args: (p) => ['-p', p],
+    mode: 'stdin',
+    args: () => [],
     keyVar: 'GEMINI_API_KEY',
     inbox: 'E:/dev/handoffs/INBOX_GA.md',
     lane: 'L7 MEASUREMENT — no write scope',
   },
 };
+
+/**
+ * Resolve a CLI to something `spawnSync` can actually execute.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * THE BUG THIS EXISTS FOR, AND THE VERIFICATION GAP THAT LET IT SHIP
+ * ════════════════════════════════════════════════════════════════════════════════
+ * I verified "both CLIs work headless" by running `gemini -p "..."` in a SHELL,
+ * where PATHEXT resolves `gemini` to `gemini.cmd`. This runner uses `spawnSync`
+ * WITHOUT a shell, which does not apply PATHEXT — so it got **ENOENT** every time.
+ *
+ * `grok` happens to be `grok.exe`, so XC worked and looked like proof the runner
+ * was sound. `gemini` is an npm `.cmd` shim, so GA silently produced a 0-second
+ * empty transcript on every dispatch. I tested the CLI; I did not test the
+ * CALL PATH — and those are different claims.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * WHY THE SHELL HERE IS NOT AN INJECTION HOLE
+ * ════════════════════════════════════════════════════════════════════════════════
+ * A `.cmd` shim cannot be executed without a shell on Windows. `shell: true` with
+ * an LLM-authored prompt on the command line WOULD be an injection hole — the
+ * prompt contains quotes, newlines and `&`, and is partly attacker-influenced
+ * whenever an agent reads untrusted content.
+ *
+ * So the two are coupled by an assertion below: **anything needing a shell must
+ * deliver its prompt over stdin**, never argv. The command line then carries only
+ * a path we resolved ourselves, and the untrusted text never touches a shell
+ * parser. That is why `ga` is `mode: 'stdin'` — not a preference, a requirement.
+ */
+function resolveBin(cli) {
+  if (process.platform !== 'win32') return { cmd: cli, shell: false };
+  const where = spawnSync('where', [cli], { encoding: 'utf8' });
+  const paths = String(where.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const exe = paths.find((p) => /\.exe$/i.test(p));
+  if (exe) return { cmd: exe, shell: false };
+  const shim = paths.find((p) => /\.(cmd|bat)$/i.test(p));
+  if (shim) return { cmd: shim, shell: true };
+  return { cmd: cli, shell: false };
+}
 
 const ENV_MASTER = process.env.TRUSTKEYS_ENV_MASTER || 'C:/Users/Cash4/repos/.env.master';
 const TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 15 * 60 * 1000);
@@ -165,13 +216,25 @@ function main() {
     return;
   }
 
-  console.log(`[dispatch] ${agentKey} via ${agent.cli} on branch ${branch} (timeout ${TIMEOUT_MS / 1000}s)`);
+  const bin = resolveBin(agent.cli);
+  // The coupling that keeps `shell: true` safe. If this ever fires, the fix is to
+  // give that agent `mode: 'stdin'` — NOT to relax the assertion.
+  if (bin.shell && agent.mode !== 'stdin') {
+    throw new Error(
+      `${agent.cli} resolves to a shell shim (${bin.cmd}) but is configured mode='${agent.mode}'. ` +
+        `Putting an LLM-authored prompt on a shell command line is an injection hole. Use mode:'stdin'.`,
+    );
+  }
+
+  console.log(`[dispatch] ${agentKey} via ${bin.cmd}${bin.shell ? ' (shim, prompt on stdin)' : ''} on branch ${branch} (timeout ${TIMEOUT_MS / 1000}s)`);
   const started = Date.now();
-  const res = spawnSync(agent.cli, agent.args(preamble), {
+  const res = spawnSync(bin.cmd, agent.args(preamble), {
     encoding: 'utf8',
     timeout: TIMEOUT_MS,
     env: { ...process.env, [agent.keyVar]: key },
     maxBuffer: 32 * 1024 * 1024,
+    shell: bin.shell,
+    ...(agent.mode === 'stdin' ? { input: preamble } : {}),
   });
 
   const secs = Math.round((Date.now() - started) / 1000);
@@ -197,6 +260,20 @@ function main() {
   console.log(out);
   if (err.trim()) console.error(err);
   console.log(`\n[dispatch] ${secs}s · exit ${res.status} · transcript: ${file}`);
+
+  // A dispatch that produced NOTHING must not read like a review that found
+  // nothing. GA failed this way silently: exit null, 0 seconds, empty output, and
+  // a transcript file that existed and therefore looked like a result. An absent
+  // review is far more dangerous than a negative one, because the PR then carries
+  // a cross-family signature it never earned.
+  if (res.error || res.status !== 0 || !out.trim()) {
+    console.error(
+      `\n[dispatch] ✗ NO REVIEW WAS PRODUCED — do not treat this as a pass.\n` +
+        `           reason: ${res.error ? `${res.error.code} (${agent.cli} could not be executed)` : res.status === null ? 'process did not exit normally (killed or timed out)' : `exit ${res.status}`}` +
+        (out.trim() ? '' : '\n           the agent returned no output at all'),
+    );
+    process.exit(1);
+  }
 
   const changed = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim();
   if (changed) {
