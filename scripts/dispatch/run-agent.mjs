@@ -56,6 +56,37 @@ import { join } from 'node:path';
  * The first version of this file used `-p` for both and GA NEVER RAN ONCE — see
  * resolveBin for why, and why I did not catch it.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════════
+ * CAPABILITIES — MEASURED, NOT DECLARED. Absent unless proven.
+ * ════════════════════════════════════════════════════════════════════════════════
+ * This mirrors `canAssign()` in src/orchestration/lane-registry.ts, whose comment
+ * says the thing this file exists to enforce: *"T12 lacks http — routing this here
+ * yields a fabricated answer, not a failed one."*
+ *
+ * Duplicated rather than imported for the same reason lane-write-guard.js
+ * duplicates its lease logic: this must run in a fresh worktree with no
+ * `npm install` and no build, because `dist/` is stale exactly when someone is
+ * mid-refactor. Anything it needs to require is a way for it to fail, and a fence
+ * that fails is a fence that fails OPEN. `tests/dispatch-capability-parity.test.ts`
+ * pins the two tables together.
+ *
+ * WHY THIS EXISTS — the failure it is built from, 2026-08-05:
+ * GA was dispatched to review a PR in ANOTHER repository and returned a detailed
+ * report containing fabricated test output with invented line numbers. Its own
+ * stderr showed it never read the file and never ran anything:
+ *
+ *     Error executing tool read_file: Path not in workspace
+ *     Blocked call: 'run_shell_command' is not available to this agent
+ *
+ * I gave it a task requiring `shell` and a cross-repo read, in a sandbox with
+ * neither. The agent did not malfunction — I asked for something it had no
+ * instrument to obtain, and a well-formed answer is what that always produces.
+ *
+ * FAIL CLOSED: a capability not listed is treated as ABSENT. Adding one requires
+ * a `verified` note saying how it was measured. An unmeasured capability is a
+ * guess, and a guess here re-creates the exact bug.
+ */
 const AGENTS = {
   xc: {
     cli: 'grok',
@@ -64,6 +95,11 @@ const AGENTS = {
     keyVar: 'GROK_API_KEY',
     inbox: 'E:/dev/handoffs/INBOX_XC.md',
     lane: 'L6 RED-TEAM — no write scope',
+    // [V 2026-08-05] grok resolves to grok.exe and ran a real analysis of
+    // penalty-provenance.ts, returning a finding I independently confirmed
+    // (INTEGRITY_TYPES exact-match gap). Reasoning + in-repo read demonstrated.
+    // `shell` is NOT listed: never observed, therefore absent.
+    capabilities: ['reasoning', 'repo_read'],
   },
   ga: {
     cli: 'gemini',
@@ -72,8 +108,40 @@ const AGENTS = {
     keyVar: 'GEMINI_API_KEY',
     inbox: 'E:/dev/handoffs/INBOX_GA.md',
     lane: 'L7 MEASUREMENT — no write scope',
+    // [V 2026-08-05] measured from its OWN stderr on the fabricated review:
+    //   run_shell_command  -> "not available to this agent"      => no `shell`
+    //   read_file/grep     -> "Path not in workspace"            => repo_read is
+    //     scoped to the CWD workspace only, hence `repo_read` but not
+    //     `cross_repo_read`.
+    //   web_fetch          -> "not available to this agent"      => no `http`
+    capabilities: ['reasoning', 'repo_read'],
   },
 };
+
+/** Capabilities a task may require. Unknown names are refused, not ignored. */
+const KNOWN_CAPABILITIES = ['reasoning', 'repo_read', 'cross_repo_read', 'shell', 'http', 'db_read'];
+
+/**
+ * The port of canAssign(). Returns null when assignable, or a refusal reason.
+ *
+ * The refusal IS the product. A dispatch that cannot be satisfied must stop here,
+ * where the cause is legible — not produce a plausible transcript that someone
+ * later cites as a review.
+ */
+function capabilityRefusal(agentKey, agent, required) {
+  const unknown = required.filter((c) => !KNOWN_CAPABILITIES.includes(c));
+  if (unknown.length) {
+    return `unknown capability requested: ${unknown.join(', ')}. Known: ${KNOWN_CAPABILITIES.join(', ')}.`;
+  }
+  const missing = required.filter((c) => !agent.capabilities.includes(c));
+  if (!missing.length) return null;
+  return (
+    `${agentKey.toUpperCase()} lacks [${missing.join(', ')}] which this task requires.\n` +
+    `           It holds only [${agent.capabilities.join(', ')}].\n` +
+    `           Routing this here yields a FABRICATED answer, not a failed one — on 2026-08-05\n` +
+    `           exactly this produced a review with invented test output. Refusing.`
+  );
+}
 
 /**
  * Resolve a CLI to something `spawnSync` can actually execute.
@@ -177,6 +245,18 @@ function main() {
   if (!task || task === true) {
     console.error(`no task. Pass --task "..." or --inbox (reads ${agent.inbox})`);
     process.exit(64);
+  }
+
+  // SEAM 1 — refuse before the work, not after the report.
+  // Default is conservative: a task that names no requirements is assumed to need
+  // only reasoning. Anything that must READ, RUN or FETCH has to say so, and
+  // saying so is what makes the mismatch visible.
+  const required = String(arg('requires', 'reasoning'))
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  const refusal = capabilityRefusal(agentKey, agent, required);
+  if (refusal) {
+    console.error(`[dispatch] ✗ REFUSED — ${refusal}`);
+    process.exit(65);
   }
 
   const key = readKey(agent.keyVar);

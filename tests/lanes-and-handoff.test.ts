@@ -117,7 +117,28 @@ describe('free-first routing — cheapest lane that can actually do it', () => {
 
   it('work needing http skips T12 to the cheap CLI tier, not straight to CC', () => {
     // The cost cascade exists to keep expensive lanes for work that needs them.
-    expect(cheapestCapableLane(['reasoning', 'http'])!.id).toBe('GA');
+    //
+    // CHANGED 2026-08-05 from 'GA' to 'XC', and the reason matters more than the
+    // edit. This assertion did not break — it was ALWAYS WRONG and only became
+    // visible when GA's capabilities were corrected against a real measurement.
+    // GA's `http` was sourced to "`gemini -p` runs", which is a claim about the
+    // process starting, not about what it can reach; its own stderr shows
+    // `web_fetch` -> "not available to this agent". So http work routed to GA
+    // would have come back fabricated, at the cheapest tier, invisibly.
+    //
+    // Both are costTier 1, so the cascade's intent — never jump to CC for work a
+    // cheap CLI can do — is preserved. Only the identity of the cheap CLI that can
+    // actually do it changed.
+    expect(cheapestCapableLane(['reasoning', 'http'])!.id).toBe('XC');
+  });
+
+  it('GA is not offered http work — the capability was measured absent', () => {
+    // Pins the correction so a future edit cannot quietly restore it. If GA gains
+    // a real web_fetch, this test should fail and be updated WITH the measurement.
+    const ga = LANES.find((l) => l.id === 'GA')!;
+    expect(ga.capabilities).not.toContain('http');
+    expect(ga.source).toMatch(/MEASURED 2026-08-05/);
+    expect(canAssign('GA', ['http']).assignable).toBe(false);
   });
 
   it('a prod DB write reaches CC — and stops there rather than escalating to Sean', () => {
