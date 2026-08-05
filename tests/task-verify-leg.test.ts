@@ -27,12 +27,12 @@ const DB_VERIFIER_VERDICTS = ['approved', 'rejected', 'unclear'];
 const DB_FINAL_VERDICTS = ['verified_done', 'disputed_done', 'rejected', 'unverified', 'spot_audited'];
 
 describe('verdict vocabulary matches the prod CHECK constraints', () => {
-  test('module constants are exactly the constraint sets', () => {
+  test('module constants are exactly the constraint sets', async () => {
     expect([...VERIFIER_VERDICTS].sort()).toEqual([...DB_VERIFIER_VERDICTS].sort());
     expect([...FINAL_VERDICTS].sort()).toEqual([...DB_FINAL_VERDICTS].sort());
   });
 
-  test('every verdict this module can emit is DB-legal', () => {
+  test('every verdict this module can emit is DB-legal', async () => {
     const cases: Array<{ expected_output: string; result: string }> = [
       { expected_output: '{"contains_all":["ok"]}', result: 'ok' },
       { expected_output: '{"contains_all":["ok"]}', result: 'nope' },
@@ -42,7 +42,7 @@ describe('verdict vocabulary matches the prod CHECK constraints', () => {
       { expected_output: '{"matches":"^[0-9a-f]{40}$"}', result: 'abc123' },
     ];
     for (const c of cases) {
-      const r = verifyTaskDeterministically(c);
+      const r = await verifyTaskDeterministically(c);
       expect(r).not.toBeNull();
       expect(DB_VERIFIER_VERDICTS).toContain(r!.verifier_verdict);
       expect(DB_FINAL_VERDICTS).toContain(r!.final_verdict);
@@ -60,21 +60,21 @@ describe('no contract → no verdict', () => {
     // Only a `{`-prefixed value is read as an attempted contract; a JSON array
     // is not one, and is left alone rather than reported as malformed.
     ['json array', '[1,2]'],
-  ])('%s expected_output returns null', (_label, expected_output) => {
+  ])('%s expected_output returns null', async (_label, expected_output) => {
     expect(
-      verifyTaskDeterministically({ expected_output: expected_output as any, result: 'anything at all' })
+      await verifyTaskDeterministically({ expected_output: expected_output as any, result: 'anything at all' })
     ).toBeNull();
   });
 
-  test('prose is not an error — only a malformed OBJECT is', () => {
+  test('prose is not an error — only a malformed OBJECT is', async () => {
     expect(parseContract('please return a table')).toBeNull();
     expect(parseContract('{"contains_all":')).toEqual({ invalid: expect.stringContaining('not valid JSON') });
   });
 });
 
 describe('a contract that cannot confirm is never read as confirming', () => {
-  test('only negative assertions → unclear/unverified even when they all pass', () => {
-    const r = verifyTaskDeterministically({
+  test('only negative assertions → unclear/unverified even when they all pass', async () => {
+    const r = await verifyTaskDeterministically({
       expected_output: '{"min_length":3,"contains_none":["error"]}',
       result: 'fine and long enough',
     })!;
@@ -85,8 +85,8 @@ describe('a contract that cannot confirm is never read as confirming', () => {
     expect(r.verified_output.reason).toBe('no_substantive_assertion');
   });
 
-  test('one substantive assertion is enough to confirm', () => {
-    const r = verifyTaskDeterministically({
+  test('one substantive assertion is enough to confirm', async () => {
+    const r = await verifyTaskDeterministically({
       expected_output: '{"contains_all":["deployed_commit"],"min_length":3}',
       result: 'deployed_commit is present',
     })!;
@@ -97,16 +97,16 @@ describe('a contract that cannot confirm is never read as confirming', () => {
 });
 
 describe('the checks can actually fail', () => {
-  test('matches: a real 40-hex sha passes, the fabricated placeholder does not', () => {
+  test('matches: a real 40-hex sha passes, the fabricated placeholder does not', async () => {
     const contract = '{"matches":"\\"deployed_commit\\":\\"[0-9a-f]{40}\\""}';
-    const real = verifyTaskDeterministically({
+    const real = await verifyTaskDeterministically({
       expected_output: contract,
       result: '{"deployed_commit":"a1b6e7fc0000000000000000000000000000dead"}',
     })!;
     expect(real.verifier_verdict).toBe('approved');
 
     // The exact body six agents emitted on six different nights (Beat 30 audit).
-    const fabricated = verifyTaskDeterministically({
+    const fabricated = await verifyTaskDeterministically({
       expected_output: contract,
       result: '{"deployed_commit":"abc123"}',
     })!;
@@ -114,8 +114,8 @@ describe('the checks can actually fail', () => {
     expect(fabricated.final_verdict).toBe('rejected');
   });
 
-  test('contains_all reports precisely what is missing', () => {
-    const r = verifyTaskDeterministically({
+  test('contains_all reports precisely what is missing', async () => {
+    const r = await verifyTaskDeterministically({
       expected_output: '{"contains_all":["alpha","beta","gamma"]}',
       result: 'alpha only',
     })!;
@@ -124,43 +124,43 @@ describe('the checks can actually fail', () => {
     expect(r.verified_output.checks.find((c) => c.kind === 'contains_all')!.detail).toContain('gamma');
   });
 
-  test('json_keys distinguishes "not JSON" from "JSON missing a key"', () => {
-    const notJson = verifyTaskDeterministically({
+  test('json_keys distinguishes "not JSON" from "JSON missing a key"', async () => {
+    const notJson = await verifyTaskDeterministically({
       expected_output: '{"json_keys":["status"]}',
       result: 'the status is fine',
     })!;
     expect(notJson.verified_output.checks[0]!.detail).toBe('result is not valid JSON');
 
-    const missing = verifyTaskDeterministically({
+    const missing = await verifyTaskDeterministically({
       expected_output: '{"json_keys":["status","count"]}',
       result: '{"status":"ok"}',
     })!;
     expect(missing.verified_output.checks[0]!.detail).toContain('count');
 
-    const arr = verifyTaskDeterministically({
+    const arr = await verifyTaskDeterministically({
       expected_output: '{"json_keys":["status"]}',
       result: '["status"]',
     })!;
     expect(arr.verified_output.checks[0]!.ok).toBe(false);
   });
 
-  test('min_length and contains_none reject', () => {
+  test('min_length and contains_none reject', async () => {
     expect(
-      verifyTaskDeterministically({ expected_output: '{"contains_all":["x"],"min_length":50}', result: 'x' })!
+      (await verifyTaskDeterministically({ expected_output: '{"contains_all":["x"],"min_length":50}', result: 'x' }))!
         .verifier_verdict
     ).toBe('rejected');
     expect(
-      verifyTaskDeterministically({
+      (await verifyTaskDeterministically({
         expected_output: '{"contains_all":["x"],"contains_none":["FAILED"]}',
         result: 'x but also FAILED',
-      })!.verifier_verdict
+      }))!.verifier_verdict
     ).toBe('rejected');
   });
 });
 
 describe('placeholder rejection', () => {
-  test('is on by default whenever a contract exists', () => {
-    const r = verifyTaskDeterministically({
+  test('is on by default whenever a contract exists', async () => {
+    const r = await verifyTaskDeterministically({
       expected_output: '{"contains_all":["report"]}',
       result: 'report body: TODO: fill this in',
     })!;
@@ -168,8 +168,8 @@ describe('placeholder rejection', () => {
     expect(r.verified_output.placeholders_found).toContain('todo:');
   });
 
-  test('can be switched off explicitly, and then it stops rejecting', () => {
-    const r = verifyTaskDeterministically({
+  test('can be switched off explicitly, and then it stops rejecting', async () => {
+    const r = await verifyTaskDeterministically({
       expected_output: '{"contains_all":["report"],"no_placeholders":false}',
       result: 'report body: TODO: fill this in',
     })!;
@@ -177,9 +177,9 @@ describe('placeholder rejection', () => {
     expect(r.verified_output.checks.some((c) => c.kind === 'no_placeholders')).toBe(false);
   });
 
-  test('every declared marker is actually detected', () => {
+  test('every declared marker is actually detected', async () => {
     for (const marker of PLACEHOLDER_MARKERS) {
-      const r = verifyTaskDeterministically({
+      const r = await verifyTaskDeterministically({
         expected_output: '{"contains_all":["ok"]}',
         result: `ok ${marker.toUpperCase()} trailing`,
       })!;
@@ -204,8 +204,8 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     ['matches with a BRACED repetition of a quantified group', '{"matches":"(a+){10}$"}'],
     ['matches with an open-ended braced repetition', '{"matches":"(a+){2,}$"}'],
     ['matches with a repeated alternation', '{"matches":"(a|aa)+$"}'],
-  ])('%s → unclear/unverified with a reason', (_label, expected_output) => {
-    const r = verifyTaskDeterministically({ expected_output, result: 'whatever' })!;
+  ])('%s → unclear/unverified with a reason', async (_label, expected_output) => {
+    const r = (await verifyTaskDeterministically({ expected_output, result: 'whatever' }))!;
     expect(r.verifier_verdict).toBe('unclear');
     expect(r.final_verdict).toBe('unverified');
     expect(r.verified_output.reason).toBe('contract_invalid');
@@ -213,7 +213,7 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     expect(r.verified_output.checks[0]!.detail.length).toBeGreaterThan(0);
   });
 
-  test('backtracking detector: flags the catastrophic shapes, allows ordinary ones', () => {
+  test('backtracking detector: flags the catastrophic shapes, allows ordinary ones', async () => {
     expect(hasBacktrackingRisk('(a+)+')).toBe(true);
     expect(hasBacktrackingRisk('(x*)*')).toBe(true);
     expect(hasBacktrackingRisk('([0-9a-f]{40})+')).toBe(false);
@@ -230,7 +230,7 @@ describe('malformed contracts are surfaced, not swallowed', () => {
    * took 61 s on 29 chars, growing exponentially; `(a|aa)+$` exceeded 30 s at 43 chars.
    * These are the exact shapes that would have parked the 30-second bridge poller.
    */
-  test('REGRESSION: braced repetitions and repeated alternations are flagged', () => {
+  test('REGRESSION: braced repetitions and repeated alternations are flagged', async () => {
     expect(hasBacktrackingRisk('(a+){10}$')).toBe(true);
     expect(hasBacktrackingRisk('(a+){2,}$')).toBe(true);
     expect(hasBacktrackingRisk('(a*){5}')).toBe(true);
@@ -241,7 +241,7 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     expect(hasBacktrackingRisk('([a-z]{2,4})+')).toBe(true);
   });
 
-  test('...without rejecting fixed-width or unrepeated groups a real contract would use', () => {
+  test('...without rejecting fixed-width or unrepeated groups a real contract would use', async () => {
     // Fixed width per repetition: no ambiguity, cannot blow up.
     expect(hasBacktrackingRisk('(\\d{4}){2}')).toBe(false);
     // Alternation that is never repeated.
@@ -264,7 +264,7 @@ describe('malformed contracts are surfaced, not swallowed', () => {
    * Depth is not a safety property. Each shape below is the depth-wrapped form of a
    * shape already pinned above, and every one of them walked through.
    */
-  test('REGRESSION: a quantifier or alternation NESTED deeper than one group is still flagged', () => {
+  test('REGRESSION: a quantifier or alternation NESTED deeper than one group is still flagged', async () => {
     expect(hasBacktrackingRisk('((a+))+$')).toBe(true);      // the verifier's find
     expect(hasBacktrackingRisk('(((a+)))+$')).toBe(true);    // depth 3
     expect(hasBacktrackingRisk('((a*))*$')).toBe(true);
@@ -279,7 +279,7 @@ describe('malformed contracts are surfaced, not swallowed', () => {
    * closes a pre-existing FALSE POSITIVE: `(?:abc)+` is fixed-width and entirely
    * safe, and the detector used to reject it.
    */
-  test('group prefixes are not mistaken for quantifiers (and the old false positive is gone)', () => {
+  test('group prefixes are not mistaken for quantifiers (and the old false positive is gone)', async () => {
     expect(hasBacktrackingRisk('(?:abc)+')).toBe(false);
     expect(hasBacktrackingRisk('(?:pass)*')).toBe(false);
     expect(hasBacktrackingRisk('(?<sha>[0-9a-f]{40})')).toBe(false);
@@ -295,7 +295,7 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     expect(hasBacktrackingRisk('(?#weird)+')).toBe(true);
   });
 
-  test('the depth-2 bypass is refused end-to-end by parseContract, not just by the guard', () => {
+  test('the depth-2 bypass is refused end-to-end by parseContract, not just by the guard', async () => {
     // The guard is internal; this is the surface an operator's contract actually hits.
     const r = parseContract('{"matches":"((a+))+$"}');
     expect(r).not.toBeNull();
@@ -303,9 +303,9 @@ describe('malformed contracts are surfaced, not swallowed', () => {
     expect((r as { invalid: string }).invalid).toMatch(/backtracking/);
   });
 
-  test('a flagged pattern is rejected fast — the detector itself never runs the regex', () => {
+  test('a flagged pattern is rejected fast — the detector itself never runs the regex', async () => {
     const t0 = Date.now();
-    const r = verifyTaskDeterministically({
+    const r = await verifyTaskDeterministically({
       expected_output: '{"matches":"(a|aa)+$"}',
       result: 'a'.repeat(2_000) + 'b',
     })!;
@@ -336,15 +336,15 @@ describe('mode lever fails safe', () => {
     expect(resolveVerifyLegMode(raw)).toBe(expected);
   });
 
-  test('unset → off', () => {
+  test('unset → off', async () => {
     delete process.env.TASK_VERIFY_LEG_MODE;
     expect(resolveVerifyLegMode()).toBe('off');
   });
 });
 
 describe('the module never claims peer verification', () => {
-  test('verification_method is always the deterministic stamp', () => {
-    const approved = verifyTaskDeterministically({
+  test('verification_method is always the deterministic stamp', async () => {
+    const approved = await verifyTaskDeterministically({
       expected_output: '{"contains_all":["ok"]}',
       result: 'ok',
     })!;

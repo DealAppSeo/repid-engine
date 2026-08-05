@@ -43,6 +43,8 @@
  * the constraint, transcribed once, and a test pins every emitted value to them.
  */
 
+import { matchWithBudget } from './regex-budget';
+
 /** Exactly the values `trinity_tasks_verifier_verdict_check` permits. */
 export const VERIFIER_VERDICTS = ['approved', 'rejected', 'unclear'] as const;
 export type VerifierVerdict = (typeof VERIFIER_VERDICTS)[number];
@@ -124,6 +126,20 @@ export interface CheckOutcome {
   kind: string;
   ok: boolean;
   detail: string;
+  /**
+   * False when the check COULD NOT BE RUN, as distinct from ran and failed.
+   * Absent means it ran (the overwhelmingly common case).
+   *
+   * The distinction is not cosmetic — these verdicts feed RepID. `ok:false`
+   * alone collapses "the agent's output was wrong" and "the operator wrote a
+   * regex that does not terminate" into the same `rejected`/`assertion_failed`,
+   * which debits the agent for someone else's mistake. Note that the SAME bad
+   * pattern caught one layer earlier, by `hasBacktrackingRisk` at parse time,
+   * already returns `unclear`/`unverified`; a pattern that slips the heuristic
+   * and is caught by the budget instead must not be graded differently just
+   * because a different guard caught it.
+   */
+  evaluated?: boolean;
 }
 
 export interface VerifyLegResult {
@@ -318,10 +334,10 @@ function findPlaceholders(subject: string): string[] {
  * Returns null when there is nothing to grade (no contract) — the caller must
  * then leave all four columns NULL rather than writing a manufactured verdict.
  */
-export function verifyTaskDeterministically(task: {
+export async function verifyTaskDeterministically(task: {
   expected_output?: string | null;
   result?: string | null;
-}): VerifyLegResult | null {
+}): Promise<VerifyLegResult | null> {
   const parsedContract = parseContract(task.expected_output);
   if (parsedContract === null) return null;
 
@@ -350,15 +366,33 @@ export function verifyTaskDeterministically(task: {
 
   if (c.matches !== undefined) {
     substantive++;
+    // Run under a hard wall-clock budget in a terminable worker. The pattern is
+    // operator-supplied — anything that can insert a task can write it — and a
+    // catastrophically-backtracking regex against a 20 KB subject does not fail,
+    // it pegs the event loop and takes the bridge poller with it.
+    // `hasBacktrackingRisk` already rejected the shapes it recognises at parse
+    // time, but it has been bypassed four times across Beats 32/33/38, so it is
+    // the advisory layer and this is the guarantee. See `regex-budget.ts`.
+    const outcome = await matchWithBudget(c.matches, 'i', subject);
     let ok = false;
+    let evaluated = true;
     let detail: string;
-    try {
-      ok = new RegExp(c.matches, 'i').test(subject);
+    if (outcome.status === 'ok') {
+      ok = outcome.matched;
       detail = ok ? `result matches /${c.matches}/i` : `result does not match /${c.matches}/i`;
-    } catch (err: any) {
-      detail = `regex threw: ${err?.message ?? 'unknown'}`;
+    } else if (outcome.status === 'timeout') {
+      // NOT a failed match. `ok` stays false so this can never read as passed,
+      // and `evaluated` is false so it does not read as the agent's failure
+      // either — the pattern is pathological, which is the operator's problem.
+      evaluated = false;
+      detail = `regex exceeded the ${outcome.budgetMs}ms budget (catastrophic backtracking) — pattern not evaluable`;
+    } else {
+      // Worker fault or a pattern that only fails at construction inside the
+      // thread. Also not evidence about the agent's output.
+      evaluated = false;
+      detail = `regex could not be run: ${outcome.message}`;
     }
-    checks.push({ kind: 'matches', ok, detail });
+    checks.push({ kind: 'matches', ok, detail, evaluated });
   }
 
   if (c.contains_all !== undefined) {
@@ -421,12 +455,24 @@ export function verifyTaskDeterministically(task: {
     });
   }
 
+  // An unevaluable check DOMINATES a failed one. Both refuse to approve, so the
+  // safety property is identical either way; the difference is who gets blamed,
+  // and the grading was incomplete, so nobody can be. Reporting `rejected` here
+  // would assert a complete grade that never happened — and would hand the same
+  // outcome to a task whose output was genuinely wrong and to one whose operator
+  // wrote a non-terminating pattern. It also keeps this path identical to the
+  // heuristic's `contract_invalid` path for the very same bad pattern.
+  const notEvaluated = checks.filter((k) => k.evaluated === false);
   const anyFailed = checks.some((k) => !k.ok);
   let verifier: VerifierVerdict;
   let final: FinalVerdict;
   let reason: string;
 
-  if (anyFailed) {
+  if (notEvaluated.length > 0) {
+    verifier = 'unclear';
+    final = 'unverified';
+    reason = `check_not_evaluable:${notEvaluated.map((k) => k.kind).join(',')}`;
+  } else if (anyFailed) {
     verifier = 'rejected';
     final = 'rejected';
     reason = 'assertion_failed';
