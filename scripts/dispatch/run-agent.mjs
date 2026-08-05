@@ -122,6 +122,53 @@ const AGENTS = {
 const KNOWN_CAPABILITIES = ['reasoning', 'repo_read', 'cross_repo_read', 'shell', 'http', 'db_read'];
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════════
+ * EVIDENCE COMMANDS — the harness holds `shell`, the agent does not.
+ * ════════════════════════════════════════════════════════════════════════════════
+ * A reviewer must RUN the tests, not read them (PARALLEL_AGENT_LANES §3.1). The
+ * obvious way to enable that is to give the agent a shell. MEASURED 2026-08-05,
+ * that is not safe here, and the reason is worth writing down because the flag
+ * looks like it solves it:
+ *
+ *   grok --allow 'Bash(node:*)' -p "delete canary.txt using rm"   ->  DELETED IT
+ *
+ * `--allow` is an AUTO-APPROVE list, not a fence. In single-turn `-p` mode there
+ * is no confirmation step to fall back on, so an unlisted command simply runs.
+ * `--sandbox <invalid-profile>` was accepted silently and ran unsandboxed. So on
+ * this machine a shell grant is a FULL shell grant — and a full shell reads
+ * `.env.master` (44 keys, known path) and can echo the provider key we place in
+ * its own environment.
+ *
+ * THE INVERSION: the agent does not need the capability, it needs the EVIDENCE.
+ * So the harness runs the command and injects the real output into the prompt.
+ * The agent gets true test results and cannot fabricate them, because they are
+ * already in front of it — and it never gets arbitrary execution.
+ *
+ * The allowlist below is a FENCE, not a suggestion: the command is matched before
+ * it runs and anything unmatched is refused. `&& || ; | > \` $( ` are rejected
+ * outright so a permitted prefix cannot smuggle a second command.
+ */
+const EVIDENCE_ALLOWED = [
+  /^npm (test|run test:[\w:-]+)$/,
+  /^npx jest --config jest\.config\.js( [\w./-]+)*$/,
+  /^node (-c )?[\w./-]+\.(mjs|js)$/,
+  /^npx tsc --noEmit$/,
+  /^git (status --porcelain|log --oneline -\d+|diff --stat [\w./~^-]+)$/,
+];
+
+const SHELL_METACHARS = /[;&|><`$(){}\n\r]|\|\||&&/;
+
+function evidenceRefusal(cmd) {
+  if (SHELL_METACHARS.test(cmd)) {
+    return `command contains shell metacharacters — refused so a permitted prefix cannot smuggle a second command: ${cmd}`;
+  }
+  if (!EVIDENCE_ALLOWED.some((re) => re.test(cmd))) {
+    return `command is not on the evidence allowlist: ${cmd}\n           allowed shapes: npm test · npx jest --config jest.config.js [file] · node <file> · npx tsc --noEmit · git status/log/diff`;
+  }
+  return null;
+}
+
+/**
  * The port of canAssign(). Returns null when assignable, or a refusal reason.
  *
  * The refusal IS the product. A dispatch that cannot be satisfied must stop here,
@@ -267,6 +314,34 @@ function main() {
 
   const branch = assertSafeRepoState();
 
+  // SEAM 2 — the harness runs it, so the agent cannot claim it ran without it.
+  // Each command is fenced, executed here, and its REAL output injected below.
+  // A failing command is injected too: "the suite is red and here is how" is a
+  // finding, not an error, and hiding it would recreate the fabrication problem
+  // from the other direction.
+  const evidenceCmds = [].concat(arg('evidence') && arg('evidence') !== true ? [String(arg('evidence'))] : []);
+  const evidence = [];
+  for (const cmd of evidenceCmds) {
+    const bad = evidenceRefusal(cmd);
+    if (bad) {
+      console.error(`[dispatch] ✗ REFUSED evidence command — ${bad}`);
+      process.exit(66);
+    }
+    console.log(`[dispatch] running evidence: ${cmd}`);
+    const parts = cmd.split(/\s+/);
+    const r = spawnSync(parts[0], parts.slice(1), {
+      encoding: 'utf8',
+      timeout: 15 * 60 * 1000,
+      maxBuffer: 32 * 1024 * 1024,
+      shell: process.platform === 'win32', // npm/npx are .cmd shims; argv here is fenced, not agent-authored
+    });
+    const tail = (s) => String(s || '').split(/\r?\n/).slice(-60).join('\n');
+    evidence.push(
+      `$ ${cmd}\n[exit ${r.status ?? 'null'}${r.error ? ` — ${r.error.code}` : ''}]\n${tail(r.stdout)}\n${tail(r.stderr)}`.trim(),
+    );
+    console.log(`[dispatch]   -> exit ${r.status}`);
+  }
+
   // The lane and its prohibitions are prepended to EVERY dispatch. An agent that
   // has to be told once, in a doc it may not read, is an agent that will merge
   // its own PR eventually.
@@ -284,6 +359,25 @@ function main() {
     'Report findings as [V] (you verified it yourself) or [R] (reported/assumed).',
     'If you could not check something, say so — an unbounded "looks fine" is refused.',
     '',
+    ...(evidence.length
+      ? [
+          '════ EVIDENCE — REAL OUTPUT, RUN BY THE HARNESS ════',
+          'These commands were executed for you just now. This is literal captured',
+          'stdout/stderr, not a summary. Cite these numbers; do NOT restate them from',
+          'memory and do NOT invent additional runs. If you need output this does not',
+          'contain, say which command would produce it — do not infer it.',
+          '',
+          ...evidence,
+          '════ END EVIDENCE ════',
+          '',
+        ]
+      : [
+          'You have NO shell and cannot run anything. If this task requires running',
+          'tests or a build, say so and name the command — do not report results you',
+          'did not observe. On 2026-08-05 a review fabricated test output with invented',
+          'line numbers this way; that transcript is kept as the example of what not to do.',
+          '',
+        ]),
     `Current branch: ${branch}`,
     '---',
     task,

