@@ -1,0 +1,33 @@
+{
+  "_comment": "The ruler ids. Every HAL accuracy number must be stated as 'F1 = x on <corpus>@<hash> at N families'. tests/corpus-files.test.ts re-derives these hashes from the files and fails if they move, so a corpus edit cannot land silently — change a label, this file must change in the same commit.",
+  "_schema": "data/hal_corpus_v1/SCHEMA.md",
+  "_frozen_at": "2026-08-06",
+  "corpora": [
+    {
+      "name": "rigorous-v1",
+      "path": "data/hal_corpus_v1/rigorous-v1.jsonl",
+      "sha256": "596f10de18d050dd63b2ccbed4c2ce8fd42fc65b920d4cc8dd11911154207b50",
+      "rows": 331,
+      "labels": { "TRUE": 170, "FALSE": 161 },
+      "splits": { "train": 232, "holdout": 99 },
+      "answer_mode": "claim-as-answer",
+      "derived_from": "eval/rigorous/rigorous-corpus-v1.jsonl",
+      "upstream_sources": { "halueval": 100, "fever": 100, "truthfulqa": 90, "canary": 47 },
+      "dropped_rows": 6,
+      "dropped_reason": "source_url was a label annotation ('false stereotype', 'indexical', 'subjective'), not an absolute URL. Dropped rather than patched with a plausible link — the provenance gate exists precisely to stop that."
+    },
+    {
+      "name": "canary-v1",
+      "path": "data/hal_corpus_v1/canary-v1.jsonl",
+      "sha256": "dbaf5dbd4e551286a4288b3f3ca9057d5b1ab9c914b6972d9baf68ee20dc9956",
+      "rows": 50,
+      "labels": { "TRUE": 30, "FALSE": 20 },
+      "splits": { "train": 35, "holdout": 15 },
+      "answer_mode": "claim-as-answer",
+      "derived_from": "eval/canary/canary-corpus-v1.jsonl",
+      "upstream_sources": { "wikipedia": 50 },
+      "dropped_rows": 0
+    }
+  ],
+  "_open_decision": "answer_mode is 'claim-as-answer' for both: prompt is a fixed verification instruction, candidate_answer is the claim. 190 of the 337 rigorous rows were built 'qa->statement' and could have their Q/A recovered instead, but the other 197 have no question to recover — mixing both inside one corpus would put two different measurements under one F1, which is the ruler-mixing this rack exists to end. Use --answer-mode recover-qa only to build a SEPARATE, separately-named, separately-hashed corpus. Not ratified by Sean."
+}
