@@ -28,6 +28,32 @@ Real on-chain attestations are publicly queryable. See `GET /api/v1/receipts/her
 
 ---
 
+## Run the trust harness end-to-end
+
+One command walks a proposed agent action through every leg of the harness against **live systems** — no mock, no fixture, no fallback that invents a value. A leg that cannot run is printed as a gap, not papered over.
+
+```bash
+npm install --legacy-peer-deps
+npm run build
+npm run demo:harness            # add --agent <name> --claim "<statement>" to vary the action
+```
+
+Each run reports, per leg, whether it hit a `REAL` system:
+
+1. **HAL** — scores the action via a live cross-provider quorum; a hallucinated claim is vetoed with a *calibrated* confidence (temperature-scaled on a frozen holdout, not a raw score).
+2. **RepID** — the actor's live reputation and tier (keyless read).
+3. **ZK range proof** — fetched, then **verified locally** — proving RepID ≥ threshold without revealing the score.
+4. **Poseidon2** — a scoped nullifier from the Rust primitive: same secret, different scope → different nullifier (one identity, many domains).
+5. **On-chain anchor** — the attestation on Base Sepolia, with a basescan link.
+6. **Outcome + fold** — classifies the result, requires a payment proof for a reward, and folds the delta into a committed Poseidon2/BabyBear root.
+7. **Dual-auth gate** — allows only with **both** agent and human authority, and **fail-closed**: if HAL vetoed, the gate REFUSES even when both authorities are present, and lists every blocker so fixing one cannot hide the next.
+
+The demo asserts only what it proves in-circuit and marks the rest explicitly (e.g. a score *decrease* is unrepresentable in unsigned field arithmetic, so that constraint is stated as vacuous rather than claimed). The footer prints which legs ran real: `legs: hal=REAL repid=REAL proof=REAL nullifier=REAL anchor=REAL fold=REAL`.
+
+`REPID_API_KEY` is **not** required — every leg reads a public surface. The Poseidon2 leg needs the `babybear-leaf` binary (`LEAF_BIN`, built from the ZKP crate); without it that single leg reports a gap and the rest still run.
+
+---
+
 ## Public API
 
 Production base URL: `https://repid-engine-production.up.railway.app`
