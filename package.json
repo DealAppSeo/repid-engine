@@ -2,11 +2,13 @@
   "name": "repid-engine",
   "version": "1.0.0",
   "description": "",
+  "private": true,
   "main": "index.js",
   "engines": {
     "node": ">=20.9.0"
   },
   "scripts": {
+    "prepublishOnly": "node -e \"console.error('repid-engine is proprietary and must NEVER be published to npm (it contains the scoring formula, a hard-stop secret). Refusing. Publish a clean public wrapper instead.'); process.exit(1)\"",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
