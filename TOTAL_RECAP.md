@@ -13,6 +13,7 @@ inert branch work; nothing changed live state. Five PRs, three verified live.
 | C | TrustMarket rating ingestion | repid-engine [#367](https://github.com/DealAppSeo/repid-engine/pull/367) | OPEN | 16 tests, typecheck 0 errors |
 | B | TrustShell proof badge | trustshell [#54](https://github.com/DealAppSeo/trustshell/pull/54) | OPEN | **live**: green badge trinity-shofet, verifier 0.2.0; 96 tests, 0 regressions |
 | D | Engine RepID consumption | trusttrader [#2](https://github.com/DealAppSeo/trusttrader/pull/2) | OPEN | **live**: fetched RepID 2070, reconciled drift 70; 8 tests |
+| G | HAL embedding fetch timeout | repid-engine [#369](https://github.com/DealAppSeo/repid-engine/pull/369) | OPEN | 2 tests; hung provider now degrades to local, no infinite wait |
 
 ### Measurements
 - **Harness (merged):** HAL veto at calibrated P=0.9999 (ruler `rigorous-v1@596f10de18d0, T=0.8192`); asymmetric delta −119.99; ZK range proof 10673 bytes verified locally; 78 on-chain writes (Base Sepolia); dual-auth REFUSE with both authorities present.
@@ -45,9 +46,8 @@ inert branch work; nothing changed live state. Five PRs, three verified live.
   project serves the domain vs which repo is the real landing). Prepare the correct
   mapping as a branch/PR with exact steps; **no DNS flips** (domain ownership = gated).
   Not started — parked pending a Vercel read.
-- **Parking lot (in-familiar-repo, next):** canary fetch-timeout hardening (the HAL
-  harness lacks a fetch timeout); Plonky3 recursion stub + measure; family-BFT
-  docs-as-code tests.
+- **Parking lot:** ✅ HAL embedding fetch-timeout — DONE (#369). Remaining: Plonky3
+  recursion stub + measure; family-BFT docs-as-code tests; searchable encrypted memory cell.
 
 ## Notes on discipline held
 - Every surface: implement → test → live-verify where possible → commit + evidence.
