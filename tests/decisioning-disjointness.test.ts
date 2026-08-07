@@ -118,9 +118,13 @@ describe('family-registry lookup', () => {
     //
     // This count is a deliberate tripwire — it caught the addition, which is the point. Bumping it
     // requires saying what was added and why, never just making the number match.
-    expect(FAMILY_REGISTRY_SEED.length).toBe(24); // seed table; sweep is at load time
+    // 26 as of 2026-08-06: +2 for google/gemini-3.5-flash and
+    // qwen/qwen-2.5-72b-instruct, which the 99-row frozen-corpus holdout caught
+    // answering inside a LIVE quorum with a regex-guessed (spoofable) family.
+    // Both verified unambiguous via matchedFamilies() before being seeded.
+    expect(FAMILY_REGISTRY_SEED.length).toBe(26); // seed table; sweep is at load time
     const legit = FAMILY_REGISTRY_SEED.filter((e) => !isAmbiguousFamily(e.model));
-    expect(legit.length).toBe(23); // exactly one (hf/deepseek-r1-qwen-32b) swept out; the rest unambiguous
+    expect(legit.length).toBe(25); // 26 seeded - 1 ambiguous (hf/deepseek-r1-qwen-32b) swept out at load
     for (const e of legit) {
       expect(resolveFamily(e.model)).toBe(e.family);
     }

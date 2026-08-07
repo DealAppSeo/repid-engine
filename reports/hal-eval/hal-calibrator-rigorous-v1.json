@@ -1,0 +1,63 @@
+{
+  "method": "platt",
+  "scale": 1.220711530542943,
+  "bias": 0.40792551802178323,
+  "temperature": 0.8191943591744596,
+  "ruler": "rigorous-v1@596f10de18d0",
+  "corpusSha256": "596f10de18d050dd63b2ccbed4c2ce8fd42fc65b920d4cc8dd11911154207b50",
+  "fittedOn": 99,
+  "nll": 0.22702382276550748,
+  "clip_eps": 0.001,
+  "selection_rule": "lowest 5-fold out-of-fold ECE; rule fixed before fitting",
+  "candidates": [
+    {
+      "method": "temperature",
+      "temperature": 0.8206900410722358,
+      "bias": 0,
+      "oof5": 0.0782458131975624,
+      "oof10": 0.07089161139895496
+    },
+    {
+      "method": "platt",
+      "temperature": 0.8191943591744596,
+      "bias": 0.40792551802178323,
+      "oof5": 0.07537195435252673,
+      "oof10": 0.06119041185262688
+    }
+  ],
+  "ece_before": 0.08000841750841747,
+  "ece_after_in_sample": 0.07285321229544921,
+  "ece_after_out_of_fold": 0.07537195435252673,
+  "max_gap_before": 0.34838541666666667,
+  "max_gap_after_out_of_fold": 0.3609026992973601,
+  "cv_folds": 5,
+  "cv_temperatures": [
+    0.8987492670190472,
+    0.9029315740498666,
+    0.7561328571741404,
+    0.9364801119805662,
+    0.5399130330729597
+  ],
+  "cv_biases": [
+    0.28788255709258626,
+    0.4649199285642658,
+    0.6751813683777794,
+    0.2559141021842878,
+    0.36520697284901305
+  ],
+  "ranking_preserved": true,
+  "confusion_before": {
+    "tp": 44,
+    "fp": 4,
+    "tn": 47,
+    "fn": 4,
+    "f1": 0.9166666666666666
+  },
+  "confusion_scale_only": {
+    "tp": 44,
+    "fp": 4,
+    "tn": 47,
+    "fn": 4,
+    "f1": 0.9166666666666666
+  }
+}

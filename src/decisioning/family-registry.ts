@@ -77,6 +77,23 @@ export const FAMILY_REGISTRY_SEED: readonly FamilyRegistryEntry[] = Object.freez
   // CONFIG-sourced (evidence_n=0), NOT telemetry. Unambiguous single-family match (/qwen/ only) → seeding
   // it is accurate, not a guess; without it HAL's live qwen provider would hit the spoofable regex fallback.
   { provider: 'qwen',              model: 'qwen-plus',                           family: 'qwen',      source: 'hal-config-default', evidence_n: 0 },
+  // [2026-08-06] Surfaced by the 99-row frozen-corpus holdout, which logged:
+  //   "hal_family_unmapped: 2 model(s) not in the family registry — family
+  //    regex-guessed via familyOf() (spoofable)"
+  // These two answered inside a LIVE quorum while their family was decided by
+  // regex rather than by this registry. Family independence is the whole basis
+  // of the BFT quorum, so a regex-guessed family weakens the property the quorum
+  // is supposed to provide — a model could carry a name that reads as a family
+  // it is not.
+  //
+  // Both verified UNAMBIGUOUS with this module's own checks before adding:
+  //   google/gemini-3.5-flash     matchedFamilies ["gemini"]  isAmbiguous false
+  //   qwen/qwen-2.5-72b-instruct  matchedFamilies ["qwen"]    isAmbiguous false
+  // source='hal-config-default', evidence_n=0 — the same honest provenance the
+  // Z.AI and qwen-plus rows carry: these are literal live model strings with no
+  // telemetry rows at seed time, NOT invented mappings.
+  { provider: 'gemini',            model: 'google/gemini-3.5-flash',             family: 'gemini',    source: 'hal-config-default', evidence_n: 0 },
+  { provider: 'openrouter',        model: 'qwen/qwen-2.5-72b-instruct',          family: 'qwen',      source: 'hal-config-default', evidence_n: 0 },
 ]);
 
 /**
