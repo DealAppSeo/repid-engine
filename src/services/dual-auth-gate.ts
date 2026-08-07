@@ -120,16 +120,32 @@ export function evaluateGate(input: GateInput): GateResult {
   // ── THRESHOLD ─────────────────────────────────────────────────────────────
   // Read from the PROOF's statement, never from a caller-supplied score: the
   // whole point is that the number is attested rather than asserted.
-  if (!st || typeof st.threshold !== 'number') {
+  //
+  // BOTH sides are checked for FINITENESS first, and that is not pedantry — it
+  // was a live fail-open. Every comparison against NaN is false, so
+  // `requiredThreshold: NaN` made `st.threshold < required` false, pushed no
+  // reason, and the gate returned ALLOW. A caller passing a malformed number
+  // could authorise anything. Caught by the malformed-input suite.
+  //
+  // Non-finite input is treated as a FAILED check, never a skipped one.
+  if (!st || typeof st.threshold !== 'number' || !Number.isFinite(st.threshold)) {
+    reasons.push('threshold_not_met');
+  } else if (typeof input.requiredThreshold !== 'number' || !Number.isFinite(input.requiredThreshold)) {
     reasons.push('threshold_not_met');
   } else if (st.threshold < input.requiredThreshold) {
     reasons.push('threshold_not_met');
   }
 
   // ── FRESHNESS ─────────────────────────────────────────────────────────────
-  const maxAge = input.maxProofAgeSeconds ?? DEFAULT_MAX_AGE;
-  if (typeof input.proofAgeSeconds === 'number' && input.proofAgeSeconds > maxAge) {
-    reasons.push('stale_proof');
+  // Same finiteness discipline as the threshold: a NaN age must not slip past
+  // the freshness check by making every comparison false.
+  const maxAge = Number.isFinite(input.maxProofAgeSeconds as number)
+    ? (input.maxProofAgeSeconds as number)
+    : DEFAULT_MAX_AGE;
+  if (typeof input.proofAgeSeconds === 'number') {
+    if (!Number.isFinite(input.proofAgeSeconds) || input.proofAgeSeconds > maxAge) {
+      reasons.push('stale_proof');
+    }
   }
 
   // ── HAL ───────────────────────────────────────────────────────────────────

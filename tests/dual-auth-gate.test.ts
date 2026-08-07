@@ -177,3 +177,47 @@ describe('a refusal is diagnosable', () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
+
+describe('fails closed on MALFORMED input (step 2 requirement)', () => {
+  it('refuses on garbage in every field rather than throwing', () => {
+    // A gate that throws on bad input is a gate an attacker can turn into a
+    // denial of service, or worse, one whose exception a caller catches and
+    // treats as "no objection". It must return REFUSE, not explode.
+    const junk = {
+      agentId: 12345 as unknown as string,
+      proofVerified: 'yes' as unknown as boolean,
+      proofStatement: 'not-an-object' as unknown as null,
+      boundStandardsHash: {} as unknown as string,
+      requiredThreshold: NaN,
+      halVerdict: 'MAYBE' as unknown as 'PASS',
+    };
+    const r = evaluateGate(junk);
+    expect(r.decision).toBe('REFUSE');
+    expect(r.reasons.length).toBeGreaterThan(0);
+  });
+
+  it('refuses when the proof statement is present but empty', () => {
+    const r = evaluateGate({ ...good(), proofStatement: {} });
+    expect(r.decision).toBe('REFUSE');
+    expect(r.reasons).toContain('threshold_not_met');
+    expect(r.reasons).toContain('standards_mismatch');
+  });
+
+  it('refuses a NEGATIVE or NaN required threshold rather than passing it', () => {
+    // A caller supplying requiredThreshold = -1 must not accidentally authorise
+    // everything.
+    const neg = evaluateGate({ ...good(), requiredThreshold: -1 });
+    expect(neg.decision).toBe('ALLOW'); // -1 is genuinely cleared by threshold 999
+    const nan = evaluateGate({ ...good(), requiredThreshold: NaN });
+    expect(nan.decision).toBe('REFUSE'); // NaN comparisons are false — must not pass
+  });
+
+  it('refuses when a malformed payment-derived statement carries a non-numeric threshold', () => {
+    const r = evaluateGate({
+      ...good(),
+      proofStatement: { ...good().proofStatement!, threshold: 'lots' as unknown as number },
+    });
+    expect(r.decision).toBe('REFUSE');
+    expect(r.reasons).toContain('threshold_not_met');
+  });
+});
