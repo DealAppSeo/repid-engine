@@ -34,8 +34,16 @@ export class XenovaEmbeddingClient implements EmbeddingClient {
     }
 }
 
+/** Default per-request embedding timeout. A hung provider must not stall the quorum. */
+export const DEFAULT_EMBEDDING_TIMEOUT_MS = 15_000;
+
 export class OpenAIEmbeddingClient implements EmbeddingClient {
-    constructor(private endpoint: string, private apiKey: string, private model: string = 'text-embedding-3-small') {}
+    constructor(
+        private endpoint: string,
+        private apiKey: string,
+        private model: string = 'text-embedding-3-small',
+        private timeoutMs: number = DEFAULT_EMBEDDING_TIMEOUT_MS,
+    ) {}
 
     async embed(text: string): Promise<number[]> {
         const res = await this.embedMany([text]);
@@ -43,13 +51,17 @@ export class OpenAIEmbeddingClient implements EmbeddingClient {
     }
 
     async embedMany(texts: string[]): Promise<number[][]> {
+        // A missing timeout is how a single unresponsive provider hangs the whole
+        // semantic-similarity layer. On timeout, fetch rejects and the caller
+        // (FallbackEmbeddingClient) degrades to the local model — never an infinite wait.
         const res = await fetch(this.endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.apiKey}`
             },
-            body: JSON.stringify({ model: this.model, input: texts })
+            body: JSON.stringify({ model: this.model, input: texts }),
+            signal: AbortSignal.timeout(this.timeoutMs)
         });
         if (!res.ok) {
             const body = await res.text().catch(() => '');
@@ -62,7 +74,11 @@ export class OpenAIEmbeddingClient implements EmbeddingClient {
 }
 
 export class VoyageEmbeddingClient implements EmbeddingClient {
-    constructor(private apiKey: string, private model: string = 'voyage-3') {}
+    constructor(
+        private apiKey: string,
+        private model: string = 'voyage-3',
+        private timeoutMs: number = DEFAULT_EMBEDDING_TIMEOUT_MS,
+    ) {}
 
     async embed(text: string): Promise<number[]> {
         const res = await this.embedMany([text]);
@@ -76,7 +92,8 @@ export class VoyageEmbeddingClient implements EmbeddingClient {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.apiKey}`
             },
-            body: JSON.stringify({ model: this.model, input: texts })
+            body: JSON.stringify({ model: this.model, input: texts }),
+            signal: AbortSignal.timeout(this.timeoutMs)
         });
         if (!res.ok) {
             const body = await res.text().catch(() => '');
