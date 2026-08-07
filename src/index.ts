@@ -28,6 +28,7 @@ import controllerRouter from './routes/v1/controller';
 import escalationRouter from './routes/v1/escalation';
 import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
+import ratingsRouter from './routes/v1/ratings';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
@@ -471,6 +472,11 @@ app.use('/api/v1/observability', productivityRouter);
 // GET /api/v1/resilience/health (read-only; auth-if-enabled) · POST /api/v1/resilience/route (authed).
 app.use('/api/v1', resilienceRouter);
 app.use('/api/v1', receiptsRouter);
+// TrustMarket ratings (2026-08-07): POST /ratings (authed — a rater has a key) and
+// GET /ratings/:agentId (public, bypassed in authMiddleware). A rating is admitted
+// only if it anchors to a real, gate-authorized outcome the rater is party to; see
+// services/rating-ingestion.ts. Persists to repid_ratings (migrations/repid_ratings.sql).
+app.use('/api/v1', ratingsRouter);
 // S-WIRE-MVP — agent-facing API over the eight new ecosystem tables (authed, post-authMiddleware).
 app.use('/api/v1', mvpApiRouter);
 // S-SPINE — referral stats dashboard (authed: requires a valid REPID_API_KEY / service role).

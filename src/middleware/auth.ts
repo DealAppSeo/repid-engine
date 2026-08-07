@@ -24,6 +24,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && req.path.startsWith('/api/v1/builder/')) return next();
   if (req.method === 'GET' && req.path.startsWith('/api/v1/trader/')) return next();
   if (req.method === 'GET' && req.path.startsWith('/api/v1/demo/')) return next();
+  // TrustMarket rating summaries are a public, keyless read (a reputation surface
+  // behind a key is not a public reputation surface). POST /ratings stays authed.
+  if (req.method === 'GET' && req.path.startsWith('/api/v1/ratings/')) return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/run-round-anonymous') return next();
   if (req.method === 'POST' && req.path === '/api/v1/builder/token-signup') return next();
