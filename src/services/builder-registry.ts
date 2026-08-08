@@ -12,6 +12,7 @@
  */
 
 import { db } from '../db';
+import { STARTING_REPID } from '../scoring/repid-constants';
 import { emitAuditEvent } from './audit-emit';
 import { getCurrentStake, snapshotAuthority } from './stake-vault';
 
@@ -39,7 +40,7 @@ export async function registerBuilder(address: string, erc7231TokenId?: string):
     .insert({
       address: norm,
       erc7231_token_id: erc7231TokenId ?? null,
-      current_repid: 0,
+      current_repid: STARTING_REPID,
       ghost_cohort_count: 0,
     })
     .select('id')
