@@ -106,6 +106,13 @@ jobs:
         with:
           node-version: '20'
 
+      # Production-extract fixture fence (the permanent #376 fence). Pure Node, so it
+      # runs BEFORE install — a real proof / real agent UUID / prod table dump committed
+      # under tests/ fails the PR here, independent of the branch-discipline pre-commit
+      # hook (which only fires on a developer's machine). See scripts/hooks/prod-fixture-guard.js.
+      - name: Prod-fixture fence (block committed production extracts)
+        run: node scripts/hooks/prod-fixture-guard.js --ci
+
       - name: Install (legacy peer deps per nixpacks.toml)
         run: npm install --legacy-peer-deps
 
