@@ -39,6 +39,17 @@ This change adds three env-guarded seams that address both, all **default-OFF**
   commitments (attestation/chain) pass.
 - **The LLM base-URL override** — the quorum's openai-compat providers retarget
   to a local model with one env var.
+- **The RepID score path runs against a LOCAL persistent store.** In `LOCAL_MODE`,
+  `src/db.ts` resolves `db` to a supabase-js-shaped adapter over a local store
+  (`src/selfhost/local-store.ts`: node:sqlite file, or a JSON file if no driver
+  loads) instead of the hosted supabase-js client. The **real** `updateRepId()` —
+  fetch agent, decay, ecosystem-need weight, redemption, delta, audit-row insert,
+  score write-back, supply-rate upsert, badge check — completes end-to-end on the
+  local box. Proven in `tests/selfhost-local-store.test.ts`: a synthetic agent's
+  `CODE_CONTRIBUTION` event writes a `repid_score_events` row locally, moves
+  `current_repid`, persists durably (a fresh adapter on the same file re-reads it),
+  and a `global.fetch` tripwire (wired through the boundary's `isLocalHost()`) is
+  **never called** — zero data egress.
 
 Verified boot (LOCAL_MODE, no `SUPABASE_URL`, boundary on, local model base):
 
@@ -50,20 +61,23 @@ Verified boot (LOCAL_MODE, no `SUPABASE_URL`, boundary on, local model base):
   llm_quorum_target=local local_base_url=http://localhost:11434/v1
 ```
 
-Covered by tests under `tests/selfhost-*.test.ts` (38 assertions, offline).
+Covered by tests under `tests/selfhost-*.test.ts` (offline), including
+`tests/selfhost-local-store.test.ts` which drives the real score path locally.
 
 ## What is STILL hosted-only (STUB for self-host)
 
-- **The RepID score-mutation pipeline** (`src/engine/repid-update.ts`) and the
-  full `src/index.ts` entrypoint. `index.ts` starts ~20 background workers/crons
-  that read/write the hosted Supabase over the network. `LOCAL_MODE` stops the
-  *throw*, but those workers are **not** yet backed by a local store, so running
-  `dist/index.js` in LOCAL_MODE would spin errors against a loopback DB. The
-  self-host entry deliberately does **not** start them.
-- **A local persistent store adapter** (SQLite / local-Postgres) implementing the
-  handful of tables the engine actually uses (`repid_agents`,
-  `repid_score_events`, …). Not built. This is the next slice: a `db`-shaped
-  adapter selected by `LOCAL_MODE`, so `updateRepId()` and friends run locally.
+- **The full `src/index.ts` entrypoint** and its ~20 background workers/crons
+  (proof-drain, receipt-indexer, eas-anchor, score-monitor, HAL production
+  loggers, …). These read/write hosted-Supabase tables **beyond** the four the
+  score path uses, and several also do on-chain / provider I/O. The local store
+  adapter covers `repid_agents`, `repid_score_events`, `repid_ecosystem_supply`
+  and `repid_badges` — enough for `updateRepId()`, **not** enough for the workers.
+  Running `dist/index.js` in LOCAL_MODE would still hit unbacked tables, so the
+  self-host entry (`src/selfhost.ts`) deliberately does **not** start them. Making
+  the workers local is the next slice (more tables + the worker loops themselves).
+- **The local store is JS-side filtered**, not a query planner: it loads a table's
+  rows and filters in memory. Correct and durable at single-operator scale; it is
+  not built for large-table analytical queries.
 - **The embedding call** in the HAL agreement step also egresses text
   (`api.openai.com/v1/embeddings`). The guard classifies `embedding` as
   content-bearing, but the embedding client is not yet wired through
