@@ -29,6 +29,11 @@ import crypto from 'crypto';
 // imports the HOISTED familyOf() declaration at load time; fact-check calls resolveFamily() only at
 // runtime (inside functions), never at module init. See familyOfResolved() for the fallback contract.
 import { resolveFamily } from '../decisioning/family-registry';
+// BFT ANTI-SPOOF (audit item #4, 2026-08-07) — registry-hard-fail disjointness enforcement for the live
+// quorum. selectDisjointQuorum() is the first LIVE caller of the src/decisioning/disjointness.ts module
+// (assertDisjoint/assembleDisjointJudges previously had none). Imported inertly; only invoked under the
+// BFT_DISJOINT_ENFORCE flag (default OFF) in factCheck(), so importing it changes nothing until enabled.
+import { selectDisjointQuorum } from '../decisioning/disjointness';
 // WEIGHT-DEDUP (2026-07-09, reports/2026-07-09 HAL eval): dedup the quorum by model CHECKPOINT
 // (weights identity) so two hosts serving the SAME weights (e.g. Groq + DeepInfra Llama-3.1-8B, eval
 // corr 0.881) can never count as two independent votes. Flag-gated (HAL_QUORUM_WEIGHT_DEDUP:
@@ -306,6 +311,11 @@ export interface FactCheckOpts {
   // WS1.2a — SLOW-PATH controls (all optional; ignored unless HAL_RETRIEVAL_ENABLED==='true').
   forceRetrieval?: boolean; // explicit "verify this" — always trigger the slow path
   highStakes?: boolean; // caller-declared high-stakes (RepID/financial/code/on-chain) claim → trigger
+  // BFT ANTI-SPOOF (audit item #4, 2026-08-07) — the model that PRODUCED the deliverable being judged.
+  // When set AND BFT_DISJOINT_ENFORCE=true, any quorum judge that shares the producer's model family is
+  // excluded as self-grading (a Llama judge grading Llama output is marking its own homework). Optional;
+  // ignored while the flag is OFF, so existing callers are unaffected.
+  producerModel?: string;
 }
 
 /**
@@ -668,6 +678,54 @@ export async function factCheck(
           : ''),
     );
     if (dedupMode === 'on') activeProviders = wouldSelect.map((w) => w.cfg);
+  }
+
+  // BFT ANTI-SPOOF DISJOINTNESS ENFORCEMENT (audit item #4, 2026-08-07 — BFT_DISJOINT_ENFORCE, default
+  // OFF → SHADOW-SAFE). Closes two gaps the audit found:
+  //   (a) familyOfResolved() falls back to a SPOOFABLE regex (familyOf) for any model absent from the
+  //       family registry, so an UNMAPPED model can vote under a GUESSED family and fake the
+  //       family-independence the whole quorum rests on; and
+  //   (b) the registry-hard-fail disjointness module (src/decisioning/disjointness.ts) had ZERO live
+  //       callers ("nothing routes live by itself").
+  // When the flag is ON, the assembled quorum is routed through selectDisjointQuorum(): unmapped judges
+  // are EXCLUDED (never regex-guessed), any judge sharing the producer's family is dropped as
+  // self-grading (assertDisjoint), and the survivors are collapsed to ONE registry-mapped judge per
+  // family via assembleDisjointJudges. Default OFF leaves the live quorum byte-identical — this changes
+  // the veto path, so it MUST be reviewed before the flag is enabled. Applied BEFORE family
+  // classification / calling providers, so an excluded judge never even makes a request or a vote.
+  if (process.env.BFT_DISJOINT_ENFORCE === 'true') {
+    const beforeCount = activeProviders.length;
+    const sel = selectDisjointQuorum(activeProviders, {
+      seed: quorumId,
+      producerModel: opts.producerModel,
+      context: 'hal_fact_check_quorum',
+    });
+    if (sel.excludedUnmapped.length > 0) {
+      console.warn(
+        `[hal] bft_disjoint_enforce: EXCLUDED ${sel.excludedUnmapped.length} UNMAPPED provider(s) from the ` +
+          `quorum (registry-hard-fail — NOT regex-guessed): ` +
+          `[${sel.excludedUnmapped.map((p) => `${p.name}/${p.model}`).join(', ')}]. ` +
+          `Register them in src/decisioning/family-registry.ts (+ migration seed) to let them vote.`,
+      );
+    }
+    if (sel.excludedProducerFamily.length > 0) {
+      console.warn(
+        `[hal] bft_disjoint_enforce: EXCLUDED ${sel.excludedProducerFamily.length} judge(s) sharing the ` +
+          `producer's family (self-grading): ` +
+          `[${sel.excludedProducerFamily.map((e) => `${e.item.name}/${e.item.model}~${e.family}`).join(', ')}].`,
+      );
+    }
+    if (sel.excludedSameFamily.length > 0) {
+      console.warn(
+        `[hal] bft_disjoint_enforce: COLLAPSED ${sel.excludedSameFamily.length} same-family provider(s) to one ` +
+          `independent vote: [${sel.excludedSameFamily.map((e) => `${e.item.name}/${e.item.model}~${e.family}`).join(', ')}].`,
+      );
+    }
+    console.warn(
+      `[hal] bft_disjoint_enforce: quorum ${beforeCount} -> ${sel.kept.length} registry-mapped, ` +
+        `mutually-family-disjoint judge(s) [${sel.keptFamilies.join(', ')}].`,
+    );
+    activeProviders = sel.kept;
   }
 
   // CROSS-FIX 2026-07-05 — REGISTRY-PRIMARY family classification for the live quorum. Each provider's
