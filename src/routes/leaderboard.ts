@@ -207,6 +207,20 @@ router.get('/leaderboard/models', async (_req: Request, res: Response) => {
     if (val.error) throw val.error;
     const performance = perf.data ?? [];
     const value = val.data ?? [];
+    // Honesty: the chart is a FIXED benchmark snapshot, not a live feed. Surface the REAL
+    // date the batch was measured (the model-bench round's created_at) so the UI can say
+    // "measured on <date>" instead of implying it refreshed just now. Best-effort — if the
+    // round lookup fails, measured_at is null and the copy degrades to "an earlier run".
+    const round = await db.from('repid_eval_rounds')
+      .select('round_id, created_at')
+      .like('round_id', 'model-bench-%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const measuredAt: string | null = (round.data as any)?.created_at ?? null;
+    const roundId: string | null = (round.data as any)?.round_id ?? null;
+    const measuredDay = measuredAt ? measuredAt.slice(0, 10) : null;
+    const ageDays = measuredAt ? Math.floor((Date.now() - new Date(measuredAt).getTime()) / 86400000) : null;
     const topPerf: any = performance[0], topVal: any = value[0];
     // When the same model tops both lenses, "they're not the same" is a
     // self-contradiction — handle that case explicitly (both said gpt-4o then
@@ -221,13 +235,24 @@ router.get('/leaderboard/models', async (_req: Request, res: Response) => {
     }
     const payload = {
       metric: 'code-review discrimination (Brier-calibrated)',
-      disclaimer: 'A narrow proxy, not general AI trustworthiness. Early results; N is small; methodology is public and inviting red-team. Single-shot base API, default settings — not multi-agent products or scaffolding.',
+      disclaimer:
+        'A narrow proxy, not general AI trustworthiness. Early results; N is small; methodology is public and inviting red-team. Single-shot base API, default settings — not multi-agent products or scaffolding.'
+        + (measuredDay
+            ? ` This is a FIXED snapshot measured ${measuredDay}${ageDays !== null ? ` (${ageDays}d ago)` : ''}, not a live feed — it refreshes only when the benchmark is re-run.`
+            : ' This is a fixed benchmark snapshot from an earlier run, not a live feed.'),
       lenses: {
         performance: { label: 'Performance (money no object)', ranked_by: 'calibration (Brier)', models: performance },
         value: { label: 'Value (per dollar)', ranked_by: 'accuracy·speed·cost composite (55/20/25)', models: value },
       },
       narrative,
-      last_updated: new Date().toISOString(),
+      // `last_updated` was request-time (a lie: it implied the data just refreshed). It now
+      // carries the REAL measurement date, so existing frontends that read it show the truth
+      // without a change. `served_at` is the cache/serve time, never a freshness claim.
+      last_updated: measuredAt,
+      measured_at: measuredAt,
+      measured_round: roundId,
+      data_age_days: ageDays,
+      served_at: new Date().toISOString(),
     };
     modelsCache = { at: Date.now(), payload };
     return res.json(payload);
