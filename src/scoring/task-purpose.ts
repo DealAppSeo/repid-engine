@@ -61,6 +61,21 @@ const DELIVERABLE_DOMAINS = new Set<string>([
 ]);
 
 /**
+ * True when task_domain is an explicit real-work-product domain (the set above).
+ *
+ * Used by the score-event REWARD gate — distinct from {@link classifyTaskPurpose}, which
+ * DEFAULTS unknown domains to `deliverable` so a HAL *penalty* still applies (correct for the
+ * penalty direction, since an unknown domain shouldn't dodge a veto). That same default is
+ * WRONG for *earning*: a free-form advisory chat run (`task_domain: 'general'`) must not be
+ * granted a positive reward just for being unrecognized. A positive reward needs an affirmative
+ * work signal — this returning true, or a HAL fact-check that returned clean. See the /run
+ * "+19 per prompt" theater fix.
+ */
+export function isDeliverableDomain(taskDomain: string | null | undefined): boolean {
+  return DELIVERABLE_DOMAINS.has((taskDomain || 'general').toLowerCase());
+}
+
+/**
  * CLASSIFIER v3 (CC-2) — PREFIX-AWARE tail non-deliverable domains.
  *
  * The v1 gate keyed off EXACT task_domain strings ('evergreen', 'cait', …). Live traffic
