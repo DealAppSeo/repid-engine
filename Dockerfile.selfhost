@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1.7
+# ^ MUST be the first line for BuildKit to honor `--mount=type=secret` below.
+#
+# repid-engine — SELF-HOST / DATA-LOCAL image (skeleton).
+#
+# Boots the data-local core (src/selfhost.ts) with LOCAL_MODE=true: the process
+# comes up with NO hosted Supabase and reports the data-locality boundary. It is
+# NOT the full hosted engine (that is Dockerfile.fly -> node dist/index.js, which
+# needs a hosted Supabase + ~20 workers). See SELFHOST.md for what boots vs stub.
+#
+# Build (the app has a git-pinned PRIVATE dep @hyperdag/proof-verifier, so the
+# builder needs git + read access; pass a GitHub token as a BuildKit secret):
+#   DOCKER_BUILDKIT=1 docker build -f Dockerfile.selfhost \
+#     --secret id=gh_token,env=GH_TOKEN -t repid-engine:selfhost .
+# If that repo is public, the token is unnecessary and a plain build resolves it.
+#
+# Run (data stays local; point the quorum at a model on the host):
+#   docker run --rm -p 3000:3000 \
+#     -e LOCAL_MODE=true \
+#     -e ONLY_ATTESTATIONS_LEAVE=true \
+#     -e LOCAL_LLM_BASE_URL=http://host.docker.internal:11434/v1 \
+#     repid-engine:selfhost
+#   curl localhost:3000/selfhost/status
+
+# ---------- builder ----------
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+
+# git resolves the github:-pinned @hyperdag/proof-verifier dep; ca-certificates
+# so HTTPS git clones validate.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json* ./
+
+# BuildKit secret `gh_token` mounted only for this RUN (never persisted to a
+# layer). Absent + public repo → plain clone still succeeds. Absent + private →
+# fails LOUDLY (correct: surfaces the missing-auth condition).
+RUN --mount=type=secret,id=gh_token,required=false sh -c '\
+  if [ -f /run/secrets/gh_token ]; then \
+    git config --global url."https://x-access-token:$(cat /run/secrets/gh_token)@github.com/".insteadOf "https://github.com/" && \
+    git config --global url."https://x-access-token:$(cat /run/secrets/gh_token)@github.com/".insteadOf "git+https://github.com/" ; \
+  fi ; \
+  npm install --legacy-peer-deps ; \
+  git config --global --remove-section url."https://x-access-token:****@github.com/" 2>/dev/null || true'
+
+COPY . .
+RUN npm run build
+
+# ---------- runtime ----------
+FROM node:20-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+
+# DATA-LOCAL DEFAULTS. Baked so `docker run` with no flags is already local:
+# no hosted DB, and prompt/response text may not leave the box. Override any of
+# these with `-e` at run time (e.g. point LOCAL_LLM_BASE_URL at your model).
+ENV LOCAL_MODE=true
+ENV ONLY_ATTESTATIONS_LEAVE=true
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package.json ./package.json
+
+USER node
+
+# The self-host entry binds 0.0.0.0:$PORT (default 3000).
+EXPOSE 3000
+
+# SELF-HOST entrypoint (NOT dist/index.js — that is the hosted engine).
+CMD ["node", "dist/selfhost.js"]

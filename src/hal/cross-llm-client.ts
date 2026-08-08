@@ -38,6 +38,15 @@ import { createDefaultEmbeddingClient } from './lib/cross-llm/embedding-client';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { pgQuery } from '../db/direct-pg';
+import { resolveProviderEndpoint } from './local-llm';
+import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
+
+// BYO / local-model base-URL override for the openai-compat quorum. Read at call
+// time (not import time) so tests and a mid-run env flip both see it. Empty →
+// provider endpoints unchanged (hosted behavior byte-identical).
+function localLlmBaseUrl(): string {
+  return process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '';
+}
 
 export type Squad = 'alpha' | 'beta' | 'gamma';
 export type CommaSeverity = 'none' | 'minor' | 'major' | 'critical';
@@ -162,12 +171,18 @@ export async function markProviderFailure(provider: string, errMessage: string):
 }
 
 function buildProviderConfigs(): ProviderConfig[] {
+  // LOCAL_LLM_BASE_URL override: when set, openai-compat providers target the
+  // local base (Ollama/vLLM/…). Per-provider CROSS_LLM_PROVIDER_N_ENDPOINT still
+  // wins if the operator set an explicit endpoint for that slot. Unset → default.
+  const base = localLlmBaseUrl();
   return [
     {
       squad: 'alpha',
       provider: 'groq',
       model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'llama-3.3-70b-versatile',
-      endpoint: process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ?? GROQ_ENDPOINT,
+      endpoint:
+        process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ??
+        resolveProviderEndpoint(GROQ_ENDPOINT, base, 'openai-compat'),
       apiKey: process.env.GROQ_API_KEY ?? '',
       callType: 'openai-compat',
     },
@@ -183,7 +198,9 @@ function buildProviderConfigs(): ProviderConfig[] {
       squad: 'gamma',
       provider: 'deepseek',
       model: process.env.CROSS_LLM_PROVIDER_3_MODEL ?? 'deepseek-chat',
-      endpoint: process.env.CROSS_LLM_PROVIDER_3_ENDPOINT ?? DEEPSEEK_ENDPOINT,
+      endpoint:
+        process.env.CROSS_LLM_PROVIDER_3_ENDPOINT ??
+        resolveProviderEndpoint(DEEPSEEK_ENDPOINT, base, 'openai-compat'),
       apiKey: process.env.DEEPSEEK_API_KEY ?? '',
       callType: 'openai-compat',
     },
@@ -191,32 +208,37 @@ function buildProviderConfigs(): ProviderConfig[] {
 }
 
 function resolveSingleFallback(excludeNames: string[]): Omit<ProviderConfig, 'squad'> | null {
+  const base = localLlmBaseUrl();
   const pool = [
     {
       provider: 'groq',
       model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'llama-3.3-70b-versatile',
-      endpoint: process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ?? GROQ_ENDPOINT,
+      endpoint:
+        process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ??
+        resolveProviderEndpoint(GROQ_ENDPOINT, base, 'openai-compat'),
       apiKey: process.env.GROQ_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'cerebras',
       model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7',
-      endpoint: 'https://api.cerebras.ai/v1/chat/completions',
+      endpoint: resolveProviderEndpoint('https://api.cerebras.ai/v1/chat/completions', base, 'openai-compat'),
       apiKey: process.env.CEREBRAS_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'fireworks',
       model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5',
-      endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions',
+      endpoint: resolveProviderEndpoint('https://api.fireworks.ai/inference/v1/chat/completions', base, 'openai-compat'),
       apiKey: process.env.FIREWORKS_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'deepseek',
       model: process.env.CROSS_LLM_PROVIDER_3_MODEL ?? 'deepseek-chat',
-      endpoint: process.env.CROSS_LLM_PROVIDER_3_ENDPOINT ?? DEEPSEEK_ENDPOINT,
+      endpoint:
+        process.env.CROSS_LLM_PROVIDER_3_ENDPOINT ??
+        resolveProviderEndpoint(DEEPSEEK_ENDPOINT, base, 'openai-compat'),
       apiKey: process.env.DEEPSEEK_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
@@ -382,6 +404,11 @@ async function queryProvider(
     };
   }
   try {
+    // DATA-LOCALITY BOUNDARY (ONLY_ATTESTATIONS_LEAVE): the prompt is content —
+    // refuse to send it to a non-local host when the boundary is engaged. No-op
+    // when the flag is off or the endpoint is local (e.g. LOCAL_LLM_BASE_URL set
+    // to an Ollama box). Throws → recorded as this provider's error, prompt not sent.
+    assertPromptEgressAllowed(cfg.endpoint, 'prompt');
     const res = cfg.callType === 'anthropic-native'
       ? await callAnthropicNative(cfg.endpoint, cfg.apiKey, cfg.model, prompt, timeoutMs)
       : await callOpenAICompat(cfg.endpoint, cfg.apiKey, cfg.model, prompt, timeoutMs);
