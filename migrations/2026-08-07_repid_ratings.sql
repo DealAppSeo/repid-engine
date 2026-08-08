@@ -24,9 +24,22 @@ CREATE TABLE IF NOT EXISTS repid_outcomes (
   fold_root      bigint NOT NULL,
   counterparty_id text,
   value_at_risk  numeric,
-  created_at     timestamptz NOT NULL DEFAULT now()
+  -- Genesis epoch policy (Sean, 2026-08-07): every outcome is permanently labeled so a
+  -- bootstrap/dogfood score can never be laundered as organically-earned. Safe honest
+  -- defaults — we are in the 'genesis' epoch and unproven rows are 'bootstrap'.
+  --   epoch:      iam (identity, no score claim) | genesis (V1 cohort, disclosed) | earned (external)
+  --   provenance: bootstrap (we generated it, dogfood) | external (a stranger did)
+  epoch          text NOT NULL DEFAULT 'genesis' CHECK (epoch IN ('iam', 'genesis', 'earned')),
+  provenance     text NOT NULL DEFAULT 'bootstrap' CHECK (provenance IN ('bootstrap', 'external')),
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  -- No stake capital on Genesis scores (Sean, 2026-08-07): a bootstrap outcome must not
+  -- carry real value-at-risk. Fail-closed at the DB, belt-and-suspenders to the app rule.
+  CONSTRAINT chk_no_stake_on_bootstrap CHECK (
+    provenance <> 'bootstrap' OR value_at_risk IS NULL OR value_at_risk = 0
+  )
 );
 CREATE INDEX IF NOT EXISTS idx_repid_outcomes_agent ON repid_outcomes (agent_id);
+CREATE INDEX IF NOT EXISTS idx_repid_outcomes_epoch ON repid_outcomes (epoch, provenance);
 
 -- ── the ratings themselves ──────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS repid_ratings (
@@ -37,6 +50,10 @@ CREATE TABLE IF NOT EXISTS repid_ratings (
   verdict          text NOT NULL CHECK (verdict IN ('good', 'ok', 'bad')),
   outcome_id       text NOT NULL REFERENCES repid_outcomes (id),
   fold_root        bigint NOT NULL,
+  -- Same Genesis labels as repid_outcomes: a rating cast during bootstrap/genesis is
+  -- permanently marked so it is never silently counted as an organically-earned signal.
+  epoch            text NOT NULL DEFAULT 'genesis' CHECK (epoch IN ('iam', 'genesis', 'earned')),
+  provenance       text NOT NULL DEFAULT 'bootstrap' CHECK (provenance IN ('bootstrap', 'external')),
   created_at       timestamptz NOT NULL DEFAULT now()
 );
 
