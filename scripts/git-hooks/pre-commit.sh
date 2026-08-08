@@ -27,6 +27,25 @@
 # DOCUMENTATION:    docs/git-workflow/WORKTREE_HOOK.md
 set -euo pipefail
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 0 — production-extract fixture fence (the permanent #376 fence).
+#
+# Runs BEFORE the branch check so a fixture carrying a real proof / real agent
+# UUID / prod table dump is refused no matter which branch you are on. The guard
+# scans only the STAGED files under tests/, is pure-Node (no build step), and
+# fails closed. Documented bypass: ALLOW_PROD_FIXTURE=1 git commit ...
+#
+# CANONICAL SOURCE: scripts/hooks/prod-fixture-guard.js
+# ─────────────────────────────────────────────────────────────────────────────
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+FIXTURE_GUARD="$REPO_ROOT/scripts/hooks/prod-fixture-guard.js"
+if [ -f "$FIXTURE_GUARD" ] && command -v node >/dev/null 2>&1; then
+    if ! node "$FIXTURE_GUARD" --staged; then
+        echo "[pre-commit-hook] prod-fixture-guard refused the commit (see above)." >&2
+        exit 1
+    fi
+fi
+
 EXPECTED_FILE="$(git rev-parse --git-dir)/EXPECTED_BRANCH"
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
