@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "A REAL Plonky3 range-check proof produced by the deployed zkp-postcard prover,",
+    "captured from repid_zkp_proofs so the cross-crate verify test runs against a",
+    "genuine artifact (not a mock). The proof bytes live beside this file as a raw",
+    "binary blob (repid-proof-79103.plonky3.bin) rather than base64 text so that a",
+    "64-hex secret-scanner rule cannot false-positive on the long uniform runs a",
+    "base64 STARK proof contains. The test base64-encodes the bytes in memory.",
+    "",
+    "This is public-by-design data: the whole point of @hyperdag/proof-verifier is",
+    "that a proof + its public statement are shared for client-side verification, and",
+    "this scheme's honesty block declares the score public (score_is_public=true).",
+    "The proof is zero-knowledge over the witness; the statement is the public claim."
+  ],
+  "provenance": {
+    "table": "repid_zkp_proofs",
+    "row_id": 79103,
+    "scheme": "plonky3_range_check",
+    "leaf_scheme": "poseidon2-babybear-sponge-v1/engine",
+    "proof_bin": "repid-proof-79103.plonky3.bin",
+    "proof_bytes_len": 10673,
+    "proof_b64_md5": "b60cd12538272300585dbe01ee848198",
+    "verifier_pkg": "@hyperdag/proof-verifier",
+    "verifier_version": "0.2.0"
+  },
+  "statement": {
+    "agent_id": "32e0e809-c1c4-4405-913f-135c8a2d6626",
+    "tier": "ESTABLISHED",
+    "repid_score": 2070,
+    "threshold": 999
+  }
+}
