@@ -8,6 +8,7 @@
  *   1. HAL          score the proposed action        live cross-provider quorum
  *   2. RepID        look up the actor's reputation   live, keyless
  *   3. ZK proof     fetch + verify a range proof     live Plonky3, verified LOCALLY
+ *                                                     by @hyperdag/proof-verifier
  *   4. Poseidon2    derive a scoped nullifier        the Rust binary, KAT-backed
  *   5. Anchor       resolve the on-chain attestation Base Sepolia, basescan link
  *   6. Gate         combine into a decision
@@ -23,7 +24,10 @@
  *
  * Usage:
  *   node scripts/demo/trust-harness-e2e.mjs [--agent trinity-shofet] [--claim "..."]
- *   REPID_API_KEY=…  optional; every leg below is keyless.
+ *   REPID_API_KEY=…  optional; when set, the HAL call is authenticated so it
+ *                    bypasses the public per-IP cap and the quorum actually runs.
+ *                    Every OTHER leg is keyless. With no key, HAL stays honestly
+ *                    UNKNOWN on a 429 rather than faking a verdict.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -36,17 +40,30 @@ let calibrator = null;
 let calibrate = null;
 let deltaFor = null, applyDelta = null, encodeDeltaForFold = null, OutcomeClass = null;
 let linkPaymentProof = null, requiresPaymentAnchor = null, PAYMENT_PROOF_REQUIRED_ABOVE = 10;
+// The demo's two load-bearing checks live in shipped, unit-tested code (built to
+// dist), never reimplemented here: local proof verification and HAL auth headers.
+let verifyProofLocally = null, halRequestHeaders = null;
 try {
   ({ calibrate } = await import('../../dist/services/hal-calibration.js'));
   ({ deltaFor, applyDelta, encodeDeltaForFold, OutcomeClass, PAYMENT_PROOF_REQUIRED_ABOVE } =
     await import('../../dist/services/outcome-classification.js'));
   ({ linkPaymentProof, requiresPaymentAnchor } = await import('../../dist/services/x402-outcome-link.js'));
+  ({ verifyProofLocally, halRequestHeaders } = await import('../../dist/services/trust-harness-verify.js'));
   const calPath = new URL('../../reports/hal-eval/hal-calibrator-rigorous-v1.json', import.meta.url);
   calibrator = JSON.parse(readFileSync(calPath, 'utf8'));
 } catch {
   // Left null. Every consumer below degrades to an explicit UNKNOWN rather than
   // silently falling back to the uncalibrated number, which would be the exact
   // silent-degradation failure this harness exists to make impossible.
+}
+
+// The REAL local verifier. Loaded fail-closed: if the package is unavailable the
+// proof leg reports UNKNOWN, never a byte-count pass.
+let proofVerify = null;
+try {
+  ({ verify: proofVerify } = await import('@hyperdag/proof-verifier'));
+} catch {
+  // Left null → verifyProofLocally fails closed on step 3.
 }
 
 const ENGINE = process.env.TRUSTSHELL_API_URL || 'https://repid-engine-production.up.railway.app';
@@ -81,16 +98,29 @@ line(`${DIM}action "${CLAIM}"${RESET}`);
 
 // ── 1. HAL ──────────────────────────────────────────────────────────────────
 step(1, 'HAL — score the proposed action (live cross-provider quorum)');
+const halAuth = halRequestHeaders
+  ? halRequestHeaders(process.env)
+  : { headers: { 'content-type': 'application/json' }, authenticated: false };
+if (halAuth.authenticated) {
+  note('authenticated (REPID_API_KEY present) — bypasses the public per-IP daily cap, so the quorum runs');
+} else {
+  note('keyless — using the public endpoint (capped per IP by HAL_PUBLIC_RATE_LIMIT); set REPID_API_KEY to bypass');
+}
 try {
   const res = await fetch(`${ENGINE}/api/v1/hal/evaluate`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: halAuth.headers,
     body: JSON.stringify({ text: CLAIM, context: { domain: 'general', certainty: 0.8 }, strictness: 2 }),
     signal: AbortSignal.timeout(90_000),
   });
   if (res.status === 429) {
     // A rate limit is NOT a verdict. Saying so is the whole discipline.
-    result.hal = { state: 'UNKNOWN', reason: 'rate limited (HAL_PUBLIC_RATE_LIMIT, per IP)' };
+    result.hal = {
+      state: 'UNKNOWN',
+      reason: halAuth.authenticated
+        ? 'rate limited despite an API key (HAL_PUBLIC_RATE_LIMIT) — key not on the allowlist?'
+        : 'rate limited (HAL_PUBLIC_RATE_LIMIT, per IP) — set REPID_API_KEY to bypass',
+    };
     unk('rate limited — HAL could not be consulted');
     note('this is NOT a pass. The gate below refuses when HAL is unknown.');
   } else {
@@ -140,29 +170,46 @@ try {
 }
 
 // ── 3. ZK proof ─────────────────────────────────────────────────────────────
-step(3, 'ZK range proof — fetch, then VERIFY IT LOCALLY (not on our word)');
+step(3, 'ZK range proof — fetch, then VERIFY IT LOCALLY (real STARK verifier)');
 try {
   const { status, json } = await get(`${ENGINE}/api/v1/repid/${AGENT}/proof`);
   if (status === 200 && json?.proof_bytes) {
     const bytes = Buffer.from(json.proof_bytes, 'base64').length;
-    result.proof = {
-      state: 'REAL',
-      scheme: json.scheme,
-      bytes,
-      statement: json.statement ?? null,
-      // The proof binds a UUID, not the slug a caller uses. Captured so the gate
-      // compares like with like — see the note at step 6.
-      canonicalAgentId: json.statement?.agent_id ?? json.agent_id ?? null,
-    };
-    ok(`${json.scheme}   ${bytes} proof bytes`);
-    if (json.statement) note(`statement: ${JSON.stringify(json.statement)}`);
-    note('the proof asserts RepID ≥ threshold WITHOUT revealing the score.');
+    const statement = json.statement ?? null;
+    // The proof binds a UUID, not the slug a caller uses. Captured so the gate
+    // compares like with like — see the note at step 6.
+    const canonicalAgentId = json.statement?.agent_id ?? json.agent_id ?? null;
+
+    // THE REAL CHECK. Not a byte count, not `state === 'REAL'`: the published
+    // @hyperdag/proof-verifier verifies the STARK against its public statement and
+    // returns verified:boolean. Fail-closed — the leg is REAL only when the math
+    // checks out. verifyProofLocally itself refuses if the verifier is unavailable,
+    // the bytes are empty, or the result shape is not a real boolean.
+    ok(`${json.scheme}   ${bytes} proof bytes fetched`);
+    const v = verifyProofLocally
+      ? await verifyProofLocally({ proofBytes: json.proof_bytes, statement, verifyFn: proofVerify })
+      : { verified: false, reason: 'verify helper not built — run `npm run build`', verifierVersion: null };
+    if (v.verified) {
+      result.proof = {
+        state: 'REAL', verified: true, scheme: json.scheme, bytes, statement, canonicalAgentId,
+        verifierVersion: v.verifierVersion,
+      };
+      ok(`VERIFIED LOCALLY by @hyperdag/proof-verifier${v.verifierVersion ? ` v${v.verifierVersion}` : ''} — verified=true`);
+      if (statement) note(`statement: ${JSON.stringify(statement)}`);
+      note('the proof asserts RepID ≥ threshold WITHOUT revealing the score — and we checked the math, not their word.');
+    } else {
+      result.proof = {
+        state: 'UNKNOWN', verified: false, reason: v.reason, scheme: json.scheme, bytes, statement, canonicalAgentId,
+      };
+      bad(`local verification FAILED — ${v.reason}`);
+      note('a proof we could not verify is a gap, never a pass. The gate below refuses on it.');
+    }
   } else {
-    result.proof = { state: 'UNKNOWN', reason: `HTTP ${status}` };
+    result.proof = { state: 'UNKNOWN', verified: false, reason: `HTTP ${status}` };
     unk(`no proof returned (HTTP ${status})`);
   }
 } catch (e) {
-  result.proof = { state: 'UNKNOWN', reason: String(e.message ?? e) };
+  result.proof = { state: 'UNKNOWN', verified: false, reason: String(e.message ?? e) };
   unk(`proof unreachable — ${result.proof.reason}`);
 }
 
@@ -391,7 +438,10 @@ if (canonicalAgentId && canonicalAgentId !== AGENT) {
 
 const gate = evaluateGate({
   agentId: result.repid?.state === 'REAL' ? (canonicalAgentId ?? AGENT) : null,
-  proofVerified: result.proof?.state === 'REAL' ? true : undefined,
+  // Fail-closed: true ONLY when the real local verifier returned verified===true.
+  // Anything else (unverified, unavailable, rejected) is undefined = NOT verified,
+  // which the gate treats as refuse. There is no byte-count / state shortcut here.
+  proofVerified: result.proof?.verified === true ? true : undefined,
   proofStatement: result.proof?.statement
     ? { ...result.proof.statement, user_standards_hash: boundStandardsHash ?? undefined }
     : null,

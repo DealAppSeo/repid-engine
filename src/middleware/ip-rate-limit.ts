@@ -13,6 +13,7 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import { checkRateLimit } from '../cache/rate-limiter';
+import { hasValidEnvApiKey } from './env-api-key';
 
 function clientIp(req: Request): string {
   const xff = req.headers['x-forwarded-for'];
@@ -23,6 +24,16 @@ function clientIp(req: Request): string {
 export function ipRateLimit(limit = 10, windowSeconds = 86400) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (req.method === 'OPTIONS') return next();
+    // Authenticated callers bypass the public per-IP cap. The cap exists to fence
+    // the ANONYMOUS demo budget; a request bearing a valid REPID_API_KEYS key is a
+    // known, trusted caller, so it is not subject to the free per-IP allowance.
+    // This is what lets an authenticated run of the trust-harness E2E demo actually
+    // reach the HAL quorum instead of stalling on a 429. Only RELAXES the limit —
+    // keyless traffic is unchanged — and only recognises env-allowlist keys.
+    if (hasValidEnvApiKey(req.headers)) {
+      res.setHeader('X-RateLimit-Bypass', 'api-key');
+      return next();
+    }
     try {
       const r = await checkRateLimit(`chat:${clientIp(req)}`, limit, windowSeconds);
       res.setHeader('X-RateLimit-Limit', String(limit));
