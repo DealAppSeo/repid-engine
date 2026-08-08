@@ -18,6 +18,7 @@ import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-no
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
 import { insertScoreEvent } from '../scoring/score-event-writer';
+import { isDeliverableDomain } from '../scoring/task-purpose';
 import { scoreEventGuardEnforced } from './score-event-guard';
 import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
 import { requireApiKey } from '../middleware/auth-api-key';
@@ -613,10 +614,30 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       impactCap,
     );
 
-    // Antifragile backstop: no single event may exceed the full score-range
-    // width, and a non-finite reward becomes delta 0 — the event records a
-    // sane number instead of 500ing the whole scoring path on insert.
-    const preClamp = halApproved ? rewardResult.reward : -Math.abs(baseDelta);
+    // EARN GATE — a POSITIVE reward requires an affirmative signal, not merely "not vetoed".
+    // For a non-verifiable advisory prompt (the /run chatbot: task_domain 'general', outcome
+    // asserted 'success'), `halApproved` only means dissonance is below threshold — "not
+    // obviously harmful" — which is NOT verification that the answer is good. Without this,
+    // every plausible chatbot answer farms a flat reward (the "+19 per prompt" theater).
+    // Earned-positive requires: a real deliverable domain, OR a HAL fact-check that came back
+    // clean. Penalties are untouched (a veto still costs). Shadow-first per RULE-4/Rule 23
+    // (this changes live RepID): OFF by default, logs what it WOULD do; REPID_RUN_EARN_GATE=true
+    // enforces it once Sean has seen the shadow numbers.
+    const factCheckClean =
+      factCheckDecision !== null && factCheckDecision !== 'vetoed' && factCheckDecision !== 'flagged';
+    const positiveEarned = isDeliverableDomain(task_domain) || factCheckClean;
+    const earnGateEnforced = process.env.REPID_RUN_EARN_GATE === 'true';
+    let purposeSuppressed = false;
+    let preClamp = halApproved ? rewardResult.reward : -Math.abs(baseDelta);
+    if (preClamp > 0 && !positiveEarned) {
+      if (earnGateEnforced) {
+        console.warn(`[score-event] earn-gate ENFORCED: unverified non-deliverable (domain=${task_domain}) reward ${preClamp} → 0 for ${agentId}`);
+        preClamp = 0;
+        purposeSuppressed = true;
+      } else {
+        console.warn(`[score-event] earn-gate SHADOW: would zero unverified non-deliverable reward ${preClamp} (domain=${task_domain}); set REPID_RUN_EARN_GATE=true to enforce`);
+      }
+    }
     const { delta: rawDelta, clamped: deltaClamped } = clampEventDelta(preClamp);
     if (deltaClamped) {
       console.error(
@@ -669,6 +690,15 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       reward_breakdown: rewardResult.breakdown,
       courage_bonus: courageBonus,
       vesting_active: vestingActive,
+      earn_gate: {
+        positive_earned: positiveEarned,
+        fact_check_clean: factCheckClean,
+        deliverable_domain: isDeliverableDomain(task_domain),
+        // what the gate WOULD do this event, regardless of enforcement — for shadow measurement
+        would_suppress: halApproved && rewardResult.reward > 0 && !positiveEarned,
+        enforced: earnGateEnforced,
+        suppressed: purposeSuppressed,
+      },
     };
     const predictionExtra = {
       certainty_at_claim: certainty,
@@ -864,6 +894,16 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       tier: newTier,
       hal_approved: halApproved,
       hal_score: dissonance,
+      // Honest earning signal for the UI: a non-deliverable, non-fact-checked run earns nothing.
+      // `purpose_suppressed` = the reward was zeroed (gate enforced); `earn_gate.would_suppress`
+      // = it WOULD be zeroed once REPID_RUN_EARN_GATE=true (shadow today). Lets /run say
+      // "conversational run — 0 earned (not a verified deliverable)" instead of a hollow +19.
+      purpose_suppressed: purposeSuppressed,
+      earn_gate: {
+        positive_earned: positiveEarned,
+        would_suppress: halApproved && rewardResult.reward > 0 && !positiveEarned,
+        enforced: earnGateEnforced,
+      },
       challenger_courage_bonus: courageBonus,
       reward_breakdown: rewardResult.breakdown,
       vdr_count: vdrCount + 1,
