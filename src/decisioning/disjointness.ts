@@ -20,7 +20,7 @@
  * this module returns routes live by itself.
  */
 
-import { resolveFamily } from './family-registry';
+import { resolveFamily, isMapped } from './family-registry';
 
 export interface ModelRef {
   /** provider label (for reporting only; family is resolved from `model`). */
@@ -177,4 +177,107 @@ export function assembleDisjointJudges(candidates: ModelRef[], pool: ModelRef[],
     return { ok: false, judges: [], judgeFamilies: [], failure: `internal: assembled set not disjoint (${verify.reason})` };
   }
   return { ok: true, judges, judgeFamilies: chosenFamilies };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// LIVE-PATH QUORUM ENFORCEMENT (audit item #4 wiring, 2026-08-07).
+//
+// Until now the primitives above (checkDisjoint / assertDisjoint / assembleDisjointJudges) had NO live
+// caller — "nothing this module returns routes live by itself" (module header). `selectDisjointQuorum`
+// is the single entry point a LIVE quorum calls to make its judges REGISTRY-HARD-FAIL DISJOINT:
+//
+//   1. REGISTRY-HARD-FAIL — every judge must resolve to a family via the REGISTRY (isMapped). A model
+//      NOT in the registry is EXCLUDED (never assigned a regex-guessed family — that guess is the spoof
+//      vector: a model named to READ as a family it is not could otherwise fake independence). This is
+//      the live-safe form of "hard-fail on unmapped": the request survives, but the spoofable judge
+//      does NOT get a vote.
+//   2. PRODUCER DISJOINTNESS (optional) — when the deliverable's PRODUCER model is known, a judge that
+//      shares the producer's family is self-grading; it is excluded and the survivors are verified via
+//      assertDisjoint (a REAL logged violation sink, no silent swallow).
+//   3. MUTUAL DISJOINTNESS — the survivors are collapsed to ONE registry-mapped judge per family via
+//      assembleDisjointJudges, so two hosts of the same family can never count as two independent votes.
+//
+// Pure + deterministic (seeded); no I/O. The CALLER decides whether to APPLY the result — the live HAL
+// path only applies it behind BFT_DISJOINT_ENFORCE (default OFF), so this lands shadow-safe.
+// ---------------------------------------------------------------------------------------------------
+
+export interface SelectDisjointQuorumOpts {
+  /** producer/candidate model that generated the deliverable; judges sharing its family are excluded. */
+  producerModel?: string;
+  /** rotation seed for assembleDisjointJudges (deterministic given a seed). Default 'bft-disjoint'. */
+  seed?: string;
+  /** violation sink for the producer-disjointness assertion (default = loud stderr, never silent). */
+  sink?: ViolationSink;
+  context?: string;
+}
+
+export interface SelectDisjointQuorumResult<T extends ModelRef> {
+  /** true iff a disjoint judge set could be assembled (mirrors assembleDisjointJudges.ok). */
+  ok: boolean;
+  /** accepted judges: registry-mapped, one per family, disjoint from the producer family. */
+  kept: T[];
+  keptFamilies: string[];
+  /** dropped: model not in the family registry — would be a spoofable regex GUESS, so it does not vote. */
+  excludedUnmapped: T[];
+  /** dropped: a same-family judge is already kept (a fake-independent second vote). */
+  excludedSameFamily: Array<{ item: T; family: string }>;
+  /** dropped: shares the producer's own family (self-grading). Empty unless producerModel is set+mapped. */
+  excludedProducerFamily: Array<{ item: T; family: string }>;
+  reason: string;
+}
+
+/**
+ * Reduce a raw judge list to a REGISTRY-HARD-FAIL, mutually-family-disjoint quorum. See the block
+ * comment above for the three stages. Generic over any judge shape carrying a `model` string (so the
+ * live path can pass its own provider configs straight through and get the SAME objects back in `kept`).
+ */
+export function selectDisjointQuorum<T extends ModelRef>(
+  judges: T[],
+  opts: SelectDisjointQuorumOpts = {},
+): SelectDisjointQuorumResult<T> {
+  const seed = opts.seed ?? 'bft-disjoint';
+
+  // 1) REGISTRY-HARD-FAIL — exclude unmapped judges (never regex-guess a family for them).
+  const mapped: T[] = [];
+  const excludedUnmapped: T[] = [];
+  for (const j of judges) (isMapped(j.model) ? mapped : excludedUnmapped).push(j);
+
+  // 2) PRODUCER DISJOINTNESS (optional) — drop judges of the producer's own family (self-grading).
+  const excludedProducerFamily: Array<{ item: T; family: string }> = [];
+  let survivors: T[] = mapped;
+  if (opts.producerModel && isMapped(opts.producerModel)) {
+    const producerFamily = resolveFamily(opts.producerModel);
+    survivors = [];
+    for (const j of mapped) {
+      if (resolveFamily(j.model) === producerFamily) excludedProducerFamily.push({ item: j, family: producerFamily });
+      else survivors.push(j);
+    }
+    // assertDisjoint (LIVE) — verify the survivors are disjoint from the producer; a violation fires the
+    // REAL sink (loud, logged). Never throws here (throwOnViolation:false) — the caller stays live-safe.
+    assertDisjoint([{ model: opts.producerModel }], survivors, {
+      sink: opts.sink,
+      context: opts.context ?? 'selectDisjointQuorum:producer',
+      throwOnViolation: false,
+    });
+  }
+
+  // 3) MUTUAL DISJOINTNESS — one registry-mapped judge per family (collapse same-family duplicates).
+  // assembleDisjointJudges returns the SAME object references it was given (it reads from the pool it is
+  // handed), so membership identity maps cleanly back to the original T judges.
+  const distinctFamilies = new Set(survivors.map((s) => resolveFamily(s.model)));
+  const assembly = assembleDisjointJudges([], survivors, distinctFamilies.size, seed);
+  const keptSet = new Set<ModelRef>(assembly.judges);
+  const kept = survivors.filter((s) => keptSet.has(s));
+  const excludedSameFamily = survivors
+    .filter((s) => !keptSet.has(s))
+    .map((s) => ({ item: s, family: resolveFamily(s.model) }));
+
+  const keptFamilies = kept.map((k) => resolveFamily(k.model)).sort();
+  const reason =
+    `selected ${kept.length} registry-mapped mutually-disjoint judge(s) [${keptFamilies.join(', ')}]; ` +
+    `excluded ${excludedUnmapped.length} unmapped, ${excludedSameFamily.length} same-family` +
+    (opts.producerModel ? `, ${excludedProducerFamily.length} producer-family` : '') +
+    '.';
+
+  return { ok: assembly.ok, kept, keptFamilies, excludedUnmapped, excludedSameFamily, excludedProducerFamily, reason };
 }
