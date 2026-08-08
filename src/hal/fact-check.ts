@@ -22,6 +22,12 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { recordProviderCall } from '../cache/provider-health'; // S-CACHE — real-time provider health
 import crypto from 'crypto';
+// DATA-LOCALITY (self-host). The fact-check quorum sends the deliverable TEXT (content) to each
+// provider — the verify path's prompt egress. LOCAL_LLM_BASE_URL redirects openai-compat endpoints
+// to a local server; ONLY_ATTESTATIONS_LEAVE refuses any remaining cloud prompt egress. Both are
+// default-OFF: unset → hosted behavior byte-identical.
+import { resolveProviderEndpoint } from './local-llm';
+import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 // CROSS-FIX 2026-07-05 — hardened registry-family lookup (single source of family truth). resolveFamily
 // is REGISTRY-ONLY and THROWS on an unmapped/ambiguous model. HAL is a LIVE scoring path and MUST NOT
 // throw here, so it is consumed ONLY via familyOfResolved() below (registry-primary, regex-fallback,
@@ -444,6 +450,12 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const call_id = crypto.randomUUID();
   try {
+    // DATA-LOCALITY BOUNDARY (ONLY_ATTESTATIONS_LEAVE): the deliverable is content —
+    // refuse to send it to a non-local host when the boundary is engaged. No-op when
+    // the flag is off or the endpoint is local (LOCAL_LLM_BASE_URL). Throws → caught
+    // below → returned as this provider's ERROR verdict (quorum degrades gracefully),
+    // never a silent cloud call. Mirrors cross-llm-client.queryProvider's prompt guard.
+    assertPromptEgressAllowed(cfg.endpoint, 'prompt');
     const res = await postWith429Retry(cfg, JSON.stringify({
       model: cfg.model,
       messages: [
@@ -1311,6 +1323,14 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
   if (qw && enabled.qwen) {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
+  }
+  // DATA-LOCALITY: when LOCAL_LLM_BASE_URL (or OPENAI_BASE_URL) is set, redirect every openai-compat
+  // fact-check provider to the local base (Ollama/vLLM/LiteLLM can host several model names on one
+  // endpoint), so the verify path's prompt egress stays on the operator's own box. Every provider in
+  // this builder is openai-compat, so all are redirected. Unset → endpoints unchanged (hosted path).
+  const localBase = (process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '').trim();
+  if (localBase) {
+    for (const p of out) p.endpoint = resolveProviderEndpoint(p.endpoint, localBase, 'openai-compat');
   }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity). CROSS-FIX
   // 2026-07-05 — registry-primary (familyOfResolved): accurate for registered models, legacy-regex
