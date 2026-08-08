@@ -29,6 +29,7 @@
  */
 import { Pool, type QueryResult, type QueryResultRow } from 'pg';
 import { publishHealth, deriveBreakerState } from '../resilience/health-bus';
+import { assertLocalDataStore } from '../selfhost/egress-guard';
 
 const DEFAULT_QUERY_TIMEOUT_MS = 10_000;
 const CONNECTION_TIMEOUT_MS = 5_000;
@@ -92,8 +93,16 @@ function resolveConnectionString(): string {
 
 export function getPgPool(): Pool {
   if (!pool) {
+    const connectionString = resolveConnectionString();
+    // DATA-LOCALITY BOUNDARY (ONLY_ATTESTATIONS_LEAVE): direct-pg opens a raw TCP
+    // socket to DATABASE_URL, which the fetch-level guard cannot see. Postgres
+    // holds every row (content), so a NON-local host is refused when the boundary
+    // is engaged — the node stays provably data-local even if DATABASE_URL is
+    // misconfigured to a remote pooler. No-op when the boundary is off (hosted
+    // behavior unchanged) or the host is local/private.
+    assertLocalDataStore(connectionString, 'DATABASE_URL');
     pool = new Pool({
-      connectionString: resolveConnectionString(),
+      connectionString,
       max: POOL_MAX,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
