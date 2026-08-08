@@ -23,6 +23,14 @@ bincode = "1.3"
 p3-poseidon2 = "0.3.0"
 p3-poseidon2-air = "0.3.0"
 
+[features]
+# OFF by default so the normal build/CI stays green. When enabled, the
+# `recursion_spike` example includes the minimal "verify-a-proof-inside-a-proof"
+# attempt, which FAILS TO COMPILE at this pin — that compile error IS the
+# deliverable (it names the exact missing capability). Reproduce with:
+#   cargo build --example recursion_spike --features attempt_incircuit_verify
+attempt_incircuit_verify = []
+
 [dev-dependencies]
 # Test-only: reproduce p3-poseidon2's own published KAT vector as an independent
 # plumbing check for the Poseidon2-BabyBear oracle (backlog 4.0-a). Same version
