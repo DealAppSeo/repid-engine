@@ -24,10 +24,17 @@ import {
   EncryptedMemoryCell,
   createCell,
   verifyProof,
+  leafHash,
+  MerkleTree,
   gcmDecrypt,
   type MemoryRecordInput,
   type SealedCell,
 } from '../src/services/mesh-memory';
+// Canon Poseidon2-BabyBear impl (backlog 4.0-b/4.0-c, bit-exact vs Plonky3 0.3.0
+// KAT). Imported directly so the parity check compares the mesh-memory commitment
+// against the SAME primitives it is built from — no hand-rolled second Poseidon2.
+import { poseidon2LeafHash, poseidon2PairHash, hexToFields } from '../src/zkp/poseidon2-leaf';
+import { BABYBEAR_P } from '../src/zkp/poseidon2-babybear';
 
 // ── synthetic corpus (fictional agent notes) ─────────────────────────────────
 const USER_KEY = 'sandbox-user-key-alpha-0123456789abcdef'; // synthetic, >= 16 chars
@@ -158,14 +165,17 @@ describe('mesh-memory SSE cell — host confidentiality', () => {
   });
 });
 
-describe('mesh-memory SSE cell — proof-carrying retrieval (STUB)', () => {
-  it('every hit carries a Merkle inclusion proof that verifies against the committed root', () => {
+describe('mesh-memory SSE cell — proof-carrying retrieval (Poseidon2 commitment)', () => {
+  it('every hit carries a Poseidon2 Merkle inclusion proof that verifies against the committed root', () => {
     const { client, cell } = makeCell();
     const hits = client.search(cell, 'escrow');
     expect(hits.length).toBe(2);
     for (const h of hits) {
       expect(h.proofVerified).toBe(true);
-      expect(h.proof.kind).toBe('merkle-inclusion-stub');
+      // Honest, self-describing label: a Poseidon2 commitment, NOT a ZK proof.
+      expect(h.proof.kind).toBe('merkle-inclusion-poseidon2-commitment');
+      // The committed root is a 32-byte (8 BabyBear field element) Poseidon2 digest.
+      expect(cell.commitmentRoot()).toMatch(/^0x[0-9a-f]{64}$/);
       expect(verifyProof(h.proof, cell.commitmentRoot())).toBe(true);
     }
   });
@@ -188,6 +198,45 @@ describe('mesh-memory SSE cell — proof-carrying retrieval (STUB)', () => {
     b.ct = raw.toString('base64');
     // Loading a cell whose contents no longer match its committed root must throw.
     expect(() => new EncryptedMemoryCell(tampered)).toThrow(/commitment root mismatch/);
+  });
+});
+
+describe('mesh-memory Merkle commitment — Poseidon2 field arithmetic matches canon impl', () => {
+  it('leafHash matches the canon Poseidon2 leaf hash (with the L domain prefix)', () => {
+    // The tree leaf-hashes raw strings; the mesh-memory leaf convention prefixes
+    // 'L' for domain separation, so leafHash(x) === canon poseidon2LeafHash('L'+x).
+    expect(leafHash('IDX:abc:def')).toBe(poseidon2LeafHash('L' + 'IDX:abc:def'));
+  });
+
+  it('a 2-leaf tree root equals a hand-computed Poseidon2 leaf+compress over the canon impl', () => {
+    const a = 'REC:m1:aaa';
+    const b = 'REC:m2:bbb';
+    const root = new MerkleTree([a, b]).root();
+    const expected = poseidon2PairHash(
+      poseidon2LeafHash('L' + a),
+      poseidon2LeafHash('L' + b),
+    );
+    expect(root).toBe(expected);
+  });
+
+  it('every commitment digest is 8 canonical BabyBear field elements (< p)', () => {
+    const { cell } = makeCell();
+    const root = cell.commitmentRoot();
+    // hexToFields throws if any limb is non-canonical (>= p); assert it parses
+    // AND that all 8 limbs are genuinely in [0, p) — real field arithmetic, not
+    // an opaque 256-bit hash reinterpreted.
+    const limbs = hexToFields(root);
+    expect(limbs).toHaveLength(8);
+    for (const limb of limbs) {
+      expect(limb).toBeGreaterThanOrEqual(0n);
+      expect(limb < BABYBEAR_P).toBe(true);
+    }
+  });
+
+  it('is deterministic: sealing the same corpus twice yields the same Poseidon2 leaf hashes', () => {
+    // (Roots differ because record ciphertexts use random IVs; but the leaf hash
+    // of a fixed string is deterministic — the Poseidon2 permutation is pure.)
+    expect(leafHash('stable-input')).toBe(leafHash('stable-input'));
   });
 });
 

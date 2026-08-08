@@ -34,11 +34,17 @@
  *   • The host does NOT learn: any plaintext, any keyword in the clear, or the
  *     postings of an un-queried keyword.
  *
- * ═══ PROOF-CARRYING RETRIEVAL (STUB) ═════════════════════════════════════════
+ * ═══ PROOF-CARRYING RETRIEVAL (Poseidon2 commitment; ZK circuit still STUB) ═══
  * Every search/record result carries a Merkle inclusion proof against a root
- * committed at seal time (see merkle.ts). This is an INTEGRITY commitment — it
- * proves the host returned committed data, not something it fabricated. It is
- * explicitly a STUB for the future ZK version; it is not zero-knowledge.
+ * committed at seal time (see merkle.ts). The tree now hashes with **Poseidon2
+ * over BabyBear** (the canon impl in src/zkp/poseidon2-leaf.ts, bit-exact vs
+ * Plonky3 0.3.0), so the root is aggregation/ZK-circuit-ready.
+ *
+ * This is still an INTEGRITY commitment — it proves the host returned committed
+ * data, not something it fabricated (non-equivocation). It is NOT zero-knowledge:
+ * Poseidon2 makes a future Plonky3 membership circuit POSSIBLE (prove inclusion
+ * under the root without revealing the record), but that circuit does not exist
+ * yet. Until it does, retrieval is a commitment, not a ZK proof.
  */
 
 import {

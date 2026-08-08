@@ -6,9 +6,13 @@
  * leakage-profile documentation.
  *
  * REAL:  AES-256-GCM record encryption + HMAC-SHA256 deterministic search
- *        tokens + encrypted postings (a minimal SSE-1-style inverted index).
- * STUB:  proof-carrying retrieval == a Merkle inclusion commitment (integrity,
- *        not zero-knowledge). The ZK version (Poseidon2 + Plonky3) is future.
+ *        tokens + encrypted postings (a minimal SSE-1-style inverted index) +
+ *        a Poseidon2-over-BabyBear Merkle commitment (canon impl, Plonky3-parity)
+ *        making the index root aggregation/ZK-circuit-ready.
+ * STUB:  proof-carrying retrieval == a Merkle inclusion *commitment* (integrity /
+ *        non-equivocation, NOT zero-knowledge). Poseidon2 makes it ZK-READY; the
+ *        actual ZK membership circuit (Plonky3, proving inclusion without
+ *        revealing the record) does NOT exist yet.
  */
 
 export {
@@ -20,7 +24,15 @@ export {
   type SearchHit,
 } from './sse-cell';
 
-export { MerkleTree, verifyProof, leafHash, type MerkleProof } from './merkle';
+export {
+  MerkleTree,
+  verifyProof,
+  leafHash,
+  DEFAULT_SCHEME,
+  type MerkleProof,
+  type MerkleProofKind,
+  type MerkleHashScheme,
+} from './merkle';
 
 export {
   toMasterKey,
