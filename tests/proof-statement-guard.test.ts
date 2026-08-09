@@ -10,11 +10,13 @@
 import {
   buildBoundStatement,
   isStatementBound,
+  isStatementTokenBound,
   assertStatementBound,
   deriveStatementTier,
   isSyntheticAgentId,
   UnboundProofStatementError,
   REQUIRED_STATEMENT_KEYS,
+  TOKEN_BOUND_STATEMENT_KEYS,
   SYNTHETIC_AGENT_ID,
 } from '../src/zkp/proof-statement-guard';
 
@@ -141,6 +143,128 @@ describe('proof-statement-guard — fail-closed agent binding', () => {
       expect(isSyntheticAgentId(SYNTHETIC_AGENT_ID)).toBe(true);
       expect(isSyntheticAgentId(REAL_AGENT)).toBe(false);
       expect(isSyntheticAgentId(null)).toBe(false);
+    });
+  });
+
+  // ── ERC-8004 token binding (first-class field in the statement) ─────────────────
+  describe('buildBoundStatement — optional ERC-8004 token binding', () => {
+    const TOKEN = '4242';
+    const ADDR = '0x' + 'a'.repeat(40);
+
+    it('emits the canonical 4-key shape when no token is supplied (default, WASM-compat)', () => {
+      const s = buildBoundStatement({ agentId: REAL_AGENT, repidScore: 2280, threshold: 999 });
+      expect(Object.keys(s).sort()).toEqual([...REQUIRED_STATEMENT_KEYS].sort());
+      expect('erc8004_token_id' in s).toBe(false);
+      expect(isStatementTokenBound(s)).toBe(false);
+    });
+
+    it('CARRIES erc8004_token_id as a first-class field when supplied', () => {
+      const s = buildBoundStatement({
+        agentId: REAL_AGENT,
+        repidScore: 2280,
+        threshold: 999,
+        erc8004TokenId: TOKEN,
+      });
+      expect(s.agent_id).toBe(REAL_AGENT);
+      expect(s.tier).toBe('ESTABLISHED');
+      expect(s.repid_score).toBe(2280);
+      expect(s.threshold).toBe(999);
+      expect(s.erc8004_token_id).toBe(TOKEN);
+      // Still agent-bound AND now token-bound.
+      expect(isStatementBound(s)).toBe(true);
+      expect(isStatementTokenBound(s)).toBe(true);
+      expect(Object.keys(s).sort()).toEqual([...TOKEN_BOUND_STATEMENT_KEYS].sort());
+    });
+
+    it('also binds the address (lowercased) when supplied', () => {
+      const s = buildBoundStatement({
+        agentId: REAL_AGENT,
+        repidScore: 2280,
+        threshold: 999,
+        erc8004TokenId: TOKEN,
+        erc8004Address: ADDR.toUpperCase().replace('0X', '0x'),
+      });
+      expect(s.erc8004_address).toBe(ADDR); // checksummed input normalises to lowercase
+    });
+
+    it('accepts a numeric token id and normalises it to a decimal string', () => {
+      const s = buildBoundStatement({
+        agentId: REAL_AGENT,
+        repidScore: 600,
+        threshold: 500,
+        erc8004TokenId: 4242 as unknown as string,
+      });
+      expect(s.erc8004_token_id).toBe('4242');
+    });
+
+    it('THROWS on a malformed token id (fail-closed — no silently-dropped binding)', () => {
+      expect(() =>
+        buildBoundStatement({
+          agentId: REAL_AGENT,
+          repidScore: 600,
+          threshold: 500,
+          erc8004TokenId: '0xabc',
+        }),
+      ).toThrow(UnboundProofStatementError);
+      try {
+        buildBoundStatement({
+          agentId: REAL_AGENT,
+          repidScore: 600,
+          threshold: 500,
+          erc8004TokenId: '0xabc',
+        });
+      } catch (e) {
+        expect((e as UnboundProofStatementError).reason).toBe('INVALID_ERC8004_TOKEN_ID');
+      }
+    });
+
+    it('THROWS on a malformed address', () => {
+      expect(() =>
+        buildBoundStatement({
+          agentId: REAL_AGENT,
+          repidScore: 600,
+          threshold: 500,
+          erc8004TokenId: TOKEN,
+          erc8004Address: '0xshort',
+        }),
+      ).toThrow(UnboundProofStatementError);
+    });
+
+    it('still fails closed on a missing agent even when a token is supplied', () => {
+      expect(() =>
+        buildBoundStatement({
+          agentId: '',
+          repidScore: 600,
+          threshold: 500,
+          erc8004TokenId: TOKEN,
+        }),
+      ).toThrow(UnboundProofStatementError);
+    });
+  });
+
+  describe('isStatementTokenBound', () => {
+    it('is false for a bare 4-key statement, true once a token id is present', () => {
+      const bare = buildBoundStatement({ agentId: REAL_AGENT, repidScore: 600, threshold: 500 });
+      const bound = buildBoundStatement({
+        agentId: REAL_AGENT,
+        repidScore: 600,
+        threshold: 500,
+        erc8004TokenId: '7',
+      });
+      expect(isStatementTokenBound(bare)).toBe(false);
+      expect(isStatementTokenBound(bound)).toBe(true);
+    });
+
+    it('rejects a non-numeric erc8004_token_id smuggled in by hand', () => {
+      expect(
+        isStatementTokenBound({
+          agent_id: REAL_AGENT,
+          tier: 'EARNING',
+          repid_score: 600,
+          threshold: 500,
+          erc8004_token_id: 'not-a-token',
+        }),
+      ).toBe(false);
     });
   });
 });

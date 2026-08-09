@@ -48,18 +48,27 @@
  *     verdict is `linkable=false, reason='uri_carries_no_uuid'`, NOT a false match.
  *
  * ════════════════════════════════════════════════════════════════════════════════
- * THE BINDING THIS MODULE ADDS — close A's server-trust with one commitment
+ * THE BINDING THIS MODULE ADDS — close the server-mapping gap, two layers
  * ════════════════════════════════════════════════════════════════════════════════
- * The RepID statement today references NO ERC-8004 field, so proof → token always
- * needs the server's DB mapping. `linkageCommitment` is the smallest value that
- * removes that: a Poseidon2 digest binding `{agent_id, erc8004_token_id,
- * erc8004_address}` under a domain tag. Included as a public input in the RepID
- * statement/proof (the minimal circuit change, documented below), a verifier
- * recomputes it from (UUID-from-tokenURI, tokenId, address) and checks equality —
- * one on-chain read, no server. It does not FIX (A): binding the commitment into
- * the proof still requires the circuit to treat it as a public input. It makes the
- * link EXPLICIT and checkable instead of implicit in a DB row, and it is
- * Poseidon2-over-BabyBear so it is aggregation-ready (Invariant 1).
+ * A bare RepID statement (`{agent_id, tier, repid_score, threshold}`) references NO
+ * ERC-8004 field, so proof → token needs the server's DB mapping. Two additions close
+ * that, in increasing strength:
+ *
+ *  1. STATEMENT-LEVEL (shipped here + proof-statement-guard): the bound statement now
+ *     CARRIES `erc8004_token_id` as a first-class field. A verifier reads the token id
+ *     from the proof itself, reads `tokenURI(token_id)` on-chain, and checks the UUID
+ *     against `statement.agent_id` — no server DB. `verifyProofLinksToToken` takes
+ *     `statementTokenId` and DROPS the "which token? ask the server" residual when it is
+ *     present. This is the IN-REPO half; it is not yet in-ZK (the circuit must make
+ *     `erc8004_token_id` a PUBLIC INPUT — the remaining prover-side step).
+ *
+ *  2. COMMITMENT-LEVEL (`linkageCommitment`): the smallest value that also binds the
+ *     address — a Poseidon2 digest of `{agent_id, erc8004_token_id, erc8004_address}`
+ *     under a domain tag. Included as a public input in the RepID statement/proof (the
+ *     minimal circuit change, documented below), a verifier recomputes it from
+ *     (UUID-from-tokenURI, tokenId, address) and checks equality. It does not FIX (A):
+ *     binding the commitment into the proof still requires the circuit to treat it as a
+ *     public input. Poseidon2-over-BabyBear, so it is aggregation-ready (Invariant 1).
  *
  * ════════════════════════════════════════════════════════════════════════════════
  * INVARIANT COMPLIANCE (ZKP_ARCHITECTURE_INVARIANTS v1)
@@ -212,6 +221,14 @@ export function verifyProofLinksToToken(params: {
   /** `tokenURI(tokenId)` read from the registry (or the Registered-event agentURI). */
   onChainAgentURI: string | null;
   erc8004TokenId: string;
+  /**
+   * Optional: `repid_zkp_proofs.statement.erc8004_token_id` — the token id the proof
+   * statement ITSELF binds (present only for token-bound statements from
+   * `proof-statement-guard.buildBoundStatement`). When set, the verifier learned WHICH
+   * token to read on-chain from the proof itself, not from the server's DB — this is
+   * what removes the "which token? ask the server" residual from `unproven`.
+   */
+  statementTokenId?: string | null;
   /** Optional: the address the registry associates (ownerOf / getAgentWallet). */
   erc8004Address?: string | null;
   /** Optional: a linkage commitment the proof claims to bind. */
@@ -221,12 +238,29 @@ export function verifyProofLinksToToken(params: {
   const onchainAgentId = agentIdFromAgentURI(params.onChainAgentURI);
   const stmtId = (params.statementAgentId ?? '').toLowerCase();
 
+  const stmtTokenId =
+    typeof params.statementTokenId === 'string' && /^\d+$/.test(params.statementTokenId.trim())
+      ? params.statementTokenId.trim()
+      : null;
+  const hasStatementTokenBinding = stmtTokenId !== null;
+
   const checks: Record<string, boolean> = {
     statement_agent_id_is_uuid: UUID_RE.test(stmtId),
     uri_carries_uuid: onchainAgentId !== null,
     agent_id_matches_onchain_uri:
       onchainAgentId !== null && onchainAgentId === stmtId,
   };
+
+  // Token-binding leg — the statement named its own token, so the verifier did not need
+  // the server to know which token this proof is about. When the caller ALSO supplies the
+  // token it actually read on-chain, the two must be the same token: a mismatch means the
+  // proof statement points at a different token than the one being verified.
+  if (hasStatementTokenBinding) {
+    checks.statement_carries_token_id = true;
+    if (params.erc8004TokenId) {
+      checks.statement_token_id_matches_queried = stmtTokenId === params.erc8004TokenId;
+    }
+  }
 
   // Optional commitment leg — only checked when the caller has both the address and
   // an expected commitment to compare against.
@@ -251,22 +285,99 @@ export function verifyProofLinksToToken(params: {
     .filter(([, ok]) => !ok)
     .map(([k]) => k);
 
+  // `unproven` is CONDITIONAL on whether the statement carries its own token id. It is
+  // never empty on a positive match (no silent overclaim), but a token-bound statement
+  // has strictly FEWER residual-trust items: the "which token? trust the server DB"
+  // residual is gone, and residual A is rephrased to name the one prover-side step left.
+  const unproven: string[] = [];
+  if (hasStatementTokenBinding) {
+    unproven.push(
+      'that the external Plonky3 circuit treats erc8004_token_id AND agent_id as bound ' +
+        'PUBLIC INPUTS — the statement now CARRIES the token id, but until the prover ' +
+        'binds it as a public input a server could still attach the wrong token to raw ' +
+        'proof bytes (needs the Plonky3 circuit; the statement-level binding is the ' +
+        'in-repo half)',
+    );
+  } else {
+    unproven.push(
+      'that statement.agent_id is a bound PUBLIC INPUT of the RepID circuit — the ' +
+        'real proof is produced by an external prover and legacy stub rows bind ' +
+        'nothing; until the circuit binds it, agent_id is a server-attached label ' +
+        '(needs the Plonky3 circuit)',
+    );
+    unproven.push(
+      'that this proof is ABOUT this token at all — the statement carries no ' +
+        'erc8004_token_id, so mapping proof → token requires trusting the server DB; ' +
+        'supply a token-bound statement (proof-statement-guard erc8004TokenId) to ' +
+        'remove this residual',
+    );
+  }
+  unproven.push(
+    'that the on-chain agentURI was not mutated after mint — the registry exposes ' +
+      'setAgentURI, so tokenURI is current state; read the Registered event at the ' +
+      'mint block for mint-time truth',
+  );
+  unproven.push(
+    'that the ERC-8004 address discriminates this agent — server-minted tokens are ' +
+      'owned by a shared deployer wallet, so ownerOf alone does not identify the ' +
+      'agent; getAgentWallet(tokenId) is the per-agent binding when set',
+  );
+
   return {
     linked: failures.length === 0,
     onchain_agent_id: onchainAgentId,
     checks,
     failures,
-    unproven: [
-      'that statement.agent_id is a bound PUBLIC INPUT of the RepID circuit — the ' +
-        'real proof is produced by an external prover and legacy stub rows bind ' +
-        'nothing; until the circuit binds it, agent_id is a server-attached label ' +
-        '(needs the Plonky3 circuit)',
-      'that the on-chain agentURI was not mutated after mint — the registry exposes ' +
-        'setAgentURI, so tokenURI is current state; read the Registered event at the ' +
-        'mint block for mint-time truth',
-      'that the ERC-8004 address discriminates this agent — server-minted tokens are ' +
-        'owned by a shared deployer wallet, so ownerOf alone does not identify the ' +
-        'agent; getAgentWallet(tokenId) is the per-agent binding when set',
-    ],
+    unproven,
   };
+}
+
+/**
+ * Verify a RepID proof STATEMENT (the object stored on `repid_zkp_proofs.statement`)
+ * links to an ERC-8004 token, reading both the agent id AND the token id straight from
+ * the statement — the whole point of the token-bound shape from `proof-statement-guard`.
+ *
+ * The caller still supplies `onChainAgentURI` — the `tokenURI(token_id)` read for the
+ * token the STATEMENT names (`statement.erc8004_token_id`), so the chain read remains the
+ * caller's job and this stays runnable in a browser WASM verifier. When the statement
+ * carries a token id the verifier no longer needs the server to say which token to read;
+ * that is the residual `verifyProofLinksToToken` drops for a token-bound statement.
+ *
+ * For a bare (agent-only) statement this degrades to the agent-id-only verdict with the
+ * full residual list — it never fabricates a token binding that is not there.
+ */
+export function verifyStatementLinksToToken(
+  statement: Record<string, unknown> | null | undefined,
+  params: {
+    onChainAgentURI: string | null;
+    /** The token id read on-chain, if the caller has it; defaults to the statement's. */
+    erc8004TokenId?: string | null;
+    erc8004Address?: string | null;
+    expectedLinkageCommitment?: string | null;
+    domain?: string;
+  },
+): LinkageVerification {
+  const s = statement ?? {};
+  const statementAgentId =
+    typeof (s as Record<string, unknown>).agent_id === 'string'
+      ? ((s as Record<string, unknown>).agent_id as string)
+      : '';
+  const statementTokenId =
+    typeof (s as Record<string, unknown>).erc8004_token_id === 'string'
+      ? ((s as Record<string, unknown>).erc8004_token_id as string)
+      : null;
+  // If the statement binds a token and the caller did not name one to query, use the
+  // statement's — the token comes from the proof, not the server.
+  const erc8004TokenId = params.erc8004TokenId ?? statementTokenId ?? '';
+  return verifyProofLinksToToken({
+    statementAgentId,
+    onChainAgentURI: params.onChainAgentURI,
+    erc8004TokenId,
+    statementTokenId,
+    ...(params.erc8004Address !== undefined ? { erc8004Address: params.erc8004Address } : {}),
+    ...(params.expectedLinkageCommitment !== undefined
+      ? { expectedLinkageCommitment: params.expectedLinkageCommitment }
+      : {}),
+    ...(params.domain ? { domain: params.domain } : {}),
+  });
 }

@@ -39,6 +39,28 @@
 export const REQUIRED_STATEMENT_KEYS = ['agent_id', 'tier', 'repid_score', 'threshold'] as const;
 
 /**
+ * The canonical keys when a statement ALSO carries its ERC-8004 token binding: the
+ * base four PLUS `erc8004_token_id`. This is the extended shape that lets a verifier
+ * read WHICH token a proof is about straight from the proof statement — closing the
+ * "proof → token needs the server DB" gap (see `erc8004-linkage.ts` module header).
+ *
+ * IMPORTANT — this shape is OPT-IN and not yet fully in-ZK. The deployed WASM verifier
+ * (`@hyperdag/proof-verifier@0.2.0`) parses exactly the four `REQUIRED_STATEMENT_KEYS`;
+ * `erc8004_token_id` becomes a checkable-in-ZK binding only once the external Plonky3
+ * circuit treats it as a PUBLIC INPUT and the verifier struct gains the field. Until
+ * then it is an in-repo statement-level binding: explicit and checkable off-chain, but
+ * a server could still attach the wrong token to raw proof bytes. `buildBoundStatement`
+ * therefore emits the 4-key shape by DEFAULT and only appends `erc8004_token_id` when a
+ * caller explicitly supplies it — the live drain does not.
+ */
+export const TOKEN_BOUND_STATEMENT_KEYS = [...REQUIRED_STATEMENT_KEYS, 'erc8004_token_id'] as const;
+
+/** `erc8004_token_id` is a uint256 minted token, stored as a decimal string. */
+const ERC8004_TOKEN_ID_RE = /^\d+$/;
+/** An EVM address the registry associates with the token (0x + 40 hex). */
+const ERC8004_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
  * The only agent id permitted to stand in for a real one, and only when the caller
  * OPTS IN via `allowSynthetic`. Matches the synthetic-fixture convention (all-zero uuid).
  * A live drain never uses this; it is here so a test corpus can be built deliberately
@@ -63,7 +85,9 @@ export type UnboundStatementReason =
   | 'MISSING_TIER'
   | 'MISSING_SCORE'
   | 'MISSING_THRESHOLD'
-  | 'STATEMENT_UNBOUND';
+  | 'STATEMENT_UNBOUND'
+  | 'INVALID_ERC8004_TOKEN_ID'
+  | 'INVALID_ERC8004_ADDRESS';
 
 export class UnboundProofStatementError extends Error {
   public readonly reason: UnboundStatementReason;
@@ -110,6 +134,23 @@ export interface BoundStatementArgs {
    * for test/synthetic fixtures. A live drain must NEVER set this.
    */
   allowSynthetic?: boolean;
+  /**
+   * Optional ERC-8004 token id (uint256 decimal string) to bind into the statement as
+   * a FIRST-CLASS field. When present, the returned statement carries `erc8004_token_id`
+   * alongside `agent_id`/`tier`/`repid_score`, so a verifier can read the token straight
+   * from the proof and check `tokenURI(token_id) -> UUID == agent_id` WITHOUT the server's
+   * DB mapping. Omit it (the default) and the statement is the canonical 4-key shape the
+   * deployed WASM verifier parses — see `TOKEN_BOUND_STATEMENT_KEYS` for why this is
+   * opt-in and not yet fully in-ZK.
+   */
+  erc8004TokenId?: string | null;
+  /**
+   * Optional ERC-8004 address the registry associates with the token (0x+40 hex, stored
+   * lowercased). Bound as `erc8004_address` when present. Secondary to the token id — a
+   * server-minted token is owned by a shared deployer wallet, so the address alone does
+   * not discriminate the agent (see `erc8004-linkage` residual C).
+   */
+  erc8004Address?: string | null;
 }
 
 /**
@@ -156,13 +197,44 @@ export function buildBoundStatement(args: BoundStatementArgs): Record<string, un
       ? args.tier.trim()
       : deriveStatementTier(args.repidScore);
 
-  return {
+  const statement: Record<string, unknown> = {
     agent_id: agentId,
     tier,
     // Stored raw (unclamped, unrounded) — the statement attests to the score as read.
     repid_score: args.repidScore,
     threshold: args.threshold,
   };
+
+  // Optional ERC-8004 token binding — first-class fields so a verifier maps proof → token
+  // without the server. Validated fail-closed: a malformed token/address THROWS rather than
+  // silently drop the binding, so a caller that intends to bind cannot end up with an
+  // unbound statement it believes is bound. Absent args leave the canonical 4-key shape.
+  if (args.erc8004TokenId !== undefined && args.erc8004TokenId !== null) {
+    const tokenId = String(args.erc8004TokenId).trim();
+    if (!ERC8004_TOKEN_ID_RE.test(tokenId)) {
+      throw new UnboundProofStatementError(
+        'INVALID_ERC8004_TOKEN_ID',
+        'erc8004TokenId must be a uint256 decimal string (the minted token id)',
+        { erc8004TokenId: args.erc8004TokenId }
+      );
+    }
+    statement.erc8004_token_id = tokenId;
+  }
+  if (args.erc8004Address !== undefined && args.erc8004Address !== null) {
+    const addr = String(args.erc8004Address).trim();
+    if (!ERC8004_ADDRESS_RE.test(addr)) {
+      throw new UnboundProofStatementError(
+        'INVALID_ERC8004_ADDRESS',
+        'erc8004Address must be an EVM address (0x + 40 hex)',
+        { erc8004Address: args.erc8004Address }
+      );
+    }
+    // Lowercased so a checksummed and an all-lowercase form of one address bind
+    // identically — an address differs only in case, never in meaning.
+    statement.erc8004_address = addr.toLowerCase();
+  }
+
+  return statement;
 }
 
 /**
@@ -179,6 +251,19 @@ export function isStatementBound(statement: unknown): statement is Record<string
   if (typeof s.agent_id !== 'string' || s.agent_id.trim().length === 0) return false;
   if (typeof s.tier !== 'string' || s.tier.trim().length === 0) return false;
   return true;
+}
+
+/**
+ * TOKEN-BOUND predicate. A statement is token-bound iff it is agent-bound AND carries a
+ * well-formed `erc8004_token_id`. This is the shape a verifier can map to an on-chain
+ * token WITHOUT the server's DB — the linkage verifier (`verifyProofLinksToToken`) reads
+ * the token straight from such a statement and drops the "which token? ask the server"
+ * residual accordingly.
+ */
+export function isStatementTokenBound(statement: unknown): statement is Record<string, unknown> {
+  if (!isStatementBound(statement)) return false;
+  const s = statement as Record<string, unknown>;
+  return typeof s.erc8004_token_id === 'string' && ERC8004_TOKEN_ID_RE.test(s.erc8004_token_id);
 }
 
 /** Assert a statement is bound; throw `UnboundProofStatementError` if not. */
