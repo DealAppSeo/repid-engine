@@ -133,7 +133,16 @@ describe('proof-statement carries the LIVE score, never a hard-coded constant', 
       commitment: '0xreal', proof_type: 'plonky3_range_check', proof_bytes: 'QkFTRTY0',
       public_statement: 'RepID > 200', repid_score_actual: 222, tier: 'PROBATIONARY',
     });
-    expect(row.statement).toEqual({ repid_score: 222, threshold: 200 });
+    // #395 corpus-hygiene: the recorded statement is now AGENT-BOUND (buildBoundStatement) — the
+    // canonical 4-key shape {agent_id, tier, repid_score, threshold}, not the old 2-key form. tier is
+    // derived from the proven score (222 -> PROBATIONARY). The live-score guarantee this test locks is
+    // unchanged: repid_score tracks the live value (222), never a hard-coded 1000.
+    expect(row.statement).toEqual({
+      agent_id: '00000000-0000-0000-0000-000000000222',
+      tier: 'PROBATIONARY',
+      repid_score: 222,
+      threshold: 200,
+    });
     expect((row.statement as any).repid_score).not.toBe(1000);
   });
 
@@ -146,7 +155,16 @@ describe('proof-statement carries the LIVE score, never a hard-coded constant', 
       public_statement: 'RepID > 200', tier: 'PROBATIONARY',
       // NOTE: no repid_score_actual field
     });
-    expect(row.statement).toEqual({ repid_score: 222, threshold: 200 });
+    // #395 corpus-hygiene: the recorded statement is now AGENT-BOUND (buildBoundStatement) — the
+    // canonical 4-key shape {agent_id, tier, repid_score, threshold}, not the old 2-key form. tier is
+    // derived from the proven score (222 -> PROBATIONARY). The live-score guarantee this test locks is
+    // unchanged: repid_score tracks the live value (222), never a hard-coded 1000.
+    expect(row.statement).toEqual({
+      agent_id: '00000000-0000-0000-0000-000000000222',
+      tier: 'PROBATIONARY',
+      repid_score: 222,
+      threshold: 200,
+    });
     expect((row.statement as any).repid_score).not.toBe(1000);
   });
 
