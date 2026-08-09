@@ -34,12 +34,16 @@
 
 import crypto from 'crypto';
 import { db } from '../db';
-import { createDefaultEmbeddingClient } from './lib/cross-llm/embedding-client';
+import {
+  createDefaultEmbeddingClient,
+  OpenAIEmbeddingClient,
+  type EmbeddingClient,
+} from './lib/cross-llm/embedding-client';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { pgQuery } from '../db/direct-pg';
 import { resolveProviderEndpoint } from './local-llm';
-import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
+import { assertPromptEgressAllowed, isLocalHost } from '../selfhost/egress-guard';
 
 // BYO / local-model base-URL override for the openai-compat quorum. Read at call
 // time (not import time) so tests and a mid-run env flip both see it. Empty →
@@ -86,6 +90,50 @@ const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions';
 const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const OPENAI_EMBEDDING_ENDPOINT = 'https://api.openai.com/v1/embeddings';
 const EMBEDDING_MODEL = 'text-embedding-3-small';
+
+/** Turn an openai-compat BASE url into its `/embeddings` endpoint (idempotent). */
+function toEmbeddingsEndpoint(base: string): string {
+  const t = base.trim().replace(/\/+$/, '');
+  return /\/embeddings$/.test(t) ? t : `${t}/embeddings`;
+}
+
+function boundaryEngaged(): boolean {
+  return (process.env.ONLY_ATTESTATIONS_LEAVE || '').toLowerCase() === 'true';
+}
+
+/**
+ * DATA-LOCALITY (#380 embedding-leak fix). The embedding call is content-bearing —
+ * the quorum's answer TEXT. Resolve which embedding client to use under the boundary:
+ *   - boundary OFF → hosted behavior unchanged (cloud/Voyage via createDefaultEmbeddingClient).
+ *   - boundary ON  + LOCAL_LLM_BASE_URL is a LOCAL host → a local openai-compat
+ *                    embeddings endpoint (the content never leaves the box).
+ *   - boundary ON  + no local endpoint → `null`: computeAgreement then degrades to
+ *                    the local Jaccard similarity path (no cloud embedding, ever).
+ * Returning `null` (not a cloud client) is what makes the degrade HONEST: we never
+ * construct — and never silently fall back into — a content-bearing cloud call.
+ */
+function resolveBoundaryEmbeddingClient(openaiKey: string): EmbeddingClient | null {
+  if (!boundaryEngaged()) {
+    return createDefaultEmbeddingClient(openaiKey, process.env.VOYAGE_API_KEY ? 'voyage' : undefined);
+  }
+  const base = localLlmBaseUrl();
+  if (base && isLocalHost(base)) {
+    const endpoint = toEmbeddingsEndpoint(base);
+    // openaiKey may be empty for a keyless local server; OpenAIEmbeddingClient sends it
+    // as a Bearer either way. The endpoint is LOCAL, so the egress assertion passes.
+    return new OpenAIEmbeddingClient(
+      endpoint,
+      openaiKey || 'local',
+      process.env.LOCAL_EMBEDDING_MODEL || EMBEDDING_MODEL,
+    );
+  }
+  console.warn(
+    '[cross-llm-client] ONLY_ATTESTATIONS_LEAVE engaged and no LOCAL_LLM_BASE_URL embeddings endpoint — ' +
+      'degrading to LOCAL Jaccard similarity (no cloud embedding). Set LOCAL_LLM_BASE_URL to a local ' +
+      'openai-compat server to keep embedding-cosine while staying data-local.',
+  );
+  return null;
+}
 const ANSWER_MAX_TOKENS = 400;
 const DEFAULT_TIMEOUT_MS = 10000;
 
@@ -545,13 +593,19 @@ async function computeAgreement(
   let methodology: 'embedding-cosine' | 'fallback-jaccard' = 'fallback-jaccard';
   let embeddings: number[][] | null = null;
 
-  try {
-    const client = createDefaultEmbeddingClient(openaiKey, process.env.VOYAGE_API_KEY ? 'voyage' : undefined);
-    embeddings = await client.embedMany(answered.map(a => a.text));
-    methodology = 'embedding-cosine';
-  } catch (e: any) {
-    console.error('[cross-llm-client] embedding fallback:', e?.message ?? e);
-    embeddings = null;
+  // DATA-LOCALITY: under ONLY_ATTESTATIONS_LEAVE, a null client means "no local
+  // embedder available" → we deliberately DO NOT embed and fall through to the
+  // local Jaccard path below (methodology stays 'fallback-jaccard'). No cloud call.
+  const client = resolveBoundaryEmbeddingClient(openaiKey);
+  if (client) {
+    try {
+      embeddings = await client.embedMany(answered.map(a => a.text));
+      methodology = 'embedding-cosine';
+    } catch (e: any) {
+      // Includes EgressBoundaryError if a cloud embedder was reached under the boundary.
+      console.error('[cross-llm-client] embedding fallback:', e?.message ?? e);
+      embeddings = null;
+    }
   }
 
   // Pairwise sim matrix (symmetric); compute upper triangle, mirror.

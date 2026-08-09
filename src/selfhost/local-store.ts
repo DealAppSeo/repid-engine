@@ -19,9 +19,21 @@
  *   repid_ecosystem_supply  .select(_).eq('signal_type',_).single()
  *                           · .upsert(_,{onConflict:'signal_type'})
  *   repid_badges            .select('badge_name').eq('agent_id',_) · .insert(_)
- * Methods outside this subset are NOT implemented — a caller that reaches for one
- * gets a loud throw, never a silent wrong answer. This is a self-host store for
- * the score path, not a Supabase reimplementation.
+ *
+ * VERIFY/GATE PATH (added for the full verify→score→gate loop, 2026-08-08). The
+ * table facade is GENERIC over `from(<table>)` — any table name works, so the HAL
+ * verify path's local writes need no per-table code here:
+ *   llm_call_log            .insert(_)   (billing/log-call.ts, one row per provider call)
+ * The dual-auth gate (src/services/dual-auth-gate.ts) is PURE — no I/O, no db — so
+ * it adds no store surface. cross-llm-client's persist(cross_llm_comparisons) +
+ * setProviderHealth(provider_trust_scores via direct-pg) are NOT on the fact-check
+ * verify path used by the loop; the direct-pg (pgQuery) channel is a raw pg socket,
+ * NOT this adapter and NOT governed by the fetch boundary (see the honest map in the
+ * self-host PR). The QUERY METHODS implemented are select/insert/update/upsert +
+ * eq/gte/lte/in/single/maybeSingle. A method OUTSIDE this subset (order/limit/lt/…)
+ * is NOT implemented — a caller that reaches for one gets a loud throw, never a
+ * silent wrong answer. This is a self-host store for the score+verify path, not a
+ * Supabase reimplementation.
  *
  * PERSISTENCE: rows are held in memory and written THROUGH to a durable backend on
  * every mutation. Backend preference: node:sqlite (real, durable) → a JSON file →
