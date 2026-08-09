@@ -4,618 +4,1426 @@
   "split": "holdout",
   "answer_mode": "claim-as-answer",
   "transport": "in-process halService",
+  "strictness": 2,
+  "concurrency": 2,
   "rows": 99,
   "scored": 99,
   "errors": 0,
   "confusion": {
-    "tp": 44,
-    "fp": 4,
-    "tn": 47,
-    "fn": 4
+    "tp": 43,
+    "fp": 5,
+    "tn": 46,
+    "fn": 5
   },
-  "precision": 0.9166666666666666,
-  "recall": 0.9166666666666666,
-  "f1": 0.9166666666666666,
-  "accuracy": 0.9191919191919192,
+  "precision": 0.8958333333333334,
+  "recall": 0.8958333333333334,
+  "f1": 0.8958333333333334,
+  "accuracy": 0.898989898989899,
+  "auc": 0.9732434640522876,
   "verdicts": {
+    "clean": 44,
     "vetoed": 48,
-    "clean": 46,
-    "flagged": 5
+    "flagged": 7
+  },
+  "provider_set": {
+    "fact_check_rows": 99,
+    "extractor_fallback_rows": 0,
+    "quorum_width_histogram": {
+      "3": 18,
+      "4": 66,
+      "5": 15
+    },
+    "family_participation": {
+      "llama": 82,
+      "glm": 15,
+      "gemini": 99,
+      "mistral": 99,
+      "qwen": 98
+    }
   },
   "results": [
-    {
-      "id": "canary-6c170b0e",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.5149999999999999
-    },
     {
       "id": "truthfulqa-dd4f6323",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.11000000000000001
+      "halScore": 0.11000000000000001,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "canary-6c170b0e",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.5149999999999999,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-10bc0e2a",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
+      "halScore": 0.012500000000000011,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-4695f782",
       "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.25
+      "verdict": "flagged",
+      "halScore": 0.41875,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-9f6459c0",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.75
+      "halScore": 0.75625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-a48a9f78",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.99375
+      "halScore": 0.99375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-464c8da5",
       "truth": "FALSE",
       "verdict": "flagged",
-      "halScore": 0.45625000000000004
+      "halScore": 0.46499999999999997,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-2c1d8990",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 1
+      "halScore": 1,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-8f82cb85",
       "truth": "FALSE",
-      "verdict": "flagged",
-      "halScore": 0.49375
+      "verdict": "vetoed",
+      "halScore": 0.74375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-a9b6fd31",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.25625
-    },
-    {
-      "id": "fever-8190ebb1",
-      "truth": "TRUE",
-      "verdict": "vetoed",
-      "halScore": 0.5
+      "halScore": 0.25625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-bd4d126d",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.15625
+      "halScore": 0.26249999999999996,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
-      "id": "halueval-15aff2c4",
+      "id": "fever-8190ebb1",
       "truth": "TRUE",
       "verdict": "vetoed",
-      "halScore": 0.74375
+      "halScore": 0.5,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-1d18feb5",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral"
+      ]
+    },
+    {
+      "id": "halueval-15aff2c4",
+      "truth": "TRUE",
+      "verdict": "vetoed",
+      "halScore": 0.74375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-caecc787",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.3
+      "halScore": 0.33999999999999997,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-1d63d620",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.5
+      "halScore": 0.5,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-c05ec675",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.75
+      "halScore": 0.75,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-dfa5635a",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.94375
+      "halScore": 0.94375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-1c27c497",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.8625
+      "halScore": 0.8625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-cf10fcfa",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.74375
+      "halScore": 0.755,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-b319dd28",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.5125000000000001
+      "halScore": 0.5125000000000001,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-ac2856de",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.50625
+      "halScore": 0.55,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "truthfulqa-23d6455a",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0.20625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-3463537e",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.05625000000000001
-    },
-    {
-      "id": "truthfulqa-23d6455a",
-      "truth": "TRUE",
-      "verdict": "flagged",
-      "halScore": 0.44375
+      "halScore": 0.05625000000000001,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-639f0c0f",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
-    },
-    {
-      "id": "halueval-665a58d1",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.7062499999999999
+      "halScore": 0.0062500000000000056,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-75a6e13e",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0.0062500000000000056,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
-      "id": "truthfulqa-981b228e",
+      "id": "halueval-665a58d1",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.8949999999999999
+      "halScore": 0.6649999999999999,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-1449bae2",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.94375
+      "halScore": 0.94375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-7702cc7d",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.018750000000000003
+      "halScore": 0.018750000000000003,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "truthfulqa-981b228e",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.99375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-f54c6da1",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-eb23c96f",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.5
-    },
-    {
-      "id": "canary-3a495b5e",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9916666666666667
+      "halScore": 0.5,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-5032895b",
       "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.5916666666666667
+      "verdict": "flagged",
+      "halScore": 0.44375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-7fffc1b6",
       "truth": "TRUE",
       "verdict": "flagged",
-      "halScore": 0.425
+      "halScore": 0.425,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "canary-3a495b5e",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.8949999999999999,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-ef6a9812",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-7dd73d39",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.01666666666666668
+      "halScore": 0.0062500000000000056,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-43e3dbd1",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 1
+      "halScore": 0.9925,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-e54eb121",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.25
+      "halScore": 0.25,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-bd3d0a49",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-50a0f972",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.275
-    },
-    {
-      "id": "halueval-5f9506a4",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.26666666666666666
+      "halScore": 0.175,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-170cfb27",
       "truth": "TRUE",
       "verdict": "vetoed",
-      "halScore": 0.625
+      "halScore": 0.625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
-      "id": "halueval-af718ea1",
+      "id": "halueval-5f9506a4",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
-    },
-    {
-      "id": "canary-66e8906e",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0
+      "halScore": 0.26,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-7750b614",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "halueval-af718ea1",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0.25,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "canary-66e8906e",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-ff21bdd4",
       "truth": "TRUE",
       "verdict": "vetoed",
-      "halScore": 0.625
+      "halScore": 0.625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-0ce65397",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9833333333333334
+      "halScore": 0.9625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-24ee80c3",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.8250000000000001
+      "halScore": 0.9625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-d628077f",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-0025cb81",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.00833333333333334
+      "halScore": 0.0062500000000000056,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-17e8b5fb",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
-    },
-    {
-      "id": "halueval-39ec8aaa",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9916666666666667
+      "halScore": 0.0062500000000000056,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-4508099d",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9249999999999999
+      "halScore": 0.9812500000000001,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "halueval-39ec8aaa",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.99375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-81eb1892",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 1
-    },
-    {
-      "id": "fever-022e43b9",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9925
+      "halScore": 1,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-50bd0baa",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.01666666666666668
+      "halScore": 0.015000000000000013,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
-      "id": "fever-1661c43b",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.1375
+      "id": "fever-022e43b9",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9875,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-b8f4415d",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9916666666666667
+      "halScore": 0.74375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "fever-1661c43b",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0.11500000000000002,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-49f9737d",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-296e2c75",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-6f056e2f",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-12039867",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9916666666666667
+      "halScore": 0.99375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "truthfulqa-b4f0e8f2",
+      "truth": "FALSE",
+      "verdict": "flagged",
+      "halScore": 0.375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-37bd2253",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.01666666666666668
-    },
-    {
-      "id": "truthfulqa-b4f0e8f2",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.6125
-    },
-    {
-      "id": "fever-4bd7e1a9",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 1
+      "halScore": 0.02500000000000001,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-c3a08d98",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "fever-4bd7e1a9",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.8949999999999999,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-a7c2a28a",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9875
+      "halScore": 0.99375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-08de7c23",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.6833333333333332
+      "halScore": 0.975,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-1141e47f",
       "truth": "FALSE",
       "verdict": "clean",
-      "halScore": 0.012500000000000011
+      "halScore": 0.24375,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-8e2cf1b3",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9625
-    },
-    {
-      "id": "halueval-50b5e658",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.3333333333333333
-    },
-    {
-      "id": "truthfulqa-70e3a4ee",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.012500000000000011
-    },
-    {
-      "id": "truthfulqa-4771e462",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.75
+      "halScore": 0.9833333333333334,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-a9dc6f11",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.8166666666666668
+      "halScore": 0.73125,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "halueval-50b5e658",
+      "truth": "TRUE",
+      "verdict": "vetoed",
+      "halScore": 0.6666666666666666,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "truthfulqa-4771e462",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.8333333333333334,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "truthfulqa-70e3a4ee",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0.0050000000000000044,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-6d8c92de",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-a01b3b67",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.012500000000000011
+      "halScore": 0.00833333333333334,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-9dd4d0c5",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.025000000000000022
+      "halScore": 0.025000000000000022,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-d7a52a55",
       "truth": "FALSE",
       "verdict": "flagged",
-      "halScore": 0.35
+      "halScore": 0.41875,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-31518287",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-b21e81ad",
       "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.11250000000000002
-    },
-    {
-      "id": "canary-aed89dcc",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9875
+      "verdict": "flagged",
+      "halScore": 0.45625000000000004,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-76785cda",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.00833333333333334
+      "halScore": 0.00833333333333334,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "canary-aed89dcc",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9949999999999999,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-9bbfb12b",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-4d905c1c",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-3df4fb19",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9833333333333334
+      "halScore": 0.9812500000000001,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-05f9599e",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.00833333333333334
-    },
-    {
-      "id": "truthfulqa-68f19cb8",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.7425
-    },
-    {
-      "id": "fever-ee2159ae",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 1
-    },
-    {
-      "id": "canary-b6a72fc3",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9916666666666667
+      "halScore": 0.00833333333333334,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-7d37675a",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.5874999999999999
+      "halScore": 0.75625,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "truthfulqa-68f19cb8",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.8233333333333333,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "canary-b6a72fc3",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9916666666666667,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
+    },
+    {
+      "id": "fever-ee2159ae",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 1,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-b8b5d4a3",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 1
+      "halScore": 1,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "truthfulqa-d6f0338e",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9816666666666666
+      "halScore": 0.9816666666666666,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-d227931c",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-8a635356",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.975
+      "halScore": 0.975,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-40233af0",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0,
+      "mode": "fact-check",
+      "familiesUsed": 4,
+      "families": [
+        "llama",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "halueval-33907149",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9916666666666667
+      "halScore": 0.9916666666666667,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "fever-73f242a9",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.00833333333333334
+      "halScore": 0.00833333333333334,
+      "mode": "fact-check",
+      "familiesUsed": 3,
+      "families": [
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     },
     {
       "id": "canary-f5b6a187",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9833333333333334
+      "halScore": 0.99,
+      "mode": "fact-check",
+      "familiesUsed": 5,
+      "families": [
+        "llama",
+        "glm",
+        "gemini",
+        "mistral",
+        "qwen"
+      ]
     }
   ]
 }
