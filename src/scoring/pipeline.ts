@@ -22,6 +22,7 @@
  */
 
 import crypto from 'crypto';
+import { STARTING_REPID } from './repid-constants';
 import { db } from '../db';
 import { logToolCall } from '../utils/tool-call-logger';
 import { evaluate } from '../hal/lib/evaluate';
@@ -197,7 +198,7 @@ async function loadAgent(agentId: string): Promise<{
     typeof cliffEnds === 'string' && new Date(cliffEnds).getTime() > Date.now();
   return {
     id: (data as any).id,
-    current_repid: Number((data as any).current_repid ?? 1000),
+    current_repid: Number((data as any).current_repid ?? STARTING_REPID),
     tier: String((data as any).tier ?? 'PROBATIONARY'),
     vesting_cliff_active,
     activity_30d: Number((data as any).activity_30d ?? 0),
