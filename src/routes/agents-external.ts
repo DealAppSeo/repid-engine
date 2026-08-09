@@ -24,6 +24,7 @@ import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
 import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 import { provisionWallet, persistProvisionedWallet } from '../services/agent-wallet-manager';
+import { emitDeceptionShadow } from '../engine/deception-emitter';
 
 const router = Router();
 
@@ -869,6 +870,23 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
         body: JSON.stringify(payload)
       }).catch(console.error);
     }
+
+    // Trust Harness P1 KEYSTONE (M3): fire-and-forget SHADOW deception scoring.
+    // Runs the M2 behavioral-integrity detectors on this interaction and, on a
+    // CONFIRMED detection, records the DEFENDED_DECEPTION_* class + the penalty it
+    // WOULD apply — WITHOUT mutating current_repid. DEFAULT-OFF: when
+    // TRUST_DECEPTION_MODE is unset the emitter is a complete no-op (does not even
+    // run a detector), so this line adds ZERO behavior to the live path until Sean
+    // flips it to 'shadow' for a measurement. 'enforce' stays Sean-gated. This
+    // never blocks or fails the response — the emitter swallows its own errors.
+    // NOTE: no persisted receipt chain exists on this path yet, so the record-
+    // grounded detectors have no priors here — only the heuristic detectors and
+    // any caller-supplied prior-assertions have signal until a receipt store lands.
+    void emitDeceptionShadow({
+      agentId,
+      decisionText: typeof decision_text === 'string' ? decision_text : '',
+      halContext: { hal_score: dissonance, hal_decision, fact_check_decision: factCheckDecision },
+    });
 
     // Sprint 12 (megasprint): fire-and-forget Graph RAG memory write.
     // Writes observation + decision (+ reflection on veto) nodes for this
