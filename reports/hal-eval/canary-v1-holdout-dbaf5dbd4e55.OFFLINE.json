@@ -1,0 +1,121 @@
+{
+  "ruler": "canary-v1@dbaf5dbd4e55 [offline-extractor s=1 providers=NONE quorum=NOT-EXERCISED]",
+  "corpus": "canary-v1",
+  "corpus_sha256": "dbaf5dbd4e551286a4288b3f3ca9057d5b1ab9c914b6972d9baf68ee20dc9956",
+  "split": "holdout",
+  "strictness": 1,
+  "providers": "NONE",
+  "quorum": "NOT-EXERCISED",
+  "transport": "in-process src/hal/lib/evaluate (offline extractor)",
+  "rows": 15,
+  "scored": 15,
+  "confusion": {
+    "tp": 6,
+    "fp": 5,
+    "tn": 4,
+    "fn": 0
+  },
+  "precision": 0.5454545454545454,
+  "recall": 1,
+  "f1": 0.7058823529411764,
+  "accuracy": 0.6666666666666666,
+  "auc": 0.7685185185185185,
+  "oracle_threshold": {
+    "t": 0.29,
+    "f1": 0.7692,
+    "precision": 0.7143,
+    "recall": 0.8333
+  },
+  "results": [
+    {
+      "id": "sha-ccc29ca15a15",
+      "truth": "TRUE",
+      "halScore": 0.259,
+      "vetoed": true
+    },
+    {
+      "id": "sha-3a495b5e13b4",
+      "truth": "FALSE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "sha-a01b3b671ace",
+      "truth": "TRUE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "sha-6c170b0e7db1",
+      "truth": "FALSE",
+      "halScore": 0.3016,
+      "vetoed": true
+    },
+    {
+      "id": "sha-31518287b7ae",
+      "truth": "TRUE",
+      "halScore": 0.2803,
+      "vetoed": true
+    },
+    {
+      "id": "sha-f5b6a187cf05",
+      "truth": "FALSE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "sha-d227931c02dd",
+      "truth": "TRUE",
+      "halScore": 0.3107,
+      "vetoed": true
+    },
+    {
+      "id": "sha-bd3d0a4984fe",
+      "truth": "TRUE",
+      "halScore": 0.2407,
+      "vetoed": false
+    },
+    {
+      "id": "sha-81eb1892c1a7",
+      "truth": "FALSE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "sha-9bbfb12b3298",
+      "truth": "TRUE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "sha-9dd4d0c59112",
+      "truth": "TRUE",
+      "halScore": 0.1582,
+      "vetoed": false
+    },
+    {
+      "id": "sha-aed89dcc09f2",
+      "truth": "FALSE",
+      "halScore": 0.2985,
+      "vetoed": true
+    },
+    {
+      "id": "sha-f54c6da1aaa9",
+      "truth": "TRUE",
+      "halScore": 0.1267,
+      "vetoed": false
+    },
+    {
+      "id": "sha-b6a72fc3e178",
+      "truth": "FALSE",
+      "halScore": 0.2965,
+      "vetoed": true
+    },
+    {
+      "id": "sha-6f056e2fd69d",
+      "truth": "TRUE",
+      "halScore": 0.2088,
+      "vetoed": false
+    }
+  ]
+}
