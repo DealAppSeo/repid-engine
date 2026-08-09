@@ -1,0 +1,27 @@
+{
+  "SYNTHETIC": true,
+  "_note": [
+    "SYNTHETIC FIXTURE — generated offline, never a database record.",
+    "This is a real Plonky3 range-check STARK proof, but its witness is fabricated:",
+    "a NIL-variant agent UUID and a made-up score/threshold. It was produced by running",
+    "the @hyperdag/proof-verifier crate's OWN range-check prover (the same circuit its",
+    "verify_proof consumes) against these synthetic inputs. No database was read, no real",
+    "agent id and no real score appear here.",
+    "",
+    "Regenerate: scripts/zkp/gen-synthetic-rangecheck-proof.rs (see its header). The proof",
+    "is deterministic in size (10673 bytes) because the circuit shape is fixed; its content",
+    "is bound to the synthetic agent_id below and to nothing real."
+  ],
+  "generated_by": "@hyperdag/proof-verifier range-check prover (offline, SYNTHETIC inputs)",
+  "proof_file": "leaf-rangecheck.synthetic.plonky3.bin",
+  "proof_bytes_len": 10673,
+  "verifier_pkg": "@hyperdag/proof-verifier",
+  "verifier_version": "0.2.0",
+  "scheme": "plonky3_range_check",
+  "statement": {
+    "agent_id": "00000000-0000-4000-8000-0000000000aa",
+    "tier": "ESTABLISHED",
+    "repid_score": 2280,
+    "threshold": 999
+  }
+}
