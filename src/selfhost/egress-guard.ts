@@ -18,14 +18,18 @@
 export type EgressKind =
   | 'prompt' // prompt/response text going to an inference provider
   | 'embedding' // text going to an embedding provider (also content-bearing)
+  | 'datastore' // a persistent-store / cache SOCKET (pg / Redis) that holds rows + cached prompt/response text
   | 'attestation' // EAS / proof anchor — a commitment, not content
   | 'chain'; // raw JSON-RPC to a blockchain node — a commitment, not content
 
 // Egress kinds that carry user content. These are the ones the boundary blocks
-// when it is engaged and the destination is not the local box.
+// when it is engaged and the destination is not the local box. `datastore` is
+// here because Postgres rows and the Redis/Dragonfly caches hold the actual
+// prompt/response TEXT — a remote store is a content leak just like a cloud LLM.
 const CONTENT_BEARING: ReadonlySet<EgressKind> = new Set<EgressKind>([
   'prompt',
   'embedding',
+  'datastore',
 ]);
 
 /**
@@ -109,11 +113,12 @@ export function classifyEgress(
 
 export class EgressBoundaryError extends Error {
   readonly decision: EgressDecision;
-  constructor(decision: EgressDecision) {
+  constructor(decision: EgressDecision, message?: string) {
     super(
-      `[egress-guard] blocked ${decision.kind} egress to ${decision.host ?? 'unparseable-url'} — ` +
-        `ONLY_ATTESTATIONS_LEAVE is set, so prompt/response text may not leave the local box. ` +
-        `Point LOCAL_LLM_BASE_URL at a local model (e.g. http://localhost:11434/v1) or unset the boundary.`,
+      message ??
+        `[egress-guard] blocked ${decision.kind} egress to ${decision.host ?? 'unparseable-url'} — ` +
+          `ONLY_ATTESTATIONS_LEAVE is set, so prompt/response text may not leave the local box. ` +
+          `Point LOCAL_LLM_BASE_URL at a local model (e.g. http://localhost:11434/v1) or unset the boundary.`,
     );
     this.name = 'EgressBoundaryError';
     this.decision = decision;
@@ -140,4 +145,58 @@ export function assertPromptEgressAllowed(
   if (!decision.allowed) {
     throw new EgressBoundaryError(decision);
   }
+}
+
+/**
+ * Assert a persistent-store / cache connection string points at the LOCAL box
+ * when the boundary is engaged. Postgres (`DATABASE_URL`) holds every row, and
+ * the Redis/Dragonfly caches (`REDIS_URL`) hold cached prompt/response TEXT — so
+ * both are CONTENT-bearing. These open raw TCP sockets via `pg` / `ioredis`, NOT
+ * `fetch`, so the fetch-level boundary (`assertPromptEgressAllowed`) never sees
+ * them; this assertion is the explicit close for that gap.
+ *
+ * Under `ONLY_ATTESTATIONS_LEAVE`, a NON-local store host is REFUSED
+ * (throws `EgressBoundaryError`) — the node stays provably data-local even if
+ * `DATABASE_URL` / `REDIS_URL` is misconfigured to point at a remote host. An
+ * unparseable connection string is treated as remote (fail-closed).
+ *
+ * No-op when the boundary is off (hosted behavior byte-identical) or the host is
+ * local/private. A connection string parsed by `new URL()` — the `postgresql://`,
+ * `postgres://`, `redis://`, and `rediss://` schemes all parse and expose a
+ * `.hostname`, which is what `isLocalHost` classifies.
+ *
+ * @param connectionString  DATABASE_URL / REDIS_URL (or equivalent)
+ * @param storeLabel        which store, for the error message ('DATABASE_URL' / 'REDIS_URL')
+ * @param boundaryOn        override for ONLY_ATTESTATIONS_LEAVE (tests pass explicitly)
+ */
+export function assertLocalDataStore(
+  connectionString: string,
+  storeLabel: string,
+  boundaryOn?: boolean,
+): void {
+  // Boundary off → no-op (hosted behavior unchanged).
+  if (!boundaryEngaged(boundaryOn)) return;
+  // Local / private host → the content never left the operator's box.
+  if (isLocalHost(connectionString)) return;
+
+  let host: string | null = null;
+  try {
+    host = new URL(connectionString).hostname.toLowerCase();
+  } catch {
+    host = null;
+  }
+  const decision: EgressDecision = {
+    allowed: false,
+    kind: 'datastore',
+    host,
+    local: false,
+    reason: `content-store-egress-blocked-by-ONLY_ATTESTATIONS_LEAVE:${storeLabel}`,
+  };
+  throw new EgressBoundaryError(
+    decision,
+    `[egress-guard] refusing ${storeLabel} connection to non-local host ${host ?? 'unparseable-url'} — ` +
+      `ONLY_ATTESTATIONS_LEAVE is set, so the datastore (rows + cached prompt/response text) may not ` +
+      `leave the local box. Point ${storeLabel} at a local store (e.g. localhost / 127.0.0.1 / a private ` +
+      `LAN host) or unset the boundary.`,
+  );
 }

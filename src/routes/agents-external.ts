@@ -18,6 +18,7 @@ import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-no
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
 import { insertScoreEvent } from '../scoring/score-event-writer';
+import { STARTING_REPID } from '../scoring/repid-constants';
 import { isDeliverableDomain } from '../scoring/task-purpose';
 import { scoreEventGuardEnforced } from './score-event-guard';
 import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
@@ -219,7 +220,7 @@ router.post('/register', async (req: Request, res: Response) => {
         agent_name: resolvedName,
         description: cleanDescription,
         constitution_text: cleanConstitutionText,
-        current_repid: 200,
+        current_repid: STARTING_REPID,
         tier: 'PROBATIONARY',
         activity_30d: 0,
         decay_rate: 0.0015,
@@ -287,7 +288,7 @@ router.post('/register', async (req: Request, res: Response) => {
       agent_id: agentId,
       api_key: rawKey, // Shown ONCE; SDK clients must save it.
       wallet_address: provisionedWalletAddress, // Real EVM address (DB-custodied key) — null only if provisioning failed.
-      starting_score: 200,
+      starting_score: STARTING_REPID,
       tier: 'PROBATIONARY',
       vesting_cliff_ends_at: vestingCliff,
       vesting_info: 'First 500 RepID vests over 30 days',
@@ -295,7 +296,7 @@ router.post('/register', async (req: Request, res: Response) => {
       // Sprint A5 Maya-shape additive fields (no breaking change)
       name: resolvedName,
       description: cleanDescription,
-      repid: 200, // alias for starting_score
+      repid: STARTING_REPID, // alias for starting_score
       erc8004_token_id: (newAgent as any).erc8004_token_id ?? null,
       created_at: (newAgent as any).created_at ?? createdAt,
     });
@@ -391,7 +392,7 @@ router.get('/:id/card', async (req: Request, res: Response) => {
     agent_id: (agent as any).id,
     name: (agent as any).agent_name,
     description: (agent as any).description ?? null,
-    repid: (agent as any).current_repid ?? 1000,
+    repid: (agent as any).current_repid ?? STARTING_REPID,
     erc8004_token_id: tokenId,
     total_decisions: decisionCount ?? 0,
     base_sepolia_explorer_url: explorerUrl,
@@ -570,7 +571,7 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
     // 6-8. Base delta + alignment + reward
     const baseDelta = Math.round(certainty * 10);
     const alignExp = alignmentExponentFor(alignment_category ?? 'other');
-    const currentRepid: number = (agent as any).current_repid ?? 1000;
+    const currentRepid: number = (agent as any).current_repid ?? STARTING_REPID;
     const vdrCount: number = (agent as any).vdr_count ?? 0;
     // 2026-07-30 hardening: repid_agents.wisdom_score carries three scale
     // conventions in prod (1.0-centered / 0-100 DB default / canonical

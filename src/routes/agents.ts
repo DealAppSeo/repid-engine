@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { STARTING_REPID } from '../scoring/repid-constants';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
@@ -54,7 +55,7 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       .insert({
         erc8004_address: zkpCommitment,
         agent_name: 'HUMAN',
-        current_repid: 200,
+        current_repid: STARTING_REPID,
         tier: 'PROBATIONARY',
         constitution: {
           ...humanConstitution,

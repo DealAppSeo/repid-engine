@@ -1,3 +1,11 @@
+// DATA-LOCALITY BOUNDARY (ONLY_ATTESTATIONS_LEAVE). Embedding input IS user
+// content — the answer texts of the quorum. A cloud embedding call therefore
+// egresses content exactly like a prompt call, and must be refused when the
+// boundary is engaged and the endpoint is not the operator's own box. This is
+// the #380 "embedding leak" TODO: the assertion below throws before any cloud
+// embedding fetch, just like the prompt path in cross-llm-client.queryProvider.
+import { assertPromptEgressAllowed } from '../../../selfhost/egress-guard';
+
 export interface EmbeddingClient {
     embed(text: string): Promise<number[]>;
     embedMany(texts: string[]): Promise<number[][]>;
@@ -51,6 +59,12 @@ export class OpenAIEmbeddingClient implements EmbeddingClient {
     }
 
     async embedMany(texts: string[]): Promise<number[][]> {
+        // DATA-LOCALITY: refuse to send content to a non-local embedder when
+        // ONLY_ATTESTATIONS_LEAVE is engaged. A local endpoint (LOCAL_LLM_BASE_URL
+        // pointed at Ollama/vLLM) passes; api.openai.com throws. Caught upstream
+        // (FallbackEmbeddingClient / computeAgreement) → honest degrade, never a
+        // silent cloud call.
+        assertPromptEgressAllowed(this.endpoint, 'embedding');
         // A missing timeout is how a single unresponsive provider hangs the whole
         // semantic-similarity layer. On timeout, fetch rejects and the caller
         // (FallbackEmbeddingClient) degrades to the local model — never an infinite wait.
@@ -86,6 +100,8 @@ export class VoyageEmbeddingClient implements EmbeddingClient {
     }
 
     async embedMany(texts: string[]): Promise<number[][]> {
+        // DATA-LOCALITY: Voyage is always a cloud host — refuse under the boundary.
+        assertPromptEgressAllowed('https://api.voyageai.com/v1/embeddings', 'embedding');
         const res = await fetch('https://api.voyageai.com/v1/embeddings', {
             method: 'POST',
             headers: {

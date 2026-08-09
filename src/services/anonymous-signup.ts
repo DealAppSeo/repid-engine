@@ -31,6 +31,7 @@
  */
 
 import { randomBytes, createHash } from 'crypto';
+import { STARTING_REPID } from '../scoring/repid-constants';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 
@@ -62,7 +63,7 @@ export async function createAnonymousBuilder(): Promise<AnonymousBuilderResult> 
     .from('builders')
     .insert({
       address: address.toLowerCase(),
-      current_repid: 0,
+      current_repid: STARTING_REPID,
       ghost_cohort_count: 0,
       display_name: 'Demo Builder (token-only)',
       earns_repid_rewards: false,

@@ -67,6 +67,7 @@
  * additive table — see sqlProposed. This module never applies DDL.
  */
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
+import { buildBoundStatement } from '../zkp/proof-statement-guard';
 import { hasTruthySimFlag } from '../utils/truthy';
 import type { ServiceContractRow } from '../types';
 
@@ -379,12 +380,16 @@ export function buildCompleteStatement(args: {
   repidScore: number;
   threshold: number;
 }): Record<string, unknown> {
-  return {
-    agent_id: args.subjectAgentId,
-    tier: deriveTier(args.repidScore),
-    repid_score: args.repidScore,
+  // Delegated to the shared fail-closed guard (2026-08-09 corpus hygiene): an empty
+  // subject id now THROWS instead of producing an agent-less statement, closing the
+  // same gap that let 7,958 unbound rows into repid_zkp_proofs. The guard derives the
+  // tier from the score with identical bands to deriveTier() above, so the returned
+  // statement is byte-identical for every non-empty subject.
+  return buildBoundStatement({
+    agentId: args.subjectAgentId,
+    repidScore: args.repidScore,
     threshold: args.threshold,
-  };
+  });
 }
 
 /** STATEMENT-COMPLETE predicate. */

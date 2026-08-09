@@ -1,0 +1,625 @@
+{
+  "ruler": "rigorous-v1@596f10de18d0 [offline-extractor s=1 providers=NONE quorum=NOT-EXERCISED]",
+  "corpus": "rigorous-v1",
+  "corpus_sha256": "596f10de18d050dd63b2ccbed4c2ce8fd42fc65b920d4cc8dd11911154207b50",
+  "split": "holdout",
+  "strictness": 1,
+  "providers": "NONE",
+  "quorum": "NOT-EXERCISED",
+  "transport": "in-process src/hal/lib/evaluate (offline extractor)",
+  "rows": 99,
+  "scored": 99,
+  "confusion": {
+    "tp": 38,
+    "fp": 35,
+    "tn": 16,
+    "fn": 10
+  },
+  "precision": 0.5205479452054794,
+  "recall": 0.7916666666666666,
+  "f1": 0.628099173553719,
+  "accuracy": 0.5454545454545454,
+  "auc": 0.5575980392156863,
+  "oracle_threshold": {
+    "t": 0.18,
+    "f1": 0.6667,
+    "precision": 0.5111,
+    "recall": 0.9583
+  },
+  "results": [
+    {
+      "id": "canary-6c170b0e",
+      "truth": "FALSE",
+      "halScore": 0.3016,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-dd4f6323",
+      "truth": "TRUE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-10bc0e2a",
+      "truth": "TRUE",
+      "halScore": 0.2833,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-4695f782",
+      "truth": "TRUE",
+      "halScore": 0.2499,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-9f6459c0",
+      "truth": "FALSE",
+      "halScore": 0.2909,
+      "vetoed": true
+    },
+    {
+      "id": "fever-a48a9f78",
+      "truth": "FALSE",
+      "halScore": 0.2833,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-464c8da5",
+      "truth": "FALSE",
+      "halScore": 0.2088,
+      "vetoed": false
+    },
+    {
+      "id": "fever-2c1d8990",
+      "truth": "FALSE",
+      "halScore": 0.3092,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-8f82cb85",
+      "truth": "FALSE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-a9b6fd31",
+      "truth": "TRUE",
+      "halScore": 0.1961,
+      "vetoed": false
+    },
+    {
+      "id": "fever-8190ebb1",
+      "truth": "TRUE",
+      "halScore": 0.1859,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-bd4d126d",
+      "truth": "TRUE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "fever-1d18feb5",
+      "truth": "TRUE",
+      "halScore": 0.3016,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-15aff2c4",
+      "truth": "TRUE",
+      "halScore": 0.2605,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-caecc787",
+      "truth": "TRUE",
+      "halScore": 0.16,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-1d63d620",
+      "truth": "FALSE",
+      "halScore": 0.2544,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-c05ec675",
+      "truth": "FALSE",
+      "halScore": 0.2575,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-dfa5635a",
+      "truth": "FALSE",
+      "halScore": 0.1589,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-1c27c497",
+      "truth": "FALSE",
+      "halScore": 0.2833,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-cf10fcfa",
+      "truth": "FALSE",
+      "halScore": 0.2924,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-b319dd28",
+      "truth": "FALSE",
+      "halScore": 0.2635,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-ac2856de",
+      "truth": "FALSE",
+      "halScore": 0.2468,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-23d6455a",
+      "truth": "TRUE",
+      "halScore": 0.2894,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-3463537e",
+      "truth": "TRUE",
+      "halScore": 0.2331,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-639f0c0f",
+      "truth": "TRUE",
+      "halScore": 0.1537,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-665a58d1",
+      "truth": "FALSE",
+      "halScore": 0.1934,
+      "vetoed": false
+    },
+    {
+      "id": "fever-75a6e13e",
+      "truth": "TRUE",
+      "halScore": 0.3,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-1449bae2",
+      "truth": "FALSE",
+      "halScore": 0.156,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-7702cc7d",
+      "truth": "TRUE",
+      "halScore": 0.2833,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-981b228e",
+      "truth": "FALSE",
+      "halScore": 0.2331,
+      "vetoed": false
+    },
+    {
+      "id": "canary-f54c6da1",
+      "truth": "TRUE",
+      "halScore": 0.1267,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-eb23c96f",
+      "truth": "FALSE",
+      "halScore": 0.2955,
+      "vetoed": true
+    },
+    {
+      "id": "fever-5032895b",
+      "truth": "FALSE",
+      "halScore": 0.2848,
+      "vetoed": true
+    },
+    {
+      "id": "canary-3a495b5e",
+      "truth": "FALSE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-7fffc1b6",
+      "truth": "TRUE",
+      "halScore": 0.262,
+      "vetoed": true
+    },
+    {
+      "id": "fever-ef6a9812",
+      "truth": "TRUE",
+      "halScore": 0.2666,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-7dd73d39",
+      "truth": "TRUE",
+      "halScore": 0.2727,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-43e3dbd1",
+      "truth": "FALSE",
+      "halScore": 0.2605,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-e54eb121",
+      "truth": "TRUE",
+      "halScore": 0.2666,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-50a0f972",
+      "truth": "TRUE",
+      "halScore": 0.2605,
+      "vetoed": true
+    },
+    {
+      "id": "canary-bd3d0a49",
+      "truth": "TRUE",
+      "halScore": 0.2407,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-5f9506a4",
+      "truth": "TRUE",
+      "halScore": 0.2164,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-170cfb27",
+      "truth": "TRUE",
+      "halScore": 0.2788,
+      "vetoed": true
+    },
+    {
+      "id": "fever-7750b614",
+      "truth": "TRUE",
+      "halScore": 0.2864,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-af718ea1",
+      "truth": "TRUE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "canary-66e8906e",
+      "truth": "TRUE",
+      "halScore": 0.1526,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-ff21bdd4",
+      "truth": "TRUE",
+      "halScore": 0.2924,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-0ce65397",
+      "truth": "FALSE",
+      "halScore": 0.2544,
+      "vetoed": true
+    },
+    {
+      "id": "fever-24ee80c3",
+      "truth": "FALSE",
+      "halScore": 0.2833,
+      "vetoed": true
+    },
+    {
+      "id": "fever-d628077f",
+      "truth": "TRUE",
+      "halScore": 0.2316,
+      "vetoed": false
+    },
+    {
+      "id": "fever-0025cb81",
+      "truth": "TRUE",
+      "halScore": 0.2818,
+      "vetoed": true
+    },
+    {
+      "id": "fever-17e8b5fb",
+      "truth": "TRUE",
+      "halScore": 0.2864,
+      "vetoed": true
+    },
+    {
+      "id": "fever-4508099d",
+      "truth": "FALSE",
+      "halScore": 0.2848,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-39ec8aaa",
+      "truth": "FALSE",
+      "halScore": 0.262,
+      "vetoed": true
+    },
+    {
+      "id": "canary-81eb1892",
+      "truth": "FALSE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "canary-50bd0baa",
+      "truth": "TRUE",
+      "halScore": 0.2858,
+      "vetoed": true
+    },
+    {
+      "id": "fever-022e43b9",
+      "truth": "FALSE",
+      "halScore": 0.2803,
+      "vetoed": true
+    },
+    {
+      "id": "fever-1661c43b",
+      "truth": "TRUE",
+      "halScore": 0.2818,
+      "vetoed": true
+    },
+    {
+      "id": "fever-b8f4415d",
+      "truth": "FALSE",
+      "halScore": 0.2803,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-49f9737d",
+      "truth": "TRUE",
+      "halScore": 0.2864,
+      "vetoed": true
+    },
+    {
+      "id": "fever-296e2c75",
+      "truth": "TRUE",
+      "halScore": 0.3122,
+      "vetoed": true
+    },
+    {
+      "id": "canary-6f056e2f",
+      "truth": "TRUE",
+      "halScore": 0.2088,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-12039867",
+      "truth": "FALSE",
+      "halScore": 0.2879,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-b4f0e8f2",
+      "truth": "FALSE",
+      "halScore": 0.2681,
+      "vetoed": true
+    },
+    {
+      "id": "fever-37bd2253",
+      "truth": "TRUE",
+      "halScore": 0.2711,
+      "vetoed": true
+    },
+    {
+      "id": "fever-4bd7e1a9",
+      "truth": "FALSE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "fever-c3a08d98",
+      "truth": "TRUE",
+      "halScore": 0.3107,
+      "vetoed": true
+    },
+    {
+      "id": "fever-a7c2a28a",
+      "truth": "FALSE",
+      "halScore": 0.2423,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-08de7c23",
+      "truth": "FALSE",
+      "halScore": 0.2924,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-1141e47f",
+      "truth": "FALSE",
+      "halScore": 0.2331,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-8e2cf1b3",
+      "truth": "FALSE",
+      "halScore": 0.2635,
+      "vetoed": true
+    },
+    {
+      "id": "fever-a9dc6f11",
+      "truth": "FALSE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-50b5e658",
+      "truth": "TRUE",
+      "halScore": 0.2635,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-70e3a4ee",
+      "truth": "TRUE",
+      "halScore": 0.2864,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-4771e462",
+      "truth": "FALSE",
+      "halScore": 0.2864,
+      "vetoed": true
+    },
+    {
+      "id": "fever-6d8c92de",
+      "truth": "TRUE",
+      "halScore": 0.2864,
+      "vetoed": true
+    },
+    {
+      "id": "canary-a01b3b67",
+      "truth": "TRUE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "canary-9dd4d0c5",
+      "truth": "TRUE",
+      "halScore": 0.1582,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-d7a52a55",
+      "truth": "FALSE",
+      "halScore": 0.1868,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-b21e81ad",
+      "truth": "TRUE",
+      "halScore": 0.2234,
+      "vetoed": false
+    },
+    {
+      "id": "canary-31518287",
+      "truth": "TRUE",
+      "halScore": 0.2803,
+      "vetoed": true
+    },
+    {
+      "id": "canary-aed89dcc",
+      "truth": "FALSE",
+      "halScore": 0.2985,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-76785cda",
+      "truth": "TRUE",
+      "halScore": 0.294,
+      "vetoed": true
+    },
+    {
+      "id": "canary-9bbfb12b",
+      "truth": "TRUE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-4d905c1c",
+      "truth": "TRUE",
+      "halScore": 0.2955,
+      "vetoed": true
+    },
+    {
+      "id": "canary-3df4fb19",
+      "truth": "FALSE",
+      "halScore": 0.2742,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-05f9599e",
+      "truth": "TRUE",
+      "halScore": 0.1678,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-7d37675a",
+      "truth": "FALSE",
+      "halScore": 0.2407,
+      "vetoed": false
+    },
+    {
+      "id": "truthfulqa-68f19cb8",
+      "truth": "FALSE",
+      "halScore": 0.294,
+      "vetoed": true
+    },
+    {
+      "id": "fever-ee2159ae",
+      "truth": "FALSE",
+      "halScore": 0.2757,
+      "vetoed": true
+    },
+    {
+      "id": "canary-b6a72fc3",
+      "truth": "FALSE",
+      "halScore": 0.2965,
+      "vetoed": true
+    },
+    {
+      "id": "fever-b8b5d4a3",
+      "truth": "FALSE",
+      "halScore": 0.3092,
+      "vetoed": true
+    },
+    {
+      "id": "truthfulqa-d6f0338e",
+      "truth": "FALSE",
+      "halScore": 0.2605,
+      "vetoed": true
+    },
+    {
+      "id": "canary-d227931c",
+      "truth": "TRUE",
+      "halScore": 0.3107,
+      "vetoed": true
+    },
+    {
+      "id": "fever-8a635356",
+      "truth": "FALSE",
+      "halScore": 0.2955,
+      "vetoed": true
+    },
+    {
+      "id": "halueval-40233af0",
+      "truth": "TRUE",
+      "halScore": 0.1754,
+      "vetoed": false
+    },
+    {
+      "id": "halueval-33907149",
+      "truth": "FALSE",
+      "halScore": 0.2681,
+      "vetoed": true
+    },
+    {
+      "id": "canary-f5b6a187",
+      "truth": "FALSE",
+      "halScore": 0.3076,
+      "vetoed": true
+    },
+    {
+      "id": "fever-73f242a9",
+      "truth": "TRUE",
+      "halScore": 0.3092,
+      "vetoed": true
+    }
+  ]
+}

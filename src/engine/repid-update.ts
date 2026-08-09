@@ -7,6 +7,7 @@ import { auditConstitutionalCompliance } from '../layers/constitutional-audit';
 import { checkAndAwardBadges, BadgeAward } from './badges';
 import { DETECTION_CONFIRM_THRESHOLD } from './behavioral-integrity';
 import { assessLedger, ledgerColumns, ledgerMetadata, logLedger } from './ledger-reconcile';
+import { STARTING_REPID } from '../scoring/repid-constants';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -722,7 +723,7 @@ export async function registerAgent(params: {
     agent_name: params.agentName,
     conservator_address: params.conservatorAddress ?? null,
     constitution: params.constitution ?? {},
-    current_repid: 200, tier: 'PROBATIONARY',
+    current_repid: STARTING_REPID, tier: 'PROBATIONARY',
   }).select('id').single();
 
   if (error || !newAgent)
