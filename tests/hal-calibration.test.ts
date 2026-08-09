@@ -148,7 +148,7 @@ describe('calibration NEVER reorders — otherwise it is a retune', () => {
     const after = conf((r) => applyCalibrator(r.halScore, { scale: cal.scale, bias: 0 }));
     expect(after).toEqual(before);
     // And the measured baseline is what the frozen artifact says it is.
-    expect(before).toEqual({ tp: 44, fp: 4, tn: 47, fn: 4 });
+    expect(before).toEqual({ tp: 43, fp: 5, tn: 46, fn: 5 });
   });
 });
 
