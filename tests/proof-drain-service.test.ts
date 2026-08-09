@@ -167,7 +167,16 @@ describe('proof-drain-service', () => {
       const row = state.zkpInserts![0]!;
       expect(row.scheme).toBe('plonky3_range_check');
       expect(row.proof_bytes).toBe('QkFTRTY0UFJPT0Y=');
-      expect(row.statement).toEqual({ repid_score: 2280, threshold: 999 });
+      // Corpus hygiene (2026-08-09): the statement is now agent-BOUND — 4 keys, not the
+      // old agent-less { repid_score, threshold } shape that produced 7,958 unbound rows.
+      // agent_id is the queue row's agent (a9); tier is derived from the proven score
+      // (2280 -> ESTABLISHED).
+      expect(row.statement).toEqual({
+        agent_id: 'a9',
+        tier: 'ESTABLISHED',
+        repid_score: 2280,
+        threshold: 999,
+      });
       // B-2 (Inv-1): aggregation-ready leaf + lineage tag recorded under the same flag.
       expect(row.poseidon2_leaf).toBe('0x32ed1341');
       expect(row.leaf_scheme).toBe('poseidon2_babybear');
@@ -289,6 +298,47 @@ describe('proof-drain-service', () => {
       else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prevA5;
       if (prevDW === undefined) delete process.env.POSEIDON2_LEAF_DUAL_WRITE;
       else process.env.POSEIDON2_LEAF_DUAL_WRITE = prevDW;
+    }
+  });
+
+  test('corpus hygiene: an agent-less job fails closed — no unbound proof is minted', async () => {
+    // The exact pollution source: a plonky3 proof whose queue row carries no agent_id.
+    // buildBoundStatement must throw, drainOnce must mark the job failed, and NOTHING
+    // may be inserted into repid_zkp_proofs.
+    const prev = process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+    process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = 'true';
+    try {
+      const state: MockSupabaseState = {
+        pending: [{ id: 'rNULL', job_id: 'jNULL', agent_id: '', event_id: 'eNULL', status: 'pending' }],
+        scoreById: { eNULL: 2280 },
+        updates: [], hitlInserts: [], zkpInserts: [], agentTier: 'ESTABLISHED'
+      };
+      const svc = createProofDrainService({
+        supabase: makeMockSupabase(state),
+        pgQueryImpl: (async () => state.pending) as any,
+        zkpServiceUrl: 'http://zkp.test',
+        routeProofRequestImpl: (async () => ({ proof_type: 'POSTCARD', route_to: 'fast_groth16', reason: 'test-stub' })) as any,
+        fetchImpl: jest.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            commitment: '0xreal', proof_type: 'plonky3_range_check', proof_bytes: 'QkFTRTY0',
+            public_statement: 'RepID > 999', repid_score_actual: 2280, tier: 'ESTABLISHED'
+          }),
+          text: async () => ''
+        }) as any
+      });
+
+      const result = await svc.drainOnce();
+      expect(result.jobsCompleted).toBe(0);
+      expect(result.jobsFailed).toBe(1);
+      // No canonical proof row was written for the agent-less job.
+      expect(state.zkpInserts!.length).toBe(0);
+      // The queue row was marked failed, not completed.
+      const failedPatch = state.updates.find(u => u.id === 'rNULL')?.patch;
+      expect(failedPatch?.status).toBe('failed');
+    } finally {
+      if (prev === undefined) delete process.env.PROOF_DRAIN_RECORD_REAL_FIELDS;
+      else process.env.PROOF_DRAIN_RECORD_REAL_FIELDS = prev;
     }
   });
 

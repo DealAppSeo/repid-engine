@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
+import { buildBoundStatement } from '../zkp/proof-statement-guard'; // corpus hygiene: fail-closed agent binding on every real-proof statement
 import { resolveLeafDualWrite } from '../zkp/leaf-dual-write'; // backlog 4.2 (Inv-1): Poseidon2 leaf dual-write
 import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
 import { routeProofRequest } from '../zkp/proof-router'; // S-ONCHAIN: routing classification (owned)
@@ -593,17 +594,28 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
     const merkleRoot = typeof proof.merkle_root === 'string' ? proof.merkle_root : null;
 
     // A5 (D-062): capture the prover's real scheme + statement so the canonical row is
-    // independently WASM-verifiable. Only a real Plonky3 proof gets a statement (the verifier
-    // needs {repid_score, threshold}); threshold parsed from the prover's public_statement
-    // ("RepID > N"). repid_score is the prover's server-side actual (it ignores client score).
+    // independently WASM-verifiable. Only a real Plonky3 proof gets a statement; threshold
+    // parsed from the prover's public_statement ("RepID > N"). repid_score is the prover's
+    // server-side actual (it ignores client score).
+    //
+    // CORPUS HYGIENE (2026-08-09): the statement MUST bind the agent, not just carry
+    // {repid_score, threshold}. 7,958 of 22,239 "real" rows were persisted agent-less
+    // (score defaulted to 1000), inflating the real-proof count and failing the WASM
+    // verifier ("missing field agent_id"/"tier"). buildBoundStatement is fail-closed: an
+    // empty agent_id throws here → the job is marked failed → NO unbound proof is minted.
+    // job.agent_id is the real custodied agent uuid for every queue row, so a live drain
+    // always yields a bound 4-key statement; the tier is derived from the proven score
+    // (matching zkp-audit-service.buildCompleteStatement).
     const scheme = typeof proof.proof_type === 'string' ? proof.proof_type : null;
     const thrMatch = typeof proof.public_statement === 'string' ? proof.public_statement.match(/(\d+)/) : null;
+    const statementScore = typeof proof.repid_score_actual === 'number' ? proof.repid_score_actual : score;
     const statement =
       scheme === 'plonky3_range_check' && thrMatch
-        ? {
-            repid_score: typeof proof.repid_score_actual === 'number' ? proof.repid_score_actual : score,
+        ? buildBoundStatement({
+            agentId: job.agent_id,
+            repidScore: statementScore,
             threshold: Number(thrMatch[1]),
-          }
+          })
         : null;
 
     // Bind the per-proof nonce into the stored canonical commitment so every
