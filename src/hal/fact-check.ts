@@ -576,12 +576,22 @@ function providerRisk(v: ProviderVerdict): number {
  * (it returns an ERROR verdict on any failure), so any Grok error simply falls back to the current
  * (tied) behavior with no effect on the live path. Small + self-contained; does NOT touch src/hal/lib/*.
  */
+/**
+ * xAI/Grok API key resolution. Accepts the canonical `GROK_API_KEY` OR the standard xAI env name
+ * `XAI_API_KEY` — the wallet/key inventory (.env.master, Railway) stores it as `XAI_API_KEY`, so reading
+ * only `GROK_API_KEY` made HAL_ESCALATE_GROK a SILENT NO-OP (0 escalations, precision lever dead).
+ * Reading both closes that gap with zero behavior change wherever GROK_API_KEY is already set.
+ */
+export function grokApiKey(): string | undefined {
+  return process.env.GROK_API_KEY?.trim() || process.env.XAI_API_KEY?.trim() || undefined;
+}
+
 async function grokTiebreak(
   deliverable: string,
   maxTokens: number,
   quorumId: string,
 ): Promise<ProviderVerdict | null> {
-  const key = process.env.GROK_API_KEY?.trim();
+  const key = grokApiKey();
   if (!key) return null;
   const cfg: FactCheckProviderCfg = {
     name: 'grok',
@@ -810,7 +820,7 @@ export async function factCheck(
   // independent tiebreak vote, folded in as a 'grok'-family verdict before the quorum is tallied.
   // Env-gated (HAL_ESCALATE_GROK, default off) and FAIL-SAFE (flag off / no key / Grok error → no-op,
   // current tied behavior preserved). Done here so the tiebreak vote flows through ALL downstream math.
-  if (process.env.HAL_ESCALATE_GROK === 'true' && process.env.GROK_API_KEY?.trim()) {
+  if (process.env.HAL_ESCALATE_GROK === 'true' && grokApiKey()) {
     const okPre = verdicts.filter((v) => v.verdict !== 'ERROR');
     const famCount = (want: Verdict) =>
       new Set(okPre.filter((v) => v.verdict === want).map((v) => familyByName.get(v.provider) ?? v.provider)).size;
@@ -996,7 +1006,7 @@ export async function factCheck(
   if (
     decision === 'vetoed' &&
     process.env.HAL_ESCALATE_GROK === 'true' &&
-    process.env.GROK_API_KEY?.trim() &&
+    grokApiKey() &&
     !families.includes('grok') // escalate-once — the cycle-2 tiebreak may have already cast a grok vote
   ) {
     // Local, clamped env parse (no redeploy to tune). BAND in [0,1]; confidences in [0,100].
