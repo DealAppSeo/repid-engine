@@ -92,7 +92,13 @@ const AGENTS = {
     cli: 'grok',
     mode: 'argv',
     args: (p) => ['-p', p],
-    keyVar: 'GROK_API_KEY',
+    // ACCEPTS BOTH NAMES, newest first. .env.master canonicalised this to
+    // XAI_API_KEY (repid-engine #398); the old GROK_API_KEY is kept as a fallback.
+    // A rename is the classic silent break — the same shape as the renamed
+    // SUPABASE_SECRET_KEY that crash-looped zkp-postcard for days. Accepting both
+    // costs one array entry; guessing wrong costs an agent that cannot be
+    // dispatched and fails in a way that reads like "the agent had nothing to say".
+    keyVars: ['XAI_API_KEY', 'GROK_API_KEY'],
     inbox: 'E:/dev/handoffs/INBOX_XC.md',
     lane: 'L6 RED-TEAM — no write scope',
     // [V 2026-08-05] grok resolves to grok.exe and ran a real analysis of
@@ -105,7 +111,7 @@ const AGENTS = {
     cli: 'gemini',
     mode: 'stdin',
     args: () => [],
-    keyVar: 'GEMINI_API_KEY',
+    keyVars: ['GEMINI_API_KEY', 'GEMINI_API_KEY_2'],
     inbox: 'E:/dev/handoffs/INBOX_GA.md',
     lane: 'L7 MEASUREMENT — no write scope',
     // [V 2026-08-05] measured from its OWN stderr on the fabricated review:
@@ -297,6 +303,13 @@ function resolveBin(cli) {
 const ENV_MASTER = process.env.TRUSTKEYS_ENV_MASTER || 'C:/Users/Cash4/repos/.env.master';
 const TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 15 * 60 * 1000);
 
+/**
+ * The one file every agent on this system reads. See the injection site in main().
+ * Path is resolved from the repo root so the dispatcher works from any cwd.
+ */
+const LESSONS_PATH = join(process.cwd(), 'LESSONS.md');
+const LESSONS_MAX = 6000;
+
 function arg(name, fallback = undefined) {
   const i = process.argv.indexOf(`--${name}`);
   if (i === -1) return fallback;
@@ -305,12 +318,27 @@ function arg(name, fallback = undefined) {
 }
 
 /** Read one key from the reference file. Returns the value; NEVER log it. */
-function readKey(varName) {
+/**
+ * Read the first key present from a list of accepted names. NEVER log the value.
+ *
+ * Returns `{ name, value }` so the caller can report WHICH name resolved. A key
+ * rename must be visible, not silently absorbed — that is the failure mode this
+ * whole function was rewritten for.
+ */
+function readKey(varNames) {
   if (!existsSync(ENV_MASTER)) return null;
+  const found = new Map();
   for (const line of readFileSync(ENV_MASTER, 'utf8').split(/\r?\n/)) {
     const m = /^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/.exec(line);
-    if (m && m[1] === varName) return m[2].trim().replace(/^["']|["']$/g, '') || null;
+    if (m && varNames.includes(m[1])) {
+      const v = m[2].trim().replace(/^["']|["']$/g, '');
+      // First occurrence wins. dotenv is last-wins, but a duplicated key has
+      // already shadowed a good value here once (the GROQ dupe), so preferring
+      // the first and reporting the name is the safer read for a lookup tool.
+      if (v && !found.has(m[1])) found.set(m[1], v);
+    }
   }
+  for (const n of varNames) if (found.has(n)) return { name: n, value: found.get(n) };
   return null;
 }
 
@@ -371,10 +399,18 @@ function main() {
     process.exit(65);
   }
 
-  const key = readKey(agent.keyVar);
-  if (!key) {
-    console.error(`${agent.keyVar} not found in ${ENV_MASTER} — cannot authenticate ${agent.cli}`);
+  const resolved = readKey(agent.keyVars);
+  if (!resolved) {
+    console.error(
+      `none of [${agent.keyVars.join(', ')}] found in ${ENV_MASTER} — cannot authenticate ${agent.cli}.
+` +
+        '           A key RENAME is the usual cause and it fails silently: add the new name to keyVars.',
+    );
     process.exit(2);
+  }
+  const key = resolved.value;
+  if (resolved.name !== agent.keyVars[0]) {
+    console.warn(`[dispatch] note: authenticating via fallback ${resolved.name} (preferred ${agent.keyVars[0]} absent)`);
   }
 
   const branch = assertSafeRepoState();
@@ -410,10 +446,56 @@ function main() {
   // The lane and its prohibitions are prepended to EVERY dispatch. An agent that
   // has to be told once, in a doc it may not read, is an agent that will merge
   // its own PR eventually.
+  // ════════════════════════════════════════════════════════════════════════════
+  // SHARED LESSONS — injected, because filing them demonstrably does not work.
+  // ════════════════════════════════════════════════════════════════════════════
+  // This repo holds 116 dated report files and CLAUDE.md referenced none of them.
+  // reports/2026-07-31/SCHOOL_OF_HARD_KNOCKS_proof_drain.md logs "unverified
+  // inference — again, THIRD occurrence"; it then recurred twice more on
+  // 2026-08-05, once by me. A lesson a worker never reads is not a lesson.
+  //
+  // XC and GA cannot read living-docs, ~/.claude memory, or claude-mem — the
+  // dispatch preamble is the ONLY channel that reaches them. So LESSONS.md ships
+  // in the repo (git resolves conflicts, so two truths cannot diverge silently)
+  // and is injected verbatim here. One file, many readers, never copied.
+  //
+  // Absent or oversized is reported LOUDLY rather than skipped: silently
+  // dropping the rules would be this file's own lesson #4 turned on itself.
+  const lessons = (() => {
+    if (!existsSync(LESSONS_PATH)) {
+      console.error(`[dispatch] ⚠ ${LESSONS_PATH} MISSING — dispatching without shared lessons.`);
+      return null;
+    }
+    const text = readFileSync(LESSONS_PATH, 'utf8');
+    if (text.length > LESSONS_MAX) {
+      console.error(
+        `[dispatch] ⚠ LESSONS.md is ${text.length} chars, over the ${LESSONS_MAX} cap. ` +
+          'Injecting anyway, but it needs consolidating — an un-injectable lessons file is the 117th report.',
+      );
+    }
+    return text;
+  })();
+
   const preamble = [
     `You are ${agentKey.toUpperCase()}. Your lane: ${agent.lane}.`,
     `Governing spec: E:/dev/living-docs/03_specs/PARALLEL_AGENT_LANES_v1.md`,
     '',
+    ...(lessons
+      ? [
+          '════ SHARED LESSONS — read before you work ════',
+          'These are hard-won operating rules, shared by every agent on this system',
+          '(CC, XC, GA and the T12 swarm). They are not style advice: each one is here',
+          'because it already cost us something real, usually more than once.',
+          '',
+          lessons,
+          '',
+          'If your work teaches a NEW lesson of this kind, say so explicitly at the end',
+          'of your report under "LESSON:" — it will be reviewed for inclusion. Do not',
+          'edit LESSONS.md yourself; it is shared state and changes go through review.',
+          '════ END SHARED LESSONS ════',
+          '',
+        ]
+      : []),
     'HARD PROHIBITIONS — these are enforced elsewhere too, but do not attempt them:',
     '  - do NOT commit to main, do NOT merge any PR, do NOT push',
     '  - do NOT apply prod SQL or DDL',
@@ -470,7 +552,7 @@ function main() {
   const res = spawnSync(bin.cmd, agent.args(preamble), {
     encoding: 'utf8',
     timeout: TIMEOUT_MS,
-    env: { ...process.env, [agent.keyVar]: key },
+    env: { ...process.env, ...Object.fromEntries(agent.keyVars.map((n) => [n, key])) },
     maxBuffer: 32 * 1024 * 1024,
     shell: bin.shell,
     ...(agent.mode === 'stdin' ? { input: preamble } : {}),
