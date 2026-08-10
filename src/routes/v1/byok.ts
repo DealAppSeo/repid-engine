@@ -31,6 +31,10 @@ import {
   HUMAN_AGENT_BIND_ENABLED, SCOPE_OWNERSHIP, type OwnerRef,
 } from '../../services/human-agent-binding';
 import { supportedProviders } from '../../services/provider-key-probe';
+import {
+  mintForOwner, mintClaimable, reclaim, revokeToken, listTokens,
+  IDENTITY_TOKENS_ENABLED,
+} from '../../services/identity-token';
 
 const router = Router();
 
@@ -229,6 +233,90 @@ router.delete('/byok/keys/:provider', async (req: Request, res: Response) => {
   if (!p) return;
   const label = typeof req.query.label === 'string' ? req.query.label : 'default';
   return res.json(await revokeKey(ownerFor(p), String(req.params.provider), label));
+});
+
+// ── HyperDAG identity tokens (hdg_byok_*) ───────────────────────────────────
+//
+// The missing issuance path. The rate limiter has always been able to VALIDATE
+// one of these and grant bypass; nothing could mint one. That is why external
+// testers could not be invited — every anonymous caller shares one 10-per-IP
+// bucket, so a tester and the eval harness starve each other.
+//
+// These tokens hold no secret of the user's. Provider keys stay in the browser
+// vault by default; custody stays opt-in. This is identity and attribution only.
+
+router.get('/byok/identity/status', (_req: Request, res: Response) => {
+  res.json({
+    enabled: IDENTITY_TOKENS_ENABLED,
+    token_format: 'hdg_byok_<43-char base64url>',
+    stored: 'sha256 of the random part, plus an 8-char display prefix. The token itself is returned once and never stored.',
+    grants: ['rate-limit bypass', 'run attribution to a RepID'],
+    does_not_grant: ['access to provider keys', 'custody of any secret'],
+  });
+});
+
+/** Mint for a proven wallet. Optionally binds attribution to a RepID at mint. */
+router.post('/byok/identity', async (req: Request, res: Response) => {
+  const p = await principalOf(req, res);
+  if (!p) return;
+  const { repid_agent_id, label } = req.body ?? {};
+  const result = await mintForOwner({
+    owner: ownerFor(p),
+    repidAgentId: typeof repid_agent_id === 'string' ? repid_agent_id : null,
+    label: typeof label === 'string' ? label : undefined,
+  });
+  return res.status(result.ok ? 201 : result.reason === 'disabled' ? 503 : 400).json(result);
+});
+
+/**
+ * Mint a CLAIMABLE token for someone with no wallet yet.
+ *
+ * Deliberately NOT behind `principalOf` — the entire point is that the caller
+ * has no wallet to prove. What stands in for identity is a client-computed
+ * Poseidon2 commitment whose preimage the server never sees. We take custody of
+ * nothing, and can neither claim this token nor recover it for them.
+ */
+router.post('/byok/identity/claimable', async (req: Request, res: Response) => {
+  const { claim_commitment, label } = req.body ?? {};
+  if (typeof claim_commitment !== 'string') {
+    return res.status(400).json({ error: 'bad_request', message: 'claim_commitment (client-computed Poseidon2 commitment) is required.' });
+  }
+  const result = await mintClaimable({ claimCommitment: claim_commitment, label: typeof label === 'string' ? label : undefined });
+  return res.status(result.ok ? 201 : result.reason === 'disabled' ? 503 : 400).json(result);
+});
+
+/**
+ * Bind a claimable token to a wallet. Requires proving the wallet AND supplying
+ * the commitment whose preimage the claimant knows. Retires the claimable row
+ * and issues a fresh owner-bound token, so the post-claim token was never known
+ * in the pre-claim state.
+ */
+router.post('/byok/identity/reclaim', async (req: Request, res: Response) => {
+  const p = await principalOf(req, res);
+  if (!p) return;
+  const { claim_commitment, repid_agent_id } = req.body ?? {};
+  if (typeof claim_commitment !== 'string') {
+    return res.status(400).json({ error: 'bad_request', message: 'claim_commitment is required.' });
+  }
+  const result = await reclaim({
+    claimCommitment: claim_commitment,
+    owner: ownerFor(p),
+    repidAgentId: typeof repid_agent_id === 'string' ? repid_agent_id : null,
+  });
+  return res.status(result.ok ? 201 : result.reason === 'disabled' ? 503 : 400).json(result);
+});
+
+router.get('/byok/identity', async (req: Request, res: Response) => {
+  const p = await principalOf(req, res);
+  if (!p) return;
+  return res.json({ tokens: await listTokens(ownerFor(p)) });
+});
+
+router.delete('/byok/identity/:id', async (req: Request, res: Response) => {
+  const p = await principalOf(req, res);
+  if (!p) return;
+  const reason = typeof req.query.reason === 'string' ? req.query.reason : undefined;
+  return res.json(await revokeToken({ id: String(req.params.id), owner: ownerFor(p), reason }));
 });
 
 // ── Human ↔ agent binding ───────────────────────────────────────────────────

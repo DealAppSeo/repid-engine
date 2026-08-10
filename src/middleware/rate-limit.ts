@@ -218,11 +218,22 @@ async function checkByok(rawSuffix: string): Promise<{ valid: boolean; key_id: s
     return { valid: cached.valid, key_id: cached.key_id };
   }
   try {
+    // Reads `hdg_identity_tokens`, NOT `user_api_keys`.
+    //
+    // This lookup previously targeted user_api_keys, whose NOT NULL
+    // provider_name / encrypted_api_key columns exist to hold CUSTODIED
+    // THIRD-PARTY SECRETS. An hdg_byok_* token is a HyperDAG-issued identity and
+    // carries no secret of the user's, so it could never legally be inserted
+    // there without fabricating a provider name and an encrypted key. The result
+    // was a validator reading a table that could not hold what it searched for,
+    // and no issuance path anywhere — the bypass branch was unreachable in
+    // practice. user_api_keys was empty (0 rows) when this moved, so nothing
+    // depended on the old target.
     const { data, error } = await db
-      .from('user_api_keys')
-      .select('id, key_status')
+      .from('hdg_identity_tokens')
+      .select('id, status')
       .eq('key_hash', hash)
-      .eq('key_status', 'active')
+      .eq('status', 'active')
       .maybeSingle();
     if (error) {
       // Surface as not-bypassed (fall back to IP). Don't fail open.
