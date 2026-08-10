@@ -66,6 +66,13 @@ export interface WriteLease {
   /** ISO timestamps. `expiresAt` is authoritative; see property 1 above. */
   acquiredAt: string;
   expiresAt: string;
+  /**
+   * Last proof-of-life from the holder. OPTIONAL — a registry written before heartbeats
+   * existed has none, and those leases still work because `expiresAt` stays authoritative.
+   * Present only to tell a human (and a sweeper) the difference between "leased 3h ago and
+   * still working" and "leased 3h ago and died 2h ago".
+   */
+  heartbeatAt?: string;
 }
 
 export interface LeaseRegistry {
@@ -82,6 +89,31 @@ export const EMPTY_REGISTRY: LeaseRegistry = { version: 1, leases: [] };
  * that a crashed lane frees its paths inside one working session. Renew by re-acquiring.
  */
 export const DEFAULT_TTL_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Heartbeat renewal window: 15 minutes.
+ *
+ * WHY THIS EXISTS. A fixed TTL forces one number to answer two different questions, and
+ * every choice is wrong for one of them:
+ *   - long  (4h): a lane that CRASHES holds `src/hal/**` for four hours. Nobody else can
+ *                 work, and the only recourse is a human editing JSON.
+ *   - short (15m): a lane doing real work loses its paths mid-edit and starts fighting
+ *                 the lane that grabbed them.
+ * A heartbeat separates them: liveness is proven continuously, so the expiry can be short
+ * WITHOUT punishing long work. A live lane renews and keeps going; a dead one frees its
+ * paths within one window. That is the same fail-fast-on-silence principle the codebase
+ * already applies to providers — absence of a signal is information, not a reason to wait.
+ */
+export const HEARTBEAT_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Hard ceiling on total lease age: 12 hours, heartbeats notwithstanding.
+ *
+ * Without it, a runaway loop that keeps heartbeating holds its paths forever and the
+ * expiry stops being a safety net at all. A lane still working after 12h is not a lane,
+ * it is a stuck process, and it should have to re-acquire in front of a human.
+ */
+export const MAX_LEASE_AGE_MS = 12 * 60 * 60 * 1000;
 
 export const LEASE_FILENAME = 'hyperdag-lane-leases.json';
 
@@ -325,6 +357,62 @@ export function withLease(reg: LeaseRegistry, lease: WriteLease, now: number): L
 /** Registry with this lane's leases removed, and expired ones dropped. */
 export function withoutLane(reg: LeaseRegistry, lane: LaneId, now: number): LeaseRegistry {
   return { version: 1, leases: activeLeases(reg, now).filter((l) => l.lane !== lane) };
+}
+
+export interface RenewResult {
+  ok: boolean;
+  registry: LeaseRegistry;
+  reason: string;
+}
+
+/**
+ * Proof of life: push this lane's expiry forward without re-stating its paths.
+ *
+ * Deliberately CANNOT change `paths`. Renewal is "I am still alive", not "I would also
+ * like these files" — letting a heartbeat widen a lease would turn the cheap, frequent
+ * call into a way to take paths without ever passing the overlap check in acquireLease().
+ *
+ * Never extends past `acquiredAt + MAX_LEASE_AGE_MS`. On an already-expired lease it
+ * refuses rather than resurrecting: those paths may already belong to someone else, and
+ * silently reclaiming them is precisely the collision the lease exists to prevent. The
+ * caller re-acquires, which runs the conflict check properly.
+ */
+export function renewLease(
+  reg: LeaseRegistry,
+  lane: LaneId,
+  now: number,
+  ttlMs: number = HEARTBEAT_TTL_MS,
+): RenewResult {
+  const mine = reg.leases.filter((l) => l.lane === lane);
+  if (mine.length === 0) {
+    return { ok: false, registry: reg, reason: `no lease held by lane "${lane}"` };
+  }
+  const live = mine.filter((l) => !isExpired(l, now));
+  if (live.length === 0) {
+    return {
+      ok: false,
+      registry: { version: 1, leases: activeLeases(reg, now) },
+      reason: `lease for "${lane}" already expired — re-acquire so the overlap check runs again`,
+    };
+  }
+
+  const renewed = live.map((l) => {
+    const hardStop = Date.parse(l.acquiredAt) + MAX_LEASE_AGE_MS;
+    const wanted = now + ttlMs;
+    // A NaN acquiredAt must not become a NaN expiry (isExpired treats that as expired,
+    // which would drop a live lane's lease on a malformed field).
+    const capped = Number.isFinite(hardStop) ? Math.min(wanted, hardStop) : wanted;
+    return { ...l, expiresAt: new Date(capped).toISOString(), heartbeatAt: new Date(now).toISOString() };
+  });
+
+  const atCeiling = renewed.some((l) => Date.parse(l.expiresAt) <= now);
+  return {
+    ok: !atCeiling,
+    registry: { version: 1, leases: [...activeLeases(reg, now).filter((l) => l.lane !== lane), ...renewed] },
+    reason: atCeiling
+      ? `lane "${lane}" hit the ${MAX_LEASE_AGE_MS / 3_600_000}h ceiling — re-acquire in front of a human`
+      : `renewed ${renewed.length} lease(s) for "${lane}"`,
+  };
 }
 
 // ---------------------------------------------------------------------------
