@@ -27,7 +27,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { verifyProofLocally as tsImpl } from '../src/services/trust-harness-verify';
+import { verifyProofLocally as tsImpl, halRequestHeaders as tsHalHeaders } from '../src/services/trust-harness-verify';
 
 const STATEMENT = { agent_id: '00000000-0000-4000-8000-0000000000aa', repid_score: 2280, threshold: 999, tier: 'ESTABLISHED' };
 const BYTES = 'QUJD';
@@ -125,6 +125,33 @@ describe('trust-demo statement-shape check', () => {
     expect(r.missingFromStored).toEqual(['agent_id', 'tier']);
     expect(r.missingFromFull).toEqual([]);
     expect(r.missingFromNull).toEqual(['agent_id', 'repid_score', 'threshold', 'tier']);
+  });
+});
+
+describe('halRequestHeaders is mirrored faithfully too', () => {
+  // The HAL leg is opt-in in the CLI, which makes this MORE important, not less: the only
+  // reason a keyless run is allowed to say "not consulted" instead of guessing is that
+  // authentication is detected correctly. If the mirror drifted so that a present key
+  // read as absent, the demo would silently downgrade a real quorum to a skip.
+  const ENVS: Array<[string, NodeJS.ProcessEnv]> = [
+    ['no key at all', {}],
+    ['key present', { REPID_API_KEY: 'sk-test-123' }],
+    ['key with surrounding whitespace', { REPID_API_KEY: '   sk-test-123   ' }],
+    ['empty-string key', { REPID_API_KEY: '' }],
+    ['whitespace-only key', { REPID_API_KEY: '   ' }],
+  ];
+
+  test.each(ENVS)('agrees on: %s', (_name, env) => {
+    const probe = `
+      import { halRequestHeaders } from '${path.resolve(__dirname, '../packages/trust-demo/src/verify-local.mjs').replace(/\\/g, '/')}';
+      process.stdout.write(JSON.stringify(halRequestHeaders(${JSON.stringify(env)})));`;
+    const mjs = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', probe], { encoding: 'utf8' }));
+    expect(mjs).toEqual(tsHalHeaders(env));
+  });
+
+  test('a whitespace-only key is NOT treated as authenticated', () => {
+    expect(tsHalHeaders({ REPID_API_KEY: '   ' }).authenticated).toBe(false);
+    expect(tsHalHeaders({ REPID_API_KEY: 'sk-real' }).authenticated).toBe(true);
   });
 });
 

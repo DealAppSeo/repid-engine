@@ -32,6 +32,8 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { resolveLeafBin, leafBinHelp } from './leaf-bin.mjs';
 
 // The FROZEN calibrator, and the real shipped calibration code. Not a copy: a
 // demo that reimplements what it demonstrates proves nothing about the shipped
@@ -67,8 +69,17 @@ try {
 }
 
 const ENGINE = process.env.TRUSTSHELL_API_URL || 'https://repid-engine-production.up.railway.app';
-const LEAF_BIN = process.env.LEAF_BIN ||
-  'C:/Users/Cash4/repos/HyperDAG-core/services/babybear-leaf/target/release/leaf.exe';
+
+// The leaf binary is RESOLVED, not assumed. This used to default to an absolute path under
+// one developer's Windows home directory, so on every other machine the Poseidon2 and fold
+// legs reported UNKNOWN even when the crate had been built correctly — a gap that blamed
+// the wrong thing. `$LEAF_BIN` still wins outright; see ./leaf-bin.mjs for the precedence
+// and tests/demo-leaf-bin.test.ts for the test that pins it.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LEAF = resolveLeafBin({ repoRoot: REPO_ROOT });
+// A string either way, so the existing `existsSync(LEAF_BIN)` call sites read unchanged.
+// Unresolved becomes a path that cannot exist — never a silent substitution.
+const LEAF_BIN = LEAF.path ?? '\0unresolved-leaf-binary';
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -216,9 +227,9 @@ try {
 // ── 4. Poseidon2 nullifier (Rust) ───────────────────────────────────────────
 step(4, 'Poseidon2 — scoped nullifier from the Rust primitive (ZKP invariant 2)');
 if (!existsSync(LEAF_BIN)) {
-  result.nullifier = { state: 'UNKNOWN', reason: `leaf binary not built at ${LEAF_BIN}` };
-  unk('Rust leaf binary not built');
-  note('build: cd HyperDAG-core/services/babybear-leaf && cargo build --release --bin leaf');
+  result.nullifier = { state: 'UNKNOWN', reason: 'leaf binary not found', tried: LEAF.tried };
+  unk('Rust leaf binary not found on this machine');
+  for (const l of leafBinHelp(LEAF.tried)) note(l);
 } else {
   try {
     // selftest FIRST: never trust a digest from a primitive that has not just
@@ -295,6 +306,7 @@ if (!deltaFor || !linkPaymentProof) {
 } else if (!existsSync(LEAF_BIN)) {
   unk('leaf binary unavailable — the fold cannot be computed by the real circuit');
   note('NOT substituting a JS hash: that would prove the demo can hash, not that the circuit can.');
+  for (const l of leafBinHelp(LEAF.tried)) note(l);
 } else {
   const prevScore = result.repid?.score ?? 1000;
 

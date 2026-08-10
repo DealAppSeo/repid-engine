@@ -97,3 +97,24 @@ export function missingStatementFields(statement) {
   if (!statement || typeof statement !== 'object') return [...REQUIRED_STATEMENT_FIELDS];
   return REQUIRED_STATEMENT_FIELDS.filter((f) => statement[f] === undefined || statement[f] === null);
 }
+
+/**
+ * Headers for the HAL /evaluate call — the second export mirrored from
+ * `src/services/trust-harness-verify.ts`, and held equal to it by the same equivalence test.
+ *
+ * With `REPID_API_KEY` present the call is authenticated, which bypasses the public per-IP
+ * cap (`HAL_PUBLIC_RATE_LIMIT`) so the cross-provider quorum actually runs. Without it the
+ * call is keyless and a 429 stays an honest UNKNOWN rather than a manufactured verdict.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{headers: Record<string,string>, authenticated: boolean}}
+ */
+export function halRequestHeaders(env = process.env) {
+  const headers = { 'content-type': 'application/json' };
+  const key = typeof env.REPID_API_KEY === 'string' ? env.REPID_API_KEY.trim() : '';
+  if (key.length > 0) {
+    headers['Authorization'] = `Bearer ${key}`;
+    return { headers, authenticated: true };
+  }
+  return { headers, authenticated: false };
+}

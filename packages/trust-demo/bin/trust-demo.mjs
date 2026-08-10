@@ -26,18 +26,23 @@
  * scripts/hooks/prod-fixture-guard.js. Live agent data is fetched, never embedded.
  *
  * Usage:
- *   npx @hyperdag/trust-demo                 everything: local crypto + live reads
+ *   npx @hyperdag/trust-demo                 everything keyless: local crypto + live reads
  *   npx @hyperdag/trust-demo --offline       only the local proof check (no network)
  *   npx @hyperdag/trust-demo --agent <slug>  a different agent (default trinity-shofet)
+ *   npx @hyperdag/trust-demo --hal           also consult HAL (needs REPID_API_KEY to
+ *                                            beat the per-IP cap; runs automatically
+ *                                            when that key is set)
  *   npx @hyperdag/trust-demo --json          machine-readable, same data
  *
  * Exit codes: 0 every attempted leg passed · 1 a leg that RAN produced a failure
  *             (e.g. a proof was rejected) · 2 nothing could be checked at all.
+ *             A leg that was SKIPPED or came back UNKNOWN is not an error — but it is
+ *             also never counted as a pass.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { verifyProofLocally, missingStatementFields } from '../src/verify-local.mjs';
+import { verifyProofLocally, missingStatementFields, halRequestHeaders } from '../src/verify-local.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'fixtures');
@@ -55,6 +60,8 @@ if (has('help') || has('h')) {
 const OFFLINE = has('offline');
 const AS_JSON = has('json');
 const AGENT = flag('agent', 'trinity-shofet');
+// A deliberately false statement, so a working quorum has something to actually catch.
+const CLAIM = flag('claim', 'The Eiffel Tower is located in Rome, Italy.');
 const ENGINE = flag('engine', process.env.TRUSTSHELL_API_URL || 'https://repid-engine-production.up.railway.app');
 const TIMEOUT_MS = Number(flag('timeout', '15000'));
 
@@ -160,6 +167,12 @@ if (!proofVerify) {
 }
 
 if (OFFLINE) {
+  // Name every leg we are NOT going to run. Without this the summary reads
+  // "unknown: 0  skipped: 0", which looks like a clean sweep of the whole harness
+  // rather than one leg out of six — the flattering reading, and the wrong one.
+  for (const k of ['repid', 'live_proof', 'anchor', 'receipt', 'hal']) {
+    result.legs[k] = { state: 'SKIPPED', reason: 'offline mode — no network calls attempted' };
+  }
   finish();
 }
 
@@ -252,6 +265,75 @@ step(5, 'A real settled exchange — the shareable receipt');
   }
 }
 
+// ── 6. HAL — opt-in ─────────────────────────────────────────────────────────
+// OPT-IN ON PURPOSE, and this is the one design decision in this file worth arguing.
+// HAL's cross-provider quorum is the only leg that needs a key: keyless callers hit
+// HAL_PUBLIC_RATE_LIMIT and get a 429. Running it by default would mean nearly every
+// first-time `npx` run ends on a rate-limit gap that says nothing about the system —
+// so it runs when you have a key (or ask for it with --hal), and otherwise says plainly
+// that it was not consulted. "Not consulted" is a different thing from "passed", and the
+// summary keeps them different.
+const halAuth = halRequestHeaders(process.env);
+const halRequested = halAuth.authenticated || has('hal');
+step(6, 'HAL — cross-provider hallucination quorum (opt-in; needs a key)');
+if (!halRequested) {
+  result.legs.hal = { state: 'SKIPPED', reason: 'not requested — no REPID_API_KEY and no --hal' };
+  note('not consulted. This leg needs REPID_API_KEY to bypass the public per-IP cap.');
+  note('set REPID_API_KEY=… (or pass --hal to try keyless and see the cap for yourself)');
+  note('NOT consulted is not the same as passed — the summary below keeps them apart.');
+} else {
+  if (halAuth.authenticated) note('authenticated (REPID_API_KEY present) — bypasses the per-IP cap, so the quorum runs');
+  else note('keyless by request (--hal) — expect HAL_PUBLIC_RATE_LIMIT to cap this');
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), Math.max(TIMEOUT_MS, 90_000));
+  try {
+    const res = await fetch(`${ENGINE}/api/v1/hal/evaluate`, {
+      method: 'POST',
+      headers: halAuth.headers,
+      body: JSON.stringify({ text: CLAIM, context: { domain: 'general', certainty: 0.8 }, strictness: 2 }),
+      signal: ac.signal,
+    });
+    if (res.status === 429) {
+      // A rate limit is NOT a verdict. Saying so is the whole discipline.
+      result.legs.hal = {
+        state: 'UNKNOWN',
+        reason: halAuth.authenticated
+          ? 'rate limited despite an API key (HAL_PUBLIC_RATE_LIMIT) — key not on the allowlist?'
+          : 'rate limited (HAL_PUBLIC_RATE_LIMIT, per IP) — set REPID_API_KEY to bypass',
+      };
+      unk(`rate limited — HAL could not be consulted`);
+      note('this is NOT a pass.');
+    } else if (!res.ok) {
+      result.legs.hal = { state: 'UNKNOWN', reason: `HTTP ${res.status}` };
+      unk(`HAL unavailable — HTTP ${res.status}`);
+    } else {
+      const j = await res.json();
+      const verdict = j.verdict ?? j.decision ?? null;
+      const halScore = j.halScore ?? j.hal_score ?? null;
+      result.legs.hal = { state: 'REAL', verdict, halScore, mode: j.mode ?? null, calibrated: false };
+      const vetoed = /veto/i.test(String(verdict));
+      (vetoed ? bad : ok)(`verdict ${verdict}   halScore ${halScore}   mode ${j.mode ?? '?'}`);
+      // LESSONS #8: a measurement without its ruler is not a result. The raw halScore is
+      // NOT a probability — on the frozen holdout, cases scoring 0.50 were hallucinations
+      // 83-88% of the time. Calibration needs the frozen calibrator artefact, which lives
+      // in the repo and is deliberately not vendored here (it would drift silently). So
+      // the raw number is shown and labelled raw, and the calibrated one is pointed at.
+      note('halScore above is RAW and uncalibrated — it is not a probability.');
+      note('for the calibrated P(hallucination) with its ruler, run scripts/demo/trust-harness-e2e.mjs');
+      if (Array.isArray(j.evidence) && j.evidence.length) {
+        note('per-provider evidence:');
+        for (const e of j.evidence.slice(0, 5)) note(`  - ${e}`);
+      }
+    }
+  } catch (e) {
+    const reason = e?.name === 'AbortError' ? 'timed out' : String(e?.message ?? e);
+    result.legs.hal = { state: 'UNKNOWN', reason };
+    unk(`HAL unreachable — ${reason}`);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 finish();
 
 // ── summary ─────────────────────────────────────────────────────────────────
@@ -260,16 +342,30 @@ function finish() {
   const real = legs.filter(([, l]) => l.state === 'REAL');
   const failed = legs.filter(([, l]) => l.state === 'FAIL');
   const unknown = legs.filter(([, l]) => l.state === 'UNKNOWN');
+  const skipped = legs.filter(([, l]) => l.state === 'SKIPPED');
+
+  // Three distinct words, because collapsing them is how a demo starts lying:
+  //   REAL    — ran, produced a result
+  //   FAIL    — ran, produced a bad result (this is an error; exit 1)
+  //   UNKNOWN — tried, could not get an answer
+  //   SKIPPED — deliberately not attempted (opt-in, not requested)
+  // A SKIPPED HAL is not a passing HAL, so the scope line says which one happened rather
+  // than quietly implying the harness ran end to end.
+  const halState = result.legs.hal?.state ?? 'SKIPPED';
+  const scope =
+    halState === 'REAL'
+      ? 'keyless subset + HAL consulted — still NOT an action-authorisation verdict (the dual-auth gate needs the standards hash and the fold; run scripts/demo/trust-harness-e2e.mjs)'
+      : halState === 'UNKNOWN'
+        ? 'keyless subset — HAL was attempted and could not answer, which is not a pass; this is not an action-authorisation verdict'
+        : 'keyless subset — HAL not consulted (opt-in); this is not an action-authorisation verdict';
 
   result.summary = {
     verified_legs: real.map(([k]) => k),
     failed_legs: failed.map(([k]) => k),
     unknown_legs: unknown.map(([k]) => k),
-    // Deliberately NOT called a gate decision. This command runs the KEYLESS subset of
-    // the trust harness: HAL's cross-provider quorum is not part of it, so nothing here
-    // is a safety verdict on an action. An unavailable check is not a passing check, and
-    // a subset that passed is not the whole harness passing.
-    scope: 'keyless subset — HAL quorum not included; this is not an action-authorisation verdict',
+    skipped_legs: skipped.map(([k]) => k),
+    hal: halState,
+    scope,
   };
 
   if (AS_JSON) {
@@ -282,11 +378,16 @@ function finish() {
       line(`  ${GRN('versions of it were rejected.')} ${DIM('That part needed no network and no key.')}`);
     }
     line('');
-    line(`  verified: ${real.length}   failed: ${failed.length}   unknown: ${unknown.length}`);
+    line(`  verified: ${real.length}   failed: ${failed.length}   unknown: ${unknown.length}   skipped: ${skipped.length}`);
     if (unknown.length) {
       line('');
       note('gaps, named rather than hidden:');
       for (const [k, l] of unknown) note(`  - ${k}: ${l.reason}`);
+    }
+    if (skipped.length) {
+      line('');
+      note('not attempted:');
+      for (const [k, l] of skipped) note(`  - ${k}: ${l.reason}`);
     }
     line('');
     note(result.summary.scope);

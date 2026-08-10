@@ -43,12 +43,37 @@ npx @hyperdag/trust-demo --offline
 | 3 | That agent's **live** proof, fetched then verified locally | no |
 | 4 | The Base Sepolia attestation anchor | no |
 | 5 | The newest real settled exchange, with a shareable receipt URL | no |
+| 6 | HAL's cross-provider hallucination quorum | **yes** — opt-in |
+
+## HAL is opt-in, and that is deliberate
+
+HAL is the only leg that needs a key: keyless callers hit `HAL_PUBLIC_RATE_LIMIT` and get a
+429. If it ran by default, most first runs would end on a rate-limit gap that says nothing
+about the system. So it runs when you have a key, and otherwise reports that it was **not
+consulted**.
+
+```bash
+REPID_API_KEY=… npx @hyperdag/trust-demo   # runs the quorum
+npx @hyperdag/trust-demo --hal             # try keyless and watch the cap for yourself
+```
+
+"Not consulted" is not "passed", and the summary keeps the two apart — every run ends with
+one of three sentences depending on whether HAL was skipped, attempted-and-unanswered, or
+actually answered. None of them is ever an authorisation verdict.
+
+The `halScore` this prints is **raw and uncalibrated** — it is not a probability. On the
+frozen holdout, cases scoring 0.50 were hallucinations 83–88% of the time. The calibrated
+figure needs the frozen calibrator artefact, which lives in the repo and is deliberately not
+vendored here (it would drift silently); for that number with its ruler attached, run
+`scripts/demo/trust-harness-e2e.mjs`.
 
 ## Options
 
 ```
 --offline           only the local proof check; makes no network calls
 --agent <slug>      which agent to look up (default: trinity-shofet)
+--claim "<text>"    the statement HAL scores (default: a deliberately false one)
+--hal               consult HAL even without a key (expect the per-IP cap)
 --engine <url>      point at a different deployment
 --json              machine-readable output, same data
 --timeout <ms>      per-request timeout (default 15000)
@@ -63,11 +88,10 @@ example a proof was rejected) · `2` nothing could be checked at all.
 or prints `????` with the reason. If production is unreachable you get four named gaps and
 a proof that still verified locally — not a green tick.
 
-**It is not an authorisation verdict.** This is the *keyless subset* of the trust harness.
-HAL — the cross-provider quorum that decides whether an action is safe — is not part of it,
-because it needs a key. An unavailable safety check is not a passing safety check, so this
-command never prints a gate decision. The full harness lives in
-`scripts/demo/trust-harness-e2e.mjs`.
+**It is not an authorisation verdict.** Even with HAL consulted, the dual-auth gate also
+needs the owner standards hash and the progressive fold, which come from the Rust Poseidon2
+binary. An unavailable safety check is not a passing safety check, so this command never
+prints a gate decision. The full harness lives in `scripts/demo/trust-harness-e2e.mjs`.
 
 **The bundled proof is synthetic, deliberately.** `fixtures/leaf-rangecheck.synthetic.*` is
 a real STARK proof generated offline over a fabricated witness (a NIL-variant UUID, a
