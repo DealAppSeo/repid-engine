@@ -34,6 +34,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveLeafBin, leafBinHelp } from './leaf-bin.mjs';
+// The SAME sanitiser @hyperdag/trust-demo uses. Imported, not copied: a second
+// implementation of an escaping rule is a second thing to get wrong.
+import { safe } from '../../packages/trust-demo/src/safe-output.mjs';
 
 // The FROZEN calibrator, and the real shipped calibration code. Not a copy: a
 // demo that reimplements what it demonstrates proves nothing about the shipped
@@ -95,9 +98,19 @@ const bad = (s) => line(`      ${R}✗${RESET} ${s}`);
 const unk = (s) => line(`      ${Y}?${RESET} ${s}`);
 const note = (s) => line(`      ${DIM}${s}${RESET}`);
 
+/** A response larger than this is not a response, it is resource exhaustion. The biggest
+ *  legitimate payload is a proof of ~15 KB of base64. */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
 async function get(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(45_000) });
-  return { status: res.status, json: await res.json().catch(() => null) };
+  const declared = Number(res.headers.get('content-length') ?? '0');
+  if (declared > MAX_BODY_BYTES) return { status: res.status, json: null };
+  const text = await res.text();
+  if (text.length > MAX_BODY_BYTES) return { status: res.status, json: null };
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON body stays null */ }
+  return { status: res.status, json };
 }
 
 const result = { hal: null, repid: null, proof: null, nullifier: null, anchor: null };
@@ -138,7 +151,7 @@ try {
     const j = await res.json();
     result.hal = { state: 'REAL', verdict: j.verdict ?? j.decision, halScore: j.halScore ?? j.hal_score, mode: j.mode };
     const vetoed = /veto/i.test(String(result.hal.verdict));
-    (vetoed ? bad : ok)(`verdict ${result.hal.verdict}   halScore ${result.hal.halScore}   mode ${result.hal.mode}`);
+    (vetoed ? bad : ok)(`verdict ${safe(result.hal.verdict)}   halScore ${safe(result.hal.halScore)}   mode ${safe(result.hal.mode)}`);
 
     // CALIBRATED CONFIDENCE. The raw halScore is not a probability: on the frozen
     // holdout, cases scoring 0.50 were hallucinations 83-88% of the time. Both
@@ -156,7 +169,7 @@ try {
     }
     if (Array.isArray(j.evidence) && j.evidence.length) {
       note('per-provider evidence:');
-      for (const e of j.evidence.slice(0, 5)) note(`  - ${e}`);
+      for (const e of j.evidence.slice(0, 5)) note(`  - ${safe(e)}`);
     }
   }
 } catch (e) {
@@ -168,9 +181,24 @@ try {
 step(2, 'RepID — the actor\'s live reputation (keyless read)');
 try {
   const { status, json } = await get(`${ENGINE}/api/v1/repid/${AGENT}`);
-  if (status === 200 && json) {
-    result.repid = { state: 'REAL', score: json.repid_score ?? json.repid, tier: json.tier };
-    ok(`RepID ${result.repid.score}  tier ${result.repid.tier}`);
+  // VALIDATE BEFORE TRUSTING. This score is not just printed: it becomes `prevScore` in
+  // step 6, is used in the fold arithmetic, and is passed as an ARGUMENT to the Rust leaf
+  // binary. A non-numeric or absurd value from the engine would either crash the fold or —
+  // worse — commit a root to a nonsense score while every individual step still looked
+  // internally consistent, which is precisely the class of bug PR #8 was written to expose.
+  // RepID is bounded 0..10000 (see @hyperdag/proof-verifier's soundness note), so anything
+  // outside that is a gap, not a number.
+  const rawScore = json?.repid_score ?? json?.repid;
+  const scoreNum = Number(rawScore);
+  const scoreOk = Number.isFinite(scoreNum) && Number.isInteger(scoreNum) && scoreNum >= 0 && scoreNum <= 10000;
+  if (status === 200 && json && scoreOk) {
+    result.repid = { state: 'REAL', score: scoreNum, tier: json.tier };
+    ok(`RepID ${safe(result.repid.score)}  tier ${safe(result.repid.tier)}`);
+  } else if (status === 200 && json && !scoreOk) {
+    result.repid = { state: 'UNKNOWN', reason: `engine returned an unusable repid_score: ${safe(rawScore, 40)}` };
+    unk(result.repid.reason);
+    note('refusing to fold a score that is not a plain integer in 0..10000 — a bad number');
+    note('would commit a root to nonsense while every step still verified.');
   } else {
     result.repid = { state: 'UNKNOWN', reason: `HTTP ${status}` };
     unk(`could not read RepID (HTTP ${status})`);
@@ -196,7 +224,7 @@ try {
     // returns verified:boolean. Fail-closed — the leg is REAL only when the math
     // checks out. verifyProofLocally itself refuses if the verifier is unavailable,
     // the bytes are empty, or the result shape is not a real boolean.
-    ok(`${json.scheme}   ${bytes} proof bytes fetched`);
+    ok(`${safe(json.scheme)}   ${bytes} proof bytes fetched`);
     const v = verifyProofLocally
       ? await verifyProofLocally({ proofBytes: json.proof_bytes, statement, verifyFn: proofVerify })
       : { verified: false, reason: 'verify helper not built — run `npm run build`', verifierVersion: null };
@@ -206,7 +234,7 @@ try {
         verifierVersion: v.verifierVersion,
       };
       ok(`VERIFIED LOCALLY by @hyperdag/proof-verifier${v.verifierVersion ? ` v${v.verifierVersion}` : ''} — verified=true`);
-      if (statement) note(`statement: ${JSON.stringify(statement)}`);
+      if (statement) note(`statement: ${safe(JSON.stringify(statement), 400)}`);
       note('the proof asserts RepID ≥ threshold WITHOUT revealing the score — and we checked the math, not their word.');
     } else {
       result.proof = {
@@ -259,7 +287,7 @@ try {
   if (status === 200 && json) {
     result.anchor = { state: 'REAL', stats: json };
     const w = json.total_writes ?? json.writes ?? json.onchain_writes;
-    ok(`on-chain reputation writes: ${w ?? JSON.stringify(json).slice(0, 90)}`);
+    ok(`on-chain reputation writes: ${w === undefined || w === null ? safe(JSON.stringify(json), 90) : safe(w)}`);
   } else {
     result.anchor = { state: 'UNKNOWN', reason: `HTTP ${status}` };
     unk(`anchor stats unavailable (HTTP ${status})`);
@@ -445,7 +473,7 @@ try {
 // the STARK verifier rejects at the crypto layer.
 const canonicalAgentId = result.proof?.canonicalAgentId ?? null;
 if (canonicalAgentId && canonicalAgentId !== AGENT) {
-  note(`slug "${AGENT}" resolves to canonical id ${canonicalAgentId} (the id the proof binds)`);
+  note(`slug "${safe(AGENT)}" resolves to canonical id ${safe(canonicalAgentId)} (the id the proof binds)`);
 }
 
 const gate = evaluateGate({
