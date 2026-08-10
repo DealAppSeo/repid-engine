@@ -41,8 +41,27 @@ const ESC_OTHER = new RegExp(`${ESC}.?`, 'g');
  */
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/g;
 
+/**
+ * Unicode FORMAT characters (category Cf). Invisible, and two of them are attacks:
+ *
+ *  - BIDI OVERRIDES (U+202A-202E, U+2066-2069) reverse rendering order — "Trojan Source",
+ *    CVE-2021-42574. A verdict returned as "VETO\u202EDEVORPPA" reads as approval; a URL
+ *    can be made to display a domain it does not point at.
+ *  - ZERO-WIDTH characters (U+200B-200D, U+FEFF, U+2060) are invisible entirely, so
+ *    "sepolia.base\u200bscan.org" displays as the real explorer and is not.
+ *
+ * Neither is a C0/C1 control, so the first version of this module let both through — found
+ * by testing the assumption rather than re-reading the regex. No legitimate agent tier,
+ * scheme, UUID, verdict or URL needs a format character, so all of Cf goes.
+ *
+ * NOT handled, and deliberately so: homoglyphs (Cyrillic "а" for Latin "a"). Stripping those
+ * means deciding which scripts are allowed, which breaks legitimate non-Latin text. The
+ * printed URL is the mitigation there — it is the thing worth reading carefully.
+ */
+const FORMAT_CHARS = /\p{Cf}/gu;
+
 /** Detects anything we would have had to strip. */
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f]/;
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f]|\p{Cf}/u;
 
 export const MAX_FIELD = 200;
 
@@ -63,7 +82,7 @@ export function safe(v, max = MAX_FIELD) {
 
   // Order matters: strip recognised sequences first so their bodies go with them, then
   // sweep up anything left. Stripping bare controls first would leave "[2K" as visible junk.
-  s = s.replace(OSC, '').replace(CSI, '').replace(ESC_OTHER, '').replace(CONTROLS, ' ');
+  s = s.replace(OSC, '').replace(CSI, '').replace(ESC_OTHER, '').replace(CONTROLS, ' ').replace(FORMAT_CHARS, '');
 
   if (s.length > max) s = `${s.slice(0, max)}… [truncated ${s.length - max} chars]`;
   return s;

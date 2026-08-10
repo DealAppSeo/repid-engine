@@ -231,7 +231,7 @@ if (OFFLINE) {
   for (const k of ['repid', 'live_proof', 'anchor', 'receipt', 'hal']) {
     result.legs[k] = { state: 'SKIPPED', reason: 'offline mode — no network calls attempted' };
   }
-  finish();
+  await finish();
 }
 
 // ── 2. RepID ────────────────────────────────────────────────────────────────
@@ -287,10 +287,15 @@ step(4, 'On-chain — the attestation anchor on Base Sepolia');
 {
   const { status, json, error } = await get(`${ENGINE}/api/v1/observability/onchain-stats`);
   if (status === 200 && json) {
-    const w = json.total_writes ?? json.writes ?? json.onchain_writes ?? null;
+    // Field names confirmed against PRODUCTION on 2026-08-10: the endpoint returns
+    // `lifetime_onchain_writes` and `agents_minted`. None of the names guessed from the
+    // harness matched, so this leg fell through to dumping a raw JSON blob truncated
+    // mid-string. Guessing an API's field names from a sibling script is not knowing them.
+    const w = json.lifetime_onchain_writes ?? json.total_writes ?? json.writes ?? json.onchain_writes ?? null;
+    const minted = json.agents_minted ?? null;
     const blob = safe(JSON.stringify(json), 80);
     result.legs.anchor = { state: 'REAL', writes: w, stats: json };
-    ok(`on-chain reputation writes: ${w === null ? blob : safe(w)}`);
+    ok(`on-chain reputation writes: ${w === null ? blob : safe(w)}${minted === null ? '' : `   agents minted: ${safe(minted)}`}`);
   } else {
     result.legs.anchor = { state: 'UNKNOWN', reason: error ?? `HTTP ${status}` };
     unk(`anchor stats unavailable — ${error ?? `HTTP ${status}`}`);
@@ -417,10 +422,22 @@ if (!halRequested) {
   }
 }
 
-finish();
+await finish();
+
+/** Truncate any string in the tree, in place, so one hostile field cannot balloon output. */
+function boundStrings(node, max = 2000, depth = 0) {
+  if (depth > 8 || node === null || typeof node !== 'object') return;
+  for (const [k, v] of Object.entries(node)) {
+    if (typeof v === 'string' && v.length > max) {
+      node[k] = `${v.slice(0, max)}… [truncated ${v.length - max} chars]`;
+    } else if (v && typeof v === 'object') {
+      boundStrings(v, max, depth + 1);
+    }
+  }
+}
 
 // ── summary ─────────────────────────────────────────────────────────────────
-function finish() {
+async function finish() {
   const legs = Object.entries(result.legs);
   const real = legs.filter(([, l]) => l.state === 'REAL');
   const failed = legs.filter(([, l]) => l.state === 'FAIL');
@@ -456,6 +473,13 @@ function finish() {
   // refuse. The output was made safe; the attempt is still news.
   result.tampering_detected = [...new Set(tampering)];
 
+  // Bound every stored string before serialising. `safe()` guards what we PRINT, but the
+  // result object holds raw server values, so `--json` could still emit megabytes of a
+  // hostile field. Found by the adversarial fuzzer: one response produced 182 KB of JSON.
+  // Control characters are already inert here (JSON.stringify escapes them), so this is
+  // purely about size — the values stay faithful up to the bound, and say when they were cut.
+  boundStrings(result);
+
   if (AS_JSON) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -490,5 +514,14 @@ function finish() {
   }
 
   // A leg that RAN and failed is an error. A leg that could not run is not.
-  process.exit(failed.length > 0 ? 1 : real.length === 0 ? 2 : 0);
+  //
+  // FLUSH BEFORE EXITING. `process.exit()` discards whatever is still buffered in stdout,
+  // and when stdout is a PIPE that buffer is only 64 KB — so `trust-demo --json | jq` was
+  // silently emitting truncated, invalid JSON on any large output. Measured: 65,536 bytes
+  // delivered out of 300,009 written. Found by the adversarial fuzzer, not by reading.
+  // Writing a final empty chunk with a callback guarantees the ordered writes ahead of it
+  // have reached the pipe before we tear the process down.
+  const code = failed.length > 0 ? 1 : real.length === 0 ? 2 : 0;
+  await new Promise((resolve) => process.stdout.write('', resolve));
+  process.exit(code);
 }
