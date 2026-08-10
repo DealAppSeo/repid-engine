@@ -42,11 +42,27 @@ function setMaybeSingle(data: any, error: any = null) {
   mockedDb.__chain.maybeSingle = jest.fn().mockResolvedValue({ data, error });
 }
 
-function setHistory(rows: any[], error: any = null) {
+const RESOLVED_UUID = '11111111-2222-4333-8444-555555555555';
+
+/**
+ * `resolvedAs` is required, and that is the point.
+ *
+ * These tests used to omit it, so the slug -> uuid lookup found nothing and the route passed
+ * the caller's RAW slug down to `getRepIDHistory`. The tests still went green because the
+ * mock is not type-aware — but `repid_score_events.agent_id` is a `uuid` column, so the same
+ * request against a real database raises 22P02 "invalid input syntax for type uuid" and the
+ * route answered an unauthenticated caller with a 500 carrying that text.
+ *
+ * A mock that accepts input the real column rejects is a test that cannot fail the way
+ * production fails (LESSONS #6). Resolution now has to succeed here exactly as it must in
+ * production, and the route reports the RESOLVED id rather than echoing the slug back.
+ */
+function setHistory(rows: any[], error: any = null, resolvedAs: string | null = RESOLVED_UUID) {
   mockedDb.__chain.select = jest.fn().mockReturnThis();
   mockedDb.__chain.eq = jest.fn().mockReturnThis();
   mockedDb.__chain.order = jest.fn().mockReturnThis();
   mockedDb.__chain.gte = jest.fn().mockReturnThis();
+  mockedDb.__chain.maybeSingle = jest.fn().mockResolvedValue({ data: resolvedAs ? { id: resolvedAs } : null, error: null });
   mockedDb.__chain.then = (resolve: any) => resolve({ data: rows, error });
 }
 
@@ -85,10 +101,19 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     ]);
     const r = await request(buildApp()).get('/api/v1/repid/agent-int-2/history');
     expect(r.status).toBe(200);
-    expect(r.body.agent_id).toBe('agent-int-2');
+    expect(r.body.agent_id).toBe(RESOLVED_UUID);   // the RESOLVED uuid, not the slug
     expect(r.body.count).toBe(2);
     expect(r.body.events[0].repid_score).toBe(4500);
     expect(r.body.events[0].delta_from_previous).toBe(100);
+  });
+
+  test('GET /api/v1/repid/:agentId/history — 404 (not 500) when the slug resolves to nothing', async () => {
+    // The regression this locks: an unresolvable slug must never reach the uuid column.
+    setHistory([], null, null);
+    const r = await request(buildApp()).get('/api/v1/repid/trinity-does-not-exist/history');
+    expect(r.status).toBe(404);
+    expect(r.body.error).toBe('AGENT_NOT_FOUND');
+    expect(r.body).not.toHaveProperty('detail');
   });
 
   test('GET /api/v1/repid/:agentId/history with ?since=', async () => {
