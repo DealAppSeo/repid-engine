@@ -1,0 +1,9 @@
+baseline pair1 slot1 F1=0.8713 P=0.8302 R=0.9167 groq_fail=0 nemo_votes=0 nemo_fail=0
+nemotron pair1 slot2 F1=0.8687 P=0.8431 R=0.8958 groq_fail=0 nemo_votes=62 nemo_fail=37
+nemotron pair2 slot1 F1=0.9000 P=0.8654 R=0.9375 groq_fail=0 nemo_votes=73 nemo_fail=26
+baseline pair2 slot2 F1=0.8980 P=0.8800 R=0.9167 groq_fail=27 nemo_votes=0 nemo_fail=0
+baseline pair3 slot1 F1=0.8980 P=0.8800 R=0.9167 groq_fail=31 nemo_votes=0 nemo_fail=0
+nemotron pair3 slot2 F1=0.8842 P=0.8936 R=0.8750 groq_fail=0 nemo_votes=66 nemo_fail=33
+nemotron pair4 slot1 F1=0.8454 P=0.8367 R=0.8542 groq_fail=0 nemo_votes=67 nemo_fail=32
+baseline pair4 slot2 F1=0.8400 P=0.8077 R=0.8750 groq_fail=36 nemo_votes=0 nemo_fail=0
+DONE

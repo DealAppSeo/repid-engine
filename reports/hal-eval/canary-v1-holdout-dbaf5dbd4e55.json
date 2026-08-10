@@ -1,0 +1,45 @@
+{
+  "ruler": "canary-v1@dbaf5dbd4e55",
+  "corpus": "canary-v1",
+  "corpus_sha256": "dbaf5dbd4e551286a4288b3f3ca9057d5b1ab9c914b6972d9baf68ee20dc9956",
+  "split": "holdout",
+  "answer_mode": "claim-as-answer",
+  "engine": "https://repid-engine-production.up.railway.app",
+  "rows": 2,
+  "scored": 2,
+  "errors": 0,
+  "confusion": {
+    "tp": 1,
+    "fp": 0,
+    "tn": 1,
+    "fn": 0
+  },
+  "precision": 1,
+  "recall": 1,
+  "f1": 1,
+  "accuracy": 1,
+  "verdicts": {
+    "flagged": 1,
+    "vetoed": 1
+  },
+  "results": [
+    {
+      "id": "sha-ccc29ca15a15",
+      "truth": "TRUE",
+      "verdict": "flagged",
+      "halScore": 0.36875,
+      "mode": "fact-check",
+      "providers": null,
+      "families": null
+    },
+    {
+      "id": "sha-3a495b5e13b4",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.8949999999999999,
+      "mode": "fact-check",
+      "providers": null,
+      "families": null
+    }
+  ]
+}

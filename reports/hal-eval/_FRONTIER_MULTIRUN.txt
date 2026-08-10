@@ -1,0 +1,4 @@
+frontier run1 F1=0.9072 P=0.8980 R=0.9167 cov=coverage 100.0%
+frontier run2 F1=0.9184 P=0.9000 R=0.9375 cov=coverage 100.0%
+frontier run3 F1=0.9293 P=0.9020 R=0.9583 cov=coverage 100.0%
+DONE
