@@ -554,12 +554,22 @@ function providerRisk(v: ProviderVerdict): number {
  * (it returns an ERROR verdict on any failure), so any Grok error simply falls back to the current
  * (tied) behavior with no effect on the live path. Small + self-contained; does NOT touch src/hal/lib/*.
  */
+/**
+ * xAI/Grok API key resolution. Accepts the canonical `GROK_API_KEY` OR the standard xAI env name
+ * `XAI_API_KEY` — the wallet/key inventory (.env.master, Railway) stores it as `XAI_API_KEY`, so reading
+ * only `GROK_API_KEY` made HAL_ESCALATE_GROK a SILENT NO-OP (0 escalations, precision lever dead).
+ * Reading both closes that gap with zero behavior change wherever GROK_API_KEY is already set.
+ */
+export function grokApiKey(): string | undefined {
+  return process.env.GROK_API_KEY?.trim() || process.env.XAI_API_KEY?.trim() || undefined;
+}
+
 async function grokTiebreak(
   deliverable: string,
   maxTokens: number,
   quorumId: string,
 ): Promise<ProviderVerdict | null> {
-  const key = process.env.GROK_API_KEY?.trim();
+  const key = grokApiKey();
   if (!key) return null;
   const cfg: FactCheckProviderCfg = {
     name: 'grok',
@@ -740,7 +750,7 @@ export async function factCheck(
   // independent tiebreak vote, folded in as a 'grok'-family verdict before the quorum is tallied.
   // Env-gated (HAL_ESCALATE_GROK, default off) and FAIL-SAFE (flag off / no key / Grok error → no-op,
   // current tied behavior preserved). Done here so the tiebreak vote flows through ALL downstream math.
-  if (process.env.HAL_ESCALATE_GROK === 'true' && process.env.GROK_API_KEY?.trim()) {
+  if (process.env.HAL_ESCALATE_GROK === 'true' && grokApiKey()) {
     const okPre = verdicts.filter((v) => v.verdict !== 'ERROR');
     const famCount = (want: Verdict) =>
       new Set(okPre.filter((v) => v.verdict === want).map((v) => familyByName.get(v.provider) ?? v.provider)).size;
@@ -926,7 +936,7 @@ export async function factCheck(
   if (
     decision === 'vetoed' &&
     process.env.HAL_ESCALATE_GROK === 'true' &&
-    process.env.GROK_API_KEY?.trim() &&
+    grokApiKey() &&
     !families.includes('grok') // escalate-once — the cycle-2 tiebreak may have already cast a grok vote
   ) {
     // Local, clamped env parse (no redeploy to tune). BAND in [0,1]; confidences in [0,100].
@@ -1311,6 +1321,44 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
   if (qw && enabled.qwen) {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
+  }
+  // FRONTIER PANEL (opt-in, HAL_S2_ENABLE_FRONTIER, default OFF → prod unchanged). Adds STRONG models
+  // as standing quorum members — the panel's ceiling is set by its members, and the free 8B panel's
+  // confident-wrong errors on obscure facts are exactly what a frontier voter corrects. Routed through
+  // OpenRouter (OpenAI-compatible; ANTHROPIC's own API is not) — verified LIVE 2026-08-09: openai/gpt-4o
+  // + anthropic/claude-sonnet-4 both 200 on this key. Distinct families (openai, anthropic) not otherwise
+  // in the panel. tier 'escalation' → only fire in the standing panel when cost-ordering is OFF
+  // (HAL_QUORUM_COST_ORDERED=false), which is the measured "frontier standing panel" config.
+  const orFront = process.env.OPENROUTER_API_KEY?.trim();
+  const frontierOn = process.env.HAL_S2_ENABLE_FRONTIER === 'true';
+  if (orFront && frontierOn) {
+    out.push({ name: 'or-gpt', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_OPENAI_MODEL ?? 'openai/gpt-4o', family: 'openai', tier: 'escalation' });
+    out.push({ name: 'or-claude', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
+  }
+  // FREE FRONTIER MEMBER (opt-in, HAL_S2_ENABLE_FRONTIER_FREE, default OFF → prod unchanged).
+  // DELIBERATELY INDEPENDENT of HAL_S2_ENABLE_FRONTIER: that flag's two-member panel is already a
+  // MEASURED configuration (F1 0.9183 mean, n=3, rigorous-v1@596f10de18d0). Folding a third member
+  // into it would silently redefine what "+ frontier" means and invalidate that recorded number —
+  // the ruler problem of CLAUDE_RULES 24. A separate flag keeps the measured arm byte-identical and
+  // makes this a NEW configuration width that must earn its own baseline.
+  //
+  // MODEL: nvidia/nemotron-3-ultra-550b-a55b:free — 550B MoE, 1M context, $0 prompt AND completion.
+  // Verified LIVE 2026-08-09 against OpenRouter /api/v1/models (present, pricing 0/0) on this key.
+  // The point of the experiment: the paid frontier panel bought only ~+0.01 F1 at real cost, so the
+  // question is whether a frontier-CLASS voter at ZERO marginal cost reaches the same lift.
+  //
+  // FAMILY 'nvidia' is declared EXPLICITLY (not regex-derived) and is distinct from every other panel
+  // family — groq=llama, cerebras=glm, deepseek, gemini, mistral, openrouter=qwen, or-gpt=openai,
+  // or-claude=anthropic. A collision would make this ONE vote with an existing member rather than an
+  // independent one, which is exactly what the family-independence quorum forbids. Not yet in
+  // family-registry.ts (same gap as gpt-4o/sonnet-4 — logged as hal_family_unmapped); the explicit
+  // field wins at runtime, and registering all three together is a separate, DB-touching change.
+  //
+  // RATE-LIMIT CAVEAT: `:free` slugs 429 hard under load (see the OpenRouter backfill note above).
+  // A run where this voter 429s measures NOTHING about quality — check its vote count before reading
+  // any F1 delta, per CLAUDE_RULES 24 (a dead provider is a provider failure, not a regression).
+  if (orFront && process.env.HAL_S2_ENABLE_FRONTIER_FREE === 'true') {
+    out.push({ name: 'or-nemotron', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_FREE_MODEL ?? 'nvidia/nemotron-3-ultra-550b-a55b:free', family: 'nvidia', tier: 'escalation' });
   }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity). CROSS-FIX
   // 2026-07-05 — registry-primary (familyOfResolved): accurate for registered models, legacy-regex
