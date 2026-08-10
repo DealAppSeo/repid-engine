@@ -142,8 +142,9 @@ RepID X at time T" claim. And it does not re-verify the server's upstream RepID 
 
 ## Requirements
 
-Node 18+. One dependency (`@hyperdag/proof-verifier`), which is pure WASM with no
-dependencies of its own.
+Node 18+. Verified on **Node 18.20.8** and **Node 22.22.2**, running the packed tarball
+both offline and against a live engine. One dependency (`@hyperdag/proof-verifier`), pure
+WASM with no dependencies of its own.
 
 ## Licence
 

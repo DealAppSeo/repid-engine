@@ -51,11 +51,15 @@ import { maySendKey } from '../src/engine-trust.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'fixtures');
 
-// Node 18 and 20 print "ExperimentalWarning: The Fetch API is an experimental feature" on
-// the first fetch. It is noise about Node's own API maturity — it says nothing about what
-// this tool verified — and it lands in the middle of the output on exactly the versions
-// `engines` supports. Suppressed as narrowly as possible: this one warning, by type and
-// message. Every other warning still reaches the user.
+// Some Node 18.x/20.x builds print "ExperimentalWarning: The Fetch API is an experimental
+// feature" on the first fetch — noise about Node's own API maturity that says nothing about
+// what this tool verified, landing mid-output on versions `engines` supports.
+//
+// HONESTY NOTE: not reproduced on 18.20.8 (checked with a bare fetch — no warning, with or
+// without this shim), so on that build this is a no-op rather than a fix. Kept because it
+// costs nothing and older patch releases in the supported range did emit it. Suppression is
+// as narrow as it can be: this one warning, matched by type AND message. Every other
+// warning, including any future deprecation, still reaches the user.
 const _emitWarning = process.emitWarning.bind(process);
 process.emitWarning = (warning, ...rest) => {
   const message = typeof warning === 'string' ? warning : warning?.message ?? '';
