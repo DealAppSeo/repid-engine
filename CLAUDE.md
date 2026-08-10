@@ -2,6 +2,31 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## READ `LESSONS.md` FIRST — it is shared with XC, GA and the swarm
+
+[`LESSONS.md`](LESSONS.md) at the repo root holds the operating rules every agent on this
+system works under. It is **injected verbatim** into every XC/GA dispatch by
+`scripts/dispatch/run-agent.mjs`, and it is the one place a lesson is durable across
+*all* of them.
+
+**Why it is there and not here.** This repo holds 116 dated report files, and until
+2026-08-05 this file referenced none of them. `reports/2026-07-31/SCHOOL_OF_HARD_KNOCKS`
+already recorded "unverified inference — again, **third occurrence**"; the same class
+recurred twice more that day. Filing a lesson does not prevent its recurrence. Only
+putting it in front of the worker does.
+
+**Why one file in git, rather than each surface keeping its own.** There are five
+memory stores here — living-docs, `~/.claude` project memory, the claude-mem plugin,
+`reports/`, and these CLAUDE.md files — and **XC and GA can read none of them.** The
+dispatch preamble is the only channel that reaches those two. A file in git is the only
+store every reader can see, and it is the only one where a disagreement surfaces as a
+version-control conflict instead of two copies quietly drifting apart.
+
+**Adding to it:** it has a hard 6000-character cap enforced by
+`tests/lessons-injectable.test.ts`. The cap is the mechanism, not tidiness — an
+un-injectable file becomes the 117th report nobody reads. A new lesson must replace or
+generalise an existing one. Narratives stay in `reports/<date>/`.
+
 ## What this is
 
 `repid-engine` is the proprietary behavioral reputation scoring backend for the HyperDAG Protocol Trust* ecosystem (`trustrepid.dev` · github.com/DealAppSeo/hyperdag-protocol). It is an Express API that mutates agent reputation (`repid`) scores in Supabase and stubs out an EAS / ERC-8004 / ZKP attestation pipeline.
