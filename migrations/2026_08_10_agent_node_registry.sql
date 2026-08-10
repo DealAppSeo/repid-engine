@@ -97,6 +97,14 @@ select
   expires_at > now()                                        as lease_active
 from public.agent_node_registry;
 
+-- SECURITY_INVOKER — NOT optional, and the security advisor flagged it as ERROR within
+-- seconds of the create. A Postgres view defaults to the OWNER's privileges, so this view
+-- would read agent_node_registry with RLS BYPASSED — handing any caller of the view the
+-- full lease + capability map of every node, defeating the RLS enabled directly above it.
+-- security_invoker evaluates the view under the CALLER's rights, so the table's RLS is
+-- what decides. Any future view over this table needs the same line.
+alter view public.v_node_truth set (security_invoker = true);
+
 comment on table public.agent_node_registry is
   'One row per (node, lane): write lease + capability manifest + heartbeat. No status column by design — liveness is derived from heartbeat_at recency (see v_node_truth), because a dead process cannot mark itself dead.';
 comment on column public.agent_node_registry.can_hal_vote is
