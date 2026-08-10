@@ -7,6 +7,27 @@ dist/
 *.js.map
 .DS_Store
 .claude/worktrees/
+# CodeGraph local index (52MB SQLite of the whole tree). The tool ships its own
+# .codegraph/.gitignore, but this repo is PUBLIC — pin it here too so a `git add -A`
+# can never stage a full structural map of the codebase.
+.codegraph/
+
+# HAL eval RAW run logs. Regenerable, large, and — the reason this rule exists —
+# provider 429 bodies embed our Groq ORGANIZATION ID in plain text (verified
+# 2026-08-09: 23 of 31 log files carried it). This repo is PUBLIC. Commit the
+# derived `_*.txt` summaries instead; they carry the numbers without the identifiers.
+reports/hal-eval/*.log
+# Aborted runs: coverage below floor, f1 null. Not results — transport failures.
+reports/hal-eval/*.INCOMPLETE.json
+
+# Agent scratch scripts written into the repo ROOT. This is not hypothetical:
+# `_scratch-dpb.mjs` appeared here on 2026-08-09 carrying .env.master loading,
+# BASE_SEPOLIA_PRIVATE_KEY use, live x402 signing, production service UUIDs and
+# wallet addresses. `git add -A` would have published all of it (CLAUDE_RULES 25 —
+# the same class as the credential scratch files staged on 2026-08-01).
+/_scratch-*
+/scratch-*.mjs
+/scratch-*.ts
 
 # Generated artifacts (regenerable via npm scripts)
 hal-ground-truth-template.csv
