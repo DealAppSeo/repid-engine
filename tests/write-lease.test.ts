@@ -11,9 +11,12 @@
 import {
   DEFAULT_TTL_MS,
   EMPTY_REGISTRY,
+  HEARTBEAT_TTL_MS,
   LANE_ENV,
+  MAX_LEASE_AGE_MS,
   acquireLease,
   activeLeases,
+  renewLease,
   currentLane,
   evaluateWrite,
   globToRegExp,
@@ -155,6 +158,124 @@ describe('leases expire, so a crashed agent cannot lock the repo', () => {
 // ---------------------------------------------------------------------------
 // The graduated decision
 // ---------------------------------------------------------------------------
+
+describe('lane definitions are disjoint BY TEST, not by good intentions', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { LANE_DEFINITIONS, allLanePaths, laneById } = require('../src/orchestration/lanes');
+
+  it('THE INVARIANT: no two lanes hold overlapping globs', () => {
+    const all = allLanePaths();
+    const collisions: string[] = [];
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        const a = all[i]!;
+        const b = all[j]!;
+        if (a.lane !== b.lane && patternsMayOverlap(a.pattern, b.pattern)) {
+          collisions.push(`${a.lane}:${a.pattern} <-> ${b.lane}:${b.pattern}`);
+        }
+      }
+    }
+    expect(collisions).toEqual([]);
+  });
+
+  it('every lane claims at least one path — an empty lane cannot take a lease', () => {
+    for (const l of LANE_DEFINITIONS) expect(l.paths.length).toBeGreaterThan(0);
+  });
+
+  it('lane ids are unique', () => {
+    const ids = LANE_DEFINITIONS.map((l: { id: string }) => l.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('an unknown lane resolves to undefined, not a throw — unknown means advisory', () => {
+    expect(laneById('nope')).toBeUndefined();
+  });
+
+  it('the four lanes can all hold their leases simultaneously', () => {
+    let registry: LeaseRegistry = EMPTY_REGISTRY;
+    for (const l of LANE_DEFINITIONS) {
+      const r = acquireLease(registry, { lane: l.id, paths: l.paths, branch: `feat/${l.id}`, purpose: l.owns }, NOW);
+      expect(r.ok).toBe(true);
+      registry = withLease(registry, r.lease!, NOW);
+    }
+    expect(registry.leases).toHaveLength(LANE_DEFINITIONS.length);
+  });
+
+  it('reports/ is deliberately unleased, so an eval can always write its own output', () => {
+    const patterns = allLanePaths().map((p: { pattern: string }) => p.pattern);
+    expect(patterns.some((p: string) => p.startsWith('reports/'))).toBe(false);
+  });
+});
+
+describe('heartbeat — liveness without punishing long work', () => {
+  it('renewal pushes the expiry out and stamps proof of life', () => {
+    const r = renewLease(reg(lease({ expiresAt: iso(NOW + 60_000) })), 'GA', NOW);
+    expect(r.ok).toBe(true);
+    const l = r.registry.leases.find((x) => x.lane === 'GA')!;
+    expect(Date.parse(l.expiresAt)).toBe(NOW + HEARTBEAT_TTL_MS);
+    expect(l.heartbeatAt).toBe(iso(NOW));
+  });
+
+  it('THE POINT: a silent lane frees its paths in one window, not one TTL', () => {
+    const held = reg(lease({ expiresAt: iso(NOW + HEARTBEAT_TTL_MS) }));
+    // Lane dies. One window later nothing renewed it.
+    expect(activeLeases(held, NOW + HEARTBEAT_TTL_MS + 1)).toHaveLength(0);
+    expect(HEARTBEAT_TTL_MS).toBeLessThan(DEFAULT_TTL_MS);
+  });
+
+  it('renewal CANNOT widen paths — a heartbeat is not a second acquire', () => {
+    const before = lease({ paths: ['src/hal/**'] });
+    const after = renewLease(reg(before), 'GA', NOW).registry.leases[0]!;
+    expect(after.paths).toEqual(['src/hal/**']);
+  });
+
+  it('refuses to resurrect an EXPIRED lease — those paths may be someone else‘s now', () => {
+    const dead = reg(lease({ expiresAt: iso(NOW - 1) }));
+    const r = renewLease(dead, 'GA', NOW);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/re-acquire/);
+    expect(r.registry.leases).toHaveLength(0);
+  });
+
+  it('refuses a lane that holds nothing', () => {
+    expect(renewLease(EMPTY_REGISTRY, 'GA', NOW).ok).toBe(false);
+  });
+
+  it('NO IMMORTAL LEASE: heartbeats cannot extend past the hard ceiling', () => {
+    const old = lease({
+      acquiredAt: iso(NOW - MAX_LEASE_AGE_MS + 60_000), // 1 min of ceiling left
+      expiresAt: iso(NOW + 60_000),
+    });
+    const l = renewLease(reg(old), 'GA', NOW).registry.leases.find((x) => x.lane === 'GA')!;
+    // Wanted NOW + 15m; ceiling allows only NOW + 1m.
+    expect(Date.parse(l.expiresAt)).toBe(NOW + 60_000);
+  });
+
+  it('at the ceiling it reports NOT ok, so a stuck loop surfaces to a human', () => {
+    const r = renewLease(reg(lease({ acquiredAt: iso(NOW - MAX_LEASE_AGE_MS) })), 'GA', NOW);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/ceiling/);
+  });
+
+  it('a malformed acquiredAt does not produce a NaN expiry that silently kills a live lane', () => {
+    const l = renewLease(reg(lease({ acquiredAt: 'not-a-date' })), 'GA', NOW)
+      .registry.leases.find((x) => x.lane === 'GA')!;
+    expect(Number.isFinite(Date.parse(l.expiresAt))).toBe(true);
+    expect(isExpired(l, NOW)).toBe(false);
+  });
+
+  it('renewing one lane leaves other lanes untouched', () => {
+    const other = lease({ lane: 'CC', paths: ['src/zkp/**'] });
+    const out = renewLease(reg(lease(), other), 'GA', NOW).registry;
+    expect(out.leases.find((l) => l.lane === 'CC')!.expiresAt).toBe(other.expiresAt);
+  });
+
+  it('legacy leases with no heartbeatAt still work — expiresAt stays authoritative', () => {
+    const legacy = lease();
+    expect(legacy.heartbeatAt).toBeUndefined();
+    expect(isExpired(legacy, NOW)).toBe(false);
+  });
+});
 
 describe('graduated adoption — turning this on cannot brick the repo', () => {
   it('no leases at all → allow everything', () => {
