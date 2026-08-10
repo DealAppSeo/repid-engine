@@ -1,0 +1,98 @@
+# @hyperdag/trust-demo
+
+**Trust math, not a server.** One command, no API key, no account, no build step.
+
+```bash
+npx @hyperdag/trust-demo
+```
+
+In about a second you will watch a genuine Plonky3 STARK proof verify **on your own
+machine**, and then watch the same verifier reject three tampered versions of it. Then the
+command reads four live production surfaces over keyless HTTP.
+
+## Why the first step is the important one
+
+Most "verifiable" demos ask you to believe a server that says `verified: true`. This one
+runs the published [`@hyperdag/proof-verifier`](https://www.npmjs.com/package/@hyperdag/proof-verifier)
+WASM locally, offline, over a real proof:
+
+```
+1. A real STARK proof, verified on YOUR machine (offline, no key)
+   OK    proof VERIFIED locally by @hyperdag/proof-verifier v0.2.0 (10673 bytes)
+   OK    tamper rejected: score changed
+   OK    tamper rejected: agent_id swapped
+   OK    tamper rejected: threshold raised above the score
+```
+
+The tamper cases are not decoration. A verifier that accepted everything would also accept
+the honest case, so the honest case alone proves nothing. Rejecting a swapped `agent_id` is
+what shows the proof is **bound to that agent** and cannot be replayed by another.
+
+This step needs no network. Run it on a plane:
+
+```bash
+npx @hyperdag/trust-demo --offline
+```
+
+## What else it checks
+
+| Step | What | Needs a key? |
+|---|---|---|
+| 1 | A real STARK proof verified locally, plus three tamper rejections | no — and no network |
+| 2 | The agent's live RepID score and tier | no |
+| 3 | That agent's **live** proof, fetched then verified locally | no |
+| 4 | The Base Sepolia attestation anchor | no |
+| 5 | The newest real settled exchange, with a shareable receipt URL | no |
+
+## Options
+
+```
+--offline           only the local proof check; makes no network calls
+--agent <slug>      which agent to look up (default: trinity-shofet)
+--engine <url>      point at a different deployment
+--json              machine-readable output, same data
+--timeout <ms>      per-request timeout (default 15000)
+```
+
+Exit codes: `0` every attempted leg passed · `1` a leg that ran produced a failure (for
+example a proof was rejected) · `2` nothing could be checked at all.
+
+## What it will not do
+
+**It never invents a value.** Every step either produces a real result from a real system
+or prints `????` with the reason. If production is unreachable you get four named gaps and
+a proof that still verified locally — not a green tick.
+
+**It is not an authorisation verdict.** This is the *keyless subset* of the trust harness.
+HAL — the cross-provider quorum that decides whether an action is safe — is not part of it,
+because it needs a key. An unavailable safety check is not a passing safety check, so this
+command never prints a gate decision. The full harness lives in
+`scripts/demo/trust-harness-e2e.mjs`.
+
+**The bundled proof is synthetic, deliberately.** `fixtures/leaf-rangecheck.synthetic.*` is
+a real STARK proof generated offline over a fabricated witness (a NIL-variant UUID, a
+made-up score). It is not a production extract. Live agent data is fetched at runtime,
+never embedded in this package.
+
+## What a `verified: true` actually means
+
+Verbatim from the verifier's own README, because overclaiming here would defeat the point:
+
+- **Agent-bound.** A proof minted for agent A fails under any other `agent_id`.
+- **Range-sound.** The circuit proves `repid_score > threshold` via a 16-bit range check on
+  the gap, so `repid_score ≤ threshold` has no satisfying witness.
+- **Value-bound.** An AIR boundary constraint ties the range-checked gap to the public
+  `{threshold, repid_score}`.
+
+And what it does **not** mean: the score is *public*, not hidden — this is a verifiable
+attestation, not zero-knowledge concealment. There is no timestamp, so it carries no "had
+RepID X at time T" claim. And it does not re-verify the server's upstream RepID computation.
+
+## Requirements
+
+Node 18+. One dependency (`@hyperdag/proof-verifier`), which is pure WASM with no
+dependencies of its own.
+
+## Licence
+
+Apache-2.0
