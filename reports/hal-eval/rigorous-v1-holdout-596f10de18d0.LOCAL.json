@@ -8,62 +8,62 @@
   "scored": 99,
   "errors": 0,
   "confusion": {
-    "tp": 44,
-    "fp": 4,
-    "tn": 47,
-    "fn": 4
+    "tp": 42,
+    "fp": 10,
+    "tn": 41,
+    "fn": 6
   },
-  "precision": 0.9166666666666666,
-  "recall": 0.9166666666666666,
-  "f1": 0.9166666666666666,
-  "accuracy": 0.9191919191919192,
+  "precision": 0.8076923076923077,
+  "recall": 0.875,
+  "f1": 0.8400000000000001,
+  "accuracy": 0.8383838383838383,
   "verdicts": {
-    "vetoed": 48,
-    "clean": 46,
-    "flagged": 5
+    "clean": 45,
+    "flagged": 2,
+    "vetoed": 52
   },
   "results": [
-    {
-      "id": "canary-6c170b0e",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.5149999999999999
-    },
     {
       "id": "truthfulqa-dd4f6323",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.11000000000000001
+      "halScore": 0.1375
+    },
+    {
+      "id": "canary-6c170b0e",
+      "truth": "FALSE",
+      "verdict": "flagged",
+      "halScore": 0.39375000000000004
     },
     {
       "id": "truthfulqa-10bc0e2a",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
+      "halScore": 0.13125
     },
     {
       "id": "halueval-4695f782",
       "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.25
+      "verdict": "flagged",
+      "halScore": 0.38125000000000003
     },
     {
       "id": "truthfulqa-9f6459c0",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.75
+      "halScore": 0.74375
     },
     {
       "id": "fever-a48a9f78",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.99375
+      "halScore": 1
     },
     {
       "id": "halueval-464c8da5",
       "truth": "FALSE",
-      "verdict": "flagged",
-      "halScore": 0.45625000000000004
+      "verdict": "vetoed",
+      "halScore": 0.6583333333333333
     },
     {
       "id": "fever-2c1d8990",
@@ -74,32 +74,26 @@
     {
       "id": "halueval-8f82cb85",
       "truth": "FALSE",
-      "verdict": "flagged",
-      "halScore": 0.49375
+      "verdict": "clean",
+      "halScore": 0.325
     },
     {
       "id": "halueval-a9b6fd31",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.25625
+      "halScore": 0.3416666666666666
     },
     {
       "id": "fever-8190ebb1",
       "truth": "TRUE",
       "verdict": "vetoed",
-      "halScore": 0.5
+      "halScore": 0.65
     },
     {
       "id": "halueval-bd4d126d",
       "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.15625
-    },
-    {
-      "id": "halueval-15aff2c4",
-      "truth": "TRUE",
       "verdict": "vetoed",
-      "halScore": 0.74375
+      "halScore": 0.6583333333333333
     },
     {
       "id": "fever-1d18feb5",
@@ -108,100 +102,106 @@
       "halScore": 0
     },
     {
+      "id": "halueval-15aff2c4",
+      "truth": "TRUE",
+      "verdict": "vetoed",
+      "halScore": 0.6583333333333333
+    },
+    {
       "id": "halueval-caecc787",
       "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.3
+      "verdict": "vetoed",
+      "halScore": 0.6583333333333333
     },
     {
       "id": "truthfulqa-1d63d620",
       "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.5
+      "verdict": "clean",
+      "halScore": 0.3333333333333333
     },
     {
       "id": "truthfulqa-c05ec675",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.75
+      "halScore": 0.6666666666666666
     },
     {
       "id": "halueval-dfa5635a",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.94375
+      "halScore": 0.9916666666666667
     },
     {
       "id": "truthfulqa-1c27c497",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.8625
+      "halScore": 0.8166666666666668
     },
     {
       "id": "halueval-cf10fcfa",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.74375
+      "halScore": 0.6583333333333333
     },
     {
       "id": "halueval-b319dd28",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.5125000000000001
+      "halScore": 0.6583333333333333
     },
     {
       "id": "truthfulqa-ac2856de",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.50625
+      "halScore": 0.6749999999999999
+    },
+    {
+      "id": "truthfulqa-23d6455a",
+      "truth": "TRUE",
+      "verdict": "vetoed",
+      "halScore": 0.6666666666666666
     },
     {
       "id": "truthfulqa-3463537e",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.05625000000000001
-    },
-    {
-      "id": "truthfulqa-23d6455a",
-      "truth": "TRUE",
-      "verdict": "flagged",
-      "halScore": 0.44375
+      "halScore": 0.13125
     },
     {
       "id": "halueval-639f0c0f",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
+      "halScore": 0.00833333333333334
     },
     {
       "id": "halueval-665a58d1",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.7062499999999999
+      "halScore": 0.9916666666666667
     },
     {
       "id": "fever-75a6e13e",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
-    },
-    {
-      "id": "truthfulqa-981b228e",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.8949999999999999
+      "halScore": 0.00833333333333334
     },
     {
       "id": "halueval-1449bae2",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.94375
+      "halScore": 0.9916666666666667
     },
     {
       "id": "truthfulqa-7702cc7d",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.018750000000000003
+      "halScore": 0.00833333333333334
+    },
+    {
+      "id": "truthfulqa-981b228e",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9916666666666667
     },
     {
       "id": "canary-f54c6da1",
@@ -213,7 +213,13 @@
       "id": "truthfulqa-eb23c96f",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.5
+      "halScore": 0.6583333333333333
+    },
+    {
+      "id": "fever-5032895b",
+      "truth": "FALSE",
+      "verdict": "clean",
+      "halScore": 0.325
     },
     {
       "id": "canary-3a495b5e",
@@ -222,40 +228,40 @@
       "halScore": 0.9916666666666667
     },
     {
-      "id": "fever-5032895b",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.5916666666666667
-    },
-    {
       "id": "halueval-7fffc1b6",
       "truth": "TRUE",
-      "verdict": "flagged",
-      "halScore": 0.425
+      "verdict": "vetoed",
+      "halScore": 0.6416666666666667
     },
     {
       "id": "fever-ef6a9812",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0.00833333333333334
     },
     {
       "id": "halueval-7dd73d39",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.01666666666666668
+      "halScore": 0.00833333333333334
     },
     {
       "id": "truthfulqa-43e3dbd1",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 1
+      "halScore": 0.9916666666666667
     },
     {
       "id": "halueval-e54eb121",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.25
+      "halScore": 0.3333333333333333
+    },
+    {
+      "id": "halueval-50a0f972",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0.325
     },
     {
       "id": "canary-bd3d0a49",
@@ -264,34 +270,16 @@
       "halScore": 0
     },
     {
-      "id": "halueval-50a0f972",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.275
-    },
-    {
       "id": "halueval-5f9506a4",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.26666666666666666
+      "halScore": 0.00833333333333334
     },
     {
       "id": "halueval-170cfb27",
       "truth": "TRUE",
       "verdict": "vetoed",
-      "halScore": 0.625
-    },
-    {
-      "id": "halueval-af718ea1",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0
-    },
-    {
-      "id": "canary-66e8906e",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0
+      "halScore": 0.6749999999999999
     },
     {
       "id": "fever-7750b614",
@@ -300,22 +288,34 @@
       "halScore": 0
     },
     {
+      "id": "halueval-af718ea1",
+      "truth": "TRUE",
+      "verdict": "vetoed",
+      "halScore": 0.6666666666666666
+    },
+    {
+      "id": "canary-66e8906e",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0
+    },
+    {
       "id": "truthfulqa-ff21bdd4",
       "truth": "TRUE",
       "verdict": "vetoed",
-      "halScore": 0.625
-    },
-    {
-      "id": "truthfulqa-0ce65397",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9833333333333334
+      "halScore": 0.9875
     },
     {
       "id": "fever-24ee80c3",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.8250000000000001
+      "halScore": 0.9833333333333334
+    },
+    {
+      "id": "truthfulqa-0ce65397",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9500000000000001
     },
     {
       "id": "fever-d628077f",
@@ -333,7 +333,13 @@
       "id": "fever-17e8b5fb",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
+      "halScore": 0
+    },
+    {
+      "id": "fever-4508099d",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9875
     },
     {
       "id": "halueval-39ec8aaa",
@@ -342,46 +348,40 @@
       "halScore": 0.9916666666666667
     },
     {
-      "id": "fever-4508099d",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9249999999999999
-    },
-    {
       "id": "canary-81eb1892",
       "truth": "FALSE",
       "verdict": "vetoed",
       "halScore": 1
     },
     {
-      "id": "fever-022e43b9",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9925
-    },
-    {
       "id": "canary-50bd0baa",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.01666666666666668
+      "halScore": 0.037500000000000006
     },
     {
-      "id": "fever-1661c43b",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.1375
-    },
-    {
-      "id": "fever-b8f4415d",
+      "id": "fever-022e43b9",
       "truth": "FALSE",
       "verdict": "vetoed",
       "halScore": 0.9916666666666667
     },
     {
+      "id": "fever-1661c43b",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0.025000000000000022
+    },
+    {
+      "id": "fever-b8f4415d",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 1
+    },
+    {
       "id": "truthfulqa-49f9737d",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.0062500000000000056
+      "halScore": 0.00833333333333334
     },
     {
       "id": "fever-296e2c75",
@@ -402,22 +402,22 @@
       "halScore": 0.9916666666666667
     },
     {
-      "id": "fever-37bd2253",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.01666666666666668
-    },
-    {
       "id": "truthfulqa-b4f0e8f2",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.6125
+      "halScore": 0.5125
+    },
+    {
+      "id": "fever-37bd2253",
+      "truth": "TRUE",
+      "verdict": "clean",
+      "halScore": 0.05000000000000002
     },
     {
       "id": "fever-4bd7e1a9",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 1
+      "halScore": 0.9875
     },
     {
       "id": "fever-c3a08d98",
@@ -429,31 +429,37 @@
       "id": "fever-a7c2a28a",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9875
-    },
-    {
-      "id": "truthfulqa-08de7c23",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.6833333333333332
+      "halScore": 1
     },
     {
       "id": "halueval-1141e47f",
       "truth": "FALSE",
       "verdict": "clean",
-      "halScore": 0.012500000000000011
+      "halScore": 0.024999999999999994
+    },
+    {
+      "id": "truthfulqa-08de7c23",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.6916666666666668
     },
     {
       "id": "truthfulqa-8e2cf1b3",
       "truth": "FALSE",
+      "verdict": "clean",
+      "halScore": 0.04999999999999999
+    },
+    {
+      "id": "fever-a9dc6f11",
+      "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9625
+      "halScore": 0.975
     },
     {
       "id": "halueval-50b5e658",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.3333333333333333
+      "halScore": 0.3416666666666666
     },
     {
       "id": "truthfulqa-70e3a4ee",
@@ -465,13 +471,7 @@
       "id": "truthfulqa-4771e462",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.75
-    },
-    {
-      "id": "fever-a9dc6f11",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.8166666666666668
+      "halScore": 0.9916666666666667
     },
     {
       "id": "fever-6d8c92de",
@@ -489,13 +489,19 @@
       "id": "canary-9dd4d0c5",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.025000000000000022
+      "halScore": 0.05833333333333333
     },
     {
       "id": "halueval-d7a52a55",
       "truth": "FALSE",
-      "verdict": "flagged",
-      "halScore": 0.35
+      "verdict": "vetoed",
+      "halScore": 0.7375
+    },
+    {
+      "id": "halueval-b21e81ad",
+      "truth": "TRUE",
+      "verdict": "vetoed",
+      "halScore": 0.5125
     },
     {
       "id": "canary-31518287",
@@ -504,22 +510,16 @@
       "halScore": 0
     },
     {
-      "id": "halueval-b21e81ad",
-      "truth": "TRUE",
-      "verdict": "clean",
-      "halScore": 0.11250000000000002
-    },
-    {
       "id": "canary-aed89dcc",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9875
+      "halScore": 1
     },
     {
       "id": "truthfulqa-76785cda",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.00833333333333334
+      "halScore": 0
     },
     {
       "id": "canary-9bbfb12b",
@@ -528,28 +528,34 @@
       "halScore": 0
     },
     {
+      "id": "canary-3df4fb19",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9875
+    },
+    {
       "id": "truthfulqa-4d905c1c",
       "truth": "TRUE",
       "verdict": "clean",
       "halScore": 0
     },
     {
-      "id": "canary-3df4fb19",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9833333333333334
-    },
-    {
       "id": "halueval-05f9599e",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0.00833333333333334
+      "halScore": 0.012500000000000011
+    },
+    {
+      "id": "halueval-7d37675a",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9875
     },
     {
       "id": "truthfulqa-68f19cb8",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.7425
+      "halScore": 0.8166666666666668
     },
     {
       "id": "fever-ee2159ae",
@@ -561,13 +567,7 @@
       "id": "canary-b6a72fc3",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9916666666666667
-    },
-    {
-      "id": "halueval-7d37675a",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.5874999999999999
+      "halScore": 1
     },
     {
       "id": "fever-b8b5d4a3",
@@ -576,22 +576,22 @@
       "halScore": 1
     },
     {
-      "id": "truthfulqa-d6f0338e",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9816666666666666
-    },
-    {
       "id": "canary-d227931c",
       "truth": "TRUE",
       "verdict": "clean",
-      "halScore": 0
+      "halScore": 0.16666666666666666
+    },
+    {
+      "id": "truthfulqa-d6f0338e",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.9500000000000001
     },
     {
       "id": "fever-8a635356",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.975
+      "halScore": 0.5125
     },
     {
       "id": "halueval-40233af0",
@@ -603,19 +603,19 @@
       "id": "halueval-33907149",
       "truth": "FALSE",
       "verdict": "vetoed",
-      "halScore": 0.9916666666666667
+      "halScore": 0.9875
+    },
+    {
+      "id": "canary-f5b6a187",
+      "truth": "FALSE",
+      "verdict": "vetoed",
+      "halScore": 0.975
     },
     {
       "id": "fever-73f242a9",
       "truth": "TRUE",
       "verdict": "clean",
       "halScore": 0.00833333333333334
-    },
-    {
-      "id": "canary-f5b6a187",
-      "truth": "FALSE",
-      "verdict": "vetoed",
-      "halScore": 0.9833333333333334
     }
   ]
 }
