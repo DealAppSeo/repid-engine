@@ -19,8 +19,11 @@
 -- Liveness here is DERIVED from heartbeat_at recency, mirroring v_fleet_truth
 -- (`last_ping > now() - interval '10 minutes'`). Same idiom, one health language.
 --
--- APPLIED: not yet. Net-new additive object (CLAUDE_RULES 7 permits self-apply for
--- net-new); held for Sean's look because it is the schema other things will bind to.
+-- APPLIED 2026-08-10 to qnnpjhlxljtqyigedwkb on Sean's GO (CLAUDE_RULES 7 DDL log).
+-- Verified in prod by round-trip, not by existence alone: a node with an 11-minute-old
+-- heartbeat read is_live=false while lease_active=true, which is the design property the
+-- unit tests assert. Probe rows deleted; table left at 0 rows, RLS on, 0 policies
+-- (fail-closed: service_role only), 5 indexes.
 
 create table if not exists public.agent_node_registry (
   id            uuid primary key default gen_random_uuid(),
