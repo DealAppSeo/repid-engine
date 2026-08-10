@@ -89,6 +89,13 @@ const engineCommit = (): string | undefined => {
 
 const envTrue = (k: string) => process.env[k] === 'true';
 
+/** Retry budget per case. Part of the ruler — printed with the result. */
+const MAX_WIDTH_ATTEMPTS = 4;
+const BACKOFF_MS = 1500;
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+let retriesUsed = 0;
+const shortfalls: string[] = [];
+
 async function main(): Promise<number> {
   const providers = buildFactCheckProviders();
   const familiesConfigured = new Set(providers.map((p) => p.family ?? p.name)).size;
@@ -103,7 +110,48 @@ async function main(): Promise<number> {
   let familiesMax = 0;
 
   for (const c of CASES) {
-    const r: Record<string, unknown> = (await factCheck(c.text, providers)) as never;
+    // OPTION 1 — RETRY TO FULL WIDTH.
+    //
+    // The first run refused: some cases were judged by 3-4 of 5 configured families.
+    // All five keys answer individually, so the losses are transient (free-tier rate
+    // limits and timeouts under burst), not outages. Retrying a SHORT case until the
+    // full quorum answers is therefore recovering the configured instrument, not
+    // shopping for a better verdict.
+    //
+    // The distinction that keeps this honest: retries are keyed on WIDTH ALONE and
+    // never on the verdict. We stop as soon as all families answered, whatever they
+    // said. A loop that retried until the answer looked right would be fabricating a
+    // result, and would be indistinguishable in the output from this one — so the
+    // rule is stated here and enforced by the condition below referencing only `width`.
+    //
+    // The retry policy is part of the ruler and is printed with the result: a number
+    // measured with retries is not comparable to one measured without.
+    let r!: Record<string, unknown>;
+    let usedRaw: unknown;
+    let attemptWidth = 0;
+    for (let attempt = 1; attempt <= MAX_WIDTH_ATTEMPTS; attempt++) {
+      r = (await factCheck(c.text, providers)) as never;
+      const fams = r.families_used;
+      const provs = r.providers_used;
+      const list = Array.isArray(fams) ? fams.map(String) : Array.isArray(provs) ? provs.map(String) : [];
+      attemptWidth =
+        list.length > 0
+          ? new Set(list).size
+          : typeof fams === 'number'
+            ? fams
+            : typeof provs === 'number'
+              ? provs
+              : 0;
+      usedRaw = list.length > 0 ? list : attemptWidth;
+      if (attemptWidth >= familiesConfigured) break;
+      if (attempt < MAX_WIDTH_ATTEMPTS) {
+        retriesUsed++;
+        // Exponential backoff: the failures are rate limits, so retrying immediately
+        // reproduces them.
+        await sleep(BACKOFF_MS * 2 ** (attempt - 1));
+      }
+    }
+    void usedRaw;
     // `families_used` is a COUNT on some paths and a LIST on others. Both shapes are
     // real and neither is wrong; assuming one silently crashed the first run. The list
     // is preferred because it also allows per-provider attribution below.
@@ -124,6 +172,22 @@ async function main(): Promise<number> {
             : 0;
     familiesMin = Math.min(familiesMin, width);
     familiesMax = Math.max(familiesMax, width);
+
+    // Per-case attribution. Retrying to full width did NOT recover the shortfall, so the
+    // loss is persistent rather than transient rate limiting — which makes "which family
+    // drops on which claim" the only question worth asking next. An aggregate "3-4
+    // families" cannot be acted on; a family/claim pair can.
+    if (width < familiesConfigured) {
+      const answered = new Set(used);
+      const missing = providers.map((p) => p.family ?? p.name).filter((f) => !answered.has(f));
+      shortfalls.push(
+        `  ${c.id} width=${width}/${familiesConfigured}` +
+          (used.length
+            ? `  answered=[${[...answered].join(',')}]  MISSING=[${missing.join(',')}]`
+            : '  (count-only — no per-family attribution available)') +
+          `  "${c.text}"`,
+      );
+    }
 
     // Any provider that did not answer this case is an ATTEMPT that failed. Recording
     // it here is what lets `assessRunIntegrity` refuse the whole measurement.
@@ -172,6 +236,10 @@ async function main(): Promise<number> {
   // benign version of this mistake and exactly why the union is shaped that way.
   if (!integrity.measurable) {
     console.error(`\nREFUSED — the run is not measurable: ${integrity.summary}`);
+    if (shortfalls.length) {
+      console.error(`\nPER-CASE SHORTFALLS (${shortfalls.length} of ${CASES.length} cases):`);
+      for (const line of shortfalls) console.error(line);
+    }
     for (const f of integrity.faults.slice(0, 6)) console.error(`  ${f.kind}: ${f.detail}`);
     console.error(
       '\nNo F1 is printed. An environment fault and a quality regression are different\n' +
@@ -200,6 +268,12 @@ async function main(): Promise<number> {
     console.log(`  ${k.padEnd(20)} ${formatMeasurement(k, m.metrics[k], m.ruler)}`);
   }
   console.log(`\n${describeRuler(m.ruler)}`);
+  // Retries are PART OF THE RULER. A number measured with them is not comparable to one
+  // measured without, so it is stated rather than left implicit.
+  console.log(
+    `RETRY POLICY: up to ${MAX_WIDTH_ATTEMPTS} attempts/case, keyed on WIDTH only ` +
+      `(never on verdict), ${BACKOFF_MS}ms exponential backoff; ${retriesUsed} retries used`,
+  );
   console.log(`\nCITATION: ${m.citation}`);
   return 0;
 }
