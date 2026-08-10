@@ -25,6 +25,8 @@ import {
   verdictConfidence,
   calibrate,
   assertRuler,
+  assertFittedOnRun,
+  runDigest,
   toLogit,
   sigmoid,
   type CalibrationSample,
@@ -254,5 +256,47 @@ describe('cross-validation is deterministic and honest', () => {
     );
     const oof = crossValidatedEce(s, 5);
     expect(oof.ece.ece).toBeGreaterThanOrEqual(inSample.ece - 1e-9);
+  });
+});
+
+describe('the shipped calibrator matches the shipped holdout — the drift that reached main', () => {
+  // WHAT WENT WRONG. main carried a calibrator whose confusion_before said
+  // tp=44 fp=4 (F1 0.9167) beside a holdout measuring tp=43 fp=5 (F1 0.8958).
+  // Same corpus, same hash, DIFFERENT evaluation run — HAL is non-deterministic
+  // across providers, so the corpus hash could never have caught it. The
+  // calibrator's temperature and bias had been fitted against numbers that were
+  // no longer the ones shipping.
+  //
+  // Nothing failed. Every value stayed in range, assertRuler passed, and the
+  // only symptom was a confidence that was quietly wrong.
+  const CAL = join(__dirname, '../reports/hal-eval/hal-calibrator-rigorous-v1.json');
+
+  it('the calibrator was fitted on the run that ships beside it', () => {
+    if (!existsSync(HOLDOUT) || !existsSync(CAL)) {
+      throw new Error('holdout or calibrator artifact missing — refusing to pass with no ruler behind it');
+    }
+    const holdout = JSON.parse(readFileSync(HOLDOUT, 'utf8'));
+    const cal = JSON.parse(readFileSync(CAL, 'utf8'));
+    // Throws with a diagnosable message if a holdout is refreshed without refitting.
+    expect(() => assertFittedOnRun(cal, runDigest(holdout.results))).not.toThrow();
+  });
+
+  it('the calibrator agrees with the holdout about the baseline confusion', () => {
+    const holdout = JSON.parse(readFileSync(HOLDOUT, 'utf8'));
+    const cal = JSON.parse(readFileSync(CAL, 'utf8'));
+    const { tp, fp, tn, fn } = cal.confusion_before;
+    expect({ tp, fp, tn, fn }).toEqual(holdout.confusion);
+  });
+
+  it('rejects a calibrator carrying no run digest at all', () => {
+    // Pre-guard artifacts are exactly the ones that could drift unnoticed.
+    expect(() => assertFittedOnRun({ temperature: 0.8 } as never, 'abc')).toThrow(/no runDigest/);
+  });
+
+  it('the digest tracks SCORES, so a re-run changes it', () => {
+    const a = runDigest([{ id: 'x', halScore: 0.5 }, { id: 'y', halScore: 0.9 }]);
+    const b = runDigest([{ id: 'x', halScore: 0.51 }, { id: 'y', halScore: 0.9 }]);
+    expect(a).not.toBe(b);
+    expect(runDigest([{ id: 'x', halScore: 0.5 }, { id: 'y', halScore: 0.9 }])).toBe(a);
   });
 });
