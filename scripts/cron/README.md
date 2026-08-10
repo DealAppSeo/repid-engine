@@ -32,3 +32,15 @@ Requires (all already set on repid-engine): `SUPABASE_URL`, `SUPABASE_SERVICE_RO
 
 The minter rotates across eligible providers (least-recently-attested first), so the on-chain proof
 spreads across the roster instead of hammering one agent.
+
+## Config-as-code (schedule lives in git)
+`railway.cron.json` (repo root) defines the cron service: start command
+`node scripts/cron/mint-attestation.mjs`, schedule `0 12 * * *` daily, `restartPolicyType: NEVER`
+(a cron runs to completion, it must not auto-restart). To deploy:
+
+1. Railway → repid-engine project → **New Service → GitHub repo → DealAppSeo/repid-engine**.
+2. Service **Settings → Config-as-code → Config File Path = `railway.cron.json`**.
+3. It inherits the project's shared env (SUPABASE_*, BASE_SEPOLIA_PRIVATE_KEY, x402 flags). Deploy.
+
+Change the cadence by editing `cronSchedule` in `railway.cron.json` (git-reviewable), not the dashboard.
+Note: the Railway MCP cannot set `cronSchedule` (not exposed on service create/update) — hence config-as-code.
