@@ -1,0 +1,7 @@
+baseline run1 F1=0.9091 P=0.8824 R=0.9375
+baseline run2 F1=0.8958 P=0.8958 R=0.8958
+baseline run3 F1=0.9184 P=0.9000 R=0.9375
+grok run1 F1=0.9091 P=0.8824 R=0.9375
+grok run2 F1=0.9149 P=0.9348 R=0.8958
+grok run3 F1=0.9167 P=0.9167 R=0.9167
+DONE
