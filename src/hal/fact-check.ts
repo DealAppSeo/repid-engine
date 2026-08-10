@@ -1392,6 +1392,44 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   if (qw && enabled.qwen) {
     out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
   }
+  // FRONTIER PANEL (opt-in, HAL_S2_ENABLE_FRONTIER, default OFF → prod unchanged). Adds STRONG models
+  // as standing quorum members — the panel's ceiling is set by its members, and the free 8B panel's
+  // confident-wrong errors on obscure facts are exactly what a frontier voter corrects. Routed through
+  // OpenRouter (OpenAI-compatible; ANTHROPIC's own API is not) — verified LIVE 2026-08-09: openai/gpt-4o
+  // + anthropic/claude-sonnet-4 both 200 on this key. Distinct families (openai, anthropic) not otherwise
+  // in the panel. tier 'escalation' → only fire in the standing panel when cost-ordering is OFF
+  // (HAL_QUORUM_COST_ORDERED=false), which is the measured "frontier standing panel" config.
+  const orFront = process.env.OPENROUTER_API_KEY?.trim();
+  const frontierOn = process.env.HAL_S2_ENABLE_FRONTIER === 'true';
+  if (orFront && frontierOn) {
+    out.push({ name: 'or-gpt', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_OPENAI_MODEL ?? 'openai/gpt-4o', family: 'openai', tier: 'escalation' });
+    out.push({ name: 'or-claude', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
+  }
+  // FREE FRONTIER MEMBER (opt-in, HAL_S2_ENABLE_FRONTIER_FREE, default OFF → prod unchanged).
+  // DELIBERATELY INDEPENDENT of HAL_S2_ENABLE_FRONTIER: that flag's two-member panel is already a
+  // MEASURED configuration (F1 0.9183 mean, n=3, rigorous-v1@596f10de18d0). Folding a third member
+  // into it would silently redefine what "+ frontier" means and invalidate that recorded number —
+  // the ruler problem of CLAUDE_RULES 24. A separate flag keeps the measured arm byte-identical and
+  // makes this a NEW configuration width that must earn its own baseline.
+  //
+  // MODEL: nvidia/nemotron-3-ultra-550b-a55b:free — 550B MoE, 1M context, $0 prompt AND completion.
+  // Verified LIVE 2026-08-09 against OpenRouter /api/v1/models (present, pricing 0/0) on this key.
+  // The point of the experiment: the paid frontier panel bought only ~+0.01 F1 at real cost, so the
+  // question is whether a frontier-CLASS voter at ZERO marginal cost reaches the same lift.
+  //
+  // FAMILY 'nvidia' is declared EXPLICITLY (not regex-derived) and is distinct from every other panel
+  // family — groq=llama, cerebras=glm, deepseek, gemini, mistral, openrouter=qwen, or-gpt=openai,
+  // or-claude=anthropic. A collision would make this ONE vote with an existing member rather than an
+  // independent one, which is exactly what the family-independence quorum forbids. Not yet in
+  // family-registry.ts (same gap as gpt-4o/sonnet-4 — logged as hal_family_unmapped); the explicit
+  // field wins at runtime, and registering all three together is a separate, DB-touching change.
+  //
+  // RATE-LIMIT CAVEAT: `:free` slugs 429 hard under load (see the OpenRouter backfill note above).
+  // A run where this voter 429s measures NOTHING about quality — check its vote count before reading
+  // any F1 delta, per CLAUDE_RULES 24 (a dead provider is a provider failure, not a regression).
+  if (orFront && process.env.HAL_S2_ENABLE_FRONTIER_FREE === 'true') {
+    out.push({ name: 'or-nemotron', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_FREE_MODEL ?? 'nvidia/nemotron-3-ultra-550b-a55b:free', family: 'nvidia', tier: 'escalation' });
+  }
   // DATA-LOCALITY: when LOCAL_LLM_BASE_URL (or OPENAI_BASE_URL) is set, redirect every openai-compat
   // fact-check provider to the local base (Ollama/vLLM/LiteLLM can host several model names on one
   // endpoint), so the verify path's prompt egress stays on the operator's own box. Every provider in
