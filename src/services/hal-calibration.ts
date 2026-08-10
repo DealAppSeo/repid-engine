@@ -96,6 +96,12 @@ export interface FittedCalibrator {
   fittedOn: number;
   /** NLL at the optimum, for reproducibility. */
   nll: number;
+  /**
+   * Digest of the RUN fitted on. The corpus hash identifies the questions; this
+   * identifies the evaluation. Optional only for backward compatibility with
+   * artifacts written before the drift in main made it necessary.
+   */
+  runDigest?: string;
 }
 
 function clip(p: number): number {
@@ -337,12 +343,62 @@ export function crossValidatedEce(
  * Silently applying yesterday's constant to a new corpus is exactly the
  * comparing-numbers-across-rulers failure r24 exists to stop, and it fails
  * invisibly — the output is still a plausible number in [0,1].
+ *
+ * ⚠ THIS CHECK IS NECESSARY AND NOT SUFFICIENT, and the gap has already bitten
+ * once in main. The corpus hash identifies the QUESTIONS. It does not identify
+ * the RUN. HAL is non-deterministic across providers, so two evaluations of the
+ * byte-identical corpus produce different scores — and a calibrator fitted on
+ * run A while run B is the artifact that ships passes this check every time.
+ *
+ * That is exactly what happened: a shipped calibrator carried
+ * confusion_before tp=44 fp=4 (F1 0.9167) beside a shipped holdout measuring
+ * tp=43 fp=5 (F1 0.8958). Same corpus, same hash, different run. Use
+ * `assertFittedOnRun` for the stronger binding.
  */
 export function assertRuler(cal: FittedCalibrator, corpusSha256: string): void {
   if (cal.corpusSha256 !== corpusSha256) {
     throw new Error(
       `calibrator ruler mismatch: fitted on ${cal.corpusSha256.slice(0, 12)}, ` +
         `applied to ${corpusSha256.slice(0, 12)} — refit rather than reuse`,
+    );
+  }
+}
+
+/**
+ * Digest of the RUN a calibrator was fitted on — the identity the corpus hash
+ * cannot provide.
+ *
+ * Hashes the (id, halScore) pairs in order: the exact inputs the fit consumed.
+ * Truth labels are deliberately excluded, so a relabelling shows up as a corpus
+ * change rather than masquerading as a new run.
+ */
+export function runDigest(results: readonly { id: string; halScore: number }[]): string {
+  // Local require keeps this module free of a top-level node dependency, so it
+  // stays usable from a browser-side consumer.
+  const { createHash } = require('node:crypto') as typeof import('node:crypto');
+  const h = createHash('sha256');
+  for (const r of results) h.update(`${r.id}:${r.halScore}
+`);
+  return h.digest('hex').slice(0, 16);
+}
+
+/**
+ * Refuse a calibrator that was fitted on a DIFFERENT RUN than the one shipping.
+ *
+ * The failure this closes is silent by construction: every number stays in
+ * range, the corpus hash matches, and the only symptom is a confidence that is
+ * subtly wrong forever.
+ */
+export function assertFittedOnRun(cal: FittedCalibrator, digest: string): void {
+  if (!cal.runDigest) {
+    throw new Error(
+      'calibrator carries no runDigest — it cannot be shown to match the holdout it ships beside; refit',
+    );
+  }
+  if (cal.runDigest !== digest) {
+    throw new Error(
+      `calibrator run mismatch: fitted on run ${cal.runDigest}, shipped beside run ${digest} — ` +
+        'same corpus, different evaluation. Refit against the holdout that actually ships.',
     );
   }
 }

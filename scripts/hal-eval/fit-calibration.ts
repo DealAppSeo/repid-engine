@@ -23,6 +23,7 @@ import {
   applyCalibrator,
   expectedCalibrationError,
   crossValidatedEce,
+  runDigest,
   type CalibrationMethod,
   type CalibrationSample,
 } from '../../src/services/hal-calibration';
@@ -158,6 +159,10 @@ function main(): void {
     JSON.stringify(
       {
         ...cal,
+        // Binds this calibrator to the exact RUN it was fitted on, not merely
+        // to the corpus. Without it, a refreshed holdout leaves a stale
+        // calibrator sitting beside it looking perfectly valid.
+        runDigest: runDigest(results),
         clip_eps: 1e-3,
         selection_rule: 'lowest 5-fold out-of-fold ECE; rule fixed before fitting',
         candidates: candidates.map((c) => ({
