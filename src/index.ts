@@ -84,6 +84,7 @@ import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { startReleaseRetryWorker } from './services/x402-release-retry-worker';
 import { startStatusDigest } from './services/status-digest';
+import { startHealthProbeWorker } from './workers/health-probe-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { easAnchorWorker } from './workers/eas-anchor-worker';
 import { x402Metrics } from './observability/x402-metrics';
@@ -969,6 +970,16 @@ if (!IS_TEST) {
 // restarts via the same snapshot table. Default OFF.
 if (!IS_TEST) {
   startStatusDigest();
+}
+
+// HEALTH PROBE (2026-08-11) — the only PROCESS liveness signal in the system. Every other
+// surface is derived from work an agent CHOSE to do, so none can tell "idle but healthy" from
+// "gone" — which is how v_fleet_truth reported 12 healthy agents as dead while three answered
+// HTTP 200. In-process rather than a Railway cron because this service is always on anyway, so
+// a timer costs nothing where a cron spins ~144 containers/day. Default OFF
+// (HEALTH_PROBE_ENABLED); honours the L0 halt; re-entrancy guarded; can never break a request.
+if (!IS_TEST) {
+  startHealthProbeWorker();
 }
 
 // EAS Anchor Worker (2026-07-04) — anchors the 21,960 real, un-anchored Plonky3
