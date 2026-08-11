@@ -21,6 +21,10 @@ E2E_BASE_URL=http://localhost:3000 npm run test:e2e
 
 # With an API key for endpoints still gated by REPID_API_KEYS auth.
 E2E_API_KEY=<key> npm run test:e2e
+
+# Post-rollout: treat any unverified step as a failure. This is the mode to
+# run once the deployment is expected to have caught up — i.e. most of the time.
+E2E_STRICT=1 npm run test:e2e
 ```
 
 ## Behavior
@@ -36,13 +40,45 @@ The flow walks the no-wallet visitor path:
 
 Each step is its own `it()`. If a public auth bypass is missing on the
 deployed build (the endpoint returns 401 for an unauthenticated POST),
-the step **soft-skips with a `console.warn`** rather than failing the
-suite. This is intentional — during the rollout window between merging
-the live-demo branch and Railway redeploying, the deployment lags the
-code, and we want the diagnostic to be readable, not a wall of red.
+the step **soft-skips** rather than failing the suite. This is
+intentional — during the rollout window between merging the live-demo
+branch and Railway redeploying, the deployment lags the code, and we want
+the diagnostic to be readable, not a wall of red.
 
-Once the deployment catches up (visible by step 2 returning 200 with a
-token), all six steps must pass for the suite to be green.
+### A skip is not a pass
+
+Returning early from an `it()` marks it **passed**. So every soft-skip
+above used to render as a green tick, and the more broken the deployment,
+the more steps skipped — the greener the suite got. Measured against stub
+deployments:
+
+| Deployment under test | Reported (before) | Reported (now) |
+|---|---|---|
+| Working | 6 passed ✅ | 7 passed ✅ |
+| Every route `404` | 3 of 6 passed | 4 failed |
+| Every route `401` | 4 of 6 passed | 3 failed |
+| Public GETs live, business endpoints `401` | **6 of 6 passed, exit 0** | 1 failed |
+| Host unreachable | 1 passed | 6 failed |
+
+The fourth row is the one that mattered: a fully green run against a
+service that never issued a token, never took a deposit, never ran a round
+and reported zero authority. (The single green tick in the unreachable
+case was the deposit step — it passed *because* the step before it failed
+to produce an address.)
+
+The tolerance stays; what changed is that skips are now **recorded and
+surfaced**, and two things enforce honesty:
+
+- **The ledger.** Every step records `VERIFIED` / `NOT CHECKED` / `FAILED`
+  with a reason, printed as a table at the end of the run.
+- **The guard.** A final `it()` fails the suite if *no* core flow step
+  (signup, deposit, round) was verified. Reachability, a public snapshot
+  and a metrics counter can all be served by a deployment where the actual
+  product is broken — that must not read as green.
+
+`E2E_STRICT=1` turns every tolerated skip into a failure. Once the
+deployment has caught up, that is the correct mode; the default tolerance
+exists only for the rollout window.
 
 ## What the script does NOT do
 
