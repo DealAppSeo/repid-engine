@@ -182,6 +182,16 @@ cannot work.
 
 ## 5. Where I'd revise the GraphRAG / DAG-GNN recommendation — measured
 
+> **PARTIAL RETRACTION, same day.** Item 1 in the "revised recommendation" below — "five
+> orders of magnitude more edge material" from 152,130 score events — is **wrong**. It
+> reasoned from row counts without reading the schema. `repid_score_events` has no
+> counterparty column; all 152,130 events yield **42 unique agent pairs**, and
+> `service_contracts` / `x402_settlements` are strict subsets that add none. Taken literally
+> it would have written ~267,000 degree-1 pendants and made the degree problem worse. The
+> diagnosis in this section (you do not have a graph; build it before the GNN) survives; the
+> proposed *source* of edges does not. See `GRAPH_BACKFILL_MEASURED.md` for the measurements
+> and for what was built and applied instead.
+
 Grok cites "+10–20 points", "~80% more truthful", "2× more questions answered". I cannot
 verify those and would not put them in a design doc as fact; they read like vendor benchmark
 figures, and GraphRAG results are notoriously corpus-dependent.
