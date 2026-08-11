@@ -33,6 +33,7 @@ import marketplacePublicRouter from './routes/v1/marketplace-public';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import negotiationRouter from './routes/v1/negotiation';
+import marketDiscoverRouter from './routes/v1/market-discover';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
 import listingOffersRouter from './routes/v1/listing-offers';
 import observabilityPublicRouter from './routes/v1/observability-public';
@@ -472,6 +473,9 @@ app.use(versioningMiddleware);
 // unbound caller could have bid as anyone, which is the one thing that makes a
 // bid non-repudiable.
 app.use('/api/v1/negotiation', negotiationRouter);
+// Rung 0 of the TrustMarket ladder: keyless, anonymous discovery. A reputation surface
+// behind an API key is not a public reputation surface.
+app.use('/api/v1/market', marketDiscoverRouter);
 app.use('/api/v1', v1Router);
 // CC1 2026-05-26: productivity-stack observability (cost/spend data) — authed (post-authMiddleware).
 app.use('/api/v1/observability', productivityRouter);
