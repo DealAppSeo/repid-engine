@@ -52,6 +52,30 @@ There is also a **join gap**: `stake_deposits` is keyed on `builder_id` (a human
 gate reasons about an agent. Repointing requires a verified builder→agent mapping, which is a
 design decision, not a rename.
 
+## Defect 5 — the staking API's own read and write disagree `[V 2026-08-11]`
+
+Found while correcting the stale comment. In **one router**, both endpoints live under
+`app.use('/api/v1', mvpApiRouter)`:
+
+```
+POST /api/v1/staking/deposit  ->  writes  agent_stakes      (the prediction-market table)
+GET  /api/v1/staking/:agent   ->  reads   staking_deposits  (the EMPTY table, 0 rows)
+```
+
+So a caller stakes through the API and is then told, by the same API, that they have
+`total_active_usdc: 0` and `deposits: []`. Permanently, for every agent, regardless of what they
+staked. The read can never return anything, because nothing writes the table it reads.
+
+This also revises defect 2's framing: `agent_stakes` is not merely *"a prediction market the gate
+mistakenly reads."* It is **also where this deposit endpoint writes**, which is very likely the
+origin of the 4 rows the gate credits. The concepts are conflated at the WRITER, not only at the
+reader — so there are two deposit paths (`stake-vault.ts#depositStake` → `stake_deposits`, and
+`POST /staking/deposit` → `agent_stakes`) landing in different tables, neither of which the
+`GET` surface reads.
+
+**Three tables, two writers, one blind reader.** That is the whole reason "stake → authority" has
+never worked, and no single rename fixes it.
+
 ## How this hid for so long
 
 The gate's own header comment says stake is summed from *"active `staking_deposits`"* — a table
