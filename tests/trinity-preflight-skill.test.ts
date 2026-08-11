@@ -33,7 +33,11 @@ describe('trinity-preflight SKILL.md', () => {
   const raw = existsSync(SKILL_PATH) ? readFileSync(SKILL_PATH, 'utf8') : '';
 
   it('opens with YAML frontmatter carrying name, description and when-to-use', () => {
-    const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+    // \r?\n, not \n: git checks this file out with CRLF on Windows, so a \n-only regex never
+    // matched the frontmatter and this test failed for every Windows developer while passing in
+    // CI on Linux. A test that is always red locally gets ignored, which costs as much as one
+    // that can never fail.
+    const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     expect(fm).not.toBeNull();
     const block = fm![1];
     expect(block).toMatch(/^name:\s*trinity-preflight\s*$/m);
