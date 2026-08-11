@@ -10,6 +10,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
+import { publicError } from './public-error';
 
 const router = Router();
 
@@ -36,7 +37,7 @@ router.post('/subscribe', async (req: Request, res: Response) => {
           .from('email_subscribers')
           .update({ unsubscribed_at: null, subscribed_at: new Date().toISOString(), source, ref_code })
           .eq('id', (existing as any).id);
-        if (upErr) return res.status(500).json({ error: 'resubscribe_failed', detail: upErr.message });
+        if (upErr) return publicError(res, 500, 'resubscribe_failed', upErr, 'subscribe route');
         return res.status(200).json({ ok: true, resubscribed: true });
       }
       return res.status(409).json({ error: 'already_subscribed' });
@@ -48,11 +49,11 @@ router.post('/subscribe', async (req: Request, res: Response) => {
       .maybeSingle();
     if (error) {
       if (/duplicate key|unique/i.test(error.message)) return res.status(409).json({ error: 'already_subscribed' });
-      return res.status(500).json({ error: 'subscribe_failed', detail: error.message });
+      return publicError(res, 500, 'subscribe_failed', error, 'subscribe route');
     }
     return res.status(201).json({ ok: true, id: (data as any)?.id ?? null });
   } catch (e: any) {
-    return res.status(500).json({ error: 'subscribe_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'subscribe_failed', e, 'subscribe route');
   }
 });
 
@@ -68,11 +69,11 @@ router.get('/unsubscribe', async (req: Request, res: Response) => {
       .eq('confirmation_token', token)
       .select('id')
       .maybeSingle();
-    if (error) return res.status(500).json({ error: 'unsubscribe_failed', detail: error.message });
+    if (error) return publicError(res, 500, 'unsubscribe_failed', error, 'subscribe route');
     if (!data) return res.status(404).json({ error: 'token_not_found' });
     return res.json({ ok: true, unsubscribed: true });
   } catch (e: any) {
-    return res.status(500).json({ error: 'unsubscribe_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'unsubscribe_failed', e, 'subscribe route');
   }
 });
 

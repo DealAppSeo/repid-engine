@@ -22,6 +22,7 @@ import { db } from '../db';
 import { logProofGeneration } from '../zkp/plonky3-real';
 import { generateProof } from '../zk-proof/prover';
 import { fireWebhook } from '../services/webhook';
+import { publicError } from './public-error';
 
 export const repidPublicRouter = Router();
 
@@ -55,22 +56,6 @@ async function resolveAgentUuid(raw: string): Promise<string | null> {
   }
   const { data } = await query.maybeSingle();
   return data && data.id ? (data.id as string) : null;
-}
-
-/**
- * Public error body. These routes are UNAUTHENTICATED, so the upstream error text is not
- * ours to hand out: a Postgres failure returns strings like
- *   invalid input syntax for type uuid: "trinity-does-not-exist"
- * which names an internal column type and echoes the caller's probe back at them. Useful to
- * an operator, useful to someone mapping the schema, useless to a legitimate client.
- *
- * The real message is LOGGED (server-side, with the route and the input) and the caller gets
- * a stable code. Nothing is hidden from us; it is only hidden from strangers.
- */
-function publicError(res: Response, status: number, code: string, e: unknown, where: string) {
-  const detail = e instanceof Error ? e.message : String(e);
-  console.error(`[repid] ${where} -> ${code}: ${detail}`);
-  return res.status(status).json({ error: code });
 }
 
 /* ------------------------ Public routes ----------------------------- */
