@@ -46,6 +46,10 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // stated range, and `sealed` is true until bids close. The bids themselves —
   // the actually competitive information — stay behind requireBoundAgent plus a
   // participant check on /rfqs/:id/bids, which is NOT opened here.
+  // RUNG 0 — keyless discovery. Everything it returns is already a public reputation fact
+  // (listed price, agent name, earned RepID, job counts, dispute counts, attestation counts).
+  // An agent cannot decide whether to join a market it is not allowed to look at.
+  if (req.method === 'GET' && req.path === '/api/v1/market/discover') return next();
   if (req.method === 'GET' && req.path === '/api/v1/negotiation/rfqs') return next();
   if (req.method === 'GET' && /^\/api\/v1\/negotiation\/rfqs\/[^/]+$/.test(req.path)) return next();
   if (req.method === 'POST' && req.path === '/api/v1/tip/request') return next();
