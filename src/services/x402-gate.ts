@@ -9,10 +9,39 @@
  * The decision logic (`decideAuthority`) is pure and unit-tested; all DB reads are injected via the
  * context so the policy can be verified without a database.
  *
- * Columns verified against prod: repid_agents(agent_name, tier, current_repid, conservator_address);
- * staking_deposits(agent_name, amount_usdc, status); x402_payment_gates(... requested_at, authorized);
- * dispute_claims(defendant_agent, status). repid_agents has NO stake_amount column — stake is summed
- * from active staking_deposits.
+ * ⚠️ WHAT THIS MODULE ACTUALLY READS FOR "STAKE" — AND WHY THAT IS A KNOWN DEFECT
+ *
+ * This header used to claim stake was "summed from active `staking_deposits`". That was wrong in
+ * the most expensive way a comment can be wrong: **`staking_deposits` has ZERO rows and no code
+ * writes it** [V 2026-08-11]. The comment named a table that does not participate in the system
+ * at all, so anyone auditing the money path — including Claude, on 2026-08-10 — queried the empty
+ * table, read "0 active stakes", and drew a conclusion about production that was false.
+ *
+ * What the code below ACTUALLY sums (see `loadContext`):
+ *   - `agent_stakes(staker_agent, stake_amount, status)`
+ *   - `sponsorship_records(sponsored_agent, collateral_usdc, status)`
+ *
+ * **`agent_stakes` is a PREDICTION MARKET, not collateral.** Its columns are `target_model`,
+ * `dimension`, `stake_position`, `actual_consensus`, `deviation`, `slash_amount` — an agent
+ * wagering how a model will score, slashed on deviation. Summing it as authority-backing
+ * collateral means winning bets on model scores buy the right to spend real money.
+ *
+ * Posted collateral actually lands in `stake_deposits(builder_id, amount, asset, is_simulated,
+ * status)`, written by `services/stake-vault.ts#depositStake` — and this module never reads it.
+ * So real collateral earns NO authority while wagers do. 50 active deposits are invisible here.
+ *
+ * DO NOT "FIX" THIS BY REPOINTING THE QUERY. 49 of 50 active deposits are `is_simulated`, and
+ * `stake_deposits` is keyed on `builder_id` (a human) while this module reasons about an agent —
+ * a link that currently resolves for ZERO rows. A naive repoint grants REAL spending power
+ * against DEMO money: today's defect fails CLOSED (under-granting), that one fails OPEN.
+ *
+ * The corrected computation exists, is pure, is tested, and is SHADOW-ONLY with no caller:
+ * `services/stake-authority-resolver.ts`. Full analysis and the flip criteria:
+ * `reports/2026-08-11/STAKE_AUTHORITY_DEFECT.md`.
+ *
+ * Other columns verified against prod: repid_agents(agent_name, tier, current_repid,
+ * conservator_address); x402_payment_gates(... requested_at, authorized);
+ * dispute_claims(defendant_agent, status). repid_agents has NO stake_amount column.
  */
 import { db } from '../db';
 
