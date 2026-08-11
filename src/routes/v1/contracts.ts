@@ -14,6 +14,7 @@ import { finalizeSettledContract } from '../../services/contract-settlement-fina
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
+import { checkTransactionAuthority } from '../../services/x402-gate';
 
 const router = Router();
 
@@ -233,6 +234,49 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   if (escrowRefusal) {
     x402Metrics.increment('escrow.error.403');
     return res.status(403).json(escrowRefusal);
+  }
+
+  // ── x402 AUTHORITY GATE — SHADOW ────────────────────────────────────────────
+  // WHY THIS IS HERE AT ALL: the gate had NO caller on any money path. 16 contracts have
+  // settled (most recent 2026-08-11) against 2 gate decisions EVER, the last on 2026-06-03.
+  // Tier ceilings, daily caps, stake requirements and dispute blocking are a well-tested pure
+  // function that nothing invoked — "an unwired mechanism is worse than an absent one: it
+  // converts a known gap into false coverage, so you stop looking" (LESSONS 3).
+  //
+  // PLACED BEFORE THE TOGGLE ON PURPOSE. The legacy branch below is the one live today when
+  // X402_ENFORCEMENT_ENABLED is unset, and it is where money actually commits. A shadow that
+  // only observed the enforced path would measure the configuration we are NOT running.
+  //
+  // SHADOW MEANS SHADOW: fire-and-forget, never awaited, wrapped so nothing it does can slow,
+  // fail or change an escrow. checkTransactionAuthority already writes its own audit row to
+  // x402_payment_gates, so this call IS the measurement. Disable with X402_GATE_SHADOW=false.
+  if (process.env.X402_GATE_SHADOW !== 'false') {
+    void (async () => {
+      try {
+        // The gate keys on agent_name; the contract carries buyer_agent_id (uuid). Resolving is
+        // NOT optional: passing the uuid straight through would return agent_not_found on every
+        // call and fill the audit table with denials that measure our own bug, not the policy.
+        const { data: buyer } = await db.from('repid_agents')
+          .select('agent_name').eq('id', contract.buyer_agent_id).maybeSingle();
+        if (!buyer?.agent_name) {
+          console.warn(`[x402-gate:shadow] buyer ${contract.buyer_agent_id} has no agent_name — skipped, NOT recorded as a denial`);
+          return;
+        }
+        const amountUsdc = Number(contract.agreed_price_usdc_raw ?? 0) / 1_000_000;
+        const d = await checkTransactionAuthority({
+          agent: buyer.agent_name,
+          transaction_type: 'escrow',
+          amount: amountUsdc,
+        });
+        console.log(
+          `[x402-gate:shadow] ${buyer.agent_name} $${amountUsdc} -> ` +
+            `${d.authorized ? 'WOULD ALLOW' : `WOULD REFUSE (${d.denial_reason})`} ` +
+            `[tier=${d.tier} stake=${d.stake_available}] — OBSERVED ONLY, escrow proceeds`,
+        );
+      } catch (e: any) {
+        console.error(`[x402-gate:shadow] observation failed (escrow unaffected): ${e?.message ?? e}`);
+      }
+    })();
   }
 
   // Toggle check
