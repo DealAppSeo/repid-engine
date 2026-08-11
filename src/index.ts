@@ -94,6 +94,7 @@ import { shouldParkForHalt } from './services/emergency-halt';
 import { pgPing } from './db/direct-pg';
 
 import { authMiddleware } from './middleware/auth';
+import repidConfessRouter from './routes/repid-confess';
 import { rateLimitMiddleware, checkRedisStatus } from './middleware/rateLimit';
 // CC Sprint 2: global token-bucket rate limiter (BYOK bypass + tier-based)
 import { rateLimitMiddleware as globalRateLimit } from './middleware/rate-limit';
@@ -448,6 +449,12 @@ app.use('/api/v1', faucetRouter);
 app.use('/api', agentGateRouter);
 
 app.use(authMiddleware);
+
+// Just-culture confession path. Mounted AFTER authMiddleware deliberately: an
+// unauthenticated confession endpoint would let anyone charge anyone else a penalty,
+// turning a mechanism for honesty into a griefing primitive.
+// (The read-only /repid/confession-preview inside this router is harmless either way.)
+app.use('/api/v1', repidConfessRouter);
 
 app.use('/api', llmRouter);
 

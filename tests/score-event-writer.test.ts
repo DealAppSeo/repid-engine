@@ -63,7 +63,12 @@ describe("applier: 'trigger' — the DB applies", () => {
       idempotency_key: 'k1',
     });
     expect(inserted[0]!.delta).toBe(5);
-    expect(inserted[0]!.metadata).toEqual({ note: 'x' });
+    // Coverage is now stamped on EVERY guarded write (see detector-coverage.ts): a score
+    // recorded while the detector fleet was degraded is not comparable to one recorded at
+    // full coverage, and 99.86% of negative events come from a single detector. The caller's
+    // own keys must survive untouched; the ruler rides alongside them.
+    expect(inserted[0]!.metadata).toMatchObject({ note: 'x' });
+    expect((inserted[0]!.metadata as Record<string, unknown>).detector_coverage).toBeDefined();
     expect(inserted[0]!.idempotency_key).toBe('k1');
   });
 });

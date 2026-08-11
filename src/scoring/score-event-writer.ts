@@ -36,6 +36,7 @@
  */
 
 import { db } from '../db';
+import { currentCoverage, withCoverage } from '../services/detector-coverage';
 
 export type Applier = 'trigger' | 'caller';
 
@@ -125,7 +126,20 @@ export async function insertScoreEvent(e: ScoreEventInsert): Promise<WriteResult
     agent_id: e.agent_id,
     event_type: e.event_type,
     delta: Math.round(e.delta),
-    metadata: e.metadata ?? {},
+    // EVERY score event records what was watching when it was written.
+    //
+    // Measured 2026-08-11: 99.86% of negative reputation events (68,321 of 68,417) come from
+    // a single detector, and task #56 has 3 of ~6 HAL providers down. A detector outage and
+    // a genuine improvement in behaviour have the IDENTICAL signature — fewer negatives — so
+    // without this stamp nobody reading the history can tell which one happened.
+    //
+    // Stamped here rather than at each call site on purpose: this is the one chokepoint every
+    // guarded write passes through, and a per-caller list of "remember to add coverage" is the
+    // hand-maintained enumeration that has failed three times in this repo already.
+    //
+    // Unknown coverage writes UNKNOWN, never nothing — see detector-coverage.ts for why an
+    // absent ruler must not read as the good ruler.
+    metadata: withCoverage(e.metadata, currentCoverage()),
     ...(e.idempotency_key ? { idempotency_key: e.idempotency_key } : {}),
     ...(e.extra ?? {}),
   };
