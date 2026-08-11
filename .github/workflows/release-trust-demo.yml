@@ -14,7 +14,9 @@
 #   git tag trust-demo-v0.1.0 && git push origin trust-demo-v0.1.0
 #
 # Or run it manually from the Actions tab with dry_run=true to rehearse the whole thing
-# without publishing anything.
+# without publishing anything. The dry run also answers "is NPM_TOKEN installed, and does
+# it still work?" without publishing — see the credential step below for what that does
+# and does not settle.
 #
 # THE GUARD THAT MATTERS. The tag and packages/trust-demo/package.json must agree on the
 # version. Without that check, `git tag trust-demo-v0.2.0` on a tree still saying 0.1.0
@@ -68,6 +70,76 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME wants $TAG but package.json says $PKG. Bump one or the other — publishing here would ship $PKG under a $TAG tag."
             exit 1
           fi
+
+      # ── does the credential actually work? ───────────────────────────────
+      # A rehearsal that stops short of the one thing you are unsure about is not a
+      # rehearsal. `npm publish --dry-run` is entirely local: it never contacts the
+      # registry and never reads NODE_AUTH_TOKEN. So before this step a dry run went green
+      # with no NPM_TOKEN at all, and the first real test of the credential was the tag
+      # push — the irreversible one.
+      #
+      # WHAT THIS PROVES: the token is valid and the registry recognises it as some
+      # account. WHAT IT DOES NOT PROVE: that the account may publish THIS name. There is
+      # no way to ask npm "could I publish a name that does not exist yet" without
+      # publishing it, so scope permission is still only settled by the real run. Printing
+      # the username is what leaves that gap checkable by eye — it has to be an account
+      # that owns @hyperdag.
+      #
+      # A MISSING SECRET IS NOT A FAILURE, BUT IT IS NEVER SILENCE. Rehearsing the
+      # packaging guards before the token exists is a legitimate thing to want, so an
+      # absent NPM_TOKEN warns and continues. It is then reported as NOT CHECKED in the
+      # log, as a warning annotation, and in the job summary — because "we did not look"
+      # reading as "it passed" is the exact failure this step exists to remove. A token
+      # that IS present and gets rejected fails the run: a broken credential and an absent
+      # one need different fixes, so they must not share an outcome.
+      #
+      # Probed against the live registry: absent -> ENEEDAUTH, wrong -> E401, and a
+      # transport failure is neither. Reporting an unreachable registry as "your token is
+      # bad" would send someone to rotate a credential that was fine, so the three stay
+      # apart. Only the npm error CODE is echoed, never the body — that is the string a
+      # token could ride out on.
+      - name: Verify npm credential
+        id: npm_auth
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "auth=not-checked" >> "$GITHUB_OUTPUT"
+            echo "::warning::NPM_TOKEN is not set on this repository, so this rehearsal did NOT verify the publish credential — everything else still ran. Add it under Settings -> Secrets and variables -> Actions."
+            echo "NPM_TOKEN absent — credential NOT verified. No other check in this run is affected."
+            exit 0
+          fi
+          if ! OUT=$(npm whoami 2>&1); then
+            # Pure bash, no pipes. `… | head -1` closes the reader after one line, and on
+            # MULTI-LINE output the writer then takes SIGPIPE; `pipefail` turns that into a
+            # failed pipeline and the `-e` Actions applies to every run block kills the
+            # step. Measured: 50k short lines exits 141 with an empty $GITHUB_OUTPUT and no
+            # message — the silent kind. (One long line does NOT trigger it: head reads to
+            # the newline, so nothing closes early. The distinction is why this was probed
+            # rather than reasoned about.)
+            if [[ "$OUT" =~ npm\ error\ code\ ([A-Z0-9]+) ]]; then CODE="${BASH_REMATCH[1]}"; else CODE=""; fi
+            echo "auth=rejected" >> "$GITHUB_OUTPUT"
+            case "$CODE" in
+              E401|ENEEDAUTH|EAUTHUNKNOWN)
+                echo "::error::NPM_TOKEN is set but registry.npmjs.org rejected it ($CODE). A tag push would fail at the publish step. Check that it has not expired and that it is an Automation or granular token with write access to the @hyperdag scope."
+                ;;
+              *)
+                echo "::error::Could not reach registry.npmjs.org to check the credential (${CODE:-no npm error code}). This is NOT a verdict on the token — do not rotate it on the strength of this. Re-run when the registry is reachable."
+                ;;
+            esac
+            exit 1
+          fi
+          # Bound and sanitise before this reaches GITHUB_OUTPUT: the value arrives from
+          # the network, and one carrying a newline can forge additional output keys.
+          # Pipe-free for the same measured SIGPIPE reason as above.
+          WHO=${OUT%%$'\n'*}
+          WHO=${WHO//[^A-Za-z0-9._@-]/}
+          WHO=${WHO:0:64}
+          echo "auth=$WHO" >> "$GITHUB_OUTPUT"
+          echo "registry.npmjs.org authenticated this token as: $WHO"
+          echo "note: that proves the token is VALID, not that $WHO may publish @hyperdag/trust-demo."
 
       - name: Refuse to republish an existing version
         run: |
@@ -132,6 +204,10 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          # Via env rather than inline `${{ }}`: this value originates from the registry,
+          # and interpolating it straight into the script would let it run as shell.
+          NPM_AUTH: ${{ steps.npm_auth.outputs.auth }}
         run: |
           PKG=$(node -p "require('./package.json').version")
           {
@@ -139,6 +215,15 @@ jobs:
             echo ""
             echo "- trigger: \`${{ github.event_name }}\` (${{ github.ref_name }})"
             echo "- dry run: \`${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}\`"
+            # Absent on the real publish path, where the step does not run at all. Silence
+            # there is correct — the publish itself is the credential test. Silence on a
+            # DRY RUN would not be, which is why not-checked is printed rather than skipped.
+            case "${NPM_AUTH:-}" in
+              '')           ;;
+              not-checked)  echo "- npm credential: **NOT CHECKED** — \`NPM_TOKEN\` is not set on this repository" ;;
+              rejected)     echo "- npm credential: **REJECTED** — see the failing step" ;;
+              *)            echo "- npm credential: valid, authenticated as \`$NPM_AUTH\` (does not prove publish rights to this name)" ;;
+            esac
             echo ""
             echo "\`\`\`"
             echo "npx @hyperdag/trust-demo"
