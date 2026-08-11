@@ -31,20 +31,50 @@ import path from 'node:path';
 const ROUTES = path.resolve(__dirname, '../src/routes');
 
 /**
- * Routers mounted BEFORE `app.use(authMiddleware)` in src/index.ts, i.e. reachable with no
- * credential at all. Kept as an explicit list so adding a public router is a deliberate act
- * that shows up in this diff.
+ * The public router set is DERIVED from src/index.ts, not listed here.
+ *
+ * The first version of this fence hard-coded eight filenames. Two public routers were
+ * missing from it — hal-evaluate (mounted line 276) and vertical-leaderboard (line 432) —
+ * and both were still leaking upstream error text while this test sat green. A
+ * hand-maintained list of things to check is a list of the things someone remembered, which
+ * is the same failure that let a copied resolver diverge and let a grep miss the anchor leg.
+ *
+ * So: parse the mount order. Everything mounted before `app.use(authMiddleware)` is
+ * reachable with no credential and must obey the rule — including a router added tomorrow by
+ * someone who never reads this file.
  */
-const PUBLIC_ROUTERS = [
-  'repid.ts',
-  'cache-stats.ts',
-  'costs.ts',
-  'efficiency.ts',
-  'leaderboard.ts',
-  'referrals.ts',
-  'stats.ts',
-  'subscribe.ts',
-];
+function derivePublicRouters(): string[] {
+  const index = readFileSync(path.resolve(__dirname, '../src/index.ts'), 'utf8').split('\n');
+  const authLine = index.findIndex((l) => /^app\.use\(authMiddleware\)/.test(l));
+  if (authLine < 0) throw new Error('authMiddleware mount not found — the derivation is broken, not the routes');
+
+  // varName -> './routes/foo'
+  const importPath = new Map<string, string>();
+  for (const l of index) {
+    const m = l.match(/^import\s+(?:\{\s*[^}]*?\b(\w+)\b[^}]*\}|(\w+))\s+from\s+'(\.\/routes\/[^']+)'/);
+    if (m) importPath.set(m[1] ?? m[2], m[3]);
+    // `import { publicRouter as xRouter, statsRouter as yRouter } from './routes/z'`
+    const multi = l.match(/^import\s+\{([^}]*)\}\s+from\s+'(\.\/routes\/[^']+)'/);
+    if (multi) {
+      for (const part of multi[1].split(',')) {
+        const alias = part.includes(' as ') ? part.split(' as ')[1] : part;
+        const name = alias.trim();
+        if (name) importPath.set(name, multi[2]);
+      }
+    }
+  }
+
+  const files = new Set<string>();
+  for (let i = 0; i < authLine; i++) {
+    for (const m of index[i].matchAll(/app\.use\((?:'[^']*',\s*)?(\w+)\)/g)) {
+      const p2 = importPath.get(m[1]);
+      if (p2) files.add(`${p2.replace('./routes/', '')}.ts`);
+    }
+  }
+  return [...files].sort();
+}
+
+const PUBLIC_ROUTERS = derivePublicRouters();
 
 /** `detail:` whose value mentions an error binding rather than being a literal. */
 const LEAKY_DETAIL = /detail:\s*(?![`'"])[^,}\n]*\b(e|err|error|upErr|ex)\b[^,}\n]*/g;
