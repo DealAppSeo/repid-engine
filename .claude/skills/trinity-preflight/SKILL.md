@@ -93,6 +93,20 @@ This is the concrete "different truth" bug and it has one correct answer.
   that has died cannot write `status='offline'`. Any surface that emits raw
   `status` is one of the ~20 deprecated, mutually-disagreeing liveness surfaces.
   Do not add to them; do not quote them.
+- **`is_live` IS THREE-VALUED. `NULL` MEANS UNKNOWN — IT DOES NOT MEAN DEAD.**
+  `TRUE` = positive evidence of life inside the window. `NULL` = no signal at all.
+  Read `NULL` as falsy and you have re-created the exact bug this step exists to
+  stop. Check `liveness_signal` (`heartbeat` | `work` | `none`) to see which
+  evidence, if any, backed the row.
+  *Why this is spelled out (2026-08-11):* agent-side heartbeat writes were
+  deliberately removed on 2026-07-17, so `last_ping` is starved and the view was
+  reporting `is_live=false` for **all 12** trinity agents while three of them
+  answered **HTTP 200** on `/health`. A session that trusted it nearly concluded the
+  fleet was dead. **Absence of a signal you turned off is not evidence of absence.**
+- **PROCESS liveness is NOT in this database.** The work-log signal proves an agent
+  *ran* (it wrote a row), not that it is *up* — an idle-but-healthy agent has no
+  work signal and will read `NULL`. Only the HTTP `/health` probe knows, and that
+  lives in UptimeRobot. If you need "is the process up", probe it; do not infer it.
 - Freshness is a property of the read, not of this file. Query when you need the
   number, state the timestamp, and treat it as a dated snapshot the moment after.
 
