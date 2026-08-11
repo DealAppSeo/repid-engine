@@ -1,0 +1,146 @@
+# Publish @hyperdag/trust-demo to npm from a tag, so releasing is a reviewable CI event
+# rather than a command run on a laptop with publish rights.
+#
+# WHY THIS EXISTS. `npm publish` is irreversible: the version number is burned the moment
+# it lands (unpublish is restricted after 72h, and a version can never be reused). A
+# release that only exists as shell history on one machine cannot be audited, repeated, or
+# handed to anyone else. This makes the tarball a build artefact of a specific commit.
+#
+# Sean action items (one-time):
+#   - npmjs.com -> Access Tokens -> Generate -> "Automation" (bypasses 2FA for CI)
+#   - GitHub repo Settings -> Secrets and variables -> Actions -> add NPM_TOKEN
+#
+# To release:
+#   git tag trust-demo-v0.1.0 && git push origin trust-demo-v0.1.0
+#
+# Or run it manually from the Actions tab with dry_run=true to rehearse the whole thing
+# without publishing anything.
+#
+# THE GUARD THAT MATTERS. The tag and packages/trust-demo/package.json must agree on the
+# version. Without that check, `git tag trust-demo-v0.2.0` on a tree still saying 0.1.0
+# publishes 0.1.0 — and 0.2.0 silently never exists. The mismatch is invisible afterwards
+# because both halves look internally consistent.
+
+name: release-trust-demo
+
+on:
+  push:
+    tags:
+      - 'trust-demo-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every check and pack the tarball, but do not publish'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+  # Required for npm provenance: mints the OIDC token that cryptographically links the
+  # published tarball to this workflow run and commit. Fitting for a package whose entire
+  # argument is "verify it yourself rather than trusting the publisher".
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/trust-demo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # ── the version guard ────────────────────────────────────────────────
+      - name: Tag must match package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#trust-demo-v}"
+          echo "package.json=$PKG  tag=$TAG"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME wants $TAG but package.json says $PKG. Bump one or the other — publishing here would ship $PKG under a $TAG tag."
+            exit 1
+          fi
+
+      - name: Refuse to republish an existing version
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          if npm view "@hyperdag/trust-demo@$PKG" version >/dev/null 2>&1; then
+            echo "::error::@hyperdag/trust-demo@$PKG is already on the registry. Versions are immutable — bump the version."
+            exit 1
+          fi
+          echo "@hyperdag/trust-demo@$PKG is unpublished — ok to proceed."
+
+      # ── the fences that gate the release ─────────────────────────────────
+      # Only the suites covering this package. They need no SUPABASE secrets, so a release
+      # never depends on credentials it has no business holding.
+      - name: Install root dev deps (for jest + ts-jest)
+        working-directory: .
+        run: npm install --legacy-peer-deps
+
+      - name: Equivalence + portability fences
+        working-directory: .
+        run: npx jest --config jest.config.js --forceExit tests/trust-demo-verify-equivalence.test.ts tests/demo-leaf-bin.test.ts
+
+      - name: Prod-fixture fence (no production extract may ship)
+        working-directory: .
+        run: node scripts/hooks/prod-fixture-guard.js --ci
+
+      # ── smoke-test the ARTEFACT, not the working tree ────────────────────
+      # The thing users get is the tarball, so that is what gets tested: packed, installed
+      # into a clean directory as a dependency, and invoked through its bin exactly the way
+      # `npx` would. A green working tree has been wrong before; `files` omissions only
+      # show up here.
+      - name: Pack
+        run: npm pack --pack-destination /tmp
+
+      - name: Install the tarball clean and run it offline
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          mkdir -p /tmp/smoke && cd /tmp/smoke
+          npm init -y >/dev/null
+          npm install "/tmp/hyperdag-trust-demo-$PKG.tgz" --no-audit --no-fund
+          # --offline exercises the real WASM verifier and the tamper rejections with no
+          # network, so this asserts the cryptography works in the shipped artefact.
+          OUT=$(./node_modules/.bin/trust-demo --offline --json)
+          echo "$OUT" | node -e "
+            let s=''; process.stdin.on('data',d=>s+=d).on('end',()=>{
+              const r = JSON.parse(s);
+              const p = r.legs.local_proof;
+              if (p?.state !== 'REAL' || p.verified !== true) throw new Error('shipped tarball did not verify the proof: ' + JSON.stringify(p));
+              if (!p.tampers?.length || !p.tampers.every(t => t.rejected)) throw new Error('shipped tarball accepted a tampered statement');
+              console.log('smoke ok — proof verified, ' + p.tampers.length + ' tampers rejected, verifier v' + p.verifierVersion);
+            });"
+
+      # ── publish ──────────────────────────────────────────────────────────
+      - name: Publish (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: npm publish --access public --provenance --dry-run
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          {
+            echo "### @hyperdag/trust-demo@$PKG"
+            echo ""
+            echo "- trigger: \`${{ github.event_name }}\` (${{ github.ref_name }})"
+            echo "- dry run: \`${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}\`"
+            echo ""
+            echo "\`\`\`"
+            echo "npx @hyperdag/trust-demo"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

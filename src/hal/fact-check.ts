@@ -69,6 +69,7 @@ import {
 // gated block near the end of factCheck() and src/hal/retrieval.ts + src/hal/crag.ts.
 import { retrieveEvidence } from './retrieval';
 import { gradeEvidence, type CragResult, type CragGrade } from './crag';
+import { publishDetectorSnapshot } from '../services/detector-coverage';
 
 export interface FactCheckProviderCfg {
   name: string;
@@ -178,6 +179,24 @@ export interface ProviderVerdict {
 }
 
 export type HalDecision = 'vetoed' | 'flagged' | 'clean' | 'abstain';
+
+/**
+ * Compress a provider failure to a short, enumerable token for the coverage record.
+ *
+ * The raw upstream message can be long and can quote the request, and this value lands in
+ * `repid_score_events.metadata`, read by things that are not a human debugging one call. A
+ * stable code is what a later reader needs to reconstruct the coverage regime.
+ */
+function shortFailureReason(err: string | undefined): string {
+  const e = (err ?? '').toLowerCase();
+  if (/\b402\b|insufficient|credit|quota|billing/.test(e)) return '402';
+  if (/\b401\b|\b403\b|unauthor|invalid api key|forbidden/.test(e)) return '401';
+  if (/\b429\b|rate.?limit|too many/.test(e)) return '429';
+  if (/timeout|timed out|abort|etimedout/.test(e)) return 'timeout';
+  if (/econnrefused|enotfound|network|socket|fetch failed/.test(e)) return 'network';
+  if (/parse|json|schema|unexpected token/.test(e)) return 'badresponse';
+  return 'error';
+}
 
 export interface FactCheckResult {
   hal_score: number; // 0..1, higher = more likely false/risky (matches HAL convention)
@@ -860,6 +879,31 @@ export async function factCheck(
     .filter((v) => v.verdict === 'ERROR')
     .map((v) => ({ name: v.provider, error: v.error ?? 'unknown' }));
   const quorum = computeQuorum(providers_used, attempted);
+
+  // ── PUBLISH DETECTOR COVERAGE ────────────────────────────────────────────────────────
+  // Every RepID score event records what was watching when it moved (detector-coverage.ts).
+  // This is the one place that actually knows: 99.86% of negative reputation events come
+  // from HAL, so without this the ledger cannot tell "agents got better" from "the thing
+  // that notices stopped noticing" — the two have identical signatures.
+  //
+  // BUILT FROM `verdicts`, NOT FROM THE CONFIGURED FLEET, and the distinction is load-bearing.
+  // With cost-ordered waves a cheap quorum deliberately SKIPS the expensive tier. Those
+  // providers were never asked, so counting them as down would report an outage every time
+  // the system worked exactly as designed — a false alarm that trains everyone to ignore the
+  // real one. `verdicts` holds exactly the providers that were attempted, each with whether
+  // it answered.
+  //
+  // Distinct from recordProviderCall above: that is Redis-backed health (a no-op without
+  // REDIS_URL). This is in-process, always present, and feeds the score-event stamp.
+  publishDetectorSnapshot(
+    verdicts.map((v) => ({
+      name: v.provider,
+      live: v.verdict !== 'ERROR',
+      // Short, enumerable code — never the raw upstream prose, which can be long and can
+      // quote the request. The full text stays in the logs.
+      ...(v.verdict === 'ERROR' ? { reason: shortFailureReason(v.error) } : {}),
+    })),
+  );
 
   if (providers_used === 0) {
     // Degrade LOUDLY: no fact-check provider produced a usable verdict. Both

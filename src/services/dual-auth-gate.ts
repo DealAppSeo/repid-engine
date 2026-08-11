@@ -36,7 +36,9 @@ export type RefusalReason =
   | 'threshold_not_met'
   | 'hal_unavailable'
   | 'hal_vetoed'
-  | 'stale_proof';
+  | 'stale_proof'
+  | 'action_binding_missing'
+  | 'action_binding_mismatch';
 
 export type Decision = 'ALLOW' | 'REFUSE';
 
@@ -51,6 +53,8 @@ export interface GateInput {
     repid_score?: number;
     threshold?: number;
     user_standards_hash?: string;
+    /** Poseidon2 digest of the action this proof authorises. Required above the value tier. */
+    action_content_hash?: string;
   } | null;
   /** The standards hash the OWNER bound. Compared against the proof's. */
   boundStandardsHash?: string | null;
@@ -62,6 +66,17 @@ export interface GateInput {
   proofAgeSeconds?: number;
   /** Max acceptable proof age. Default 1h. */
   maxProofAgeSeconds?: number;
+  /**
+   * Value at stake, USDC. Above CONTENT_BINDING_REQUIRED_ABOVE the proof must commit to
+   * `actionContentHash`.
+   *
+   * UNDEFINED means the caller declared no value. The gate does NOT assume that means zero —
+   * it proceeds on policy-binding alone and SAYS SO in `doesNotAttest`, so a consumer can see
+   * that action binding was never checked rather than inferring it passed.
+   */
+  actionValueUsdc?: number;
+  /** Digest of the action being authorised, computed by the caller. */
+  actionContentHash?: string;
 }
 
 export interface GateResult {
@@ -73,7 +88,40 @@ export interface GateResult {
   authorities: { agent: boolean; human: boolean };
   /** Everything the decision rested on — auditable after the fact. */
   evidence: Record<string, unknown>;
+  /**
+   * What this ALLOW does not cover.
+   *
+   * An ALLOW that silently omits a check reads, to every downstream consumer, exactly like an
+   * ALLOW that performed it. Naming the gaps is what lets a caller reason about coverage
+   * instead of assuming it — and it is the one property that stays useful when the
+   * cryptography around it becomes commodity.
+   */
+  doesNotAttest: string[];
 }
+
+/**
+ * Above this value (USDC), policy-binding is no longer enough: the proof must commit to the
+ * CONTENT of the specific action.
+ *
+ * ── WHY A TIER RATHER THAN ALWAYS-ON ─────────────────────────────────────────────────────
+ * This gate binds human authority to `user_standards_hash` — the owner's POLICY. That is
+ * stronger than binding a session (the policy is committed inside the proof, so it cannot be
+ * swapped) but it is weaker than binding the action, and the gap has a name: the CONFUSED
+ * DEPUTY. An agent whose key is compromised, acting entirely WITHIN its owner's standards,
+ * is authorised — and the gate correctly says ALLOW, because the owner did permit that class
+ * of action. The deputy is not impersonating anyone; it is exercising real authority that has
+ * been re-aimed.
+ *
+ * Requiring content-hash binding on EVERY action would close that, and would also destroy the
+ * standing autonomy that makes an agent worth having: a human would have to authorise each
+ * individual call. So the binding strengthens with what is at stake, which is how every other
+ * authority system that survives contact with users behaves.
+ *
+ * Set to 10 to match `PAYMENT_PROOF_REQUIRED_ABOVE` in outcome-classification.ts, which uses
+ * the same value for the same reason — above it, a claim needs an anchor rather than a
+ * promise. One number, one mental model.
+ */
+export const CONTENT_BINDING_REQUIRED_ABOVE = 10;
 
 const DEFAULT_MAX_AGE = 3600;
 
@@ -148,6 +196,32 @@ export function evaluateGate(input: GateInput): GateResult {
     }
   }
 
+  // ── ACTION BINDING (value-tiered) ─────────────────────────────────────────
+  // Policy-binding above says the owner permitted this CLASS of action. Content-binding says
+  // the owner authorised THIS action. The second is what closes the confused deputy, and it
+  // is required only once the stakes justify the friction.
+  //
+  // FAIL-CLOSED ON A MALFORMED VALUE, for the same reason the threshold check does: a NaN
+  // makes every comparison false, so `actionValueUsdc: NaN` would slip under the tier and
+  // silently buy the weaker check. An unparseable value is treated as ABOVE the tier — if we
+  // cannot tell what is at stake, we assume it is a lot.
+  const valueDeclared = input.actionValueUsdc !== undefined && input.actionValueUsdc !== null;
+  const valueUsable = valueDeclared && Number.isFinite(input.actionValueUsdc as number);
+  const bindingRequired = valueDeclared
+    ? (!valueUsable || (input.actionValueUsdc as number) > CONTENT_BINDING_REQUIRED_ABOVE)
+    : false;
+
+  if (bindingRequired) {
+    const supplied = typeof input.actionContentHash === 'string' && input.actionContentHash.length > 0;
+    const committed = typeof st?.action_content_hash === 'string' && st.action_content_hash.length > 0;
+    if (!supplied || !committed) {
+      // "Nothing to compare" is a MISSING binding, never a satisfied one.
+      reasons.push('action_binding_missing');
+    } else if (st!.action_content_hash !== input.actionContentHash) {
+      reasons.push('action_binding_mismatch');
+    }
+  }
+
   // ── HAL ───────────────────────────────────────────────────────────────────
   // Unavailable is REFUSE, not ALLOW. This is the property the demo exercised
   // when the endpoint was rate-limited.
@@ -160,7 +234,12 @@ export function evaluateGate(input: GateInput): GateResult {
   const agentOk = !reasons.some((r) =>
     ['agent_identity_unverified', 'proof_missing', 'proof_invalid', 'stale_proof'].includes(r),
   );
-  const humanOk = !reasons.some((r) => ['standards_unbound', 'standards_mismatch'].includes(r));
+  // Action binding is HUMAN authority, not agent authority: it is the owner saying "this
+  // payload", not the agent proving who it is. A missing binding above the tier therefore
+  // means the human authority is NOT satisfied, even though the policy hash matched.
+  const humanOk = !reasons.some((r) =>
+    ['standards_unbound', 'standards_mismatch', 'action_binding_missing', 'action_binding_mismatch'].includes(r),
+  );
 
   const decision: Decision = reasons.length === 0 ? 'ALLOW' : 'REFUSE';
 
@@ -178,8 +257,44 @@ export function evaluateGate(input: GateInput): GateResult {
       standardsMatch: !!bound && st?.user_standards_hash === bound,
       halVerdict: input.halVerdict ?? null,
       proofAgeSeconds: input.proofAgeSeconds ?? null,
+      actionValueUsdc: valueUsable ? (input.actionValueUsdc as number) : null,
+      contentBindingRequired: bindingRequired,
+      contentBindingSatisfied: bindingRequired
+        ? !reasons.includes('action_binding_missing') && !reasons.includes('action_binding_mismatch')
+        : null,
     },
+    doesNotAttest: buildDoesNotAttest({ valueDeclared, valueUsable, bindingRequired, halVerdict: input.halVerdict }),
   };
+}
+
+/**
+ * Name the checks this decision did NOT perform.
+ *
+ * Deliberately says nothing about checks that FAILED — those are `reasons`, and conflating
+ * "we looked and it was wrong" with "we never looked" is the exact collapse this codebase
+ * refuses everywhere else (proofVerified undefined vs false; UNKNOWN vs NONE coverage).
+ */
+function buildDoesNotAttest(ctx: {
+  valueDeclared: boolean;
+  valueUsable: boolean;
+  bindingRequired: boolean;
+  halVerdict?: 'PASS' | 'FLAG' | 'VETO';
+}): string[] {
+  const out: string[] = [];
+  if (!ctx.valueDeclared) {
+    // The single most likely way to get a weaker check than intended: forget the value.
+    out.push('action_content_binding (no action value declared — policy binding only)');
+  } else if (!ctx.bindingRequired) {
+    out.push(`action_content_binding (value at or below ${CONTENT_BINDING_REQUIRED_ABOVE} USDC)`);
+  }
+  if (!ctx.valueUsable && ctx.valueDeclared) {
+    out.push('action_value (declared but not a finite number — treated as above the tier)');
+  }
+  if (ctx.halVerdict === 'FLAG') {
+    // FLAG is not a veto and does not refuse, but it is not a clean pass either.
+    out.push('hal_clean (HAL flagged rather than passed)');
+  }
+  return out;
 }
 
 const MESSAGES: Record<RefusalReason, string> = {
@@ -192,6 +307,10 @@ const MESSAGES: Record<RefusalReason, string> = {
   hal_unavailable: 'HAL could not be consulted — an unavailable safety check is not a passing one',
   hal_vetoed: 'HAL vetoed the proposed action',
   stale_proof: 'the reputation proof is older than this action allows',
+  action_binding_missing:
+    'this action is valuable enough to need the owner to authorise THIS payload, and no content binding was presented — the owner permitting this class of action is not the same as authorising this one',
+  action_binding_mismatch:
+    'the proof authorises a DIFFERENT action than the one being attempted',
 };
 
 function explain(decision: Decision, reasons: RefusalReason[]): string {

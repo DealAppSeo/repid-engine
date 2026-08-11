@@ -32,6 +32,11 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { resolveLeafBin, leafBinHelp } from './leaf-bin.mjs';
+// The SAME sanitiser @hyperdag/trust-demo uses. Imported, not copied: a second
+// implementation of an escaping rule is a second thing to get wrong.
+import { safe } from '../../packages/trust-demo/src/safe-output.mjs';
 
 // The FROZEN calibrator, and the real shipped calibration code. Not a copy: a
 // demo that reimplements what it demonstrates proves nothing about the shipped
@@ -67,8 +72,17 @@ try {
 }
 
 const ENGINE = process.env.TRUSTSHELL_API_URL || 'https://repid-engine-production.up.railway.app';
-const LEAF_BIN = process.env.LEAF_BIN ||
-  'C:/Users/Cash4/repos/HyperDAG-core/services/babybear-leaf/target/release/leaf.exe';
+
+// The leaf binary is RESOLVED, not assumed. This used to default to an absolute path under
+// one developer's Windows home directory, so on every other machine the Poseidon2 and fold
+// legs reported UNKNOWN even when the crate had been built correctly — a gap that blamed
+// the wrong thing. `$LEAF_BIN` still wins outright; see ./leaf-bin.mjs for the precedence
+// and tests/demo-leaf-bin.test.ts for the test that pins it.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LEAF = resolveLeafBin({ repoRoot: REPO_ROOT });
+// A string either way, so the existing `existsSync(LEAF_BIN)` call sites read unchanged.
+// Unresolved becomes a path that cannot exist — never a silent substitution.
+const LEAF_BIN = LEAF.path ?? '\0unresolved-leaf-binary';
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -84,9 +98,19 @@ const bad = (s) => line(`      ${R}✗${RESET} ${s}`);
 const unk = (s) => line(`      ${Y}?${RESET} ${s}`);
 const note = (s) => line(`      ${DIM}${s}${RESET}`);
 
+/** A response larger than this is not a response, it is resource exhaustion. The biggest
+ *  legitimate payload is a proof of ~15 KB of base64. */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
 async function get(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(45_000) });
-  return { status: res.status, json: await res.json().catch(() => null) };
+  const declared = Number(res.headers.get('content-length') ?? '0');
+  if (declared > MAX_BODY_BYTES) return { status: res.status, json: null };
+  const text = await res.text();
+  if (text.length > MAX_BODY_BYTES) return { status: res.status, json: null };
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON body stays null */ }
+  return { status: res.status, json };
 }
 
 const result = { hal: null, repid: null, proof: null, nullifier: null, anchor: null };
@@ -127,7 +151,7 @@ try {
     const j = await res.json();
     result.hal = { state: 'REAL', verdict: j.verdict ?? j.decision, halScore: j.halScore ?? j.hal_score, mode: j.mode };
     const vetoed = /veto/i.test(String(result.hal.verdict));
-    (vetoed ? bad : ok)(`verdict ${result.hal.verdict}   halScore ${result.hal.halScore}   mode ${result.hal.mode}`);
+    (vetoed ? bad : ok)(`verdict ${safe(result.hal.verdict)}   halScore ${safe(result.hal.halScore)}   mode ${safe(result.hal.mode)}`);
 
     // CALIBRATED CONFIDENCE. The raw halScore is not a probability: on the frozen
     // holdout, cases scoring 0.50 were hallucinations 83-88% of the time. Both
@@ -145,7 +169,7 @@ try {
     }
     if (Array.isArray(j.evidence) && j.evidence.length) {
       note('per-provider evidence:');
-      for (const e of j.evidence.slice(0, 5)) note(`  - ${e}`);
+      for (const e of j.evidence.slice(0, 5)) note(`  - ${safe(e)}`);
     }
   }
 } catch (e) {
@@ -157,9 +181,24 @@ try {
 step(2, 'RepID — the actor\'s live reputation (keyless read)');
 try {
   const { status, json } = await get(`${ENGINE}/api/v1/repid/${AGENT}`);
-  if (status === 200 && json) {
-    result.repid = { state: 'REAL', score: json.repid_score ?? json.repid, tier: json.tier };
-    ok(`RepID ${result.repid.score}  tier ${result.repid.tier}`);
+  // VALIDATE BEFORE TRUSTING. This score is not just printed: it becomes `prevScore` in
+  // step 6, is used in the fold arithmetic, and is passed as an ARGUMENT to the Rust leaf
+  // binary. A non-numeric or absurd value from the engine would either crash the fold or —
+  // worse — commit a root to a nonsense score while every individual step still looked
+  // internally consistent, which is precisely the class of bug PR #8 was written to expose.
+  // RepID is bounded 0..10000 (see @hyperdag/proof-verifier's soundness note), so anything
+  // outside that is a gap, not a number.
+  const rawScore = json?.repid_score ?? json?.repid;
+  const scoreNum = Number(rawScore);
+  const scoreOk = Number.isFinite(scoreNum) && Number.isInteger(scoreNum) && scoreNum >= 0 && scoreNum <= 10000;
+  if (status === 200 && json && scoreOk) {
+    result.repid = { state: 'REAL', score: scoreNum, tier: json.tier };
+    ok(`RepID ${safe(result.repid.score)}  tier ${safe(result.repid.tier)}`);
+  } else if (status === 200 && json && !scoreOk) {
+    result.repid = { state: 'UNKNOWN', reason: `engine returned an unusable repid_score: ${safe(rawScore, 40)}` };
+    unk(result.repid.reason);
+    note('refusing to fold a score that is not a plain integer in 0..10000 — a bad number');
+    note('would commit a root to nonsense while every step still verified.');
   } else {
     result.repid = { state: 'UNKNOWN', reason: `HTTP ${status}` };
     unk(`could not read RepID (HTTP ${status})`);
@@ -185,7 +224,7 @@ try {
     // returns verified:boolean. Fail-closed — the leg is REAL only when the math
     // checks out. verifyProofLocally itself refuses if the verifier is unavailable,
     // the bytes are empty, or the result shape is not a real boolean.
-    ok(`${json.scheme}   ${bytes} proof bytes fetched`);
+    ok(`${safe(json.scheme)}   ${bytes} proof bytes fetched`);
     const v = verifyProofLocally
       ? await verifyProofLocally({ proofBytes: json.proof_bytes, statement, verifyFn: proofVerify })
       : { verified: false, reason: 'verify helper not built — run `npm run build`', verifierVersion: null };
@@ -195,7 +234,7 @@ try {
         verifierVersion: v.verifierVersion,
       };
       ok(`VERIFIED LOCALLY by @hyperdag/proof-verifier${v.verifierVersion ? ` v${v.verifierVersion}` : ''} — verified=true`);
-      if (statement) note(`statement: ${JSON.stringify(statement)}`);
+      if (statement) note(`statement: ${safe(JSON.stringify(statement), 400)}`);
       note('the proof asserts RepID ≥ threshold WITHOUT revealing the score — and we checked the math, not their word.');
     } else {
       result.proof = {
@@ -216,9 +255,9 @@ try {
 // ── 4. Poseidon2 nullifier (Rust) ───────────────────────────────────────────
 step(4, 'Poseidon2 — scoped nullifier from the Rust primitive (ZKP invariant 2)');
 if (!existsSync(LEAF_BIN)) {
-  result.nullifier = { state: 'UNKNOWN', reason: `leaf binary not built at ${LEAF_BIN}` };
-  unk('Rust leaf binary not built');
-  note('build: cd HyperDAG-core/services/babybear-leaf && cargo build --release --bin leaf');
+  result.nullifier = { state: 'UNKNOWN', reason: 'leaf binary not found', tried: LEAF.tried };
+  unk('Rust leaf binary not found on this machine');
+  for (const l of leafBinHelp(LEAF.tried)) note(l);
 } else {
   try {
     // selftest FIRST: never trust a digest from a primitive that has not just
@@ -248,7 +287,7 @@ try {
   if (status === 200 && json) {
     result.anchor = { state: 'REAL', stats: json };
     const w = json.total_writes ?? json.writes ?? json.onchain_writes;
-    ok(`on-chain reputation writes: ${w ?? JSON.stringify(json).slice(0, 90)}`);
+    ok(`on-chain reputation writes: ${w === undefined || w === null ? safe(JSON.stringify(json), 90) : safe(w)}`);
   } else {
     result.anchor = { state: 'UNKNOWN', reason: `HTTP ${status}` };
     unk(`anchor stats unavailable (HTTP ${status})`);
@@ -295,6 +334,7 @@ if (!deltaFor || !linkPaymentProof) {
 } else if (!existsSync(LEAF_BIN)) {
   unk('leaf binary unavailable — the fold cannot be computed by the real circuit');
   note('NOT substituting a JS hash: that would prove the demo can hash, not that the circuit can.');
+  for (const l of leafBinHelp(LEAF.tried)) note(l);
 } else {
   const prevScore = result.repid?.score ?? 1000;
 
@@ -433,7 +473,7 @@ try {
 // the STARK verifier rejects at the crypto layer.
 const canonicalAgentId = result.proof?.canonicalAgentId ?? null;
 if (canonicalAgentId && canonicalAgentId !== AGENT) {
-  note(`slug "${AGENT}" resolves to canonical id ${canonicalAgentId} (the id the proof binds)`);
+  note(`slug "${safe(AGENT)}" resolves to canonical id ${safe(canonicalAgentId)} (the id the proof binds)`);
 }
 
 const gate = evaluateGate({
@@ -459,7 +499,23 @@ line(`      ${gate.explanation}`);
 if (gate.reasons.length) {
   line('');
   note('every blocker, so fixing one does not hide the next:');
-  for (const r of gate.reasons) note(`  - ${r}`);
+  for (const r of gate.reasons) note(`  - ${safe(r)}`);
+}
+
+// NEGATIVE SPACE — what this decision does NOT cover.
+//
+// Printed even on ALLOW, and especially on ALLOW. A consumer that cannot see which checks
+// were skipped will assume they passed, and an ALLOW that silently omits a check reads
+// exactly like one that performed it. This is also the field's only CONSUMER: a
+// `doesNotAttest` nothing reads is decoration, which is the same unwired-mechanism failure
+// as a confession table with no writer.
+if (Array.isArray(gate.doesNotAttest) && gate.doesNotAttest.length) {
+  line('');
+  note('this decision does NOT attest to:');
+  for (const d of gate.doesNotAttest) note(`  - ${safe(d)}`);
+  if (gate.decision === 'ALLOW') {
+    note('an ALLOW is only as wide as the checks behind it — the gaps above are real.');
+  }
 }
 
 // THE NEW ROOT, and an honest statement of what it does and does not cover.

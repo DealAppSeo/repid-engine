@@ -92,6 +92,13 @@ interface InsertParams {
   idempotencyKey: string;
   metadata: Record<string, unknown>;
   certaintyAtClaim?: number | null;
+  /**
+   * The other party in the verification. Threaded through the GUARDED branch only: the
+   * legacy raw-SQL insert below is preserved byte-identical on purpose (the ratchet
+   * allow-list asserts it has no stale entries) and, per the note above it, cannot currently
+   * insert anything at all — widening it would add an untested column write to a dead path.
+   */
+  counterpartyAgentId?: string | null;
 }
 
 /**
@@ -158,6 +165,9 @@ async function insertScoreEventGuarded(params: InsertParams): Promise<ScoreEvent
     delta: params.delta,
     idempotency_key: params.idempotencyKey,
     metadata: params.metadata,
+    ...(params.counterpartyAgentId
+      ? { counterparty_agent_id: params.counterpartyAgentId }
+      : {}),
     ...(params.certaintyAtClaim == null
       ? {}
       : { extra: { certainty_at_claim: params.certaintyAtClaim } }),
@@ -227,6 +237,9 @@ export async function emitPeerVerifyScoreEvents(
         claim: claimRef,
         verifier_agent_id: input.verifierAgentId,
       },
+      // The producer row already named the verifier in metadata; now it is a queryable,
+      // foreign-keyed column instead of a jsonb key one join cannot use.
+      counterpartyAgentId: input.verifierAgentId,
       certaintyAtClaim: input.certaintyAtClaim ?? undefined,
     });
     const verifier = await insertScoreEvent({
@@ -239,6 +252,9 @@ export async function emitPeerVerifyScoreEvents(
         queue_id: qid,
         claim: claimRef,
       },
+      // The asymmetry this closes: the verifier's row recorded NOTHING about whose claim it
+      // verified, so the pair was only ever visible from the producer's side.
+      counterpartyAgentId: input.producerAgentId,
       certaintyAtClaim: input.certaintyAtClaim ?? undefined,
     });
     // Bridge to the ERC-8004 outbox so the verifier's (and producer's) moved
@@ -281,6 +297,9 @@ export async function emitPeerVerifyScoreEvents(
         queue_id: qid,
         claim: claimRef,
       },
+      // A slash is ABOUT the disputed claim, so whose claim it was is the most load-bearing
+      // fact on the row — and it was the one thing the row did not record.
+      counterpartyAgentId: input.producerAgentId,
       certaintyAtClaim: input.certaintyAtClaim ?? undefined,
     });
     // Bridge the disputed-verifier slash to the ERC-8004 outbox (flag-gated,

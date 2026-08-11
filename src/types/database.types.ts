@@ -14782,6 +14782,7 @@ export type Database = {
           challenger_repid_at_event: number | null
           collusion_risk: number | null
           contract_id: string | null
+          counterparty_agent_id: string | null
           created_at: string | null
           decision_outcome: string | null
           delta: number
@@ -14820,6 +14821,7 @@ export type Database = {
           challenger_repid_at_event?: number | null
           collusion_risk?: number | null
           contract_id?: string | null
+          counterparty_agent_id?: string | null
           created_at?: string | null
           decision_outcome?: string | null
           delta: number
@@ -14858,6 +14860,7 @@ export type Database = {
           challenger_repid_at_event?: number | null
           collusion_risk?: number | null
           contract_id?: string | null
+          counterparty_agent_id?: string | null
           created_at?: string | null
           decision_outcome?: string | null
           delta?: number
@@ -14892,6 +14895,13 @@ export type Database = {
           {
             foreignKeyName: "repid_score_events_agent_id_fkey"
             columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "repid_agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repid_score_events_counterparty_fkey"
+            columns: ["counterparty_agent_id"]
             isOneToOne: false
             referencedRelation: "repid_agents"
             referencedColumns: ["id"]

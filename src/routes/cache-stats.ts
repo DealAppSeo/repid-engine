@@ -6,6 +6,7 @@ import { Router, Request, Response } from 'express';
 import { getCache, cacheEnabled } from '../cache/dragonfly';
 import { getHalCacheStats } from '../cache/hal-cache';
 import { getProviderHealth } from '../cache/provider-health';
+import { forLog } from './public-error';
 
 const router = Router();
 
@@ -42,7 +43,12 @@ router.get('/cache/stats', async (_req: Request, res: Response) => {
       last_updated: new Date().toISOString(),
     });
   } catch (e: any) {
-    return res.json({ status: 'error', detail: e?.message ?? String(e) });
+    // Distinct shape from the other public routes: this one answers 200 with a status field
+    // rather than an HTTP error, and callers depend on that. Only the leaked `detail` goes;
+    // the real cause is logged. (It also reported a Redis/provider failure as HTTP 200,
+    // which is a separate question about this endpoint's contract — left alone deliberately.)
+    console.error(`[public] GET /api/v1/cache-stats -> status:error: ${forLog(e)}`);
+    return res.json({ status: 'error' });
   }
 });
 

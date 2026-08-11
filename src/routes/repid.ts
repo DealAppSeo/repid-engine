@@ -22,6 +22,7 @@ import { db } from '../db';
 import { logProofGeneration } from '../zkp/plonky3-real';
 import { generateProof } from '../zk-proof/prover';
 import { fireWebhook } from '../services/webhook';
+import { publicError } from './public-error';
 
 export const repidPublicRouter = Router();
 
@@ -67,20 +68,15 @@ async function resolveAgentUuid(raw: string): Promise<string | null> {
 // the existing tests/repid-score.test.ts smoke test stays green.
 repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => {
   try {
-    let resolvedId = String(req.params.agentId ?? '');
-    if (resolvedId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedId)) {
-      let query = db.from('repid_agents').select('id');
-      if (/^\d+$/.test(resolvedId)) {
-        query = query.eq('erc8004_token_id', resolvedId);
-      } else {
-        const lcName = resolvedId.toLowerCase();
-        const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
-        query = query.eq('agent_name', lookupName);
-      }
-      const { data } = await query.maybeSingle();
-      if (data && data.id) {
-        resolvedId = data.id;
-      }
+    // Shared resolver — NOT a fourth inline copy. This block used to duplicate
+    // resolveAgentUuid() and diverge from it: when the name lookup missed, it kept the raw
+    // user string and passed it to a uuid-typed column, so Postgres raised 22P02
+    // "invalid input syntax for type uuid" and this route answered an unauthenticated GET
+    // with a 500 carrying the raw DB error text. /proof was fixed by extracting the helper;
+    // its three siblings kept the copy and kept the bug.
+    const resolvedId = await resolveAgentUuid(String(req.params.agentId ?? ''));
+    if (!resolvedId) {
+      return res.status(404).json({ error: 'AGENT_NOT_FOUND', agent_id: String(req.params.agentId ?? '').slice(0, 128) });
     }
     const lookup = await getRepIDForAgent(resolvedId);
     res.json(lookup);
@@ -88,7 +84,7 @@ repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => 
     if (e?.code === 'DATABASE_ERROR') {
       console.error(`[repid] lookup db error for ${req.params.agentId}: ${e.message}`);
     }
-    return res.status(404).json({ error: 'AGENT_NOT_FOUND', detail: e?.message ?? String(e) });
+    return publicError(res, 404, 'AGENT_NOT_FOUND', e, `GET /repid/${req.params.agentId}`);
   }
 });
 
@@ -97,29 +93,24 @@ repidPublicRouter.get(
   '/repid/:agentId/history',
   async (req: Request, res: Response) => {
     try {
-      let resolvedId = String(req.params.agentId ?? '');
-      if (resolvedId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedId)) {
-        let query = db.from('repid_agents').select('id');
-        if (/^\d+$/.test(resolvedId)) {
-          query = query.eq('erc8004_token_id', resolvedId);
-        } else {
-          const lcName = resolvedId.toLowerCase();
-          const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
-          query = query.eq('agent_name', lookupName);
-        }
-        const { data } = await query.maybeSingle();
-        if (data && data.id) {
-          resolvedId = data.id;
-        }
+      // Shared resolver — NOT a fourth inline copy. This block used to duplicate
+      // resolveAgentUuid() and diverge from it: when the name lookup missed, it kept the raw
+      // user string and passed it to a uuid-typed column, so Postgres raised 22P02
+      // "invalid input syntax for type uuid" and this route answered an unauthenticated GET
+      // with a 500 carrying the raw DB error text. /proof was fixed by extracting the helper;
+      // its three siblings kept the copy and kept the bug.
+      const resolvedId = await resolveAgentUuid(String(req.params.agentId ?? ''));
+      if (!resolvedId) {
+        return res.status(404).json({ error: 'AGENT_NOT_FOUND', agent_id: String(req.params.agentId ?? '').slice(0, 128) });
       }
       const since = typeof req.query.since === 'string' ? req.query.since : undefined;
       const history = await getRepIDHistory(resolvedId, since);
       res.json({ agent_id: resolvedId, count: history.length, events: history });
     } catch (e: any) {
       if (e?.code === 'AGENT_NOT_FOUND') {
-        return res.status(404).json({ error: 'AGENT_NOT_FOUND', detail: e.message });
+        return publicError(res, 404, 'AGENT_NOT_FOUND', e, `GET /repid/${req.params.agentId}/history`);
       }
-      res.status(500).json({ error: 'INTERNAL', detail: e?.message ?? String(e) });
+      return publicError(res, 500, 'INTERNAL', e, `GET /repid/${req.params.agentId}/history`);
     }
   },
 );
@@ -127,20 +118,15 @@ repidPublicRouter.get(
 // GET /api/v1/repid/:agentId/zkp — latest ZKP proof for an agent
 repidPublicRouter.get('/repid/:agentId/zkp', async (req: Request, res: Response) => {
   try {
-    let resolvedId = String(req.params.agentId ?? '');
-    if (resolvedId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedId)) {
-      let query = db.from('repid_agents').select('id');
-      if (/^\d+$/.test(resolvedId)) {
-        query = query.eq('erc8004_token_id', resolvedId);
-      } else {
-        const lcName = resolvedId.toLowerCase();
-        const lookupName = lcName.startsWith('trinity-') ? lcName : `trinity-${lcName}`;
-        query = query.eq('agent_name', lookupName);
-      }
-      const { data } = await query.maybeSingle();
-      if (data && data.id) {
-        resolvedId = data.id;
-      }
+    // Shared resolver — NOT a fourth inline copy. This block used to duplicate
+    // resolveAgentUuid() and diverge from it: when the name lookup missed, it kept the raw
+    // user string and passed it to a uuid-typed column, so Postgres raised 22P02
+    // "invalid input syntax for type uuid" and this route answered an unauthenticated GET
+    // with a 500 carrying the raw DB error text. /proof was fixed by extracting the helper;
+    // its three siblings kept the copy and kept the bug.
+    const resolvedId = await resolveAgentUuid(String(req.params.agentId ?? ''));
+    if (!resolvedId) {
+      return res.status(404).json({ error: 'AGENT_NOT_FOUND', agent_id: String(req.params.agentId ?? '').slice(0, 128) });
     }
 
     const { data: proof, error } = await db
@@ -152,7 +138,7 @@ repidPublicRouter.get('/repid/:agentId/zkp', async (req: Request, res: Response)
       .maybeSingle();
 
     if (error) {
-      return res.status(500).json({ error: 'DATABASE_ERROR', detail: error.message });
+      return publicError(res, 500, 'DATABASE_ERROR', error, `GET /repid/${req.params.agentId}/zkp`);
     }
     if (!proof) {
       return res.status(404).json({ error: 'NO_PROOF_FOUND' });
@@ -160,7 +146,7 @@ repidPublicRouter.get('/repid/:agentId/zkp', async (req: Request, res: Response)
 
     res.json(proof);
   } catch (e: any) {
-    res.status(500).json({ error: 'INTERNAL', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'INTERNAL', e, `GET /repid/${req.params.agentId}/zkp`);
   }
 });
 
@@ -210,7 +196,7 @@ repidPublicRouter.get('/repid/proof/:job_id', async (req: Request, res: Response
     .maybeSingle();
   if (error) {
     console.error(`[repid] proof lookup db error for job_id=${job_id}: ${error.message}`);
-    return res.status(500).json({ error: 'INTERNAL', detail: error.message });
+    return res.status(500).json({ error: 'INTERNAL' });
   }
   if (!data) return res.status(404).json({ error: 'Proof job not found' });
 
@@ -270,7 +256,7 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
 
   if (error) {
     console.error(`[repid] proof-by-agent db error for ${agentId}: ${error.message}`);
-    return res.status(500).json({ error: 'INTERNAL', detail: error.message });
+    return res.status(500).json({ error: 'INTERNAL' });
   }
   if (!data) return res.status(404).json({ error: 'No proof found for agent', agent_id: agentId });
 
@@ -409,12 +395,12 @@ repidAdminRouter.post(
       res.json({ ...attestation, source: lookup.source });
     } catch (e: any) {
       if (e?.code === 'AGENT_NOT_FOUND') {
-        return res.status(404).json({ error: 'AGENT_NOT_FOUND', detail: e.message });
+        return publicError(res, 404, 'AGENT_NOT_FOUND', e, 'repid route');
       }
       if (e?.code === 'DATABASE_ERROR') {
-        return res.status(500).json({ error: 'DATABASE_ERROR', detail: e.message });
+        return publicError(res, 500, 'DATABASE_ERROR', e, 'repid route');
       }
-      res.status(500).json({ error: 'INTERNAL', detail: e?.message ?? String(e) });
+      return publicError(res, 500, 'INTERNAL', e, 'repid route');
     }
   },
 );

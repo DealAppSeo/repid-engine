@@ -9,6 +9,7 @@
 import { Router, Request, Response } from 'express';
 import { isFreeProvider, frontierCostEstimate } from '../billing/free-providers';
 import { fetchLlmCalls24h } from '../billing/llm-calls-24h';
+import { publicError } from './public-error';
 
 const router = Router();
 
@@ -100,7 +101,7 @@ router.get('/costs/summary', async (_req: Request, res: Response) => {
     cache = { at: Date.now(), payload };
     return res.json(payload);
   } catch (e: any) {
-    return res.status(500).json({ error: 'costs_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'costs_failed', e, 'GET /api/v1/costs');
   }
 });
 

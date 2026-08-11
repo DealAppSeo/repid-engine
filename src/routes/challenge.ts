@@ -281,6 +281,10 @@ router.post('/challenge', async (req: Request, res: Response) => {
       repid_delta_applied: challengerNewRepId - challenger.current_repid,
       repid_delta_calculated: challengerDelta,
       metadata: challengerMetadata,
+      // Each side records the other. Before this, the defender's row carried the
+      // challenger's id inside metadata and the challenger's row carried nothing at all —
+      // so the pair could only ever be reconstructed from one direction.
+      counterparty_agent_id: defenderId,
       extra: challengeCommonExtra,
     });
     await insertScoreEvent({
@@ -293,6 +297,7 @@ router.post('/challenge', async (req: Request, res: Response) => {
       repid_delta_applied: defenderNewRepId - defender.current_repid,
       repid_delta_calculated: defenderDelta,
       metadata: defenderMetadata,
+      counterparty_agent_id: challengerId,
       extra: challengeCommonExtra,
     });
   } else {

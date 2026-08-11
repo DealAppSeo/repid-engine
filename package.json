@@ -65,6 +65,7 @@
     "cb:resume": "ts-node scripts/circuit-breaker-controls.ts resume",
     "cb:status": "ts-node scripts/circuit-breaker-controls.ts status",
     "graph-rag:infer-edges": "ts-node scripts/graph-rag/infer-edges.ts",
+    "graph-rag:backfill-embeddings": "ts-node scripts/graph-rag/backfill-embeddings.ts",
     "corpus:hash": "node scripts/corpus/hash-corpus.mjs",
     "corpus:migrate": "node scripts/corpus/migrate-to-v1-schema.mjs",
     "corpus:verify": "jest --config jest.config.js tests/corpus-files.test.ts",

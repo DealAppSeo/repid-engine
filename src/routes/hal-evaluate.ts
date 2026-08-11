@@ -21,6 +21,7 @@ import { halService } from '../hal/service';
 import { scanForInjection } from '../hal/injection-guard';
 import { getCachedHalResult, cacheHalResult } from '../cache/hal-cache'; // S-CACHE
 import { db } from '../db';
+import { publicError } from './public-error';
 
 const router = Router();
 
@@ -124,7 +125,7 @@ router.get('/fact-check-count', async (_req: Request, res: Response) => {
     for (let i = 0; i < PUBLIC_FACT_CHECK_SOURCES.length; i++) {
       const r: any = results[i];
       if (r?.error) {
-        return res.status(500).json({ error: 'fact_check_count_failed', detail: r.error.message });
+        return publicError(res, 500, 'fact_check_count_failed', r.error, 'POST /api/v1/hal/evaluate');
       }
       const c = Number(r?.count ?? 0);
       by_source[PUBLIC_FACT_CHECK_SOURCES[i]!] = c;

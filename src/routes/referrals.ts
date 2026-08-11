@@ -10,6 +10,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
+import { publicError } from './public-error';
 
 export const publicRouter = Router();
 export const statsRouter = Router();
@@ -33,10 +34,10 @@ publicRouter.post('/track', async (req: Request, res: Response) => {
       })
       .select('id')
       .maybeSingle();
-    if (error) return res.status(500).json({ error: 'track_failed', detail: error.message });
+    if (error) return publicError(res, 500, 'track_failed', error, 'referrals route');
     return res.status(201).json({ ok: true, id: (data as any)?.id ?? null });
   } catch (e: any) {
-    return res.status(500).json({ error: 'track_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'track_failed', e, 'referrals route');
   }
 });
 
@@ -46,7 +47,7 @@ statsRouter.get('/referrals/stats', async (_req: Request, res: Response) => {
       .from('referral_tracking')
       .select('ref_code, source_type, converted_to_session, converted_to_email')
       .limit(50000);
-    if (error) return res.status(500).json({ error: 'stats_failed', detail: error.message });
+    if (error) return publicError(res, 500, 'stats_failed', error, 'referrals route');
     const rows = (data ?? []) as any[];
     const total = rows.length;
     const by_source: Record<string, number> = {};
@@ -72,6 +73,6 @@ statsRouter.get('/referrals/stats', async (_req: Request, res: Response) => {
       last_updated: new Date().toISOString(),
     });
   } catch (e: any) {
-    return res.status(500).json({ error: 'stats_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'stats_failed', e, 'referrals route');
   }
 });

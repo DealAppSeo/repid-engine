@@ -13,6 +13,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { isFreeProvider } from '../billing/free-providers';
 import { fetchLlmCalls24h } from '../billing/llm-calls-24h';
+import { publicError } from './public-error';
 
 const router = Router();
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -107,7 +108,7 @@ router.get('/system/efficiency', async (_req: Request, res: Response) => {
     cache = { at: Date.now(), payload };
     return res.json(payload);
   } catch (e: any) {
-    return res.status(500).json({ error: 'efficiency_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'efficiency_failed', e, 'GET /api/v1/efficiency');
   }
 });
 

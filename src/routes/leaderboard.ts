@@ -15,6 +15,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { db } from '../db';
 import { verifyChainBreaks } from '../services/audit/verify-chain-db';
 import { getCachedLeaderboard, cacheLeaderboard } from '../cache/leaderboard-cache'; // S-CACHE — shared L2
+import { publicError } from './public-error';
 
 const router = Router();
 
@@ -150,7 +151,7 @@ router.get('/leaderboard', async (_req: Request, res: Response) => {
     void cacheLeaderboard(payload);
     return res.json(payload);
   } catch (e: any) {
-    return res.status(500).json({ error: 'leaderboard_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'leaderboard_failed', e, 'leaderboard route');
   }
 });
 
@@ -185,7 +186,7 @@ router.get('/leaderboard/agents', async (_req: Request, res: Response) => {
     agentsCache = { at: Date.now(), payload };
     return res.json(payload);
   } catch (e: any) {
-    return res.status(500).json({ error: 'agent_leaderboard_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'agent_leaderboard_failed', e, 'leaderboard route');
   }
 });
 
@@ -257,7 +258,7 @@ router.get('/leaderboard/models', async (_req: Request, res: Response) => {
     modelsCache = { at: Date.now(), payload };
     return res.json(payload);
   } catch (e: any) {
-    return res.status(500).json({ error: 'models_leaderboard_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'models_leaderboard_failed', e, 'leaderboard route');
   }
 });
 
@@ -291,7 +292,7 @@ router.get('/leaderboard/:provider', async (req: Request, res: Response) => {
       .map(([day, scores]) => ({ day, avg_score: r2(avg(scores.filter(Number.isFinite))), n: scores.length }));
     return res.json({ ...agg, recent, trend });
   } catch (e: any) {
-    return res.status(500).json({ error: 'provider_detail_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'provider_detail_failed', e, 'leaderboard route');
   }
 });
 
@@ -307,10 +308,10 @@ router.post('/comparison/vote', writeLimiter, async (req: Request, res: Response
       .insert({ session_id_left, session_id_right, winner, prompt: prompt ?? null })
       .select('id')
       .maybeSingle();
-    if (error) return res.status(500).json({ error: 'vote_insert_failed', detail: error.message });
+    if (error) return publicError(res, 500, 'vote_insert_failed', error, 'leaderboard route');
     return res.status(201).json({ ok: true, id: (data as any)?.id ?? null });
   } catch (e: any) {
-    return res.status(500).json({ error: 'vote_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'vote_failed', e, 'leaderboard route');
   }
 });
 
@@ -340,7 +341,7 @@ router.patch('/session/:sessionId/rate', writeLimiter, async (req: Request, res:
       .eq('session_id', sessionId)
       .select('session_id, hal_score, hal_verdict')
       .maybeSingle();
-    if (error) return res.status(500).json({ error: 'rate_update_failed', detail: error.message });
+    if (error) return publicError(res, 500, 'rate_update_failed', error, 'leaderboard route');
     if (!data) return res.status(404).json({ error: 'session_not_found', session_id: sessionId });
 
     // S-FIX Phase 1.4 — when a user says HAL got it wrong, capture it as a learning event.
@@ -370,7 +371,7 @@ router.patch('/session/:sessionId/rate', writeLimiter, async (req: Request, res:
     }
     return res.json({ ok: true, session_id: sessionId, hal_agreement: hal_agreement ?? null });
   } catch (e: any) {
-    return res.status(500).json({ error: 'rate_failed', detail: e?.message ?? String(e) });
+    return publicError(res, 500, 'rate_failed', e, 'leaderboard route');
   }
 });
 
