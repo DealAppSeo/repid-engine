@@ -499,7 +499,23 @@ line(`      ${gate.explanation}`);
 if (gate.reasons.length) {
   line('');
   note('every blocker, so fixing one does not hide the next:');
-  for (const r of gate.reasons) note(`  - ${r}`);
+  for (const r of gate.reasons) note(`  - ${safe(r)}`);
+}
+
+// NEGATIVE SPACE — what this decision does NOT cover.
+//
+// Printed even on ALLOW, and especially on ALLOW. A consumer that cannot see which checks
+// were skipped will assume they passed, and an ALLOW that silently omits a check reads
+// exactly like one that performed it. This is also the field's only CONSUMER: a
+// `doesNotAttest` nothing reads is decoration, which is the same unwired-mechanism failure
+// as a confession table with no writer.
+if (Array.isArray(gate.doesNotAttest) && gate.doesNotAttest.length) {
+  line('');
+  note('this decision does NOT attest to:');
+  for (const d of gate.doesNotAttest) note(`  - ${safe(d)}`);
+  if (gate.decision === 'ALLOW') {
+    note('an ALLOW is only as wide as the checks behind it — the gaps above are real.');
+  }
 }
 
 // THE NEW ROOT, and an honest statement of what it does and does not cover.
