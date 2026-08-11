@@ -807,6 +807,14 @@ export async function applyValidationEvent(
     decision_outcome: halDecision,
     metadata: { ...decayMetadata(decay), ...(enrichedMetadata as Record<string, unknown>) },
     contract_id: metadata?.contract_id ?? null,
+    // Lifted out of metadata onto its own column, exactly as contract_id above is. This
+    // writer bypasses insertScoreEvent(), so its self-check is repeated rather than
+    // inherited: a self-counterparty would otherwise hit the DB CHECK as a 23514 and, since
+    // this function throws on insert error, take the whole delta down with it.
+    counterparty_agent_id:
+      metadata?.counterparty_agent_id && metadata.counterparty_agent_id !== agent_id
+        ? metadata.counterparty_agent_id
+        : null,
     answer_text: answerText,
     prompt_text: promptText,
     task_domain: taskDomain,

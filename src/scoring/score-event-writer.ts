@@ -46,6 +46,21 @@ export interface ScoreEventBase {
   delta: number;
   metadata?: Record<string, unknown> | null;
   idempotency_key?: string | null;
+  /**
+   * The OTHER agent in a two-party event — buyer↔provider, challenger↔defender,
+   * producer↔verifier.
+   *
+   * A first-class field rather than a key in `extra`, on purpose. Measured 2026-08-11: every
+   * two-agent interaction in this table is stored as two unrelated single-agent rows, and all
+   * 152,130 events together yield only 42 recoverable pairs. The relationship is destroyed at
+   * write time and no downstream inference gets it back. Typing it is what puts it in front of
+   * the next person adding a two-party event type — `extra` is where fields go to be forgotten.
+   *
+   * Omit it when there genuinely is no other party (DECAY, GENESIS, a solo HAL score).
+   * Undefined means "no counterparty, or not recorded" — never self, which both the DB CHECK
+   * and `counterpartyProblem()` below enforce.
+   */
+  counterparty_agent_id?: string | null;
   /** Any additional columns the caller legitimately owns. */
   extra?: Record<string, unknown>;
 }
@@ -121,7 +136,48 @@ export function reconciles(e: CallerAppliedEvent): boolean {
   return e.repid_after - e.repid_before === e.repid_delta_applied;
 }
 
+/**
+ * Why the counterparty is checked here and not left to the DB CHECK.
+ *
+ * The constraint would catch self-as-counterparty, but as a 23514 from PostgREST several
+ * layers from the call site, on a write that most callers `await` without reading `ok`. The
+ * event would vanish and the log would blame the schema. Checked here, the caller is named.
+ *
+ * Also catches the shape that the constraint CANNOT see: a caller that passes `''` or a
+ * whitespace string, which is not a uuid and not an absence either. Treating an empty string
+ * as "no counterparty" would silently discard a relationship the caller believed it recorded.
+ *
+ * Returns a reason, or null when the value is fine (including legitimately absent).
+ */
+export function counterpartyProblem(e: ScoreEventInsert): string | null {
+  const cp = e.counterparty_agent_id;
+  if (cp === undefined || cp === null) return null; // no other party — the common case
+  if (typeof cp !== 'string' || cp.trim() === '') {
+    return (
+      `counterparty_agent_id was provided but is empty. An empty string is not "no ` +
+      `counterparty" — omit the field entirely if there is no other party, so the absence ` +
+      `is deliberate rather than the residue of a lookup that returned nothing.`
+    );
+  }
+  if (cp === e.agent_id) {
+    return (
+      `counterparty_agent_id equals agent_id (${cp}). An agent cannot be its own ` +
+      `counterparty; this is almost always a copied variable at the call site. The DB CHECK ` +
+      `repid_score_events_counterparty_not_self would reject it too, but only as an opaque ` +
+      `23514 far from here.`
+    );
+  }
+  return null;
+}
+
 export async function insertScoreEvent(e: ScoreEventInsert): Promise<WriteResult> {
+  // Refuse before doing anything else. A self-counterparty or an empty-string counterparty
+  // is a call-site defect, and writing the row with the field dropped would hide it forever.
+  const cpProblem = counterpartyProblem(e);
+  if (cpProblem) {
+    return { ok: false, applier: e.applier, error: cpProblem };
+  }
+
   const row: Record<string, unknown> = {
     agent_id: e.agent_id,
     event_type: e.event_type,
@@ -142,6 +198,11 @@ export async function insertScoreEvent(e: ScoreEventInsert): Promise<WriteResult
     metadata: withCoverage(e.metadata, currentCoverage()),
     ...(e.idempotency_key ? { idempotency_key: e.idempotency_key } : {}),
     ...(e.extra ?? {}),
+    // AFTER `extra`, so the validated field wins. The typed value has been through
+    // counterpartyProblem(); a raw `extra.counterparty_agent_id` has not, and letting the
+    // unchecked one override the checked one would make the guard optional — which is the
+    // same failure as a checker you can edit your way past.
+    ...(e.counterparty_agent_id ? { counterparty_agent_id: e.counterparty_agent_id } : {}),
   };
 
   if (e.applier === 'caller') {

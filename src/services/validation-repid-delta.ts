@@ -388,6 +388,9 @@ export async function applyServiceFulfilledDeltas(
     halOverride = undefined;
   }
 
+  // The two halves of one transaction. Each side now records the other, so the relationship
+  // survives in the ledger instead of having to be re-derived from contract_id afterwards —
+  // which only ever worked for the 0.8% of events that set it.
   await applyValidationEvent(
     contract.provider_agent_id,
     'SERVICE_FULFILLED',
@@ -396,6 +399,7 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'provider',
+      counterparty_agent_id: contract.buyer_agent_id,
       answer_text: deliverable,
       prompt_text: promptText,
       task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
@@ -410,6 +414,7 @@ export async function applyServiceFulfilledDeltas(
       contract_id: contract.id,
       service_id: contract.service_id,
       role: 'buyer',
+      counterparty_agent_id: contract.provider_agent_id,
       answer_text: deliverable,
       prompt_text: promptText,
       task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
