@@ -129,8 +129,23 @@ describe('factCheck — BFT_DISJOINT_ENFORCE live wiring', () => {
     // Every provider returns a confident TRUE so the quorum is well-formed; we assert on WHICH models
     // were actually called (an excluded judge must never make a request).
     (global as any).fetch = jest.fn(async (_url: string, init: any) => {
-      const model = JSON.parse(init.body).model;
-      calledModels.push(model);
+      // Count PROVIDER calls only. This mock intercepts *every* fetch in the
+      // process, and several non-provider requests also carry a `model` field
+      // in their body — notably the fire-and-forget `llm_call_log` telemetry
+      // insert, which echoes the model it is logging. Counting those inflated
+      // calledModels with exact duplicates of each provider.
+      //
+      // It passed by luck: those writes are not awaited, so they normally
+      // landed after the assertion. Anything that adds latency inside
+      // factCheck() lets them land inside the measured window instead —
+      // which is exactly what the ground-truth gate's corpus read did.
+      // The endpoint, not the body, is what identifies a provider.
+      const url = String(_url);
+      const isProviderCall = /^http:\/\/x\//.test(url);
+      if (isProviderCall) {
+        const model = JSON.parse(init.body).model;
+        calledModels.push(model);
+      }
       return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ verdict: 'TRUE', confidence: 90 }) } }] }) } as any;
     });
     // Call every provider in parallel (no cheapest-first short-circuit) so exclusion is the only reason a

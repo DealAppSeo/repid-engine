@@ -35,6 +35,10 @@ import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 // imports the HOISTED familyOf() declaration at load time; fact-check calls resolveFamily() only at
 // runtime (inside functions), never at module init. See familyOfResolved() for the fallback contract.
 import { resolveFamily } from '../decisioning/family-registry';
+// GROUND-TRUTH GATE — Trinity's own recorded facts, consulted after the quorum.
+// The external quorum demonstrably vetoes TRUE claims about our private systems
+// (measured 2026-08-13); see src/hal/ground-truth-gate.ts for the numbers.
+import { checkGroundTruth, type GroundTruthResult } from './ground-truth-gate';
 // BFT ANTI-SPOOF (audit item #4, 2026-08-07) — registry-hard-fail disjointness enforcement for the live
 // quorum. selectDisjointQuorum() is the first LIVE caller of the src/decisioning/disjointness.ts module
 // (assertDisjoint/assembleDisjointJudges previously had none). Imported inertly; only invoked under the
@@ -204,6 +208,14 @@ export interface FactCheckResult {
   // A1 — human-readable explanation of WHY (verdict mode), e.g. "2 of 3 independent model
   // families judged this claim FALSE (Groq/Llama, Gemini, DeepSeek)". The demo surface.
   decision_reason?: string;
+  /**
+   * What Trinity's own `ground_truth_facts` corpus said about this claim, and
+   * whether it moved `decision`. Present whenever the gate ran (default on;
+   * HAL_GROUND_TRUTH_GATE=false disables). Exposed rather than hidden because a
+   * decision overridden by a local table must be visible to whoever reads the
+   * verdict — an unexplained override is indistinguishable from a bug.
+   */
+  ground_truth?: GroundTruthResult;
   verdicts: ProviderVerdict[];
   providers_used: number; // non-error responses
   families_used?: number; // R5 — distinct independent families among the non-error responses
@@ -1269,9 +1281,49 @@ export async function factCheck(
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // GROUND-TRUTH GATE — our own facts get the last word about our own systems.
+  //
+  // Runs AFTER the quorum, not instead of it: the quorum's hal_score and verdicts
+  // stay intact and observable, and only `decision` can move. That costs the
+  // provider calls even when the corpus decides, which is the price of keeping
+  // the two signals independently auditable.
+  //
+  // Two directions, both real:
+  //   contradicted → force 'vetoed'. Catches internal falsehoods the external
+  //                  quorum cannot detect, e.g. "contracts are on Ethereum
+  //                  mainnet" (recorded wrong_value). This makes HAL STRICTER.
+  //   corroborated → lift 'vetoed'/'flagged' to 'clean'. This is the false-
+  //                  positive fix; it never touches an already-'clean' verdict.
+  //
+  // Kill switch: HAL_GROUND_TRUTH_GATE=false. A degraded lookup changes nothing.
+  let groundTruthField: GroundTruthResult | undefined;
+  if (process.env.HAL_GROUND_TRUTH_GATE !== 'false') {
+    try {
+      const gt = await checkGroundTruth(deliverable);
+      groundTruthField = gt;
+
+      if (gt.degraded) {
+        console.warn(`[ground-truth-gate] degraded (decision '${decision}' unchanged): ${gt.reason}`);
+      } else if (gt.verdict === 'contradicted' && decision !== 'vetoed') {
+        console.log(`[ground-truth-gate] '${decision}' -> 'vetoed': ${gt.reason}`);
+        decision = 'vetoed';
+        decision_reason = gt.reason;
+      } else if (gt.verdict === 'corroborated' && (decision === 'vetoed' || decision === 'flagged')) {
+        console.log(`[ground-truth-gate] '${decision}' -> 'clean': ${gt.reason}`);
+        decision = 'clean';
+        decision_reason = gt.reason;
+      }
+    } catch (e: any) {
+      // Belt and braces: checkGroundTruth already never throws.
+      console.warn(`[ground-truth-gate] threw (ignored, decision kept): ${e?.message ?? String(e)}`);
+    }
+  }
+
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
+    ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
     ...(sbfaField ? { sbfa: sbfaField } : {}),
