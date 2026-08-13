@@ -465,8 +465,11 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
   // cross-LLM agreement. Otherwise fall back to the synchronous 5-signal
   // extractor (preserves Track-A behavior for callers that only have the
   // answer text).
+  // agentId is passed so Graph RAG recalls THIS agent's memory. Without it the
+  // injection silently no-ops (see hal-signals.ts) — which is what it did for
+  // every call before 2026-08-13.
   const halSignals = (typeof prompt === 'string' && prompt.trim().length > 0)
-    ? await extractHALSignalsWithCrossLLM(decision_text, task_domain || 'finance', certainty || 0.85, prompt)
+    ? await extractHALSignalsWithCrossLLM(decision_text, task_domain || 'finance', certainty || 0.85, prompt, agentId)
     : extractHALSignals(decision_text, task_domain || 'finance', certainty || 0.85);
 
   try {
