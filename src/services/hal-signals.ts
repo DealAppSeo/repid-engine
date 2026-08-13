@@ -118,6 +118,14 @@ export async function extractHALSignalsWithCrossLLM(
   domain: string,
   certainty: number,
   prompt?: string,
+  /**
+   * The agent whose memory should be recalled into the prompt.
+   *
+   * Optional so existing callers keep compiling, but its absence now means
+   * "inject nothing" rather than "inject from three hardcoded ids". See the
+   * Graph RAG block below for why that distinction is the entire fix.
+   */
+  agentId?: string,
 ): Promise<HALSignals> {
   const baseSignals = extractHALSignals(claimText, domain, certainty);
   if (!prompt || !prompt.trim()) {
@@ -131,37 +139,64 @@ export async function extractHALSignalsWithCrossLLM(
   let comma_gap: number | null = null;
   let comma_severity: 'none' | 'minor' | 'major' | 'critical' | null = null;
   
-  // Phase 3: Pre-LLM Graph RAG injection
+  // Phase 3: Pre-LLM Graph RAG injection — recall the CALLING agent's memory.
+  //
+  // This block previously recalled from three hardcoded uuids
+  // (550e8400-…-440000/1/2, the ALPHA/BETA/GAMMA_SQUAD_REP placeholders from
+  // scripts/seed-squad-memories.ts). Measured against the live database on
+  // 2026-08-13, those three ids own **zero** rows in agent_memory_nodes and do
+  // not exist in repid_agents at all. graph_rag_match_nodes therefore returned
+  // [] on every call, flatMemories was always empty, enrichedPrompt always
+  // equalled prompt, and no error was ever raised — an empty result set is not
+  // an error. Memory injection ran on every HAL turn and was a no-op by
+  // construction, which is why access_count was 0 across all 429 memory nodes.
+  //
+  // The real spokesperson memories belong to four different agents
+  // (trinity-sophia, -veritas, -shofet, -chesed). Recall is scoped per agent —
+  // graph_rag_match_nodes filters `agent_id = p_agent_id` — so the only correct
+  // id here is the agent actually being scored.
+  //
+  // When no agentId is supplied we now inject nothing and say so. Falling back
+  // to a fixed id would reintroduce exactly the bug above, in a form that looks
+  // like it is working.
   let enrichedPrompt = prompt;
-  try {
-    const { RetrievalService } = require('./graph-rag/retrieval-service');
-    const retriever = new RetrievalService(db);
-    
-    const spokespersonIds = [
-      '550e8400-e29b-41d4-a716-446655440000', // ALPHA_SQUAD_REP
-      '550e8400-e29b-41d4-a716-446655440001', // BETA_SQUAD_REP
-      '550e8400-e29b-41d4-a716-446655440002'  // GAMMA_SQUAD_REP
-    ];
+  let memoryInjected = 0;
+  if (!agentId) {
+    console.info('[hal-signals] graph-rag: skipped, no agentId supplied by caller');
+  } else {
+    try {
+      const { RetrievalService } = require('./graph-rag/retrieval-service');
+      const retriever = new RetrievalService(db);
 
-    const allMemories = await Promise.all(spokespersonIds.map(id => 
-      retriever.retrieve({
+      const memories = await retriever.retrieve({
         query: prompt,
-        agent_id: id,
-        top_k: 1,
-        similarity_threshold: 0.5
-      })
-    ));
+        agent_id: agentId,
+        // 3, not 1: this queries one agent now rather than three, and a single
+        // top hit is a thin basis for a claim-verification prompt.
+        top_k: 3,
+        similarity_threshold: 0.5,
+      });
 
-    const flatMemories = allMemories.flat();
-    if (flatMemories.length > 0) {
-      const memoryText = flatMemories.map(m => `- ${m.node.content}`).join('\n');
-      enrichedPrompt = `Context from squad memory:\n${memoryText}\n\nQuestion: ${prompt}`;
-      // console.log(`[hal-signals] Injected ${flatMemories.length} memories into prompt`);
+      if (memories.length > 0) {
+        const memoryText = memories
+          .map((m: any) => `- ${m.node.content}`)
+          .join('\n');
+        enrichedPrompt = `Context from this agent's memory:\n${memoryText}\n\nQuestion: ${prompt}`;
+        memoryInjected = memories.length;
+        console.info(
+          `[hal-signals] graph-rag: injected ${memoryInjected} memories for ${agentId}`,
+        );
+      } else {
+        // Distinguished from the skip and the failure paths on purpose: an
+        // agent with no embedded rows returns empty here forever, and that
+        // reads identically to a genuine miss unless it is named.
+        console.info(
+          `[hal-signals] graph-rag: 0 matches for ${agentId} (no embedded memory, or nothing above threshold)`,
+        );
+      }
+    } catch (e: any) {
+      console.warn('[hal-signals] graph-rag: injection FAILED:', e?.message ?? e);
     }
-
-
-  } catch (e: any) {
-    console.warn('[hal-signals] Graph RAG injection failed:', e.message);
   }
 
   try {
