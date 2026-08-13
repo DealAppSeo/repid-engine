@@ -10,8 +10,8 @@
 //
 // On public facts the quorum discriminates almost perfectly — a 0.96 spread. On
 // true claims about our own systems it collapses into the 0.40–0.60 band, and
-// hal_veto_threshold (0.43) cuts straight through it. The second claim above
-// missed a constitutional block by 0.025.
+// this evaluator's own vetoThreshold (0.5) cuts straight through it. The second
+// claim above missed a constitutional block by 0.095.
 //
 // The cause is not a bad threshold. External model families cannot verify claims
 // about a private protocol, and their inability to confirm is being scored as
@@ -50,8 +50,24 @@
 //      unchanged. This gate can never turn a database outage into a verdict.
 //   5. It never invents a decision — it only reports what the corpus says. The
 //      caller decides what to do with that.
+//   6. The lookup is HARD-BOUNDED by a timeout and cached per process. This sits
+//      in front of every fact-check; an unbounded await here adds database
+//      latency to every scored claim, and a stalled connection hangs the
+//      evaluator outright. Found in CI on this file's first run: tests/hal/
+//      fact-check.test.ts carries no db mock, because factCheck was a pure
+//      function over mocked providers until this gate gave it a real dependency,
+//      and the query timed the suite out.
 
 import { db } from '../db';
+
+/**
+ * Bound on the corpus read. Deliberately short: this runs before every verdict.
+ * Read per call rather than captured at import so an operator (or a test) can
+ * change it without reloading the module.
+ */
+const lookupTimeoutMs = () => Number(process.env.HAL_GROUND_TRUTH_TIMEOUT_MS ?? 1500);
+/** 144 static rows that change rarely — re-reading them per claim is pure waste. */
+const cacheTtlMs = () => Number(process.env.HAL_GROUND_TRUTH_TTL_MS ?? 300_000);
 
 export type GroundTruthVerdict = 'corroborated' | 'contradicted' | 'no_match';
 
@@ -118,6 +134,57 @@ interface FactRow {
   match_type: string | null;
 }
 
+let cachedRows: FactRow[] | null = null;
+let cachedAt = 0;
+
+/** Test seam — drop the process cache so a test can vary the corpus. */
+export function __resetGroundTruthCache(): void {
+  cachedRows = null;
+  cachedAt = 0;
+}
+
+/**
+ * Read the corpus, bounded and cached.
+ *
+ * Returns null on timeout/error/empty — every one of which the caller must treat
+ * as "the corpus said nothing", never as agreement. Only a successful non-empty
+ * read is cached; a failure is retried on the next claim, with the timeout
+ * bounding what that retry can cost.
+ */
+async function loadCorpus(): Promise<{ rows: FactRow[] | null; why: string }> {
+  const now = Date.now();
+  if (cachedRows && now - cachedAt < cacheTtlMs()) {
+    return { rows: cachedRows, why: 'cache' };
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const query = (async () => {
+      const { data, error } = await db
+        .from('ground_truth_facts')
+        .select('fact_key, fact_value, category, match_type');
+      if (error) throw new Error(error.message);
+      return (data ?? []) as FactRow[];
+    })();
+
+    const timeout = new Promise<never>((_, reject) => {
+      const ms = lookupTimeoutMs();
+      timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    });
+
+    const rows = await Promise.race([query, timeout]);
+    if (rows.length === 0) return { rows: null, why: 'ground_truth_facts is empty' };
+
+    cachedRows = rows;
+    cachedAt = now;
+    return { rows, why: 'fresh' };
+  } catch (e: any) {
+    return { rows: null, why: `ground_truth_facts unavailable: ${e?.message ?? String(e)}` };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Consult the corpus about one claim.
  *
@@ -128,18 +195,8 @@ interface FactRow {
 export async function checkGroundTruth(text: string): Promise<GroundTruthResult> {
   if (!text || !text.trim()) return EMPTY('empty claim text');
 
-  let rows: FactRow[];
-  try {
-    const { data, error } = await db
-      .from('ground_truth_facts')
-      .select('fact_key, fact_value, category, match_type');
-    if (error) return EMPTY(`ground_truth_facts unavailable: ${error.message}`, true);
-    rows = (data ?? []) as FactRow[];
-  } catch (e: any) {
-    return EMPTY(`ground_truth_facts threw: ${e?.message ?? String(e)}`, true);
-  }
-
-  if (rows.length === 0) return EMPTY('ground_truth_facts is empty', true);
+  const { rows, why } = await loadCorpus();
+  if (!rows) return EMPTY(why, true);
 
   const corroborating: GroundTruthHit[] = [];
   const contradicting: GroundTruthHit[] = [];

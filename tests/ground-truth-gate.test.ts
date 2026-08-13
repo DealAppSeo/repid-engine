@@ -12,17 +12,30 @@
 let mockRows: any[] = [];
 let mockError: any = null;
 let mockThrows = false;
+let mockNeverSettles = false;
+let mockSelectCalls = 0;
 
 jest.mock('../src/db', () => ({
   db: {
     from: () => {
       if (mockThrows) throw new Error('boom');
-      return { select: async () => ({ data: mockRows, error: mockError }) };
+      return {
+        select: () => {
+          mockSelectCalls++;
+          if (mockNeverSettles) return new Promise(() => { /* never settles */ });
+          return Promise.resolve({ data: mockRows, error: mockError });
+        },
+      };
     },
   },
 }));
 
-import { checkGroundTruth, isDistinctive, containsValue } from '../src/hal/ground-truth-gate';
+import {
+  checkGroundTruth,
+  isDistinctive,
+  containsValue,
+  __resetGroundTruthCache,
+} from '../src/hal/ground-truth-gate';
 
 const CORRECT = { fact_key: 'chain_name', fact_value: 'Base Sepolia', category: 'chain', match_type: 'exact' };
 const WRONG = { fact_key: 'chain_wrong', fact_value: 'Ethereum mainnet', category: 'chain', match_type: 'wrong_value' };
@@ -31,6 +44,12 @@ beforeEach(() => {
   mockRows = [CORRECT, WRONG];
   mockError = null;
   mockThrows = false;
+  mockNeverSettles = false;
+  mockSelectCalls = 0;
+  delete process.env.HAL_GROUND_TRUTH_TIMEOUT_MS;
+  // The corpus is cached per process. Without this reset a later test would
+  // silently assert against an earlier test's rows.
+  __resetGroundTruthCache();
 });
 
 describe('isDistinctive — the corroboration safety margin', () => {
@@ -147,5 +166,49 @@ describe('checkGroundTruth — verdict precedence', () => {
     mockThrows = true; // would throw if consulted
     const r = await checkGroundTruth('   ');
     expect(r.verdict).toBe('no_match');
+  });
+});
+
+describe('bounded and cached — the CI regression', () => {
+  // This gate runs before every fact-check. The first version awaited the corpus
+  // read with no timeout and no cache, which hung tests/hal/fact-check.test.ts
+  // (no db mock there — factCheck was pure until this gate gave it a real
+  // dependency). In production the same shape would add database latency to
+  // every scored claim and stall the evaluator on a bad connection.
+
+  it('does NOT hang when the database never responds — it times out and degrades', async () => {
+    process.env.HAL_GROUND_TRUTH_TIMEOUT_MS = '80';
+    mockNeverSettles = true;
+
+    const started = Date.now();
+    const r = await checkGroundTruth('HyperDAG uses Base Sepolia.');
+    const elapsed = Date.now() - started;
+
+    expect(r.verdict).toBe('no_match');
+    expect(r.degraded).toBe(true);
+    expect(r.reason).toMatch(/timed out/i);
+    expect(elapsed).toBeLessThan(2000); // bounded, not hung
+  });
+
+  it('reads the corpus once and serves later claims from cache', async () => {
+    mockRows = [CORRECT];
+    await checkGroundTruth('claim one mentions Base Sepolia');
+    await checkGroundTruth('claim two also mentions Base Sepolia');
+    await checkGroundTruth('claim three mentions Base Sepolia too');
+    expect(mockSelectCalls).toBe(1);
+  });
+
+  it('does not cache a failed read, so recovery is possible', async () => {
+    mockRows = [];
+    mockError = { message: 'connection refused' };
+    const first = await checkGroundTruth('mentions Base Sepolia');
+    expect(first.degraded).toBe(true);
+
+    mockError = null;
+    mockRows = [CORRECT];
+    const second = await checkGroundTruth('mentions Base Sepolia');
+    expect(second.degraded).toBe(false);
+    expect(second.verdict).toBe('corroborated');
+    expect(mockSelectCalls).toBe(2); // it retried rather than serving a cached failure
   });
 });
