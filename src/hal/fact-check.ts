@@ -596,13 +596,22 @@ function providerRisk(v: ProviderVerdict): number {
  * (tied) behavior with no effect on the live path. Small + self-contained; does NOT touch src/hal/lib/*.
  */
 /**
- * xAI/Grok API key resolution. Accepts the canonical `GROK_API_KEY` OR the standard xAI env name
- * `XAI_API_KEY` — the wallet/key inventory (.env.master, Railway) stores it as `XAI_API_KEY`, so reading
- * only `GROK_API_KEY` made HAL_ESCALATE_GROK a SILENT NO-OP (0 escalations, precision lever dead).
- * Reading both closes that gap with zero behavior change wherever GROK_API_KEY is already set.
+ * xAI/Grok API key resolution. Accepts the canonical `XAI_API_KEY` OR the legacy `GROK_API_KEY` —
+ * the wallet/key inventory (.env.master, Railway) stores it as `XAI_API_KEY`, so reading only
+ * `GROK_API_KEY` made HAL_ESCALATE_GROK a SILENT NO-OP (0 escalations, precision lever dead).
+ *
+ * PRECEDENCE IS NOT A STYLE CHOICE — it is pinned to the dispatcher. This function used to read
+ * `GROK_API_KEY || XAI_API_KEY` while `scripts/dispatch/run-agent.mjs` read
+ * `['XAI_API_KEY', 'GROK_API_KEY']`. Both accept both names, so nothing failed loudly; but with the
+ * two vars set to DIFFERENT values the HAL tiebreak and XC authenticate as different principals,
+ * and the resulting 401 lands on whichever surface nobody is watching. That is the same shape as
+ * the #398 rename that silently un-dispatched XC: an inconsistency with no failing signal.
+ *
+ * `.env.master` was canonicalised to `XAI_API_KEY` (#398), so XAI wins and `GROK_API_KEY` is the
+ * legacy fallback. `tests/grok-key-precedence-parity.test.ts` pins these two orders together.
  */
 export function grokApiKey(): string | undefined {
-  return process.env.GROK_API_KEY?.trim() || process.env.XAI_API_KEY?.trim() || undefined;
+  return process.env.XAI_API_KEY?.trim() || process.env.GROK_API_KEY?.trim() || undefined;
 }
 
 async function grokTiebreak(
