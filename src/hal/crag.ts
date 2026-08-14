@@ -147,10 +147,14 @@ interface GraderCfg {
  * Resolve the strong grader model from env keys (grok-4 first, then gemini-2.5-flash). null if none.
  *
  * The xAI key is resolved through `grokApiKey()` rather than read directly: this function used to
- * read `GROK_API_KEY` only, so wherever the inventory supplies the canonical `XAI_API_KEY` (#398)
- * the grok-4 grader was unreachable and CRAG silently graded on the Gemini fallback instead. That
- * is not an error anywhere — the fallback works — so the spec'd primary grader can be absent for
- * months while every log looks healthy.
+ * read `GROK_API_KEY` only, so anywhere the key is supplied under the canonical `XAI_API_KEY`
+ * (#398) — `.env.master`, and Railway if it is ever renamed — the grok-4 grader is unreachable and
+ * CRAG silently grades on the Gemini fallback instead. That is not an error anywhere: the fallback
+ * works, so the spec'd primary grader can be absent while every log looks healthy.
+ *
+ * NOT a production outage as of [V 2026-08-14]: Railway supplies `GROK_API_KEY`, which the old code
+ * did read, so the deployed grader was working. The exposure was latent — it would have appeared
+ * the moment anyone renamed the Railway var to match `.env.master`.
  */
 function resolveGrader(): GraderCfg | null {
   const grok = grokApiKey();
