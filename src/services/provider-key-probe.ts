@@ -34,10 +34,13 @@ export interface ProviderProbe {
   /**
    * Legacy/alias env names accepted AFTER `env`, most-canonical-first.
    *
-   * Not cosmetic. `grok` read only `GROK_API_KEY` while the inventory was canonicalised to
-   * `XAI_API_KEY` (#398), so a present, live key was reported ABSENT — and "not configured" is a
-   * quiet row in the doctor report, not a failure. A rename with no alias is how a provider
-   * silently leaves the fleet while every check still passes.
+   * Not cosmetic. `grok` read only `GROK_API_KEY` while `.env.master` was canonicalised to
+   * `XAI_API_KEY` (#398), so a present, live key was reported ABSENT wherever that inventory is the
+   * source — which includes the ops CLI, the main consumer of this table. "Not configured" is a
+   * quiet row in the doctor report, not a failure, so it read as an unset key rather than a bug.
+   *
+   * Railway still supplies `GROK_API_KEY` [V 2026-08-14], so the fleet-liveness path was resolving
+   * correctly; the two inventories disagree and the alias list is what makes both work.
    */
   envFallbacks?: string[];
   /**

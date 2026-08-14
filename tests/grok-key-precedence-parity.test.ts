@@ -25,8 +25,13 @@
  * exactly when someone is mid-refactor, and a fence that needs a build is a fence that fails
  * OPEN. So the copies stay, and this file pins them.
  *
- * WHY XAI_API_KEY WINS: `.env.master` and Railway were canonicalised to `XAI_API_KEY` (#398),
- * which is also the standard xAI env name. `GROK_API_KEY` is the legacy fallback.
+ * WHY XAI_API_KEY WINS: `.env.master` was canonicalised to `XAI_API_KEY` (#398), and it is the
+ * standard xAI env name. `GROK_API_KEY` is the legacy fallback.
+ *
+ * WHY THE FALLBACK CANNOT BE DROPPED: Railway supplies `GROK_API_KEY` and NOT `XAI_API_KEY`
+ * [V 2026-08-14]. The two inventories disagree, so precedence decides nothing in production today —
+ * every surface falls through to the legacy name. Removing it would take the deployed service down.
+ * (An earlier revision of these comments asserted Railway used `XAI_API_KEY`. Unverified, wrong.)
  */
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
