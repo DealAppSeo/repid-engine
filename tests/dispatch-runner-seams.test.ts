@@ -309,6 +309,59 @@ describe('secret containment — the child env and the transcript', () => {
   });
 });
 
+describe('inbox resolution — --inbox and DISPATCH_HANDOFF_DIR', () => {
+  const inboxPath = (explicit?: string, env: Record<string, string> = {}) =>
+    String(
+      call(
+        `({inboxPathFor, AGENTS}) => inboxPathFor(AGENTS.xc, ${explicit === undefined ? 'undefined' : JSON.stringify(explicit)})`,
+        env,
+      ),
+    ).replace(/\\/g, '/');
+
+  it('honours an explicit --inbox path (it used to be parsed and discarded)', () => {
+    // The defect: `arg('inbox')` returned the path, the call site read the hardcoded one,
+    // so --inbox ./MY_TASK.md silently dispatched from a different file entirely.
+    expect(inboxPath('/tmp/some/INBOX_TEST.md')).toBe('/tmp/some/INBOX_TEST.md');
+  });
+
+  it('falls back to DISPATCH_HANDOFF_DIR when no path is given', () => {
+    expect(inboxPath(undefined, { DISPATCH_HANDOFF_DIR: '/srv/handoffs' })).toBe('/srv/handoffs/INBOX_XC.md');
+  });
+
+  it('keeps the historical default so the original machine is unaffected', () => {
+    expect(inboxPath(undefined)).toBe('E:/dev/handoffs/INBOX_XC.md');
+  });
+
+  it('prefers an explicit path over the env override', () => {
+    expect(inboxPath('/tmp/explicit.md', { DISPATCH_HANDOFF_DIR: '/srv/handoffs' })).toBe('/tmp/explicit.md');
+  });
+
+  it('treats a blank explicit path as absent rather than resolving to the cwd', () => {
+    expect(inboxPath('   ', { DISPATCH_HANDOFF_DIR: '/srv/handoffs' })).toBe('/srv/handoffs/INBOX_XC.md');
+  });
+
+  it('resolves each agent against its own filename', () => {
+    const ga = String(
+      call(`({inboxPathFor, AGENTS}) => inboxPathFor(AGENTS.ga, undefined)`, { DISPATCH_HANDOFF_DIR: '/srv/h' }),
+    ).replace(/\\/g, '/');
+    expect(ga).toBe('/srv/h/INBOX_GA.md');
+  });
+
+  it('reads the newest "## " entry from a real file', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'dispatch-inbox-'));
+    const file = path.join(dir, 'INBOX_XC.md');
+    writeFileSync(file, '## newest\n\ndo this\n\n## older\n\ndo not pick this\n', 'utf8');
+    const entry = call(`({newestInboxEntry}) => newestInboxEntry(${JSON.stringify(file)})`);
+    expect(entry).toContain('do this');
+    expect(entry).not.toContain('do not pick this');
+  });
+
+  it('returns null for a missing file instead of throwing', () => {
+    const missing = path.join(tmpdir(), 'definitely-not-here', 'INBOX_XC.md');
+    expect(call(`({newestInboxEntry}) => newestInboxEntry(${JSON.stringify(missing)})`)).toBeNull();
+  });
+});
+
 describe('capabilityRefusal — seam 1', () => {
   it('refuses a task needing shell, naming what is missing', () => {
     const r = call(

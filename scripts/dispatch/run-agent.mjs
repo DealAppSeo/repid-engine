@@ -49,9 +49,14 @@
  * the other secrets before spawn, and the scrubber redacts all of them on the way out.
  * See buildChildEnv and makeScrubber.
  *
- *   node scripts/dispatch/run-agent.mjs --agent xc --task "…"        # inline
- *   node scripts/dispatch/run-agent.mjs --agent ga --inbox           # newest INBOX entry
- *   node scripts/dispatch/run-agent.mjs --agent xc --inbox --dry-run # show, don't run
+ *   node scripts/dispatch/run-agent.mjs --agent xc --task "…"         # inline
+ *   node scripts/dispatch/run-agent.mjs --agent ga --inbox            # newest INBOX entry
+ *   node scripts/dispatch/run-agent.mjs --agent xc --inbox ./IN.md    # from an explicit file
+ *   node scripts/dispatch/run-agent.mjs --agent xc --inbox --dry-run  # show, don't run
+ *
+ * PATHS THIS READS, and how to move them off one machine:
+ *   .env.master     TRUSTKEYS_ENV_MASTER   (default C:/Users/Cash4/repos/.env.master)
+ *   INBOX_*.md      DISPATCH_HANDOFF_DIR   (default E:/dev/handoffs)
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -111,7 +116,8 @@ const AGENTS = {
     // costs one array entry; guessing wrong costs an agent that cannot be
     // dispatched and fails in a way that reads like "the agent had nothing to say".
     keyVars: ['XAI_API_KEY', 'GROK_API_KEY'],
-    inbox: 'E:/dev/handoffs/INBOX_XC.md',
+    // FILENAME, not a full path — resolved against HANDOFF_DIR by inboxPathFor().
+    inboxFile: 'INBOX_XC.md',
     lane: 'L6 RED-TEAM — no write scope',
     // [V 2026-08-05] grok resolves to grok.exe and ran a real analysis of
     // penalty-provenance.ts, returning a finding I independently confirmed
@@ -124,7 +130,7 @@ const AGENTS = {
     mode: 'stdin',
     args: () => [],
     keyVars: ['GEMINI_API_KEY', 'GEMINI_API_KEY_2'],
-    inbox: 'E:/dev/handoffs/INBOX_GA.md',
+    inboxFile: 'INBOX_GA.md',
     lane: 'L7 MEASUREMENT — no write scope',
     // [V 2026-08-05] measured from its OWN stderr on the fabricated review:
     //   run_shell_command  -> "not available to this agent"      => no `shell`
@@ -499,6 +505,36 @@ function makeScrubber(values) {
   return (s) => targets.reduce((acc, v) => acc.split(v).join('<redacted>'), String(s || ''));
 }
 
+/**
+ * Where an INBOX actually lives, most specific first:
+ *
+ *   1. an explicit `--inbox <path>`
+ *   2. DISPATCH_HANDOFF_DIR + the agent's filename
+ *   3. the historical default directory
+ *
+ * TWO DEFECTS THIS CLOSES, both measured 2026-08-14.
+ *
+ * (a) `--inbox <path>` PARSED THE PATH AND THREW IT AWAY. `arg()` returns the value when
+ *     one follows the flag, but the call site read `agent.inbox` regardless, so
+ *     `--inbox ./MY_TASK.md` silently dispatched from a completely different file — or,
+ *     off Windows, from nothing at all. The only clue was the hardcoded path echoed back
+ *     in the "no task" message. Silently substituting the input is the same shape as the
+ *     `--evidence` truncation: the flag looks honoured, the work is done on other data.
+ *
+ * (b) THE DIRECTORY WAS HARDCODED to one machine's `E:/dev/handoffs`, with no override —
+ *     unlike `.env.master`, which has had `TRUSTKEYS_ENV_MASTER` all along. So `--inbox`
+ *     worked for exactly one operator on exactly one OS, and everywhere else exited 64
+ *     "no task", which reads like an empty queue rather than an unreachable path.
+ *
+ * The default is deliberately kept, so nothing changes for the machine it was written for.
+ */
+const HANDOFF_DIR = process.env.DISPATCH_HANDOFF_DIR || 'E:/dev/handoffs';
+
+function inboxPathFor(agent, explicit) {
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+  return join(HANDOFF_DIR, agent.inboxFile);
+}
+
 /** Newest `## ` section of an INBOX (they are newest-on-top by convention). */
 function newestInboxEntry(path) {
   if (!existsSync(path)) return null;
@@ -534,13 +570,23 @@ function main() {
   const agentKey = String(arg('agent', '')).toLowerCase();
   const agent = AGENTS[agentKey];
   if (!agent) {
-    console.error(`usage: --agent <${Object.keys(AGENTS).join('|')}> [--task "..." | --inbox] [--dry-run]`);
+    console.error(`usage: --agent <${Object.keys(AGENTS).join('|')}> [--task "..." | --inbox [path]] [--dry-run]`);
     process.exit(64);
   }
 
-  const task = arg('inbox') ? newestInboxEntry(agent.inbox) : arg('task');
+  // `arg('inbox')` is `true` for a bare flag and the path string when one follows.
+  const inboxArg = arg('inbox');
+  const inboxPath = inboxArg ? inboxPathFor(agent, typeof inboxArg === 'string' ? inboxArg : undefined) : null;
+  const task = inboxPath ? newestInboxEntry(inboxPath) : arg('task');
   if (!task || task === true) {
-    console.error(`no task. Pass --task "..." or --inbox (reads ${agent.inbox})`);
+    // Name the path that was ACTUALLY read. When the file is missing this message is the
+    // only diagnosis available, and it used to print the hardcoded default even when a
+    // different path had been passed — sending the reader to the wrong file.
+    console.error(
+      inboxPath
+        ? `no task: ${existsSync(inboxPath) ? 'no "## " entry found in' : 'no such file'} ${inboxPath}`
+        : `no task. Pass --task "..." or --inbox (reads ${inboxPathFor(agent)})`,
+    );
     process.exit(64);
   }
 
@@ -866,7 +912,7 @@ function main() {
  * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
  * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
  */
-export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, AGENTS };
+export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS };
 
 const INVOKED_DIRECTLY =
   Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
