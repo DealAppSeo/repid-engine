@@ -68,6 +68,7 @@ import {
 // the flag is on, and both modules NEVER throw (failure → fast-path decision preserved). See the
 // gated block near the end of factCheck() and src/hal/retrieval.ts + src/hal/crag.ts.
 import { retrieveEvidence } from './retrieval';
+import { grokApiKey } from '../providers/xai-key';
 import { gradeEvidence, type CragResult, type CragGrade } from './crag';
 import { publishDetectorSnapshot } from '../services/detector-coverage';
 
@@ -596,23 +597,14 @@ function providerRisk(v: ProviderVerdict): number {
  * (tied) behavior with no effect on the live path. Small + self-contained; does NOT touch src/hal/lib/*.
  */
 /**
- * xAI/Grok API key resolution. Accepts the canonical `XAI_API_KEY` OR the legacy `GROK_API_KEY` —
- * the wallet/key inventory (.env.master, Railway) stores it as `XAI_API_KEY`, so reading only
- * `GROK_API_KEY` made HAL_ESCALATE_GROK a SILENT NO-OP (0 escalations, precision lever dead).
+ * xAI/Grok API key resolution — canonical `XAI_API_KEY`, legacy `GROK_API_KEY` fallback.
  *
- * PRECEDENCE IS NOT A STYLE CHOICE — it is pinned to the dispatcher. This function used to read
- * `GROK_API_KEY || XAI_API_KEY` while `scripts/dispatch/run-agent.mjs` read
- * `['XAI_API_KEY', 'GROK_API_KEY']`. Both accept both names, so nothing failed loudly; but with the
- * two vars set to DIFFERENT values the HAL tiebreak and XC authenticate as different principals,
- * and the resulting 401 lands on whichever surface nobody is watching. That is the same shape as
- * the #398 rename that silently un-dispatched XC: an inconsistency with no failing signal.
- *
- * `.env.master` was canonicalised to `XAI_API_KEY` (#398), so XAI wins and `GROK_API_KEY` is the
- * legacy fallback. `tests/grok-key-precedence-parity.test.ts` pins these two orders together.
+ * Re-exported rather than defined here so that HAL, CRAG and the key probe cannot drift apart
+ * again; see `src/providers/xai-key.ts` for why the definition lives in a leaf module and why the
+ * order is what it is. Kept exported from this module because it is part of this module's public
+ * surface already (`HAL_ESCALATE_GROK` gates and existing importers).
  */
-export function grokApiKey(): string | undefined {
-  return process.env.XAI_API_KEY?.trim() || process.env.GROK_API_KEY?.trim() || undefined;
-}
+export { grokApiKey };
 
 async function grokTiebreak(
   deliverable: string,

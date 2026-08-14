@@ -70,6 +70,7 @@ import {
   probeProviderKey,
   independentFamilies,
   probeFor,
+  resolveProbeKey,
   type KeyProbeStatus,
 } from '../services/provider-key-probe';
 
@@ -257,9 +258,11 @@ export async function refreshFleetLiveness(
 ): Promise<LivenessVerdict[]> {
   const results = await Promise.all(
     PROVIDER_PROBES.map(async (p) => {
-      const key = process.env[p.env];
-      if (!key) return null;
-      const r = await probe(p.provider, key);
+      // resolveProbeKey, not process.env[p.env] — a provider whose key is set under a legacy alias
+      // is CONFIGURED, and skipping it here would report it as "not configured" while it is live.
+      const found = resolveProbeKey(p);
+      if (!found) return null;
+      const r = await probe(p.provider, found.key);
       const v: LivenessVerdict = {
         provider: p.provider,
         status: r.status,

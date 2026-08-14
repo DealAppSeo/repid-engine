@@ -16,6 +16,8 @@
  * It never logs, returns, or embeds one in an error. Callers get a status.
  */
 
+import { XAI_KEY_VARS } from '../providers/xai-key';
+
 export type KeyProbeStatus = 'LIVE' | 'DEAD' | 'INCONCLUSIVE';
 
 export interface KeyProbeResult {
@@ -27,8 +29,17 @@ export interface KeyProbeResult {
 export interface ProviderProbe {
   /** Canonical provider id, as used by the router's adapters. */
   provider: string;
-  /** Env var this key lives in for fleet-wide (non-BYOK) use. */
+  /** Canonical env var this key lives in for fleet-wide (non-BYOK) use. Also the display name. */
   env: string;
+  /**
+   * Legacy/alias env names accepted AFTER `env`, most-canonical-first.
+   *
+   * Not cosmetic. `grok` read only `GROK_API_KEY` while the inventory was canonicalised to
+   * `XAI_API_KEY` (#398), so a present, live key was reported ABSENT — and "not configured" is a
+   * quiet row in the doctor report, not a failure. A rename with no alias is how a provider
+   * silently leaves the fleet while every check still passes.
+   */
+  envFallbacks?: string[];
   /**
    * The independent model family this key buys.
    *
@@ -50,7 +61,9 @@ export const PROVIDER_PROBES: ProviderProbe[] = [
   { provider: 'gemini', env: 'GEMINI_API_KEY', family: 'gemini', url: 'https://generativelanguage.googleapis.com/v1beta/models', headers: (k) => ({ 'x-goog-api-key': k }) },
   { provider: 'deepseek', env: 'DEEPSEEK_API_KEY', family: 'deepseek', url: 'https://api.deepseek.com/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
   { provider: 'mistral', env: 'MISTRAL_API_KEY', family: 'mistral', url: 'https://api.mistral.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
-  { provider: 'grok', env: 'GROK_API_KEY', family: 'grok', url: 'https://api.x.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
+  // env/envFallbacks are DERIVED from XAI_KEY_VARS rather than spelled out, so this row cannot
+  // drift from HAL, CRAG and the dispatcher by someone editing one list.
+  { provider: 'grok', env: XAI_KEY_VARS[0], envFallbacks: [...XAI_KEY_VARS.slice(1)], family: 'grok', url: 'https://api.x.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
   { provider: 'anthropic', env: 'ANTHROPIC_API_KEY', family: 'claude', url: 'https://api.anthropic.com/v1/models', headers: (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01' }) },
   { provider: 'openai', env: 'OPENAI_API_KEY', family: 'gpt', url: 'https://api.openai.com/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
   { provider: 'cohere', env: 'COHERE_API_KEY', family: 'cohere', url: 'https://api.cohere.com/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
@@ -62,6 +75,29 @@ export const PROVIDER_PROBES: ProviderProbe[] = [
 
 export const probeFor = (provider: string): ProviderProbe | undefined =>
   PROVIDER_PROBES.find((p) => p.provider === provider.toLowerCase());
+
+/** Every env name this probe accepts, canonical first. */
+export const probeEnvNames = (p: ProviderProbe): string[] => [p.env, ...(p.envFallbacks ?? [])];
+
+/**
+ * Find this provider's key across all names it accepts, canonical first.
+ *
+ * Returns the NAME as well as the value so a caller can report which one answered — when two names
+ * are live with different values, "which key did we actually probe?" is the whole question. Blank
+ * values are treated as absent so a blank canonical cannot shadow a real legacy key.
+ *
+ * `lookup` is injectable because the ops CLI resolves through `.env.master` as well as `process.env`.
+ */
+export function resolveProbeKey(
+  p: ProviderProbe,
+  lookup: (name: string) => string | undefined = (n) => process.env[n],
+): { name: string; key: string } | undefined {
+  for (const name of probeEnvNames(p)) {
+    const key = lookup(name)?.trim();
+    if (key) return { name, key };
+  }
+  return undefined;
+}
 
 export const supportedProviders = (): string[] => PROVIDER_PROBES.map((p) => p.provider);
 

@@ -25,6 +25,7 @@
  */
 
 import type { EvidenceSnippet } from './retrieval';
+import { grokApiKey } from '../providers/xai-key';
 
 export type CragGrade = 'Correct' | 'Ambiguous' | 'Incorrect';
 
@@ -142,9 +143,17 @@ interface GraderCfg {
   model: string;
 }
 
-/** Resolve the strong grader model from env keys (grok-4 first, then gemini-2.5-flash). null if none. */
+/**
+ * Resolve the strong grader model from env keys (grok-4 first, then gemini-2.5-flash). null if none.
+ *
+ * The xAI key is resolved through `grokApiKey()` rather than read directly: this function used to
+ * read `GROK_API_KEY` only, so wherever the inventory supplies the canonical `XAI_API_KEY` (#398)
+ * the grok-4 grader was unreachable and CRAG silently graded on the Gemini fallback instead. That
+ * is not an error anywhere — the fallback works — so the spec'd primary grader can be absent for
+ * months while every log looks healthy.
+ */
 function resolveGrader(): GraderCfg | null {
-  const grok = process.env.GROK_API_KEY?.trim();
+  const grok = grokApiKey();
   if (grok) {
     return {
       name: 'grok',

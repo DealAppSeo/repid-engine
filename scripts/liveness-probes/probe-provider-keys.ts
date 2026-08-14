@@ -31,7 +31,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 import {
-  PROVIDER_PROBES, probeProviderKey, independentFamilies, type KeyProbeStatus,
+  PROVIDER_PROBES, probeProviderKey, independentFamilies, resolveProbeKey, type KeyProbeStatus,
 } from '../../src/services/provider-key-probe';
 
 /**
@@ -74,8 +74,12 @@ async function main() {
 
   const results = await Promise.all(
     PROVIDER_PROBES.map(async (p) => {
-      const { status, detail } = await probeOne(p.env, p.provider, keyFor(p.env));
-      return { key: p.env, provider: p.provider, family: p.family, status, detail };
+      // Resolve across every name the probe accepts, not just the canonical one — a key set under
+      // a legacy alias is present, and reporting it "not set" is the #398 failure as a green row.
+      const found = resolveProbeKey(p, keyFor);
+      const { status, detail } = await probeOne(p.env, p.provider, found?.key);
+      // Report the name that actually answered, so a legacy alias is visible in the output.
+      return { key: found?.name ?? p.env, provider: p.provider, family: p.family, status, detail };
     }),
   );
 

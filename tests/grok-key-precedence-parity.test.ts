@@ -28,12 +28,17 @@
  * WHY XAI_API_KEY WINS: `.env.master` and Railway were canonicalised to `XAI_API_KEY` (#398),
  * which is also the standard xAI env name. `GROK_API_KEY` is the legacy fallback.
  */
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { grokApiKey } from '../src/hal/fact-check';
+import { XAI_KEY_VARS } from '../src/providers/xai-key';
+import { probeEnvNames, probeFor, resolveProbeKey } from '../src/services/provider-key-probe';
 
 const RUNNER = join(__dirname, '..', 'scripts', 'dispatch', 'run-agent.mjs');
 const runnerSrc = readFileSync(RUNNER, 'utf8');
+
+/** The one file permitted to read the xAI env vars directly. */
+const OWNER = join(__dirname, '..', 'src', 'providers', 'xai-key.ts');
 
 /** The dispatcher's declared order — the source of truth both surfaces are pinned to. */
 function dispatcherKeyVars(): string[] {
@@ -83,5 +88,57 @@ describe('xAI key precedence — HAL parity with the XC dispatcher', () => {
       process.env[name] = `only-${name}`;
       expect(grokApiKey()).toBe(`only-${name}`);
     }
+  });
+
+  it('the canonical list matches the dispatcher exactly (order included)', () => {
+    expect([...XAI_KEY_VARS]).toEqual(dispatcherKeyVars());
+  });
+
+  it('the key probe accepts the same names in the same order', () => {
+    // The fourth copy. It read GROK_API_KEY only, so a live key under the
+    // canonical name was reported ABSENT — a quiet row, not a failure.
+    const grok = probeFor('grok');
+    expect(grok).toBeDefined();
+    expect(probeEnvNames(grok!)).toEqual([...XAI_KEY_VARS]);
+  });
+
+  it('the key probe resolves the same var HAL does when both are set', () => {
+    process.env.XAI_API_KEY = 'value-from-xai-api-key';
+    process.env.GROK_API_KEY = 'value-from-grok-api-key';
+    expect(resolveProbeKey(probeFor('grok')!)?.key).toBe(grokApiKey());
+  });
+
+  it('no file under src/ reads the xAI env vars directly (xai-key.ts is the only reader)', () => {
+    // The structural fence. Every previous instance of this bug was someone reading
+    // `process.env.GROK_API_KEY` in a new place — which is invisible in review because it looks
+    // exactly like every other env read. Behavioural parity tests cannot catch a FIFTH copy that
+    // no test imports; this can.
+    const SRC = join(__dirname, '..', 'src');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.isFile() && e.name.endsWith('.ts') && full !== OWNER) {
+          const body = readFileSync(full, 'utf8');
+          for (const v of XAI_KEY_VARS) {
+            // A bare mention in prose/comments is fine; an actual env read is not.
+            if (new RegExp(`process\\.env(\\.${v}\\b|\\[['"\`]${v}['"\`]\\])`).test(body)) {
+              offenders.push(`${full.slice(SRC.length + 1)} reads ${v} directly`);
+            }
+          }
+        }
+      }
+    };
+    walk(SRC);
+    expect(offenders).toEqual([]);
+  });
+
+  it('the key probe still finds a key set ONLY under the legacy name', () => {
+    delete process.env.XAI_API_KEY;
+    process.env.GROK_API_KEY = 'legacy-only';
+    const found = resolveProbeKey(probeFor('grok')!);
+    // The name is reported too, so an alias is visible rather than silently substituted.
+    expect(found).toEqual({ name: 'GROK_API_KEY', key: 'legacy-only' });
   });
 });
