@@ -189,13 +189,14 @@ describe('claim manifest — execution artifacts without execution', () => {
     '* **Vulnerability Analysis [R]:**',
   ].join('\n');
 
-  function audit(output: string, capabilities: string[], evidenceCount: number) {
+  function audit(output: string, capabilities: string[], evidenceCount: number, evidenceText = '') {
     const body = src.slice(src.indexOf('const EXECUTION_ARTIFACT'), src.indexOf('function capabilityRefusal'));
     // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
     const fn = new Function(`${body}; return auditClaims;`)() as (a: unknown) => {
       unsupported: boolean; maxGrade: string; artifactCount: number; couldExecute: boolean;
+      groundedCount: number; ungroundedCount: number;
     };
-    return fn({ output, capabilities, evidenceCount });
+    return fn({ output, capabilities, evidenceCount, evidenceText });
   }
 
   it('THE REGRESSION: flags the real fabricated review, which the first detector missed', () => {
@@ -213,11 +214,28 @@ describe('claim manifest — execution artifacts without execution', () => {
     expect(audit(FABRICATED, ['reasoning'], 0).unsupported).toBe(true);
   });
 
-  it('does NOT flag the same text once evidence was actually supplied', () => {
-    // Artifacts are expected when the harness ran something — that is the point.
-    const r = audit(FABRICATED, ['reasoning', 'repo_read'], 1);
+  it('does NOT flag the same text once the evidence actually CONTAINS it', () => {
+    // Artifacts are expected when the harness ran something — that is the point. But
+    // "expected" means traceable to what was injected, not merely coincident with a
+    // command having been run.
+    const r = audit(FABRICATED, ['reasoning', 'repo_read'], 1, `$ npm test\n[exit 1]\n${FABRICATED}`);
     expect(r.unsupported).toBe(false);
+    expect(r.groundedCount).toBeGreaterThan(0);
     expect(r.maxGrade).toBe('V');
+  });
+
+  it('STILL flags it when evidence was supplied but does not contain it (the disarm)', () => {
+    // CORRECTED 2026-08-14. This case previously asserted `unsupported === false` for ANY
+    // evidenceCount > 0, which encoded the disarm as intended behaviour: one cheap
+    // allowlisted command — `git log --oneline -1` — switched the detector off for every
+    // claim in the transcript, while the manifest went on printing [V].
+    //
+    // A detector a caller can disable with an unrelated flag is worse than none, because
+    // reviewers have been told it is watching.
+    const r = audit(FABRICATED, ['reasoning', 'repo_read'], 1, '$ git log --oneline -1\n[exit 0]\nc207e8c docs: a claim');
+    expect(r.unsupported).toBe(true);
+    expect(r.ungroundedCount).toBeGreaterThan(0);
+    expect(r.groundedCount).toBe(0);
   });
 
   it('does NOT flag reasoning-only output that claims nothing it cannot back', () => {

@@ -38,13 +38,30 @@
  * environment only. It is never printed, never written to the transcript, and the
  * transcript is scrubbed of anything matching it before being saved.
  *
- *   node scripts/dispatch/run-agent.mjs --agent xc --task "…"        # inline
- *   node scripts/dispatch/run-agent.mjs --agent ga --inbox           # newest INBOX entry
- *   node scripts/dispatch/run-agent.mjs --agent xc --inbox --dry-run # show, don't run
+ * THAT WAS TRUE OF ONE KEY AND ONLY ONE KEY, which was not enough. Until 2026-08-14:
+ *
+ *   - the child received `{ ...process.env }`, so if the operator's shell had sourced
+ *     .env.master the agent's process held ALL of it, not just its own credential;
+ *   - `scrub` redacted the resolved key alone, so any OTHER secret echoed back landed
+ *     verbatim in `reports/`, which is committed to a repo CLAUDE.md states is PUBLIC.
+ *
+ * Both halves now cover every value in the reference file: the child env is PRUNED of
+ * the other secrets before spawn, and the scrubber redacts all of them on the way out.
+ * See buildChildEnv and makeScrubber.
+ *
+ *   node scripts/dispatch/run-agent.mjs --agent xc --task "…"         # inline
+ *   node scripts/dispatch/run-agent.mjs --agent ga --inbox            # newest INBOX entry
+ *   node scripts/dispatch/run-agent.mjs --agent xc --inbox ./IN.md    # from an explicit file
+ *   node scripts/dispatch/run-agent.mjs --agent xc --inbox --dry-run  # show, don't run
+ *
+ * PATHS THIS READS, and how to move them off one machine:
+ *   .env.master     TRUSTKEYS_ENV_MASTER   (default C:/Users/Cash4/repos/.env.master)
+ *   INBOX_*.md      DISPATCH_HANDOFF_DIR   (default E:/dev/handoffs)
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * `mode` is not a style preference — it is what each CLI actually accepts,
@@ -99,7 +116,8 @@ const AGENTS = {
     // costs one array entry; guessing wrong costs an agent that cannot be
     // dispatched and fails in a way that reads like "the agent had nothing to say".
     keyVars: ['XAI_API_KEY', 'GROK_API_KEY'],
-    inbox: 'E:/dev/handoffs/INBOX_XC.md',
+    // FILENAME, not a full path — resolved against HANDOFF_DIR by inboxPathFor().
+    inboxFile: 'INBOX_XC.md',
     lane: 'L6 RED-TEAM — no write scope',
     // [V 2026-08-05] grok resolves to grok.exe and ran a real analysis of
     // penalty-provenance.ts, returning a finding I independently confirmed
@@ -112,7 +130,7 @@ const AGENTS = {
     mode: 'stdin',
     args: () => [],
     keyVars: ['GEMINI_API_KEY', 'GEMINI_API_KEY_2'],
-    inbox: 'E:/dev/handoffs/INBOX_GA.md',
+    inboxFile: 'INBOX_GA.md',
     lane: 'L7 MEASUREMENT — no write scope',
     // [V 2026-08-05] measured from its OWN stderr on the fabricated review:
     //   run_shell_command  -> "not available to this agent"      => no `shell`
@@ -230,17 +248,60 @@ const EXECUTION_ARTIFACT = [
   /\bERR_[A-Z_]+\b/,
 ];
 
-function auditClaims({ output, capabilities, evidenceCount }) {
-  const couldExecute = capabilities.includes('shell') || evidenceCount > 0;
-  const artifacts = EXECUTION_ARTIFACT.filter((re) => re.test(output));
-  const hasArtifacts = artifacts.length > 0;
+/**
+ * THE DISARM THIS CLOSES — found 2026-08-14, by reading the predicate rather than the prose.
+ *
+ * The old test was `couldExecute = shell || evidenceCount > 0`, and `unsupported` required
+ * `!couldExecute`. So ONE evidence command of any kind disarmed the detector for EVERY claim
+ * in the transcript. Supply `git log --oneline -1` — cheap, always passes, on the allowlist —
+ * and the agent could then invent jest output with stack frames and exit codes, and this
+ * function stayed silent while the manifest printed a confident **[V]**.
+ *
+ * That is worse than having no detector. A reviewer who has been told the harness catches
+ * fabrication reads [V] as "checked". The 2026-08-05 incident is precisely the class it was
+ * built for, and one flag on the command line switched it off.
+ *
+ * WHAT REPLACES IT: an artifact is GROUNDED if the matched text also appears in the evidence
+ * the harness actually injected, and UNGROUNDED otherwise. Quoting real output is exactly what
+ * the agent is asked to do and never flags. Producing a stack frame that appears nowhere in
+ * what it was shown is the contradiction, and it is now caught even when evidence was supplied.
+ *
+ * STILL CONSERVATIVE, deliberately — a false positive trains people to ignore the banner, which
+ * is worse than not having it:
+ *   - an agent holding real `shell` is never flagged; it could legitimately have run anything
+ *   - grounding is a substring test on whitespace-normalised text, so reformatted or truncated
+ *     quotes of real evidence still count as grounded
+ *   - with no shell and no evidence the behaviour is IDENTICAL to before: any artifact flags
+ *   - it flags, it does not fail the run
+ */
+function auditClaims({ output, capabilities, evidenceCount, evidenceText = '' }) {
+  const hasShell = capabilities.includes('shell');
+  const couldExecute = hasShell || evidenceCount > 0;
+
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ');
+  const shown = norm(evidenceText);
+  const said = norm(output);
+
+  const grounded = [];
+  const ungrounded = [];
+  for (const re of EXECUTION_ARTIFACT) {
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    for (const m of said.matchAll(g)) {
+      (shown && shown.includes(m[0]) ? grounded : ungrounded).push(m[0]);
+    }
+  }
+
   return {
     couldExecute,
-    hasArtifacts,
-    artifactCount: artifacts.length,
-    // The contradiction: output that could only come from running something, from
-    // an agent that ran nothing and was shown nothing.
-    unsupported: hasArtifacts && !couldExecute,
+    hasArtifacts: grounded.length + ungrounded.length > 0,
+    artifactCount: grounded.length + ungrounded.length,
+    groundedCount: grounded.length,
+    ungroundedCount: ungrounded.length,
+    /** A few verbatim offenders, so the banner can show WHAT was unsupported. */
+    ungroundedSamples: [...new Set(ungrounded)].slice(0, 5),
+    // The contradiction: output that could only come from running something, which the
+    // agent neither ran nor was shown.
+    unsupported: !hasShell && ungrounded.length > 0,
     // Nothing in a transcript with no evidence and no shell can exceed [R].
     maxGrade: couldExecute ? 'V' : 'R',
   };
@@ -305,9 +366,22 @@ const TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 15 * 60 * 1000);
 
 /**
  * The one file every agent on this system reads. See the injection site in main().
- * Path is resolved from the repo root so the dispatcher works from any cwd.
+ *
+ * Resolved from THIS FILE's location, not `process.cwd()`.
+ *
+ * [V 2026-08-14] It was `join(process.cwd(), 'LESSONS.md')` under a comment claiming it
+ * came "from the repo root so the dispatcher works from any cwd". It did not: cwd is
+ * wherever the caller happened to be. Measured by dispatching from `src/` — the preamble
+ * collapsed from 7537 to 1001 characters and the entire shared-lessons block was gone.
+ *
+ * That is this file's own failure mode aimed at itself. CLAUDE.md calls the dispatch
+ * preamble "the ONLY channel that reaches XC and GA", and the lessons block opens with
+ * "each one is here because it already cost us something real". Losing it to a cwd
+ * turns a governed dispatch into an ungoverned one, and the only trace is one warning
+ * line in a log nobody reads after the fact. `import.meta.url` cannot drift this way.
  */
-const LESSONS_PATH = join(process.cwd(), 'LESSONS.md');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LESSONS_PATH = join(REPO_ROOT, 'LESSONS.md');
 const LESSONS_MAX = 6000;
 
 function arg(name, fallback = undefined) {
@@ -315,6 +389,33 @@ function arg(name, fallback = undefined) {
   if (i === -1) return fallback;
   const v = process.argv[i + 1];
   return v && !v.startsWith('--') ? v : true;
+}
+
+/**
+ * EVERY occurrence of a repeatable flag, in order.
+ *
+ * `arg()` uses indexOf, so it returns the FIRST match and discards the rest. For a
+ * repeatable flag that is a silent truncation, and `--evidence` is repeatable in every
+ * way that matters: it is collected into an array, the manifest renders it with
+ * `.map()`, and the prompt injects the entries as a list.
+ *
+ * [V 2026-08-14] Measured: `--evidence "git log --oneline -1" --evidence "npx tsc
+ * --noEmit"` ran ONLY the git command. No warning. The manifest then truthfully listed
+ * one command, so the transcript looked correct while the reviewer's actual request —
+ * "run the tests AND the typecheck" — had been halved on the way in.
+ *
+ * This matters more than a dropped flag usually would, because evidence is what licenses
+ * an execution claim. Silently supplying less evidence than was asked for produces a
+ * report graded against evidence nobody knows is missing.
+ */
+function argAll(name) {
+  const out = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] !== `--${name}`) continue;
+    const v = process.argv[i + 1];
+    if (v && !v.startsWith('--')) out.push(v);
+  }
+  return out;
 }
 
 /** Read one key from the reference file. Returns the value; NEVER log it. */
@@ -340,6 +441,98 @@ function readKey(varNames) {
   }
   for (const n of varNames) if (found.has(n)) return { name: n, value: found.get(n) };
   return null;
+}
+
+/**
+ * EVERY name/value in the reference file. NEVER logged, never written, never returned
+ * to a caller that prints. Used for two things only: pruning the child environment and
+ * building the scrubber.
+ *
+ * Same first-occurrence-wins parse as readKey, for the same reason (the GROQ dupe).
+ */
+function readAllSecrets(path = ENV_MASTER) {
+  const out = new Map();
+  if (!existsSync(path)) return out;
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const m = /^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const v = m[2].trim().replace(/^["']|["']$/g, '');
+    if (v && !out.has(m[1])) out.set(m[1], v);
+  }
+  return out;
+}
+
+/**
+ * The environment the agent's process actually gets.
+ *
+ * `{ ...process.env }` was the whole of it before. That is the maximum possible blast
+ * radius for no benefit: the CLI needs its OWN provider key, PATH, HOME and the usual
+ * platform variables — it has no use for the other 43 credentials, and handing them over
+ * means a prompt-injected or merely chatty agent can surface one.
+ *
+ * So every name present in the reference file is removed, and only this agent's key is
+ * put back (under each accepted alias, as before). Note what is NOT done: this is a
+ * targeted prune, not an allow-list. An allow-list of "variables a CLI needs" is a guess,
+ * and a wrong guess breaks dispatch on a machine I cannot test — HOME, APPDATA,
+ * USERPROFILE, TEMP, SystemRoot, LANG, NODE_OPTIONS and PATHEXT are all load-bearing
+ * somewhere. Pruning known-secret NAMES cannot break a CLI that only needs its own key,
+ * and it is the part that carries the risk.
+ */
+function buildChildEnv(parentEnv, secretNames, keyVars, key) {
+  const env = { ...parentEnv };
+  for (const name of secretNames) delete env[name];
+  for (const name of keyVars) env[name] = key;
+  return env;
+}
+
+/**
+ * A scrubber over every known secret value, applied to stdout and stderr before either
+ * is printed or written to `reports/`.
+ *
+ * LONGEST FIRST: two secrets can share a prefix, and redacting the short one first would
+ * leave the tail of the long one exposed in the transcript.
+ *
+ * MINIMUM LENGTH 8: a short or dictionary-word value would redact ordinary prose and
+ * make the transcript unreadable. An unreadable transcript is not reviewed, and a review
+ * nobody reads is the failure this whole file exists to prevent — so the floor is a
+ * legibility guard, not laziness. Values that short are not credentials worth the trade.
+ */
+const SCRUB_MIN_LEN = 8;
+function makeScrubber(values) {
+  const targets = [...new Set(values)]
+    .filter((v) => typeof v === 'string' && v.length >= SCRUB_MIN_LEN)
+    .sort((a, b) => b.length - a.length);
+  return (s) => targets.reduce((acc, v) => acc.split(v).join('<redacted>'), String(s || ''));
+}
+
+/**
+ * Where an INBOX actually lives, most specific first:
+ *
+ *   1. an explicit `--inbox <path>`
+ *   2. DISPATCH_HANDOFF_DIR + the agent's filename
+ *   3. the historical default directory
+ *
+ * TWO DEFECTS THIS CLOSES, both measured 2026-08-14.
+ *
+ * (a) `--inbox <path>` PARSED THE PATH AND THREW IT AWAY. `arg()` returns the value when
+ *     one follows the flag, but the call site read `agent.inbox` regardless, so
+ *     `--inbox ./MY_TASK.md` silently dispatched from a completely different file — or,
+ *     off Windows, from nothing at all. The only clue was the hardcoded path echoed back
+ *     in the "no task" message. Silently substituting the input is the same shape as the
+ *     `--evidence` truncation: the flag looks honoured, the work is done on other data.
+ *
+ * (b) THE DIRECTORY WAS HARDCODED to one machine's `E:/dev/handoffs`, with no override —
+ *     unlike `.env.master`, which has had `TRUSTKEYS_ENV_MASTER` all along. So `--inbox`
+ *     worked for exactly one operator on exactly one OS, and everywhere else exited 64
+ *     "no task", which reads like an empty queue rather than an unreachable path.
+ *
+ * The default is deliberately kept, so nothing changes for the machine it was written for.
+ */
+const HANDOFF_DIR = process.env.DISPATCH_HANDOFF_DIR || 'E:/dev/handoffs';
+
+function inboxPathFor(agent, explicit) {
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+  return join(HANDOFF_DIR, agent.inboxFile);
 }
 
 /** Newest `## ` section of an INBOX (they are newest-on-top by convention). */
@@ -377,13 +570,23 @@ function main() {
   const agentKey = String(arg('agent', '')).toLowerCase();
   const agent = AGENTS[agentKey];
   if (!agent) {
-    console.error(`usage: --agent <${Object.keys(AGENTS).join('|')}> [--task "..." | --inbox] [--dry-run]`);
+    console.error(`usage: --agent <${Object.keys(AGENTS).join('|')}> [--task "..." | --inbox [path]] [--dry-run]`);
     process.exit(64);
   }
 
-  const task = arg('inbox') ? newestInboxEntry(agent.inbox) : arg('task');
+  // `arg('inbox')` is `true` for a bare flag and the path string when one follows.
+  const inboxArg = arg('inbox');
+  const inboxPath = inboxArg ? inboxPathFor(agent, typeof inboxArg === 'string' ? inboxArg : undefined) : null;
+  const task = inboxPath ? newestInboxEntry(inboxPath) : arg('task');
   if (!task || task === true) {
-    console.error(`no task. Pass --task "..." or --inbox (reads ${agent.inbox})`);
+    // Name the path that was ACTUALLY read. When the file is missing this message is the
+    // only diagnosis available, and it used to print the hardcoded default even when a
+    // different path had been passed — sending the reader to the wrong file.
+    console.error(
+      inboxPath
+        ? `no task: ${existsSync(inboxPath) ? 'no "## " entry found in' : 'no such file'} ${inboxPath}`
+        : `no task. Pass --task "..." or --inbox (reads ${inboxPathFor(agent)})`,
+    );
     process.exit(64);
   }
 
@@ -398,6 +601,11 @@ function main() {
     console.error(`[dispatch] ✗ REFUSED — ${refusal}`);
     process.exit(65);
   }
+
+  // Read once: the same map prunes the child env and builds the scrubber. Values are
+  // never logged — the COUNT is reported so a surprising 0 (a moved or unreadable
+  // reference file) is visible rather than silently disabling both protections.
+  const secrets = readAllSecrets();
 
   const resolved = readKey(agent.keyVars);
   if (!resolved) {
@@ -420,7 +628,7 @@ function main() {
   // A failing command is injected too: "the suite is red and here is how" is a
   // finding, not an error, and hiding it would recreate the fabrication problem
   // from the other direction.
-  const evidenceCmds = [].concat(arg('evidence') && arg('evidence') !== true ? [String(arg('evidence'))] : []);
+  const evidenceCmds = argAll('evidence');
   const evidence = [];
   for (const cmd of evidenceCmds) {
     const bad = evidenceRefusal(cmd);
@@ -530,6 +738,17 @@ function main() {
     task,
   ].join('\n');
 
+  // Containment posture, stated BEFORE the dry-run branch so `--dry-run` previews it too —
+  // "what would this dispatch expose?" is exactly what a dry run is for.
+  //
+  // Counts only, never values. There is no zero-count branch on purpose: `readKey` reads
+  // the same file and has already exited if it was missing or held nothing, so reaching
+  // here with an empty inventory is not a state this can be in. A defensive branch for it
+  // would be unreachable code implying a check that never runs.
+  console.log(
+    `[dispatch] child env pruned of ${secrets.size} inventory secret(s); transcript scrubbed against all of them`,
+  );
+
   if (arg('dry-run')) {
     console.log(`[dry-run] would run: ${agent.cli} -p <prompt>  (${preamble.length} chars)`);
     console.log(`[dry-run] branch=${branch} timeout=${TIMEOUT_MS}ms`);
@@ -552,7 +771,7 @@ function main() {
   const res = spawnSync(bin.cmd, agent.args(preamble), {
     encoding: 'utf8',
     timeout: TIMEOUT_MS,
-    env: { ...process.env, ...Object.fromEntries(agent.keyVars.map((n) => [n, key])) },
+    env: buildChildEnv(process.env, secrets.keys(), agent.keyVars, key),
     maxBuffer: 32 * 1024 * 1024,
     shell: bin.shell,
     ...(agent.mode === 'stdin' ? { input: preamble } : {}),
@@ -561,14 +780,24 @@ function main() {
   const secs = Math.round((Date.now() - started) / 1000);
   // Scrub before anything is written or printed. The key was in the child env, so
   // a provider echoing it back must not reach the transcript.
-  const scrub = (s) => (s || '').split(key).join('<redacted>');
+  // Every known secret, not just the one this agent authenticates with. The child was
+  // pruned of the others, but the operator's shell, a setup script or the agent's own
+  // repo reads can still surface one — and `reports/` is committed to a public repo.
+  const scrub = makeScrubber([key, ...secrets.values()]);
   const out = scrub(res.stdout);
   const err = scrub(res.stderr);
 
   // SEAM 3 — the manifest goes FIRST in the file, before the agent's prose.
   // A reviewer must meet "this agent could not run anything" before meeting its
   // confident paragraph about test results, not after.
-  const audit = auditClaims({ output: out, capabilities: agent.capabilities, evidenceCount: evidence.length });
+  const audit = auditClaims({
+    output: out,
+    capabilities: agent.capabilities,
+    evidenceCount: evidence.length,
+    // The literal text the agent was shown. Grounding is checked against this, so an
+    // artifact it could only have invented is caught even when evidence WAS supplied.
+    evidenceText: evidence.join('\n'),
+  });
   const headSha = (() => {
     try { return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); }
     catch { return 'unknown'; }
@@ -592,18 +821,22 @@ function main() {
     audit.unsupported
       ? '> ### ⚠ EXECUTION ARTIFACTS WITH NO EXECUTION\n' +
         '>\n' +
-        `> This transcript contains ${audit.artifactCount} pattern(s) that can only be OBSERVED by\n` +
+        `> This transcript contains ${audit.ungroundedCount} pattern(s) that can only be OBSERVED by\n` +
         '> running something — a stack frame, a `file:line`, an exit code, a test\n' +
-        '> count. **This agent held no `shell` and was given no evidence.** Nobody\n' +
-        '> derives those by reading source.\n' +
+        `> count — which appear NOWHERE in what this agent was shown${evidence.length ? ` (${audit.groundedCount} other(s) do match the evidence and are fine)` : ''}.\n` +
+        `> **This agent held no \`shell\`${evidence.length ? '; the evidence it was given does not contain these' : ' and was given no evidence'}.** Nobody derives those by reading source.\n` +
         '>\n' +
+        (audit.ungroundedSamples.length
+          ? `> Unsupported specifics: ${audit.ungroundedSamples.map((s) => `\`${s}\``).join(' · ')}\n>\n`
+          : '') +
         '> Note this fires regardless of how the prose is hedged. The 2026-08-05\n' +
         '> fabricated review tagged itself `[R]` and called its invented output\n' +
         '> "Expected Failure Output" — the dishonesty was in the SPECIFICS, not the\n' +
         '> claim. Re-run anything here before citing it.'
       : evidence.length > 0
         ? '> Execution claims below are backed by harness-run evidence, quoted verbatim in the prompt.\n' +
-          '> The agent did not run these itself — it was shown the real output.'
+          `> The agent did not run these itself — it was shown the real output, and all ${audit.artifactCount}\n` +
+          '> execution artifact(s) in this transcript trace back to it.'
         : '> No execution capability and none claimed. Reasoning-only report; grade [R].',
     '',
   ].join('\n');
@@ -628,8 +861,10 @@ function main() {
   console.log(`[dispatch] max claim grade: [${audit.maxGrade}] · evidence runs: ${evidence.length}`);
   if (audit.unsupported) {
     console.error(
-      '[dispatch] ⚠ UNSUPPORTED EXECUTION CLAIM — the output asserts something was run,\n' +
-        '           tagged [V], from an agent with no shell and no evidence supplied.\n' +
+      `[dispatch] ⚠ UNSUPPORTED EXECUTION CLAIM — ${audit.ungroundedCount} specific(s) in the output\n` +
+        '           could only come from running something, and appear nowhere in what this\n' +
+        `           agent was shown${evidence.length ? ` (${audit.groundedCount} other(s) do match the evidence).` : ' — it held no shell and got no evidence.'}\n` +
+        (audit.ungroundedSamples.length ? `           e.g. ${audit.ungroundedSamples.join(' · ')}\n` : '') +
         '           Do not accept the execution claims without re-running them yourself.',
     );
   }
@@ -656,9 +891,37 @@ function main() {
   process.exit(res.status === 0 ? 0 : 1);
 }
 
-try {
-  main();
-} catch (e) {
-  console.error(`[dispatch] ${e instanceof Error ? e.message : String(e)}`);
-  process.exit(3);
+/**
+ * ════════════════════════════════════════════════════════════════════════════════
+ * TESTABILITY — why there is an entry guard and a set of exports
+ * ════════════════════════════════════════════════════════════════════════════════
+ * The safety of this file rests on four pure functions — `auditClaims` (the fabrication
+ * detector), `evidenceRefusal` (the command fence), `readKey` (the rename-tolerant
+ * lookup) and `resolveBin` (the call-path resolver). Until 2026-08-14 not one of them
+ * had a direct test. The two suites that name this file read it as TEXT and check the
+ * capability table; they cannot execute a predicate.
+ *
+ * That gap is not theoretical here. `auditClaims`'s first version was written, reviewed,
+ * shipped, and then MEASURED AGAINST THE REAL FABRICATED TRANSCRIPT IT MISSED COMPLETELY
+ * — see the comment on EXECUTION_ARTIFACT. Nothing has pinned it since, and the disarm
+ * fixed today survived in it for exactly that reason: reading the prose around the
+ * predicate is not the same as running the predicate.
+ *
+ * `main()` runs only when this file is the process entry point, so a test can import the
+ * functions without dispatching an agent. `tests/dispatch-runner-seams.test.ts` executes
+ * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
+ * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
+ */
+export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS };
+
+const INVOKED_DIRECTLY =
+  Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (INVOKED_DIRECTLY) {
+  try {
+    main();
+  } catch (e) {
+    console.error(`[dispatch] ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(3);
+  }
 }
