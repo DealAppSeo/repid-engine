@@ -207,6 +207,108 @@ describe('readKey — rename-tolerant lookup', () => {
   });
 });
 
+describe('secret containment — the child env and the transcript', () => {
+  // reports/ is committed to a repo CLAUDE.md states is PUBLIC, so a secret that reaches
+  // a transcript is published permanently. Before 2026-08-14 the child received the whole
+  // of process.env and the scrubber covered exactly one value.
+  const INVENTORY = [
+    'XAI_API_KEY=xai-this-agents-own-key',
+    'ANTHROPIC_API_KEY=sk-ant-some-other-credential',
+    'AGENT_KEY_MASTER=master-that-decrypts-every-agent-wallet',
+    'SHORT=abc',
+    '# a comment, and a blank line follow',
+    '',
+  ].join('\n');
+
+  const withInventory = (): string => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'dispatch-secrets-'));
+    const file = path.join(dir, '.env.master');
+    writeFileSync(file, INVENTORY, 'utf8');
+    return file;
+  };
+
+  describe('buildChildEnv', () => {
+    const built = (parent: Record<string, string>) =>
+      call(
+        `({buildChildEnv, readAllSecrets}) => buildChildEnv(${JSON.stringify(parent)}, readAllSecrets().keys(), ['XAI_API_KEY','GROK_API_KEY'], 'xai-this-agents-own-key')`,
+        { TRUSTKEYS_ENV_MASTER: withInventory() },
+      );
+
+    it('strips other inventory secrets the operator shell happened to export', () => {
+      const env = built({
+        PATH: '/usr/bin',
+        ANTHROPIC_API_KEY: 'sk-ant-some-other-credential',
+        AGENT_KEY_MASTER: 'master-that-decrypts-every-agent-wallet',
+      });
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.AGENT_KEY_MASTER).toBeUndefined();
+    });
+
+    it("keeps the agent's own key, under every alias it accepts", () => {
+      const env = built({ PATH: '/usr/bin' });
+      expect(env.XAI_API_KEY).toBe('xai-this-agents-own-key');
+      expect(env.GROK_API_KEY).toBe('xai-this-agents-own-key');
+    });
+
+    it('preserves the platform variables the CLI needs to run at all', () => {
+      // A prune that breaks dispatch is not a security win. This is why the prune is
+      // keyed on known-secret NAMES rather than an allow-list of "what a CLI needs".
+      const env = built({ PATH: '/usr/bin', HOME: '/home/x', LANG: 'en_US.UTF-8', TEMP: '/tmp' });
+      expect(env).toMatchObject({ PATH: '/usr/bin', HOME: '/home/x', LANG: 'en_US.UTF-8', TEMP: '/tmp' });
+    });
+  });
+
+  describe('makeScrubber', () => {
+    const scrub = (values: string[], text: string) =>
+      call(`({makeScrubber}) => makeScrubber(${JSON.stringify(values)})(${JSON.stringify(text)})`);
+
+    it('redacts a secret that is NOT the provider key (the whole point)', () => {
+      const out = scrub(
+        ['xai-this-agents-own-key', 'sk-ant-some-other-credential'],
+        'I found ANTHROPIC_API_KEY=sk-ant-some-other-credential in the environment.',
+      );
+      expect(out).not.toContain('sk-ant-some-other-credential');
+      expect(out).toContain('<redacted>');
+    });
+
+    it('still redacts the provider key itself', () => {
+      expect(scrub(['xai-this-agents-own-key'], 'key is xai-this-agents-own-key')).toBe('key is <redacted>');
+    });
+
+    it('redacts the longer of two overlapping secrets without leaving its tail', () => {
+      const out = scrub(['secret-prefix', 'secret-prefix-and-more'], 'value: secret-prefix-and-more');
+      expect(out).toBe('value: <redacted>');
+      expect(out).not.toContain('and-more');
+    });
+
+    it('ignores values under the length floor, so prose stays readable', () => {
+      // A 3-char secret would redact ordinary words; an unreadable transcript is not
+      // reviewed, and an unreviewed transcript is the failure the harness exists to stop.
+      expect(scrub(['abc'], 'the abc of it')).toBe('the abc of it');
+    });
+
+    it('is a no-op on text containing no secret', () => {
+      expect(scrub(['xai-this-agents-own-key'], 'nothing sensitive here')).toBe('nothing sensitive here');
+    });
+  });
+
+  describe('readAllSecrets', () => {
+    it('reads every assignment, skipping comments and blanks', () => {
+      const names = call(`({readAllSecrets}) => [...readAllSecrets().keys()]`, {
+        TRUSTKEYS_ENV_MASTER: withInventory(),
+      });
+      expect(names).toEqual(['XAI_API_KEY', 'ANTHROPIC_API_KEY', 'AGENT_KEY_MASTER', 'SHORT']);
+    });
+
+    it('returns empty rather than throwing when the inventory is absent', () => {
+      const names = call(`({readAllSecrets}) => [...readAllSecrets().keys()]`, {
+        TRUSTKEYS_ENV_MASTER: path.join(tmpdir(), 'definitely-not-here', '.env.master'),
+      });
+      expect(names).toEqual([]);
+    });
+  });
+});
+
 describe('capabilityRefusal — seam 1', () => {
   it('refuses a task needing shell, naming what is missing', () => {
     const r = call(

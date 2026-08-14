@@ -38,6 +38,17 @@
  * environment only. It is never printed, never written to the transcript, and the
  * transcript is scrubbed of anything matching it before being saved.
  *
+ * THAT WAS TRUE OF ONE KEY AND ONLY ONE KEY, which was not enough. Until 2026-08-14:
+ *
+ *   - the child received `{ ...process.env }`, so if the operator's shell had sourced
+ *     .env.master the agent's process held ALL of it, not just its own credential;
+ *   - `scrub` redacted the resolved key alone, so any OTHER secret echoed back landed
+ *     verbatim in `reports/`, which is committed to a repo CLAUDE.md states is PUBLIC.
+ *
+ * Both halves now cover every value in the reference file: the child env is PRUNED of
+ * the other secrets before spawn, and the scrubber redacts all of them on the way out.
+ * See buildChildEnv and makeScrubber.
+ *
  *   node scripts/dispatch/run-agent.mjs --agent xc --task "…"        # inline
  *   node scripts/dispatch/run-agent.mjs --agent ga --inbox           # newest INBOX entry
  *   node scripts/dispatch/run-agent.mjs --agent xc --inbox --dry-run # show, don't run
@@ -426,6 +437,68 @@ function readKey(varNames) {
   return null;
 }
 
+/**
+ * EVERY name/value in the reference file. NEVER logged, never written, never returned
+ * to a caller that prints. Used for two things only: pruning the child environment and
+ * building the scrubber.
+ *
+ * Same first-occurrence-wins parse as readKey, for the same reason (the GROQ dupe).
+ */
+function readAllSecrets(path = ENV_MASTER) {
+  const out = new Map();
+  if (!existsSync(path)) return out;
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const m = /^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const v = m[2].trim().replace(/^["']|["']$/g, '');
+    if (v && !out.has(m[1])) out.set(m[1], v);
+  }
+  return out;
+}
+
+/**
+ * The environment the agent's process actually gets.
+ *
+ * `{ ...process.env }` was the whole of it before. That is the maximum possible blast
+ * radius for no benefit: the CLI needs its OWN provider key, PATH, HOME and the usual
+ * platform variables — it has no use for the other 43 credentials, and handing them over
+ * means a prompt-injected or merely chatty agent can surface one.
+ *
+ * So every name present in the reference file is removed, and only this agent's key is
+ * put back (under each accepted alias, as before). Note what is NOT done: this is a
+ * targeted prune, not an allow-list. An allow-list of "variables a CLI needs" is a guess,
+ * and a wrong guess breaks dispatch on a machine I cannot test — HOME, APPDATA,
+ * USERPROFILE, TEMP, SystemRoot, LANG, NODE_OPTIONS and PATHEXT are all load-bearing
+ * somewhere. Pruning known-secret NAMES cannot break a CLI that only needs its own key,
+ * and it is the part that carries the risk.
+ */
+function buildChildEnv(parentEnv, secretNames, keyVars, key) {
+  const env = { ...parentEnv };
+  for (const name of secretNames) delete env[name];
+  for (const name of keyVars) env[name] = key;
+  return env;
+}
+
+/**
+ * A scrubber over every known secret value, applied to stdout and stderr before either
+ * is printed or written to `reports/`.
+ *
+ * LONGEST FIRST: two secrets can share a prefix, and redacting the short one first would
+ * leave the tail of the long one exposed in the transcript.
+ *
+ * MINIMUM LENGTH 8: a short or dictionary-word value would redact ordinary prose and
+ * make the transcript unreadable. An unreadable transcript is not reviewed, and a review
+ * nobody reads is the failure this whole file exists to prevent — so the floor is a
+ * legibility guard, not laziness. Values that short are not credentials worth the trade.
+ */
+const SCRUB_MIN_LEN = 8;
+function makeScrubber(values) {
+  const targets = [...new Set(values)]
+    .filter((v) => typeof v === 'string' && v.length >= SCRUB_MIN_LEN)
+    .sort((a, b) => b.length - a.length);
+  return (s) => targets.reduce((acc, v) => acc.split(v).join('<redacted>'), String(s || ''));
+}
+
 /** Newest `## ` section of an INBOX (they are newest-on-top by convention). */
 function newestInboxEntry(path) {
   if (!existsSync(path)) return null;
@@ -482,6 +555,11 @@ function main() {
     console.error(`[dispatch] ✗ REFUSED — ${refusal}`);
     process.exit(65);
   }
+
+  // Read once: the same map prunes the child env and builds the scrubber. Values are
+  // never logged — the COUNT is reported so a surprising 0 (a moved or unreadable
+  // reference file) is visible rather than silently disabling both protections.
+  const secrets = readAllSecrets();
 
   const resolved = readKey(agent.keyVars);
   if (!resolved) {
@@ -614,6 +692,17 @@ function main() {
     task,
   ].join('\n');
 
+  // Containment posture, stated BEFORE the dry-run branch so `--dry-run` previews it too —
+  // "what would this dispatch expose?" is exactly what a dry run is for.
+  //
+  // Counts only, never values. There is no zero-count branch on purpose: `readKey` reads
+  // the same file and has already exited if it was missing or held nothing, so reaching
+  // here with an empty inventory is not a state this can be in. A defensive branch for it
+  // would be unreachable code implying a check that never runs.
+  console.log(
+    `[dispatch] child env pruned of ${secrets.size} inventory secret(s); transcript scrubbed against all of them`,
+  );
+
   if (arg('dry-run')) {
     console.log(`[dry-run] would run: ${agent.cli} -p <prompt>  (${preamble.length} chars)`);
     console.log(`[dry-run] branch=${branch} timeout=${TIMEOUT_MS}ms`);
@@ -636,7 +725,7 @@ function main() {
   const res = spawnSync(bin.cmd, agent.args(preamble), {
     encoding: 'utf8',
     timeout: TIMEOUT_MS,
-    env: { ...process.env, ...Object.fromEntries(agent.keyVars.map((n) => [n, key])) },
+    env: buildChildEnv(process.env, secrets.keys(), agent.keyVars, key),
     maxBuffer: 32 * 1024 * 1024,
     shell: bin.shell,
     ...(agent.mode === 'stdin' ? { input: preamble } : {}),
@@ -645,7 +734,10 @@ function main() {
   const secs = Math.round((Date.now() - started) / 1000);
   // Scrub before anything is written or printed. The key was in the child env, so
   // a provider echoing it back must not reach the transcript.
-  const scrub = (s) => (s || '').split(key).join('<redacted>');
+  // Every known secret, not just the one this agent authenticates with. The child was
+  // pruned of the others, but the operator's shell, a setup script or the agent's own
+  // repo reads can still surface one — and `reports/` is committed to a public repo.
+  const scrub = makeScrubber([key, ...secrets.values()]);
   const out = scrub(res.stdout);
   const err = scrub(res.stderr);
 
@@ -774,7 +866,7 @@ function main() {
  * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
  * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
  */
-export { auditClaims, evidenceRefusal, readKey, resolveBin, argAll, capabilityRefusal, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, AGENTS };
+export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, AGENTS };
 
 const INVOKED_DIRECTLY =
   Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
