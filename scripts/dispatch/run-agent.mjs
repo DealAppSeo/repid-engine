@@ -44,7 +44,8 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * `mode` is not a style preference — it is what each CLI actually accepts,
@@ -230,17 +231,60 @@ const EXECUTION_ARTIFACT = [
   /\bERR_[A-Z_]+\b/,
 ];
 
-function auditClaims({ output, capabilities, evidenceCount }) {
-  const couldExecute = capabilities.includes('shell') || evidenceCount > 0;
-  const artifacts = EXECUTION_ARTIFACT.filter((re) => re.test(output));
-  const hasArtifacts = artifacts.length > 0;
+/**
+ * THE DISARM THIS CLOSES — found 2026-08-14, by reading the predicate rather than the prose.
+ *
+ * The old test was `couldExecute = shell || evidenceCount > 0`, and `unsupported` required
+ * `!couldExecute`. So ONE evidence command of any kind disarmed the detector for EVERY claim
+ * in the transcript. Supply `git log --oneline -1` — cheap, always passes, on the allowlist —
+ * and the agent could then invent jest output with stack frames and exit codes, and this
+ * function stayed silent while the manifest printed a confident **[V]**.
+ *
+ * That is worse than having no detector. A reviewer who has been told the harness catches
+ * fabrication reads [V] as "checked". The 2026-08-05 incident is precisely the class it was
+ * built for, and one flag on the command line switched it off.
+ *
+ * WHAT REPLACES IT: an artifact is GROUNDED if the matched text also appears in the evidence
+ * the harness actually injected, and UNGROUNDED otherwise. Quoting real output is exactly what
+ * the agent is asked to do and never flags. Producing a stack frame that appears nowhere in
+ * what it was shown is the contradiction, and it is now caught even when evidence was supplied.
+ *
+ * STILL CONSERVATIVE, deliberately — a false positive trains people to ignore the banner, which
+ * is worse than not having it:
+ *   - an agent holding real `shell` is never flagged; it could legitimately have run anything
+ *   - grounding is a substring test on whitespace-normalised text, so reformatted or truncated
+ *     quotes of real evidence still count as grounded
+ *   - with no shell and no evidence the behaviour is IDENTICAL to before: any artifact flags
+ *   - it flags, it does not fail the run
+ */
+function auditClaims({ output, capabilities, evidenceCount, evidenceText = '' }) {
+  const hasShell = capabilities.includes('shell');
+  const couldExecute = hasShell || evidenceCount > 0;
+
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ');
+  const shown = norm(evidenceText);
+  const said = norm(output);
+
+  const grounded = [];
+  const ungrounded = [];
+  for (const re of EXECUTION_ARTIFACT) {
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    for (const m of said.matchAll(g)) {
+      (shown && shown.includes(m[0]) ? grounded : ungrounded).push(m[0]);
+    }
+  }
+
   return {
     couldExecute,
-    hasArtifacts,
-    artifactCount: artifacts.length,
-    // The contradiction: output that could only come from running something, from
-    // an agent that ran nothing and was shown nothing.
-    unsupported: hasArtifacts && !couldExecute,
+    hasArtifacts: grounded.length + ungrounded.length > 0,
+    artifactCount: grounded.length + ungrounded.length,
+    groundedCount: grounded.length,
+    ungroundedCount: ungrounded.length,
+    /** A few verbatim offenders, so the banner can show WHAT was unsupported. */
+    ungroundedSamples: [...new Set(ungrounded)].slice(0, 5),
+    // The contradiction: output that could only come from running something, which the
+    // agent neither ran nor was shown.
+    unsupported: !hasShell && ungrounded.length > 0,
     // Nothing in a transcript with no evidence and no shell can exceed [R].
     maxGrade: couldExecute ? 'V' : 'R',
   };
@@ -305,9 +349,22 @@ const TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 15 * 60 * 1000);
 
 /**
  * The one file every agent on this system reads. See the injection site in main().
- * Path is resolved from the repo root so the dispatcher works from any cwd.
+ *
+ * Resolved from THIS FILE's location, not `process.cwd()`.
+ *
+ * [V 2026-08-14] It was `join(process.cwd(), 'LESSONS.md')` under a comment claiming it
+ * came "from the repo root so the dispatcher works from any cwd". It did not: cwd is
+ * wherever the caller happened to be. Measured by dispatching from `src/` — the preamble
+ * collapsed from 7537 to 1001 characters and the entire shared-lessons block was gone.
+ *
+ * That is this file's own failure mode aimed at itself. CLAUDE.md calls the dispatch
+ * preamble "the ONLY channel that reaches XC and GA", and the lessons block opens with
+ * "each one is here because it already cost us something real". Losing it to a cwd
+ * turns a governed dispatch into an ungoverned one, and the only trace is one warning
+ * line in a log nobody reads after the fact. `import.meta.url` cannot drift this way.
  */
-const LESSONS_PATH = join(process.cwd(), 'LESSONS.md');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LESSONS_PATH = join(REPO_ROOT, 'LESSONS.md');
 const LESSONS_MAX = 6000;
 
 function arg(name, fallback = undefined) {
@@ -315,6 +372,33 @@ function arg(name, fallback = undefined) {
   if (i === -1) return fallback;
   const v = process.argv[i + 1];
   return v && !v.startsWith('--') ? v : true;
+}
+
+/**
+ * EVERY occurrence of a repeatable flag, in order.
+ *
+ * `arg()` uses indexOf, so it returns the FIRST match and discards the rest. For a
+ * repeatable flag that is a silent truncation, and `--evidence` is repeatable in every
+ * way that matters: it is collected into an array, the manifest renders it with
+ * `.map()`, and the prompt injects the entries as a list.
+ *
+ * [V 2026-08-14] Measured: `--evidence "git log --oneline -1" --evidence "npx tsc
+ * --noEmit"` ran ONLY the git command. No warning. The manifest then truthfully listed
+ * one command, so the transcript looked correct while the reviewer's actual request —
+ * "run the tests AND the typecheck" — had been halved on the way in.
+ *
+ * This matters more than a dropped flag usually would, because evidence is what licenses
+ * an execution claim. Silently supplying less evidence than was asked for produces a
+ * report graded against evidence nobody knows is missing.
+ */
+function argAll(name) {
+  const out = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] !== `--${name}`) continue;
+    const v = process.argv[i + 1];
+    if (v && !v.startsWith('--')) out.push(v);
+  }
+  return out;
 }
 
 /** Read one key from the reference file. Returns the value; NEVER log it. */
@@ -420,7 +504,7 @@ function main() {
   // A failing command is injected too: "the suite is red and here is how" is a
   // finding, not an error, and hiding it would recreate the fabrication problem
   // from the other direction.
-  const evidenceCmds = [].concat(arg('evidence') && arg('evidence') !== true ? [String(arg('evidence'))] : []);
+  const evidenceCmds = argAll('evidence');
   const evidence = [];
   for (const cmd of evidenceCmds) {
     const bad = evidenceRefusal(cmd);
@@ -568,7 +652,14 @@ function main() {
   // SEAM 3 — the manifest goes FIRST in the file, before the agent's prose.
   // A reviewer must meet "this agent could not run anything" before meeting its
   // confident paragraph about test results, not after.
-  const audit = auditClaims({ output: out, capabilities: agent.capabilities, evidenceCount: evidence.length });
+  const audit = auditClaims({
+    output: out,
+    capabilities: agent.capabilities,
+    evidenceCount: evidence.length,
+    // The literal text the agent was shown. Grounding is checked against this, so an
+    // artifact it could only have invented is caught even when evidence WAS supplied.
+    evidenceText: evidence.join('\n'),
+  });
   const headSha = (() => {
     try { return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); }
     catch { return 'unknown'; }
@@ -592,18 +683,22 @@ function main() {
     audit.unsupported
       ? '> ### ⚠ EXECUTION ARTIFACTS WITH NO EXECUTION\n' +
         '>\n' +
-        `> This transcript contains ${audit.artifactCount} pattern(s) that can only be OBSERVED by\n` +
+        `> This transcript contains ${audit.ungroundedCount} pattern(s) that can only be OBSERVED by\n` +
         '> running something — a stack frame, a `file:line`, an exit code, a test\n' +
-        '> count. **This agent held no `shell` and was given no evidence.** Nobody\n' +
-        '> derives those by reading source.\n' +
+        `> count — which appear NOWHERE in what this agent was shown${evidence.length ? ` (${audit.groundedCount} other(s) do match the evidence and are fine)` : ''}.\n` +
+        `> **This agent held no \`shell\`${evidence.length ? '; the evidence it was given does not contain these' : ' and was given no evidence'}.** Nobody derives those by reading source.\n` +
         '>\n' +
+        (audit.ungroundedSamples.length
+          ? `> Unsupported specifics: ${audit.ungroundedSamples.map((s) => `\`${s}\``).join(' · ')}\n>\n`
+          : '') +
         '> Note this fires regardless of how the prose is hedged. The 2026-08-05\n' +
         '> fabricated review tagged itself `[R]` and called its invented output\n' +
         '> "Expected Failure Output" — the dishonesty was in the SPECIFICS, not the\n' +
         '> claim. Re-run anything here before citing it.'
       : evidence.length > 0
         ? '> Execution claims below are backed by harness-run evidence, quoted verbatim in the prompt.\n' +
-          '> The agent did not run these itself — it was shown the real output.'
+          `> The agent did not run these itself — it was shown the real output, and all ${audit.artifactCount}\n` +
+          '> execution artifact(s) in this transcript trace back to it.'
         : '> No execution capability and none claimed. Reasoning-only report; grade [R].',
     '',
   ].join('\n');
@@ -628,8 +723,10 @@ function main() {
   console.log(`[dispatch] max claim grade: [${audit.maxGrade}] · evidence runs: ${evidence.length}`);
   if (audit.unsupported) {
     console.error(
-      '[dispatch] ⚠ UNSUPPORTED EXECUTION CLAIM — the output asserts something was run,\n' +
-        '           tagged [V], from an agent with no shell and no evidence supplied.\n' +
+      `[dispatch] ⚠ UNSUPPORTED EXECUTION CLAIM — ${audit.ungroundedCount} specific(s) in the output\n` +
+        '           could only come from running something, and appear nowhere in what this\n' +
+        `           agent was shown${evidence.length ? ` (${audit.groundedCount} other(s) do match the evidence).` : ' — it held no shell and got no evidence.'}\n` +
+        (audit.ungroundedSamples.length ? `           e.g. ${audit.ungroundedSamples.join(' · ')}\n` : '') +
         '           Do not accept the execution claims without re-running them yourself.',
     );
   }
@@ -656,9 +753,37 @@ function main() {
   process.exit(res.status === 0 ? 0 : 1);
 }
 
-try {
-  main();
-} catch (e) {
-  console.error(`[dispatch] ${e instanceof Error ? e.message : String(e)}`);
-  process.exit(3);
+/**
+ * ════════════════════════════════════════════════════════════════════════════════
+ * TESTABILITY — why there is an entry guard and a set of exports
+ * ════════════════════════════════════════════════════════════════════════════════
+ * The safety of this file rests on four pure functions — `auditClaims` (the fabrication
+ * detector), `evidenceRefusal` (the command fence), `readKey` (the rename-tolerant
+ * lookup) and `resolveBin` (the call-path resolver). Until 2026-08-14 not one of them
+ * had a direct test. The two suites that name this file read it as TEXT and check the
+ * capability table; they cannot execute a predicate.
+ *
+ * That gap is not theoretical here. `auditClaims`'s first version was written, reviewed,
+ * shipped, and then MEASURED AGAINST THE REAL FABRICATED TRANSCRIPT IT MISSED COMPLETELY
+ * — see the comment on EXECUTION_ARTIFACT. Nothing has pinned it since, and the disarm
+ * fixed today survived in it for exactly that reason: reading the prose around the
+ * predicate is not the same as running the predicate.
+ *
+ * `main()` runs only when this file is the process entry point, so a test can import the
+ * functions without dispatching an agent. `tests/dispatch-runner-seams.test.ts` executes
+ * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
+ * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
+ */
+export { auditClaims, evidenceRefusal, readKey, resolveBin, argAll, capabilityRefusal, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, AGENTS };
+
+const INVOKED_DIRECTLY =
+  Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (INVOKED_DIRECTLY) {
+  try {
+    main();
+  } catch (e) {
+    console.error(`[dispatch] ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(3);
+  }
 }
