@@ -222,16 +222,27 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 - Sprint-3 stubs (EAS, ZKP) — do not remove or "fix" passing stubs
 
 ### Deploy facts
-- Railway project: **`repid-engine`** — its own project, 3 services: `repid-engine` (the API,
-  repid-engine-production.up.railway.app), `receipt-indexer`, `proof-drain-worker`.
+- Railway project: **`repid-engine`** — its own project, 4 services: `repid-engine` (the API,
+  repid-engine-production.up.railway.app), `receipt-indexer`, `proof-drain-worker`,
+  `attestation-minter`.
   **Corrected 2026-07-30 (verified against the Railway dashboard).** This line previously read
   "Railway project: AITrinitySymphony", which is wrong and caused a wallet-custody master key to be
   configured in the wrong project. `AITrinitySymphony` is the separate *Trinity swarm* project
   (trinity-* agents, n8n, Flowise, py-brain/rust-brain, zkp-postcard, …) — it runs none of this
   repo's code. Set env vars for this repo on the `repid-engine` **service**, not as project-shared.
+  **`attestation-minter` added to the list 2026-08-15**, observed on the dashboard; this line said
+  "3 services" until then. It is **scheduled, not a server** — it shows a last-run status and a
+  next-run time, and no public domain. **Its source is not identified:** the string
+  `attestation-minter` appears in no file in this repo, nor in `hyperdag-protocol`,
+  `trinity-ecosystem` or `trinity-symphony-shared`. Do not assume it builds from this repo.
 - Healthcheck: intentionally removed (do not re-add)
 - Node: >=20.9.0
 - All secrets injected via Railway env vars — never commit to code
 - `AGENT_KEY_MASTER` (agent wallet custody, `src/services/agent-key-crypto.ts`) belongs ONLY on the
   `repid-engine` service. `receipt-indexer` (chain reads) and `proof-drain-worker` (EAS attestor key)
   must not have it — it decrypts every custodied agent wallet private key.
+  `attestation-minter`: **UNVERIFIED — nobody has checked.** This rule was written when the project
+  had three services and does not cover it either way. Minting attestations needs a *signing* key,
+  which is not `AGENT_KEY_MASTER`; "an attestor must need it" is an assumption, not a finding, and
+  the same class of inference that put this key in the wrong project once already. Read the
+  service's Variables in the Railway dashboard and replace this paragraph with the answer.
