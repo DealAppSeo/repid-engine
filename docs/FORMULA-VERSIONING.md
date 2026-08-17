@@ -80,7 +80,7 @@ An old proof therefore verifies **against the version it was issued under**, and
 genuinely cannot be performed it says so rather than returning a false FAILED. Three outcomes,
 never two — the same rule the rest of this codebase runs on.
 
-## 4. Make the bump machine-enforced, not remembered
+## 4. Make the bump machine-enforced, not remembered — **LANDED 2026-08-17**
 
 The defect was not that someone forgot; it is that forgetting was possible and silent.
 
@@ -90,6 +90,31 @@ delta function's observable behaviour without bumping the version and the test g
 
 This is the piece that converts "bumped by hand" into a checked invariant, and it is the part
 worth building first — without it, §2 and §3 just move the same silence somewhere newer.
+
+Built as `src/zkp/formula-golden-vector.ts` + `tests/formula-golden-vector.test.ts`. Two details
+that are load-bearing and were not obvious when this section was written:
+
+- **The digest is keyed BY VERSION, not pinned as one constant.** A single constant would let
+  someone bump the version and repin the digest in the same motion — the exact silent drift this
+  section is about. Keyed by version, *both* directions go red: change behaviour without bumping
+  and today's digest stops matching this version's entry; bump without adding an entry and there
+  is no entry to match. `BEHAVIOUR_DIGESTS` therefore doubles as the seed of §3's registry.
+- **The vector contains only REACHABLE cases.** `deriveHalDecision` never emits `clean` at or
+  above risk 0.40, and the orientation defect survived its own unit tests precisely because those
+  tests asserted on `clean` at risk 0.75 — a combination production cannot produce. An unreachable
+  row pins behaviour that does not exist and reads as coverage, which is worse than no pin.
+
+Mutation-verified in both directions: perturbing the delta arithmetic without a version bump fails
+`observable behaviour matches the digest pinned for this version`; bumping the version without an
+entry fails two assertions. `repid-delta-a7` is listed in `UNRECOMPUTABLE_VERSIONS` and deliberately
+has **no** digest entry — its delta function is not in the tree, so a digest under that key could
+only hold a8's behaviour. That absence is §3's NOT_CHECKED row, expressed as data.
+
+One coupling worth knowing before flipping a flag: `REPID_DELTA_FLOOR_RECONCILED` changes
+floor-protection behaviour, and the vector's floor rows straddle it, so flipping it changes the
+digest. That is correct — it *is* a behaviour change — and it means the flag needs its own version
+when Sean flips it. The test asserts the flag is off rather than assuming it, so the failure names
+the precondition instead of looking like unexplained drift.
 
 ## What this does not resolve
 
