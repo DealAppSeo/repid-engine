@@ -1,8 +1,21 @@
 # Adopting the OmegaHive ideas into HAL and the ZK-RepID layer
 
-**Status: PLAN ONLY. No code, no schema, no config is changed by this document.**
-Nothing here is applied without an explicit GO (CLAUDE-RULE-2). Every "we would
-build X" below is a proposal with a promotion gate attached, not a commitment.
+**Status: PHASE 1 LANDED 2026-08-17 on an explicit GO. Phases 2–5 remain PLAN ONLY.**
+
+Phase 1 added three pure modules and their tests and changed **no behaviour**: no
+schema, no config, no scoring path, no route, no existing file's logic. Nothing
+in it runs at request time. Phases 2–5 are still proposals with promotion gates
+attached, and none is applied without a further GO (CLAUDE-RULE-2).
+
+What Phase 1 shipped: `src/orchestration/module-space.ts`,
+`src/orchestration/context-frame.ts`, `src/orchestration/promotion-ledger.ts`,
+`src/orchestration/promotion-register.ts`, and three test suites under `tests/`.
+See §5 for the gate it was held to, and how that gate had to be amended.
+
+Two claims in the original draft of this document were **wrong** and are corrected
+in place below (§1, §3.2): the state of `commaANFIS` and the state of the
+shadow-reject capability filter. Both were inherited from repo documents and both
+understated what is built. See §0.
 
 **Source:** Ben Goertzel, *Seeding RSI Toward ASI* (2026-08-07), and the three
 design papers it summarises (the OmegaHive meta-algorithm, the ProtoAGI test
@@ -14,7 +27,36 @@ borrow from — not as an architecture to copy.
 
 ---
 
-## 0. Two corrections this plan is built on
+## 0. Corrections this plan is built on — and two it had to make to itself
+
+**Added 2026-08-17, during Phase 1.** Building the register meant grepping for each
+stalled mechanism instead of reading the document describing it, and two of the three
+descriptions were false — both understating what exists:
+
+- **`commaANFIS`.** `docs/HAL_CANONICAL_v1.md` called `src/services/anfis-comma.ts`
+  "dead code", on a grep scoped to four directories, every consumer of which lives
+  outside all four. Only the `commaANFIS` entry point is uncalled; `anfisForward`,
+  `goldenCenters`, `goldenSpreads` and `gaussianMF` have three live consumers. Read as
+  written, the sentence invites deleting a module three production paths import from.
+- **The shadow-reject capability filter.** `docs/SHADOW_REJECT_CAPABILITY.md` is headed
+  "DESIGN ONLY — not applied". It is **built and shipped default-off**, with a test
+  pinning the off-state. What has never happened is the measurement.
+
+Both errors were inherited into the first draft of *this* document and repeated as fact.
+That is LESSONS §2 in both directions: a doc read as a proxy for the code, and the error
+propagating one document further each time it was cited. The dated correction notes now on
+those two files came out of this exercise — the ledger paying for itself before it has
+measured anything.
+
+**The pattern worth naming:** all three of the plan's motivating examples were
+*understatements*. A stale doc in this repo does not typically claim too much; it claims
+too little, because it was written before the work landed and nobody returned to it. That
+is a different failure from the one `LESSONS.md` mostly guards against, and it argues for
+the register — state that tests check — over prose that a reader has to re-verify.
+
+---
+
+### The two corrections the plan was originally built on
 
 **`zkRepID` is not a name in this codebase.** Grepped across all four repos on
 2026-08-17: zero hits, in any casing. The layer that answers to that description
@@ -59,7 +101,7 @@ is what the OmegaHive paper actually supplies, and it is what we should take.
 | Frozen-state vs developmental trials | everything we run is frozen-state | **MISSING** — though `EarnedMetrics` decay is time-dependent, so a developmental substrate genuinely exists. |
 | Independent voters / de-correlated evidence | `src/hal/checkpoint-registry.ts` (curated host+model → weights identity; an unmapped model becomes its own singleton and can only *reduce* independence), `src/decisioning/family-registry.ts`, `disjointness.ts` | **HAVE** — and it is *ahead* of the paper, which discusses diverse baselines but not vote-independence laundering. Flag this as ours. |
 | Forks explore in parallel, best pieces merged back | `src/orchestration/lane-registry.ts`, `write-lease.ts`, `node-registry.ts`, XC/GA dispatch | **PARTIAL** — lanes exist to prevent write collisions, not to explore an architecture search space. Merging is by PR, not by measured promotion. |
-| Value system moved out of the LLM into a structured, inspectable substrate | `src/layers/constitutional-audit.ts`, `LESSONS.md` injected into every dispatch, `src/resilience/decision-contract.ts`, `emergency-halt.ts` | **PARTIAL / honest stub** — the constitutional audit's three primitives return "all rules", "1.0", and "true" unconditionally, correctly gated off and correctly labelled. `src/services/anfis-comma.ts` is a complete ANFIS forward pass with **zero call sites**. |
+| Value system moved out of the LLM into a structured, inspectable substrate | `src/layers/constitutional-audit.ts`, `LESSONS.md` injected into every dispatch, `src/resilience/decision-contract.ts`, `emergency-halt.ts` | **PARTIAL / honest stub** — the constitutional audit's three primitives return "all rules", "1.0", and "true" unconditionally, correctly gated off and correctly labelled, and it is genuinely wired into four call sites. ~~`src/services/anfis-comma.ts` is a complete ANFIS forward pass with **zero call sites**.~~ **Corrected 2026-08-17:** only the `commaANFIS` *entry point* is uncalled; the module's `anfisForward`/`goldenCenters`/`goldenSpreads`/`gaussianMF` have three live consumers. |
 
 **Read the table this way.** Nine `PARTIAL`s in a row is not a mediocre score.
 It says the parts were built by people who understood the problem, and then
@@ -163,11 +205,12 @@ incumbent under matched conditions, and is `promoted`, `parked`, or `rejected` �
 with the measurement that decided it recorded alongside the verdict.
 
 **Why we need it specifically.** `CONSTITUTIONAL_AUDIT_ENABLED` has been false
-since 2026-07-05 with no written criterion for what would turn it true. There
-are two ANFIS implementations, one of which (`src/services/anfis-comma.ts`) is a
-complete forward pass with zero call sites. `docs/SHADOW_REJECT_CAPABILITY.md`
-is a designed, unbuilt fix with a written verification plan and no owner. These
-are not three separate stalls; they are one missing institution. **LESSONS §3
+since 2026-07-05 with no written criterion for what would turn it true. The
+`commaANFIS` entry point in `src/services/anfis-comma.ts` has no callers, while
+the scaffold in the same file has three. `docs/SHADOW_REJECT_CAPABILITY.md`
+describes a fix that is **built and shipped default-off**, whose written
+verification plan has never been run. These are not three separate stalls; they
+are one missing institution. **LESSONS §3
 says an unwired mechanism is worse than an absent one because it converts a known
 gap into false coverage. A promotion ledger is the enforcement of §3 for
 mechanisms rather than for safeguards.**
@@ -297,10 +340,28 @@ that can proceed in the meantime; Phase 2 onward cannot. Saying so here is the
 point — a plan that quietly assumes a live substrate is how a stalled surface
 starts looking current.
 
-**Phase 1 — vocabulary and the ledger (no behaviour change).**
+**Phase 1 — vocabulary and the ledger (no behaviour change). LANDED 2026-08-17.**
 Define Module Space and Context Frame as types. Stand up the Promotion Ledger
 with the three stalled mechanisms entered and honestly graded. Nothing is
-promoted. *Gate: three verdicts, each with a ruler attached.*
+promoted.
+
+*Gate, as originally written:* ~~three verdicts, each with a ruler attached.~~
+**AMENDED 2026-08-17 — the original gate was not satisfiable and never could have
+been.** A ruler requires a measurement, and Phase 0 of this same plan states that
+nothing is measurable while the fleet is down. Written as it was, the only way to
+pass Phase 1 would have been to fabricate three measurements. The gate collapsed
+NOT_CHECKED into failure — the exact two-outcome mistake §6 of this document and
+the surrounding codebase exist to refuse, committed by this document about itself.
+
+*Gate, amended:* **three verdicts, each carrying either a ruler or an explicit
+NOT_CHECKED reason, and the ledger structurally refusing to promote on anything
+but a ruler.** The teeth are in the second clause: the point was never that three
+numbers exist, it was that authority cannot be granted without one.
+
+*Met by:* `src/orchestration/promotion-register.ts` (three entries, all
+NOT_CHECKED with stated reasons, none promoted) and
+`src/orchestration/promotion-ledger.ts` (`PROMOTED_WITHOUT_MEASUREMENT`),
+with the invariant verified by mutation — broken, observed red, reverted.
 
 **Phase 2 — qualify the instrument.**
 Oracle ceiling and qualification floor for HAL's frozen corpus; report regret,
@@ -375,9 +436,14 @@ Adapted from the paper's list, made specific to this stack.
 
 ## 8. Open questions for Sean
 
-1. **Is calibration a RepID input, or a separate portable score?** §3.1 changes
-   what RepID *means*. Folding it into the existing score alters every published
-   number; a parallel score does not, but splits the product claim in two.
+1. ~~**Is calibration a RepID input, or a separate portable score?**~~
+   **ANSWERED 2026-08-17 (Sean): a SEPARATE PORTABLE SCORE. Never a RepID input.**
+   Every RepID already issued keeps meaning exactly what it meant, and the two
+   claims — "this agent behaves well" and "this agent knows what it knows" —
+   stay independently falsifiable. Recorded in `DECISIONS.md` §8 and encoded in
+   `src/orchestration/context-frame.ts`, which defines the commitment type and
+   deliberately defines no calibration record, so the Phase 3 gap stays visible
+   instead of being pre-wired into scoring.
 2. **Should `zkRepID` become the canonical name for `src/zkp/`?** If yes it is
    its own rename PR before anything here builds on it.
 3. **Phase 1 during the outage, or hold everything until the redeploy?** Phase 1
