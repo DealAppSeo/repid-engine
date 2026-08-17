@@ -35,15 +35,18 @@ the SHA is absent while the change is fully present).
 **Apply:** call what you will actually call, the way you will call it. Query the source, never a
 mirror of it. Check the property you actually mean. Committed ≠ landed ≠ deployed.
 
-## 3. An unwired mechanism is worse than an absent one
+## 3. A mechanism wired at one end only is worse than an absent one
 
-It converts a known gap into false coverage, so you stop looking.
+It converts a known gap into false coverage, so you stop looking. Both ends count — a caller, and
+a reader.
 
-*Proof:* `canAssign()` — built, tested, **zero callers** — is why dispatch was believed guarded.
-Same for the L0 halt (unmerged 9 days). The lane write-fence shipped registered and enforcing
-NOTHING: an empty registry, so it failed open on every write for weeks.
+*Proof:* `canAssign()` — built, tested, **zero callers**. The L0 halt, unmerged 9 days. The lane
+write-fence, registered against an empty registry, failing open on every write for weeks. The
+inverse: survivor-alert **caught the 2026-07-17 outage in 10 min and named the fix**, then repeated
+it ~1300×/day for 30 days, unread. Nobody knew for a month.
 
-**Apply:** a safeguard is not done until something calls it. Name the caller, or say it is inert.
+**Apply:** name the caller AND the consumer, or say it is inert. An alert nobody reads is not an
+alert.
 
 ## 4. Evidence outranks the label
 
