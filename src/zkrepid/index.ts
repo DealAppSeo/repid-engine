@@ -60,6 +60,24 @@ export * as holder from '../zkp/holder-identity-binding';
 /** Per-identity nullifiers, so one RepID cannot be replayed as many. */
 export * as nullifier from '../zkp/nullifier-identity';
 
+/**
+ * The selective-disclosure seam: prove `repid >= threshold` without publishing the score.
+ *
+ * SHADOW MODE BY DEFAULT, and it refuses to enforce. Read the module header before wiring it to
+ * anything that grants access — `provenWithoutSecret` is structurally false until a circuit exists,
+ * and `ZKREPID_DISCLOSURE_MODE=enforce` throws rather than let an unproven statement gate.
+ */
+export * as disclosure from './disclosure';
+
+/**
+ * The formula's observable behaviour, pinned per version.
+ *
+ * Not a proving primitive — it is the other end of the wire from `statement.formulaCommitment`. A
+ * version string behind a salted hash that no test reads cannot detect a behaviour change; this
+ * module is what makes the version mean something. See docs/FORMULA-VERSIONING.md.
+ */
+export * as formulaVector from '../zkp/formula-golden-vector';
+
 /** The boundary itself — what zkRepID covers, what it does not, and why. */
 export {
   ZKREPID_MODULES,
