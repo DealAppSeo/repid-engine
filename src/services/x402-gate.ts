@@ -44,6 +44,7 @@
  * dispute_claims(defendant_agent, status). repid_agents has NO stake_amount column.
  */
 import { db } from '../db';
+import { observeOwnerCeiling } from './owner-ceiling-shadow';
 
 export type Tier = 'PROBATIONARY' | 'EARNING' | 'ESTABLISHED' | 'AUTONOMOUS' | 'VETERAN';
 
@@ -193,6 +194,17 @@ export async function checkTransactionAuthority(
       processed_at: new Date().toISOString(),
     })
     .then(({ error }: any) => { if (error) console.error('[x402-gate] audit insert failed:', error.message); });
+
+  // OWNER→CEILING INHERITANCE, IN SHADOW. Nothing about the human who owns this
+  // agent currently narrows what it may spend; `decideAuthority` above reads the
+  // agent's own tier and nothing else. This call computes what the ceiling WOULD
+  // be if the owner's limits attenuated it, records the comparison, and returns a
+  // value this function ignores — the decision above is unchanged and is what the
+  // caller acts on. Inert unless OWNER_CEILING_SHADOW_ENABLED is set: with it
+  // unset the observer performs no reads and no writes.
+  void observeOwnerCeiling({ agent: input.agent, amount: input.amount, decision }).catch(() => {
+    /* observeOwnerCeiling catches its own failures; this guards the promise itself. */
+  });
 
   return { ...decision, agent_exists };
 }
