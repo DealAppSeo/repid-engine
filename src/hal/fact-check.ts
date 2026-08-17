@@ -927,7 +927,34 @@ export async function factCheck(
     if (process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true') {
       const localVerdict: Verdict = deliverable.toLowerCase().includes('false') || deliverable.toLowerCase().includes('error') ? 'FALSE' : 'TRUE';
       const localScore = localVerdict === 'FALSE' ? 0.8 : 0.2;
-      const localDecision = localScore >= vetoThreshold ? 'vetoed' : localScore >= flagThreshold ? 'flagged' : 'clean';
+      const baseLocalDecision = localScore >= vetoThreshold ? 'vetoed' : localScore >= flagThreshold ? 'flagged' : 'clean';
+
+      // ─── THE RESILIENCE GATE APPLIES HERE TOO ──────────────────────────────
+      //
+      // This branch used to RETURN BEFORE the gate below (search
+      // MIN_QUORUM_FOR_VETO), so it could issue a `vetoed` at quorum ZERO while
+      // the normal path refuses to veto below two independent providers. The
+      // guard was not disabled — it was bypassed by an early return.
+      //
+      // What that veto was made of: `deliverable.includes('false')`. A substring
+      // match, no provider consulted, no cross-LLM agreement — returned with the
+      // same `decision: 'vetoed'` a real quorum produces, and therefore
+      // indistinguishable downstream.
+      //
+      // MEASURED, 2026-08-17 (docs/HAL-ACCURACY-2026-08-16.md): 59 corpus rows
+      // have an EMPTY hal_providers_used, and 41 of those also set hal_vetoed —
+      // vetoes that consulted nothing, inflating recall. Removing them moves
+      // realized F1 from 0.8812 to 0.8760, still 98.37% of the achievable bound,
+      // so the accuracy cost is ~0.005 F1 and the honesty gain is a veto that
+      // means what it says.
+      //
+      // A local heuristic may FLAG. It may not VETO: a veto is the strongest
+      // claim this system makes and it must rest on independent agreement.
+      // `hal_score` is preserved exactly as the gate below preserves it — only
+      // the decision is capped, so the score stays available to any caller doing
+      // its own thresholding.
+      const localDecision = baseLocalDecision === 'vetoed' ? 'flagged' : baseLocalDecision;
+
       return {
         hal_score: localScore,
         decision: localDecision,
@@ -938,14 +965,29 @@ export async function factCheck(
           note: 'local slm fallback heuristic',
           latency_ms: Date.now() - start,
         }],
-        providers_used: 1,
-        agreement: 1.0,
+        // ZERO. `providers_used` counts non-error PROVIDER responses, and there
+        // were none — `provider_health.succeeded` on the very next line already
+        // said 0, so this field contradicted its own row. It reported 1 because
+        // the local heuristic occupies the verdicts array, which is how 41
+        // no-provider vetoes stayed invisible to every "did HAL actually run?"
+        // check, including the one that computes its AUC. The heuristic is
+        // recorded in `fallback_used` and in `verdicts`; it is not a provider.
+        providers_used: 0,
+        // Agreement among zero independent sources is undefined, not unanimous.
+        // 1.0 read as perfect consensus in exactly the case where there was no
+        // one to agree with.
+        agreement: null,
         degraded: true,
         latency_ms: Date.now() - start,
         quorum,
         provider_health: { attempted: attempted, succeeded: 0, failed },
         fallback_used: 'local_slm',
         confidence: 'degraded',
+        quorum_note:
+          `No provider responded (0/${attempted}); local_slm heuristic only. ` +
+          (baseLocalDecision === 'vetoed'
+            ? `Would-be 'vetoed' (score ${localScore.toFixed(3)}) capped at 'flagged' — a veto needs >= ${MIN_QUORUM_FOR_VETO} independent providers.`
+            : `Decision '${localDecision}' carries no cross-LLM agreement.`),
       };
     }
 
