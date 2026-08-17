@@ -26,12 +26,14 @@ import observabilityRouter from './v1/observability';
 import servicesRouter from './v1/services';
 import contractsRouter from './v1/contracts';
 import agentRouter from './v1/agent';
+import runloopLivenessRouter from './v1/runloop-liveness';
 import peerVerificationRouter from './peer-verification';
 import { createAndResolveArenaChallenge } from '../testing/red-team';
 
 const router = Router();
 router.use(substanceGateRouter);
 router.use(agentRouter); // Phase 2.10 — /api/v1/agent/process-contracts (router declares full sub-path)
+router.use(runloopLivenessRouter); // /api/v1/runloop-liveness (+ /:agent_name) — router declares full sub-path
 router.use('/hitl', hitlRouter);
 router.use('/status', observabilityRouter);
 router.use('/services', servicesRouter);
