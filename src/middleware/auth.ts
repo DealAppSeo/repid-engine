@@ -82,6 +82,11 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // Sprint 12 (megasprint): public Graph RAG recall surface
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/recall$/.test(req.path)) return next();
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/memory\/recent$/.test(req.path)) return next();
+  // Scoped lesson recall — read-only, and the dispatcher calls it to append
+  // context under the LESSONS.md block it already injects verbatim. Requiring a
+  // key here would add a dispatch failure mode without protecting anything new.
+  // The POST /api/v1/lessons write path is NOT bypassed: it mutates shared state.
+  if (req.method === 'GET' && req.path === '/api/v1/lessons/recall') return next();
   // Wave 6: ERC-8004 spec — public registration file + reputation reads
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/registration\.json$/.test(req.path)) return next();
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/reputation\/(payload\.json|onchain)$/.test(req.path)) return next();

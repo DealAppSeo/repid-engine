@@ -8,7 +8,10 @@ import type {
 } from '../../types/graph-rag';
 
 export interface CreateNodeArgs {
-  agent_id: string;
+  /** Omit for a scoped (agent-independent) node; supply `scope` instead. The DB
+   *  requires at least one of the two — a node with neither is unreachable. */
+  agent_id?: string | null;
+  scope?: string | null;
   node_type: NodeType;
   content: string;
   metadata?: Record<string, unknown>;
@@ -35,11 +38,21 @@ export class GraphRagStore {
   constructor(private supabase: SupabaseClient) {}
 
   async createNode(args: CreateNodeArgs): Promise<MemoryNode> {
+    const agentId = args.agent_id ?? null;
+    const scope = args.scope ?? null;
+    if (!agentId && !scope) {
+      // Caught here rather than as a 23514 from the DB check, because the
+      // constraint violation does not say which of the two you forgot.
+      throw new Error(
+        'createNode failed: node needs an agent_id or a scope — one with neither is unreachable by every read path',
+      );
+    }
     const embedding = await embed(args.content);
     const { data, error } = await this.supabase
       .from('agent_memory_nodes')
       .insert({
-        agent_id: args.agent_id,
+        agent_id: agentId,
+        scope,
         node_type: args.node_type,
         content: args.content,
         embedding: toPgVector(embedding),
@@ -47,7 +60,7 @@ export class GraphRagStore {
         source_event_id: args.source_event_id ?? null,
         importance: args.importance ?? 0.5,
       })
-      .select('id, agent_id, node_type, content, metadata, source_event_id, importance, created_at, accessed_at, access_count')
+      .select('id, agent_id, scope, node_type, content, metadata, source_event_id, importance, created_at, accessed_at, access_count')
       .single();
     if (error) throw new Error(`createNode failed: ${error.message}`);
     return data as MemoryNode;
