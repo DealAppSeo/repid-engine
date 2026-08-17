@@ -58,15 +58,30 @@ the register — state that tests check — over prose that a reader has to re-v
 
 ### The two corrections the plan was originally built on
 
-**`zkRepID` is not a name in this codebase.** Grepped across all four repos on
+**`zkRepID` was not a name in this codebase.** Grepped across all four repos on
 2026-08-17: zero hits, in any casing. The layer that answers to that description
 is `src/zkp/` — `commitment.ts`, `merkle-root.ts`, `nullifier-identity.ts`,
 `repid-delta-statement.ts`, `repid-delta-bridge.ts`, `proof-statement-guard.ts`,
 `delta-anchor.ts`, `erc8004-linkage.ts`, `poseidon2-*` — plus the "ZKP Postcard"
-link in the NORTH-STAR spine. This plan uses **ZK-RepID** to mean exactly that
-set of files and nothing else. If the name is meant to become canonical it needs
-a rename PR of its own; adopting a term that names no code is the precise
-failure LESSONS §5 is about.
+link in the NORTH-STAR spine. This plan used **ZK-RepID** to mean exactly that
+set of files and nothing else, on the grounds that adopting a term which names
+no code is the precise failure LESSONS §5 is about.
+
+> **RESOLVED 2026-08-17 (Sean): `zkRepID` is canonical.** It now names real,
+> importable code — `src/zkrepid/`, with the boundary enumerated in
+> `boundary.ts` and pinned by `tests/zkrepid-boundary.test.ts`. See
+> `docs/ZKREPID.md` and `DECISIONS.md` §9.
+>
+> **The boundary is narrower than the sentence above.** Scoping the rename showed
+> that `src/zkp/` holds two different kinds of thing, and only one of them is
+> zkRepID: Poseidon2 is a hash function, Plonky3 is a proving backend,
+> `merkle-root.ts` self-describes as hash-agnostic, and `zkp-vault/` is a separate
+> Rust crate with its own CI job. Those are general zero-knowledge machinery that
+> zkRepID *uses*, and renaming them would have made the vocabulary worse. So
+> zkRepID names the six RepID-specific modules, `zkp` keeps the rest, and the list
+> above is superseded by the table in `docs/ZKREPID.md`.
+>
+> No file moved and no import changed — the barrel is purely additive.
 
 **We are not short of ideas. We are short of a loop.** Reading Goertzel against
 this tree, the striking thing is how much of his *discipline* was already
@@ -444,8 +459,15 @@ Adapted from the paper's list, made specific to this stack.
    `src/orchestration/context-frame.ts`, which defines the commitment type and
    deliberately defines no calibration record, so the Phase 3 gap stays visible
    instead of being pre-wired into scoring.
-2. **Should `zkRepID` become the canonical name for `src/zkp/`?** If yes it is
-   its own rename PR before anything here builds on it.
+2. ~~**Should `zkRepID` become the canonical name for `src/zkp/`?**~~
+   **ANSWERED 2026-08-17 (Sean): yes, canonical — but for a narrower boundary than
+   the question assumed.** Not `src/zkp/` wholesale: that directory holds
+   general-purpose ZK machinery (Poseidon2, Plonky3, hash-agnostic Merkle, the
+   `zkp-vault` crate) alongside six RepID-specific modules, and only the latter are
+   zkRepID. A wholesale rename would also have been impossible to complete — the
+   `zkp_*` database columns live in an externally-managed schema this repo does not
+   own — so it would have landed half-applied, which is worse than not renaming.
+   Delivered additively in `src/zkrepid/`; see `docs/ZKREPID.md`, `DECISIONS.md` §9.
 3. **Phase 1 during the outage, or hold everything until the redeploy?** Phase 1
    is genuinely doc-and-type work and does not need a live producer — but it also
    cannot be validated without one.
