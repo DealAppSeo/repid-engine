@@ -324,3 +324,172 @@ export function summarizeFleetHealth(rows: ProgressRow[], nowMs: number = Date.n
     fleet,
   };
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE PROBE PATH — because `agent_heartbeat` is a retired table
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// EVERYTHING ABOVE READS `agent_heartbeat`, AND NOTHING HAS WRITTEN THAT TABLE
+// SINCE 2026-07-17 22:18. Not a fault: agent presence writes were deliberately
+// switched off (HEARTBEAT_MODE='off' in ConstitutionalAgentV4, "presence-write
+// reduction", ~8.6M writes/day). Every one of its twelve rows is frozen — which
+// means `deriveProgress` reads mel's 19,155/0 forever and would report
+// `spinning` no matter what the fleet is doing. Right answer, dead input.
+//
+// This was shipped one commit earlier and is corrected here rather than quietly
+// rewritten, because "the instrument reads a table nobody writes" is the exact
+// class of defect the module above is about, and hiding the instance would be
+// worse than the instance.
+//
+// `deriveProgress`/`deriveHealth` are KEPT: they are correct over their inputs
+// and remain right for any caller holding genuine per-session counters. They
+// must simply not be pointed at `agent_heartbeat` for a live answer.
+//
+// ─── WHAT REPLACED IT ────────────────────────────────────────────────────────
+//
+// Each agent serves GET /health from process memory:
+//
+//     { alive, loopCount, lastIterationAt, currentTaskId, uptimeSec, codeVersion }
+//
+// `lastIterationAt` is set at the TOP of every runLoop iteration and BEFORE the
+// agent_controls idle gate, so it stays fresh while an agent is deliberately
+// idled and goes stale only when the loop genuinely stops advancing. That makes
+// staleness a HUNG-LOOP signal on a single sample — no second probe, no rate.
+//
+// The prober now records that body (`health-probe.ts`), so this classification
+// runs over `agent_health_probes` rows.
+
+/** What one /health probe establishes about the loop. */
+export type LoopState =
+  /** Answered, and the loop advanced recently. */
+  | 'advancing'
+  /**
+   * Answered, and the loop has NOT advanced. The Sprint-13 signature and the
+   * one this whole surface exists for: HTTP is green, the work is stopped.
+   */
+  | 'hung'
+  /** Did not answer. The process itself is unreachable or erroring. */
+  | 'down'
+  /** Answered, but carried no loop signal — an old build, or an unreadable body. */
+  | 'unknown';
+
+/**
+ * Past this, the loop is not advancing.
+ *
+ * 15 minutes. `lastIterationAt` is stamped before the idle gate, so a deliberately
+ * paused agent keeps it fresh and only a genuinely stopped loop lets it age —
+ * which means this does not need to accommodate slow work, only clock skew and a
+ * missed probe or two. The external prober runs on a ~5-minute cadence, so 15
+ * gives three windows before anything is called hung.
+ */
+export const LOOP_STALE_MIN = 15;
+
+export interface HealthProbeRow {
+  agent_name?: string | null;
+  ok?: boolean | null;
+  http_status?: number | null;
+  alive?: boolean | null;
+  loop_count?: number | null;
+  last_iteration_at?: string | Date | null;
+  code_version?: string | null;
+  body_error?: string | null;
+  probed_at?: string | Date | null;
+}
+
+export interface LoopHealth {
+  agentName: string;
+  state: LoopState;
+  /** Answering HTTP. Kept separate from `healthy` so the two can disagree visibly. */
+  responding: boolean;
+  minutesSinceLastIteration: number | null;
+  loopCount: number | null;
+  codeVersion: string | null;
+  /**
+   * The agent's own `alive` flag. Self-asserted, so it is reported and never
+   * consulted — the same reason `selfReportedStatus` exists above.
+   */
+  selfReportedAlive: boolean | null;
+  /**
+   * True when the agent answers 200 and claims alive while its loop is stale.
+   * This is the alertable condition: a green monitor over a stopped fleet.
+   */
+  respondingButStopped: boolean;
+  /** Why nothing could be concluded, when nothing could. */
+  detail: string | null;
+  healthy: boolean;
+}
+
+/** Classify one probe row. Pure; clock injected. */
+export function deriveLoopHealth(row: HealthProbeRow, nowMs: number = Date.now()): LoopHealth {
+  const agentName = typeof row.agent_name === 'string' ? row.agent_name : '';
+  const responding = row.ok === true;
+  const loopCount = typeof row.loop_count === 'number' && Number.isFinite(row.loop_count) ? row.loop_count : null;
+  const selfReportedAlive = typeof row.alive === 'boolean' ? row.alive : null;
+  const mins = minutesSince(row.last_iteration_at, nowMs);
+
+  let state: LoopState;
+  let detail: string | null = null;
+  if (!responding) {
+    state = 'down';
+    detail = row.http_status === null || row.http_status === undefined
+      ? 'the probe did not complete'
+      : `answered HTTP ${row.http_status}`;
+  } else if (mins === null) {
+    // Answered, but told us nothing about its loop. NOT healthy-by-default and
+    // NOT hung — an old build is a gap in observation, not a diagnosis.
+    state = 'unknown';
+    detail = typeof row.body_error === 'string' && row.body_error
+      ? row.body_error
+      : 'no lastIterationAt in the /health body';
+  } else if (mins < LOOP_STALE_MIN) {
+    state = 'advancing';
+  } else {
+    state = 'hung';
+    detail = `loop last advanced ${Math.round(mins)} min ago while the process answered 200`;
+  }
+
+  return {
+    agentName,
+    state,
+    responding,
+    minutesSinceLastIteration: mins === null ? null : Number(mins.toFixed(1)),
+    loopCount,
+    codeVersion: typeof row.code_version === 'string' ? row.code_version : null,
+    selfReportedAlive,
+    respondingButStopped: responding && state === 'hung',
+    detail,
+    // Only `advancing` is healthy. `unknown` is deliberately NOT healthy here —
+    // unlike the counter path above, where unknown means "an optional column is
+    // unwired". Here it means the agent could not tell us whether it is working,
+    // and this endpoint's entire job is to answer that.
+    healthy: state === 'advancing',
+  };
+}
+
+export interface FleetLoopHealth {
+  total: number;
+  healthy: number;
+  hung: number;
+  down: number;
+  unknown: number;
+  healthyPct: number;
+  /** Answering 200 with a stopped loop. The number a status-code monitor cannot see. */
+  respondingButStopped: number;
+  agents: LoopHealth[];
+}
+
+export function summarizeFleetLoop(rows: HealthProbeRow[], nowMs: number = Date.now()): FleetLoopHealth {
+  const agents = rows.map((r) => deriveLoopHealth(r, nowMs)).sort((a, b) => a.agentName.localeCompare(b.agentName));
+  const count = (s: LoopState) => agents.filter((a) => a.state === s).length;
+  const healthy = count('advancing');
+  return {
+    total: agents.length,
+    healthy,
+    hung: count('hung'),
+    down: count('down'),
+    unknown: count('unknown'),
+    healthyPct: agents.length ? Math.round((healthy / agents.length) * 100) : 0,
+    respondingButStopped: agents.filter((a) => a.respondingButStopped).length,
+    agents,
+  };
+}
