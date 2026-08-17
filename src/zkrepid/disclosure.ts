@@ -95,6 +95,13 @@ import { poseidon2Sponge, fieldsToHex } from '../zkp/poseidon2-leaf';
 import { feltsFromString, scopedNullifier, type IdentitySecret } from '../zkp/nullifier-identity';
 import { CURRENT_FORMULA_PARAMS, feltFromSigned } from '../zkp/repid-delta-statement';
 import { REPID_MIN, REPID_MAX } from '../scoring/repid-clamp';
+// TYPE-ONLY, and that is load-bearing. `zkp-epoch-anchor` imports `../db`, and `src/config.ts`
+// throws at module scope without Supabase credentials — a runtime import here would make this
+// module un-importable without an environment and would break the purity property that
+// `tests/zkrepid-boundary.test.ts` enforces over the zkRepID barrel. `import type` is erased at
+// compile time, so it costs nothing at runtime while still making a drift in `EpochSpec` a BUILD
+// failure rather than a silent divergence.
+import type { EpochSpec } from '../services/zkp-epoch-anchor';
 
 // ---------------------------------------------------------------------------
 // Domain, mode
@@ -176,6 +183,48 @@ export interface DisclosureEpoch {
   readonly end: string;
   /** The epoch merkle root, `0x`+64 hex, as read from the anchor machinery. */
   readonly root: string;
+}
+
+/**
+ * COMPILE-TIME proof that a `DisclosureEpoch` really is an anchor `EpochSpec` plus a root.
+ *
+ * The module header claims this seam "does not invent a second notion of epoch". Until this line
+ * existed that claim was PROSE: `DisclosureEpoch` was hand-declared with the same three field
+ * names, and nothing connected it to `EpochSpec`. Rename `EpochSpec.label` in
+ * `src/services/zkp-epoch-anchor.ts` and the two would have drifted apart silently, leaving two
+ * incompatible notions of epoch — the precise failure the header says is avoided.
+ *
+ * This is a mechanism wired at BOTH ends (LESSONS §3): the anchor produces `EpochSpec`, and this
+ * assignment is the reader that fails the build if it stops fitting. It costs no runtime code.
+ */
+type _DisclosureEpochIsAnchorEpochPlusRoot = EpochSpec extends Omit<DisclosureEpoch, 'root'>
+  ? true
+  : ['DRIFT: EpochSpec no longer satisfies DisclosureEpoch minus root', EpochSpec];
+const _epochShapesAgree: _DisclosureEpochIsAnchorEpochPlusRoot = true;
+void _epochShapesAgree;
+
+/**
+ * Lift an anchor `EpochSpec` into a `DisclosureEpoch` by supplying the root the caller READ.
+ *
+ * The root is a parameter, never a lookup: this module does no I/O, so the read stays with the
+ * caller who knows which anchor they trust. Validated on the way through, so a malformed root is
+ * refused at the point of construction rather than deep inside digest building.
+ *
+ * ⚠ Reusing the anchor's DAY epoch is a deliberate choice, and it is the reason a statement's
+ * freshness resolution is one UTC day and no finer. See the header's epoch section: a distinct
+ * finer-grained freshness epoch would answer a different question, and would need its own anchored
+ * root to be checkable — which does not exist. Binding the batching root keeps the statement tied
+ * to a root that is actually published.
+ */
+export function disclosureEpochFromSpec(spec: EpochSpec, root: string): DisclosureEpoch {
+  const epoch: DisclosureEpoch = {
+    label: spec.label,
+    start: spec.start,
+    end: spec.end,
+    root,
+  };
+  assertEpoch(epoch);
+  return Object.freeze(epoch);
 }
 
 export interface ThresholdRequest {
@@ -318,6 +367,50 @@ export interface ThresholdWitness {
 }
 
 /**
+ * Field names that carry, or narrow, the witness. Publishing any of these defeats the seam.
+ *
+ * `repid_score` and `tier` are not hypothetical: they are two of the four keys the DEPLOYED
+ * statement publishes (`src/zkp/proof-statement-guard.ts`), which is the exact mistake this list
+ * exists to make un-writable here. `met` is included because it is the proven predicate — it is
+ * legitimate on `ThresholdStatement` (holder-facing) and must never reach the public surface until
+ * a circuit proves it.
+ */
+export type WitnessKey =
+  | 'repid_score'
+  | 'repidScore'
+  | 'score'
+  | 'current_repid'
+  | 'currentRepid'
+  | 'identitySecret'
+  | 'identity_secret'
+  | 'secret'
+  | 'agent_id'
+  | 'agentId'
+  | 'tier'
+  | 'met';
+
+/**
+ * COMPILE-TIME exclusion of the witness from the public surface.
+ *
+ * Typing every forbidden key as `never` is what makes the prohibition structural rather than
+ * advisory. It is strictly stronger than TypeScript's excess-property check, which only fires on a
+ * fresh object literal and is silently bypassed by the spread and alias patterns real code uses:
+ *
+ *     const wide = { ...pub, repid_score: agent.current_repid };
+ *     const out: ThresholdPublicInputs = wide;   // ← excess-property check does NOT fire here,
+ *                                                //   but `number` is not assignable to `never`,
+ *                                                //   so this is a COMPILE ERROR anyway.
+ *
+ * `?: never` rather than `: never` so the keys stay absent-by-default instead of required.
+ *
+ * This does not replace the runtime guard in `computeGuards`. Types are erased at runtime and
+ * cannot see a surface parsed from JSON off the wire, which is precisely where an untrusted
+ * statement arrives. The two checks cover different ends: this one stops the code being written,
+ * `computeGuards` stops the value being emitted. `tests/zkrepid-disclosure.test.ts` pins both.
+ */
+export type ForbiddenWitnessFields = { readonly [K in WitnessKey]?: never };
+
+/**
  * The PUBLIC SURFACE. Everything here is safe to publish; nothing here is score-bearing.
  *
  * Note what is ABSENT and why, because the absences are the design:
@@ -325,8 +418,13 @@ export interface ThresholdWitness {
  *   - no `tier`         — a tier is a score band; publishing it narrows the score to ~1 of 5
  *   - no `agent_id`     — the nullifier is the only identity handle, and its pre-image is secret
  *   - no `met` flag     — see `ThresholdStatement.met` below, which is NOT part of this surface
+ *
+ * Those absences are enforced by `ForbiddenWitnessFields` at COMPILE time and by `computeGuards`
+ * at RUNTIME. The comment above is a description of the mechanism, not the mechanism.
  */
-export interface ThresholdPublicInputs {
+export type ThresholdPublicInputs = ThresholdPublicSurface & ForbiddenWitnessFields;
+
+interface ThresholdPublicSurface {
   /** The threshold the VERIFIER nominated, verbatim. */
   readonly threshold: number;
   /**
@@ -430,6 +528,59 @@ export function thresholdFelts(p: Omit<ThresholdPublicInputs, 'digest'>): bigint
 export function thresholdDigest(p: Omit<ThresholdPublicInputs, 'digest'>): string {
   return fieldsToHex(poseidon2Sponge(thresholdFelts(p)));
 }
+
+// ---------------------------------------------------------------------------
+// Known-answer test (KAT) — the thing that actually pins the field order
+// ---------------------------------------------------------------------------
+
+/**
+ * A FIXED pre-image whose digest is frozen below.
+ *
+ * ⚠ WHY THIS EXISTS, MEASURED. `thresholdFelts` documented its order as "pinned by a KAT test" and
+ * no KAT existed. The only digest test asserted that mutating any one field changes the digest —
+ * which is order-INVARIANT: swapping `threshold` and `formula_version` in the absorb order was
+ * applied on 2026-08-17 and all 32 tests stayed green. A reorder desynchronises every future
+ * circuit from the engine, and every proof fails with no visible cause. This constant is what
+ * turns that from a comment into a check.
+ *
+ * Values are literals, never `CURRENT_FORMULA_PARAMS` or `new Date()`: a KAT that recomputes its
+ * own expectation from live inputs re-derives whatever the code currently does and can never fail.
+ */
+export const THRESHOLD_DIGEST_KAT_PREIMAGE: Omit<ThresholdPublicInputs, 'digest'> = Object.freeze({
+  threshold: 5000,
+  formula_version: 'repid-delta-a8-quality-oriented',
+  epoch: Object.freeze({
+    label: '2026-08-17',
+    start: '2026-08-17T00:00:00.000Z',
+    end: '2026-08-18T00:00:00.000Z',
+    root: '0x' + 'ab'.repeat(32),
+  }),
+  nullifier: '0x' + '3c'.repeat(32),
+});
+
+/**
+ * Frozen digest of `THRESHOLD_DIGEST_KAT_PREIMAGE`, per formula version.
+ *
+ * Keyed by version, mirroring `BEHAVIOUR_DIGESTS` in `src/zkp/formula-golden-vector.ts`, and it
+ * goes red for BOTH of the things Sean asked it to catch:
+ *   - FIELD ORDER changes → the existing entry's digest no longer reproduces → FAILED.
+ *   - VERSION changes     → `CURRENT_FORMULA_PARAMS.version` has no entry here → FAILED, forcing
+ *     a deliberate addition rather than a silent regime switch. That is the 2026-08-17 failure
+ *     (a behaviour change shipped with no version bump) encoded as a test.
+ *
+ * ADD an entry on a version bump. Do NOT edit an existing one: an entry records what that version's
+ * wire format WAS, and rewriting it makes statements issued under it unverifiable.
+ *
+ * UNLIKE the delta statement's commitment KAT, this digest is REAL and fully recomputable in a
+ * public repo. `thresholdFelts` absorbs the formula VERSION in cleartext and never touches
+ * `REPID_FORMULA_COMMITMENT_SALT`, so there is no secret in the pre-image and no need for the
+ * dummy-commitment workaround that KAT uses. That is a direct consequence of putting the version
+ * on the wire — see `ThresholdPublicInputs.formula_version` for what that costs.
+ */
+export const THRESHOLD_DIGEST_KATS: Readonly<Record<string, string>> = Object.freeze({
+  'repid-delta-a8-quality-oriented':
+    '0x5eec600445e5ee0d72b1a79d764eb04664e5997b2feeff197286bf9b75396ded',
+});
 
 /**
  * The EXACT key set of the public surface.
