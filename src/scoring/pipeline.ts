@@ -54,6 +54,7 @@ import {
   parseProofEnqueueMode,
   evaluateProofEnqueue,
 } from '../services/proof-enqueue-filter';
+import { resolveIssuerIdentity } from './issuer-identity';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -512,6 +513,39 @@ export async function runScoreEvent(
   const triggerProof = rawTriggerProof && !proofFilter.skip;
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 
+  // 5b. ISSUER IDENTITY (additive, flag-gated, default OFF — see
+  // src/scoring/issuer-identity.ts and
+  // migrations/2026-08-17-issuer-identity-and-verdict-evidence.sql).
+  //
+  // A HAL verdict currently names nobody as its author: counterparty_agent_id
+  // is NULL on every HAL_SCORE_EVENT row in production, so a wrong veto has no
+  // issuer to charge and a right one has no issuer to credit.
+  //
+  // Two things this deliberately does NOT do:
+  //   - it does not derive an identifier. The write site HAS no issuer identity
+  //     (input.provider_used names the judged ANSWER's provider, not the judge),
+  //     so the id comes from HAL_ISSUER_AGENT_ID or the row is written exactly
+  //     as it is today.
+  //   - it does not reuse `providersUsed` above. That value is
+  //     `Number(signals.providers_used ?? 0)`, and the `?? 0` is why every
+  //     stored zero in production means "not recorded" rather than "consulted
+  //     nothing". The raw signal is passed through so absence stays NULL.
+  //
+  // With the flag off this resolves to `recorded: false` and insertPayload is
+  // byte-identical to before this change.
+  const issuer = resolveIssuerIdentity({
+    subjectAgentId: String(input.agent_id),
+    rawProvidersUsed: (signals as Record<string, unknown>).providers_used,
+  });
+  if (!issuer.recorded && issuer.reason !== 'disabled') {
+    // Loud, because every non-'disabled' reason is a misconfiguration that
+    // silently produces rows indistinguishable from the un-wired ones.
+    console.warn(
+      `[scoring/pipeline] issuer identity NOT recorded (${issuer.reason}) — ` +
+        'HAL_ISSUER_IDENTITY_ENABLED is on; see src/scoring/issuer-identity.ts'
+    );
+  }
+
   // 6. Insert score event.
   const insertPayload: Record<string, unknown> = {
     agent_id: input.agent_id,
@@ -588,6 +622,11 @@ export async function runScoreEvent(
           }
         : {}),
     },
+    // Spread LAST and only when resolved. The three columns do not exist until
+    // the 2026-08-17 migration is applied, so naming them while the flag is off
+    // would break every insert — the flag and the migration are coupled in that
+    // direction and only that direction.
+    ...(issuer.recorded ? issuer.fields : {}),
   };
 
   const { data: eventRow, error: evErr } = await db
