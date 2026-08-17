@@ -127,8 +127,25 @@ ANFIS forward pass with golden-ratio-scaled centers and spreads
 `:27-31`) and a "detune in cents" dissonance term at `:69-74`. It
 exports `commaANFIS` (`:80-113`) but is **not imported anywhere** —
 grepped on `2026-04-23` with no call sites in `src/routes/`,
-`src/engine/`, `src/middleware/`, or `src/layers/`. It is dead code
-awaiting Sprint 3 wiring.
+`src/engine/`, `src/middleware/`, or `src/layers/`. ~~It is dead code
+awaiting Sprint 3 wiring.~~
+
+> **CORRECTED 2026-08-17.** "Dead code" is **false at the module level** and was already
+> false when written as a claim about the file. Only the `commaANFIS` *entry point* is
+> uncalled. The rest of `src/services/anfis-comma.ts` — `anfisForward`, `goldenCenters`,
+> `goldenSpreads`, `gaussianMF` — has **three live consumers**:
+> `src/services/proof-tier-policy.ts:31`, `src/services/anfis-router.ts:16`, and
+> `src/resilience/anfis-failover.ts:18`.
+>
+> The original grep was scoped to four directories (`src/routes/`, `src/engine/`,
+> `src/middleware/`, `src/layers/`) and every consumer lives outside all four, so the
+> sentence generalised a narrow, correct observation into a wrong claim about a file. That
+> matters practically: read as written, it invites deleting a module three production paths
+> import from.
+>
+> Standing state for the uncalled entry point is recorded in
+> `src/orchestration/promotion-register.ts` (`comma-anfis-entry-point`, PARKED), where it is
+> checked by tests rather than by a reader.
 
 ### Usage of φ
 

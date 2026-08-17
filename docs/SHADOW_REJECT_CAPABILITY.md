@@ -1,6 +1,31 @@
-# Shadow-Reject Capability Filter (S-HARDEN Phase 4 — design, not applied)
+# Shadow-Reject Capability Filter (S-HARDEN Phase 4)
 
-**Repo of the fix:** trinity-symphony-shared (`lib/ConstitutionalAgentV4.js` `getNextTask`). **Status:** DESIGN ONLY — that claim loop is being rewritten on GA's in-flight `feat/ga-2026-05-30-t12-concurrency`, so per the deconfliction rule this is **not** edited here; fold it into T12 or apply after T12 merges.
+> ## ⚠ CORRECTED 2026-08-17 — THIS IS BUILT, NOT A DESIGN
+>
+> The title and status line below read **"design, not applied"** and **"DESIGN ONLY"**.
+> That is **false** and has been for some time.
+>
+> The filter is implemented and shipped **default-off** at
+> `trinity-symphony-shared/lib/ConstitutionalAgentV4.js:1834-1838` — `CAPABILITY_FILTER`,
+> `AGENT_TASK_TYPES`, and the `capFilter` parameter threaded into the pending-task query
+> exactly as the design below specifies. The off-state is pinned by a test at
+> `trinity-symphony-shared/tests/claimCallSite.test.js:150`.
+>
+> **What is still true:** the *verification plan* at the bottom of this document has never
+> been run. Nobody has enabled it for a canary agent, and nobody has measured whether the
+> churn actually stops. So the mechanism is in **shadow** — built, gated off, unmeasured —
+> which is a materially different state from "designed".
+>
+> **Why this matters beyond one stale heading.** This document was read as evidence that the
+> fix did not exist, and that reading was carried into `docs/RSI-ADOPTION-PLAN.md` and had to
+> be corrected there too. A doc that understates what is built causes work to be re-planned,
+> not merely mis-described. Verified by grepping for the symbol rather than reading the prose
+> about it (LESSONS §2).
+>
+> Standing state now lives in `src/orchestration/promotion-register.ts`, which is checked by
+> tests; this document is the design and the verification plan.
+
+**Repo of the fix:** trinity-symphony-shared (`lib/ConstitutionalAgentV4.js` `getNextTask`). **Original status line, retained for the record:** DESIGN ONLY — that claim loop is being rewritten on GA's in-flight `feat/ga-2026-05-30-t12-concurrency`, so per the deconfliction rule this is **not** edited here; fold it into T12 or apply after T12 merges. *(That deconfliction has since resolved and the change landed; see the correction above.)*
 
 ## Root cause `[sql:2026-06-02]`
 Agents claim task types they have **no handler for**, then `shadow_reject` them — wasted claim/release cycles. shadow_reject by type (last 24h):

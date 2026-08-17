@@ -73,6 +73,7 @@
     "hal:score-external": "ts-node tests/hal/score-corpus.ts",
     "hal:ground-truth-stats": "ts-node scripts/hal/seed-ground-truth.ts --stats",
     "hal:ground-truth-template": "ts-node scripts/hal/seed-ground-truth.ts --export-template ./hal-ground-truth-template.csv",
+    "hal:reskin": "ts-node scripts/hal-eval/reskin-invariance.ts",
     "types:gen": "npx supabase gen types typescript --project-id qnnpjhlxljtqyigedwkb --schema public > src/types/database.types.ts",
     "types:check": "tsc --noEmit",
     "x402:preflight-real-microtx": "tsx scripts/x402/preflight-real-microtx.ts",
