@@ -16,6 +16,19 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   const publicPaths = ['/health', '/healthz', '/', '/api/v1/health'];
   if (publicPaths.includes(req.path)) return next();
 
+  // Run-loop liveness is public so UptimeRobot and any external monitor can ping
+  // it without a key. It is read-only and exposes no scoring internals — agent
+  // names, ping ages and session counters, which the fleet's own dashboards
+  // already show. A monitor that needs a secret is a monitor that silently stops
+  // working when the secret rotates, which is the failure mode this endpoint
+  // exists to catch.
+  if (
+    req.method === 'GET' &&
+    (req.path === '/api/v1/runloop-liveness' || req.path.startsWith('/api/v1/runloop-liveness/'))
+  ) {
+    return next();
+  }
+
   if (req.method === 'GET' && (req.path.startsWith('/api/v1/repid/') || req.path.startsWith('/api/v1/erc8004/validate/'))) {
     return next();
   }
