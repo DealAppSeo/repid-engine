@@ -19,6 +19,7 @@ import { createAnonymousBuilder } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
 import { generateCard } from '../services/zkp-card-generator';
 import { buildAgentPassport, PassportQueryError } from '../services/agent-passport';
+import { verifyProofLocally, type VerifyFn } from '../services/trust-harness-verify';
 import { renderCardHtml } from '../services/zkp-card-renderer';
 import substanceGateRouter from './v1/substance-gate';
 import hitlRouter from './v1/hitl';
@@ -136,34 +137,92 @@ router.get('/metrics', async (req: Request, res: Response) => {
 
 /**
  * Pure decision for a stored proof row (no DB side effects).
- * - If proof_bytes present: real WASM cryptographic verify using the proven path.
+ * - If proof_bytes present: real WASM cryptographic verify, FAIL-CLOSED through the shared
+ *   `verifyProofLocally` boundary (see the incident note inside).
  * - If absent (stub/sha256 rows): honest "attested, not cryptographically verified".
  * Used by the /verify-proof endpoint and fixture tests.
  */
-export async function verifyProofCryptographically(proofRow: any, claimedStatement?: any) {
+export async function verifyProofCryptographically(
+  proofRow: any,
+  claimedStatement?: any,
+  // TESTABILITY SEAM — pass a verifier instead of loading the published one. Omit in production
+  // (the route does); pass `null` to model "no verifier available". It exists because the loader
+  // below is a NATIVE dynamic `import()` of an ESM-only package, which jest cannot execute inside
+  // its vm sandbox (`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` under `module: nodenext`) and
+  // therefore cannot mock either. That is not incidental: it is why the fail-open below survived
+  // in a repo that already had a test for exactly this bug shape. Injection is also how every
+  // other verifier consumer here is already written (`VerifyFn` in `trust-harness-verify.ts` and
+  // `zkp-audit-service.ts`), so this is the repo's existing convention, not a new one.
+  injectedVerifyFn?: VerifyFn | null,
+) {
   if (!proofRow) {
     return { valid: false, cryptographically_verified: false, error: 'no proof row' };
   }
 
   if (proofRow.proof_bytes) {
-    try {
-      // Proven verification path (the independent WASM one exercised in the negative suite)
-      const verifierMod: any = await import('@hyperdag/proof-verifier');
-      const publicInputs = proofRow.statement || claimedStatement || {
-        agent_id: proofRow.agent_id,
-        tier: proofRow.tier_proven,
-      };
-      const valid = await verifierMod.verify(proofRow.proof_bytes, publicInputs);
-      return {
-        valid: !!valid,
-        cryptographically_verified: true,
-        verified_at: new Date().toISOString(),
-        proof_version: 'plonky3-wasm-1.0',
-      };
-    } catch (e: any) {
-      console.error('[verify-proof] WASM verify error', e);
-      return { valid: false, cryptographically_verified: true, error: 'wasm-verify-failed' };
+    // FAIL-OPEN INCIDENT, fixed here. This path used to read:
+    //     const valid = await verifierMod.verify(proofRow.proof_bytes, publicInputs);
+    //     return { valid: !!valid, cryptographically_verified: true, ... };
+    // `@hyperdag/proof-verifier`'s verify() resolves to an OBJECT (`{verified, error,
+    // proof_size_bytes, verifier_version}`), and `!!someObject` is always true. So every stored
+    // proof with non-empty `proof_bytes` was reported `valid: true, cryptographically_verified:
+    // true` — INCLUDING proofs the verifier had just rejected. The catch block asserted
+    // `cryptographically_verified: true` on a WASM failure as well, i.e. claimed a cryptographic
+    // check on the one path where none completed. This is the flagship trust claim of the
+    // product, so the endpoint was answering "verified" to everything.
+    //
+    // The fail-closed boundary that refuses exactly this shape ALREADY EXISTED in
+    // `src/services/trust-harness-verify.ts` and had no caller on this path — LESSONS 3, an
+    // unwired mechanism is worse than an absent one, because it converts a known gap into false
+    // coverage and you stop looking. `verifyProofLocally` is now the only decider here; the
+    // verdict is not recomputed locally. The same property is pinned one layer down by
+    // `tests/zkp-proof-verifier-crosscheck.test.ts` ("the classic bug this guards: `!!result` on
+    // an object is always true"), and `createWasmVerifier` in
+    // `src/services/handlers/zkp-audit-handler.ts` named this very line as the live instance.
+    let verifyFn: VerifyFn | null = injectedVerifyFn ?? null;
+    if (injectedVerifyFn === undefined) {
+      try {
+        const verifierMod: any = await import('@hyperdag/proof-verifier');
+        if (typeof verifierMod.verify === 'function') verifyFn = verifierMod.verify as VerifyFn;
+      } catch (e: any) {
+        // Loading the WASM is itself something that can fail. A verifier we could not load is
+        // NOT CHECKED, never a pass — left null so the boundary below fails closed on it.
+        console.error('[verify-proof] verifier load error', e);
+      }
     }
+
+    // Three outcomes, never two. `valid` carries the verdict; `cryptographically_verified`
+    // carries whether a real cryptographic check RAN and returned a genuine boolean at all:
+    //   VERIFIED    → { valid: true,  cryptographically_verified: true  }
+    //   FAILED      → { valid: false, cryptographically_verified: true  }  verifier ran, rejected
+    //   NOT CHECKED → { valid: false, cryptographically_verified: false }  unavailable/threw/shape
+    // Collapsing the last two is the mistake that produced the incident above. The flag is set
+    // from the observed call — not by re-deriving the verdict and not by matching on `reason`, a
+    // prose string — so `verifyProofLocally` stays the single decider of `valid`.
+    let verdictObserved = false;
+    const observedVerify: VerifyFn = async (bytes, statement) => {
+      const raw = await verifyFn!(bytes, statement);
+      verdictObserved = !!raw && typeof raw === 'object' && typeof raw.verified === 'boolean';
+      return raw;
+    };
+
+    const publicInputs = proofRow.statement || claimedStatement || {
+      agent_id: proofRow.agent_id,
+      tier: proofRow.tier_proven,
+    };
+    const local = await verifyProofLocally({
+      proofBytes: proofRow.proof_bytes,
+      statement: publicInputs,
+      verifyFn: verifyFn ? observedVerify : null,
+    });
+
+    return {
+      valid: local.verified,
+      cryptographically_verified: verdictObserved,
+      verified_at: new Date().toISOString(),
+      proof_version: 'plonky3-wasm-1.0',
+      ...(local.verified ? {} : { error: local.reason }),
+    };
   }
 
   // Absent proof_bytes — today's sha256/HMAC stub rows (pre real Plonky3 flip)
