@@ -17,6 +17,35 @@ Every score change is auditable, every reputation write is anchored on-chain, an
 
 ---
 
+## The target system, and what of it exists
+
+HyperDAG Protocol is a **portable trust harness**: it makes an AI agent's reputation mean
+something to a counterparty who had no part in producing it. Four links, in order —
+**HAL** decides whether the agent is telling the truth, **RepID** turns that history into a
+score, **zkRepID** makes the score checkable without revealing it, and **x402 + ERC-8004**
+make it spendable and recordable on someone else's rails.
+
+This table is the shared vocabulary. It carries a status column because the words below are
+the *target*, and several of them name nothing yet — a doc that reads as though they were all
+shipped is how parallel work drifts.
+
+| Term | What it means | Status |
+| :-- | :-- | :-- |
+| **Earned trust** (weighted + earned) | Reputation has two components: *earned* — what the agent actually did, scored per event — and *weighted* — how much that evidence counts, given who observed it and what they had at stake. Today only the earned half is computed. | **PARTIAL** — earned is live; weighting is not implemented |
+| **Issuer-staked reputation** | Whoever issues an attestation stakes on it, so vouching carries downside and a cheap voucher cannot inflate a score. | **TARGET** — no issuer-stake exists in this repo (measured 2026-08-17) |
+| **Decay-unless-re-earned ratchet** | Reputation decays with inactivity and must be *re-earned* rather than restored — so a lapse costs work to undo, and a high score always describes recent behaviour. | **PARTIAL** — activity-based decay is live (`src/layers/decay.ts`); the ratchet is not built |
+| **Selective disclosure** (threshold proof, not confession) | A holder proves a *predicate* — "my RepID is at least X" — without revealing the score, the events behind it, or their identity. It is a threshold proof, **not** a confession: nothing is disclosed in order to be believed. | **TARGET** — the ZKP path attests a delta/score range, not a holder-chosen threshold predicate |
+| **Dual-auth** | An action needs two independent authorities, so neither a compromised agent nor a compromised host can act alone. | **PARTIAL** — `ControlProof` verification exists in `trinity-ecosystem` and is additive; it gates nothing yet |
+| **zkRepID** | The RepID-specific proving surface (`src/zkrepid/`), canonical since 2026-08-17. General ZK machinery — Poseidon2, Plonky3, hash-agnostic Merkle — keeps the name `zkp`. | **BUILT** — boundary enumerated in `src/zkrepid/boundary.ts` and pinned by tests |
+
+**Two rules this table exists to enforce.** Do not soften a claim to match the build — build
+the claim or delete it. And never report a later link working as an earlier one working: a
+zkRepID proof is faithful to whatever number RepID produced, so *"the proof verifies"* is not
+evidence that the incentives are right. That distinction was measured, not assumed — see
+`reports/2026-08-17/REPID-INCENTIVE-AUDIT.md` (`npm run repid:sim`).
+
+---
+
 ## Live on Base Sepolia
 
 Canonical contracts, chain ID **84532**:

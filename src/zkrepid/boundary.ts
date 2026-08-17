@@ -89,6 +89,17 @@ export const ZKREPID_MODULES: readonly ZkRepIdModule[] = [
     kind: 'pure',
   },
   {
+    path: 'zkrepid/disclosure',
+    role: 'the selective-disclosure seam: prove repid >= threshold without publishing the score',
+    kind: 'pure',
+  },
+  {
+    path: 'zkp/formula-golden-vector',
+    role: "pins the scoring formula's observable behaviour per version, so a RepID statement's " +
+      'formula_version cannot silently stop describing the formula that produced it',
+    kind: 'pure',
+  },
+  {
     path: 'zkp/repid-delta-bridge',
     role: 'the wire from the live scoring path into a RepID delta statement',
     kind: 'io-edge',

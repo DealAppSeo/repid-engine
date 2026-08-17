@@ -30,9 +30,13 @@ describe('computeDelta', () => {
     expect(r.delta_applied).toBe(-10);
   });
 
-  test('clean with hal_score=0.95 → ~+2.8 (capped at +5)', () => {
+  // The clean branch consumes QUALITY as of 2026-08-17, so delta = 3 - 4*risk. Every case below
+  // uses a REACHABLE risk: `deriveHalDecision` flags anything >= 0.40, so a 'clean' decision at
+  // risk 0.95 or 1.0 — which this suite previously asserted — cannot occur in production. Those
+  // unreachable cases are why the orientation defect survived (LESSONS §6).
+  test('clean at risk 0.05 (near-perfect grounding) → ~+2.8', () => {
     const r = computeDelta({
-      hal_score: 0.95,
+      hal_score: 0.05,
       hal_decision: 'clean',
       current_repid: 1000,
       agent_tier: 'ESTABLISHED',
@@ -43,9 +47,9 @@ describe('computeDelta', () => {
     expect(r.delta_calculated).toBeLessThanOrEqual(5);
   });
 
-  test('clean with hal_score=1.0 → +3 (well under +5 cap)', () => {
+  test('clean at risk 0.0 (perfect grounding) → +3, the documented ceiling, now reachable', () => {
     const r = computeDelta({
-      hal_score: 1.0,
+      hal_score: 0.0,
       hal_decision: 'clean',
       current_repid: 1000,
       agent_tier: 'ESTABLISHED',
@@ -54,16 +58,34 @@ describe('computeDelta', () => {
     expect(r.delta_calculated).toBe(3);
   });
 
-  test('clean with hal_score=0.10 → small negative (-0.6)', () => {
+  test('clean at risk 0.39 (worst still-clean) → +1.4: smallest clean reward, still positive', () => {
+    // The floor of the clean branch. Previously this end of the range paid the MOST (+0.6 was the
+    // best a clean event could earn); it now pays the least, and honest work is never punished.
     const r = computeDelta({
-      hal_score: 0.10,
+      hal_score: 0.39,
       hal_decision: 'clean',
       current_repid: 1000,
       agent_tier: 'ESTABLISHED',
       vesting_cliff_active: false,
     });
-    expect(r.delta_calculated).toBeCloseTo(-0.6, 1);
-    expect(r.delta_applied).toBeCloseTo(-0.6, 1);
+    expect(r.delta_calculated).toBeCloseTo(1.4, 1);
+    expect(r.delta_applied).toBeCloseTo(1.4, 1);
+    expect(r.delta_applied).toBeGreaterThan(0);
+  });
+
+  test('reward decreases monotonically as risk rises across the clean branch', () => {
+    const at = (hal_score: number) =>
+      computeDelta({
+        hal_score,
+        hal_decision: 'clean',
+        current_repid: 1000,
+        agent_tier: 'ESTABLISHED',
+        vesting_cliff_active: false,
+      }).delta_applied;
+    const risks = [0, 0.05, 0.1, 0.2, 0.3, 0.39];
+    for (let i = 1; i < risks.length; i++) {
+      expect(at(risks[i]!)).toBeLessThan(at(risks[i - 1]!));
+    }
   });
 
   test('floor protection: agent at repid=2 vetoed → applied=-2 (not -10)', () => {
@@ -105,7 +127,7 @@ describe('computeDelta', () => {
 
   test('clean+positive applies normally during vesting', () => {
     const r = computeDelta({
-      hal_score: 0.95,
+      hal_score: 0.05,
       hal_decision: 'clean',
       current_repid: 1000,
       agent_tier: 'ESTABLISHED',
@@ -115,17 +137,19 @@ describe('computeDelta', () => {
     expect(r.delta_applied).toBeGreaterThan(0);
   });
 
-  test('positive cap at +5 if formula somehow exceeds', () => {
-    // current formula maxes at +3 for clean — synthesize an edge by passing
-    // unlikely score; verify clamp would still apply via direct invariant.
+  test('positive cap at +5 if the formula somehow exceeds it', () => {
+    // The clean branch maxes at +3 on valid input, so the upper clamp needs an out-of-spec value to
+    // exercise at all. Now that reward falls with risk, the extreme is a NEGATIVE risk — the old
+    // version passed 2.0, which after the orientation fix drives the formula DOWN and so probed
+    // nothing. Raw here is +7 before the clamp.
     const r = computeDelta({
-      hal_score: 2.0, // outside spec but tests clamp
+      hal_score: -1.0, // outside spec, on purpose: this is the clamp's test
       hal_decision: 'clean',
       current_repid: 1000,
       agent_tier: 'ESTABLISHED',
       vesting_cliff_active: false,
     });
-    expect(r.delta_calculated).toBeLessThanOrEqual(5);
+    expect(r.delta_calculated).toBe(5);
   });
 });
 

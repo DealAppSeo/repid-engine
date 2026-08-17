@@ -59,7 +59,16 @@ of RepID?* If yes, it is not zkRepID.
 | `src/zkp/erc8004-linkage.ts` | joins a RepID proof to an on-chain ERC-8004 identity | pure |
 | `src/zkp/holder-identity-binding.ts` | binds a RepID proof to the holder who earned it | pure |
 | `src/zkp/nullifier-identity.ts` | per-identity nullifiers, so one RepID cannot be replayed as many | pure |
+| `src/zkrepid/disclosure.ts` | the selective-disclosure seam: prove `repid >= threshold` without publishing the score | pure |
+| `src/zkp/formula-golden-vector.ts` | pins the scoring formula's observable behaviour per version, so a statement's `formula_version` cannot silently stop describing the formula that produced it | pure |
 | `src/zkp/repid-delta-bridge.ts` | the wire from the live scoring path into a RepID delta statement | **I/O edge** |
+
+`disclosure.ts` is the first module to live in `src/zkrepid/` itself rather than be re-exported from
+`src/zkp/`. That is deliberate: it is new code with no existing consumers, so there is nothing to
+avoid breaking, and a module whose only reason to exist is RepID-specific disclosure belongs at the
+name that means RepID-specific. The `src/zkp/` entries above are older files the barrel adopted in
+place; they were not moved, and moving them is still not planned. Design and the shape of the
+threshold statement: [`ZKREPID-DISCLOSURE.md`](ZKREPID-DISCLOSURE.md).
 
 ## What is NOT zkRepID
 

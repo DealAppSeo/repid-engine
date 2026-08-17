@@ -22,14 +22,21 @@ import {
 const SALT = 'bridge-test-formula-salt-not-production';
 const MASTER = 'bridge-test-identity-master-not-production';
 
-/** A clean event whose delta the formula really does produce (+2 at hal_score 0.75). */
+/**
+ * A clean event whose delta the formula really does produce: +2 at RISK 0.25.
+ *
+ * Was `halScore: 0.75`, which yielded +2 under the pre-2026-08-17 clean branch but is a
+ * combination the pipeline cannot emit — `deriveHalDecision` flags anything >= 0.40, so a
+ * 'clean' decision at risk 0.75 never reaches the ledger. Now that the branch consumes QUALITY
+ * (delta = 3 - 4*risk), risk 0.25 yields the same +2 and is genuinely reachable.
+ */
 const input = () => ({
   agentId: 'agent-shofet',
   eventLabel: 'score_event:4242',
   deltaApplied: 2,
   scoreBefore: 1611,
   scoreAfter: 1613,
-  halScore: 0.75,
+  halScore: 0.25,
   halDecision: 'clean' as const,
   agentTier: 'ESTABLISHED',
   vestingCliffActive: false,

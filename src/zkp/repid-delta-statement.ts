@@ -221,7 +221,21 @@ export interface FormulaParams {
   bandMax: number;
   scoreFloor: number;
   scoreCeiling: number;
-  /** Bumped by hand whenever scoring behaviour changes in a way the band cannot see. */
+  /**
+   * Bumped by hand whenever scoring behaviour changes in a way the band cannot see.
+   *
+   * ⚠ THIS FIELD HAS ALREADY FAILED ONCE, on 2026-08-17. The clean branch's orientation was
+   * corrected (it consumed risk where it needed quality), which changed every delta the formula
+   * produces — and the band, floor and ceiling are all untouched by that change, so
+   * `formulaCommitment()` stayed BYTE-IDENTICAL because nobody bumped this string.
+   *
+   * The failure mode that creates is the misleading one: an old proof still shows a MATCHING
+   * `formula_commitment`, while the recompute check disagrees with its stored delta — so a version
+   * skew presents as a FORGED DELTA. See docs/FORMULA-VERSIONING.md.
+   *
+   * "Bumped by hand" is the defect, not the instruction. A hand-maintained version behind a hash
+   * nobody reads is wired at one end.
+   */
   version: string;
 }
 
@@ -230,7 +244,10 @@ export const CURRENT_FORMULA_PARAMS: FormulaParams = {
   bandMax: DELTA_BAND_MAX,
   scoreFloor: REPID_MIN,
   scoreCeiling: REPID_MAX,
-  version: 'repid-delta-a7',
+  // Bumped 2026-08-17: the clean branch now consumes QUALITY, not risk (src/scoring/repid-delta.ts).
+  // Every delta the formula produces changed. The band did not, so the commitment would otherwise
+  // have been unchanged — which is exactly the hole this bump closes.
+  version: 'repid-delta-a8-quality-oriented',
 };
 
 /** Env var holding the secret salt. See the header on why an unsalted commitment leaks. */
