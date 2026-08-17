@@ -118,9 +118,28 @@ the precondition instead of looking like unexplained drift.
 
 ## What this does not resolve
 
-**Blast radius is UNMEASURED.** How many stored deltas were issued under the pre-bump formula
-needs a count of clean-decision score events, which needs the database. Until that number
-exists, "how many old proofs are affected" has no answer and must not be estimated.
+**Blast radius — MEASURED 2026-08-17**, superseding the "UNMEASURED, must not be estimated" note
+that shipped here. Full method and caveats:
+[`reports/2026-08-17/LEDGER-VERDICT-REACHABILITY.md`](../reports/2026-08-17/LEDGER-VERDICT-REACHABILITY.md).
+
+- **10,648** stored deltas came from `computeDelta` (`event_type='HAL_SCORE_EVENT'` +
+  `hal_decision='clean'`) — **7.0%** of the ledger, not "every delta".
+- **10,627 of those (99.80%)** fail a recompute under a8. Bounded 10,617–10,637: 10 rows sit on a
+  float band edge. The 21 survivors are the one band where both formulas agree (risk 0.39375 and
+  0.395), which is a check on the derivation, not a coincidence.
+- **ZK re-verification exposure: NOT CHECKED — and it cannot be counted today.** 1,065 of those
+  rows set `zk_proof_triggered` and carry a `zk_proof_id`, but that column is a **dangling
+  identifier**: it is a `uuid` while `repid_zkp_proofs.id` is a `bigint`, and the only uuid that
+  could carry the link (`event_id`) is NULL for all 79,062 proof rows. So none of the 1,065 resolve
+  to a proof. **Do not quote 1,065 as "proof-bearing rows"** — an earlier draft of this section did,
+  and it was wrong. Consistent with the independent finding that the sole `IBindingScheme` throws,
+  so no proof can be produced at all.
+- **0** carry an EAS attestation. Nothing on-chain asserts a stale delta, which is what keeps this
+  a correctable ledger problem rather than an irreversible one.
+
+Method note worth copying: the risk→delta bands were derived by running the **real** `computeDelta`
+locally, and SQL only counted rows per band. Restating the formula in SQL would have measured the
+restatement.
 
 **Re-issuance is not designed here.** Whether affected statements are re-issued, or simply
 verify with a NOT_CHECKED recompute forever, is a product decision, not a proof-system one.
