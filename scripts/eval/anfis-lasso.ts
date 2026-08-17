@@ -28,14 +28,33 @@
  * DIRECTIONAL PRIOR for ANFIS input weights, NOT a trained production model. The report states N and
  * the class balance so nobody over-reads it.
  *
+ * SECOND INPUT PATH — the joined routing corpus (added 2026-08-17)
+ * ----------------------------------------------------------------
+ * The canary corpus above answers "which signals predict a provider getting a CLAIM right".
+ * It cannot answer "which ROUTING-DECISION features predict the call succeeding", because it
+ * contains no routing decisions. That second corpus now has a home: decision-time features
+ * are written to `routing_decision_records` and joined to `llm_call_log` on
+ * (call_id, provider) — see src/decisioning/routing-record-persist.ts.
+ *
+ * `--joined <path.json>` fits that corpus instead. **The fitting maths is untouched** —
+ * `fitLassoLogistic`, `standardize` and `softThreshold` are byte-identical on both paths;
+ * only the (X, y) builder and the feature labels differ. Featurisation lives in
+ * src/decisioning/routing-corpus.ts so it is unit-testable without a database.
+ *
  * USAGE
  *   npx ts-node scripts/eval/anfis-lasso.ts [path-to-canary-f1-raw.json]
+ *   npx ts-node scripts/eval/anfis-lasso.ts --joined <routing-corpus.json>
  * If no path is given it auto-discovers the newest canary-f1-raw-*.json under reports/.
+ * Produce the joined corpus with scripts/eval/fetch-routing-corpus.ts.
  * Writes a markdown report to reports/<today>/ANFIS_LASSO_SIGNALS.md (path echoed to stdout).
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  buildRoutingCorpus,
+  type JoinedRoutingRow,
+} from '../../src/decisioning/routing-corpus';
 
 // ---------------------------------------------------------------------------
 // Types describing the canary-f1 raw JSON we consume (only the fields we use).
@@ -259,22 +278,139 @@ function todayStr(): string {
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
-function main() {
-  const repoRoot = path.resolve(__dirname, '..', '..');
-  const argPath = process.argv[2];
+/**
+ * What a corpus loader must hand back. `datasetLines` and `honestyLines` are the RULER —
+ * a coefficient table without its corpus, row count and date is not a result.
+ */
+interface LoadedCorpus {
+  X: number[][];
+  y: number[];
+  featureNames: readonly string[];
+  providerCounts: Record<string, number>;
+  title: string;
+  /** Report filename. Distinct per corpus — one ruler per file. */
+  outFile: string;
+  whatThisIs: string[];
+  datasetLines: string[];
+  honestyLines: string[];
+}
+
+/** Input path 1 (unchanged): the labelled canary F1 corpus. */
+function loadCanaryCorpus(repoRoot: string, argPath: string | undefined): LoadedCorpus {
   const rawPath = argPath || findLatestRaw(repoRoot);
   if (!rawPath || !fs.existsSync(rawPath)) {
     console.error('[anfis-lasso] no canary-f1-raw JSON found. Pass a path or generate one via scripts/eval/canary-f1.ts');
     process.exit(1);
   }
   console.log('[anfis-lasso] using raw results:', rawPath);
-
   const raw: CanaryF1Raw = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
   const { X, y, providerCounts } = buildDataset(raw);
   const n = X.length;
   const positives = y.reduce((a, b) => a + b, 0);
+  return {
+    X,
+    y,
+    featureNames: FEATURE_NAMES,
+    providerCounts,
+    title: '# ANFIS LASSO Signal Selection — canary corpus (measurement, not cutover)',
+    outFile: 'ANFIS_LASSO_SIGNALS.md',
+    whatThisIs: [
+      'L1-penalized logistic regression (hand-rolled coordinate descent, no ML deps) over per-(claim,provider)',
+      'verdicts from the labeled canary corpus. Target = did the provider get the claim RIGHT. The sparse',
+      'coefficients tell us **which signals actually predict a correct verdict** — i.e. which ANFIS inputs',
+      'deserve weight. This is a **directional prior**, not a trained model, and it is **not wired into live',
+      'routing**. `ROUTER_STRICT_COST_ORDER` stays true (static cost-order in control).',
+    ],
+    datasetLines: [
+      `Source raw results: \`${path.relative(repoRoot, rawPath)}\` (generated_at ${raw.generated_at})`,
+      `- Claims: ${raw.results.length} · verdict rows (training examples): **${n}**`,
+      `- Positive class (correct verdicts): ${positives} (${n ? ((positives / n) * 100).toFixed(1) : '0.0'}%)`,
+      `- Corpus F1 (context, from raw): ${raw.overall?.f1 ?? 'n/a'} · accuracy ${raw.overall?.accuracy ?? 'n/a'}`,
+      `- Verdicts per provider: ${Object.entries(providerCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+    ],
+    honestyLines: [
+      `- **Small N (${n} verdict rows over ${raw.results.length} claims).** This is enough to see *directional*`,
+      '  signal (which inputs matter, and their sign) but NOT enough to trust exact magnitudes or to justify a',
+      '  routing cutover. Treat as a weight PRIOR for the ANFIS inputs.',
+      '- Confidence is provider **self-reported** (calibration, not ground truth) — high weight on it should be',
+      '  read with that caveat.',
+      '- The canary corpus skews easy/factual; hard-domain behavior is under-sampled. Re-run as the corpus and',
+      '  the shadow log (`anfis_routing_logs`) grow, then re-measure before any cutover.',
+    ],
+  };
+}
+
+/**
+ * Input path 2 (new): the joined routing corpus — decision features from
+ * `routing_decision_records` against the outcome label from `llm_call_log`, keyed on
+ * (call_id, provider). Produce the file with scripts/eval/fetch-routing-corpus.ts.
+ */
+function loadJoinedCorpus(repoRoot: string, corpusPath: string | undefined): LoadedCorpus {
+  if (!corpusPath || !fs.existsSync(corpusPath)) {
+    console.error('[anfis-lasso] --joined needs a corpus JSON path. Produce one with:');
+    console.error('  npx ts-node scripts/eval/fetch-routing-corpus.ts <out.json>');
+    process.exit(1);
+  }
+  console.log('[anfis-lasso] using joined routing corpus:', corpusPath);
+  const parsed = JSON.parse(fs.readFileSync(corpusPath, 'utf8'));
+  const rows: JoinedRoutingRow[] = Array.isArray(parsed) ? parsed : (parsed.rows ?? []);
+  const meta = Array.isArray(parsed) ? {} : (parsed.meta ?? {});
+  const corpus = buildRoutingCorpus(rows);
+  const n = corpus.X.length;
+  const positives = corpus.y.reduce((a, b) => a + b, 0);
+  return {
+    X: corpus.X,
+    y: corpus.y,
+    featureNames: corpus.featureNames,
+    providerCounts: corpus.providerCounts,
+    title: '# LASSO on the joined routing corpus — decision features vs call outcome',
+    outFile: 'ROUTING_CORPUS_LASSO_SIGNALS.md',
+    whatThisIs: [
+      'The SAME L1-penalized logistic regression, over a different corpus: one row per routing DECISION',
+      '(`routing_decision_records`) joined to its OUTCOME (`llm_call_log.status`) on (call_id, provider).',
+      'Target = did the call succeed. Every feature is knowable before the provider was called — latency and',
+      'cost are outcomes and are deliberately excluded, so nothing here is a model of a decision that could',
+      'not have been made. **Not wired into live routing.** `ROUTER_STRICT_COST_ORDER` stays default-strict',
+      'and `ANFIS_ROUTING_MODE` stays default-shadow.',
+    ],
+    datasetLines: [
+      `Source corpus: \`${path.relative(repoRoot, corpusPath)}\`` +
+        (meta.fetched_at ? ` (fetched_at ${meta.fetched_at})` : ''),
+      `- Joined rows supplied: ${corpus.rowsIn} · **dropped for having no outcome row: ${corpus.droppedUnlabelled}**`,
+      `- Training rows (labelled): **${n}**`,
+      `- Positive class (status='success'): ${positives} (${n ? ((positives / n) * 100).toFixed(1) : '0.0'}%)`,
+      `- Rows per provider: ${Object.entries(corpus.providerCounts).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}`,
+    ],
+    honestyLines: [
+      `- **N = ${n} labelled decisions.** A dropped row is an UNOBSERVED decision, not a failed one; ` +
+        `${corpus.droppedUnlabelled} were dropped and are counted above rather than absorbed into the negatives.`,
+      '- Features are decision-time only. `attempt` is a feature because the router already holds the exclusion',
+      '  set it was handed; `latency_ms` and `cost_usd` are not, because they are measured after the call.',
+      '- Provider identity is NOT a column here. The chain shape and cost classes are; a per-provider indicator',
+      '  set would mostly re-encode the static cost order and swamp the shape signals.',
+      '- This is a directional prior for which decision features carry signal. It is not a fitted production',
+      '  weight and no production weight is refitted from it.',
+    ],
+  };
+}
+
+function main() {
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const argv = process.argv.slice(2);
+  const joinedIdx = argv.indexOf('--joined');
+  const loaded =
+    joinedIdx >= 0
+      ? loadJoinedCorpus(repoRoot, argv[joinedIdx + 1])
+      : loadCanaryCorpus(repoRoot, argv[0]);
+
+  const { X, y, featureNames } = loaded;
+  const n = X.length;
+  const positives = y.reduce((a, b) => a + b, 0);
   if (n < 10) {
-    console.error('[anfis-lasso] too few rows to fit anything meaningful:', n);
+    // FAIL LOUD, and name the ruler. "Too thin to fit" is a result; a fit on 9 rows is not.
+    console.error(`[anfis-lasso] CORPUS TOO THIN — ${n} labelled rows, ${loaded.featureNames.length} features.`);
+    console.error('[anfis-lasso] NOT CHECKED: no fit attempted. Collect more rows and re-run.');
+    loaded.datasetLines.forEach((l) => console.error('  ' + l.replace(/^- /, '')));
     process.exit(1);
   }
 
@@ -298,7 +434,7 @@ function main() {
     fits[fits.length - 1]!;
 
   // Rank features by |standardized coefficient| at the reported lambda.
-  const ranked = FEATURE_NAMES.map((name, j) => ({
+  const ranked = featureNames.map((name, j) => ({
     name,
     coef: reported.beta[j]!,
     absCoef: Math.abs(reported.beta[j]!),
@@ -319,26 +455,22 @@ function main() {
   // ---- Write markdown report ----
   const outDir = path.join(repoRoot, 'reports', todayStr());
   fs.mkdirSync(outDir, { recursive: true });
-  const outPath = path.join(outDir, 'ANFIS_LASSO_SIGNALS.md');
+  // Two corpora, two rulers, two files. Sharing one filename would let a routing-corpus
+  // run silently replace a canary run's numbers under the same heading, and "did the
+  // signal move?" would then have no answer. See LESSONS 8.
+  const outPath = path.join(outDir, loaded.outFile);
 
   const md: string[] = [];
-  md.push('# ANFIS LASSO Signal Selection — canary corpus (measurement, not cutover)');
+  md.push(loaded.title);
   md.push('');
   md.push(`Generated: ${new Date().toISOString()}`);
-  md.push(`Source raw results: \`${path.relative(repoRoot, rawPath)}\` (generated_at ${raw.generated_at})`);
+  md.push(loaded.datasetLines[0]!);
   md.push('');
   md.push('## What this is');
-  md.push('L1-penalized logistic regression (hand-rolled coordinate descent, no ML deps) over per-(claim,provider)');
-  md.push('verdicts from the labeled canary corpus. Target = did the provider get the claim RIGHT. The sparse');
-  md.push('coefficients tell us **which signals actually predict a correct verdict** — i.e. which ANFIS inputs');
-  md.push('deserve weight. This is a **directional prior**, not a trained model, and it is **not wired into live');
-  md.push('routing**. `ROUTER_STRICT_COST_ORDER` stays true (static cost-order in control).');
+  loaded.whatThisIs.forEach((l) => md.push(l));
   md.push('');
   md.push('## Dataset');
-  md.push(`- Claims: ${raw.results.length} · verdict rows (training examples): **${n}**`);
-  md.push(`- Positive class (correct verdicts): ${positives} (${((positives / n) * 100).toFixed(1)}%)`);
-  md.push(`- Corpus F1 (context, from raw): ${raw.overall?.f1 ?? 'n/a'} · accuracy ${raw.overall?.accuracy ?? 'n/a'}`);
-  md.push(`- Verdicts per provider: ${Object.entries(providerCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+  loaded.datasetLines.slice(1).forEach((l) => md.push(l));
   md.push('');
   md.push(`## Ranked signals (reported lambda = ${reported.lambda})`);
   md.push('Coefficients are on **standardized** features, so |coef| is comparable across signals.');
@@ -373,7 +505,7 @@ function main() {
   md.push('');
   md.push(`| signal | ${lambdas.map((l) => `λ=${l}`).join(' | ')} |`);
   md.push(`|---|${lambdas.map(() => '---').join('|')}|`);
-  FEATURE_NAMES.forEach((name, j) => {
+  featureNames.forEach((name, j) => {
     const cells = fits.map((f) => {
       const b = f.beta[j]!;
       return Math.abs(b) < 1e-6 ? '·' : b.toFixed(3);
@@ -382,13 +514,7 @@ function main() {
   });
   md.push('');
   md.push('## Honesty note on trusting these weights');
-  md.push(`- **Small N (${n} verdict rows over ${raw.results.length} claims).** This is enough to see *directional*`);
-  md.push('  signal (which inputs matter, and their sign) but NOT enough to trust exact magnitudes or to justify a');
-  md.push('  routing cutover. Treat as a weight PRIOR for the ANFIS inputs.');
-  md.push('- Confidence is provider **self-reported** (calibration, not ground truth) — high weight on it should be');
-  md.push('  read with that caveat.');
-  md.push('- The canary corpus skews easy/factual; hard-domain behavior is under-sampled. Re-run as the corpus and');
-  md.push('  the shadow log (`anfis_routing_logs`, now persisted per PR step 1) grow, then re-measure before any cutover.');
+  loaded.honestyLines.forEach((l) => md.push(l));
   md.push('');
 
   fs.writeFileSync(outPath, md.join('\n'), 'utf8');

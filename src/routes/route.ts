@@ -8,6 +8,7 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { incrementSpend } from '../billing/caps';
 import { runScoreEvent, NotFoundError } from '../scoring/pipeline';
+import { persistRoutingRecord } from '../decisioning/routing-record-persist';
 import crypto from 'crypto';
 import { validateAgentApiKey } from '../auth/api-keys';
 import { db } from '../db';
@@ -259,9 +260,30 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
         staticTier,
         anfisProvider,
         anfisTier,
-        anfisConfidence
+        anfisConfidence,
+        routingRecord
       } = await routeRequest(routeReq, excludeProviders);
       lastDecision = decision;
+
+      // CLOSE THE LOOP: persist the decision-time feature set so it can be joined to the
+      // outcome this same `call_id` will write to `llm_call_log`, on (call_id, provider).
+      //
+      // This is the ONLY site where both halves are in scope. `buildRoutingRecord` runs
+      // inside `routeRequest` and knows nothing about `call_id`; `logLlmCall` knows
+      // `call_id` and nothing about the candidate chain. Without this line the two are
+      // never joinable and no (features -> outcome) corpus can exist.
+      //
+      // INERT: fire-and-forget, after selection, cannot move a decision. Gated by
+      // ROUTING_RECORD_PERSIST, DEFAULT OFF — see src/decisioning/routing-record-persist.ts
+      // for why the default is off (this system shed ~8.6M writes/day for that reason).
+      if (routingRecord) {
+        void persistRoutingRecord({
+          callId: call_id,
+          attempt: attempts,
+          record: routingRecord,
+          taskHint: typeof task_hint === 'string' ? task_hint : undefined,
+        });
+      }
       // S-HARDEN Phase 3 — audit the ANFIS routing decision (gated by TOOL_CALL_LOGGING; no-op default; never throws).
       void logToolCall({
         agentName: 'anfis-router',

@@ -30,14 +30,27 @@ import {
   DisclosureRefusedError,
   nominateThreshold,
   thresholdDigest,
+  thresholdFelts,
   thresholdScopeLabel,
   verifyThresholdStatement,
+  disclosureEpochFromSpec,
+  THRESHOLD_DIGEST_KATS,
+  THRESHOLD_DIGEST_KAT_PREIMAGE,
   type DisclosureEpoch,
   type ThresholdPublicInputs,
   type ThresholdWitness,
 } from '../src/zkrepid/disclosure';
-import { identitySecretFromFelts, scopedNullifier } from '../src/zkp/nullifier-identity';
-import { CURRENT_FORMULA_PARAMS } from '../src/zkp/repid-delta-statement';
+import {
+  identitySecretFromFelts,
+  scopedNullifier,
+  feltsFromString,
+} from '../src/zkp/nullifier-identity';
+import { CURRENT_FORMULA_PARAMS, feltFromSigned } from '../src/zkp/repid-delta-statement';
+import { poseidon2Sponge, fieldsToHex } from '../src/zkp/poseidon2-leaf';
+// Runtime import, deliberately: this is the BOTH-ENDS check that the disclosure epoch is the
+// anchor's epoch. A type-only import would re-verify the shape the source file already asserts at
+// compile time and would prove nothing at runtime about `dayEpoch`'s actual output.
+import { dayEpoch } from '../src/services/zkp-epoch-anchor';
 import { REPID_MIN, REPID_MAX } from '../src/scoring/repid-clamp';
 
 // Eight canonical BabyBear elements. Deliberately LARGE and irregular: small values (1..8) would
@@ -450,5 +463,166 @@ describe('verification — VERIFIED never means "the bar was met"', () => {
     });
     expect(r.verdict).toBe('FAILED');
     expect(r.failures.join(' ')).toContain('formula_version');
+  });
+});
+
+describe('the KAT — what actually pins the canonical field order', () => {
+  // ══════════════════════════════════════════════════════════════════════════════
+  // WHY THIS BLOCK EXISTS, AND WHAT WAS MEASURED
+  // ══════════════════════════════════════════════════════════════════════════════
+  // `thresholdFelts` said its order was "pinned by a KAT test". No KAT existed. The only digest
+  // test above ("the digest binds every public field") is order-INVARIANT — it asserts that
+  // mutating a field changes the digest, which stays true under ANY permutation of the absorb
+  // order. Measured on 2026-08-17: swapping `threshold` and `formula_version` in `thresholdFelts`
+  // left all 32 tests in this file GREEN.
+  //
+  // That reorder is not cosmetic. An engine and a circuit that absorb the same values in different
+  // orders compute different digests, so every proof fails and nothing says why. This block is the
+  // check that goes red for it.
+
+  it('reproduces the frozen digest for the current formula version', () => {
+    const version = CURRENT_FORMULA_PARAMS.version;
+    const expected = THRESHOLD_DIGEST_KATS[version];
+
+    // A missing entry is a FAILURE, not a skip. A version bump with no KAT entry is exactly the
+    // defect FORMULA-VERSIONING records — a regime change with nothing recording the old wire
+    // format — and an early `return` here would report that silently as a pass (LESSONS §6).
+    expect(expected).toBeDefined();
+
+    expect(thresholdDigest(THRESHOLD_DIGEST_KAT_PREIMAGE)).toBe(expected);
+  });
+
+  it('goes RED if the canonical field order changes', () => {
+    // Proves the KAT has the power claimed for it, by computing the digest a REORDERED
+    // implementation would produce and asserting it differs. This is the assertion the
+    // mutate-one-field test structurally cannot make.
+    const p = THRESHOLD_DIGEST_KAT_PREIMAGE;
+    const canonical = thresholdFelts(p);
+
+    const reordered = [
+      ...feltsFromString(THRESHOLD_DOMAIN),
+      ...feltsFromString(p.formula_version), // ← swapped with `threshold`
+      feltFromSigned(p.threshold),
+      ...feltsFromString(p.epoch.label),
+      ...feltsFromString(p.epoch.start),
+      ...feltsFromString(p.epoch.end),
+      ...feltsFromString(p.epoch.root),
+      ...feltsFromString(p.nullifier),
+    ];
+
+    // Same multiset of field elements, different order — so only an order-sensitive digest
+    // separates them. Poseidon2 is a sponge, so it is.
+    const bySize = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0);
+    expect([...reordered].sort(bySize)).toEqual([...canonical].sort(bySize));
+    expect(fieldsToHex(poseidon2Sponge(reordered))).not.toBe(
+      fieldsToHex(poseidon2Sponge(canonical)),
+    );
+    expect(fieldsToHex(poseidon2Sponge(reordered))).not.toBe(
+      THRESHOLD_DIGEST_KATS[CURRENT_FORMULA_PARAMS.version],
+    );
+  });
+
+  it('goes RED if the formula version changes, because the version is IN the digest', () => {
+    const bumped = { ...THRESHOLD_DIGEST_KAT_PREIMAGE, formula_version: 'repid-delta-a9-whatever' };
+    expect(thresholdDigest(bumped)).not.toBe(THRESHOLD_DIGEST_KATS[CURRENT_FORMULA_PARAMS.version]);
+  });
+
+  it('pins the KAT pre-image itself — a KAT whose inputs drift pins nothing', () => {
+    // If someone "fixes" a failing KAT by editing the pre-image instead of investigating, the
+    // digest reproduces and the check is hollow. These literals are the other half of the KAT.
+    expect(THRESHOLD_DIGEST_KAT_PREIMAGE.threshold).toBe(5000);
+    expect(THRESHOLD_DIGEST_KAT_PREIMAGE.formula_version).toBe('repid-delta-a8-quality-oriented');
+    expect(THRESHOLD_DIGEST_KAT_PREIMAGE.epoch.label).toBe('2026-08-17');
+    expect(THRESHOLD_DIGEST_KAT_PREIMAGE.nullifier).toBe('0x' + '3c'.repeat(32));
+  });
+});
+
+describe('the epoch is the anchor\'s epoch, not a second notion of one', () => {
+  const ROOT = '0x' + 'ab'.repeat(32);
+
+  it('lifts a real dayEpoch() spec into a DisclosureEpoch', () => {
+    // BOTH ENDS (LESSONS §3): the anchor PRODUCES the spec, and this is the reader. Before the
+    // adapter existed, `DisclosureEpoch` was three hand-declared field names that merely happened
+    // to match `EpochSpec`, while the module header claimed they were the same notion of epoch.
+    const spec = dayEpoch(new Date('2026-08-17T12:34:56.000Z'));
+    const epoch = disclosureEpochFromSpec(spec, ROOT);
+
+    expect(epoch.label).toBe(spec.label);
+    expect(epoch.start).toBe(spec.start);
+    expect(epoch.end).toBe(spec.end);
+    expect(epoch.root).toBe(ROOT);
+  });
+
+  it('a lifted epoch is accepted by nomination, end to end', () => {
+    const epoch = disclosureEpochFromSpec(dayEpoch(new Date('2026-08-17T12:00:00Z')), ROOT);
+    const req = nominateThreshold({ threshold: 5000, verifierId: 'v', purpose: 'p', epoch });
+    expect(req.epoch.label).toBe('2026-08-17');
+  });
+
+  it('refuses a malformed root at the lift, not deep inside digest construction', () => {
+    const spec = dayEpoch(new Date('2026-08-17T12:00:00Z'));
+    expect(() => disclosureEpochFromSpec(spec, 'not-a-root')).toThrow(/EPOCH_ROOT_MALFORMED/);
+  });
+
+  it('the lifted window is what the freshness check reads', () => {
+    // Staleness is enforced at the STATEMENT level against this window. It is NOT cryptographically
+    // bound — see the `notChecked` assertions above; a verifier that does not parse the epoch
+    // cannot enforce it, and nothing proves the score is a leaf under `root`.
+    delete process.env[MODE_ENV];
+    const epoch = disclosureEpochFromSpec(dayEpoch(new Date('2026-08-17T12:00:00Z')), ROOT);
+    const s = consentToThreshold({
+      request: nominateThreshold({ threshold: 5000, verifierId: 'v', purpose: 'p', epoch }),
+      witness: witness(6000),
+      consent: true,
+    });
+    expect(
+      verifyThresholdStatement({ public: s.public, now: new Date('2026-08-17T23:59:59Z') }).verdict,
+    ).toBe('VERIFIED');
+    expect(
+      verifyThresholdStatement({ public: s.public, now: new Date('2026-08-18T00:00:00Z') }).verdict,
+    ).toBe('FAILED');
+  });
+});
+
+describe('the witness cannot be added to the public surface — RUNTIME half', () => {
+  // The COMPILE-TIME half of this property lives in `tests/zkrepid-witness-exclusion.test.ts`,
+  // which runs `tsc` over a fixture and asserts the errors. It is NOT written here as
+  // `@ts-expect-error`, because that was measured to be inert in this repo on 2026-08-17: ts-jest
+  // runs with default (unset) `diagnostics` and `tsconfig.json` excludes `tests/`, so a bogus
+  // `@ts-expect-error` on an error-free line left this suite green. See that file's header.
+  //
+  // The two halves cover different ends and neither replaces the other: types are erased at
+  // runtime and cannot see a surface parsed from JSON off the wire, which is exactly where an
+  // untrusted statement arrives.
+
+  const base = {
+    threshold: 5000,
+    formula_version: CURRENT_FORMULA_PARAMS.version,
+    epoch: EPOCH,
+    nullifier: '0x' + '3c'.repeat(32),
+    digest: '0x' + '11'.repeat(32),
+  };
+
+  it('the runtime guard rejects each witness-bearing field, however it got there', () => {
+    // `as` casts stand in for the untyped path — a statement deserialised from the wire, where the
+    // compile-time guard has nothing to say.
+    const cases: Array<readonly [string, ThresholdPublicInputs]> = [
+      ['repid_score', { ...base, repid_score: 6000 } as unknown as ThresholdPublicInputs],
+      ['repidScore', { ...base, repidScore: 6000 } as unknown as ThresholdPublicInputs],
+      ['tier', { ...base, tier: 'AUTONOMOUS' } as unknown as ThresholdPublicInputs],
+      ['agent_id', { ...base, agent_id: 'agent-1' } as unknown as ThresholdPublicInputs],
+      ['met', { ...base, met: true } as unknown as ThresholdPublicInputs],
+    ];
+    for (const [label, bad] of cases) {
+      const g = computeGuards(bad, witness(6000));
+      expect(g.witnessHidden).toBe(false);
+      expect(g.leaks.join(' ')).toContain(label);
+    }
+  });
+
+  it('still permits every legitimate public field', () => {
+    const ok: ThresholdPublicInputs = { ...base };
+    expect(Object.keys(ok).sort()).toEqual([...THRESHOLD_PUBLIC_KEYS].sort());
+    expect(computeGuards(ok, witness(6000)).witnessHidden).toBe(true);
   });
 });

@@ -1,0 +1,28 @@
+{
+  // Project file for `tests/zkrepid-witness-exclusion.test.ts`, which compiles the fixture and
+  // asserts the errors it reports.
+  //
+  // A dedicated project rather than command-line file arguments: `tsc` refuses the latter when a
+  // tsconfig.json is present ("TS5112: tsconfig.json is present but will not be loaded if files
+  // are specified on commandline"), and the `--ignoreConfig` escape hatch is newer than the
+  // TypeScript this repo pins. This is stable across versions.
+  //
+  // Options MIRROR the root tsconfig.json's typechecking settings. If they drift laxer than the
+  // real build, this test would measure a weaker contract than production enforces and could pass
+  // while a leak compiles for real.
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "module": "nodenext",
+    "target": "esnext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "moduleDetection": "force"
+  },
+  "files": ["./witness-exclusion.fixture.ts"]
+}

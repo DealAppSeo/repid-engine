@@ -54,6 +54,7 @@ import {
   parseProofEnqueueMode,
   evaluateProofEnqueue,
 } from '../services/proof-enqueue-filter';
+import { resolveIssuerIdentity } from './issuer-identity';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -277,6 +278,9 @@ export async function runScoreEvent(
   let vetoed = false;
   let signals: Record<string, unknown> = {};
   let halError: string | null = null;
+  // A REWARD REQUIRES A PROVIDER — set when HalService established that ZERO providers succeeded
+  // behind a 'clean'. See `applyProviderEvidenceGuard` in src/hal/service.ts for the measurement.
+  let rewardEvidenceMissing = false;
   try {
     if (halStrictness >= 2) {
       // Discriminative path — providers built by halService; falls back to the
@@ -302,6 +306,7 @@ export async function runScoreEvent(
       });
       hal_score = Number.isFinite(r.hal_score) ? r.hal_score : 0.5;
       vetoed = r.decision === 'vetoed';
+      rewardEvidenceMissing = r.reward_suppressed !== undefined;
       signals = { ...(r.signals as Record<string, unknown>), hal_mode: r.mode, hal_strictness: 2 };
     } else {
       const result = await evaluate(input.answer, input.answer, {
@@ -363,7 +368,25 @@ export async function runScoreEvent(
   // telemetry ONLY. Reversible via HAL_DECISION_REQUIRES_QUORUM (default ON). On a HAL failure we keep
   // the existing 'flagged' fail-soft (decision already 'flagged') — neutralization is a no-op there.
   const decisionRequiresQuorum = halConfig.decisionRequiresQuorum;
-  const decisionNeutralized = decisionRequiresQuorum && !quorumMet && !halError && decision !== 'flagged';
+  // A REWARD REQUIRES A PROVIDER (2026-08-17) — the sign-flipped twin of the unearned veto.
+  //
+  // MEASURED on the frozen 395-row labelled corpus (`hal_runner_results`, hal_mode='fact-check-s2',
+  // gen_failed=false), no-provider slice: HAL returned 'clean' on 18 rows, 9 of them labelled
+  // hallucination — precision 0.5000 against a 0.5254 base rate, i.e. lift 0.95 and no information.
+  // At the recorded hal_scores those 18 rows mint +37.4 RepID through computeDelta's clean branch.
+  //
+  // WHY THIS IS NOT REDUNDANT WITH THE QUORUM GATE ABOVE, even though it currently overlaps it:
+  // `decisionRequiresQuorum` is resolved from a `repid_config` ROW (verified 'true' on 2026-08-17),
+  // so it is one UPDATE away from off, and it asks a DIFFERENT question — "did >= 2 families vote?"
+  // rather than "did ANY provider succeed?". This one is the floor under that ceiling: whatever the
+  // quorum policy is set to, a verdict reached with zero provider successes never pays.
+  //
+  // It NEVER produces a penalty. It substitutes the decision that goes INTO computeDelta (the
+  // established pattern here, and the one the ZKP delta witness records) rather than reaching into
+  // the formula, so `checkConsistency` still recomputes the stored delta from the stored decision.
+  const rewardUnearned = rewardEvidenceMissing && !halError && decision === 'clean';
+  const decisionNeutralized =
+    (decisionRequiresQuorum && !quorumMet && !halError && decision !== 'flagged') || rewardUnearned;
   const scoringDecision: HALDecision = decisionNeutralized ? 'flagged' : decision;
 
   // 4. Compute delta. Driven by the QUORUM-eligible scoringDecision, never the raw extractor decision.
@@ -490,6 +513,39 @@ export async function runScoreEvent(
   const triggerProof = rawTriggerProof && !proofFilter.skip;
   const zk_proof_id = triggerProof ? crypto.randomUUID() : null;
 
+  // 5b. ISSUER IDENTITY (additive, flag-gated, default OFF — see
+  // src/scoring/issuer-identity.ts and
+  // migrations/2026-08-17-issuer-identity-and-verdict-evidence.sql).
+  //
+  // A HAL verdict currently names nobody as its author: counterparty_agent_id
+  // is NULL on every HAL_SCORE_EVENT row in production, so a wrong veto has no
+  // issuer to charge and a right one has no issuer to credit.
+  //
+  // Two things this deliberately does NOT do:
+  //   - it does not derive an identifier. The write site HAS no issuer identity
+  //     (input.provider_used names the judged ANSWER's provider, not the judge),
+  //     so the id comes from HAL_ISSUER_AGENT_ID or the row is written exactly
+  //     as it is today.
+  //   - it does not reuse `providersUsed` above. That value is
+  //     `Number(signals.providers_used ?? 0)`, and the `?? 0` is why every
+  //     stored zero in production means "not recorded" rather than "consulted
+  //     nothing". The raw signal is passed through so absence stays NULL.
+  //
+  // With the flag off this resolves to `recorded: false` and insertPayload is
+  // byte-identical to before this change.
+  const issuer = resolveIssuerIdentity({
+    subjectAgentId: String(input.agent_id),
+    rawProvidersUsed: (signals as Record<string, unknown>).providers_used,
+  });
+  if (!issuer.recorded && issuer.reason !== 'disabled') {
+    // Loud, because every non-'disabled' reason is a misconfiguration that
+    // silently produces rows indistinguishable from the un-wired ones.
+    console.warn(
+      `[scoring/pipeline] issuer identity NOT recorded (${issuer.reason}) — ` +
+        'HAL_ISSUER_IDENTITY_ENABLED is on; see src/scoring/issuer-identity.ts'
+    );
+  }
+
   // 6. Insert score event.
   const insertPayload: Record<string, unknown> = {
     agent_id: input.agent_id,
@@ -548,8 +604,16 @@ export async function runScoreEvent(
       hal_mode: halMode ?? null,
       // HONEST-HAL — decision provenance. scoringDecision (the recorded hal_decision) is quorum-only;
       // extractor_decision is the blind style-extractor's raw call, kept for telemetry ONLY.
-      decision_source: quorumMet ? 'fact-check-quorum' : 'neutralized-no-quorum',
+      decision_source: quorumMet
+        ? 'fact-check-quorum'
+        : rewardUnearned
+          ? 'neutralized-no-provider-evidence'
+          : 'neutralized-no-quorum',
       decision_neutralized: decisionNeutralized,
+      // Distinguishes "no 2-family quorum" from "no provider succeeded at all" in the audit trail.
+      // Without it the two collapse into one `decision_neutralized: true` and the stronger finding
+      // — a verdict issued having consulted nothing — is unrecoverable from the ledger.
+      reward_unearned: rewardUnearned,
       extractor_decision: decision,
       ...(penaltySuppressed || purposeSuppressed
         ? {
@@ -558,6 +622,11 @@ export async function runScoreEvent(
           }
         : {}),
     },
+    // Spread LAST and only when resolved. The three columns do not exist until
+    // the 2026-08-17 migration is applied, so naming them while the flag is off
+    // would break every insert — the flag and the migration are coupled in that
+    // direction and only that direction.
+    ...(issuer.recorded ? issuer.fields : {}),
   };
 
   const { data: eventRow, error: evErr } = await db
