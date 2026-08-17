@@ -1,26 +1,25 @@
 /**
- * RepID incentive properties — does the scoring path pay for good behaviour?
+ * RepID incentive properties — does the scoring path pay for good behaviour? Yes, since 2026-08-17.
  *
  * Every test here composes the REAL functions (`deriveHalDecision` + `computeDelta`) rather than
  * restating their arithmetic. A property proved against a reimplementation proves nothing about
  * production (LESSONS §2).
  *
  * ════════════════════════════════════════════════════════════════════════════════
- * TWO PROPERTIES ARE CURRENTLY FALSE, AND THEY USE `it.failing`
+ * THESE TWO PROPERTIES WERE FALSE UNTIL 2026-08-17 AND ARE NOW ENFORCED
  * ════════════════════════════════════════════════════════════════════════════════
- * `it.failing` passes while its body throws and FAILS once the body starts passing. So a violated
- * property is recorded as a live, named defect that CI carries green — and the moment someone
- * corrects the orientation, these two go red and force a deliberate update. That is the opposite of
- * deleting the assertion or softening it to match the behaviour, which is how a defect becomes a
- * feature nobody remembers choosing.
- *
  * The defect: `hal_score` is a hallucination-RISK score (HIGH IS BAD — src/hal/lib/score.ts, and
- * `deriveHalDecision` returns 'clean' only below 0.40). `computeDelta`'s clean branch reads it as
- * though HIGH WERE GOOD. Nothing inverts it in between (src/scoring/pipeline.ts passes one value to
- * both). Composed, quality is paid inversely.
+ * `deriveHalDecision` returns 'clean' only below 0.40), and `computeDelta`'s clean branch read it as
+ * though HIGH WERE GOOD, with nothing inverting it in between. Composed, quality was paid inversely:
+ * a perfectly grounded claim earned -1.0 while the riskiest still-clean claim earned the most.
  *
- * NOT FIXED HERE. `computeDelta` is on the live scoring path; changing it is Sean's call
- * (CLAUDE-RULE-2, CLAUDE-RULE-3). These tests measure and pin.
+ * They were carried here as `it.failing` — which passes while the body throws and fails once it
+ * starts passing — precisely so that fixing the orientation would turn them RED and force this
+ * update rather than letting the defect quietly become a feature. It worked: the fix
+ * (Sean, 2026-08-17 — the clean branch consumes QUALITY) flipped them, and they are now ordinary
+ * assertions guarding against regression.
+ *
+ * Full measurement of the defect, kept for the record: reports/2026-08-17/REPID-INCENTIVE-AUDIT.md.
  */
 import {
   sampleCurve,
@@ -51,63 +50,73 @@ describe('the reachability fact the whole analysis rests on', () => {
     expect([...reachableDecisions()].sort()).toEqual(['clean', 'flagged']);
   });
 
-  it('confirms the existing unit tests exercise combinations production cannot emit', () => {
-    // tests/repid-delta.test.ts asserts clean@0.95 → +2.8 and clean@1.0 → +3. Both are unreachable:
-    // the pipeline flags anything ≥ 0.40. Those assertions validate an orientation production never
-    // uses, which is why the inversion below survived unnoticed (LESSONS §6).
+  it('pins the boundary that made the old unit tests unreachable', () => {
+    // tests/repid-delta.test.ts USED to assert clean@0.95 → +2.8 and clean@1.0 → +3. Both were
+    // unreachable — the pipeline flags anything ≥ 0.40 — so they validated an orientation production
+    // never used, which is why the inversion survived (LESSONS §6). Those cases were rewritten onto
+    // reachable risks when the orientation was fixed; this assertion keeps the boundary fact itself
+    // under test, so the same class of unreachable fixture cannot be reintroduced unnoticed.
     expect(deriveHalDecision(0.95, false, null)).toBe('flagged');
     expect(deriveHalDecision(1.0, false, null)).toBe('flagged');
   });
 });
 
 describe('PROPERTY: reward must not increase with hallucination risk', () => {
-  it.failing('pays a better-grounded claim at least as much as a worse one', () => {
-    const violations = monotonicityViolations(401, AGENT);
-    // Currently every adjacent pair on the clean branch violates this.
-    expect(violations).toEqual([]);
+  it('pays a better-grounded claim at least as much as a worse one', () => {
+    // Was `it.failing` until the orientation fix; every adjacent pair on the clean branch used to
+    // violate this. An empty list over the sampled grid is a proof of the property, not weak
+    // evidence for it — a monotone-decreasing sequence has no adjacent increase.
+    expect(monotonicityViolations(401, AGENT)).toEqual([]);
   });
 
-  it('records the violation quantitatively, so the size is not lost', () => {
-    const violations = monotonicityViolations(401, AGENT);
-    expect(violations.length).toBeGreaterThan(0);
-    for (const v of violations) {
-      expect(v.higherRisk.risk).toBeGreaterThan(v.lowerRisk.risk);
-      expect(v.rewardGain).toBeGreaterThan(0);
-    }
+  it('holds at a finer sampling too, so the grid is not hiding a local inversion', () => {
+    expect(monotonicityViolations(1601, AGENT)).toEqual([]);
   });
 });
 
 describe('PROPERTY: a maximally well-grounded claim must not be punished', () => {
-  it.failing('does not penalise a zero-risk claim', () => {
+  it('does not penalise a zero-risk claim', () => {
+    // Was `it.failing`: a perfectly grounded claim used to be paid -1.0.
     const d = computeDelta({ hal_score: 0, hal_decision: 'clean', ...AGENT });
     expect(d.delta_applied).toBeGreaterThanOrEqual(0);
   });
 
-  it('records what a zero-risk claim is actually paid', () => {
+  it('pays the documented ceiling for a zero-risk claim, which is now reachable', () => {
     const d = computeDelta({ hal_score: 0, hal_decision: 'clean', ...AGENT });
-    expect(d.delta_applied).toBeLessThan(0);
+    expect(d.delta_applied).toBeCloseTo(3, 5);
+  });
+
+  it('never pays a negative delta anywhere on the clean branch', () => {
+    for (const p of reachableCleanPoints(1601, AGENT)) {
+      expect(p.delta_applied).toBeGreaterThan(0);
+    }
   });
 });
 
-describe('what the system currently pays the most for', () => {
-  it('maximises reward at high risk, just under the flag threshold', () => {
+describe('what the system pays the most for', () => {
+  it('maximises reward at the best-grounded end of the branch', () => {
     const best = rewardMaximisingRisk(4001, AGENT);
     expect(best.decision).toBe('clean');
-    // The reward-maximising behaviour is "be as risky as possible without tripping the flag".
-    expect(best.risk).toBeGreaterThan(0.38);
-    expect(best.risk).toBeLessThan(0.4);
+    // The reward-maximising behaviour is now "be as well grounded as possible" — the opposite of
+    // the pre-fix answer, which was "be as risky as possible without tripping the flag".
+    expect(best.risk).toBeLessThan(0.02);
   });
 
-  it('caps the best reachable clean reward far below the advertised +5', () => {
+  it('reaches the documented +3 ceiling and stays under the +5 clamp', () => {
     const { best } = cleanExtrema(4001, AGENT);
-    // The delta clamp allows +5 and the module comment advertises up to +3 at score 1.0, but the
-    // decision gate makes anything ≥0.40 'flagged', so the true ceiling on a clean event is ~+0.6.
-    expect(best.delta_applied).toBeLessThan(1);
-    expect(best.delta_applied).toBeGreaterThan(0);
+    expect(best.delta_applied).toBeCloseTo(3, 5);
+    expect(best.delta_applied).toBeLessThanOrEqual(5);
   });
 
-  it('has an inverted clean branch end to end', () => {
-    expect(cleanExtrema(4001, AGENT).inverted).toBe(true);
+  it('is not inverted end to end', () => {
+    expect(cleanExtrema(4001, AGENT).inverted).toBe(false);
+  });
+
+  it('still pays the worst still-clean claim a positive, smaller reward', () => {
+    const { worst } = cleanExtrema(4001, AGENT);
+    expect(worst.risk).toBeGreaterThan(0.38);
+    expect(worst.delta_applied).toBeGreaterThan(0);
+    expect(worst.delta_applied).toBeLessThan(cleanExtrema(4001, AGENT).best.delta_applied);
   });
 });
 
@@ -116,15 +125,17 @@ describe('PROPERTIES THAT HOLD — the anti-gaming floor that is genuinely there
     const veto = computeDelta({ hal_score: 0.9, hal_decision: 'vetoed', ...AGENT }).delta_applied;
     const { best } = cleanExtrema(4001, AGENT);
     expect(veto).toBe(-10);
-    // Asymmetry is the core anti-gaming property: one caught fabrication must outweigh many wins.
-    expect(Math.abs(veto)).toBeGreaterThan(best.delta_applied * 10);
+    // Asymmetry is the core anti-gaming property: one caught fabrication must outweigh several wins.
+    // The fix RAISED clean rewards (ceiling +0.6 -> +3.0), so it necessarily WEAKENED this ratio
+    // from ~17 events per veto to ~4. Asserted at 3 so the guard is real: if clean rewards are ever
+    // raised again past a third of the veto, this goes red and the trade-off gets re-decided.
+    expect(Math.abs(veto)).toBeGreaterThan(best.delta_applied * 3);
   });
 
-  it('requires many best-case clean events to repay one veto', () => {
+  it('still requires several best-case clean events to repay one veto', () => {
     const { best } = cleanExtrema(4001, AGENT);
     const breakEven = Math.ceil(10 / best.delta_applied);
-    // Recorded rather than asserted at a magic number: this is the farming exchange rate.
-    expect(breakEven).toBeGreaterThan(10);
+    expect(breakEven).toBeGreaterThanOrEqual(4);
   });
 
   it('pays nothing for an unfalsifiable claim, so abstention cannot be farmed', () => {

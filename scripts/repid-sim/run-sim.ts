@@ -64,7 +64,16 @@ function reportCurve(): void {
   console.log('');
   console.log(`  best-paid clean event : risk ${best.risk.toFixed(3)} pays ${best.delta_applied.toFixed(2)}`);
   console.log(`  worst-paid clean event: risk ${worst.risk.toFixed(3)} pays ${worst.delta_applied.toFixed(2)}`);
-  console.log(`  reward-maximising risk: ${maxima.risk.toFixed(3)} (just under the 0.40 flag boundary)`);
+  // Describe where the maximum actually IS rather than asserting where it was: this line used to
+  // hardcode "just under the 0.40 flag boundary", which silently became false the moment the
+  // orientation was corrected.
+  const atBoundary = maxima.risk > 0.3;
+  console.log(
+    `  reward-maximising risk: ${maxima.risk.toFixed(3)} ` +
+      (atBoundary
+        ? '(just under the 0.40 flag boundary — reward rises with risk)'
+        : '(best-grounded end of the branch — reward falls with risk)'),
+  );
   console.log(`  monotonicity violations over the clean branch: ${violations.length}`);
   console.log(
     `  VERDICT: reward ${inverted ? 'INCREASES with risk — quality is PENALISED' : 'decreases with risk (correct)'}`,

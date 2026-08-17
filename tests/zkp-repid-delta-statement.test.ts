@@ -60,12 +60,19 @@ const withSalt = <T>(fn: () => T): T => {
   }
 };
 
-/** A clean event: hal_score 0.75 → raw = 1 + 0.25*4 = 2.0. */
+/**
+ * A clean event: RISK 0.25 → quality 0.75 → raw = 1 + (0.75-0.5)*4 = 2.0.
+ *
+ * Was `hal_score: 0.75`. That produced the same +2 under the pre-2026-08-17 clean branch, but it
+ * is unreachable — `deriveHalDecision` flags anything >= 0.40, so 'clean' at risk 0.75 cannot
+ * occur. The branch now consumes QUALITY (delta = 3 - 4*risk), so risk 0.25 gives +2 and is a
+ * combination production can actually produce.
+ */
 const cleanParams = (over: Partial<BuildStatementParams> = {}): BuildStatementParams => ({
   agentId: 'agent-shofet',
   scopeLabel: 'event-0001',
   witness: {
-    hal_score: 0.75,
+    hal_score: 0.25,
     hal_decision: 'clean',
     current_repid: 1611,
     agent_tier: 'ESTABLISHED',
@@ -414,7 +421,7 @@ describe('building the statement', () => {
       const p = cleanParams();
       const s = buildRepidDeltaStatement(p);
       const blob = JSON.stringify(s.public);
-      expect(blob).not.toContain('0.75'); // hal_score
+      expect(blob).not.toContain('0.25'); // hal_score (the witness must not leak)
       expect(blob).not.toContain('clean'); // hal_decision
       expect(blob).not.toContain('ESTABLISHED'); // tier
       expect(blob).not.toContain(p.agentId); // raw identity

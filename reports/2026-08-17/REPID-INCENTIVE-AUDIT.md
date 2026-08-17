@@ -1,5 +1,28 @@
 # Does RepID reward good behaviour? — measured
 
+> ## ✅ RESOLVED 2026-08-17 — the defect below is FIXED
+>
+> Sean's decision: **the clean branch consumes QUALITY.** `src/scoring/repid-delta.ts` now
+> converts risk → quality once, at that boundary. After the fix, on the same ruler:
+>
+> | | before | after |
+> |---|---|---|
+> | reachable clean reward | −1.00 … +0.60 | **+1.40 … +3.00** |
+> | monotonicity violations | 16 | **0** |
+> | reward-maximising risk | 0.388 (at the flag boundary) | **0.000 (best-grounded)** |
+> | best-grounded claim (risk 0) | −1.00 | **+3.00** — the documented ceiling, now reachable |
+> | honesty wins? | **NO**, at any detector accuracy | **YES**, at every swept combination |
+> | honest-expert net | −143 | **+574** |
+> | threshold-gamer net | +184 (1st place) | +346 (**4th**, below both honest strategies) |
+>
+> **Everything below is retained as the record of the defect**, because the measurement is what
+> justified the change and because two of the reasons it survived are reusable lessons. Where a
+> statement below is now historical it is marked in this box, not silently edited.
+>
+> **Two things the fix did NOT resolve** — see "After the fix" at the end:
+> 1. Throughput now dominates the top of the table.
+> 2. ZK statements over deltas issued *before* the fix will no longer verify.
+
 **Run 2026-08-17.** Reproduce: `npm run repid:sim`. Deterministic (seed 12345), no database,
 no network, no provider keys.
 
@@ -159,3 +182,80 @@ quality?** Both readings are defensible, and they imply different one-line chang
 migrations of already-issued deltas. That decision belongs to Sean, not to this audit. What is not
 defensible is the current state, where the decision function and the reward function disagree about
 which direction is good.
+
+
+---
+
+# After the fix
+
+## What changed, verified on the same ruler
+
+`npm run repid:sim`, seed 12345, 200 rounds. Reward on the clean branch is now
+`3 − 4×risk`: **+3.00** at risk 0, **+1.40** at the worst still-clean risk, monotonically
+decreasing, **zero** violations. Every clean event pays something positive; none is punished.
+
+| rank | strategy | net | per claim |
+|---:|---|---:|---:|
+| 1 | volume-farmer — honest at 5× throughput | +2904 | +2.904 |
+| 2 | honest-expert | **+574** | +2.870 |
+| 3 | honest-hedger | +450 | +2.250 |
+| 4 | threshold-gamer | +346 | +1.730 |
+| 5 | abstainer | 0 | 0 |
+| 6 | fabricator | −190 | −0.950 |
+
+**Honesty wins at all ten swept combinations.** The gamer still profits — it *is* telling the
+truth — but it now earns strictly less than either honest strategy, which is the correct
+ordering: it is paid less for writing that looks less grounded.
+
+## Two new findings the fix creates or exposes
+
+### 1. Throughput now dominates — a live trade-off, not a win
+
+`volume-farmer` finishes **first**, purely on claim count: its per-claim rate (2.904) is
+statistically indistinguishable from `honest-expert`'s (2.870), same risk band. Before the fix,
+volume *lost* faster because each honest claim carried a negative delta; now every honest claim
+pays, so total RepID scales linearly with throughput.
+
+This is not the gaming problem returning — nobody is paid more for worse work. But **an agent
+emitting many trivially-true claims accrues RepID fast**, and nothing in the scoring path
+rate-limits that. Whether it is acceptable depends on a cost this simulation does not model
+(rate limits, staking, per-claim fees, the ecosystem-need multiplier). Pinned as a test in
+`tests/strategy-sim.test.ts` so it stays visible.
+
+### 2. The penalty asymmetry weakened, by construction
+
+Raising the clean ceiling from +0.6 to +3.0 necessarily cheapened a veto in relative terms:
+the farming exchange rate fell from **17** best-case clean events per veto to **4**. Still
+strongly asymmetric, and asserted at a floor of 3 in `tests/incentive-properties.test.ts` — so
+if clean rewards are raised again past a third of the veto, that test goes red and the
+trade-off gets re-decided rather than drifting.
+
+### 3. ⚠ Historical ZK statements will no longer verify — NEEDS A DECISION
+
+`src/zkp/repid-delta-statement.ts` **recomputes** the delta from the witness with
+`computeDelta` and rejects the statement if it disagrees with the stored value. That is the
+right design — but it means every delta issued under the old formula now fails the check,
+because the verifier computes with the new one.
+
+- **Newly-issued deltas:** verify fine, both sides use the fixed function.
+- **Already-stored deltas:** will be rejected as "does not follow from the witness".
+
+**Not attempted here, and not this audit's call.** The options are visibly different — version
+the formula so historical statements verify under the orientation in force when they were
+issued; re-issue affected statements; or accept the break. The formula has a
+`formula_commitment` field but no *version*, so today the break would be silent rather than
+explained. **Blast radius is UNMEASURED** — it needs a count of stored clean-decision score
+events, which needs the database.
+
+## Testing posture
+
+The two violated properties were carried as `it.failing`, so fixing the orientation turned them
+**red** and forced a deliberate update — which is what happened. They are now ordinary
+assertions. `src/incentives/reward-curve.ts` stays in place as the regression guard: it composes
+the two real functions and re-derives the answer every run, so a future edit that reintroduces
+the disagreement fails the suite instead of waiting to be noticed.
+
+Fixtures in `tests/repid-delta.test.ts`, `tests/zkp-repid-delta-statement.test.ts` and
+`tests/zkp-nullifier-bridge.test.ts` used `hal_score` values ≥ 0.40 on `clean` decisions —
+combinations the pipeline cannot emit. All were moved onto **reachable** risks, so the suite now
+tests the system that exists.

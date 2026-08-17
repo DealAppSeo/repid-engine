@@ -21,14 +21,16 @@
  * `deriveHalDecision` confirms it operationally — it returns 'clean' only BELOW 0.40 and 'flagged'
  * at or above.
  *
- * `computeDelta`'s clean branch reads that same number as though HIGH WERE GOOD. Its own comment
- * says "0.5 → +1, 1.0 → +3, 0.0 → −1", which is only coherent for a quality score. The pipeline
- * passes one value to both without inverting it.
+ * Until 2026-08-17 `computeDelta`'s clean branch read that same number as though HIGH WERE GOOD,
+ * and nothing inverted it in between, so composed the two disagreed: reward rose with risk, a
+ * perfectly grounded claim was paid −1.0, and the documented +3 ceiling was unreachable. This
+ * module is what measured that. Sean's decision (the clean branch consumes QUALITY) fixed it, and
+ * `monotonicityViolations` is now empty.
  *
- * Composed, the two disagree, and the disagreement is not academic — see `monotonicityViolations`.
- * This module does not fix either function. `computeDelta` is on the live scoring path and changing
- * it is Sean's call (CLAUDE-RULE-2/3); the job here is to measure and to make the measurement
- * impossible to lose.
+ * The module stays as the REGRESSION GUARD, not as a historical note: it composes the two real
+ * functions and re-derives the answer on every run, so a future edit to either one that
+ * reintroduces the disagreement fails `tests/incentive-properties.test.ts` rather than waiting to
+ * be noticed. That is the difference between a fix and a fix that stays fixed.
  *
  * PURITY: no I/O, no DB, no network. `deltaFloor()` inside `computeDelta` reads one env flag; the
  * sampling functions here pass explicit agent state and are otherwise functions of their arguments.

@@ -92,12 +92,31 @@ export function computeDelta(input: DeltaInput): DeltaOutput {
   } else {
     // clean
     const score = Number.isFinite(hal_score) ? hal_score : 0.5;
-    const raw = 1 + (score - 0.5) * 4; // 0.5 → +1, 1.0 → +3, 0.0 → -1
+
+    // ORIENTATION — fixed 2026-08-17 (Sean: the clean branch consumes QUALITY).
+    //
+    // `hal_score` is a hallucination RISK score: HIGH IS BAD. src/hal/lib/score.ts says so, and
+    // `deriveHalDecision` confirms it operationally — it returns 'clean' only BELOW 0.40.
+    //
+    // This branch previously fed that risk value straight into a reward curve written for
+    // quality, and nothing inverted it anywhere in between (src/scoring/pipeline.ts passes one
+    // value to both functions). Measured consequence: over the domain the pipeline can actually
+    // produce, reward INCREASED with risk — a perfectly grounded claim was penalised -1.0, the
+    // best-paid clean event sat at risk 0.388 just under the flag boundary, and the documented
+    // ceiling was unreachable because anything >= 0.40 is 'flagged' and pays 0. A truthful agent
+    // that tuned its prose to the boundary out-earned an honest one at every detector accuracy.
+    // Full measurement: reports/2026-08-17/REPID-INCENTIVE-AUDIT.md (`npm run repid:sim`).
+    //
+    // The conversion happens HERE, once, rather than at the callers: `hal_score` means risk
+    // everywhere else in this system, so renaming the field or asking each caller to invert would
+    // spread a units conversion across every call site — which is how this class of bug starts.
+    const quality = 1 - score;
+    const raw = 1 + (quality - 0.5) * 4; // quality 1.0 → +3, 0.5 → +1, 0.0 → -1
     delta_calculated = Math.round(raw * 10) / 10; // 1 decimal precision
     reason =
-      score >= 0.5
-        ? `HAL clean (score=${score.toFixed(2)}): baseline +1 + bonus`
-        : `HAL clean but low quality (score=${score.toFixed(2)}): reduced reward`;
+      quality >= 0.5
+        ? `HAL clean (risk=${score.toFixed(2)}, quality=${quality.toFixed(2)}): baseline +1 + bonus`
+        : `HAL clean but low quality (risk=${score.toFixed(2)}, quality=${quality.toFixed(2)}): reduced reward`;
   }
 
   delta_calculated = clampDelta(delta_calculated);

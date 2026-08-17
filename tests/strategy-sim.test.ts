@@ -2,9 +2,10 @@
  * The incentive simulation, pinned.
  *
  * A simulation nobody can reproduce is an anecdote, so determinism is tested first. The rest
- * records the tournament's current verdict — that honesty is NOT the best play — so the day
- * someone corrects the reward orientation, these go red and force a deliberate re-read rather than
- * quietly reporting a different answer.
+ * asserts the tournament's verdict — that honesty IS the best play. It was the opposite until
+ * 2026-08-17: these were carried as `it.failing` while the reward orientation was inverted,
+ * precisely so that fixing it would turn them red and force this re-read instead of quietly
+ * reporting a different answer. It worked.
  *
  * See src/incentives/strategy-sim.ts for what is real (the payoff arithmetic) and what is modelled
  * and swept (detector accuracy, quorum availability).
@@ -66,32 +67,35 @@ describe('determinism — without it this is an anecdote, not a measurement', ()
   });
 });
 
-describe('THE VERDICT — currently recorded, not desired', () => {
-  it.failing('makes honesty the best available play', () => {
-    // The property a reputation economy needs. Currently false; see the reward-curve inversion in
-    // tests/incentive-properties.test.ts. When the orientation is corrected this should pass, at
-    // which point this `it.failing` goes red and must be promoted to a normal `it`.
+describe('THE VERDICT — honesty is the best play', () => {
+  it('makes honesty the best available play', () => {
+    // Was `it.failing` while the clean branch consumed risk instead of quality.
     expect(honestyWins(runTournament(BASE))).toBe(true);
   });
 
-  it('records that the threshold gamer currently wins', () => {
+  it('puts the threshold gamer BELOW both honest strategies', () => {
+    // The gamer asserts nothing false; it only writes to the boundary. It used to win outright.
     const results = runTournament(BASE);
-    expect(results[0]!.strategyId).toBe('threshold-gamer');
-    expect(honestyWins(results)).toBe(false);
+    const gamer = rankOf(results, 'threshold-gamer');
+    expect(gamer).toBeGreaterThan(rankOf(results, 'honest-expert'));
+    expect(gamer).toBeGreaterThan(rankOf(results, 'honest-hedger'));
   });
 
-  it('records that the most honest strategy LOSES RepID over time', () => {
+  it('makes the most honest strategy GAIN RepID over time', () => {
     const results = runTournament(BASE);
     const honest = results.find((r) => r.strategyId === 'honest-expert')!;
-    expect(honest.netChange).toBeLessThan(0);
-    expect(honest.finalRepid).toBeLessThan(STARTING_REPID);
+    expect(honest.netChange).toBeGreaterThan(0);
+    expect(honest.finalRepid).toBeGreaterThan(STARTING_REPID);
   });
 
-  it('records that doing nothing outranks being honest', () => {
-    // The abstainer asserts nothing checkable, nets exactly zero, and still places above the
-    // honest expert. That is the cleanest single statement of the defect.
+  it('ranks being honest above doing nothing', () => {
+    // The inverse used to hold, and it was the cleanest single statement of the defect.
     const results = runTournament(BASE);
-    expect(rankOf(results, 'abstainer')).toBeLessThan(rankOf(results, 'honest-expert'));
+    expect(rankOf(results, 'honest-expert')).toBeLessThan(rankOf(results, 'abstainer'));
+  });
+
+  it('still ranks the fabricator last once the detector works', () => {
+    expect(rankOf(runTournament(BASE), 'fabricator')).toBe(STRATEGIES.length);
   });
 
   it('keeps abstention exactly neutral, in either direction', () => {
@@ -99,14 +103,23 @@ describe('THE VERDICT — currently recorded, not desired', () => {
     expect(abstainer.netChange).toBe(0);
   });
 
-  it('punishes volume when each honest claim carries a negative expected delta', () => {
-    // volume-farmer is honest-expert at 5x throughput. More of a losing play loses more, which is
-    // the correct behaviour of a wrong payoff — worth pinning so a future fix is visible here too.
+  it('THROUGHPUT NOW DOMINATES — recorded as a live trade-off, not a win', () => {
+    // volume-farmer is honest-expert at 5x throughput, and it now finishes FIRST. Before the fix
+    // each honest claim carried a negative expected delta, so volume lost faster; now every honest
+    // claim pays, so total RepID scales with claim count and the top of the table is decided by
+    // throughput rather than by quality.
+    //
+    // Per-claim efficiency is essentially identical between the two (same risk band), so this is
+    // not the gamer problem returning — nobody is being paid for worse work. But it does mean an
+    // agent emitting many trivially-true claims accrues RepID fast, and nothing in THIS module
+    // rate-limits that. Whether it is acceptable depends on a cost the simulation does not model.
     const results = runTournament(BASE);
     const farmer = results.find((r) => r.strategyId === 'volume-farmer')!;
     const honest = results.find((r) => r.strategyId === 'honest-expert')!;
     expect(farmer.claims).toBeGreaterThan(honest.claims);
-    expect(farmer.finalRepid).toBeLessThanOrEqual(honest.finalRepid);
+    expect(farmer.finalRepid).toBeGreaterThan(honest.finalRepid);
+    // The per-claim rates stay close: volume wins on volume, not on being paid more per claim.
+    expect(Math.abs(farmer.perClaim - honest.perClaim)).toBeLessThan(0.2);
   });
 });
 
@@ -117,17 +130,17 @@ describe('the sweep — the detector is not the problem', () => {
     expect(rows).toHaveLength(10);
   });
 
-  it.failing('finds at least one detector accuracy where honesty wins', () => {
-    // If this ever passes, a detector improvement fixed the incentive — which would mean the
-    // defect was in HAL rather than in the reward curve. It is not.
-    expect(rows.some((r) => r.honestyWins)).toBe(true);
+  it('has honesty winning at EVERY swept detector accuracy', () => {
+    // Was `it.failing` at "at least one". The stronger form holds now, and it should: the
+    // honest-vs-gamer comparison never depended on the detector, because both are truthful. Fixing
+    // the reward curve fixed it everywhere at once — which is the same fact the old failure showed
+    // from the other side.
+    expect(rows.every((r) => r.honestyWins)).toBe(true);
   });
 
-  it('records that no swept detector accuracy makes honesty win', () => {
-    // The point: perfecting HAL cannot repair this. A better detector changes what the FABRICATOR
-    // earns and leaves the honest-vs-gamer comparison untouched, because both are truthful.
-    expect(rows.every((r) => !r.honestyWins)).toBe(true);
-    expect(new Set(rows.map((r) => r.bestStrategy))).toEqual(new Set(['threshold-gamer']));
+  it('never lets a gaming strategy top the table at any swept accuracy', () => {
+    const winners = new Set(rows.map((r) => r.bestStrategy));
+    for (const w of winners) expect(['honest-expert', 'honest-hedger', 'volume-farmer']).toContain(w);
   });
 
   it('shows a better detector does punish the fabricator, so HAL is working as a detector', () => {
