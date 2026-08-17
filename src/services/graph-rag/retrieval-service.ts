@@ -4,6 +4,7 @@ import { GraphRagStore } from './graph-rag-store';
 import type {
   RetrievalResult,
   RetrievalOptions,
+  ScopedRetrievalOptions,
   MemoryNode,
   EdgeType,
 } from '../../types/graph-rag';
@@ -30,24 +31,51 @@ export class RetrievalService {
   }
 
   async retrieve(opts: RetrievalOptions): Promise<RetrievalResult[]> {
-    const topK = opts.top_k ?? 5;
-    const threshold = opts.similarity_threshold ?? 0.65;
-    const includeRelated = opts.include_related ?? true;
-
     const queryEmbedding = await embed(opts.query);
 
     const { data, error } = await this.supabase.rpc('graph_rag_match_nodes', {
       p_agent_id: opts.agent_id,
       p_query_embedding: toPgVector(queryEmbedding),
-      p_match_count: topK,
-      p_similarity_threshold: threshold,
+      p_match_count: opts.top_k ?? 5,
+      p_similarity_threshold: opts.similarity_threshold ?? 0.65,
       p_node_types: opts.node_types ?? null,
     });
 
     if (error) throw new Error(`retrieve failed: ${error.message}`);
-    if (!data || (data as MatchRow[]).length === 0) return [];
+    return this.hydrate(data as MatchRow[] | null, opts.include_related ?? true);
+  }
 
-    const matches = data as MatchRow[];
+  /**
+   * Agent-independent retrieval, for shared lessons. Backed by
+   * graph_rag_match_scoped; graph_rag_match_nodes is deliberately untouched
+   * because it has live callers and a signature change would break them.
+   */
+  async retrieveScoped(
+    opts: ScopedRetrievalOptions
+  ): Promise<RetrievalResult[]> {
+    const queryEmbedding = await embed(opts.query);
+
+    const { data, error } = await this.supabase.rpc('graph_rag_match_scoped', {
+      p_scope: opts.scope,
+      p_query_embedding: toPgVector(queryEmbedding),
+      p_match_count: opts.top_k ?? 5,
+      p_similarity_threshold: opts.similarity_threshold ?? 0.65,
+      p_node_types: opts.node_types ?? null,
+    });
+
+    if (error) throw new Error(`retrieveScoped failed: ${error.message}`);
+    return this.hydrate(data as MatchRow[] | null, opts.include_related ?? true);
+  }
+
+  /** Shared tail of both retrieval paths: one-hop edge walk, read-stat touch,
+   *  and row→RetrievalResult mapping. */
+  private async hydrate(
+    data: MatchRow[] | null,
+    includeRelated: boolean
+  ): Promise<RetrievalResult[]> {
+    if (!data || data.length === 0) return [];
+
+    const matches = data;
     const results: RetrievalResult[] = [];
 
     for (const row of matches) {
@@ -96,6 +124,7 @@ export class RetrievalService {
         node: {
           id: row.id,
           agent_id: row.agent_id,
+          scope: row.scope ?? null,
           node_type: row.node_type,
           content: row.content,
           metadata: row.metadata,

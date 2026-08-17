@@ -384,6 +384,159 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LESSONS_PATH = join(REPO_ROOT, 'LESSONS.md');
 const LESSONS_MAX = 6000;
 
+/* ════════════════════════════════════════════════════════════════════════════
+ * SCOPED LESSONS — the graph layer beneath the LESSONS.md block.
+ * ════════════════════════════════════════════════════════════════════════════
+ * LESSONS.md is capped at 6000 chars and injected unconditionally. That cap is
+ * the mechanism, so subsystem-specific knowledge (ZKP, ANFIS, HAL) can never
+ * live there. It lives in the graph as scope-tagged `reflection` nodes and is
+ * PUSHED into the preamble here — the dispatcher retrieves and pastes it.
+ *
+ * It is deliberately not a tool the agent may call. An agent that must remember
+ * to ask is an agent that can forget, and the ones most likely to forget are the
+ * ones already reasoning badly. Same reason LESSONS.md is injected, not filed.
+ *
+ * Retrieval is best-effort and FAILS OPEN: if the API is down or slow, the
+ * dispatch still ships with LESSONS.md intact and says so on stderr. A silent
+ * skip here would be this file's own lesson #3 turned on itself.
+ *
+ * Synchronous on purpose. main() is sync and wrapped in a try/catch at the call
+ * site; making it async would move throws off that path. execFileSync gives a
+ * hard timeout that an await cannot.
+ */
+const RECALL_BASE =
+  process.env.DISPATCH_RECALL_URL || 'https://repid-engine-production.up.railway.app';
+const RECALL_TIMEOUT_MS = Number(process.env.DISPATCH_RECALL_TIMEOUT_MS || 2000);
+const SCOPED_CONTEXT_MAX = 4000;
+const LESSON_SCOPES = ['global', 'repid-engine', 'hal', 'anfis', 'zkp'];
+
+/** Pick the graph scope from what the agent has been asked to do. Keyword match,
+ *  not a model call — this runs on every dispatch and must never be the slow or
+ *  flaky part. Unmatched work gets 'global', which is the correct default: the
+ *  cross-cutting lessons apply everywhere. */
+function scopeForTask(text) {
+  const t = String(text || '').toLowerCase();
+  if (/zkp|plonky|zero.?knowledge|groth16|circuit/.test(t)) return 'zkp';
+  if (/anfis|fuzzy|lasso|constitutional.?audit|mirror.?test/.test(t)) return 'anfis';
+  if (/\bhal\b|hallucinat|substance.?gate/.test(t)) return 'hal';
+  if (/repid|tier|score.?event|decay|ecosystem.?need|badge/.test(t)) return 'repid-engine';
+  return 'global';
+}
+
+/** GET the scoped lessons. Returns an array, or null when retrieval failed —
+ *  null and [] mean different things and the caller reports them differently. */
+function fetchScopedLessons(scope, query) {
+  const url =
+    `${RECALL_BASE}/api/v1/lessons/recall` +
+    `?scope=${encodeURIComponent(scope)}` +
+    `&q=${encodeURIComponent(String(query).slice(0, 500))}` +
+    `&k=5&threshold=0.65&types=reflection`;
+  const child =
+    `fetch(${JSON.stringify(url)})` +
+    `.then(r=>r.ok?r.text():Promise.reject(new Error('HTTP '+r.status)))` +
+    `.then(t=>process.stdout.write(t))` +
+    `.catch(e=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})`;
+  try {
+    const raw = execFileSync(process.execPath, ['-e', child], {
+      encoding: 'utf8',
+      timeout: RECALL_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.results) ? parsed.results : [];
+  } catch (e) {
+    const why = e && e.killed ? `timeout after ${RECALL_TIMEOUT_MS}ms` : (e && e.message) || String(e);
+    console.error(
+      `[dispatch] ⚠ scoped lesson recall failed (scope=${scope}): ${why}. ` +
+        'Dispatching with LESSONS.md only — shared rules are unaffected.',
+    );
+    return null;
+  }
+}
+
+/** Render retrieved lessons as a preamble block, hard-capped. The cap matters:
+ *  this sits below LESSONS.md and must never be able to push it out of the
+ *  model's attention by sheer volume. */
+function scopedLessonBlock(scope, results) {
+  if (!results || results.length === 0) return [];
+  const lines = [];
+  let used = 0;
+  for (const r of results) {
+    const body = String(r.content || '').trim();
+    if (!body) continue;
+    const entry = `- (${Number(r.similarity ?? 0).toFixed(2)}) ${body}`;
+    if (used + entry.length > SCOPED_CONTEXT_MAX) break;
+    lines.push(entry);
+    used += entry.length;
+  }
+  if (lines.length === 0) return [];
+  return [
+    `════ SCOPED LESSONS — scope: ${scope} ════`,
+    'Retrieved for THIS task from prior agents\' reports. Narrower than the shared',
+    'rules above and lower confidence: they were true when written, not verified now.',
+    'The shared lessons above outrank these if they ever conflict.',
+    '',
+    ...lines,
+    '════ END SCOPED LESSONS ════',
+    '',
+  ];
+}
+
+/** Pull `LESSON:` blocks out of an agent's report. The preamble already asks for
+ *  them; until now they landed in a report file and stopped there. */
+function extractLessons(output) {
+  const out = [];
+  // A lesson runs to the next blank line, the next heading, the next LESSON:,
+  // or the true end of input. NOT `$` — with the /m flag needed for `^` to match
+  // decorated line starts, `$` also matches every line end, which silently
+  // truncated every wrapped lesson to its first line.
+  const re = /^[ \t>*-]*LESSON:[ \t]*([\s\S]*?)(?=\n[ \t]*\n|\n[ \t]*#|\n[ \t>*-]*LESSON:|(?![\s\S]))/gim;
+  let m;
+  while ((m = re.exec(String(output || ''))) !== null) {
+    const body = String(m[1] || '').replace(/\s+/g, ' ').trim();
+    // Below 20 chars it is an empty heading, not a lesson. The API rejects
+    // these too; filtering here keeps the dispatch log quiet.
+    if (body.length >= 20) out.push(body.slice(0, 4000));
+  }
+  return out;
+}
+
+/** POST harvested lessons. Authed, best-effort, never fails the dispatch — the
+ *  agent's work is already done and its report is already on disk. */
+function postLessons(lessons, scope, meta, apiKey) {
+  if (lessons.length === 0) return 0;
+  if (!apiKey) {
+    console.error(
+      `[dispatch] ⚠ ${lessons.length} LESSON: block(s) found but no REPID_API_KEY — not harvested. ` +
+        'They remain in the report file only.',
+    );
+    return 0;
+  }
+  let written = 0;
+  for (const content of lessons) {
+    const payload = JSON.stringify({ scope, content, importance: 0.7, metadata: meta });
+    const child =
+      `fetch(${JSON.stringify(`${RECALL_BASE}/api/v1/lessons`)},{method:'POST',` +
+      `headers:{'content-type':'application/json','x-api-key':${JSON.stringify(apiKey)}},` +
+      `body:${JSON.stringify(payload)}})` +
+      `.then(r=>r.ok?process.stdout.write('ok'):Promise.reject(new Error('HTTP '+r.status)))` +
+      `.catch(e=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})`;
+    try {
+      execFileSync(process.execPath, ['-e', child], {
+        encoding: 'utf8',
+        timeout: RECALL_TIMEOUT_MS,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      written += 1;
+    } catch (e) {
+      console.error(
+        `[dispatch] ⚠ lesson harvest failed: ${(e && e.message) || String(e)}`,
+      );
+    }
+  }
+  return written;
+}
+
 function arg(name, fallback = undefined) {
   const i = process.argv.indexOf(`--${name}`);
   if (i === -1) return fallback;
@@ -684,6 +837,21 @@ function main() {
     return text;
   })();
 
+  // Scoped layer. Retrieved BEFORE the preamble is assembled so a slow or dead
+  // recall API delays the dispatch by at most RECALL_TIMEOUT_MS and never
+  // changes whether the shared lessons ship.
+  const dispatchScope = scopeForTask(task);
+  const scopedLessons = fetchScopedLessons(dispatchScope, task);
+  if (scopedLessons && scopedLessons.length === 0) {
+    console.error(
+      `[dispatch] scoped lessons: 0 for scope=${dispatchScope} (recall OK, nothing stored yet).`,
+    );
+  } else if (scopedLessons) {
+    console.error(
+      `[dispatch] scoped lessons: ${scopedLessons.length} injected for scope=${dispatchScope}.`,
+    );
+  }
+
   const preamble = [
     `You are ${agentKey.toUpperCase()}. Your lane: ${agent.lane}.`,
     `Governing spec: E:/dev/living-docs/03_specs/PARALLEL_AGENT_LANES_v1.md`,
@@ -704,6 +872,7 @@ function main() {
           '',
         ]
       : []),
+    ...scopedLessonBlock(dispatchScope, scopedLessons),
     'HARD PROHIBITIONS — these are enforced elsewhere too, but do not attempt them:',
     '  - do NOT commit to main, do NOT merge any PR, do NOT push',
     '  - do NOT apply prod SQL or DDL',
@@ -841,6 +1010,23 @@ function main() {
     '',
   ].join('\n');
 
+  // PHASE 2 — harvest. The preamble has asked agents to end with "LESSON:" for
+  // a long time; those blocks landed in a report file and stopped there, which
+  // is the read path having no writer. Harvest runs on the SCRUBBED output, so a
+  // lesson can never carry a secret into shared state.
+  const harvested = extractLessons(out);
+  const harvestedCount = postLessons(
+    harvested,
+    dispatchScope,
+    { agent: agentKey, lane: agent.lane, branch, head: headSha },
+    readKey(['REPID_API_KEY', 'REPID_ENGINE_API_KEY']),
+  );
+  if (harvested.length > 0) {
+    console.error(
+      `[dispatch] lessons: ${harvestedCount}/${harvested.length} written to scope=${dispatchScope}.`,
+    );
+  }
+
   const dir = join('reports', new Date().toISOString().slice(0, 10));
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `DISPATCH_${agentKey.toUpperCase()}_${Date.now()}.md`);
@@ -912,7 +1098,7 @@ function main() {
  * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
  * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
  */
-export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS };
+export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS, scopeForTask, scopedLessonBlock, extractLessons, LESSON_SCOPES, SCOPED_CONTEXT_MAX };
 
 const INVOKED_DIRECTLY =
   Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

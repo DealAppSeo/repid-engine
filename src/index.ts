@@ -243,6 +243,12 @@ app.use((req, res, next) => {
   if (req.path === '/api/v1/api-key-requests/request') return next();
   // Escalation (CC2 2026-05-26): /escalation/escalate carries free-form summary/detail prose.
   if (req.path === '/api/v1/escalation/escalate') return next();
+  // Lesson harvest: a lesson is prose written by an agent about its own mistake,
+  // so it routinely contains ';' and '--' and words like "delete". Without this
+  // the harvester silently 400s on most real lessons and the graph stays empty —
+  // the exact one-end-wired failure this feature exists to fix. The route is
+  // authed, length-capped, and its Supabase insert is parameterized.
+  if (req.path === '/api/v1/lessons') return next();
   const SKIP_SANITIZER_KEYS = new Set(['description', 'success_criteria', 'expected_output', 'notes', 'title', 'constitution_text', 'interest', 'linkedin', 'github', 'notes_text']);
   const sanitizeObj = (obj: any) => {
     for (const key in obj) {
