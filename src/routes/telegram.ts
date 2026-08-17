@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { handleHitlCallback } from '../services/hitl-callback-handler';
 import { listAgentControls, setAgentEnabled } from '../services/agent-controls';
 import { fetchVerticalLeaderboard } from '../services/vertical-leaderboard';
+import { getMetricsSnapshot } from '../services/metrics-snapshot';
 const router = express.Router();
 
 const supabase = createClient(
@@ -258,22 +259,13 @@ router.get('/set-webhook', async (req, res) => {
   }
 });
 
+// GET /api/v1/telegram/metrics — this was a byte-for-byte copy of the old
+// /api/v1/metrics body, including the fabricated `hal_approval_rate: 99.4` and the
+// same count-rows-in-JS bug. Fixing only the copy on the main route would have left
+// the identical false numbers reachable one path over, so both now read the single
+// honest snapshot. See src/services/metrics-snapshot.ts.
 router.get('/metrics', async (req, res) => {
-  const [agents, decisions, hallucinations] = await Promise.all([
-    supabase.from('repid_agents').select('id,vdr_count'),
-    supabase.from('repid_score_events').select('id,llm_provider').not('llm_provider','is',null),
-    supabase.from('repid_score_events').select('id').eq('hallucination_caught',true)
-  ]);
-  const vdr = (agents.data||[]).reduce((s,a)=>s+(a.vdr_count||0),0);
-  const providers = new Set((decisions.data||[]).map(d=>d.llm_provider)).size;
-  res.json({
-    agents: agents.data?.length||0,
-    vdr, decisions: decisions.data?.length||0,
-    providers, hallucinations: hallucinations.data?.length||0,
-    staking_contract: '0xd35331Bf94b1A4F4CAf595951056C288ce58C4fA',
-    identity_registry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
-    hal_approval_rate: 99.4
-  });
+  res.json(await getMetricsSnapshot(supabase));
 });
 
 export default router;

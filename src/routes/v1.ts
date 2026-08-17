@@ -104,35 +104,28 @@ router.post('/hal/signals', async (req: Request, res: Response) => {
 });
 
 
-router.get('/metrics', async (req: Request, res: Response) => {
-  const { count: agentCount } = await db.from('repid_agents').select('*', { count: 'exact', head: true });
-  const { data: vdrData } = await db.from('repid_verified_decisions').select('vdr_count');
-  const totalVdr = (vdrData || []).reduce((acc: number, row: any) => acc + (row.vdr_count || 0), 0);
-  
-  res.json({
-    system: {
-      status: "operational",
-      uptime_pct: 99.9,
-      avg_response_ms: 124,
-      hal_veto_rate_24h: 0.994,
-      hallucination_catch_rate: 0.12
-    },
-    network: {
-      total_agents: agentCount || 0,
-      active_agents_24h: agentCount || 0,
-      total_vdr: totalVdr,
-      total_decisions: totalVdr,
-      llm_providers: 2
-    },
-    economics: {
-      grace_pool_pct: 0.20,
-      phi: 1.618033988749895,
-      jubilee_next: new Date(Date.now() + 30*24*60*60*1000).toISOString(),
-      active_stakes_usdc: 500000
-    }
-  });
-});
-
+// DELETED 2026-08-17 — a second `GET /metrics` handler lived here and was DEAD CODE.
+// src/index.ts registers `app.get('/api/v1/metrics')` before `app.use('/api/v1',
+// v1Router)`, and Express matches in registration order, so this block never served a
+// request. Verified by driving the real app through supertest: the response came back
+// in the index.ts shape, and the tables this handler queried
+// (`repid_verified_decisions`) were never touched.
+//
+// It was deleted rather than corrected because everything in it was fabricated and
+// nothing could depend on it — an unreachable handler has no consumers by
+// construction. It published `status: "operational"` (a constant with no path to any
+// other value), `uptime_pct: 99.9`, `avg_response_ms: 124`, `hal_veto_rate_24h:
+// 0.994`, `hallucination_catch_rate: 0.12`, `llm_providers: 2`, `grace_pool_pct:
+// 0.20`, `active_stakes_usdc: 500000`, a `jubilee_next` recomputed as now+30d on every
+// request (so permanently 30 days away, and `repid_jubilee_log` has never held a row),
+// `active_agents_24h` that returned the TOTAL agent count, and `total_decisions` that
+// was `total_vdr` under a second name.
+//
+// The fields that are genuinely measurable — response time, provider count, HAL veto
+// rate, hallucination catch rate, active agents — now exist as real queries on the
+// live endpoint via src/services/metrics-snapshot.ts. Leaving a fabricating copy here
+// would have been a loaded gun: any future reordering of the mounts in src/index.ts
+// would have published it.
 
 
 /**
