@@ -528,7 +528,16 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       try {
         const { halService } = require('../hal/service');
         const fc = await halService.evaluate({ text: decision_text, strictness: 2 });
-        if (fc && fc.mode === 'fact-check') {
+        // `mode === 'fact-check'` IS NOT ENOUGH, and the comment above ("quorum unavailable →
+        // dissonance path unchanged") was not what the code did. The HAL_LOCAL_FALLBACK_ENABLED
+        // path in src/hal/fact-check.ts returns mode 'fact-check' with decision 'clean' at
+        // hal_score 0.2 for any deliverable NOT containing the word "false" — a substring match
+        // with `provider_health.succeeded: 0`. Accepted here, that fabricated 'clean' is read as
+        // a quorum verdict and PRESERVES a reward that a real quorum's 'flagged' would have
+        // denied. `reward_suppressed` is HAL marking exactly that case at the source, so a caller
+        // no longer has to know which fields lie. Marked → treat as no verdict, which is what the
+        // degrade contract already promised.
+        if (fc && fc.mode === 'fact-check' && !fc.reward_suppressed) {
           factCheckDecision = fc.decision ?? null;
         }
       } catch (e: any) {
