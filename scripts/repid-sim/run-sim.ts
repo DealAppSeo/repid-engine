@@ -21,8 +21,11 @@ import {
   runTournament,
   sweep,
   honestyWins,
+  measureArbitrage,
   STRATEGIES,
   SimParams,
+  SYSTEM_FLAG_THRESHOLD,
+  ARBITRAGE_OPTIMUM,
 } from '../../src/incentives/strategy-sim';
 import {
   sampleCurve,
@@ -157,6 +160,46 @@ function reportSweep(): SweepRowsOut {
   return rows;
 }
 
+function reportArbitrage(): void {
+  console.log('');
+  console.log('');
+  console.log('PART 4 — PREFERENCE ARBITRAGE: is a user-settable risk tolerance a gaming vector?');
+  line();
+  console.log('broad-default and broad-shopper are the SAME agent: identical risk band, identical');
+  console.log('volume, identical truthfulness. They differ in ONE bit — the flag threshold the user');
+  console.log(`was allowed to set (${SYSTEM_FLAG_THRESHOLD} default vs ${ARBITRAGE_OPTIMUM} shopped).`);
+  console.log('So the gap between them is the value of the KNOB with behaviour held fixed.');
+  console.log('');
+
+  const results = runTournament({ rounds: ROUNDS, pCatch: 1.0, pQuorum: 1.0, seed: SEED });
+  const a = measureArbitrage(results);
+
+  console.log(`  broad-default  (threshold ${SYSTEM_FLAG_THRESHOLD})  net ${a.defaultNet >= 0 ? '+' : ''}${a.defaultNet.toFixed(1)}`);
+  console.log(`  broad-shopper  (threshold ${ARBITRAGE_OPTIMUM})  net ${a.shopperNet >= 0 ? '+' : ''}${a.shopperNet.toFixed(1)}`);
+  console.log(
+    `  => value of the knob, behaviour unchanged: ${a.gain >= 0 ? '+' : ''}${a.gain.toFixed(1)} RepID ` +
+      `(${(a.gainRatio * 100).toFixed(0)}% of the honest twin's gain)`,
+  );
+  console.log('');
+  console.log(`  EXPLOITABLE? ${a.exploitable ? 'YES — a setting change pays, with no better work' : 'NO'}`);
+  console.log('');
+  console.log('  And the other direction — does CAUTION cost the user? Same agent, stricter setting:');
+  console.log(`    broad-cautious (threshold 0.25)  net ${a.cautiousNet >= 0 ? '+' : ''}${a.cautiousNet.toFixed(1)}`);
+  console.log(`    broad-default  (threshold ${SYSTEM_FLAG_THRESHOLD})   net ${a.defaultNet >= 0 ? '+' : ''}${a.defaultNet.toFixed(1)}`);
+  console.log(
+    `    => cost of caution: ${a.cautiousCost >= 0 ? '+' : ''}${a.cautiousCost.toFixed(1)} RepID  ` +
+      `(penalised? ${a.cautiousPenalised ? 'YES' : 'NO'})`,
+  );
+  console.log('');
+  console.log('  So the knob is monotone in permissiveness: strict < default < permissive, on identical');
+  console.log('  work. A user is paid for their SETTING, which is the finding.');
+  console.log('');
+  console.log('  Note the ceiling: the corrected curve is delta = 3 - 4*risk, which crosses zero at');
+  console.log(`  ${ARBITRAGE_OPTIMUM}. Shopping a threshold ABOVE that converts zero-paying flagged events into`);
+  console.log('  NEGATIVE-paying clean ones, so a rational shopper stops exactly there. The arbitrage is');
+  console.log('  bounded by the reward curve itself, not by any guard.');
+}
+
 type SweepRowsOut = ReturnType<typeof sweep>;
 
 function main(): void {
@@ -172,6 +215,7 @@ function main(): void {
   reportCurve();
   reportTournament();
   const rows = reportSweep();
+  reportArbitrage();
 
   console.log('');
   line();
@@ -187,6 +231,7 @@ function main(): void {
           violations: monotonicityViolations(401).length,
           tournament: runTournament({ rounds: ROUNDS, pCatch: 1.0, pQuorum: 1.0, seed: SEED }),
           sweep: rows,
+          arbitrage: measureArbitrage(runTournament({ rounds: ROUNDS, pCatch: 1.0, pQuorum: 1.0, seed: SEED })),
         },
         null,
         2,

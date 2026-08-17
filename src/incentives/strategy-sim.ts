@@ -40,8 +40,28 @@
  */
 
 import { computeDelta, HALDecision } from '../scoring/repid-delta';
+import { deriveHalDecision } from '../scoring/pipeline';
 import { clampRepid } from '../scoring/repid-clamp';
 import { STARTING_REPID } from '../scoring/repid-constants';
+
+/**
+ * The flag threshold the SYSTEM uses, as a documentation constant only.
+ *
+ * The default path calls the real `deriveHalDecision` rather than comparing against this, so the
+ * number here can never silently disagree with production — `tests/strategy-sim.test.ts` asserts the
+ * two agree across the whole range. It exists so a per-user threshold has something to be compared
+ * to when reporting.
+ */
+export const SYSTEM_FLAG_THRESHOLD = 0.4;
+
+/**
+ * The risk at which the corrected reward curve crosses zero: delta = 3 − 4·risk, so 0.75.
+ *
+ * This is the ceiling on threshold arbitrage. Widening your own clean band past here starts
+ * converting zero-paying flagged events into NEGATIVE-paying clean ones, so a rational shopper stops
+ * exactly at 0.75. Derived from the curve, not chosen — and re-derived by a test.
+ */
+export const ARBITRAGE_OPTIMUM = 0.75;
 
 /** xorshift32 — small, fast, and deterministic from a seed. */
 export function makeRng(seed: number): () => number {
@@ -69,6 +89,14 @@ export interface Strategy {
   readonly riskBand: readonly [number, number];
   /** True when its claims are unfalsifiable, so HAL abstains. */
   readonly abstains?: boolean;
+  /**
+   * A PER-USER flag threshold, modelling a risk-tolerance preference the user was allowed to set.
+   *
+   * Omitted means "use the system default", and that path calls the real `deriveHalDecision` — so an
+   * ordinary strategy is scored by production's own gate, not by a copy of it. Only a strategy that
+   * explicitly declares a preference deviates.
+   */
+  readonly flagThreshold?: number;
 }
 
 /**
@@ -122,6 +150,43 @@ export const STRATEGIES: readonly Strategy[] = [
     riskBand: [0.5, 0.5],
     abstains: true,
   },
+
+  // ────────────────────────────────────────────────────────────────────────────────
+  // THE PREFERENCE ARBITRAGE PAIR — a factorial, not two anecdotes.
+  //
+  // Both emit the SAME output: identical risk band, identical volume, identical truthfulness.
+  // They differ in ONE bit — the flag threshold a user was allowed to choose. So the gap between
+  // their scores is the value of the knob with behaviour held fixed, which is the only way to
+  // answer "is a user-settable risk tolerance a gaming vector" rather than "do assertive agents
+  // score differently".
+  //
+  // The band deliberately straddles the system threshold. A cautious agent's output already sits
+  // far below 0.40, so widening its band would change nothing and measure nothing — the arbitrage
+  // only exists for output that lands in the contested zone.
+  // ────────────────────────────────────────────────────────────────────────────────
+  {
+    id: 'broad-default',
+    description: 'assertive but truthful, spanning the threshold; DEFAULT preference',
+    claimsPerRound: 1,
+    fabricates: false,
+    riskBand: [0.05, 0.7],
+  },
+  {
+    id: 'broad-shopper',
+    description: 'IDENTICAL output to broad-default; shops a permissive preference',
+    claimsPerRound: 1,
+    fabricates: false,
+    riskBand: [0.05, 0.7],
+    flagThreshold: ARBITRAGE_OPTIMUM,
+  },
+  {
+    id: 'broad-cautious',
+    description: 'IDENTICAL output to broad-default; shops a STRICTER preference',
+    claimsPerRound: 1,
+    fabricates: false,
+    riskBand: [0.05, 0.7],
+    flagThreshold: 0.25,
+  },
 ];
 
 export interface SimParams {
@@ -174,9 +239,15 @@ function runStrategy(strategy: Strategy, p: SimParams, rng: () => number) {
       } else if (strategy.fabricates && quorumAvailable && rng() < p.pCatch) {
         decision = 'vetoed';
         vetoes += 1;
+      } else if (strategy.flagThreshold === undefined) {
+        // No preference declared: the REAL gate decides. Previously this line duplicated the 0.4
+        // constant while claiming to be the real function — a copy that could drift silently.
+        decision = deriveHalDecision(risk, false, null);
       } else {
-        // The real threshold function decides clean vs flagged from the risk.
-        decision = risk >= 0.4 ? 'flagged' : 'clean';
+        // A user-set preference widens or narrows the agent's own clean band. This is the whole
+        // subject of the arbitrage measurement: nothing about the agent's OUTPUT changes, only which
+        // of its outputs are eligible to be paid.
+        decision = risk >= strategy.flagThreshold ? 'flagged' : 'clean';
       }
 
       // HAL_DECISION_REQUIRES_QUORUM (default ON): without a quorum the decision is neutralised to
@@ -250,6 +321,59 @@ export function honestyWins(results: readonly StrategyResult[]): boolean {
     ...results.filter((r) => gamingIds.has(r.strategyId)).map((r) => r.finalRepid),
   );
   return bestHonest > bestGaming;
+}
+
+/**
+ * The value of a user-settable risk preference, with the agent's behaviour held fixed.
+ *
+ * `broad-cautious`, `broad-default` and `broad-shopper` are ALL the same agent — identical risk
+ * band, volume and truthfulness — run at three thresholds (0.25 / system default / 0.75). So every
+ * difference between them is the knob and nothing else. A positive `gain` means a user can raise
+ * their own RepID by changing a setting rather than by doing better work, which is the same class of
+ * defect as the reward inversion this simulation was built to find, except deliberate.
+ *
+ * All three arms must share the band for this to mean anything. An earlier version gave the cautious
+ * arm the honest-expert band, which sits entirely below 0.25 — so the stricter threshold never bound,
+ * and the difference it reported was PRNG draw noise between two independently seeded strategies
+ * rather than an effect of the setting. A comparison whose treatment cannot bind is not a
+ * measurement.
+ */
+export interface ArbitrageResult {
+  /** RepID the shopper gained over its identical-behaviour twin. */
+  gain: number;
+  /** As a fraction of the twin's net change. */
+  gainRatio: number;
+  shopperNet: number;
+  defaultNet: number;
+  /** True when shopping a preference pays anything at all. */
+  exploitable: boolean;
+  /** True when a STRICTER preference costs the user RepID for identical work. */
+  cautiousPenalised: boolean;
+  cautiousNet: number;
+  /** Negative when caution costs. Compared against the DEFAULT twin, not against a different agent. */
+  cautiousCost: number;
+}
+
+export function measureArbitrage(results: readonly StrategyResult[]): ArbitrageResult {
+  const get = (id: string) => {
+    const r = results.find((x) => x.strategyId === id);
+    if (!r) throw new Error(`[strategy-sim] no result for '${id}'`);
+    return r;
+  };
+  const shopper = get('broad-shopper');
+  const dflt = get('broad-default');
+  const cautious = get('broad-cautious');
+  const gain = shopper.netChange - dflt.netChange;
+  return {
+    gain,
+    gainRatio: dflt.netChange === 0 ? Infinity : gain / Math.abs(dflt.netChange),
+    shopperNet: shopper.netChange,
+    defaultNet: dflt.netChange,
+    exploitable: gain > 0,
+    cautiousPenalised: cautious.netChange < dflt.netChange,
+    cautiousNet: cautious.netChange,
+    cautiousCost: cautious.netChange - dflt.netChange,
+  };
 }
 
 /** Sweep the detector accuracy and report where, if anywhere, honesty starts winning. */

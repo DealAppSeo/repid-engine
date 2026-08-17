@@ -259,3 +259,78 @@ Fixtures in `tests/repid-delta.test.ts`, `tests/zkp-repid-delta-statement.test.t
 `tests/zkp-nullifier-bridge.test.ts` used `hal_score` values ≥ 0.40 on `clean` decisions —
 combinations the pipeline cannot emit. All were moved onto **reachable** risks, so the suite now
 tests the system that exists.
+
+
+---
+
+# Preference arbitrage — is a user-settable risk tolerance a gaming vector?
+
+**Run 2026-08-17, after the fix.** Motivated by the proposal to let users set a risk
+tolerance during PAI onboarding. Reproduce: `npm run repid:sim`, Part 4.
+
+## Answer
+
+**Yes, and it penalises the cautious user.**
+
+Three arms of a factorial — the **same agent**, identical risk band, identical volume,
+identical truthfulness — run at three flag thresholds. Every difference between them is the
+setting and nothing else.
+
+| arm | threshold | net RepID | vs default |
+|---|---:|---:|---:|
+| `broad-cautious` | 0.25 | **+138** | **−83** |
+| `broad-default` | 0.40 (system) | +221 | — |
+| `broad-shopper` | 0.75 | **+294** | **+73** |
+
+- **A permissive setting is worth +73 RepID on identical work** — 33% of what the twin
+  earned by working at all.
+- **A cautious setting costs −83.** The user the setting exists to serve is the one it
+  charges.
+- The knob is **monotone in permissiveness**: strict < default < permissive. A user is paid
+  for their *setting*.
+- Span across the three arms is **156 RepID**, on output that is byte-for-byte equivalent.
+
+## Why, mechanically
+
+Raising your own flag threshold does not change what you write and does not help you evade
+detection — vetoes come from the quorum catching a falsehood, which the threshold does not
+touch. What it changes is **which of your existing outputs are eligible to be paid**: every
+claim in the band between the old and new threshold moves from `flagged` (pays 0) to `clean`
+(pays a positive delta). It is reward arbitrage, not detection evasion — a sharper and
+narrower claim than "permissive users can cheat".
+
+**The arbitrage has a natural ceiling, and it is the reward curve, not a guard.** The
+corrected curve is `delta = 3 − 4×risk`, which crosses zero at **0.75**. Shopping a threshold
+above that converts zero-paying flagged events into *negative*-paying clean ones, so a
+rational shopper stops exactly at 0.75. That bound is derived in the test rather than
+asserted as a constant — but it is a bound on the *exploit's size*, not a defence against it.
+
+## What this settles about the design
+
+The split proposed before the measurement now has a number behind it:
+
+- **Risk tolerance may govern the user's own experience** — what is surfaced, how much
+  hedging they read, when the agent asks rather than acts, cost/speed/quality routing.
+- **Risk tolerance must not govern the thresholds that mint portable RepID.** If it does,
+  RepID stops being comparable between agents, and a user can raise their score by 33% with a
+  toggle.
+
+And the consequence for zkRepID, which is not optional if thresholds ever do vary: **the ZK
+statement must commit to the threshold set.** Otherwise "RepID ≥ 8000" is unfalsifiable,
+because a verifier cannot know which regime produced it. This is structurally the same hole as
+the missing formula *version* recorded above — the statement carries a `formula_commitment` but
+nothing pinning the gate that decided which events counted.
+
+## Two limits on this result
+
+- **The thresholds are modelled, not implemented.** No per-user threshold exists in the code
+  today; `deriveHalDecision` hardcodes 0.40. The simulation models what *would* happen, using
+  the real reward arithmetic. Any strategy without a declared preference is scored by the real
+  `deriveHalDecision`, and a test asserts the sim's default path agrees with it across the
+  whole range — so the arbitrage arms are the only modelled part.
+- **One earlier version of this measurement was invalid and was discarded.** The cautious arm
+  was first given the honest-expert band, which sits entirely below its own 0.25 threshold, so
+  the treatment could never bind and the "+6" it reported was PRNG draw noise between two
+  independently seeded strategies. A comparison whose treatment cannot bind is not a
+  measurement. The current arms share one band, and a test enforces that each converts a
+  strictly larger share of identical output into paid events.
