@@ -1,0 +1,206 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://repid.dev/schemas/events.v1.json",
+  "title": "RepID Score Events and ERC-8004 Passport Contracts",
+  "description": "Strict, production-grade schemas for RepID ledger score events, selective-disclosure passport disclosures, and x402 spending gate contracts.",
+  "definitions": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "repid_range": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 10000
+    },
+    "DORMANCY_DECAY": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "event_type",
+        "delta",
+        "repid_before",
+        "repid_after",
+        "repid_delta_applied",
+        "idempotency_key",
+        "metadata"
+      ],
+      "properties": {
+        "agent_id": { "$ref": "#/definitions/uuid" },
+        "event_type": { "type": "string", "enum": ["DORMANCY_DECAY"] },
+        "delta": { "type": "number", "maximum": 0 },
+        "repid_before": { "$ref": "#/definitions/repid_range" },
+        "repid_after": { "$ref": "#/definitions/repid_range" },
+        "repid_delta_applied": { "type": "number", "maximum": 0 },
+        "idempotency_key": {
+          "type": "string",
+          "pattern": "^decay:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:[0-9]{4}-[0-9]{2}-[0-9]{2}:tick_[0-9]+_of_[0-9]+$"
+        },
+        "metadata": {
+          "type": "object",
+          "required": [
+            "reason",
+            "weeks_idle",
+            "effective_rate",
+            "floored",
+            "is_decay_shock",
+            "shock_k_of_n",
+            "shock_epoch"
+          ],
+          "properties": {
+            "reason": { "type": "string", "enum": ["Dormancy decay"] },
+            "weeks_idle": { "type": "number", "minimum": 0 },
+            "effective_rate": { "type": "number", "minimum": 0 },
+            "floored": { "type": "boolean" },
+            "is_decay_shock": { "type": "boolean" },
+            "shock_k_of_n": { "type": "string", "pattern": "^[0-9]+ of [0-9]+$" },
+            "shock_epoch": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "ECOSYSTEM_REFERRAL": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "event_type",
+        "delta",
+        "repid_before",
+        "repid_after",
+        "repid_delta_applied",
+        "idempotency_key",
+        "metadata"
+      ],
+      "properties": {
+        "agent_id": { "$ref": "#/definitions/uuid" },
+        "event_type": { "type": "string", "enum": ["ECOSYSTEM_REFERRAL"] },
+        "delta": { "type": "number", "minimum": 1 },
+        "repid_before": { "$ref": "#/definitions/repid_range" },
+        "repid_after": { "$ref": "#/definitions/repid_range" },
+        "repid_delta_applied": { "type": "number", "minimum": 1 },
+        "idempotency_key": {
+          "type": "string",
+          "pattern": "^referral:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "metadata": {
+          "type": "object",
+          "required": ["referred_agent_id", "referral_index", "base_reward", "decay_curve"],
+          "properties": {
+            "referred_agent_id": { "$ref": "#/definitions/uuid" },
+            "referral_index": { "type": "integer", "minimum": 1 },
+            "base_reward": { "type": "number", "minimum": 0 },
+            "decay_curve": { "type": "string", "enum": ["logarithmic"] }
+          }
+        }
+      }
+    },
+    "IMPACT_REWARD": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "event_type",
+        "delta",
+        "repid_before",
+        "repid_after",
+        "repid_delta_applied",
+        "idempotency_key",
+        "metadata"
+      ],
+      "properties": {
+        "agent_id": { "$ref": "#/definitions/uuid" },
+        "event_type": { "type": "string", "enum": ["IMPACT_REWARD"] },
+        "delta": { "type": "number", "minimum": 1 },
+        "repid_before": { "$ref": "#/definitions/repid_range" },
+        "repid_after": { "$ref": "#/definitions/repid_range" },
+        "repid_delta_applied": { "type": "number", "minimum": 1 },
+        "idempotency_key": {
+          "type": "string",
+          "pattern": "^impact:[a-zA-Z0-9_-]+:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "metadata": {
+          "type": "object",
+          "required": ["action_class", "severity_multiplier", "base_value", "reviewer_id"],
+          "properties": {
+            "action_class": {
+              "type": "string",
+              "enum": ["bug_bounty_critical", "ecosystem_tooling", "governance_vote"]
+            },
+            "severity_multiplier": { "type": "number", "minimum": 1.0 },
+            "base_value": { "type": "number", "minimum": 0 },
+            "reviewer_id": { "$ref": "#/definitions/uuid" }
+          }
+        }
+      }
+    },
+    "ZKPPassportDisclosure": {
+      "type": "object",
+      "required": [
+        "current_repid",
+        "tier",
+        "axis_scores",
+        "verification_axis"
+      ],
+      "properties": {
+        "current_repid": { "$ref": "#/definitions/repid_range" },
+        "tier": {
+          "type": "string",
+          "enum": ["PROBATIONARY", "EARNING", "ESTABLISHED", "AUTONOMOUS", "VETERAN"]
+        },
+        "axis_scores": {
+          "type": "object",
+          "required": ["reliability", "accuracy", "alignment", "impact", "longevity"],
+          "properties": {
+            "reliability": { "type": "number", "minimum": 0, "maximum": 100 },
+            "accuracy": { "type": "number", "minimum": 0, "maximum": 100 },
+            "alignment": { "type": "number", "minimum": 0, "maximum": 100 },
+            "impact": { "type": "number", "minimum": 0, "maximum": 100 },
+            "longevity": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+        "verification_axis": {
+          "type": "object",
+          "required": ["soft_landing_active", "amortization_progress", "bft_mismatch_observed"],
+          "properties": {
+            "soft_landing_active": { "type": "boolean" },
+            "amortization_progress": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9]+ of [0-9]+$"
+            },
+            "bft_mismatch_observed": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "X402GateDecision": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "requested_usd",
+        "effective_authority",
+        "real_collateral_usd",
+        "decision",
+        "warning"
+      ],
+      "properties": {
+        "agent_id": { "$ref": "#/definitions/uuid" },
+        "requested_usd": { "type": "number", "minimum": 0 },
+        "effective_authority": { "type": "number", "minimum": 0 },
+        "real_collateral_usd": { "type": "number", "minimum": 0 },
+        "decision": {
+          "type": "string",
+          "enum": ["APPROVED", "DENIED_AUTHORITY_EXCEEDED", "DENIED_NO_STAKE"]
+        },
+        "warning": {
+          "type": ["string", "null"],
+          "enum": ["SOFT_LANDING_ACTIVE_AUTHORITY_WILL_DECAY", null]
+        }
+      }
+    }
+  },
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/definitions/DORMANCY_DECAY" },
+    { "$ref": "#/definitions/ECOSYSTEM_REFERRAL" },
+    { "$ref": "#/definitions/IMPACT_REWARD" }
+  ]
+}

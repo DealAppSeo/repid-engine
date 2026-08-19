@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://repid.dev/schemas/capability-declaration.schema.json",
+  "title": "Adapter Capability Declaration Schema",
+  "description": "A vendor-agnostic, versioned schema that every compute, LLM, storage, or routing adapter must satisfy to integrate with the Trust Harness.",
+  "type": "object",
+  "required": [
+    "adapter_version",
+    "vendor",
+    "cost_model",
+    "latency_class",
+    "degradation_class",
+    "region_edge",
+    "failure_modes"
+  ],
+  "properties": {
+    "adapter_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "vendor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cost_model": {
+      "type": "object",
+      "required": ["usd_per_1k_input", "usd_per_1k_output", "fixed_overhead_usd"],
+      "properties": {
+        "usd_per_1k_input": {
+          "type": "number",
+          "minimum": 0
+        },
+        "usd_per_1k_output": {
+          "type": "number",
+          "minimum": 0
+        },
+        "fixed_overhead_usd": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "latency_class": {
+      "type": "string",
+      "enum": ["instant", "fast", "balanced", "deep"]
+    },
+    "degradation_class": {
+      "type": "object",
+      "required": ["rate_limit_behavior", "fallback_supported"],
+      "properties": {
+        "rate_limit_behavior": {
+          "type": "string",
+          "enum": ["429_backoff", "fail_closed"]
+        },
+        "fallback_supported": {
+          "type": "boolean"
+        }
+      }
+    },
+    "region_edge": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "failure_modes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["context_length_exceeded", "content_filter_block", "timeout"]
+      }
+    }
+  }
+}
