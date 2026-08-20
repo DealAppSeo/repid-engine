@@ -1,0 +1,48 @@
+# Sensitive paths — maintainer-authored, review required before merge.
+#
+# THIS IS ABOUT THE PATH, NOT THE PERSON. It applies to maintainers writing
+# their own code, not only to outside contributions. A solo maintainer shipping
+# unreviewed auth at 2am is the same risk as anyone else, and a rule that only
+# binds strangers is a rule about trust rather than about safety.
+#
+# Two failure modes it exists to catch, both real and both from this repo:
+#   - A new environment secret on a money path. A variable that does not exist
+#     yet reads as the empty string, so a check gated on it FAILS OPEN unless the
+#     secret is deployed strictly before the code that reads it.
+#   - A fix that looks right and does not close the hole. See #446: requiring the
+#     `admin` scope would have authorised every agent, because public
+#     registration grants `admin` to all of them.
+#
+# CODEOWNERS only REQUESTS review. To make it binding, enable "Require review
+# from Code Owners" in branch protection on `main` — without that, this file is
+# documentation, not a gate.
+#
+# Every path below was verified to exist when this file was written. A
+# CODEOWNERS rule pointing at a path that does not exist silently protects
+# nothing.
+
+# Authentication and credential validation.
+/src/auth/                              @DealAppSeo
+/src/middleware/auth.ts                 @DealAppSeo
+
+# Authorization services — routes mounted before the global auth middleware do
+# their own checks here, which makes these the highest-consequence files in the
+# repo.
+/src/services/stake-authorization.ts    @DealAppSeo
+/src/services/bounty-authorization.ts   @DealAppSeo
+
+# Payout and reward paths.
+/src/routes/bounties.ts                 @DealAppSeo
+/src/engine/repid-update.ts             @DealAppSeo
+
+# Delegated authority — mint, revoke, and the effective-authority calculation
+# that gates spending.
+/src/services/principal-grants.ts       @DealAppSeo
+/src/services/effective-authority.ts    @DealAppSeo
+
+# Key custody. This decrypts custodied agent wallet private keys.
+/src/services/agent-key-crypto.ts       @DealAppSeo
+
+# CI configuration — a workflow change can exfiltrate secrets or disable a gate.
+/.github/workflows/                     @DealAppSeo
+/.github/CODEOWNERS                     @DealAppSeo

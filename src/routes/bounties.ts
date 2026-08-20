@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { updateRepId } from '../engine/repid-update';
+import { authorizeBountyVerification } from '../services/bounty-authorization';
 
 const router = Router();
 
@@ -84,9 +85,29 @@ router.post('/bounties/:id/complete', async (req: Request, res: Response) => {
   return res.json({ status: 'COMPLETED', message: 'Awaiting verification by Sean.' });
 });
 
-// POST /bounties/:id/verify — Sean-side verification → pays out RepID via /score
+// POST /bounties/:id/verify — operator verification → pays out RepID via /score
+//
+// AUTHORIZATION RUNS FIRST, BEFORE ANY READ. This router is mounted at
+// src/index.ts:376, ahead of `app.use(authMiddleware)` at line 456, so nothing
+// upstream has checked anything by the time a request arrives here. The ordering
+// below is load-bearing, not stylistic: a check that runs after the bounty is
+// fetched still discloses whether an id exists and still risks a partial write.
+// See services/bounty-authorization.ts for why the `admin` scope is NOT what
+// gates this. (#446; reported externally in #445.)
 router.post('/bounties/:id/verify', async (req: Request, res: Response) => {
-  const { verifierAgentId, approved } = req.body ?? {};
+  const authz = await authorizeBountyVerification({
+    authorizationHeader: req.headers.authorization,
+    apiKeyHeader: typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'] : undefined,
+  });
+  if (!authz.ok) {
+    const status = authz.reason === 'insufficient_scope' ? 403 : 401;
+    return res.status(status).json({ error: authz.detail, reason: authz.reason });
+  }
+  // The verifier is whoever the CREDENTIAL says it is. Any `verifierAgentId` in
+  // the body is ignored — it is a claim, not evidence.
+  const verifierAgentId = authz.verifierAgentId!;
+
+  const { approved } = req.body ?? {};
   const { data: bounty } = await db
     .from('repid_bounties')
     .select('*')
@@ -101,7 +122,11 @@ router.post('/bounties/:id/verify', async (req: Request, res: Response) => {
       status: 'CLAIMED',
       completed_at: null,
     }).eq('id', req.params.id);
-    return res.json({ status: 'REJECTED', message: 'Bounty returned to CLAIMED state' });
+    return res.json({
+      status: 'REJECTED',
+      verifierAgentId,
+      message: 'Bounty returned to CLAIMED state',
+    });
   }
 
   // Approve: mark verified and pay out via AUDIT_CONTRIBUTION score event
@@ -124,7 +149,7 @@ router.post('/bounties/:id/verify', async (req: Request, res: Response) => {
 
   return res.json({
     status: 'VERIFIED',
-    verifierAgentId: verifierAgentId ?? null,
+    verifierAgentId,
     payout,
     message: `Bounty verified. ${bounty.bounty_repid} RepID payout attributed (score event AUDIT_CONTRIBUTION).`,
   });
