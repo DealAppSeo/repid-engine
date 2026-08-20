@@ -1,5 +1,5 @@
-// Patent pending P-023 — TUNED constants come from config/scoring-params.ts
-// (environment-sourced); they are deliberately absent from this public repo.
+// TUNED constants come from config/scoring-params.ts (environment-sourced);
+// they are deliberately absent from this public repo.
 import { scoringParams } from '../config/scoring-params';
 const PHI = 1.6180339887;
 export const PHI_CUBED = PHI ** 3; // ≈ 4.236 — floor cap

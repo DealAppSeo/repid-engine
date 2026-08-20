@@ -24,8 +24,8 @@
  * because shadow still writes a new metadata key on every event and that should be
  * a deliberate act.
  *
- * REUSES layers/decay.ts unchanged. The math is patent-pending (P-023) and was
- * never the problem; the problem was that nothing called it.
+ * REUSES layers/decay.ts unchanged. The math was never the problem; the problem
+ * was that nothing called it.
  */
 
 import { computeDecayFactor, applyDecay } from '../layers/decay';

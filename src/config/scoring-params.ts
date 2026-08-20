@@ -4,8 +4,8 @@
  * ════════════════════════════════════════════════════════════════════════════════
  * WHY THIS EXISTS
  * ════════════════════════════════════════════════════════════════════════════════
- * Four files carried the header `Patent pending P-023 — do not expose constants in
- * public repos` and then declared the constants three lines below it:
+ * Four files carried a header saying the tuned constants must not be exposed in a
+ * public repo, and then declared those constants three lines below it:
  *
  *   layers/decay.ts             LAMBDA, K, DECAY_FLOOR, REDEMPTION_MODIFIER, …
  *   layers/challenge-scoring.ts WIN_BASE, LOSS_BASE, VIOLATION_MULTIPLIER, …
