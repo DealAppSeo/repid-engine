@@ -53,13 +53,19 @@ const BASELINE = {
   'tests/integration/x402-mock-harness.integration.test.ts': 2,
   'tests/integration/x402-recovery-flow.integration.test.ts': 2,
   'tests/peer-verification.test.ts': 2,
+  // Added 2026-08-20: line 48 sets a GrantIntentMessage idempotency-key field to a
+  // literal test-fixture string, flagged only because the field name contains the
+  // substring "Key". Entropy 3.57, plain readable English, no relationship to any live
+  // system. Decoded and confirmed at add-time; same class already covered by every other
+  // entry in this list. Full writeup: .gitleaksignore's entry for the same finding.
+  'tests/principal-grants.test.ts': 1,
   'tests/reponomics-real-staking.test.ts': 1,
   'tests/reponomics-withdraw-fail-closed.test.ts': 1,
   'tests/services/x402-circuit-breaker.test.ts': 1,
   'tests/services/x402-governor.test.ts': 7,
 };
 
-const BASELINE_TOTAL = Object.values(BASELINE).reduce((a, b) => a + b, 0); // 27
+const BASELINE_TOTAL = Object.values(BASELINE).reduce((a, b) => a + b, 0); // 28
 
 /** Normalise a gitleaks `File` (absolute, OS-native) to a repo-relative POSIX path. */
 function normalisePath(file, root = process.cwd()) {

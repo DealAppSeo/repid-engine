@@ -1,0 +1,13 @@
+# False positives, one line per gitleaks fingerprint (commit:file:rule:startLine).
+# Do NOT add an entry here without decoding the flagged value and confirming it is not a
+# credential for a live system — see scripts/ci/resident-secret-gate.js's header for why
+# this repo treats that as non-negotiable (a live Supabase service_role key sat in this
+# tree for weeks in 2026-08 while every gitleaks check was green).
+#
+# tests/principal-grants.test.ts line 48 sets a GrantIntentMessage idempotency-key field
+# to a literal test-fixture string (not a credential) — see that file for the exact text.
+# Flagged only because the field name contains the substring "Key". Entropy 3.57 (real
+# secrets score noticeably higher), plain readable English, no relationship to any live
+# system. Same false-positive class already baselined 27 times in
+# scripts/ci/resident-secret-gate.js for EIP-712 constants and x402 test fixtures.
+e3cca6971b98dbb21d72ed4eb957839eca2a7051:tests/principal-grants.test.ts:generic-api-key:48
