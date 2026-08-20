@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS (CC2 calibration, 2026-05-23): the extractor (strictness:1)
  * cannot discriminate truth on short factual deliverables (harm/scope flat 0.00,
- * epistemic constant 0.45). And the patent comma-BFT agreement lib
+ * epistemic constant 0.45). And the canonical comma-BFT agreement lib
  * (src/hal/lib/*) compares provider *answers to a declarative prompt* — which
  * measures phrasing similarity, NOT truth (a false "Berlin is the capital of
  * France" scored HIGHER agreement than the true "Paris"). It also inflates the
@@ -12,7 +12,7 @@
  * This module takes the opposite, question-shaped approach: ask each free
  * provider to VERIFY the claim (TRUE/FALSE/UNCERTAIN + confidence as JSON), then
  * aggregate verdicts into a 0..1 hal_score (higher = more likely false/risky).
- * It does NOT touch the patent lib (which stays the canonical comma-BFT path).
+ * It does NOT touch src/hal/lib/* (which stays the canonical comma-BFT path).
  *
  * Resilient (RULE-8): bounded per-provider timeout, Promise.allSettled, degrades
  * gracefully (3→2→1→0 providers); 0 providers → caller falls back to extractor.
@@ -647,7 +647,7 @@ async function grokTiebreak(
  * (caught downstream by the F-series filter + dispute path) than a false-veto.
  *
  * This WRAPS the existing aggregation: hal_score and agreement math are
- * unchanged, and the patent comma-BFT lib (src/hal/lib/*) is untouched. Note
+ * unchanged, and the canonical comma-BFT lib (src/hal/lib/*) is untouched. Note
  * the agreement/score were already computed over successful responses only
  * (ERROR providers filtered before aggregation), so failed providers never
  * inflated the score — this gate adds the missing quorum requirement.
@@ -1025,7 +1025,7 @@ export async function factCheck(
   // After the aggregate decision, if it is 'vetoed' but among the responding (non-ERROR) families
   // MORE voted TRUE than FALSE, downgrade the veto: to 'clean' when TRUE is an outright majority of the
   // responding families (trueN*2 > units), else to 'flagged'. This is a principled vote-count rule
-  // (not a per-case lookup / no tuning to a test set); hal_score and the patent comma-BFT lib
+  // (not a per-case lookup / no tuning to a test set); hal_score and the canonical comma-BFT lib
   // (src/hal/lib/*) are untouched — only `decision` changes. Reversible via HAL_PLURALITY_GUARD=false.
   // Uses the SAME family-aware tallies (falseFams/trueFams) already computed above. Applies in BOTH
   // decision modes. ---
@@ -1056,7 +1056,7 @@ export async function factCheck(
   // (>= 75% families FALSE AND score comfortably over threshold) is NEVER escalated/overridden — those
   // are real hallucinations, so recall is protected. Reuses the SAME family-aware tallies
   // (falseFams/trueFams) already computed above. Applies in BOTH decision modes. hal_score and the
-  // patent comma-BFT lib (src/hal/lib/*) are untouched — only `decision` (and its reason/quorum_note)
+  // canonical comma-BFT lib (src/hal/lib/*) are untouched — only `decision` (and its reason/quorum_note)
   // changes. Escalate-ONCE: skipped if Grok already voted via the cycle-2 even-split tiebreak (a 'grok'
   // family is already present). FAIL-SAFE: flag off / no key / Grok error / non-confident-TRUE → veto
   // STANDS unchanged (queryProvider never throws → ERROR verdict → no-op). Reversible via HAL_ESCALATE_GROK.
@@ -1205,7 +1205,7 @@ export async function factCheck(
           crag = await gradeEvidence(deliverable, evidence);
           // REFINE: a confident CRAG grade (Correct/Incorrect, each already gated on ≥2 independent
           // domains) overrides the fast-path decision. Ambiguous never changes the decision (only sets
-          // the disclosure flag). hal_score and the patent comma-BFT lib (src/hal/lib/*) are untouched.
+          // the disclosure flag). hal_score and the canonical comma-BFT lib (src/hal/lib/*) are untouched.
           if (crag.grade === 'Correct' && (decision === 'vetoed' || decision === 'flagged' || decision === 'abstain')) {
             decision = 'clean';
             refined = true;

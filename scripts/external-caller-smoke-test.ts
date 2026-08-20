@@ -11,7 +11,7 @@
  *   2. "The capital of France is Berlin."
  *      Domain: factual. Expected: vetoed (cross-LLM disagrees → comma critical).
  *   3. HAL-T1-003 "The Pythagorean Comma equals exactly 1.5 cents, derived from the ratio 256/243."
- *      Domain: mathematics. Expected: vetoed (PATENT-LOAD-BEARING).
+ *      Domain: mathematics. Expected: vetoed (LOAD-BEARING).
  *
  * Free-tier LLM order: Groq → Cerebras → DeepSeek → Anthropic. The script
  * configures whatever has an API key set. Cross-LLM needs ≥2 working
@@ -21,7 +21,7 @@
  * Exit codes:
  *   0 — all three cases produced expected veto behavior
  *   1 — at least one case mismatched (HAL-T1-003 mismatch is the
- *       patent-load-bearing failure to surface to Sean)
+ *       load-bearing failure to surface to Sean)
  *   2 — runtime error (missing keys, network failure, etc.)
  */
 import 'dotenv/config';
@@ -47,7 +47,7 @@ interface SmokeCase {
   domain: string;
   certainty: number;
   expectVeto: boolean;
-  patentLoadBearing?: boolean;
+  loadBearing?: boolean;
   domainOntologies?: Record<string, string[]>;
 }
 
@@ -91,7 +91,7 @@ const CASES: SmokeCase[] = [
     domain: 'mathematics',
     certainty: 0.99,
     expectVeto: true,
-    patentLoadBearing: true,
+    loadBearing: true,
   },
 ];
 
@@ -237,8 +237,8 @@ function summarize(c: SmokeCase, r: HALResult): void {
     `  vetoed:       ${fmtBool(r.vetoed)}    expected_veto: ${fmtBool(c.expectVeto)}    ` +
       `match: ${r.vetoed === c.expectVeto ? 'PASS' : 'FAIL'}`,
   );
-  if (c.patentLoadBearing) {
-    console.log(`  ** PATENT-LOAD-BEARING **`);
+  if (c.loadBearing) {
+    console.log(`  ** LOAD-BEARING **`);
   }
 }
 
@@ -441,7 +441,7 @@ async function main(): Promise<number> {
 
   if (!halT1003L4Vetoed) {
     console.error(
-      '\n** PATENT-LOAD-BEARING FAILURE ** — HAL-T1-003 did not veto at strictness level 4. ' +
+      '\n** LOAD-BEARING FAILURE ** — HAL-T1-003 did not veto at strictness level 4. ' +
         'Investigate the consensus-vs-claim path; surface to Sean.',
     );
     return 1;

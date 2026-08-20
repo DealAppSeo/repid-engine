@@ -171,7 +171,7 @@ async function processSingleTask(claim: any) {
       // shared appendToAuditChain helper (the prior raw 3-arg unprefixed call
       // matched no function and silently no-op'd). Isolated try/catch: an
       // audit-anchor failure must NOT bubble to processSingleTask's outer
-      // catch (which would mark this already-completed row 'failed'). Patent
+      // catch (which would mark this already-completed row 'failed'). Audit
       // surface — fail LOUDLY (stack), never silently.
       try {
         await appendToAuditChain('validation_queue', claim.id, {
@@ -188,7 +188,7 @@ async function processSingleTask(claim: any) {
       } catch (auditErr: any) {
         console.error(
           `[ValidationWorker] hal_audit_chain append FAILED for validation_queue ${claim.id} ` +
-          `(verdict recorded but NOT anchored — patent-surface gap):`,
+          `(verdict recorded but NOT anchored — audit-surface gap):`,
           auditErr?.stack ?? auditErr
         );
       }

@@ -167,7 +167,7 @@ Read directly inside HAL modules (must become DI params for library):
 
 ---
 
-## 5. The 5-signal block (patent-load-bearing — preserved exactly)
+## 5. The 5-signal block (load-bearing — preserved exactly)
 
 Per `hal-signals.ts:59-77` and canonical doc:
 

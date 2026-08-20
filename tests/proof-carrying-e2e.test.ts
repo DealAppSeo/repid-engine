@@ -1,5 +1,5 @@
 /**
- * The convergence run as a CI assertion (Patent #1 reduction-to-practice, in one test):
+ * The convergence run as a CI assertion (reduction-to-practice, in one test):
  * commit -> retrieve-with-proof -> bind -> revoke -> current-validity FAILS -> HAL abstains -> anchor.
  * Exercises P0-P3 + HAL-grounding together under real Poseidon2. Mirrors scripts/demo/proof-carrying-e2e.ts.
  */
@@ -36,7 +36,7 @@ describe('proof-carrying E2E — the whole loop holds (commit→prove→bind→r
   /**
    * The test above rejects the stale answer, but `grounded=false` alone does not say WHY: swapping
    * in the new root also breaks the binding, so a rejection driven purely by `binding_mismatch`
-   * would satisfy it. The patent claim is stronger than that — the INCLUSION PROOF itself must stop
+   * would satisfy it. The design claim is stronger than that — the INCLUSION PROOF itself must stop
    * verifying once the fact is revoked. So model the realistic adversary: one who re-binds honestly
    * at the new root, leaving the proof as the only thing standing between them and a retracted fact.
    */

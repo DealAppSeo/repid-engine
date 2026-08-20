@@ -20,7 +20,7 @@ import type { ServiceContractRow } from '../types';
  *
  * LOUD ERROR LOGGING (per Phase 2.9.4 silent-swallow finding): every catch
  * here uses console.error WITH STACK TRACE, never .message-only. This is
- * patent surface — failures must be discoverable.
+ * audit surface — failures must be discoverable.
  */
 export abstract class ServiceHandlerBase {
   protected abstract readonly serviceType: string;

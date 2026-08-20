@@ -198,7 +198,7 @@ export const PROOF_TIER_CORPUS: CorpusScenario[] = [
     description: 'Agent recalls a fact that has since been superseded by a correction.',
     axes: { stakes: 0.7, costPressure: 0.45, privacy: 0.2, latencyUrgency: 0.4, reliabilityRequired: 0.85 },
     requiredTier: 'current_validity',
-    why: 'This is the canonical Patent #1 case: inclusion alone would happily prove the SUPERSEDED fact. Only non-membership of its retraction distinguishes still-true from once-true.',
+    why: 'This is the canonical case: inclusion alone would happily prove the SUPERSEDED fact. Only non-membership of its retraction distinguishes still-true from once-true.',
   },
   {
     id: 'permission-check',

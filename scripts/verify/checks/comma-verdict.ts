@@ -2,7 +2,7 @@
  * CHECK — comma verdict is backed by a current ablation. Reads
  * scripts/hal-ablation/data/comma-ablation-results.json (from run-comma-ablation.ts) and reports the
  * decisive B-vs-C held-out result for the Pythagorean-comma-as-cyclic-drift veto. The point: the
- * patent (P-003) re-scope claim can never assert something this artifact contradicts.
+ * P-003 re-scope claim can never assert something this artifact contradicts.
  *
  * This is a RECORD check, not a quality gate: B ≈ C (comma value decorative) is a valid scientific
  * outcome (RULE-10), so it does NOT fail the suite. It SKIPs if the ablation artifact is absent

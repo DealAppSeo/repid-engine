@@ -1,5 +1,5 @@
 /**
- * epoch-freshness.ts — THE WITHHELD-EPOCH CHECK (D-094, Patent #1: *current*-valid memory).
+ * epoch-freshness.ts — THE WITHHELD-EPOCH CHECK (D-094: *current*-valid memory).
  *
  * `auditCommitment` binds a leaf LIST to a ROOT. An EAS anchor binds that ROOT to a TIME and a
  * PURPOSE. Both are single-artifact properties, and both are satisfied — genuinely, with nothing

@@ -1,5 +1,5 @@
 /**
- * ANFIS enablement (Patent #2 broker) — STAGING artifact.
+ * ANFIS broker enablement — STAGING artifact.
  *
  * Mints one `llm_complete`-scoped agent API key per Trinity-12 agent so each
  * agent can call the server-side broker (POST /api/v1/llm/complete with an
@@ -90,7 +90,7 @@ async function hasExistingKey(agentId: string): Promise<boolean> {
 }
 
 async function main() {
-  console.log('=== ANFIS broker key mint (Patent #2 staging) ===');
+  console.log('=== ANFIS broker key mint (staging) ===');
   console.log(`  mode       : ${APPLY ? 'APPLY (will mint + print raw keys ONCE)' : 'DRY-RUN (no writes, no keys)'}`);
   console.log(`  scopes     : ${SCOPES.join(', ')}`);
   console.log(`  label      : ${LABEL}`);

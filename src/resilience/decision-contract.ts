@@ -4,7 +4,7 @@
  *
  * CC imports the TYPES + `decideFailover` from this module and obeys the guarantees below. CC does
  * NOT import (or need to know about) the ANFIS math — that lives privately in `./anfis-failover.ts`
- * (patent hard-stop: the coefficient matrices never leave the private module / never appear in docs).
+ * (disclosure hard-stop: the coefficient matrices never leave the private module / never appear in docs).
  *
  * GOVERNING PRINCIPLE: shadow-first, flagged, fail-safe. A failover brain that ACTS on a bad signal
  * is worse than no brain, so the contract guarantees the wrapper can always fall back to the static

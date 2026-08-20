@@ -187,7 +187,7 @@ Run via `npx ts-node scripts/smoke-phase-1-5.ts`. Full output under
 **Misses (Jaccard fallback noise):**
 - [3,5] Two LLMs answered correctly but with different phrasing or detail level → low Jaccard despite semantic agreement. With `text-embedding-3-small` cosine the agreement signal would land closer to 0.85+ and the 6-DOF dissonance would drop. **Embedding path is implemented; only the API quota blocks it.**
 
-## Patent-relevance
+## Disclosure-relevance
 
 This pipeline closes the reduction-to-practice gap identified in
 PHASE_1A_SPRINT_C_REPORT.md for the **factual cross-check** application
@@ -197,7 +197,7 @@ of the SBFA + Pythagorean Comma primitives:
   from ABSENT → REAL.
 - **Layer 1** (cross-LLM textual fan-out + comparison): newly extracted as
   a callable module separate from BFTEngine. The BFTEngine pattern was
-  patent-load-bearing for *belief-score* cross-check (HMAC, see GMPD
+  load-bearing for *belief-score* cross-check (HMAC, see GMPD
   v1.7); this module applies the same SBFA architecture to *natural-
   language answer* cross-check — different application, separate claim.
 - **6th HAL signal**: `agreement_score` is now consumed by the load-bearing
@@ -229,7 +229,7 @@ Supabase MCP at sprint start.
    429 "You exceeded your current quota, please check your plan and
    billing details" on every call. The verifier falls back to token
    Jaccard, which is the spec's documented fallback methodology, but the
-   patent-relevant claim shape is *embedding cosine over textual
+   disclosure-relevant claim shape is *embedding cosine over textual
    answers*. Restoring the embedding path requires only adding billing
    to the OpenAI account; no code changes.
 

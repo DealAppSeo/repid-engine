@@ -138,10 +138,10 @@ The two `test-persistence.ts` errors above are missing-module issues in Gemini's
 
 - **Code mechanical work:** half-day. Move files, write package.json, configure tsconfig, write README, set up the `dist/` build.
 - **Decoupling check:** few hours. Confirm no leak from `src/services/` or `repid-engine/`-specific code into the extracted library; the existing `scripts/external-caller-smoke-test.ts` already proves clean extraction empirically.
-- **Patent-attorney review gate:** unknown. The library is functionally and architecturally ready; legal review of what's published to public npm vs what stays private is a Sean+attorney decision, not engineering work.
+- **Counsel review gate:** unknown. The library is functionally and architecturally ready; legal review of what's published to public npm vs what stays private is a Sean+counsel decision, not engineering work.
 - **CI workflow setup:** 1-2 hours.
 
-**Recommendation:** do not publish until patent-attorney sign-off. The library is internally consumable as-is. The publish step is mechanical once legal clears.
+**Recommendation:** do not publish until counsel sign-off. The library is internally consumable as-is. The publish step is mechanical once legal clears.
 
 ---
 

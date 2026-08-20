@@ -7,7 +7,7 @@
  * centers/spreads from `../services/anfis-comma` (does NOT fork the math) and maps each surface's
  * per-target signals into the 5-input ANFIS vector.
  *
- * PATENT HARD-STOP (repo CLAUDE.md): the ANFIS coefficient/consequent matrices below are proprietary
+ * DISCLOSURE HARD-STOP (repo CLAUDE.md): the ANFIS coefficient/consequent matrices below are proprietary
  * and must NEVER appear in any public doc. They live only in this private module.
  *
  * SHADOW-FIRST: `decideFailover` returns `shadow:true` for every surface by default (no enable flag

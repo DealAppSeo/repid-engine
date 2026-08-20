@@ -1,7 +1,7 @@
 /**
- * proof-tier-policy.test.ts — properties of the Patent #2 proof-tier policy.
+ * proof-tier-policy.test.ts — properties of the proof-tier policy.
  *
- * These are not coverage tests. Each one pins a property the patent claim rests on,
+ * These are not coverage tests. Each one pins a property the design claim rests on,
  * and each is written so that a policy which "works by accident" fails it:
  *
  *  P1 non-degeneracy — every rung of the ladder is actually reachable. A policy that
@@ -123,7 +123,7 @@ describe('proof-tier policy — non-degeneracy (anti-vacuity)', () => {
     // P2 above could not see it: `seen.size > 1` distinguishes CONSTANT from NON-CONSTANT,
     // not ANFIS from LINEAR. So the sentence P2 was written to earn — "without this the floors
     // could be doing 100% of the work and the policy is a lookup table wearing a fuzzy-logic
-    // costume" — was true of P2 itself. Patent #2's whole claim is that ONE fabric decides both
+    // costume" — was true of P2 itself. The proof-tier policy’s whole claim is that ONE fabric decides both
     // routing and proof strength; a suite that ships green with the fabric removed is not
     // evidence for that claim.
     //

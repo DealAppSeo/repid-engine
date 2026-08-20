@@ -22,7 +22,7 @@
  * WHAT IS SCORED. For each answer emitted during the run, ground truth at verification
  * time is whether the cited fact is still ACTIVE in memory. A policy that refuses a live
  * fact commits a FALSE ABSTENTION (an availability cost). A policy that accepts a retracted
- * fact commits an UNSOUND ACCEPT (a correctness cost — the failure Patent #1 claims to close).
+ * fact commits an UNSOUND ACCEPT (a correctness cost — the failure this design claims to close).
  *
  * WHAT IS NOT SCORED — stated so the table is not read as more than it is:
  *   - RE-DERIVE is the ground-truth oracle by construction, so its 0/0 is a tautology, not

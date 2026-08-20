@@ -1,5 +1,5 @@
 /**
- * proof-tier-regret.test.ts — pins the MEASUREMENT behind Patent #2's enabling disclosure.
+ * proof-tier-regret.test.ts — pins the MEASUREMENT behind the proof-tier policy’s enabling disclosure.
  *
  * #225 pinned properties (safety floor, monotonicity, rung reachability) over a
  * 32,768-point grid. Properties cannot produce regret: regret needs a notion of what the
@@ -12,7 +12,7 @@
  * is load-bearing:
  *   STRUCTURAL — the corpus cannot depend on the policy. Enforced by reading the file,
  *                not by trusting the author's comment saying so.
- *   CLAIM      — the inequalities that Patent #2's value argument actually rests on.
+ *   CLAIM      — the inequalities that the proof-tier policy’s value argument actually rests on.
  *                These must break if the learned fabric is removed; that is checked by
  *                mutation, not assumed.
  *   DISCLOSED  — characterisation literals, including two literals that pin LIMITATIONS
@@ -250,7 +250,7 @@ describe('proof-tier regret — DISCLOSED: the measured table (characterisation)
   });
 });
 
-describe('proof-tier regret — CLAIM: what Patent #2’s value argument actually rests on', () => {
+describe('proof-tier regret — CLAIM: what the proof-tier policy’s value argument actually rests on', () => {
   const { results } = runRegretMeasurement();
   const policy = byName(results, 'policy');
   const floorOnly = byName(results, 'floor_only');
@@ -259,7 +259,7 @@ describe('proof-tier regret — CLAIM: what Patent #2’s value argument actuall
 
   it('the learned layer strictly beats rules-only on safety', () => {
     // If a deterministic floor alone matched the policy's under-proof count, the learned
-    // fabric would be decoration and the patent claim would be weaker than stated. This
+    // fabric would be decoration and the design claim would be weaker than stated. This
     // is the inequality that says otherwise, and it is the one a linear-substitution
     // mutation must break.
     expect(policy.underProof).toBeLessThan(floorOnly.underProof);
@@ -447,7 +447,7 @@ describe('proof-tier regret — ROBUSTNESS: how much of the result rests on my o
     // Beat 46 verifier, MEDIUM-HIGH. The corpus header used to rank the second-labeller
     // result FIRST and call it "the strongest evidence, and the one to cite" — while no
     // data file, fixture or test anywhere in any branch carries that labeller's 30 values.
-    // For patent enabling-disclosure material that distinction is the whole game: an
+    // For enabling-disclosure material that distinction is the whole game: an
     // unpinned FACT is the same defect as an unpinned column, one level up.
     //
     // Prose is the thing that drifts, so the disclosure is pinned as a property. If someone

@@ -4,7 +4,7 @@
  *
  * NOT a stub: this is the real scoring math. The formula has been stable
  * since the 2026-05-03 cross-LLM verification merge (commit `d8915e43`)
- * and is patent-load-bearing per HAL_LIBRARY_API.md. Phase 3 callers
+ * and is load-bearing per HAL_LIBRARY_API.md. Phase 3 callers
  * (extracted hal-signals, /score-event, /api/v1/hal/signals) will route
  * through this function so there's exactly one implementation.
  */

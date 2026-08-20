@@ -1,5 +1,5 @@
 /**
- * P2 — proof-carrying retrieval + answer-binding (Patent #1 keystone), under real Poseidon2.
+ * P2 — proof-carrying retrieval + answer-binding (keystone), under real Poseidon2.
  * Proves: retrieval carries verifying proofs; an answer binds to its cited proof-set;
  * tampering (answer or citation) breaks grounding; revoking a cited entry makes it
  * un-retrievable and its stale citation un-verifiable; and the abstain path refuses

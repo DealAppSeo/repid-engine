@@ -9,7 +9,7 @@
 
 HAL (Hallucination Auditor Layer) is the load-bearing pre-mint check for the HyperDAG receipt-bridge: it converts a (prompt, output) pair into a 5-signal "epistemic risk" vector and a single `hal_score`, with optional cross-LLM consensus + Pythagorean Comma BFT veto. It currently lives entwined with `repid-engine`'s express routes and Supabase clients. This library extracts it cleanly so:
 
-- `hyperdag-bench` can run real-HAL benchmarks for patent defense (P-001/P-002/P-003)
+- `hyperdag-bench` can run real-HAL benchmarks for internal benchmarking (P-001/P-002/P-003)
 - `@hyperdag/protocol` can wire HAL as the default `hallucinationDetector` implementation in its modular-kernel design
 - Third-party consumers (e.g. Gemini's evaluation harness) consume HAL without dragging in Trinity Supabase, the agent runtime, or env-var coupling
 
@@ -17,7 +17,7 @@ HAL (Hallucination Auditor Layer) is the load-bearing pre-mint check for the Hyp
 
 ```typescript
 import {
-  // Constants — patent-load-bearing, see constants.ts comments
+  // Constants — load-bearing, see constants.ts comments
   HAL_PYTHAGOREAN_COMMA,            // = 531441 / 524288
   HAL_FORMULA_WEIGHTS,              // canonical 0.4/0.3/0.2/0.1 weights
   HAL_DEFAULT_VETO_THRESHOLD,       // 0.25
@@ -103,10 +103,10 @@ The library never reads `process.env` directly. Every external client is passed 
 
 This makes the library safe to import into pure-functional benchmark harnesses and into agent runtimes alike — both can call `evaluate()` and get the same result shape, only differing in the optional logging side effects.
 
-## Patent caveats
+## Disclosure caveats
 
-- The Pythagorean Comma constant (`HAL_PYTHAGOREAN_COMMA = 531441/524288`) is a **configurable consensus threshold** — its exact ratio is patent-relevant for P-003. Library docs describe it abstractly; library code uses the ratio form (never the decimal approximation 1.0136433).
-- The 5 signal field names (`harm_probability`, `epistemic_uncertainty`, `evidence_quality`, `scope_appropriateness`, `certainty_at_claim`) are patent-load-bearing — never rename.
+- The Pythagorean Comma constant (`HAL_PYTHAGOREAN_COMMA = 531441/524288`) is a **configurable consensus threshold** — its exact ratio is disclosure-relevant for P-003. Library docs describe it abstractly; library code uses the ratio form (never the decimal approximation 1.0136433).
+- The 5 signal field names (`harm_probability`, `epistemic_uncertainty`, `evidence_quality`, `scope_appropriateness`, `certainty_at_claim`) are load-bearing — never rename.
 - Veto logic flow is preserved: `hal_score = (Σ wᵢ × signalᵢ) × HAL_PYTHAGOREAN_COMMA`, with `vetoed = hal_score ≥ threshold`. Comma BFT critical severity is OR'd into the final veto decision in `evaluate()`.
 
 ## Module layout
@@ -215,7 +215,7 @@ The cross-LLM `agreement_score` (mean pairwise similarity) is classified relativ
 - **`in-band`** (`0.95 – 0.99`): trusted consensus — at level 4+, triggers the consensus-vs-claim comparison.
 - **`too-loose`** (`≤ 0.95`): uncertainty — caller may treat as a low-confidence answer.
 
-Boundaries (`COMMA_BAND_TIGHT_THRESHOLD = 0.99`, `COMMA_BAND_LOOSE_THRESHOLD = 0.95`) are calibratable. The Pythagorean Comma constant (`531441/524288`) is fixed and patent-load-bearing.
+Boundaries (`COMMA_BAND_TIGHT_THRESHOLD = 0.99`, `COMMA_BAND_LOOSE_THRESHOLD = 0.95`) are calibratable. The Pythagorean Comma constant (`531441/524288`) is fixed and load-bearing.
 
 ### Consensus-vs-claim comparison (level 4+)
 

@@ -12,7 +12,7 @@ import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
  * Restored to canonical spec per May 15 handoff doc Architecture Decision #6
  * and Grok cross-validation (2026-05-16). Prior shipped values (-8 claimer slash,
  * +4 validator reward) were unauthorized drift approximately 31× smaller than
- * spec. This file now reflects the patent-aligned delta matrix tied to
+ * spec. This file now reflects the spec-aligned delta matrix tied to
  * Provenance Framework tiers, providing clean reduction-to-practice evidence
  * for P-003 (Pythagorean Comma BFT veto reduction-to-practice claims).
  *
@@ -22,7 +22,7 @@ import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
  * Modification of these constants requires:
  *   1. Update of HYPERDAG_ROADMAP_TO_A2A_MVP_v1.md Architecture Decision #6
  *   2. Strategy Claude approval
- *   3. Grok cross-validation for patent surface impact
+ *   3. Grok cross-validation for audit surface impact
  *   4. New audit-log entry below this block
  *
  * Audit log:
@@ -248,7 +248,7 @@ export async function isContractSimulated(contractId: string): Promise<boolean> 
 // extractor signal. NOTE: comma_gap (the Pythagorean-Comma BFT veto) is null
 // with <3 providers — a 3rd free provider (e.g. fireworks) would enable the
 // full 3-provider Comma-BFT; tracked as a follow-up.
-// Retained (exported) for the patent comma-BFT lib path; strictness:2 now uses
+// Retained (exported) for the canonical comma-BFT lib path; strictness:2 now uses
 // the fact-check evaluator (src/hal/fact-check.ts) per 2026-05-23 calibration.
 export function buildFreeHalProviders(): HALProviderConfig[] {
   const out: HALProviderConfig[] = [];
@@ -542,7 +542,7 @@ export async function applyServiceSatisfiedDeltas(
 // band so a whale can't nuke and a fresh account still counts a little.
 //
 // ── TUNING BLOCK (change these + log an audit line; Grok cross-validate for
-//    patent-surface impact per the file header rules) ─────────────────────
+//    audit-surface impact per the file header rules) ─────────────────────
 const SERVICE_OUTCOME_BASE = {
   good: 60,   // full positive — largest of the three touchpoints' base magnitude
   ok:   0,    // honest middle — no move by default (small nudge possible via _OK_NUDGE)

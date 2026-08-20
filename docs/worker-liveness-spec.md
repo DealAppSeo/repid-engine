@@ -34,4 +34,4 @@ Therefore "worker liveness" = **(a)** is *any* agent runLoop reaching the cascad
 
 ## Hard constraints honored
 
-No code changed. No schema change. Spec only. Patent gate observed (no comma-math literals).
+No code changed. No schema change. Spec only. Disclosure gate observed (no comma-math literals).

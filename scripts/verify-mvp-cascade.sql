@@ -36,7 +36,7 @@ WHERE source_id IN (
 )
 ORDER BY created_at;
 
-\echo '=== Section E: Patent surface deltas — magnitude check ==='
+\echo '=== Section E: Audit surface deltas — magnitude check ==='
 SELECT event_type, delta,
        CASE 
          WHEN ABS(delta) IN (40, 120, 300, 500) THEN 'CANONICAL'

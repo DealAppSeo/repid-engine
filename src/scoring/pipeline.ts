@@ -930,7 +930,7 @@ export async function applyValidationEvent(
       .eq('id', agent_id);
   }
 
-  // Patent-evidence audit anchor for service-contract fulfilment. The
+  // Audit anchor for service-contract fulfilment. The
   // validation_queue path anchors at the queue level (validation-queue-
   // worker.ts); SERVICE_FULFILLED events flow through the service-contract
   // path (applyServiceFulfilledDeltas) which has no queue row, so the
@@ -938,7 +938,7 @@ export async function applyValidationEvent(
   // Gated strictly to SERVICE_FULFILLED so the validation_queue events are
   // not double-anchored. Isolated try/catch: the score event is already
   // persisted; an anchor failure must NOT rethrow and falsely fail the
-  // delta — but it is a patent surface, so it fails LOUDLY with a stack
+  // delta — but it is an audit surface, so it fails LOUDLY with a stack
   // (RULE-11), never silently. Mirrors validation-queue-worker.ts:171-189.
   if (event_type === 'SERVICE_FULFILLED') {
     try {
@@ -960,7 +960,7 @@ export async function applyValidationEvent(
       console.error(
         `[scoring/pipeline] hal_audit_chain append FAILED for repid_score_events ` +
           `${score_event_id} (SERVICE_FULFILLED recorded but NOT anchored — ` +
-          `patent-surface gap):`,
+          `audit-surface gap):`,
         auditErr?.stack ?? auditErr
       );
     }

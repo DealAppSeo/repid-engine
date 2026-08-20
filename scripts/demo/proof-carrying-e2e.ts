@@ -1,7 +1,7 @@
 /**
  * proof-carrying-e2e.ts — THE convergence run.
  *
- * One runnable artifact that is, at once: the patent-#1 reduction-to-practice
+ * One runnable artifact that is, at once: the reduction-to-practice
  * ("an end-to-end run exists"), the Wednesday hackathon demo (hallucinating agent
  * vs proof-carrying agent), and a live validation of the whole substrate.
  *
@@ -31,7 +31,7 @@ const MOCK_ATTEST: AttestFn = async () => ({ uid: '0xMOCK_UID_offline_demo_not_o
 /**
  * Pick the stage-5 anchor writer. A `--live` run must produce a REAL attestation or fail loudly:
  * silently degrading to the mock would put a fabricated on-chain claim on a demo screen (and into
- * the patent record), which is exactly the failure mode this whole artifact exists to argue against.
+ * the permanent record), which is exactly the failure mode this whole artifact exists to argue against.
  */
 export function selectAnchorFn(live: boolean, keyPresent: boolean): { fn: AttestFn; label: string } {
   if (!live) return { fn: MOCK_ATTEST, label: 'offline mock — pass --live for a real Base Sepolia attestation' };

@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 
 async function captureEvidence() {
-  console.log('Fetching evidence for patent class micro-transaction...');
+  console.log('Fetching evidence for the micro-transaction class...');
 
   // 1. Find the real settlement
   const { data: settlements, error: setErr } = await db
@@ -46,7 +46,7 @@ async function captureEvidence() {
   }
 
   // 4. Generate Markdown
-  const markdown = `# X402 Patent Evidence Payload
+  const markdown = `# X402 Evidence Payload
 
 **Date Generated**: ${new Date().toISOString()}
 **Event Type**: First Real-World X402 Micro-Transaction
@@ -73,7 +73,7 @@ ${JSON.stringify(settlement, null, 2)}
 (Attach the HAL or Proof payload here if applicable)
 `;
 
-  const outDir = path.join(__dirname, '../../docs/patent');
+  const outDir = path.join(__dirname, '../../docs/evidence');
   if (!fs.existsSync(outDir)) {
     fs.mkdirSync(outDir, { recursive: true });
   }

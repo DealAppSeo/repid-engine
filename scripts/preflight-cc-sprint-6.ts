@@ -1,5 +1,5 @@
 /**
- * Preflight schema check for CC Sprint 6 (recovery substrate + patent evidence).
+ * Preflight schema check for CC Sprint 6 (recovery substrate + audit evidence).
  *
  * Verifies every table/view/column/UUID this sprint will touch BEFORE we
  * write code, per established Sprint 2/3/4/5 discipline.

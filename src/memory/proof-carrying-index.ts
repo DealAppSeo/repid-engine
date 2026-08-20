@@ -12,7 +12,7 @@
  * (indexed Merkle tree vs MMR-with-tombstones) — see spec §5/§9. The path-folding
  * in verifyInclusion() is identical for either fork, so P0 is safe to build now.
  *
- * ## Merkle hygiene (hardened 2026-07-27 — Patent #1)
+ * ## Merkle hygiene (hardened 2026-07-27)
  * Two standard Merkle weaknesses are closed here so the committed root is a sound
  * cryptographic commitment (not merely a hash chain):
  *

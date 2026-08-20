@@ -2,8 +2,8 @@
  * HAL library types. The interface contract for external callers
  * (Gemini benchmarks, @hyperdag/protocol modular kernel, etc.).
  *
- * Stable since 2026-05-04. Field names are patent-load-bearing —
- * never rename without updating patent docs first.
+ * Stable since 2026-05-04. Field names are load-bearing —
+ * never rename without updating the internal spec first.
  */
 
 export type CommaSeverity = 'none' | 'minor' | 'major' | 'critical';
