@@ -325,6 +325,106 @@ describe('decideRevoke — G6: always allowed to the grantor, never to the grant
   });
 });
 
+/**
+ * F-G6 fixture, verbatim from trinity-ecosystem PR #117's G6 measurement pack
+ * (docs/policy/grants-authority.v0.md): construct a 2-level chain, revoke — never expire — the
+ * link under test, then present. G6a-G6e all MEASURED here is what flips G6 in that doc from
+ * NOT_CHECKED to MEASURED; this describe block IS that measurement, run against the real
+ * decideRevoke/isChainLive/decideAuthorization — no stub that always returns denied.
+ *
+ * One deliberate divergence from the fixture's literal text, called out rather than silently
+ * resolved: the doc's G6b says the child may be revoked by "the grantor (G, or H on the root)".
+ * This module's decideRevoke() is stricter — only the DIRECT grantor of a specific link may
+ * revoke THAT link's own row; a root human has no override on a grandchild's row. H's real power
+ * is G6c's cascade: revoking H's OWN (root) link denies every unexpired descendant, without ever
+ * touching the child row itself. Same end state (A is denied), different, more auditable
+ * mechanism (every revocation is attributable to the one link whose grantor issued it, never a
+ * reach-down). G6b below tests the strict, as-implemented rule; G6c tests the cascade H actually
+ * has.
+ */
+describe('F-G6 fixture — G6a-G6e (trinity-ecosystem PR #117, docs/policy/grants-authority.v0.md)', () => {
+  const now = Date.now();
+  // Step 1: H issues a root ControlProof-equivalent to G. Long TTL — this link is never the one
+  // under test for expiry, only ever for cascade (G6c).
+  const rootGrant = () =>
+    grantRow({
+      id: 'root-1',
+      grantor_agent_id: 'human-h',
+      grantee_agent_id: 'pai-g',
+      parent_grant_id: null,
+      depth: 0,
+      capabilities: ['pay:usdc'],
+      expires_at: new Date(now + 3_600_000).toISOString(),
+    });
+  // Step 2: G delegates to A. Tighter (shorter) TTL than root, child ⊆ parent capabilities,
+  // still comfortably unexpired for the whole test — this is the isolation G6e checks for.
+  const childGrant = (overrides: Partial<GrantRow> = {}) =>
+    grantRow({
+      id: 'child-1',
+      grantor_agent_id: 'pai-g',
+      grantee_agent_id: 'agent-a',
+      parent_grant_id: 'root-1',
+      depth: 1,
+      capabilities: ['pay:usdc'],
+      expires_at: new Date(now + 300_000).toISOString(),
+      ...overrides,
+    });
+  const ctx = { value: { asset: 'USDC' as const, amount: 10 } };
+
+  test('G6a: grantor revoke denies subsequent use — step 4 is FAILED via decideAuthorization, not just isChainLive', () => {
+    const revokedChild = childGrant({ revoked_at: new Date(now + 1000).toISOString(), revoked_by: 'pai-g' });
+    // G6e isolation, asserted rather than merely incidental: the fixture must still be unexpired
+    // at the moment of the check, or a FAILED result here would be measuring G5, not G6.
+    expect(Date.parse(revokedChild.expires_at)).toBeGreaterThan(now + 2000);
+    const decision = decideAuthorization(revokedChild, [rootGrant()], 'pay:usdc', ctx, new Date(now + 2000));
+    expect(decision.authorized).toBe(false);
+    expect(decision.outcome).toBe('FAILED');
+    expect(decision.reason).toMatch(/revoked/);
+    expect(decision.reason).not.toMatch(/expired/);
+  });
+
+  test('G6b: only the direct grantor of this link may revoke it (as-implemented — see block header)', () => {
+    const child = childGrant();
+    expect(decideRevoke(child, 'agent-a').allowed).toBe(false); // grantee cannot revoke
+    expect(decideRevoke(child, 'human-h').allowed).toBe(false); // root human has no override on a grandchild's own row
+    expect(decideRevoke(child, 'pai-g').allowed).toBe(true); // the direct grantor can
+  });
+
+  test('G6c: parent (root) revoke cascades to an unexpired, itself-untouched child', () => {
+    const child = childGrant(); // revoked_at stays null — the child's own row is never touched
+    const revokedRoot = rootGrant();
+    revokedRoot.revoked_at = new Date(now + 1000).toISOString();
+    revokedRoot.revoked_by = 'human-h';
+    expect(Date.parse(child.expires_at)).toBeGreaterThan(now + 2000); // G6e isolation again
+    expect(child.revoked_at).toBeNull(); // confirms the cascade, not a direct revoke of the child
+    const decision = decideAuthorization(child, [revokedRoot], 'pay:usdc', ctx, new Date(now + 2000));
+    expect(decision.authorized).toBe(false);
+    expect(decision.outcome).toBe('FAILED');
+    expect(decision.reason).toMatch(/ancestor/);
+    expect(decision.reason).toMatch(/revoked/);
+  });
+
+  test('G6d: pre-revoke bytes do not resurrect — every subsequent presentation re-checks live, none of them can succeed once revoked', () => {
+    const revokedChild = childGrant({ revoked_at: new Date(now + 1000).toISOString(), revoked_by: 'pai-g' });
+    // There is no bearer token to replay here (unlike a signed-proof system) — the closest
+    // meaningful analog is that the SAME row, re-presented any number of times, is re-checked
+    // live against the DB-shaped state every time, with no cache or one-shot-only denial to
+    // slip past. Three re-presentations, all denied, all for the same (revoked) reason.
+    for (const presentAt of [2000, 60_000, 250_000]) {
+      const decision = decideAuthorization(revokedChild, [rootGrant()], 'pay:usdc', ctx, new Date(now + presentAt));
+      expect(decision.authorized).toBe(false);
+      expect(decision.reason).toMatch(/revoked/);
+    }
+  });
+
+  test('G6e: not G5 in disguise — an explicit control showing the SAME child, unrevoked, is still authorized (so G6a/c above are provably about revocation, not a fixture that would fail anyway)', () => {
+    const liveChild = childGrant(); // no revoked_at
+    const decision = decideAuthorization(liveChild, [rootGrant()], 'pay:usdc', ctx, new Date(now + 2000));
+    expect(decision.authorized).toBe(true);
+    expect(decision.outcome).toBe('MEASURED');
+  });
+});
+
 describe('signed mint intent — FOLLOW-UP: verify, never sign, never touch custodied keys', () => {
   const baseReq = (overrides: Partial<MintRequest> = {}): MintRequest => ({
     grantorAgentId: 'pai-ceo',
