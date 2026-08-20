@@ -26,6 +26,7 @@ import { repidFloorCheck } from './checks/repid-floor';
 import { zkpAnchorCheck } from './checks/zkp-anchor';
 import { commaVerdictCheck } from './checks/comma-verdict';
 import { controllerSanitizerCheck } from './checks/controller-sanitizer';
+import { g6GrantorRevokeCheck } from './checks/g6-grantor-revoke';
 
 const REGISTRY: Record<string, Check> = {
   authority: authorityCheck,
@@ -41,6 +42,9 @@ const REGISTRY: Record<string, Check> = {
   'comma-verdict': commaVerdictCheck, // S-COMMA-R2: B-vs-C cyclic-drift verdict backed by current ablation
   // S-R3 Phase 1 — security guards that become GA's fix list (RED against current code).
   'controller-sanitizer': controllerSanitizerCheck, // sprint free-form insert must be length/field-validated
+  // Grants G1-G8 (docs/policy/grants-authority.v0.md, trinity-ecosystem) — PR #442's registry
+  // is the caller that makes G6 measurable; PR #117 (trinity-ecosystem) is the measurement spec.
+  'g6-grantor-revoke': g6GrantorRevokeCheck,
 };
 
 function parseList(flag: string): string[] | null {
