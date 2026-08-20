@@ -23,14 +23,14 @@ import crypto from 'crypto';
  *   5. DeepSeek   deepseek-chat                (if DEEPSEEK_API_KEY set)
  *   6. Cerebras   llama-3.3-70b                (if CEREBRAS_API_KEY set)
  *
- * RULE-11 (no silent catch on patent/audit surfaces): every provider failure
+ * RULE-11 (no silent catch on audit surfaces): every provider failure
  * is logged with its provider name AND a distinguishable failure_mode
  * (no_api_key | http_<status> | network_error | unparseable |
  * no_verdict_or_zero_confidence). If ALL providers fail, the return is a REAL
  * ESCALATE whose critique enumerates every attempt and its failure mode —
  * distinguishable from a model that genuinely said ESCALATE.
  *
- * Patent gate: no T-formula, no Pythagorean Comma literals, no ANFIS coeffs.
+ * Disclosure gate: no T-formula, no Pythagorean Comma literals, no ANFIS coeffs.
  */
 
 const CALL_TIMEOUT_MS = parseInt(process.env.JUDGE_CALL_TIMEOUT_MS || '20000', 10);
@@ -239,7 +239,7 @@ function safeParse(s: string): any {
  * Observability: one provider_health row per rotation attempt (success |
  * failure | skipped). Best-effort — a health-write failure is logged but
  * NEVER throws, so observability can never break adversarial judging.
- * provider_health is an observability surface, not the patent/audit/money
+ * provider_health is an observability surface, not the audit/money
  * surface, so log-and-swallow is correct here (cf. RULE-11 which governs the
  * audit surfaces). View: provider_health_summary.
  */

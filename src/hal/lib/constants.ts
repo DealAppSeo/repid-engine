@@ -6,13 +6,13 @@
  * Cross-repo file writes to this file are a known anti-pattern (see
  * GEMINI_DRIFT_FIX_REPORT.md, 2026-05-05).
  *
- * Patent-load-bearing: HAL_PYTHAGOREAN_COMMA preserves the exact ratio
+ * Load-bearing: HAL_PYTHAGOREAN_COMMA preserves the exact ratio
  * 531441/524288. The decimal approximation 1.0136433 is informational
  * only — never substitute the decimal for the ratio in computation.
  * (Sprint hard rule #15.)
  *
  * Signal field names (HALSignals.harm_probability etc.) and the canonical
- * formula weights are also patent-load-bearing — see
+ * formula weights are also load-bearing — see
  * docs/HAL_LIBRARY_API.md and docs/HAL_CANONICAL_v1.md.
  */
 
@@ -69,7 +69,7 @@ export const COMMA_BFT_THRESHOLDS = {
  *   - Too-loose zone:  similarity ≤ 0.95  (uncertainty)
  *
  * These zone boundaries are calibratable. The Pythagorean Comma
- * constant itself is fixed (patent-load-bearing, hard-rule #2).
+ * constant itself is fixed (load-bearing, hard-rule #2).
  */
 export const COMMA_BAND_TIGHT_THRESHOLD: number = 0.99;
 export const COMMA_BAND_LOOSE_THRESHOLD: number = 0.95;

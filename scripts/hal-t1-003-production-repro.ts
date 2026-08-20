@@ -10,8 +10,8 @@
  *   (a) the failure is in the extraction (library disagrees with production), or
  *   (b) production HAL itself does not veto HAL-T1-003 — i.e., a real gap.
  *
- * Either answer matters for the patent attorney; (b) is the more important
- * finding because it affects the patent-defense data sheet.
+ * Either answer matters for the counsel; (b) is the more important
+ * finding because it affects the internal-benchmark data sheet.
  *
  * Imports come from src/services/hal-signals.ts (the production path) on
  * purpose — this is NOT an external-caller test; it is a parallel evaluation.

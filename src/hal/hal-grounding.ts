@@ -4,7 +4,7 @@
  * If an agent's answer carries a proof-carrying binding (P2), HAL verifies it: an answer that
  * CLAIMED grounding but can't prove every citation against the memory root is "ungrounded" and
  * SHOULD abstain (no proof ⇒ no answer). This is the HAL side of PROOF_CARRYING_RETRIEVAL_v0
- * (Patent #1 / #3 boundary-abstention).
+ * (boundary-abstention).
  *
  * WHICH root, though — that is the whole of current-validity, and it is a caller obligation.
  * `verifyProofCarryingAnswer` is a pure function over the root the ANSWER asserts, which is the

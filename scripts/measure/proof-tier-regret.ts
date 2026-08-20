@@ -28,7 +28,7 @@ import {
 function main(): void {
   const { results, oracleCostUnits, n, floorFirings, ceilingFirings } = runRegretMeasurement();
 
-  console.log('\n=== PROOF-TIER POLICY — MEASURED REGRET (Patent #2 enabling disclosure) ===');
+  console.log('\n=== PROOF-TIER POLICY — MEASURED REGRET (enabling disclosure) ===');
   console.log(`corpus: ${n} labelled scenarios · oracle cost (perfect play): ${oracleCostUnits} units`);
   console.log(`under-proof prices swept: ${UNDER_PROOF_PRICES.join(', ')} units per violation\n`);
 

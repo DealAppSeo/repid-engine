@@ -51,7 +51,7 @@ async function checkHealth() {
   console.log(`Unresolved failures currently in queue: ${unresolvedCount || 0}`);
   console.log(`Abandoned failures (attempt_count >= 5): ${abandonedCount || 0}`);
 
-  console.log('\n--- X402 PATENT WAKEUP READINESS ---');
+  console.log('\n--- X402 WAKEUP READINESS ---');
   console.log(`Circuit Breaker: ${dashboard.circuit_breaker_tripped}`);
   console.log(`Unresolved Failures: ${unresolvedCount || 0}`);
   try {

@@ -59,4 +59,4 @@ UptimeRobot/`/health` and `agent_heartbeat` all read process/timer liveness, whi
 
 ## Hard constraints honored
 
-No table created. No code changed. No schema change. Spec only. Patent gate observed.
+No table created. No code changed. No schema change. Spec only. Disclosure gate observed.

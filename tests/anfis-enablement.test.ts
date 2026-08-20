@@ -1,5 +1,5 @@
 /**
- * ANFIS enablement (Patent #2 broker) — acceptance tests. STAGING artifact.
+ * ANFIS broker enablement — acceptance tests. STAGING artifact.
  *
  * These prove the broker's enablement-critical behaviors WITHOUT flipping any
  * live flag. They exercise the real llmRouter (src/routes/route.ts) and — for

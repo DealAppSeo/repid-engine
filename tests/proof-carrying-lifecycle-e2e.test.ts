@@ -1,5 +1,5 @@
 /**
- * PATENT #1 — INTEGRATED LIFECYCLE E2E: commit → anchor → retrieve → bind → verify →
+ * INTEGRATED LIFECYCLE E2E: commit → anchor → retrieve → bind → verify →
  * REVOKE → provable staleness → proof-of-absence → abstain → re-anchor.
  *
  * WHY THIS FILE EXISTS (reduction to practice, not extra coverage).
@@ -8,8 +8,8 @@
  * answer-binding (`proof-carrying-memory`), P3 EAS anchoring
  * (`memory-root-anchor`), and the HAL abstain signal (`hal-grounding`). What no
  * test did was walk the claim AS A WHOLE across those module boundaries in one
- * run. The catalog records that as reduction-to-practice gap (b), and a patent
- * claim is granted on the combination, not on the parts: the parts passing
+ * run. The catalog records that as reduction-to-practice gap (b), and a claim of
+ * this kind rests on the combination, not on the parts: the parts passing
  * separately is not evidence that the composed system behaves as claimed.
  *
  * Concretely, three joints were only ever exercised against synthetic stand-ins:
@@ -22,7 +22,7 @@
  *   • `ProofCarryingMemory.nonMembershipWitness` was exported and never called by
  *     any P2-level test. Retraction was shown as "membership stops verifying"
  *     (absence of proof) and never as "absence verifies" (PROOF of absence).
- *     Those are different claims and only the second one is the patent's.
+ *     Those are different claims and only the second one is this design’s.
  *
  * Runs under real Poseidon2-BabyBear (module defaults — no injected fakes), so a
  * pass is evidence about the shipped cryptography, not about a test double.
@@ -68,7 +68,7 @@ function recordingAttester() {
   return { fn, calls };
 }
 
-describe('Patent #1 — full lifecycle across P0/P1/P2/P3 + HAL, under real Poseidon2', () => {
+describe('Full lifecycle across P0/P1/P2/P3 + HAL, under real Poseidon2', () => {
   it('commit → anchor → bind → verify → revoke → prove absence → abstain → re-anchor', async () => {
     const mem = new ProofCarryingMemory();
     const attester = recordingAttester();

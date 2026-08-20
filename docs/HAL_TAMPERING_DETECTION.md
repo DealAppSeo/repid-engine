@@ -125,12 +125,12 @@ loop (v0.2-0.3) will refine it from production data:
 
 The Pythagorean Comma constant itself (`531441/524288 ≈ 1.013643`,
 `HAL_PYTHAGOREAN_COMMA` in `src/hal/lib/constants.ts`) is fixed and
-patent-load-bearing — never modify. The zone boundaries calibrate
+load-bearing — never modify. The zone boundaries calibrate
 around it.
 
 ---
 
-## Patent-portfolio note
+## Proprietary-internals note
 
 The tampering signal is an application of P-003 (Pythagorean Comma BFT)
 in the inverse direction: where the original BFT critical-veto fires

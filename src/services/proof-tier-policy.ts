@@ -1,7 +1,7 @@
 /**
  * proof-tier-policy.ts — backlog #11: proof strength as a FIRST-CLASS ANFIS policy output.
  *
- * PATENT #2 KEYSTONE ("policy-gated proof-tier selection via a unified ANFIS/LASSO
+ * KEYSTONE ("policy-gated proof-tier selection via a unified ANFIS/LASSO
  * fabric"): the same policy fabric that picks the provider/tier for a call also picks
  * the *cryptographic proof strength* that call's answer must carry. One model, two
  * kinds of output — routing and proof obligation — from one feature vector.

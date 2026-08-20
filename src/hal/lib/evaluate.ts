@@ -22,7 +22,7 @@
  * gate is a cost-saver not a correctness gate).
  *
  * Final veto = (hal_score >= threshold) OR (comma_severity === 'critical').
- * The Comma BFT critical-veto is patent-load-bearing (P-003) — preserved
+ * The Comma BFT critical-veto is load-bearing (P-003) — preserved
  * verbatim from src/services/hal-signals.ts:extractHALSignalsWithCrossLLM
  * + the consumer-side veto compose at /score-event and /api/v1/hal/signals.
  */

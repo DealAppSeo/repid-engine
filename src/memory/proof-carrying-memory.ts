@@ -1,7 +1,7 @@
 /**
  * proof-carrying-memory.ts — P2 of PROOF_CARRYING_RETRIEVAL_v0 (D-094).
  *
- * The retrieval API + ANSWER-BINDING — the Patent #1 keystone
+ * The retrieval API + ANSWER-BINDING — the keystone
  * ("binding the verified proof set into the agent's output"):
  *   • retrieval returns each entry WITH an inclusion / current-validity proof
  *     against the committed memory root (revoked entries are excluded — a

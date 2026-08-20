@@ -324,11 +324,11 @@ export async function appendGateAuditChain(db: SupabaseClient, gateEventId: stri
     await appendToAuditChain('substance_gate_events', gateEventId, payload);
   } catch (error: any) {
     // Keep gate recording resilient, but FAIL LOUDLY (stack). This is
-    // patent surface (P-001/P-003) — a silent swallow here means the gate
+    // audit surface (P-001/P-003) — a silent swallow here means the gate
     // event is never anchored. Never let signature drift be invisible again.
     console.error(
       `[GateWriter] hal_audit_chain append FAILED for substance_gate_events ${gateEventId} ` +
-      `(gate event NOT anchored — patent-surface gap):`,
+      `(gate event NOT anchored — audit-surface gap):`,
       error?.stack ?? error
     );
   }

@@ -58,7 +58,7 @@ jobs:
             FIRST read: reports/2026-07-25/AUTONOMOUS_LOOP_CONTRACT.md, the last 2 beats of
             reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md, and reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md.
 
-            PRIORITY (Sean 2026-07-27): patent-proof first (filing imminent); favor the work that touches
+            PRIORITY (Sean 2026-07-27): audit-evidence first; favor the work that touches
             the MOST SURFACES ("do more with less"). Optional extra focus this run: ${{ github.event.inputs.focus }}
 
             THE BEAT:

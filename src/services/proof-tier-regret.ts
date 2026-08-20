@@ -1,5 +1,5 @@
 /**
- * proof-tier-regret.ts — measured regret for the proof-tier policy (Patent #2).
+ * proof-tier-regret.ts — measured regret for the proof-tier policy.
  *
  * The backlog's enabling-disclosure note asks for the ANFIS half of the fabric to carry
  * "measured cost/reliability numbers ... ANFIS regret vs shadow", not only properties.
@@ -8,7 +8,7 @@
  * answer was, and the grid has none. This adds that: a hand-labelled corpus
  * (`proof-tier-corpus.ts`, committed before this file existed) supplies the oracle.
  *
- * THE ABLATION THAT MATTERS. Patent #2 claims a UNIFIED LEARNED FABRIC selects proof
+ * THE ABLATION THAT MATTERS. The proof-tier policy claims a UNIFIED LEARNED FABRIC selects proof
  * strength. The honest test of that claim is not "does the policy do well" — a
  * deterministic floor alone might do just as well, in which case the learned layer is
  * decoration and the claim is weaker than stated. So `floor_only` is measured as a

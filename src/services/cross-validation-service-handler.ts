@@ -8,7 +8,7 @@ import type { ServiceContractRow } from '../types';
  * Phase 2.10 — Cross-Validation Service Handler (P-003)
  *
  * The cleanest commercial reduction-to-practice surface for P-003 (Pythagorean
- * Comma BFT veto). Every successful fulfilment is patent evidence — the
+ * Comma BFT veto). Every successful fulfilment is audit evidence — the
  * `patent_marker: 'P-003'` field is the queryable trail and MUST NOT be removed.
  *
  * Verified signatures (Step 0):
@@ -101,7 +101,7 @@ export class CrossValidationServiceHandler extends ServiceHandlerBase {
       comma_severity,
       contract_id: contract.id,
       verified_at: new Date().toISOString(),
-      patent_marker: 'P-003', // PATENT EVIDENCE TAG — DO NOT REMOVE
+      patent_marker: 'P-003', // AUDIT EVIDENCE TAG — DO NOT REMOVE (column name, not a claim)
       ...(comma_layer_inactive
         ? {
             metadata: {

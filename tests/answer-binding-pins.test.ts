@@ -1,13 +1,13 @@
 /**
- * answer-binding-pins.test.ts — pins for the Patent #1 keystone (ANSWER-BINDING) and for the
+ * answer-binding-pins.test.ts — pins for the keystone (ANSWER-BINDING) and for the
  * verifier's documented adversarial-input contract.
  *
  * WHY THIS FILE EXISTS (Beat 47's independent verification of PR #220, two HIGH findings):
  *
- *  1. The answer-binding element — the Patent #1 keystone by `proof-carrying-memory.ts`'s own
+ *  1. The answer-binding element — the keystone by `proof-carrying-memory.ts`'s own
  *     header — was ENTIRELY UNPINNED. Three mutations that REDUCED what `bindAnswer` commits to
  *     (dropping the root, dropping the citations, dropping the answer) each survived the whole
- *     47-test Patent #1 battery. The shipped code was correct; nothing proved it. For
+ *     47-test battery. The shipped code was correct; nothing proved it. For
  *     reduction-to-practice material the test IS the evidence, so each component of the binding
  *     gets its own killing test here.
  *
@@ -38,7 +38,7 @@ function fixture(): { pca: ProofCarryingAnswer; mem: ProofCarryingMemory; values
   return { pca, mem, values: [a, b] };
 }
 
-describe('answer-binding commits to every component (Patent #1 keystone)', () => {
+describe('answer-binding commits to every component (keystone)', () => {
   it('baseline: the fixture is grounded and its binding verifies', () => {
     const { pca } = fixture();
     const v = verifyProofCarryingAnswer(pca);

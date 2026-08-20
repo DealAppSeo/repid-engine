@@ -21,7 +21,7 @@ function slmAvailable(m: SlmModel): boolean {
  * Phase 2.10 — ANFIS Routing Service Handler (P-002)
  *
  * Advisory: given a query + task characteristics, recommends an LLM provider
- * from historical performance. Patent gate: computeFitnessScore uses abstract
+ * from historical performance. Disclosure gate: computeFitnessScore uses abstract
  * feature normalization only — NO ANFIS internal coefficients/weight matrices
  * are committed here.
  */
@@ -244,7 +244,7 @@ export class AnfisRoutingServiceHandler extends ServiceHandlerBase {
   }
 
   /**
-   * ABSTRACT FITNESS SCORING — patent-gate compliant. Feature-based
+   * ABSTRACT FITNESS SCORING — disclosure-gate compliant. Feature-based
    * normalization only; no ANFIS internal coefficients.
    */
   private computeFitnessScore(

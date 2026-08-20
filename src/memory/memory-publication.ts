@@ -1,5 +1,5 @@
 /**
- * memory-publication.ts — the PUBLICATION CHANNEL for a proof-carrying memory root (D-094, Patent #1).
+ * memory-publication.ts — the PUBLICATION CHANNEL for a proof-carrying memory root (D-094).
  *
  * `auditCommitment` establishes that a published leaf set is a well-formed commitment, which is what
  * makes the cheap per-witness proofs sound against a committer who is not assumed honest. But an
@@ -21,7 +21,7 @@
  * and a PURPOSE. An audited-but-unanchored root is a root the committer asserted about itself: the
  * list is well-formed, and the committer remains free to have produced a different well-formed list
  * a moment earlier and shown that one instead. Which is to say: the audit buys well-formedness, not
- * currency, and "current-valid" is the claim Patent #1 actually makes.
+ * currency, and "current-valid" is the claim this design actually makes.
  *
  * WHAT THIS DOES NOT BUY, stated so it is not assumed:
  *   • It does not fetch anything. The anchor fields are an INPUT (see `decodeAnchorFields`). The

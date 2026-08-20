@@ -3,7 +3,7 @@
  *
  * Ported from src/hal/cross-llm-client.ts:227-373 with no semantic change.
  * The Pythagorean Comma BFT severity tiers are imported from the central
- * constants module so the patent-load-bearing thresholds are single-sourced.
+ * constants module so the load-bearing thresholds are single-sourced.
  */
 import { COMMA_BFT_THRESHOLDS } from '../constants';
 import type { CommaSeverity, HALEmbeddingClient } from '../types';
