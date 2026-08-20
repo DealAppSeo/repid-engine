@@ -50,17 +50,143 @@ export interface ConstitutionalAuditResult {
   processingMs: number;
 }
 
-// LASSO sparse rule selection stub
-// Real: O(n) feature selection → 3-5 most relevant rules from constitution
-// Stub: returns all rules (no selection yet — Sprint 3)
+const LASSO_MAX_FEATURES = 512;
+const LASSO_ITERATIONS = 8;
+const LASSO_LAMBDA = 0.08;
+
+function featureTokens(value: string): string[] {
+  const unigrams = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(token => token.length > 1);
+  const stem = (token: string): string => {
+    let result = token;
+    if (result.length > 4 && result.endsWith('ies')) result = `${result.slice(0, -3)}y`;
+    else if (result.length > 3 && result.endsWith('s')) result = result.slice(0, -1);
+    if (result.length > 5 && result.endsWith('ing')) result = result.slice(0, -3);
+    else if (result.length > 4 && result.endsWith('ed')) result = result.slice(0, -2);
+    if (result.length > 6 && result.endsWith('tion')) result = `${result.slice(0, -4)}t`;
+    else if (result.length > 4 && result.endsWith('e')) result = result.slice(0, -1);
+    return result;
+  };
+  const stems = unigrams.map(stem);
+  const bigrams = stems.slice(0, -1).map((token, i) => `${token}:${stems[i + 1]}`);
+  return [...new Set([...unigrams, ...stems, ...bigrams])];
+}
+
+function ruleText(ruleId: string, value: unknown): string {
+  if (typeof value === 'string') return `${ruleId} ${value}`;
+  try { return `${ruleId} ${JSON.stringify(value)}`; }
+  catch { return `${ruleId} ${String(value)}`; }
+}
+
+function softThreshold(value: number, lambda: number): number {
+  if (value > lambda) return value - lambda;
+  if (value < -lambda) return value + lambda;
+  return 0;
+}
+
+/**
+ * Select constitutional rules with a small L1-regularised linear model.
+ *
+ * Rule token vectors are the predictors and the action token vector is the
+ * response. Fixed-size coordinate descent solves
+ *   1/2 ||action - rules * beta||^2 + lambda ||beta||_1
+ * and therefore drives irrelevant rule coefficients exactly to zero. The
+ * fixed feature/iteration caps keep the selector linear in the rule count.
+ */
+export function selectRelevantRulesLasso(
+  rules: Record<string, unknown>, actionType: string
+): string[] {
+  const entries = Object.entries(rules);
+  if (entries.length <= 3) return entries.map(([id]) => id);
+
+  const actionTokens = featureTokens(actionType);
+  const ruleTokens = entries.map(([id, value]) => featureTokens(ruleText(id, value)));
+  const vocabulary = new Map<string, number>();
+  for (const token of [...actionTokens, ...ruleTokens.flat()]) {
+    if (!vocabulary.has(token) && vocabulary.size < LASSO_MAX_FEATURES) {
+      vocabulary.set(token, vocabulary.size);
+    }
+  }
+
+  const vectorize = (tokens: string[]): Float64Array => {
+    const vector = new Float64Array(vocabulary.size);
+    for (const token of tokens) {
+      const index = vocabulary.get(token);
+      if (index !== undefined) {
+        vector[index] = (vector[index] ?? 0) + (token.includes(':') ? 1.5 : 1);
+      }
+    }
+    let norm = 0;
+    for (const value of vector) norm += value * value;
+    norm = Math.sqrt(norm);
+    if (norm > 0) {
+      for (let i = 0; i < vector.length; i++) vector[i] = (vector[i] ?? 0) / norm;
+    }
+    return vector;
+  };
+
+  const response = vectorize(actionTokens);
+  const predictors = ruleTokens.map(vectorize);
+  const coefficients = new Float64Array(entries.length);
+  const residual = Float64Array.from(response);
+  const correlations = predictors.map(predictor => {
+    let dot = 0;
+    for (let k = 0; k < predictor.length; k++) {
+      dot += (predictor[k] ?? 0) * (response[k] ?? 0);
+    }
+    return dot;
+  });
+
+  for (let iteration = 0; iteration < LASSO_ITERATIONS; iteration++) {
+    for (let j = 0; j < predictors.length; j++) {
+      const predictor = predictors[j]!;
+      const previous = coefficients[j] ?? 0;
+      let rho = 0;
+      for (let k = 0; k < predictor.length; k++) {
+        const x = predictor[k] ?? 0;
+        rho += x * ((residual[k] ?? 0) + x * previous);
+      }
+      const next = softThreshold(rho, LASSO_LAMBDA);
+      const delta = next - previous;
+      if (delta !== 0) {
+        coefficients[j] = next;
+        for (let k = 0; k < predictor.length; k++) {
+          residual[k] = (residual[k] ?? 0) - (predictor[k] ?? 0) * delta;
+        }
+      }
+    }
+  }
+
+  const targetCount = Math.min(5, Math.max(3, Math.ceil(Math.sqrt(entries.length))));
+  return entries
+    .map(([id], index) => ({
+      id,
+      index,
+      coefficient: Math.abs(coefficients[index] ?? 0),
+      correlation: correlations[index] ?? 0,
+    }))
+    .sort((a, b) =>
+      b.coefficient - a.coefficient ||
+      b.correlation - a.correlation ||
+      a.index - b.index
+    )
+    .slice(0, targetCount)
+    .map(item => item.id);
+}
+
+// LASSO sparse rule selection: fetch the constitution once, then run the
+// bounded pure selector above. Database latency is outside the model itself.
 async function lasso_selectRelevantRules(
-  agentId: string, _actionType: string
+  agentId: string, actionType: string
 ): Promise<string[]> {
   try {
     const { data: agent } = await db.from('repid_agents')
       .select('constitution').eq('id', agentId).single();
     if (!agent?.constitution?.rules) return [];
-    return Object.keys(agent.constitution.rules);
+    return selectRelevantRulesLasso(agent.constitution.rules, actionType);
   } catch { return []; }
 }
 
