@@ -30,6 +30,14 @@ import {
   assertDelegationCovers,
   type DelegationMessage,
 } from '../services/agent-delegation';
+import {
+  mintGrant,
+  listGrants,
+  revokeGrant,
+  checkAuthorization,
+  type GrantClass,
+} from '../services/principal-grants';
+import type { Caveat, ActionContext } from '../services/principal-caveat';
 
 const router = Router();
 const fail = (res: Response, code: number, error: string, detail?: string) =>
@@ -167,6 +175,76 @@ router.post('/delegations/revoke', async (req: Request, res: Response) => {
     if (!result.ok) return fail(res, 500, 'delegation_revoke_failed', result.error);
     return res.json({ ok: true, revoked: result.revoked });
   } catch (e: any) { return fail(res, 500, 'delegation_revoke_failed', e?.message); }
+});
+
+// ---------------------------------------------------------------- Grants: principal -> principal
+// The MVP-critical-path piece neither existing delegation primitive covered: an agent (e.g. a
+// PAI) granting scoped, budgeted, time-limited authority to ANOTHER agent (e.g. a CTO/CFO/CMO
+// worker it spawns) — with real, always-available-to-the-grantor revocation. See
+// src/services/principal-grants.ts's header for the full G1-G8 spec this backs
+// (docs/policy/grants-authority.v0.md in trinity-ecosystem).
+router.post('/grants', async (req: Request, res: Response) => {
+  const { grantor_agent_id, grantee_agent_id, grant_class, capabilities, caveats, ttl_seconds, role, audit_for, parent_grant_id } = req.body ?? {};
+  if (!grantor_agent_id || typeof grantor_agent_id !== 'string') return fail(res, 400, 'invalid_grantor', 'grantor_agent_id is required');
+  if (!grantee_agent_id || typeof grantee_agent_id !== 'string') return fail(res, 400, 'invalid_grantee', 'grantee_agent_id is required');
+  const validClasses: GrantClass[] = ['spend', 'hot', 'warm', 'cold'];
+  if (!validClasses.includes(grant_class)) return fail(res, 400, 'invalid_grant_class', `grant_class must be one of ${validClasses.join(', ')}`);
+  if (!Array.isArray(capabilities) || capabilities.some((c) => typeof c !== 'string')) return fail(res, 400, 'invalid_capabilities', 'capabilities must be a string[]');
+  if (caveats !== undefined && !Array.isArray(caveats)) return fail(res, 400, 'invalid_caveats', 'caveats must be an array');
+  const ttl = Number(ttl_seconds);
+  if (!Number.isFinite(ttl)) return fail(res, 400, 'invalid_ttl', 'ttl_seconds is required and must be a number');
+  try {
+    const result = await mintGrant({
+      grantorAgentId: grantor_agent_id,
+      granteeAgentId: grantee_agent_id,
+      grantClass: grant_class as GrantClass,
+      capabilities,
+      caveats: (caveats ?? []) as Caveat[],
+      ttlSeconds: ttl,
+      role: role ?? null,
+      auditFor: audit_for ?? null,
+      parentGrantId: parent_grant_id ?? null,
+    });
+    if (!result.ok) return res.status(403).json({ ok: false, error: result.error });
+    return res.status(201).json({ ok: true, grant: result.grant });
+  } catch (e: any) { return fail(res, 500, 'grant_mint_failed', e?.message); }
+});
+
+// List grants where `principal` is either the grantor or the grantee. Liveness is computed
+// per-request against the full ancestor chain, never stored — a revoked/expired ancestor
+// denies every descendant even though only one row's own fields changed.
+router.get('/grants', async (req: Request, res: Response) => {
+  const principal = req.query.principal ? String(req.query.principal) : null;
+  if (!principal) return fail(res, 400, 'invalid_principal', 'principal query param is required');
+  try {
+    const grants = await listGrants(principal);
+    return res.json({ principal, grants });
+  } catch (e: any) { return fail(res, 500, 'grants_list_failed', e?.message); }
+});
+
+// G6: the grantor may always revoke, and only the grantor — the grantee cannot block it.
+router.post('/grants/:id/revoke', async (req: Request, res: Response) => {
+  const grantId = String(req.params.id);
+  const { requested_by } = req.body ?? {};
+  if (!requested_by || typeof requested_by !== 'string') return fail(res, 400, 'invalid_requested_by', 'requested_by is required');
+  try {
+    const result = await revokeGrant(grantId, requested_by);
+    if (!result.ok) return res.status(403).json({ ok: false, error: result.error });
+    return res.json({ ok: true });
+  } catch (e: any) { return fail(res, 500, 'grant_revoke_failed', e?.message); }
+});
+
+// Read-only: does this grant (and its full ancestor chain) authorize `capability` right now?
+// G5 lives here: an expired or revoked link anywhere in the chain returns FAILED, never a
+// soft-allow with a warning.
+router.post('/grants/:id/authorize', async (req: Request, res: Response) => {
+  const grantId = String(req.params.id);
+  const { capability, context } = req.body ?? {};
+  if (!capability || typeof capability !== 'string') return fail(res, 400, 'invalid_capability', 'capability is required');
+  try {
+    const decision = await checkAuthorization(grantId, capability, (context ?? {}) as ActionContext);
+    return res.json(decision);
+  } catch (e: any) { return fail(res, 500, 'grant_authorize_failed', e?.message); }
 });
 
 router.get('/x402-gate/limits/:agent', async (req: Request, res: Response) => {
