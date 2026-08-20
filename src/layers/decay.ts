@@ -1,7 +1,7 @@
 import { db } from '../db';
 
-// Patent pending P-023 — the TUNED constants are supplied by the environment
-// (config/scoring-params.ts) and are deliberately absent from this public repo.
+// The TUNED constants are supplied by the environment (config/scoring-params.ts)
+// and are deliberately absent from this public repo.
 // REPID_MAX / REPID_MIN stay here: they are the published tier bounds, not tuning.
 import { scoringParams } from '../config/scoring-params';
 

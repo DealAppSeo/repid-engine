@@ -1,7 +1,7 @@
 import { db } from '../db';
 
-// Patent pending P-023 — TUNED constants come from config/scoring-params.ts
-// (environment-sourced); they are deliberately absent from this public repo.
+// TUNED constants come from config/scoring-params.ts (environment-sourced);
+// they are deliberately absent from this public repo.
 import { scoringParams } from '../config/scoring-params';
 
 const EPISTEMIC_SIGNALS = new Set([
