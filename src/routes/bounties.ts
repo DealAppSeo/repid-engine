@@ -1,8 +1,68 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { db } from '../db';
 import { updateRepId } from '../engine/repid-update';
+import { validateAgentApiKey } from '../auth/api-keys';
 
 const router = Router();
+
+type BountyVerifier =
+  | { kind: 'operator' }
+  | { kind: 'agent'; agentId: string };
+
+function safeEqual(a: string, b: string): boolean {
+  const aBytes = Buffer.from(a, 'utf8');
+  const bBytes = Buffer.from(b, 'utf8');
+  return aBytes.length > 0 && aBytes.length === bBytes.length && crypto.timingSafeEqual(aBytes, bBytes);
+}
+
+function extractApiKey(req: Request): string {
+  const xApiKey = req.headers['x-api-key'];
+  if (typeof xApiKey === 'string' && xApiKey.trim()) return xApiKey.trim();
+
+  const authorization = req.headers.authorization;
+  if (typeof authorization !== 'string') return '';
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  return (bearer?.[1] ?? authorization).trim();
+}
+
+/**
+ * Bounty verification is intentionally stricter than the other public bounty
+ * routes: it changes payout state and can emit a RepID score event. The router
+ * is mounted before global auth so this route must authorize locally.
+ */
+export async function requireBountyVerifier(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const apiKey = extractApiKey(req);
+  if (!apiKey) {
+    res.status(401).json({ error: 'Bounty verification requires an operator or admin API key' });
+    return;
+  }
+
+  // REPID_API_KEYS is deliberately not accepted here: those shared keys are
+  // agent-facing and carry neither an identity nor an administrative scope.
+  const masterKey = process.env.CONTROLLER_MASTER_KEY ?? '';
+  if (safeEqual(apiKey, masterKey)) {
+    res.locals.bountyVerifier = { kind: 'operator' } satisfies BountyVerifier;
+    next();
+    return;
+  }
+
+  const validated = await validateAgentApiKey(apiKey);
+  if (!validated?.scopes.includes('admin')) {
+    res.status(403).json({ error: 'Bounty verification requires admin scope' });
+    return;
+  }
+
+  res.locals.bountyVerifier = {
+    kind: 'agent',
+    agentId: validated.agent_id,
+  } satisfies BountyVerifier;
+  next();
+}
 
 // GET /bounties — list bounties with optional filter/sort
 //   ?status=OPEN|CLAIMED|COMPLETED|VERIFIED  (default OPEN, 'all' = no filter)
@@ -85,8 +145,9 @@ router.post('/bounties/:id/complete', async (req: Request, res: Response) => {
 });
 
 // POST /bounties/:id/verify — Sean-side verification → pays out RepID via /score
-router.post('/bounties/:id/verify', async (req: Request, res: Response) => {
-  const { verifierAgentId, approved } = req.body ?? {};
+router.post('/bounties/:id/verify', requireBountyVerifier, async (req: Request, res: Response) => {
+  const { approved } = req.body ?? {};
+  const verifier = res.locals.bountyVerifier as BountyVerifier;
   const { data: bounty } = await db
     .from('repid_bounties')
     .select('*')
@@ -124,7 +185,7 @@ router.post('/bounties/:id/verify', async (req: Request, res: Response) => {
 
   return res.json({
     status: 'VERIFIED',
-    verifierAgentId: verifierAgentId ?? null,
+    verifierAgentId: verifier.kind === 'agent' ? verifier.agentId : null,
     payout,
     message: `Bounty verified. ${bounty.bounty_repid} RepID payout attributed (score event AUDIT_CONTRIBUTION).`,
   });
