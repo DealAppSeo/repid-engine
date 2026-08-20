@@ -27,6 +27,14 @@
  *   G8  a grant never approves/denies payment directly (still a separate,
  *       observe-mode question) -- NOT this module's job; nothing here is wired into
  *       PAY_AUTH_MODE or the pay route. Enforcing G8 is "don't wire it up", not code to test.
+ *
+ * FOLLOW-UP (before merge): two gaps closed after comparing this module's first pass against
+ * agent-delegation.ts's own established shape --
+ *   - idempotency_key: a retried POST /api/v1/grants with the same key now returns the
+ *     already-minted grant instead of risking a second one. See mintGrant().
+ *   - signed mint intent: mint no longer trusts "whichever API key called this" as sufficient
+ *     grantor consent. See principal-grant-intent.ts's header for the full reasoning, including
+ *     why this deliberately does NOT touch the custodied-wallet-decryption path.
  */
 import { db } from '../db';
 import { logAgentEvent } from '../engine/agent-log';
@@ -41,6 +49,7 @@ import {
 } from './principal-caveat';
 import { effectiveAuthority, type EffectiveAuthority } from './effective-authority';
 import { resolveAuthorityInputs } from './grantor-authority';
+import { buildGrantIntentMessage, checkGrantIntentSignature, type SignatureCheck } from './principal-grant-intent';
 
 export const MAX_GRANT_DEPTH = 4; // ported constant: identity/delegation.ts MAX_DELEGATION_DEPTH
 
@@ -71,6 +80,10 @@ export interface GrantRow {
   revoked_by: string | null;
   mint_reason: string;
   created_at: string;
+  idempotency_key: string | null;
+  grantor_signature: string | null;
+  grantor_wallet_address_used: string | null;
+  signature_status: 'VERIFIED' | 'NOT_CHECKED' | null;
 }
 
 // --- Mint: pure decision -----------------------------------------------------
@@ -93,11 +106,15 @@ export type MintDecision =
   | { allowed: false; reason: string };
 
 /**
- * Pure — takes the grantor's already-resolved A_eff rather than computing it, so this is
- * unit-testable with fixtures. `mintGrant` below is the DB-touching wrapper that resolves
- * A_eff and the parent chain, then calls this.
+ * Pure — takes the grantor's already-resolved A_eff AND already-decided signature check rather
+ * than computing either, so this stays unit-testable with fixtures. `mintGrant` below is the
+ * DB-touching wrapper that resolves A_eff, the wallet lookup, and the parent chain, then calls
+ * this.
  */
-export function decideMint(req: MintRequest, grantorAuthority: EffectiveAuthority): MintDecision {
+export function decideMint(req: MintRequest, grantorAuthority: EffectiveAuthority, signatureCheck: SignatureCheck): MintDecision {
+  if (signatureCheck.status === 'FAILED') {
+    return { allowed: false, reason: `mint intent signature check failed: ${signatureCheck.detail}` };
+  }
   if (!Number.isFinite(req.ttlSeconds) || req.ttlSeconds <= 0) {
     return { allowed: false, reason: 'ttlSeconds is required and must be positive — a never-expiring grant is refused at mint' };
   }
@@ -182,7 +199,11 @@ export function decideMint(req: MintRequest, grantorAuthority: EffectiveAuthorit
   }
   // 'cold' has no A_eff floor (theta_cold = 0) beyond the G7 checks above.
 
-  return { allowed: true, depth, reason: `mint permitted: class=${req.grantClass}, depth=${depth}, A_eff=${grantorAuthority.aEff ?? 'NOT_CHECKED'}` };
+  return {
+    allowed: true,
+    depth,
+    reason: `mint permitted: class=${req.grantClass}, depth=${depth}, A_eff=${grantorAuthority.aEff ?? 'NOT_CHECKED'}, signature=${signatureCheck.status}`,
+  };
 }
 
 // --- Liveness / authorization: pure ------------------------------------------
@@ -277,7 +298,23 @@ export interface MintResult {
   error?: string;
 }
 
-export async function mintGrant(req: MintRequest & { parentGrantId?: string | null }): Promise<MintResult> {
+export async function mintGrant(
+  req: MintRequest & { parentGrantId?: string | null; idempotencyKey?: string | null; signature?: string | null },
+): Promise<MintResult> {
+  // Idempotency FIRST, before any other work: a retried request with the same key returns the
+  // grant that request already minted, rather than re-running mint logic (which could otherwise
+  // mint a second grant, or re-deny a request that actually succeeded the first time).
+  if (req.idempotencyKey) {
+    const { data: existing } = await db
+      .from('principal_grants')
+      .select('*')
+      .eq('idempotency_key', req.idempotencyKey)
+      .maybeSingle();
+    if (existing) {
+      return { ok: true, grant: existing as unknown as GrantRow };
+    }
+  }
+
   let parent: GrantRow | null = null;
   if (req.parentGrantId) {
     const { data } = await db.from('principal_grants').select('*').eq('id', req.parentGrantId).maybeSingle();
@@ -291,10 +328,33 @@ export async function mintGrant(req: MintRequest & { parentGrantId?: string | nu
       ? effectiveAuthority(authorityResolution.inputs)
       : { aEff: null, outcome: 'NOT_CHECKED', bindingTerm: null, detail: authorityResolution.detail, rRouteIsLedgerApproximation: true };
 
-  const decision = decideMint({ ...req, parent }, grantorAuthority);
+  // Signature check: look up the grantor's registered wallet_address (NOT its private key —
+  // this never touches getDecryptedPrivateKey(); see principal-grant-intent.ts's header).
+  const { data: grantorRow } = await db
+    .from('repid_agents')
+    .select('wallet_address')
+    .eq('agent_name', req.grantorAgentId)
+    .maybeSingle();
+  const grantorWalletAddress = ((grantorRow as any)?.wallet_address ?? null) as string | null;
+  const intentMessage = buildGrantIntentMessage({
+    grantorAgentId: req.grantorAgentId,
+    granteeAgentId: req.granteeAgentId,
+    grantClass: req.grantClass,
+    capabilities: req.capabilities,
+    caveats: req.caveats,
+    ttlSeconds: req.ttlSeconds,
+    idempotencyKey: req.idempotencyKey ?? '',
+  });
+  const signatureCheck = checkGrantIntentSignature({
+    grantorWalletAddress,
+    message: intentMessage,
+    signature: req.signature ?? null,
+  });
+
+  const decision = decideMint({ ...req, parent }, grantorAuthority, signatureCheck);
   if (!decision.allowed) {
     await logAgentEvent(
-      { agent: req.grantorAgentId, action: 'principal_grant_mint_denied', metadata: { reason: decision.reason, granteeAgentId: req.granteeAgentId, grantClass: req.grantClass } },
+      { agent: req.grantorAgentId, action: 'principal_grant_mint_denied', metadata: { reason: decision.reason, granteeAgentId: req.granteeAgentId, grantClass: req.grantClass, signatureStatus: signatureCheck.status } },
       'warn',
     );
     return { ok: false, error: decision.reason };
@@ -319,17 +379,33 @@ export async function mintGrant(req: MintRequest & { parentGrantId?: string | nu
       not_before: notBefore,
       expires_at: expiresAt,
       mint_reason: decision.reason,
+      idempotency_key: req.idempotencyKey ?? null,
+      grantor_signature: req.signature ?? null,
+      grantor_wallet_address_used: signatureCheck.status === 'VERIFIED' ? signatureCheck.recoveredAddress : null,
+      signature_status: signatureCheck.status,
     })
     .select('*')
     .single();
 
-  if (error) return { ok: false, error: `db_error: ${error.message}` };
+  if (error) {
+    // A unique-violation on idempotency_key here means a concurrent request with the same key
+    // won the race between our lookup above and this insert — fetch and return ITS grant rather
+    // than reporting a spurious failure for what is, from the caller's perspective, a success.
+    if (req.idempotencyKey && /idempotency_key/i.test(error.message)) {
+      const { data: winner } = await db.from('principal_grants').select('*').eq('idempotency_key', req.idempotencyKey).maybeSingle();
+      if (winner) return { ok: true, grant: winner as unknown as GrantRow };
+    }
+    return { ok: false, error: `db_error: ${error.message}` };
+  }
 
   await logAgentEvent(
     {
       agent: req.grantorAgentId,
       action: 'principal_grant_minted',
-      metadata: { grantId: (data as any).id, granteeAgentId: req.granteeAgentId, grantClass: req.grantClass, depth: decision.depth, expiresAt, aEff: grantorAuthority.aEff, aEffOutcome: grantorAuthority.outcome },
+      metadata: {
+        grantId: (data as any).id, granteeAgentId: req.granteeAgentId, grantClass: req.grantClass, depth: decision.depth,
+        expiresAt, aEff: grantorAuthority.aEff, aEffOutcome: grantorAuthority.outcome, signatureStatus: signatureCheck.status,
+      },
     },
     'info',
   );

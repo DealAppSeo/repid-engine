@@ -37,9 +37,38 @@ revocation. The gap neither existing delegation primitive covered — see
   "caveats": [{ "type": "maxValue", "asset": "USDC", "amount": 100 }],
   "ttl_seconds": 3600,
   "role": "CFO",
-  "parent_grant_id": null
+  "parent_grant_id": null,
+  "idempotency_key": "client-generated-uuid",
+  "signature": "0x… (optional — see below)"
 }
 ```
+
+**`idempotency_key`** (optional but recommended): a client-generated key reused across retries of
+one logical mint attempt. A retry with the same key returns the grant that attempt already
+minted rather than risking a duplicate — enforced by a real unique index on the table, not just
+application logic (a concurrent retry racing the same key still resolves to one grant, verified
+against the live table).
+
+**`signature`** (optional, required-when-checkable): an EIP-712 signature over a canonical
+`GrantIntent` payload (`src/services/principal-grant-intent.ts`), covering `grantor`, `grantee`,
+`grantClass`, `capabilities`, the caveats' canonical encoding, `ttlSeconds`, and
+`idempotencyKey` — so the signature is bound to this exact mint attempt and cannot be replayed
+against a different one. This closes a real gap in the first pass: minting used to trust
+whichever API key called the endpoint as sufficient grantor consent, with nothing cryptographic
+behind it. This module only **verifies** a signature the caller already produced — it never
+signs anything itself, and it never touches `agent-wallet-manager.ts`'s
+`getDecryptedPrivateKey()` (the custodied-wallet-decryption path, which that file's own header
+flags as needing separate human/Sean review before any new use).
+
+The response's `signature_status` is one of:
+
+| status | meaning |
+|---|---|
+| `VERIFIED` | grantor has a `repid_agents.wallet_address` on record and the signature recovered to it |
+| `NOT_CHECKED` | grantor has **no** `wallet_address` on record — measured 2026-08-20: 18 of 176 agents. Mint still proceeds (hard-requiring a signature today would block ~90% of agents), but this is never rendered as equivalent to `VERIFIED` |
+
+A grantor **with** a wallet_address on record whose signature is missing or invalid gets a hard
+`FAILED` — the mint is refused, full stop.
 
 `grant_class` is one of `spend | hot | warm | cold`, and sets the mint floor (G1):
 

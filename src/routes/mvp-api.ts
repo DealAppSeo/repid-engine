@@ -184,7 +184,7 @@ router.post('/delegations/revoke', async (req: Request, res: Response) => {
 // src/services/principal-grants.ts's header for the full G1-G8 spec this backs
 // (docs/policy/grants-authority.v0.md in trinity-ecosystem).
 router.post('/grants', async (req: Request, res: Response) => {
-  const { grantor_agent_id, grantee_agent_id, grant_class, capabilities, caveats, ttl_seconds, role, audit_for, parent_grant_id } = req.body ?? {};
+  const { grantor_agent_id, grantee_agent_id, grant_class, capabilities, caveats, ttl_seconds, role, audit_for, parent_grant_id, idempotency_key, signature } = req.body ?? {};
   if (!grantor_agent_id || typeof grantor_agent_id !== 'string') return fail(res, 400, 'invalid_grantor', 'grantor_agent_id is required');
   if (!grantee_agent_id || typeof grantee_agent_id !== 'string') return fail(res, 400, 'invalid_grantee', 'grantee_agent_id is required');
   const validClasses: GrantClass[] = ['spend', 'hot', 'warm', 'cold'];
@@ -193,6 +193,8 @@ router.post('/grants', async (req: Request, res: Response) => {
   if (caveats !== undefined && !Array.isArray(caveats)) return fail(res, 400, 'invalid_caveats', 'caveats must be an array');
   const ttl = Number(ttl_seconds);
   if (!Number.isFinite(ttl)) return fail(res, 400, 'invalid_ttl', 'ttl_seconds is required and must be a number');
+  if (idempotency_key !== undefined && idempotency_key !== null && typeof idempotency_key !== 'string') return fail(res, 400, 'invalid_idempotency_key', 'idempotency_key must be a string');
+  if (signature !== undefined && signature !== null && typeof signature !== 'string') return fail(res, 400, 'invalid_signature', 'signature must be a string');
   try {
     const result = await mintGrant({
       grantorAgentId: grantor_agent_id,
@@ -204,6 +206,8 @@ router.post('/grants', async (req: Request, res: Response) => {
       role: role ?? null,
       auditFor: audit_for ?? null,
       parentGrantId: parent_grant_id ?? null,
+      idempotencyKey: idempotency_key ?? null,
+      signature: signature ?? null,
     });
     if (!result.ok) return res.status(403).json({ ok: false, error: result.error });
     return res.status(201).json({ ok: true, grant: result.grant });

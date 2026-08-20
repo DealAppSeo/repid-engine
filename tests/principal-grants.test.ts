@@ -28,6 +28,26 @@ import {
   type GrantRow,
   type MintRequest,
 } from '../src/services/principal-grants';
+import {
+  buildGrantIntentMessage,
+  checkGrantIntentSignature,
+  GRANT_INTENT_DOMAIN,
+  GRANT_INTENT_TYPES,
+  type GrantIntentMessage,
+} from '../src/services/principal-grant-intent';
+import { Wallet } from 'ethers';
+
+function sampleMessage(): GrantIntentMessage {
+  return buildGrantIntentMessage({
+    grantorAgentId: 'pai-ceo',
+    granteeAgentId: 'agent-cfo',
+    grantClass: 'spend',
+    capabilities: ['pay:usdc'],
+    caveats: [{ type: 'maxValue', asset: 'USDC', amount: 100 }],
+    ttlSeconds: 3600,
+    idempotencyKey: 'test-idempotency-key-1',
+  });
+}
 
 function grantRow(overrides: Partial<GrantRow> = {}): GrantRow {
   const now = Date.now();
@@ -48,6 +68,10 @@ function grantRow(overrides: Partial<GrantRow> = {}): GrantRow {
     revoked_by: null,
     mint_reason: 'test fixture',
     created_at: new Date(now - 1000).toISOString(),
+    idempotency_key: null,
+    grantor_signature: null,
+    grantor_wallet_address_used: null,
+    signature_status: null,
     ...overrides,
   };
 }
@@ -61,6 +85,13 @@ const NOT_CHECKED_AEFF = {
   detail: 'fixture: collateral unmeasured',
   rRouteIsLedgerApproximation: true as const,
 };
+
+// Most decideMint() fixtures below are indifferent to the signature outcome — they exercise
+// G1-G4/G7, not the signature gate itself (that gets its own describe block). NOT_CHECKED_SIG
+// (no wallet_address on record) is the common case measured live: 18 of 176 agents today.
+const NOT_CHECKED_SIG = { required: false as const, status: 'NOT_CHECKED' as const, detail: 'fixture: grantor has no wallet_address on record' };
+const VERIFIED_SIG = { required: true as const, status: 'VERIFIED' as const, recoveredAddress: '0x1111111111111111111111111111111111111111', detail: 'fixture: signature verified' };
+const FAILED_SIG = { required: true as const, status: 'FAILED' as const, detail: 'fixture: signature did not verify' };
 
 describe('principal-capability (ported attenuation algebra)', () => {
   test('exact match permits', () => expect(permits('pay:usdc', 'pay:usdc')).toBe(true));
@@ -139,46 +170,46 @@ describe('decideMint — G1, G2, G3, G4, G7', () => {
   });
 
   test('G1: refuses a never-expiring grant (ttlSeconds <= 0)', () => {
-    const d = decideMint(baseReq({ ttlSeconds: 0 }), MEASURED_AEFF(1000));
+    const d = decideMint(baseReq({ ttlSeconds: 0 }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
     expect(d.allowed).toBe(false);
   });
   test('refuses a self-grant', () => {
-    const d = decideMint(baseReq({ granteeAgentId: 'pai-ceo' }), MEASURED_AEFF(1000));
+    const d = decideMint(baseReq({ granteeAgentId: 'pai-ceo' }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
     expect(d.allowed).toBe(false);
   });
   test('G1: spend grant denied when grantor A_eff is NOT_CHECKED', () => {
-    const d = decideMint(baseReq(), NOT_CHECKED_AEFF);
+    const d = decideMint(baseReq(), NOT_CHECKED_AEFF, NOT_CHECKED_SIG);
     expect(d.allowed).toBe(false);
     expect((d as any).reason).toMatch(/NOT_CHECKED/);
   });
   test('G1: spend grant denied when budget exceeds grantor A_eff', () => {
-    const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 500 }] }), MEASURED_AEFF(100));
+    const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 500 }] }), MEASURED_AEFF(100), NOT_CHECKED_SIG);
     expect(d.allowed).toBe(false);
   });
   test('G1: spend grant allowed when budget is within grantor A_eff', () => {
-    const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 50 }] }), MEASURED_AEFF(100));
+    const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 50 }] }), MEASURED_AEFF(100), NOT_CHECKED_SIG);
     expect(d.allowed).toBe(true);
   });
   test('spend grant requires a maxValue caveat', () => {
-    const d = decideMint(baseReq({ caveats: [] }), MEASURED_AEFF(1000));
+    const d = decideMint(baseReq({ caveats: [] }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
     expect(d.allowed).toBe(false);
   });
   test('hot routing requires A_eff >= 2000', () => {
-    expect(decideMint(baseReq({ grantClass: 'hot', capabilities: ['route:hot'], caveats: [] }), MEASURED_AEFF(1999)).allowed).toBe(false);
-    expect(decideMint(baseReq({ grantClass: 'hot', capabilities: ['route:hot'], caveats: [] }), MEASURED_AEFF(2000)).allowed).toBe(true);
+    expect(decideMint(baseReq({ grantClass: 'hot', capabilities: ['route:hot'], caveats: [] }), MEASURED_AEFF(1999), NOT_CHECKED_SIG).allowed).toBe(false);
+    expect(decideMint(baseReq({ grantClass: 'hot', capabilities: ['route:hot'], caveats: [] }), MEASURED_AEFF(2000), NOT_CHECKED_SIG).allowed).toBe(true);
   });
   test('warm routing requires A_eff >= 500', () => {
-    expect(decideMint(baseReq({ grantClass: 'warm', capabilities: ['route:warm'], caveats: [] }), MEASURED_AEFF(499)).allowed).toBe(false);
-    expect(decideMint(baseReq({ grantClass: 'warm', capabilities: ['route:warm'], caveats: [] }), MEASURED_AEFF(500)).allowed).toBe(true);
+    expect(decideMint(baseReq({ grantClass: 'warm', capabilities: ['route:warm'], caveats: [] }), MEASURED_AEFF(499), NOT_CHECKED_SIG).allowed).toBe(false);
+    expect(decideMint(baseReq({ grantClass: 'warm', capabilities: ['route:warm'], caveats: [] }), MEASURED_AEFF(500), NOT_CHECKED_SIG).allowed).toBe(true);
   });
   test('cold/auditor grant has no A_eff floor but requires auditFor != grantee (G7)', () => {
     const cold = baseReq({ grantClass: 'cold', capabilities: ['audit:read'], caveats: [], auditFor: 'agent-cfo' });
-    expect(decideMint(cold, NOT_CHECKED_AEFF).allowed).toBe(false); // auditFor === grantee
+    expect(decideMint(cold, NOT_CHECKED_AEFF, NOT_CHECKED_SIG).allowed).toBe(false); // auditFor === grantee
     const ok = baseReq({ grantClass: 'cold', capabilities: ['audit:read'], caveats: [], auditFor: 'agent-cto' });
-    expect(decideMint(ok, NOT_CHECKED_AEFF).allowed).toBe(true); // theta_cold = 0, unaffected by A_eff
+    expect(decideMint(ok, NOT_CHECKED_AEFF, NOT_CHECKED_SIG).allowed).toBe(true); // theta_cold = 0, unaffected by A_eff
   });
   test('cold grant with a non-read capability is refused (coarse checker_must_not_be_doer companion)', () => {
-    const d = decideMint(baseReq({ grantClass: 'cold', capabilities: ['pay:usdc'], caveats: [], auditFor: 'agent-cto' }), NOT_CHECKED_AEFF);
+    const d = decideMint(baseReq({ grantClass: 'cold', capabilities: ['pay:usdc'], caveats: [], auditFor: 'agent-cto' }), NOT_CHECKED_AEFF, NOT_CHECKED_SIG);
     expect(d.allowed).toBe(false);
   });
 
@@ -190,34 +221,34 @@ describe('decideMint — G1, G2, G3, G4, G7', () => {
     const parent = grantRow({ id: 'parent-1', depth: 0, capabilities: ['pay:usdc'], caveats: [{ type: 'maxValue', asset: 'USDC', amount: 100 }], expires_at: farFuture });
 
     test('G2: child capability not covered by parent is refused', () => {
-      const d = decideMint(baseReq({ capabilities: ['pay:usdt'], parent }), MEASURED_AEFF(1000));
+      const d = decideMint(baseReq({ capabilities: ['pay:usdt'], parent }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
       expect(d.allowed).toBe(false);
     });
     test('G2: child capability that narrows the parent is allowed', () => {
-      const d = decideMint(baseReq({ capabilities: ['pay:usdc'], caveats: [{ type: 'maxValue', asset: 'USDC', amount: 10 }], parent }), MEASURED_AEFF(1000));
+      const d = decideMint(baseReq({ capabilities: ['pay:usdc'], caveats: [{ type: 'maxValue', asset: 'USDC', amount: 10 }], parent }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
       expect(d.allowed).toBe(true);
     });
     test('G3: child budget exceeding the parent stated cap is refused even if grantor A_eff is high', () => {
-      const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 500 }], parent }), MEASURED_AEFF(10000));
+      const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 500 }], parent }), MEASURED_AEFF(10000), NOT_CHECKED_SIG);
       expect(d.allowed).toBe(false);
     });
     test('dropping the parent maxValue caveat entirely is refused (loosening)', () => {
-      const d = decideMint(baseReq({ caveats: [], capabilities: ['pay:usdc'], grantClass: 'hot', parent: grantRow({ grant_class: 'hot', caveats: [{ type: 'maxValue', asset: 'USDC', amount: 100 }] }) }), MEASURED_AEFF(10000));
+      const d = decideMint(baseReq({ caveats: [], capabilities: ['pay:usdc'], grantClass: 'hot', parent: grantRow({ grant_class: 'hot', caveats: [{ type: 'maxValue', asset: 'USDC', amount: 100 }] }) }), MEASURED_AEFF(10000), NOT_CHECKED_SIG);
       expect(d.allowed).toBe(false);
     });
     test('child expiry beyond the parent is refused', () => {
       const shortParent = grantRow({ expires_at: new Date(Date.now() + 10_000).toISOString() });
-      const d = decideMint(baseReq({ ttlSeconds: 3600, parent: shortParent }), MEASURED_AEFF(1000));
+      const d = decideMint(baseReq({ ttlSeconds: 3600, parent: shortParent }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
       expect(d.allowed).toBe(false);
     });
     test('G4: depth beyond MAX_GRANT_DEPTH is refused', () => {
       const deepParent = grantRow({ depth: MAX_GRANT_DEPTH, expires_at: farFuture });
-      const d = decideMint(baseReq({ parent: deepParent }), MEASURED_AEFF(1000));
+      const d = decideMint(baseReq({ parent: deepParent }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
       expect(d.allowed).toBe(false);
     });
     test('depth exactly at MAX_GRANT_DEPTH is the last one allowed', () => {
       const almostDeepParent = grantRow({ depth: MAX_GRANT_DEPTH - 1, caveats: [{ type: 'maxValue', asset: 'USDC', amount: 100 }], expires_at: farFuture });
-      const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 10 }], parent: almostDeepParent }), MEASURED_AEFF(1000));
+      const d = decideMint(baseReq({ caveats: [{ type: 'maxValue', asset: 'USDC', amount: 10 }], parent: almostDeepParent }), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
       expect(d.allowed).toBe(true);
       expect((d as any).depth).toBe(MAX_GRANT_DEPTH);
     });
@@ -291,5 +322,109 @@ describe('decideRevoke — G6: always allowed to the grantor, never to the grant
   test('an already-revoked grant refuses a second revoke (idempotency guard)', () => {
     const revoked = grantRow({ revoked_at: new Date().toISOString(), revoked_by: 'pai-ceo' });
     expect(decideRevoke(revoked, 'pai-ceo').allowed).toBe(false);
+  });
+});
+
+describe('signed mint intent — FOLLOW-UP: verify, never sign, never touch custodied keys', () => {
+  const baseReq = (overrides: Partial<MintRequest> = {}): MintRequest => ({
+    grantorAgentId: 'pai-ceo',
+    granteeAgentId: 'agent-cfo',
+    grantClass: 'spend',
+    capabilities: ['pay:usdc'],
+    caveats: [{ type: 'maxValue', asset: 'USDC', amount: 100 }],
+    ttlSeconds: 3600,
+    parent: null,
+    ...overrides,
+  });
+
+  test('a FAILED signature check refuses the mint outright, before any other rule runs', () => {
+    const d = decideMint(baseReq(), MEASURED_AEFF(1000), FAILED_SIG);
+    expect(d.allowed).toBe(false);
+    expect((d as any).reason).toMatch(/signature/);
+  });
+  test('NOT_CHECKED (no wallet_address on record) does not block a mint that is otherwise valid', () => {
+    const d = decideMint(baseReq(), MEASURED_AEFF(1000), NOT_CHECKED_SIG);
+    expect(d.allowed).toBe(true);
+  });
+  test('VERIFIED does not block a mint that is otherwise valid', () => {
+    const d = decideMint(baseReq(), MEASURED_AEFF(1000), VERIFIED_SIG);
+    expect(d.allowed).toBe(true);
+  });
+  test('a FAILED signature check still refuses even when every other rule would have allowed it', () => {
+    // Same request as the VERIFIED case above -- only the signature outcome differs -- to prove
+    // the signature gate is genuinely load-bearing, not vacuously true alongside some other denial.
+    const d = decideMint(baseReq(), MEASURED_AEFF(1000), FAILED_SIG);
+    expect(d.allowed).toBe(false);
+  });
+});
+
+describe('checkGrantIntentSignature (pure) — grantor has no wallet_address on record', () => {
+  test('NOT_CHECKED, not FAILED, when the grantor has no wallet_address at all', () => {
+    const r = checkGrantIntentSignature({ grantorWalletAddress: null, message: sampleMessage(), signature: null });
+    expect(r.status).toBe('NOT_CHECKED');
+    expect(r.required).toBe(false);
+  });
+  test('NOT_CHECKED even if a signature happens to be supplied — nothing to check it against', () => {
+    const r = checkGrantIntentSignature({ grantorWalletAddress: null, message: sampleMessage(), signature: '0xdeadbeef' });
+    expect(r.status).toBe('NOT_CHECKED');
+  });
+});
+
+describe('checkGrantIntentSignature (pure) — grantor HAS a wallet_address on record', () => {
+  test('FAILED when no signature is supplied', () => {
+    const r = checkGrantIntentSignature({ grantorWalletAddress: '0x1111111111111111111111111111111111111111', message: sampleMessage(), signature: null });
+    expect(r.required).toBe(true);
+    expect(r.status).toBe('FAILED');
+  });
+  test('FAILED when the signature is malformed', () => {
+    const r = checkGrantIntentSignature({ grantorWalletAddress: '0x1111111111111111111111111111111111111111', message: sampleMessage(), signature: 'not-a-signature' });
+    expect(r.status).toBe('FAILED');
+  });
+  test('a REAL signature from a DIFFERENT wallet than the one on record is FAILED, not VERIFIED', async () => {
+    const wallet = Wallet.createRandom();
+    const message = sampleMessage();
+    const signature = await wallet.signTypedData(GRANT_INTENT_DOMAIN, GRANT_INTENT_TYPES, message);
+    // grantorWalletAddress deliberately does NOT match `wallet` -- the signature is real and
+    // well-formed, it just doesn't belong to the grantor on record.
+    const r = checkGrantIntentSignature({ grantorWalletAddress: '0x2222222222222222222222222222222222222222', message, signature });
+    expect(r.status).toBe('FAILED');
+  });
+  test('a REAL signature from the wallet on record VERIFIES, end to end', async () => {
+    const wallet = Wallet.createRandom();
+    const message = sampleMessage();
+    const signature = await wallet.signTypedData(GRANT_INTENT_DOMAIN, GRANT_INTENT_TYPES, message);
+    const r = checkGrantIntentSignature({ grantorWalletAddress: wallet.address, message, signature });
+    expect(r.status).toBe('VERIFIED');
+    if (r.status === 'VERIFIED') {
+      expect(r.recoveredAddress.toLowerCase()).toBe(wallet.address.toLowerCase());
+    }
+  });
+  test('changing ANY signed field (capabilities) after signing invalidates the signature', async () => {
+    const wallet = Wallet.createRandom();
+    const message = sampleMessage();
+    const signature = await wallet.signTypedData(GRANT_INTENT_DOMAIN, GRANT_INTENT_TYPES, message);
+    const tampered = { ...message, capabilities: ['pay:usdc', 'pay:eth'] }; // widened after signing
+    const r = checkGrantIntentSignature({ grantorWalletAddress: wallet.address, message: tampered, signature });
+    expect(r.status).toBe('FAILED');
+  });
+  test('changing the idempotencyKey after signing invalidates the signature (binds signature to one mint attempt)', async () => {
+    const wallet = Wallet.createRandom();
+    const message = sampleMessage();
+    const signature = await wallet.signTypedData(GRANT_INTENT_DOMAIN, GRANT_INTENT_TYPES, message);
+    const replayed = { ...message, idempotencyKey: 'a-different-attempt' };
+    const r = checkGrantIntentSignature({ grantorWalletAddress: wallet.address, message: replayed, signature });
+    expect(r.status).toBe('FAILED');
+  });
+});
+
+describe('buildGrantIntentMessage (pure)', () => {
+  test('capabilities are sorted, so the signed message does not depend on caller-supplied order', () => {
+    const a = buildGrantIntentMessage({ grantorAgentId: 'g', granteeAgentId: 'e', grantClass: 'spend', capabilities: ['pay:usdc', 'audit:read'], caveats: [], ttlSeconds: 60, idempotencyKey: 'k' });
+    const b = buildGrantIntentMessage({ grantorAgentId: 'g', granteeAgentId: 'e', grantClass: 'spend', capabilities: ['audit:read', 'pay:usdc'], caveats: [], ttlSeconds: 60, idempotencyKey: 'k' });
+    expect(a.capabilities).toEqual(b.capabilities);
+  });
+  test('caveats are canonically encoded via the same encodeCaveats() caveat.ts already uses', () => {
+    const m = buildGrantIntentMessage({ grantorAgentId: 'g', granteeAgentId: 'e', grantClass: 'spend', capabilities: [], caveats: [{ type: 'maxValue', asset: 'USDC', amount: 10 }], ttlSeconds: 60, idempotencyKey: 'k' });
+    expect(m.caveatsEncoded).toBe('maxValue:USDC:10');
   });
 });
