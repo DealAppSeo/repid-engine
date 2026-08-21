@@ -7,7 +7,7 @@
  * OLLAMA_URL/OLLAMA_FALLBACK_MODEL are unset or the server is unreachable, the chain raises a clear
  * error rather than silently returning nothing (RULE-8 fail-loud).
  */
-import { ProviderAdapter, CompletionRequest, CompletionResponse } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, providerHttpError } from './types';
 
 export const OLLAMA_PROVIDER_NAME = 'ollama';
 
@@ -71,7 +71,7 @@ export class OllamaAdapter implements ProviderAdapter {
     }
     clearTimeout(id);
 
-    if (!res.ok) throw new Error(`Ollama HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('Ollama', res);
 
     const data: any = await res.json();
     return {

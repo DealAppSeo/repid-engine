@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 export class DeepSeekAdapter implements ProviderAdapter {
   name = 'deepseek';
@@ -9,7 +9,7 @@ export class DeepSeekAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || 'deepseek-chat';
+    const model = req.model || defaultModelFor('deepseek', 'deepseek-chat');
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -43,7 +43,7 @@ export class DeepSeekAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('DeepSeek rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`DeepSeek HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('DeepSeek', res);
 
     const data = await res.json();
     return {
