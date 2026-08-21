@@ -96,6 +96,54 @@ time, tie it to sustained behaviour rather than peak, or scope it to non-fault e
 Related drift: CLAUDE.md documents `compute_tier(integer)`. It is now
 `compute_tier(integer, uuid)`. The verification command in CLAUDE.md no longer resolves.
 
+#### L4 — the ledger cannot hold the deltas the policy computes **[MEASURED, MITIGATED]**
+
+`delta` and `repid_delta_calculated` are `integer`. `deltaFor` returns two decimal
+places. Postgres casts numeric to integer by rounding **half away from zero** — probed in
+a rolled-back transaction: `-24.75 → -25`, `-0.5 → -1`, `0.4 → 0`, `0.5 → 1`, `2.4 → 2`.
+
+The tested invariants survive it. A confident fault is roughly 12x a success at equal
+value, and rounding cannot invert a 12x gap — so this is **not a scoring bug**.
+
+It is a **replay bug**, and replay is the entire purpose of shadow rows. The
+`FAILURE_COUNTERPARTY` "whisper of negative" is specified as `-0.5`, lands as `-1`, and
+is unrecoverable; every positive delta below 0.5 disappears. *You cannot tune a weight
+whose whole effect is smaller than the quantum your ledger can store.*
+
+**Mitigated in application code, not by a schema change.** The rounding is now performed
+explicitly by the same rule Postgres would have used, so the number written is one we
+chose; and the exact value is preserved beside it as a fixed-point integer at the
+`DELTA_ENCODING_SCALE = 100` this codebase already uses for exactly this problem. A
+re-tuning run reads the exact value. Whether the column should become `numeric` is a
+schema decision and is left open.
+
+#### L5 — deleting an agent deletes its reputation history **[MEASURED, POLICY DECISION]**
+
+Read from the live constraints while validating the shadow writer:
+
+- `repid_score_events_agent_id_fkey` is **`ON DELETE CASCADE`**. Deleting an agent row
+  removes every score event it ever had. An append-only audit log that a `DELETE`
+  silently erases is not append-only.
+- `repid_score_events_counterparty_fkey` is **`ON DELETE SET NULL`**. Deleting a
+  counterparty rewrites the counterparty out of every past event that named it.
+- **`builder_id` has no foreign key at all.** It is a bare `uuid`, so a typo is accepted,
+  permanent, and invisible. It was added on 2026-08-21 and no writer existed yet to
+  constrain it — this is the moment to decide what it references, if anything.
+
+Not changed here. Retention and deletion semantics on a reputation ledger are a policy
+question (and interact with erasure requests), not a cleanup.
+
+#### L6 — the event-type whitelist cannot say "an outcome was classified" **[MEASURED, WORKED AROUND]**
+
+`repid_score_events_event_type_check` admits 36 values, none of which means *an outcome
+was classified*. Every mapping from an outcome class onto it is therefore lossy, and two
+distinct classes have to share one `event_type`.
+
+Worked around rather than solved: the mapping never files a failure as a delivery, and
+the **exact class is written to `decision_outcome`**, which is authoritative. Nothing may
+branch on `event_type` for attribution. The real fix is a whitelist addition — an
+external schema change, and it belongs to whoever owns that constraint.
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
@@ -131,6 +179,54 @@ A first attempt at the shadow guard returned before populating `repid_before`, w
 
 ---
 
+### 2b. The shadow writer, and what it was measured to do **[MEASURED 2026-08-21]**
+
+Three modules, all pure — they BUILD a row and never write it, for the same reason
+`x402-outcome-link.ts` refuses to resolve a tx hash: a scoring path that is a network
+call is a scoring path nobody tests.
+
+| Module | What it decides |
+|---|---|
+| `src/services/risk-tier.ts` | `max(service, stake)` → novelty uplift → one of three bands |
+| `src/services/policy-version.ts` | The version string, **derived from behaviour, not declared** |
+| `src/services/shadow-scoring.ts` | Settled interaction → `classifyOutcome` → the row |
+
+**`policy_version` is a fingerprint, not a constant anyone remembers to bump.**
+`repid-delta-statement.ts` records that its hand-bumped version HAS ALREADY FAILED ONCE —
+every delta changed, nobody bumped the string, the commitment stayed byte-identical — and
+its own verdict is that *"a hand-maintained version behind a hash nobody reads is wired at
+one end."* So this version digests the OBSERVED OUTPUT of the policy across a probe grid
+spanning every outcome class, both sides of every cap, and all three risk bands. Digesting
+the constants instead would have failed twice over: most are inline literals, so it would
+mean keeping a copy that can drift; and a constant list cannot see a LOGIC change —
+`outcome-classification.ts` documents a real bug where moving a clamp collapsed the
+confidence gradient with every constant untouched.
+
+**The idempotency key must contain the policy version.** `idempotency_key` carries a
+global partial unique index. Keyed on the interaction alone, an interaction could be
+shadow-scored exactly once ever — so the first re-tuning run over existing history would
+collide on every row, and re-scoring under a tuned policy, *the entire reason shadow mode
+exists*, would be structurally impossible. The key is `(mode, policy_version, interaction)`.
+
+Verified in rolled-back transactions against the live database, using fabricated
+NIL-variant agents:
+
+| Assertion | Result |
+|---|---|
+| Shadow row leaves the score untouched | **PASS** |
+| Shadow row records `calculated`, `applied = 0`; trigger fills `before`/`after` | **PASS** |
+| Shadow row writes no history row — so it never reaches the L2 collision | **PASS** |
+| Exact delta survives the integer column as fixed-point (L4) | **PASS** |
+| **Control:** the identical row with `is_shadow = false` DOES move the score, DOES write history, and its L2 `payment_proof_hash` fallback resolves from the supplied `idempotency_key` | **PASS** |
+| Re-scoring the same interaction under the SAME policy is refused (23505) | **PASS** |
+| Re-scoring the same interaction under a TUNED policy is accepted | **PASS** |
+| Both regimes coexist on one agent for comparison | **PASS** |
+
+The control is the load-bearing half. Without it, "the shadow row moved nothing" is also
+what a row that was inert for some unrelated reason would look like.
+
+---
+
 ### 3. Sequence, ordered by irreversibility × cost-after-users
 
 | # | Item | State |
@@ -139,8 +235,8 @@ A first attempt at the shadow guard returned before populating `repid_before`, w
 | 2 | Ledger replay columns | **DONE** |
 | 3 | Attestation payload schema + A1 versioning decision | **NEXT — design only, one-way door** |
 | 4 | Hard testnet/mainnet score separation | Design now (token + score identity) |
-| 5 | Shadow wiring: settled x402 → `classifyOutcome` → shadow row | Now safe. Must supply `idempotency_key` (L2) |
-| 6 | Live E2E on a test triad: good / bad / confession | The headline win |
+| 5 | Shadow wiring: settled x402 → `classifyOutcome` → shadow row | **DONE — builder + risk bands + derived `policy_version`, 12 assertions MEASURED against the live trigger** |
+| 6 | Live E2E on a test triad: good / bad / confession | **NEXT** — the headline win. Needs a caller and three fabricated agents |
 | 7 | Confession window (24h, `repid_config` key) | Meaningless until 6 produces confessions |
 | 8 | Routing signal schema + decision logging | Prerequisite for any learned router |
 | 9 | TrustTrader paper-trading outcome loop | **Elevated — see §5** |
@@ -228,6 +324,14 @@ near-term roadmap; promising it is the overclaim this whole harness argues again
 2. **L2** — how to fix the UNIQUE payment-proof collision.
 3. T1/T2 numbers (placeholders fine; anchors suggested above).
 4. Whether graduation zeroes, discounts, or selectively discloses training history.
+5. **L5, deletion semantics.** Does deleting an agent erase its reputation history? Today
+   it does, by cascade. And what should `builder_id` reference — it currently references
+   nothing, so any uuid is accepted.
+6. **L4 follow-on.** The exact delta is preserved in `metadata`, which is a mitigation and
+   not a fix. Whether `delta` should become `numeric` is still open; the mitigation means
+   nothing is lost while it stays open.
+7. **L6.** Whether to add an event-type the whitelist can use for a classified outcome, or
+   to keep reading `decision_outcome` as authoritative and leave `event_type` approximate.
 
 ### 7. Scoped slices for the swarm
 
