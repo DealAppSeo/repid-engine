@@ -96,6 +96,35 @@ export function declaredFree(provider: string): boolean {
 }
 
 /**
+ * Blended $/1M-token price for a provider's DEFAULT model, or `null` when unpriced.
+ *
+ * `in + out` deliberately, with no assumed prompt:completion ratio. For the tier-0
+ * paid tail the ordering this produces is INVARIANT to that ratio — gemini
+ * (0.075/0.30) < deepseek (0.27/1.10) < cohere (0.50/1.50) holds whether a workload
+ * is input-heavy or output-heavy, because each is dominated on BOTH rates. So the
+ * sort needs no traffic-shape assumption, and `tests/routing-order.test.ts` pins that
+ * dominance rather than the arithmetic — if a future price makes the two rates
+ * disagree, that test fails and this function needs a real ratio instead of a sum.
+ *
+ * `null` for unpriced is the whole point: an unpriced provider must never sort as
+ * cheap. See the three-state doctrine in this file's header.
+ */
+export function defaultBlendedPrice(provider: string): number | null {
+  const model = ADAPTER_DEFAULT_MODELS[provider];
+  if (!model) return null;
+  // `PRICING_PER_1M_TOKENS?.` guards the WHOLE TABLE being absent, not just a missing
+  // row. This function is called during module initialisation by the router's chain
+  // builder, so an unguarded index here throws before the server can listen — turning
+  // a missing price into a boot failure. Absent table => price unknown => null, which
+  // sorts last and leaves the declared order intact. Degrading a cost OPTIMISATION is
+  // proportionate; refusing to start is not.
+  const table = PRICING_PER_1M_TOKENS?.[(provider ?? '').toLowerCase()];
+  const entry = table?.[model];
+  if (!entry) return null;
+  return entry.in + entry.out;
+}
+
+/**
  * Is this provider safe to treat as costing nothing on a default request?
  *
  * ONLY an explicit zero-rate entry qualifies. 'unpriced' deliberately returns false:

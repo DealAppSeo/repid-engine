@@ -17,7 +17,7 @@ import { db } from '../db';
 import { computeShadowDecision, anfisRecommendProvider } from '../services/anfis-router'; // A2 shadow for TRACK A (ANFIS/LASSO rebuild)
 import { applyEscalationOnly } from '../services/anfis-escalation-gate'; // 2026-07-30 bounded live authority (PR #281)
 import { persistShadowDecision } from '../services/anfis-shadow-persist'; // persist shadow decision so ANFIS is measurable (shadow-only, no routing change)
-import { operationalCostClass, declaredFree } from './cost-class';
+import { operationalCostClass, declaredFree, defaultBlendedPrice } from './cost-class';
 import { buildRoutingRecord, summarizeRoutingRecord, RoutingRecord } from '../decisioning/routing-record';
 
 export interface RouteRequest {
@@ -46,9 +46,15 @@ const slmAdapters: ProviderAdapter[] = [
 /**
  * Tier-0a chain, built once at module load. SambaNova (3rd FAST free Llama
  * family) slots in right after cerebras so a burst that 429s groq+cerebras has
- * another FREE fallback before the paid/aggregator tail. OpenRouter (aggregator)
- * is the LAST tier-0 fallback — after the free + cheap providers, before we
- * escalate to tier-1 (anthropic/openai).
+ * another FREE fallback before the paid tail. OpenRouter (aggregator) is the LAST
+ * tier-0 fallback — after the paid tail, before we escalate to tier-1
+ * (anthropic/openai).
+ *
+ * That last sentence used to read "after the free + cheap providers", which was
+ * misleading in two ways worth not repeating: the three providers ahead of
+ * OpenRouter are all PAID, and one of them (cohere, 0.50/1.50) is the most
+ * expensive thing in tier-0 — the opposite of cheap. The tail is now explicitly
+ * cost-ordered rather than described as if it were; see orderPaidTailByCost.
  *
  * Both are wired 2026-07-07 to activate idle-but-LIVE keys and are each gated by
  * an env flag (default ON) AND require their API key to be present — so a
@@ -79,11 +85,11 @@ function buildTier0aAdapters(): ProviderAdapter[] {
   if (process.env.ROUTER_ENABLE_SAMBANOVA !== 'false' && process.env.SAMBANOVA_API_KEY?.trim()) {
     chain.push(new SambaNovaAdapter());
   }
-  chain.push(
+  chain.push(...orderPaidTailByCost([
     new GeminiAdapter(),
     new CohereAdapter(),
     new DeepSeekAdapter(),
-  );
+  ]));
   // OpenRouter — LAST tier-0 fallback (after free + cheap, before tier-1 escalation).
   if (process.env.ROUTER_ENABLE_OPENROUTER !== 'false' && process.env.OPENROUTER_API_KEY?.trim()) {
     chain.push(new OpenRouterAdapter());
@@ -92,21 +98,59 @@ function buildTier0aAdapters(): ProviderAdapter[] {
 }
 
 /**
+ * Cost-order the PAID tier-0 tail, cheapest first. Default ON; set
+ * ROUTER_PAID_TAIL_COST_ORDER=false to restore the historical gemini > cohere >
+ * deepseek order.
+ *
+ * WHY: the tail was ordered by the sequence adapters happened to be added, which put
+ * cohere (0.50/1.50 — the most expensive provider in tier-0) ahead of deepseek
+ * (0.27/1.10). Every request that exhausted the free head and failed gemini therefore
+ * reached the dearest option before the cheaper one, for no stated reason.
+ *
+ * WHY IT IS SAFE TO DEFAULT ON, where free-first is not: this only reorders providers
+ * that are already PAID and already in the chain, using prices this repo has explicit
+ * entries for. It promotes nothing unpriced, changes no provider's presence, and the
+ * ordering is invariant to prompt shape (see defaultBlendedPrice). Availability is
+ * unchanged — the same set is tried, in a cheaper sequence.
+ *
+ * Unpriced providers sort LAST. 'unpriced' is not 'cheap' and must never win a
+ * cost-ordering by default — the same doctrine that gives cost-class.ts three states.
+ */
+export function orderPaidTailByCost(tail: ProviderAdapter[]): ProviderAdapter[] {
+  if (process.env.ROUTER_PAID_TAIL_COST_ORDER === 'false') return tail;
+  return [...tail].sort((a, b) => {
+    const pa = defaultBlendedPrice(a.name);
+    const pb = defaultBlendedPrice(b.name);
+    if (pa === null && pb === null) return 0; // both unknown — preserve declared order
+    if (pa === null) return 1; // unknown sorts last
+    if (pb === null) return -1;
+    return pa - pb;
+  });
+}
+
+/**
  * OPT-IN free-first reordering. DEFAULT OFF — the chain returned is byte-identical to
  * the one above unless ROUTER_FREE_FIRST_ORDER=true.
  *
- * WHY IT IS NEEDED: the comment above claims OpenRouter sits "after the free + cheap
- * providers". It does not. OpenRouter is in FREE_PROVIDERS, and the three providers
- * placed ahead of it — gemini, cohere, deepseek — are NOT. So on the current chain a
- * burst that exhausts groq/cerebras reaches PAID gemini while a free provider is still
- * untried. The repo's own test encodes this: tests/providers/router.test.ts:22
- * "groq unhealthy picks gemini" asserts the paid pick as correct behaviour.
+ * WHAT IT ACTUALLY DOES, MEASURED 2026-08-20 — this is narrower than the name suggests
+ * and the reason it stays off. Every genuinely free provider (groq, cerebras, zai,
+ * sambanova) is ALREADY at the head of the chain. The partition is on FREE_PROVIDERS
+ * membership, and the only member sitting behind a non-member is `openrouter`. So the
+ * flag's entire effect is to move openrouter from last to position 5, ahead of gemini,
+ * cohere and deepseek. Nothing else moves.
  *
- * WHY IT IS OFF BY DEFAULT: this is live routing. Which provider serves production
- * traffic is not a change to make from a static reading — OpenRouter's own adapter
- * comment (openrouter.ts:16-20) documents that its earlier `:free` slug 429'd hard, and
- * moving it ahead of three working providers could trade cost for availability. The
- * flip wants a canary and Sean's GO, and it reverses in one env change.
+ * WHY THAT IS NOT THE WIN IT SOUNDS LIKE: openrouter's default model is
+ * `qwen/qwen-2.5-72b-instruct`, a cheap PAID variant drawn against a prepaid balance
+ * (openrouter.ts:16-20), and it has NO entry in PRICING_PER_1M_TOKENS — so it classes
+ * as `unpriced`, not `free`. Promoting it above gemini (0.075/0.30, priced) trades a
+ * measurable cost for an unmeasurable one. `costClassDisagreements()` reports exactly
+ * this: "FREE_PROVIDERS says free but no pricing entry exists — that is UNPRICED, not
+ * free."
+ *
+ * So the free-tokens-first intent is served by orderPaidTailByCost above, not by this.
+ * This flag remains available and correct for what it does; it should not be flipped
+ * until openrouter and sambanova have real pricing entries, at which point the
+ * partition would be on evidence rather than on an entitlement claim.
  *
  * The ordering is a STABLE partition on free-tier entitlement (FREE_PROVIDERS), not on
  * list price — see cost-class.ts:operationalCostClass for why those differ. Relative

@@ -74,8 +74,13 @@ jest.mock('../src/billing/caps', () => ({
   incrementSpend: jest.fn(() => Promise.resolve()),
 }));
 
+// PRICING_PER_1M_TOKENS is part of this module's real surface and the router's chain
+// builder reads it at module load (orderPaidTailByCost). A mock that omits it made the
+// whole suite fail to LOAD rather than fail an assertion — so the export is kept here
+// even though nothing in this file asserts on prices.
 jest.mock('../src/billing/pricing', () => ({
   calculateCost: jest.fn(() => 0.0001),
+  PRICING_PER_1M_TOKENS: jest.requireActual('../src/billing/pricing').PRICING_PER_1M_TOKENS,
 }));
 
 jest.mock('../src/billing/log-call', () => ({
