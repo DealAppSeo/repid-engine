@@ -390,6 +390,23 @@ provider, so these are MEASURED rather than deferred to an environment with egre
 | A spoofed `Transfer` from a non-token address counts for nothing | PASS |
 | A fault whose settlement cannot be verified is **still charged** — the anchor gates positive claims only, never an escape from a penalty | PASS |
 
+**What that does NOT prove.** A fake provider returns exactly the receipt shape the test
+author imagined. Three things can differ on the real chain, and each would make an honest
+settlement look unverified: the configured USDC address could be wrong for this network, so
+every genuine transfer reads as "a different token"; the RPC could be unset, rate-limited or
+pruned, so receipts come back null and every settlement reads as *"not found on chain"* —
+which is reported MEASURED, correctly, because a chain answering "no such tx" **is** an
+observation, and that is precisely why a misconfigured endpoint is dangerous: it produces
+confident wrong answers rather than errors; or the token could emit through a proxy whose log
+address is not the configured one, so the emitter check rejects real logs.
+
+`scripts/trust-loop/live-settlement-crosscheck.ts` closes that, and is a script rather than a
+test because it needs egress the sandbox denies (CONNECT 403, verified 2026-08-21) and which
+CI should not depend on — a gate that reddens for environmental reasons is ignored within a
+week. It hardcodes no tx hash and no address; every identifier comes from the command line.
+Exit codes carry the verdict: `0` VERIFIED, `2` NOT_CHECKED, `1` FAILED. **Until it runs
+green, the live settlement path is NOT_CHECKED.**
+
 ---
 
 ### 3. Sequence, ordered by irreversibility × cost-after-users
