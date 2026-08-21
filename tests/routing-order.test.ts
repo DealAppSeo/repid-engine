@@ -52,6 +52,7 @@ jest.mock('dotenv', () => ({
 const OPTIONAL_KEYS = ['ZAI_API_KEY', 'SAMBANOVA_API_KEY', 'OPENROUTER_API_KEY'] as const;
 const FLAGS = [
   'ROUTER_FREE_FIRST_ORDER',
+  'ROUTER_PAID_TAIL_COST_ORDER',
   'ROUTER_ENABLE_ZAI',
   'ROUTER_ENABLE_SAMBANOVA',
   'ROUTER_ENABLE_OPENROUTER',
@@ -85,7 +86,7 @@ function loadRouterWithAllProviders(): typeof import('../src/providers/router') 
 }
 
 describe('the actual routing order (enumerated, not inferred)', () => {
-  it('tier-0a walks groq > cerebras > zai > sambanova > gemini > cohere > deepseek > openrouter', () => {
+  it('tier-0a walks groq > cerebras > zai > sambanova > gemini > deepseek > cohere > openrouter', () => {
     const router = loadRouterWithAllProviders();
     expect(router.tier0aChainNames()).toEqual([
       'groq',
@@ -93,8 +94,8 @@ describe('the actual routing order (enumerated, not inferred)', () => {
       'zai',
       'sambanova',
       'gemini',
-      'cohere',
       'deepseek',
+      'cohere',
       'openrouter',
     ]);
   });
@@ -118,8 +119,8 @@ describe('the actual routing order (enumerated, not inferred)', () => {
       'groq',
       'cerebras',
       'gemini',
-      'cohere',
       'deepseek',
+      'cohere',
     ]);
   });
 
@@ -134,7 +135,7 @@ describe('the actual routing order (enumerated, not inferred)', () => {
 });
 
 describe('cost class of each provider in walk order', () => {
-  it('classifies the chain: 5 free-tier entitlements, 3 paid, sitting in the wrong order', () => {
+  it('classifies the chain: 5 free-tier entitlements, 3 paid, paid tail now cheapest-first', () => {
     const router = loadRouterWithAllProviders();
     const classes = router.tier0aChainNames().map((p: string) => [p, operationalCostClass(p)]);
     expect(classes).toEqual([
@@ -142,10 +143,66 @@ describe('cost class of each provider in walk order', () => {
       ['cerebras', 'free'],
       ['zai', 'free'],
       ['sambanova', 'free'],
-      ['gemini', 'paid'], // position 4 — PAID
-      ['cohere', 'paid'], // position 5 — PAID
-      ['deepseek', 'paid'], // position 6 — PAID
-      ['openrouter', 'free'], // position 7 — FREE, behind three paid providers
+      ['gemini', 'paid'], // position 4 — PAID, 0.075/0.30
+      ['deepseek', 'paid'], // position 5 — PAID, 0.27/1.10
+      ['cohere', 'paid'], // position 6 — PAID, 0.50/1.50 (dearest in tier-0)
+      ['openrouter', 'free'], // position 7 — free ENTITLEMENT, but unpriced by the table
+    ]);
+  });
+
+  /**
+   * The paid tail is ordered by price, and the order needs no assumption about prompt
+   * shape. Asserting DOMINANCE on both rates rather than the blended sum is the point:
+   * `defaultBlendedPrice` adds `in + out`, which is only a safe proxy while each
+   * provider is cheaper than the next on BOTH rates. If a future price change breaks
+   * that, this test goes red and the sum stops being defensible — which is exactly
+   * when someone needs to look, rather than silently trusting a blended number.
+   */
+  it('paid tail is cost-ordered, and the order is invariant to the in:out token ratio', () => {
+    const router = loadRouterWithAllProviders();
+    const chain: string[] = router.tier0aChainNames();
+    const paidTail = chain.filter((p) => operationalCostClass(p) === 'paid');
+    expect(paidTail).toEqual(['gemini', 'deepseek', 'cohere']);
+
+    const rates: Record<string, { in: number; out: number }> = {
+      gemini: { in: 0.075, out: 0.3 },
+      deepseek: { in: 0.27, out: 1.1 },
+      cohere: { in: 0.5, out: 1.5 },
+    };
+    for (let i = 0; i + 1 < paidTail.length; i++) {
+      const lo = rates[paidTail[i] as string]!;
+      const hi = rates[paidTail[i + 1] as string]!;
+      expect(lo.in).toBeLessThan(hi.in);
+      expect(lo.out).toBeLessThan(hi.out);
+    }
+  });
+
+  it('ROUTER_PAID_TAIL_COST_ORDER=false restores the historical declared order', () => {
+    process.env.ROUTER_PAID_TAIL_COST_ORDER = 'false';
+    for (const k of OPTIONAL_KEYS) process.env[k] = 'test-key';
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const router = require('../src/providers/router');
+    const chain: string[] = router.tier0aChainNames();
+    expect(chain.filter((p) => operationalCostClass(p) === 'paid')).toEqual([
+      'gemini',
+      'cohere',
+      'deepseek',
+    ]);
+    delete process.env.ROUTER_PAID_TAIL_COST_ORDER;
+  });
+
+  it('an UNPRICED provider never sorts ahead of a priced one', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { orderPaidTailByCost } = require('../src/providers/router');
+    const fake = (name: string) => ({ name }) as never;
+    // openrouter/sambanova are unpriced; gemini is priced. Declared order puts the
+    // unpriced ones first, so a sort that treated 'unpriced' as cheap would keep them there.
+    const ordered = orderPaidTailByCost([fake('openrouter'), fake('sambanova'), fake('gemini')]);
+    expect(ordered.map((a: { name: string }) => a.name)).toEqual([
+      'gemini',
+      'openrouter',
+      'sambanova',
     ]);
   });
 
@@ -210,8 +267,8 @@ describe('FREE-FIRST INVARIANT: no paid provider ahead of a usable free provider
       'sambanova',
       'openrouter', // moved ahead of the paid trio
       'gemini',
-      'cohere',
       'deepseek',
+      'cohere',
     ]);
 
     const record = recordForDefaultWalk(router);
@@ -227,9 +284,12 @@ describe('FREE-FIRST INVARIANT: no paid provider ahead of a usable free provider
     // zai stays after groq/cerebras (deliberate: a brand-new free tier that 429s would
     // otherwise put a retry in front of every request).
     expect(names.indexOf('zai')).toBeGreaterThan(names.indexOf('cerebras'));
-    // paid trio keeps its internal order.
-    expect(names.indexOf('gemini')).toBeLessThan(names.indexOf('cohere'));
-    expect(names.indexOf('cohere')).toBeLessThan(names.indexOf('deepseek'));
+    // The paid trio keeps its internal order — which is now the COST order established
+    // by orderPaidTailByCost (gemini < deepseek < cohere), not the historical declared
+    // order. Free-first partitions on entitlement and is stable within each group, so
+    // it must not disturb the cost ordering underneath it.
+    expect(names.indexOf('gemini')).toBeLessThan(names.indexOf('deepseek'));
+    expect(names.indexOf('deepseek')).toBeLessThan(names.indexOf('cohere'));
   });
 
   it('is DEFAULT OFF — an unset flag leaves the chain byte-identical', () => {
