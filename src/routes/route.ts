@@ -27,24 +27,24 @@ llmRouter.get('/v1/llm/providers', (req: Request, res: Response) => {
   const healths = getAllHealthStates();
   
   const tier0a = [
-    { name: "groq", healthy: healths.groq ? healths.groq.state !== 'down' : true, default_model: "llama-3.1-8b-instant", last_success: healths.groq?.lastSuccess || null },
-    { name: "cerebras", healthy: healths.cerebras ? healths.cerebras.state !== 'down' : true, default_model: "llama3.1-8b", last_success: healths.cerebras?.lastSuccess || null },
-    { name: "gemini", healthy: healths.gemini ? healths.gemini.state !== 'down' : true, default_model: "gemini-2.0-flash", last_success: healths.gemini?.lastSuccess || null },
-    { name: "cohere", healthy: healths.cohere ? healths.cohere.state !== 'down' : true, default_model: "command-r", last_success: healths.cohere?.lastSuccess || null },
-    { name: "deepseek", healthy: healths.deepseek ? healths.deepseek.state !== 'down' : true, default_model: "deepseek-chat", last_success: healths.deepseek?.lastSuccess || null }
+    { name: "groq", healthy: healths.groq ? healths.groq.state !== 'down' : true, default_model: getDefaultModelForProvider("groq"), last_success: healths.groq?.lastSuccess || null },
+    { name: "cerebras", healthy: healths.cerebras ? healths.cerebras.state !== 'down' : true, default_model: getDefaultModelForProvider("cerebras"), last_success: healths.cerebras?.lastSuccess || null },
+    { name: "gemini", healthy: healths.gemini ? healths.gemini.state !== 'down' : true, default_model: getDefaultModelForProvider("gemini"), last_success: healths.gemini?.lastSuccess || null },
+    { name: "cohere", healthy: healths.cohere ? healths.cohere.state !== 'down' : true, default_model: getDefaultModelForProvider("cohere"), last_success: healths.cohere?.lastSuccess || null },
+    { name: "deepseek", healthy: healths.deepseek ? healths.deepseek.state !== 'down' : true, default_model: getDefaultModelForProvider("deepseek"), last_success: healths.deepseek?.lastSuccess || null }
   ];
   // Idle-live keys wired 2026-07-07: surface sambanova/openrouter in the listing only when routable
   // (env flag on AND key present) so the display matches buildTier0aAdapters() in the router.
   if (process.env.ROUTER_ENABLE_SAMBANOVA !== 'false' && process.env.SAMBANOVA_API_KEY?.trim()) {
-    tier0a.push({ name: "sambanova", healthy: healths.sambanova ? healths.sambanova.state !== 'down' : true, default_model: "Meta-Llama-3.1-8B-Instruct", last_success: healths.sambanova?.lastSuccess || null });
+    tier0a.push({ name: "sambanova", healthy: healths.sambanova ? healths.sambanova.state !== 'down' : true, default_model: getDefaultModelForProvider("sambanova"), last_success: healths.sambanova?.lastSuccess || null });
   }
   if (process.env.ROUTER_ENABLE_OPENROUTER !== 'false' && process.env.OPENROUTER_API_KEY?.trim()) {
-    tier0a.push({ name: "openrouter", healthy: healths.openrouter ? healths.openrouter.state !== 'down' : true, default_model: "meta-llama/llama-3.3-70b-instruct:free", last_success: healths.openrouter?.lastSuccess || null });
+    tier0a.push({ name: "openrouter", healthy: healths.openrouter ? healths.openrouter.state !== 'down' : true, default_model: getDefaultModelForProvider("openrouter"), last_success: healths.openrouter?.lastSuccess || null });
   }
 
   const tier1 = [
-    { name: "anthropic", healthy: healths.anthropic ? healths.anthropic.state !== 'down' : true, requires_user_key: true, default_model: "claude-haiku-4-5", last_success: healths.anthropic?.lastSuccess || null },
-    { name: "openai", healthy: healths.openai ? healths.openai.state !== 'down' : true, requires_user_key: true, default_model: "gpt-4o-mini", last_success: healths.openai?.lastSuccess || null }
+    { name: "anthropic", healthy: healths.anthropic ? healths.anthropic.state !== 'down' : true, requires_user_key: true, default_model: getDefaultModelForProvider("anthropic"), last_success: healths.anthropic?.lastSuccess || null },
+    { name: "openai", healthy: healths.openai ? healths.openai.state !== 'down' : true, requires_user_key: true, default_model: getDefaultModelForProvider("openai"), last_success: healths.openai?.lastSuccess || null }
   ];
 
   res.json({
@@ -89,20 +89,45 @@ llmRouter.post('/v1/llm/route-debug', llmLimiter, async (req: Request, res: Resp
   }
 });
 
-function getDefaultModelForProvider(provider: string): string {
-  switch (provider) {
-    case 'groq': return 'llama-3.1-8b-instant';
-    case 'cerebras': return 'llama3.1-8b';
-    case 'gemini': return 'gemini-2.0-flash';
-    case 'cohere': return 'command-r';
-    case 'deepseek': return 'deepseek-chat';
-    case 'anthropic': return 'claude-haiku-4-5';
-    case 'openai': return 'gpt-4o-mini';
-    case 'llama-3-2-1b': return 'llama-3-2-1b';
-    case 'gemma-3-2b': return 'gemma-3-2b';
-    case 'phi-4': return 'phi-4';
-    default: return 'default';
-  }
+/**
+ * Provider names that ARE their own model id — the locally-served SLMs. There is no
+ * adapter table entry for these because there is no vendor catalogue to drift from.
+ */
+const LOCAL_SLM_PROVIDERS = new Set(['llama-3-2-1b', 'gemma-3-2b', 'phi-4']);
+
+/**
+ * The model a provider will ACTUALLY use on a default request.
+ *
+ * This was a hand-maintained `switch`, and it was the third of four copies of the same
+ * table. Three of them disagreed [MEASURED 2026-08-21]:
+ *
+ *   provider     ADAPTER_DEFAULT_MODELS      this switch / the /providers listing
+ *   gemini       gemini-1.5-flash            gemini-2.0-flash
+ *   anthropic    claude-3-5-haiku-20241022   claude-haiku-4-5
+ *   openrouter   qwen/qwen-2.5-72b-instruct  meta-llama/llama-3.3-70b-instruct:free
+ *
+ * `ADAPTER_DEFAULT_MODELS` wins because it is the only copy anything CHECKS:
+ * `tests/routing-cost-class.test.ts` reads the adapter sources and fails when the table
+ * drifts from the literal an adapter actually sends. The other copies were asserted once
+ * and never re-examined, which is how they came to describe models the router does not use.
+ *
+ * Routed through `defaultModelFor` so a `<PROVIDER>_MODEL` override is reflected here too.
+ * Without that, setting an override would fix the ROUTING and leave `/api/v1/llm/providers`
+ * publicly advertising the model we stopped using — a new copy of the same bug, one layer out.
+ *
+ * This matters concretely today: Groq shut down `llama-3.1-8b-instant` on 2026-08-16, so
+ * every copy still naming it is advertising a model that 404s.
+ */
+export function getDefaultModelForProvider(provider: string): string {
+  if (LOCAL_SLM_PROVIDERS.has(provider)) return provider;
+  const fallback = ADAPTER_DEFAULT_MODELS[provider];
+  // 'unknown', not the old 'default'. An unrecognised provider must read as an ABSENCE
+  // of knowledge, and 'default' reads like a value — it sorts, it looks deliberate, and
+  // in a log column it is indistinguishable from a model actually named "default".
+  // The failure-log path already spelled this 'unknown'; two words for one absence is
+  // the same duplication this function exists to remove, one layer down.
+  if (!fallback) return 'unknown';
+  return defaultModelFor(provider, fallback);
 }
 
 function inferCategory(prompt: string, taskHint?: string): string {
@@ -503,7 +528,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           // Still the DEFAULT, not necessarily what the adapter sent: a caller may
           // pass an explicit model this catch block cannot see. Approximate and
           // useful beats precise and absent.
-          model: defaultModelFor(adapter.name, ADAPTER_DEFAULT_MODELS[adapter.name] ?? 'unknown'),
+          model: getDefaultModelForProvider(adapter.name),
           prompt_tokens: 0,
           completion_tokens: 0,
           cost_usd: 0,
