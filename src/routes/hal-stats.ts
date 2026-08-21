@@ -132,7 +132,34 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
           accuracy: +(accuracy * 100).toFixed(2),
         },
         path: 'fact-check-quorum (strictness 2)',
-        quorum_configuration: 'Groq (llama-3.1-8b-instant) + Cerebras (zai-glm-4.7) [DeepSeek enabled but simulated-throttled]',
+
+        // AS MEASURED, past tense, deliberately. These figures come from one dated run,
+        // and BOTH models named below have since been retired by their vendors:
+        // Groq shut down `llama-3.1-8b-instant` on 2026-08-16, and Cerebras reports
+        // `zai-glm-4.7` as `model_archived_error`. Neither can be called today.
+        //
+        // Stating the configuration in the present tense implied a quorum that is
+        // currently running. It is not, and `npm run hal:score-external` can no longer
+        // reproduce these numbers — it would fail on both members. A published metric
+        // whose reproduction command does not reproduce is the exact debt this codebase
+        // keeps paying: the caveat has to travel WITH the number, not live in someone's
+        // memory of it.
+        quorum_configuration_as_measured:
+          'Groq (llama-3.1-8b-instant) + Cerebras (zai-glm-4.7) [DeepSeek enabled but simulated-throttled]',
+
+        // Age is computed here rather than left to the reader to subtract from
+        // `measured_at`. Same reasoning as the leaderboard: a date the reader has to do
+        // arithmetic on is a date most readers do not check.
+        measurement_age_days: Math.floor(
+          (Date.now() - new Date(latestRunRuns[0]!.run_at).getTime()) / 86_400_000,
+        ),
+
+        // Three states, not two. `false` here is a FACT about tooling availability, not
+        // a claim that the measurement was wrong — the run happened and its numbers
+        // stand; what has lapsed is our ability to re-run it unchanged.
+        reproducible_today: false,
+        reproducibility_note:
+          'Both quorum members were retired by their vendors after this run. The command below will not reproduce these figures until the quorum is repointed at live models.',
         reproduction_command: 'npm run hal:score-external',
       };
     } catch {
