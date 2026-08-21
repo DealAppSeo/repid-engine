@@ -8,6 +8,7 @@
  */
 import { OutcomeClass } from '../src/services/outcome-classification';
 import { RiskBand } from '../src/services/risk-tier';
+import { schemaAcceptsEventType } from './event-type-whitelist';
 import {
   EVENT_TYPE_BY_OUTCOME,
   SHADOW_EVENT_SCHEMA,
@@ -186,30 +187,9 @@ describe('all three parties are recorded from the first row', () => {
 });
 
 describe('event_type stays inside the whitelist the CHECK constraint enforces', () => {
-  /**
-   * Copied from `repid_score_events_event_type_check` as read from the live
-   * database on 2026-08-21. The constraint is managed outside this repository,
-   * so this list is a SNAPSHOT: if the constraint gains or loses a value, this
-   * test does not notice. What it does catch is this module drifting to a value
-   * that was never in it — which is the failure that reaches production as a
-   * 23514 on every insert.
-   */
-  const WHITELIST_SNAPSHOT_2026_08_21 = new Set([
-    'CHALLENGE_WIN', 'CHALLENGE_LOSS', 'CHALLENGE_DRAW', 'EPISTEMIC_VIOLATION',
-    'CONSTITUTIONAL_VIOLATION', 'PREDICTION_RESOLVE', 'STAKE', 'GENESIS', 'REFERRAL',
-    'PEACEMAKER', 'SELF_MONITOR', 'DECAY', 'DORMANCY_DECAY', 'SALE_DROP',
-    'MIRROR_TEST_MODE7', 'CONSTITUTIONAL_PASS', 'CODE_CONTRIBUTION',
-    'WORKFLOW_CONTRIBUTION', 'TOOL_PIONEER', 'AGENT_TEACHING', 'AUDIT_CONTRIBUTION',
-    'CONSTITUTIONAL_AUDIT', 'MCP_TOOL_CALL', 'LATENCY_OPPORTUNITY_LEARNING',
-    'BOUNTY_CLAIM', 'BOUNTY_COMPLETE', 'BOUNTY_VERIFY', 'HAL_SCORE_EVENT',
-    'PAPER_TRADE_OUTCOME', 'VALIDATION_PASSED', 'VALIDATION_FAILED',
-    'VALIDATOR_REWARD', 'VALIDATOR_PENALTY', 'SERVICE_FULFILLED',
-    'SERVICE_SATISFIED', 'x402_value_delivered',
-  ]);
-
   it('maps every outcome class to an accepted value', () => {
     for (const cls of Object.values(OutcomeClass)) {
-      expect(WHITELIST_SNAPSHOT_2026_08_21.has(EVENT_TYPE_BY_OUTCOME[cls])).toBe(true);
+      expect(schemaAcceptsEventType(EVENT_TYPE_BY_OUTCOME[cls])).toBe(true);
     }
   });
 

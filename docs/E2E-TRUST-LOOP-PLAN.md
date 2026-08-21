@@ -144,6 +144,37 @@ the **exact class is written to `decision_outcome`**, which is authoritative. No
 branch on `event_type` for attribution. The real fix is a whitelist addition — an
 external schema change, and it belongs to whoever owns that constraint.
 
+#### L7 — the just-culture path could not write a single event **[MEASURED, FIXED]**
+
+The most consequential of the seven, and it surfaced only because the confession leg of the
+E2E was *run* rather than read.
+
+`repid-confession.ts` writes `event_type = 'SELF_REPORTED_FAILURE'`. **That value was not in
+the whitelist.** Probed in a rolled-back transaction: `23514 check_violation`.
+
+The failure mode is the one this codebase exists to catch. `recordConfession()` writes the
+confession-log row first — deliberately, so a disclosure survives a ledger failure — then
+attempts the score event, and on failure returns `ok: true` with the error demoted to a
+`warning` field. **A caller that checks the obvious field is told the confession
+succeeded.** The confession row exists. The penalty does not.
+
+So an agent confessed and **its score did not move at all**. The discount is set to `0.4`
+and invariant-tested strictly between 0 and 1 — while the effective discount in production
+was **0**. That is not the parity case, it is the *free* case, which the module's own header
+names as the one that "prices in reputation laundering". A mechanism built to make honesty
+cheaper than concealment was instead making honesty free, and therefore indistinguishable
+from saying nothing.
+
+Zero confession-log rows and zero such events confirm nobody had ever exercised it. **An
+unwired mechanism is worse than an absent one**, because a reviewer reading the schema
+concludes just-culture is handled.
+
+**Fixed** by adding the value to the constraint — strictly additive, so a CHECK admitting
+more values cannot reject a row it previously accepted. The existing test asserted the event
+type was *distinct from every detection-shaped one*; nothing asserted the database would
+take it. **A name is not a channel.** `tests/event-type-whitelist.ts` now holds the schema's
+answer once, and both the confession path and the shadow writer assert against it.
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
@@ -227,6 +258,28 @@ what a row that was inert for some unrelated reason would look like.
 
 ---
 
+### 2c. The triad, on the live trigger **[MEASURED 2026-08-21]**
+
+Good / bad / confession, in a rolled-back transaction against fabricated NIL-variant
+agents. Every delta was produced by the real modules, not hand-computed for the probe.
+
+| Leg | Movement | What it demonstrates |
+|---|---|---|
+| Settled, audited success | 4000 → **4025** | Value delivered earns, capped and sub-linear |
+| Confident agent-fault failure, **detected** | 4025 → **3909** | −116 against +25 — *the confident error costs more than the success earned*, on the real score rather than in the pure function |
+| The same failure, **self-reported** | 4025 → **3978** | −47. Honesty is strictly cheaper than being caught |
+
+All three land under one `policy_version`, so the three legs are comparable to each other
+and re-interpretable after the weights move.
+
+**State this precisely.** What is MEASURED is the **scoring half** — outcome to ledger to
+score, on the live trigger. The *inputs* were supplied, not observed: no x402 settlement was
+resolved on chain and no HAL classification was run. A caller that reads a real settlement
+and a real classification is what item 6 still needs. The arithmetic is no longer the
+unknown; the wiring to reality is.
+
+---
+
 ### 3. Sequence, ordered by irreversibility × cost-after-users
 
 | # | Item | State |
@@ -236,8 +289,8 @@ what a row that was inert for some unrelated reason would look like.
 | 3 | Attestation payload schema + A1 versioning decision | **NEXT — design only, one-way door** |
 | 4 | Hard testnet/mainnet score separation | Design now (token + score identity) |
 | 5 | Shadow wiring: settled x402 → `classifyOutcome` → shadow row | **DONE — builder + risk bands + derived `policy_version`, 12 assertions MEASURED against the live trigger** |
-| 6 | Live E2E on a test triad: good / bad / confession | **NEXT** — the headline win. Needs a caller and three fabricated agents |
-| 7 | Confession window (24h, `repid_config` key) | Meaningless until 6 produces confessions |
+| 6 | Live E2E on a test triad: good / bad / confession | **Scoring half MEASURED** (see §2c). Inputs were supplied, not observed — a caller that reads a real settlement is what remains |
+| 7 | Confession window (24h, `repid_config` key) | **Unblocked by L7** — the path can write now |
 | 8 | Routing signal schema + decision logging | Prerequisite for any learned router |
 | 9 | TrustTrader paper-trading outcome loop | **Elevated — see §5** |
 | 10 | Three-party scoring · TrustMarket · ANFIS promotion · ZKML | Need data or users |

@@ -31,6 +31,7 @@ import {
   SELF_REPORT_DISCOUNT,
   SELF_REPORTED_FAILURE,
 } from '../src/services/repid-confession';
+import { schemaAcceptsEventType } from './event-type-whitelist';
 
 describe('the asymmetry holds across the whole realistic penalty range', () => {
   // Real detected penalties observed in production, by event type:
@@ -162,6 +163,29 @@ describe('the mechanism has a caller — it is not another empty table', () => {
     ];
     expect(DETECTION_SHAPED).not.toContain(SELF_REPORTED_FAILURE);
     expect(SELF_REPORTED_FAILURE).toBe('SELF_REPORTED_FAILURE');
+  });
+
+  /**
+   * THE GAP THAT LET THIS SHIP. The assertion above checks the event type is
+   * distinct from every detection-shaped one. Nothing checked the DATABASE would
+   * accept it — and it did not.
+   *
+   * MEASURED 2026-08-21 in a rolled-back transaction: an insert carrying this
+   * event type was rejected `23514 check_violation`. So `recordConfession()`
+   * wrote its confession-log row, the ledger write failed, and the function
+   * returned `ok: true` with the failure demoted to a `warning` field. An agent
+   * confessed and its score did not move.
+   *
+   * That makes confession FREE, which is worse than the parity case: this
+   * module's own header states that a discount of `0` "prices in reputation
+   * laundering", and the invariant test two files over pins the discount
+   * strictly between 0 and 1 — while the effective discount in production was 0.
+   *
+   * Fixed by adding the value to the constraint. A name is not a channel, and a
+   * mechanism nothing has ever exercised is not a mechanism.
+   */
+  test('the schema will actually accept the event type the confession path writes', () => {
+    expect(schemaAcceptsEventType(SELF_REPORTED_FAILURE)).toBe(true);
   });
 });
 
