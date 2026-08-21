@@ -175,6 +175,26 @@ type was *distinct from every detection-shaped one*; nothing asserted the databa
 take it. **A name is not a channel.** `tests/event-type-whitelist.ts` now holds the schema's
 answer once, and both the confession path and the shadow writer assert against it.
 
+#### L8 — `repid_config.min_value` / `max_value` enforce nothing **[MEASURED, OPEN]**
+
+Found while seeding the confession-window keys. That table carries **no CHECK constraint and
+no trigger** — probed by setting a bounded key outside its own declared range in a
+rolled-back transaction: accepted, no error.
+
+So every declared bound on a live-tunable knob is documentation. That matters most where a
+knob is load-bearing: setting `late_self_report_discount` to `1.0` makes late disclosure
+cost exactly what detection costs, and an agent holding an undisclosed failure then faces
+*"pay P for certain"* against *"pay P only if caught"* — **concealment becomes strictly
+dominant again**, reinstated by one config edit, with no error and no alarm.
+
+Enforced in application code for this path (`resolveTimingPolicy` refuses any value breaking
+`prompt < late < 1` and reports what it refused). **Not fixed table-wide** — that governs 25
+knobs other people own.
+
+**Pre-verified for whoever takes it:** 25 rows declare bounds, **0 currently sit outside
+their own bounds**, and 0 have a non-numeric value alongside bounds. A CHECK enforcing the
+declared range would therefore validate cleanly today. That is the cheapest it will ever be.
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
@@ -280,6 +300,46 @@ unknown; the wiring to reality is.
 
 ---
 
+### 2d. The disclosure window **[MEASURED 2026-08-21]**
+
+`src/services/confession-window.ts`, pure, composing with `reducedPenalty`'s existing
+`discount` parameter so the invariant-tested function is untouched.
+
+**What it closes.** With a flat 40% discount and no time limit, the optimal play is not
+honesty — it is *waiting*: conceal, watch for signs a detector is closing in, and disclose at
+the last moment. That collects the discount with none of the behaviour the discount pays for.
+
+**The part that is easy to get backwards.** The obvious fix — charge full price after the
+window — rebuilds the original hole from the other side. An agent holding an undisclosed
+failure would face *"pay P for certain"* against *"pay P only if caught"*, and concealment
+would strictly dominate again. So late disclosure stays discounted, just less. The ordering
+that must hold, all three strict:
+
+```
+prompt disclosure  <  late disclosure  <  being caught
+```
+
+Waiting is punished; hiding is punished more. Both inequalities are pinned on the **charged
+amount**, not on the multipliers — `reducedPenalty` rounds up and floors at 1, so a
+multiplier ordering can survive while the money ties.
+
+Untimed disclosure is `NOT_CHECKED`: priced as late, *reported* as unmeasured. The prompt
+rate is never granted on no evidence, and the four-state vocabulary is not collapsed into
+the price.
+
+Measured on the live trigger — one failure worth −116 detected, three responses, from 4000:
+
+| Response | Charged | Score |
+|---|---|---|
+| Disclosed 3h after the failure (inside the window) | −47 | **3953** |
+| Disclosed 72h after (outside it) | −82 | **3918** |
+| Said nothing, was caught | −116 | **3884** |
+
+Both inequalities **HOLD**. Config keys `confession_window_hours` (24) and
+`late_self_report_discount` (0.7) are live-tunable — subject to L8 below.
+
+---
+
 ### 3. Sequence, ordered by irreversibility × cost-after-users
 
 | # | Item | State |
@@ -290,7 +350,7 @@ unknown; the wiring to reality is.
 | 4 | Hard testnet/mainnet score separation | Design now (token + score identity) |
 | 5 | Shadow wiring: settled x402 → `classifyOutcome` → shadow row | **DONE — builder + risk bands + derived `policy_version`, 12 assertions MEASURED against the live trigger** |
 | 6 | Live E2E on a test triad: good / bad / confession | **Scoring half MEASURED** (see §2c). Inputs were supplied, not observed — a caller that reads a real settlement is what remains |
-| 7 | Confession window (24h, `repid_config` key) | **Unblocked by L7** — the path can write now |
+| 7 | Confession window (24h, `repid_config` key) | **DONE — MEASURED, see §2d** |
 | 8 | Routing signal schema + decision logging | Prerequisite for any learned router |
 | 9 | TrustTrader paper-trading outcome loop | **Elevated — see §5** |
 | 10 | Three-party scoring · TrustMarket · ANFIS promotion · ZKML | Need data or users |
