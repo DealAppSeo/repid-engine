@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 export class OpenAIAdapter implements ProviderAdapter {
   name = 'openai';
@@ -9,7 +9,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || 'gpt-4o-mini';
+    const model = req.model || defaultModelFor('openai', 'gpt-4o-mini');
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -43,7 +43,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('OpenAI rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`OpenAI HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('OpenAI', res);
 
     const data = await res.json();
     return {

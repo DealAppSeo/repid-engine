@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 export class AnthropicAdapter implements ProviderAdapter {
   name = 'anthropic';
@@ -9,7 +9,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || 'claude-3-5-haiku-20241022';
+    const model = req.model || defaultModelFor('anthropic', 'claude-3-5-haiku-20241022');
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -44,7 +44,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('Anthropic rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`Anthropic HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('Anthropic', res);
 
     const data = await res.json();
     return {

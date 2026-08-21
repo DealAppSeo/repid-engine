@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 export class CerebrasAdapter implements ProviderAdapter {
   name = 'cerebras';
@@ -9,7 +9,7 @@ export class CerebrasAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || 'llama3.1-8b';
+    const model = req.model || defaultModelFor('cerebras', 'llama3.1-8b');
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -43,7 +43,7 @@ export class CerebrasAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('Cerebras rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`Cerebras HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('Cerebras', res);
 
     const data = await res.json();
     return {

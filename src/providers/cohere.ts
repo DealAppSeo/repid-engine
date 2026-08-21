@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 export class CohereAdapter implements ProviderAdapter {
   name = 'cohere';
@@ -9,7 +9,7 @@ export class CohereAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || 'command-r';
+    const model = req.model || defaultModelFor('cohere', 'command-r');
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -43,7 +43,7 @@ export class CohereAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('Cohere rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`Cohere HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('Cohere', res);
 
     const data = await res.json();
     return {

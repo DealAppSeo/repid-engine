@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 /**
  * SambaNova adapter — OpenAI-compatible, serves fast Llama models on their free
@@ -18,7 +18,7 @@ export class SambaNovaAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || process.env.SAMBANOVA_MODEL || 'Meta-Llama-3.1-8B-Instruct';
+    const model = req.model || defaultModelFor('sambanova', 'Meta-Llama-3.1-8B-Instruct');
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -52,7 +52,7 @@ export class SambaNovaAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('SambaNova rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`SambaNova HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('SambaNova', res);
 
     const data = await res.json();
     return {

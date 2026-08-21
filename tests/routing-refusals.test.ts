@@ -26,12 +26,23 @@ import { costClass } from '../src/providers/cost-class';
 
 const realFetch = global.fetch;
 
-function stubFetch(status: number, headers: Record<string, string> = {}, body: any = {}) {
+/**
+ * `textBody` is OPTIONAL and omitted by default, so the default double has NO `text()`.
+ * That is deliberate: it is the shape a partial mock actually has in the wild, and it is
+ * the shape that caught providerHttpError calling `res.text()` unconditionally.
+ */
+function stubFetch(
+  status: number,
+  headers: Record<string, string> = {},
+  body: any = {},
+  textBody?: string,
+) {
   global.fetch = jest.fn().mockResolvedValue({
     status,
     ok: status >= 200 && status < 300,
     headers: { get: (h: string) => headers[h.toLowerCase()] ?? null },
     json: async () => body,
+    ...(textBody === undefined ? {} : { text: async () => textBody }),
   }) as any;
 }
 
@@ -211,7 +222,34 @@ describe('timeouts', () => {
   it('a non-401/429 HTTP error is a plain error carrying the status', async () => {
     stubFetch(503);
     await expect(new GroqAdapter().complete({ prompt: 'hi', apiKey: 'k' })).rejects.toThrow(
-      /Groq HTTP error: 503/,
+      /Groq HTTP 503/,
     );
+  });
+
+  // The status alone was all these errors used to carry, and it is not enough to tell
+  // "our configured model id is retired" from any other 404. A user hit exactly that on
+  // 2026-08-21: the log said `Groq HTTP error: 404` and the UI guessed "free tier
+  // exhausted", which was false. The vendor had said why, in a body we discarded.
+  it('carries the VENDOR BODY so a 404 can be told from a 404', async () => {
+    stubFetch(404, {}, {}, JSON.stringify({
+      error: { message: 'The model `some-retired-id` does not exist', code: 'model_not_found' },
+    }));
+    await expect(new GroqAdapter().complete({ prompt: 'hi', apiKey: 'k' })).rejects.toThrow(
+      /model_not_found/,
+    );
+  });
+
+  // A Response-LIKE object without `text()` must still yield a clean error. The default
+  // stubFetch above is exactly that shape, and the first version of providerHttpError
+  // called `res.text()` unconditionally — turning the error path into an unhandled
+  // "res.text is not a function". A helper whose job is to report a failure must never
+  // become one; losing the body is acceptable, losing the error is not.
+  it('degrades to status-only when the response cannot produce a body', async () => {
+    stubFetch(500); // no `text` on this double, by design
+    const err = await new GroqAdapter()
+      .complete({ prompt: 'hi', apiKey: 'k' })
+      .catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('Groq HTTP 500');
   });
 });

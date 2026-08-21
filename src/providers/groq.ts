@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 export class GroqAdapter implements ProviderAdapter {
   name = 'groq';
@@ -9,7 +9,7 @@ export class GroqAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || 'llama-3.1-8b-instant';
+    const model = req.model || defaultModelFor('groq', 'llama-3.1-8b-instant');
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -43,7 +43,7 @@ export class GroqAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('Groq rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`Groq HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('Groq', res);
 
     const data = await res.json();
     return {

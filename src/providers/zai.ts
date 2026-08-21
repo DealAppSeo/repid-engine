@@ -1,4 +1,4 @@
-import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError } from './types';
+import { ProviderAdapter, CompletionRequest, CompletionResponse, RateLimitError, AuthError, providerHttpError, defaultModelFor } from './types';
 
 /**
  * Z.AI (Zhipu) — the GLM family from the vendor, on their free tier.
@@ -46,7 +46,7 @@ export class ZaiAdapter implements ProviderAdapter {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const startTime = Date.now();
-    const model = req.model || ZaiAdapter.DEFAULT_MODEL;
+    const model = req.model || defaultModelFor('zai', ZaiAdapter.DEFAULT_MODEL);
     const timeout = req.timeout || 30000;
 
     const controller = new AbortController();
@@ -80,7 +80,7 @@ export class ZaiAdapter implements ProviderAdapter {
       const retryMs = retry ? parseInt(retry) * 1000 : 10000;
       throw new RateLimitError('Z.AI rate limited', retryMs);
     }
-    if (!res.ok) throw new Error(`Z.AI HTTP error: ${res.status}`);
+    if (!res.ok) throw await providerHttpError('Z.AI', res);
 
     const data = await res.json();
     return {

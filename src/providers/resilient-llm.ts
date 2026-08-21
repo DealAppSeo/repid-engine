@@ -19,6 +19,7 @@ import { isHealthy, markFailure, markSuccess, markRateLimit, getHealthState } fr
 import { WORKING_FREE_PROVIDERS } from '../billing/free-providers';
 import { ollamaAdapter, ollamaFloorEnabled, OLLAMA_PROVIDER_NAME } from './ollama';
 import type { CompletionResponse } from './types';
+import { providerHttpError } from './types';
 import { publishHealth, getRoutingDecision, isEndpointHardDown } from '../resilience/health-bus';
 import type { RoutingDecision, SurfaceHealth } from '../resilience/types';
 
@@ -143,7 +144,7 @@ async function callOpenAiCompat(
     err.retryAfterMs = retryMs;
     throw err;
   }
-  if (!res.ok) throw new Error(`${wire.provider} HTTP error: ${res.status}`);
+  if (!res.ok) throw await providerHttpError(wire.provider, res);
 
   const data: any = await res.json();
   return {

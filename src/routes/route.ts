@@ -3,7 +3,8 @@ import rateLimit from 'express-rate-limit';
 import { routeRequest, RouteRequest, resolveTier1Key, keylessProviders, resolveAdapterKey} from '../providers/router';
 import { logToolCall } from '../utils/tool-call-logger';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
-import { RateLimitError, AuthError } from '../providers/types';
+import { RateLimitError, AuthError, defaultModelFor } from '../providers/types';
+import { ADAPTER_DEFAULT_MODELS } from '../providers/cost-class';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { incrementSpend } from '../billing/caps';
@@ -487,7 +488,22 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
           call_id,
           provider: adapter.name,
           tier: adapter.tier === 0 ? '0a' : '1',
-          model: 'unknown',
+          // WAS `'unknown'`. A real call had just been made to a known provider, so
+          // the model was never actually unknown — the log simply declined to say.
+          // On 2026-08-21 that cost a live diagnosis: a user's failing row read
+          // `model: 'unknown'` next to a 404, and "is our configured model stale?"
+          // — which was the answer — could not be asked of the log at all.
+          //
+          // Resolved through `defaultModelFor` rather than a literal so the value
+          // reflects a `<PROVIDER>_MODEL` override. Logging the built-in default
+          // while the deployment overrides it would restore the same lie in a new
+          // shape. The fallback is `ADAPTER_DEFAULT_MODELS`, which is drift-tested
+          // against the adapter sources by tests/routing-cost-class.test.ts.
+          //
+          // Still the DEFAULT, not necessarily what the adapter sent: a caller may
+          // pass an explicit model this catch block cannot see. Approximate and
+          // useful beats precise and absent.
+          model: defaultModelFor(adapter.name, ADAPTER_DEFAULT_MODELS[adapter.name] ?? 'unknown'),
           prompt_tokens: 0,
           completion_tokens: 0,
           cost_usd: 0,
