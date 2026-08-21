@@ -39,6 +39,14 @@
 
 import { db } from '../db';
 import { insertScoreEvent } from '../scoring/score-event-writer';
+import {
+  LATE_SELF_REPORT_DISCOUNT,
+  SELF_REPORT_WINDOW_HOURS,
+  classifyDisclosureTiming,
+  discountForTiming,
+  orderingHolds,
+  type TimingResult,
+} from './confession-window';
 
 /** The event type a confession writes to the ledger. New, and the point of this module. */
 export const SELF_REPORTED_FAILURE = 'SELF_REPORTED_FAILURE' as const;
@@ -72,6 +80,79 @@ export interface ConfessionInput {
    * point of the mechanism.
    */
   originalEventId?: number | null;
+  /**
+   * When the failure occurred, per the agent. Epoch ms.
+   *
+   * Drives the disclosure window (`confession-window.ts`). Absent, the timing is
+   * `NOT_CHECKED` and priced as late — the prompt rate is never granted on no
+   * evidence.
+   */
+  failureOccurredAt?: number | null;
+  /** When the disclosure was filed. Epoch ms. Defaults to now at the call site. */
+  confessedAt?: number | null;
+}
+
+/** The two tunables that decide what a disclosure costs, once resolved. */
+export interface TimingPolicy {
+  windowHours: number;
+  lateDiscount: number;
+  /** Set when a configured value was refused; the safe default was used instead. */
+  refusedConfig?: string;
+}
+
+/**
+ * Resolve the window and the late discount from `repid_config`, refusing any
+ * value that would break the ordering the mechanism depends on.
+ *
+ * **`min_value` / `max_value` on that table are decorative** [MEASURED
+ * 2026-08-21]: there is no CHECK constraint and no trigger, so an `UPDATE`
+ * setting `late_self_report_discount` to `1.0` is accepted. At `1.0` a late
+ * disclosure costs exactly what detection costs, and concealment becomes
+ * strictly dominant again — the failure the confession channel exists to fix,
+ * reinstated by a one-line config edit with no error and no alarm.
+ *
+ * So the ordering is enforced HERE, where it is load-bearing, rather than
+ * trusted to a column that enforces nothing. A refused value is reported, never
+ * silently swallowed.
+ *
+ * Fail-safe: any read error falls back to the constants. A tuning table being
+ * unreachable must not take down the disclosure path.
+ */
+export async function resolveTimingPolicy(): Promise<TimingPolicy> {
+  const fallback: TimingPolicy = {
+    windowHours: SELF_REPORT_WINDOW_HOURS,
+    lateDiscount: LATE_SELF_REPORT_DISCOUNT,
+  };
+
+  try {
+    const { data, error } = await db
+      .from('repid_config')
+      .select('key, value')
+      .in('key', ['confession_window_hours', 'late_self_report_discount']);
+    if (error || !data) return fallback;
+
+    const byKey = new Map(data.map((r: { key: string; value: string }) => [r.key, r.value]));
+    const rawWindow = Number(byKey.get('confession_window_hours'));
+    const rawLate = Number(byKey.get('late_self_report_discount'));
+
+    const windowHours =
+      Number.isFinite(rawWindow) && rawWindow > 0 ? rawWindow : SELF_REPORT_WINDOW_HOURS;
+
+    if (Number.isFinite(rawLate) && orderingHolds(SELF_REPORT_DISCOUNT, rawLate)) {
+      return { windowHours, lateDiscount: rawLate };
+    }
+    return {
+      windowHours,
+      lateDiscount: LATE_SELF_REPORT_DISCOUNT,
+      ...(byKey.has('late_self_report_discount')
+        ? {
+            refusedConfig: `late_self_report_discount=${byKey.get('late_self_report_discount')} breaks the required ordering (prompt < late < 1) — using ${LATE_SELF_REPORT_DISCOUNT}`,
+          }
+        : {}),
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 export interface ReducedPenaltyResult {
@@ -121,6 +202,8 @@ export interface ConfessionResult {
    * discounted below 1 — but it is reported so the caller never assumes the incentive applied.
    */
   discountApplied?: boolean;
+  /** How the disclosure was timed, and why. Never absent — `NOT_CHECKED` is a value. */
+  timing?: TimingResult;
   /** Set when the ledger write failed; the confession log entry may still exist. */
   warning?: string;
 }
@@ -156,7 +239,20 @@ export async function recordConfession(input: ConfessionInput): Promise<Confessi
   const refusal = validateConfession(input);
   if (refusal) return { ok: false, refusal };
 
-  const penalty = reducedPenalty(input.detectedPenalty);
+  // Timing decides WHICH discount applies. Without it the optimal play is not
+  // honesty but waiting: conceal, watch for signs a detector is closing in, and
+  // disclose at the last moment — collecting the discount with none of the
+  // behaviour it pays for. See `confession-window.ts`.
+  const policy = await resolveTimingPolicy();
+  const timing = classifyDisclosureTiming({
+    failureAt: input.failureOccurredAt ?? null,
+    confessedAt: input.confessedAt ?? Date.now(),
+    windowHours: policy.windowHours,
+  });
+  const penalty = reducedPenalty(
+    input.detectedPenalty,
+    discountForTiming(timing.timing, SELF_REPORT_DISCOUNT, policy.lateDiscount),
+  );
   const unverifiable = input.originalEventId === undefined || input.originalEventId === null;
 
   const { data: conf, error: confErr } = await db
@@ -205,6 +301,13 @@ export async function recordConfession(input: ConfessionInput): Promise<Confessi
       detected_penalty_would_have_been: penalty.detected,
       discount_applied: isStrictlyCheaper(penalty),
       peer_endorsement_required: unverifiable,
+      // Recorded so a reviewer can see WHY this disclosure cost what it cost,
+      // and re-derive it without the config values that were live at the time.
+      disclosure_timing: timing.timing,
+      disclosure_age_hours: timing.ageHours,
+      disclosure_window_hours: timing.windowHours,
+      disclosure_reason: timing.reason,
+      ...(policy.refusedConfig ? { refused_config: policy.refusedConfig } : {}),
     },
     extra: { task_domain: input.domain.trim() },
   });
@@ -215,6 +318,7 @@ export async function recordConfession(input: ConfessionInput): Promise<Confessi
       confessionId: conf.id,
       penalty,
       discountApplied: isStrictlyCheaper(penalty),
+      timing,
       warning: `confession recorded but ledger write failed: ${write.error ?? 'unknown'}`,
     };
   }
@@ -225,5 +329,6 @@ export async function recordConfession(input: ConfessionInput): Promise<Confessi
     scoreEventId: write.id ? Number(write.id) : undefined,
     penalty,
     discountApplied: isStrictlyCheaper(penalty),
+    timing,
   };
 }
