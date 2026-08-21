@@ -1,5 +1,7 @@
 # INBOX_XC — policy predicates and GateRun hooks for DP / aggregation / zk disclosure
 
+## Task
+
 **Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is a specification returned
 as text. Do not claim to have created, edited or committed a file.
 
@@ -11,7 +13,7 @@ node scripts/dispatch/run-agent.mjs --agent xc --inbox docs/dispatch/INBOX_XC.md
 
 ---
 
-## Why this task exists
+### Why this task exists
 
 The standing order changed on 2026-08-20. FL / DP / ZKP are **no longer on hold**. What
 is held is *overclaiming* — nothing is MEASURED or user-facing until a GateRun says so.
@@ -25,7 +27,7 @@ need, and name the fields you require as requirements on GA.
 
 ---
 
-## Facts you need, inlined
+### Facts you need, inlined
 
 You have `reasoning` and `repo_read`. **`repo_read` is scoped to this workspace only** —
 you cannot open `trinity-ecosystem`, `trustshell` or `hyperdag-protocol`. Everything
@@ -76,7 +78,7 @@ write.
 
 ---
 
-## Deliverables — four specifications
+### Deliverables — four specifications
 
 ### 1. DP spend predicates + GateRun hooks
 
@@ -134,7 +136,7 @@ vendor names — vendors change, the property is what matters.
 
 ---
 
-## Acceptance criteria
+### Acceptance criteria
 
 - Every predicate distinguishes all four vocabulary states, and says which of them is
   the **fail-closed default**.
@@ -143,7 +145,7 @@ vendor names — vendors change, the property is what matters.
   spec that cannot describe its own failure mode has not been thought through.
 - Where you are uncertain, write **UNVERIFIED** and say what evidence would settle it.
 
-## What will be rejected
+### What will be rejected
 
 - Any claim you read a file outside this workspace.
 - Any invented test output, command output, or measurement. On 2026-08-05 a dispatch
@@ -154,7 +156,7 @@ vendor names — vendors change, the property is what matters.
 - Upgrading anything from APPROXIMATE to MEASURED without a named check that produces it.
 - Any recommendation to enable FL by default, claim a DP guarantee, or ship zk product UI.
 
-## Note on where this lands
+### Note on where this lands
 
 `repid-engine` is a **PUBLIC** repository. State findings, not inventories. No
 credentials, project identifiers, row counts or service names in your output.

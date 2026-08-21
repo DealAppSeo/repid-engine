@@ -1,5 +1,7 @@
 # INBOX_GA — plugin-ready contracts for DP / secure aggregation / zk disclosure
 
+## Task
+
 **Lane:** L7 MEASUREMENT — **no write scope.** Your deliverable is a specification
 returned as text. Do not claim to have created, edited or committed a file.
 
@@ -11,7 +13,7 @@ node scripts/dispatch/run-agent.mjs --agent ga --inbox docs/dispatch/INBOX_GA.md
 
 ---
 
-## Why this task exists
+### Why this task exists
 
 The standing order changed on 2026-08-20. FL / DP / ZKP are **no longer on hold**.
 What is held is *overclaiming* — nothing is MEASURED or user-facing until a GateRun
@@ -23,7 +25,7 @@ write policy logic, and do not assume what XC will decide.
 
 ---
 
-## Facts you need, inlined
+### Facts you need, inlined
 
 You have `reasoning` and `repo_read`. **`repo_read` is scoped to this workspace only** —
 you cannot open `trinity-ecosystem`, `trustshell` or `hyperdag-protocol`. Everything
@@ -71,7 +73,7 @@ else FAILED.
 
 ---
 
-## Deliverables — three documents, in this order
+### Deliverables — three documents, in this order
 
 ### 1. `dp-budget.v0` — differential-privacy budget objects
 
@@ -126,7 +128,7 @@ participating", never "participating with defaults".
 
 ---
 
-## Acceptance criteria
+### Acceptance criteria
 
 - Every status field can express all four vocabulary states.
 - No field name, comment or example implies a guarantee that is not implemented.
@@ -135,7 +137,7 @@ participating", never "participating with defaults".
   confident wrong answer.
 - Where you are uncertain, write **UNVERIFIED** and say what would settle it.
 
-## What will be rejected
+### What will be rejected
 
 - Any claim you read a file outside this workspace.
 - Any invented test output, command output, or measurement. On 2026-08-05 a dispatch
@@ -144,7 +146,7 @@ participating", never "participating with defaults".
 - Filling in a Sprint-3 stub.
 - A two-state (boolean) status anywhere.
 
-## Note on where this lands
+### Note on where this lands
 
 `repid-engine` is a **PUBLIC** repository. State findings, not inventories. Do not
 include credentials, project identifiers, row counts or service names in your output.

@@ -1,5 +1,7 @@
 # INBOX_XC_ZKP — STARK/FRI parameter policy, pin reconciliation, and the mutation matrix
 
+## Task
+
 **Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is a specification returned
 as text. Do not claim to have created, edited or committed a file.
 
@@ -11,7 +13,7 @@ node scripts/dispatch/run-agent.mjs --agent xc --inbox docs/dispatch/INBOX_XC_ZK
 
 ---
 
-## Read this before you plan anything
+### Read this before you plan anything
 
 **The statement is already written, in Rust.** A first pass at this sprint was about to
 ask you to *"define the ZKP statement"*. That would have been wasted work — it exists,
@@ -29,7 +31,7 @@ Your lane is **not** the statement. It is the three things nobody has done:
 
 ---
 
-## Facts you need, inlined
+### Facts you need, inlined
 
 You have `reasoning` and `repo_read`. **`repo_read` is scoped to this workspace only** —
 you cannot open `trinity-ecosystem`, `trustshell`, `hyperdag-protocol` or
@@ -107,7 +109,7 @@ gate — so a prover that is unreachable is `NOT_CHECKED`, never `FAILED`.
 
 ---
 
-## Deliverables — four specifications
+### Deliverables — four specifications
 
 ### 1. STARK/FRI parameter policy
 
@@ -224,7 +226,7 @@ the circuit.
 
 ---
 
-## Acceptance criteria
+### Acceptance criteria
 
 - Every predicate distinguishes all four vocabulary states and names its **fail-closed
   default**.
@@ -235,7 +237,7 @@ the circuit.
 - Where you are uncertain, write **UNVERIFIED** and say what evidence would settle it —
   naming the file or the command a human should run.
 
-## What will be rejected
+### What will be rejected
 
 - Any claim you read a file outside this workspace, including the verifier crate.
 - Any invented test output, command output, or measurement. On 2026-08-05 a dispatch
@@ -248,7 +250,7 @@ the circuit.
 - Any recommendation to remove the UI's *"Not live yet"* label. That is gated on a
   MEASURED GateRun, not on a specification.
 
-## Fixtures — the #376 fence
+### Fixtures — the #376 fence
 
 PR #376 committed a proof lifted from the production proofs table — real agent UUID, real
 score — into this **public** repo. It cannot be withdrawn.
@@ -258,7 +260,7 @@ Every fixture and every witness you propose must be **fabricated**: a NIL-varian
 real agent can hold, and a made-up score. If you propose a test vector, propose it in that
 shape.
 
-## Note on where this lands
+### Note on where this lands
 
 `repid-engine` is a **PUBLIC** repository. State findings, not inventories. No
 credentials, project identifiers, row counts, host names or service names in your output.

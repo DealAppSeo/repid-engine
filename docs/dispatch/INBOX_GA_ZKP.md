@@ -1,5 +1,7 @@
 # INBOX_GA_ZKP — the GateRun event shape for prove → verify outcomes
 
+## Task
+
 **Lane:** L7 MEASUREMENT — **no write scope.** Your deliverable is a specification
 returned as text. Do not claim to have created, edited or committed a file.
 
@@ -11,7 +13,7 @@ node scripts/dispatch/run-agent.mjs --agent ga --inbox docs/dispatch/INBOX_GA_ZK
 
 ---
 
-## Read this before you plan anything
+### Read this before you plan anything
 
 **The proof schema already exists and is fixed.** A first pass at this sprint was about
 to ask you to *"design proof schemas"*. Statement A1's public values are already
@@ -25,7 +27,7 @@ between a measurement we can trust and one we cannot.
 
 ---
 
-## Facts you need, inlined
+### Facts you need, inlined
 
 You have `reasoning` and `repo_read`. **`repo_read` is scoped to this workspace only** —
 you cannot open `trinity-ecosystem`, `trustshell`, `hyperdag-protocol` or
@@ -123,7 +125,7 @@ same event as a proof that is simply invalid.
 
 ---
 
-## Deliverables — three documents, in this order
+### Deliverables — three documents, in this order
 
 ### 1. `zkp-gaterun.v0` — the prove → verify event (the one that matters)
 
@@ -219,7 +221,7 @@ made-up score.
 
 ---
 
-## Acceptance criteria
+### Acceptance criteria
 
 - Every status field can express all four vocabulary states.
 - No field name, comment or example implies the end-to-end path is proven.
@@ -231,7 +233,7 @@ made-up score.
   confident wrong answer.
 - Where you are uncertain, write **UNVERIFIED** and say what would settle it.
 
-## What will be rejected
+### What will be rejected
 
 - Any claim you read a file outside this workspace, including the verifier crate and
   `attestation-presence.ts`.
@@ -243,7 +245,7 @@ made-up score.
 - A schema in which a crate-internal proof and a service proof are indistinguishable.
 - Proposing that a Sprint-3 stub be "fixed" by hardcoding a pass.
 
-## Note on where this lands
+### Note on where this lands
 
 `repid-engine` is a **PUBLIC** repository. State findings, not inventories. Do not include
 credentials, project identifiers, row counts, host names or service names in your output.
