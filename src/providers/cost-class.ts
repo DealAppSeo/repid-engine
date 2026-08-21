@@ -52,7 +52,7 @@ export type CostClass = 'free' | 'paid' | 'unpriced';
  * default drifts away from this table, so the duplication cannot rot silently.
  */
 export const ADAPTER_DEFAULT_MODELS: Record<string, string> = {
-  groq: 'llama-3.1-8b-instant', // src/providers/groq.ts:12
+  groq: 'openai/gpt-oss-20b', // src/providers/groq.ts (was llama-3.1-8b-instant; Groq shut it down 2026-08-16)
   cerebras: 'llama3.1-8b', // src/providers/cerebras.ts:12
   zai: 'glm-4.5-flash', // src/providers/zai.ts:43 (DEFAULT_MODEL)
   sambanova: 'Meta-Llama-3.1-8B-Instruct', // src/providers/sambanova.ts:21

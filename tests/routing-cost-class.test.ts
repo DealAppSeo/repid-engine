@@ -95,7 +95,17 @@ describe('the two lenses answer different questions and both are needed', () => 
   it('pricing lens: only zai is confirmed free across the whole tier-0a chain', () => {
     const chain = ['groq', 'cerebras', 'zai', 'sambanova', 'gemini', 'cohere', 'deepseek', 'openrouter'];
     expect(chain.filter((p) => defaultCostClass(p) === 'free')).toEqual(['zai']);
-    expect(chain.filter((p) => defaultCostClass(p) === 'unpriced')).toEqual(['sambanova', 'openrouter']);
+    // groq JOINED the unpriced set on 2026-08-21. Groq shut down `llama-3.1-8b-instant`
+    // on 2026-08-16, so the default moved to its documented replacement — for which we
+    // hold no price. Deliberately NOT given an invented { in: 0, out: 0 } entry: this
+    // module's whole doctrine is that `free` means someone ASSERTED a zero rate, and we
+    // have not. The free-tier entitlement is carried by FREE_PROVIDERS instead, which is
+    // the lens below and the one routing actually consumes.
+    expect(chain.filter((p) => defaultCostClass(p) === 'unpriced')).toEqual([
+      'groq',
+      'sambanova',
+      'openrouter',
+    ]);
   });
 
   it('entitlement lens: five of the eight carry a free-tier entitlement', () => {
@@ -104,8 +114,11 @@ describe('the two lenses answer different questions and both are needed', () => 
   });
 
   it('operational lens prefers the entitlement, and still reports unpriced when neither knows', () => {
-    // groq: list price is non-zero, but we are on its free tier — entitlement wins.
-    expect(defaultCostClass('groq')).toBe('paid');
+    // groq: we hold NO price for its default model, but we are on its free tier —
+    // entitlement wins. This is the sharpest case for the operational lens: the pricing
+    // lens genuinely does not know, and collapsing "we don't know" into "it's paid"
+    // would push a provider we pay nothing for to the back of the chain.
+    expect(defaultCostClass('groq')).toBe('unpriced');
     expect(operationalCostClass('groq')).toBe('free');
     // anthropic: no entitlement and no pricing row for its default model.
     expect(operationalCostClass('anthropic')).toBe('unpriced');
@@ -120,11 +133,14 @@ describe('the three classifications disagree — pinned so a fourth contradictio
     const byProvider = Object.fromEntries(found.map((d) => [d.provider, d]));
 
     // FREE_PROVIDERS says free; the pricing table charges for the default model.
-    expect(byProvider.groq?.pricingClass).toBe('paid');
-    expect(byProvider.groq?.inFreeProvidersSet).toBe(true);
     expect(byProvider.cerebras?.pricingClass).toBe('paid');
 
     // FREE_PROVIDERS says free; there is no pricing row at all — that is UNPRICED.
+    // groq moved from the block above to this one on 2026-08-21 when its default model
+    // changed to one we hold no price for. Still a disagreement, still pinned — only the
+    // SHAPE of the disagreement changed, from "priced non-zero" to "not priced at all".
+    expect(byProvider.groq?.pricingClass).toBe('unpriced');
+    expect(byProvider.groq?.inFreeProvidersSet).toBe(true);
     expect(byProvider.sambanova?.pricingClass).toBe('unpriced');
     expect(byProvider.openrouter?.pricingClass).toBe('unpriced');
 
