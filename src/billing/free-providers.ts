@@ -20,7 +20,7 @@ export const FREE_PROVIDERS = new Set<string>([
 
 /** Providers we actually have working free-tier keys for AND a routed adapter (route peer_verify across these). */
 export const WORKING_FREE_PROVIDERS: { provider: string; model: string }[] = [
-  { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  { provider: 'groq', model: 'openai/gpt-oss-20b' },
   { provider: 'cerebras', model: 'zai-glm-4.7' },
   // fireworks RETIRED 2026-06-04 (account suspended → 100% fail); replaced by sambanova below.
   { provider: 'sambanova', model: 'Meta-Llama-3.1-8B-Instruct' },
