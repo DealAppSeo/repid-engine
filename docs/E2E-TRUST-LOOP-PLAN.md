@@ -340,6 +340,58 @@ Both inequalities **HOLD**. Config keys `confession_window_hours` (24) and
 
 ---
 
+### 2e. `verified` was never an observation **[MEASURED 2026-08-21]**
+
+`x402-outcome-link.ts` says plainly that it does not verify a transaction on chain, because
+*"resolving a hash is I/O and belongs in a service with a provider."* `settlement-reconciler.ts`
+defers to the same service: *"reconciling means asserting an on-chain fact, so it requires a
+verified receipt from the chain."*
+
+**That service did not exist.** So `PaymentProof.verified` was set by whoever built the
+proof and nothing ever contradicted them. The no-proof-no-pay anchor — the mechanism that
+makes wash-trading reputation cost real money — was checking that a hash was *well-formed*,
+not that it was *real*. A 32-byte hex string resolving to nothing passed.
+
+`deposit-verifier.ts` was close but does not fit: it verifies deposits into one fixed escrow.
+An agent-to-agent settlement pays an ordinary wallet.
+
+**And it must not be that module with the address swapped.** It finishes with a
+belt-and-suspenders check that `balanceOf(escrow)` rose by at least the claimed amount across
+the block. That is sound for an escrow, whose balance moves for one reason, and **unsound for
+an agent wallet**, which can also SPEND in the same block — so its balance delta can be
+smaller than what it genuinely received, and the check would report a real payment as
+unverified. A false negative there demotes an honest agent's success for someone else's block
+ordering. It is dropped, and the safety it provided is preserved by the check that was doing
+the real work anyway: the log must be emitted **by the canonical token contract**, so a
+spoofed `Transfer` never counts in the first place.
+
+**A second claim closed at the same time.** The caller also asserts the service value, and
+that number does more than scale the delta — value at risk picks the **risk band**. An
+unverified value therefore chooses its own level of scrutiny as well as its own reward.
+Requiring `observed >= claimed` makes "claim large, pay small" fail.
+
+**Four states, not two.** `verified: false` is returned both for *we looked and the money is
+not there* and for *we could not look*. Those demote a claim identically — correct, unverified
+value must not earn — but they are not the same fact, and reporting an RPC outage as a failed
+verification turns an infrastructure problem into an accusation.
+
+`settled-interaction-scorer.ts` is the seam: resolve first, then hand the pure builder a proof
+whose flag is an observation. **Order is load-bearing** — scoring first and correcting later
+would mean the ledger briefly held a delta the chain does not support. Verified against a fake
+provider, so these are MEASURED rather than deferred to an environment with egress:
+
+| Assertion | |
+|---|---|
+| A confirmed payment anchors and pays | PASS |
+| A hash the chain has never heard of demotes the success to UNCERTAIN, delta 0 | PASS |
+| A caller-asserted `verified: true` is discarded when the chain disagrees | PASS |
+| A claimed value above the money that moved is CONTRADICTED, not merely unproven | PASS |
+| An RPC outage never grants an anchor, and is recorded `NOT_CHECKED`, not as a failure | PASS |
+| A spoofed `Transfer` from a non-token address counts for nothing | PASS |
+| A fault whose settlement cannot be verified is **still charged** — the anchor gates positive claims only, never an escape from a penalty | PASS |
+
+---
+
 ### 3. Sequence, ordered by irreversibility × cost-after-users
 
 | # | Item | State |
@@ -349,7 +401,7 @@ Both inequalities **HOLD**. Config keys `confession_window_hours` (24) and
 | 3 | Attestation payload schema + A1 versioning decision | **NEXT — design only, one-way door** |
 | 4 | Hard testnet/mainnet score separation | Design now (token + score identity) |
 | 5 | Shadow wiring: settled x402 → `classifyOutcome` → shadow row | **DONE — builder + risk bands + derived `policy_version`, 12 assertions MEASURED against the live trigger** |
-| 6 | Live E2E on a test triad: good / bad / confession | **Scoring half MEASURED** (see §2c). Inputs were supplied, not observed — a caller that reads a real settlement is what remains |
+| 6 | Live E2E on a test triad: good / bad / confession | **Scoring half MEASURED** (§2c); **settlement resolution MEASURED against a fake provider** (§2e). What remains: the payee-address lookup, the insert, and one run against a real RPC |
 | 7 | Confession window (24h, `repid_config` key) | **DONE — MEASURED, see §2d** |
 | 8 | Routing signal schema + decision logging | Prerequisite for any learned router |
 | 9 | TrustTrader paper-trading outcome loop | **Elevated — see §5** |
