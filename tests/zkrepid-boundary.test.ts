@@ -61,9 +61,12 @@ describe('the boundary is well-formed', () => {
 
   it('splits into a pure surface and a named I/O edge', () => {
     // 7 as of 2026-08-17: `zkrepid/disclosure` and `zkp/formula-golden-vector` joined the surface.
+    // 8 as of 2026-08-21: `zkp/statement-registry` — which statement a proof proves, a question
+    // the proof cannot answer about itself because the verifier ignores every field it does not
+    // already know (MEASURED; see tests/zkp-statement-registry.test.ts).
     // The number is asserted rather than derived so ADDING a module is a deliberate act that shows
     // up in a diff — the point of the boundary is that its edges are decided, not accumulated.
-    expect(ZKREPID_PURE_MODULES.length).toBe(7);
+    expect(ZKREPID_PURE_MODULES.length).toBe(8);
     expect(ZKREPID_IO_EDGE_MODULES.map((m) => m.path)).toEqual(['zkp/repid-delta-bridge']);
   });
 });

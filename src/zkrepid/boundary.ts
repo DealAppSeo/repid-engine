@@ -104,6 +104,13 @@ export const ZKREPID_MODULES: readonly ZkRepIdModule[] = [
     role: 'the wire from the live scoring path into a RepID delta statement',
     kind: 'io-edge',
   },
+  {
+    path: 'zkp/statement-registry',
+    role: 'the family of RepID statements and what each one binds — the answer to "which ' +
+      'statement does this proof prove?", which a proof cannot answer about itself because ' +
+      'the verifier ignores any field it does not already know',
+    kind: 'pure',
+  },
 ];
 
 /**
