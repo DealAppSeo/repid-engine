@@ -25,15 +25,15 @@ Every failure returns a REASON with its do-not-substitute instruction attached: 
 
 ## 2. Verify the thing itself, never a proxy for it
 
-*Proof:* `gemini -p` worked in a shell, so "headless auth works" was recorded — but the
-dispatcher used `spawnSync` without one → **ENOENT every run**. A rename
-(`GROK_API_KEY`→`XAI_API_KEY`) silently un-dispatched an agent. Two claims died the same way in
-one session: *"~20 PRs open"* (a session record's **cached** field; GitHub said 2)
-and *"the fix is not on main"* (checked commit **ancestry**, not content — squash-merged, so
-the SHA is absent while the change is fully present).
+*Proof:* `gemini -p` worked in a shell, so "headless auth works" was recorded; the dispatcher
+used `spawnSync` without one → **ENOENT**. *"Not on main"* checked **ancestry**, not content:
+squash-merge hides the SHA, not the change. `npm i -g pkg@latest` **succeeded** and installed a
+build this Node cannot run: npm warns on an unmet engine, never refuses. The script confirming
+it exited 0 — for the `git` call that ran last.
 
-**Apply:** call what you will actually call, the way you will call it. Query the source, never a
-mirror of it. Check the property you actually mean. Committed ≠ landed ≠ deployed.
+**Apply:** call what you will call, how you will call it. Query the source, not a
+mirror. Exit 0 covers the last command, not your intent; a banner is a label, not a result.
+Installed ≠ runnable. Committed ≠ landed ≠ deployed. Pin versions in git.
 
 ## 3. A mechanism wired at one end only is worse than an absent one
 
