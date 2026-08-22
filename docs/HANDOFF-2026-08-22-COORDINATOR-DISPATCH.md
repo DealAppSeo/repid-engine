@@ -14,7 +14,9 @@ inventories (public repo).
 - The brief I was handed was a **pre-merge snapshot.** Its "get PR #462 green" step was
   already done — #462 merged, and `#463` (yours) rewrote the handoff to *"start from
   `main`."* Corrected: working from `main`.
-- Preflight green after cleanup. Live queue/config/schema **VERIFIED**. The two dead
+- Preflight green after cleanup **except the test baseline**, which is red (~151/6166
+  failing) even with the required env — must be classified ENV-vs-REAL and the failing set
+  pinned before Phase-0 edits (§2.5). Live queue/config/schema **VERIFIED**. The two dead
   phase-9 queue rows are **cleared**.
 - **Blocker (VERIFIED, the important part):** the unattended dispatch loop cannot
   self-chain more than one dispatch per working tree. `run-agent.mjs` writes its
@@ -48,9 +50,15 @@ the tree was dirty with unrelated `trust-identity` WIP on a different branch —
    `SUPABASE_URL`** (only `NEXT_PUBLIC_*`, `*_TEST`, `*_TRUSTCHAT` variants) — a local
    daemon run needs `SUPABASE_URL` supplied separately.
 4. `npm install --legacy-peer-deps` — **VERIFIED** (exit 0)
-5. `npm test` green — **NOT_CHECKED at report time.** First run was red only because the
-   required dummy env (`SUPABASE_URL`/`SUPABASE_SERVICE_KEY`, per repo `CLAUDE.md`) was
-   unset → import-time failures (ENV/CONFIG, not REAL). True baseline re-running with env.
+5. `npm test` green — **FAILED.** The baseline is red **with** the required dummy env
+   (`SUPABASE_URL`/`SUPABASE_SERVICE_KEY`): **~151 tests / 14 suites failing, ~5992
+   passing** (6166 total). My first-pass "it's only missing-env import failures" was wrong
+   — env changed the shape (no-env: 145 fail; with-env: 151 fail) but a large red set
+   remains. **NOT_CHECKED whether these are ENV/CONFIG (integration suites needing real
+   Supabase/network) or REAL** — they must be classified (CLAUDE_RULES r10) and the exact
+   failing set captured before Phase-0 edits, so a new red is attributable. This is a
+   FAILED on preflight item 5, which the brief does not make a hard stop — but it means
+   "a later red is yours" does not hold until the baseline set is pinned.
 
 ## 3. Live state — VERIFIED (findings, not inventories)
 
