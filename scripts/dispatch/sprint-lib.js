@@ -156,4 +156,51 @@ function parsePair(spec) {
     });
 }
 
-module.exports = { extractHandoff, handoffField, handoffList, decideNext, buildDispatchText, parsePair };
+/* ─────────────────────── unattended-daemon guards ─────────────────────── */
+
+/**
+ * May the daemon dispatch right now?
+ *
+ * Both guards are read from live config on every cycle rather than captured at
+ * start-up, deliberately: a loop that spends money unattended must be stoppable
+ * WITHOUT reaching the machine it runs on. A switch the daemon only reads once
+ * is a switch you cannot use in the situation you built it for.
+ *
+ * Fails CLOSED on a missing or unparseable switch. The dangerous default here is
+ * the silent yes.
+ */
+function shouldDispatch({ enabledRaw, dispatchedLastHour, maxPerHourRaw }) {
+  const enabled = String(enabledRaw ?? '').trim().toLowerCase() === 'true';
+  if (!enabled) return { ok: false, reason: 'agent_dispatch_enabled is not true — daemon idle by config' };
+
+  const max = Number(maxPerHourRaw);
+  if (!Number.isFinite(max) || max <= 0) {
+    return { ok: false, reason: `agent_dispatch_max_per_hour is not a positive number (${maxPerHourRaw}) — refusing to dispatch unbounded` };
+  }
+  if (dispatchedLastHour >= max) {
+    return { ok: false, reason: `rate ceiling reached: ${dispatchedLastHour}/${max} in the last hour` };
+  }
+  return { ok: true, remaining: max - dispatchedLastHour };
+}
+
+/**
+ * Given a completed row and its handoff, what should be queued next?
+ *
+ * Returns `null` when the sprint is finished, blocked, or stuck — the same
+ * decisions `decideNext` makes, expressed as a queue row so the daemon has no
+ * second copy of that logic to disagree with.
+ */
+function nextQueueRow(completedRow, handoff, maxPhases, buildText) {
+  const decision = decideNext(handoff, completedRow.phase, maxPhases);
+  if (decision.action !== 'continue') return null;
+  return {
+    agent: completedRow.agent,
+    sprint: completedRow.sprint,
+    phase: decision.nextPhase,
+    brief_path: completedRow.brief_path,
+    dispatch_text: buildText(decision.nextPhase, handoff.body),
+    status: 'QUEUED',
+  };
+}
+
+module.exports = { extractHandoff, handoffField, handoffList, decideNext, buildDispatchText, parsePair, shouldDispatch, nextQueueRow };

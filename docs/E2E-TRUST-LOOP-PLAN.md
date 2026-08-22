@@ -273,6 +273,135 @@ Re-measured after the fix: all 22 events honest, event 18 records the partial ab
 `repid_delta_applied = 0` beside `delta = -116` now makes floor insulation **queryable**,
 which is exactly what XC's harness asked GA for.
 
+**The historical half — MEASURED, and it took three attempts to measure honestly.**
+`scripts/trust-loop/floor-absorption-audit.ts` is the detector; both obvious ones are wrong
+and are documented in its header so the next person does not repeat them. Comparing
+`repid_after` against the agent's floor over-counts enormously, because `peak_repid` only
+rises and so an April event gets judged against an August floor. Reconstructing the peak per
+event is better and still unusable, because **there is no floor migration in the tracked
+history**, so the trigger cannot be dated and events predating it were legitimately below a
+floor that did not exist.
+
+The detector that works needs neither: consecutive events where the ledger says one left the
+score at X and the next says it *started* higher. Something raised it in between, and that is
+visible without dating anything. Rises landing **exactly on the agent's tier floor** are the
+floor's signature; the remainder has other causes and is reported separately rather than
+folded in.
+
+**Result: floor-shaped absorption is present in history, across a minority of agents, in a
+window opening 2026-06-04 and running to the day before the fix.** It is a **lower bound** —
+the detector compares against today's peak, so an agent whose peak has risen since will not
+match even where absorption happened. Under-counting is the right direction for a number that
+will be quoted.
+
+**Not repaired here.** A ledger rewrite and a change to the floor's shape want to happen in
+the same migration, so remediation rides on the L3 decision rather than preceding it.
+
+#### What the floor is actually absorbing — this reframes L3 **[MEASURED 2026-08-22]**
+
+XC modelled the ratchet as a **defection subsidy**: spike to VETERAN once, then defect for
+free. The mechanism is real and now measured. But asking what the floor has absorbed *in
+practice* gives a different picture, and it changes which option is cheap.
+
+**Over 99% of all absorbed points come from a single event type, at a constant magnitude.**
+Not a distribution — every absorbed event of that type carries the identical delta, repeated
+tens of thousands of times across a minority of agents. Discrete agent-fault events account
+for the remainder: a handful of events, well under 1% of the points.
+
+Three things follow.
+
+1. **The attack XC modelled is not what is happening.** It remains a genuine hole and should
+   still be closed, but the floor's live load is not defection — it is a high-frequency,
+   fixed-magnitude signal.
+2. **`NON_FAULT_ONLY` is therefore much cheaper than it looks**, or much more expensive,
+   depending entirely on one classification question: *is that dominant event type the
+   agent's fault?* `repid-confession.ts` lists it among the detection-shaped negatives, which
+   argues yes; its constant magnitude and frequency argue it is closer to continuous drift
+   than to a discrete failure. **The L3 decision largely reduces to answering that**, which
+   is a far more tractable question than "what shape should the floor be".
+3. **The floor has been masking that signal.** Without it, the affected agents would have
+   been driven down by an automated process nobody was watching. Weakening the floor without
+   first understanding that process would surface the consequence immediately. The rate has
+   since collapsed to near-zero, so this is a historical accumulation rather than an active
+   runaway — but it is the reason any L3 analysis over that window is distorted.
+
+`src/services/floor-policy.ts` replays a history under each candidate shape and reports both
+sides of the trade: **penalty absorbed** (the cost — at zero, defection is never free and the
+floor does nothing) and **worst single drop prevented** (the benefit, and the reason not to
+simply delete the floor). It decides nothing; the trade is a values question, and the module
+exists so it is argued over numbers rather than intuitions.
+
+#### The classification question, answered — and what it exposed **[MEASURED 2026-08-22]**
+
+Reading the metadata on the dominant absorbed event type settles it. Every one carries
+`decision_outcome: vetoed`, `decision_source: fact-check-quorum`, and
+`delta_reason: "HAL vetoed: hallucination or constitutional block"`. **That is agent fault.**
+So `NON_FAULT_ONLY` is the EXPENSIVE end of the options, not the cheap one — it would remove
+essentially all current absorption. Correcting the note above, which left it open.
+
+**And the metadata exposed something else.** These penalties record their own evidence base,
+and roughly **two-thirds of all vetoing penalties ran with at least one provider failed** —
+every one of them on a partial quorum, over a window opening 2026-06-04. Among the failures
+named in that metadata is the retired Groq model whose shutdown took the free tier down; the
+same outage was also degrading the quorum that decides penalties, which nothing connected at
+the time.
+
+Being decided by fewer providers is not by itself wrong, and this does not claim the verdicts
+were. What is worth stating precisely is the bounded set where it could have mattered:
+
+| Evidence base at the moment of penalty | Share |
+|---|---|
+| A provider failed, but the survivors were **unanimous** | ~54% |
+| A provider failed **and** the survivors **disagreed** | **~9%** |
+| Full provider set, survivors disagreed | negligible |
+
+The middle row is the concerning one — those are penalties where the absent provider could
+plausibly have changed the verdict, and roughly a quarter of them were decided by two or
+fewer model families. The last row is the striking one: **disagreement almost never happens
+with a full provider set.** Losing a provider is what turns a unanimous panel into a split
+one, so provider health and verdict quality are not independent.
+
+`HAL_PENALTY_REQUIRES_QUORUM` is `true`, and these events record `quorum_met: true` while
+also recording `quorum: partial`. Whether a partial quorum should satisfy a gate whose name
+promises a quorum is a design question for whoever owns HAL — **NOT a finding that it is
+wrong**, and deliberately not changed here.
+
+#### Does anything actually consume the clamped score? **[MEASURED 2026-08-22]**
+
+XC named this as the fact that decides whether L3 is load-bearing or cosmetic: if routing,
+`A_eff` and rater weight do not read ratchet-clamped `current_repid`, a floored defector has
+no operational power and the whole concern evaporates. Settled by reading the call sites.
+
+| Consumer | Reads clamped `current_repid`? |
+|---|---|
+| `A_eff` (`effective-authority.ts`) | **Yes** — documented in that file as a named approximation for `R_route` |
+| Rater weight (`routes/v1/contracts.ts` → `validation-repid-delta.ts`) | **Yes** — the rater's `current_repid` is read directly at the call site |
+| Marketplace purchase eligibility (`min_repid_to_purchase`, re-asserted at bid accept) | **Yes** — the buyer's `current_repid` gates the purchase |
+
+**A first pass reported this as two of three, looking for a "router".** That was the wrong
+search: `routes/route.ts` is **LLM provider** routing — model selection, no reputation
+involved. The repid-gated *selection* that actually exists is marketplace access, where a
+service's `min_repid_to_purchase` is checked against the buyer's `current_repid` at bid
+accept. It reads the clamped value like the other two.
+
+So it is **three of three**, and the practical consequence is worse than the earlier note:
+a defector on a VETERAN floor retains purchase access to every service whose minimum sits
+below that floor — in practice, all of them.
+
+**And the rater-weight finding is worse than XC modelled.** XC assumed a logarithmic weight,
+giving a floored defector roughly 98% of maximum rating power. The shipped function is a
+*linear ratio against a pivot, clamped at both ends* — and it **saturates at its ceiling far
+below the VETERAN floor**. So a defector sitting on that floor does not hold 98% of maximum
+influence over other agents' penalties; it holds **100% of the maximum, with several
+thousand points of headroom to spare**. It would keep full rating power long after falling
+several tiers.
+
+That makes L3 load-bearing on two of the three consumers, and strengthens rather than
+weakens XC's case. The exact constants stay out of this document per the standing rule —
+publish the invariant, not the weights — but the invariant is: *rating influence saturates
+well below the floor the ratchet guarantees, so the ratchet guarantees maximum influence
+permanently.*
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
