@@ -62,6 +62,12 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+// The domain-pack matcher is CommonJS (see lessons-lib.js header) so the jest suite
+// can require it without the ESM-URL-scheme failure a `.mjs` import hits on Windows.
+const require_ = createRequire(import.meta.url);
+const { loadPacks, matchPacks, renderPacks } = require_('./lessons-lib.js');
 
 /**
  * `mode` is not a style preference — it is what each CLI actually accepts,
@@ -383,6 +389,10 @@ const TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 15 * 60 * 1000);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LESSONS_PATH = join(REPO_ROOT, 'LESSONS.md');
 const LESSONS_MAX = 6000;
+// Second tier: domain packs the dispatcher appends after LESSONS.md when a brief's
+// text triggers them. Keeps LESSONS.md under its cap while the detail still reaches
+// the lane that needs it — injected, never a pointer the agent chooses to follow.
+const LESSONS_DIR = join(REPO_ROOT, 'lessons');
 
 /* ════════════════════════════════════════════════════════════════════════════
  * SCOPED LESSONS — the graph layer beneath the LESSONS.md block.
@@ -867,6 +877,15 @@ function main() {
     );
   }
 
+  // Domain packs matched to THIS brief by substring trigger (fail-open-safe; see
+  // lessons-lib.js). loadPacks tolerates a missing dir → []. Matching on `task` is
+  // deliberate: the pack is chosen by what the work is about, not by who runs it.
+  const matchedPacks = matchPacks(task, loadPacks(LESSONS_DIR));
+  const lessonPacksText = renderPacks(matchedPacks);
+  if (matchedPacks.length) {
+    console.error(`[dispatch] lesson packs matched: ${matchedPacks.map((p) => p.name).join(', ')}`);
+  }
+
   const preamble = [
     `You are ${agentKey.toUpperCase()}. Your lane: ${agent.lane}.`,
     `Governing spec: E:/dev/living-docs/03_specs/PARALLEL_AGENT_LANES_v1.md`,
@@ -880,6 +899,18 @@ function main() {
           '',
           lessons,
           '',
+          ...(lessonPacksText
+            ? [
+                '════ DOMAIN LESSON PACKS — matched to this task ════',
+                'The rules above are universal; these add the hard-won detail for this',
+                'task\'s domain. Same standing as the shared lessons.',
+                '',
+                lessonPacksText,
+                '',
+                '════ END DOMAIN PACKS ════',
+                '',
+              ]
+            : []),
           'If your work teaches a NEW lesson of this kind, say so explicitly at the end',
           'of your report under "LESSON:" — it will be reviewed for inclusion. Do not',
           'edit LESSONS.md yourself; it is shared state and changes go through review.',
