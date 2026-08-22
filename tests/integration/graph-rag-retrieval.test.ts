@@ -16,10 +16,10 @@
 
 import { db } from '../../src/db';
 import { integrationSchemaPresent } from '../helpers/describe-if-schema';
+import { runIntegration } from '../helpers/run-integration';
 
-const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 // Run only against a seeded, non-prod test DB (schema-present) with creds.
-const describeIfDb = HAS_DB && integrationSchemaPresent() ? describe : describe.skip;
+const describeIfDb = runIntegration() && integrationSchemaPresent() ? describe : describe.skip;
 
 const SPOKESPERSONS = new Set([
   'f3ef0bf8-5cdc-4fad-bce8-5144f01dc271', // SOPHIA

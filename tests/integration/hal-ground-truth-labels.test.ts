@@ -15,10 +15,10 @@
 
 import { db } from '../../src/db';
 import { integrationSchemaPresent } from '../helpers/describe-if-schema';
+import { runIntegration } from '../helpers/run-integration';
 
-const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 // Run only against a seeded, non-prod test DB (schema-present) with creds.
-const describeIfDb = HAS_DB && integrationSchemaPresent() ? describe : describe.skip;
+const describeIfDb = runIntegration() && integrationSchemaPresent() ? describe : describe.skip;
 
 describeIfDb('hal_ground_truth_labels + hal_accuracy_summary v2', () => {
   it('hal_ground_truth_labels table exists and is queryable', async () => {
