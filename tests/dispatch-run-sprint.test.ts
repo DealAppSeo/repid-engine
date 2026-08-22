@@ -201,3 +201,63 @@ describe('pair parsing', () => {
     expect(() => parsePair('xc')).toThrow(/agent=path/);
   });
 });
+
+describe('unattended-daemon guards — it spends money with nobody watching', () => {
+  const { shouldDispatch } = sprint;
+  const base = { enabledRaw: 'true', dispatchedLastHour: 0, maxPerHourRaw: '12' };
+
+  it('dispatches when enabled and under the ceiling', () => {
+    expect(shouldDispatch(base)).toMatchObject({ ok: true, remaining: 12 });
+  });
+
+  /**
+   * The switch ships FALSE and is read from live config every cycle. The
+   * situation a kill switch exists for is the one where you cannot reach the
+   * machine — a switch requiring shell access to the runaway is not one.
+   */
+  it('is OFF unless the switch says exactly true', () => {
+    for (const enabledRaw of ['false', '', null, undefined, '1', 'yes', 'TRUE ']) {
+      const r = shouldDispatch({ ...base, enabledRaw });
+      if (enabledRaw === 'TRUE ') {
+        // Trimmed and case-folded, because a config edit with a stray space
+        // should not silently leave the daemon running.
+        expect(r.ok).toBe(true);
+      } else {
+        expect(r.ok).toBe(false);
+      }
+    }
+  });
+
+  it('fails CLOSED on an unusable rate ceiling rather than dispatching unbounded', () => {
+    for (const maxPerHourRaw of ['0', '-5', 'lots', '', null, undefined]) {
+      const r = shouldDispatch({ ...base, maxPerHourRaw });
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/positive number/);
+    }
+  });
+
+  it('stops at the ceiling', () => {
+    expect(shouldDispatch({ ...base, dispatchedLastHour: 12 }).ok).toBe(false);
+    expect(shouldDispatch({ ...base, dispatchedLastHour: 99 }).reason).toMatch(/rate ceiling/);
+    expect(shouldDispatch({ ...base, dispatchedLastHour: 11 })).toMatchObject({ ok: true, remaining: 1 });
+  });
+});
+
+describe('the daemon chains with the same decision function as the runner', () => {
+  const { nextQueueRow } = sprint;
+  const row = { agent: 'xc', sprint: 'trustloop', phase: 2, brief_path: 'docs/dispatch/X.md' };
+  const h = (body: string, phase = 2) => extractHandoff(handoff('XC', phase, body));
+
+  it('queues the next phase when the agent advanced', () => {
+    const next = nextQueueRow(row, h('STATUS: COMPLETE\nNEXT_PHASE_READY: 3'), 8, () => 'text');
+    expect(next).toMatchObject({ agent: 'xc', phase: 3, status: 'QUEUED' });
+  });
+
+  it('queues nothing when the sprint is finished, blocked, or stuck', () => {
+    expect(nextQueueRow(row, h('STATUS: COMPLETE'), 8, () => 't')).toBeNull();
+    expect(nextQueueRow(row, h('STATUS: BLOCKED\nBLOCKED_ON: x'), 8, () => 't')).toBeNull();
+    // The one that would otherwise re-dispatch the same phase all night.
+    expect(nextQueueRow(row, h('STATUS: COMPLETE\nNEXT_PHASE_READY: 2'), 8, () => 't')).toBeNull();
+    expect(nextQueueRow(row, null, 8, () => 't')).toBeNull();
+  });
+});
