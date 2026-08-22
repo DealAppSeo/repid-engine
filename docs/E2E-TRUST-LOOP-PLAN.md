@@ -297,6 +297,40 @@ will be quoted.
 **Not repaired here.** A ledger rewrite and a change to the floor's shape want to happen in
 the same migration, so remediation rides on the L3 decision rather than preceding it.
 
+#### What the floor is actually absorbing — this reframes L3 **[MEASURED 2026-08-22]**
+
+XC modelled the ratchet as a **defection subsidy**: spike to VETERAN once, then defect for
+free. The mechanism is real and now measured. But asking what the floor has absorbed *in
+practice* gives a different picture, and it changes which option is cheap.
+
+**Over 99% of all absorbed points come from a single event type, at a constant magnitude.**
+Not a distribution — every absorbed event of that type carries the identical delta, repeated
+tens of thousands of times across a minority of agents. Discrete agent-fault events account
+for the remainder: a handful of events, well under 1% of the points.
+
+Three things follow.
+
+1. **The attack XC modelled is not what is happening.** It remains a genuine hole and should
+   still be closed, but the floor's live load is not defection — it is a high-frequency,
+   fixed-magnitude signal.
+2. **`NON_FAULT_ONLY` is therefore much cheaper than it looks**, or much more expensive,
+   depending entirely on one classification question: *is that dominant event type the
+   agent's fault?* `repid-confession.ts` lists it among the detection-shaped negatives, which
+   argues yes; its constant magnitude and frequency argue it is closer to continuous drift
+   than to a discrete failure. **The L3 decision largely reduces to answering that**, which
+   is a far more tractable question than "what shape should the floor be".
+3. **The floor has been masking that signal.** Without it, the affected agents would have
+   been driven down by an automated process nobody was watching. Weakening the floor without
+   first understanding that process would surface the consequence immediately. The rate has
+   since collapsed to near-zero, so this is a historical accumulation rather than an active
+   runaway — but it is the reason any L3 analysis over that window is distorted.
+
+`src/services/floor-policy.ts` replays a history under each candidate shape and reports both
+sides of the trade: **penalty absorbed** (the cost — at zero, defection is never free and the
+floor does nothing) and **worst single drop prevented** (the benefit, and the reason not to
+simply delete the floor). It decides nothing; the trade is a values question, and the module
+exists so it is argued over numbers rather than intuitions.
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
