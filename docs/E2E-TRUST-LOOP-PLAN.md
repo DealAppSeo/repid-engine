@@ -376,7 +376,17 @@ no operational power and the whole concern evaporates. Settled by reading the ca
 |---|---|
 | `A_eff` (`effective-authority.ts`) | **Yes** — documented in that file as a named approximation for `R_route` |
 | Rater weight (`routes/v1/contracts.ts` → `validation-repid-delta.ts`) | **Yes** — the rater's `current_repid` is read directly at the call site |
-| Routing (`routes/route.ts`) | **No repid read found** — NOT_CHECKED rather than confirmed absent |
+| Marketplace purchase eligibility (`min_repid_to_purchase`, re-asserted at bid accept) | **Yes** — the buyer's `current_repid` gates the purchase |
+
+**A first pass reported this as two of three, looking for a "router".** That was the wrong
+search: `routes/route.ts` is **LLM provider** routing — model selection, no reputation
+involved. The repid-gated *selection* that actually exists is marketplace access, where a
+service's `min_repid_to_purchase` is checked against the buyer's `current_repid` at bid
+accept. It reads the clamped value like the other two.
+
+So it is **three of three**, and the practical consequence is worse than the earlier note:
+a defector on a VETERAN floor retains purchase access to every service whose minimum sits
+below that floor — in practice, all of them.
 
 **And the rater-weight finding is worse than XC modelled.** XC assumed a logarithmic weight,
 giving a floored defector roughly 98% of maximum rating power. The shipped function is a
