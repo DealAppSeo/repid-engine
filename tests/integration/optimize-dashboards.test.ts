@@ -1,16 +1,16 @@
 /**
  * S-OPTIMIZE — cost + efficiency dashboard integration (supertest). Live-DB assertions gated on creds.
  */
-const HAVE_CREDS = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost:54321';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy-key-for-import';
 
 import request from 'supertest';
 import app from '../../src/index';
 import { integrationSchemaPresent } from '../helpers/describe-if-schema';
+import { runIntegration } from '../helpers/run-integration';
 
 // Live-DB assertions run only with creds AND a seeded, non-prod test schema.
-const live = HAVE_CREDS && integrationSchemaPresent() ? describe : describe.skip;
+const live = runIntegration() && integrationSchemaPresent() ? describe : describe.skip;
 
 live('cost + efficiency dashboards (live llm_call_log)', () => {
   it('GET /costs/summary returns the 24h cost shape', async () => {

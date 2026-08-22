@@ -74,6 +74,14 @@ npx jest --config jest.config.js -t "<test name substring>"  # single test by na
 export SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_KEY=dummy
 ```
 
+**These dummies only let `src/config.ts` BOOT — they do NOT enable the integration
+tests.** Integration suites are opt-in and require `RUN_INTEGRATION=1` alongside real,
+reachable credentials; without it they skip. Do not expect `localhost:54321` to make a
+DB-touching suite pass — it satisfies config's presence check, not a live database, so a
+suite that armed on presence alone would try to reach a Supabase that isn't there. (Guards
+gate on `RUN_INTEGRATION=1`, never on credential presence — see
+`tests/helpers/run-integration.ts`.)
+
 Real credentials come from Railway env vars at deploy; never commit them.
 
 ## Test layout — important quirk

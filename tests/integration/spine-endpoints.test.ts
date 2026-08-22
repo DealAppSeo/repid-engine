@@ -10,7 +10,6 @@
  */
 
 // Must be set BEFORE importing app (config.ts throws at import without these).
-const HAVE_CREDS = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost:54321';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy-key-for-import';
 
@@ -18,9 +17,10 @@ import request from 'supertest';
 import app from '../../src/index';
 import { db } from '../../src/db';
 import { integrationSchemaPresent } from '../helpers/describe-if-schema';
+import { runIntegration } from '../helpers/run-integration';
 
 // live-DB block runs only with creds AND a seeded, non-prod test schema.
-const live = HAVE_CREDS && integrationSchemaPresent() ? describe : describe.skip;
+const live = runIntegration() && integrationSchemaPresent() ? describe : describe.skip;
 const uniq = `spine-test-${process.pid}-${Math.floor(process.hrtime()[1] / 1000)}`;
 
 describe('S-SPINE public endpoints (no DB needed)', () => {
