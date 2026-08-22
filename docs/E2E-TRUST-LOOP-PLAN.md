@@ -366,6 +366,32 @@ also recording `quorum: partial`. Whether a partial quorum should satisfy a gate
 promises a quorum is a design question for whoever owns HAL — **NOT a finding that it is
 wrong**, and deliberately not changed here.
 
+#### Does anything actually consume the clamped score? **[MEASURED 2026-08-22]**
+
+XC named this as the fact that decides whether L3 is load-bearing or cosmetic: if routing,
+`A_eff` and rater weight do not read ratchet-clamped `current_repid`, a floored defector has
+no operational power and the whole concern evaporates. Settled by reading the call sites.
+
+| Consumer | Reads clamped `current_repid`? |
+|---|---|
+| `A_eff` (`effective-authority.ts`) | **Yes** — documented in that file as a named approximation for `R_route` |
+| Rater weight (`routes/v1/contracts.ts` → `validation-repid-delta.ts`) | **Yes** — the rater's `current_repid` is read directly at the call site |
+| Routing (`routes/route.ts`) | **No repid read found** — NOT_CHECKED rather than confirmed absent |
+
+**And the rater-weight finding is worse than XC modelled.** XC assumed a logarithmic weight,
+giving a floored defector roughly 98% of maximum rating power. The shipped function is a
+*linear ratio against a pivot, clamped at both ends* — and it **saturates at its ceiling far
+below the VETERAN floor**. So a defector sitting on that floor does not hold 98% of maximum
+influence over other agents' penalties; it holds **100% of the maximum, with several
+thousand points of headroom to spare**. It would keep full rating power long after falling
+several tiers.
+
+That makes L3 load-bearing on two of the three consumers, and strengthens rather than
+weakens XC's case. The exact constants stay out of this document per the standing rule —
+publish the invariant, not the weights — but the invariant is: *rating influence saturates
+well below the floor the ratchet guarantees, so the ratchet guarantees maximum influence
+permanently.*
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
