@@ -331,6 +331,41 @@ floor does nothing) and **worst single drop prevented** (the benefit, and the re
 simply delete the floor). It decides nothing; the trade is a values question, and the module
 exists so it is argued over numbers rather than intuitions.
 
+#### The classification question, answered — and what it exposed **[MEASURED 2026-08-22]**
+
+Reading the metadata on the dominant absorbed event type settles it. Every one carries
+`decision_outcome: vetoed`, `decision_source: fact-check-quorum`, and
+`delta_reason: "HAL vetoed: hallucination or constitutional block"`. **That is agent fault.**
+So `NON_FAULT_ONLY` is the EXPENSIVE end of the options, not the cheap one — it would remove
+essentially all current absorption. Correcting the note above, which left it open.
+
+**And the metadata exposed something else.** These penalties record their own evidence base,
+and roughly **two-thirds of all vetoing penalties ran with at least one provider failed** —
+every one of them on a partial quorum, over a window opening 2026-06-04. Among the failures
+named in that metadata is the retired Groq model whose shutdown took the free tier down; the
+same outage was also degrading the quorum that decides penalties, which nothing connected at
+the time.
+
+Being decided by fewer providers is not by itself wrong, and this does not claim the verdicts
+were. What is worth stating precisely is the bounded set where it could have mattered:
+
+| Evidence base at the moment of penalty | Share |
+|---|---|
+| A provider failed, but the survivors were **unanimous** | ~54% |
+| A provider failed **and** the survivors **disagreed** | **~9%** |
+| Full provider set, survivors disagreed | negligible |
+
+The middle row is the concerning one — those are penalties where the absent provider could
+plausibly have changed the verdict, and roughly a quarter of them were decided by two or
+fewer model families. The last row is the striking one: **disagreement almost never happens
+with a full provider set.** Losing a provider is what turns a unanimous panel into a split
+one, so provider health and verdict quality are not independent.
+
+`HAL_PENALTY_REQUIRES_QUORUM` is `true`, and these events record `quorum_met: true` while
+also recording `quorum: partial`. Whether a partial quorum should satisfy a gate whose name
+promises a quorum is a design question for whoever owns HAL — **NOT a finding that it is
+wrong**, and deliberately not changed here.
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
