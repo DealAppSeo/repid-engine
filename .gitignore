@@ -115,3 +115,4 @@ pvq_results.json
 # a naive grep scan reported it clean — check the encoding before trusting a scan.
 /railway_vars.txt
 /railway_env.json
+.sprint-state/

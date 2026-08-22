@@ -93,6 +93,42 @@ There is an escape hatch (`app.bypass_repid_floor`) and a per-agent `floor_overr
 goal). A permanent tier floor is not obviously the right shape. Options: decay the floor over
 time, tie it to sustained behaviour rather than peak, or scope it to non-fault events only.
 
+##### L3 quantified **[MEASURED 2026-08-21, XC S1 + a direct probe]**
+
+The original entry showed the clamp exists — one −999999 event landing at 8000. It did not
+show what **repeated realistic** faults do, which is the question the policy turns on. Probed
+with 25 consecutive confident faults (−116, the value from the measured triad) against an
+agent peaked at 10000, and a never-peaked control:
+
+- Faults 1–17 cost the full −116 each. The per-event asymmetry is intact **above** the floor.
+- Fault 18 is **partially absorbed** (−28, the remaining distance to 8000).
+- **Faults 19 onward cost exactly 0.** Every subsequent confident fault is free.
+- The control, never peaked, loses −116 on every event throughout.
+
+So the per-event invariant holds and the **career invariant does not**: once an agent touches
+VETERAN, the marginal cost of defecting is zero, permanently. XC reached this by inference;
+this is the measurement.
+
+**XC's break-even, checked and correct.** Climb to the floor is 312 capped successes from a
+200 start (`⌈7800/25⌉`, needing value ≥ 156.25 at full confidence, each anchored), or 3900
+refusals at a flat +2 with no settlement at all — `REFUSED_CORRECTLY` is deliberately not
+value-scaled, which stops big-refusal farming but not *many-small*-refusal farming. Because
+both an honest agent and a defector pay that climb, **the climb cost cancels**, and "spike
+then defect" beats honest play exactly when the per-period defection surplus exceeds the
+honest one. On RepID accrual the attack loses (it is stuck at 8000 while honesty continues to
+10000); on extractable value it wins.
+
+Two amplifiers XC identified that are worth keeping in view: rater weight at the 8000 floor
+stays ≈0.98 of maximum, so a defector retains near-full power to weight *other* agents'
+penalties; and `A_eff` binds on stake below `S = 6400`, so at typical stakes 8000 and 10000
+buy **the same spendable authority** — the 2000 points of "lost" reputation cost the attacker
+nothing operationally.
+
+**This does not decide the policy.** It says a permanent tier floor makes defection free at
+the margin, and names the options: decay the floor, tie it to a sustained window rather than
+peak, scope it to non-fault events, or have routing and rater weight consume a windowed score
+instead of the ratchet-clamped one.
+
 Related drift: CLAUDE.md documents `compute_tier(integer)`. It is now
 `compute_tier(integer, uuid)`. The verification command in CLAUDE.md no longer resolves.
 
@@ -194,6 +230,48 @@ knobs other people own.
 **Pre-verified for whoever takes it:** 25 rows declare bounds, **0 currently sit outside
 their own bounds**, and 0 have a non-numeric value alongside bounds. A CHECK enforcing the
 declared range would therefore validate cleanly today. That is the cheapest it will ever be.
+
+#### L9 — the ledger recorded movements that never happened **[MEASURED, FIXED]**
+
+Found while turning XC's L3 claim into a measurement, and it is the reason that measurement
+had to be run rather than reasoned about.
+
+An agent whose peak reached VETERAN takes repeated confident faults. Once its score reaches
+the tier floor, `current_repid` **does not move at all** — while every score event recorded
+`repid_delta_applied = -116` and a `repid_after` 116 points below the score the agent
+actually held. `agent_repid_history` recorded the same false delta.
+
+| # | What the score did | What the ledger said |
+|---|---|---|
+| 17 | 8144 → 8028 | applied −116, after 8028 ✓ |
+| 18 | 8028 → **8000** (partially absorbed) | applied −116, after **7912** ✗ |
+| 19+ | 8000 → **8000** (fully absorbed) | applied −116, after **7884** ✗ |
+
+**Cause.** `apply_repid_score_event` writes `current_repid`, and `trg_repid_earned_floor`
+then fires on `repid_agents` and raises it back to `tier_lower_bound(peak_repid)`. By then
+the score event has already stamped its before/after from its own arithmetic.
+
+This is the same class as the [10, 10000] clamp fixed earlier — *"log the delta actually
+applied, not the one requested"* — except the clamp lives inside this function and the floor
+lives in a different trigger that runs afterwards. Fixing one did not fix the other, and the
+first fix's own comment made it look as though it had.
+
+**Why it is worse than L3 itself.** L3 is a policy question Sean gets to answer. This made
+the answer *unobtainable*: any analysis of ratchet insulation reads a ledger that positively
+asserts the penalties landed. It also silently invalidated replay for every VETERAN-peaked
+agent — the whole point of the `policy_version` work.
+
+**Fixed** by reading back what actually landed (`RETURNING current_repid`) instead of
+trusting the value we asked for. Deliberately **not** a copy of the floor logic: a second
+copy drifts from the first, and would also miss `floor_override`, `app.bypass_repid_floor`,
+and any future trigger that adjusts a score. Reading the row is correct against all of them,
+including the ones not yet written. **No score and no policy changed** — only what the ledger
+says, from a number that was requested to the number that occurred.
+
+Re-measured after the fix: all 22 events honest, event 18 records the partial absorption
+(−28, the real move), events 19+ record 0. A never-peaked control is unaffected.
+`repid_delta_applied = 0` beside `delta = -116` now makes floor insulation **queryable**,
+which is exactly what XC's harness asked GA for.
 
 ---
 
@@ -409,13 +487,94 @@ green, the live settlement path is NOT_CHECKED.**
 
 ---
 
+### 2f. A1 cannot carry its own version — so identity moves outside **[MEASURED 2026-08-21]**
+
+The locked decision was *"adopt a versioned statement family from the start."* Implementing it
+turned up the reason it is not simply a matter of adding a field.
+
+**The verifier ignores unknown fields.** Probed directly against the real WASM
+(`@hyperdag/proof-verifier` 0.2.0) with the synthetic proof fixture:
+
+| Statement handed to the verifier | Result |
+|---|---|
+| honest | verified |
+| `+ statement_version: 'A1'` | verified |
+| `+ statement_version: 'A2-totally-different'` | **verified** |
+| `+ risk_tier`, `+ policy_version`, arbitrary junk | verified |
+| `tier`, `threshold` or `agent_id` **omitted** | rejected, `missing field` |
+| `repid_score` as a string | rejected, `invalid type` |
+
+So the parser is strict about fields it knows and silent about ones it does not. **A version
+tag written into the statement is worth exactly what `tier` is worth: nothing.** `tier` is the
+already-documented unbound field this codebase refuses to trust, deriving it database-side
+instead. A `statement_version` would be a second one — and far more dangerous, because `tier`
+merely describes the subject while a version claims to say *what was proven*.
+
+**A soundness property nobody had checked, which holds.** A1's claim relation is
+`reconstructed == repid_score - threshold - 1` — a statement about a *difference*. If only the
+difference were bound, a proof of "2280 over a threshold of 999" would equally prove "10000
+over a threshold of 8719": same gap, vastly better claim. Probed with difference-preserving
+shifts of +1, +100, +1000 and +7720: **all four reject.** The two values are bound
+individually. Now pinned so it cannot regress silently.
+
+**The one-way door, and the rule that closes it.** A1 is 18 BabyBear field elements and is
+published and fixed. If a future A2 arrives with the same arity and different meaning, a
+legitimate A2 proof handed to an A1 verifier is just *"agent X, threshold = 1, score = 5000"* —
+and it verifies. Nothing in the proof, the statement, or the verifier can tell them apart.
+
+The fix cannot be a field, because A1 cannot gain one. It has to be structural:
+
+> **No future statement in this family may use 18 public values.** Every A2+ binds a
+> domain-separator element, so its arity is ≥ 19 and an A1 verifier rejects it on shape before
+> semantics. **Arity 18 is reserved to A1, permanently.**
+
+`src/zkp/statement-registry.ts` holds the family, the per-field trust labels
+(`BOUND` / `REQUIRED_UNBOUND`), and that rule as an assertable predicate rather than a sentence
+in a comment. The registry deliberately resolves an unknown or absent statement id to `null`
+rather than defaulting to A1 — defaulting is precisely how a future A2 proof would silently
+become a RepID claim.
+
+**Where identity lives instead: the row.** `repid_zkp_proofs` records `proof_type`
+(`POSTCARD` for everything — a transport label) and `scheme` (`plonky3_range_check`, which
+names machinery, not meaning; two statements can share a proof system). **Nothing records which
+statement a stored proof proves.** Every real proof is A1 today, so the column is backfillable
+now and never again once a second statement exists. Not applied here — it is a schema decision
+on a table this repo does not own — but it is the cheapest it will ever be, and it is on
+Sean's list below.
+
+---
+
+### 2g. Reconciling GA's `outcome-attestation.v0` with what shipped
+
+GA delivered Phase 1 on 2026-08-21. The field set is sound and the on-chain justifications are
+real. **Three fields collide with code that landed the same night**, which is exactly the
+semantic-divergence risk the lane table was written to prevent, and it is cheap to fix now and
+expensive after the first mint:
+
+| Field | GA proposed | What shipped | Why it matters |
+|---|---|---|---|
+| `risk_tier` | integer `1..3` | text band `OFF_CHAIN` / `BATCHED` / `ATTESTED` (`repid_score_events.risk_tier` is `text`) | An integer band on chain and a text band in the ledger cannot be joined without a mapping nobody has written |
+| `policy_version` | `^v[0-9]+\.[0-9]+$` | `pol1-<16 hex>`, a behavioural digest | GA's pattern **rejects every policy version the engine produces** |
+| `value_at_risk_usd` | `integer`, USD | `max(service, stake) × novelty`, fractional, USDC | Truncating to an integer discards the multiplier that decides the band |
+
+Two more worth GA's Phase 2 attention rather than correction now: every one of the thirteen
+rows in the justification table says *"Required on-chain"*, which means the exclusion work has
+not yet bitten — and the brief's Phase 2 is precisely *"the exclusions, argued as carefully as
+the inclusions."* And the stated reason for excluding deltas ("prevent weight leakage") is
+undercut by including `value_at_risk`, `outcome_class` and `policy_version` together while the
+resulting score movement is observable on chain: that is an (input, output) pair per
+attestation, which is what regression needs. Single-field analysis will not catch it; the brief
+already asks for the combination analysis.
+
+---
+
 ### 3. Sequence, ordered by irreversibility × cost-after-users
 
 | # | Item | State |
 |---|---|---|
 | 1 | `is_shadow` + trigger guards + clamp | **DONE** |
 | 2 | Ledger replay columns | **DONE** |
-| 3 | Attestation payload schema + A1 versioning decision | **NEXT — design only, one-way door** |
+| 3 | Attestation payload schema + A1 versioning decision | **A1 half DONE — see §2f.** Payload is GA's, Phase 1 delivered and needs reconciling (§2g) |
 | 4 | Hard testnet/mainnet score separation | Design now (token + score identity) |
 | 5 | Shadow wiring: settled x402 → `classifyOutcome` → shadow row | **DONE — builder + risk bands + derived `policy_version`, 12 assertions MEASURED against the live trigger** |
 | 6 | Live E2E on a test triad: good / bad / confession | **Scoring half MEASURED** (§2c); **settlement resolution MEASURED against a fake provider** (§2e). What remains: the payee-address lookup, the insert, and one run against a real RPC |
@@ -502,7 +661,11 @@ near-term roadmap; promising it is the overclaim this whole harness argues again
 
 ### 6. Open, and owned by Sean
 
-1. **L3, the tier ratchet** — highest-value open question on this track.
+1. **L3, the tier ratchet** — still the highest-value open question, and **now quantified**
+   (§1, L3). Above the floor the asymmetry holds; below it every confident fault costs
+   exactly zero, permanently, for any agent that once touched VETERAN. The decision is
+   yours: decay the floor, tie it to a sustained window, scope it to non-fault events, or
+   have routing and rater weight read a windowed score rather than the ratchet-clamped one.
 2. **L2** — how to fix the UNIQUE payment-proof collision.
 3. T1/T2 numbers (placeholders fine; anchors suggested above).
 4. Whether graduation zeroes, discounts, or selectively discloses training history.
@@ -514,6 +677,15 @@ near-term roadmap; promising it is the overclaim this whole harness argues again
    nothing is lost while it stays open.
 7. **L6.** Whether to add an event-type the whitelist can use for a classified outcome, or
    to keep reading `decision_outcome` as authoritative and leave `event_type` approximate.
+8. **`repid_zkp_proofs.statement_id`** (§2f). Nothing records which statement a stored proof
+   proves; `proof_type` is transport and `scheme` names machinery. Every real proof is A1
+   today, so a column plus a backfill is trivial **now** and impossible once a second
+   statement exists. Cheapest it will ever be, and it is a schema decision on a table this
+   repo does not own.
+9. **Denomination**, raised by GA: is USDC/USD the permanent pricing reference on chain, or
+   must value-at-risk carry a denomination? Affects the payload before the first mint.
+10. **Who can set `floor_override`**, raised by XC and still UNVERIFIED. It is an escape
+    hatch from the L3 ratchet, so whoever holds it holds the ratchet.
 
 ### 7. Scoped slices for the swarm
 
