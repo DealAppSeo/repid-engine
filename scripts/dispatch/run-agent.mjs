@@ -710,10 +710,25 @@ function assertSafeRepoState() {
       `refusing to run an agent on '${branch}'. Create a branch first — agent output must be isolable for review.`,
     );
   }
-  const dirty = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim();
+  // `reports/` is THIS runner's own transcript sink (see the writeFileSync near the
+  // end of main): every dispatch drops a DISPATCH_*.md there and deliberately does
+  // NOT commit it, so a reviewer can read it before anything is recorded. Counting
+  // that against the NEXT dispatch was the self-chain deadlock — dispatch #2 refused
+  // on dispatch #1's own output, so the loop was never capable of a second cycle.
+  // Exclude `reports/` from the pre-dispatch cleanliness check so a prior transcript
+  // cannot block the next agent. Everything the guard actually exists for is intact:
+  // `main` still refuses above, and any uncommitted change OUTSIDE reports/ — i.e. a
+  // real source edit, the thing that must stay isolable for review — still refuses.
+  const dirty = execFileSync(
+    'git',
+    ['status', '--porcelain', '--', '.', ':(exclude)reports/'],
+    { encoding: 'utf8' },
+  ).trim();
   if (dirty) {
     throw new Error(
-      'refusing to run: the working tree is dirty. Agent output would be indistinguishable from your uncommitted changes.',
+      'refusing to run: the working tree has uncommitted changes outside reports/. ' +
+        "Agent output would be indistinguishable from your uncommitted changes. " +
+        "(reports/ is excluded — it is this runner's own transcript sink.)",
     );
   }
   return branch;
@@ -1069,9 +1084,18 @@ function main() {
     process.exit(1);
   }
 
-  const changed = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim();
+  // Exclude reports/ here for the same reason as the pre-dispatch guard: the line
+  // just above wrote this dispatch's own transcript there, and reporting it as
+  // something "the agent modified" would misattribute the runner's output to the
+  // agent and mask whether the agent actually touched source (it has no write scope,
+  // so a real change here is the signal that matters).
+  const changed = execFileSync(
+    'git',
+    ['status', '--porcelain', '--', '.', ':(exclude)reports/'],
+    { encoding: 'utf8' },
+  ).trim();
   if (changed) {
-    console.log(`[dispatch] the agent modified ${changed.split('\n').length} file(s).`);
+    console.log(`[dispatch] the agent modified ${changed.split('\n').length} file(s) outside reports/.`);
     console.log('[dispatch] NOT committed on purpose — a different model family reviews before anything lands.');
   }
   process.exit(res.status === 0 ? 0 : 1);
