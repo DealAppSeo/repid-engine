@@ -273,6 +273,30 @@ Re-measured after the fix: all 22 events honest, event 18 records the partial ab
 `repid_delta_applied = 0` beside `delta = -116` now makes floor insulation **queryable**,
 which is exactly what XC's harness asked GA for.
 
+**The historical half — MEASURED, and it took three attempts to measure honestly.**
+`scripts/trust-loop/floor-absorption-audit.ts` is the detector; both obvious ones are wrong
+and are documented in its header so the next person does not repeat them. Comparing
+`repid_after` against the agent's floor over-counts enormously, because `peak_repid` only
+rises and so an April event gets judged against an August floor. Reconstructing the peak per
+event is better and still unusable, because **there is no floor migration in the tracked
+history**, so the trigger cannot be dated and events predating it were legitimately below a
+floor that did not exist.
+
+The detector that works needs neither: consecutive events where the ledger says one left the
+score at X and the next says it *started* higher. Something raised it in between, and that is
+visible without dating anything. Rises landing **exactly on the agent's tier floor** are the
+floor's signature; the remainder has other causes and is reported separately rather than
+folded in.
+
+**Result: floor-shaped absorption is present in history, across a minority of agents, in a
+window opening 2026-06-04 and running to the day before the fix.** It is a **lower bound** —
+the detector compares against today's peak, so an agent whose peak has risen since will not
+match even where absorption happened. Under-counting is the right direction for a number that
+will be quoted.
+
+**Not repaired here.** A ledger rewrite and a change to the floor's shape want to happen in
+the same migration, so remediation rides on the L3 decision rather than preceding it.
+
 ---
 
 ### 2. What was applied to the database **[MEASURED]**
