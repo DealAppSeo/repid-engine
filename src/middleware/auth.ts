@@ -40,6 +40,28 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // TrustMarket rating summaries are a public, keyless read (a reputation surface
   // behind a key is not a public reputation surface). POST /ratings stays authed.
   if (req.method === 'GET' && req.path.startsWith('/api/v1/ratings/')) return next();
+
+  // The service catalog is a public, keyless READ, for the same reason as ratings
+  // above: a marketplace behind a key is not a public marketplace. The SDK's
+  // `listServices()` calls GET /api/v1/services, and until now a developer who
+  // followed the quickstart could verify an output and read any agent's RepID with
+  // no key, then hit a 401 the moment they tried to browse what is for sale — the
+  // exact wall in the middle of the discover→buy→receipt story. The same rows are
+  // already served to anyone at trustshell.dev/market, so the key was gating a
+  // surface that was never actually private.
+  //
+  // GET ONLY, and the method check is the whole control: this router also carries
+  // POST / (create a listing), PATCH /:id and DELETE /:id, which mutate the
+  // catalog and MUST stay authed. `startsWith` without the method guard would open
+  // all four.
+  //
+  // Verified against the table before opening it: agent_services holds catalog
+  // columns only — provider id, type, name, description, price, min RepID,
+  // capability metadata, fulfilment counters, timestamps. No credential, wallet or
+  // key material is reachable through `select('*')` here.
+  if (req.method === 'GET' && (req.path === '/api/v1/services' || req.path.startsWith('/api/v1/services/'))) {
+    return next();
+  }
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/run-round-anonymous') return next();
   if (req.method === 'POST' && req.path === '/api/v1/builder/token-signup') return next();
