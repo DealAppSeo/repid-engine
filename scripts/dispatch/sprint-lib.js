@@ -203,4 +203,30 @@ function nextQueueRow(completedRow, handoff, maxPhases, buildText) {
   };
 }
 
-module.exports = { extractHandoff, handoffField, handoffList, decideNext, buildDispatchText, parsePair, shouldDispatch, nextQueueRow };
+/**
+ * Strip characters a Postgres `text` column cannot store, so a handoff write cannot
+ * silently fail. NUL (``) is rejected outright by Postgres; the other C0 control
+ * bytes arrive from a CLI's ANSI/terminal capture and have no place in a handoff. Tab,
+ * newline and carriage-return are kept — they are legitimate in a handoff block.
+ *
+ * WHY THIS EXISTS: on 2026-08-22 the daemon dispatched all 8 XC phases, logged each
+ * COMPLETE, and persisted none of them — grok's handoff_body carried a byte the column
+ * rejected, the `.update()` returned an error nobody checked, and 7 phases of paid work
+ * survived only in `reports/`. GA's cleaner output wrote fine, which is why it looked
+ * lane-specific. Sanitising defends the write; checking the error (in the daemon) makes
+ * any remaining failure loud instead of silent. Both halves, per LESSONS §3.
+ */
+function sanitizeHandoff(text) {
+  if (text === null || text === undefined) return text;
+  // Codepoint filter (no control-char literals in this source). Drop NUL and the C0
+  // control range, but KEEP tab(9), LF(10), CR(13) — legitimate in a handoff block.
+  let out = "";
+  for (const ch of String(text)) {
+    const c = ch.codePointAt(0);
+    if (c === 0 || (c < 32 && c !== 9 && c !== 10 && c !== 13)) continue;
+    out += ch;
+  }
+  return out;
+}
+
+module.exports = { extractHandoff, handoffField, handoffList, decideNext, buildDispatchText, parsePair, shouldDispatch, nextQueueRow, sanitizeHandoff };
