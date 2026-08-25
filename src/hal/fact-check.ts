@@ -461,6 +461,37 @@ function parseVerdict(text: string): { verdict: Verdict; confidence: number; not
 }
 
 /**
+ * How much of a failing provider's response body to keep, and what to strip from it.
+ *
+ * WHY 120 WAS NOT ENOUGH, measured 2026-08-25. OpenRouter failed the live quorum with:
+ *
+ *   HTTP 400: {"error":{"message":"Provider returned error","code":400,
+ *              "metadata":{"raw":"{\"code\":400, \"reason\":\"INVALID_REQUEST_
+ *
+ * and that is where it stopped. An aggregator wraps the UPSTREAM error in its own envelope, so
+ * the envelope alone spends the whole budget and the actual reason — the only part anyone needs
+ * — is the part that gets cut. The failure was reported honestly and was still undiagnosable.
+ *
+ * WHY IT IS REDACTED RATHER THAN JUST WIDENED. This exact string goes two places: the internal
+ * llm-call log AND `provider_health.failed` in the response to an UNAUTHENTICATED caller. A
+ * provider that echoes the offending request back can put a key in it, so widening the window
+ * widens what a stranger can read. The limit and the redaction ship together, deliberately —
+ * raising one without the other trades a diagnosis problem for a disclosure one.
+ */
+const PROVIDER_ERROR_CHARS = 400;
+
+export function redactProviderError(body: string): string {
+  return body
+    .replace(/Bearer\s+[A-Za-z0-9._-]{8,}/gi, 'Bearer [redacted]')
+    .replace(/\b(?:sk|pk|rk|api)[-_][A-Za-z0-9_-]{8,}/gi, '[redacted-key]')
+    // Long opaque runs: hex digests and bearer-ish tokens. Model slugs are far shorter and
+    // usually carry '/' or '.', so this does not eat `accounts/fireworks/models/kimi-k2p5`.
+    .replace(/\b[A-Fa-f0-9]{32,}\b/g, '[redacted-hex]')
+    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, '[redacted-token]')
+    .slice(0, PROVIDER_ERROR_CHARS);
+}
+
+/**
  * POST to an OpenAI-compatible chat endpoint with a single jittered retry on HTTP 429.
  * Free tiers (esp. groq) rate-limit under burst; one short backoff turns a transient 429 into a
  * success without blowing the per-provider timeout. Honors a numeric Retry-After when present.
@@ -520,10 +551,10 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         cost_usd: 0,
         latency_ms,
         status: 'failed',
-        error_message: `HTTP ${res.status}: ${body.slice(0, 120)}`,
+        error_message: `HTTP ${res.status}: ${redactProviderError(body)}`,
         task_hint: 'hal_fact_check', quorum_id: quorumId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
-      return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${body.slice(0, 120)}`, latency_ms };
+      return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${redactProviderError(body)}`, latency_ms };
     }
     const data: any = await res.json();
     const msg = data?.choices?.[0]?.message ?? {};
