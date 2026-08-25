@@ -61,7 +61,7 @@ import { createRequire } from 'node:module';
 import { createClient } from '@supabase/supabase-js';
 
 const require_ = createRequire(import.meta.url);
-const { extractHandoff, handoffField, decideNext, buildDispatchText } = require_('./sprint-lib.js');
+const { extractHandoff, handoffField, decideNext, buildDispatchText, sanitizeHandoff } = require_('./sprint-lib.js');
 const { readFileSync, existsSync } = require_('node:fs');
 
 const RUNNER = 'scripts/dispatch/run-agent.mjs';
@@ -189,14 +189,33 @@ async function cycle(sb, { dryRun, timeoutMs }) {
     return { dispatched: true };
   }
 
-  const hStatus = handoffField(handoff.body, 'STATUS');
-  await sb.from(QUEUE).update({
+  // Sanitise before the write: grok's handoff_body carried a byte Postgres `text`
+  // rejects (see sprint-lib.js sanitizeHandoff), the update below errored, and because
+  // the error was unchecked the daemon logged COMPLETE and self-chained anyway — 7 XC
+  // phases ran, were paid for, and were never recorded (2026-08-22). LESSONS §3.
+  const cleanBody = sanitizeHandoff(handoff.body);
+  const hStatus = handoffField(cleanBody, 'STATUS');
+  const { error: completeErr } = await sb.from(QUEUE).update({
     status: hStatus === 'BLOCKED' ? 'BLOCKED' : 'COMPLETE',
-    handoff_body: handoff.body,
+    handoff_body: cleanBody,
     handoff_status: hStatus,
-    next_phase_ready: Number(String(handoffField(handoff.body, 'NEXT_PHASE_READY') ?? '').match(/\d+/)?.[0]) || null,
+    next_phase_ready: Number(String(handoffField(cleanBody, 'NEXT_PHASE_READY') ?? '').match(/\d+/)?.[0]) || null,
     completed_at: new Date().toISOString(),
   }).eq('id', row.id);
+  if (completeErr) {
+    // Fail LOUD, never silent. Do NOT self-chain a phase whose completion could not be
+    // recorded — that is how the record and the work diverge. The transcript is already
+    // in reports/; mark the row FAILED with the error so recovery is possible and visible.
+    console.error(
+      `[daemon] ✗ ${row.agent} phase ${row.phase}: completion write FAILED — ${completeErr.message}. ` +
+        'Transcript saved to reports/; row marked FAILED for recovery, sprint NOT advanced.',
+    );
+    await sb
+      .from(QUEUE)
+      .update({ status: 'FAILED', error: `completion write failed: ${String(completeErr.message).slice(0, 800)}`, completed_at: new Date().toISOString() })
+      .eq('id', row.id);
+    return { dispatched: true };
+  }
   console.log(`[daemon] ${row.agent} phase ${handoff.phase}: ${hStatus ?? '?'}`);
 
   // Self-chain, using the SAME decision function the interactive runner uses, so
@@ -221,14 +240,27 @@ async function cycle(sb, { dryRun, timeoutMs }) {
     ? require_('./sprint-lib.js').handoffList(other[0].handoff_body, `REQUIREMENTS_ON_${row.agent.toUpperCase()}`)
     : [];
 
-  await sb.from(QUEUE).insert({
+  // Sanitise dispatch_text too: it embeds the prior handoff, so the same rejected byte
+  // would break this INSERT (silently stopping the sprint) exactly as it broke the
+  // completion update. Use the cleaned body, and check the insert's error out loud.
+  const nextDispatchText = sanitizeHandoff(
+    buildDispatchText(brief, { handoffBody: cleanBody, counterpartRequirements }),
+  );
+  const { error: insertErr } = await sb.from(QUEUE).insert({
     agent: row.agent,
     sprint: row.sprint,
     phase: decision.nextPhase,
     brief_path: row.brief_path,
-    dispatch_text: buildDispatchText(brief, { handoffBody: handoff.body, counterpartRequirements }),
+    dispatch_text: nextDispatchText,
     status: 'QUEUED',
   });
+  if (insertErr) {
+    console.error(
+      `[daemon] ✗ ${row.agent} phase ${decision.nextPhase}: queue INSERT FAILED — ${insertErr.message}. ` +
+        'Sprint will not advance until re-queued.',
+    );
+    return { dispatched: true };
+  }
   console.log(`[daemon] queued ${row.agent} phase ${decision.nextPhase}${counterpartRequirements.length ? ` (+${counterpartRequirements.length} cross-lane)` : ''}`);
   return { dispatched: true };
 }
