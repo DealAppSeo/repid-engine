@@ -250,6 +250,32 @@ async function checkByok(rawSuffix: string): Promise<{ valid: boolean; key_id: s
   }
 }
 
+/**
+ * Is this request carrying a valid BYOK identity token?
+ *
+ * Exported so OTHER limiters can honour the same bypass without growing a second
+ * copy of the extraction regex, the hash, or the lookup. `ip-rate-limit.ts` knew
+ * nothing about BYOK, so a developer who had brought their own key still hit the
+ * public per-IP HAL cap — the escape hatch existed and did not reach the endpoint
+ * that needed it.
+ *
+ * Deliberately reuses `checkByok`, including its 60s cache: a second resolver
+ * would be a second thing to keep in step with the token format, and this file's
+ * own history is that a validator once looked up a table that could not hold what
+ * it searched for.
+ *
+ * Returns false on a malformed header, an unknown token, or a lookup error —
+ * `checkByok` does not fail open, and neither does this.
+ */
+export async function isByokAuthenticated(req: Request): Promise<boolean> {
+  const auth = (req.headers['authorization'] as string | undefined) ?? '';
+  const m = /^Bearer\s+hdg_byok_(.+)$/.exec(auth);
+  const suffix = m?.[1];
+  if (!suffix) return false;
+  const { valid } = await checkByok(suffix);
+  return valid;
+}
+
 function getClientIp(req: Request): string {
   // app.set('trust proxy', 1) is already configured in src/index.ts so req.ip
   // reads the leftmost X-Forwarded-For. Fall back to socket if undefined.
