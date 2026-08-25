@@ -28,11 +28,11 @@ import type { Request, Response, NextFunction } from 'express';
 
 const checkRateLimit = jest.fn();
 const hasValidEnvApiKey = jest.fn();
-const isByokAuthenticated = jest.fn();
+const resolveByokIdentity = jest.fn();
 
 jest.mock('../src/cache/rate-limiter', () => ({ checkRateLimit: (...a: unknown[]) => checkRateLimit(...a) }));
 jest.mock('../src/middleware/env-api-key', () => ({ hasValidEnvApiKey: (...a: unknown[]) => hasValidEnvApiKey(...a) }));
-jest.mock('../src/middleware/rate-limit', () => ({ isByokAuthenticated: (...a: unknown[]) => isByokAuthenticated(...a) }));
+jest.mock('../src/middleware/rate-limit', () => ({ resolveByokIdentity: (...a: unknown[]) => resolveByokIdentity(...a) }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { ipRateLimit } = require('../src/middleware/ip-rate-limit');
@@ -62,39 +62,102 @@ beforeEach(() => {
   jest.clearAllMocks();
   delete process.env.HAL_PUBLIC_GLOBAL_DAILY;
   delete process.env.HAL_PUBLIC_GLOBAL_FAIL_OPEN;
+  delete process.env.HAL_BYOK_DAILY;
   hasValidEnvApiKey.mockReturnValue(false);
-  isByokAuthenticated.mockResolvedValue(false);
+  resolveByokIdentity.mockResolvedValue({ valid: false, keyId: null });
   checkRateLimit.mockResolvedValue(counted(true, 5));
 });
 
-describe('a BYOK caller is not subject to the free-tier controls', () => {
-  it('is served without consuming any counter at all', async () => {
-    isByokAuthenticated.mockResolvedValue(true);
+describe('a BYOK caller gets their OWN budget, not the free tier and not infinity', () => {
+  // THE CORRECTION THIS BLOCK ENCODES. The first version of this middleware gave
+  // a BYOK caller `next()` with no counter, justified in a comment as "a BYOK
+  // caller pays for their own usage." They do not. /hal/evaluate reads only
+  // {text, context, strictness, source}; nothing under src/hal/ imports the
+  // key-custody service; the issuance endpoint itself says the token
+  // `does_not_grant: ["access to provider keys"]`. Every BYOK evaluation spends
+  // OUR provider credits, so an unmetered token was an unbounded bill wearing a
+  // name that implied the opposite.
+
+  it('is metered against its own token budget, not the shared counters', async () => {
+    resolveByokIdentity.mockResolvedValue({ valid: true, keyId: 'tok-1' });
+    checkRateLimit.mockResolvedValueOnce(counted(true, 499));
     const { req, res, next, served } = run({ authorization: 'Bearer hdg_byok_abc' });
     await ipRateLimit(10, 86400)(req, res, next);
 
     expect(served()).toBe(true);
-    expect(res.headers['x-ratelimit-bypass']).toBe('byok');
-    // The point of BYOK is that their usage is theirs. Touching a shared counter
-    // would let one paying customer exhaust the free tier for everyone else.
+    expect(res.headers['x-ratelimit-bucket']).toBe('byok');
+    // Exactly one counter, and it is keyed to the TOKEN. Keyed to the IP, a room
+    // of testers behind one NAT would starve each other — which is the problem
+    // issuing tokens is supposed to solve.
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+    expect(checkRateLimit).toHaveBeenCalledWith('hal:byok:tok-1', 500, 86_400);
+  });
+
+  it('two different tokens do not share a budget', async () => {
+    resolveByokIdentity.mockResolvedValueOnce({ valid: true, keyId: 'tok-A' });
+    const a = run({ authorization: 'Bearer hdg_byok_a' });
+    await ipRateLimit(10, 86400)(a.req, a.res, a.next);
+
+    resolveByokIdentity.mockResolvedValueOnce({ valid: true, keyId: 'tok-B' });
+    const b = run({ authorization: 'Bearer hdg_byok_b' });
+    await ipRateLimit(10, 86400)(b.req, b.res, b.next);
+
+    const keys = checkRateLimit.mock.calls.map((c) => c[0]);
+    expect(keys).toEqual(['hal:byok:tok-A', 'hal:byok:tok-B']);
+  });
+
+  it('REFUSES once that token has spent its budget', async () => {
+    resolveByokIdentity.mockResolvedValue({ valid: true, keyId: 'tok-1' });
+    checkRateLimit.mockResolvedValueOnce(counted(false, 0));
+    const { req, res, next, served } = run({ authorization: 'Bearer hdg_byok_abc' });
+    await ipRateLimit(10, 86400)(req, res, next);
+
+    expect(served()).toBe(false);
+    // 429 here, unlike the ceiling's 503: this caller really did spend their own
+    // allowance, so "too many requests" is a true statement about them.
+    expect(res.statusCode).toBe(429);
+    expect(res.body.error).toBe('BYOK_BUDGET_EXHAUSTED');
+  });
+
+  it('REFUSES when the token budget cannot be counted', async () => {
+    // Same rule as the ceiling: if it cannot count, it cannot bound. Holding a
+    // token does not entitle anyone to unlimited spend during a store outage.
+    resolveByokIdentity.mockResolvedValue({ valid: true, keyId: 'tok-1' });
+    checkRateLimit.mockResolvedValueOnce(uncountable());
+    const { req, res, next, served } = run({ authorization: 'Bearer hdg_byok_abc' });
+    await ipRateLimit(10, 86400)(req, res, next);
+
+    expect(served()).toBe(false);
+    expect(res.statusCode).toBe(503);
+    expect(res.body.error).toBe('BYOK_BUDGET_UNAVAILABLE');
+  });
+
+  it('is unmetered ONLY when HAL_BYOK_DAILY is explicitly 0', async () => {
+    process.env.HAL_BYOK_DAILY = '0';
+    resolveByokIdentity.mockResolvedValue({ valid: true, keyId: 'tok-1' });
+    const { req, res, next, served } = run({ authorization: 'Bearer hdg_byok_abc' });
+    await ipRateLimit(10, 86400)(req, res, next);
+
+    expect(served()).toBe(true);
+    expect(res.headers['x-ratelimit-bypass']).toBe('byok-unmetered');
     expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
   it('falls through to anonymous treatment when the token is not valid', async () => {
-    isByokAuthenticated.mockResolvedValue(false);
+    resolveByokIdentity.mockResolvedValue({ valid: false, keyId: null });
     const { req, res, next } = run({ authorization: 'Bearer hdg_byok_forged' });
     await ipRateLimit(10, 86400)(req, res, next);
-    expect(res.headers['x-ratelimit-bypass']).toBeUndefined();
-    expect(checkRateLimit).toHaveBeenCalled();
+    expect(res.headers['x-ratelimit-bucket']).toBeUndefined();
+    expect(checkRateLimit).toHaveBeenCalledWith(expect.stringContaining('chat:'), 10, 86400);
   });
 
-  it('does not grant the bypass when the BYOK lookup throws', async () => {
-    // A resolver outage must not become a free unmetered pass.
-    isByokAuthenticated.mockRejectedValue(new Error('lookup down'));
+  it('does not grant a budget when the BYOK lookup throws', async () => {
+    // A resolver outage must not become a free pass of any size.
+    resolveByokIdentity.mockRejectedValue(new Error('lookup down'));
     const { req, res, next } = run({ authorization: 'Bearer hdg_byok_abc' });
     await ipRateLimit(10, 86400)(req, res, next);
-    expect(res.headers['x-ratelimit-bypass']).toBeUndefined();
-    expect(checkRateLimit).toHaveBeenCalled();
+    expect(res.headers['x-ratelimit-bucket']).toBeUndefined();
+    expect(checkRateLimit).toHaveBeenCalledWith(expect.stringContaining('chat:'), 10, 86400);
   });
 });
 

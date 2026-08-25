@@ -55,6 +55,33 @@ const TIER_LIMITS: Record<string, number> = {
   VETERAN: 1200,
 };
 
+/**
+ * Requests per minute for a holder of a BYOK identity token.
+ *
+ * This used to be `Number.POSITIVE_INFINITY` with `bypass: true`, which made a
+ * BYOK token an unmetered pass across **every** `/api/v1` route — this
+ * middleware is mounted globally, not just on HAL. The name invites the
+ * assumption that such a caller is spending their own credits and so costs us
+ * nothing. They are not: `/api/v1/hal/evaluate` reads only
+ * `{text, context, strictness, source}` from the body, nothing under `src/hal/`
+ * imports the key-custody service, and the issuance endpoint's own status
+ * response says the token `does_not_grant: ["access to provider keys"]`. It is
+ * an IDENTITY, and it spends OUR provider credits.
+ *
+ * So it gets a generous bucket rather than no bucket. 600/min matches
+ * ESTABLISHED — far above anything an honest developer hits, and finite.
+ *
+ * This bounds BURST. It does not bound spend: 600/min sustained is ~864k/day.
+ * The daily spend cap lives in `ip-rate-limit.ts`, on `/hal/evaluate`, because
+ * that is the route that actually costs money — everything else here is
+ * database reads. Two different questions, two different instruments.
+ */
+function byokRatePerMin(): number {
+  const raw = Number(process.env.BYOK_RATE_PER_MIN);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return 600;
+}
+
 class BucketStore {
   private map = new Map<string, BucketState>();
   private lastSweepMs = Date.now();
@@ -251,29 +278,35 @@ async function checkByok(rawSuffix: string): Promise<{ valid: boolean; key_id: s
 }
 
 /**
- * Is this request carrying a valid BYOK identity token?
+ * Resolve the BYOK identity on a request, if there is one.
  *
- * Exported so OTHER limiters can honour the same bypass without growing a second
- * copy of the extraction regex, the hash, or the lookup. `ip-rate-limit.ts` knew
- * nothing about BYOK, so a developer who had brought their own key still hit the
- * public per-IP HAL cap — the escape hatch existed and did not reach the endpoint
- * that needed it.
+ * Exported so OTHER limiters can recognise the same identity without growing a
+ * second copy of the extraction regex, the hash, or the lookup. `ip-rate-limit.ts`
+ * knew nothing about BYOK, so a developer who had brought their own key still hit
+ * the public per-IP HAL cap — the escape hatch existed and did not reach the
+ * endpoint that needed it.
  *
- * Deliberately reuses `checkByok`, including its 60s cache: a second resolver
- * would be a second thing to keep in step with the token format, and this file's
- * own history is that a validator once looked up a table that could not hold what
- * it searched for.
+ * RETURNS THE TOKEN ID, not just a yes/no, and that is load-bearing rather than
+ * convenience: a spend cap has to be keyed to the TOKEN. Keyed to the IP it would
+ * punish a room of hackathon testers behind one NAT for each other's usage, which
+ * is precisely what issuing them tokens is supposed to fix. This started life as
+ * `isByokAuthenticated(): Promise<boolean>` and was widened here rather than
+ * joined by a second function, because two resolvers are two things to keep in
+ * step with the token format.
  *
- * Returns false on a malformed header, an unknown token, or a lookup error —
- * `checkByok` does not fail open, and neither does this.
+ * Deliberately reuses `checkByok`, including its 60s cache. Returns
+ * `{ valid: false, keyId: null }` on a malformed header, an unknown token, or a
+ * lookup error — `checkByok` does not fail open, and neither does this.
  */
-export async function isByokAuthenticated(req: Request): Promise<boolean> {
+export async function resolveByokIdentity(
+  req: Request,
+): Promise<{ valid: boolean; keyId: string | null }> {
   const auth = (req.headers['authorization'] as string | undefined) ?? '';
   const m = /^Bearer\s+hdg_byok_(.+)$/.exec(auth);
   const suffix = m?.[1];
-  if (!suffix) return false;
-  const { valid } = await checkByok(suffix);
-  return valid;
+  if (!suffix) return { valid: false, keyId: null };
+  const { valid, key_id } = await checkByok(suffix);
+  return { valid, keyId: key_id };
 }
 
 function getClientIp(req: Request): string {
@@ -318,11 +351,15 @@ async function resolveIdentity(req: Request, routeOverride: number | null): Prom
   if (byokSuffix) {
     const { valid, key_id } = await checkByok(byokSuffix);
     if (valid) {
+      // Bounded, not bypassed — see byokRatePerMin(). The key is already
+      // per-TOKEN rather than per-IP, which is the property that makes a finite
+      // limit fair here: a room full of hackathon testers behind one NAT each
+      // get their own bucket, which is the whole reason to hand out tokens.
       return {
         kind: 'byok',
         key: `byok:${key_id ?? hashByokKey(byokSuffix)}`,
-        limit: Number.POSITIVE_INFINITY,
-        bypass: true,
+        limit: byokRatePerMin(),
+        bypass: false,
         byok_key_id: key_id ?? undefined,
       };
     }
@@ -393,8 +430,16 @@ export function rateLimitMiddleware() {
     const id = await resolveIdentity(req, routeOverride);
 
     if (id.bypass) {
-      // BYOK fast path — no counters, no headers cluttered
-      (req as any).rateLimit = { bucket: 'byok', bypass: true };
+      // NOTHING SETS THIS TODAY, and that is the point of the change that left
+      // it here. BYOK used to take this branch and was therefore unmetered
+      // across every /api/v1 route; it now carries a finite per-token limit and
+      // falls through to the counters below like any other identity.
+      //
+      // The branch is kept because an unmetered identity is a legitimate thing
+      // to want later (an internal service account, say) — but whoever sets
+      // `bypass: true` next is choosing to spend money without a bound, and
+      // should have to write that line themselves rather than inherit it.
+      (req as any).rateLimit = { bucket: id.kind, bypass: true };
       return next();
     }
 
