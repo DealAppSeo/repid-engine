@@ -107,14 +107,14 @@ function resolveSingleFallback(excludeNames: string[]): HALProviderConfig | null
   const pool: HALProviderConfig[] = [
     {
       provider: 'groq',
-      model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'llama-3.3-70b-versatile',
+      model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'openai/gpt-oss-120b',
       endpoint: process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ?? 'https://api.groq.com/openai/v1/chat/completions',
       apiKey: process.env.GROQ_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'cerebras',
-      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7',
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.6',
       endpoint: 'https://api.cerebras.ai/v1/chat/completions',
       apiKey: process.env.CEREBRAS_API_KEY ?? '',
       callType: 'openai-compat' as const,

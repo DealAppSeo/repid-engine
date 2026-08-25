@@ -40,6 +40,7 @@ const PROVIDER_ENABLE_KEYS = [
   'HAL_S2_ENABLE_MISTRAL',
   'HAL_S2_ENABLE_QWEN',
   'HAL_S2_ENABLE_ANTHROPIC',
+  'HAL_S2_ENABLE_GLOO',
 ] as const;
 
 const BOOL_KEYS = [
@@ -77,6 +78,7 @@ const PROVIDER_DEFAULTS: Record<(typeof PROVIDER_ENABLE_KEYS)[number], boolean> 
   HAL_S2_ENABLE_MISTRAL: false,
   HAL_S2_ENABLE_QWEN: false,
   HAL_S2_ENABLE_ANTHROPIC: false,
+  HAL_S2_ENABLE_GLOO: false,
 };
 
 const TTL_MS = (() => {
