@@ -21,12 +21,26 @@
  * problems with different fixes:
  *
  * 1. BYOK DID NOT REACH HERE. `rate-limit.ts` has resolved
- *    `Authorization: Bearer hdg_byok_<key>` to an unmetered bypass for a long
- *    time, and `routes/v1/byok.ts` + `services/identity-token.ts` issue those
- *    tokens. This file knew nothing about any of it, so a developer paying their
- *    own way still hit the anonymous cap. That is lesson 3 — a mechanism wired at
- *    one end only — and the fix is to consume the resolver that already exists
- *    rather than grow a second one.
+ *    `Authorization: Bearer hdg_byok_<key>` to a bypass for a long time, and
+ *    `routes/v1/byok.ts` + `services/identity-token.ts` issue those tokens. This
+ *    file knew nothing about any of it, so a developer holding a token still hit
+ *    the anonymous cap. That is lesson 3 — a mechanism wired at one end only —
+ *    and the fix is to consume the resolver that already exists rather than grow
+ *    a second one.
+ *
+ *    CORRECTED 2026-08-25, same day, before any token existed. The first version
+ *    of this said a BYOK caller "pays for their own usage" and therefore made
+ *    them unmetered. That premise was never checked and is false. This route
+ *    reads only `{text, context, strictness, source}` from the body; nothing
+ *    under `src/hal/` imports the key-custody service; and the issuance
+ *    endpoint's own status response says the token
+ *    `does_not_grant: ["access to provider keys"]`. A BYOK token is an IDENTITY,
+ *    not a credential, and every evaluation under one spends OUR provider
+ *    credits. The name carried an assumption the mechanism never supported.
+ *
+ *    So BYOK now means "out of the free tier, into your own bounded budget" —
+ *    keyed to the token, so a room of testers behind one NAT stop starving each
+ *    other, which was the actual problem worth solving.
  *
  * 2. THERE WAS NO CEILING ON THE TOTAL. A per-IP cap bounds each stranger; it
  *    bounds nothing about the bill when there are four hundred strangers. Raising
@@ -53,8 +67,20 @@
  * there is no prior behaviour to preserve. It is the new control's own semantics.
  * `HAL_PUBLIC_GLOBAL_FAIL_OPEN=true` opts back out, deliberately and visibly.
  *
- * Neither control is reached by a BYOK or env-allowlist caller. Someone paying
- * their own way never sees a ceiling sized for the free tier.
+ * Neither free-tier control is reached by a BYOK or env-allowlist caller. A BYOK
+ * caller meets their OWN daily budget instead, which fails closed for the same
+ * reason the ceiling does.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * WHAT THE WORST CASE COSTS, WHICH IS THE ONLY HONEST WAY TO SIZE THIS
+ * ════════════════════════════════════════════════════════════════════════════════
+ *     evaluations/day  <=  HAL_PUBLIC_GLOBAL_DAILY  +  (live tokens x HAL_BYOK_DAILY)
+ *
+ * Both terms have to be finite for the sum to be. That is why issuance is capped
+ * too (BYOK_MAX_CLAIMABLE, services/identity-token.ts): a per-token budget with
+ * unlimited tokens is not a bound, and the claimable mint endpoint is
+ * deliberately unauthenticated, so without a cap one shared invite code would
+ * reopen everything this file closes.
  *
  * ════════════════════════════════════════════════════════════════════════════════
  * CONFIGURATION — all env, no deploy needed to retune
@@ -63,14 +89,15 @@
  *   HAL_PUBLIC_RATE_WINDOW_SEC   that window                  (default 86400)
  *   HAL_PUBLIC_GLOBAL_DAILY      free-tier calls/day, ALL IPs (default 2000; 0 disables)
  *   HAL_PUBLIC_GLOBAL_FAIL_OPEN  'true' to serve when uncountable (default: refuse)
+ *   HAL_BYOK_DAILY               evaluations/day PER TOKEN    (default 500; 0 = unmetered)
  *
- * The first two are read in src/index.ts and passed in; the last two are read here
+ * The first two are read in src/index.ts and passed in; the rest are read here
  * because nothing else needs them.
  */
 import { Request, Response, NextFunction } from 'express';
 import { checkRateLimit } from '../cache/rate-limiter';
 import { hasValidEnvApiKey } from './env-api-key';
-import { isByokAuthenticated } from './rate-limit';
+import { resolveByokIdentity } from './rate-limit';
 
 function clientIp(req: Request): string {
   const xff = req.headers['x-forwarded-for'];
@@ -90,6 +117,25 @@ function ceilingFailsOpen(): boolean {
   return String(process.env.HAL_PUBLIC_GLOBAL_FAIL_OPEN ?? '').trim().toLowerCase() === 'true';
 }
 
+/**
+ * Daily HAL evaluations per BYOK token. 0 means unmetered, deliberately.
+ *
+ * 500/day is roughly fifty times the anonymous allowance and far more than a
+ * developer integrating the SDK will use — the point is that it is a NUMBER, so
+ * total exposure can be computed instead of hoped about:
+ *
+ *     worst case/day  =  HAL_PUBLIC_GLOBAL_DAILY  +  (live tokens x this)
+ *
+ * which is why the count of live tokens is itself capped at issuance
+ * (BYOK_MAX_CLAIMABLE in services/identity-token.ts). A per-token budget with
+ * unlimited tokens bounds nothing.
+ */
+function byokDailyBudget(): number {
+  const raw = Number(process.env.HAL_BYOK_DAILY);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return 500;
+}
+
 const GLOBAL_WINDOW_SECONDS = 86_400;
 
 export function ipRateLimit(limit = 10, windowSeconds = 86400) {
@@ -106,18 +152,70 @@ export function ipRateLimit(limit = 10, windowSeconds = 86400) {
       return next();
     }
 
-    // A BYOK caller pays for their own usage, so neither the free per-IP budget
-    // nor the free-tier ceiling applies to them. Resolved by rate-limit.ts's
-    // existing validator; a malformed or unknown token simply falls through to the
-    // anonymous path rather than erroring.
+    // A BYOK caller is out of the FREE TIER — neither the anonymous per-IP budget
+    // nor the shared ceiling is theirs to consume — but they are not unmetered.
+    // They get their own daily budget instead, keyed to the token.
+    //
+    // The comment that stood here said "a BYOK caller pays for their own usage."
+    // That was wrong, and it was the premise the whole bypass rested on. They do
+    // not: this route reads only {text, context, strictness, source} from the body
+    // and never resolves a caller-supplied provider key, so every BYOK evaluation
+    // spends OUR provider credits. Correcting the sentence without correcting the
+    // control would have left the bill unbounded.
+    //
+    // Keyed to the token, not the IP, on purpose: a room of hackathon testers
+    // behind one NAT each get their own budget, which is the entire reason to hand
+    // out tokens rather than raise the per-IP number.
     try {
-      if (await isByokAuthenticated(req)) {
-        res.setHeader('X-RateLimit-Bypass', 'byok');
+      const byok = await resolveByokIdentity(req);
+      if (byok.valid) {
+        res.setHeader('X-RateLimit-Bucket', 'byok');
+        const budget = byokDailyBudget();
+        if (budget <= 0) {
+          // 0 is a deliberate, visible opt-out into unmetered BYOK. It is not the
+          // default, and it is the only way to get there.
+          res.setHeader('X-RateLimit-Bypass', 'byok-unmetered');
+          return next();
+        }
+
+        // `byok.keyId` can be null only if the row was found without an id, which
+        // the select makes impossible; the fallback exists so a null could never
+        // silently collapse every token into one shared bucket.
+        const key = byok.keyId ? `hal:byok:${byok.keyId}` : 'hal:byok:unidentified';
+        const b = await checkRateLimit(key, budget, GLOBAL_WINDOW_SECONDS);
+        res.setHeader('X-RateLimit-Limit', String(budget));
+        res.setHeader('X-RateLimit-Remaining', String(b.remaining));
+
+        if (b.backend === 'fail-open') {
+          // Same reasoning as the ceiling below: if it cannot count, it cannot
+          // bound, and this is a spend control. A BYOK holder who cannot be
+          // metered is not therefore entitled to unlimited spend.
+          res.setHeader('X-RateLimit-Byok-State', 'uncountable');
+          res.status(503).json({
+            error: 'BYOK_BUDGET_UNAVAILABLE',
+            message:
+              'The usage counter is unavailable, so your token budget cannot be enforced right now. ' +
+              'This is temporary — retry shortly.',
+            reason: 'usage_counter_unreachable',
+          });
+          return;
+        }
+        if (!b.allowed) {
+          res.setHeader('X-RateLimit-Byok-State', 'exhausted');
+          res.status(429).json({
+            // 429, unlike the ceiling's 503: this caller really did spend their
+            // own allowance, so saying so is a true statement about them.
+            error: 'BYOK_BUDGET_EXHAUSTED',
+            message: `This token's daily budget of ${budget} evaluations is spent. It resets daily.`,
+            resetIn: b.resetIn,
+          });
+          return;
+        }
         return next();
       }
     } catch {
-      // A BYOK lookup failure must not grant the bypass, and must not 500 a
-      // request that is still perfectly serviceable as anonymous traffic.
+      // A BYOK lookup failure must not grant a bypass, and must not 500 a request
+      // that is still perfectly serviceable as anonymous traffic.
     }
 
     try {

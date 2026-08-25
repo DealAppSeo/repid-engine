@@ -250,8 +250,21 @@ router.get('/byok/identity/status', (_req: Request, res: Response) => {
     enabled: IDENTITY_TOKENS_ENABLED,
     token_format: 'hdg_byok_<43-char base64url>',
     stored: 'sha256 of the random part, plus an 8-char display prefix. The token itself is returned once and never stored.',
-    grants: ['rate-limit bypass', 'run attribution to a RepID'],
-    does_not_grant: ['access to provider keys', 'custody of any secret'],
+    // "bypass" is what this said until 2026-08-25, and it was true of the code
+    // and misleading about the cost: the token exempts you from the shared free
+    // tier and gives you your own metered budget instead. It is not unmetered,
+    // and — despite "BYOK" — it does not make you spend your own provider
+    // credits, which is exactly the misreading the old wording invited.
+    grants: [
+      'own daily evaluation budget, separate from the shared free tier',
+      'run attribution to a RepID',
+    ],
+    does_not_grant: [
+      'access to provider keys',
+      'custody of any secret',
+      'unmetered usage',
+    ],
+    claimable_minting: 'requires an invite code, and is capped at a fixed number of live tokens',
   });
 });
 
@@ -277,12 +290,35 @@ router.post('/byok/identity', async (req: Request, res: Response) => {
  * nothing, and can neither claim this token nor recover it for them.
  */
 router.post('/byok/identity/claimable', async (req: Request, res: Response) => {
-  const { claim_commitment, label } = req.body ?? {};
+  const { claim_commitment, label, invite_code } = req.body ?? {};
   if (typeof claim_commitment !== 'string') {
     return res.status(400).json({ error: 'bad_request', message: 'claim_commitment (client-computed Poseidon2 commitment) is required.' });
   }
-  const result = await mintClaimable({ claimCommitment: claim_commitment, label: typeof label === 'string' ? label : undefined });
-  return res.status(result.ok ? 201 : result.reason === 'disabled' ? 503 : 400).json(result);
+  // The invite code may also arrive as a header, because this body is scanned by
+  // the SQL-keyword sanitizer in index.ts and a code containing ';' or '--' would
+  // be rejected before reaching here. Accepting both means an operator can pick
+  // any code they like without discovering that constraint the hard way.
+  const headerCode = req.headers['x-byok-invite'];
+  const suppliedCode =
+    typeof invite_code === 'string'
+      ? invite_code
+      : Array.isArray(headerCode) ? headerCode[0] : (headerCode ?? '');
+
+  const result = await mintClaimable({
+    claimCommitment: claim_commitment,
+    label: typeof label === 'string' ? label : undefined,
+    inviteCode: String(suppliedCode),
+  });
+  const status = result.ok
+    ? 201
+    : result.reason === 'disabled'
+      ? 503
+      // 403, not 400: the request was well-formed and the caller simply may not
+      // make it. Returning 400 would send them off checking their commitment.
+      : result.reason === 'forbidden'
+        ? 403
+        : 400;
+  return res.status(status).json(result);
 });
 
 /**

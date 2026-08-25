@@ -45,6 +45,63 @@ export interface TokenOwner {
 /** Feature flag. Default OFF — original work touching live state (CLAUDE_RULES 23). */
 export const IDENTITY_TOKENS_ENABLED = process.env.IDENTITY_TOKENS_ENABLED === 'true';
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHY MINTING IS GATED, AND WHY THE GATE IS FAIL-CLOSED
+ * ════════════════════════════════════════════════════════════════════════════
+ * A BYOK token is a bounded budget of OUR provider spend (see
+ * middleware/ip-rate-limit.ts — it does not carry the holder's own provider
+ * keys, whatever the name suggests). `mintClaimable` is deliberately NOT behind
+ * a wallet proof, because its whole purpose is issuing to someone who has no
+ * wallet yet. Those two facts together mean an ungated claimable mint is an
+ * open door to unlimited budgets, and flipping IDENTITY_TOKENS_ENABLED would
+ * have opened it.
+ *
+ * So claimable minting needs BOTH:
+ *   BYOK_INVITE_CODES   who may mint      — comma-separated
+ *   BYOK_MAX_CLAIMABLE  how many exist    — a hard cap on live claimable tokens
+ *
+ * `mintForOwner` is not gated this way: it already requires a signature proving
+ * control of a wallet, which is an identity gate of its own.
+ *
+ * NO CODES CONFIGURED MEANS NO CLAIMABLE MINTING. Not "anyone may mint" — that
+ * is the failure this exists to prevent, and defaulting to open would mean the
+ * dangerous state is the one you get by forgetting something.
+ */
+function inviteCodes(): string[] {
+  return String(process.env.BYOK_INVITE_CODES ?? '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+/** Live claimable tokens allowed to exist at once. 0 disables claimable minting. */
+function maxClaimable(): number {
+  const raw = Number(process.env.BYOK_MAX_CLAIMABLE);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return 100;
+}
+
+/**
+ * Compare against the configured codes without leaking which one matched, or how
+ * far a near-miss got, through timing. Invite codes are low-value next to a
+ * signing key, but a length-independent compare costs one hash and removes the
+ * question entirely.
+ */
+function inviteCodeAccepted(supplied: string): boolean {
+  const codes = inviteCodes();
+  if (codes.length === 0) return false;
+  const given = crypto.createHash('sha256').update(supplied).digest();
+  let ok = false;
+  for (const c of codes) {
+    const expected = crypto.createHash('sha256').update(c).digest();
+    // Not short-circuiting: every candidate is compared so the work does not
+    // depend on which position matched.
+    if (crypto.timingSafeEqual(given, expected)) ok = true;
+  }
+  return ok;
+}
+
 const PREFIX = 'hdg_byok_';
 /** 32 bytes of CSPRNG → 43 base64url chars. Not guessable, not derived from anything. */
 const SUFFIX_BYTES = 32;
@@ -61,7 +118,12 @@ export function hashTokenSuffix(suffix: string): string {
 
 export interface MintResult {
   ok: boolean;
-  reason?: 'disabled' | 'write_failed' | 'bad_request';
+  // 'forbidden' is distinct from 'bad_request' on purpose: the request was
+  // well-formed and the caller is simply not allowed to make it (no invite code,
+  // or the issuance cap is reached). Collapsing the two would tell a hackathon
+  // participant their commitment was malformed when the real answer is "ask for
+  // a code" — and would map to the wrong HTTP status at the route.
+  reason?: 'disabled' | 'write_failed' | 'bad_request' | 'forbidden';
   detail: string;
   /** The ONLY time the full token exists outside the holder's hands. */
   token?: string;
@@ -133,10 +195,46 @@ export async function mintForOwner(params: {
 export async function mintClaimable(params: {
   claimCommitment: string;
   label?: string;
+  inviteCode?: string;
 }): Promise<MintResult> {
   if (!IDENTITY_TOKENS_ENABLED) {
     return { ok: false, reason: 'disabled', detail: 'Identity token issuance is not enabled on this deployment.' };
   }
+
+  // Both gates live HERE rather than in the route, so a future second caller of
+  // mintClaimable cannot acquire an ungated path to the same budget by accident.
+  if (!inviteCodeAccepted(String(params.inviteCode ?? ''))) {
+    return {
+      ok: false,
+      reason: 'forbidden',
+      detail: 'A valid invite code is required to mint a claimable identity token.',
+    };
+  }
+
+  const cap = maxClaimable();
+  if (cap <= 0) {
+    return { ok: false, reason: 'forbidden', detail: 'Claimable token issuance is closed on this deployment.' };
+  }
+  // Counts LIVE claimable tokens, so revoking one frees a slot — the cap is on
+  // concurrent exposure, not on how many were ever issued.
+  const { count, error: countErr } = await db
+    .from('hdg_identity_tokens')
+    .select('id', { count: 'exact', head: true })
+    .eq('owner_kind', 'claimable')
+    .eq('status', 'active');
+  if (countErr) {
+    // Cannot count means cannot bound. Same rule as the spend controls: a budget
+    // control that resolves "I don't know" to "go ahead" is not a control.
+    return { ok: false, reason: 'write_failed', detail: 'Could not verify the issuance cap; refusing to mint.' };
+  }
+  if ((count ?? 0) >= cap) {
+    return {
+      ok: false,
+      reason: 'forbidden',
+      detail: `The claimable token cap (${cap}) is reached. Revoke an unused token or raise BYOK_MAX_CLAIMABLE.`,
+    };
+  }
+
   const c = String(params.claimCommitment ?? '').trim();
   // A commitment must look like one. Rejecting junk here keeps the unique index
   // from being filled with placeholder strings that can never be claimed.
