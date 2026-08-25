@@ -64,7 +64,7 @@ Categories:
 Rules: time-sensitive overrides factual when temporal markers present. Math overrides factual when computation asked. Code wins when source/syntax involved. Creative only when generation explicitly requested.
 Confidence: high=unambiguous, medium=fits two, low=malformed.`;
 
-const DEFAULT_MODEL = 'llama-3.1-8b-instant';
+const DEFAULT_MODEL = 'openai/gpt-oss-20b';
 const DEFAULT_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const DEFAULT_TIMEOUT_MS = 5000;
 

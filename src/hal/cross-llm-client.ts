@@ -227,7 +227,7 @@ function buildProviderConfigs(): ProviderConfig[] {
     {
       squad: 'alpha',
       provider: 'groq',
-      model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'llama-3.3-70b-versatile',
+      model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'openai/gpt-oss-120b',
       endpoint:
         process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ??
         resolveProviderEndpoint(GROQ_ENDPOINT, base, 'openai-compat'),
@@ -260,7 +260,7 @@ function resolveSingleFallback(excludeNames: string[]): Omit<ProviderConfig, 'sq
   const pool = [
     {
       provider: 'groq',
-      model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'llama-3.3-70b-versatile',
+      model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'openai/gpt-oss-120b',
       endpoint:
         process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ??
         resolveProviderEndpoint(GROQ_ENDPOINT, base, 'openai-compat'),
@@ -269,7 +269,7 @@ function resolveSingleFallback(excludeNames: string[]): Omit<ProviderConfig, 'sq
     },
     {
       provider: 'cerebras',
-      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7',
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.6',
       endpoint: resolveProviderEndpoint('https://api.cerebras.ai/v1/chat/completions', base, 'openai-compat'),
       apiKey: process.env.CEREBRAS_API_KEY ?? '',
       callType: 'openai-compat' as const,

@@ -51,7 +51,7 @@ async function defaultGroqCall(prompt: string): Promise<string> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.1-8b-instant',
+      model: process.env.HAL_S2_GROQ_MODEL ?? 'openai/gpt-oss-20b',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 8, temperature: 0,
     }),

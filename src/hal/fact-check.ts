@@ -1378,6 +1378,8 @@ export interface FactCheckProviderEnable {
   qwen: boolean;
   /** OpenRouter (aggregator) — last-resort backfill family; optional so existing callers compile. */
   openrouter?: boolean;
+  /** Gloo (router) — opt-in, never auto-backfilled. Optional so existing callers compile. */
+  gloo?: boolean;
 }
 
 /**
@@ -1408,12 +1410,27 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const ab = quorumAutoBackfillOn();
   // S-QUORUM (2026-06-02): groq llama-3.3-70b-versatile 429s on the free tier under any burst;
   // llama-3.1-8b-instant has a far higher free RPM and returns the same clean JSON verdict.
+  //
+  // MODEL DEATH, MEASURED LIVE 2026-08-25. Both defaults below 404'd in production, and the
+  // quorum had silently been running on 3 of 5 providers:
+  //     groq     → "The model `llama-3.1-8b-instant` does not exist or you do not have access"
+  //     cerebras → "Model zai-glm-4.7 is archived and unavailable for the organization"
+  // Neither was an outage. Groq SHUT DOWN llama-3.1-8b-instant on 2026-08-16 and cerebras
+  // deprecated zai-glm-4.7 on 2026-08-17 — two scheduled vendor deprecations a day apart, and
+  // nothing here noticed. `provider_health` reported it honestly in every single response; no
+  // human reads per-response JSON, so honest-but-unread is indistinguishable from fine.
+  //
+  // The replacements are Groq's own documented migration target and cerebras' still-live prior
+  // version. THEY ARE DOCUMENTATION-SOURCED, NOT MEASURED — no provider key is reachable from a
+  // dev sandbox, so the only real verification is post-deploy against provider_health. Treat a
+  // green build here as NOT_CHECKED on these two strings.
   const g = process.env.GROQ_API_KEY?.trim();
-  if (g && enabled.groq) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.1-8b-instant' });
-  // cerebras `llama3.1-8b` 404s on this key (no access); `zai-glm-4.7` is available and returns a
-  // correct verdict (in the `reasoning` field — handled in queryProvider) given enough max_tokens.
+  if (g && enabled.groq) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'openai/gpt-oss-20b' });
+  // cerebras `llama3.1-8b` 404s on this key (no access). zai-glm-4.6 is the predecessor of the
+  // archived 4.7 and returns its verdict the same way (in `reasoning` — handled in queryProvider)
+  // given enough max_tokens, so the parsing path is unchanged.
   const c = process.env.CEREBRAS_API_KEY?.trim();
-  if (c && enabled.cerebras) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.7' });
+  if (c && enabled.cerebras) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.6' });
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
   // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
@@ -1483,6 +1500,34 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
     out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'qwen/qwen-2.5-72b-instruct' });
+  }
+  // GLOO — opt-in, and NOT auto-backfilled. OpenAI-compatible, plain-key bearer, so it needs no
+  // adapter of its own; it is the same {endpoint, apiKey, model} shape as every entry above.
+  //
+  // THE FAMILY FIELD IS THE LOAD-BEARING PART, not the endpoint. Gloo is a ROUTER: a model id like
+  // `gloo-anthropic-claude-sonnet-4.6` is Anthropic's model reached through Gloo. Declaring gloo as
+  // its own family would let the quorum count it as an independent voice when it is the SAME model
+  // that an `anthropic` or `or-claude` entry may already be voting with — one model's error would
+  // then form a fake quorum, which is the exact failure the family-independence audit below exists
+  // to prevent. Same reasoning already applied to gemini-via-openrouter above, which declares
+  // family 'gemini' rather than 'openrouter'.
+  //
+  // So the family DEFAULTS to the vendor the default model actually routes to, and is overridable:
+  // point HAL_S2_GLOO_MODEL at a non-Anthropic model and you MUST set HAL_S2_GLOO_FAMILY to match,
+  // or the audit will be counting a correlated verifier as an independent one.
+  //
+  // NOT MEASURED: the endpoint path and model slug are from Gloo's published API docs, not from a
+  // call — no Gloo key is reachable from a dev sandbox. Both are env-overridable precisely because
+  // the first live call is the real test. Default OFF, like every other opt-in provider here.
+  const gl = process.env.GLOO_API_KEY?.trim();
+  if (gl && enabled.gloo) {
+    out.push({
+      name: 'gloo',
+      endpoint: process.env.HAL_S2_GLOO_ENDPOINT ?? 'https://platform.ai.gloo.com/ai/v2/chat/completions',
+      apiKey: gl,
+      model: process.env.HAL_S2_GLOO_MODEL ?? 'gloo-anthropic-claude-sonnet-4.6',
+      family: process.env.HAL_S2_GLOO_FAMILY ?? 'anthropic',
+    });
   }
   // qwen stays opt-in (endpoint region varies per key) — NOT auto-backfilled.
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
@@ -1566,6 +1611,11 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
     mistral: process.env.HAL_S2_ENABLE_MISTRAL === 'true',
     qwen: process.env.HAL_S2_ENABLE_QWEN === 'true',
     openrouter: process.env.HAL_S2_ENABLE_OPENROUTER === 'true',
+    // Opt-in like every other non-groq/cerebras provider. Deliberately NOT defaulted ON to
+    // backfill the two dead providers above: turning on a provider whose endpoint and model
+    // slug have never been exercised, in the same change that fixes a quorum outage, would
+    // make it impossible to tell which change did what if the next run is still degraded.
+    gloo: process.env.HAL_S2_ENABLE_GLOO === 'true',
   });
 }
 
