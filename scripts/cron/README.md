@@ -44,3 +44,24 @@ spreads across the roster instead of hammering one agent.
 
 Change the cadence by editing `cronSchedule` in `railway.cron.json` (git-reviewable), not the dashboard.
 Note: the Railway MCP cannot set `cronSchedule` (not exposed on service create/update) — hence config-as-code.
+
+## Known gap (2026-08-26): rotation stops spreading once a provider never completes
+
+The rotation sorts by "oldest last on-chain write," which assumes every run either
+completes (advancing that timestamp) or is a rare, self-correcting blip. Observed
+live: `trinity-gcm` was picked, escrowed, and never reached a write for **8
+consecutive daily runs** (2026-08-17 through 2026-08-26) — because it never
+succeeds, its "last write" timestamp never moves, so it keeps sorting first and
+keeps getting picked, monopolizing every run instead of the roster spreading as
+documented above. The run also left **no diagnostic at all**: the Railway deploy
+log ended right after the escrow line with no `[mint-attestation] FAIL` and no
+stack trace, which is only possible from an uncaught exception or unhandled
+rejection outside `main()`'s own try/catch — `main().catch()` never saw it. Fixed
+partially here: `process.on('uncaughtException'/'unhandledRejection')` handlers
+now log whatever kills the process, and the delivery/satisfy/write-wait loops log
+each attempt instead of running silently for minutes. **Not fixed here:** the
+rotation itself doesn't yet exclude or de-prioritize a provider with a recent,
+uncompleted attempt — that's a real selection-logic gap, tracked in
+`trinity-ecosystem`'s issue #134 (assigned XC) rather than changed unilaterally
+here, since it's a decision about intended failure-handling semantics, not a bug
+with one obvious fix.

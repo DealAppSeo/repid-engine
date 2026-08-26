@@ -54,6 +54,22 @@ const supa = createClient(url, svcKey);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
+// The 2026-08-26 Railway "Crashed" run left NO diagnostic at all: the log ends
+// right after "escrowed ..." with no [mint-attestation] FAIL line and no stack
+// trace, which is only possible if the process died OUTSIDE the try/catch in
+// main() — an uncaught exception or unhandled rejection that never reaches
+// main().catch() below. Without these handlers that class of failure is
+// silent by construction; with them, whatever killed the run gets one line
+// naming it before the process exits, on the same log stream Railway shows.
+process.on('uncaughtException', (e) => {
+  console.error('[mint-attestation] UNCAUGHT EXCEPTION: ' + (e?.stack || e?.message || e));
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => {
+  console.error('[mint-attestation] UNHANDLED REJECTION: ' + (e?.stack || e?.message || e));
+  process.exit(1);
+});
+
 async function api(method, path, key, body, extra) {
   const r = await fetch(BASE + path, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...(extra || {}) }, body: body !== undefined ? JSON.stringify(body) : undefined });
   let j = null; try { j = await r.json(); } catch {}
@@ -117,10 +133,12 @@ async function main() {
     if (escrow.status !== 200 || escrow.json?.status !== 'escrowed') throw new Error('escrow -> ' + escrow.status + ' ' + JSON.stringify(escrow.json).slice(0, 200));
     console.log(`[mint-attestation] escrowed ${cid} (real x402 USDC settled)`);
     // deliver via the registered handler (provider identity), then satisfy (poll for cascade delivery).
-    await api('POST', '/api/v1/agent/process-contracts', provKey.raw, { agent_name: prov.agent_name });
+    const processResp = await api('POST', '/api/v1/agent/process-contracts', provKey.raw, { agent_name: prov.agent_name });
+    console.log(`[mint-attestation] process-contracts -> ${processResp.status}`);
     let settled = false;
     for (let i = 0; i < 8 && !settled; i++) {
       const s = await api('POST', `/api/v1/contracts/${cid}/satisfy`, buyerKey.raw, { satisfaction_score: 1 });
+      console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> ${s.status} ${s.json?.status ?? ''}`);
       if (s.status === 200 && s.json?.status === 'settled') { settled = true; break; }
       await sleep(15000);
     }
@@ -133,7 +151,8 @@ async function main() {
     for (let i = 0; i < 12 && !write; i++) {
       await sleep(15000);
       const { data } = await supa.from('erc8004_reputation_writes').select('tx_hash, block_number, repid_value, created_at').eq('agent_id', prov.id).gt('created_at', sinceIso).order('created_at', { ascending: false }).limit(1);
-      if (data && data[0]?.tx_hash) write = data[0];
+      if (data && data[0]?.tx_hash) { write = data[0]; break; }
+      console.log(`[mint-attestation] waiting for on-chain write ${i + 1}/12...`);
     }
     if (!write) throw new Error('no on-chain write appeared within ~3min (FeedbackLoopWorker may be off, or provider ineligible)');
 
