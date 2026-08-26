@@ -19,13 +19,21 @@ on:
         description: 'Optional focus/override for this beat'
         required: false
   schedule:
-    - cron: '7 * * * *'     # :07 every hour (UTC) — matches the old local loop
+    - cron: '7 */4 * * *'    # :07 every 4th hour (UTC) — 6 beats/day
     # Enabled 2026-08-26 after Beat 63 (the first-ever run of this workflow,
     # #478) verified end-to-end: secrets resolve, the PAT is a real user
     # token (not github-actions[bot], so it actually triggers downstream CI),
     # build/test are clean modulo one pre-documented env-only failure, and
     # the beat's own diagnostic report reached main as a real PR on the real
     # path. Sean approved enabling this in the session that ran Beat 63.
+    #
+    # Cadence set to every 4 hours, not hourly, from the very first scheduled
+    # firing (Beat 64, #480): that beat cost $1.55 in real API spend hitting
+    # the 40-turn cap, and hourly would run this 24x/day — roughly $750-1500/mo
+    # unattended. Every 4 hours is 6 beats/day, ~75% cheaper, while still
+    # making steady daily progress on the backlog. Reconsider once there's a
+    # few weeks of real per-beat cost data to size against actual value
+    # delivered, rather than guessing further from one data point.
     #
     # ⚠ Beat 63 also flagged: PRs #463-#477 landed 2026-08-22→08-26 through
     # some path this ledger never recorded — if a LOCAL scheduled task is
