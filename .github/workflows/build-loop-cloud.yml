@@ -18,8 +18,19 @@ on:
       focus:
         description: 'Optional focus/override for this beat'
         required: false
-  # schedule:                 # ← uncomment for hands-off hourly (after a good dispatch test)
-  #   - cron: '7 * * * *'     #   :07 every hour (UTC) — matches the old local loop
+  schedule:
+    - cron: '7 * * * *'     # :07 every hour (UTC) — matches the old local loop
+    # Enabled 2026-08-26 after Beat 63 (the first-ever run of this workflow,
+    # #478) verified end-to-end: secrets resolve, the PAT is a real user
+    # token (not github-actions[bot], so it actually triggers downstream CI),
+    # build/test are clean modulo one pre-documented env-only failure, and
+    # the beat's own diagnostic report reached main as a real PR on the real
+    # path. Sean approved enabling this in the session that ran Beat 63.
+    #
+    # ⚠ Beat 63 also flagged: PRs #463-#477 landed 2026-08-22→08-26 through
+    # some path this ledger never recorded — if a LOCAL scheduled task is
+    # still what produced those, it should be disabled now so the two loops
+    # don't run concurrently (double PRs, wasted spend, possible conflicts).
 
 concurrency:
   group: hyperdag-build-loop-cloud
