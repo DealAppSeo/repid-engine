@@ -81,9 +81,18 @@ human to apply is an ADVISE-ONLY session that mislabeled itself.
 
 This is the concrete "different truth" bug and it has one correct answer.
 
-- **Source of truth: `v_fleet_truth`** (Supabase view, recency-based) — or, if that
-  view is unavailable in your session, compute liveness yourself from **`last_ping`
-  recency** on `agent_heartbeat`. The in-repo reference implementation is
+- **Source of truth: `v_agent_state`** (Supabase view, built 2026-08-27). One row
+  per agent, `state` ∈ **`working` | `idle` | `wedged` | `down` | `unknown`**, each
+  with an `evidence` column naming the reading that produced it. Query it and quote
+  the state and its evidence; do not re-derive liveness yourself.
+- **`v_fleet_truth` IS WRONG — do not use it, and do not quote a number from it.**
+  Its `is_live` CASE consults `last_ping`, then `last_work_at`, then `ELSE false`,
+  and **never consults the probe** — while its own `liveness_signal` column *does*,
+  returning `probe_only`. Since heartbeat writes were removed (below), the first two
+  branches can never fire, so it reports `is_live=false` for agents answering HTTP
+  200. On 2026-08-27 that read **0 of 12 live** while the probe read **12 of 12**.
+  It is one of ~36 mutually-disagreeing liveness surfaces; `v_agent_state` replaces
+  it. The older reference implementation is
   [`src/observability/agent-liveness.ts`](../../../src/observability/agent-liveness.ts)
   (`deriveLiveness` → `live` / `stale` / `dead` by minutes since `last_ping`, clock
   injected so the boundary is testable).
@@ -103,10 +112,21 @@ This is the concrete "different truth" bug and it has one correct answer.
   reporting `is_live=false` for **all 12** trinity agents while three of them
   answered **HTTP 200** on `/health`. A session that trusted it nearly concluded the
   fleet was dead. **Absence of a signal you turned off is not evidence of absence.**
-- **PROCESS liveness is NOT in this database.** The work-log signal proves an agent
-  *ran* (it wrote a row), not that it is *up* — an idle-but-healthy agent has no
-  work signal and will read `NULL`. Only the HTTP `/health` probe knows, and that
-  lives in UptimeRobot. If you need "is the process up", probe it; do not infer it.
+- **PROCESS liveness IS in this database — corrected 2026-08-27.** This bullet used
+  to read *"PROCESS liveness is NOT in this database … only the HTTP `/health` probe
+  knows, and that lives in UptimeRobot."* **That is now false and it cost a
+  session:** a Claude read this line, went to triangulate liveness from six
+  disagreeing views, and was about to ask the operator for an UptimeRobot API key it
+  did not need. `agent_health_probes` holds the probe result **and more** — `ok`,
+  `http_status`, `probed_at`, and crucially `loop_count`, `last_iteration_at`,
+  `current_task_id` — refreshed every ~5 minutes for every agent, tens of thousands
+  of rows deep. **Query `v_agent_state`; do not fetch UptimeRobot.**
+- **The work-log signal still is not liveness.** It proves an agent *ran* (it wrote
+  a row), not that it is *up*: an idle-but-healthy agent has no work signal and
+  reads `NULL`. That is exactly why `v_agent_state` reads the probe's loop columns
+  instead — `loop_count` advancing with `current_task_id` NULL is **`idle`**, not
+  dead, and a fresh probe with a *stalled* loop is **`wedged`**, which no
+  boolean-shaped surface can express.
 - Freshness is a property of the read, not of this file. Query when you need the
   number, state the timestamp, and treat it as a dated snapshot the moment after.
 
@@ -164,7 +184,7 @@ blockers — record that, and hand off.
 
 | Question | Source | Path / object |
 |----------|--------|---------------|
-| Which agents are actually alive? | `v_fleet_truth` (recency) — never a `status` column | Supabase view; ref impl `src/observability/agent-liveness.ts` |
+| What is each agent DOING? | **`v_agent_state`** — `working`/`idle`/`wedged`/`down`/`unknown` + `evidence`. Never a `status` column, never `v_fleet_truth` | Supabase view (2026-08-27), from `agent_health_probes` |
 | What is provable vs merely asserted? | Claim ledger (CLAIMED / BUILT / VERIFIED) | [`CLAIM_LEDGER.md`](../../../CLAIM_LEDGER.md) |
 | What do I work on next, in what order? | Ordered sprint queue | [`SPRINT_BOARD.md`](../../../SPRINT_BOARD.md) |
 
