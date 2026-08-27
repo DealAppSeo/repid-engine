@@ -9,6 +9,8 @@
   },
   "scripts": {
     "prepublishOnly": "node -e \"console.error('repid-engine is proprietary and must NEVER be published to npm (it contains the scoring formula, a hard-stop secret). Refusing. Publish a clean public wrapper instead.'); process.exit(1)\"",
+    "gen:env-registry": "node scripts/generate-env-registry.mjs",
+    "prebuild": "node scripts/generate-env-registry.mjs",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",

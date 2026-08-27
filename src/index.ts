@@ -105,8 +105,18 @@ import { attestationExtractorMiddleware } from './middleware/attestation-extract
 import { versioningMiddleware } from './middleware/versioning';
 import { emergencyHaltMiddleware } from './middleware/emergency-halt';
 import { scoreMonitor } from './engine/score-monitor';
+import { warnEnvTypos } from './config/env-typo-guard';
 
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+
+// Warn-only: a misspelled env var (e.g. HAL_PBLIC_RATE_LIMIT) silently falls
+// back to its default via `??`/`||`, indistinguishable from "unset" from
+// inside the process. Never throws, never delays boot — see env-typo-guard.ts.
+try {
+  warnEnvTypos();
+} catch {
+  // best-effort diagnostic only
+}
 
 const app = express();
 app.set('trust proxy', 1);
