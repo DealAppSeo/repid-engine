@@ -80,14 +80,31 @@ jobs:
             PRIORITY (Sean 2026-07-27): audit-evidence first; favor the work that touches
             the MOST SURFACES ("do more with less"). Optional extra focus this run: ${{ github.event.inputs.focus }}
 
+            TURN BUDGET (read before starting — this is why Beats 64-67 never got logged):
+            you have a hard 40-turn cap. Three of the four scheduled runs since this workflow was
+            enabled (2026-08-26/27) hit that cap mid-investigation and were killed before step (e)
+            ever ran — real PRs shipped (#480, #482, #483) with ZERO ledger entries for any of them.
+            The interactive-session ledger entries you read for style (Beats 55-63) each spent an
+            entire unbounded session on one beat; do not use them as a length or depth target here.
+            Budget roughly: (a) 5-8 turns, (b)+(c) 15-20 turns, (d) 3-5 turns, (e) 5 turns, and STOP
+            adding scope once you are ~30 turns in — ship a shorter, real ledger entry over a longer
+            one that never gets written. A one-paragraph (e) that lands beats a thorough one that doesn't.
+
             THE BEAT:
               (a) INDEPENDENTLY verify the prior beat by reading its diff + its CI conclusion (gh) — never rubber-stamp.
+                  Keep this proportionate (see budget above): confirm the claim, don't re-derive it from scratch.
               (b) advance the highest-priority OPEN backlog item on a NEW branch cut from origin/main.
               (c) you are in the cloud runner — you MAY run `npm install --legacy-peer-deps` + `tsc`/`npm test`
                   here to sanity-check (it costs runner minutes, not Sean's box); the required CI is the authority.
               (d) push the branch, open a PR, and — ONLY if SAFE-CLASS (docs / shadow-inert / additive-tested) —
                   run `gh pr merge <n> --auto --squash` WHILE its checks are still pending, so GitHub lands it on green.
-              (e) append a Beat entry to reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md and push it.
+              (e) append a Beat entry to reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md, on its OWN small branch/PR
+                  (docs-only, SAFE-CLASS, auto-merge it immediately) SEPARATE from (b)'s branch. Open this ledger
+                  PR right after (a)'s verification, before sinking turns into (b) — main has branch protection,
+                  so there is no direct-push shortcut; a small early PR is what actually survives hitting the
+                  turn cap later. If turns run out during (b)/(c)/(d), the ledger entry for THIS beat's step (a)
+                  is already safely merged even though the new backlog work is not — that is the failure mode
+                  to design for, not to just note after the fact.
 
             HARD LINES: verify before asserting ([V] not [R]); SHADOW-FIRST — NEVER flip Sean-gated enable flags
             (ENGINE_LLM_PROXY, ROUTER_STRICT_COST_ORDER, HAL_GROUNDING_MODE=enforce, REPID_PURPOSE_GATE_V3,
