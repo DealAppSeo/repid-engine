@@ -30,13 +30,19 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { RETIRED_MODELS } from '../src/hal/retired-models';
 
-/** Model ids whose vendor has confirmed them dead. Add to this list; never remove. */
-const RETIRED_MODELS: ReadonlyArray<{ id: string; vendor: string; died: string }> = [
-  { id: 'llama-3.1-8b-instant', vendor: 'groq', died: '2026-08-16 (shutdown)' },
-  { id: 'llama-3.3-70b-versatile', vendor: 'groq', died: '2026-08-16 (shutdown)' },
-  { id: 'zai-glm-4.7', vendor: 'cerebras', died: '2026-08-17 (archived)' },
-];
+/**
+ * THE LIST MOVED INTO src/ (2026-08-28) — it is no longer duplicated here.
+ *
+ * It used to be a test-only constant, which meant this guard could refuse a dead DEFAULT while
+ * the runtime happily dialled a dead OVERRIDE, and production did exactly that: it pinned
+ * HAL_S2_CEREBRAS_MODEL to an archived id and 404'd on every fact-check while this file was
+ * green. That is the same "knowledge exists where the worker never reads it" defect described
+ * in the header, one level up — so the fix is the same one: connect the knowing to the call
+ * path. `src/hal/retired-models.ts` is now read by BOTH this guard and the quorum builder, so
+ * adding an id bans it as a default and makes the quorum skip it in one edit.
+ */
 
 /**
  * Directories whose defaults reach a real provider call. `src/hal` is where the measured
@@ -56,7 +62,14 @@ const LIVE_DIRS = ['src/hal'];
  *
  * Anything added here needs that kind of reason, in writing. "It was failing" is not one.
  */
-const RECORD_NOT_CALL_PATH = ['src/hal/checkpoint-registry.ts'];
+const RECORD_NOT_CALL_PATH = [
+  'src/hal/checkpoint-registry.ts',
+  // `retired-models.ts` IS the list this guard enforces. It names every dead id as a literal by
+  // construction — that is its entire content — so scanning it would make the guard fail on its
+  // own source. Excluding it costs nothing: it exports no endpoint, no key and no default, and
+  // the one thing a reader could do wrong there (add an id) is what the file is for.
+  'src/hal/retired-models.ts',
+];
 
 function tsFilesUnder(dir: string): string[] {
   const out: string[] = [];

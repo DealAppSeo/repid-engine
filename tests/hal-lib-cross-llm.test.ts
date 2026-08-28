@@ -197,8 +197,19 @@ describe('checkCrossLLM — 3 providers, BFT veto active', () => {
   it('excludes provider and uses fallback when circuit is open after 5 failures', async () => {
     const oldGroqKey = process.env.GROQ_API_KEY;
     const oldCerebrasKey = process.env.CEREBRAS_API_KEY;
+    const oldCerebrasModel = process.env.HAL_S2_CEREBRAS_MODEL;
     process.env.GROQ_API_KEY = 'mock-groq-key';
     process.env.CEREBRAS_API_KEY = 'mock-cerebras-key';
+    // A KEY IS NO LONGER ENOUGH to make cerebras a fallback candidate: it has no default model,
+    // because every id this repo shipped for it is retired (src/hal/retired-models.ts). This
+    // test is about the circuit breaker failing over, so configure a live-shaped id.
+    //
+    // The real-world consequence is worth stating rather than hiding behind this line: while no
+    // live cerebras id is configured, the fallback pool is one member thinner, and when NOTHING
+    // in the pool is usable this code keeps the circuit-open provider (the `else` branch at the
+    // resolveSingleFallback call site — pre-existing behaviour, not introduced here). Failing
+    // over to a model that 404s was never the better outcome; a thinner pool is the honest one.
+    process.env.HAL_S2_CEREBRAS_MODEL = 'a-live-model-id';
 
     try {
       let groqFailCount = 0;
@@ -240,6 +251,8 @@ describe('checkCrossLLM — 3 providers, BFT veto active', () => {
     } finally {
       process.env.GROQ_API_KEY = oldGroqKey;
       process.env.CEREBRAS_API_KEY = oldCerebrasKey;
+      if (oldCerebrasModel === undefined) delete process.env.HAL_S2_CEREBRAS_MODEL;
+      else process.env.HAL_S2_CEREBRAS_MODEL = oldCerebrasModel;
     }
   });
 });
