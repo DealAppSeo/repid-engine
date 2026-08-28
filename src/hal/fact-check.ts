@@ -72,6 +72,16 @@ import {
 // the flag is on, and both modules NEVER throw (failure → fast-path decision preserved). See the
 // gated block near the end of factCheck() and src/hal/retrieval.ts + src/hal/crag.ts.
 import { isRetiredModel, retiredModelsFor } from './retired-models';
+// SELF-HEALING MODEL SELECTION (2026-08-28). Four vendor retirements have each been repaired by a
+// human reading production JSON, guessing a replacement id off a docs page, and shipping a release —
+// and the fourth guess was dead on arrival. These three modules replace that loop: ask the vendor
+// what this key can reach (model-catalog), ask our own ledger what actually answered
+// (dead-model-evidence), and pick from the intersection, ranked to buy quorum independence
+// (model-selection). All three are inert until the background refresh populates their caches, so an
+// unrefreshed process builds exactly the provider set it builds today. See resolveModelFor().
+import { catalogIsMeasured, catalogModelsFor } from './model-catalog';
+import { isMeasuredDead } from './dead-model-evidence';
+import { selectModel, type ModelChoice } from './model-selection';
 import { retrieveEvidence } from './retrieval';
 import { grokApiKey } from '../providers/xai-key';
 import { gradeEvidence, type CragResult, type CragGrade } from './crag';
@@ -85,6 +95,29 @@ export interface FactCheckProviderCfg {
   timeoutMs?: number;
   family?: string; // R5 — independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
   tier?: 'free' | 'cheap' | 'escalation'; // R6 — cost class for cheapest-first quorum assembly
+  /**
+   * How this provider's model id was chosen, when it was not simply the configured/shipped one.
+   *
+   * Present ONLY on a substitution. A pinned model that still works reports nothing, so the common
+   * path stays byte-identical and a reader can tell at a glance that the measurement ruler
+   * (CLAUDE_RULES 24) was intact for this call. When it IS present it travels into
+   * `provider_health.selections`, because a quality number measured while a model was swapped
+   * underneath it must never be mistaken for one taken at the pinned configuration.
+   */
+  selection?: ModelChoice;
+  /**
+   * Which wire format this endpoint speaks. Absent ⇒ 'openai', so every existing entry and every
+   * caller-supplied literal array is unchanged.
+   *
+   * WHY THIS EXISTS. `ANTHROPIC_API_KEY` is live on this deployment and has been all along —
+   * MEASURED at 3,374 successes against 5 failures lifetime, most recently today via the
+   * adversarial judge. It is an independent `claude` family, on its own account, and the
+   * fact-check quorum has never once used it. Not for want of a key or a decision: purely because
+   * `queryProvider` speaks only Bearer + `/chat/completions`, and Anthropic's API is `x-api-key` +
+   * `/v1/messages` with a different body and a different response shape. A working, independent
+   * voice sat one adapter away from a quorum that has been running three families wide.
+   */
+  dialect?: 'openai' | 'anthropic';
 }
 
 /**
@@ -263,6 +296,16 @@ export interface FactCheckResult {
      * succeeded / failed / skipped.
      */
     skipped?: FactCheckProviderSkip[];
+    /**
+     * Providers that ran on a model they SELECTED rather than the one they were configured with,
+     * because the configured id had been measured unusable on this credential.
+     *
+     * Present only on a substitution. This is the honesty half of self-healing: recovering from a
+     * dead model without a deploy is only an improvement if the recovery is visible, otherwise it
+     * trades a loud failure for a quiet configuration drift — the same trade `skipped` exists to
+     * refuse.
+     */
+    selections?: Array<{ name: string; model: string; reason: string; source: string }>;
   };
   quorum_note?: string; // set only when the resilience gate downgraded a decision
   fallback_used?: 'local_slm';
@@ -518,21 +561,83 @@ export function redactProviderError(body: string): string {
  * Free tiers (esp. groq) rate-limit under burst; one short backoff turns a transient 429 into a
  * success without blowing the per-provider timeout. Honors a numeric Retry-After when present.
  */
-async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal: AbortSignal): Promise<Response> {
-  let res = await fetch(cfg.endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body, signal,
+export function providerHeaders(cfg: FactCheckProviderCfg): Record<string, string> {
+  if (cfg.dialect === 'anthropic') {
+    // Anthropic authenticates with x-api-key and REQUIRES a version header; a Bearer token is
+    // rejected outright. Exported so a test can assert the key never goes out as a Bearer.
+    return {
+      'Content-Type': 'application/json',
+      'x-api-key': cfg.apiKey,
+      'anthropic-version': process.env.HAL_S2_ANTHROPIC_VERSION ?? '2023-06-01',
+    };
+  }
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` };
+}
+
+/**
+ * Build the request body for this provider's dialect.
+ *
+ * Anthropic takes the system prompt as a TOP-LEVEL `system` field rather than a message with
+ * `role: 'system'` — passing one in `messages` is a 400. Exported for the same reason as the
+ * headers: the shapes are the whole of the adapter, and they are worth asserting directly.
+ */
+export function providerBody(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number): string {
+  const user = factCheckPrompt(deliverable);
+  if (cfg.dialect === 'anthropic') {
+    return JSON.stringify({
+      model: cfg.model,
+      system: FACT_CHECK_SYSTEM,
+      messages: [{ role: 'user', content: user }],
+      max_tokens: maxTokens,
+      temperature: 0,
+    });
+  }
+  return JSON.stringify({
+    model: cfg.model,
+    messages: [
+      { role: 'system', content: FACT_CHECK_SYSTEM },
+      { role: 'user', content: user },
+    ],
+    max_tokens: maxTokens,
+    temperature: 0,
   });
+}
+
+/** Pull the answer text and token usage out of whichever response shape came back. */
+export function parseProviderResponse(cfg: FactCheckProviderCfg, data: any): { content: string; tokensIn: number; tokensOut: number } {
+  if (cfg.dialect === 'anthropic') {
+    // Content is an array of typed blocks; concatenate the text ones so a response split across
+    // blocks is not silently truncated to the first.
+    const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
+    return {
+      content: blocks.filter((b) => typeof b?.text === 'string').map((b) => b.text).join(''),
+      tokensIn: data?.usage?.input_tokens || 0,
+      tokensOut: data?.usage?.output_tokens || 0,
+    };
+  }
+  const msg = data?.choices?.[0]?.message ?? {};
+  return {
+    // Reasoning models (cerebras zai-glm / gpt-oss) put output in `reasoning` or
+    // `reasoning_content`, not `content` — fall through all three so they parse.
+    content: msg.content || msg.reasoning_content || msg.reasoning || '',
+    tokensIn: data?.usage?.prompt_tokens || 0,
+    tokensOut: data?.usage?.completion_tokens || 0,
+  };
+}
+
+/**
+ * POST to a provider's chat endpoint with a single jittered retry on HTTP 429.
+ * Free tiers (esp. groq) rate-limit under burst; one short backoff turns a transient 429 into a
+ * success without blowing the per-provider timeout. Honors a numeric Retry-After when present.
+ */
+async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal: AbortSignal): Promise<Response> {
+  const headers = providerHeaders(cfg);
+  let res = await fetch(cfg.endpoint, { method: 'POST', headers, body, signal });
   if (res.status === 429) {
     const ra = Number(res.headers?.get?.('retry-after'));
     const waitMs = Math.min(3000, (Number.isFinite(ra) && ra > 0 ? ra * 1000 : 800) + Math.floor(Math.random() * 400));
     await new Promise((r) => setTimeout(r, waitMs));
-    res = await fetch(cfg.endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body, signal,
-    });
+    res = await fetch(cfg.endpoint, { method: 'POST', headers, body, signal });
   }
   return res;
 }
@@ -551,15 +656,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     // below → returned as this provider's ERROR verdict (quorum degrades gracefully),
     // never a silent cloud call. Mirrors cross-llm-client.queryProvider's prompt guard.
     assertPromptEgressAllowed(cfg.endpoint, 'prompt');
-    const res = await postWith429Retry(cfg, JSON.stringify({
-      model: cfg.model,
-      messages: [
-        { role: 'system', content: FACT_CHECK_SYSTEM },
-        { role: 'user', content: factCheckPrompt(deliverable) },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0,
-    }), controller.signal);
+    const res = await postWith429Retry(cfg, providerBody(cfg, deliverable, maxTokens), controller.signal);
     const latency_ms = Date.now() - start;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -579,13 +676,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${redactProviderError(body)}`, latency_ms };
     }
     const data: any = await res.json();
-    const msg = data?.choices?.[0]?.message ?? {};
-    // Reasoning models (cerebras zai-glm / gpt-oss) put output in `reasoning` or `reasoning_content`,
-    // not `content` — fall through all three so they parse.
-    const content: string = msg.content || msg.reasoning_content || msg.reasoning || '';
-    
-    const tokensIn = data.usage?.prompt_tokens || 0;
-    const tokensOut = data.usage?.completion_tokens || 0;
+    const { content, tokensIn, tokensOut } = parseProviderResponse(cfg, data);
     const cost_usd = calculateCost(cfg.name, cfg.model, tokensIn, tokensOut);
 
     if (!content.trim()) {
@@ -888,7 +979,18 @@ export async function factCheck(
   const skippedField: FactCheckProviderSkip[] = [];
   const cerebrasSkip = cerebrasDeadModelSkip();
   if (cerebrasSkip && !providers.some((p) => p.name === 'cerebras')) skippedField.push(cerebrasSkip);
-  const skipped = skippedField.length ? { skipped: skippedField } : {};
+  // Models the builder chose for itself because the configured one was measured unusable. Reported
+  // for the same reason the skips are: a substitution that nobody can see is a measurement whose
+  // ruler changed silently (CLAUDE_RULES 24), and a HAL number taken during one must never be
+  // compared against a number taken at the pinned configuration as though they were alike.
+  // Absent — not empty — when every provider used exactly the model it was configured with.
+  const selectionsField = activeProviders
+    .filter((p) => p.selection?.substituted)
+    .map((p) => ({ name: p.name, model: p.model, reason: p.selection!.reason, source: p.selection!.source }));
+  const skipped = {
+    ...(skippedField.length ? { skipped: skippedField } : {}),
+    ...(selectionsField.length ? { selections: selectionsField } : {}),
+  };
   if (costOrdered) {
     const rank = (p: FactCheckProviderCfg) => ({ free: 0, cheap: 1, escalation: 2 })[p.tier ?? costTierOf({ name: p.name, family: familyByName.get(p.name) })];
     const waves = [0, 1, 2].map((r) => activeProviders.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
@@ -1443,6 +1545,8 @@ export interface FactCheckProviderEnable {
   openrouter?: boolean;
   /** Gloo (router) — opt-in, never auto-backfilled. Optional so existing callers compile. */
   gloo?: boolean;
+  /** Anthropic direct — independent `claude` family, escalation tier. Optional so callers compile. */
+  anthropic?: boolean;
 }
 
 /**
@@ -1528,8 +1632,94 @@ export function cerebrasDeadModelSkip(): FactCheckProviderSkip | null {
   };
 }
 
+/**
+ * Resolve which model id this provider should actually call, and why.
+ *
+ * THE DEFAULT ANSWER IS "THE ONE YOU CONFIGURED". This only ever departs from the operator override
+ * or the shipped default when one of those has been MEASURED — on this credential, in our own
+ * ledger — to be dead, and only then does it consult the vendor's live model list for a
+ * replacement. With both caches cold (every process, until the first background refresh completes)
+ * `catalogIsMeasured` is false and `isMeasuredDead` is false for everything, so this returns the
+ * configured id unchanged and the builder behaves exactly as it did before this existed.
+ *
+ * `familiesTaken` is threaded through the builder in push order, so each provider is picked knowing
+ * which independent families the quorum has already bought. That is the whole point: the quorum's
+ * claim is cross-examination across INDEPENDENT families, so a replacement that adds a family the
+ * panel lacks is worth more than a marginally faster one inside a family already covered.
+ */
+/**
+ * THE CATALOG KEY AND THE LEDGER KEY ARE NOT THE SAME KEY, and conflating them corrupts selection.
+ *
+ * A quorum member is identified three different ways, and gemini-via-OpenRouter is the case where
+ * all three differ at once:
+ *   - `name` 'gemini'      what the verdict is reported under, and what lands in llm_call_log
+ *   - HOST   'openrouter'  whose `/models` list is authoritative for the slug we must send
+ *   - slug   'google/gemini-3.5-flash'   valid ONLY on that host
+ *
+ * Looking the catalog up under 'gemini' there would offer Google's own ids — `gemini-2.5-flash` —
+ * and selecting one would post a direct-endpoint slug to OpenRouter, which must 404. That is this
+ * module handing the caller a guaranteed-dead id: precisely the bug it was written to remove,
+ * reintroduced one layer up. The same applies to every or-* member.
+ *
+ * So the catalog is keyed by HOST and the ledger by REPORTED NAME, separately and explicitly.
+ */
+export function resolveModelFor(
+  ledgerProvider: string,
+  envVar: string,
+  staticDefault: string | undefined,
+  familiesTaken: ReadonlySet<string>,
+  catalogProvider: string = ledgerProvider,
+): ModelChoice {
+  return selectModel({
+    provider: ledgerProvider,
+    operatorModel: process.env[envVar]?.trim(),
+    staticModel: staticDefault,
+    catalogModels: catalogModelsFor(catalogProvider),
+    catalogMeasured: catalogIsMeasured(catalogProvider),
+    isMeasuredDead: (m) => isMeasuredDead(ledgerProvider, m),
+    isStaticallyRetired: isRetiredModel,
+    familiesTaken,
+    familyOf: (m) => familyOfResolved(m),
+  });
+}
+
 export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
+  /**
+   * Families already bought, in push order. Seeded empty and updated by `add()` so that
+   * cheapest-first ordering also becomes independence-first ordering: the earlier a provider is
+   * considered, the more of the family space is still open to it.
+   */
+  const familiesTaken = new Set<string>();
+
+  /**
+   * Push a provider after resolving its model against the live catalog + ledger.
+   *
+   * Returns false (and pushes nothing) when nothing is reachable — a provider with no callable
+   * model must be SKIPPED, never dialled. A guaranteed-404 call costs a request and a slot in the
+   * quorum and then reports the quorum as `partial`, which is the exact production bug this whole
+   * change exists to end.
+   */
+  const add = (
+    cfg: Omit<FactCheckProviderCfg, 'model'>,
+    envVar: string,
+    staticDefault: string | undefined,
+    /** The HOST whose `/models` list is authoritative — see resolveModelFor. Defaults to cfg.name. */
+    catalogProvider: string = cfg.name,
+  ): boolean => {
+    const choice = resolveModelFor(cfg.name, envVar, staticDefault, familiesTaken, catalogProvider);
+    if (!choice.model) {
+      console.warn(`[hal] quorum: ${cfg.name} not added — ${choice.reason}`);
+      return false;
+    }
+    const family = cfg.family ?? familyOfResolved(choice.model);
+    if (choice.substituted) {
+      console.warn(`[hal] quorum: ${cfg.name} model substituted — ${choice.reason}`);
+    }
+    out.push({ ...cfg, model: choice.model, family, ...(choice.substituted ? { selection: choice } : {}) });
+    familiesTaken.add(family);
+    return true;
+  };
   // Auto-backfill: OR the passed enable flag with the default-on backfill so a backfill family is
   // included when EITHER it was explicitly enabled OR (autobackfill on AND its key is present). This
   // preserves cheapest-first ordering (deepseek → gemini → mistral → openrouter appear in that order).
@@ -1551,7 +1741,9 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // dev sandbox, so the only real verification is post-deploy against provider_health. Treat a
   // green build here as NOT_CHECKED on these two strings.
   const g = process.env.GROQ_API_KEY?.trim();
-  if (g && enabled.groq) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'openai/gpt-oss-20b' });
+  if (g && enabled.groq) {
+    add({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g }, 'HAL_S2_GROQ_MODEL', 'openai/gpt-oss-20b');
+  }
   // CEREBRAS HAS NO DEFAULT MODEL, deliberately — see cerebrasDeadModelSkip(). The replacement
   // named in the NOT_CHECKED caveat above never worked: the ledger says every call it made
   // 404'd, so both ids this repo has shipped are now in RETIRED_MODELS. Without an id from
@@ -1563,10 +1755,17 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // provider that was never configured — the failure mode `hal-gemini-model-default.test.ts`
   // was written about — and a reported 404 is already better than a silent absence, so only a
   // reported SKIP is an improvement on the bug this replaces.
+  //
+  // SELF-HEALING SUPERSEDES THE HARDCODED SKIP, in one direction only. `cerebrasDeadModelSkip()`
+  // still governs whether cerebras is dialled at all, so the reported-skip contract is unchanged.
+  // What changed is that a cerebras with NO usable configured model is no longer automatically
+  // nothing: if the live catalog offers a model this key can reach, `add()` selects one and the
+  // family rejoins the quorum without a release. When the catalog is cold — every process until
+  // the first refresh — there is nothing to select from and the behaviour is exactly as before.
   const c = process.env.CEREBRAS_API_KEY?.trim();
   const cerebrasModel = process.env.HAL_S2_CEREBRAS_MODEL?.trim();
-  if (c && enabled.cerebras && cerebrasModel && !cerebrasDeadModelSkip()) {
-    out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: cerebrasModel });
+  if (c && enabled.cerebras && !cerebrasDeadModelSkip()) {
+    add({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c }, 'HAL_S2_CEREBRAS_MODEL', cerebrasModel);
   }
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
   // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
@@ -1576,7 +1775,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // when the free tiers (groq/cerebras) throttle under prod burst. Cheapest backfill member → first.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
   if (d && (enabled.deepseek || ab)) {
-    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
+    add({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, family: 'deepseek' }, 'HAL_S2_DEEPSEEK_MODEL', 'deepseek-chat');
   }
   // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
   // Auto-backfilled when their key is present (HAL_QUORUM_AUTOBACKFILL); else opt-in per enable flag.
@@ -1591,10 +1790,56 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // the direct endpoint. Model override: HAL_S2_GEMINI_MODEL (must match the chosen endpoint's slugs).
   const gm = process.env.GEMINI_API_KEY?.trim();
   const orForGemini = process.env.OPENROUTER_API_KEY?.trim();
-  const geminiViaOpenRouter = orForGemini && process.env.HAL_S2_GEMINI_VIA_OPENROUTER !== 'false';
+  //
+  // ══ DIRECT IS NOW THE DEFAULT (2026-08-28). This inverts the 2026-07-08 decision below. ══
+  //
+  // That decision was correct when it was made and its stated premise has since expired. It reads
+  // "the DIRECT Gemini endpoint 429s 'credits depleted' … so the gemini family contributed 0 real
+  // votes". MEASURED against our own ledger on 2026-08-28, that is no longer what the direct path
+  // does: `gemini-2.5-flash` on the Google endpoint has **339 successes and zero recorded
+  // failures**, most recently 2026-08-22. The depleted-credits era belonged to `gemini-2.0-flash`,
+  // which Google retired, and to a wave of 503s — neither of which describes the endpoint today.
+  //
+  // WHY THE RE-ROUTE IS NOW THE MORE EXPENSIVE OPTION. Routing gemini through OpenRouter puts two
+  // of the quorum's families on ONE account and ONE credit pool, and `MIN_QUORUM_FOR_VETO` is 2 —
+  // so a single billing event can take the panel to its floor. That pool has run dry repeatedly:
+  // `google/gemini-3.5-flash` carries **8,762 failures against 16,643 successes**, the sample being
+  // `HTTP 402 … requires more credits`. It is a real, recurring, single point of failure.
+  //
+  // STATED PRECISELY, because the stronger version of this claim is not supported: over the 14 days
+  // to 2026-08-28, 43 quorums ran both gemini-via-OpenRouter and openrouter, and **zero** had both
+  // fail. The shared pool is a demonstrated fragility, NOT a demonstrated co-failure. The case for
+  // direct rests on the 402 history and on independence, not on a correlation we have not measured.
+  //
+  // FAIL-BACK IS AUTOMATIC. If the ledger later measures the direct model dead, this falls back to
+  // OpenRouter on its own. `HAL_S2_GEMINI_VIA_OPENROUTER=true` forces the re-route; `=false` forces
+  // direct. Unset now means direct-when-keyed, which is the change.
+  const directGeminiModel = process.env.HAL_S2_GEMINI_MODEL?.trim();
+  // ENDPOINT-SCOPED OVERRIDE, and this is load-bearing rather than fussy: the two paths do not share
+  // a slug namespace. Direct wants `gemini-2.5-flash`; OpenRouter wants `google/gemini-3.5-flash`.
+  // A single env var applied to whichever endpoint we happened to pick would hand one of them a
+  // string it must 404 on — swapping the route would silently break the model. The '/' is what
+  // tells them apart, so an override only applies to the endpoint whose shape it matches.
+  const overrideIsOpenRouterSlug = !!directGeminiModel?.includes('/');
+  const geminiForcedViaOr = process.env.HAL_S2_GEMINI_VIA_OPENROUTER === 'true';
+  const geminiForcedDirect = process.env.HAL_S2_GEMINI_VIA_OPENROUTER === 'false';
+  const directGeminiDead = isMeasuredDead('gemini', directGeminiModel || 'gemini-2.5-flash');
+  const geminiViaOpenRouter =
+    !!orForGemini && !geminiForcedDirect && (geminiForcedViaOr || !gm || directGeminiDead);
   if ((gm || orForGemini) && (enabled.gemini || ab)) {
     if (geminiViaOpenRouter) {
-      out.push({ name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini!, model: process.env.HAL_S2_GEMINI_MODEL ?? 'google/gemini-3.5-flash', family: 'gemini' });
+      if (directGeminiDead && gm) {
+        console.warn(
+          `[hal] quorum: gemini failing back to OpenRouter — the direct model has been MEASURED dead. ` +
+            `This puts gemini and openrouter on one account; set HAL_S2_GEMINI_MODEL to a live direct id to split them again.`,
+        );
+      }
+      add(
+        { name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini!, family: 'gemini' },
+        overrideIsOpenRouterSlug ? 'HAL_S2_GEMINI_MODEL' : '__unset__',
+        'google/gemini-3.5-flash',
+        'openrouter', // the HOST — its slugs, not Google's. See resolveModelFor.
+      );
     } else if (gm) {
       // RETIRED-MODEL FIX 2026-08-04. The default was `gemini-2.0-flash`, which Google
       // has retired: every call on this endpoint returns HTTP 404 "This model is no
@@ -1613,12 +1858,16 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
       // a fixed configuration; a floating alias silently changes the model underneath
       // them and turns every comparison into a measurement without its ruler
       // (CLAUDE_RULES 24). Bump it explicitly when re-measuring.
-      out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.5-flash', family: 'gemini' });
+      add(
+        { name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, family: 'gemini' },
+        overrideIsOpenRouterSlug ? '__unset__' : 'HAL_S2_GEMINI_MODEL',
+        'gemini-2.5-flash',
+      );
     }
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
   if (ms && (enabled.mistral || ab)) {
-    out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
+    add({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, family: 'mistral' }, 'HAL_S2_MISTRAL_MODEL', 'mistral-small-latest');
   }
   // OpenRouter — LAST backfill resort (aggregator). Its family derives from the configured model, so the
   // DEFAULT is a QWEN model — a family distinct from the always-on hosts (groq=llama, cerebras=glm) and
@@ -1636,7 +1885,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // live /models list first.
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
-    out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'qwen/qwen-2.5-72b-instruct' });
+    add({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', 'qwen/qwen-2.5-72b-instruct');
   }
   // GLOO — opt-in, and NOT auto-backfilled. OpenAI-compatible, plain-key bearer, so it needs no
   // adapter of its own; it is the same {endpoint, apiKey, model} shape as every entry above.
@@ -1666,6 +1915,41 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
       family: process.env.HAL_S2_GLOO_FAMILY ?? 'anthropic',
     });
   }
+  // ANTHROPIC DIRECT — the independent 5th family that was already paid for and never used.
+  //
+  // MEASURED on this deployment's own ledger (2026-08-28): ANTHROPIC_API_KEY has 3,374 successes
+  // against 5 failures lifetime, most recently the same day, via the adversarial judge. It is the
+  // most reliable credential in the fleet by success ratio, it is a family (`claude`) no other
+  // quorum member covers, and it is on its own account — so unlike the or-* members it shares no
+  // failure mode with OpenRouter. The only reason it was never a voter is that this builder could
+  // not speak its wire format.
+  //
+  // ESCALATION TIER, DELIBERATELY, AND IT IS NOT A HEDGE. Under cost-ordered assembly (the default)
+  // waves run free → cheap → escalation and stop the moment two families answer, so this costs
+  // NOTHING while the free wave is healthy and fires only when that wave cannot form a quorum —
+  // which is the exact scenario that has been leaving the panel narrow. Standing membership would
+  // widen the panel on every call and would also start spending on every call; that is a cost
+  // decision to make deliberately, not a side effect of adding an adapter. Promote it by setting
+  // HAL_QUORUM_COST_ORDERED=false or HAL_S2_ANTHROPIC_TIER=free.
+  //
+  // Auto-backfilled on key presence like the other resilience members, since an escalation member
+  // that never fires costs nothing to have.
+  const an = process.env.ANTHROPIC_API_KEY?.trim();
+  if (an && (process.env.HAL_S2_ENABLE_ANTHROPIC !== 'false') && (enabled.anthropic || ab)) {
+    add(
+      {
+        name: 'anthropic',
+        endpoint: process.env.HAL_S2_ANTHROPIC_ENDPOINT ?? 'https://api.anthropic.com/v1/messages',
+        apiKey: an,
+        family: 'anthropic',
+        dialect: 'anthropic',
+        tier: process.env.HAL_S2_ANTHROPIC_TIER === 'free' ? 'free' : 'escalation',
+      },
+      'HAL_S2_ANTHROPIC_MODEL',
+      // The id the ledger shows answering on this key today — measured, not read off a docs page.
+      'claude-haiku-4-5-20251001',
+    );
+  }
   // qwen stays opt-in (endpoint region varies per key) — NOT auto-backfilled.
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
   if (qw && enabled.qwen) {
@@ -1682,7 +1966,16 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const frontierOn = process.env.HAL_S2_ENABLE_FRONTIER === 'true';
   if (orFront && frontierOn) {
     out.push({ name: 'or-gpt', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_OPENAI_MODEL ?? 'openai/gpt-4o', family: 'openai', tier: 'escalation' });
-    out.push({ name: 'or-claude', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
+    // PREFER THE DIRECT ACCOUNT OVER THE AGGREGATOR FOR THE SAME FAMILY. `or-claude` declares
+    // family 'anthropic', and so does the direct member added above — with both present they are
+    // ONE vote, not two, and `assertFamilyIndependenceAtBoot` would (correctly) log a violation
+    // that did not exist before the direct member was added. Dropping the routed one keeps the
+    // panel honest and picks the better of the two: its own account and credit pool rather than
+    // OpenRouter's shared one. Same reasoning as gemini-direct above. If the direct key is absent,
+    // or-claude is added exactly as before.
+    if (!out.some((p) => p.family === 'anthropic')) {
+      out.push({ name: 'or-claude', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
+    }
   }
   // FREE FRONTIER MEMBER (opt-in, HAL_S2_ENABLE_FRONTIER_FREE, default OFF → prod unchanged).
   // DELIBERATELY INDEPENDENT of HAL_S2_ENABLE_FRONTIER: that flag's two-member panel is already a
@@ -1715,7 +2008,28 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // this builder is openai-compat, so all are redirected. Unset → endpoints unchanged (hosted path).
   const localBase = (process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '').trim();
   if (localBase) {
-    for (const p of out) p.endpoint = resolveProviderEndpoint(p.endpoint, localBase, 'openai-compat');
+    // ONLY openai-compat members may be redirected. The comment this replaces said "every provider
+    // in this builder is openai-compat, so all are redirected" — true when written, false the
+    // moment the anthropic dialect was added below. Pointing an `/v1/messages` caller at a local
+    // openai-compat server sends a body that host cannot parse, so the redirect would convert a
+    // working self-hosted setup into a silently failing provider. A non-openai member is DROPPED
+    // rather than redirected: under a data-locality boundary, removing a cloud caller is the
+    // conservative outcome, and leaving its cloud endpoint in place would be an egress leak.
+    const kept: FactCheckProviderCfg[] = [];
+    for (const p of out) {
+      if ((p.dialect ?? 'openai') !== 'openai') {
+        console.warn(
+          `[hal] quorum: dropping ${p.name} under LOCAL_LLM_BASE_URL — its ${p.dialect} wire format ` +
+            `cannot be served by an openai-compat local endpoint, and redirecting it would send an ` +
+            `unparseable body. Unset the local base to use it.`,
+        );
+        continue;
+      }
+      p.endpoint = resolveProviderEndpoint(p.endpoint, localBase, 'openai-compat');
+      kept.push(p);
+    }
+    out.length = 0;
+    out.push(...kept);
   }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity). CROSS-FIX
   // 2026-07-05 — registry-primary (familyOfResolved): accurate for registered models, legacy-regex

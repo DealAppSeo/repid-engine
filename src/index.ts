@@ -106,6 +106,20 @@ import { attestationExtractorMiddleware } from './middleware/attestation-extract
 import { versioningMiddleware } from './middleware/versioning';
 import { emergencyHaltMiddleware } from './middleware/emergency-halt';
 import { scoreMonitor } from './engine/score-monitor';
+import { refreshModelCatalog, CATALOG_REFRESH_MS } from './hal/model-catalog';
+import { refreshDeadModelEvidence } from './hal/dead-model-evidence';
+
+/**
+ * Warm both caches the self-healing quorum builder reads. Never throws and never rejects: these are
+ * ADVISORY, and a cache that can take the boot path down would be a worse bug than the dead models
+ * it exists to route around. On failure the builder simply keeps using the configured model.
+ */
+async function warmModelSelectionCaches(): Promise<void> {
+  const results = await Promise.allSettled([refreshModelCatalog(), refreshDeadModelEvidence()]);
+  for (const r of results) {
+    if (r.status === 'rejected') console.error('[hal] model-selection cache refresh failed:', r.reason);
+  }
+}
 import { warnEnvTypos } from './config/env-typo-guard';
 
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
@@ -745,6 +759,26 @@ if (!IS_TEST) {
       if (await shouldParkForHalt(db, 'scoreMonitor')) return;
       await scoreMonitor();
     }, 300000);
+
+    // SELF-HEALING MODEL SELECTION (2026-08-28). Keeps two caches warm so the SYNCHRONOUS quorum
+    // builder can pick a model that actually works without a network call on the scoring path:
+    //   - the vendor's own /models list, per key   (what we are allowed to call)
+    //   - our llm_call_log window                  (what actually answered when we called it)
+    // Both are advisory and fail soft: until they populate, and any time they cannot refresh, the
+    // builder uses the configured/shipped model exactly as it did before this existed. This is why
+    // it is safe to start them unconditionally rather than behind a flag — the OFF state and the
+    // cold state are the same state.
+    // ONE gated loop, not two ungated ones. `tests/emergency-halt.test.ts` pins that every tick
+    // loop in this file parks on the emergency halt, and it caught this when the refreshes were
+    // first added on their own timers. The rule is right and applies here in particular: a halt
+    // means stop doing background work, and this loop makes outbound calls to every model vendor
+    // plus a ledger read. Warmed once at boot (outside the gate, so a cold start is not blind for
+    // a full period) and then refreshed on the interval.
+    void warmModelSelectionCaches();
+    setInterval(async () => {
+      if (await shouldParkForHalt(db, 'modelCatalogRefresh')) return;
+      await warmModelSelectionCaches();
+    }, CATALOG_REFRESH_MS);
 
     // PostgREST bypass (2026-05-21) — boot diagnostic for the direct-pg client
     // (used by the feedback-loop poll). Loud, non-fatal: the API itself serves
