@@ -96,7 +96,17 @@ async function liveFetch<T = any>(path: string, init: RequestInit = {}): Promise
   const t = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
   const headers = new Headers(init.headers ?? {});
   if (!headers.has('content-type') && init.body) headers.set('content-type', 'application/json');
-  if (API_KEY && !headers.has('authorization')) headers.set('authorization', `Bearer ${API_KEY}`);
+  // OFFER THE SESSION TOKEN STEP 1 MINTED. `ctx.token` was assigned and never read by
+  // anything — the suite signed up, stored the credential, and then made every
+  // subsequent call anonymously. So the deposit step could only ever 401, and its
+  // 401 meant "no credential was sent", not "the credential was refused". Those are
+  // different findings and only one of them is about the server.
+  //
+  // Offering it loosens NOTHING server-side; it makes the evidence say which case
+  // this is. E2E_API_KEY still wins when set, since an operator key is the stronger
+  // credential and is what a caller supplies deliberately.
+  const bearer = API_KEY || ctx.token;
+  if (bearer && !headers.has('authorization')) headers.set('authorization', `Bearer ${bearer}`);
   try {
     const res = await fetch(`${BASE_URL}${path}`, { ...init, headers, signal: ctrl.signal });
     let body: any = null;
@@ -174,8 +184,34 @@ describe('e2e — reponomics live flow against Railway', () => {
       method: 'POST',
       body: JSON.stringify({ builder_address: ctx.builder_address, amount: '100000000' }),
     });
-    if (r.status === 401 || r.status === 404) {
-      skipped('stake/deposit', `HTTP ${r.status} — public endpoint not deployed`);
+    if (r.status === 404) {
+      skipped('stake/deposit', 'HTTP 404 — endpoint not deployed');
+      return;
+    }
+    if (r.status === 401) {
+      // THIS USED TO READ "public endpoint not deployed", AND THAT WAS WRONG IN A WAY
+      // THAT COSTS SOMEONE AN HOUR. MEASURED against production 2026-08-28: the route
+      // IS deployed and IS auth-bypassed at the middleware (src/middleware/auth.ts —
+      // "serves BOTH signed-out demo traffic and wallet-bearing real"). The 401 comes
+      // from INSIDE the handler, and it is correct behaviour, not an outage.
+      //
+      // What it actually reveals is a seam between two credential systems:
+      //   /builder/token-signup mints 32 random bytes and stores them in
+      //     builders.session_token (auth_method 'token_only'). Four routes in v1.ts
+      //     resolve a builder by that column, so it is a real, used credential.
+      //   /stake/deposit's session tier calls verifyFullAccountToken(), which is
+      //     jwt.verify() requiring builder_id AND email — a full account.
+      // An anonymous visitor has no email by construction, so the no-wallet flow this
+      // suite is named after cannot clear the session tier at all. The reason string
+      // now carries whichever of the two the server reported, so the diagnosis points
+      // at the seam instead of at a deployment.
+      const why = r.body?.error === 'invalid_session'
+        ? 'the signup token WAS sent and was refused (invalid_session) — /stake/deposit ' +
+          'verifies full-account JWTs only and never consults builders.session_token'
+        : r.body?.error === 'no_credential'
+          ? 'no credential reached the handler (no_credential) — step 2 sent nothing usable'
+          : `server said ${JSON.stringify(r.body?.error ?? null)}`;
+      skipped('stake/deposit', `HTTP 401 — endpoint deployed and refusing: ${why}`);
       return;
     }
     expect([200, 400]).toContain(r.status);
@@ -200,6 +236,33 @@ describe('e2e — reponomics live flow against Railway', () => {
     }
     if (r.status === 404) {
       skipped('run-round-anonymous', 'HTTP 404 — endpoint not deployed yet');
+      return;
+    }
+    // A MISSING FIXTURE IS NOT A BROKEN ENDPOINT, and scoring it as one is the same
+    // conflation as the reverse. MEASURED against production 2026-08-28: HTTP 400 with
+    //
+    //   {"ok":false,"error":"fleet agents missing","is_simulated":true,
+    //    "notes":"APM or VERITAS not seeded — apply 20260427_seed_two_builder_demo.sql first"}
+    //
+    // The endpoint ran, looked for its two demo agents, did not find them, and said so
+    // precisely — naming the exact migration. That is a well-built refusal, and this
+    // suite was calling it FAILED. The step's own comment two lines below already
+    // anticipated the seed being absent ("apm and veritas may be null if seed agents
+    // are absent on this DB") but only on the 200 path, so the anticipated case was
+    // the one case that could not be reported.
+    //
+    // A red E2E for an unapplied demo seed teaches people that red does not mean
+    // broken, which is exactly how the green-that-means-nothing at the top of this
+    // file happened, arriving from the other direction. STRICT still turns it into a
+    // failure, which is what STRICT is for: this remains a CORE step, so a run that
+    // never exercised it cannot claim the flow works.
+    if (r.status === 400 && r.body?.error === 'fleet agents missing') {
+      skipped(
+        'run-round-anonymous',
+        'HTTP 400 — endpoint executed and refused: demo agents APM/VERITAS are not seeded ' +
+          'on this database. Remedy is named by the server: apply ' +
+          'supabase/migrations/20260427_seed_two_builder_demo.sql. This is a data gap, not a defect.',
+      );
       return;
     }
     expect(r.status).toBe(200);

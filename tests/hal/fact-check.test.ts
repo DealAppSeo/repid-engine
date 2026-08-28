@@ -135,10 +135,19 @@ describe('factCheck — env thresholds + provider builder', () => {
     process.env.HAL_S2_CEREBRAS_MODEL = 'a-live-model-id';
     delete process.env.DEEPSEEK_API_KEY; delete process.env.GEMINI_API_KEY; delete process.env.MISTRAL_API_KEY; delete process.env.OPENROUTER_API_KEY;
     process.env.GROQ_API_KEY = 'g'; process.env.CEREBRAS_API_KEY = 'c'; delete process.env.FIREWORKS_API_KEY;
+    // COMPARED ORDER-INSENSITIVELY, and the change is deliberate. This test is about KEY GATING —
+    // its own name says "includes only keyed providers" — and `toEqual` on the raw array also
+    // pinned REGISTRATION ORDER, which was incidental to that question and is now deliberately
+    // different: cerebras registers after the fixed-family members so its catalog pick can see
+    // which families the panel has actually taken (see the builder's comment at that call site,
+    // and the production selection that motivated it).
+    //
+    // Sorting drops ONLY the ordering. "Exactly these providers, no more and no fewer" — the thing
+    // this test exists to assert — is unchanged, and a provider appearing or vanishing still fails.
     const ps = buildFactCheckProviders();
-    expect(ps.map((p) => p.name)).toEqual(['groq', 'cerebras']);
+    expect(ps.map((p) => p.name).sort()).toEqual(['cerebras', 'groq']);
     process.env.FIREWORKS_API_KEY = 'f'; process.env.HAL_S2_ENABLE_FIREWORKS = 'true';
-    expect(buildFactCheckProviders().map((p) => p.name)).toEqual(['groq', 'cerebras', 'fireworks']);
+    expect(buildFactCheckProviders().map((p) => p.name).sort()).toEqual(['cerebras', 'fireworks', 'groq']);
     // restore
     process.env.GROQ_API_KEY = save.g; process.env.CEREBRAS_API_KEY = save.c; process.env.FIREWORKS_API_KEY = save.f; process.env.HAL_S2_ENABLE_FIREWORKS = save.fw_en;
     process.env.HAL_QUORUM_AUTOBACKFILL = save.ab; process.env.DEEPSEEK_API_KEY = save.d; process.env.GEMINI_API_KEY = save.gm; process.env.MISTRAL_API_KEY = save.ms; process.env.OPENROUTER_API_KEY = save.or;

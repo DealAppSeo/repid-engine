@@ -759,3 +759,85 @@ describe('zai is a first-class quorum member', () => {
     expect(z!.selection?.substituted).toBe(true);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+/**
+ * A FAMILY BONUS MEASURED AGAINST A PREFIX IS NOT A FAMILY BONUS.
+ *
+ * `familiesTaken` is threaded in REGISTRATION order, so a provider picks knowing only what the
+ * providers BEFORE it claimed. Every member except cerebras has a fixed family — an explicit
+ * cfg.family, or a static default whose family is a constant. Cerebras alone has no default and
+ * must choose from the live catalog every time.
+ *
+ * Registered second, it chose against an almost-empty set. MEASURED on production 2026-08-28,
+ * minutes after the ordering fix above let it select at all:
+ *
+ *     SELECTED cerebras -> gemma-4-31b   "(family 'gemini', new to this quorum)"
+ *
+ * It was not new. The gemini provider registers later carrying family 'gemini', so cerebras bought
+ * a duplicate while believing it had bought independence. The family COUNT stayed honest — it
+ * dedupes at count time — but the SELECTION spent the one slot whose entire purpose is widening the
+ * panel, which is the opposite of what the bonus exists to do.
+ *
+ * This is a defect in the family-maximizing selection shipped earlier the same day, found by
+ * reading what production actually chose rather than by re-reading the ranking function.
+ */
+describe('cerebras picks against the whole panel, not a prefix of it', () => {
+  /** A catalog offering one model per family, so the choice is purely about what is already taken. */
+  function catalogOfferingBoth() {
+    setCachedCatalog({
+      entries: {
+        cerebras: {
+          provider: 'cerebras', status: 'MEASURED',
+          models: ['gemma-4-31b', 'llama-3.3-70b'],
+          detail: 't', fetched_at: 'now',
+        },
+      },
+      refreshed_at: 'now',
+    });
+  }
+
+  it('THE BUG IT FIXES: with gemini in the panel, cerebras must not buy the gemini family', () => {
+    catalogOfferingBoth();
+    const out = withEnv(
+      { CEREBRAS_API_KEY: 'k', GEMINI_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' },
+      () => buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }),
+    );
+    const cer = out.find((p) => p.name === 'cerebras');
+    expect(cer).toBeDefined();
+    // gemma resolves to the gemini family; llama does not. The panel already has gemini.
+    expect(cer!.model).toBe('llama-3.3-70b');
+    expect(cer!.family).not.toBe('gemini');
+  });
+
+  it('THE PANEL IS ACTUALLY WIDER — the count, not just the label', () => {
+    catalogOfferingBoth();
+    const out = withEnv(
+      { CEREBRAS_API_KEY: 'k', GEMINI_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' },
+      () => buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }),
+    );
+    const families = new Set(out.map((p) => p.family));
+    // Before the reorder these two collapsed to one family; the second vote was an echo.
+    expect(families.size).toBe(out.length);
+  });
+
+  it('FAILABILITY: with gemini ABSENT, gemma is a legitimate pick and must still be chosen', () => {
+    // Without this the fix could be "never pick gemma", which would be a different bug —
+    // refusing a family the panel genuinely lacks.
+    catalogOfferingBoth();
+    const cer = withEnv(
+      { CEREBRAS_API_KEY: 'k', GEMINI_API_KEY: undefined, OPENROUTER_API_KEY: undefined, HAL_QUORUM_AUTOBACKFILL: 'false' },
+      () => buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }).find((p) => p.name === 'cerebras'),
+    );
+    expect(cer).toBeDefined();
+    expect(['gemma-4-31b', 'llama-3.3-70b']).toContain(cer!.model);
+  });
+
+  it('cerebras is still REGISTERED, not dropped, by the move', () => {
+    // The reorder must not have quietly removed it from the builder entirely.
+    catalogOfferingBoth();
+    const out = withEnv({ CEREBRAS_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'false' }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }));
+    expect(out.some((p) => p.name === 'cerebras')).toBe(true);
+  });
+});
