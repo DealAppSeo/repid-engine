@@ -527,7 +527,11 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
     if (factCheckEnabled && verifiableCategory) {
       try {
         const { halService } = require('../hal/service');
-        const fc = await halService.evaluate({ text: decision_text, strictness: 2 });
+        // agentId is the authenticated caller (checked against the API key's agent_id at the
+        // top of this handler). Passing it stamps llm_call_log.agent_id on every provider call
+        // in this quorum — this is the score-event path, so "which agent's reward did this
+        // fact-check gate" becomes answerable instead of NULL.
+        const fc = await halService.evaluate({ text: decision_text, strictness: 2, agentId });
         // `mode === 'fact-check'` IS NOT ENOUGH, and the comment above ("quorum unavailable →
         // dissonance path unchanged") was not what the code did. The HAL_LOCAL_FALLBACK_ENABLED
         // path in src/hal/fact-check.ts returns mode 'fact-check' with decision 'clean' at

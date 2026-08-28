@@ -354,6 +354,18 @@ export interface FactCheckOpts {
   // excluded as self-grading (a Llama judge grading Llama output is marking its own homework). Optional;
   // ignored while the flag is OFF, so existing callers are unaffected.
   producerModel?: string;
+  // CALL ATTRIBUTION (2026-08-28) — the agent this quorum is being run FOR, stamped onto every
+  // provider call's `llm_call_log.agent_id`.
+  //
+  // MEASURED before writing this: `hal_fact_check` accounts for ~99.8% of all rows in that
+  // table, and effectively none of them carry an agent_id, because this was the only
+  // high-volume call site that never passed one. Attribution is FORWARD-ONLY — no other table
+  // maps call_id/quorum_id back to an agent, so the historical rows cannot be recovered.
+  //
+  // Optional and ignored when absent, so existing callers are unaffected — same contract as
+  // `producerModel` above. The PUBLIC /hal/evaluate endpoint deliberately does not set it:
+  // anonymous callers have no agent, and inventing one would be worse than a null.
+  agentId?: string;
 }
 
 /**
@@ -515,7 +527,7 @@ async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal:
   return res;
 }
 
-async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number, quorumId?: string): Promise<ProviderVerdict> {
+async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number, quorumId?: string, agentId?: string): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
   // R5 — configurable per-call timeout so one slow provider can't stall the family quorum.
@@ -552,7 +564,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         latency_ms,
         status: 'failed',
         error_message: `HTTP ${res.status}: ${redactProviderError(body)}`,
-        task_hint: 'hal_fact_check', quorum_id: quorumId
+        task_hint: 'hal_fact_check', quorum_id: quorumId, agent_id: agentId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${redactProviderError(body)}`, latency_ms };
     }
@@ -578,7 +590,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
         latency_ms,
         status: 'failed',
         error_message: 'empty content',
-        task_hint: 'hal_fact_check', quorum_id: quorumId
+        task_hint: 'hal_fact_check', quorum_id: quorumId, agent_id: agentId
       }).catch(err => console.error('[fact-check] logLlmCall error:', err));
       return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: 'empty content', latency_ms };
     }
@@ -593,7 +605,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       cost_usd,
       latency_ms,
       status: 'success',
-      task_hint: 'hal_fact_check', quorum_id: quorumId
+      task_hint: 'hal_fact_check', quorum_id: quorumId, agent_id: agentId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
 
     const parsed = parseVerdict(content);
@@ -612,7 +624,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       latency_ms,
       status: e?.name === 'AbortError' ? 'rate_limited' : 'failed',
       error_message: error,
-      task_hint: 'hal_fact_check', quorum_id: quorumId
+      task_hint: 'hal_fact_check', quorum_id: quorumId, agent_id: agentId
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
     return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error, latency_ms };
   } finally {
@@ -653,6 +665,7 @@ async function grokTiebreak(
   deliverable: string,
   maxTokens: number,
   quorumId: string,
+  agentId?: string,
 ): Promise<ProviderVerdict | null> {
   const key = grokApiKey();
   if (!key) return null;
@@ -664,7 +677,7 @@ async function grokTiebreak(
     family: 'grok',
     tier: 'escalation',
   };
-  return queryProvider(cfg, deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+  return queryProvider(cfg, deliverable, maxTokens, quorumId, agentId); // never throws → ERROR verdict on failure
 }
 
 /**
@@ -842,7 +855,7 @@ export async function factCheck(
         `family-independence is registry-accurate.`,
     );
   }
-  const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId);
+  const callOne = (p: FactCheckProviderCfg) => queryProvider(p, deliverable, maxTokens, quorumId, opts.agentId);
   const settle = async (ps: FactCheckProviderCfg[]): Promise<ProviderVerdict[]> => {
     const s = await Promise.allSettled(ps.map(callOne));
     return s.map((r, i) => r.status === 'fulfilled' ? r.value
@@ -891,7 +904,7 @@ export async function factCheck(
     const tN = famCount('TRUE');
     if (fN >= 1 && fN === tN) {
       console.log(`  - [grok-tiebreak] evenly split (${tN} TRUE / ${fN} FALSE families) — escalating to Grok`);
-      const gv = await grokTiebreak(deliverable, maxTokens, quorumId);
+      const gv = await grokTiebreak(deliverable, maxTokens, quorumId, opts.agentId);
       attempted += 1;
       if (gv && gv.verdict !== 'ERROR') {
         familyByName.set(gv.provider, 'grok'); // distinct family → breaks the tie
@@ -1117,7 +1130,7 @@ export async function factCheck(
           `margin ${(hal_score - vetoThreshold).toFixed(3)} <= band ${band} ? ${weakByScore}; ` +
           `FALSE ${falseN}/${units} >= ceil(0.75*${units})=${Math.ceil(0.75 * units)} ? ${strongFalseCount}) — escalating ONCE to Grok`,
       );
-      const gv = await grokTiebreak(deliverable, maxTokens, quorumId); // never throws → ERROR verdict on failure
+      const gv = await grokTiebreak(deliverable, maxTokens, quorumId, opts.agentId); // never throws → ERROR verdict on failure
       attempted += 1;
       if (gv && gv.verdict === 'TRUE' && gv.confidence >= overrideConf) {
         // Grok (higher-weight) confidently confirms TRUE → override the weak veto. clean if VERY
