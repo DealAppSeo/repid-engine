@@ -58,17 +58,18 @@ jobs:
       - name: Install (legacy peer deps per nixpacks.toml)
         run: npm install --legacy-peer-deps
 
-      # Installed globally and PINNED, out of the project tree: promptfoo is a CI-only tool,
-      # and putting it in package.json would make every existing `npm install --legacy-peer-deps`
-      # (including ci.yml's) resolve it too. An unpinned version would let this gate's verdict
-      # change with no commit in this repo.
-      - name: Install promptfoo (pinned, outside the project tree)
-        run: npm install -g promptfoo@0.122.2
-
+      # NO GLOBAL INSTALL. `npm install -g promptfoo` followed by spawning a bare `promptfoo`
+      # is what broke the first run of this gate: the install step succeeded, the binary was
+      # not on the PATH the runner's child process inherited, every invocation exited 127, and
+      # the gate evaluated nothing. Verified from the job log on 022631b.
+      #
+      # run-gate.mjs falls back to `npx --yes promptfoo@<pinned>` when PROMPTFOO_BIN is unset,
+      # which needs no PATH at all and keeps the version pinned, so the gate's verdict still
+      # cannot drift without a commit here. Slower per run; a security gate that actually
+      # executes is worth the download.
       - name: Run the gate
         id: gate
         env:
-          PROMPTFOO_BIN: promptfoo
           PROMPTFOO_DISABLE_TELEMETRY: '1'
           PROMPTFOO_DISABLE_UPDATE: '1'
           # Absent on forks and on this repo until someone adds them — an empty value is
@@ -88,7 +89,15 @@ jobs:
               echo "::notice title=HAL adversarial gate::VERIFIED — every tier ran and passed"
               ;;
             2)
-              echo "::warning title=HAL adversarial gate::NOT_CHECKED — the key-free tier passed, but the live-quorum tier did not run (no provider key). This is not a pass; see the job summary."
+              # DO NOT NAME THE REASON HERE. There are several ways to reach exit 2 — the
+              # live-quorum tier lacking a key, promptfoo not being invocable, the canary
+              # failing on infrastructure rather than an assertion — and this line cannot
+              # tell them apart. It previously asserted "the key-free tier passed", and on
+              # 022631b it printed exactly that directly beneath the runner's own
+              # "promptfoo is not invocable — nothing was evaluated". A summary line that
+              # contradicts the tool it is summarising is worse than no line at all.
+              # The runner prints the real reason immediately above; point at it.
+              echo "::warning title=HAL adversarial gate::NOT_CHECKED — this is not a pass. The gate output above this annotation names which tier did not run and why."
               ;;
             *)
               echo "::error title=HAL adversarial gate::FAILED (runner exit $code)"
