@@ -8,9 +8,20 @@
  * developers to export `SUPABASE_URL=http://localhost:54321
  * SUPABASE_SERVICE_KEY=dummy` to make it boot. That dummy satisfies a presence
  * check — so the suite ARMS against a Supabase that does not exist and fails on
- * an unreachable localhost. In CI there are no secrets, so presence is false, it
- * all skips, and CI is green. The result is a guard that is red for the wrong
- * reason locally and silent in CI: it never actually runs, and nobody notices.
+ * an unreachable localhost.
+ *
+ * IT WAS GREEN IN CI FOR A DIFFERENT AND WORSE REASON than this file used to
+ * claim. The old text here said "in CI there are no secrets, so presence is
+ * false" — measured 2026-08-27 against `ci.yml`, that is wrong: the Unit tests
+ * step exports presence dummies of its own. The last suite doing this skipped on
+ * a variable-NAME mismatch — the workflow sets SUPABASE_SERVICE_ROLE_KEY, the
+ * gate read SUPABASE_SERVICE_KEY. Align those two names and the same gate
+ * evaluates TRUE in CI and arms against localhost:54321 on every PR.
+ *
+ * So presence gates are not merely silent in CI; they are silent by accident,
+ * and one rename away from breaking the build for everyone. The result is a
+ * guard that is red for the wrong reason locally and quiet in CI for an
+ * unrelated one: it never actually runs, and nobody notices.
  *
  * A guard that knows one bad value (special-casing `localhost:54321`) fails open
  * for every OTHER unreachable endpoint, so we do NOT special-case a host. We
