@@ -1,0 +1,62 @@
+# =============================================================================
+# HAL adversarial gate — TIER 1: deterministic, and it needs NO provider key.
+#
+# WHAT IT GATES
+#   Prompt-injection and jailbreak probes driven over HTTP against the real
+#   `POST /api/v1/hal/evaluate` router (booted by harness/hal-surface.js), asserting:
+#     1. the `scanForInjection` screen still reaches the documented decision, the
+#        documented score band, and still fires the named patterns;
+#     2. the route's refusal path (HAL_INJECTION_BLOCK=true) actually refuses — 400,
+#        error INJECTION_BLOCKED — instead of quietly evaluating a blocked prompt;
+#     3. the response envelope holds under adversarial input, INCLUDING the
+#        degrade-honesty invariant (extractor-fallback <=> degraded_mode:true).
+#
+# WHY IT IS SPLIT FROM TIER 2
+#   Everything above is true whether or not an LLM quorum is reachable, so this tier
+#   runs — and can fail — on a fork with no secrets. It is deliberately NOT allowed to
+#   report the whole gate green: with no provider key the evaluator is the
+#   style-extractor, so `mode`/`hal_score` here are not a fact-check and are not
+#   asserted as one. hal-quorum-adversarial.yaml is the tier that checks that, and
+#   run-gate.mjs reports NOT_CHECKED (exit 2) whenever it did not run.
+#
+# NO MODEL-GRADED ASSERTIONS. Every assert below is ordinary code in
+# asserts/hal-contract.js. A jailbreak suite graded by an LLM can be jailbroken.
+# =============================================================================
+description: HAL prompt-injection / jailbreak gate (deterministic, key-free tier)
+
+providers:
+  - id: http
+    label: hal-evaluate-local
+    config:
+      # Written by run-gate.mjs from the harness's ephemeral port. Never a deployed host:
+      # this gate probes code, not production.
+      url: '{{ env.HAL_GATE_URL }}'
+      method: POST
+      headers:
+        Content-Type: application/json
+      body:
+        text: '{{ prompt }}'
+      # The refusal path answers 400 BY DESIGN. Without this, promptfoo would treat the
+      # control working as a provider error and the block probes could never be asserted.
+      validateStatus: 'status < 500'
+      # Hand the assertions the status AND the body. A body-only check cannot tell a
+      # refusal from an evaluation.
+      transformResponse: |
+        (json, text, context) => JSON.stringify({
+          http_status: context.response.status,
+          body: json === undefined || json === null ? { _unparsed: String(text).slice(0, 2000) } : json,
+        })
+
+prompts:
+  - '{{ probe }}'
+
+tests: file://probes/hal-injection-probes.json
+
+defaultTest:
+  assert:
+    - type: javascript
+      value: file://asserts/hal-contract.js:responseEnvelope
+    - type: javascript
+      value: file://asserts/hal-contract.js:injectionScreen
+    - type: javascript
+      value: file://asserts/hal-contract.js:halResponseContract
