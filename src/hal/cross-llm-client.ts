@@ -43,6 +43,7 @@ import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { pgQuery } from '../db/direct-pg';
 import { resolveProviderEndpoint } from './local-llm';
+import { isRetiredModel } from './retired-models';
 import { assertPromptEgressAllowed, isLocalHost } from '../selfhost/egress-guard';
 
 // BYO / local-model base-URL override for the openai-compat quorum. Read at call
@@ -269,7 +270,9 @@ function resolveSingleFallback(excludeNames: string[]): Omit<ProviderConfig, 'sq
     },
     {
       provider: 'cerebras',
-      model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.6',
+      // NO DEFAULT: both ids ever shipped here are retired (see src/hal/retired-models.ts),
+      // and an unset env now means "cerebras is not a candidate" rather than "dial a 404".
+      model: process.env.HAL_S2_CEREBRAS_MODEL ?? '',
       endpoint: resolveProviderEndpoint('https://api.cerebras.ai/v1/chat/completions', base, 'openai-compat'),
       apiKey: process.env.CEREBRAS_API_KEY ?? '',
       callType: 'openai-compat' as const,
@@ -301,7 +304,11 @@ function resolveSingleFallback(excludeNames: string[]): Omit<ProviderConfig, 'sq
 
   const excludes = new Set(excludeNames.map(n => n.toLowerCase().trim()));
   for (const p of pool) {
-    if (p.apiKey && !isCircuitOpen(p.provider) && !excludes.has(p.provider.toLowerCase().trim())) {
+    // A RETIRED MODEL IS NOT A USABLE FALLBACK. This loop takes the first provider with a
+    // key, so a pool entry whose default model the vendor switched off does not fail over —
+    // it becomes the answer, and every call 404s. Checking the model here covers the whole
+    // pool rather than one provider, which is the shape this bug arrived in twice.
+    if (p.apiKey && p.model && !isRetiredModel(p.model) && !isCircuitOpen(p.provider) && !excludes.has(p.provider.toLowerCase().trim())) {
       return p;
     }
   }

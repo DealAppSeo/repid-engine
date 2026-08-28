@@ -18,7 +18,7 @@ import {
 const KEYS = [
   'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'MISTRAL_API_KEY',
   'OPENROUTER_API_KEY', 'SAMBANOVA_API_KEY', 'FIREWORKS_API_KEY',
-  'HAL_QUORUM_AUTOBACKFILL', 'HAL_S2_ENABLE_CEREBRAS', 'HAL_S2_ENABLE_DEEPSEEK', 'HAL_S2_ENABLE_GEMINI',
+  'HAL_QUORUM_AUTOBACKFILL', 'HAL_S2_ENABLE_CEREBRAS', 'HAL_S2_CEREBRAS_MODEL', 'HAL_S2_ENABLE_DEEPSEEK', 'HAL_S2_ENABLE_GEMINI',
   'HAL_S2_ENABLE_MISTRAL', 'HAL_S2_ENABLE_OPENROUTER', 'HAL_S2_ENABLE_FIREWORKS',
   'ROUTER_ENABLE_OPENROUTER', 'ROUTER_ENABLE_SAMBANOVA',
 ];
@@ -26,6 +26,11 @@ const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
   for (const k of KEYS) saved[k] = process.env[k];
   for (const k of KEYS) delete process.env[k];
+  // Cerebras has no default model any more — every id this repo shipped is retired, so an
+  // unconfigured cerebras is now skipped on purpose (src/hal/retired-models.ts). These tests are
+  // about KEY gating and backfill, not model liveness, so give it a live-shaped id and keep them
+  // testing what they were written to test.
+  process.env.HAL_S2_CEREBRAS_MODEL = 'a-live-model-id';
 });
 afterEach(() => {
   for (const k of KEYS) {

@@ -71,6 +71,7 @@ import {
 // behind HAL_RETRIEVAL_ENABLED (default OFF/shadow) — importing these modules changes nothing until
 // the flag is on, and both modules NEVER throw (failure → fast-path decision preserved). See the
 // gated block near the end of factCheck() and src/hal/retrieval.ts + src/hal/crag.ts.
+import { isRetiredModel, retiredModelsFor } from './retired-models';
 import { retrieveEvidence } from './retrieval';
 import { grokApiKey } from '../providers/xai-key';
 import { gradeEvidence, type CragResult, type CragGrade } from './crag';
@@ -253,6 +254,15 @@ export interface FactCheckResult {
     attempted: number;
     succeeded: number;
     failed: Array<{ name: string; error: string }>;
+    /**
+     * Providers deliberately NOT attempted, and why. Present only when there is one.
+     *
+     * `attempted` counts calls made; a skipped provider is not in it. Without this field a
+     * skip is indistinguishable from a provider that was never configured — the exact trap
+     * `tests/hal-gemini-model-default.test.ts` documents. Three outcomes, never two:
+     * succeeded / failed / skipped.
+     */
+    skipped?: FactCheckProviderSkip[];
   };
   quorum_note?: string; // set only when the resilience gate downgraded a decision
   fallback_used?: 'local_slm';
@@ -870,6 +880,15 @@ export async function factCheck(
   const costOrdered = process.env.HAL_QUORUM_COST_ORDERED !== 'false';
   let verdicts: ProviderVerdict[] = [];
   let attempted = 0;
+
+  // Providers the builder left out on purpose, reported so the response says WHY the quorum is
+  // narrow. Guarded on absence from the list actually in use: a caller that hand-assembles its
+  // providers (every test that passes a literal array) may legitimately include a cerebras cfg,
+  // and claiming a skip that did not happen would be the same lie in the other direction.
+  const skippedField: FactCheckProviderSkip[] = [];
+  const cerebrasSkip = cerebrasDeadModelSkip();
+  if (cerebrasSkip && !providers.some((p) => p.name === 'cerebras')) skippedField.push(cerebrasSkip);
+  const skipped = skippedField.length ? { skipped: skippedField } : {};
   if (costOrdered) {
     const rank = (p: FactCheckProviderCfg) => ({ free: 0, cheap: 1, escalation: 2 })[p.tier ?? costTierOf({ name: p.name, family: familyByName.get(p.name) })];
     const waves = [0, 1, 2].map((r) => activeProviders.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
@@ -987,7 +1006,7 @@ export async function factCheck(
         degraded: true,
         latency_ms: Date.now() - start,
         quorum,
-        provider_health: { attempted: attempted, succeeded: 0, failed },
+        provider_health: { attempted: attempted, succeeded: 0, failed, ...skipped },
         fallback_used: 'local_slm',
         confidence: 'degraded',
       };
@@ -996,7 +1015,7 @@ export async function factCheck(
     // No truth signal available — neutral score; caller falls back to extractor.
     return {
       hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
-      quorum, provider_health: { attempted: attempted, succeeded: 0, failed },
+      quorum, provider_health: { attempted: attempted, succeeded: 0, failed, ...skipped },
       quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
       ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
       ...(weightDedupField ? { weight_dedup: weightDedupField } : {}),
@@ -1367,7 +1386,7 @@ export async function factCheck(
 
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
-    quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed },
+    quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed, ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
@@ -1446,6 +1465,69 @@ function quorumAutoBackfillOn(): boolean {
  * included only when it is BOTH enabled AND its API key is present. Model
  * defaults / overrides are unchanged (HAL_S2_*_MODEL still apply).
  */
+/** A provider deliberately NOT called, with the reason a reader needs to act on it. */
+export type FactCheckProviderSkip = { name: string; reason: string };
+
+/**
+ * Why cerebras is being left out of the quorum, or null if it is not being left out.
+ *
+ * THERE IS NO CEREBRAS DEFAULT MODEL ANY MORE, and that is the fix, not an omission. Both ids
+ * this repo has ever shipped are in RETIRED_MODELS: 4.7 archived by the vendor mid-day on
+ * 2026-08-17, and 4.6 — picked from documentation to replace it, shipped under an explicit
+ * NOT_CHECKED caveat — 404ing `model_not_found` on every call it ever made. A default that
+ * cannot answer is not a default; it is a guaranteed wasted request on every fact-check,
+ * reported as a `partial` quorum. Naming a THIRD id would need evidence, and the only thing
+ * reachable from a dev sandbox is a docs page — which is precisely what produced 4.6.
+ *
+ * THE BUILDER AND THE REPORTER BOTH CALL THIS, so a response can never claim a skip that did
+ * not happen, nor stay silent about one that did.
+ *
+ * WHY THIS OVERRULES AN OPERATOR OVERRIDE, where the sibling guard on gemini deliberately does
+ * not (`tests/hal-gemini-model-default.test.ts`: "an override may legitimately be anything").
+ * That list is a test-side assertion about what the DEFAULT may be and never blocks a call.
+ * This blocks at runtime because the facts differ in kind: gemini's retirement was inferred
+ * from documentation, while these are measured against this system's own ledger — and the
+ * override IS the live production bug, since production pins HAL_S2_CEREBRAS_MODEL to an
+ * archived id. A guard on the default alone would have fixed nothing where it mattered.
+ *
+ * THE OPERATOR KEEPS THE LAST WORD, which is what makes a runtime block defensible:
+ * HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL=true forces the provider back in unchanged. Setting
+ * HAL_S2_CEREBRAS_MODEL to any live id does the same. Neither needs a release — the list is
+ * our belief about the vendor, and an operator who has just been granted access must not have
+ * to wait for us to agree.
+ */
+export function cerebrasDeadModelSkip(): FactCheckProviderSkip | null {
+  // NO KEY and OFF-BY-FLAG are different facts, and reporting either as a dead-model skip sends
+  // the reader to the wrong fix — "rotate the model id" when the answer is "add a credential".
+  // Caught by the test that asserts an unkeyed build claims no skip at all.
+  if (!process.env.CEREBRAS_API_KEY?.trim()) return null;
+  if (process.env.HAL_S2_ENABLE_CEREBRAS === 'false') return null;
+
+  const model = process.env.HAL_S2_CEREBRAS_MODEL?.trim();
+  const revive = 'Set HAL_S2_CEREBRAS_MODEL to a live id to rejoin the quorum.';
+
+  // NOT CONFIGURED IS CHECKED BEFORE THE ALLOW FLAG, and the order is load-bearing: the flag
+  // means "call this retired id anyway", which is meaningless when there is no id. Checking it
+  // first would make an operator who set only the flag lose the provider AND the explanation —
+  // the silent absence this whole change exists to eliminate.
+  if (!model) {
+    return {
+      name: 'cerebras',
+      reason:
+        `not called: no model configured, and every id this build has shipped is retired ` +
+        `(${retiredModelsFor('cerebras').map((m) => `${m.id}, ${m.died}`).join('; ')}). ${revive}`,
+    };
+  }
+  if (process.env.HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL === 'true') return null;
+  if (!isRetiredModel(model)) return null;
+  return {
+    name: 'cerebras',
+    reason:
+      `not called: configured model '${model}' is retired and 404s on every call. ${revive} ` +
+      `Or set HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL=true to call it anyway.`,
+  };
+}
+
 export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
   // Auto-backfill: OR the passed enable flag with the default-on backfill so a backfill family is
@@ -1470,11 +1552,22 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // green build here as NOT_CHECKED on these two strings.
   const g = process.env.GROQ_API_KEY?.trim();
   if (g && enabled.groq) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'openai/gpt-oss-20b' });
-  // cerebras `llama3.1-8b` 404s on this key (no access). zai-glm-4.6 is the predecessor of the
-  // archived 4.7 and returns its verdict the same way (in `reasoning` — handled in queryProvider)
-  // given enough max_tokens, so the parsing path is unchanged.
+  // CEREBRAS HAS NO DEFAULT MODEL, deliberately — see cerebrasDeadModelSkip(). The replacement
+  // named in the NOT_CHECKED caveat above never worked: the ledger says every call it made
+  // 404'd, so both ids this repo has shipped are now in RETIRED_MODELS. Without an id from
+  // HAL_S2_CEREBRAS_MODEL there is nothing live to dial, and inventing a third one from the only
+  // source a sandbox can reach — a docs page — is exactly what produced the dead one.
+  //
+  // The skip is REPORTED, never silent: `provider_health.skipped` carries the reason and the
+  // recovery. That is the whole point. An unreported skip would make cerebras look like a
+  // provider that was never configured — the failure mode `hal-gemini-model-default.test.ts`
+  // was written about — and a reported 404 is already better than a silent absence, so only a
+  // reported SKIP is an improvement on the bug this replaces.
   const c = process.env.CEREBRAS_API_KEY?.trim();
-  if (c && enabled.cerebras) out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'zai-glm-4.6' });
+  const cerebrasModel = process.env.HAL_S2_CEREBRAS_MODEL?.trim();
+  if (c && enabled.cerebras && cerebrasModel && !cerebrasDeadModelSkip()) {
+    out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: cerebrasModel });
+  }
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
   // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
