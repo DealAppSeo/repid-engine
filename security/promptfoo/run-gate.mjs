@@ -71,19 +71,37 @@ function promptfooAvailable() {
   const bin = process.env.PROMPTFOO_BIN;
   const cmd = bin ?? 'npx';
   const args = bin ? ['--version'] : ['--yes', `promptfoo@${PINNED_PROMPTFOO}`, '--version'];
+
+  // CAPTURE THE FAILURE, DON'T JUST REPORT ONE. The first version of this returned a bare
+  // boolean, so when it failed in CI the log said only "not invocable" and the next fix had
+  // to be a guess. Two guesses were spent that way. The exit code and the last of stderr are
+  // what turn the next iteration into a measurement.
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: HERE, stdio: 'ignore' });
+    const child = spawn(cmd, args, { cwd: HERE, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    const grab = (buf) => {
+      out += buf.toString();
+      if (out.length > 4000) out = out.slice(-4000); // keep the tail; errors land at the end
+    };
+    child.stdout?.on('data', grab);
+    child.stderr?.on('data', grab);
+
+    const started = Date.now();
+    const done = (ok, why) =>
+      resolve({ ok, why, seconds: Math.round((Date.now() - started) / 1000), output: out.trim() });
+
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      resolve(false);
-    }, 120_000);
+      done(false, 'timed out after 240s');
+    }, 240_000);
+
     child.on('exit', (code) => {
       clearTimeout(timer);
-      resolve(code === 0);
+      done(code === 0, code === 0 ? 'ok' : `exit ${code}`);
     });
-    child.on('error', () => {
+    child.on('error', (err) => {
       clearTimeout(timer);
-      resolve(false);
+      done(false, `spawn failed: ${err.code ?? err.message}`);
     });
   });
 }
@@ -218,11 +236,13 @@ async function main() {
     // Costs one `--version` and removes an entire class of dishonest verdict. Without it a
     // missing binary makes every tier exit 127, which the canary check below used to read as
     // "assertions are live".
-    if (!(await promptfooAvailable())) {
+    const pf = await promptfooAvailable();
+    if (!pf.ok) {
       summarise(
         [
-          'promptfoo is not invocable — nothing was evaluated.',
-          `Set PROMPTFOO_BIN to an installed binary, or allow npx to fetch promptfoo@${PINNED_PROMPTFOO}.`,
+          `promptfoo is not invocable (${pf.why}, after ${pf.seconds}s) — nothing was evaluated.`,
+          `Command: ${process.env.PROMPTFOO_BIN ?? `npx --yes promptfoo@${PINNED_PROMPTFOO}`} --version`,
+          pf.output ? `Its output (tail): ${pf.output.replace(/\s+/g, ' ').slice(-600)}` : 'It produced no output.',
           'Reported as NOT_CHECKED, not FAILED: "we could not look" is not "HAL is broken".',
         ],
         'NOT_CHECKED',
