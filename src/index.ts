@@ -19,6 +19,7 @@ import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
+import socialQueueRouter from './routes/social-queue';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import agentKeysRouter from './routes/v1/agent-keys';
 import serviceManifestRouter from './routes/v1/service-manifest';
@@ -244,6 +245,11 @@ app.use((req, res, next) => {
   if (req.path === '/api/v1/agent/process-contracts') return next();
   // Phase 2: HAL evaluation payload accepts free-form text that may contain SQL keywords or semicolons
   if (req.path === '/api/v1/hal/evaluate') return next();
+  // Social drafts are PROSE. A post contains semicolons, dashes and the words "select" and
+  // "update" as a matter of course, so the blanket scan would 400 nearly every real draft and
+  // the queue would stay empty while looking wired — the same one-end-wired failure already
+  // documented above for lessons and the substance gate. Authed, length-capped, parameterized.
+  if (req.path === '/api/v1/social/drafts') return next();
   // CC1 2026-05-25: /repid/verify + /prove-repid carry base64url signatures whose
   // alphabet includes '-', so a valid signature can contain '--' and the blanket SQL
   // scan intermittently 400s legitimate signed requests (also a flaky-test source).
@@ -470,6 +476,13 @@ app.use(authMiddleware);
 // turning a mechanism for honesty into a griefing primitive.
 // (The read-only /repid/confession-preview inside this router is harmless either way.)
 app.use('/api/v1', repidConfessRouter);
+
+// SOCIAL PUBLISH QUEUE (2026-08-28). Mounted AFTER authMiddleware, unlike /hal/evaluate:
+// evaluating text is a public primitive anyone may call, but writing a row that a scheduler
+// may later publish is not. The gate that actually blocks an unverified post is the
+// `social_content_queue_verified_before_publish` CHECK in Postgres, not this router — see
+// src/services/social-publish-gate.ts for why enforcement cannot live in application code.
+app.use('/api/v1/social', socialQueueRouter);
 
 app.use('/api', llmRouter);
 

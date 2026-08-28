@@ -139,6 +139,14 @@ The engine reads/writes only these tables (no migrations live in this repo — s
 - `trinity_agent_logs` — auth / ZKP / monitoring events (write-only from this codebase)
 - `hal_production_events` — HAL production logging
 - `api_key_versions` — version-pinning per API key (auto-created on first request)
+- `social_content_queue` — the publish queue. **Its gate is a DB CHECK, not app code**:
+  `social_content_queue_verified_before_publish` refuses any row in a publishable state
+  (`ready`/`approved`/`scheduled`/`posted`) unless `hal_decision` is set and is not `vetoed`.
+  A NULL verdict means NOT CHECKED and is refused — not checked is not the same as passed.
+  It is `NOT VALID`, grandfathering rows that predate verification; validate it once those are
+  cleared. Write through `src/services/social-publish-gate.ts` so the verdict is recorded
+  honestly — but do not treat that module as the enforcement point, which is the whole reason
+  the constraint exists.
 
 The Supabase project ID is **not** committed; the only artifacts are `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` injected at runtime.
 
