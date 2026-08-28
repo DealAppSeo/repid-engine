@@ -7,6 +7,24 @@
 
 (global as any)._api_key_versions_table_checked = true;
 
+/**
+ * These tests exercise the HANDLER — UUID validation, required fields, response
+ * shape, idempotent replay, 404 — none of which is about authentication.
+ *
+ * Sprint A8 put a credential in front of this route (see the route's header for
+ * the measured reason). Rather than bolt a mocked key onto five tests that are
+ * not about auth, they run under the documented escape hatch, which restores the
+ * exact pre-A8 request path. That keeps each test asserting one thing.
+ *
+ * THE AUTH CONTRACT ITSELF IS NOT TESTED HERE — it is in
+ * tests/agents-external-score-auth.test.ts, which drives both branches. Splitting
+ * them matters: if the auth tests lived in this file under this flag, they would
+ * be asserting the open path while claiming to prove the closed one.
+ *
+ * Set before importing src/index so the route is mounted with the flag visible.
+ */
+process.env.SCORE_EVENT_PUBLIC_ALPHA = 'true';
+
 jest.mock('../src/scoring/pipeline', () => {
   const actual = jest.requireActual('../src/scoring/pipeline');
   return {
