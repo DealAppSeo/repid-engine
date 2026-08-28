@@ -105,6 +105,19 @@ export interface FactCheckProviderCfg {
    * underneath it must never be mistaken for one taken at the pinned configuration.
    */
   selection?: ModelChoice;
+  /**
+   * Which wire format this endpoint speaks. Absent ⇒ 'openai', so every existing entry and every
+   * caller-supplied literal array is unchanged.
+   *
+   * WHY THIS EXISTS. `ANTHROPIC_API_KEY` is live on this deployment and has been all along —
+   * MEASURED at 3,374 successes against 5 failures lifetime, most recently today via the
+   * adversarial judge. It is an independent `claude` family, on its own account, and the
+   * fact-check quorum has never once used it. Not for want of a key or a decision: purely because
+   * `queryProvider` speaks only Bearer + `/chat/completions`, and Anthropic's API is `x-api-key` +
+   * `/v1/messages` with a different body and a different response shape. A working, independent
+   * voice sat one adapter away from a quorum that has been running three families wide.
+   */
+  dialect?: 'openai' | 'anthropic';
 }
 
 /**
@@ -548,21 +561,83 @@ export function redactProviderError(body: string): string {
  * Free tiers (esp. groq) rate-limit under burst; one short backoff turns a transient 429 into a
  * success without blowing the per-provider timeout. Honors a numeric Retry-After when present.
  */
-async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal: AbortSignal): Promise<Response> {
-  let res = await fetch(cfg.endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body, signal,
+export function providerHeaders(cfg: FactCheckProviderCfg): Record<string, string> {
+  if (cfg.dialect === 'anthropic') {
+    // Anthropic authenticates with x-api-key and REQUIRES a version header; a Bearer token is
+    // rejected outright. Exported so a test can assert the key never goes out as a Bearer.
+    return {
+      'Content-Type': 'application/json',
+      'x-api-key': cfg.apiKey,
+      'anthropic-version': process.env.HAL_S2_ANTHROPIC_VERSION ?? '2023-06-01',
+    };
+  }
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` };
+}
+
+/**
+ * Build the request body for this provider's dialect.
+ *
+ * Anthropic takes the system prompt as a TOP-LEVEL `system` field rather than a message with
+ * `role: 'system'` — passing one in `messages` is a 400. Exported for the same reason as the
+ * headers: the shapes are the whole of the adapter, and they are worth asserting directly.
+ */
+export function providerBody(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number): string {
+  const user = factCheckPrompt(deliverable);
+  if (cfg.dialect === 'anthropic') {
+    return JSON.stringify({
+      model: cfg.model,
+      system: FACT_CHECK_SYSTEM,
+      messages: [{ role: 'user', content: user }],
+      max_tokens: maxTokens,
+      temperature: 0,
+    });
+  }
+  return JSON.stringify({
+    model: cfg.model,
+    messages: [
+      { role: 'system', content: FACT_CHECK_SYSTEM },
+      { role: 'user', content: user },
+    ],
+    max_tokens: maxTokens,
+    temperature: 0,
   });
+}
+
+/** Pull the answer text and token usage out of whichever response shape came back. */
+export function parseProviderResponse(cfg: FactCheckProviderCfg, data: any): { content: string; tokensIn: number; tokensOut: number } {
+  if (cfg.dialect === 'anthropic') {
+    // Content is an array of typed blocks; concatenate the text ones so a response split across
+    // blocks is not silently truncated to the first.
+    const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
+    return {
+      content: blocks.filter((b) => typeof b?.text === 'string').map((b) => b.text).join(''),
+      tokensIn: data?.usage?.input_tokens || 0,
+      tokensOut: data?.usage?.output_tokens || 0,
+    };
+  }
+  const msg = data?.choices?.[0]?.message ?? {};
+  return {
+    // Reasoning models (cerebras zai-glm / gpt-oss) put output in `reasoning` or
+    // `reasoning_content`, not `content` — fall through all three so they parse.
+    content: msg.content || msg.reasoning_content || msg.reasoning || '',
+    tokensIn: data?.usage?.prompt_tokens || 0,
+    tokensOut: data?.usage?.completion_tokens || 0,
+  };
+}
+
+/**
+ * POST to a provider's chat endpoint with a single jittered retry on HTTP 429.
+ * Free tiers (esp. groq) rate-limit under burst; one short backoff turns a transient 429 into a
+ * success without blowing the per-provider timeout. Honors a numeric Retry-After when present.
+ */
+async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal: AbortSignal): Promise<Response> {
+  const headers = providerHeaders(cfg);
+  let res = await fetch(cfg.endpoint, { method: 'POST', headers, body, signal });
   if (res.status === 429) {
     const ra = Number(res.headers?.get?.('retry-after'));
     const waitMs = Math.min(3000, (Number.isFinite(ra) && ra > 0 ? ra * 1000 : 800) + Math.floor(Math.random() * 400));
     await new Promise((r) => setTimeout(r, waitMs));
-    res = await fetch(cfg.endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body, signal,
-    });
+    res = await fetch(cfg.endpoint, { method: 'POST', headers, body, signal });
   }
   return res;
 }
@@ -581,15 +656,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     // below → returned as this provider's ERROR verdict (quorum degrades gracefully),
     // never a silent cloud call. Mirrors cross-llm-client.queryProvider's prompt guard.
     assertPromptEgressAllowed(cfg.endpoint, 'prompt');
-    const res = await postWith429Retry(cfg, JSON.stringify({
-      model: cfg.model,
-      messages: [
-        { role: 'system', content: FACT_CHECK_SYSTEM },
-        { role: 'user', content: factCheckPrompt(deliverable) },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0,
-    }), controller.signal);
+    const res = await postWith429Retry(cfg, providerBody(cfg, deliverable, maxTokens), controller.signal);
     const latency_ms = Date.now() - start;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -609,13 +676,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
       return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error: `HTTP ${res.status}: ${redactProviderError(body)}`, latency_ms };
     }
     const data: any = await res.json();
-    const msg = data?.choices?.[0]?.message ?? {};
-    // Reasoning models (cerebras zai-glm / gpt-oss) put output in `reasoning` or `reasoning_content`,
-    // not `content` — fall through all three so they parse.
-    const content: string = msg.content || msg.reasoning_content || msg.reasoning || '';
-    
-    const tokensIn = data.usage?.prompt_tokens || 0;
-    const tokensOut = data.usage?.completion_tokens || 0;
+    const { content, tokensIn, tokensOut } = parseProviderResponse(cfg, data);
     const cost_usd = calculateCost(cfg.name, cfg.model, tokensIn, tokensOut);
 
     if (!content.trim()) {
@@ -1484,6 +1545,8 @@ export interface FactCheckProviderEnable {
   openrouter?: boolean;
   /** Gloo (router) — opt-in, never auto-backfilled. Optional so existing callers compile. */
   gloo?: boolean;
+  /** Anthropic direct — independent `claude` family, escalation tier. Optional so callers compile. */
+  anthropic?: boolean;
 }
 
 /**
@@ -1852,6 +1915,41 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
       family: process.env.HAL_S2_GLOO_FAMILY ?? 'anthropic',
     });
   }
+  // ANTHROPIC DIRECT — the independent 5th family that was already paid for and never used.
+  //
+  // MEASURED on this deployment's own ledger (2026-08-28): ANTHROPIC_API_KEY has 3,374 successes
+  // against 5 failures lifetime, most recently the same day, via the adversarial judge. It is the
+  // most reliable credential in the fleet by success ratio, it is a family (`claude`) no other
+  // quorum member covers, and it is on its own account — so unlike the or-* members it shares no
+  // failure mode with OpenRouter. The only reason it was never a voter is that this builder could
+  // not speak its wire format.
+  //
+  // ESCALATION TIER, DELIBERATELY, AND IT IS NOT A HEDGE. Under cost-ordered assembly (the default)
+  // waves run free → cheap → escalation and stop the moment two families answer, so this costs
+  // NOTHING while the free wave is healthy and fires only when that wave cannot form a quorum —
+  // which is the exact scenario that has been leaving the panel narrow. Standing membership would
+  // widen the panel on every call and would also start spending on every call; that is a cost
+  // decision to make deliberately, not a side effect of adding an adapter. Promote it by setting
+  // HAL_QUORUM_COST_ORDERED=false or HAL_S2_ANTHROPIC_TIER=free.
+  //
+  // Auto-backfilled on key presence like the other resilience members, since an escalation member
+  // that never fires costs nothing to have.
+  const an = process.env.ANTHROPIC_API_KEY?.trim();
+  if (an && (process.env.HAL_S2_ENABLE_ANTHROPIC !== 'false') && (enabled.anthropic || ab)) {
+    add(
+      {
+        name: 'anthropic',
+        endpoint: process.env.HAL_S2_ANTHROPIC_ENDPOINT ?? 'https://api.anthropic.com/v1/messages',
+        apiKey: an,
+        family: 'anthropic',
+        dialect: 'anthropic',
+        tier: process.env.HAL_S2_ANTHROPIC_TIER === 'free' ? 'free' : 'escalation',
+      },
+      'HAL_S2_ANTHROPIC_MODEL',
+      // The id the ledger shows answering on this key today — measured, not read off a docs page.
+      'claude-haiku-4-5-20251001',
+    );
+  }
   // qwen stays opt-in (endpoint region varies per key) — NOT auto-backfilled.
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
   if (qw && enabled.qwen) {
@@ -1868,7 +1966,16 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const frontierOn = process.env.HAL_S2_ENABLE_FRONTIER === 'true';
   if (orFront && frontierOn) {
     out.push({ name: 'or-gpt', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_OPENAI_MODEL ?? 'openai/gpt-4o', family: 'openai', tier: 'escalation' });
-    out.push({ name: 'or-claude', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
+    // PREFER THE DIRECT ACCOUNT OVER THE AGGREGATOR FOR THE SAME FAMILY. `or-claude` declares
+    // family 'anthropic', and so does the direct member added above — with both present they are
+    // ONE vote, not two, and `assertFamilyIndependenceAtBoot` would (correctly) log a violation
+    // that did not exist before the direct member was added. Dropping the routed one keeps the
+    // panel honest and picks the better of the two: its own account and credit pool rather than
+    // OpenRouter's shared one. Same reasoning as gemini-direct above. If the direct key is absent,
+    // or-claude is added exactly as before.
+    if (!out.some((p) => p.family === 'anthropic')) {
+      out.push({ name: 'or-claude', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
+    }
   }
   // FREE FRONTIER MEMBER (opt-in, HAL_S2_ENABLE_FRONTIER_FREE, default OFF → prod unchanged).
   // DELIBERATELY INDEPENDENT of HAL_S2_ENABLE_FRONTIER: that flag's two-member panel is already a
@@ -1901,7 +2008,28 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // this builder is openai-compat, so all are redirected. Unset → endpoints unchanged (hosted path).
   const localBase = (process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '').trim();
   if (localBase) {
-    for (const p of out) p.endpoint = resolveProviderEndpoint(p.endpoint, localBase, 'openai-compat');
+    // ONLY openai-compat members may be redirected. The comment this replaces said "every provider
+    // in this builder is openai-compat, so all are redirected" — true when written, false the
+    // moment the anthropic dialect was added below. Pointing an `/v1/messages` caller at a local
+    // openai-compat server sends a body that host cannot parse, so the redirect would convert a
+    // working self-hosted setup into a silently failing provider. A non-openai member is DROPPED
+    // rather than redirected: under a data-locality boundary, removing a cloud caller is the
+    // conservative outcome, and leaving its cloud endpoint in place would be an egress leak.
+    const kept: FactCheckProviderCfg[] = [];
+    for (const p of out) {
+      if ((p.dialect ?? 'openai') !== 'openai') {
+        console.warn(
+          `[hal] quorum: dropping ${p.name} under LOCAL_LLM_BASE_URL — its ${p.dialect} wire format ` +
+            `cannot be served by an openai-compat local endpoint, and redirecting it would send an ` +
+            `unparseable body. Unset the local base to use it.`,
+        );
+        continue;
+      }
+      p.endpoint = resolveProviderEndpoint(p.endpoint, localBase, 'openai-compat');
+      kept.push(p);
+    }
+    out.length = 0;
+    out.push(...kept);
   }
   // Tag the always-on hosts with their family (model-derived; explicit for clarity). CROSS-FIX
   // 2026-07-05 — registry-primary (familyOfResolved): accurate for registered models, legacy-regex

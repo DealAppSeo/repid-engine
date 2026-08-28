@@ -25,7 +25,13 @@ jest.mock('../src/db', () => ({
   db: { from: () => ({ insert: () => Promise.resolve({ error: null }) }) },
 }));
 
-import { buildFactCheckProvidersWith } from '../src/hal/fact-check';
+import {
+  auditFamilyIndependence,
+  buildFactCheckProvidersWith,
+  providerHeaders,
+  providerBody,
+  parseProviderResponse,
+} from '../src/hal/fact-check';
 import { parseModelIds, setCachedCatalog, catalogModelsFor, catalogIsMeasured } from '../src/hal/model-catalog';
 import { isModelNotFoundError, classifyEvidence, setCachedEvidence, isMeasuredDead } from '../src/hal/dead-model-evidence';
 import { selectModel, scoreCandidate, eligibleCandidates, type SelectionInput } from '../src/hal/model-selection';
@@ -39,7 +45,8 @@ const TOUCHED = [
   'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'MISTRAL_API_KEY',
   'DEEPSEEK_API_KEY', 'HAL_S2_GROQ_MODEL', 'HAL_S2_CEREBRAS_MODEL', 'HAL_S2_GEMINI_MODEL',
   'HAL_S2_OPENROUTER_MODEL', 'HAL_S2_GEMINI_VIA_OPENROUTER', 'HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL',
-  'HAL_QUORUM_AUTOBACKFILL',
+  'HAL_QUORUM_AUTOBACKFILL', 'ANTHROPIC_API_KEY', 'HAL_S2_ANTHROPIC_MODEL', 'HAL_S2_ANTHROPIC_TIER',
+  'HAL_S2_ENABLE_ANTHROPIC', 'LOCAL_LLM_BASE_URL', 'OPENAI_BASE_URL', 'HAL_S2_ENABLE_FRONTIER',
 ];
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
@@ -352,6 +359,150 @@ describe('gemini routes DIRECT by default — splitting it from the shared OpenR
     );
     const hosts = out.map((p) => new URL(p.endpoint).host);
     expect(new Set(hosts).size).toBe(out.length); // no two members share an account
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+describe('the anthropic dialect — an independent family that was already paid for', () => {
+  const cfg = {
+    name: 'anthropic',
+    endpoint: 'https://api.anthropic.com/v1/messages',
+    apiKey: 'test-key-not-real',
+    model: 'claude-haiku-4-5-20251001',
+    dialect: 'anthropic' as const,
+  };
+  const oai = { name: 'groq', endpoint: 'https://x/v1/chat/completions', apiKey: 'test-key-not-real', model: 'm' };
+
+  it('authenticates with x-api-key and a version header — NEVER as a Bearer token', () => {
+    // Not cosmetic. Anthropic rejects a Bearer outright, so getting this wrong is a 401 that looks
+    // like a dead key; and sending a credential under the wrong scheme is worth pinning on its own.
+    const h = providerHeaders(cfg);
+    expect(h['x-api-key']).toBe('test-key-not-real');
+    expect(h['anthropic-version']).toBeTruthy();
+    expect(h['Authorization']).toBeUndefined();
+  });
+
+  it('the openai dialect is untouched — this is the regression that matters', () => {
+    const h = providerHeaders(oai);
+    expect(h['Authorization']).toBe('Bearer test-key-not-real');
+    expect(h['x-api-key']).toBeUndefined();
+  });
+
+  it('the system prompt is a TOP-LEVEL field, not a system message', () => {
+    // Anthropic 400s on a `role: "system"` entry in `messages`. A body that merely looks close
+    // enough would fail on the first real call and read as an outage.
+    const b = JSON.parse(providerBody(cfg, 'the sky is blue', 64));
+    expect(typeof b.system).toBe('string');
+    expect(b.messages).toHaveLength(1);
+    expect(b.messages[0].role).toBe('user');
+    expect(b.messages.some((m: any) => m.role === 'system')).toBe(false);
+  });
+
+  it('…and stays a system message on the openai dialect', () => {
+    const b = JSON.parse(providerBody(oai, 'the sky is blue', 64));
+    expect(b.messages[0].role).toBe('system');
+    expect(b.system).toBeUndefined();
+  });
+
+  it('reads content blocks and its own token fields', () => {
+    const parsed = parseProviderResponse(cfg, {
+      content: [{ type: 'text', text: '{"verdict":' }, { type: 'text', text: '"TRUE"}' }],
+      usage: { input_tokens: 11, output_tokens: 7 },
+    });
+    // Concatenated, not first-block-only: a verdict split across blocks must not be truncated
+    // into unparseable JSON, which would surface as a phantom provider failure.
+    expect(parsed.content).toBe('{"verdict":"TRUE"}');
+    expect(parsed.tokensIn).toBe(11);
+    expect(parsed.tokensOut).toBe(7);
+  });
+
+  it('a non-text block is skipped rather than crashing the parse', () => {
+    const parsed = parseProviderResponse(cfg, { content: [{ type: 'thinking' }, { type: 'text', text: 'ok' }] });
+    expect(parsed.content).toBe('ok');
+  });
+
+  it('openai responses still parse, reasoning fallbacks included', () => {
+    expect(parseProviderResponse(oai, { choices: [{ message: { content: 'a' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }))
+      .toEqual({ content: 'a', tokensIn: 2, tokensOut: 3 });
+    expect(parseProviderResponse(oai, { choices: [{ message: { reasoning: 'r' } }] }).content).toBe('r');
+  });
+
+  it('joins the quorum as its own family, on its own account, at escalation tier', () => {
+    const out = withEnv({ ANTHROPIC_API_KEY: 'k', GROQ_API_KEY: 'k', OPENROUTER_API_KEY: 'k' }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF, groq: true }),
+    );
+    const a = out.find((p) => p.name === 'anthropic');
+    expect(a).toBeDefined();
+    expect(a!.family).toBe('anthropic');
+    expect(a!.dialect).toBe('anthropic');
+    expect(a!.tier).toBe('escalation'); // costs nothing while the free wave forms a quorum
+    // The whole point: a family nobody else covers, reached without OpenRouter in the path.
+    expect(new URL(a!.endpoint).host).toBe('api.anthropic.com');
+    expect(out.filter((p) => p.family === 'anthropic')).toHaveLength(1);
+  });
+
+  it('LOCAL_LLM_BASE_URL DROPS it rather than pointing /v1/messages at an openai server', () => {
+    // The bug this prevents: the redirect loop used to assume every member was openai-compat, so
+    // it would have rewritten this endpoint and posted a body the local host cannot parse —
+    // converting a working self-hosted setup into a silently failing provider. Dropping is also
+    // the conservative choice under a data-locality boundary: leaving the cloud endpoint would
+    // be an egress leak.
+    const out = withEnv({ ANTHROPIC_API_KEY: 'k', GROQ_API_KEY: 'k', LOCAL_LLM_BASE_URL: 'http://127.0.0.1:11434/v1' }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF, groq: true }),
+    );
+    expect(out.find((p) => p.name === 'anthropic')).toBeUndefined();
+    // …and the openai-compat member IS still redirected, so the local path keeps working.
+    expect(out.find((p) => p.name === 'groq')!.endpoint).toContain('127.0.0.1');
+  });
+
+  it('the direct account WINS over the routed one for the same family', () => {
+    // Without this the frontier panel would put `or-claude` (family 'anthropic', via OpenRouter)
+    // alongside the direct member — two hosts, ONE vote — and trip the family-independence audit
+    // with a violation the direct member itself introduced. Prefer the independent account.
+    const out = withEnv(
+      { ANTHROPIC_API_KEY: 'k', OPENROUTER_API_KEY: 'k', GROQ_API_KEY: 'k', HAL_S2_ENABLE_FRONTIER: 'true' },
+      () => buildFactCheckProvidersWith({ ...ALL_OFF, groq: true }),
+    );
+    expect(out.filter((p) => p.family === 'anthropic')).toHaveLength(1);
+    expect(out.find((p) => p.family === 'anthropic')!.name).toBe('anthropic');
+    // Asserted on the anthropic family SPECIFICALLY, not on whole-panel independence.
+    //
+    // A blanket `independent === true` here fails, and for a reason that is NOT this change: with
+    // the frontier panel on, groq's default `openai/gpt-oss-20b` and or-gpt's `openai/gpt-4o` both
+    // resolve to family 'openai', so they already count as one vote. That collision predates the
+    // anthropic member and is out of scope here (frontier is default OFF, so production is
+    // unaffected) — but asserting the broad claim would have quietly attached a pre-existing bug
+    // to this diff, and later "fixing" the test would have buried it. Pinned narrowly, and the
+    // collision is reported rather than absorbed.
+    const collapsed = auditFamilyIndependence(out).collapsed;
+    expect(collapsed.map((c) => c.family)).not.toContain('anthropic');
+  });
+
+  it('PRE-EXISTING, recorded not fixed: groq and or-gpt are both family openai', () => {
+    // Documented here because this suite is where it surfaced. With HAL_S2_ENABLE_FRONTIER=true
+    // the panel counts two 'openai' hosts as two votes in its width while the audit says they are
+    // one — and the frontier panel's recorded F1 was measured at exactly that configuration. Not
+    // touched in this change: frontier is default OFF, so no live quorum is affected, and fixing
+    // it means re-measuring a frozen number. If this test ever goes red because the collision is
+    // gone, delete it — that is the fix landing, not a regression.
+    const out = withEnv({ OPENROUTER_API_KEY: 'k', GROQ_API_KEY: 'k', HAL_S2_ENABLE_FRONTIER: 'true' }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF, groq: true }),
+    );
+    const openai = out.filter((p) => p.family === 'openai').map((p) => p.name).sort();
+    expect(openai).toEqual(['groq', 'or-gpt']);
+  });
+
+  it('…and without a direct key, the routed one is added exactly as before', () => {
+    const out = withEnv(
+      { OPENROUTER_API_KEY: 'k', GROQ_API_KEY: 'k', HAL_S2_ENABLE_FRONTIER: 'true' },
+      () => buildFactCheckProvidersWith({ ...ALL_OFF, groq: true }),
+    );
+    expect(out.find((p) => p.family === 'anthropic')!.name).toBe('or-claude');
+  });
+
+  it('no key, no member — presence is the only trigger', () => {
+    const out = withEnv({ GROQ_API_KEY: 'k' }, () => buildFactCheckProvidersWith({ ...ALL_OFF, groq: true }));
+    expect(out.find((p) => p.name === 'anthropic')).toBeUndefined();
   });
 });
 
