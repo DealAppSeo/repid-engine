@@ -39,6 +39,7 @@
     "x402:recovery-worker": "tsx scripts/x402/run-recovery-worker.ts",
     "install:hooks": "ts-node scripts/install-hooks.ts",
     "guard:prod-fixtures": "node scripts/hooks/prod-fixture-guard.js --ci",
+    "security:hal-gate": "node security/promptfoo/run-gate.mjs",
     "worktree:doctor": "ts-node scripts/git-worktree/doctor.ts",
     "verify:hal-dual-write": "ts-node scripts/verify-hal-dual-write.ts",
     "test:integration": "jest --config jest.integration.config.js --runInBand --forceExit",

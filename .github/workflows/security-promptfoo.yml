@@ -1,0 +1,106 @@
+# HAL adversarial gate — prompt-injection / jailbreak probes against the real
+# `POST /api/v1/hal/evaluate` route, driven by promptfoo.
+#
+# THIS IS A NEW WORKFLOW, NOT AN EDIT TO ci.yml. Nothing here can change the verdict of the
+# existing type-check / unit / integration jobs.
+#
+# THREE OUTCOMES, NEVER TWO. `security/promptfoo/run-gate.mjs` exits:
+#     0  VERIFIED     every tier ran and passed (and the failability canary failed as required)
+#     2  NOT_CHECKED  the key-free tier passed; the live-quorum tier could not run
+#     1  FAILED       a probe failed, the harness died, or the canary passed
+# The step below maps those back to the same three words and only fails the job on FAILED.
+# NOT_CHECKED is surfaced as a ::warning annotation and written to the job summary — a green
+# job here does NOT mean the live-quorum tier ran, and the summary always says which it was.
+#
+# WHY A NOT_CHECKED RUN IS STILL WORTH RUNNING: the key-free tier is not a no-op. It boots the
+# real route and asserts the injection screen, the 400 refusal path and the response contract,
+# so it fails for real on a fork with no secrets. And the run REFUSES to report a pass at all
+# until hal-failability-canary.yaml — a suite built to fail — has failed.
+#
+# TRIGGERS: `pull_request` is deliberately UNFILTERED, both by branch and by path. ci.yml
+# carries the same note for the same reason: a branch filter meant stacked PRs ran no tests
+# at all while looking checked, and a path filter would skip this gate on exactly the changes
+# most likely to move it (a refactor that stops calling scanForInjection touches neither the
+# guard nor the probes).
+#
+# NOT WIRED ON `push: main` YET — deliberate. The gate should accumulate a few PR runs before
+# it is allowed to redden the default branch. Adding `push: { branches: [main] }` here is the
+# intended follow-up, and is a one-line change.
+name: Security · HAL adversarial gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why this manual run — recorded on the run itself'
+        required: false
+        default: 'manual'
+  schedule:
+    # Weekly. Catches drift from merges that never touched a path a filter would have caught.
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  hal-adversarial:
+    name: HAL prompt-injection / jailbreak probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install (legacy peer deps per nixpacks.toml)
+        run: npm install --legacy-peer-deps
+
+      # Installed globally and PINNED, out of the project tree: promptfoo is a CI-only tool,
+      # and putting it in package.json would make every existing `npm install --legacy-peer-deps`
+      # (including ci.yml's) resolve it too. An unpinned version would let this gate's verdict
+      # change with no commit in this repo.
+      - name: Install promptfoo (pinned, outside the project tree)
+        run: npm install -g promptfoo@0.122.2
+
+      - name: Run the gate
+        id: gate
+        env:
+          PROMPTFOO_BIN: promptfoo
+          PROMPTFOO_DISABLE_TELEMETRY: '1'
+          PROMPTFOO_DISABLE_UPDATE: '1'
+          # Absent on forks and on this repo until someone adds them — an empty value is
+          # falsy to buildFactCheckProviders(), so the live-quorum tier simply does not run
+          # and the gate reports NOT_CHECKED. These two are the providers the default
+          # provider set enables without an extra HAL_S2_ENABLE_* flag.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+        run: |
+          set +e
+          node security/promptfoo/run-gate.mjs
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0)
+              echo "::notice title=HAL adversarial gate::VERIFIED — every tier ran and passed"
+              ;;
+            2)
+              echo "::warning title=HAL adversarial gate::NOT_CHECKED — the key-free tier passed, but the live-quorum tier did not run (no provider key). This is not a pass; see the job summary."
+              ;;
+            *)
+              echo "::error title=HAL adversarial gate::FAILED (runner exit $code)"
+              exit "$code"
+              ;;
+          esac
+
+      - name: Upload promptfoo results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hal-adversarial-results
+          path: security/promptfoo/.results/
+          if-no-files-found: warn
+          retention-days: 14

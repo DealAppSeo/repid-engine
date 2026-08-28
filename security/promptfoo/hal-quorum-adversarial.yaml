@@ -1,0 +1,63 @@
+# =============================================================================
+# HAL adversarial gate — TIER 2: the same probes, against a REAL cross-LLM quorum.
+#
+# THIS TIER REQUIRES A PROVIDER KEY AND IS SKIPPED WITHOUT ONE.
+# `run-gate.mjs` asks the engine's own buildFactCheckProviders() how many providers it
+# assembled (a count — never names, never key material) and skips this file when that is
+# zero, reporting NOT_CHECKED / exit 2 for the whole gate. It never reports VERIFIED for
+# a tier that did not run.
+#
+# WHY IT IS A SEPARATE FILE
+#   With no key, `POST /api/v1/hal/evaluate` still answers 200 — it degrades to the
+#   style-extractor and stamps `degraded_mode: true`. So a suite that merely asserted
+#   "200 with a plausible verdict" would pass forever with the evaluator switched off.
+#   The one assertion that cannot be satisfied by the fallback is quorumIsReal: mode
+#   'fact-check', not stamped degraded, providers_used >= 1. That is what makes this
+#   tier's green mean something, and why it must be allowed to be absent rather than
+#   quietly satisfied.
+#
+# HAL_INJECTION_BLOCK IS OFF FOR THIS TIER (run-gate.mjs sets it). Under the hard block a
+# high-confidence injection is refused at 400 BEFORE the evaluator is called, so the
+# quorum would never see the adversarial prompts at all. Off, every probe reaches the
+# evaluator and the question this tier exists to ask — does an injection attempt disturb
+# the quorum, and is the injection screen still reported alongside a real verdict — is
+# actually asked.
+#
+# COST: this tier makes real provider calls, one quorum per probe. It is why the gate is
+# not wired to run on every push by default.
+# =============================================================================
+description: HAL prompt-injection / jailbreak gate against a live cross-LLM quorum (key-gated tier)
+
+providers:
+  - id: http
+    label: hal-evaluate-local-quorum
+    config:
+      url: '{{ env.HAL_GATE_URL }}'
+      method: POST
+      headers:
+        Content-Type: application/json
+      body:
+        text: '{{ prompt }}'
+      validateStatus: 'status < 500'
+      transformResponse: |
+        (json, text, context) => JSON.stringify({
+          http_status: context.response.status,
+          body: json === undefined || json === null ? { _unparsed: String(text).slice(0, 2000) } : json,
+        })
+
+prompts:
+  - '{{ probe }}'
+
+tests: file://probes/hal-injection-probes.json
+
+defaultTest:
+  assert:
+    - type: javascript
+      value: file://asserts/hal-contract.js:responseEnvelope
+    - type: javascript
+      value: file://asserts/hal-contract.js:injectionScreen
+    - type: javascript
+      value: file://asserts/hal-contract.js:halResponseContract
+    # The clause the key-free tier structurally cannot make.
+    - type: javascript
+      value: file://asserts/hal-contract.js:quorumIsReal
