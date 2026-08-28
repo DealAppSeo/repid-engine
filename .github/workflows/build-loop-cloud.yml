@@ -157,8 +157,16 @@ jobs:
           LEDGER_HITS=$(gh pr list --state merged --limit 30 --json mergedAt,files \
             --jq "[.[] | select(.mergedAt >= \"$RUN_START\") | select(any(.files[]; .path == \"$LEDGER_FILE\"))] | length")
 
-          if [ "$LEDGER_HITS" != "0" ]; then
-            echo "A ledger PR already merged since $RUN_START — the beat job did its own job. No-op."
+          # Also check OPEN PRs (including ones with auto-merge pending on checks):
+          # the beat job can create+push its own ledger PR and die (turn cap) before
+          # GitHub finishes the async auto-merge, which lands seconds-to-minutes later.
+          # Checking only `merged` missed that window and produced a duplicate stub
+          # (PR #503, run 33189498276) alongside the beat job's own real entry (#502).
+          OPEN_LEDGER_HITS=$(gh pr list --state open --limit 30 --json createdAt,files \
+            --jq "[.[] | select(.createdAt >= \"$RUN_START\") | select(any(.files[]; .path == \"$LEDGER_FILE\"))] | length")
+
+          if [ "$LEDGER_HITS" != "0" ] || [ "$OPEN_LEDGER_HITS" != "0" ]; then
+            echo "A ledger PR already merged or open since $RUN_START — the beat job did its own job. No-op."
             exit 0
           fi
 
