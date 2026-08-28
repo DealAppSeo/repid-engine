@@ -62,6 +62,36 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && (req.path === '/api/v1/services' || req.path.startsWith('/api/v1/services/'))) {
     return next();
   }
+
+  // GET /api/v1/grants — MEASURED BROKEN IN PRODUCTION, 2026-08-28.
+  //
+  // trustshell.dev's Grants screen calls this with no key (`listGrantsFor` in
+  // lib/repid-engine.ts sends no auth header, exactly like its Passport and Market reads).
+  // The live endpoint answered `401 Unauthorized: API key required` to that exact request,
+  // while /api/v1/hal/stats answered 200 from the same client — so this was auth, not an
+  // outage. The screen has therefore never been able to read a single grant: its client
+  // maps any non-ok response to 'error', so the failure renders as a generic error state
+  // rather than as "you are not authenticated", and nothing upstream ever said otherwise.
+  //
+  // That makes it the same defect this codebase keeps paying for: a feature built complete,
+  // wired at both ends by inspection, and non-functional in production because the two ends
+  // disagreed about one thing nobody executed.
+  //
+  // GET ONLY, and the method check is the whole control. This router also carries
+  // POST /grants (mint), POST /grants/:id/revoke and POST /grants/:id/authorize, which
+  // change who may act on whose behalf and MUST stay authed. An exact path match rather
+  // than `startsWith` for the same reason.
+  //
+  // Verified against the table before opening it: principal_grants holds the authority
+  // record only — grantor/grantee ids, parent, depth, class, capabilities, caveats, role,
+  // validity window, revocation, mint reason, an idempotency token, and the grantor's
+  // signature plus the public address that produced it. No key or secret material is
+  // reachable through `select('*')` here. The signature and address are the PROOF a grant
+  // is genuine; publishing them is the point of a verifiable authority record, and neither
+  // authorizes anything on its own — minting still requires an API key.
+  if (req.method === 'GET' && req.path === '/api/v1/grants') {
+    return next();
+  }
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/run-round-anonymous') return next();
   if (req.method === 'POST' && req.path === '/api/v1/builder/token-signup') return next();
