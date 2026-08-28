@@ -1,0 +1,160 @@
+# XC / GA cloud dispatch — FULLY CLOUD (zero local footprint), same shape as
+# hyperdag-build-loop-cloud.yml (T12). Setup: docs/CLOUD_DISPATCH_SETUP.md
+#
+# This wraps the EXISTING, unmodified scripts/dispatch/run-agent.mjs — the local
+# dispatcher for XC (grok) / GA (gemini) — so it can run from a GitHub Actions
+# runner instead of Sean's Windows machine. It adds no capability and relaxes no
+# fence: every guarantee run-agent.mjs already makes (capability refusal, evidence
+# fencing, claim audit, secret pruning + scrubbing, safe-repo-state guard, no
+# auto-commit outside reports/) applies unchanged. See
+# docs/AGENT-DISPATCH-ENGINE-DESIGN.md for the design this implements (rollout
+# step 3 — "build the XC and GA cloud workflows").
+#
+# BEFORE ENABLING — add repo secrets (Settings → Secrets and variables → Actions):
+#   XAI_API_KEY / GEMINI_API_KEY  — the ONE credential each agent needs. Optional
+#                                   fallback names GROK_API_KEY / GEMINI_API_KEY_2
+#                                   are read too if that's what's on hand.
+#   REPID_API_KEY                 — optional; only needed for LESSON: harvesting
+#                                   back to the pgvector recall API. Dispatch still
+#                                   works without it (harvest is best-effort).
+#   LOOP_GH_PAT                   — REUSE the same PAT already set up for T12's
+#                                   loop (build-loop-cloud.yml). Same anti-recursion
+#                                   reason: a github-actions[bot] push would not
+#                                   trigger downstream CI on the PR this opens.
+#
+# workflow_dispatch ONLY — no schedule. XC/GA are single-shot report tasks against
+# the already-queued docs/dispatch/INBOX_XC.md / INBOX_GA.md specs, not a
+# continuous loop like T12's; run this by hand until there's a real reason to
+# automate the cadence too (same "don't build ahead of the need" rule as
+# everything else in this sprint's index).
+#
+# XC/GA hold `reasoning + repo_read` only (no `shell`, no write scope) — see the
+# AGENTS registry in run-agent.mjs. So the only thing this workflow can ever
+# commit is the dispatch transcript under reports/. It is NEVER auto-merged: "a
+# different model family reviews before anything lands" (run-agent.mjs's own
+# rule) applies to this transcript exactly as it does locally.
+name: dispatch-agent-cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: 'Which agent to dispatch'
+        required: true
+        type: choice
+        options:
+          - xc
+          - ga
+      ref_note:
+        description: 'Why this manual run (recorded on the run itself)'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dispatch-agent-cloud-${{ inputs.agent }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20       # single-shot report task, not a 40-turn build beat
+    steps:
+      - name: Checkout (PAT so any PR opened here actually triggers CI)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.LOOP_GH_PAT }}
+
+      - name: Git identity
+        run: |
+          git config user.name "dispatch-${{ inputs.agent }}-cloud[bot]"
+          git config user.email "dispatch@users.noreply.github.com"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install agent CLI
+        # Package names verified against npm/GitHub 2026-08-27 — NOT previously
+        # exercised in CI (only on Sean's machine, where they're already
+        # installed). If either name is wrong or the CLI's actual auth contract
+        # differs from what run-agent.mjs assumes, the dispatch step below fails
+        # LOUDLY (run-agent.mjs's own "NO REVIEW WAS PRODUCED" guard, or an
+        # ENOENT it reports as res.error) — never silently. That is the thing
+        # this first workflow_dispatch run is here to find out.
+        run: |
+          if [ "${{ inputs.agent }}" = "xc" ]; then
+            npm install -g @xai-official/grok
+          else
+            npm install -g @google/gemini-cli
+          fi
+
+      - name: Write credential file (temp runner path, never committed)
+        # run-agent.mjs reads ONE reference file (TRUSTKEYS_ENV_MASTER, format
+        # KEY=value per line) rather than raw process.env — this step is the
+        # adapter from GitHub secrets to that format, so the well-tested script
+        # itself needs zero changes. An unset secret becomes an empty value here;
+        # readAllSecrets()/readKey() already skip empty values, so a missing
+        # optional secret is silently a no-op, not a blank credential.
+        run: |
+          CRED_FILE="$RUNNER_TEMP/.env.master"
+          {
+            echo "XAI_API_KEY=${{ secrets.XAI_API_KEY }}"
+            echo "GROK_API_KEY=${{ secrets.GROK_API_KEY }}"
+            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
+            echo "GEMINI_API_KEY_2=${{ secrets.GEMINI_API_KEY_2 }}"
+            echo "REPID_API_KEY=${{ secrets.REPID_API_KEY }}"
+          } > "$CRED_FILE"
+          echo "TRUSTKEYS_ENV_MASTER=$CRED_FILE" >> "$GITHUB_ENV"
+
+      - name: Dispatch ${{ inputs.agent }}
+        id: dispatch
+        run: |
+          set +e
+          AGENT_UPPER=$(echo "${{ inputs.agent }}" | tr '[:lower:]' '[:upper:]')
+          INBOX_FILE="docs/dispatch/INBOX_${AGENT_UPPER}.md"
+          echo "inbox_file=$INBOX_FILE" >> "$GITHUB_OUTPUT"
+          node scripts/dispatch/run-agent.mjs --agent "${{ inputs.agent }}" \
+            --inbox "$INBOX_FILE" --requires reasoning,repo_read
+          code=$?
+          echo "dispatch_exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Shred credential file
+        if: always()
+        run: rm -f "$TRUSTKEYS_ENV_MASTER"
+
+      - name: Open PR with the transcript (never auto-merged)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.LOOP_GH_PAT }}
+        run: |
+          REPORT=$(git status --porcelain -- reports/ | awk '{print $2}' | head -n1)
+          if [ -z "$REPORT" ]; then
+            echo "no transcript file exists — the dispatcher refused before running (see the 'Dispatch' step log above for why)."
+            exit 0
+          fi
+          STATUS_WORD="ok"
+          if [ "${{ steps.dispatch.outputs.dispatch_exit }}" != "0" ]; then STATUS_WORD="FAILED"; fi
+          BRANCH="dispatch/${{ inputs.agent }}-$(date -u +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          git add "$REPORT"
+          git commit -m "dispatch(${{ inputs.agent }}): cloud beat transcript (${STATUS_WORD})"
+          git push -u origin "$BRANCH"
+          gh pr create --draft \
+            --title "dispatch(${{ inputs.agent }}): cloud beat transcript (${STATUS_WORD})" \
+            --body "Automated dispatch via dispatch-agent-cloud.yml. dispatch_exit=${{ steps.dispatch.outputs.dispatch_exit }}, inbox=${{ steps.dispatch.outputs.inbox_file }}. The transcript's claim manifest is the first thing to read (it names what ${{ inputs.agent }} actually had — reasoning + repo_read, no shell — and whether any execution claim is grounded in evidence it was shown). Never auto-merged: a different model family reads this before anything downstream trusts it." \
+            --head "$BRANCH" --base main
+
+      - name: Fail the run if the dispatch itself failed
+        # A transcript PR (if any) still gets opened above — the failure is
+        # visible in TWO places, not swallowed in either: this run goes red, and
+        # the PR (if one exists) is titled FAILED so a reviewer doesn't mistake
+        # a failed beat for a completed one.
+        if: steps.dispatch.outputs.dispatch_exit != '0'
+        run: |
+          echo "::error::dispatch exited ${{ steps.dispatch.outputs.dispatch_exit }} for agent=${{ inputs.agent }} — see the Dispatch step log and any transcript PR opened above."
+          exit 1
