@@ -15,9 +15,19 @@
  * CLAUDE.md tells developers to export `SUPABASE_URL=http://localhost:54321
  * SUPABASE_SERVICE_KEY=dummy` just to boot src/config.ts — so that check passed,
  * the suite armed against a Supabase that does not exist, and all six tests
- * failed locally. In CI there are no secrets, presence is false, the whole suite
- * skips, and CI is green. Red locally for the wrong reason, silent in CI: a guard
- * that never actually runs and that nobody can trust either way.
+ * failed locally.
+ *
+ * WHY IT WAS NEVERTHELESS GREEN IN CI — measured 2026-08-27, and NOT the reason
+ * you would guess. It is not that CI has no credentials: ci.yml's "Unit tests"
+ * step exports presence dummies of its own. It skipped on a variable-NAME
+ * mismatch — the workflow sets SUPABASE_SERVICE_ROLE_KEY, this gate read
+ * SUPABASE_SERVICE_KEY. Under CI's exact env the old expression evaluates false;
+ * align the two names and it evaluates true. So the suite sat one rename in
+ * ci.yml away from arming against localhost:54321 and turning CI red on every PR.
+ * What kept it quiet was a typo-shaped accident, not a design.
+ *
+ * Red locally for the wrong reason, silent in CI for an unrelated one: a guard
+ * that never actually ran and that nobody could trust in either direction.
  *
  * `describeIfIntegration` is the repo's ONE correct gate — it requires an explicit
  * RUN_INTEGRATION=1 opt-in alongside credentials, so a boot dummy can never arm it.

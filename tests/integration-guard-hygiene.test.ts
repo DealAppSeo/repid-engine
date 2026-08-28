@@ -25,6 +25,12 @@ import { runIntegration } from './helpers/run-integration';
  * guards reports success it has not earned — the same defect it exists to prevent.
  *
  * So the scan now walks every `*.test.ts` under `tests/`, at any depth.
+ *
+ * This scan READS FILES FROM DISK; it does not run them. That distinction is why
+ * it still covers `tests/integration/` during the unit run, even though
+ * `jest.config.js` puts that directory in `testPathIgnorePatterns` so those suites
+ * never execute there. A guard that could only see what the current jest
+ * invocation happens to execute would go blind exactly where coverage is thinnest.
  */
 const TESTS_DIR = __dirname;
 
