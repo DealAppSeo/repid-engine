@@ -110,6 +110,30 @@ jobs:
           } > "$CRED_FILE"
           echo "TRUSTKEYS_ENV_MASTER=$CRED_FILE" >> "$GITHUB_ENV"
 
+      # THE DISPATCHER REFUSES TO RUN ON `main`, SO THE BRANCH MUST EXIST FIRST.
+      #
+      # MEASURED — this is why every run of this workflow failed before 2026-08-28:
+      #
+      #   [dispatch] refusing to run an agent on 'main'. Create a branch first —
+      #   agent output must be isolable for review.
+      #
+      # run-agent.mjs's safe-repo-state guard is correct and stays. The workflow was
+      # simply creating the branch in the WRONG STEP: `git checkout -b` lived in the
+      # "Open PR" step, which runs AFTER the dispatch. So the dispatcher was always
+      # invoked on a `main` checkout and always refused, exit 3, on every agent —
+      # a workflow wired at both ends that could not succeed once.
+      #
+      # The branch name is exported to GITHUB_ENV rather than recomputed later: the
+      # old code built it from `date -u` at PR time, so moving the checkout without
+      # sharing the name would have produced two different timestamps and pushed a
+      # branch that did not exist locally.
+      - name: Create the dispatch branch (BEFORE running the agent)
+        run: |
+          BRANCH="dispatch/${{ inputs.agent }}-$(date -u +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          echo "DISPATCH_BRANCH=$BRANCH" >> "$GITHUB_ENV"
+          echo "dispatching on branch $BRANCH (never main — the agent's output must be isolable)"
+
       - name: Dispatch ${{ inputs.agent }}
         id: dispatch
         run: |
@@ -139,8 +163,10 @@ jobs:
           fi
           STATUS_WORD="ok"
           if [ "${{ steps.dispatch.outputs.dispatch_exit }}" != "0" ]; then STATUS_WORD="FAILED"; fi
-          BRANCH="dispatch/${{ inputs.agent }}-$(date -u +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH"
+          # Already ON this branch — it was created before the dispatch step so the
+          # agent had an isolable branch to write into. Reused by name, never
+          # recomputed, so the pushed ref matches the one the transcript was made on.
+          BRANCH="$DISPATCH_BRANCH"
           git add "$REPORT"
           git commit -m "dispatch(${{ inputs.agent }}): cloud beat transcript (${STATUS_WORD})"
           git push -u origin "$BRANCH"
