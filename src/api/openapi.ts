@@ -94,6 +94,50 @@ export const openApiSpec = {
         responses: { "200": { description: "Score event processed" } }
       }
     },
+    // THE PRIMITIVE A STRANGER CALLS FIRST. Everything else in this spec assumes you
+    // already have an agent, a key, or a stake. This one does not: it is public, keyless,
+    // and answers "is this claim supported?" in one request. It was live and undocumented
+    // — present in the running service but absent from this spec, so no external agent
+    // could discover the one endpoint that demonstrates what the system is for.
+    "/api/v1/hal/evaluate": {
+      post: {
+        tags: ["HAL & Scoring"],
+        summary: "Evaluate a claim for hallucination risk (public, no auth)",
+        description:
+          "Runs the HAL evaluation pipeline over a text claim and returns a decision plus the " +
+          "evidence behind it. No API key required. strictness 2 runs the multi-provider " +
+          "fact-check quorum; strictness 1 runs the cheaper extractor path. " +
+          "DEGRADES LOUDLY: if strictness 2 is requested but the quorum is unavailable, the " +
+          "response carries mode 'extractor-fallback' with degraded_mode and degraded_reason " +
+          "set, so a caller can never mistake a style-extractor score for a real fact-check.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/HalEvaluateRequest" },
+              examples: {
+                factual: {
+                  summary: "A verifiable claim at full strictness",
+                  value: { text: "The Eiffel Tower is located in Berlin.", strictness: 2 }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description:
+              "Evaluation completed. A 200 means HAL ran — read `decision` and `mode` for the verdict, " +
+              "and `degraded_mode` to know whether the full quorum was actually available.",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/HalEvaluateResponse" } }
+            }
+          },
+          "400": { description: "text missing, empty, over 8000 chars, or blocked as prompt injection" },
+          "500": { description: "Evaluation failed" }
+        }
+      }
+    },
     "/api/v1/hal/stats": {
       get: {
         tags: ["HAL & Scoring"],
@@ -319,7 +363,53 @@ export const openApiSpec = {
       LLMCompleteRequest: { type: "object", properties: { prompt: { type: "string" }, agent_id: { type: "string" } }, required: ["prompt"] },
       ScoreEventRequest: { type: "object", properties: { prompt: { type: "string" }, answer: { type: "string" } }, required: ["prompt", "answer"] },
       ZKProofRequest: { type: "object", properties: { agent_id: { type: "string" }, requester_pubkey: { type: "string" }, requested_tier: { type: "string" } }, required: ["agent_id", "requester_pubkey", "requested_tier"] },
-      Bounty: { type: "object", properties: { title: { type: "string" }, reward_amount: { type: "number" } }, required: ["title"] }
+      Bounty: { type: "object", properties: { title: { type: "string" }, reward_amount: { type: "number" } }, required: ["title"] },
+      HalEvaluateRequest: {
+        type: "object",
+        properties: {
+          text: { type: "string", maxLength: 8000, description: "The claim to evaluate. Required, non-empty." },
+          strictness: {
+            type: "integer", enum: [1, 2],
+            description: "2 = multi-provider fact-check quorum. 1 = cheaper extractor path. Omit for the product profile default."
+          },
+          context: {
+            type: "object",
+            properties: {
+              domain: { type: "string" },
+              certainty: { type: "number" },
+              product: { type: "string" }
+            }
+          },
+          source: { type: "string", description: "Free-form caller tag, recorded on the public fact-check counter." }
+        },
+        required: ["text"]
+      },
+      HalEvaluateResponse: {
+        type: "object",
+        properties: {
+          decision: {
+            type: "string", enum: ["vetoed", "flagged", "clean", "abstain"],
+            description: "'abstain' is a real outcome, not a failure — HAL declining to judge is more useful than a guess."
+          },
+          hal_score: { type: "number" },
+          mode: { type: "string", enum: ["fact-check", "extractor", "extractor-fallback"] },
+          strictness: { type: "integer", enum: [1, 2] },
+          decision_reason: { type: "string" },
+          degraded_mode: {
+            type: "boolean",
+            description: "Present and true ONLY on the extractor-fallback path — strictness 2 was asked for and the quorum was not available."
+          },
+          degraded_reason: { type: "string" },
+          latency_ms: { type: "number" },
+          signals: { type: "object", additionalProperties: true },
+          injection: {
+            type: "object",
+            description: "Prompt-injection screen, always reported. Blocks the request only when the block flag is enabled server-side.",
+            additionalProperties: true
+          }
+        },
+        required: ["decision", "hal_score", "mode", "strictness"]
+      }
     },
     securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } }
   }
