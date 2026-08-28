@@ -308,9 +308,20 @@ router.get('/disputes/:id', async (req: Request, res: Response) => {
 router.get('/staking/:agent', async (req: Request, res: Response) => {
   const agent = String(req.params.agent);
   try {
+    // NAMED COLUMNS, NOT `*`, because this read is keyless (see the bypass in
+    // middleware/auth.ts). `select('*')` would also return `metadata`, a free-form jsonb
+    // whose contents CANNOT BE VERIFIED: the table is empty, so there is no sample to
+    // inspect and no way to certify that a future writer will not put something private in
+    // it. Certifying safety from a zero-row sample is exactly the unverified inference this
+    // codebase keeps paying for, so the fix is to name what the consumer needs instead.
+    //
+    // These are the fields the stake UI actually reads (id, amount, status, staked_at) plus
+    // the on-chain facts that let a reader verify a deposit independently. `metadata` and
+    // `custodian_address` are omitted because nothing consumes them; add a column here
+    // deliberately, never by widening back to `*`.
     const { data, error } = await db
       .from('staking_deposits')
-      .select('*')
+      .select('id, agent_name, amount_usdc, chain_id, tx_hash, staked_at, status, hold_until')
       .eq('agent_name', agent)
       .order('staked_at', { ascending: false });
     if (error) return fail(res, 500, 'staking_failed', error.message);

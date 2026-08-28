@@ -92,6 +92,39 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && req.path === '/api/v1/grants') {
     return next();
   }
+
+  // The Authority screen's two reads, broken the same way and found by the same probe.
+  //
+  // MEASURED 2026-08-28, keyless, against production:
+  //   GET /api/v1/stake/authority/<id>  -> 401
+  //   GET /api/v1/staking/<agent>       -> 401
+  // Both clients (`fetchAuthority`, `fetchStakePositions`) send no auth header and map any
+  // failure to `null`, so the screen renders "no authority data" rather than "you are not
+  // authenticated". Half the Trust Kernel — Grants and Authority — was reading nothing.
+  //
+  // WHY EACH IS SAFE TO OPEN, verified rather than assumed:
+  //   /stake/authority/:id returns four computed scalars — builder id, stake total,
+  //     authority, and the basis it was derived from. It reads no table columns out.
+  //   /staking/:agent previously did `select('*')`, which would have exposed a free-form
+  //     `metadata` jsonb with NO ROWS to inspect and therefore nothing to certify. It now
+  //     selects named columns; see the note at that handler. This bypass depends on that
+  //     narrowing and must not be landed without it.
+  //
+  // GET ONLY, and the method check is the control for THIS rule: it admits no POST, so
+  // nothing that moves collateral is opened by it. POST /api/v1/staking/deposit stays
+  // API-key gated.
+  //
+  // Do NOT read that as "every stake POST is API-key gated" — POST /api/v1/stake/deposit is
+  // deliberately bypassed a few lines below and authorizes itself in the route (a session
+  // for simulated stake, a wallet signature for a real one). An earlier draft of this
+  // comment asserted the opposite and would have sat fifteen lines above the rule that
+  // contradicts it. A comment that disagrees with the code beneath it is worse than none.
+  if (
+    req.method === 'GET' &&
+    (req.path.startsWith('/api/v1/stake/authority/') || req.path.startsWith('/api/v1/staking/'))
+  ) {
+    return next();
+  }
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/run-round-anonymous') return next();
   if (req.method === 'POST' && req.path === '/api/v1/builder/token-signup') return next();

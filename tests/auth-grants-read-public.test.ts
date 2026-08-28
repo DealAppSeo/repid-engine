@@ -1,5 +1,5 @@
 /**
- * The grants list is a keyless READ, and only a read (2026-08-28).
+ * The consumer app's keyless READS, and only the reads (2026-08-28).
  *
  * MEASURED BROKEN, NOT INFERRED. trustshell.dev's Grants screen calls
  * `GET /api/v1/grants?principal=…` with no auth header — the same shape as its Passport and
@@ -54,9 +54,13 @@ async function passesKeyless(method: string, path: string): Promise<boolean> {
   return next.mock.calls.length === 1 && res.statusCode === 0;
 }
 
-describe('GET /api/v1/grants is reachable without a key', () => {
-  it('the exact request trustshell.dev makes is no longer a 401', async () => {
-    expect(await passesKeyless('GET', '/api/v1/grants')).toBe(true);
+describe('the reads the site actually makes are reachable without a key', () => {
+  it.each([
+    ['the grants list', '/api/v1/grants'],
+    ['a builder authority snapshot', '/api/v1/stake/authority/builder-1'],
+    ['an agent stake position list', '/api/v1/staking/agent-1'],
+  ])('%s is no longer a 401', async (_label, path) => {
+    expect(await passesKeyless('GET', path)).toBe(true);
   });
 
   it('a query string does not change the decision', async () => {
@@ -79,6 +83,27 @@ describe('THE LOAD-BEARING HALF: the mutations stay authed', () => {
     // `startsWith('/api/v1/grants')` would look like a tidy simplification and would open
     // every future sub-route under this prefix, read or write, without anyone deciding to.
     expect(await passesKeyless('GET', '/api/v1/grants/2f1c9d84-0000-4000-8000-000000000001')).toBe(false);
+  });
+
+  it('POST /api/v1/staking/deposit still requires a key — it moves real collateral', async () => {
+    expect(await passesKeyless('POST', '/api/v1/staking/deposit')).toBe(false);
+  });
+
+  it('no POST is admitted under the stake/authority prefix this rule opens', async () => {
+    // The precise property of the new rule: it is GET-only, so nothing that mutates is
+    // opened by it. Asserted on its own prefix rather than on /stake/deposit, because...
+    expect(await passesKeyless('POST', '/api/v1/stake/authority/builder-1')).toBe(false);
+  });
+
+  it('...POST /api/v1/stake/deposit is keyless BY DESIGN, and that is not this rule', async () => {
+    // ...it has its own older bypass and authorizes itself inside the route — a session for
+    // simulated stake, a wallet signature for a real one. It is differently authenticated,
+    // not unauthenticated.
+    //
+    // This assertion exists because the first draft of this file asserted the opposite and
+    // failed, which is how the wrong claim in the middleware comment above it was caught. A
+    // test written to match an assumption would have been "fixed" into agreeing with it.
+    expect(await passesKeyless('POST', '/api/v1/stake/deposit')).toBe(true);
   });
 
   it('the guard can actually fail — an unrelated authed path is still refused', async () => {
