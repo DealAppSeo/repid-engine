@@ -7,14 +7,36 @@
  *   3. Status color computes correctly per timestamp
  *   4. Spokesperson UUID matches the canonical mapping
  *
- * Skipped if SUPABASE env not set — same skip-when-no-env pattern as other
- * db-touching tests in this repo.
+ * GATING (corrected 2026-08-27). This suite used to arm on credential PRESENCE:
+ *
+ *     const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+ *
+ * which asks whether the variables are SET, not whether anything is behind them.
+ * CLAUDE.md tells developers to export `SUPABASE_URL=http://localhost:54321
+ * SUPABASE_SERVICE_KEY=dummy` just to boot src/config.ts — so that check passed,
+ * the suite armed against a Supabase that does not exist, and all six tests
+ * failed locally.
+ *
+ * WHY IT WAS NEVERTHELESS GREEN IN CI — measured 2026-08-27, and NOT the reason
+ * you would guess. It is not that CI has no credentials: ci.yml's "Unit tests"
+ * step exports presence dummies of its own. It skipped on a variable-NAME
+ * mismatch — the workflow sets SUPABASE_SERVICE_ROLE_KEY, this gate read
+ * SUPABASE_SERVICE_KEY. Under CI's exact env the old expression evaluates false;
+ * align the two names and it evaluates true. So the suite sat one rename in
+ * ci.yml away from arming against localhost:54321 and turning CI red on every PR.
+ * What kept it quiet was a typo-shaped accident, not a design.
+ *
+ * Red locally for the wrong reason, silent in CI for an unrelated one: a guard
+ * that never actually ran and that nobody could trust in either direction.
+ *
+ * `describeIfIntegration` is the repo's ONE correct gate — it requires an explicit
+ * RUN_INTEGRATION=1 opt-in alongside credentials, so a boot dummy can never arm it.
  */
 
 import { db } from '../src/db';
+import { describeIfIntegration } from './helpers/run-integration';
 
-const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
-const describeIfDb = HAS_DB ? describe : describe.skip;
+const describeIfDb = describeIfIntegration;
 
 const EXPECTED_AGENTS = new Set([
   'trinity-orch','trinity-w3c','trinity-shofet','trinity-torch',
