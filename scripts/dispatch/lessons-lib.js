@@ -65,10 +65,36 @@ function matchPacks(dispatchText, packs) {
   return packs.filter((p) => p.triggers.length > 0 && p.triggers.some((t) => hay.includes(t)));
 }
 
-/** Render matched packs as one block to append after LESSONS.md, before the brief. */
-function renderPacks(matched) {
+/**
+ * MEASURED GAP, 2026-08-28: the other two lesson channels are both capped —
+ * LESSONS.md at 6000 chars (tests/lessons-injectable.test.ts), scoped pgvector
+ * recall at SCOPED_CONTEXT_MAX=4000 (run-agent.mjs) — but this one, the domain
+ * packs, had no cap at all. Currently harmless (4 packs, ~9KB combined), but a
+ * brief whose text happens to trigger several packs, or one pack that grows over
+ * time, would silently balloon the preamble with no test to catch it. Same shape
+ * LESSONS §3 warns about: a mechanism wired at one end (the loader) without a
+ * limit at the other (what gets injected).
+ */
+const PACKS_MAX = 4000;
+
+/**
+ * Render matched packs as one block to append after LESSONS.md, before the brief.
+ * Packs are added whole, in match order, never truncated mid-pack — a half-rule
+ * silently missing its "Apply:" line is worse than a dropped pack. The FIRST pack
+ * is always included even if it alone exceeds `max`, so an over-budget pack is
+ * visibly too big (and gets trimmed at the source) rather than silently producing
+ * an empty block that reads as "no domain lessons matched" when some did.
+ */
+function renderPacks(matched, max = PACKS_MAX) {
   if (!matched || matched.length === 0) return '';
-  return matched.map((p) => p.body).join('\n\n');
+  const parts = [];
+  let used = 0;
+  for (const p of matched) {
+    if (parts.length > 0 && used + p.body.length > max) break;
+    parts.push(p.body);
+    used += p.body.length + 2; // +2 accounts for the '\n\n' join below
+  }
+  return parts.join('\n\n');
 }
 
-module.exports = { parseTriggers, stripTriggerHeader, loadPacks, matchPacks, renderPacks, TRIGGER_RE };
+module.exports = { parseTriggers, stripTriggerHeader, loadPacks, matchPacks, renderPacks, PACKS_MAX, TRIGGER_RE };

@@ -11,7 +11,7 @@
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const path = require('node:path');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { loadPacks, matchPacks, parseTriggers } = require('../scripts/dispatch/lessons-lib');
+const { loadPacks, matchPacks, parseTriggers, renderPacks } = require('../scripts/dispatch/lessons-lib');
 
 const LESSONS_DIR = path.join(__dirname, '..', 'lessons');
 
@@ -66,5 +66,42 @@ describe('LESSONS domain packs', () => {
   it('parseTriggers lowercases and splits on commas and whitespace', () => {
     expect(parseTriggers('<!-- triggers: Foo, BAR baz -->')).toEqual(['foo', 'bar', 'baz']);
     expect(parseTriggers('no header here')).toEqual([]);
+  });
+
+  it('renderPacks with the real, current pack set stays under its own cap unmodified', () => {
+    // Guards the actual shipped packs, not just the synthetic ones below — if
+    // real pack content ever grows past the cap, THIS is what should turn red.
+    const { PACKS_MAX } = require('../scripts/dispatch/lessons-lib');
+    expect(renderPacks(packs).length).toBeLessThanOrEqual(PACKS_MAX);
+  });
+
+  describe('renderPacks cap (MEASURED GAP, 2026-08-28 — this channel had no cap at all)', () => {
+    const big = (label: string, n: number) => ({ name: label, triggers: ['x'], body: label.repeat(n) });
+
+    it('includes every pack, unjoined-length untouched, when combined size is under the cap', () => {
+      const small = [big('a', 10), big('b', 10)];
+      expect(renderPacks(small, 1000)).toBe('aaaaaaaaaa\n\nbbbbbbbbbb');
+    });
+
+    it('drops a LATER pack that would push the block over the cap, keeps the earlier one whole', () => {
+      const p1 = big('a', 100); // 100 chars
+      const p2 = big('b', 950); // would take the total to 1052 with the join
+      expect(renderPacks([p1, p2], 1000)).toBe(p1.body);
+    });
+
+    it('still includes a FIRST pack that alone exceeds the cap — visibly too big, not silently empty', () => {
+      const huge = big('a', 5000);
+      const rendered = renderPacks([huge], 1000);
+      expect(rendered).toBe(huge.body);
+      expect(rendered.length).toBeGreaterThan(1000);
+    });
+
+    it('a second oversized pack after a first that already fit is still dropped, not truncated mid-pack', () => {
+      const p1 = big('a', 10);
+      const p2 = big('b', 5000);
+      const rendered = renderPacks([p1, p2], 1000);
+      expect(rendered).toBe(p1.body);
+      expect(rendered).not.toContain('b');
+    });
   });
 });
