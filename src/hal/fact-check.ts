@@ -72,6 +72,16 @@ import {
 // the flag is on, and both modules NEVER throw (failure → fast-path decision preserved). See the
 // gated block near the end of factCheck() and src/hal/retrieval.ts + src/hal/crag.ts.
 import { isRetiredModel, retiredModelsFor } from './retired-models';
+// SELF-HEALING MODEL SELECTION (2026-08-28). Four vendor retirements have each been repaired by a
+// human reading production JSON, guessing a replacement id off a docs page, and shipping a release —
+// and the fourth guess was dead on arrival. These three modules replace that loop: ask the vendor
+// what this key can reach (model-catalog), ask our own ledger what actually answered
+// (dead-model-evidence), and pick from the intersection, ranked to buy quorum independence
+// (model-selection). All three are inert until the background refresh populates their caches, so an
+// unrefreshed process builds exactly the provider set it builds today. See resolveModelFor().
+import { catalogIsMeasured, catalogModelsFor } from './model-catalog';
+import { isMeasuredDead } from './dead-model-evidence';
+import { selectModel, type ModelChoice } from './model-selection';
 import { retrieveEvidence } from './retrieval';
 import { grokApiKey } from '../providers/xai-key';
 import { gradeEvidence, type CragResult, type CragGrade } from './crag';
@@ -85,6 +95,16 @@ export interface FactCheckProviderCfg {
   timeoutMs?: number;
   family?: string; // R5 — independent model family (groq-Llama + cerebras-Llama = ONE family/vote)
   tier?: 'free' | 'cheap' | 'escalation'; // R6 — cost class for cheapest-first quorum assembly
+  /**
+   * How this provider's model id was chosen, when it was not simply the configured/shipped one.
+   *
+   * Present ONLY on a substitution. A pinned model that still works reports nothing, so the common
+   * path stays byte-identical and a reader can tell at a glance that the measurement ruler
+   * (CLAUDE_RULES 24) was intact for this call. When it IS present it travels into
+   * `provider_health.selections`, because a quality number measured while a model was swapped
+   * underneath it must never be mistaken for one taken at the pinned configuration.
+   */
+  selection?: ModelChoice;
 }
 
 /**
@@ -263,6 +283,16 @@ export interface FactCheckResult {
      * succeeded / failed / skipped.
      */
     skipped?: FactCheckProviderSkip[];
+    /**
+     * Providers that ran on a model they SELECTED rather than the one they were configured with,
+     * because the configured id had been measured unusable on this credential.
+     *
+     * Present only on a substitution. This is the honesty half of self-healing: recovering from a
+     * dead model without a deploy is only an improvement if the recovery is visible, otherwise it
+     * trades a loud failure for a quiet configuration drift — the same trade `skipped` exists to
+     * refuse.
+     */
+    selections?: Array<{ name: string; model: string; reason: string; source: string }>;
   };
   quorum_note?: string; // set only when the resilience gate downgraded a decision
   fallback_used?: 'local_slm';
@@ -888,7 +918,18 @@ export async function factCheck(
   const skippedField: FactCheckProviderSkip[] = [];
   const cerebrasSkip = cerebrasDeadModelSkip();
   if (cerebrasSkip && !providers.some((p) => p.name === 'cerebras')) skippedField.push(cerebrasSkip);
-  const skipped = skippedField.length ? { skipped: skippedField } : {};
+  // Models the builder chose for itself because the configured one was measured unusable. Reported
+  // for the same reason the skips are: a substitution that nobody can see is a measurement whose
+  // ruler changed silently (CLAUDE_RULES 24), and a HAL number taken during one must never be
+  // compared against a number taken at the pinned configuration as though they were alike.
+  // Absent — not empty — when every provider used exactly the model it was configured with.
+  const selectionsField = activeProviders
+    .filter((p) => p.selection?.substituted)
+    .map((p) => ({ name: p.name, model: p.model, reason: p.selection!.reason, source: p.selection!.source }));
+  const skipped = {
+    ...(skippedField.length ? { skipped: skippedField } : {}),
+    ...(selectionsField.length ? { selections: selectionsField } : {}),
+  };
   if (costOrdered) {
     const rank = (p: FactCheckProviderCfg) => ({ free: 0, cheap: 1, escalation: 2 })[p.tier ?? costTierOf({ name: p.name, family: familyByName.get(p.name) })];
     const waves = [0, 1, 2].map((r) => activeProviders.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
@@ -1528,8 +1569,94 @@ export function cerebrasDeadModelSkip(): FactCheckProviderSkip | null {
   };
 }
 
+/**
+ * Resolve which model id this provider should actually call, and why.
+ *
+ * THE DEFAULT ANSWER IS "THE ONE YOU CONFIGURED". This only ever departs from the operator override
+ * or the shipped default when one of those has been MEASURED — on this credential, in our own
+ * ledger — to be dead, and only then does it consult the vendor's live model list for a
+ * replacement. With both caches cold (every process, until the first background refresh completes)
+ * `catalogIsMeasured` is false and `isMeasuredDead` is false for everything, so this returns the
+ * configured id unchanged and the builder behaves exactly as it did before this existed.
+ *
+ * `familiesTaken` is threaded through the builder in push order, so each provider is picked knowing
+ * which independent families the quorum has already bought. That is the whole point: the quorum's
+ * claim is cross-examination across INDEPENDENT families, so a replacement that adds a family the
+ * panel lacks is worth more than a marginally faster one inside a family already covered.
+ */
+/**
+ * THE CATALOG KEY AND THE LEDGER KEY ARE NOT THE SAME KEY, and conflating them corrupts selection.
+ *
+ * A quorum member is identified three different ways, and gemini-via-OpenRouter is the case where
+ * all three differ at once:
+ *   - `name` 'gemini'      what the verdict is reported under, and what lands in llm_call_log
+ *   - HOST   'openrouter'  whose `/models` list is authoritative for the slug we must send
+ *   - slug   'google/gemini-3.5-flash'   valid ONLY on that host
+ *
+ * Looking the catalog up under 'gemini' there would offer Google's own ids — `gemini-2.5-flash` —
+ * and selecting one would post a direct-endpoint slug to OpenRouter, which must 404. That is this
+ * module handing the caller a guaranteed-dead id: precisely the bug it was written to remove,
+ * reintroduced one layer up. The same applies to every or-* member.
+ *
+ * So the catalog is keyed by HOST and the ledger by REPORTED NAME, separately and explicitly.
+ */
+export function resolveModelFor(
+  ledgerProvider: string,
+  envVar: string,
+  staticDefault: string | undefined,
+  familiesTaken: ReadonlySet<string>,
+  catalogProvider: string = ledgerProvider,
+): ModelChoice {
+  return selectModel({
+    provider: ledgerProvider,
+    operatorModel: process.env[envVar]?.trim(),
+    staticModel: staticDefault,
+    catalogModels: catalogModelsFor(catalogProvider),
+    catalogMeasured: catalogIsMeasured(catalogProvider),
+    isMeasuredDead: (m) => isMeasuredDead(ledgerProvider, m),
+    isStaticallyRetired: isRetiredModel,
+    familiesTaken,
+    familyOf: (m) => familyOfResolved(m),
+  });
+}
+
 export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
+  /**
+   * Families already bought, in push order. Seeded empty and updated by `add()` so that
+   * cheapest-first ordering also becomes independence-first ordering: the earlier a provider is
+   * considered, the more of the family space is still open to it.
+   */
+  const familiesTaken = new Set<string>();
+
+  /**
+   * Push a provider after resolving its model against the live catalog + ledger.
+   *
+   * Returns false (and pushes nothing) when nothing is reachable — a provider with no callable
+   * model must be SKIPPED, never dialled. A guaranteed-404 call costs a request and a slot in the
+   * quorum and then reports the quorum as `partial`, which is the exact production bug this whole
+   * change exists to end.
+   */
+  const add = (
+    cfg: Omit<FactCheckProviderCfg, 'model'>,
+    envVar: string,
+    staticDefault: string | undefined,
+    /** The HOST whose `/models` list is authoritative — see resolveModelFor. Defaults to cfg.name. */
+    catalogProvider: string = cfg.name,
+  ): boolean => {
+    const choice = resolveModelFor(cfg.name, envVar, staticDefault, familiesTaken, catalogProvider);
+    if (!choice.model) {
+      console.warn(`[hal] quorum: ${cfg.name} not added — ${choice.reason}`);
+      return false;
+    }
+    const family = cfg.family ?? familyOfResolved(choice.model);
+    if (choice.substituted) {
+      console.warn(`[hal] quorum: ${cfg.name} model substituted — ${choice.reason}`);
+    }
+    out.push({ ...cfg, model: choice.model, family, ...(choice.substituted ? { selection: choice } : {}) });
+    familiesTaken.add(family);
+    return true;
+  };
   // Auto-backfill: OR the passed enable flag with the default-on backfill so a backfill family is
   // included when EITHER it was explicitly enabled OR (autobackfill on AND its key is present). This
   // preserves cheapest-first ordering (deepseek → gemini → mistral → openrouter appear in that order).
@@ -1551,7 +1678,9 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // dev sandbox, so the only real verification is post-deploy against provider_health. Treat a
   // green build here as NOT_CHECKED on these two strings.
   const g = process.env.GROQ_API_KEY?.trim();
-  if (g && enabled.groq) out.push({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g, model: process.env.HAL_S2_GROQ_MODEL ?? 'openai/gpt-oss-20b' });
+  if (g && enabled.groq) {
+    add({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g }, 'HAL_S2_GROQ_MODEL', 'openai/gpt-oss-20b');
+  }
   // CEREBRAS HAS NO DEFAULT MODEL, deliberately — see cerebrasDeadModelSkip(). The replacement
   // named in the NOT_CHECKED caveat above never worked: the ledger says every call it made
   // 404'd, so both ids this repo has shipped are now in RETIRED_MODELS. Without an id from
@@ -1563,10 +1692,17 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // provider that was never configured — the failure mode `hal-gemini-model-default.test.ts`
   // was written about — and a reported 404 is already better than a silent absence, so only a
   // reported SKIP is an improvement on the bug this replaces.
+  //
+  // SELF-HEALING SUPERSEDES THE HARDCODED SKIP, in one direction only. `cerebrasDeadModelSkip()`
+  // still governs whether cerebras is dialled at all, so the reported-skip contract is unchanged.
+  // What changed is that a cerebras with NO usable configured model is no longer automatically
+  // nothing: if the live catalog offers a model this key can reach, `add()` selects one and the
+  // family rejoins the quorum without a release. When the catalog is cold — every process until
+  // the first refresh — there is nothing to select from and the behaviour is exactly as before.
   const c = process.env.CEREBRAS_API_KEY?.trim();
   const cerebrasModel = process.env.HAL_S2_CEREBRAS_MODEL?.trim();
-  if (c && enabled.cerebras && cerebrasModel && !cerebrasDeadModelSkip()) {
-    out.push({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c, model: cerebrasModel });
+  if (c && enabled.cerebras && !cerebrasDeadModelSkip()) {
+    add({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c }, 'HAL_S2_CEREBRAS_MODEL', cerebrasModel);
   }
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
   // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
@@ -1576,7 +1712,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // when the free tiers (groq/cerebras) throttle under prod burst. Cheapest backfill member → first.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
   if (d && (enabled.deepseek || ab)) {
-    out.push({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, model: process.env.HAL_S2_DEEPSEEK_MODEL ?? 'deepseek-chat', family: 'deepseek' });
+    add({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, family: 'deepseek' }, 'HAL_S2_DEEPSEEK_MODEL', 'deepseek-chat');
   }
   // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
   // Auto-backfilled when their key is present (HAL_QUORUM_AUTOBACKFILL); else opt-in per enable flag.
@@ -1591,10 +1727,56 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // the direct endpoint. Model override: HAL_S2_GEMINI_MODEL (must match the chosen endpoint's slugs).
   const gm = process.env.GEMINI_API_KEY?.trim();
   const orForGemini = process.env.OPENROUTER_API_KEY?.trim();
-  const geminiViaOpenRouter = orForGemini && process.env.HAL_S2_GEMINI_VIA_OPENROUTER !== 'false';
+  //
+  // ══ DIRECT IS NOW THE DEFAULT (2026-08-28). This inverts the 2026-07-08 decision below. ══
+  //
+  // That decision was correct when it was made and its stated premise has since expired. It reads
+  // "the DIRECT Gemini endpoint 429s 'credits depleted' … so the gemini family contributed 0 real
+  // votes". MEASURED against our own ledger on 2026-08-28, that is no longer what the direct path
+  // does: `gemini-2.5-flash` on the Google endpoint has **339 successes and zero recorded
+  // failures**, most recently 2026-08-22. The depleted-credits era belonged to `gemini-2.0-flash`,
+  // which Google retired, and to a wave of 503s — neither of which describes the endpoint today.
+  //
+  // WHY THE RE-ROUTE IS NOW THE MORE EXPENSIVE OPTION. Routing gemini through OpenRouter puts two
+  // of the quorum's families on ONE account and ONE credit pool, and `MIN_QUORUM_FOR_VETO` is 2 —
+  // so a single billing event can take the panel to its floor. That pool has run dry repeatedly:
+  // `google/gemini-3.5-flash` carries **8,762 failures against 16,643 successes**, the sample being
+  // `HTTP 402 … requires more credits`. It is a real, recurring, single point of failure.
+  //
+  // STATED PRECISELY, because the stronger version of this claim is not supported: over the 14 days
+  // to 2026-08-28, 43 quorums ran both gemini-via-OpenRouter and openrouter, and **zero** had both
+  // fail. The shared pool is a demonstrated fragility, NOT a demonstrated co-failure. The case for
+  // direct rests on the 402 history and on independence, not on a correlation we have not measured.
+  //
+  // FAIL-BACK IS AUTOMATIC. If the ledger later measures the direct model dead, this falls back to
+  // OpenRouter on its own. `HAL_S2_GEMINI_VIA_OPENROUTER=true` forces the re-route; `=false` forces
+  // direct. Unset now means direct-when-keyed, which is the change.
+  const directGeminiModel = process.env.HAL_S2_GEMINI_MODEL?.trim();
+  // ENDPOINT-SCOPED OVERRIDE, and this is load-bearing rather than fussy: the two paths do not share
+  // a slug namespace. Direct wants `gemini-2.5-flash`; OpenRouter wants `google/gemini-3.5-flash`.
+  // A single env var applied to whichever endpoint we happened to pick would hand one of them a
+  // string it must 404 on — swapping the route would silently break the model. The '/' is what
+  // tells them apart, so an override only applies to the endpoint whose shape it matches.
+  const overrideIsOpenRouterSlug = !!directGeminiModel?.includes('/');
+  const geminiForcedViaOr = process.env.HAL_S2_GEMINI_VIA_OPENROUTER === 'true';
+  const geminiForcedDirect = process.env.HAL_S2_GEMINI_VIA_OPENROUTER === 'false';
+  const directGeminiDead = isMeasuredDead('gemini', directGeminiModel || 'gemini-2.5-flash');
+  const geminiViaOpenRouter =
+    !!orForGemini && !geminiForcedDirect && (geminiForcedViaOr || !gm || directGeminiDead);
   if ((gm || orForGemini) && (enabled.gemini || ab)) {
     if (geminiViaOpenRouter) {
-      out.push({ name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini!, model: process.env.HAL_S2_GEMINI_MODEL ?? 'google/gemini-3.5-flash', family: 'gemini' });
+      if (directGeminiDead && gm) {
+        console.warn(
+          `[hal] quorum: gemini failing back to OpenRouter — the direct model has been MEASURED dead. ` +
+            `This puts gemini and openrouter on one account; set HAL_S2_GEMINI_MODEL to a live direct id to split them again.`,
+        );
+      }
+      add(
+        { name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini!, family: 'gemini' },
+        overrideIsOpenRouterSlug ? 'HAL_S2_GEMINI_MODEL' : '__unset__',
+        'google/gemini-3.5-flash',
+        'openrouter', // the HOST — its slugs, not Google's. See resolveModelFor.
+      );
     } else if (gm) {
       // RETIRED-MODEL FIX 2026-08-04. The default was `gemini-2.0-flash`, which Google
       // has retired: every call on this endpoint returns HTTP 404 "This model is no
@@ -1613,12 +1795,16 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
       // a fixed configuration; a floating alias silently changes the model underneath
       // them and turns every comparison into a measurement without its ruler
       // (CLAUDE_RULES 24). Bump it explicitly when re-measuring.
-      out.push({ name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, model: process.env.HAL_S2_GEMINI_MODEL ?? 'gemini-2.5-flash', family: 'gemini' });
+      add(
+        { name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, family: 'gemini' },
+        overrideIsOpenRouterSlug ? '__unset__' : 'HAL_S2_GEMINI_MODEL',
+        'gemini-2.5-flash',
+      );
     }
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
   if (ms && (enabled.mistral || ab)) {
-    out.push({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, model: process.env.HAL_S2_MISTRAL_MODEL ?? 'mistral-small-latest', family: 'mistral' });
+    add({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, family: 'mistral' }, 'HAL_S2_MISTRAL_MODEL', 'mistral-small-latest');
   }
   // OpenRouter — LAST backfill resort (aggregator). Its family derives from the configured model, so the
   // DEFAULT is a QWEN model — a family distinct from the always-on hosts (groq=llama, cerebras=glm) and
@@ -1636,7 +1822,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // live /models list first.
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
-    out.push({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or, model: process.env.HAL_S2_OPENROUTER_MODEL ?? 'qwen/qwen-2.5-72b-instruct' });
+    add({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', 'qwen/qwen-2.5-72b-instruct');
   }
   // GLOO — opt-in, and NOT auto-backfilled. OpenAI-compatible, plain-key bearer, so it needs no
   // adapter of its own; it is the same {endpoint, apiKey, model} shape as every entry above.
