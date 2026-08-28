@@ -41,7 +41,52 @@ const VERIFIED = 0;
 const FAILED = 1;
 const NOT_CHECKED = 2;
 
+/**
+ * Exit codes that mean "promptfoo never got to judge anything" rather than "an assertion
+ * failed". These are INFRASTRUCTURE failures, and the distinction is load-bearing:
+ *
+ * The failability canary is required to FAIL. The original check accepted any non-zero exit
+ * as proof the assertions were live — so when the promptfoo binary was simply absent, every
+ * invocation exited 127 and the runner reported "canary failed as required — assertions are
+ * live" while nothing had been asserted at all. A canary that is satisfied by its own tool
+ * being missing is exactly the fake-pass this gate exists to prevent, one level up.
+ *
+ * A canary must fail for the RIGHT reason.
+ */
+const INFRA_EXIT_CODES = new Set([
+  124, // our own timeout kill
+  127, // spawn error / command not found
+  128, // killed by signal
+]);
+
 const log = (...a) => console.log(...a);
+
+/**
+ * Is the promptfoo binary actually invocable? Run BEFORE any tier.
+ *
+ * A missing tool is NOT_CHECKED, never FAILED: "we could not look" and "HAL is broken" are
+ * different states, and collapsing them is how a red build gets blamed on the wrong thing.
+ */
+function promptfooAvailable() {
+  const bin = process.env.PROMPTFOO_BIN;
+  const cmd = bin ?? 'npx';
+  const args = bin ? ['--version'] : ['--yes', `promptfoo@${PINNED_PROMPTFOO}`, '--version'];
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { cwd: HERE, stdio: 'ignore' });
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve(false);
+    }, 120_000);
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
 
 /** Boot harness/hal-surface.js and resolve once it prints its ready line. */
 function startHarness({ injectionBlock }) {
@@ -169,6 +214,22 @@ async function main() {
   let harness = null;
 
   try {
+    // ---- preflight: is the tool even here? -------------------------------------------
+    // Costs one `--version` and removes an entire class of dishonest verdict. Without it a
+    // missing binary makes every tier exit 127, which the canary check below used to read as
+    // "assertions are live".
+    if (!(await promptfooAvailable())) {
+      summarise(
+        [
+          'promptfoo is not invocable — nothing was evaluated.',
+          `Set PROMPTFOO_BIN to an installed binary, or allow npx to fetch promptfoo@${PINNED_PROMPTFOO}.`,
+          'Reported as NOT_CHECKED, not FAILED: "we could not look" is not "HAL is broken".',
+        ],
+        'NOT_CHECKED',
+      );
+      return NOT_CHECKED;
+    }
+
     // ---- tiers 1 + canary share one harness (hard block ON) --------------------------
     harness = await startHarness({ injectionBlock: true });
     notes.push(`harness up on the real \`POST /api/v1/hal/evaluate\` route; quorum providers assembled: ${harness.quorumProviders}`);
@@ -191,7 +252,22 @@ async function main() {
       );
       return FAILED;
     }
-    notes.push(`failability canary failed as required (promptfoo exit ${canaryCode}) — assertions are live`);
+    if (INFRA_EXIT_CODES.has(canaryCode)) {
+      // The canary did fail — for the wrong reason. promptfoo crashed, timed out, or was
+      // never found, so no assertion was evaluated. Accepting this as "assertions are live"
+      // is the fake-pass this whole gate exists to prevent.
+      summarise(
+        [
+          ...notes,
+          `FAILABILITY CANARY DID NOT RUN (promptfoo exit ${canaryCode} — timeout, crash, or missing binary).`,
+          'It failed, but not by failing an assertion, so it proves nothing about whether the gate can fail.',
+          'Reported as NOT_CHECKED rather than a pass or a HAL failure.',
+        ],
+        'NOT_CHECKED',
+      );
+      return NOT_CHECKED;
+    }
+    notes.push(`failability canary failed on an assertion (promptfoo exit ${canaryCode}) — assertions are live`);
 
     const t1Code = await runPromptfoo('hal-adversarial.yaml', {
       url: harness.url,
