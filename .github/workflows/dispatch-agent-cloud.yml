@@ -170,10 +170,32 @@ jobs:
           git add "$REPORT"
           git commit -m "dispatch(${{ inputs.agent }}): cloud beat transcript (${STATUS_WORD})"
           git push -u origin "$BRANCH"
-          gh pr create --draft \
+          # THE PUSH IS THE DELIVERABLE; THE PR IS CONVENIENCE.
+          #
+          # MEASURED 2026-08-28, runs 33213873155 (xc) and 33214009080 (ga): BOTH
+          # dispatches succeeded, both transcripts were committed and pushed, and
+          # both runs then went red on the next line:
+          #
+          #     GraphQL: API rate limit already exceeded for user ID 11688996
+          #     ##[error]Process completed with exit code 1
+          #
+          # So the Actions list read "dispatch failed" for two dispatches that
+          # worked. That is this repo's recurring defect wearing a status column:
+          # the account's API quota is not a fact about whether the agent produced
+          # anything, and letting it decide the run's verdict makes a green/red
+          # signal that answers the wrong question.
+          #
+          # `|| true` is deliberate and narrow. A failure here is REPORTED loudly,
+          # with the branch name so the transcript is one click away, and the run's
+          # actual verdict is left to the "Fail the run if the dispatch itself
+          # failed" step below — which reads dispatch_exit, the thing that means
+          # what this workflow is for.
+          if ! gh pr create --draft \
             --title "dispatch(${{ inputs.agent }}): cloud beat transcript (${STATUS_WORD})" \
             --body "Automated dispatch via dispatch-agent-cloud.yml. dispatch_exit=${{ steps.dispatch.outputs.dispatch_exit }}, inbox=${{ steps.dispatch.outputs.inbox_file }}. The transcript's claim manifest is the first thing to read (it names what ${{ inputs.agent }} actually had — reasoning + repo_read, no shell — and whether any execution claim is grounded in evidence it was shown). Never auto-merged: a different model family reads this before anything downstream trusts it." \
-            --head "$BRANCH" --base main
+            --head "$BRANCH" --base main; then
+            echo "::warning::gh pr create FAILED (commonly the account API rate limit). The transcript is COMMITTED AND PUSHED to '$BRANCH' — nothing was lost. Open the PR by hand: https://github.com/${{ github.repository }}/pull/new/$BRANCH"
+          fi
 
       - name: Fail the run if the dispatch itself failed
         # A transcript PR (if any) still gets opened above — the failure is
