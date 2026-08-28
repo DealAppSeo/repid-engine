@@ -41,6 +41,22 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // behind a key is not a public reputation surface). POST /ratings stays authed.
   if (req.method === 'GET' && req.path.startsWith('/api/v1/ratings/')) return next();
 
+  // The publish queue's READ is keyless; its WRITE is not.
+  //
+  // Caught before shipping, by running the same probe that found three other reads returning
+  // 401 to their own UI: this endpoint was mounted after authMiddleware, so the surface built
+  // to prove content is verified would itself have been unreadable. Shipping that would have
+  // been the very bug being fixed elsewhere in the same session, in new code.
+  //
+  // A verification record behind a key is not a verification record — the point is that
+  // anyone can check that what was published was checked first. The handler deliberately
+  // selects METADATA ONLY: id, platform, status, verdict, score, mode, author, timestamps.
+  // It does not select `content` or `hashtags`, so unpublished copy is not exposed by it.
+  //
+  // GET ONLY. POST /api/v1/social/drafts writes a row a scheduler may later publish and stays
+  // authed — an anonymous caller must not be able to put anything into the queue at all.
+  if (req.method === 'GET' && req.path === '/api/v1/social/drafts') return next();
+
   // The service catalog is a public, keyless READ, for the same reason as ratings
   // above: a marketplace behind a key is not a public marketplace. The SDK's
   // `listServices()` calls GET /api/v1/services, and until now a developer who

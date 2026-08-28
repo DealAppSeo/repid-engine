@@ -22,6 +22,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { authMiddleware } from '../src/middleware/auth';
 
 const inserted: any[] = [];
 let nextId = 1;
@@ -177,5 +178,54 @@ describe('the app-side states and the database gate agree', () => {
     // silently publishing — but the reverse edit would be silent, so pin both.
     expect(BLOCKING_DECISION).toBe('vetoed');
     expect([...PUBLISHABLE_STATUSES].sort()).toEqual(['approved', 'posted', 'ready', 'scheduled']);
+  });
+});
+
+describe('the queue is READABLE without a key, and WRITABLE only with one', () => {
+  /**
+   * CAUGHT BEFORE SHIPPING, and only because the same probe that found three other reads
+   * returning 401 to their own UI was run against this new one too. The route was mounted
+   * after authMiddleware, so the surface built to prove content is verified would itself
+   * have been unreadable — the very bug being fixed elsewhere, reintroduced in new code.
+   *
+   * A verification record behind a key is not a verification record. The read is keyless
+   * because the point is that anyone can check that what was published was checked first;
+   * the handler selects metadata only and never `content`, so unpublished copy stays private.
+   *
+   * The write stays authed, and that asymmetry is the whole design: an anonymous caller must
+   * not be able to put anything into a queue a scheduler may later publish.
+   */
+  function passesKeyless(method: string, path: string): Promise<boolean> {
+    const req: any = { method, path, headers: {}, query: {}, body: {} };
+    const res: any = {
+      statusCode: 0,
+      status(c: number) { this.statusCode = c; return this; },
+      json() { return this; },
+    };
+    const next = jest.fn();
+    return Promise.resolve(authMiddleware(req, res, next)).then(
+      () => next.mock.calls.length === 1 && res.statusCode === 0,
+    );
+  }
+
+  it('the read is reachable with no key', async () => {
+    expect(await passesKeyless('GET', '/api/v1/social/drafts')).toBe(true);
+  });
+
+  it('THE ASYMMETRY: the write still requires one', async () => {
+    expect(await passesKeyless('POST', '/api/v1/social/drafts')).toBe(false);
+  });
+
+  it('the route selects metadata only — never the draft copy itself', () => {
+    // The read being public is only defensible while this holds. If someone adds `content`
+    // to the select, unpublished campaign copy becomes world-readable, and nothing else in
+    // the system would notice.
+    const route = readFileSync(join(__dirname, '..', 'src', 'routes', 'social-queue.ts'), 'utf8');
+    const select = route.match(/\.select\(\s*'([^']+)'/);
+    expect(select).not.toBeNull();
+    const columns = select![1]!.split(',').map((c) => c.trim());
+    expect(columns).not.toContain('content');
+    expect(columns).not.toContain('hashtags');
+    expect(columns).toContain('hal_decision');
   });
 });
