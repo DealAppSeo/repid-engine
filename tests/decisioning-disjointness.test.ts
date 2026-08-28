@@ -122,9 +122,18 @@ describe('family-registry lookup', () => {
     // qwen/qwen-2.5-72b-instruct, which the 99-row frozen-corpus holdout caught
     // answering inside a LIVE quorum with a regex-guessed (spoofable) family.
     // Both verified unambiguous via matchedFamilies() before being seeded.
-    expect(FAMILY_REGISTRY_SEED.length).toBe(26); // seed table; sweep is at load time
+    // 29 as of 2026-08-28: +3 for openai/gpt-oss-20b, deepseek-v4-flash and
+    // gemini-2.5-flash — the three ids a LIVE production quorum reported in
+    // `families_unmapped` on that date, i.e. every vote in that panel had its
+    // family regex-guessed. Two arrived by paths that postdate the last edit here:
+    // gpt-oss is groq's migration target after llama-3.1-8b-instant was shut down,
+    // and deepseek-v4-flash was picked automatically by catalog self-healing — so
+    // the panel's model set now changes without a commit. The third is a near-miss:
+    // 'models/gemini-2.5-flash' was seeded, but the caller sends it unprefixed.
+    // All three verified unambiguous via matchedFamilies() before seeding.
+    expect(FAMILY_REGISTRY_SEED.length).toBe(29); // seed table; sweep is at load time
     const legit = FAMILY_REGISTRY_SEED.filter((e) => !isAmbiguousFamily(e.model));
-    expect(legit.length).toBe(25); // 26 seeded - 1 ambiguous (hf/deepseek-r1-qwen-32b) swept out at load
+    expect(legit.length).toBe(28); // 29 seeded - 1 ambiguous (hf/deepseek-r1-qwen-32b) swept out at load
     for (const e of legit) {
       expect(resolveFamily(e.model)).toBe(e.family);
     }

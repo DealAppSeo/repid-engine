@@ -549,3 +549,213 @@ describe('FAILABILITY — every guard above must be able to go red', () => {
     expect(m!.selection?.reason).toMatch(/mistral-small-latest/);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+/**
+ * THE SKIP GUARD RAN BEFORE SELF-HEALING, so self-healing could never fire for cerebras.
+ *
+ * MEASURED ON PRODUCTION 2026-08-28 at commit 736062e, keyless POST /api/v1/hal/evaluate:
+ *
+ *   "skipped":[{"name":"cerebras","reason":"not called: configured model 'zai-glm-4.7' is
+ *              retired and 404s on every call. …"}]
+ *
+ * On the SAME response, deepseek's dead pinned id was silently healed from the live catalog
+ * ("selected 'deepseek-v4-flash' from this key's live model list"). One provider healed; the
+ * other reported a skip. The difference is not the catalog — it is one `&&`.
+ *
+ * The builder read:
+ *
+ *     if (c && enabled.cerebras && !cerebrasDeadModelSkip()) add(…)
+ *
+ * and the comment directly above it claimed "SELF-HEALING SUPERSEDES THE HARDCODED SKIP … a
+ * cerebras with NO usable configured model is no longer automatically nothing". That comment is
+ * mine, from earlier the same day, and it was false in BOTH cases it named:
+ *
+ *   - no model configured  → cerebrasDeadModelSkip() returns the "no model configured" skip
+ *   - model configured but retired → it returns the "retired" skip
+ *
+ * Those are exactly the two states where healing is worth anything, and in both the guard
+ * short-circuited before `add()` was ever reached. The only state that got through to selection
+ * was HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL=true — which is the operator having already fixed it by
+ * hand, the case that needs no healing at all. The existing FAILABILITY test above passes for
+ * precisely that reason: it sets that flag.
+ *
+ * A mechanism wired at both ends that cannot run under any condition it was built for. Same class
+ * as the workflow that always refused on `main`, found the same way — by executing it.
+ *
+ * THE SKIP IS NOT DELETED, and must not be: with a cold catalog there is nothing to select from,
+ * and dialling a known-404 id costs a request and reports the quorum `partial`. What changed is
+ * ORDER. Selection gets first refusal; the skip stands only when selection finds nothing — which
+ * `add()` already reports by returning false and pushing nothing.
+ */
+describe('cerebras: self-healing gets first refusal, and the skip is the fallback', () => {
+  const cerebrasWith = (env: Record<string, string | undefined>) =>
+    withEnv({ CEREBRAS_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'false', ...env }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }).find((p) => p.name === 'cerebras'),
+    );
+
+  /** A warm catalog offering one live id, and a ledger that has measured the pinned id dead. */
+  function warmWithLiveReplacement() {
+    setCachedCatalog({
+      entries: { cerebras: { provider: 'cerebras', status: 'MEASURED', models: ['zai-glm-4.9'], detail: 't', fetched_at: 'now' } },
+      refreshed_at: 'now',
+    });
+    setCachedEvidence({
+      rows: [{ provider: 'cerebras', model: 'zai-glm-4.7', successes: 0, not_found: 9, other_failures: 0, liveness: 'DEAD' }],
+      refreshed_at: 'now',
+    });
+  }
+
+  it("PRODUCTION'S EXACT STATE: a retired pin + a live catalog now heals instead of skipping", () => {
+    // No HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL — that is the whole point. Before the fix this was
+    // undefined (guard short-circuited); the family sat out of every quorum while a model it
+    // could reach was sitting in the catalog.
+    warmWithLiveReplacement();
+    const c = cerebrasWith({ HAL_S2_CEREBRAS_MODEL: 'zai-glm-4.7' });
+    expect(c).toBeDefined();
+    expect(c!.model).toBe('zai-glm-4.9');
+    expect(c!.selection?.substituted).toBe(true);
+    expect(c!.selection?.source).toBe('catalog');
+  });
+
+  it('NO MODEL CONFIGURED AT ALL also heals — the other case the comment claimed', () => {
+    warmWithLiveReplacement();
+    const c = cerebrasWith({ HAL_S2_CEREBRAS_MODEL: undefined });
+    expect(c).toBeDefined();
+    expect(c!.model).toBe('zai-glm-4.9');
+  });
+
+  it('FAILABILITY — a COLD catalog still skips: healing must not become invention', () => {
+    // The state every process boots in. Nothing has been measured, so there is nothing to select
+    // from, and dialling the retired pin anyway is the bug the skip exists to prevent. If this
+    // ever goes green with a model, the fix has turned into a guess.
+    coldCaches();
+    expect(cerebrasWith({ HAL_S2_CEREBRAS_MODEL: 'zai-glm-4.7' })).toBeUndefined();
+  });
+
+  it('FAILABILITY — a warm catalog with NO live model still skips', () => {
+    // The vendor answered and offered nothing this key can chat with. That is a real skip, and
+    // it must survive: an empty catalog is a measurement, not a licence to dial the dead id.
+    setCachedCatalog({
+      entries: { cerebras: { provider: 'cerebras', status: 'MEASURED', models: [], detail: 't', fetched_at: 'now' } },
+      refreshed_at: 'now',
+    });
+    expect(cerebrasWith({ HAL_S2_CEREBRAS_MODEL: 'zai-glm-4.7' })).toBeUndefined();
+  });
+
+  it('FAILABILITY — a catalog offering ONLY the dead id still skips', () => {
+    // The vendor still lists a model our ledger has watched 404 nine times. The ledger outranks
+    // the catalog; nothing eligible remains.
+    warmWithLiveReplacement();
+    setCachedCatalog({
+      entries: { cerebras: { provider: 'cerebras', status: 'MEASURED', models: ['zai-glm-4.7'], detail: 't', fetched_at: 'now' } },
+      refreshed_at: 'now',
+    });
+    expect(cerebrasWith({ HAL_S2_CEREBRAS_MODEL: 'zai-glm-4.7' })).toBeUndefined();
+  });
+
+  it('an operator id that is NOT dead is still used untouched — the operator keeps the last word', () => {
+    warmWithLiveReplacement();
+    const c = cerebrasWith({ HAL_S2_CEREBRAS_MODEL: 'zai-glm-4.9' });
+    expect(c!.model).toBe('zai-glm-4.9');
+    // `selection` is attached ONLY on a substitution (see add()), so its absence here IS the
+    // assertion: nothing was overridden, and the reported-substitution channel stays quiet when
+    // there is nothing to report.
+    expect(c!.selection).toBeUndefined();
+  });
+
+  it('ALLOW_DEAD_MODEL still forces the dead id through, unchanged', () => {
+    // The documented manual override must not be quietly overruled by healing.
+    coldCaches();
+    const c = cerebrasWith({ HAL_S2_CEREBRAS_MODEL: 'zai-glm-4.7', HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL: 'true' });
+    expect(c!.model).toBe('zai-glm-4.7');
+  });
+
+  it('no key means no member and no skip — absence is not a dead model', () => {
+    warmWithLiveReplacement();
+    const c = withEnv({ CEREBRAS_API_KEY: undefined, HAL_QUORUM_AUTOBACKFILL: 'false' }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }).find((p) => p.name === 'cerebras'),
+    );
+    expect(c).toBeUndefined();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+/**
+ * Z.AI joins the QUORUM, not just the router — the credential now buys the family it names.
+ *
+ * `src/providers/zai.ts` and `ZAI_API_KEY` both already existed, and the adapter's own header says
+ * what they did NOT do: "this does not widen HAL quorum on its own". It served
+ * src/providers/router.ts only. So the key could be set on the service and the fact-check panel
+ * would still have no GLM voice — a credential that looks connected and buys nothing.
+ *
+ * That mattered because `glm` reached the quorum through cerebras, whose shipped ids are all
+ * retired. MEASURED on production 2026-08-28: four families answered and glm was not among them.
+ * Z.AI publishes GLM on a permanently free tier, so this restores the family at zero marginal cost
+ * — and on the vendor's own account, which is independence in the BILLING sense too. That is the
+ * property MIN_QUORUM_FOR_VETO=2 actually rests on: two families on one credit pool are one
+ * billing event away from being one family.
+ */
+describe('zai is a first-class quorum member', () => {
+  const zaiOf = (env: Record<string, string | undefined>) =>
+    withEnv({ HAL_QUORUM_AUTOBACKFILL: 'false', ...env }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF, zai: true } as never).find((p) => p.name === 'zai'),
+    );
+
+  it('key present + enabled -> a glm-family member on the vendor endpoint', () => {
+    const z = zaiOf({ ZAI_API_KEY: 'k' });
+    expect(z).toBeDefined();
+    expect(z!.family).toBe('glm');
+    expect(z!.endpoint).toBe('https://api.z.ai/api/paas/v4/chat/completions');
+    expect(z!.model).toBe('glm-4.5-flash');
+  });
+
+  it('FAILABILITY: no key, no member — presence is the only trigger', () => {
+    expect(zaiOf({ ZAI_API_KEY: undefined })).toBeUndefined();
+  });
+
+  it('it is auto-backfilled like the other free families', () => {
+    // Free tier, so it belongs in the free wave, not behind an opt-in nobody sets.
+    const z = withEnv({ ZAI_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF }).find((p) => p.name === 'zai'),
+    );
+    expect(z).toBeDefined();
+  });
+
+  it('HAL_QUORUM_AUTOBACKFILL=false + no opt-in leaves it out', () => {
+    const z = withEnv({ ZAI_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'false' }, () =>
+      buildFactCheckProvidersWith({ ...ALL_OFF }).find((p) => p.name === 'zai'),
+    );
+    expect(z).toBeUndefined();
+  });
+
+  it('an operator model override is honoured', () => {
+    expect(zaiOf({ ZAI_API_KEY: 'k', HAL_S2_ZAI_MODEL: 'glm-4.7' })!.model).toBe('glm-4.7');
+  });
+
+  it('THE POINT: it adds a family the panel did not have, so the veto floor gets real headroom', () => {
+    // groq=openai, mistral=mistral, zai=glm. Three families where cerebras' retirement left two.
+    const out = withEnv({ GROQ_API_KEY: 'k', MISTRAL_API_KEY: 'k', ZAI_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' },
+      () => buildFactCheckProvidersWith({ ...ALL_OFF, groq: true }));
+    const fams = new Set(out.map((p) => p.family));
+    expect(fams.has('glm')).toBe(true);
+    expect(fams.size).toBeGreaterThanOrEqual(3);
+  });
+
+  it('SELF-HEALING APPLIES TO IT TOO — it is not exempt from the system it joined', () => {
+    // A member with no probe row can never have a MEASURED catalog, so it could never notice its
+    // own model retiring. That is the failure the whole self-healing effort exists to end; adding a
+    // provider outside it would have quietly recreated it for the newest member.
+    setCachedCatalog({
+      entries: { zai: { provider: 'zai', status: 'MEASURED', models: ['glm-4.9-flash'], detail: 't', fetched_at: 'now' } },
+      refreshed_at: 'now',
+    });
+    setCachedEvidence({
+      rows: [{ provider: 'zai', model: 'glm-4.5-flash', successes: 0, not_found: 5, other_failures: 0, liveness: 'DEAD' }],
+      refreshed_at: 'now',
+    });
+    const z = zaiOf({ ZAI_API_KEY: 'k' });
+    expect(z!.model).toBe('glm-4.9-flash');
+    expect(z!.selection?.substituted).toBe(true);
+  });
+});

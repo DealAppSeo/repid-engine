@@ -64,6 +64,20 @@ export const PROVIDER_PROBES: ProviderProbe[] = [
   { provider: 'gemini', env: 'GEMINI_API_KEY', family: 'gemini', url: 'https://generativelanguage.googleapis.com/v1beta/models', headers: (k) => ({ 'x-goog-api-key': k }) },
   { provider: 'deepseek', env: 'DEEPSEEK_API_KEY', family: 'deepseek', url: 'https://api.deepseek.com/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
   { provider: 'mistral', env: 'MISTRAL_API_KEY', family: 'mistral', url: 'https://api.mistral.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
+  // Z.AI direct — the `glm` family from the vendor. Added when zai joined the HAL quorum: without a
+  // row here `catalogIsMeasured('zai')` is false forever, so the one provider added AFTER the
+  // self-healing work would have been the only one exempt from it — a new member permanently unable
+  // to notice its own model retiring, which is the exact failure that started that work.
+  //
+  // THE URL IS NOT_CHECKED: no Z.AI credential is reachable from a dev sandbox, so this path is
+  // derived from the chat endpoint's shape (`/api/paas/v4/chat/completions` → `/api/paas/v4/models`)
+  // and the vendor's OpenAI compatibility, not observed. That is survivable BY CONSTRUCTION rather
+  // than by luck: a wrong URL fails the fetch, the entry never reaches status MEASURED,
+  // `catalogIsMeasured` stays false, and selection falls back to the configured/static model exactly
+  // as it does for a cold cache. A bad guess here degrades to today's behaviour; it cannot invent a
+  // model. Confirm against provider_health after deploy and delete this paragraph when it is seen
+  // MEASURED.
+  { provider: 'zai', env: 'ZAI_API_KEY', family: 'glm', url: 'https://api.z.ai/api/paas/v4/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },
   // env/envFallbacks are DERIVED from XAI_KEY_VARS rather than spelled out, so this row cannot
   // drift from HAL, CRAG and the dispatcher by someone editing one list.
   { provider: 'grok', env: XAI_KEY_VARS[0], envFallbacks: [...XAI_KEY_VARS.slice(1)], family: 'grok', url: 'https://api.x.ai/v1/models', headers: (k) => ({ Authorization: `Bearer ${k}` }) },

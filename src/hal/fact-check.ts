@@ -710,7 +710,14 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
 
     const parsed = parseVerdict(content);
-    return { provider: cfg.name, verdict: parsed.verdict, confidence: parsed.confidence, note: parsed.note, latency_ms };
+    // `model` IS NOT OPTIONAL DECORATION HERE. Every ERROR return above sets it; this one — the only
+    // return that carries a real verdict — did not, so the field was populated exactly on the paths
+    // where no model had answered and empty on every path where one had. Measured on production
+    // 2026-08-28: `provider_responses` came back with no model, and SBFA's per-version reliability
+    // key (§2.1, explicitly PER-VERSION not per-host) silently degraded to the provider name.
+    // That got sharper the day self-healing selection shipped: selection now substitutes models
+    // automatically, and which model actually answered is the record that makes a swap auditable.
+    return { provider: cfg.name, model: cfg.model, verdict: parsed.verdict, confidence: parsed.confidence, note: parsed.note, latency_ms };
   } catch (e: any) {
     const latency_ms = Date.now() - start;
     const error = e?.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : e?.message ?? String(e);
@@ -1278,7 +1285,13 @@ export async function factCheck(
   let sbfaField: FactCheckResult['sbfa'];
   if (process.env.HAL_SBFA_SHADOW !== 'false') {
     try {
-      const votes = votesFromVerdicts(verdicts);
+      // PASS THE REGISTRY FAMILY MAP. Without it every vote reached sbfaConsensus with
+      // familyKey undefined, so `families.size` was structurally 0 and the §5 correlated-panel
+      // warning fired on EVERY one-sided quorum of 4+ — including a perfectly independent one
+      // (measured on production 2026-08-28: 4 distinct families, trace read "0 independent
+      // families"). It is `familyByName`, the same registry-primary map every other family
+      // computation in this quorum uses, so the independence signal cannot fork into two answers.
+      const votes = votesFromVerdicts(verdicts, (provider) => familyByName.get(provider));
       // Placeholder oracle until GA wires the verified-outcome oracle (§2.1). NOT a real reliability source.
       const oracle = new ConstantReliabilityOracle(0.7, 4);
       const v = sbfaConsensus({ votes, stakes: sbfaStakes(), action: sbfaAction(), category: 'factual', oracle });
@@ -1547,6 +1560,8 @@ export interface FactCheckProviderEnable {
   gloo?: boolean;
   /** Anthropic direct — independent `claude` family, escalation tier. Optional so callers compile. */
   anthropic?: boolean;
+  /** Z.AI direct — the `glm` family from the vendor's free tier. Optional so callers compile. */
+  zai?: boolean;
 }
 
 /**
@@ -1669,10 +1684,25 @@ export function resolveModelFor(
   staticDefault: string | undefined,
   familiesTaken: ReadonlySet<string>,
   catalogProvider: string = ledgerProvider,
+  /**
+   * Drop the operator pin from consideration for this one resolution.
+   *
+   * ONLY for a caller that has ALREADY established the pin is not callable — today that is the
+   * cerebras site, where `cerebrasDeadModelSkip()` has decided the configured id is retired and
+   * refuses to dial it. Having refused it, continuing to let it win precedence would mean the
+   * provider is dropped while a model the key CAN reach sits unused in the catalog.
+   *
+   * `selectModel` is deliberately NOT changed to do this itself: its rule is that an operator
+   * override is honoured unless the LEDGER measured it dead, because an operator may legitimately
+   * know about a model our static list does not. That contract stays. This is the narrow case
+   * where the refusal has already happened one layer up, and the operator still has the last word
+   * via HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL, which suppresses the skip entirely and never reaches here.
+   */
+  ignoreOperatorModel = false,
 ): ModelChoice {
   return selectModel({
     provider: ledgerProvider,
-    operatorModel: process.env[envVar]?.trim(),
+    operatorModel: ignoreOperatorModel ? undefined : process.env[envVar]?.trim(),
     staticModel: staticDefault,
     catalogModels: catalogModelsFor(catalogProvider),
     catalogMeasured: catalogIsMeasured(catalogProvider),
@@ -1706,8 +1736,10 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     staticDefault: string | undefined,
     /** The HOST whose `/models` list is authoritative — see resolveModelFor. Defaults to cfg.name. */
     catalogProvider: string = cfg.name,
+    /** See resolveModelFor — only the cerebras site sets this, after its skip guard has fired. */
+    ignoreOperatorModel = false,
   ): boolean => {
-    const choice = resolveModelFor(cfg.name, envVar, staticDefault, familiesTaken, catalogProvider);
+    const choice = resolveModelFor(cfg.name, envVar, staticDefault, familiesTaken, catalogProvider, ignoreOperatorModel);
     if (!choice.model) {
       console.warn(`[hal] quorum: ${cfg.name} not added — ${choice.reason}`);
       return false;
@@ -1756,16 +1788,39 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // was written about — and a reported 404 is already better than a silent absence, so only a
   // reported SKIP is an improvement on the bug this replaces.
   //
-  // SELF-HEALING SUPERSEDES THE HARDCODED SKIP, in one direction only. `cerebrasDeadModelSkip()`
-  // still governs whether cerebras is dialled at all, so the reported-skip contract is unchanged.
-  // What changed is that a cerebras with NO usable configured model is no longer automatically
-  // nothing: if the live catalog offers a model this key can reach, `add()` selects one and the
-  // family rejoins the quorum without a release. When the catalog is cold — every process until
-  // the first refresh — there is nothing to select from and the behaviour is exactly as before.
+  // SELF-HEALING GETS FIRST REFUSAL; THE SKIP IS THE FALLBACK. THE ORDER IS THE WHOLE POINT.
+  //
+  // This guard used to read `&& !cerebrasDeadModelSkip()`, and the comment here claimed healing
+  // superseded it. MEASURED 2026-08-28 on production: it did not, and could not. The skip fires in
+  // exactly two states — no model configured, and a configured-but-retired model — and those are
+  // precisely the two states where healing is worth anything. Short-circuiting on it meant `add()`
+  // was never reached in either, so the only state that ever got to selection was
+  // HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL=true: the operator having already fixed it by hand. A
+  // mechanism wired at both ends that could not run under any condition it was built for.
+  //
+  // Live evidence, one response: deepseek's dead pin healed from the catalog while cerebras
+  // reported a skip. Same catalog, same ledger, same builder — one `&&` apart.
+  //
+  // THE SKIP IS NOT DELETED and must not be. With a cold catalog there is nothing to select from,
+  // and dialling a known-404 id burns a request and reports the quorum `partial` — the bug the skip
+  // exists to prevent. So selection is asked FIRST, and the skip stands only when selection finds
+  // nothing: `add()` already reports exactly that by returning false and pushing nothing.
+  //
+  // The pin is dropped from consideration ONLY in the skip case (see resolveModelFor's last
+  // parameter): the skip has already established that id is not callable, and leaving it winning
+  // precedence would drop the family while a reachable model sits unused in the catalog. The
+  // operator keeps the last word — ALLOW_DEAD_MODEL suppresses the skip and never reaches here.
   const c = process.env.CEREBRAS_API_KEY?.trim();
   const cerebrasModel = process.env.HAL_S2_CEREBRAS_MODEL?.trim();
-  if (c && enabled.cerebras && !cerebrasDeadModelSkip()) {
-    add({ name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c }, 'HAL_S2_CEREBRAS_MODEL', cerebrasModel);
+  if (c && enabled.cerebras) {
+    const pinUnusable = !!cerebrasDeadModelSkip();
+    add(
+      { name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c },
+      'HAL_S2_CEREBRAS_MODEL',
+      pinUnusable ? undefined : cerebrasModel,
+      'cerebras',
+      pinUnusable,
+    );
   }
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
   // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
@@ -1868,6 +1923,30 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const ms = process.env.MISTRAL_API_KEY?.trim();
   if (ms && (enabled.mistral || ab)) {
     add({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, family: 'mistral' }, 'HAL_S2_MISTRAL_MODEL', 'mistral-small-latest');
+  }
+  // Z.AI DIRECT — the `glm` family bought from the vendor instead of a reseller.
+  //
+  // WHY THIS IS HERE AND NOT ONLY IN THE ROUTER. src/providers/zai.ts has existed and reads the
+  // same ZAI_API_KEY, but it serves src/providers/router.ts only; its own header says so — "this
+  // does not widen HAL quorum on its own". So the key could be set and the quorum would still have
+  // no GLM voice. That is the gap this closes: the credential now buys the family it names.
+  //
+  // IT REPLACES A FAMILY THE QUORUM CURRENTLY LOSES. `glm` reached the panel through cerebras, and
+  // cerebras' shipped ids are retired (see cerebrasDeadModelSkip) — measured on production
+  // 2026-08-28, the panel ran four families with glm absent. Z.AI publishes GLM on a permanently
+  // free tier, so this restores the fifth family at zero marginal cost, from the vendor, on its own
+  // account and its own credit pool — independence in the billing sense as well as the model sense,
+  // which is the property MIN_QUORUM_FOR_VETO=2 actually depends on.
+  //
+  // OpenAI-compatible wire format, so no dialect is needed. Default `glm-4.5-flash`: GLM-4.7 is
+  // also free but rate-limits harder, and Flash is the one that survives a continuous loop
+  // (src/providers/zai.ts records the same choice for the same reason).
+  //
+  // AUTO-BACKFILLED like the other free families: key presence is the trigger, HAL_S2_ENABLE_ZAI
+  // forces it on and HAL_QUORUM_AUTOBACKFILL=false restores pure per-provider gating.
+  const z = process.env.ZAI_API_KEY?.trim();
+  if (z && (enabled.zai || ab)) {
+    add({ name: 'zai', endpoint: 'https://api.z.ai/api/paas/v4/chat/completions', apiKey: z, family: 'glm' }, 'HAL_S2_ZAI_MODEL', 'glm-4.5-flash');
   }
   // OpenRouter — LAST backfill resort (aggregator). Its family derives from the configured model, so the
   // DEFAULT is a QWEN model — a family distinct from the always-on hosts (groq=llama, cerebras=glm) and
@@ -2067,6 +2146,7 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
     // slug have never been exercised, in the same change that fixes a quorum outage, would
     // make it impossible to tell which change did what if the next run is still degraded.
     gloo: process.env.HAL_S2_ENABLE_GLOO === 'true',
+    zai: process.env.HAL_S2_ENABLE_ZAI === 'true',
   });
 }
 

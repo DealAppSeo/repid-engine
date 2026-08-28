@@ -39,9 +39,20 @@ export interface FamilyRegistryEntry {
 }
 
 /**
- * SEED = the 21 confidently-mapped telemetry pairs [V 2026-07-05]. Keyed at lookup by (provider, model)
- * AND by model alone (model is the family-determining field per familyOf's own doc). Kept byte-aligned
- * with the migration seed so DB and code cannot drift.
+ * SEED = the 21 confidently-mapped telemetry pairs [V 2026-07-05] plus every model added since.
+ * Keyed at lookup by (provider, model) AND by model alone (model is the family-determining field per
+ * familyOf's own doc).
+ *
+ * THIS ARRAY IS THE RUNTIME AUTHORITY, and the migration is a mirror of it — not the other way
+ * round. 2026-07-05's migration says so explicitly ("the code module mirrors it and is the runtime
+ * authority until this is applied"), and it is still PROMOTION-GATED / never applied.
+ *
+ * This comment used to end "Kept byte-aligned with the migration seed so DB and code cannot drift."
+ * By 2026-08-28 that was false: seven rows had been added here and none to any migration. Nothing
+ * broke, because the DB copy is not consulted — but a comment claiming an invariant that had already
+ * lapsed is worse than no comment, since it tells the next reader not to check. Adding a row here is
+ * sufficient for correctness; migrations/2026-08-28-model-family-registry-catchup.sql exists to
+ * restore parity IF and WHEN the table is promoted.
  */
 export const FAMILY_REGISTRY_SEED: readonly FamilyRegistryEntry[] = Object.freeze([
   { provider: 'groq',              model: 'llama-3.1-8b-instant',                family: 'llama',     source: 'familyOf', evidence_n: 77536 },
@@ -94,6 +105,25 @@ export const FAMILY_REGISTRY_SEED: readonly FamilyRegistryEntry[] = Object.freez
   // telemetry rows at seed time, NOT invented mappings.
   { provider: 'gemini',            model: 'google/gemini-3.5-flash',             family: 'gemini',    source: 'hal-config-default', evidence_n: 0 },
   { provider: 'openrouter',        model: 'qwen/qwen-2.5-72b-instruct',          family: 'qwen',      source: 'hal-config-default', evidence_n: 0 },
+  // THE THREE MODELS PRODUCTION WAS ACTUALLY RUNNING, and none of them was in this table.
+  // MEASURED 2026-08-28, keyless POST /api/v1/hal/evaluate against 736062e:
+  //     "families_unmapped":["openai/gpt-oss-20b","deepseek-v4-flash","gemini-2.5-flash"]
+  // Every live vote in that quorum had its family REGEX-GUESSED (the fallback the registry exists
+  // to replace, and which its own log calls spoofable). Two of the three arrived here by paths that
+  // did not exist when this table was last touched: 'openai/gpt-oss-20b' is groq's migration target
+  // after llama-3.1-8b-instant was shut down, and 'deepseek-v4-flash' was chosen AUTOMATICALLY by
+  // catalog self-healing — so the set of models in the panel now changes without a commit, and a
+  // hand-maintained registry falls behind by default rather than by neglect.
+  //
+  // 'gemini-2.5-flash' is the subtler one: 'models/gemini-2.5-flash' IS seeded above, and the
+  // catalog parser strips Google's 'models/' prefix because the completion endpoint rejects it. So
+  // the registry held the id in the one form the caller never sends. A near-match is a miss.
+  //
+  // All three verified unambiguous via matchedFamilies() before seeding — ["openai"], ["deepseek"],
+  // ["gemini"] respectively, each a single known family.
+  { provider: 'groq',              model: 'openai/gpt-oss-20b',                  family: 'openai',    source: 'hal-config-default', evidence_n: 0 },
+  { provider: 'deepseek',          model: 'deepseek-v4-flash',                   family: 'deepseek',  source: 'hal-config-default', evidence_n: 0 },
+  { provider: 'gemini',            model: 'gemini-2.5-flash',                    family: 'gemini',    source: 'hal-config-default', evidence_n: 0 },
 ]);
 
 /**

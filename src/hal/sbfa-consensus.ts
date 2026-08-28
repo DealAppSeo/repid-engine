@@ -487,8 +487,28 @@ export interface VerdictLike {
  * Map fact-check verdicts → SBFA votes. `belief` is "the veto/slash action IS warranted", i.e.
  * P(claim is FALSE): FALSE → high, TRUE → low, UNCERTAIN → 0.5 with low confidence (the DST
  * discounting then routes its mass to ignorance, not to a decisive side). ERROR votes are dropped.
+ *
+ * `familyOf` RESOLVES INDEPENDENCE, and is what makes the §5 correlated-panel heuristic mean
+ * anything. A ProviderVerdict does not carry `family`, so before this parameter existed every live
+ * vote reached `sbfaConsensus` with `familyKey: undefined` — `families.size` was therefore always 0
+ * and `correlated_warning` fired on EVERY one-sided panel of 4+, including a perfectly independent
+ * one (measured on production 2026-08-28: 4 distinct families, trace read "0 independent families").
+ * A warning that cannot not-fire is not a warning, and this one was inverted: more independent
+ * families raised `votes.length` while `families.size` stayed pinned at 0.
+ *
+ * It is a RESOLVER rather than a second family table on purpose — the caller passes the same
+ * registry-primary map (`familyByName`) that every other family computation in the quorum already
+ * uses, so this cannot drift into a second opinion about who is independent of whom.
+ *
+ * Optional, and an explicit `verdict.family` still wins: the builder pre-tags family on some paths
+ * from the same registry, and a lookup must never overwrite a tag that is already authoritative. A
+ * resolver MISS returns undefined and stays undefined — an unknown family is counted as unknown,
+ * never quietly folded into one the provider never had.
  */
-export function votesFromVerdicts(verdicts: VerdictLike[]): ValidatorVote[] {
+export function votesFromVerdicts(
+  verdicts: VerdictLike[],
+  familyOf?: (provider: string) => string | undefined,
+): ValidatorVote[] {
   const out: ValidatorVote[] = [];
   for (const v of verdicts) {
     if (v.verdict === 'ERROR') continue;
@@ -510,7 +530,7 @@ export function votesFromVerdicts(verdicts: VerdictLike[]): ValidatorVote[] {
       modelVersion: v.model ?? v.provider,
       belief,
       confidence,
-      familyKey: v.family,
+      familyKey: v.family ?? familyOf?.(v.provider),
     });
   }
   return out;
