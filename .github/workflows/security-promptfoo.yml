@@ -53,15 +53,34 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 22, NOT 20, AND THIS IS THE WHOLE REASON THE GATE NEVER RAN.
+          # promptfoo declares engines >=22.22.0 and refuses to start below it:
+          #   "promptfoo requires a supported Node.js runtime. Detected: v20.20.2
+          #    Required: >=22.22.0"
+          # On Node 20 every invocation is rejected before a single probe executes, so the gate
+          # reported NOT_CHECKED honestly and stayed green while evaluating nothing.
+          #
+          # This is the ONLY job that needs 22. The app itself targets >=20.9.0 and Railway is
+          # untouched by this line — it applies to this workflow's runner and nothing else.
+          node-version: '22'
 
       - name: Install (legacy peer deps per nixpacks.toml)
         run: npm install --legacy-peer-deps
 
-      # NO GLOBAL INSTALL. `npm install -g promptfoo` followed by spawning a bare `promptfoo`
-      # is what broke the first run of this gate: the install step succeeded, the binary was
-      # not on the PATH the runner's child process inherited, every invocation exited 127, and
-      # the gate evaluated nothing. Verified from the job log on 022631b.
+      # NO GLOBAL INSTALL — but NOT for the reason this comment used to give.
+      #
+      # It read: "the install succeeded, the binary was not on the PATH the child process
+      # inherited, every invocation exited 127." The 127 was real; the explanation was a guess
+      # made from the exit code alone, and it was wrong. The actual cause of BOTH that 127 and
+      # the later npx exit 1 was the Node version pinned above — promptfoo refuses to run on
+      # Node 20, so the global install had no working binary to place and npx downloaded the
+      # package then bailed at the engine check. One cause, two symptoms, two wrong diagnoses.
+      #
+      # It took shipping instrumentation that prints the command's own stderr to find that,
+      # after two attempts at guessing. The lesson is the exit code alone did not identify it.
+      #
+      # npx is still the right call: it needs no PATH and keeps the version pinned, so the
+      # gate's verdict cannot drift without a commit here.
       #
       # run-gate.mjs falls back to `npx --yes promptfoo@<pinned>` when PROMPTFOO_BIN is unset,
       # which needs no PATH at all and keeps the version pinned, so the gate's verdict still
