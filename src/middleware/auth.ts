@@ -62,6 +62,69 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && (req.path === '/api/v1/services' || req.path.startsWith('/api/v1/services/'))) {
     return next();
   }
+
+  // GET /api/v1/grants — MEASURED BROKEN IN PRODUCTION, 2026-08-28.
+  //
+  // trustshell.dev's Grants screen calls this with no key (`listGrantsFor` in
+  // lib/repid-engine.ts sends no auth header, exactly like its Passport and Market reads).
+  // The live endpoint answered `401 Unauthorized: API key required` to that exact request,
+  // while /api/v1/hal/stats answered 200 from the same client — so this was auth, not an
+  // outage. The screen has therefore never been able to read a single grant: its client
+  // maps any non-ok response to 'error', so the failure renders as a generic error state
+  // rather than as "you are not authenticated", and nothing upstream ever said otherwise.
+  //
+  // That makes it the same defect this codebase keeps paying for: a feature built complete,
+  // wired at both ends by inspection, and non-functional in production because the two ends
+  // disagreed about one thing nobody executed.
+  //
+  // GET ONLY, and the method check is the whole control. This router also carries
+  // POST /grants (mint), POST /grants/:id/revoke and POST /grants/:id/authorize, which
+  // change who may act on whose behalf and MUST stay authed. An exact path match rather
+  // than `startsWith` for the same reason.
+  //
+  // Verified against the table before opening it: principal_grants holds the authority
+  // record only — grantor/grantee ids, parent, depth, class, capabilities, caveats, role,
+  // validity window, revocation, mint reason, an idempotency token, and the grantor's
+  // signature plus the public address that produced it. No key or secret material is
+  // reachable through `select('*')` here. The signature and address are the PROOF a grant
+  // is genuine; publishing them is the point of a verifiable authority record, and neither
+  // authorizes anything on its own — minting still requires an API key.
+  if (req.method === 'GET' && req.path === '/api/v1/grants') {
+    return next();
+  }
+
+  // The Authority screen's two reads, broken the same way and found by the same probe.
+  //
+  // MEASURED 2026-08-28, keyless, against production:
+  //   GET /api/v1/stake/authority/<id>  -> 401
+  //   GET /api/v1/staking/<agent>       -> 401
+  // Both clients (`fetchAuthority`, `fetchStakePositions`) send no auth header and map any
+  // failure to `null`, so the screen renders "no authority data" rather than "you are not
+  // authenticated". Half the Trust Kernel — Grants and Authority — was reading nothing.
+  //
+  // WHY EACH IS SAFE TO OPEN, verified rather than assumed:
+  //   /stake/authority/:id returns four computed scalars — builder id, stake total,
+  //     authority, and the basis it was derived from. It reads no table columns out.
+  //   /staking/:agent previously did `select('*')`, which would have exposed a free-form
+  //     `metadata` jsonb with NO ROWS to inspect and therefore nothing to certify. It now
+  //     selects named columns; see the note at that handler. This bypass depends on that
+  //     narrowing and must not be landed without it.
+  //
+  // GET ONLY, and the method check is the control for THIS rule: it admits no POST, so
+  // nothing that moves collateral is opened by it. POST /api/v1/staking/deposit stays
+  // API-key gated.
+  //
+  // Do NOT read that as "every stake POST is API-key gated" — POST /api/v1/stake/deposit is
+  // deliberately bypassed a few lines below and authorizes itself in the route (a session
+  // for simulated stake, a wallet signature for a real one). An earlier draft of this
+  // comment asserted the opposite and would have sat fifteen lines above the rule that
+  // contradicts it. A comment that disagrees with the code beneath it is worse than none.
+  if (
+    req.method === 'GET' &&
+    (req.path.startsWith('/api/v1/stake/authority/') || req.path.startsWith('/api/v1/staking/'))
+  ) {
+    return next();
+  }
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
   if (req.method === 'POST' && req.path === '/api/v1/demo/run-round-anonymous') return next();
   if (req.method === 'POST' && req.path === '/api/v1/builder/token-signup') return next();
