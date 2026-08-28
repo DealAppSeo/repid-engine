@@ -25,6 +25,18 @@ export interface HalEvaluationRequest {
    * enablement is DB-driven (no redeploy) without mutating the shared singleton.
    */
   providersFn?: () => FactCheckProviderCfg[];
+  /**
+   * CALL ATTRIBUTION — the agent this evaluation is being run FOR. Forwarded to
+   * `factCheck()` so every provider call in the quorum is stamped with it in
+   * `llm_call_log.agent_id`.
+   *
+   * Set it ONLY where the caller has an authenticated agent. The public
+   * `/hal/evaluate` route has anonymous callers and deliberately leaves it unset —
+   * a null there is the honest value, and inventing an id to raise an attribution
+   * percentage would be exactly the kind of number that looks like success without
+   * being it.
+   */
+  agentId?: string;
 }
 
 export interface HalEvaluationResponse {
@@ -350,7 +362,11 @@ export class HalService {
     if (strictness === 2) {
       const providers = providersFn();
       if (providers.length > 0) {
-        const fc = await factCheck(req.text, providers, { vetoThreshold, flagThreshold });
+        const fc = await factCheck(req.text, providers, {
+          vetoThreshold,
+          flagThreshold,
+          ...(req.agentId ? { agentId: req.agentId } : {}),
+        });
         if (fc.providers_used > 0) {
           // A veto here still needs REAL provider successes behind it: the local_slm fallback
           // reaches this branch with a fabricated providers_used:1 and provider_health.succeeded:0.
