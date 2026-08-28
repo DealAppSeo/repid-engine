@@ -1788,40 +1788,6 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // was written about — and a reported 404 is already better than a silent absence, so only a
   // reported SKIP is an improvement on the bug this replaces.
   //
-  // SELF-HEALING GETS FIRST REFUSAL; THE SKIP IS THE FALLBACK. THE ORDER IS THE WHOLE POINT.
-  //
-  // This guard used to read `&& !cerebrasDeadModelSkip()`, and the comment here claimed healing
-  // superseded it. MEASURED 2026-08-28 on production: it did not, and could not. The skip fires in
-  // exactly two states — no model configured, and a configured-but-retired model — and those are
-  // precisely the two states where healing is worth anything. Short-circuiting on it meant `add()`
-  // was never reached in either, so the only state that ever got to selection was
-  // HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL=true: the operator having already fixed it by hand. A
-  // mechanism wired at both ends that could not run under any condition it was built for.
-  //
-  // Live evidence, one response: deepseek's dead pin healed from the catalog while cerebras
-  // reported a skip. Same catalog, same ledger, same builder — one `&&` apart.
-  //
-  // THE SKIP IS NOT DELETED and must not be. With a cold catalog there is nothing to select from,
-  // and dialling a known-404 id burns a request and reports the quorum `partial` — the bug the skip
-  // exists to prevent. So selection is asked FIRST, and the skip stands only when selection finds
-  // nothing: `add()` already reports exactly that by returning false and pushing nothing.
-  //
-  // The pin is dropped from consideration ONLY in the skip case (see resolveModelFor's last
-  // parameter): the skip has already established that id is not callable, and leaving it winning
-  // precedence would drop the family while a reachable model sits unused in the catalog. The
-  // operator keeps the last word — ALLOW_DEAD_MODEL suppresses the skip and never reaches here.
-  const c = process.env.CEREBRAS_API_KEY?.trim();
-  const cerebrasModel = process.env.HAL_S2_CEREBRAS_MODEL?.trim();
-  if (c && enabled.cerebras) {
-    const pinUnusable = !!cerebrasDeadModelSkip();
-    add(
-      { name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c },
-      'HAL_S2_CEREBRAS_MODEL',
-      pinUnusable ? undefined : cerebrasModel,
-      'cerebras',
-      pinUnusable,
-    );
-  }
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
   // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
@@ -1965,6 +1931,64 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
     add({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', 'qwen/qwen-2.5-72b-instruct');
+  }
+
+  // ── CEREBRAS IS REGISTERED LAST ON PURPOSE, AND THE POSITION IS THE POINT. ──────────────
+  //
+  // `familiesTaken` is threaded in REGISTRATION order, so a provider picks its model knowing
+  // only which families the providers BEFORE it have claimed. Every other member above has a
+  // fixed family — an explicit cfg.family, or a static default whose family is a constant.
+  // Cerebras is the only one with no default at all (deliberately, see cerebrasDeadModelSkip),
+  // so it is the only one that must choose from the live catalog every time.
+  //
+  // Registered second, it chose against an almost-empty set and its "new to this quorum" bonus
+  // was measured against a prefix rather than the panel. MEASURED on production 2026-08-28,
+  // minutes after the self-healing ordering fix let it select at all:
+  //
+  //   SELECTED cerebras -> gemma-4-31b  "(family 'gemini', new to this quorum)"
+  //
+  // It was not new. The gemini provider is registered later with family 'gemini', so cerebras
+  // bought a duplicate while believing it had bought independence. The family COUNT stayed
+  // honest — it dedupes at count time — but the SELECTION wasted the one slot whose whole
+  // purpose is to widen the panel, which is the opposite of what a family bonus is for.
+  //
+  // Registering it after the fixed-family members makes the bonus mean what it says: the set it
+  // consults is now the panel, not a prefix of it. Safe for cost-ordered assembly, which ranks
+  // by costTierOf at quorum time and settles each wave with Promise.allSettled — registration
+  // order does not affect which wave a provider lands in, nor the order within one.
+  // SELF-HEALING GETS FIRST REFUSAL; THE SKIP IS THE FALLBACK. THE ORDER IS THE WHOLE POINT.
+  //
+  // This guard used to read `&& !cerebrasDeadModelSkip()`, and the comment here claimed healing
+  // superseded it. MEASURED 2026-08-28 on production: it did not, and could not. The skip fires in
+  // exactly two states — no model configured, and a configured-but-retired model — and those are
+  // precisely the two states where healing is worth anything. Short-circuiting on it meant `add()`
+  // was never reached in either, so the only state that ever got to selection was
+  // HAL_S2_CEREBRAS_ALLOW_DEAD_MODEL=true: the operator having already fixed it by hand. A
+  // mechanism wired at both ends that could not run under any condition it was built for.
+  //
+  // Live evidence, one response: deepseek's dead pin healed from the catalog while cerebras
+  // reported a skip. Same catalog, same ledger, same builder — one `&&` apart.
+  //
+  // THE SKIP IS NOT DELETED and must not be. With a cold catalog there is nothing to select from,
+  // and dialling a known-404 id burns a request and reports the quorum `partial` — the bug the skip
+  // exists to prevent. So selection is asked FIRST, and the skip stands only when selection finds
+  // nothing: `add()` already reports exactly that by returning false and pushing nothing.
+  //
+  // The pin is dropped from consideration ONLY in the skip case (see resolveModelFor's last
+  // parameter): the skip has already established that id is not callable, and leaving it winning
+  // precedence would drop the family while a reachable model sits unused in the catalog. The
+  // operator keeps the last word — ALLOW_DEAD_MODEL suppresses the skip and never reaches here.
+  const c = process.env.CEREBRAS_API_KEY?.trim();
+  const cerebrasModel = process.env.HAL_S2_CEREBRAS_MODEL?.trim();
+  if (c && enabled.cerebras) {
+    const pinUnusable = !!cerebrasDeadModelSkip();
+    add(
+      { name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c },
+      'HAL_S2_CEREBRAS_MODEL',
+      pinUnusable ? undefined : cerebrasModel,
+      'cerebras',
+      pinUnusable,
+    );
   }
   // GLOO — opt-in, and NOT auto-backfilled. OpenAI-compatible, plain-key bearer, so it needs no
   // adapter of its own; it is the same {endpoint, apiKey, model} shape as every entry above.
