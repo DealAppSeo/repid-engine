@@ -12,10 +12,46 @@
  * This test is the tripwire the CLAUDE.md note and run-integration.ts promise.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { runIntegration } from './helpers/run-integration';
 
-const INTEGRATION_DIR = join(__dirname, 'integration');
+/**
+ * SCOPE — widened 2026-08-27, and the reason matters more than the change.
+ *
+ * This scan used to read ONLY `tests/integration/`. `trinity-swarm-health.test.ts`
+ * lives at `tests/` root, gated on credential presence, and had done so the whole
+ * time: it failed locally against the boot dummy and skipped silently in CI, while
+ * THIS suite sat green one directory away. A tripwire that cannot see the room it
+ * guards reports success it has not earned — the same defect it exists to prevent.
+ *
+ * So the scan now walks every `*.test.ts` under `tests/`, at any depth.
+ */
+const TESTS_DIR = __dirname;
+
+/** Every *.test.ts under tests/, recursively. */
+function testFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...testFiles(full));
+    else if (entry.name.endsWith('.test.ts')) out.push(full);
+  }
+  return out;
+}
+
+/**
+ * COMMENTS ARE STRIPPED BEFORE SCANNING, and that is load-bearing.
+ *
+ * Three files in this repo quote the banned idiom inside a comment in order to
+ * explain why they moved off it — including this file's own header and
+ * `hal-accuracy-summary.test.ts`, which documents the presence-vs-liveness
+ * distinction at length. A raw scan flags all three. A guard that punishes the
+ * files documenting the rule teaches people to delete the documentation, so it
+ * must read code, not prose.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
 
 /**
  * The banned idiom: a boolean built from the mere PRESENCE of Supabase env, used
@@ -26,19 +62,38 @@ const INTEGRATION_DIR = join(__dirname, 'integration');
 const PRESENCE_GATE = /!!\(\s*process\.env\.SUPABASE_URL/;
 
 describe('integration guard hygiene', () => {
-  const files = readdirSync(INTEGRATION_DIR).filter((f) => f.endsWith('.test.ts'));
+  const files = testFiles(TESTS_DIR);
 
-  it('has integration files to check (guards against an empty/false-green scan)', () => {
-    expect(files.length).toBeGreaterThan(0);
+  it('finds test files to check (guards against an empty/false-green scan)', () => {
+    // A scan of zero files passes trivially. That is exactly how this guard was
+    // green while an offender sat outside its directory.
+    expect(files.length).toBeGreaterThan(20);
   });
 
-  it('no tests/integration file gates on credential PRESENCE — use runIntegration()', () => {
+  it('actually reaches BOTH tests/ root and tests/integration/', () => {
+    // The specific blindness that let the bug through. Asserting the count alone
+    // would still pass if the scan silently narrowed to one directory again.
+    const rel = files.map((f) => relative(TESTS_DIR, f));
+    expect(rel.some((f) => !f.includes('/'))).toBe(true);
+    expect(rel.some((f) => f.startsWith('integration/'))).toBe(true);
+  });
+
+  it('no test file gates on credential PRESENCE — use runIntegration()', () => {
     const offenders: string[] = [];
     for (const f of files) {
-      const src = readFileSync(join(INTEGRATION_DIR, f), 'utf8');
-      if (PRESENCE_GATE.test(src)) offenders.push(f);
+      if (PRESENCE_GATE.test(stripComments(readFileSync(f, 'utf8')))) {
+        offenders.push(relative(TESTS_DIR, f));
+      }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('does NOT flag a file that only quotes the idiom in a comment', () => {
+    // Proves the strip works, so the guard cannot regress into punishing the
+    // files that explain the rule.
+    const commented = `/** const HAS_DB = !!(process.env.SUPABASE_URL && x); */\nconst ok = 1;`;
+    expect(PRESENCE_GATE.test(commented)).toBe(true);
+    expect(PRESENCE_GATE.test(stripComments(commented))).toBe(false);
   });
 });
 

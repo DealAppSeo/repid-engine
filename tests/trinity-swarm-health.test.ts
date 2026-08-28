@@ -7,14 +7,26 @@
  *   3. Status color computes correctly per timestamp
  *   4. Spokesperson UUID matches the canonical mapping
  *
- * Skipped if SUPABASE env not set — same skip-when-no-env pattern as other
- * db-touching tests in this repo.
+ * GATING (corrected 2026-08-27). This suite used to arm on credential PRESENCE:
+ *
+ *     const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+ *
+ * which asks whether the variables are SET, not whether anything is behind them.
+ * CLAUDE.md tells developers to export `SUPABASE_URL=http://localhost:54321
+ * SUPABASE_SERVICE_KEY=dummy` just to boot src/config.ts — so that check passed,
+ * the suite armed against a Supabase that does not exist, and all six tests
+ * failed locally. In CI there are no secrets, presence is false, the whole suite
+ * skips, and CI is green. Red locally for the wrong reason, silent in CI: a guard
+ * that never actually runs and that nobody can trust either way.
+ *
+ * `describeIfIntegration` is the repo's ONE correct gate — it requires an explicit
+ * RUN_INTEGRATION=1 opt-in alongside credentials, so a boot dummy can never arm it.
  */
 
 import { db } from '../src/db';
+import { describeIfIntegration } from './helpers/run-integration';
 
-const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
-const describeIfDb = HAS_DB ? describe : describe.skip;
+const describeIfDb = describeIfIntegration;
 
 const EXPECTED_AGENTS = new Set([
   'trinity-orch','trinity-w3c','trinity-shofet','trinity-torch',
