@@ -197,11 +197,76 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
   // Cross-family quorum shape — the SBFA differentiator, surfaced for the
   // public "independent cross-examination" card. Families are generic
   // lineage names (llama, glm, …), not provider secrets.
+  //
+  // THIS COUNTED THE WRONG THING UNTIL 2026-08-28, and it was a false claim on a public
+  // surface. It reported `buildFactCheckProviders().length` — the CONFIGURED set — as though
+  // it were the number of independent families cross-examining a claim. Measured on that day:
+  // this endpoint said 6 families including `glm`, while a live evaluate on the same service
+  // answered with 4 and reported glm's provider failing every call on a vendor-archived model.
+  // The consumer renders this number as "N families cross-examine every claim", so the site
+  // was advertising verification that was not happening.
+  //
+  // A configured provider is a provider we ASKED. Only a provider that answered is a voice in
+  // the quorum, and the difference is exactly what a trust product may not blur.
+  //
+  // THREE OUTCOMES, NEVER TWO. Quiet periods are real — an empty window means "nobody called
+  // HAL recently", NOT "nothing works" — so an absent measurement falls back to the configured
+  // set and says so in `basis`. Reporting 0 families during a quiet hour would be the same
+  // error pointed the other way.
   let quorum = { providers: 0, families: 0, family_names: [] as string[] };
+  let quorumHealth: Record<string, unknown> = { basis: 'unavailable' };
   try {
     const cfgs = buildFactCheckProviders();
-    const a = auditFamilyIndependence(cfgs);
-    quorum = { providers: cfgs.length, families: a.families.length, family_names: a.families };
+    const configured = auditFamilyIndependence(cfgs);
+
+    // Which providers actually ANSWERED in the window. Read from the call ledger rather than
+    // re-probing: a probe costs a request per provider and answers a different question
+    // ("could it work now") than the one the card makes ("is it working").
+    const { data: rows, error } = await db
+      .from('llm_call_log')
+      .select('provider, status')
+      .eq('task_hint', 'hal_fact_check')
+      .gte('created_at', since24h)
+      .limit(5000);
+
+    const observed = new Map<string, { ok: number; bad: number }>();
+    if (!error) {
+      for (const r of (rows ?? []) as Array<{ provider: string; status: string }>) {
+        const e = observed.get(r.provider) ?? { ok: 0, bad: 0 };
+        if (r.status === 'success') e.ok += 1;
+        else e.bad += 1;
+        observed.set(r.provider, e);
+      }
+    }
+
+    const answered = cfgs.filter((c) => (observed.get(c.name)?.ok ?? 0) > 0);
+    const measured = answered.length > 0;
+    // Re-run the SAME family audit on the answering subset, rather than deriving families a
+    // second way here. Two independent derivations of "what counts as one family" would drift,
+    // and this number is the whole differentiator.
+    const live = measured ? auditFamilyIndependence(answered) : configured;
+
+    quorum = measured
+      ? { providers: answered.length, families: live.families.length, family_names: live.families }
+      : { providers: cfgs.length, families: configured.families.length, family_names: configured.families };
+
+    quorumHealth = {
+      // 'measured' = counted from calls that happened. 'configured' = nothing to count in the
+      // window, so this is what we would ask, not what answered. Never silently one or other.
+      basis: measured ? 'measured' : 'configured',
+      window_hours: 24,
+      configured_providers: cfgs.length,
+      configured_families: configured.families.length,
+      answering_providers: answered.length,
+      // Named so the gap is actionable rather than merely visible. A provider that was asked
+      // and never once succeeded in 24h is the shape of a dead model or a dead key.
+      not_answering: cfgs
+        .filter((c) => (observed.get(c.name)?.ok ?? 0) === 0)
+        .map((c) => ({ provider: c.name, calls_failed: observed.get(c.name)?.bad ?? 0 })),
+      note: measured
+        ? 'Counted from calls in the window. A configured provider that never answered is not a voice in the quorum.'
+        : 'No fact-check calls in the window, so this reports the configured set. NOT a measurement that these providers answer.',
+    };
   } catch {
     // Leave zeros — the frontend renders an honest fallback, never a mock.
   }
@@ -221,6 +286,8 @@ router.get('/hal/stats', async (_req: Request, res: Response) => {
     quorum_providers: quorum.providers,
     quorum_families: quorum.families,
     quorum_family_names: quorum.family_names,
+    // The provenance of the three numbers above. Read `basis` before quoting them.
+    quorum_health: quorumHealth,
 
     // Per-table breakdown for the curious reader.
     breakdown: {
