@@ -189,14 +189,51 @@ The server binds `0.0.0.0:$PORT` (default 3000).
 ### Tier is database-derived (do NOT treat as a bug)
 
 `repid_agents.tier` is overwritten on every INSERT/UPDATE by the Postgres
-trigger `trg_sync_tier`, which calls `compute_tier(current_repid)`. The
-application code in `src/engine/repid-update.ts` and elsewhere writes `tier`
-in its UPDATE payloads, but that value is immediately replaced by the trigger.
-The database is the source of truth for tier; app-side writes are theater
-that the trigger overrides.
+trigger `trg_sync_tier`. The application code in `src/engine/repid-update.ts`
+and elsewhere writes `tier` in its UPDATE payloads, but that value is
+immediately replaced by the trigger. The database is the source of truth for
+tier; app-side writes are theater that the trigger overrides.
 
-This is intentional architecture, not a bug. It guarantees `tier` can never
-drift from `current_repid`.
+**THE TRIGGER CALLS THE TWO-ARGUMENT OVERLOAD, AND THIS PARAGRAPH USED TO SEND
+YOU TO THE WRONG ONE.** There are two functions named `compute_tier`:
+
+| signature | what it does | who calls it |
+|---|---|---|
+| `compute_tier(integer)` | pure score→tier ladder | **nothing in the live path** |
+| `compute_tier(integer, uuid)` | score→tier, **then demotes on counterparty count** | `sync_tier()`, i.e. the trigger |
+
+`sync_tier()` is `NEW.tier := compute_tier(NEW.current_repid, NEW.id)`. So the
+one-argument version — the one this file told you to inspect for years — is not
+the function that decides anything. Verified 2026-08-28 against prod.
+
+**THE COUNTERPARTY GATE, which was documented nowhere.** The live overload
+computes the base tier from score, then demotes:
+
+- `VETERAN` requires **>= 2 unique counterparties**, else → `AUTONOMOUS`
+- `AUTONOMOUS` requires **>= 2 unique counterparties**, else → `ESTABLISHED`
+- `ESTABLISHED` / `EARNING` have a floor of 0 — no gate today
+
+(`is_human = true` agents skip the demotion entirely and keep the base tier.)
+
+This is deliberate anti-Sybil design, not a bug: a score farmed without real
+counterparties cannot buy a top tier. It is also why **no agent is in
+AUTONOMOUS or VETERAN** — measured 2026-08-28, the ESTABLISHED band holds 29
+agents spanning 1000–10000, including one at the 10000 cap. If you see a
+high-score agent in ESTABLISHED, that is the gate working. Do not "fix" it.
+
+**`tier` CANNOT drift from `current_repid`, but it CAN lag counterparty count.**
+This paragraph used to claim the trigger "guarantees `tier` can never drift",
+which is true only of the score. The trigger is `BEFORE INSERT OR UPDATE **OF
+current_repid**`, while the tier now also depends on
+`count_unique_counterparties(id)` — a value that changes without any write to
+`current_repid`. So an agent that earns its 2nd counterparty is **not promoted
+until its score next moves**. MEASURED 2026-08-28: 0 agents currently sit at a
+stale tier, so this is a live window, not a live wound. Re-check with:
+
+```sql
+select id, current_repid, tier as stored, compute_tier(current_repid, id) as now
+from repid_agents where tier is distinct from compute_tier(current_repid, id);
+```
 
 To change tier names or thresholds you MUST update both together in one
 migration:
