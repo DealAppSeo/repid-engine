@@ -15,7 +15,7 @@
 import { db } from '../db';
 import { config } from '../config';
 import { emitAuditEvent } from './audit-emit';
-import { BUILDER_FLOOR, computeAuthority, babylonianSqrt } from './authority-math';
+import { BUILDER_FLOOR, computeAuthority, babylonianSqrt, type FloorCheck } from './authority-math';
 import { recordSponsorship } from './sponsorship'; // R3 exercise + GA handoff
 import { verifyDeposit } from './deposit-verifier';
 
@@ -370,7 +370,10 @@ export interface SnapshotResult {
     builder_repid: number;
     agents: Array<{ id: string; name: string; current_repid: number; wisdom_score: number; character_score: number }>;
     combined_score_used: string;
+    /** LOSSY — `floor_check !== 'FAILED'`. Reports true for a bypass that never ran the floor. */
     floor_passed: boolean;
+    /** AUTHORITATIVE: whether BUILDER_FLOOR was actually evaluated, and what it said. */
+    floor_check: FloorCheck;
   };
 }
 
@@ -428,6 +431,10 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
       mean_C: meanC,
       combined_score_used: auth.breakdown.combinedScore,
       floor_passed: auth.breakdown.builderFloorPassed,
+      // The authoritative one. `floor_passed` above is lossy — it reads true for a bypass
+      // that never evaluated the floor — and is kept only so existing readers of these rows
+      // do not change meaning underneath them.
+      floor_check: auth.breakdown.floorCheck,
     },
   });
 
@@ -446,6 +453,10 @@ export async function snapshotAuthority(builderId: string, totalStake?: bigint):
       })),
       combined_score_used: auth.breakdown.combinedScore,
       floor_passed: auth.breakdown.builderFloorPassed,
+      // The authoritative one. `floor_passed` above is lossy — it reads true for a bypass
+      // that never evaluated the floor — and is kept only so existing readers of these rows
+      // do not change meaning underneath them.
+      floor_check: auth.breakdown.floorCheck,
     },
   };
 }
