@@ -20,6 +20,7 @@ import { createHash } from 'crypto';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { issueFullAccountToken } from './auth-token';
+import { likeLiteral } from '../utils/like-literal';
 
 const STARTING_REPID = 5000; // AUTONOMOUS tier floor
 const BCRYPT_COST = 10;
@@ -70,7 +71,7 @@ export async function createFullBuilder(input: FullSignupInput): Promise<FullSig
   const { data: existing } = await db
     .from('builders')
     .select('id')
-    .ilike('email', emailLower)
+    .ilike('email', likeLiteral(emailLower))
     .maybeSingle();
   if (existing) {
     return { ok: false, error: 'email already registered' };
@@ -132,7 +133,7 @@ export async function verifyPassword(email: string, password: string): Promise<{
   const { data: builder } = await db
     .from('builders')
     .select('id, password_hash')
-    .ilike('email', email.toLowerCase())
+    .ilike('email', likeLiteral(email.toLowerCase()))
     .maybeSingle();
   if (!builder || !builder.password_hash) {
     return { ok: false, error: 'invalid credentials' };

@@ -285,9 +285,13 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   repo's code. Set env vars for this repo on the `repid-engine` **service**, not as project-shared.
   **`attestation-minter` added to the list 2026-08-15**, observed on the dashboard; this line said
   "3 services" until then. It is **scheduled, not a server** — it shows a last-run status and a
-  next-run time, and no public domain. **Its BUILD succeeds; its daily CRON RUN has failed since
-  2026-08-17** — see the delivery-leg finding below (corrected 2026-08-29; this line previously
-  said "failing every run", which reads as a build failure and sent one diagnosis down the wrong path).
+  next-run time, and no public domain. **Its BUILD succeeds. Its daily CRON RUN failed from
+  2026-08-17 to 2026-08-28 and RUNS GREEN AGAIN as of 2026-08-29** — see the delivery-leg finding
+  below, which is where the reasoning lives; this line is only the status, and it is dated because
+  it will go stale again. (Corrected twice on 2026-08-29: it once said "failing every run", which
+  reads as a build failure and sent one diagnosis down the wrong path, and it then kept saying
+  "has failed since" for the hour after the failure was fixed. A status line a reader meets BEFORE
+  the finding must not contradict it.)
 
   **Two claims in this paragraph were wrong, and both were negative findings — the kind that
   decays silently because anyone can add the missing thing without touching this file.**
@@ -329,16 +333,35 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
       08-17 → 08-28   escrowed ✓  fulfilled ✗  settled ✗   status `resolved`,
                                                             dispute_verdict `provider_at_fault`
 
-  Money escrows every run; **`fulfilled_at` is NULL on every run since 08-17**. The dispute path
-  then fires correctly and the script exits 1 — the red run is honest reporting, not a bug in it.
-  `erc8004_reputation_writes`: 91 total, last 2026-08-16, **0 in the last 7 days**. 29 providers
-  are still eligible, so "no eligible provider" is NOT the cause.
+  Money escrowed every run; `fulfilled_at` was NULL on every run from 08-17 to 08-28. The dispute
+  path fired correctly and the script exited 1 — the red run was honest reporting, not a bug in it.
+  `erc8004_reputation_writes` sat flat across the whole window with nothing in seven days. 29
+  providers were still eligible, so "no eligible provider" was NOT the cause.
+
+  **Everything in this block is the OUTAGE, in the past tense. It is resolved — see below.** It is
+  kept because the diagnosis is the reusable part; it is past-tensed because a live-sounding
+  symptom list outlives the bug it describes and gets re-investigated by the next reader.
 
   **Two suspects raised and killed, so nobody re-raises them.** `c38e5ac` (#434) landed 30 minutes
   before the first failure — perfect timing, but its diff touches only scoring, incentives and
   zkRepID, nothing in the contract or x402 path. `8fc370f` (#438) is the only commit in the window
   touching `src/services/x402-gate.ts`, but that change is shadow-only: it ignores its own return
   value, catches its own failures, and is inert unless `OWNER_CEILING_SHADOW_ENABLED` is set.
+
+  **THE TRIGGER, which this entry originally missed: GROQ RETIRED THE HARDCODED VALIDATOR MODEL.**
+  `runPCP` named `llama-3.3-70b-versatile` in code. When Groq withdrew it every validator call
+  404'd, and the rest of the cascade below followed from that. The mechanism this entry described
+  was right; the *cause* was absent, which left the finding un-actionable — you cannot prevent a
+  recurrence of "the LLM call threw" without knowing why every call threw at once.
+  [Diagnosis from the parallel session's #536; VERIFIED here against the merged code rather than
+  taken on its word — `PCP_MODEL = process.env['PCP_VALIDATOR_MODEL'] ?? '<default>'` is now in
+  `pcp-validator.ts`, so the next retirement is an env var and not a redeploy.]
+
+  **What the fix does on a non-answer is the other half, and it is not just "stop saying FAIL":
+  the contract stays ESCROWED for retry.** The handler throws on `checked: false`, `processOne`
+  is try/caught and never rethrows, so the next cycle picks the contract up again. NOT_CHECKED is
+  handled as *no answer yet* rather than as any verdict — neither a pass nor a dispute. A fix that
+  merely stopped disputing would have left the money stuck instead.
 
   **RESOLVED 2026-08-29 (PR #529): the delivery handler didn't stop responding — it answered
   FAIL for work nobody assessed.** The cascade path this script drives is
@@ -353,10 +376,27 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   `responded: false` (dropped from the aggregate, not counted as a zero) and adds a `checked` flag
   the handler now throws on rather than silently treating as a fail. It also fixed a second bug
   found on the way: the buyer-exclusion check compared `contract.buyer_agent_id` (a UUID) against
-  `agent_name`, so it never matched and a buyer could validate its own purchase. **Not yet
-  reverified against a live cron run** — the fix is merged and CI-green (458 suites, 0 failures),
-  but nobody has watched `service_contracts` produce a `fulfilled ✓ / settled ✓` row since. Check
-  that before calling the delivery leg closed.
+  `agent_name`, so it never matched and a buyer could validate its own purchase. **REVERIFIED AGAINST A LIVE CRON RUN,
+  2026-08-29 — the delivery leg is closed.** This paragraph asked for exactly one thing and it has
+  now been done, so it is recorded rather than left as a standing debt nobody clears.
+
+      08-27, 08-28  escrowed ✓  fulfilled ✗  settled ✗   dispute_verdict provider_at_fault
+      08-29         escrowed ✓  fulfilled ✓  settled ✓   status settled, no dispute
+
+  **Attributable, not merely correlated.** The deployed commit was checked to actually carry the
+  fix before the run was credited to it — `responded: false` on a non-responding validator, those
+  dropped from the aggregate rather than counted as zeroes, and the handler throwing on
+  `checked: false`. All three runs fired from the same daily cron at the same 12:00Z slot down the
+  same path; the only thing that differed was the code.
+
+  The downstream leg fired too, which is what makes this end-to-end rather than one green row:
+  `erc8004_reputation_writes` had been flat since 08-16 with nothing in seven days, and took a new
+  write **55 seconds after** the contract settled. Cascade → settle → reputation write, all of it.
+
+  Two consequences worth keeping. The 12-day outage was NOT_CHECKED being scored as FAILED in the
+  one place it moves real testnet money — so the class matters more than this instance. And the
+  reason this could be closed at all is that the caveat named the exact observation that would
+  close it; a caveat that says only "unverified" gets read as decoration and never gets paid.
 
 - Healthcheck: intentionally removed (do not re-add)
 - Node: >=20.9.0

@@ -34,7 +34,20 @@
 | Compassion | CHESED | ESTABLISHED | 1915 | trinity-chesed |
 | Justice | SHOFET | ESTABLISHED | 2510 | trinity-shofet |
 
-Defined in `src/config/squad-architecture.ts`. RepID values as of 2026-05-10 evening — backfill writes the live value at the moment of the call.
+Defined in `src/config/squad-architecture.ts`. Backfill writes the live value at the
+moment of the call.
+
+**The Tier and RepID columns above are a 2026-05-10 snapshot and are NOT_CHECKED
+today — read them as history.** Do not act on the tier strings in particular: tier is
+computed by the `compute_tier(integer, uuid)` overload the `trg_sync_tier` trigger
+calls, which **demotes AUTONOMOUS and VETERAN below 2 unique counterparties**, so a
+high-scoring agent legitimately sitting in ESTABLISHED is the anti-Sybil gate working
+and must not be "fixed". Fresh values are one query away and are deliberately not
+pasted back into this file, because this repository is public:
+
+```sql
+select name, current_repid, tier from repid_agents where name in (...);
+```
 
 ## Step 1 — Probe sanity check (LOCAL, read-only)
 
@@ -43,7 +56,13 @@ cd C:\Users\Cash4\repos\repid-engine
 npm run probe:reputation
 ```
 
-Expected stdout (matches verified 2026-05-10):
+Expected stdout — **NOT_CHECKED since 2026-05-10.** It matched on that date. It has
+not been re-run since, and it **cannot** be re-run from an agent session: every Base
+Sepolia RPC tried on 2026-08-29 — the configured `sepolia.base.org` plus four public
+alternates — was refused by the sandbox egress proxy with `Host not in allowlist`,
+which is the proxy answering, not the chain. Re-run `npm run probe:reputation` from a
+machine with chain egress and re-date this line **from that run's output only**. A
+111-day-old match is a record of the past, not a statement about now.
 ```
 Step 1: provider.getCode(0x8004B663...)
   → contract present

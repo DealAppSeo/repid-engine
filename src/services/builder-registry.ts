@@ -15,6 +15,7 @@ import { db } from '../db';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { emitAuditEvent } from './audit-emit';
 import { getCurrentStake, snapshotAuthority } from './stake-vault';
+import { decideAuthorityDisplay } from '../config/display-policy';
 
 const GHOST_PENALTY_PER_AGENT = 100;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -134,7 +135,10 @@ export interface BuilderProfile {
     deposit_count: number;
     is_simulated: boolean;
   };
-  current_authority: string;
+  /** null when the policy withholds it — never a stand-in zero. See config/display-policy. */
+  current_authority: string | null;
+  current_authority_withheld: boolean;
+  current_authority_is_binding: boolean;
   authority_basis: unknown;
 }
 
@@ -174,6 +178,7 @@ export async function getBuilderProfile(address: string): Promise<BuilderProfile
 
   const stake = await getCurrentStake(builder.id);
   const auth = await snapshotAuthority(builder.id, stake);
+  const authorityDisplay = decideAuthorityDisplay(auth.authority.toString(), auth.basis.floor_check);
 
   return {
     id: builder.id,
@@ -188,7 +193,11 @@ export async function getBuilderProfile(address: string): Promise<BuilderProfile
       deposit_count: (deposits ?? []).length,
       is_simulated: (deposits ?? []).every(d => d.is_simulated),
     },
-    current_authority: auth.authority.toString(),
+    // Same policy as the /stake/authority route — applied here too rather than only there,
+    // because a second surface quoting the unhonoured figure is the seam this fix exists to close.
+    current_authority: authorityDisplay.authority,
+    current_authority_withheld: authorityDisplay.withheld,
+    current_authority_is_binding: authorityDisplay.binding,
     authority_basis: auth.basis,
   };
 }

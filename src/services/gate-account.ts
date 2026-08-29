@@ -45,6 +45,7 @@ import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { issueFullAccountToken } from './auth-token';
 import { deriveAddressFromEmail } from './full-account-signup';
+import { likeLiteral } from '../utils/like-literal';
 
 export const GATE_PROVISIONS_ACCOUNT = process.env.GATE_PROVISIONS_ACCOUNT === 'true';
 
@@ -72,14 +73,14 @@ async function findExisting(
   const byEmail = await db
     .from('builders')
     .select('id, address')
-    .ilike('email', email)
+    .ilike('email', likeLiteral(email))
     .maybeSingle();
   if (byEmail.data) return byEmail.data as { id: string; address: string };
 
   const byAddress = await db
     .from('builders')
     .select('id, address')
-    .ilike('address', address)
+    .ilike('address', likeLiteral(address))
     .maybeSingle();
   if (byAddress.data) return byAddress.data as { id: string; address: string };
 
@@ -94,8 +95,72 @@ async function findExisting(
  * success path). It performs no verification of its own — passing an unverified
  * address here would hand out an account for an inbox nobody proved they own.
  */
+/**
+ * Upgrade a Rung 0 (token-only) builder in place, instead of minting a second row.
+ *
+ * WHY THIS IS NOT JUST A CONVENIENCE. Without it, verifying an email creates a NEW builder and
+ * ORPHANS the anonymous one: the visitor's `builder_id` silently changes, and anything holding
+ * the old one — a demo round, a preview session, a client that cached it — is now pointing at a
+ * row nobody will ever touch again. Preview-only makes that cheap (no score is lost, because a
+ * Rung 0 row accrues none) but it does not make it correct.
+ *
+ * TWO PROOFS ARE REQUIRED AND BOTH ARE REAL. The caller must present the session token (the
+ * Rung 0 credential) AND have completed the OTP for the email. Neither alone upgrades anything:
+ * the token without a verified email cannot name an address, and a verified email without the
+ * token cannot claim an existing anonymous row.
+ *
+ * REFUSES, rather than guessing, in three cases — each of which would otherwise be a way to
+ * take over a row:
+ *   - the token resolves to nothing → fall through to normal provisioning; a bad token must not
+ *     block someone whose email IS verified
+ *   - the row already carries an email → it is already bound; re-binding it to a different
+ *     address is account takeover, not an upgrade
+ *   - the email already belongs to a DIFFERENT builder → the upgrade would create a duplicate
+ *     identity; the existing account wins and the token-only row is left alone
+ *
+ * The `0xT0KEN…` address is deliberately KEPT. Rewriting it to the email-derived form would
+ * change the very identifier this function exists to preserve; later lookups find the row by
+ * its now-present email.
+ */
+async function upgradeTokenOnlyBuilder(
+  sessionToken: string,
+  email: string,
+): Promise<{ id: string; address: string } | null> {
+  const { data: row } = await db
+    .from('builders')
+    .select('id, address, email, auth_method')
+    .eq('session_token', sessionToken)
+    .maybeSingle();
+  if (!row) return null;
+  if (row.auth_method !== 'token_only') return null;
+  if (row.email) return null; // already bound — never re-bind
+
+  const { data: clash } = await db
+    .from('builders')
+    .select('id')
+    .ilike('email', likeLiteral(email))
+    .maybeSingle();
+  if (clash && clash.id !== row.id) return null; // that email is someone else's account
+
+  const { error } = await db
+    .from('builders')
+    .update({
+      email,
+      auth_method: AUTH_METHOD_EMAIL_OTP,
+      // Set for consistency with the other Rung 1 paths. NOTE: this column is a LABEL, not a
+      // gate — it is read by the dashboard and by no scoring path. See the trust-ladder doc.
+      earns_repid_rewards: true,
+    })
+    .eq('id', row.id)
+    .is('email', null); // last-writer guard: refuse if something bound it in between
+  if (error) return null;
+
+  return { id: row.id as string, address: row.address as string };
+}
+
 export async function provisionAccountFromVerifiedEmail(
   emailRaw: string,
+  opts?: { sessionToken?: string },
 ): Promise<GateAccountResult> {
   if (!GATE_PROVISIONS_ACCOUNT) {
     return { ok: false, reason: 'disabled', detail: 'Account provisioning is not enabled on this deployment.' };
@@ -105,6 +170,24 @@ export async function provisionAccountFromVerifiedEmail(
   }
   const email = emailRaw.toLowerCase();
   const address = deriveAddressFromEmail(email).toLowerCase();
+
+  // Rung 0 -> Rung 1 IN PLACE, before anything else, so the anonymous row is preserved rather
+  // than orphaned. Returns null for every refusal case, and the normal path then runs unchanged.
+  const sessionToken = typeof opts?.sessionToken === 'string' ? opts.sessionToken.trim() : '';
+  if (sessionToken) {
+    const upgraded = await upgradeTokenOnlyBuilder(sessionToken, email);
+    if (upgraded) {
+      const t = mintToken(upgraded.id, email);
+      if (!t) return { ok: false, reason: 'no_jwt_secret', detail: 'Server is missing its token secret.' };
+      return {
+        ok: true,
+        builder_id: upgraded.id,
+        builder_address: upgraded.address,
+        login_token: t,
+        created: false,
+      };
+    }
+  }
 
   const existing = await findExisting(email, address);
   if (existing) {

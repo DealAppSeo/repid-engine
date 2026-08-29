@@ -1,6 +1,15 @@
 /**
  * Builder-owned agent creation.
  *
+ * THIS FUNCTION IS NOT AN AUTHORIZATION BOUNDARY. It confirms the builder row exists and
+ * nothing else — not auth_method, not email, not earns_repid_rewards. A `token_only` builder
+ * passed in here would get an agent.
+ *
+ * What stops that is the ONLY caller: POST /api/v1/builder/create-agent, behind
+ * `requireFullAccount`, which verifies a signed login token that only the OTP path mints. If you
+ * add a second caller, you are adding a second place that decision gets made — carry the guard
+ * with it. See tests/keyless-builder-containment.test.ts.
+ *
  * Creates a new repid_agents row with builder_id linked, starting RepID
  * 1000 (ESTABLISHED tier floor) and wisdom/character at 1000.
  *

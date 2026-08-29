@@ -21,9 +21,28 @@
  * EVM wallet. Real wallets never start with that pattern.
  *
  * Token-only builders have:
- *   earns_repid_rewards = false   (cannot accrue RepID; mint ERC-7231 to upgrade)
+ *   earns_repid_rewards = false   see below — this is a LABEL, not the control
  *   auth_method         = 'token_only'
  *   session_token       = <token>
+ *
+ * WHAT ACTUALLY CONTAINS THEM, because this comment used to name the wrong thing and a wrong
+ * mechanism is worse than none: it invites someone to delete the real guard as redundant, or to
+ * add a second creation path believing the flag still covers it.
+ *
+ * `earns_repid_rewards` enforces NOTHING [MEASURED 2026-08-29]. It is read in exactly one place
+ * in the codebase — the dashboard, which echoes it into a response body. No scoring path branches
+ * on it, and `repid-update.ts` never reads a builder row at all.
+ *
+ * The containment is structural and lives two layers away:
+ *   RepID accrues to AGENTS (`repid_agents`), never to builders.
+ *   The only route that creates one is POST /api/v1/builder/create-agent.
+ *   That route is behind `requireFullAccount`, which verifies a SIGNED login token.
+ *   Only the OTP path mints one; a `token_only` builder's `session_token` is 32 random bytes
+ *   and cannot be made into a signed token.
+ *
+ * `createBuilderAgent` itself checks only that the builder EXISTS — not auth_method, not email,
+ * not this flag. So the route guard is the whole control, and it is pinned by
+ * tests/keyless-builder-containment.test.ts rather than left to this comment.
  *
  * Per CLAUDE-RULE-4: every response includes
  *   { repid_rewards_eligible: false, message: "Token-only access. Mint ERC-7231 later to earn RepID rewards." }

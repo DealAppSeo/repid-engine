@@ -163,7 +163,14 @@ export function verifyAgentGateToken(token: unknown): AgentGatePayload | null {
 
 export async function verifyOtp(
   emailRaw: unknown,
-  code: unknown
+  code: unknown,
+  /**
+   * The caller's Rung 0 session token, if they had one. Optional and untrusted: it is only ever
+   * used to UPGRADE the anonymous row that token already identifies, and every refusal path
+   * falls back to normal provisioning. A bad or absent token must never block someone whose
+   * email is genuinely verified.
+   */
+  sessionToken?: unknown,
 ): Promise<{
   ok: boolean;
   token?: string;
@@ -231,7 +238,9 @@ export async function verifyOtp(
   // would strand someone who did everything right.
   if (GATE_PROVISIONS_ACCOUNT) {
     try {
-      const account = await provisionAccountFromVerifiedEmail(email);
+      const account = await provisionAccountFromVerifiedEmail(email, {
+        sessionToken: typeof sessionToken === 'string' ? sessionToken : undefined,
+      });
       if (account.ok) {
         return {
           ok: true,
