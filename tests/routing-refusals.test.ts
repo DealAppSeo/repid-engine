@@ -178,12 +178,15 @@ describe('REFUSAL 3 — an unpriced model', () => {
 
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const cost = calculateCost(res.provider, res.model, res.tokensIn, res.tokensOut);
-    // 0 = "we did not price this". NOT "this was free".
+    // 0 = "we did not price this". NOT "this was free". Unchanged, and it must stay that
+    // way: inventing a rate here is the failure this whole module exists to prevent.
     expect(cost).toBe(0);
-    // ...and openrouter has no pricing table at all, so this 0 arrives SILENTLY —
-    // pricing.ts:47 returns before reaching the UNPRICED-MODEL warn at :68. A real
-    // 2M-token call would be ledgered at $0 with nothing in the logs to say so.
-    expect(warn).not.toHaveBeenCalled();
+    // WHAT CHANGED: this 0 used to arrive SILENTLY, because openrouter has no pricing table
+    // and `if (!providerPricing) return 0;` returned before the UNPRICED-MODEL warn. A real
+    // 2M-token call was ledgered at $0 with nothing in the logs. The early return is gone,
+    // so an unpriced call now says so — with the cold catalog here, nothing published a rate.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toContain('UNPRICED MODEL');
     // The classification layer still refuses to call it free.
     expect(costClass(res.provider, res.model)).toBe('unpriced');
   });

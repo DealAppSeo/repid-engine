@@ -254,6 +254,13 @@ export interface FactCheckResult {
   verdicts: ProviderVerdict[];
   providers_used: number; // non-error responses
   families_used?: number; // R5 — distinct independent families among the non-error responses
+  /**
+   * Distinct endpoint HOSTS among the non-error responses. Travels with `families_used` because
+   * the two answer different questions and only one of them is about correlated failure: N
+   * families behind 1 host is N opinions that all vanish in a single outage. See the comment at
+   * the computation site.
+   */
+  independent_hosts?: number;
   families?: string[];    // R5 — the distinct families that voted
   // CROSS-FIX 2026-07-05 — models whose family came from the legacy familyOf() FALLBACK because they
   // are NOT in the hardened family registry. Registry-known models are absent here; a non-empty list
@@ -1052,6 +1059,32 @@ export async function factCheck(
   const familiesSet = new Set(ok.map((v) => familyByName.get(v.provider) ?? v.provider));
   const families = [...familiesSet];
   const families_used = families.length;
+
+  // ── A FAMILY COUNT IS NOT AN INDEPENDENCE COUNT, AND CONSOLIDATION IS WHY THAT NOW MATTERS ──
+  //
+  // Family count answers "how many distinct model lineages agreed?" — the right question for a
+  // reasoning quorum, because two hosts serving the same Llama are one opinion. It says NOTHING
+  // about correlated failure. Four families behind one gateway is four opinions and ONE outage
+  // away from a silent quorum: the gateway has an incident and every voice disappears together.
+  //
+  // That is not hypothetical here. Gemini was deliberately moved OFF the shared gateway to a
+  // direct endpoint for exactly this reason, and the consolidation slots above push in the
+  // opposite direction on purpose, to cut vendor accounts. Both are defensible; what is not
+  // defensible is reporting `families_used: 5` and letting a reader hear "five-way independent"
+  // when one host can take four of them down at once.
+  //
+  // So the host count travels WITH the family count, always, rather than being derivable by
+  // someone who thinks to ask. Counted from the endpoint ORIGIN, not the provider name: the
+  // consolidation slots are `openrouter`, `openrouter-2`, `openrouter-3` — three names, three
+  // families, ONE host.
+  const endpointByName = new Map(activeProviders.map((p) => [p.name, p.endpoint]));
+  const hostOf = (name: string): string => {
+    const ep = endpointByName.get(name);
+    if (!ep) return name; // unknown endpoint counts as its own host — never collapse an unknown
+    try { return new URL(ep).host; } catch { return ep; }
+  };
+  const hostsSet = new Set(ok.map((v) => hostOf(v.provider)));
+  const independent_hosts = hostsSet.size;
   // Quorum is counted in families by default; HAL_QUORUM_FAMILY_AWARE=false reverts to host count.
   const familyAware = process.env.HAL_QUORUM_FAMILY_AWARE !== 'false';
   const quorumCount = familyAware ? families_used : providers_used;
@@ -1500,7 +1533,7 @@ export async function factCheck(
   }
 
   return {
-    hal_score, decision, verdicts, providers_used, families_used, families, agreement, degraded: quorumCount < 2, latency_ms,
+    hal_score, decision, verdicts, providers_used, families_used, families, independent_hosts, agreement, degraded: quorumCount < 2, latency_ms,
     quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed, ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(decision_reason ? { decision_reason } : {}),
@@ -1931,6 +1964,32 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
     add({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', 'qwen/qwen-2.5-72b-instruct');
+
+    // ── CONSOLIDATION SLOTS ────────────────────────────────────────────────────────────
+    // One gateway can carry several families, which is the whole point of consolidating:
+    // eight vendor accounts, each with its own minimum top-up, cost real money while the
+    // tokens flowing through them cost cents. MEASURED over 30 days: ~$0.21 of token spend
+    // across ~22k calls. The bill is the number of RELATIONSHIPS, not the inference.
+    //
+    // NO SLUGS ARE HARDCODED HERE, and that is deliberate. The single default above already
+    // went stale once — the previous `qwen...:free` slug was retired, 404'd on every call,
+    // and OpenRouter silently contributed zero votes for weeks. A list of guessed slugs is
+    // that bug once per entry. So each extra slot passes NO env override and NO static
+    // default: `resolveModelFor` picks from this key's LIVE catalog, preferring a family the
+    // quorum has not already claimed. A slot with nothing family-novel left to pick is
+    // skipped with a logged reason rather than duplicating a family it already has.
+    //
+    // Default 1 — today's behaviour exactly. This is the live trust path; widening it is an
+    // operator's decision, taken by setting HAL_S2_OPENROUTER_SLOTS, not by deploying this.
+    const slots = Math.min(Math.max(Number(process.env.HAL_S2_OPENROUTER_SLOTS) || 1, 1), 6);
+    for (let i = 2; i <= slots; i++) {
+      add(
+        { name: `openrouter-${i}`, endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or },
+        `HAL_S2_OPENROUTER_MODEL_${i}`,
+        undefined,
+        'openrouter',
+      );
+    }
   }
 
   // ── CEREBRAS IS REGISTERED LAST ON PURPOSE, AND THE POSITION IS THE POINT. ──────────────
