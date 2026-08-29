@@ -340,10 +340,23 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   touching `src/services/x402-gate.ts`, but that change is shadow-only: it ignores its own return
   value, catches its own failures, and is inert unless `OWNER_CEILING_SHADOW_ENABLED` is set.
 
-  **STILL UNVERIFIED: which delivery handler stopped responding.** Delivery is via "registered
-  handler / cascade". Settling it needs the cron run's **Deploy Logs**, which are not readable from
-  a sandboxed session (`railway.app` is proxy-denied). That is the one read left, and it is an
-  operator's.
+  **RESOLVED 2026-08-29 (PR #529): the delivery handler didn't stop responding — it answered
+  FAIL for work nobody assessed.** The cascade path this script drives is
+  `mint-attestation.mjs` → the API's cascade-satisfy endpoint → `cascade-settlement-worker.ts` →
+  `VerificationServiceHandler` → `runPCP` (`src/services/pcp-validator.ts`). `runPCP` returned
+  `{validity: 0, confidence: 0}` for any validator whose LLM call threw or whose output didn't
+  parse, and those zeroes then entered the aggregate as real verdicts. With all three validators
+  silent, `sumConfidence` fell to 0, `finalScore` fell to 0, and the handler's
+  `confidence >= 0.5 ? 'PASS' : 'FAIL'` read FAIL — so the cascade worker disputed
+  `provider_at_fault` on a contract nobody actually checked. That is NOT_CHECKED scored as FAILED,
+  landing in the one place it moves real testnet money. #529 makes a non-responding validator
+  `responded: false` (dropped from the aggregate, not counted as a zero) and adds a `checked` flag
+  the handler now throws on rather than silently treating as a fail. It also fixed a second bug
+  found on the way: the buyer-exclusion check compared `contract.buyer_agent_id` (a UUID) against
+  `agent_name`, so it never matched and a buyer could validate its own purchase. **Not yet
+  reverified against a live cron run** — the fix is merged and CI-green (458 suites, 0 failures),
+  but nobody has watched `service_contracts` produce a `fulfilled ✓ / settled ✓` row since. Check
+  that before calling the delivery leg closed.
 
 - Healthcheck: intentionally removed (do not re-add)
 - Node: >=20.9.0
