@@ -1,6 +1,7 @@
 # Progressive-trust signup — the decided ladder
 
-**Status:** DECIDED (2026-08-29). Rung 0 partially built; **preview RepID BUILT** — see below.
+**Status:** DECIDED (2026-08-29). Rung 0 partially built; **preview RepID BUILT**; **the
+Rung 1 password door RETIRED** — see below.
 **Inputs:** XC red-team dispatch (PR #517), GA data contracts (PR #518), operator direction.
 
 ---
@@ -49,6 +50,33 @@ Escalation is keyed to the **risk of the action**, never to the identity of the 
 - **Unlocks:** simulated stake on its own row · marketplace posts · full dashboard.
 - **Refuses:** real on-chain deposits · authority beyond the simulated path.
 - 2FA belongs here as a **threshold on action risk**, not a property of the account.
+
+**The password door is RETIRED (2026-08-29).** `POST /builder/full-signup` and
+`POST /builder/login` return **410** and touch nothing. Email-OTP is now the only way to
+reach this rung.
+
+*Why, and it was found by reading rather than by an incident.* Signup was mounted before
+`authMiddleware` and created a builder at the **AUTONOMOUS tier floor** from an email
+address nobody had verified. Measured against production: an empty body returned **400,
+not 401** — a validation error, which is what established the route was reachable with no
+credential at all. So one keyless request minted a high-authority account, and the
+counterparty gate does not help, because it demotes `AUTONOMOUS` to `ESTABLISHED` — the
+band with no gate. Nobody was locked out by closing it: no builder in production held a
+password hash, so login could never have authenticated anyone.
+
+**The starting score was deliberately NOT changed.** What a signup is worth is an economic
+decision; this changed which doors exist. `gate-account.ts` is right that such a change
+"does not belong in plumbing", and it applies to both paths at once when it happens.
+
+**Closing one door made the other load-bearing, so its state is now published.**
+`signup-posture.ts` reports whether the OTP path is actually open, and
+`GET /security/status` carries the answer — checkable from outside the deploy with no
+dashboard access. It shuts in **three independent ways**, reported separately because each
+needs a different fix: account provisioning disabled (a verified visitor gets a session and
+no account), email delivery unconfigured (no code is ever sent), token signing unconfigured
+(a verified visitor gets no session). Collapsing those into one boolean would report
+"signup is broken" and hide which of three unrelated things to do. No credential name or
+value appears in the response.
 
 ### Rung 2 — wallet signature
 EIP-191 recovery over the exact `stakeDepositMessage`, including `tx_hash`
@@ -132,6 +160,14 @@ revisited together when a real verifier lands.
 - **Demo agents (APM / VERITAS) are unseeded**, so `/demo/run-round-anonymous` returns 400
   and Rung 0's demo-round unlock cannot be exercised. The migration exists and is not
   applied; applying it writes agents into production and is the operator's call.
-- **Binding / upgrade flow** — the transition out of Rung 0.
+- **Binding / upgrade flow — the transition out of Rung 0 is still not an UPGRADE.**
+  `provisionAccountFromVerifiedEmail` resolves an existing builder by email, or by the
+  address derived from that email. A Rung 0 builder has neither — its address is derived
+  from its session token and it carries no email — so verifying an address creates a
+  **second row** and leaves the Rung 0 row orphaned. Preview-only makes that cheap (nothing
+  persistent accrues at Rung 0, so no score is lost), but the `builder_id` changes, which
+  matters to anything holding the old one. Closing this means letting a caller present a
+  Rung 0 session token alongside the verified email so the existing row is upgraded in
+  place — and that write needs its own thought about what an attacker can bind to what.
 - **A consumer surface for the preview.** The endpoints exist and are exercised by tests;
   no page on `trustshell.dev` renders them yet.
