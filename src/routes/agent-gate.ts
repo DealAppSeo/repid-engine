@@ -38,7 +38,10 @@ agentGateRouter.post('/v1/agent-gate/request-otp', otpLimiter, async (req: Reque
 });
 
 agentGateRouter.post('/v1/agent-gate/verify-otp', otpLimiter, async (req: Request, res: Response): Promise<void> => {
-  const result = await verifyOtp(req.body?.email, req.body?.code);
+  // `session_token` is optional: a visitor who previewed anonymously sends the token they were
+  // given at Rung 0, and the account is upgraded in place rather than duplicated. Omitting it is
+  // the ordinary path and behaves exactly as before.
+  const result = await verifyOtp(req.body?.email, req.body?.code, req.body?.session_token);
   if (!result.ok) {
     const status = result.error === 'server_config' ? 503 : 400;
     res.status(status).json(result);
