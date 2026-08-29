@@ -180,7 +180,26 @@ The server binds `0.0.0.0:$PORT` (default 3000).
 
 ### Canonical data facts
 - Supabase project: qnnpjhlxljtqyigedwkb (AITrinitySymphony)
-- SOPHIA RepID: 10,000 AUTONOMOUS (cap). repid_earned: 19,157
+- **RepID range: 10 floor / 10,000 CAP.** 10,000 is the ceiling the clamp enforces, not any
+  agent's score. STARTING_REPID is **200** in code (`src/scoring/repid-constants.ts`) — Sean's
+  stated intent as of 2026-08-29 is **1,000**, so a new agent has room to fall as well as rise.
+  Those disagree today; the code is what runs.
+- ~~SOPHIA RepID: 10,000 AUTONOMOUS (cap). repid_earned: 19,157~~ — **RETRACTED, MEASURED
+  2026-08-29.** Live: `trinity-sophia`, **current_repid 1299, tier ESTABLISHED**. There is no
+  `repid_earned` column at all — a query naming it errors 42703. The line conflated the CAP with
+  a reading, then attached a tier the counterparty gate makes unreachable.
+  **This file already contradicted itself here**: the counterparty-gate section below states that
+  no agent is in AUTONOMOUS or VETERAN and that the ESTABLISHED band holds every high scorer.
+  Both statements could not be true; the database settled it. A "canonical fact" nobody re-queries
+  is just an old measurement wearing a permanent label — re-run the query, do not cite this line.
+- **The ecosystem-need multiplier is COMPUTED AND NEVER APPLIED** [MEASURED 2026-08-29]. The
+  pipeline description further down calls it step 4 of scoring. It is not: `getEcosystemNeedWeight`
+  runs, its result is written to `repid_score_events.ecosystem_need_weight` and returned to the
+  caller, and the arithmetic is `clamp(decayedRepId + finalDelta)` where `finalDelta` never
+  touches it. So the audit trail records a weight that moved no score, and anyone reading the
+  ledger would conclude need-weighting was live. Same shape as the builder floor reporting PASSED
+  without running: a value recorded as if it had been used. Wiring it up changes every future
+  score, so it is a decision, not a cleanup — do not "fix" it silently.
 - Canonical tier names: PROBATIONARY (0-499) / EARNING (500-999) / ESTABLISHED (1000-4999) / AUTONOMOUS (5000-7999) / VETERAN (8000-10000)
 - Pythagorean Comma: 531441/524288 ≈ 1.013643
 - φ = 1.61803398875, ε = 1e-8, BFT_THRESHOLD = 0.618
