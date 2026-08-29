@@ -9,15 +9,34 @@ export async function runPCP(taskData: any) {
   // 1. Select Validators
   const { data: agents, error } = await db
     .from('repid_agents')
-    .select('id, agent_name, current_repid');
+    .select('id, agent_name, current_repid, lifecycle_status');
 
   if (error || !agents) {
     console.error('[runPCP] Failed to fetch agents:', error);
     return { score: 0, confidence: 0, validators: [] };
   }
 
-  // Filter: exclude claimer, exclude repid < 500
-  const eligible = agents.filter(a => a.agent_name !== taskData.claimed_by && a.current_repid >= 500);
+  // Filter: exclude claimer, exclude repid < 500, exclude non-active lifecycle.
+  //
+  // The lifecycle filter is HYGIENE, NOT THE FIX, and the distinction matters:
+  // `lifecycle_status` is a LABEL, and it is measurably unreliable here — 47 of the
+  // 110 rows marked 'active' are mock/test agents by name (measured 2026-08-29), and
+  // the mock buyers sit at repid 500-505, clearing the `>= 500` gate exactly. So this
+  // line removes the 61 rows honest enough to admit what they are and nothing more.
+  // The load-bearing fix is below: a validator that does not answer is NOT_CHECKED,
+  // never a zero. Classify on evidence, never on the label (LESSONS #4).
+  // `claimed_by` is compared against BOTH id and agent_name on purpose. Callers pass
+  // whichever they hold — VerificationServiceHandler passes `contract.buyer_agent_id`,
+  // a UUID, while its own comment says "excludes buyer from the validator pool". Against
+  // a name-only comparison that never matched, so the buyer stayed eligible to validate
+  // its own purchase. Self-validation is exactly what a peer-validation claim must not
+  // permit, so the exclusion now covers both shapes.
+  const claimer = taskData.claimed_by;
+  const eligible = agents.filter(a =>
+    a.agent_name !== claimer &&
+    a.id !== claimer &&
+    a.current_repid >= 500 &&
+    (a.lifecycle_status ?? 'active') === 'active');
 
   // Random sample weighted by RepID. Diversity logic is a plus.
   const selectedValidators = selectWeightedValidators(eligible, 3);
@@ -92,12 +111,15 @@ ${taskData.result}`;
         const jsonMatch = content.match(/\{[\s\S]*\}/);
         parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
       } catch (e) {
-        parsed = { validity: 0, confidence: 0 };
+        // Unparseable output is a validator that did not answer, not one that
+        // answered "worthless". Marked NOT_CHECKED and dropped from the aggregate.
+        return { name: agent.agent_name, validity: 0, confidence: 0, responded: false };
       }
       return {
         name: agent.agent_name,
         validity: Number(parsed.validity) || 0,
-        confidence: Number(parsed.confidence) || 0
+        confidence: Number(parsed.confidence) || 0,
+        responded: true
       };
     } catch (e: any) {
       console.error(`[runPCP] Validator ${agent.agent_name} failed:`, e);
@@ -115,27 +137,56 @@ ${taskData.result}`;
         agent_id: agent.id,
         task_hint: 'pcp_validation'
       }).catch(err => console.error('[runPCP] logLlmCall error:', err));
-      return { name: agent.agent_name, validity: 0, confidence: 0 };
+      // An unreachable validator is NOT_CHECKED. Returning validity 0 here is what
+      // charged providers for work nobody assessed: with all three validators erroring,
+      // sumConfidence was 0, finalScore fell to 0, the handler read FAIL, and the
+      // contract disputed as `provider_at_fault`. Measured: every daily living-proof
+      // run from 2026-08-17 to 2026-08-28 died exactly this way.
+      return { name: agent.agent_name, validity: 0, confidence: 0, responded: false };
     }
   }));
 
-  // 3. Aggregate
+  // 3. Aggregate — OVER RESPONDERS ONLY.
+  //
+  // Averaging across non-responders silently converts "we could not check" into "it
+  // scored zero". Dividing by `results.length` did exactly that to `confidence` even
+  // when a responder existed, so one live validator beside two dead ones had its
+  // confidence cut to a third.
+  const responded = results.filter(r => r.responded);
+
   let sumWeightedValidity = 0;
   let sumConfidence = 0;
-
-  for (const res of results) {
+  for (const res of responded) {
     sumWeightedValidity += res.validity * res.confidence;
     sumConfidence += res.confidence;
   }
 
-  const finalScore = sumConfidence > 0 ? sumWeightedValidity / sumConfidence : 0;
-  const avgConfidence = results.length > 0 ? sumConfidence / results.length : 0;
+  // Quorum: at least one real verdict carrying real confidence. Below that there is
+  // no measurement, and the caller MUST NOT read the result as a failing score —
+  // `checked: false` is the signal to leave the contract alone and retry, never to
+  // dispute it. Three outcomes, never two.
+  const checked = responded.length > 0 && sumConfidence > 0;
+
+  const finalScore = checked ? sumWeightedValidity / sumConfidence : 0;
+  const avgConfidence = checked ? sumConfidence / responded.length : 0;
+
+  if (!checked) {
+    console.warn(
+      `[runPCP] NOT_CHECKED: 0 of ${results.length} validator(s) answered ` +
+      `(${results.map(r => r.name).join(', ')}). Returning checked:false — a score of 0 ` +
+      `here would blame a provider for work nobody assessed.`
+    );
+  }
 
   return {
     score: finalScore,
     confidence: avgConfidence,
-    validators: results.map(r => r.name),
-    validatorBeliefs: results.map(r => r.confidence)
+    checked,
+    respondedCount: responded.length,
+    attemptedCount: results.length,
+    validators: responded.map(r => r.name),
+    attemptedValidators: results.map(r => r.name),
+    validatorBeliefs: responded.map(r => r.confidence)
   };
 }
 

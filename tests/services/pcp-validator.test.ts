@@ -85,7 +85,25 @@ describe('pcp-validator', () => {
 
       expect(res.score).toBe(0);
       expect(res.confidence).toBe(0);
-      expect(res.validators.length).toBeGreaterThan(0);
+
+      // The audit trail this line originally protected is INTACT — it just moved to a
+      // field that says what it means. `attemptedValidators` is who was asked;
+      // `validators` is who answered. They used to be one list, and conflating them is
+      // what let three silent validators read as three damning zeroes.
+      expect(res.attemptedValidators.length).toBeGreaterThan(0);
+      expect(res.validators.length).toBe(0);
+      expect(res.checked).toBe(false);
+    });
+
+    it('an unparseable validator is NOT_CHECKED, never a zero score', async () => {
+      // Pins the inversion directly: unparseable output must not be aggregated as
+      // validity 0. If someone restores `parsed = { validity: 0, confidence: 0 }` into
+      // the responder set, `checked` flips true and this goes red.
+      const taskData = { claimed_by: 'ClaimerBot', title: 'T', description: 'D', result: 'R' };
+      const res = await runPCP(taskData);
+      expect(res.checked).toBe(false);
+      expect(res.respondedCount).toBe(0);
+      expect(res.attemptedCount).toBeGreaterThan(0);
     });
 
     it('aggregates scores correctly based on confidence weighting', async () => {
