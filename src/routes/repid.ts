@@ -23,6 +23,8 @@ import { logProofGeneration } from '../zkp/plonky3-real';
 import { generateProof } from '../zk-proof/prover';
 import { fireWebhook } from '../services/webhook';
 import { publicError } from './public-error';
+import { previewCatalog, previewRepId } from '../engine/repid-preview';
+import { REPID_MAX, REPID_MIN } from '../scoring/repid-deltas';
 
 export const repidPublicRouter = Router();
 
@@ -66,6 +68,69 @@ async function resolveAgentUuid(raw: string): Promise<string | null> {
 // logged server-side for ops visibility. This matches the pre-
 // existing /repid/:agent_id route's lenient behavior in v1.ts so
 // the existing tests/repid-score.test.ts smoke test stays green.
+/**
+ * PREVIEW — what actions are worth, for a visitor who has proven nothing.
+ *
+ * Two GETs, both keyless (this router mounts before authMiddleware) and both
+ * PURE: they call `src/engine/repid-preview.ts`, which imports no database
+ * client, so no request here can create or move a score. That is the Rung 0
+ * guarantee from `docs/design/progressive-trust-ladder.v0.md` — a token-only
+ * visitor sees the value of the system before being asked for anything, and
+ * accrues nothing persistent while doing it.
+ *
+ * The paths are two segments deep DELIBERATELY. `/repid/preview` would be
+ * matched by `/repid/:agentId` below, so it would work only by being registered
+ * first — and would then permanently shadow any agent whose slug is "preview".
+ * `/repid/preview/actions` collides with none of the `:agentId`-prefixed routes,
+ * so correctness here does not depend on registration order.
+ *
+ * Every response is labelled APPROXIMATE and carries what it omits. Do not add a
+ * field to these payloads that a caller could read as an earned score.
+ */
+repidPublicRouter.get('/repid/preview/actions', (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    measurement: 'APPROXIMATE',
+    persisted: false,
+    actions: previewCatalog(),
+    disclaimer:
+      'Preview only. Nothing here was written and no reputation was earned. Actions marked NOT_CHECKED have a value that cannot be stated before the event happens; they are listed rather than hidden.',
+  });
+});
+
+const MAX_PREVIEW_EVENTS = 50;
+
+repidPublicRouter.get('/repid/preview/project', (req: Request, res: Response) => {
+  const raw = String(req.query.events ?? '').trim();
+  const eventTypes = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  if (eventTypes.length > MAX_PREVIEW_EVENTS) {
+    // Written by hand, not derived from the request: this route has no upstream
+    // whose error text could leak, and echoing the caller's own input back is the
+    // habit `publicError` exists to break.
+    return res.status(400).json({
+      error: 'too_many_events',
+      detail: `at most ${MAX_PREVIEW_EVENTS} events per preview`,
+    });
+  }
+
+  let baseRepId: number | undefined;
+  if (req.query.base !== undefined) {
+    const parsed = Number(req.query.base);
+    if (!Number.isFinite(parsed) || parsed < REPID_MIN || parsed > REPID_MAX) {
+      // Rejected rather than silently clamped: a caller who asked for an
+      // impossible starting score should be told, not handed a different number
+      // that looks like the one they asked for.
+      return res.status(400).json({
+        error: 'invalid_base',
+        detail: `base must be a number in [${REPID_MIN}, ${REPID_MAX}]`,
+      });
+    }
+    baseRepId = parsed;
+  }
+
+  return res.json({ ok: true, ...previewRepId({ baseRepId, eventTypes }) });
+});
+
 repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => {
   try {
     // Shared resolver — NOT a fourth inline copy. This block used to duplicate

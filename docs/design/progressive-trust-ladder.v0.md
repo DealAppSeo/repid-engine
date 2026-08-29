@@ -1,6 +1,6 @@
 # Progressive-trust signup — the decided ladder
 
-**Status:** DECIDED (2026-08-29). Rung 0 partially built; preview RepID NOT built.
+**Status:** DECIDED (2026-08-29). Rung 0 partially built; **preview RepID BUILT** — see below.
 **Inputs:** XC red-team dispatch (PR #517), GA data contracts (PR #518), operator direction.
 
 ---
@@ -90,13 +90,48 @@ nothing persistent.
 
 Red-team output is grade `[R]` — reasoning, no execution. Verify before building.
 
+## Preview RepID — built, and the shape of the guarantee
+
+`GET /api/v1/repid/preview/actions` (the full menu) and
+`GET /api/v1/repid/preview/project?events=A,B&base=200` (a projection). Both keyless, both
+mounted on the pre-auth public router, both covered by the global per-IP limiter.
+
+**The no-write guarantee is structural, not a promise.** The obvious implementation — a
+`dryRun` flag threaded through `updateRepId` — was rejected: that function interleaves the
+delta computation with a fetch, a decay write, an agent update, an audit insert, a
+supply-rate bump and a badge sweep, and one missed write site turns a preview into a
+mutation. Instead `FIXED_DELTAS` and the event vocabulary moved to
+`src/scoring/repid-deltas.ts`, a file with **no imports at all**, and
+`src/engine/repid-preview.ts` imports that and nothing else. It cannot write because there
+is nothing there to write with. `tests/repid-preview.test.ts` walks the import graph and
+fails if `src/db.ts` becomes reachable — with an **anchor case** that runs the same walker
+against `repid-update.ts` and requires it to find the database client, so a broken walker
+cannot report a clean graph and read as a pass.
+
+**A preview is never MEASURED.** Every delta is `APPROXIMATE`, and the payload carries what
+it omits — decay, the ecosystem-need weight, the redemption modifier (so previewed penalties
+are the undampened worst case), and the self-report evidence gate. The projected tier is
+stamped `tierIsCounterpartyGateApproximation: true` and says in the response that the
+database derives the real tier from a trigger that demotes `AUTONOMOUS` and `VETERAN` below
+2 unique counterparties — exactly the position a new visitor is in.
+
+**What it refuses to state matters more than what it states.** An action whose live value
+depends on data no pure function has returns `NOT_CHECKED` with `delta: null` — never a
+plausible zero. That covers challenge outcomes, predictions, and the eight
+defended-deception classes. **STAKE is the case worth naming:** the tariff says +5 and the
+live path hard-codes 0 pending a server-side on-chain verifier, so a preview that read the
+table would advertise +5 for an action that earns nothing. It is `NOT_CHECKED`, a test pins
+that it does not return 5, and a second test pins the engine's override so the two are
+revisited together when a real verifier lands.
+
+**Still preview-only.** Nothing on this path is persisted, and the response says
+`persisted: false` in the shape. Rung 0 accrues nothing.
+
 ## Not built
 
-- **Preview RepID.** `FIXED_DELTAS` is private to `src/engine/repid-update.ts` and there is
-  no dry-run path, so a preview needs either the layer math exported or a genuine no-write
-  mode on the scoring engine. That is a change to the live scoring path and wants doing
-  deliberately, not squeezed in.
 - **Demo agents (APM / VERITAS) are unseeded**, so `/demo/run-round-anonymous` returns 400
   and Rung 0's demo-round unlock cannot be exercised. The migration exists and is not
   applied; applying it writes agents into production and is the operator's call.
 - **Binding / upgrade flow** — the transition out of Rung 0.
+- **A consumer surface for the preview.** The endpoints exist and are exercised by tests;
+  no page on `trustshell.dev` renders them yet.
