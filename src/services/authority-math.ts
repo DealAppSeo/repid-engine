@@ -12,6 +12,17 @@ export interface AuthorityInput {
 }
 
 /**
+ * WHICH AUTHORITY THIS IS, because there are two and confusing them overstates every finding
+ * here. THIS one (`computeAuthority`) is a DISPLAYED and RECORDED number: it reaches
+ * `stake_authority_snapshots` and `current_authority` on the builder read, which the stake page
+ * shows. Nothing branches on it. The number that actually GATES anything is `A_eff` in
+ * `effective-authority.ts` — a spend ceiling that decides whether one agent may delegate a
+ * budget to another — and that one applies its floor unconditionally, has no demo bypass, and
+ * refuses on NOT_CHECKED collateral.
+ *
+ * So a wrong value here misleads a READER; it does not authorise a spend. Fix it for
+ * truthfulness, and do not describe it as a permission bypass.
+ *
  * Whether `BUILDER_FLOOR` was actually evaluated, and what it said.
  *
  * THREE OUTCOMES, BECAUSE A BOOLEAN CANNOT HOLD THIS. `computeAuthority` has three routes to a
