@@ -285,7 +285,9 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   repo's code. Set env vars for this repo on the `repid-engine` **service**, not as project-shared.
   **`attestation-minter` added to the list 2026-08-15**, observed on the dashboard; this line said
   "3 services" until then. It is **scheduled, not a server** — it shows a last-run status and a
-  next-run time, and no public domain. **It has been failing every run** (observed 2026-08-29).
+  next-run time, and no public domain. **Its BUILD succeeds; its daily CRON RUN has failed since
+  2026-08-17** — see the delivery-leg finding below (corrected 2026-08-29; this line previously
+  said "failing every run", which reads as a build failure and sent one diagnosis down the wrong path).
 
   **Two claims in this paragraph were wrong, and both were negative findings — the kind that
   decays silently because anyone can add the missing thing without touching this file.**
@@ -298,34 +300,62 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
      `railway.toml` declares **no `startCommand`**, and its own comment says each service uses its
      own dashboard "Custom Start Command". So the other three demonstrably do build from here.
 
-  **What IS established (MEASURED 2026-08-29):** this repo contains exactly three entrypoints a
-  start command could name — `start` (the API), `indexer` (receipt-indexer) and `worker`
-  (proof-drain-worker). There is no fourth. The one thing here that mints EAS attestations,
+  **"There is no fourth" was FALSE, and it was the load-bearing half of the paragraph below
+  [MEASURED 2026-08-29, from the service's own build log].** This repo has three *package.json*
+  entrypoints — `start` (the API), `indexer` (receipt-indexer), `worker` (proof-drain-worker) —
+  but a Railway Custom Start Command names a FILE, not an npm script, and `attestation-minter`
+  runs **`node scripts/cron/mint-attestation.mjs`**. That file exists (11,659 bytes, with
+  `scripts/cron/README.md` beside it). Enumerating npm scripts and concluding "no fourth" asked
+  the wrong question of the right repo. The one thing here that mints EAS attestations,
   `easAnchorWorker`, runs **in-process inside the API server** (`src/index.ts`), not as a separate
   service, and its work queue is **empty** — no real proof is currently un-anchored. So nothing in
   this repo is waiting on this service.
 
-  **The likeliest cause, UNVERIFIED because nobody has read the service's logs or Variables.**
-  `src/db.ts` calls `createClient(...)` at **module scope**, so *every* entrypoint here dies at
-  import when the Supabase vars are absent on that service — measured, with a control that imports
-  cleanly when they are present:
+  **The module-scope-Supabase hypothesis is REFUTED, and the service does not fail to build at all
+  [MEASURED 2026-08-29 from the build log + live DB].** Both halves were wrong:
 
-      Error: SUPABASE_URL and SUPABASE_SECRET_KEY (or a legacy SUPABASE_SERVICE_ROLE_KEY /
-      SUPABASE_SERVICE_KEY fallback) are required
+  1. **The build SUCCEEDS.** The log ends `exporting to docker image format` → `image push 378 MB`,
+     deployment `Active`. Nothing here is a build failure. What goes red is the daily **cron run**.
+  2. **The Supabase vars are PRESENT.** Docker's own `SecretsUsedInArgOrEnv` warnings name
+     `SUPABASE_SERVICE_ROLE_KEY` and `BASE_SEPOLIA_PRIVATE_KEY` as `ARG`/`ENV` on this service, so
+     it is not missing its environment. (Those warnings are also a real finding in their own right:
+     a funded-wallet key is being baked into image layers.)
 
-  That is the string to look for. Settled by two dashboard reads on the `attestation-minter`
-  service — the failed run's **Deploy Logs**, and **Settings → Deploy → Custom Start Command** —
-  and this paragraph should be replaced with the answer. Note the shape of the failure before
-  fixing it: a start command naming a script that does not exist fails differently from a service
-  missing its environment, and only one of those is fixed by adding variables.
+  **What actually fails — the delivery leg, since 2026-08-17.** `mint-attestation.mjs` buys a
+  service from an eligible provider and needs the contract to reach `settled`. Measured in
+  `service_contracts`:
+
+      08-13 → 08-16   escrowed ✓  fulfilled ✓  settled ✓   (buyer_satisfaction_score 1)
+      08-17 → 08-28   escrowed ✓  fulfilled ✗  settled ✗   status `resolved`,
+                                                            dispute_verdict `provider_at_fault`
+
+  Money escrows every run; **`fulfilled_at` is NULL on every run since 08-17**. The dispute path
+  then fires correctly and the script exits 1 — the red run is honest reporting, not a bug in it.
+  `erc8004_reputation_writes`: 91 total, last 2026-08-16, **0 in the last 7 days**. 29 providers
+  are still eligible, so "no eligible provider" is NOT the cause.
+
+  **Two suspects raised and killed, so nobody re-raises them.** `c38e5ac` (#434) landed 30 minutes
+  before the first failure — perfect timing, but its diff touches only scoring, incentives and
+  zkRepID, nothing in the contract or x402 path. `8fc370f` (#438) is the only commit in the window
+  touching `src/services/x402-gate.ts`, but that change is shadow-only: it ignores its own return
+  value, catches its own failures, and is inert unless `OWNER_CEILING_SHADOW_ENABLED` is set.
+
+  **STILL UNVERIFIED: which delivery handler stopped responding.** Delivery is via "registered
+  handler / cascade". Settling it needs the cron run's **Deploy Logs**, which are not readable from
+  a sandboxed session (`railway.app` is proxy-denied). That is the one read left, and it is an
+  operator's.
+
 - Healthcheck: intentionally removed (do not re-add)
 - Node: >=20.9.0
 - All secrets injected via Railway env vars — never commit to code
 - `AGENT_KEY_MASTER` (agent wallet custody, `src/services/agent-key-crypto.ts`) belongs ONLY on the
   `repid-engine` service. `receipt-indexer` (chain reads) and `proof-drain-worker` (EAS attestor key)
   must not have it — it decrypts every custodied agent wallet private key.
-  `attestation-minter`: **UNVERIFIED — nobody has checked.** This rule was written when the project
-  had three services and does not cover it either way. Minting attestations needs a *signing* key,
-  which is not `AGENT_KEY_MASTER`; "an attestor must need it" is an assumption, not a finding, and
-  the same class of inference that put this key in the wrong project once already. Read the
-  service's Variables in the Railway dashboard and replace this paragraph with the answer.
+  `attestation-minter`: **half-settled 2026-08-29 — the assumption is dead, the presence question
+  is not.** SETTLED: the signing key it actually uses is `BASE_SEPOLIA_PRIVATE_KEY`, read from the
+  script's own source, so "an attestor must need `AGENT_KEY_MASTER`" is refuted — it does not.
+  STILL UNVERIFIED: whether `AGENT_KEY_MASTER` is *also* set there. The build log names only
+  `BASE_SEPOLIA_PRIVATE_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, and **absence from that list is much
+  weaker evidence than presence** — Docker flags only names matching its own sensitive-name
+  heuristic, and the log surfaces build-time vars, not the full runtime set. Do not read "not in the
+  log" as "not on the service". Read the service's Variables to close it.
