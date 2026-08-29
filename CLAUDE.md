@@ -285,9 +285,39 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   repo's code. Set env vars for this repo on the `repid-engine` **service**, not as project-shared.
   **`attestation-minter` added to the list 2026-08-15**, observed on the dashboard; this line said
   "3 services" until then. It is **scheduled, not a server** — it shows a last-run status and a
-  next-run time, and no public domain. **Its source is not identified:** the string
-  `attestation-minter` appears in no file in this repo, nor in `hyperdag-protocol`,
-  `trinity-ecosystem` or `trinity-symphony-shared`. Do not assume it builds from this repo.
+  next-run time, and no public domain. **It has been failing every run** (observed 2026-08-29).
+
+  **Two claims in this paragraph were wrong, and both were negative findings — the kind that
+  decays silently because anyone can add the missing thing without touching this file.**
+
+  1. *"The string appears in no file in this repo"* — **false as of 2026-08-29.** It appears in a
+     migration comment (naming the service as a possible external `SELECT *` consumer) and in
+     `trinity-ecosystem` docs. A mention is not a source, so the substance survives; the sentence
+     as written does not, and a reader who greps once and finds a hit now distrusts the rest.
+  2. *"Do not assume it builds from this repo"* — **backwards for the other three.**
+     `railway.toml` declares **no `startCommand`**, and its own comment says each service uses its
+     own dashboard "Custom Start Command". So the other three demonstrably do build from here.
+
+  **What IS established (MEASURED 2026-08-29):** this repo contains exactly three entrypoints a
+  start command could name — `start` (the API), `indexer` (receipt-indexer) and `worker`
+  (proof-drain-worker). There is no fourth. The one thing here that mints EAS attestations,
+  `easAnchorWorker`, runs **in-process inside the API server** (`src/index.ts`), not as a separate
+  service, and its work queue is **empty** — no real proof is currently un-anchored. So nothing in
+  this repo is waiting on this service.
+
+  **The likeliest cause, UNVERIFIED because nobody has read the service's logs or Variables.**
+  `src/db.ts` calls `createClient(...)` at **module scope**, so *every* entrypoint here dies at
+  import when the Supabase vars are absent on that service — measured, with a control that imports
+  cleanly when they are present:
+
+      Error: SUPABASE_URL and SUPABASE_SECRET_KEY (or a legacy SUPABASE_SERVICE_ROLE_KEY /
+      SUPABASE_SERVICE_KEY fallback) are required
+
+  That is the string to look for. Settled by two dashboard reads on the `attestation-minter`
+  service — the failed run's **Deploy Logs**, and **Settings → Deploy → Custom Start Command** —
+  and this paragraph should be replaced with the answer. Note the shape of the failure before
+  fixing it: a start command naming a script that does not exist fails differently from a service
+  missing its environment, and only one of those is fixed by adding variables.
 - Healthcheck: intentionally removed (do not re-add)
 - Node: >=20.9.0
 - All secrets injected via Railway env vars — never commit to code
