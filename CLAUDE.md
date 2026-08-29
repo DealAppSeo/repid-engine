@@ -348,6 +348,21 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   touching `src/services/x402-gate.ts`, but that change is shadow-only: it ignores its own return
   value, catches its own failures, and is inert unless `OWNER_CEILING_SHADOW_ENABLED` is set.
 
+  **THE TRIGGER, which this entry originally missed: GROQ RETIRED THE HARDCODED VALIDATOR MODEL.**
+  `runPCP` named `llama-3.3-70b-versatile` in code. When Groq withdrew it every validator call
+  404'd, and the rest of the cascade below followed from that. The mechanism this entry described
+  was right; the *cause* was absent, which left the finding un-actionable — you cannot prevent a
+  recurrence of "the LLM call threw" without knowing why every call threw at once.
+  [Diagnosis from the parallel session's #536; VERIFIED here against the merged code rather than
+  taken on its word — `PCP_MODEL = process.env['PCP_VALIDATOR_MODEL'] ?? '<default>'` is now in
+  `pcp-validator.ts`, so the next retirement is an env var and not a redeploy.]
+
+  **What the fix does on a non-answer is the other half, and it is not just "stop saying FAIL":
+  the contract stays ESCROWED for retry.** The handler throws on `checked: false`, `processOne`
+  is try/caught and never rethrows, so the next cycle picks the contract up again. NOT_CHECKED is
+  handled as *no answer yet* rather than as any verdict — neither a pass nor a dispute. A fix that
+  merely stopped disputing would have left the money stuck instead.
+
   **RESOLVED 2026-08-29 (PR #529): the delivery handler didn't stop responding — it answered
   FAIL for work nobody assessed.** The cascade path this script drives is
   `mint-attestation.mjs` → the API's cascade-satisfy endpoint → `cascade-settlement-worker.ts` →
