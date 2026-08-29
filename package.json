@@ -87,7 +87,8 @@
     "demo:harness": "node scripts/demo/trust-harness-e2e.mjs",
     "ops:reconcile": "ts-node scripts/ops/reconcile-settlements.ts",
     "repid:decay": "ts-node scripts/run-repid-decay.ts",
-    "repid:decay:apply": "ts-node scripts/run-repid-decay.ts --apply"
+    "repid:decay:apply": "ts-node scripts/run-repid-decay.ts --apply",
+    "probe:hal-shape": "ts-node scripts/liveness-probes/probe-hal-response-shape.ts"
   },
   "keywords": [],
   "author": "",

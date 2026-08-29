@@ -18,6 +18,7 @@ import { probeX402Settlements } from './probe-x402-settlements';
 import { probeOnchainReputation } from './probe-onchain-reputation';
 import { probeTrinitySwarm } from './probe-trinity-swarm';
 import { probeAnfisRouting } from './probe-anfis-routing';
+import { probeHalResponseShape } from './probe-hal-response-shape';
 
 async function persistHistory(results: ProbeResult[]): Promise<void> {
   // Best-effort: skip silently if liveness_probe_history doesn't exist yet
@@ -45,6 +46,7 @@ async function persistHistory(results: ProbeResult[]): Promise<void> {
   const startMs = Date.now();
   const results = await Promise.all([
     probeZkpPipeline(),
+    probeHalResponseShape(),
     probeHalPipeline(),
     probeRepidScoring(),
     probeGraphRag(),

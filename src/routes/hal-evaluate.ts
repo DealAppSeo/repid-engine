@@ -97,7 +97,17 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     const cached = await getCachedHalResult(text, cacheProvider);
     // Cached hits are NOT re-counted: the underlying evaluation was already recorded on its first
     // (fresh) run, so counting the cache-serve would double-count the same (text, strictness).
-    if (cached) return res.json({ ...cached, injection });
+    // `cached: true` IS THE POINT OF THIS LINE, and it is not cosmetic.
+    //
+    // A cache serve used to be INDISTINGUISHABLE from a fresh evaluation: same shape, same
+    // fields, no marker. That made "is this answer current?" unanswerable by any caller, and it
+    // cost a real hour — a deploy was verified by POSTing the same sentence used before the
+    // deploy, the TTL served the pre-deploy verdict, and a working fix was reported broken.
+    // The probe could not have been right: it had no way to fail correctly.
+    //
+    // Marked only on the cache path, so its ABSENCE is not a claim of freshness by an older
+    // caller — but its PRESENCE lets a verifier assert it got a real evaluation.
+    if (cached) return res.json({ ...cached, cached: true, injection });
 
     const result = await halService.evaluate({ text, context: context as any, strictness: s });
     void cacheHalResult(text, cacheProvider, result);
