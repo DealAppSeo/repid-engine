@@ -136,6 +136,28 @@ jobs:
 
       - name: Dispatch ${{ inputs.agent }}
         id: dispatch
+        env:
+          # GEMINI CLI REFUSES TO RUN IN AN "UNTRUSTED" DIRECTORY, AND A CI CHECKOUT IS
+          # ALWAYS ONE. MEASURED, run 33228054581 (ga), exit 55 after TWO SECONDS:
+          #
+          #   Gemini CLI is not running in a trusted directory. To proceed, either use
+          #   `--skip-trust`, set the `GEMINI_CLI_TRUST_WORKSPACE=true` environment
+          #   variable, or trust this directory in interactive mode.
+          #
+          # It never reached the task. This is the vendor's own documented switch for
+          # headless and automated environments, not a workaround.
+          #
+          # WHY IT BROKE A PATH THAT WORKED HOURS EARLIER. The install step above runs
+          # `npm install -g @google/gemini-cli` with NO VERSION PIN, so every dispatch
+          # takes whatever is latest at that moment. GA succeeded at 21:46Z and failed at
+          # 02:05Z on an unchanged workflow — the CLI changed underneath it. Pinning is a
+          # separate decision with its own cost (a pin also freezes fixes), so it is
+          # RAISED, NOT TAKEN here; this env var is the fix for the named failure.
+          #
+          # SCOPED TO THIS STEP, and harmless to xc, which does not read it. What is being
+          # trusted is a fresh ephemeral checkout of this repo on a throwaway runner, by an
+          # agent holding `reasoning + repo_read` and no shell.
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
         run: |
           set +e
           AGENT_UPPER=$(echo "${{ inputs.agent }}" | tr '[:lower:]' '[:upper:]')
