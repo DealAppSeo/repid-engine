@@ -30,6 +30,7 @@ import agentRouter from './v1/agent';
 import runloopLivenessRouter from './v1/runloop-liveness';
 import peerVerificationRouter from './peer-verification';
 import { createAndResolveArenaChallenge } from '../testing/red-team';
+import { decideAuthorityDisplay } from '../config/display-policy';
 
 const router = Router();
 router.use(substanceGateRouter);
@@ -535,7 +536,21 @@ router.get('/stake/authority/:builder_id', async (req: Request, res: Response) =
   try {
     const stake = await getCurrentStake(builderId);
     const auth = await snapshotAuthority(builderId, stake);
-    return res.json({ builder_id: builderId, stake_total: stake.toString(), authority: auth.authority.toString(), basis: auth.basis });
+    // The SNAPSHOT keeps the computed figure — that is the audit trail and it stays complete.
+    // What the policy decides is whether the figure is handed out as a promise. A token_only
+    // builder's number is real arithmetic that the A_eff gate would refuse, so quoting it as a
+    // ceiling overpromises. `withheld` is returned so a caller can render "not shown" and never
+    // a stand-in zero, which would be false in the other direction.
+    const display = decideAuthorityDisplay(auth.authority.toString(), auth.basis.floor_check);
+    return res.json({
+      builder_id: builderId,
+      stake_total: stake.toString(),
+      authority: display.authority,
+      authority_withheld: display.withheld,
+      authority_is_binding: display.binding,
+      ...(display.detail ? { authority_detail: display.detail } : {}),
+      basis: auth.basis,
+    });
   } catch (e: any) {
     return res.status(500).json({ error: e?.message ?? 'authority compute failed' });
   }
