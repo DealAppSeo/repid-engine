@@ -8,34 +8,15 @@ import { checkAndAwardBadges, BadgeAward } from './badges';
 import { DETECTION_CONFIRM_THRESHOLD } from './behavioral-integrity';
 import { assessLedger, ledgerColumns, ledgerMetadata, logLedger } from './ledger-reconcile';
 import { STARTING_REPID } from '../scoring/repid-constants';
+import { FIXED_DELTAS, type RepIdEventType } from '../scoring/repid-deltas';
 
 export interface RepIdUpdateInput {
   agentId: string;
-  eventType:
-    | 'CHALLENGE_WIN'|'CHALLENGE_LOSS'|'CHALLENGE_DRAW'
-    | 'EPISTEMIC_VIOLATION'|'CONSTITUTIONAL_VIOLATION'
-    | 'PREDICTION_RESOLVE'
-    | 'STAKE'|'GENESIS'|'REFERRAL'|'PEACEMAKER'|'SELF_MONITOR'
-    | 'CODE_CONTRIBUTION' | 'WORKFLOW_CONTRIBUTION' | 'TOOL_PIONEER'
-    | 'AGENT_TEACHING' | 'AUDIT_CONTRIBUTION'
-    | 'HANDOFF_COSIGN_VERIFIED' | 'HANDOFF_COSIGN_FALSE_PASS_SLASH'
-    | 'PEER_VERIFY_WRONG_CALL' // Phase 3 dogfooding (behind DOGFOOD_REPID_FROM_COSIGN) + BFT panel divergence
-    // --- Ordinary error (light penalty) ------------------------------------
-    // An honest wrong answer / unsupported claim. Penalized, but LIGHTLY — it
-    // does not attack supervisability. Contrast with DEFENDED_DECEPTION_* below.
-    | 'UNSUPPORTED_CLAIM'
-    // --- Defended deception (heavy penalty) — Trust Harness P1 KEYSTONE M1 ---
-    // These attack the ability to supervise the agent (they corrupt the record
-    // itself), so they carry a markedly heavier negative delta than ordinary
-    // error. ENFORCEMENT is shadow-first behind TRUST_DECEPTION_MODE (below).
-    | 'DEFENDED_DECEPTION_DENIAL_OF_PRIOR_OUTPUT'
-    | 'DEFENDED_DECEPTION_DOUBT_ATTACK'
-    | 'DEFENDED_DECEPTION_FABRICATED_CITATION'
-    | 'DEFENDED_DECEPTION_FABRICATED_TOOL_RESULT'
-    | 'DEFENDED_DECEPTION_FABRICATED_BENCHMARK'
-    | 'DEFENDED_DECEPTION_THRESHOLD_DANCING'
-    | 'DEFENDED_DECEPTION_SYCOPHANTIC_FALSE_PREMISE'
-    | 'DEFENDED_DECEPTION_STORY_CHANGE';
+  // The vocabulary now lives in `src/scoring/repid-deltas.ts` alongside the
+  // tariff, so a module that must never write can read both without importing
+  // this file (and therefore `../db`). `RepIdUpdateInput['eventType']` still
+  // resolves for every existing consumer.
+  eventType: RepIdEventType;
   certaintyAtClaim?: number;
   pStated?: number;
   pCorrect?: number;
@@ -122,17 +103,9 @@ export function computeTier(repId: number): string {
   return 'PROBATIONARY';
 }
 
-const FIXED_DELTAS: Partial<Record<RepIdUpdateInput['eventType'], number>> = {
-  STAKE: 5, GENESIS: 0, REFERRAL: 20, PEACEMAKER: 15, SELF_MONITOR: 10,
-  CODE_CONTRIBUTION: 25, WORKFLOW_CONTRIBUTION: 20, TOOL_PIONEER: 12,
-  AGENT_TEACHING: 15, AUDIT_CONTRIBUTION: 15,
-  HANDOFF_COSIGN_VERIFIED: 10, // producer + verifier each get + on verified co-sign (calibrated)
-  HANDOFF_COSIGN_FALSE_PASS_SLASH: -15, // slash the rubber-stamper (verifier) on false-PASS
-  PEER_VERIFY_WRONG_CALL: -5, // BFT panel: reviewer diverged from majority (bounded; low-confidence self-flag exempt)
-  // Ordinary error — an honest wrong/unsupported claim. LIGHT penalty. This is
-  // the baseline the deception tiers below are deliberately heavier than.
-  UNSUPPORTED_CLAIM: -8,
-};
+// FIXED_DELTAS moved to `src/scoring/repid-deltas.ts` (imported above). It is
+// the same table; it lives in a file with no imports so the preview path can
+// read the tariff without inheriting a database handle.
 
 // --- DECEPTION_DELTAS — Trust Harness P1 KEYSTONE (M1) --------------------
 // Defended deception attacks SUPERVISABILITY (it corrupts the record the whole
