@@ -69,6 +69,7 @@ import leaderboardRouter from './routes/leaderboard';
 import statsRouter from './routes/stats';
 import verticalLeaderboardRouter from './routes/vertical-leaderboard';
 import providersRouter from './routes/providers';
+import proofCarryingVerifyRouter from './routes/proof-carrying-verify';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
 import securityStatusRouter from './routes/security-status';
@@ -539,6 +540,10 @@ app.use('/api/v1/escalation', escalationRouter);
 // Sprint R-C: RepID admin endpoints (attest) — auth required
 app.use('/api/v1', repidAdminRouter);
 app.use('/api/v1/admin/caps', adminCapsRouter);
+// Backlog item 3 (PROOF_CARRYING_RETRIEVAL_v0 P2) — stateless verifier endpoint for a
+// ProofCarryingAnswer (patent #1 answer-binding). Authed like other post-authMiddleware
+// routes; the caller supplies memory_root + citations, no server-side memory access needed.
+app.use('/api/v1/proof-carrying', proofCarryingVerifyRouter);
 
 app.get('/api/v1/observability/x402-metrics', (req, res) => {
   const apiKey = (req as any).apiKey;
