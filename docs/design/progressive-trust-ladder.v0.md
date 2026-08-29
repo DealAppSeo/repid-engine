@@ -36,12 +36,32 @@ Each rung states what is **proven**, what it **unlocks**, and what it must **ref
 Escalation is keyed to the **risk of the action**, never to the identity of the user.
 
 ### Rung 0 — token-only
-`builders.session_token` match · `auth_method='token_only'` · `earns_repid_rewards=false`
+`builders.session_token` match · `auth_method='token_only'`
 
 - **Proven:** possession of a 32-byte token. NOT_CHECKED: email, key, human-vs-Sybil.
 - **Unlocks:** preview RepID display · demo rounds · builder profile.
 - **Refuses:** any persisted RepID accrual · real stake deposit · bounties, challenges,
   agent operation · binding without further proof.
+
+**`earns_repid_rewards=false` was listed here as if it enforced that refusal. IT DOES NOT.**
+MEASURED: the column appears **zero times** in `src/engine/repid-update.ts`. It is written at
+signup, read by the dashboard for display, and consulted by no scoring path anywhere. It is a
+label, not a gate. The red-team pass asserted the opposite — *"`earns_repid_rewards=false` gates
+`updateRepId` in several places"* — and that sentence is what this correction exists to kill,
+because a false reassurance is worse than a false alarm: an alarm gets checked, a reassurance
+argues against looking.
+
+**The refusal is real, and it is STRUCTURAL rather than a flag.** A builder's score is *derived*
+by `recomputeBuilderRepID` from the `repid_agents` rows they own — mean active score minus a
+ghost penalty. A token-only builder owns none, because creating an agent goes through
+`requireFullAccount`, which is Rung 1. Zero agents, zero derived score. That is a far better
+protection than a boolean, and it is worth knowing which one is actually holding the line: the
+flag could be deleted tomorrow with no security consequence, while the agent-ownership path
+could not.
+
+Note the write itself is ungated: `recomputeBuilderRepID` updates `builders.current_repid`
+without consulting `earns_repid_rewards` or `auth_method`. If a token-only builder ever acquired
+an agent by some other route, the score would move. The gate is the acquisition, not the write.
 
 ### Rung 1 — full account
 `verifyFullAccountToken()` — a JWT carrying `builder_id` **and** `email`
@@ -154,6 +174,24 @@ revisited together when a real verifier lands.
 
 **Still preview-only.** Nothing on this path is persisted, and the response says
 `persisted: false` in the shape. Rung 0 accrues nothing.
+
+## A latent hole to close before `PAY_AUTH_MODE` ever goes to enforce
+
+**CONFIRMED from the red-team pass**, and the one finding in it that survived checking.
+`computeAuthority` (`src/services/authority-math.ts`) takes an early return when
+`isDemoBuilder` is set, computing authority as a flat percentage of stake and stamping
+`builderFloorPassed: true` — hardcoded, never evaluated. `isDemoBuilder` comes from
+`snapshotAuthority` as `builder?.auth_method === 'token_only'`, which is exactly what anonymous
+signup writes. So the `BUILDER_FLOOR` does not apply to a token-only row.
+
+**Severity: latent, not live.** `PAY_AUTH_MODE` is `observe` — the gate records what it would
+decide and does not decide it — so this number currently gates nothing. It becomes a real
+authority bypass on the day enforcement is switched on, which is precisely the kind of hole that
+gets discovered by the flip rather than before it.
+
+Recorded here rather than fixed in the same breath: changing authority arithmetic is a live-path
+change and wants its own pass, with the demo's legitimate need (a fresh demo builder genuinely
+has no stake history) solved deliberately rather than by removing the branch.
 
 ## Not built
 
