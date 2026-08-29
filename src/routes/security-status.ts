@@ -12,6 +12,7 @@
 import { Router, Request, Response } from 'express';
 import { pgQuery } from '../db/direct-pg';
 import { verifyChainBreaks } from '../services/audit/verify-chain-db';
+import { signupPosture } from '../services/signup-posture';
 
 const router = Router();
 
@@ -63,6 +64,13 @@ router.get('/security/status', async (_req: Request, res: Response) => {
       tables_chained: chains.map((c) => ({ table: c.table, rows: c.total_rows, breaks: c.breaks })),
       ...(chains.length === 0 ? { note: 'chain recompute needs the DB pooler (DATABASE_URL)' } : {}),
     },
+
+    // WHICH FRONT DOORS ARE OPEN. Published here because the password path was
+    // retired, leaving email-OTP as the only way to create an account — and that
+    // path shuts silently when its deploy-time configuration is missing. Reading
+    // this endpoint is how anyone confirms the remaining door is actually open,
+    // without dashboard access. No credential name or value is reported.
+    account_creation: signupPosture(),
 
     authentication: {
       // Live-true: RLS denies anon/authenticated writes when coverage is full.
