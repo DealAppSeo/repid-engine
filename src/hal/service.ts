@@ -379,6 +379,14 @@ export class HalService {
               providers_used: fc.providers_used, agreement: fc.agreement, degraded: fc.degraded,
               // R5 — distinct independent families that voted (the quorum unit).
               families_used: fc.families_used, families: fc.families,
+              // A FAMILY COUNT IS NOT AN INDEPENDENCE COUNT — N families behind ONE host is N
+              // opinions that vanish in a single outage. It travels WITH families_used, always,
+              // and this line is why: `signals` is rebuilt field by field here, so a value can be
+              // computed in fact-check.ts, typed on the result, returned internally, and still
+              // never reach a caller. That is exactly what happened — shipped, deployed, and only
+              // caught by probing the live endpoint. `tests/hal-signals-seam.test.ts` now asserts
+              // the crossing rather than the computation.
+              ...(fc.independent_hosts !== undefined ? { independent_hosts: fc.independent_hosts } : {}),
               // V3 FIX 2026-07-05 — surface models whose family was regex-guessed (not in the registry)
               // so the unmapped signal reaches score-event metadata, not just the console.warn.
               ...(fc.families_unmapped?.length ? { families_unmapped: fc.families_unmapped } : {}),
