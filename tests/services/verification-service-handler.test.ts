@@ -13,7 +13,7 @@ const contract: any = {
 
 describe('VerificationServiceHandler', () => {
   it('shapes synthetic taskData (claimed_by=buyer) and emits P-001 PASS', async () => {
-    runPCP.mockResolvedValue({ score: 0.9, confidence: 0.8, validators: ['a', 'b', 'c'] });
+    runPCP.mockResolvedValue({ score: 0.9, confidence: 0.8, checked: true, validators: ['a', 'b', 'c'], attemptedValidators: ['a', 'b', 'c'], attemptedCount: 3, respondedCount: 3 });
     const out = await (new VerificationServiceHandler() as any).fulfill(contract);
     const passed = runPCP.mock.calls[0][0];
     expect(passed.claimed_by).toBe('buyer1');
@@ -25,9 +25,40 @@ describe('VerificationServiceHandler', () => {
   });
 
   it('confidence < 0.5 → FAIL (honest verdict, no escalation)', async () => {
-    runPCP.mockResolvedValue({ score: 0.1, confidence: 0.2, validators: [] });
+    // The validators list is non-empty on purpose. This case previously passed
+    // `validators: []` with confidence 0.2 — a shape runPCP can no longer produce,
+    // because confidence is now averaged over RESPONDERS. A real FAIL means peers
+    // answered and were unconvinced; that is what this asserts.
+    runPCP.mockResolvedValue({ score: 0.1, confidence: 0.2, checked: true, validators: ['a', 'b'], attemptedValidators: ['a', 'b', 'c'], attemptedCount: 3, respondedCount: 2 });
     const out = await (new VerificationServiceHandler() as any).fulfill(contract);
     expect(out.verdict).toBe('FAIL');
     expect(out.patent_marker).toBe('P-001');
+  });
+
+  // THE REGRESSION THIS PINS. Break it by making fulfill() return a verdict when
+  // `checked` is false and this goes red — which is the whole point, because that
+  // is what shipped and it disputed twelve consecutive living-proof runs as
+  // `provider_at_fault` for work no validator ever assessed.
+  it('no validator answered → THROWS NOT_CHECKED, never a FAIL verdict', async () => {
+    runPCP.mockResolvedValue({
+      score: 0, confidence: 0, checked: false,
+      validators: [], attemptedValidators: ['mock-a', 'mock-b', 'mock-c'],
+      attemptedCount: 3, respondedCount: 0,
+    });
+    await expect((new VerificationServiceHandler() as any).fulfill(contract))
+      .rejects.toThrow(/NOT_CHECKED/);
+  });
+
+  it('an unanswered check never blames the provider', async () => {
+    runPCP.mockResolvedValue({
+      score: 0, confidence: 0, checked: false,
+      validators: [], attemptedValidators: ['mock-a'], attemptedCount: 1, respondedCount: 0,
+    });
+    let err: Error | undefined;
+    try { await (new VerificationServiceHandler() as any).fulfill(contract); }
+    catch (e) { err = e as Error; }
+    expect(err).toBeDefined();
+    expect(err!.message).toMatch(/not the provider's fault/);
+    expect(err!.message).not.toMatch(/FAIL/);
   });
 });
