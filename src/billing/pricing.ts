@@ -1,3 +1,5 @@
+import { catalogPriceFor } from '../hal/model-catalog';
+
 export const PRICING_PER_1M_TOKENS: Record<string, Record<string, { in: number; out: number }>> = {
   groq: {
     'llama-3.1-8b-instant': { in: 0.05, out: 0.08 },
@@ -53,10 +55,35 @@ export const PRICING_PER_1M_TOKENS: Record<string, Record<string, { in: number; 
 };
 
 export function calculateCost(provider: string, model: string, tokensIn: number, tokensOut: number): number {
+  // NO EARLY RETURN ON AN UNKNOWN PROVIDER, and this line is the whole point of the change.
+  //
+  // This used to be `if (!providerPricing) return 0;`, which meant a provider absent from the
+  // static table below could never be priced at all — it returned 0 before anything else ran.
+  // `openrouter` is exactly that provider: it has no row here, and it is the one carrying the
+  // gateway-routed models whose spend was invisible. So the early exit skipped precisely the
+  // case the catalog lookup exists to serve. Caught by a test, not by reading.
   const providerPricing = PRICING_PER_1M_TOKENS[provider];
-  if (!providerPricing) return 0;
-  let modelPricing = providerPricing[model];
+  const modelPricing = providerPricing?.[model];
   if (!modelPricing) {
+    // BEFORE GIVING UP, ASK THE VENDOR. The catalog refresh already fetches every provider's
+    // `/models` every 30 minutes, and a gateway publishes a rate for each one — so the price is
+    // usually sitting in memory while this table has no row for it. Consulting it turns the common
+    // unpriced case (a model nobody typed a row for) into a real number, which is the whole reason
+    // frontier models routed through a gateway ledgered at $0.00 against real token counts.
+    //
+    // The static table above still WINS when it has an entry: it is the human override, and it
+    // carries deliberate assertions (a known free tier, a retired model kept so old rows stay
+    // costable) that a live catalog cannot express.
+    //
+    // Returns null — never 0 — when the vendor published nothing, so the unpriced path below is
+    // still reached and still says so out loud.
+    const fromCatalog = catalogPriceFor(provider, model);
+    if (fromCatalog) {
+      const cIn = (tokensIn / 1_000_000) * fromCatalog.in;
+      const cOut = (tokensOut / 1_000_000) * fromCatalog.out;
+      return Math.round((cIn + cOut) * 1_000_000) / 1_000_000;
+    }
+
     // AN UNPRICED MODEL COSTS "UNKNOWN", NOT "WHATEVER IS LISTED FIRST".
     //
     // This used to fall back to `providerPricing[Object.keys(...)[0]]` — the first
@@ -78,7 +105,7 @@ export function calculateCost(provider: string, model: string, tokensIn: number,
     console.warn(
       `[pricing] UNPRICED MODEL provider=${provider} model=${model} — cost recorded as 0. ` +
         `This is "not priced", NOT "free". Add an explicit entry (0 for a genuine free tier) ` +
-        `so the cost ledger stops guessing.`,
+        `so the cost ledger stops guessing. (The vendor catalog published no rate for it either.)`,
     );
     return 0;
   }

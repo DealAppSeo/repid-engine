@@ -72,6 +72,16 @@ export interface ProviderCatalog {
   status: CatalogStatus;
   /** Model ids exactly as the vendor spells them — these are the strings a call must use. */
   models: string[];
+  /**
+   * Per-1M-token rates for the models whose vendor PUBLISHES them, keyed by model id.
+   *
+   * Present only where the vendor states a price. A model absent from this map is UNPRICED —
+   * unknown, not free. Never default a missing entry to 0: the ledger already had one incident
+   * where a fabricated rate reached the cost dashboard, and an assumed zero is the same error
+   * pointed the other way (it HIDES spend rather than inventing it). Both were how the invisible
+   * frontier-model spend went unnoticed for three weeks.
+   */
+  pricing?: Record<string, { in: number; out: number }>;
   /** Safe to log: never contains key material. */
   detail: string;
   /** When this entry was fetched. */
@@ -132,6 +142,60 @@ export function parseModelIds(body: unknown): string[] {
 }
 
 /**
+ * Extract per-model pricing from a vendor's `/models` body, where the vendor publishes it.
+ *
+ * WHY THIS IS WORTH HAVING. `PRICING_PER_1M_TOKENS` is hand-maintained, so every model nobody has
+ * typed a row for ledgers at 0 — and 0 is indistinguishable from free in the stored number. That is
+ * how frontier models routed through a gateway logged real token counts against $0.00 for weeks.
+ * A vendor that already tells us the price on every catalog refresh is a better source than a human
+ * remembering to add a row.
+ *
+ * SHAPE. OpenRouter (the only catalog in PROVIDER_PROBES that publishes rates today) returns
+ * `pricing: { prompt, completion }` as **USD per single token**, as STRINGS:
+ *
+ *   { data: [ { id: 'qwen/qwen-2.5-72b-instruct', pricing: { prompt: '0.0000004', completion: '0.0000004' } } ] }
+ *
+ * The billing table is per 1M tokens, hence the 1e6 scaling. Getting that factor wrong by 10^6 is
+ * the obvious catastrophic failure here, so `tests/model-catalog-pricing.test.ts` pins a known rate
+ * end-to-end rather than testing the parser's arithmetic in isolation.
+ *
+ * WHAT IS DELIBERATELY EXCLUDED, because each would put a wrong number in the ledger:
+ *   - a model with no `pricing` key at all — stays unpriced
+ *   - a value that is not a finite non-negative number (null, '', 'N/A', -1)
+ * A vendor's explicit `'0'` IS kept: that is the vendor asserting a free tier, which is exactly the
+ * `free` vs `unpriced` distinction `cost-class.ts` exists to preserve.
+ */
+export function parseModelPricing(body: unknown): Record<string, { in: number; out: number }> {
+  const out: Record<string, { in: number; out: number }> = {};
+  const b = body as { data?: unknown; models?: unknown };
+  const rows = Array.isArray(b?.data) ? b.data : Array.isArray(b?.models) ? b.models : [];
+
+  const perMillion = (v: unknown): number | null => {
+    if (typeof v !== 'string' && typeof v !== 'number') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) return null;
+    // Rounded to 6dp — the same precision `calculateCost` already rounds its output to. Without
+    // it, 0.0000004 * 1e6 lands on 0.39999999999999997 and that float noise rides into every
+    // stored cost. Six decimal places of a per-1M rate is a millionth of a dollar per million
+    // tokens: far below anything that could change a billing decision.
+    return Math.round(n * 1_000_000 * 1e6) / 1e6;
+  };
+
+  for (const r of rows) {
+    const row = r as { id?: unknown; name?: unknown; pricing?: unknown };
+    const raw = typeof row?.id === 'string' ? row.id : typeof row?.name === 'string' ? row.name : '';
+    const id = raw.replace(/^models\//, '').trim();
+    if (!id || !row?.pricing || typeof row.pricing !== 'object') continue;
+    const pr = row.pricing as { prompt?: unknown; completion?: unknown };
+    const inRate = perMillion(pr.prompt);
+    const outRate = perMillion(pr.completion);
+    if (inRate === null || outRate === null) continue;
+    out[id] = { in: inRate, out: outRate };
+  }
+  return out;
+}
+
+/**
  * Fetch one provider's catalog. Never throws; every failure becomes NOT_CHECKED with a reason.
  *
  * `lookup` is injectable for the same reason `resolveProbeKey` takes one — the ops CLI resolves
@@ -158,14 +222,23 @@ export async function fetchProviderCatalog(
       // NOT_CHECKED would give two modules two opinions about one key.
       return { ...base, status: 'NOT_CHECKED', detail: `HTTP ${res.status}` };
     }
-    const models = parseModelIds(await res.json());
+    const body = await res.json();
+    const models = parseModelIds(body);
+    const pricing = parseModelPricing(body);
     if (models.length === 0) {
       // 200 with nothing parseable. Claiming MEASURED here would report "this key can reach zero
       // models", which reads as an entitlement problem and would send an operator to rotate a
       // perfectly good key. An unrecognised body is our gap, not theirs.
       return { ...base, status: 'NOT_CHECKED', detail: 'HTTP 200 but no model ids parsed' };
     }
-    return { ...base, status: 'MEASURED', models, detail: `HTTP 200, ${models.length} models` };
+    const priced = Object.keys(pricing).length;
+    return {
+      ...base,
+      status: 'MEASURED',
+      models,
+      ...(priced > 0 ? { pricing } : {}),
+      detail: `HTTP 200, ${models.length} models${priced > 0 ? `, ${priced} priced` : ''}`,
+    };
   } catch (e) {
     return {
       ...base,
@@ -232,4 +305,22 @@ export function catalogHasModel(provider: string, model: string): boolean {
 }
 
 /** The probe row backing a provider, so callers need no second copy of the endpoint table. */
+/**
+ * The vendor-published rate for one model, or null if nobody published one.
+ *
+ * NULL IS THE POINT. A caller must be able to tell "the vendor says this costs nothing" from
+ * "nobody knows what this costs", and a number cannot carry that difference. Returning 0 for the
+ * unknown case would recreate the exact bug this closes.
+ *
+ * Synchronous, against the warm cache, because the billing path is synchronous. Before the first
+ * refresh the cache is empty and every lookup is null — the static table still answers, and an
+ * unpriced model stays unpriced, which is the behaviour that already exists.
+ */
+export function catalogPriceFor(
+  provider: string,
+  model: string,
+): { in: number; out: number } | null {
+  return cache.entries[provider.toLowerCase()]?.pricing?.[model] ?? null;
+}
+
 export { probeFor };

@@ -60,27 +60,34 @@ describe('three-state cost class — unpriced is its own answer', () => {
     }
   });
 
-  it('GAP: an unknown PROVIDER returns 0 SILENTLY — only an unknown MODEL warns', () => {
+  it('CLOSED: an unknown PROVIDER now warns too — the silent half is gone', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      // pricing.ts:47 `if (!providerPricing) return 0;` returns before the warn at :68.
-      // So the loudness of the "we did not price this" signal depends on WHICH half is
-      // missing — and the silent half covers the providers with no table at all:
-      // openrouter, sambanova, and all three SLMs (llama-3-2-1b / gemma-3-2b / phi-4).
-      // Verified live 2026-08-03: 40 openrouter + 8 phi-4 + 2 llama-3-2-1b calls in the
-      // last 7 days all recorded cost 0 with no warning emitted.
+      // THIS TEST USED TO ASSERT THE OPPOSITE, and recording the gap is what made the fix
+      // findable. It read: "GAP: an unknown PROVIDER returns 0 SILENTLY", because
+      // `if (!providerPricing) return 0;` returned before the UNPRICED-MODEL warn — so the
+      // loudness of "we did not price this" depended on WHICH half was missing, and the
+      // silent half covered every provider with no table at all: openrouter, sambanova,
+      // and the SLMs. Verified live 2026-08-03: 40 openrouter + 8 phi-4 + 2 llama-3-2-1b
+      // calls in one week, all ledgered at 0 with nothing in the logs.
+      //
+      // The early return is now gone. Both halves take the same path: consult the vendor
+      // catalog, and if nobody published a rate, warn. The cost is still 0 — that has not
+      // changed and must not, because 0 here means "unknown", not "free" — but it is no
+      // longer silent.
       expect(calculateCost('openrouter', 'qwen/qwen-2.5-72b-instruct', 1_000_000, 1_000_000)).toBe(0);
       expect(calculateCost('sambanova', 'Meta-Llama-3.1-8B-Instruct', 1_000_000, 1_000_000)).toBe(0);
-      expect(warn).not.toHaveBeenCalled(); // <- the gap
+      expect(warn).toHaveBeenCalledTimes(2);
+      for (const call of warn.mock.calls) {
+        expect(String(call[0])).toContain('UNPRICED MODEL');
+      }
 
-      // costClass closes it at the classification layer regardless of which half is absent.
+      // costClass is unchanged: it still refuses to call either of them free.
       expect(costClass('openrouter', 'qwen/qwen-2.5-72b-instruct')).toBe('unpriced');
       expect(costClass('sambanova', 'Meta-Llama-3.1-8B-Instruct')).toBe('unpriced');
     } finally {
       warn.mockRestore();
     }
-    // NOT FIXED HERE: making the provider-missing branch warn is a change to
-    // src/billing/pricing.ts, outside this lane's fence.
   });
 
   it('isConfirmedFree refuses to vouch for an unpriced provider', () => {
