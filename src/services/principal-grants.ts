@@ -50,6 +50,7 @@ import {
 import { effectiveAuthority, type EffectiveAuthority } from './effective-authority';
 import { resolveAuthorityInputs } from './grantor-authority';
 import { buildGrantIntentMessage, checkGrantIntentSignature, type SignatureCheck } from './principal-grant-intent';
+import { applyRoleCeiling } from './principal-roles';
 
 export const MAX_GRANT_DEPTH = 4; // ported constant: identity/delegation.ts MAX_DELEGATION_DEPTH
 
@@ -120,6 +121,23 @@ export function decideMint(req: MintRequest, grantorAuthority: EffectiveAuthorit
   }
   if (req.grantorAgentId === req.granteeAgentId) {
     return { allowed: false, reason: 'grantor and grantee are the same principal — self-grants are not narrowing' };
+  }
+
+  // G9 — ROLE CEILING. A named role bounds what this grant may carry; it never supplies
+  // anything. Checked BEFORE the parent-attenuation and A_eff gates below, because a request the
+  // role forbids should be refused on the role's own terms rather than surviving to fail later
+  // for a reason that does not name it — a refusal whose reason points at the wrong control is
+  // how the next reader loosens the wrong thing.
+  //
+  // An UNRECOGNIZED role is not a ceiling. It is stored as a label and constrains nothing, which
+  // is what `role` has always done; making an unknown string suddenly refuse capabilities would
+  // break live grants carrying free text like "Researcher / Data".
+  const roleCeiling = applyRoleCeiling(req.capabilities, req.role);
+  if (roleCeiling.refused.length > 0) {
+    return {
+      allowed: false,
+      reason: `role ceiling refuses ${roleCeiling.refused.join(', ')}: ${roleCeiling.detail ?? 'not permitted by this role'}`,
+    };
   }
 
   const depth = req.parent ? req.parent.depth + 1 : 0;
