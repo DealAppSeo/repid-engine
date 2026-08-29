@@ -405,6 +405,29 @@ const ROUTE_OVERRIDES: RouteOverride[] = [
   { match: /^\/api\/v1\/agents\/[^/]+\/recall$/, multiplier: 0.5, description: 'recall-semantic-search' },
   // Public registration.json cache-friendly — triple
   { match: /^\/api\/v1\/agents\/[^/]+\/registration\.json$/, multiplier: 3, description: 'registration-json-cache' },
+  // ACCOUNT CREATION IS NOT A READ, AND IT WAS PRICED LIKE ONE.
+  //
+  // POST /api/v1/builder/token-signup is public and unauthenticated by design — it is the
+  // front door of the no-wallet flow. It was NOT unlimited (a red-team pass reported "no
+  // rate limit visible", which is wrong: this middleware is mounted globally on /api/v1 at
+  // src/index.ts, so the route always carried IP_DEFAULT). The real problem is subtler and
+  // survives that correction: it carried the SAME allowance as a cache-friendly GET —
+  // 60/min/IP, roughly 86,000 persistent `builders` rows per day from a single address.
+  //
+  // Each of those rows is durable state that participates in profile reads and demo flows,
+  // so the generic read budget is the wrong unit for it entirely.
+  //
+  // 0.1 → 6/min. NOT tighter, deliberately: a shared NAT (an office, a conference, a
+  // university) can legitimately produce several genuine signups in one minute, and a limit
+  // that breaks those is a limit someone raises back out in an incident. A real visitor
+  // signs up once.
+  //
+  // WHAT THIS DOES NOT DO, stated because a rate limit invites overclaiming: it does not
+  // stop a Sybil farm. Rotating IPs defeats per-IP limiting entirely. This raises the cost
+  // of bulk minting from one address; it is defence in depth, not the defence. The actual
+  // protection is that a token-only account accrues NOTHING persistent to its reputation —
+  // which is why the preview-only model was chosen over provisional-and-vesting.
+  { match: /^\/api\/v1\/builder\/token-signup$/, multiplier: 0.1, description: 'anonymous-account-creation' },
 ];
 
 function getRouteOverride(reqPath: string, baseLimit: number): number | null {

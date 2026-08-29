@@ -155,3 +155,59 @@ describe('Route overrides — match patterns', () => {
     expect('/api/v1/agents/f3ef0bf8-5cdc-4fad-bce8-5144f01dc271/registration.json').toMatch(reg!.match);
   });
 });
+
+describe('anonymous account creation is not priced as a read', () => {
+  /**
+   * POST /api/v1/builder/token-signup is the public front door of the no-wallet flow.
+   *
+   * A red-team pass reported "no rate limit visible in the router or middleware for this
+   * path". THAT IS WRONG, and the correction matters more than the finding: this
+   * middleware is mounted globally on /api/v1 (src/index.ts), so the route always carried
+   * IP_DEFAULT. Acting on the finding as stated would have meant building a second limiter
+   * beside a working one.
+   *
+   * The real problem survives the correction and is subtler. Account creation carried the
+   * SAME allowance as a cache-friendly GET — 60/min/IP, roughly 86,000 durable `builders`
+   * rows per day from one address. Each row is persistent state that shows up in profile
+   * reads and demo flows, so the generic read budget was simply the wrong unit.
+   */
+  const { ROUTE_OVERRIDES } = __test;
+  const rule = () => ROUTE_OVERRIDES.find((r) => r.description === 'anonymous-account-creation');
+
+  it('the signup route has its own, tighter budget', () => {
+    expect(rule()).toBeDefined();
+    expect(rule()!.multiplier).toBe(0.1);
+    expect('/api/v1/builder/token-signup').toMatch(rule()!.match);
+  });
+
+  it('it is TIGHTER than the default, which is the entire point', () => {
+    // A multiplier >= 1 here would be the override existing and buying nothing — the shape
+    // of fix that looks applied and changes no behaviour.
+    expect(rule()!.multiplier).toBeLessThan(1);
+  });
+
+  it('60/min becomes 6/min — enough for a shared NAT, not for bulk minting', () => {
+    // Mirrors getRouteOverride's arithmetic. Not tighter on purpose: an office or
+    // conference IP can produce several genuine signups in a minute, and a limit that
+    // breaks those is one someone raises back out during an incident.
+    expect(Math.max(1, Math.floor(60 * rule()!.multiplier))).toBe(6);
+  });
+
+  it('FAILABILITY: the pattern is anchored and does not leak onto neighbours', () => {
+    // Without anchors this would also throttle every /builder/* read, which would be a
+    // worse bug than the one being fixed.
+    for (const p of [
+      '/api/v1/builder/0xT0KENabc',
+      '/api/v1/builder/token-signup/extra',
+      '/api/v1/builders/token-signup',
+      '/api/v1/agents/x/recall',
+    ]) {
+      expect(p).not.toMatch(rule()!.match);
+    }
+  });
+
+  it('the other overrides are untouched', () => {
+    expect(ROUTE_OVERRIDES.find((r) => r.description === 'recall-semantic-search')?.multiplier).toBe(0.5);
+    expect(ROUTE_OVERRIDES.find((r) => r.description === 'registration-json-cache')?.multiplier).toBe(3);
+  });
+});
