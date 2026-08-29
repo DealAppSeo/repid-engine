@@ -1,9 +1,9 @@
-# INBOX_XC — policy predicates and GateRun hooks for DP / aggregation / zk disclosure
+# INBOX_XC — red-team the least-friction signup ladder before it is built
 
 ## Task
 
-**Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is a specification returned
-as text. Do not claim to have created, edited or committed a file.
+**Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is findings and a
+specification returned as text. Do not claim to have created, edited or committed a file.
 
 **Dispatch:**
 ```
@@ -15,24 +15,31 @@ node scripts/dispatch/run-agent.mjs --agent xc --inbox docs/dispatch/INBOX_XC.md
 
 ### Why this task exists
 
-The standing order changed on 2026-08-20. FL / DP / ZKP are **no longer on hold**. What
-is held is *overclaiming* — nothing is MEASURED or user-facing until a GateRun says so.
-The seams get built now so that surfacing a feature later is **integration, not
-greenfield**.
+The product is about to grow a **progressive-trust signup**: a visitor can arrive with no
+wallet, no email and no account, do real things, and see their RepID move — proving more
+about themselves only as the stakes rise. That is the MVP's front door and it is not built
+yet. **You are being asked BEFORE it is built, not after**, because the failure direction
+here is "anyone can mint reputation", and that is far cheaper to prevent than to unwind.
 
-Your half is the **policy**: predicates, gates, and the ladders that decide when a
-control relaxes. GA has the data contracts in parallel. Do not design schemas, and do
-not assume what GA will choose — write your predicates against the *properties* you
-need, and name the fields you require as requirements on GA.
+The operator's stated intent, verbatim, because it is not written anywhere in this repo:
+
+> *"we want to create the signup with the least friction possible … for most users we want
+> them to see value before we ask for too much info … without us ever taking seeing or
+> having access to their info or wallet, we never take custody. So as they do a few things
+> and learn, see the value hopefully, and their RepID goes up slightly because they are
+> learning … even though at a certain point they obviously will have to 2FA and I see
+> value in 4FA before they start exchanging high risk data."*
+
+Your job is to find where that intent, implemented naively, breaks the guarantee that a
+RepID is **earned**.
 
 ---
 
 ### Facts you need, inlined
 
 You have `reasoning` and `repo_read`. **`repo_read` is scoped to this workspace only** —
-you cannot open `trinity-ecosystem`, `trustshell` or `hyperdag-protocol`. Everything
-below is stated because you cannot go and check it. Do not claim to have read a file
-outside this repo, and do not invent its contents.
+you cannot open `trinity-ecosystem`, `trustshell` or `hyperdag-protocol`. Do not claim to
+have read a file outside this repo, and do not invent its contents.
 
 **The trust vocabulary — four states, and the distinctions ARE the product:**
 
@@ -43,120 +50,114 @@ outside this repo, and do not invent its contents.
 | `NOT_CHECKED` | Nobody looked. **Not** a warning, **not** a failure — an absence. |
 | `FAILED` | A check ran and did not pass. |
 
-**Exit codes:** `0` VERIFIED, `2` NOT_CHECKED, anything else FAILED. A gate that goes red
-for environmental reasons gets ignored within a week, at which point it is worse than no
-gate — so distinguish "could not look" from "looked and failed" in every predicate you
-write.
+**Exit codes:** `0` VERIFIED, `2` NOT_CHECKED, anything else FAILED.
 
 **Canonical facts (do not re-derive, do not contradict):**
 - Tiers: `PROBATIONARY` 0–499 · `EARNING` 500–999 · `ESTABLISHED` 1000–4999 ·
   `AUTONOMOUS` 5000–7999 · `VETERAN` 8000–10000. RepID clamps to [10, 10000].
-- `tier` is **database-derived** — a Postgres trigger overwrites it from
-  `current_repid` on every write. Never design a policy that writes tier directly.
-- `A_eff = min(R_route, 100·√S_real) · 1[builder ≥ 500]`. This engine cannot compute the
-  true decay-adjusted `R_route` and stamps `rRouteIsLedgerApproximation: true`. Where a
-  policy consumes `A_eff` it consumes an **APPROXIMATE** value and must say so — and note
-  that latent decay means it can **overstate** authority.
-- Grants G1–G8: **G6** (grantor revoke, cascading) is MEASURED end-to-end, in CI and
-  against production. **G1 and G3** (mint-floor enforcement) are NOT_CHECKED — no
-  measured caller exists.
+- `tier` is **database-derived**. A Postgres trigger overwrites it on every write to
+  `current_repid`. Never design a policy that writes tier directly.
+- **There is already an anti-Sybil gate, and it is load-bearing to this task.** The live
+  `compute_tier(integer, uuid)` overload demotes on counterparty count: `VETERAN` and
+  `AUTONOMOUS` each require **>= 2 unique counterparties**, else they fall one tier.
+  `ESTABLISHED` and `EARNING` have **no such gate today**. That asymmetry is the single
+  most important input to your analysis — reason about what it does and does not protect
+  when the population gains a large number of zero-counterparty accounts.
 - `PAY_AUTH_MODE` is **observe**: the ControlProof gate records what it would decide and
-  does not decide it. Flipping it is a real decision, not a config tweak. Design for
-  observe first; state explicitly what would have to be true to enforce.
-- `CONSTITUTIONAL_AUDIT_ENABLED` defaults **FALSE** and the layer is **non-load-bearing**:
-  while disabled its output influences no RepID delta, no verdict, no tool gate. A stub
-  that always passes must never steer scoring or be reported as a measurement.
+  does not decide it.
+- `CONSTITUTIONAL_AUDIT_ENABLED` defaults **FALSE** and the layer is non-load-bearing.
 
-**Existing patterns in THIS repo to align with (read them):**
-- `src/services/bounty-authorization.ts` — the house authorization pattern, and the
-  clearest worked example of a fix that *looks* correct and closes nothing: requiring the
+**Read these files — they are the actual subject:**
+- `src/services/stake-authorization.ts` — the existing authorization ladder
+  (`session` / `wallet_signature` / `operator` / `unenforced`). Note that it already
+  escalates on the **risk of the action** (a real on-chain deposit demands a wallet
+  signature; a simulated one accepts a session). Read the module header first.
+- `src/services/anonymous-signup.ts` — what a no-wallet visitor actually gets: a 32-byte
+  random token stored on the builder row, `auth_method: 'token_only'`,
+  `earns_repid_rewards: false`, and an address derived from the token that is
+  **deliberately not a valid checksummed address** and holds no key.
+- `src/services/auth-token.ts` — `verifyFullAccountToken()`: a JWT requiring `builder_id`
+  **and** `email`. An anonymous visitor has neither.
+- `src/services/bounty-authorization.ts` — read the header. It is the clearest worked
+  example in this repo of a fix that *looks* correct and closes nothing: requiring the
   `admin` scope would have authorised everyone, because public registration grants
-  `admin` to every new agent. Read its header before designing any gate.
-- `src/providers/cost-class.ts` — three states, never two, and why `unpriced` must not
-  collapse into `free`.
-- `src/services/effective-authority.ts` — how an honest approximation is labelled.
+  `admin` to every new agent. **Assume the same shape of mistake is available here.**
+- `src/routes/agents-external-score.ts` — a route that until recently required no
+  credential at all, and the reasoning that closed it.
+
+**The measured gap this task is about:** `/builder/token-signup` mints a credential into
+`builders.session_token`, and four routes in `src/routes/v1.ts` resolve a builder by that
+column — so it is a real, used credential. But `/stake/deposit`'s session tier accepts
+**only** full-account JWTs. So the product issues a credential its own ladder will not
+accept. Confirmed against production 2026-08-28: sign up, present the token you were
+handed one call earlier, receive `invalid_session`.
 
 ---
 
-### Deliverables — four specifications
+### Deliverables — four sets of findings
 
-### 1. DP spend predicates + GateRun hooks
+### 1. Attack the anonymous rung
 
-Predicates over a DP budget (GA is defining the object; state the fields you need).
+Assume the bottom rung is added: a `builders.session_token` match authorises **simulated**
+stake on its own row only, with real deposits still requiring a wallet signature.
 
-Must cover: whether a spend is permitted; what happens when accounting is **absent**
-rather than exhausted — these are different and must not share a branch; and the
-GateRun outcome mapping to MEASURED / NOT_CHECKED / FAILED.
+Find what that buys an attacker. At minimum reason about: unbounded free account creation;
+what a token-only account can reach that it should not; whether "its own row only" is
+actually enforceable given how the builder is resolved; and whether any downstream consumer
+treats a token-only account as equivalent to a full one.
 
-**The trap to avoid explicitly:** a budget check gated on a value that does not exist
-yet reads as the empty string / zero / undefined, and **fails OPEN**. This repo has been
-bitten by exactly this shape. Your predicate must fail **closed** on absent accounting,
-and you should say so in the spec rather than leaving it implied.
+**Name the single highest-severity path you find, and say plainly if you find none.**
 
-### 2. Aggregation cohort rules
+### 2. Rank the two RepID options by failure direction
 
-When may a secure-aggregation cohort form, and who may join.
+The operator must choose between:
 
-Must cover: minimum cohort size as a **policy input**, not a magic number; eligibility
-tied to RepID tier and/or grants; what happens on dropout below threshold; and how a
-cohort that cannot form reports — `NOT_CHECKED` (never assembled) is not `FAILED`
-(assembled and rejected).
+- **(A) Provisional-and-vesting** — an anonymous user's RepID moves as they act, is
+  recorded against the token-only row, and becomes *earned* only when they bind an
+  identity. A Sybil farm accumulates nothing that vests.
+- **(B) Preview-only** — the number shown is not persisted as earned at all.
 
-**Hard constraint:** FL participation is **opt-in, default OFF**. No rule may cause an
-agent to join a cohort it did not explicitly opt into.
+For each: what does an attacker gain, what does an honest user lose, and **which way does
+it fail when the implementation is subtly wrong** — because that, not the happy path, is
+what should decide it. Note explicitly whether the existing counterparty gate covers (A),
+and at which tier it stops helping.
 
-### 3. zk reputation-disclosure policy
+### 3. The escalation ladder itself
 
-When a selective-disclosure proof is required, accepted, or insufficient.
+Specify the ladder as predicates: for each rung, what is proven, what it unlocks, and what
+the system must refuse. Cover the operator's 2FA/4FA intent as *thresholds on action risk*,
+not on user identity. State where each rung's decision is MEASURED vs NOT_CHECKED.
 
-Must cover: which claims require a proof at all; verifier-side acceptance criteria; and
-the distinction between *no proof presented* (`NOT_CHECKED`) and *proof rejected*
-(`FAILED`). The ZKP layer here is a **deliberate stub** — your policy must treat a
-stubbed prover as NOT_CHECKED and must never let it satisfy a requirement.
+**Design for observe first.** Say explicitly what would have to be true to enforce.
 
-### 4. HITL relaxation ladders, tied to grants and RepID tier
+### 4. What must never be reachable
 
-The highest-value piece, and the one most likely to be got wrong.
-
-Design the ladder by which human-in-the-loop review **relaxes as trust is earned**:
-which tier or grant state unlocks which reduction in review, what evidence is required
-at each rung, and — most importantly — **what pushes an agent back down**. A ladder with
-no descent is not a trust system, it is a ratchet.
-
-Constraints: `REPID_HITL_GATE = 70` and `CONFIDENCE_GATE = 0.8` are canonical. A rung may
-never be unlocked by a value that is `APPROXIMATE` without that being stated at the rung.
-Since `A_eff` is approximate and can overstate, say what that means for any rung that
-consumes it.
-
-### 5. Cross-family critique requirements
-
-What it means for a claim to have been critiqued by a **different model family**, and
-when that is required. State the requirement in terms of observable properties, not
-vendor names — vendors change, the property is what matters.
+The short list of capabilities that must remain closed to a token-only account no matter
+how the ladder evolves, each with the reason it is on the list. This is the list a future
+change gets checked against, so it is worth more than a long one.
 
 ---
 
 ### Acceptance criteria
 
-- Every predicate distinguishes all four vocabulary states, and says which of them is
-  the **fail-closed default**.
-- Every gate states its rollback: what single change reverts it.
-- Each spec names the specific way it could **fail open**, and how it prevents that. A
-  spec that cannot describe its own failure mode has not been thought through.
-- Where you are uncertain, write **UNVERIFIED** and say what evidence would settle it.
+- Every finding names the file and the mechanism, not just the symptom.
+- Every status distinguishes all four vocabulary states. No two-state booleans.
+- Each finding carries **what it does NOT establish**. A boundary stated is worth more
+  than a claim overreached.
+- Where you are uncertain, write **UNVERIFIED** and say what would settle it.
+- Severity is ranked by **which way the control fails**, not by how alarming the component
+  sounds. A gate that fails closed and a gate that fails open are not comparable.
 
 ### What will be rejected
 
 - Any claim you read a file outside this workspace.
 - Any invented test output, command output, or measurement. On 2026-08-05 a dispatch
   returned a review containing fabricated test results; that is the specific failure this
-  lane's constraints exist to prevent. If you did not run it, you did not run it.
-- Filling in a Sprint-3 stub, or proposing that ANFIS/LASSO move beyond
-  observe/policy. Those stay observe-only.
-- Upgrading anything from APPROXIMATE to MEASURED without a named check that produces it.
-- Any recommendation to enable FL by default, claim a DP guarantee, or ship zk product UI.
+  lane's constraints exist to prevent. **If you did not run it, you did not run it.**
+- A recommendation to loosen an authorization path without stating its failure direction.
+- Filling in a Sprint-3 stub.
 
 ### Note on where this lands
 
-`repid-engine` is a **PUBLIC** repository. State findings, not inventories. No
+`repid-engine` is a **PUBLIC** repository. State findings, not inventories. Do not include
 credentials, project identifiers, row counts or service names in your output.
