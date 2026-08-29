@@ -5,6 +5,30 @@ import crypto from 'crypto';
 
 // Using global fetch
 
+/**
+ * The validator model, and why it is not a literal any more.
+ *
+ * `llama-3.3-70b-versatile` was hardcoded in four places. Groq decommissioned it,
+ * and from 2026-08-17 every PCP call returned:
+ *
+ *     Groq HTTP 404: The model `llama-3.3-70b-versatile` does not exist or you do
+ *     not have access to it.
+ *
+ * MEASURED in `llm_call_log` (task_hint='pcp_validation'): 39 successes, the last
+ * at 2026-08-16 12:04:12 — the exact minute of the last contract that ever settled —
+ * then 69 consecutive failures. Twelve daily living-proof runs escrowed real USDC
+ * and minted nothing because of a model rename.
+ *
+ * The default below is EVIDENCE, not a guess: `openai/gpt-oss-20b` was observed
+ * answering on this account's Groq key on 2026-08-29 via the live
+ * POST /api/v1/hal/evaluate probe (verdict TRUE, confidence 95, 232ms).
+ *
+ * It is env-overridable so the NEXT deprecation is a variable change, not a deploy.
+ * A provider retiring a model is routine; a hardcoded name turning it into twelve
+ * days of silent economic damage is not.
+ */
+const PCP_MODEL = process.env['PCP_VALIDATOR_MODEL'] ?? 'openai/gpt-oss-20b';
+
 export async function runPCP(taskData: any) {
   // 1. Select Validators
   const { data: agents, error } = await db
@@ -73,7 +97,7 @@ ${taskData.result}`;
           'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: PCP_MODEL,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.1,
           response_format: { type: 'json_object' }
@@ -89,13 +113,13 @@ ${taskData.result}`;
       const json = await res.json();
       const tokensIn = json.usage?.prompt_tokens || 0;
       const tokensOut = json.usage?.completion_tokens || 0;
-      const cost_usd = calculateCost('groq', 'llama-3.3-70b-versatile', tokensIn, tokensOut);
+      const cost_usd = calculateCost('groq', PCP_MODEL, tokensIn, tokensOut);
       
       logLlmCall({
         call_id,
         provider: 'groq',
         tier: '0a',
-        model: 'llama-3.3-70b-versatile',
+        model: PCP_MODEL,
         prompt_tokens: tokensIn,
         completion_tokens: tokensOut,
         cost_usd,
@@ -127,7 +151,7 @@ ${taskData.result}`;
         call_id,
         provider: 'groq',
         tier: '0a',
-        model: 'llama-3.3-70b-versatile',
+        model: PCP_MODEL,
         prompt_tokens: 0,
         completion_tokens: 0,
         cost_usd: 0,
