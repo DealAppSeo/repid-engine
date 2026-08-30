@@ -361,10 +361,31 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         //
         //   select count(*) from repid_proof_queue q
         //    where q.status='completed'
+        //      and coalesce(q.completed_at, q.created_at) > '2026-08-01T06:58:24Z'   -- see below
         //      and not exists (select 1 from repid_zkp_proofs z where z.job_id = q.job_id);
         //
         // That query is the real detector. It was answerable on day one and nobody had reason
         // to ask it, because every visible signal said the pipeline was healthy.
+        //
+        // THE DATE BOUND IS NOT COSMETIC, and the first version of this comment shipped without
+        // it. MEASURED 2026-08-30, both forms against production:
+        //
+        //     unbounded ..................... 81,911
+        //     bounded to the provenance era ..... 103
+        //
+        // `job_id` is NULL on every row written before 2026-08-01, because the provenance block
+        // that populates it is what broke the write in the first place. So the unbounded join
+        // cannot match those rows and counts the ENTIRE completed history as missing. A detector
+        // that always reports a catastrophic number is not a detector: the first person to run it
+        // concludes it is broken, and stops running it — which is strictly worse than not having
+        // one, because it also discredits the finding it came from.
+        //
+        // The bound is the timestamp of the last row the store accepted. After the backfill it
+        // should read 0, and any non-zero value is a live recurrence.
+        //
+        // Better still would be a surface that runs this rather than a comment someone must
+        // remember to paste. Deliberately not bundled: a /health field is a public-payload
+        // change and belongs in its own review.
         console.error(
           `[ProofDrain][CANONICAL_WRITE_FAILED] repid_zkp_proofs INSERT rejected for agent=${args.agentId} ` +
             `job=${args.jobId ?? 'none'} pgcode=${(error as { code?: string }).code ?? 'unknown'} — ` +
