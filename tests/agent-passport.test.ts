@@ -126,7 +126,7 @@ describe('buildAgentPassport', () => {
       activity_30d: 12,
     });
 
-    expect(p!.identity_erc8004.registered_onchain).toBe(true);
+    expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');
     expect(p!.identity_erc8004.token_id).toBe('5863');
     expect(p!.identity_erc8004.network).toBe('base-sepolia');
     expect(p!.identity_erc8004.mint_basescan_url).toBe(
@@ -185,7 +185,7 @@ describe('buildAgentPassport', () => {
     };
     const p = await buildAgentPassport(makeDb(script), MINTED_AGENT.id);
 
-    expect(p!.identity_erc8004.registered_onchain).toBe(false);
+    expect(p!.identity_erc8004.registered_onchain).toBe('NOT_MINTED');
     expect(p!.identity_erc8004.token_id).toBeNull();
     expect(p!.identity_erc8004.mint_basescan_url).toBeNull();
     expect(p!.payments_x402.real_settlements).toBe(0);
@@ -297,7 +297,7 @@ describe('GET /api/v1/passport/:agentId', () => {
     const res = await request(makeApp()).get(`/api/v1/passport/${MINTED_AGENT.id}`);
     expect(res.status).toBe(200);
     expect(res.body.passport_version).toBe('1');
-    expect(res.body.identity_erc8004.registered_onchain).toBe(true);
+    expect(res.body.identity_erc8004.registered_onchain).toBe('MINTED');
     expect(res.headers['cache-control']).toBe('public, max-age=30');
   });
 

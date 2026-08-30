@@ -80,31 +80,48 @@ jobs:
             PRIORITY (Sean 2026-07-27): audit-evidence first; favor the work that touches
             the MOST SURFACES ("do more with less"). Optional extra focus this run: ${{ github.event.inputs.focus }}
 
-            TURN BUDGET (read before starting — this is why Beats 64-67 never got logged):
-            you have a hard 40-turn cap. Three of the four scheduled runs since this workflow was
-            enabled (2026-08-26/27) hit that cap mid-investigation and were killed before step (e)
-            ever ran — real PRs shipped (#480, #482, #483) with ZERO ledger entries for any of them.
-            The interactive-session ledger entries you read for style (Beats 55-63) each spent an
-            entire unbounded session on one beat; do not use them as a length or depth target here.
-            Budget roughly: (a) 5-8 turns, (b)+(c) 15-20 turns, (d) 3-5 turns, (e) 5 turns, and STOP
-            adding scope once you are ~30 turns in — ship a shorter, real ledger entry over a longer
-            one that never gets written. A one-paragraph (e) that lands beats a thorough one that doesn't.
+            TURN BUDGET — READ THIS FIRST, IT IS WHY THE ORDER BELOW CHANGED.
+            You have a hard 40-turn cap. MEASURED 2026-08-29: FOUR of the five scheduled runs since
+            this workflow was enabled (2026-08-26/27) hit that cap mid-investigation and died before
+            the ledger was ever written. The latest, run 33273165759, ended `error_max_turns` at 41
+            turns, $1.06, 5 minutes, with nothing logged. Real PRs shipped (#480, #482, #483) with
+            ZERO ledger entries for any of them.
+
+            THE PREVIOUS VERSION OF THIS PROMPT ALREADY KNEW THAT AND STILL FAILED, four times. It
+            listed the ledger as step (e) — last — and then asked, in a sub-clause of that last item,
+            for it to be done early. An agent reading a lettered list executes it in order. The prose
+            said "do this first"; the structure said "do this fifth"; the structure won. So the order
+            below IS the fix — the ledger is now step 1, not a note attached to step 5.
+
+            The interactive ledger entries you may read for style (Beats 55-63) each spent an entire
+            unbounded session on one beat. Do not use them as a length or depth target here.
+
+            Budget: (1) 8-12 turns, (2)+(3) 15-20, (4) 3-5, (5) 3. STOP adding scope at ~30 turns.
+
+            A BEAT THAT DOES ONLY STEP 1 IS A COMPLETE BEAT. If the top backlog item is too large to
+            land inside the remaining turns, say so in the ledger and stop. An honest "verified the
+            prior beat, backlog item X needs more than one beat, not started" is a real result. Half
+            a feature plus no record is not — it is the failure this loop keeps producing.
 
             THE BEAT:
-              (a) INDEPENDENTLY verify the prior beat by reading its diff + its CI conclusion (gh) — never rubber-stamp.
-                  Keep this proportionate (see budget above): confirm the claim, don't re-derive it from scratch.
-              (b) advance the highest-priority OPEN backlog item on a NEW branch cut from origin/main.
-              (c) you are in the cloud runner — you MAY run `npm install --legacy-peer-deps` + `tsc`/`npm test`
+              (1) LEDGER FIRST — THIS IS THE ONE STEP THAT MUST SURVIVE.
+                  Verify the prior beat INDEPENDENTLY (its diff + its CI conclusion via gh) — never
+                  rubber-stamp, but keep it proportionate: confirm the claim, do not re-derive it.
+                  Then IMMEDIATELY append a Beat entry to
+                  reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md on its OWN small docs-only branch,
+                  open the PR, and `gh pr merge <n> --auto --squash` it. Record what you verified and
+                  what you INTEND to do in steps 2-4. Do not start step 2 until that PR is open.
+                  Main has branch protection, so there is no direct-push shortcut; a small early PR
+                  is the only thing that survives hitting the cap later.
+              (2) advance the highest-priority OPEN backlog item on a NEW branch cut from origin/main.
+              (3) you are in the cloud runner — you MAY run `npm install --legacy-peer-deps` + `tsc`/`npm test`
                   here to sanity-check (it costs runner minutes, not Sean's box); the required CI is the authority.
-              (d) push the branch, open a PR, and — ONLY if SAFE-CLASS (docs / shadow-inert / additive-tested) —
+              (4) push the branch, open a PR, and — ONLY if SAFE-CLASS (docs / shadow-inert / additive-tested) —
                   run `gh pr merge <n> --auto --squash` WHILE its checks are still pending, so GitHub lands it on green.
-              (e) append a Beat entry to reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md, on its OWN small branch/PR
-                  (docs-only, SAFE-CLASS, auto-merge it immediately) SEPARATE from (b)'s branch. Open this ledger
-                  PR right after (a)'s verification, before sinking turns into (b) — main has branch protection,
-                  so there is no direct-push shortcut; a small early PR is what actually survives hitting the
-                  turn cap later. If turns run out during (b)/(c)/(d), the ledger entry for THIS beat's step (a)
-                  is already safely merged even though the new backlog work is not — that is the failure mode
-                  to design for, not to just note after the fact.
+              (5) IF TURNS REMAIN, append a short second entry saying what step 2 actually shipped and
+                  how it differed from the intent you logged in step 1. If turns do not remain, step 1
+                  already told the truth about this beat and nothing is lost — which is the whole point
+                  of the reorder. Never skip step 1 to make room for step 5.
 
             HARD LINES: verify before asserting ([V] not [R]); SHADOW-FIRST — NEVER flip Sean-gated enable flags
             (ENGINE_LLM_PROXY, ROUTER_STRICT_COST_ORDER, HAL_GROUNDING_MODE=enforce, REPID_PURPOSE_GATE_V3,
@@ -118,7 +135,7 @@ jobs:
 
   # Beats 64-67 all showed the same failure: the 40-turn cap kills the `beat`
   # job mid-investigation, real PRs still land (auto-merge was already set
-  # before the runner died), but step (e) — the ledger entry — never runs
+  # before the runner died), but step 1 — the ledger entry — never ran
   # because it depended on the agent having turns left. A prompt-text fix
   # (Beat 65) held for exactly one run (Beat 66) then failed the next two
   # (Beat 67). This job is the structural fix: it runs unconditionally,
@@ -182,7 +199,7 @@ jobs:
 
           {
             echo ""
-            echo "## Beat (auto-logged, run ${RUN_ID}) — agent did not reach step (e)"
+            echo "## Beat (auto-logged, run ${RUN_ID}) — agent did not reach step 1 (ledger)"
             echo ""
             echo "**Auto-generated by the ledger-fallback job** — the \`beat\` job (result: \`${BEAT_RESULT}\`) did not open its own ledger entry before this job ran. Run: ${RUN_URL}"
             echo ""
@@ -193,7 +210,7 @@ jobs:
               echo "$SHIPPED"
             fi
             echo ""
-            echo "This is a bare factual stub, not analysis — the next beat should read this run's own log (\`gh run view ${RUN_ID} --log\`) if the reason matters."
+            echo "The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (\`gh run view ${RUN_ID} --log\`) if the reason matters."
           } >> "$LEDGER_FILE"
 
           git add "$LEDGER_FILE"

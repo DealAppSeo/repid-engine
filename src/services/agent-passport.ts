@@ -61,7 +61,18 @@ export interface AgentPassport {
     activity_30d: number;
   };
   identity_erc8004: {
-    registered_onchain: boolean;
+    /**
+     * THREE STATES, NEVER TWO — and never `false` for "we did not look".
+     *
+     * MINTED      we hold the mint transaction: the chain write is evidenced.
+     * UNVERIFIED  a token id exists but no mint tx is recorded here. This is the state that
+     *             used to render as `false`, and it was WRONG: measured 2026-08-30, tokens
+     *             reported this way are live on chain — `ownerOf()` on the identity registry
+     *             returns a real owner, in one case exactly matching this payload's own
+     *             `conservator_address`. Resolve it at `live_verification_endpoint`.
+     * NOT_MINTED  no token id at all. Nothing was ever minted for this agent.
+     */
+    registered_onchain: 'MINTED' | 'UNVERIFIED' | 'NOT_MINTED';
     token_id: string | null;
     contract_address: string | null;
     chain_id: number | null;
@@ -220,7 +231,24 @@ export async function buildAgentPassport(
     .maybeSingle();
   if (proofErr) throw new PassportQueryError('zkp_latest', proofErr.message);
 
+  /**
+   * `mint_tx_hash` is BOOKKEEPING, not a chain reading, and this line used to publish it as one:
+   *
+   *     const minted = !!agent.mint_tx_hash;   // then: registered_onchain: minted
+   *
+   * MEASURED 2026-08-30 against the live identity registry on Base Sepolia. Every token id
+   * sampled — including several whose row carries no mint tx, and one whose stored status
+   * literally reads NEVER_MINTED — returns a real owner from `ownerOf()`. One of those owners is
+   * byte-for-byte the `conservator_address` this same passport reports. So the database was
+   * telling the world an agent had no on-chain identity while the chain held one.
+   *
+   * The absence of a transaction hash in our table is not evidence about the blockchain. It is
+   * evidence about our table. Those are different claims and only one of them was ours to make.
+   */
   const minted = !!agent.mint_tx_hash;
+  const hasToken = agent.erc8004_token_id != null && String(agent.erc8004_token_id) !== '';
+  const identityState: 'MINTED' | 'UNVERIFIED' | 'NOT_MINTED' =
+    minted ? 'MINTED' : hasToken ? 'UNVERIFIED' : 'NOT_MINTED';
   const mintChainId: number | null = agent.mint_chain_id ?? null;
 
   return {
@@ -240,7 +268,7 @@ export async function buildAgentPassport(
       activity_30d: agent.activity_30d ?? 0,
     },
     identity_erc8004: {
-      registered_onchain: minted,
+      registered_onchain: identityState,
       token_id: agent.erc8004_token_id ?? null,
       contract_address: minted ? agent.erc8004_address ?? null : null,
       chain_id: mintChainId,

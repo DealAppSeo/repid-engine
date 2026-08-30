@@ -3012,3 +3012,172 @@ PRs merged during this run's window (since 2026-08-29T20:19:05Z):
 - (none detected)
 
 This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 33273165759 --log`) if the reason matters.
+
+## Beat 72 — 2026-08-30 · ledger-first reorder verified against a real prior beat, PR #540 confirmed independently
+
+**Step 1 — verified PR #540 independently, not rubber-stamped.** `gh pr view 540 --json state,mergedAt` → `MERGED` at 2026-08-30T03:01:32Z. `gh pr checks 540` → all checks pass (test, crosscheck, gitleaks ×2, resident-secrets ×2, zkp-vault, HAL prompt-injection probes). `gh pr diff 540 --name-only` → `src/middleware/auth.ts`, `src/routes/mvp-api.ts`, `tests/auth-grants-read-public.test.ts` — matches the PR body's claim of a keyless `GET /api/v1/grants/roles` endpoint gated by an exact-path + method guard, with the two prior auto-logged run stubs (33262678107, 33273165759) correctly showing no PRs merged in their windows since #540 landed after both.
+
+**Step 2 intent (not yet started as of this entry):** the highest-priority OPEN backlog item per `PATENT_ALIGNED_BUILD_BACKLOG.md` is item 3, **P2 retrieval API** (`(content, inclusionProof, currentValidityProof, root)` + verifier endpoint) — it is the blocker the snapshot names for both item 6's remaining half (no proof-carrying traffic exists to measure hallucination drop against) and item 4 (answer-binding). Items 1-2 are marked done/superseded by the P0/P1 lines above the queue table. Given the 15-20 turn budget for steps 2-3, this beat will attempt a bounded slice of item 3 (read the existing `leanimt-plus.ts` surface, confirm what a verifier endpoint needs, and either land a small additive piece or report back honestly that it needs more than one beat) rather than the full acceptance test.
+
+**Process note:** this entry itself is the test of the reordered contract — steps 2-4 have not run yet at the time this PR is opened, so if the beat is cut short after this merges, the record survives per the loop's own design.
+
+**Step 2 outcome (added before this PR merged, turns remained) — investigated, correctly stopped, nothing shipped.** Backlog item 3 already has its "verifier endpoint" half built: `src/routes/proof-carrying-verify.ts` wraps `verifyProofCarryingAnswer` (`src/memory/proof-carrying-memory.ts`) behind `POST /verify`, and its own header already says so. What remains is the *retrieval* half — wrapping `ProofCarryingMemory.retrieve()` / `.nonMembershipWitness()` behind an authenticated per-agent endpoint — and `ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:60`) is an in-process class holding its tree in memory, with no persistence. Standing it up behind a real endpoint means deciding whether agent memory is per-process (lost on restart, broken across the multi-replica/Railway-restart case this API actually runs under) or backed by backlog item 5's `agent_memory_leaves`/`agent_memory_roots` tables — which do not exist yet, and this repo has no migrations (CLAUDE.md: "schema is managed externally"). That is a persistence-architecture decision, not an additive-tested slice, so per CLAUDE-RULE-1 it needs Sean's answer before code, not a guess made to fill the turn budget. Stopping here rather than shipping a single-process placeholder that would look done in a name-grep and isn't.
+
+**Differs from the step-1 intent** in that no code landed — the intent said "land a small additive piece **or** report back honestly," and investigation showed the honest-report branch was the correct one for this item specifically, not a fallback taken for lack of time.
+
+## Beat 73 — 2026-08-30 · verified Beat 72 (PR #542) independently; item 2 confirmed DONE and logged
+
+**Step 1 — verified PR #542 independently.** `gh pr view 542 --json state,mergedAt` → `MERGED` at
+2026-08-30T04:28:53Z. `gh pr checks 542` → all 8 checks pass (test, crosscheck, gitleaks ×2,
+resident-secrets ×2, zkp-vault, HAL prompt-injection probes). Cross-checked its underlying claim
+about PR #540 rather than trusting the entry's prose: `gh pr checks 540` also all-pass, and
+`gh pr diff 540` matches the entry's description (`src/middleware/auth.ts`, `src/routes/mvp-api.ts`,
+`tests/auth-grants-read-public.test.ts` — a keyless `GET /api/v1/grants/roles` behind an exact-path
++ method guard). Beat 72's step-2 outcome (investigated backlog item 3, correctly stopped rather
+than guessing a persistence architecture without Sean) checks out against the code it cites:
+`ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:60`) is in fact an in-process class with
+no persistence, and `agent_memory_leaves`/`agent_memory_roots` (item 5) do not exist as this repo
+has no migrations — that is a real fork, not a stalling excuse.
+
+**Step 2 intent (not yet started as of this entry):** with item 3 correctly blocked pending Sean,
+the next highest-priority OPEN item to advance is item 2, **P0.1 two-primitive refactor** — inject
+`hashLeaf`(sponge)+`hashPair`(compress) instead of one `Hash2`. A quick read during step 1 shows
+this already landed in PR #197 (2026-07-26, `feat(zkp): Poseidon2-BabyBear leaf H(a,b)`) and is
+wired as the *default* everywhere it matters, not just available: `LeanIMTPlus` (`src/memory/
+leanimt-plus.ts:77-78`) defaults `leafHash`/`pairHash` to `poseidon2LeafHash`/`poseidon2PairHash`,
+and `ProofCarryingMemory` (`proof-carrying-memory.ts:63-69`) does the same. At least 8 test files
+exercise the pair (`tests/leaf-dual-write.test.ts`, `tests/leanimt-plus-*.test.ts`,
+`tests/memory-publication.test.ts`, `tests/mesh-memory-sse.test.ts`, …), including a KAT gate
+against an independent Rust oracle (`zkp-vault/kat/poseidon2_babybear16_leaf_kat.json`) per the
+primitive's own file header. Unlike items 3-5/7-10, which the status snapshot explicitly warns
+carry only partial name-grep hits, item 2 is wired end to end. This beat will update the backlog
+table to mark item 2 **DONE with evidence**, the same audit-evidence pattern used for items 6 and
+20 — a docs-only, safe-class change (no code, no flags touched) that keeps the backlog's status
+snapshot from misleading the next beat into re-investigating settled ground.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, matched intent.** Backlog
+item 2 confirmed DONE with evidence exactly as scoped: PR #544 (`docs/backlog-item2-done`) marks the
+queue row and adds a status-snapshot bullet, citing `LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`)
+and `ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:63-69`) both defaulting to
+`poseidon2LeafHash`/`poseidon2PairHash` since #197, KAT-gated against the Rust oracle. Docs-only,
+safe-class, queued with `gh pr merge --auto --squash` while checks were pending.
+
+**Differs from the step-1 intent** in nothing material — the intent was to mark item 2 DONE with
+evidence, and that is what #544 does. No code was touched; no flags were touched.
+
+## Beat 74 — 2026-08-30 · verified Beat 73 (PR #543/#544) independently; step-2 intent logged for items 3/5/8
+
+**Step 1 — verified Beat 73's ledger entry and its shipped PR independently.** `gh pr view 543
+--json state,mergedAt` → `MERGED` 2026-08-30T08:32:03Z, all 8 checks `SUCCESS`. `gh pr view 544
+--json state,mergedAt,files` → `MERGED` 2026-08-30T08:31:26Z, all 8 checks `SUCCESS`, single file
+`reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` (+9/-1) — docs-only, matching the entry's own
+description. Read the diff, not just the file list: `gh pr diff 544` shows item 2 marked DONE citing
+`LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`) and `ProofCarryingMemory`
+(`src/memory/proof-carrying-memory.ts:63-69`) defaulting `leafHash`/`pairHash` to
+`poseidon2LeafHash`/`poseidon2PairHash`, KAT-gated against a Rust oracle — the backlog file on disk
+now reads exactly as Beat 73 claimed, not just as the PR title implied.
+
+**Step 2 intent (not yet started as of this entry).** With items 2 and 6 both closed and item 3
+already found blocked on a Sean-only persistence decision (Beat 72's finding, re-confirmed above),
+the remaining NOW-tier candidates that do not require Sean's GO or new secrets are item 5
+(`agent_memory_leaves`/`agent_memory_roots` DDL) and items 8/9 (ANFIS speculative cascade / SCHEDULE
+axis, both marked GA-phase, additive-tested, no flag flips). Item 5 is very likely dead-on-arrival in
+this repo specifically: CLAUDE.md states "no migrations live in this repo — schema is managed
+externally", so even an additive DDL statement has nowhere to live here without inventing a
+migrations mechanism Sean hasn't asked for. This beat's remaining turns will (a) confirm that by
+grepping for any existing migration tooling before ruling it out, then (b) check whether item 8's
+speculative-cascade primitive already exists anywhere under `src/` the way items 2 and 6 turned out
+to — following the pattern that a "NOW, not started" backlog row does not mean the code doesn't
+already do this — before attempting anything new. Ceiling for this beat is a bounded read-only
+investigation, not new code, given the turn budget already spent on verification above.
+
+**Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
+ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, matched intent, plus a
+finding item 8/9 investigation didn't need to reach.** Grepping for migration tooling surfaced the
+opposite of the expected answer: `migrations/`, `supabase/migrations/`, and `scripts/migrations/`
+all exist in this repo with real, dated SQL files — CLAUDE.md's "no migrations live in this repo"
+line is contradicted by the tree itself. More specifically, `git log -- supabase/migrations/` showed
+**backlog item 5 was already merged, in PR #490 (2026-08-28, all 7 checks green)**:
+`supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` +
+`src/memory/memory-root-store.ts`, satisfying item 5's own acceptance test with 6/6 tests in
+`tests/memory-root-store.test.ts`, no live database required. The backlog table still listed it as
+`NOW` — the same stale-tracking pattern already caught for items 2, 6, and 20, this time on a
+different item and caught before investigating items 8/9 at all. Filed as **PR #546**
+(`docs/backlog-item5-done`), docs-only, marking item 5 DONE with file:PR evidence and correcting the
+"items 3-5, 7-10 partial hits" disclaimer to "items 3-4, 7-10" since 5 no longer belongs in that set.
+Queued with `gh pr merge --auto --squash` while checks were pending. Items 8/9 (ANFIS speculative
+cascade / SCHEDULE axis) were not reached this beat — item 5 turning out to already be done changed
+what "next" meant mid-investigation, and the turn budget for step 2/3 was spent confirming and
+documenting that rather than starting a fresh grep on 8/9.
+
+**Differs from the step-1 intent** in scope, not direction: the intent named both a feasibility check
+(item 5) and a wiring check (items 8/9) as candidates; item 5's answer turned out to be "already
+done, just undocumented" rather than "blocked" or "needs a migrations mechanism," which closed it
+in one PR and left no remaining turns to also start on 8/9. Also worth flagging for whoever next
+touches CLAUDE.md: its "no migrations live in this repo — schema is managed externally" line
+(Commands section) is now demonstrably false — three migration directories with real SQL exist,
+though PR #490's own test plan confirms none of them are applied by any CI step. That is a doc
+correction for CLAUDE.md itself, not this backlog file, and is left open rather than fixed here to
+keep this PR's diff to the one file the intent named.
+
+## Beat 75 — 2026-08-30 · verified Beat 74 (PR #545/#546) independently; step-2 intent logged for items 8/9
+
+**Step 1 — verified Beat 74's ledger entry and its shipped PRs independently.** `gh pr view 545
+--json state,mergedAt,statusCheckRollup` → `MERGED` 2026-08-30T12:35:46Z, all 8 checks `SUCCESS`.
+`gh pr view 546 --json state,mergedAt,statusCheckRollup,files` → `MERGED` 2026-08-30T12:34:12Z, all
+8 checks `SUCCESS`, single file `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` — docs-only,
+matching the entry's own description. Read the diff, not just the file list: `gh pr diff 546` shows
+item 5 marked DONE citing `supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` +
+`src/memory/memory-root-store.ts`, with an explicit scope note that it is schema + pure helper only
+and NOT yet wired into scoring. Cross-checked the underlying claim rather than trusting the entry's
+prose: `git log --oneline -- supabase/migrations/` confirms `4d93678` (PR #490, 2026-08-28) added
+that exact migration file, `ls supabase/migrations/` shows the file present on disk, and
+`tests/memory-root-store.test.ts` exists as cited. CLAUDE.md's "no migrations live in this repo"
+line is indeed contradicted by three real migration directories, as Beat 74 flagged — left as an
+open doc-correction item, not fixed in this PR, same reasoning Beat 74 gave.
+
+**Step 2 intent (not yet started as of this entry).** With items 2, 5, 6, and 20 all confirmed DONE
+and item 3/4 blocked pending Sean's persistence-architecture decision (Beat 72's finding), the
+natural next pick — carried forward from Beat 74, which named this the intended next check but ran
+out of turns before starting it — is items 8/9: **ANFIS speculative cascade** (cheap draft →
+escalate on low confidence/high stakes) and the **SCHEDULE axis**, both marked GA-phase/NOW,
+additive-tested, no flag flips required (unlike item 7, which needs Sean GO to mint keys and flip
+`ENGINE_LLM_PROXY`/`ROUTER_STRICT_COST_ORDER`). Following the pattern that already found items 2, 5,
+and 6 further along than their backlog rows claimed, this beat will grep `src/` for any existing
+speculative-cascade or schedule-axis implementation before assuming either needs new code — a
+bounded read-only investigation given the turns already spent on step 1, landing either a DONE-with-
+evidence correction (if already wired) or an honest "not started, here is what it needs" note if not.
+
+**Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
+ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, mixed verdict rather than
+the "already wired" pattern repeating a fourth time.** Grepped `src/` for both items rather than
+assuming either was already done. **Item 9 (SCHEDULE axis) is PARTIAL, not done:**
+`isOffPeakHour`/`selectOffPeakBatch` (`src/memory/memory-root-anchor.ts:112-125`) is a real, tested
+primitive whose own file header names it "the ANFIS SCHEDULE axis" (`tests/memory-root-anchor.test.ts`
+covers it), but `grep -rn` for its exports across `src/routes`, `src/engine`, and
+`src/observability` found zero callers — no cron or worker invokes it, so no non-urgent work is
+actually batched off-peak today. Same "wired one end only" shape LESSON 3 names, and the same one
+item 5 already showed for `current_memory_root`. The free-tier-quota-tracking half of item 9 doesn't
+exist at all: `src/billing/free-providers.ts` only classifies providers free/paid for cost
+reporting, no quota or cap. **Item 8 (speculative cascade) is NOT STARTED:** the two nearest
+candidates, `selectSlmRoute` (`src/providers/slm-tier.ts`, routes to cheap SLM from a caller-declared
+`confidence_required` threshold) and `applyEscalationOnly` (`src/services/anfis-escalation-gate.ts`,
+called from `src/providers/router.ts:580`, escalates tier from ANFIS's routing recommendation vs the
+static router), are both real and wired — but neither produces a cheap draft, scores its actual
+output confidence, and conditionally re-runs on a stronger model, which is what item 8 specifies.
+Filed as **PR #551** (`docs/backlog-items8-9-investigated`), docs-only, single-file diff to
+`PATENT_ALIGNED_BUILD_BACKLOG.md` marking item 8 NOT STARTED and item 9 PARTIAL with the file:line
+evidence above, plus narrowing the vague "items 3-4,7-10 partial hits" disclaimer line to "3-4,7,10"
+now that 8/9 have their own specific rows. Queued with `gh pr merge --auto --squash` while checks
+were pending.
+
+**Differs from the step-1 intent** in outcome, not process: the intent named the same grep-first
+approach and the same two possible landings (DONE-with-evidence or honest not-started), but this is
+the first of these investigations (after items 2/5/6/20 all turning out already-wired) where the
+answer split — one item genuinely unstarted, the other a real primitive stranded with no caller.
+Worth flagging for whoever picks up item 9 next: the off-peak batching logic does not need to be
+written, only called from wherever `anchorMemoryRoot`/item 10's EAS-anchoring cron ends up living.
