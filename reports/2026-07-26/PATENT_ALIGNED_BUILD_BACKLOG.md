@@ -12,6 +12,14 @@
 - ✅ **P1** LeanIMT+ accumulator: membership + non-membership + **provable retraction** — PR #203 (9/9 props under real Poseidon2). ← Patent #1 core, reduced to practice.
 - ✅ **Item 20** commitment well-formedness (option b) — PR #250 (merged 2026-07-28), wired into `memory-publication.ts`. Verified by beat 66, 2026-08-27 — this snapshot line had gone stale for ~10 beats before that. See item 20's row for file:line evidence.
 - Poseidon2 BabyBear leaf merged (#195/#196/#197). Breakers 2.0/2.3 merged (#188/#191); #189/#192/#193/#194 in flight.
+- ✅ **Item 2** P0.1 two-primitive refactor — landed in #197 (2026-07-26) and wired as the DEFAULT, not
+  just available: `LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`) and `ProofCarryingMemory`
+  (`src/memory/proof-carrying-memory.ts:63-69`) both default `leafHash`/`pairHash` to
+  `poseidon2LeafHash` (sponge) / `poseidon2PairHash` (compression). Gated bit-exact against an
+  independent Rust oracle KAT (`zkp-vault/kat/poseidon2_babybear16_leaf_kat.json`) and exercised by
+  8+ test files (`tests/leaf-dual-write.test.ts`, `tests/leanimt-plus-*.test.ts`,
+  `tests/memory-publication.test.ts`, `tests/mesh-memory-sse.test.ts`, …). Verified by beat 73,
+  2026-08-30, by reading the call sites, not the table.
 - ✅ **Item 6** HAL abstain / knowledge-boundary — wired, not just name-grep hits. Verified by beat 71, 2026-08-29 by reading the call site: `computeGroundingSignal` (`src/hal/hal-grounding.ts:69`) is called from `src/scoring/pipeline.ts:450`, its `would_abstain`/`grounded` fields are written into the score event's `metadata.grounding` (`pipeline.ts:587-588`) on every scoring call — the "compute + log" half of the shadow contract is real, not aspirational. `HAL_GROUNDING_MODE` defaults to `shadow` (log-only); `enforce` (ungated, Sean GO before flipping in prod) zeroes a positive delta when an answer claims grounding it can't prove. 6 dedicated test files exercise it (`tests/hal-grounding.test.ts`, `tests/hal-grounding-root-currency.test.ts`, `tests/verifier-never-throws.test.ts`, `tests/answer-binding-pins.test.ts`, `tests/proof-carrying-e2e.test.ts`, `tests/proof-carrying-lifecycle-e2e.test.ts`). See item 6's row for what remains: the "measured hallucination drop" acceptance criterion needs live shadow-mode traffic carrying a proof-carrying answer, which does not exist yet (`applicable:false` for all current traffic per the file's own header) — the primitive is done, the measurement is not.
 - ⚠ Items 3-5, 7-10 (retrieval API, answer-binding, DDL tables, ANFIS enablement/cascade/schedule-axis, EAS anchoring) show partial name-grep hits in `src/` as of 2026-08-27 but have not been verified wired the way item 20 was — do not assume done or not-done from this line, check the item.
 
@@ -19,7 +27,7 @@
 | # | Task | Patent | Phase | Tier | Acceptance test | When |
 |---|---|---|---|---|---|---|
 | 1 | Land #198 → rebase #203 to main | #1 | P0/P1 | Sean+CC | both green on main; #203 diff = P1 only | NOW |
-| 2 | **P0.1 two-primitive refactor** — inject `hashLeaf`(sponge)+`hashPair`(compress) instead of one Hash2 | #1 | P0.1 | CC | leaf commitment uses sponge; existing tests pass | NOW |
+| 2 | **P0.1 two-primitive refactor** — inject `hashLeaf`(sponge)+`hashPair`(compress) instead of one Hash2 | #1 | P0.1 | CC | leaf commitment uses sponge; existing tests pass | **DONE — #197 (2026-07-26), wired as the default `leafHash`/`pairHash` in both `LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`) and `ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:63-69`), KAT-gated against an independent Rust oracle. Verified by beat 73, 2026-08-30, by reading the call sites.** |
 | 3 | **P2 retrieval API** — return `(content, inclusionProof, currentValidityProof, root)`; verifier endpoint | #1 | P2 | CC/GA | retrieved entry's proof verifies; revoked entry → non-membership | NOW |
 | 4 | **Answer-binding** — gate answer emit on successful verify; answer carries commitment to its proof set | #1 | P2 | CC | answer w/o valid proof set is refused/flagged; binding is checkable | NOW (Patent #1 keystone) |
 | 5 | `agent_memory_leaves` + `agent_memory_roots` tables (additive DDL) | #1 | P1 | CC | append→root deterministic; recompute matches | NOW |
