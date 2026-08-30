@@ -3012,3 +3012,11 @@ PRs merged during this run's window (since 2026-08-29T20:19:05Z):
 - (none detected)
 
 This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 33273165759 --log`) if the reason matters.
+
+## Beat 72 — 2026-08-30 · ledger-first reorder verified against a real prior beat, PR #540 confirmed independently
+
+**Step 1 — verified PR #540 independently, not rubber-stamped.** `gh pr view 540 --json state,mergedAt` → `MERGED` at 2026-08-30T03:01:32Z. `gh pr checks 540` → all checks pass (test, crosscheck, gitleaks ×2, resident-secrets ×2, zkp-vault, HAL prompt-injection probes). `gh pr diff 540 --name-only` → `src/middleware/auth.ts`, `src/routes/mvp-api.ts`, `tests/auth-grants-read-public.test.ts` — matches the PR body's claim of a keyless `GET /api/v1/grants/roles` endpoint gated by an exact-path + method guard, with the two prior auto-logged run stubs (33262678107, 33273165759) correctly showing no PRs merged in their windows since #540 landed after both.
+
+**Step 2 intent (not yet started as of this entry):** the highest-priority OPEN backlog item per `PATENT_ALIGNED_BUILD_BACKLOG.md` is item 3, **P2 retrieval API** (`(content, inclusionProof, currentValidityProof, root)` + verifier endpoint) — it is the blocker the snapshot names for both item 6's remaining half (no proof-carrying traffic exists to measure hallucination drop against) and item 4 (answer-binding). Items 1-2 are marked done/superseded by the P0/P1 lines above the queue table. Given the 15-20 turn budget for steps 2-3, this beat will attempt a bounded slice of item 3 (read the existing `leanimt-plus.ts` surface, confirm what a verifier endpoint needs, and either land a small additive piece or report back honestly that it needs more than one beat) rather than the full acceptance test.
+
+**Process note:** this entry itself is the test of the reordered contract — steps 2-4 have not run yet at the time this PR is opened, so if the beat is cut short after this merges, the record survives per the loop's own design.
