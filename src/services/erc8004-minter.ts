@@ -55,12 +55,46 @@ export interface MintStatus {
   basescanUrl: string | null;
 }
 
+/**
+ * Outcome of the on-chain cross-check. THREE outcomes, never two — the difference
+ * between "the chain says no" and "we never reached the chain" is the whole point.
+ *
+ * NO_TOKEN     no token id recorded here; nothing to look up.
+ * OWNER_FOUND  ownerOf() returned an address. A real on-chain fact.
+ * REVERTED     ownerOf() REVERTED — the contract answered, and the answer is that no
+ *              such token exists. Also a real on-chain fact.
+ * NOT_CHECKED  we never got an answer: RPC unreachable, timeout, rate limit, proxy
+ *              refusal. NOT a fact about the chain, and must never be reported as one.
+ */
+export type OnChainCheck = 'NO_TOKEN' | 'OWNER_FOUND' | 'REVERTED' | 'NOT_CHECKED';
+
 export interface OnChainVerification {
   dbTokenId: string | null;
   onChainOwner: string | null;
   dbConservator: string | null;
   drift: boolean;
   reason: string | null;
+  check: OnChainCheck;
+}
+
+/**
+ * Did the CONTRACT answer, or did we never reach it?
+ *
+ * ethers v6 raises `CALL_EXCEPTION` when the contract itself reverts — that is the chain
+ * answering "no such token". Every other code (SERVER_ERROR, NETWORK_ERROR, TIMEOUT,
+ * UNKNOWN_ERROR, …) means the call never landed.
+ *
+ * MEASURED 2026-08-30 from a sandbox whose proxy refuses every public Base RPC:
+ *     code = "SERVER_ERROR"   shortMessage = "server response 403 Forbidden"
+ *     e.code === 'CALL_EXCEPTION'  ->  false
+ * So a blocked or down RPC is plainly distinguishable from a revert, and the previous
+ * code did not distinguish them: it labelled EVERY failure `ownerOf reverted` and set
+ * `drift: true`. An RPC outage was therefore published as an on-chain finding — the same
+ * NOT_CHECKED-scored-as-a-verdict defect that cost twelve days in the settlement path,
+ * here in the identity path.
+ */
+export function classifyOwnerOfError(e: unknown): 'REVERTED' | 'NOT_CHECKED' {
+  return (e as { code?: string } | null)?.code === 'CALL_EXCEPTION' ? 'REVERTED' : 'NOT_CHECKED';
 }
 
 function basescanTxUrl(chainId: number, txHash: string): string {
@@ -235,6 +269,7 @@ export class Erc8004Minter {
         dbConservator: status.conservatorAddress,
         drift: false,
         reason: 'not minted',
+        check: 'NO_TOKEN',
       };
     }
     try {
@@ -250,15 +285,34 @@ export class Erc8004Minter {
         reason: driftFromConservator
           ? `on-chain owner ${owner} != db conservator ${status.conservatorAddress}`
           : null,
+        check: 'OWNER_FOUND',
       };
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      const code = (e as { code?: string } | null)?.code;
+      if (classifyOwnerOfError(e) === 'REVERTED') {
+        // The contract answered: no such token. A real on-chain fact, and real drift
+        // against a db row that claims one.
+        return {
+          dbTokenId: status.tokenId,
+          onChainOwner: null,
+          dbConservator: status.conservatorAddress,
+          drift: true,
+          reason: `ownerOf reverted: ${msg}`,
+          check: 'REVERTED',
+        };
+      }
+      // We never reached the chain. `drift: false` is deliberate and is the fix: asserting
+      // drift here would publish a network failure as a discrepancy with the chain, and a
+      // caller resolving UNVERIFIED against this would flip live agents to NOT_MINTED
+      // during an RPC outage.
       return {
         dbTokenId: status.tokenId,
         onChainOwner: null,
         dbConservator: status.conservatorAddress,
-        drift: true,
-        reason: `ownerOf reverted: ${msg}`,
+        drift: false,
+        reason: `chain not reached (${code ?? 'no code'}): ${msg}`,
+        check: 'NOT_CHECKED',
       };
     }
   }
