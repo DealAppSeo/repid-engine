@@ -27,6 +27,8 @@ const UUID_RE =
 const REPUTATION_REGISTRY_BASE_SEPOLIA =
   '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 
+import { deriveIdentityState } from './identity-state';
+
 export class PassportQueryError extends Error {
   constructor(public step: string, detail: string) {
     super(`passport query failed at ${step}: ${detail}`);
@@ -245,10 +247,15 @@ export async function buildAgentPassport(
    * The absence of a transaction hash in our table is not evidence about the blockchain. It is
    * evidence about our table. Those are different claims and only one of them was ours to make.
    */
+  // `minted` stays local because `contract_address` below is gated on it. The ladder itself now
+  // lives in ONE place — see identity-state.ts. It was extracted, unchanged, the moment a second
+  // consumer needed it, rather than copied: an open-coded second copy of a ladder is the defect
+  // this repo has already paid for repeatedly with tiers, and it never fails loudly when it drifts.
   const minted = !!agent.mint_tx_hash;
-  const hasToken = agent.erc8004_token_id != null && String(agent.erc8004_token_id) !== '';
-  const identityState: 'MINTED' | 'UNVERIFIED' | 'NOT_MINTED' =
-    minted ? 'MINTED' : hasToken ? 'UNVERIFIED' : 'NOT_MINTED';
+  const identityState = deriveIdentityState({
+    mint_tx_hash: agent.mint_tx_hash ?? null,
+    erc8004_token_id: agent.erc8004_token_id ?? null,
+  });
   const mintChainId: number | null = agent.mint_chain_id ?? null;
 
   return {
