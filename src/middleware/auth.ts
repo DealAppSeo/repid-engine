@@ -109,6 +109,20 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // GET /api/v1/grants/roles — the role ceilings, static and public.
+  //
+  // Opened for the same reason as the line above and with the same control: an exact path
+  // match plus the method guard, so it cannot widen to the POST mint/revoke/authorize paths
+  // that share this router's `/grants` prefix.
+  //
+  // It returns four hardcoded names, their capability ceilings and the one-line reasoning for
+  // each — no row, no key, no agent identity, nothing derived from the database at all. The
+  // point of the layer is that a CTO grant provably cannot carry spend authority; a
+  // constraint nobody outside can read is a constraint nobody can rely on.
+  if (req.method === 'GET' && req.path === '/api/v1/grants/roles') {
+    return next();
+  }
+
   // The Authority screen's two reads, broken the same way and found by the same probe.
   //
   // MEASURED 2026-08-28, keyless, against production:

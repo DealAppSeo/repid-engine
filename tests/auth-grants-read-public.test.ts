@@ -59,6 +59,7 @@ describe('the reads the site actually makes are reachable without a key', () => 
     ['the grants list', '/api/v1/grants'],
     ['a builder authority snapshot', '/api/v1/stake/authority/builder-1'],
     ['an agent stake position list', '/api/v1/staking/agent-1'],
+    ['the role ceiling catalog', '/api/v1/grants/roles'],
   ])('%s is no longer a 401', async (_label, path) => {
     expect(await passesKeyless('GET', path)).toBe(true);
   });
@@ -83,6 +84,22 @@ describe('THE LOAD-BEARING HALF: the mutations stay authed', () => {
     // `startsWith('/api/v1/grants')` would look like a tidy simplification and would open
     // every future sub-route under this prefix, read or write, without anyone deciding to.
     expect(await passesKeyless('GET', '/api/v1/grants/2f1c9d84-0000-4000-8000-000000000001')).toBe(false);
+  });
+
+  it('the roles catalog is opened for GET ONLY', async () => {
+    // The catalog is static and public, but it sits under the same `/grants` prefix as mint,
+    // revoke and authorize. A rule that forgot the method guard would open a write path while
+    // looking like it opened a document.
+    expect(await passesKeyless('POST', '/api/v1/grants/roles')).toBe(false);
+  });
+
+  it('the roles bypass does not extend to anything BELOW it', async () => {
+    // The precise failure this pins: `startsWith('/api/v1/grants/roles')` would still read as
+    // "the roles endpoint" and would open every path that happens to begin with those
+    // characters. There is no such route today, which is exactly why the rule has to be
+    // written so that adding one tomorrow does not silently publish it.
+    expect(await passesKeyless('GET', '/api/v1/grants/roles/ceo')).toBe(false);
+    expect(await passesKeyless('GET', '/api/v1/grants/rolesomething')).toBe(false);
   });
 
   it('POST /api/v1/staking/deposit still requires a key — it moves real collateral', async () => {
