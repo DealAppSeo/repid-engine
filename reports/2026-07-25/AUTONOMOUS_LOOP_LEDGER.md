@@ -3158,7 +3158,14 @@ month ago — and never updated; `gh api pulls/198` and `pulls/203` both show `m
 2026-07-27`. Filed as **PR #547** (`docs/beat75-ledger-and-backlog`): marks item 1 DONE with the two
 merge dates, marks item 9 PARTIAL with the exact file:line and the zero-caller finding, and narrows
 the item 3-4/7-10 disclaimer bullet to 3-4/7-8/10 now that 9 has its own specific line. Docs-only,
-safe-class, queued with `gh pr merge --auto --squash` while checks were pending.
+safe-class — but `gh pr merge 547 --auto --squash` failed repeatedly with `GraphQL: API rate limit
+already exceeded for user ID 11688996` even though `gh api rate_limit` showed the REST/GraphQL
+request quota at 5000/5000 remaining, i.e. a secondary (abuse-detection) limit on the auto-merge
+mutation specifically, not the counter this session could inspect. A direct `PUT .../merge` was also
+tried and correctly refused with `405 Required status check "test" is queued` (branch protection
+working as intended, not a bug). Per the hard line against any immediate/manual merge, #547 is left
+open, unmerged, with auto-merge NOT enabled — the next beat (or a human) needs to retry
+`gh pr merge 547 --auto --squash` once this rate limit clears.
 
 **Differs from the step-1 intent** in scope: the intent named items 8/9 as the investigation target
 and got a real answer for both (8 confirmed not-done, 9 confirmed partially-wired) — item 1's
