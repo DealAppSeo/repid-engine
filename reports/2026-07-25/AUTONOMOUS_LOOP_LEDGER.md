@@ -3121,3 +3121,34 @@ touches CLAUDE.md: its "no migrations live in this repo — schema is managed ex
 though PR #490's own test plan confirms none of them are applied by any CI step. That is a doc
 correction for CLAUDE.md itself, not this backlog file, and is left open rather than fixed here to
 keep this PR's diff to the one file the intent named.
+
+## Beat 75 — 2026-08-30 · verified Beat 74 (PR #545/#546) independently; step-2 intent logged for items 8/9
+
+**Step 1 — verified Beat 74's ledger entry and its shipped PRs independently.** `gh pr view 545
+--json state,mergedAt,statusCheckRollup` → `MERGED` 2026-08-30T12:35:46Z, all 8 checks `SUCCESS`.
+`gh pr view 546 --json state,mergedAt,statusCheckRollup,files` → `MERGED` 2026-08-30T12:34:12Z, all
+8 checks `SUCCESS`, single file `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` — docs-only,
+matching the entry's own description. Read the diff, not just the file list: `gh pr diff 546` shows
+item 5 marked DONE citing `supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` +
+`src/memory/memory-root-store.ts`, with an explicit scope note that it is schema + pure helper only
+and NOT yet wired into scoring. Cross-checked the underlying claim rather than trusting the entry's
+prose: `git log --oneline -- supabase/migrations/` confirms `4d93678` (PR #490, 2026-08-28) added
+that exact migration file, `ls supabase/migrations/` shows the file present on disk, and
+`tests/memory-root-store.test.ts` exists as cited. CLAUDE.md's "no migrations live in this repo"
+line is indeed contradicted by three real migration directories, as Beat 74 flagged — left as an
+open doc-correction item, not fixed in this PR, same reasoning Beat 74 gave.
+
+**Step 2 intent (not yet started as of this entry).** With items 2, 5, 6, and 20 all confirmed DONE
+and item 3/4 blocked pending Sean's persistence-architecture decision (Beat 72's finding), the
+natural next pick — carried forward from Beat 74, which named this the intended next check but ran
+out of turns before starting it — is items 8/9: **ANFIS speculative cascade** (cheap draft →
+escalate on low confidence/high stakes) and the **SCHEDULE axis**, both marked GA-phase/NOW,
+additive-tested, no flag flips required (unlike item 7, which needs Sean GO to mint keys and flip
+`ENGINE_LLM_PROXY`/`ROUTER_STRICT_COST_ORDER`). Following the pattern that already found items 2, 5,
+and 6 further along than their backlog rows claimed, this beat will grep `src/` for any existing
+speculative-cascade or schedule-axis implementation before assuming either needs new code — a
+bounded read-only investigation given the turns already spent on step 1, landing either a DONE-with-
+evidence correction (if already wired) or an honest "not started, here is what it needs" note if not.
+
+**Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
+ordering — if the beat is cut short, this record of intent survives.
