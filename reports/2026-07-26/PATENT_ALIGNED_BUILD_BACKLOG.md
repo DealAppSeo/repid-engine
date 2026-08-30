@@ -31,14 +31,22 @@
   `current_memory_root` parameter still has zero callers) — the table exists for item 3/6 to
   eventually read from, it does not by itself close either. Verified by beat 74, 2026-08-30, by
   reading the migration + the merged PR, not the table.
-- ⚠ Items 3-4, 7-10 (retrieval API, answer-binding, ANFIS enablement/cascade/schedule-axis, EAS
-  anchoring) show partial name-grep hits in `src/` as of 2026-08-27 but have not been verified wired
-  the way item 20 was — do not assume done or not-done from this line, check the item.
+- ✅ **Item 1** Land #198 → rebase #203 to main — both merged 2026-07-27, over a month before this
+  line was corrected. The row said "NOW" the entire time; nothing was blocked, the table just never
+  got updated after the merge. Verified by beat 75, 2026-08-30, via `gh api pulls/198` and `pulls/203`.
+- ⚠ Items 3-4, 7-8, 10 (retrieval API, answer-binding, ANFIS enablement/cascade, EAS anchoring) show
+  partial name-grep hits in `src/` as of 2026-08-27 but have not been verified wired the way item 20
+  was — do not assume done or not-done from this line, check the item.
+- ⚠ **Item 9** ANFIS SCHEDULE axis is NOT a name-grep-only unknown any more: `isOffPeakHour`/
+  `selectOffPeakBatch` (`src/memory/memory-root-anchor.ts:112-125`) are a real, tested primitive with
+  **zero production callers** — the same "wired at one end only" pattern LESSONS.md warns about,
+  just caught before anything depended on it. No quota tracking exists. Checked by beat 75,
+  2026-08-30.
 
 ## Dependency-ordered queue
 | # | Task | Patent | Phase | Tier | Acceptance test | When |
 |---|---|---|---|---|---|---|
-| 1 | Land #198 → rebase #203 to main | #1 | P0/P1 | Sean+CC | both green on main; #203 diff = P1 only | NOW |
+| 1 | Land #198 → rebase #203 to main | #1 | P0/P1 | Sean+CC | both green on main; #203 diff = P1 only | **DONE — #198 merged 2026-07-27 (`feat(memory): proof-carrying retrieval P0 — committed-memory leaf + inclusion verify`), #203 merged 2026-07-27 (`feat(memory): P1 LeanIMT+ — membership, non-membership, provable retraction`, stacked on #198). Verified by beat 75, 2026-08-30, via `gh api pulls/198` and `pulls/203`. Row was stale for over a month.** |
 | 2 | **P0.1 two-primitive refactor** — inject `hashLeaf`(sponge)+`hashPair`(compress) instead of one Hash2 | #1 | P0.1 | CC | leaf commitment uses sponge; existing tests pass | **DONE — #197 (2026-07-26), wired as the default `leafHash`/`pairHash` in both `LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`) and `ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:63-69`), KAT-gated against an independent Rust oracle. Verified by beat 73, 2026-08-30, by reading the call sites.** |
 | 3 | **P2 retrieval API** — return `(content, inclusionProof, currentValidityProof, root)`; verifier endpoint | #1 | P2 | CC/GA | retrieved entry's proof verifies; revoked entry → non-membership | NOW |
 | 4 | **Answer-binding** — gate answer emit on successful verify; answer carries commitment to its proof set | #1 | P2 | CC | answer w/o valid proof set is refused/flagged; binding is checkable | NOW (Patent #1 keystone) |
@@ -46,7 +54,7 @@
 | 6 | **HAL abstain / knowledge-boundary** — refuse/flag when cited evidence lacks a valid inclusion+current-validity proof | #1/#3 | — | GA/CC | ungrounded answer → abstain in shadow; measured hallucination drop | **DONE (primitive + wiring + logging) — `computeGroundingSignal` (`src/hal/hal-grounding.ts:69`), called from `src/scoring/pipeline.ts:450`, logged into score-event `metadata.grounding`/`metadata.grounding_abstained` (`pipeline.ts:587-588`) on every scoring call. `HAL_GROUNDING_MODE` shadow-first, default `shadow`. Verified by beat 71, 2026-08-29, by reading the call site and the write, not the table. REMAINING: no current traffic carries a proof-carrying answer (`applicable:false` today), so the "measured hallucination drop" half of the acceptance test has nothing to measure yet — that needs P2 retrieval (item 3) producing real proof-carrying answers first.** |
 | 7 | **ANFIS enablement** — mint 12 agent keys + `ENGINE_LLM_PROXY` + `ROUTER_STRICT_COST_ORDER` (staged; flips = Sean GO) + 5 acceptance tests | #2 | — | CC | no-leak/injection/ANFIS-decision/live-routing/job-token tests green | NOW (stage) / Sean GO (flip) |
 | 8 | **ANFIS speculative cascade** — cheap draft → escalate on low confidence/high stakes | #2 | — | GA | cost drop measured vs always-full; quality held | NOW |
-| 9 | **ANFIS SCHEDULE axis** — free-tier quota tracking + off-peak windows for EAS anchoring + non-urgent work | #2 | — | GA | non-urgent work batched off-peak; $ drop measured | NOW |
+| 9 | **ANFIS SCHEDULE axis** — free-tier quota tracking + off-peak windows for EAS anchoring + non-urgent work | #2 | — | GA | non-urgent work batched off-peak; $ drop measured | **PARTIAL — an off-peak batching primitive exists (`isOffPeakHour`/`selectOffPeakBatch`, `src/memory/memory-root-anchor.ts:112-125`), tested (`tests/memory-root-anchor.test.ts`), but has ZERO production callers (only the test file references it) — a wired-at-neither-end helper, not a scheduled job. No free-tier quota tracking exists anywhere in `src/` and no $ drop is measured. Found by beat 75, 2026-08-30, grepping for callers. Still NOW.** |
 | 10 | **P3 EAS anchoring** of `memory_root` per epoch, batched off-peak | #1 | P3 | CC | `agent_memory_roots.eas_uid` populated; on-chain matches local root | NEXT (after P2) |
 | 11 | **Proof-tier selection in ANFIS** — proof strength as a first-class policy output | #2 | — | CC | policy picks inclusion vs current-validity vs walk by stakes/cost | NEXT (Patent #2 keystone) |
 | 12 | **GraphRAG-native leaves** — entity/relation/episode/skill schemas on leaves; authenticated subgraph walk (chain of inclusions + edge hashes) | #3 | P4 | CC | a multi-hop walk verifies hop-by-hop against the root | LATER |

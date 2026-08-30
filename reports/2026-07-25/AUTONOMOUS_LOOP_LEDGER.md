@@ -3121,3 +3121,47 @@ touches CLAUDE.md: its "no migrations live in this repo — schema is managed ex
 though PR #490's own test plan confirms none of them are applied by any CI step. That is a doc
 correction for CLAUDE.md itself, not this backlog file, and is left open rather than fixed here to
 keep this PR's diff to the one file the intent named.
+
+## Beat 75 — 2026-08-30 · verified Beat 74 (PR #545/#546) independently; item 1 found stale-DONE, item 9 found partially-wired
+
+**Step 1 — verified PR #545 and #546 independently.** `gh pr view` hit `GraphQL: API rate limit
+exceeded`; fell back to the REST API (`gh api repos/DealAppSeo/repid-engine/pulls/545` and `/546`),
+which was not rate-limited. Both `state: closed`, `merged_at` 2026-08-30T12:35:46Z / 12:34:12Z, merge
+commit SHAs matching `a2a4741`/`473bd9f` in this checkout's own `git log`. `gh api .../check-runs`
+for both merge commits: `test`, `crosscheck`, `gitleaks`, `resident-secrets`, `zkp-vault`,
+`build-and-deploy` all `success`. File lists: #545 touches only
+`reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md`, #546 touches only
+`reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` — both docs-only, matching Beat 74's own
+description of them.
+
+**Step 2 intent (not yet started as of this entry).** With items 1-2, 5-6, 20 now DONE and item 3
+blocked on Sean, the remaining NOW-tier candidates untouched are items 7 (ANFIS enablement, requires
+Sean GO to flip, so only the "stage" half is CC-reachable), 8 (speculative cascade), and 9 (SCHEDULE
+axis). Given the pattern of items 2/5/6/20 turning out to be further along than the table showed,
+this beat will grep for existing wiring on 8/9 before assuming either needs new code, per the same
+method Beat 74 used for item 5.
+
+**Step 2 outcome (added before this PR merged, turns remained) — investigated 8/9, found one more
+stale row (item 1) along the way, shipped a docs-only correction, wrote no new code.** Grepping
+`applyEscalationOnly`/`anfis-escalation-gate.ts` (item 7/8-adjacent) showed it is the staged
+escalation-only routing gate from PR #281 — real, wired into `src/providers/router.ts:580`, and
+tested — but it is a capability-tier escalation gate, not item 8's cheap-draft-then-escalate-on-low-
+confidence cascade; no draft/confidence-gated cascade exists anywhere in `src/`, so item 8 stays
+genuinely NOW. Item 9 turned out to be a real, useful, half-true finding: `src/memory/
+memory-root-anchor.ts:112-125` (`isOffPeakHour`/`selectOffPeakBatch`) is a tested, working off-peak
+batching primitive for EAS anchoring specifically — but grepping every caller found none in `src/`,
+only `tests/memory-root-anchor.test.ts`. That is LESSONS.md rule 3 ("a mechanism wired at one end
+only is worse than an absent one") one commit before it could bite: a scheduler with no job calling
+it. No free-tier quota tracking exists at all. While checking item 7/8's PR history for context, item
+1's row (`Land #198 → rebase #203 to main`) turned out to have been merged **2026-07-27** — over a
+month ago — and never updated; `gh api pulls/198` and `pulls/203` both show `merged_at
+2026-07-27`. Filed as **PR #547** (`docs/beat75-ledger-and-backlog`): marks item 1 DONE with the two
+merge dates, marks item 9 PARTIAL with the exact file:line and the zero-caller finding, and narrows
+the item 3-4/7-10 disclaimer bullet to 3-4/7-8/10 now that 9 has its own specific line. Docs-only,
+safe-class, queued with `gh pr merge --auto --squash` while checks were pending.
+
+**Differs from the step-1 intent** in scope: the intent named items 8/9 as the investigation target
+and got a real answer for both (8 confirmed not-done, 9 confirmed partially-wired) — item 1's
+staleness was an incidental find while reading `anfis-escalation-gate.ts`'s PR history, not something
+step 1 predicted, and is included because leaving a known-stale row uncorrected costs the next beat
+the same re-investigation Beat 74 spent on item 5.
