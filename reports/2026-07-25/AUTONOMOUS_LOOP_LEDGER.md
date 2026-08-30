@@ -3024,3 +3024,33 @@ This is a bare factual stub, not analysis — the next beat should read this run
 **Step 2 outcome (added before this PR merged, turns remained) — investigated, correctly stopped, nothing shipped.** Backlog item 3 already has its "verifier endpoint" half built: `src/routes/proof-carrying-verify.ts` wraps `verifyProofCarryingAnswer` (`src/memory/proof-carrying-memory.ts`) behind `POST /verify`, and its own header already says so. What remains is the *retrieval* half — wrapping `ProofCarryingMemory.retrieve()` / `.nonMembershipWitness()` behind an authenticated per-agent endpoint — and `ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:60`) is an in-process class holding its tree in memory, with no persistence. Standing it up behind a real endpoint means deciding whether agent memory is per-process (lost on restart, broken across the multi-replica/Railway-restart case this API actually runs under) or backed by backlog item 5's `agent_memory_leaves`/`agent_memory_roots` tables — which do not exist yet, and this repo has no migrations (CLAUDE.md: "schema is managed externally"). That is a persistence-architecture decision, not an additive-tested slice, so per CLAUDE-RULE-1 it needs Sean's answer before code, not a guess made to fill the turn budget. Stopping here rather than shipping a single-process placeholder that would look done in a name-grep and isn't.
 
 **Differs from the step-1 intent** in that no code landed — the intent said "land a small additive piece **or** report back honestly," and investigation showed the honest-report branch was the correct one for this item specifically, not a fallback taken for lack of time.
+
+## Beat 73 — 2026-08-30 · verified Beat 72 (PR #542) independently; item 2 confirmed DONE and logged
+
+**Step 1 — verified PR #542 independently.** `gh pr view 542 --json state,mergedAt` → `MERGED` at
+2026-08-30T04:28:53Z. `gh pr checks 542` → all 8 checks pass (test, crosscheck, gitleaks ×2,
+resident-secrets ×2, zkp-vault, HAL prompt-injection probes). Cross-checked its underlying claim
+about PR #540 rather than trusting the entry's prose: `gh pr checks 540` also all-pass, and
+`gh pr diff 540` matches the entry's description (`src/middleware/auth.ts`, `src/routes/mvp-api.ts`,
+`tests/auth-grants-read-public.test.ts` — a keyless `GET /api/v1/grants/roles` behind an exact-path
++ method guard). Beat 72's step-2 outcome (investigated backlog item 3, correctly stopped rather
+than guessing a persistence architecture without Sean) checks out against the code it cites:
+`ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:60`) is in fact an in-process class with
+no persistence, and `agent_memory_leaves`/`agent_memory_roots` (item 5) do not exist as this repo
+has no migrations — that is a real fork, not a stalling excuse.
+
+**Step 2 intent (not yet started as of this entry):** with item 3 correctly blocked pending Sean,
+the next highest-priority OPEN item to advance is item 2, **P0.1 two-primitive refactor** — inject
+`hashLeaf`(sponge)+`hashPair`(compress) instead of one `Hash2`. A quick read during step 1 shows
+this already landed in PR #197 (2026-07-26, `feat(zkp): Poseidon2-BabyBear leaf H(a,b)`) and is
+wired as the *default* everywhere it matters, not just available: `LeanIMTPlus` (`src/memory/
+leanimt-plus.ts:77-78`) defaults `leafHash`/`pairHash` to `poseidon2LeafHash`/`poseidon2PairHash`,
+and `ProofCarryingMemory` (`proof-carrying-memory.ts:63-69`) does the same. At least 8 test files
+exercise the pair (`tests/leaf-dual-write.test.ts`, `tests/leanimt-plus-*.test.ts`,
+`tests/memory-publication.test.ts`, `tests/mesh-memory-sse.test.ts`, …), including a KAT gate
+against an independent Rust oracle (`zkp-vault/kat/poseidon2_babybear16_leaf_kat.json`) per the
+primitive's own file header. Unlike items 3-5/7-10, which the status snapshot explicitly warns
+carry only partial name-grep hits, item 2 is wired end to end. This beat will update the backlog
+table to mark item 2 **DONE with evidence**, the same audit-evidence pattern used for items 6 and
+20 — a docs-only, safe-class change (no code, no flags touched) that keeps the backlog's status
+snapshot from misleading the next beat into re-investigating settled ground.
