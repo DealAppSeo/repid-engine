@@ -3054,3 +3054,13 @@ carry only partial name-grep hits, item 2 is wired end to end. This beat will up
 table to mark item 2 **DONE with evidence**, the same audit-evidence pattern used for items 6 and
 20 — a docs-only, safe-class change (no code, no flags touched) that keeps the backlog's status
 snapshot from misleading the next beat into re-investigating settled ground.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, matched intent.** Backlog
+item 2 confirmed DONE with evidence exactly as scoped: PR #544 (`docs/backlog-item2-done`) marks the
+queue row and adds a status-snapshot bullet, citing `LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`)
+and `ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:63-69`) both defaulting to
+`poseidon2LeafHash`/`poseidon2PairHash` since #197, KAT-gated against the Rust oracle. Docs-only,
+safe-class, queued with `gh pr merge --auto --squash` while checks were pending.
+
+**Differs from the step-1 intent** in nothing material — the intent was to mark item 2 DONE with
+evidence, and that is what #544 does. No code was touched; no flags were touched.
