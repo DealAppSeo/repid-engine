@@ -303,17 +303,24 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         // bigint", the whole INSERT is rejected, and the catch below swallows it while the
         // queue row stays `completed`.
         //
-        // That is not hypothetical. This provenance block landed 2026-08-09 and has NEVER
-        // succeeded: across 79,062 rows in repid_zkp_proofs, job_id, event_id and contract_id
-        // are populated ZERO times, and 100% of completed jobs carry an event_id. Every
-        // canonical write since that day failed on this line, silently, for three weeks —
-        // the passport, CLI and badge have been serving the newest surviving row (2026-08-01)
-        // while the prover kept minting 2-4 real proofs a day into the queue.
+        // That is not hypothetical. This provenance block landed 2026-08-01 and has NEVER
+        // succeeded: in every row of repid_zkp_proofs, job_id, event_id and contract_id are
+        // populated ZERO times, and every completed job carries an event_id — so every
+        // canonical write since has failed on this line, silently, for four weeks. The store's
+        // newest row is 2026-08-01 06:58Z; the passport, CLI and badge have been serving it
+        // while the prover kept minting real proofs into the queue every day, through today.
+        //
+        // CONTROLLED against the live table — three inserts, all rolled back:
+        //     bare row (the pre-provenance shape) ............. INSERT_OK
+        //     + job_id + contract_id .......................... INSERT_OK
+        //     + event_id from a real completed queue row ...... 42804
+        // event_id is the sole cause. The other two provenance columns are innocent, which is
+        // why they stay: omitting event_id restores provenance rather than abandoning it.
         //
         // Omitting it restores the write NOW and keeps the two provenance columns whose types
         // do match. Recording event_id properly needs a migration aligning
-        // repid_zkp_proofs.event_id to bigint (it is null on all 79,062 rows, so the change is
-        // additive) — deliberately NOT bundled here, because a production column-type change
+        // repid_zkp_proofs.event_id to bigint (it is null on every existing row, so the change
+        // is additive) — deliberately NOT bundled here, because a production column-type change
         // is a decision, and this fix should not wait on it.
         ...(args.contractId ? { contract_id: args.contractId } : {}),
         proof_type: 'POSTCARD',

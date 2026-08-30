@@ -1,15 +1,21 @@
 /**
  * The canonical proof write must not send a column the store cannot accept.
  *
- * WHAT HAPPENED. A provenance block landed 2026-08-09 adding job_id, event_id and contract_id
+ * WHAT HAPPENED. A provenance block landed 2026-08-01 adding job_id, event_id and contract_id
  * to the repid_zkp_proofs insert. `repid_proof_queue.event_id` is BIGINT (it points at
  * repid_score_events); `repid_zkp_proofs.event_id` is UUID. Postgres rejected the whole INSERT
  * with 42804, the catch swallowed it, and the queue row stayed `completed`.
  *
- * MEASURED 2026-08-30, three weeks later: across 79,062 rows in repid_zkp_proofs, job_id,
- * event_id and contract_id are populated ZERO times — the feature never once succeeded — while
- * 100% of completed queue jobs carry an event_id. The prover kept minting 2-4 real proofs a day
- * into the queue and the passport, CLI and badge kept serving the newest surviving row.
+ * MEASURED 2026-08-30, four weeks later: in every row of repid_zkp_proofs, job_id, event_id and
+ * contract_id are populated ZERO times — the feature never once succeeded — while every completed
+ * queue job carries an event_id. The prover kept minting real proofs into the queue every day and
+ * the passport, CLI and badge kept serving the newest surviving row, dated 2026-08-01.
+ *
+ * THE DATE WAS WRONG IN THE FIRST VERSION OF THIS FILE, and the way it was wrong is the reusable
+ * part. It said 2026-08-09 because `git log` on this file showed nothing earlier — but the CI/agent
+ * clone is SHALLOW, and 2026-08-09 is simply its oldest commit. A truncated history reports its own
+ * boundary as the change date, and it does so silently. Check `git rev-parse --is-shallow-repository`
+ * before dating anything from `git log`; here the database settled it instead.
  *
  * WHY THE TEST IS SHAPED LIKE THIS. The bug is a type disagreement between two tables, which no
  * unit test can observe directly. What it CAN pin is the consequence: the row this service
