@@ -295,7 +295,33 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         // dead-letter rows) legitimately has nothing to point at, and writing a
         // placeholder there would be inventing a link that does not exist.
         ...(args.jobId ? { job_id: args.jobId } : {}),
-        ...(args.eventId ? { event_id: args.eventId } : {}),
+        // event_id IS DELIBERATELY OMITTED — the two columns disagree on type.
+        //
+        // MEASURED 2026-08-30: repid_proof_queue.event_id is BIGINT (it points at
+        // repid_score_events), while repid_zkp_proofs.event_id is UUID. Sending the bigint
+        // raises Postgres 42804 "column event_id is of type uuid but expression is of type
+        // bigint", the whole INSERT is rejected, and the catch below swallows it while the
+        // queue row stays `completed`.
+        //
+        // That is not hypothetical. This provenance block landed 2026-08-01 and has NEVER
+        // succeeded: in every row of repid_zkp_proofs, job_id, event_id and contract_id are
+        // populated ZERO times, and every completed job carries an event_id — so every
+        // canonical write since has failed on this line, silently, for four weeks. The store's
+        // newest row is 2026-08-01 06:58Z; the passport, CLI and badge have been serving it
+        // while the prover kept minting real proofs into the queue every day, through today.
+        //
+        // CONTROLLED against the live table — three inserts, all rolled back:
+        //     bare row (the pre-provenance shape) ............. INSERT_OK
+        //     + job_id + contract_id .......................... INSERT_OK
+        //     + event_id from a real completed queue row ...... 42804
+        // event_id is the sole cause. The other two provenance columns are innocent, which is
+        // why they stay: omitting event_id restores provenance rather than abandoning it.
+        //
+        // Omitting it restores the write NOW and keeps the two provenance columns whose types
+        // do match. Recording event_id properly needs a migration aligning
+        // repid_zkp_proofs.event_id to bigint (it is null on every existing row, so the change
+        // is additive) — deliberately NOT bundled here, because a production column-type change
+        // is a decision, and this fix should not wait on it.
         ...(args.contractId ? { contract_id: args.contractId } : {}),
         proof_type: 'POSTCARD',
         tier_proven: tierProven,
@@ -319,8 +345,31 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       }
       const { error } = await config.supabase.from('repid_zkp_proofs').insert(insertRow as any);
       if (error) {
+        // WHY THIS LOG IS SHAPED THIS WAY. Keeping the canonical insert non-fatal is the right
+        // call — a job that produced a real proof should not be marked failed because an
+        // additive evidence row did not land. But "non-fatal" was implemented as "invisible",
+        // and the two are not the same thing.
+        //
+        // MEASURED 2026-08-30: this branch fired on EVERY canonical write for three weeks
+        // (Postgres 42804, event_id uuid vs bigint — fixed above). Throughout, the queue
+        // reported `completed`, /health reported nothing, and the passport kept serving a
+        // three-week-old proof. A console line in a Railway log is not an alarm; nothing
+        // reads it, and no surface anywhere said the store had stopped accepting writes.
+        //
+        // So: a stable, greppable marker plus the Postgres code, and — the part that actually
+        // matters — a divergence anyone can query without reading logs at all:
+        //
+        //   select count(*) from repid_proof_queue q
+        //    where q.status='completed'
+        //      and not exists (select 1 from repid_zkp_proofs z where z.job_id = q.job_id);
+        //
+        // That query is the real detector. It was answerable on day one and nobody had reason
+        // to ask it, because every visible signal said the pipeline was healthy.
         console.error(
-          `[ProofDrain] repid_zkp_proofs INSERT failed for ${args.agentId} (queue stays completed):`,
+          `[ProofDrain][CANONICAL_WRITE_FAILED] repid_zkp_proofs INSERT rejected for agent=${args.agentId} ` +
+            `job=${args.jobId ?? 'none'} pgcode=${(error as { code?: string }).code ?? 'unknown'} — ` +
+            `the proof EXISTS in repid_proof_queue but is NOT readable by passport/CLI/badge. ` +
+            `Queue deliberately stays 'completed' (the proof is real); this row is the missing evidence.`,
           error.message,
           error
         );
