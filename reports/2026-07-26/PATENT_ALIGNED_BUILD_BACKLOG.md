@@ -21,7 +21,19 @@
   `tests/memory-publication.test.ts`, `tests/mesh-memory-sse.test.ts`, …). Verified by beat 73,
   2026-08-30, by reading the call sites, not the table.
 - ✅ **Item 6** HAL abstain / knowledge-boundary — wired, not just name-grep hits. Verified by beat 71, 2026-08-29 by reading the call site: `computeGroundingSignal` (`src/hal/hal-grounding.ts:69`) is called from `src/scoring/pipeline.ts:450`, its `would_abstain`/`grounded` fields are written into the score event's `metadata.grounding` (`pipeline.ts:587-588`) on every scoring call — the "compute + log" half of the shadow contract is real, not aspirational. `HAL_GROUNDING_MODE` defaults to `shadow` (log-only); `enforce` (ungated, Sean GO before flipping in prod) zeroes a positive delta when an answer claims grounding it can't prove. 6 dedicated test files exercise it (`tests/hal-grounding.test.ts`, `tests/hal-grounding-root-currency.test.ts`, `tests/verifier-never-throws.test.ts`, `tests/answer-binding-pins.test.ts`, `tests/proof-carrying-e2e.test.ts`, `tests/proof-carrying-lifecycle-e2e.test.ts`). See item 6's row for what remains: the "measured hallucination drop" acceptance criterion needs live shadow-mode traffic carrying a proof-carrying answer, which does not exist yet (`applicable:false` for all current traffic per the file's own header) — the primitive is done, the measurement is not.
-- ⚠ Items 3-5, 7-10 (retrieval API, answer-binding, DDL tables, ANFIS enablement/cascade/schedule-axis, EAS anchoring) show partial name-grep hits in `src/` as of 2026-08-27 but have not been verified wired the way item 20 was — do not assume done or not-done from this line, check the item.
+- ✅ **Item 5** `agent_memory_leaves`/`agent_memory_roots` DDL — landed in PR #490 (merged
+  2026-08-28, all checks green), contradicting CLAUDE.md's "no migrations live in this repo": the
+  additive migration is `supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql`, and
+  `src/memory/memory-root-store.ts` is the pure DB-row↔`IndexedLeaf` boundary that satisfies the
+  item's own acceptance test ("append→root deterministic; recompute matches") without a live
+  database — 6/6 tests in `tests/memory-root-store.test.ts`. Scope note from the PR itself: schema +
+  pure helper only, not yet wired into the scoring pipeline (`computeGroundingSignal`'s
+  `current_memory_root` parameter still has zero callers) — the table exists for item 3/6 to
+  eventually read from, it does not by itself close either. Verified by beat 74, 2026-08-30, by
+  reading the migration + the merged PR, not the table.
+- ⚠ Items 3-4, 7-10 (retrieval API, answer-binding, ANFIS enablement/cascade/schedule-axis, EAS
+  anchoring) show partial name-grep hits in `src/` as of 2026-08-27 but have not been verified wired
+  the way item 20 was — do not assume done or not-done from this line, check the item.
 
 ## Dependency-ordered queue
 | # | Task | Patent | Phase | Tier | Acceptance test | When |
@@ -30,7 +42,7 @@
 | 2 | **P0.1 two-primitive refactor** — inject `hashLeaf`(sponge)+`hashPair`(compress) instead of one Hash2 | #1 | P0.1 | CC | leaf commitment uses sponge; existing tests pass | **DONE — #197 (2026-07-26), wired as the default `leafHash`/`pairHash` in both `LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`) and `ProofCarryingMemory` (`src/memory/proof-carrying-memory.ts:63-69`), KAT-gated against an independent Rust oracle. Verified by beat 73, 2026-08-30, by reading the call sites.** |
 | 3 | **P2 retrieval API** — return `(content, inclusionProof, currentValidityProof, root)`; verifier endpoint | #1 | P2 | CC/GA | retrieved entry's proof verifies; revoked entry → non-membership | NOW |
 | 4 | **Answer-binding** — gate answer emit on successful verify; answer carries commitment to its proof set | #1 | P2 | CC | answer w/o valid proof set is refused/flagged; binding is checkable | NOW (Patent #1 keystone) |
-| 5 | `agent_memory_leaves` + `agent_memory_roots` tables (additive DDL) | #1 | P1 | CC | append→root deterministic; recompute matches | NOW |
+| 5 | `agent_memory_leaves` + `agent_memory_roots` tables (additive DDL) | #1 | P1 | CC | append→root deterministic; recompute matches | **DONE — PR #490 (2026-08-28), migration `supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` + `src/memory/memory-root-store.ts`, 6/6 tests. Verified by beat 74, 2026-08-30. NOT yet wired into scoring (item 3/6's currency read still has zero callers).** |
 | 6 | **HAL abstain / knowledge-boundary** — refuse/flag when cited evidence lacks a valid inclusion+current-validity proof | #1/#3 | — | GA/CC | ungrounded answer → abstain in shadow; measured hallucination drop | **DONE (primitive + wiring + logging) — `computeGroundingSignal` (`src/hal/hal-grounding.ts:69`), called from `src/scoring/pipeline.ts:450`, logged into score-event `metadata.grounding`/`metadata.grounding_abstained` (`pipeline.ts:587-588`) on every scoring call. `HAL_GROUNDING_MODE` shadow-first, default `shadow`. Verified by beat 71, 2026-08-29, by reading the call site and the write, not the table. REMAINING: no current traffic carries a proof-carrying answer (`applicable:false` today), so the "measured hallucination drop" half of the acceptance test has nothing to measure yet — that needs P2 retrieval (item 3) producing real proof-carrying answers first.** |
 | 7 | **ANFIS enablement** — mint 12 agent keys + `ENGINE_LLM_PROXY` + `ROUTER_STRICT_COST_ORDER` (staged; flips = Sean GO) + 5 acceptance tests | #2 | — | CC | no-leak/injection/ANFIS-decision/live-routing/job-token tests green | NOW (stage) / Sean GO (flip) |
 | 8 | **ANFIS speculative cascade** — cheap draft → escalate on low confidence/high stakes | #2 | — | GA | cost drop measured vs always-full; quality held | NOW |
