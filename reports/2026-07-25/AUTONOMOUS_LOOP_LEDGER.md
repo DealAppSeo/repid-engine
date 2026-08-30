@@ -3152,3 +3152,32 @@ evidence correction (if already wired) or an honest "not started, here is what i
 
 **Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
 ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, mixed verdict rather than
+the "already wired" pattern repeating a fourth time.** Grepped `src/` for both items rather than
+assuming either was already done. **Item 9 (SCHEDULE axis) is PARTIAL, not done:**
+`isOffPeakHour`/`selectOffPeakBatch` (`src/memory/memory-root-anchor.ts:112-125`) is a real, tested
+primitive whose own file header names it "the ANFIS SCHEDULE axis" (`tests/memory-root-anchor.test.ts`
+covers it), but `grep -rn` for its exports across `src/routes`, `src/engine`, and
+`src/observability` found zero callers — no cron or worker invokes it, so no non-urgent work is
+actually batched off-peak today. Same "wired one end only" shape LESSON 3 names, and the same one
+item 5 already showed for `current_memory_root`. The free-tier-quota-tracking half of item 9 doesn't
+exist at all: `src/billing/free-providers.ts` only classifies providers free/paid for cost
+reporting, no quota or cap. **Item 8 (speculative cascade) is NOT STARTED:** the two nearest
+candidates, `selectSlmRoute` (`src/providers/slm-tier.ts`, routes to cheap SLM from a caller-declared
+`confidence_required` threshold) and `applyEscalationOnly` (`src/services/anfis-escalation-gate.ts`,
+called from `src/providers/router.ts:580`, escalates tier from ANFIS's routing recommendation vs the
+static router), are both real and wired — but neither produces a cheap draft, scores its actual
+output confidence, and conditionally re-runs on a stronger model, which is what item 8 specifies.
+Filed as **PR #551** (`docs/backlog-items8-9-investigated`), docs-only, single-file diff to
+`PATENT_ALIGNED_BUILD_BACKLOG.md` marking item 8 NOT STARTED and item 9 PARTIAL with the file:line
+evidence above, plus narrowing the vague "items 3-4,7-10 partial hits" disclaimer line to "3-4,7,10"
+now that 8/9 have their own specific rows. Queued with `gh pr merge --auto --squash` while checks
+were pending.
+
+**Differs from the step-1 intent** in outcome, not process: the intent named the same grep-first
+approach and the same two possible landings (DONE-with-evidence or honest not-started), but this is
+the first of these investigations (after items 2/5/6/20 all turning out already-wired) where the
+answer split — one item genuinely unstarted, the other a real primitive stranded with no caller.
+Worth flagging for whoever picks up item 9 next: the off-peak batching logic does not need to be
+written, only called from wherever `anchorMemoryRoot`/item 10's EAS-anchoring cron ends up living.
