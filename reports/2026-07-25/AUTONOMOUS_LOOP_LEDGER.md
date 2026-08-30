@@ -3064,3 +3064,60 @@ safe-class, queued with `gh pr merge --auto --squash` while checks were pending.
 
 **Differs from the step-1 intent** in nothing material — the intent was to mark item 2 DONE with
 evidence, and that is what #544 does. No code was touched; no flags were touched.
+
+## Beat 74 — 2026-08-30 · verified Beat 73 (PR #543/#544) independently; step-2 intent logged for items 3/5/8
+
+**Step 1 — verified Beat 73's ledger entry and its shipped PR independently.** `gh pr view 543
+--json state,mergedAt` → `MERGED` 2026-08-30T08:32:03Z, all 8 checks `SUCCESS`. `gh pr view 544
+--json state,mergedAt,files` → `MERGED` 2026-08-30T08:31:26Z, all 8 checks `SUCCESS`, single file
+`reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` (+9/-1) — docs-only, matching the entry's own
+description. Read the diff, not just the file list: `gh pr diff 544` shows item 2 marked DONE citing
+`LeanIMTPlus` (`src/memory/leanimt-plus.ts:77-78`) and `ProofCarryingMemory`
+(`src/memory/proof-carrying-memory.ts:63-69`) defaulting `leafHash`/`pairHash` to
+`poseidon2LeafHash`/`poseidon2PairHash`, KAT-gated against a Rust oracle — the backlog file on disk
+now reads exactly as Beat 73 claimed, not just as the PR title implied.
+
+**Step 2 intent (not yet started as of this entry).** With items 2 and 6 both closed and item 3
+already found blocked on a Sean-only persistence decision (Beat 72's finding, re-confirmed above),
+the remaining NOW-tier candidates that do not require Sean's GO or new secrets are item 5
+(`agent_memory_leaves`/`agent_memory_roots` DDL) and items 8/9 (ANFIS speculative cascade / SCHEDULE
+axis, both marked GA-phase, additive-tested, no flag flips). Item 5 is very likely dead-on-arrival in
+this repo specifically: CLAUDE.md states "no migrations live in this repo — schema is managed
+externally", so even an additive DDL statement has nowhere to live here without inventing a
+migrations mechanism Sean hasn't asked for. This beat's remaining turns will (a) confirm that by
+grepping for any existing migration tooling before ruling it out, then (b) check whether item 8's
+speculative-cascade primitive already exists anywhere under `src/` the way items 2 and 6 turned out
+to — following the pattern that a "NOW, not started" backlog row does not mean the code doesn't
+already do this — before attempting anything new. Ceiling for this beat is a bounded read-only
+investigation, not new code, given the turn budget already spent on verification above.
+
+**Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
+ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, matched intent, plus a
+finding item 8/9 investigation didn't need to reach.** Grepping for migration tooling surfaced the
+opposite of the expected answer: `migrations/`, `supabase/migrations/`, and `scripts/migrations/`
+all exist in this repo with real, dated SQL files — CLAUDE.md's "no migrations live in this repo"
+line is contradicted by the tree itself. More specifically, `git log -- supabase/migrations/` showed
+**backlog item 5 was already merged, in PR #490 (2026-08-28, all 7 checks green)**:
+`supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` +
+`src/memory/memory-root-store.ts`, satisfying item 5's own acceptance test with 6/6 tests in
+`tests/memory-root-store.test.ts`, no live database required. The backlog table still listed it as
+`NOW` — the same stale-tracking pattern already caught for items 2, 6, and 20, this time on a
+different item and caught before investigating items 8/9 at all. Filed as **PR #546**
+(`docs/backlog-item5-done`), docs-only, marking item 5 DONE with file:PR evidence and correcting the
+"items 3-5, 7-10 partial hits" disclaimer to "items 3-4, 7-10" since 5 no longer belongs in that set.
+Queued with `gh pr merge --auto --squash` while checks were pending. Items 8/9 (ANFIS speculative
+cascade / SCHEDULE axis) were not reached this beat — item 5 turning out to already be done changed
+what "next" meant mid-investigation, and the turn budget for step 2/3 was spent confirming and
+documenting that rather than starting a fresh grep on 8/9.
+
+**Differs from the step-1 intent** in scope, not direction: the intent named both a feasibility check
+(item 5) and a wiring check (items 8/9) as candidates; item 5's answer turned out to be "already
+done, just undocumented" rather than "blocked" or "needs a migrations mechanism," which closed it
+in one PR and left no remaining turns to also start on 8/9. Also worth flagging for whoever next
+touches CLAUDE.md: its "no migrations live in this repo — schema is managed externally" line
+(Commands section) is now demonstrably false — three migration directories with real SQL exist,
+though PR #490's own test plan confirms none of them are applied by any CI step. That is a doc
+correction for CLAUDE.md itself, not this backlog file, and is left open rather than fixed here to
+keep this PR's diff to the one file the intent named.
