@@ -37,6 +37,7 @@ import {
   checkAuthorization,
   type GrantClass,
 } from '../services/principal-grants';
+import { roleCatalog, ROLE_NAMES } from '../services/principal-roles';
 import type { Caveat, ActionContext } from '../services/principal-caveat';
 
 const router = Router();
@@ -224,6 +225,30 @@ router.get('/grants', async (req: Request, res: Response) => {
     const grants = await listGrants(principal);
     return res.json({ principal, grants });
   } catch (e: any) { return fail(res, 500, 'grants_list_failed', e?.message); }
+});
+
+// The role CEILINGS, exactly as the mint path enforces them.
+//
+// WHY THIS ENDPOINT EXISTS RATHER THAN A COPY IN THE UI. A ceiling rendered from a
+// hand-maintained mirror is a displayed constraint no gate need honour — the defect this
+// codebase found four times in one day and named in principal-roles.ts's own header. A UI
+// that reads this route shows what `applyRoleCeiling` will actually do, and a UI that
+// cannot reach it must say NOT_CHECKED rather than fall back silently.
+//
+// Public, read-only, and it reveals nothing: these four names and their ceilings are already
+// in a public repository, and knowing that a CTO grant carries no spend authority is exactly
+// the fact the layer exists to advertise. Minting still requires an API key.
+router.get('/grants/roles', (_req: Request, res: Response) => {
+  return res.json({
+    roles: roleCatalog(),
+    // The names that carry a ceiling. Anything else a caller sends is stored as a human
+    // label and CONSTRAINS NOTHING — clients need the closed set to render that difference
+    // rather than inferring it from a lookup miss.
+    recognized: [...ROLE_NAMES],
+    note:
+      'A role is a ceiling, never a grant. effective = requested ∩ grantor-held ∩ role ceiling. ' +
+      'A role name outside `recognized` is a label only and bounds nothing.',
+  });
 });
 
 // G6: the grantor may always revoke, and only the grantor — the grantee cannot block it.
