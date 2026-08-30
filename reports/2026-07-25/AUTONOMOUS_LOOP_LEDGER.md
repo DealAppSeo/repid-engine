@@ -3093,3 +3093,31 @@ investigation, not new code, given the turn budget already spent on verification
 
 **Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
 ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, matched intent, plus a
+finding item 8/9 investigation didn't need to reach.** Grepping for migration tooling surfaced the
+opposite of the expected answer: `migrations/`, `supabase/migrations/`, and `scripts/migrations/`
+all exist in this repo with real, dated SQL files — CLAUDE.md's "no migrations live in this repo"
+line is contradicted by the tree itself. More specifically, `git log -- supabase/migrations/` showed
+**backlog item 5 was already merged, in PR #490 (2026-08-28, all 7 checks green)**:
+`supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` +
+`src/memory/memory-root-store.ts`, satisfying item 5's own acceptance test with 6/6 tests in
+`tests/memory-root-store.test.ts`, no live database required. The backlog table still listed it as
+`NOW` — the same stale-tracking pattern already caught for items 2, 6, and 20, this time on a
+different item and caught before investigating items 8/9 at all. Filed as **PR #546**
+(`docs/backlog-item5-done`), docs-only, marking item 5 DONE with file:PR evidence and correcting the
+"items 3-5, 7-10 partial hits" disclaimer to "items 3-4, 7-10" since 5 no longer belongs in that set.
+Queued with `gh pr merge --auto --squash` while checks were pending. Items 8/9 (ANFIS speculative
+cascade / SCHEDULE axis) were not reached this beat — item 5 turning out to already be done changed
+what "next" meant mid-investigation, and the turn budget for step 2/3 was spent confirming and
+documenting that rather than starting a fresh grep on 8/9.
+
+**Differs from the step-1 intent** in scope, not direction: the intent named both a feasibility check
+(item 5) and a wiring check (items 8/9) as candidates; item 5's answer turned out to be "already
+done, just undocumented" rather than "blocked" or "needs a migrations mechanism," which closed it
+in one PR and left no remaining turns to also start on 8/9. Also worth flagging for whoever next
+touches CLAUDE.md: its "no migrations live in this repo — schema is managed externally" line
+(Commands section) is now demonstrably false — three migration directories with real SQL exist,
+though PR #490's own test plan confirms none of them are applied by any CI step. That is a doc
+correction for CLAUDE.md itself, not this backlog file, and is left open rather than fixed here to
+keep this PR's diff to the one file the intent named.
