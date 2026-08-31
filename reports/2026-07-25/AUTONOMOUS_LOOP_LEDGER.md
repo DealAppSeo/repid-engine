@@ -3311,3 +3311,66 @@ This beat closes the orchestration gap only.
 
 **Process note:** this entry is opened before step 2 runs, per the loop's ledger-first ordering — if
 the beat is cut short, this record of intent (and of Beat 77's unmet one) survives.
+
+## Beat 79 — 2026-08-31 · verified PR #560 independently; Beat 78's own step-2 promise also never landed — building `runMemoryRootAnchorSweep` for real this beat
+
+**Step 1 — verified Beat 78's ledger PR independently, not its own account of itself.** `gh pr view
+560 --json state,mergedAt,statusCheckRollup,files,additions,deletions` → `MERGED`
+2026-08-31T08:40:07Z, all 8 checks `SUCCESS`, single-file diff (+40/-0) to
+`AUTONOMOUS_LOOP_LEDGER.md` — docs-only, matching the entry's own description.
+
+**But Beat 78's step-2 promise is exactly as unfulfilled as Beat 77's was.** Beat 78 opened its
+entry saying "building it now" for `runMemoryRootAnchorSweep`, then PR #560 shipped as a
+ledger-only diff with no code change and no step-2 outcome section. `grep -rn
+"runMemoryRootAnchorSweep" src/ tests/` still returns **zero hits** as of this beat — re-run just
+now, same command Beat 78 itself used to catch Beat 77's identical gap. This is the third
+consecutive beat (77 → 78 → 79) where "will build X next" was logged and the next beat found X
+still missing. The pattern, not just the instance, is the finding: logging intent as a standalone
+ledger PR and then hitting the turn cap before code lands is now happening reliably, one beat at a
+time, rather than sporadically — worth a structural fix (e.g. never squash the ledger-intent PR
+alone; hold it open until the code PR exists, or fold both into one PR) if a future beat has spare
+turns for loop-process work rather than backlog work. Not attempted this beat — turns go to
+actually shipping the primitive instead of re-diagnosing why it keeps not shipping.
+
+**Step 2 intent (this beat, immediately after this PR merges): build `runMemoryRootAnchorSweep` in
+the same session, before opening this ledger PR's merge is even confirmed** — reversing Beats
+77/78's order of "log intent, run out of turns" by doing the code first and appending the outcome
+to this same entry rather than deferring it to Beat 80. Spec unchanged from Beat 77/78: a pure,
+injected-dependency function in `src/memory/memory-root-anchor.ts` — `fetchPending()` returns
+pending `agent_memory_roots` rows, `selectOffPeakBatch`/`isOffPeakHour` (already in this file)
+choose which to anchor, `anchorMemoryRoot` (already in this file) does the work per row, and an
+injected `writeback` fires only on `anchored: true`. Tested offline with injected fakes, matching
+`memory-root-anchor.test.ts`'s existing pattern — no live DB, no live chain. Will NOT be wired into
+`src/index.ts`'s real Supabase client or a `setInterval`: that step turns an inert, fully-tested
+primitive into an unattended on-chain spend from the funded attester wallet on a trigger nobody has
+approved, which stays a secret/infra-flip decision for Sean per this loop's hard lines, not
+something `--auto --squash` should land.
+
+**Process note:** this entry, and the code described in step 2, are being built as a single
+sequential unit this beat, specifically to break the three-beat pattern of logging intent and
+losing the turn budget before executing it.
+
+**Step 2 outcome — shipped, but not as independently-written code: found and adopted a prior
+session's unfinished work instead.** Before writing the planned implementation, `git push` on a
+freshly-created `feat/memory-root-anchor-sweep` branch was rejected as non-fast-forward — a branch
+of the *same name* already existed on `origin`, pushed by some earlier session, containing a real,
+tested `runMemoryRootAnchorSweep` with no open PR and no ledger entry anywhere. That is the exact
+"turn cap hit mid-work, nothing survives" failure this whole beat-reorder exists to prevent, just
+caught mid-flight instead of in a `git log` audit after the fact. Its design was better than the
+one specified in this entry's own step-2 intent — a DB-row `id`-keyed `PendingRootRow` instead of
+`(agentId, epoch)`, `selectOffPeakBatch` made generic over any row shape, a `dryRun` mode, and a
+per-row `try/catch` so one bad root can't sink the whole sweep — so rather than land a redundant
+independent implementation, that work was rebased onto current main (it predated Beat 78's ledger
+entry) and shipped as **PR #562** (`feat/memory-root-anchor-sweep-v2`): `src/memory/memory-root-anchor-sweep.ts`
++ `tests/memory-root-anchor-sweep.test.ts` (4/4 new tests, 13/13 total across both anchor test
+files), plus the `PATENT_ALIGNED_BUILD_BACKLOG.md` item 10 update. `npx tsc --noEmit` clean.
+Confirmed still zero real callers (`grep -rn "runMemoryRootAnchorSweep" src/index.ts` → no hits) —
+the shadow-inert constraint from this entry's own step-2 intent holds. Queued with
+`gh pr merge 562 --auto --squash` while checks were pending.
+
+**Differs from the step-1 intent** in provenance, not shape: the spec (injected fetch/attest/
+writeback, off-peak-gated, no caller) was followed almost exactly, but by adopting found code
+rather than writing it from scratch — worth a structural note for whoever next hits a
+non-fast-forward push on this loop's branches: check `origin` for the branch before assuming the
+rejection is a stale local ref, it may be a half-finished beat worth finishing rather than
+overwriting.
