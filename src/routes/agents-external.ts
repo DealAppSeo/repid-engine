@@ -293,11 +293,50 @@ router.post('/register', async (req: Request, res: Response) => {
     // than leaving the caller to infer it from a null.
     let genesisProofJobId: string | null = null;
     try {
+      // The proof drain REQUIRES an event_id: proof-drain-service.ts types
+      // processJob({event_id: string}) and calls fetchScore(event_id) first thing, so a job
+      // with a null event_id is markFailed('Score event not found') immediately. The first
+      // cut of this feature enqueued without one and every genesis job failed in production
+      // — repid_proof_queue.event_id being nullable made the INSERT legal and told us
+      // nothing about the consumer.
+      //
+      // So a genesis proof needs a genesis event to be about, and registration genuinely is
+      // one. It is inert by construction, verified against all four triggers on
+      // repid_score_events before writing it:
+      //   delta = 0            -> apply_repid_score_event returns early: no score change,
+      //                           no repid_agents UPDATE, no agent_repid_history row.
+      //   event_type 'GENESIS' -> already in the repid_score_events_event_type_check
+      //                           allowlist (an invented 'AGENT_GENESIS' is REJECTED), and
+      //                           being non-HAL it fires neither peer_verify_trigger (WHEN
+      //                           event_type = 'HAL_SCORE_EVENT') nor trg_hal_penalty_guard
+      //                           fires. HAL is NOT invoked at signup, by design.
+      //   task_domain unset    -> apply_vertical_accuracy returns early.
+      const { data: genesisEvent, error: eventErr } = await db
+        .from('repid_score_events')
+        .insert({
+          agent_id: agentId,
+          event_type: 'GENESIS',
+          delta: 0,
+          repid_before: STARTING_REPID,
+          repid_after: STARTING_REPID,
+          metadata: { genesis: true, source: 'register' },
+        })
+        .select('id')
+        .single();
+
+      if (eventErr || !genesisEvent) {
+        // Never enqueue a job the drain is guaranteed to fail — that is what produced a
+        // proof_status of 'pending' for work that could never complete.
+        console.error(`[agents-external/register] genesis event insert failed for ${agentId}: ${eventErr?.message}`);
+        throw new Error('genesis event insert failed');
+      }
+
       const jobId = crypto.randomUUID();
       const zkpUrl = process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app';
       const { error: queueErr } = await db.from('repid_proof_queue').insert({
         job_id: jobId,
         agent_id: agentId,
+        event_id: (genesisEvent as any).id,
         status: 'pending',
         zkp_service_url: zkpUrl,
       });
