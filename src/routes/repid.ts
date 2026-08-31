@@ -324,14 +324,51 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
     console.error(`[repid] proof-by-agent db error for ${agentId}: ${error.message}`);
     return res.status(500).json({ error: 'INTERNAL' });
   }
-  if (!data) return res.status(404).json({ error: 'No proof found for agent', agent_id: agentId });
+  if (!data) {
+    // A bare 404 here conflated two states a new user cannot tell apart: "this agent will
+    // never have a proof" and "your postcard is being generated right now". MEASURED
+    // 2026-08-31 on a fresh registration: the prover returned real bytes at ~8s, but this
+    // endpoint 404'd until ~23s, because the row lands in repid_zkp_proofs only when the
+    // drain writes it. Fifteen seconds of "not found" is the first thing a new user saw.
+    //
+    // So: if a proof job is still in flight, say so with a 200 and a status, and let the
+    // caller poll. This reports queue state that genuinely exists — it does not promise a
+    // proof will succeed. A real 404 is still returned when there is neither proof nor job.
+    const { data: job } = await db
+      .from('repid_proof_queue')
+      .select('job_id,status,created_at')
+      .eq('agent_id', agentId)
+      .in('status', ['pending', 'processing'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (job) {
+      return res.json({
+        agent_id: agentId,
+        status: 'pending',
+        proof_job_id: job.job_id,
+        queued_at: job.created_at,
+        cryptographically_verifiable: false,
+        note: 'A Proof of Trust postcard is being generated. Poll this endpoint; status becomes "postcard" once the proof lands, then "anchored" once its EAS batch is mined.',
+      });
+    }
+
+    return res.status(404).json({ error: 'No proof found for agent', agent_id: agentId });
+  }
 
   const stmt = (data.statement ?? {}) as { threshold?: number; repid_score?: number };
   const cryptographically_verifiable =
     data.scheme === 'plonky3_range_check' && typeof data.proof_bytes === 'string' && data.proof_bytes.length > 0;
 
+  // pending | postcard | anchored — one field a client can switch on, instead of making it
+  // infer liveness from the shape of `eas`. A uid in hand is ANCHORED whatever the row's age,
+  // matching agent-passport's anchor_status.
+  const status = data.eas_attestation_uid ? 'anchored' : 'postcard';
+
   return res.json({
     agent_id: data.agent_id,
+    status,
     scheme: data.scheme,
     proof_type: data.proof_type,
     // base64 proof bytes; empty string for legacy sha256 stubs (cryptographically_verifiable=false)
