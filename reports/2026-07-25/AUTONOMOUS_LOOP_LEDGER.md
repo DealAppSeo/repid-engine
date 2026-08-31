@@ -3181,3 +3181,58 @@ the first of these investigations (after items 2/5/6/20 all turning out already-
 answer split — one item genuinely unstarted, the other a real primitive stranded with no caller.
 Worth flagging for whoever picks up item 9 next: the off-peak batching logic does not need to be
 written, only called from wherever `anchorMemoryRoot`/item 10's EAS-anchoring cron ends up living.
+
+## Beat 76 — 2026-08-31 · verified Beat 75 (PR #547) independently; step-2 intent logged for item 10
+
+**Step 1 — verified Beat 75's ledger entry and its shipped PR independently.** `gh pr view 547
+--json state,mergedAt,statusCheckRollup,files` → `MERGED` 2026-08-30T22:25:32Z, all 8 checks
+`SUCCESS`, single file `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` (+1/-1) — docs-only,
+matching the entry's own description (item 1 stale-DONE row corrected, item 9 marked partially-wired).
+Note for whoever reads `git log` next to this entry: five real code PRs (#548 passport-identity
+honesty, #549 proof-drain-store-write, #552 identity-ladder+cache, #553 folded into #552, #554
+detector-bounded fix for #549) merged in the same window as #547 but are not backlog/ledger work —
+they read as a separate track (identity/zkp/passport fixes), not this loop's beats, and are outside
+this verification's scope; noted so their absence from this ledger isn't mistaken for the "ledger
+went silent" failure mode Beat 64 found. This entry only vouches for #547 and the backlog items it
+touches.
+
+**Step 2 intent (not yet started as of this entry).** With items 2, 5, 6, 8, 9, and 20 all
+investigated to a real (not name-grep) verdict, the next natural pick is **item 10 (P3 EAS anchoring
+of `memory_root` per epoch, batched off-peak)** — named directly in item 9's own closing line as
+where the stranded `isOffPeakHour`/`selectOffPeakBatch` primitive would need a caller. Item 10's
+backlog row currently reads "NEXT (after P2)", which undersells what's already there: a full,
+tested anchoring primitive (`anchorMemoryRoot`, `buildMemoryRootAttest`, `decodeAnchorFields`,
+`verifyMemoryRootAnchor` in `src/memory/memory-root-anchor.ts`) that reuses the existing EAS rail
+with zero new schema. This beat will grep for callers of `anchorMemoryRoot` before assuming it's
+unwired, following the same pattern that already caught items 2/5/6 further along than their rows
+claimed — a bounded, read-only check given turns already spent on step 1.
+
+**Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
+ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped, matched intent: item 10
+is confirmed NOT wired, for a more specific reason than "NEXT (after P2)" implied.** `grep -rn
+"anchorMemoryRoot(" src/` finds exactly one hit — the function's own definition
+(`src/memory/memory-root-anchor.ts:95`) — and every other reference is from test files
+(`tests/memory-root-anchor.test.ts`, `tests/memory-publication.test.ts`,
+`tests/proof-carrying-e2e.test.ts`, `tests/proof-carrying-lifecycle-e2e.test.ts`) or a doc comment
+in `memory-publication.ts`. No cron, route, or worker calls it. The migration that created
+`agent_memory_roots` (`supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql:23-24,
+70`) says so in its own comment: `eas_uid`/`anchored_at` "are left null until backlog item 10 (EAS
+anchoring) exists to populate them" — the schema itself documents the gap. So item 10 is not merely
+next in the queue, it is a fully-built, fully-tested, zero-caller primitive exactly like item 9's
+`isOffPeakHour`/`selectOffPeakBatch` — and wiring one in without the other would be pointless, since
+item 9's own row already named `anchorMemoryRoot`'s caller as where its batching belongs. Filed as
+**PR (this beat's step-2 branch, `docs/beat76-item10-not-wired`)**, docs-only, single-file diff to
+`PATENT_ALIGNED_BUILD_BACKLOG.md`, marking item 10 PARTIAL (primitive built, zero callers) rather
+than leaving its stale "NEXT (after P2)" cell, and cross-linking it to item 9's identical shape.
+Queued with `gh pr merge --auto --squash` while checks were pending. Actually wiring items 9+10
+together — a real cron/worker that queues pending roots and calls `selectOffPeakBatch` then
+`anchorMemoryRoot` on the result — is new code, not a docs correction, and was not attempted this
+beat: it needs a decision on where pending roots come from (a queue, or a scan over
+`agent_memory_roots` rows with `eas_uid is null`) that is worth a full beat of its own, not a
+turn-budget afterthought bolted onto a verification beat.
+
+**Differs from the step-1 intent** in nothing material — the intent was to check whether item 10 is
+actually wired before assuming so, and it confirmed the more specific "zero callers" finding rather
+than the vaguer "NEXT" the backlog previously said. No code was touched; no flags were touched.
