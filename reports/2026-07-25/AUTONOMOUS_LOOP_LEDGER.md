@@ -3271,3 +3271,43 @@ is called out below for Sean.
 
 **Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
 ordering — if the beat is cut short, this record of intent survives.
+
+## Beat 78 — 2026-08-31 · verified PR #558/#559 independently; Beat 77's intent never landed, building it now
+
+**Step 1 — verified the two most recent merges independently, not the ledger's own account of them.**
+`gh pr view 559 --json state,mergedAt,statusCheckRollup,additions,deletions,files` → `MERGED`
+2026-08-31T06:01:34Z, all checks `SUCCESS`, 68/-4 across `src/routes/agents-external.ts` +
+`src/routes/repid.ts`. `gh pr view 558` (same query) → `MERGED` 2026-08-31T05:23:28Z, all checks
+`SUCCESS`, 79/-1, same two files. Read #559's body: it is a same-day self-fix of a bug #558 shipped
+(a genesis proof job created with `event_id: null` 404'd on the poll endpoint 13/13 times it
+mattered), verified by executing the fix's trigger-inertness claims inside a rolled-back production
+transaction rather than by reading the trigger definitions — real verification, not the LESSON-2
+proxy failure mode.
+
+**But neither PR is Beat 77's stated step-2 work, and Beat 77's own ledger entry never got a step-2
+outcome section.** Beat 77 (PR #557, `MERGED` 2026-08-31T04:34:33Z per `gh pr view 557
+--json state,mergedAt` — verified, not assumed) committed to building `runMemoryRootAnchorSweep`,
+the orchestration layer joining `selectOffPeakBatch` to `anchorMemoryRoot`. `grep -rn
+"runMemoryRootAnchorSweep" src/ tests/` returns **zero hits** — it was never written. #558/#559 are
+real, CI-green, and match the "separate track" shape Beat 76 already named for #548/#549/#552-554
+(signup/genesis-proof work, not backlog items), so their existence doesn't indicate ledger silence
+by itself — but Beat 77's own intent going unfulfilled, with no "differs from intent" note
+explaining why, is exactly the gap LESSON 3 warns about: a stated plan with no logged outcome reads
+as done to the next skimmer of this file. Recording that gap here rather than quietly starting the
+same work as if it were fresh.
+
+**Step 2 intent: build `runMemoryRootAnchorSweep` now, exactly as Beat 77 specified it.** A pure,
+injected-dependency function in `src/memory/memory-root-anchor.ts` taking an injected
+`fetchPending() => Promise<PendingRoot[]>` (rows from `agent_memory_roots` where `eas_uid is null`,
+joined to `repid_agents` for `tier`/`current_repid`), an injected `attestFn` (default real
+`attestProof`, matching every other fn in this file), and an injected `writeback(agentId, epoch,
+uid, txHash) => Promise<void>` — applies `isOffPeakHour`/`selectOffPeakBatch` to the fetched rows,
+calls `anchorMemoryRoot` per selected row, and writes back only on `anchored: true`. Tested offline
+with injected fakes, same pattern as `memory-root-anchor.test.ts`'s existing suite. Will NOT wire it
+into `src/index.ts`'s real Supabase client or a `setInterval` — that turns an inert primitive into
+an unattended on-chain spend from the funded attester wallet on a trigger nobody has approved, which
+Beat 77 correctly flagged as a secret/infra-flip decision for Sean, not an `--auto --squash` merge.
+This beat closes the orchestration gap only.
+
+**Process note:** this entry is opened before step 2 runs, per the loop's ledger-first ordering — if
+the beat is cut short, this record of intent (and of Beat 77's unmet one) survives.
