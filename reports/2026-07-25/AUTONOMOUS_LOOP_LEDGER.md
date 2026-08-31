@@ -3432,3 +3432,58 @@ outcome land as one auditable unit instead of intent going stale across a beat b
 
 **Differs from the step-1 intent** in nothing material — the spec (pure decision layer, injected
 draft/escalate, threshold-gated escalation, no wiring) was followed exactly as logged above.
+
+## Beat 81 — 2026-08-31 · verified PR #563/#564 independently; item 9's free-tier quota half — sharper finding than the backlog row states, primitive built for it
+
+**Step 1 — verified Beat 80's two PRs independently, not their own account.** `gh pr view 563
+--json state,mergedAt,statusCheckRollup` (the ledger PR) → `MERGED` 2026-08-31T16:33:49Z, 8/8 checks
+`SUCCESS`. `gh pr view 564 --json state,mergedAt,statusCheckRollup,body` (the code PR) → `MERGED`
+2026-08-31T16:33:21Z, 8/8 checks `SUCCESS`, body matches the shipped diff. Re-ran the shadow-inert
+grep myself rather than trusting either PR body: `grep -rn "runSpeculativeCascade" src/` on current
+`origin/main` returns exactly one hit — the function's own definition in
+`src/providers/speculative-cascade.ts` — confirming no caller exists, as both PRs claimed.
+
+**Step 2 intent: item 9's free-tier quota half is real, but the backlog row's framing of it is
+imprecise — worth fixing before building on top of it.** Backlog row 9 says "the free-tier-quota-
+tracking half does not exist." Investigating rather than taking that at face value (LESSON 2/5)
+found a real, LIVE, WIRED cap system that the row doesn't mention at all:
+`checkCap`/`incrementSpend` (`src/billing/caps.ts`), backed by the real `llm_provider_caps` table,
+called on every candidate adapter in the router's hot path (`src/providers/router.ts:693,743`) and
+already producing a `cap_hit` routing reason that flows into `routing-record.ts`'s persisted
+outcomes. So "no cap system exists" is false. But re-reading what it actually gates: `checkCap`
+compares `current_month_spent_usd` against `monthly_limit_usd` — a **dollar** ceiling. Every
+provider in `FREE_PROVIDERS` (`src/billing/free-providers.ts`) bills close to $0 per call by
+definition, so a $-denominated cap structurally can never trip for them no matter how many calls
+they take. The backlog row's claim survives in substance (no CALL-COUNT ceiling exists for
+providers whose cost signal is always ~zero) but its stated reason ("does not exist") is wrong —
+the real gap is narrower and more specific: **a real cap mechanism exists, it just cannot see
+free-tier usage**, which is a materially different thing to build against than "nothing exists."
+
+**What was built, matching this beat's turn budget and the established shadow-first pattern
+(`slm-tier.ts` → `anfis-escalation-gate.ts` → `speculative-cascade.ts`):** a pure decision layer,
+`src/billing/free-tier-quota.ts`, `evaluateFreeTierQuota({provider, callsToday, dailyCallCap})` →
+`{allowed, remaining, reason}`. No I/O — the caller supplies today's call count for a provider
+(however it chooses to track it) and a cap; `dailyCallCap <= 0` means uncapped (opt-in, not a
+silent default deny). Tested offline: under cap, at cap, over cap, and the uncapped case — 4
+tests, matching the neighbor suites' shape. `npx tsc --noEmit -p .` clean.
+
+**Deliberately NOT wired** into `router.ts`'s existing `capHit` path, `checkCap`, or a live call
+counter this beat — three real follow-up decisions remain open, none of them safe to squeeze into
+this beat's budget: (a) where the per-provider daily call count is actually tracked (a new DB
+column/table vs. counting `llm_call_log` rows live — a schema decision), (b) whether it plugs into
+`router.ts`'s existing `capHit`/`cap_hit` reason or reports a distinct reason, and (c) whether
+free-tier providers should fail closed (skip to the next provider) or fail open (allow past cap
+with a logged warning) when the daily count is unknown/unavailable. `grep -rn
+"evaluateFreeTierQuota" src/` finds only its own definition, matching the shadow-inert shape of
+items 8/9/10's other primitives before them.
+
+**Process note — extending, not repeating, the pattern Beats 78/79 flagged.** This beat did not
+just add a fourth isolated primitive; it corrected a specific factual claim in the backlog row it
+was extending (the cap system's existence and its $-vs-count distinction), which the next agent to
+read row 9 needs in order not to re-discover it or, worse, assume "no cap system" and build a
+second, competing one beside `caps.ts`.
+
+**Differs from the step-1 intent** in nothing material — no step-2 intent was pre-declared this
+beat (the investigation into what item 9 actually needed happened before any code was written, per
+CLAUDE-RULE-1: show what exists first). The backlog-row correction and the new primitive are both
+logged here as the outcome directly.
