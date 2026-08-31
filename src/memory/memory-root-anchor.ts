@@ -118,8 +118,13 @@ export function isOffPeakHour(hourUtc: number, busyStartUtc = 13, busyEndUtc = 2
   return !(hourUtc >= busyStartUtc && hourUtc < busyEndUtc);
 }
 
-/** Which queued roots to anchor now: none unless off-peak; cap the batch. Pure. */
-export function selectOffPeakBatch(pending: PendingRoot[], isOffPeak: boolean, maxBatch = 10): PendingRoot[] {
+/**
+ * Which queued items to act on now: none unless off-peak; cap the batch. Pure.
+ * Generic (not just `PendingRoot`) so the same SCHEDULE-axis primitive can select over
+ * whatever row shape a caller's queue holds — e.g. `PendingRootRow` in
+ * `memory-root-anchor-sweep.ts`, which carries a DB row id the pure anchor params don't.
+ */
+export function selectOffPeakBatch<T = PendingRoot>(pending: T[], isOffPeak: boolean, maxBatch = 10): T[] {
   if (!isOffPeak || maxBatch <= 0) return [];
   return pending.slice(0, maxBatch);
 }
