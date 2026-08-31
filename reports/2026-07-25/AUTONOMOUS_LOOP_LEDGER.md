@@ -3374,3 +3374,61 @@ rather than writing it from scratch — worth a structural note for whoever next
 non-fast-forward push on this loop's branches: check `origin` for the branch before assuming the
 rejection is a stale local ref, it may be a half-finished beat worth finishing rather than
 overwriting.
+
+## Beat 80 — 2026-08-31 · verified PR #562 independently; step-2 intent logged for item 8 (ANFIS speculative cascade)
+
+**Step 1 — verified Beat 79's ledger PR independently, not its own account of itself.** `gh pr view
+562 --json state,mergedAt,statusCheckRollup,files,additions,deletions` → `MERGED`
+2026-08-31T12:45:01Z, all 8 checks `SUCCESS`, four-file diff (+226/-3): new
+`src/memory/memory-root-anchor-sweep.ts` (+87) and `tests/memory-root-anchor-sweep.test.ts` (+118),
+a small addition to `src/memory/memory-root-anchor.ts` (+7/-2, generalising `selectOffPeakBatch`
+over any row shape per the PR body), and the backlog item-10 update (+14/-1) — matches the entry's
+own description exactly, including its claim of adopting a prior session's orphaned
+`feat/memory-root-anchor-sweep` branch rather than writing independent code. Re-ran the shadow-inert
+check myself rather than trusting the PR body's own count: `grep -rn "runMemoryRootAnchorSweep"
+src/index.ts src/routes/` on current main returns zero hits — still no caller, as claimed.
+
+**Step 2 intent: item 8, ANFIS speculative cascade — cheap draft, escalate on low confidence.**
+With items 9 and 10 now both PARTIAL-with-a-real-orchestration-layer (Beat 79 closed the gap
+between them), the next unblocked "NOW" row is item 8, not item 4: item 4 (answer-binding) is
+explicitly gated on item 3's retrieval-persistence design, which Beat 74/75-era investigation found
+still undone (no design decided for where a real agent's committed tree lives). Item 8 has no such
+blocker. Beat 75 (2026-08-30) already investigated it and found two near-miss primitives that are
+NOT this mechanism: `selectSlmRoute` (`src/providers/slm-tier.ts`) routes to a cheap SLM tier from
+a caller-*declared* `confidence_required` threshold (static, pre-call), and `applyEscalationOnly`
+(`src/services/anfis-escalation-gate.ts`) escalates provider *tier* from ANFIS's routing
+recommendation vs the static router — neither one produces a cheap draft, scores its *actual
+output* confidence, and conditionally re-runs on a stronger model from that measured confidence.
+This beat will add a new pure decision-layer module, `src/providers/speculative-cascade.ts`,
+matching the existing style of its two neighbors (no I/O — the caller injects `draft()`/`escalate()`
+async functions and their measured `{output, confidence, costUsd}`), returning whether escalation
+was used, both confidences, total cost, and a savings figure vs an "always-escalate" baseline cost
+the caller supplies. Tested offline with injected fake draft/escalate functions, same pattern as
+`slm-tier`'s and `anfis-escalation-gate`'s own test suites — no live provider calls, no wiring into
+`src/routes` or the real router this beat (that step is a decision about which live call sites
+adopt cascading, and is scoped as follow-up, not squeezed into this beat's turn budget).
+
+**Process note:** this entry is opened before step 2 code is written, per the loop's ledger-first
+ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped as specified, closing the
+three-beat intent-without-code gap this same ledger flagged in Beats 78/79.** PR #564
+(`feat/anfis-speculative-cascade`) adds `runSpeculativeCascade` in
+`src/providers/speculative-cascade.ts` exactly to the spec above: injected `draft()`/`escalate()`
+async fns each returning `{output, confidence, costUsd}`, escalates only when draft confidence
+misses `CASCADE_CONFIDENCE_THRESHOLD` (default 0.7, overridable per call), and computes `savedUsd`
+against a caller-supplied always-escalate baseline cost (clamped at 0 on the accept-draft path, so
+a pathologically expensive draft can't report a negative saving there). `npx tsc --noEmit -p .`
+clean; 5 new tests plus the two existing neighbor suites (`slm-tier.test.ts`,
+`anfis-escalation-gate.test.ts`) all pass, 29/29. Confirmed shadow-inert same as items 9/10 before
+their orchestration layer landed: `grep -rn "runSpeculativeCascade" src/` finds only its own
+definition — no caller in `router.ts` or any route. Backlog item 8 updated from NOT STARTED to
+PARTIAL with this evidence, marked NEXT (deciding which live call sites adopt cascading is real
+design work, not a follow-up docs correction). Queued with `gh pr merge 564 --auto --squash` while
+checks were pending, same as this ledger PR itself (#563) — appending this outcome to #563's branch
+before it merged, rather than opening Beat 81 to record it, is the structural fix Beat 79 named but
+didn't apply: hold the ledger-intent PR open long enough for the code PR to exist, so intent and
+outcome land as one auditable unit instead of intent going stale across a beat boundary.
+
+**Differs from the step-1 intent** in nothing material — the spec (pure decision layer, injected
+draft/escalate, threshold-gated escalation, no wiring) was followed exactly as logged above.
