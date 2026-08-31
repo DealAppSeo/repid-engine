@@ -3410,3 +3410,25 @@ adopt cascading, and is scoped as follow-up, not squeezed into this beat's turn 
 
 **Process note:** this entry is opened before step 2 code is written, per the loop's ledger-first
 ordering — if the beat is cut short, this record of intent survives.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped as specified, closing the
+three-beat intent-without-code gap this same ledger flagged in Beats 78/79.** PR #564
+(`feat/anfis-speculative-cascade`) adds `runSpeculativeCascade` in
+`src/providers/speculative-cascade.ts` exactly to the spec above: injected `draft()`/`escalate()`
+async fns each returning `{output, confidence, costUsd}`, escalates only when draft confidence
+misses `CASCADE_CONFIDENCE_THRESHOLD` (default 0.7, overridable per call), and computes `savedUsd`
+against a caller-supplied always-escalate baseline cost (clamped at 0 on the accept-draft path, so
+a pathologically expensive draft can't report a negative saving there). `npx tsc --noEmit -p .`
+clean; 5 new tests plus the two existing neighbor suites (`slm-tier.test.ts`,
+`anfis-escalation-gate.test.ts`) all pass, 29/29. Confirmed shadow-inert same as items 9/10 before
+their orchestration layer landed: `grep -rn "runSpeculativeCascade" src/` finds only its own
+definition — no caller in `router.ts` or any route. Backlog item 8 updated from NOT STARTED to
+PARTIAL with this evidence, marked NEXT (deciding which live call sites adopt cascading is real
+design work, not a follow-up docs correction). Queued with `gh pr merge 564 --auto --squash` while
+checks were pending, same as this ledger PR itself (#563) — appending this outcome to #563's branch
+before it merged, rather than opening Beat 81 to record it, is the structural fix Beat 79 named but
+didn't apply: hold the ledger-intent PR open long enough for the code PR to exist, so intent and
+outcome land as one auditable unit instead of intent going stale across a beat boundary.
+
+**Differs from the step-1 intent** in nothing material — the spec (pure decision layer, injected
+draft/escalate, threshold-gated escalation, no wiring) was followed exactly as logged above.
