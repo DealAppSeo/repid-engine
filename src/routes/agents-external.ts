@@ -17,7 +17,6 @@ const PROVENANCE_SAMPLE = 500;
 import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-normalize';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
-import { insertScoreEvent } from '../scoring/score-event-writer';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { isDeliverableDomain } from '../scoring/task-purpose';
 import { scoreEventGuardEnforced } from './score-event-guard';
@@ -26,6 +25,7 @@ import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 import { provisionWallet, persistProvisionedWallet } from '../services/agent-wallet-manager';
 import { emitDeceptionShadow } from '../engine/deception-emitter';
+import { insertScoreEvent } from '../scoring/score-event-writer';
 
 const router = Router();
 
@@ -293,11 +293,57 @@ router.post('/register', async (req: Request, res: Response) => {
     // than leaving the caller to infer it from a null.
     let genesisProofJobId: string | null = null;
     try {
+      // The proof drain REQUIRES an event_id: proof-drain-service.ts types
+      // processJob({event_id: string}) and calls fetchScore(event_id) first thing, so a job
+      // with a null event_id is markFailed('Score event not found') immediately. The first
+      // cut of this feature enqueued without one and every genesis job failed in production
+      // — repid_proof_queue.event_id being nullable made the INSERT legal and told us
+      // nothing about the consumer.
+      //
+      // So a genesis proof needs a genesis event to be about, and registration genuinely is
+      // one. It is inert by construction, verified against all four triggers on
+      // repid_score_events before writing it:
+      //   delta = 0            -> apply_repid_score_event returns early: no score change,
+      //                           no repid_agents UPDATE, no agent_repid_history row.
+      //   event_type 'GENESIS' -> already in the repid_score_events_event_type_check
+      //                           allowlist (an invented 'AGENT_GENESIS' is REJECTED), and
+      //                           being non-HAL it fires neither peer_verify_trigger (WHEN
+      //                           event_type = 'HAL_SCORE_EVENT') nor trg_hal_penalty_guard
+      //                           fires. HAL is NOT invoked at signup, by design.
+      //   task_domain unset    -> apply_vertical_accuracy returns early.
+      // Written through the canonical writer, NOT a raw insert. A direct supabase-js
+      // insert against the score-events table would be a second write site in this file and
+      // tests/writers-raw-insert-ratchet.test.ts fails the build for it, by design: score
+      // events are the reputation ledger, and scattered writers are how one gets corrupted.
+      // The writer is also the single chokepoint that stamps detector coverage on every
+      // event, which a raw insert would silently skip.
+      //
+      // applier:'trigger' — the DB trigger sets repid_before/after. Do NOT pass
+      // repid_delta_applied: apply_repid_score_event returns early when it is non-null,
+      // before it fills those NOT NULL columns.
+      const genesisWrite = await insertScoreEvent({
+        applier: 'trigger',
+        agent_id: agentId,
+        event_type: 'GENESIS',
+        delta: 0,
+        metadata: { genesis: true, source: 'register' },
+        // No counterparty: registration has no other party. The writer's own docs name
+        // GENESIS as an example of exactly this.
+      });
+
+      if (!genesisWrite.ok || !genesisWrite.id) {
+        // Never enqueue a job the drain is guaranteed to fail — that is what produced a
+        // proof_status of 'pending' for work that could never complete.
+        console.error(`[agents-external/register] genesis event insert failed for ${agentId}: ${genesisWrite.error}`);
+        throw new Error('genesis event insert failed');
+      }
+
       const jobId = crypto.randomUUID();
       const zkpUrl = process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app';
       const { error: queueErr } = await db.from('repid_proof_queue').insert({
         job_id: jobId,
         agent_id: agentId,
+        event_id: genesisWrite.id,
         status: 'pending',
         zkp_service_url: zkpUrl,
       });

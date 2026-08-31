@@ -334,16 +334,19 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
     // So: if a proof job is still in flight, say so with a 200 and a status, and let the
     // caller poll. This reports queue state that genuinely exists — it does not promise a
     // proof will succeed. A real 404 is still returned when there is neither proof nor job.
+    // Latest job of ANY status, not just in-flight ones. Filtering to pending/processing
+    // meant a job that had already FAILED fell through to the bare 404 below, so a caller
+    // still could not tell "failed" from "never existed" — measured on a live probe, which
+    // is how the genesis-event bug was found at all.
     const { data: job } = await db
       .from('repid_proof_queue')
-      .select('job_id,status,created_at')
+      .select('job_id,status,created_at,error_message')
       .eq('agent_id', agentId)
-      .in('status', ['pending', 'processing'])
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    if (job) {
+    if (job && (job.status === 'pending' || job.status === 'processing')) {
       return res.json({
         agent_id: agentId,
         status: 'pending',
@@ -351,6 +354,21 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
         queued_at: job.created_at,
         cryptographically_verifiable: false,
         note: 'A Proof of Trust postcard is being generated. Poll this endpoint; status becomes "postcard" once the proof lands, then "anchored" once its EAS batch is mined.',
+      });
+    }
+
+    if (job && job.status === 'failed') {
+      // Report the failure rather than hiding it behind "not found". A trust product that
+      // silently swallows its own failed proof is the exact defect this codebase exists to
+      // catch. 200, not 5xx: the request succeeded and this IS the answer.
+      return res.json({
+        agent_id: agentId,
+        status: 'failed',
+        proof_job_id: job.job_id,
+        queued_at: job.created_at,
+        error: job.error_message ?? 'proof generation failed',
+        cryptographically_verifiable: false,
+        note: 'The most recent Proof of Trust job failed. No proof exists for this agent yet.',
       });
     }
 
