@@ -3349,3 +3349,28 @@ something `--auto --squash` should land.
 **Process note:** this entry, and the code described in step 2, are being built as a single
 sequential unit this beat, specifically to break the three-beat pattern of logging intent and
 losing the turn budget before executing it.
+
+**Step 2 outcome — shipped, but not as independently-written code: found and adopted a prior
+session's unfinished work instead.** Before writing the planned implementation, `git push` on a
+freshly-created `feat/memory-root-anchor-sweep` branch was rejected as non-fast-forward — a branch
+of the *same name* already existed on `origin`, pushed by some earlier session, containing a real,
+tested `runMemoryRootAnchorSweep` with no open PR and no ledger entry anywhere. That is the exact
+"turn cap hit mid-work, nothing survives" failure this whole beat-reorder exists to prevent, just
+caught mid-flight instead of in a `git log` audit after the fact. Its design was better than the
+one specified in this entry's own step-2 intent — a DB-row `id`-keyed `PendingRootRow` instead of
+`(agentId, epoch)`, `selectOffPeakBatch` made generic over any row shape, a `dryRun` mode, and a
+per-row `try/catch` so one bad root can't sink the whole sweep — so rather than land a redundant
+independent implementation, that work was rebased onto current main (it predated Beat 78's ledger
+entry) and shipped as **PR #562** (`feat/memory-root-anchor-sweep-v2`): `src/memory/memory-root-anchor-sweep.ts`
++ `tests/memory-root-anchor-sweep.test.ts` (4/4 new tests, 13/13 total across both anchor test
+files), plus the `PATENT_ALIGNED_BUILD_BACKLOG.md` item 10 update. `npx tsc --noEmit` clean.
+Confirmed still zero real callers (`grep -rn "runMemoryRootAnchorSweep" src/index.ts` → no hits) —
+the shadow-inert constraint from this entry's own step-2 intent holds. Queued with
+`gh pr merge 562 --auto --squash` while checks were pending.
+
+**Differs from the step-1 intent** in provenance, not shape: the spec (injected fetch/attest/
+writeback, off-peak-gated, no caller) was followed almost exactly, but by adopting found code
+rather than writing it from scratch — worth a structural note for whoever next hits a
+non-fast-forward push on this loop's branches: check `origin` for the branch before assuming the
+rejection is a stale local ref, it may be a half-finished beat worth finishing rather than
+overwriting.
