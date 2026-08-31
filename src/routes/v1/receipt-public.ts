@@ -89,7 +89,7 @@ function render(r: TrustReceipt): string {
   const zk = r.zk_proofs.length
     ? step(7, 'Zero-knowledge proof attached',
         `<p class="muted">${esc(r.zk_proofs[0]!.scheme)} · real=${r.zk_proofs[0]!.is_real}</p>
-         <p>Proves a reputation threshold without revealing the score.</p>`)
+         <p>Proves a reputation threshold. The score, threshold and agent id are public inputs bound by the proof — tamper-evident, not hidden.</p>`)
     : '';
 
   const binding = r.work_statement_hash

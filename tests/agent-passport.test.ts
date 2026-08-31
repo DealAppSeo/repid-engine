@@ -153,11 +153,21 @@ describe('buildAgentPassport', () => {
       scheme: 'plonky3_range_check',
       cryptographically_verifiable: true,
       eas_attestation_uid: '0xeas',
+      // A uid in hand is ANCHORED whatever the row's age — the chain write is evidenced.
+      anchor_status: 'ANCHORED',
+      anchor_note: expect.stringContaining('on-chain receipt'),
       created_at: '2026-07-01T00:00:00.000Z',
     });
     // D-019: the disclosure must scope the proof to a score range claim.
     expect(p!.zkp.disclosure).toMatch(/range proofs over the RepID score/);
     expect(p!.zkp.disclosure).toMatch(/do not yet bind agent execution/);
+    // …and it must NOT claim score privacy. The gate MEASURED the score as a public circuit
+    // input on 2026-08-30; this exact sentence said the opposite on the live passport, and the
+    // same false claim was shipping in three other places (badge SVG, /meta/trust glossary,
+    // the public receipt page). A claim removed in one surface reappears through the others
+    // unless something fails, so this assertion is the thing that fails.
+    expect(p!.zkp.disclosure).not.toMatch(/without revealing the score/i);
+    expect(p!.zkp.disclosure).toMatch(/PUBLIC circuit inputs/);
   });
 
   test('never fabricates: unminted agent reads offchain-honest, empty history reads zero', async () => {

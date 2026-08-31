@@ -28,6 +28,7 @@ const REPUTATION_REGISTRY_BASE_SEPOLIA =
   '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 
 import { deriveIdentityState } from './identity-state';
+import { deriveAnchorStatus, ANCHOR_NOTES, type AnchorStatus } from './anchor-status';
 
 export class PassportQueryError extends Error {
   constructor(public step: string, detail: string) {
@@ -109,6 +110,8 @@ export interface AgentPassport {
       scheme: string | null;
       cryptographically_verifiable: boolean;
       eas_attestation_uid: string | null;
+      anchor_status: AnchorStatus;
+      anchor_note: string;
       created_at: string | null;
     } | null;
     disclosure: string;
@@ -226,7 +229,7 @@ export async function buildAgentPassport(
   // -- Latest ZKP proof row, labeled honestly -------------------------------
   const { data: latestProof, error: proofErr } = await db
     .from('repid_zkp_proofs')
-    .select('scheme, proof_bytes, eas_attestation_uid, created_at')
+    .select('scheme, proof_bytes, eas_attestation_uid, eas_schema, created_at, is_real, zk_commitment')
     .eq('agent_id', agentId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -322,12 +325,17 @@ export async function buildAgentPassport(
               typeof latestProof.proof_bytes === 'string' &&
               latestProof.proof_bytes.length > 0,
             eas_attestation_uid: latestProof.eas_attestation_uid ?? null,
+            // Absent this, a proof whose anchor is simply still batching is indistinguishable
+            // on the passport from one that will never be anchored — a null uid rendered as an
+            // answer instead of as "not yet". See anchor-status.ts for the measurement.
+            anchor_status: deriveAnchorStatus(latestProof),
+            anchor_note: ANCHOR_NOTES[deriveAnchorStatus(latestProof)],
             created_at: latestProof.created_at ?? null,
           }
         : null,
       // D-019: never describe the proof as attesting agent behavior.
       disclosure:
-        'Proofs are range proofs over the RepID score (score >= threshold without revealing the score). They do not yet bind agent execution transcripts — that binding is roadmap.',
+        'Proofs are range proofs over the RepID score. agent_id, threshold AND the score itself are PUBLIC circuit inputs — altering any of the three breaks verification, but the score is disclosed, not hidden. They do not yet bind agent execution transcripts — that binding is roadmap.',
       proof_endpoint: `/api/v1/repid/${agentId}/proof`,
       verify_endpoint: '/api/v1/repid/verify',
     },

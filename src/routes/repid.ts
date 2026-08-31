@@ -25,6 +25,7 @@ import { fireWebhook } from '../services/webhook';
 import { publicError } from './public-error';
 import { previewCatalog, previewRepId } from '../engine/repid-preview';
 import { REPID_MAX, REPID_MIN } from '../scoring/repid-deltas';
+import { easBlock } from '../services/anchor-status';
 
 export const repidPublicRouter = Router();
 
@@ -298,7 +299,7 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
   // can see legacy (stub) state honestly rather than a 404.
   const base = db
     .from('repid_zkp_proofs')
-    .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at')
+    .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at,is_real,zk_commitment')
     .eq('agent_id', agentId);
 
   let { data, error } = await base
@@ -312,7 +313,7 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
     // No real proof yet — return the latest row of any kind (honest legacy/stub state).
     ({ data, error } = await db
       .from('repid_zkp_proofs')
-      .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at')
+      .select('agent_id,scheme,proof_type,proof_bytes,statement,tier_proven,eas_attestation_uid,eas_schema,created_at,is_real,zk_commitment')
       .eq('agent_id', agentId)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -342,12 +343,11 @@ repidPublicRouter.get('/repid/:agentId/proof', async (req: Request, res: Respons
       threshold: stmt.threshold ?? null,
       tier: data.tier_proven,
     },
-    eas: {
-      attestation_uid: data.eas_attestation_uid ?? null,
-      schema: data.eas_schema ?? null,
-      anchored: !!data.eas_attestation_uid,
-      network: 'base-sepolia',
-    },
+    // `anchored: false` used to be the whole answer here, and it conflated two different
+    // truths: a proof minted seconds ago whose batch has not been cut yet, and a legacy row
+    // that will never be anchored at all. MEASURED 2026-08-31 — a live proof sat in the first
+    // state for just over two minutes before its attestation was mined. See anchor-status.ts.
+    eas: easBlock(data, 'base-sepolia'),
     cryptographically_verifiable,
     created_at: data.created_at,
   });
@@ -368,7 +368,7 @@ repidPublicRouter.get('/meta/trust', async (_req: Request, res: Response) => {
     glossary: {
       HAL: 'Hallucination Abatement Layer — a cross-provider quorum that flags or vetoes ungrounded model output.',
       RepID: 'Reputation Identity — an agent’s behavioral reputation score (0–10000) earned through verified outcomes.',
-      ZKP: 'Zero-Knowledge Proof — a Plonky3 STARK proving an agent’s RepID exceeds a threshold without revealing the score.',
+      ZKP: 'Zero-Knowledge Proof — a Plonky3 STARK binding an agent’s RepID score, threshold and agent_id as public inputs, so none of the three can be altered without breaking verification. NOTE: the score itself is a PUBLIC input today, not a hidden one — this proof is tamper-evidence, not score privacy.',
       'agent-bound proof': 'A RepID proof whose public statement includes agent_id, so it cannot be replayed for another agent.',
       EAS: 'Ethereum Attestation Service — where RepID proofs are anchored on-chain (Base Sepolia).',
       'ERC-8004': 'The trustless-agents reputation standard the on-chain reputation writes conform to.',
