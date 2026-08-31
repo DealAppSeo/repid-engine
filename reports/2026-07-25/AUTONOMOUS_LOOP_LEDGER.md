@@ -3487,3 +3487,15 @@ second, competing one beside `caps.ts`.
 beat (the investigation into what item 9 actually needed happened before any code was written, per
 CLAUDE-RULE-1: show what exists first). The backlog-row correction and the new primitive are both
 logged here as the outcome directly.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped as described above,
+verified after the fact rather than left as a prediction.** The "what was built" paragraph above
+was written before `src/billing/free-tier-quota.ts` existed; appending the actual results now,
+same-PR, rather than trusting the pre-declared numbers: `npx tsc --noEmit -p .` clean, `npx jest
+--config jest.config.js tests/billing/free-tier-quota.test.ts` → 4/4 pass, and `grep -rn
+"evaluateFreeTierQuota" src/` → one hit, its own definition. All three match what this entry
+claimed in advance. Shipped as **PR #567** (`feat/free-tier-quota`), which also carries the
+backlog item-9 row correction. Queued with `gh pr merge 567 --auto --squash` while checks were
+pending, same pattern as this ledger PR (#566) — appending this confirmation to #566's branch
+before it merges, continuing the structural fix Beats 79/80 established: intent and outcome land
+as one auditable unit instead of a prediction going unverified across a beat boundary.
