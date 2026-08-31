@@ -17,7 +17,6 @@ const PROVENANCE_SAMPLE = 500;
 import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-normalize';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
-import { insertScoreEvent } from '../scoring/score-event-writer';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { isDeliverableDomain } from '../scoring/task-purpose';
 import { scoreEventGuardEnforced } from './score-event-guard';
@@ -26,6 +25,7 @@ import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 import { provisionWallet, persistProvisionedWallet } from '../services/agent-wallet-manager';
 import { emitDeceptionShadow } from '../engine/deception-emitter';
+import { insertScoreEvent } from '../scoring/score-event-writer';
 
 const router = Router();
 
@@ -311,23 +311,30 @@ router.post('/register', async (req: Request, res: Response) => {
       //                           event_type = 'HAL_SCORE_EVENT') nor trg_hal_penalty_guard
       //                           fires. HAL is NOT invoked at signup, by design.
       //   task_domain unset    -> apply_vertical_accuracy returns early.
-      const { data: genesisEvent, error: eventErr } = await db
-        .from('repid_score_events')
-        .insert({
-          agent_id: agentId,
-          event_type: 'GENESIS',
-          delta: 0,
-          repid_before: STARTING_REPID,
-          repid_after: STARTING_REPID,
-          metadata: { genesis: true, source: 'register' },
-        })
-        .select('id')
-        .single();
+      // Written through the canonical writer, NOT a raw insert. A direct supabase-js
+      // insert against the score-events table would be a second write site in this file and
+      // tests/writers-raw-insert-ratchet.test.ts fails the build for it, by design: score
+      // events are the reputation ledger, and scattered writers are how one gets corrupted.
+      // The writer is also the single chokepoint that stamps detector coverage on every
+      // event, which a raw insert would silently skip.
+      //
+      // applier:'trigger' — the DB trigger sets repid_before/after. Do NOT pass
+      // repid_delta_applied: apply_repid_score_event returns early when it is non-null,
+      // before it fills those NOT NULL columns.
+      const genesisWrite = await insertScoreEvent({
+        applier: 'trigger',
+        agent_id: agentId,
+        event_type: 'GENESIS',
+        delta: 0,
+        metadata: { genesis: true, source: 'register' },
+        // No counterparty: registration has no other party. The writer's own docs name
+        // GENESIS as an example of exactly this.
+      });
 
-      if (eventErr || !genesisEvent) {
+      if (!genesisWrite.ok || !genesisWrite.id) {
         // Never enqueue a job the drain is guaranteed to fail — that is what produced a
         // proof_status of 'pending' for work that could never complete.
-        console.error(`[agents-external/register] genesis event insert failed for ${agentId}: ${eventErr?.message}`);
+        console.error(`[agents-external/register] genesis event insert failed for ${agentId}: ${genesisWrite.error}`);
         throw new Error('genesis event insert failed');
       }
 
@@ -336,7 +343,7 @@ router.post('/register', async (req: Request, res: Response) => {
       const { error: queueErr } = await db.from('repid_proof_queue').insert({
         job_id: jobId,
         agent_id: agentId,
-        event_id: (genesisEvent as any).id,
+        event_id: genesisWrite.id,
         status: 'pending',
         zkp_service_url: zkpUrl,
       });
