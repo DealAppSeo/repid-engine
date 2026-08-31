@@ -283,6 +283,42 @@ router.post('/register', async (req: Request, res: Response) => {
       agent_id: agentId, immunity_score: 0,
     });
 
+    // Genesis postcard. A new agent used to leave register with nothing to verify: no proof
+    // row and no job id to poll, so the first Proof of Trust only appeared after some later
+    // score-event, and the signup screen had an empty state it could not explain. Enqueue one
+    // now and hand the job id back in the 201.
+    //
+    // Best-effort on purpose, exactly like wallet provisioning above: a prover hiccup must never
+    // fail a registration that has already succeeded. `proof_status` says which happened rather
+    // than leaving the caller to infer it from a null.
+    let genesisProofJobId: string | null = null;
+    try {
+      const jobId = crypto.randomUUID();
+      const zkpUrl = process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app';
+      const { error: queueErr } = await db.from('repid_proof_queue').insert({
+        job_id: jobId,
+        agent_id: agentId,
+        status: 'pending',
+        zkp_service_url: zkpUrl,
+      });
+      if (queueErr) {
+        console.error(`[agents-external/register] genesis proof enqueue failed for ${agentId}: ${queueErr.message}`);
+      } else {
+        genesisProofJobId = jobId;
+        fetch(`${zkpUrl}/zkp/repid-proof`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent_id: agentId,
+            score: STARTING_REPID,
+            metadata: { job_id: jobId, genesis: true },
+          }),
+        }).catch((err) => console.error(`[agents-external/register] genesis proof dispatch failed for ${agentId}:`, err));
+      }
+    } catch (proofErr: any) {
+      console.error(`[agents-external/register] genesis proof threw for ${agentId}: ${proofErr?.message}`);
+    }
+
     return res.status(201).json({
       // Existing v11 fields (unchanged for legacy callers)
       agent_id: agentId,
@@ -299,6 +335,11 @@ router.post('/register', async (req: Request, res: Response) => {
       repid: STARTING_REPID, // alias for starting_score
       erc8004_token_id: (newAgent as any).erc8004_token_id ?? null,
       created_at: (newAgent as any).created_at ?? createdAt,
+      // Genesis Proof of Trust. `pending` means a postcard is being generated right now —
+      // poll GET /api/v1/repid/:agent_id/proof, which reports pending | postcard | anchored.
+      // `unavailable` means the enqueue itself failed; registration still succeeded.
+      proof_job_id: genesisProofJobId,
+      proof_status: genesisProofJobId ? 'pending' : 'unavailable',
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
