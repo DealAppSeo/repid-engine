@@ -3222,11 +3222,12 @@ in `memory-publication.ts`. No cron, route, or worker calls it. The migration th
 anchoring) exists to populate them" — the schema itself documents the gap. So item 10 is not merely
 next in the queue, it is a fully-built, fully-tested, zero-caller primitive exactly like item 9's
 `isOffPeakHour`/`selectOffPeakBatch` — and wiring one in without the other would be pointless, since
-item 9's own row already named `anchorMemoryRoot`'s caller as where its batching belongs. Filed as
-**PR (this beat's step-2 branch, `docs/beat76-item10-not-wired`)**, docs-only, single-file diff to
-`PATENT_ALIGNED_BUILD_BACKLOG.md`, marking item 10 PARTIAL (primitive built, zero callers) rather
-than leaving its stale "NEXT (after P2)" cell, and cross-linking it to item 9's identical shape.
-Queued with `gh pr merge --auto --squash` while checks were pending. Actually wiring items 9+10
+item 9's own row already named `anchorMemoryRoot`'s caller as where its batching belongs. Filed in this same PR (`docs/beat76-ledger-and-item10`) rather than a separate step-2 branch — both
+edits are docs-only single-file diffs (this ledger + the backlog table), so splitting them into two
+PRs would have added process weight without adding safety. Marks item 10 PARTIAL (primitive built,
+zero callers) rather than leaving its stale "NEXT (after P2)" cell, and cross-links it to item 9's
+identical shape. Queued with `gh pr merge --auto --squash` while checks were pending. Actually wiring
+items 9+10
 together — a real cron/worker that queues pending roots and calls `selectOffPeakBatch` then
 `anchorMemoryRoot` on the result — is new code, not a docs correction, and was not attempted this
 beat: it needs a decision on where pending roots come from (a queue, or a scan over
