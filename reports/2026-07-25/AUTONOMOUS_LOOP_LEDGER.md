@@ -3237,3 +3237,37 @@ turn-budget afterthought bolted onto a verification beat.
 **Differs from the step-1 intent** in nothing material — the intent was to check whether item 10 is
 actually wired before assuming so, and it confirmed the more specific "zero callers" finding rather
 than the vaguer "NEXT" the backlog previously said. No code was touched; no flags were touched.
+
+## Beat 77 — 2026-08-31 · verified Beat 76 (PR #555) independently; step-2 intent logged for items 9+10 wiring
+
+**Step 1 — verified Beat 76's ledger entry and its shipped PR independently.** `gh pr view 555
+--json state,mergedAt,statusCheckRollup,files,additions,deletions` → `MERGED` 2026-08-31T01:08:19Z,
+8/8 checks `SUCCESS`, two-file diff (+57/-1) to `AUTONOMOUS_LOOP_LEDGER.md` +
+`PATENT_ALIGNED_BUILD_BACKLOG.md`, matching the entry's own description (item 10 marked PARTIAL
+with `anchorMemoryRoot(` file:line evidence). Note for whoever reads `git log` next to this entry:
+PR #556 (`A proof still being batched read the same as one that will never anchor`) merged
+2026-08-31T03:07:23Z, after #555, with a real 451/-12 diff across `src/services/anchor-status.ts`
+(new), `src/services/agent-passport.ts`, `src/routes/repid.ts`, `src/routes/v1/receipt-public.ts`,
+and two test files, 8/8 checks `SUCCESS`. It is not backlog/ledger work — same "separate track"
+shape Beat 76 itself flagged for #548/#549/#552-554 — so its absence from Beat 76's entry isn't the
+ledger-went-silent failure mode; this entry only vouches for #555.
+
+**Step 2 intent (not yet started as of this entry).** Items 9 (off-peak SCHEDULE batching) and 10
+(EAS anchoring) both have real, tested, zero-caller primitives (`isOffPeakHour`/`selectOffPeakBatch`
+and `anchorMemoryRoot`, both in `src/memory/memory-root-anchor.ts`) — Beat 75 and Beat 76 each
+independently concluded that wiring them together is new code needing a design decision (where
+pending roots come from), not a docs correction, and left it unattempted. This beat will build the
+missing middle layer: a pure, injected-dependency orchestration function
+(`runMemoryRootAnchorSweep`) that fetches pending `agent_memory_roots` rows (`eas_uid is null`,
+joined to `repid_agents` for `tier`), applies `selectOffPeakBatch`, and calls `anchorMemoryRoot` +
+a writeback per chosen row — tested offline the same way `memory-root-anchor.test.ts` tests its
+neighbors (injected fetch/attest/writeback fns, no live DB or chain). Given the turn budget, this
+beat will deliberately NOT wire it into `src/index.ts`'s real Supabase client / setInterval loop:
+that step turns an inert primitive into an unattended, automated on-chain spend (EAS attestation
+gas from the funded attester wallet) on a new trigger nobody has approved, which is exactly the
+"secret/infra flip" class this loop's hard lines say to surface to Sean rather than land via
+`--auto --squash`. This beat closes the orchestration gap only; production wiring stays open and
+is called out below for Sean.
+
+**Process note:** this entry is opened before step 2 investigation runs, per the loop's ledger-first
+ordering — if the beat is cut short, this record of intent survives.
