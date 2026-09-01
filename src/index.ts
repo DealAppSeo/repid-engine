@@ -158,6 +158,38 @@ const scoreLimiter = rateLimit({
   max: 100,                    // 100 score events/min
   keyGenerator: (req): string => String(req.params.id || ipKeyGenerator(req.ip ?? '')),
 });
+
+/**
+ * `POST /account/connect` is the one PUBLIC surface that mints a durable identity
+ * row for a wallet nobody has seen before — and generating a wallet is free. With
+ * no ceiling, anyone can insert unbounded rows into `builders` for the cost of a
+ * keypair.
+ *
+ * WHAT THIS IS AND IS NOT PROTECTING. Connecting grants no reputation, deliberately
+ * (see the route's own header): RepID has to be earned by work somebody else
+ * verified, so this is not a reputation-inflation vector and never was. The exposure
+ * is junk rows. A ceiling is still the difference between junk and unbounded junk,
+ * and it is cheap.
+ *
+ * FIVE PER HOUR, mirroring registrationLimiter, because it is the same kind of act:
+ * minting a durable identity from a public surface. Connecting is IDEMPOTENT — the
+ * second call returns the same account rather than a second one — so one success is
+ * all a real person ever needs. The remaining four absorb a declined wallet prompt
+ * or a timestamp that drifted past the five-minute signature skew.
+ *
+ * NO ENTERPRISE SKIP, and that divergence from registrationLimiter is deliberate.
+ * That skip exists so a paying integrator can register agents in bulk; nothing
+ * registers ACCOUNTS in bulk, and a bypass on the exact surface this bounds would
+ * hand the hole back to anyone holding the key.
+ */
+const accountConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,   // 1 hour
+  max: 5,
+  message: {
+    error: 'too_many_connects',
+    message: 'Too many account connections from this network. Try again within the hour.',
+  },
+});
 app.use(helmet());
 // CORS — allow-list + anchored trust*.dev pattern (src/utils/cors-origins.ts). The trustchat.dev
 // frontend + the rest of the Trust* ecosystem call repid-engine's public endpoints (rating, vote,
@@ -381,6 +413,11 @@ app.use('/api/v1', receiptPublicRouter);
 // would be no identity at all: wallet addresses are public, so trusting
 // x-sbt-wallet would let anyone list or overwrite another person's provider
 // keys. Both features are behind default-OFF flags. See routes/v1/byok.ts.
+// Mounted IMMEDIATELY BEFORE the router that serves the route. Express runs
+// middleware in mount order, so a limiter registered after byokRouter would never
+// execute — the router would answer first and the ceiling would be decorative.
+// Same placement as externalScoreLimiter and subscribeLimiter below.
+app.use('/api/v1/account/connect', accountConnectLimiter);
 app.use('/api/v1', byokRouter);
 // Live-numbers (2026-07-07): PUBLIC read-only observability surface the
 // TrustShell.dev landing reads for its minted-agent leaderboard + on-chain
