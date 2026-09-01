@@ -11,7 +11,7 @@
  * POSITION, so the position used for hashing must be fixed by something other than
  * whatever order a query happens to return.
  */
-import { auditCommitment, encodeLeaf, type CommitmentAudit, type Hex, type IndexedLeaf, type LeafHash } from './leanimt-plus';
+import { auditCommitment, encodeLeaf, LeanIMTPlus, type CommitmentAudit, type Hex, type IndexedLeaf, type LeafHash } from './leanimt-plus';
 import { referenceRoot, type Hash2 } from './proof-carrying-index';
 import { poseidon2LeafHash, poseidon2PairHash } from '../zkp/poseidon2-leaf';
 
@@ -50,4 +50,15 @@ export function rootMatchesStored(rows: MemoryLeafRow[], storedRoot: Hex, leafHa
 /** Whole-commitment audit (leanimt-plus.ts scope 2) over a fetched row set, against a stored root. */
 export function auditStoredCommitment(rows: MemoryLeafRow[], storedRoot: Hex, leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair): CommitmentAudit {
   return auditCommitment(orderedLeaves(rows), storedRoot, leafHash, pair);
+}
+
+/**
+ * The bridge item 3 (P2 retrieval API) has been missing: a fetched row set in, a live tree able to
+ * produce membership/non-membership witnesses out. `recomputeRoot`/`auditStoredCommitment` above
+ * can only check a root, not hand back a prover. Position (leaf_index) is preserved via the same
+ * `orderedLeaves` sort every other function in this file already uses, so a hydrated tree's root
+ * matches what `recomputeRoot` on the same rows would compute.
+ */
+export function hydrateTree(rows: MemoryLeafRow[], leafHash: LeafHash = dfltLeaf, pair: Hash2 = dfltPair): LeanIMTPlus {
+  return LeanIMTPlus.fromLeaves(orderedLeaves(rows), { leafHash, pairHash: pair });
 }
