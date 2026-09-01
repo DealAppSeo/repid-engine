@@ -3499,3 +3499,53 @@ backlog item-9 row correction. Queued with `gh pr merge 567 --auto --squash` whi
 pending, same pattern as this ledger PR (#566) — appending this confirmation to #566's branch
 before it merges, continuing the structural fix Beats 79/80 established: intent and outcome land
 as one auditable unit instead of a prediction going unverified across a beat boundary.
+
+## Beat 82 — 2026-09-01 · verified PR #567 independently; item 11's proof-tier-policy is already built — backlog row 11 is stale, not the primitive
+
+**Step 1 — verified Beat 81's PR independently, not its own account.** `gh pr view 567
+--json state,mergedAt,statusCheckRollup` → `MERGED` 2026-08-31T20:30:05Z, 8/8 checks `SUCCESS`,
+title/body match the shipped diff (`src/billing/free-tier-quota.ts`). Re-ran the shadow-inert grep
+myself rather than trusting the PR body: `grep -rn "evaluateFreeTierQuota" src/` on current
+`origin/main` returns exactly one hit — the function's own definition — confirming no caller
+exists, as claimed. Also noted (not verified as "the prior beat" — it carries no Beat number and
+isn't this loop's own sequence, so it's out of scope for step 1, but worth recording since it's the
+most recent merge to main): PR #565, `fix(bind): every bind was impossible`, merged
+2026-08-31T21:38:19Z, 8/8 checks green, fixing a `text = uuid` type mismatch that made the human-
+agent-binding trigger reject every insert including valid ones.
+
+**Step 2 intent: backlog row 11 ("Proof-tier selection in ANFIS") says NEXT — that's stale, not
+absent.** Reading the row before building anything (CLAUDE-RULE-1 / LESSON 5 — match the real
+state, not the tidy remembered one) found `src/services/proof-tier-policy.ts` already exists,
+fully built: `selectProofTier(axes)` runs the same ANFIS fabric as `anfis-comma.ts` over 5 policy
+axes (stakes/costPressure/privacy/latencyUrgency/reliabilityRequired), gated by a documented
+deterministic floor+ceiling (a mis-tuned learned layer can select a *stronger* proof tier than the
+floor but never weaker), plus `shadowCompareProofTier` for measuring policy-vs-current without
+changing behavior. It ships with a labelled evaluation corpus (`proof-tier-corpus.ts`), a regret
+measurement script (`scripts/measure/proof-tier-regret.ts`), and two test files
+(`tests/proof-tier-policy.test.ts`, `tests/proof-tier-regret.test.ts`). Git blame: `cbb4fff`,
+already merged as PR #225 — this is not new work landing today, it is a backlog row that was never
+updated after the code shipped.
+
+**What's actually missing, confirmed by grep, not assumed:** `grep -rn
+"selectProofTier\|shadowCompareProofTier" src/` outside the module's own file and
+`proof-tier-regret.ts` returns zero hits. Unlike item 6 (HAL grounding), which is wired into
+`pipeline.ts` for shadow-only logging, proof-tier-policy has NO caller anywhere in a live path —
+not even a shadow-log call. The reason is structural, not an oversight: no code in this repo
+computes the 5 `PolicyAxes` inputs from a real call's context today (`grep -n
+"PolicyAxes\|costPressure\|latencyUrgency" src/services/anfis-router.ts` — zero hits), so wiring
+even a no-op shadow-compare call would mean inventing that mapping now, which is exactly the
+"which live call sites adopt X" class of decision Beats 79-81 each declined to rush for items
+8/9/10. Not attempted this beat for the same reason.
+
+**Step 2 outcome — backlog row 11 corrected in
+`reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md`** from "NEXT (Patent #2 keystone)" to PARTIAL
+with the evidence above: primitive + shadow comparator + corpus + regret script + 2 test files all
+exist and pass, zero callers, same "wired one end only" shape as items 8/9/10, and the specific
+missing piece (an axes-from-real-context mapping) named so the next reader doesn't have to
+re-derive it. Docs-only change, no code touched — matches this beat's remaining turn budget and
+keeps the correction auditable against the file it corrects.
+
+**Differs from the step-1 intent** in nothing material — the intent (verify #567, then investigate
+and correct item 11's stale status) is exactly what was done; no code primitive was built this beat
+because the investigation itself was the highest-value, lowest-risk action available inside the
+remaining budget.
