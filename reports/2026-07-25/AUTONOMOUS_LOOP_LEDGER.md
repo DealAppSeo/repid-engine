@@ -3698,3 +3698,42 @@ beat doesn't re-derive it.
 **Differs from the step-1 intent** in nothing material — verify #575, then investigate (not build)
 item 3's next piece, which is what happened. No code touched this beat; docs-only, matching the
 remaining turn budget.
+
+## Beat 86 — 2026-09-01 · verified PR #577 independently; closed item 3's content-storage blocker (PR #578, auto-merge pending)
+
+**Step 1 — verified Beat 85's ledger PR (#577) independently, not its own account.** `gh pr view
+577 --json mergedAt,state` → `MERGED` 2026-09-01T16:49:10Z; `gh pr checks 577` → 8/8 `pass`,
+including `test`, `crosscheck`, `gitleaks` x2, `zkp-vault`. Also checked `gh pr list --state merged
+--limit 10` for any PR merged between #577 and this beat with no ledger trace (the #570/#576 class
+of gap) — none found; #577 is the latest merge.
+
+**Step 2 — advanced backlog item 3 (P2 retrieval API), the top OPEN item per the priority rule
+(unblocks item 4/6, Patent #1 keystone).** Beat 85 sharpened the remaining blocker to one specific
+gap: no persisted content store (`agent_memory_leaves` holds only the leaf commitment;
+`ProofCarryingMemory`'s content `Map` doesn't survive past a request). Made the design decision
+Beat 85 declined to make (content-addressed, write-once, keyed by the entry's own leaf commitment
+— matching the in-memory store's existing idempotency) and built it:
+- Additive migration `agent_memory_leaf_content` (`unique(agent_id, value)`).
+- `src/memory/memory-content-store.ts` — pure DB-row↔`MemoryEntry` boundary, mirroring
+  `memory-root-store.ts`'s pattern. `contentMatchesValue`/`verifiedEntry` recompute the commitment
+  from a row's own fields and refuse a row that doesn't hash to its claimed `value` — the same
+  non-negotiable check `auditStoredCommitment` already enforces for roots, so a corrupted/swapped
+  row is caught, not trusted.
+- Exported `encodeEntry` from `proof-carrying-memory.ts` (previously private) so the new check
+  can't drift from the format the tree was actually built against — reuse over reimplementation.
+- 7/7 new tests (`tests/memory-content-store.test.ts`), `npx tsc --noEmit` clean, existing
+  `memory-root-store`/`proof-carrying-e2e` suites still green (19/19 total run together).
+
+**PR #578 opened and `gh pr merge --auto --squash` run while checks were pending** — SAFE-CLASS:
+additive migration, pure new module, zero callers (`grep -rn "memory-content-store\|verifiedEntry"
+src/` finds only its own definition/test), no flags touched, no secrets. Backlog row 3 updated in
+the same PR: both blockers item 3's acceptance test named (a live prover from stored rows, PR #575;
+content to hand back, this PR) are now closed at the primitive level. What's left is now sharply
+scoped and not a further design question: an authenticated per-agent HTTP endpoint that fetches
+this agent's rows, calls `hydrateTree()`, and returns each entry via `verifiedEntry` with its
+witness — not attempted this beat, to stay inside budget.
+
+**Differs from nothing declared here yet** — this entry was written before waiting for PR #578's
+CI to finish landing (auto-merge will complete it on green), per this loop's own turn-budget
+mandate: the ledger must survive even if a later step runs out of turns. If #578's CI goes red,
+the next beat's step 1 verification will catch it — auto-merge does not land a failing check.
