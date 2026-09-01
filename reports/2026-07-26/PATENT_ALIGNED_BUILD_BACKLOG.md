@@ -56,7 +56,31 @@ file whose contents mention `content` at all: zero hits tying content to a leaf.
 endpoint is blocked on a second, still-open persistence design (where does content live, keyed by
 what, self-service or write-once at insert time) — not the same gap PR #575 closed, and not
 attempted this beat for the same reason beat 84 didn't build item 8's output-confidence scorer: it
-is a real design decision with its own tradeoffs, not a route to wire.** |
+is a real design decision with its own tradeoffs, not a route to wire.**
+
+**Content-storage decision made and built, beat 86, 2026-09-01.** Additive migration
+`supabase/migrations/20260901000000_agent_memory_leaf_content.sql` adds
+`agent_memory_leaf_content`, content-addressed and write-once: `unique(agent_id, value)`, where
+`value` is the entry's own leaf commitment (`poseidon2LeafHash(encodeEntry(entry))`) — the same
+key `ProofCarryingMemory`'s in-process `Map` already used, so the same idempotency (re-adding
+identical content is a no-op) carries over. Deliberately keyed by `value`, not by
+`agent_memory_leaves.leaf_index`/`root_epoch`, because content-addressing means one entry can
+recur at a different index in a later epoch without being re-hashed or re-stored. `encodeEntry`
+(`src/memory/proof-carrying-memory.ts`) is now exported rather than re-derived, so the new
+`src/memory/memory-content-store.ts` cannot drift from the format the tree was actually built
+against. That module's `contentMatchesValue`/`verifiedEntry` recompute the commitment from a
+row's own fields and refuse to hand back unchecked content — the same non-negotiable-check
+pattern `memory-root-store.ts`'s `auditStoredCommitment` already established for roots, so a
+corrupted or swapped row (wrong content, wrong source_repid, a value copied from a different
+entry) is caught rather than trusted. 7/7 new tests (`tests/memory-content-store.test.ts`),
+`npx tsc --noEmit` clean. Zero callers (`grep -rn "memory-content-store\|verifiedEntry" src/`
+finds only its own definition/test) — schema + pure boundary only, same shape as item 5's own
+migration before it had a reader. **Still not attempted: the authenticated per-agent HTTP
+endpoint itself** (fetch this agent's `agent_memory_leaves` + `agent_memory_leaf_content` rows,
+`hydrateTree()` them, produce a witness per entry, verify each via `verifiedEntry` before
+returning it) — both blockers item 3's acceptance test named are now closed at the primitive
+level, but nothing yet calls either one from a route. NEXT — this is the actual remaining scope,
+not a further design question. |
 | 4 | **Answer-binding** — gate answer emit on successful verify; answer carries commitment to its proof set | #1 | P2 | CC | answer w/o valid proof set is refused/flagged; binding is checkable | NOW (Patent #1 keystone) |
 | 5 | `agent_memory_leaves` + `agent_memory_roots` tables (additive DDL) | #1 | P1 | CC | append→root deterministic; recompute matches | **DONE — PR #490 (2026-08-28), migration `supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` + `src/memory/memory-root-store.ts`, 6/6 tests. Verified by beat 74, 2026-08-30. NOT yet wired into scoring (item 3/6's currency read still has zero callers).** |
 | 6 | **HAL abstain / knowledge-boundary** — refuse/flag when cited evidence lacks a valid inclusion+current-validity proof | #1/#3 | — | GA/CC | ungrounded answer → abstain in shadow; measured hallucination drop | **DONE (primitive + wiring + logging) — `computeGroundingSignal` (`src/hal/hal-grounding.ts:69`), called from `src/scoring/pipeline.ts:450`, logged into score-event `metadata.grounding`/`metadata.grounding_abstained` (`pipeline.ts:587-588`) on every scoring call. `HAL_GROUNDING_MODE` shadow-first, default `shadow`. Verified by beat 71, 2026-08-29, by reading the call site and the write, not the table. REMAINING: no current traffic carries a proof-carrying answer (`applicable:false` today), so the "measured hallucination drop" half of the acceptance test has nothing to measure yet — that needs P2 retrieval (item 3) producing real proof-carrying answers first.** |

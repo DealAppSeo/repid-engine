@@ -51,8 +51,13 @@ export interface PcmOptions { leafHash?: LeafHash; pairHash?: Hash2; }
 const dfltLeaf: LeafHash = poseidon2LeafHash;
 const dfltPair: Hash2 = (a, b) => poseidon2PairHash(a, b);
 
-/** Canonical, domain-separated serialization of an entry → its committed value key. */
-function encodeEntry(e: MemoryEntry): string {
+/**
+ * Canonical, domain-separated serialization of an entry → its committed value key.
+ * Exported so a content-persistence boundary (memory-content-store.ts) can verify a stored
+ * row's `content` actually hashes to the `value` it claims, without re-deriving this format
+ * itself and risking drift from what the tree was actually built against.
+ */
+export function encodeEntry(e: MemoryEntry): string {
   return `pcr.entry.v0|${e.content}|${e.source_id}|${e.source_repid}|${e.hal_verdict}|${e.epoch}`;
 }
 
