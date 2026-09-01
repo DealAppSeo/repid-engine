@@ -3650,3 +3650,51 @@ PRs merged during this run's window (since 2026-09-01T12:32:23Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 33508240819 --log`) if the reason matters.
+
+## Beat 85 — 2026-09-01 · verified PR #575 independently; flagged #576's fallback stub going stale before its own merge; item 3's retrieval endpoint has a second, deeper blocker than the one it just closed
+
+**Step 1 — the "prior beat" here is a failed run (33508240819), not a clean ledger entry.** It
+shipped a real PR (#575) before dying without logging, then the ledger-fallback job auto-generated
+a stub (#576, `(none detected)` for merged PRs). Verified #575 independently rather than trusting
+its own body: `gh pr view 575` → `MERGED` 2026-09-01T12:43:18Z, 8/8 checks `SUCCESS`. Re-ran its
+core claim myself: `grep -rn "hydrateTree\|fromLeaves" src/` outside
+`leanimt-plus.ts`/`memory-root-store.ts` returns zero hits, matching the "shadow-inert, no callers"
+claim. `LeanIMTPlus.fromLeaves()` (`src/memory/leanimt-plus.ts:93`) and
+`memory-root-store.ts`'s `hydrateTree()` (line 62) do what the PR says: turn a fetched
+`agent_memory_leaves` row set back into a live, proof-capable tree — real work, correctly
+described, backlog row 3 updated in the same diff.
+
+**Also found: #576's "(none detected)" was already stale by the time #576 itself merged — the
+same class of gap Beat 84 caught in #570, one layer earlier.** Timestamps: run 33508240819 started
+12:32:23Z, completed (failure) 12:39:45Z. It had already opened #575 at 12:38:53Z before dying, so
+the fallback job's merged-PR query (run ~12:39, before #575's `gh pr merge --auto` had landed) truthfully
+found nothing yet — but #575 merged at 12:43:18Z, four minutes *before* #576 itself merged at
+12:44:38Z. Nobody re-checked the fallback body before merging it, so a factually-wrong "(none
+detected)" shipped to main in a file whose whole purpose is being the trustworthy record. Unlike
+#570 (a PR with no ledger trace at all), #575's substance did land — inside its own diff, updating
+backlog row 3 directly — so the record gap here is narrower: a stale auto-generated line, not a
+silent PR. Worth naming anyway because the fallback job is new (built to catch exactly the #570
+class) and this is its first miss.
+
+**Step 2 — investigated item 3's remaining piece before writing any code (CLAUDE-RULE-1 /
+LESSON 5), and found a second blocker, not just "the route is unwritten."** #575 closed the
+data-structure half (row-set → live prover). What's left per the row's own acceptance test —
+return `(content, inclusionProof, currentValidityProof, root)` — needs a `content` to hand back.
+Checked what actually persists: `agent_memory_leaves` (migration
+`20260828000000_agent_memory_leaves_and_roots.sql`) stores `value`/`next`/`tombstoned`/`leaf_index`
+only — the commitment, never the content it commits to. The one place content DOES live,
+`ProofCarryingMemory`'s in-process `Map` (`src/memory/proof-carrying-memory.ts:62`), doesn't
+survive past the request that built it, so it can't back a real HTTP endpoint. Grepped for a
+persisted content store (`agent_memory_content`, `memory_entries`, `memory_content`, and every
+migration file mentioning `content`) — zero hits tying content to a leaf anywhere in this repo.
+
+**Not attempted this beat.** Where content should live (a new column vs. a new table, keyed by
+value vs. by leaf_index, written at insert time vs. fetched lazily) is a real design decision with
+its own tradeoffs — the same shape as item 8's missing output-confidence scorer (beat 84) and item
+11's missing policy-axes mapping (beat 82): naming the blocker precisely beats guessing an answer
+and wiring a route around it. Backlog row 3 updated in this same PR with the finding so the next
+beat doesn't re-derive it.
+
+**Differs from the step-1 intent** in nothing material — verify #575, then investigate (not build)
+item 3's next piece, which is what happened. No code touched this beat; docs-only, matching the
+remaining turn budget.
