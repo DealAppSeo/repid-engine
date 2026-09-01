@@ -50,6 +50,7 @@ import { easService as realEasService } from '../services/eas-attestation-servic
 import { rootFromCommitments, DEFAULT_HASH_SCHEME } from '../zkp/merkle-root';
 import { markDegraded } from '../lib/degraded';
 import { shouldParkForHalt } from '../services/emergency-halt';
+import { notifyAgentEvent } from '../services/notify';
 
 /* -------------------------------------------------------------------------- */
 /* Types + injectable dependencies (so unit tests need no network / DB)        */
@@ -93,9 +94,22 @@ export interface BatchAuditSink {
   }): Promise<{ error: string | null }>;
 }
 
+/**
+ * Minimal notifier surface. INJECTED rather than imported, for the reason the first draft of
+ * this change discovered the hard way: calling `notifyAgentEvent` directly put a live Supabase
+ * lookup inside the batch loop, which hung every worker test against a database that was not
+ * there. The same shape in production is worse than a slow test — a sluggish lookup would stall
+ * anchoring behind up to a hundred agent reads, on the path that has already moved real money.
+ */
+export interface AgentNotifier {
+  (agentId: string, event: 'anchor_confirmed', message: string, metadata: Record<string, unknown>): Promise<unknown>;
+}
+
 export interface EasAnchorWorkerDeps {
   /** Batch selection (direct pg, hot path). Defaults to the real pgQuery. */
   pgQueryImpl?: typeof realPgQuery;
+  /** Per-agent webhook delivery. Defaults to the real notifier; tests inject a spy. */
+  notifierImpl?: AgentNotifier;
   /** Writeback of uid/tx onto the proof rows. Defaults to the real pgQuery. */
   writebackImpl?: typeof realPgQuery;
   /** EAS client. Defaults to the real easService. */
@@ -145,6 +159,7 @@ export class EasAnchorWorker {
   private readonly writeback: typeof realPgQuery;
   private readonly eas: EasClient;
   private readonly audit: BatchAuditSink;
+  private readonly notify: AgentNotifier;
   private readonly hashScheme: string;
   private readonly batchSize: number;
   private timer: NodeJS.Timeout | null = null;
@@ -155,6 +170,7 @@ export class EasAnchorWorker {
     this.writeback = deps.writebackImpl ?? deps.pgQueryImpl ?? realPgQuery;
     this.eas = deps.easClient ?? realEasService;
     this.audit = deps.auditSink ?? defaultAuditSink();
+    this.notify = deps.notifierImpl ?? (notifyAgentEvent as AgentNotifier);
     this.hashScheme = deps.hashScheme ?? DEFAULT_HASH_SCHEME;
     this.batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
   }
@@ -199,7 +215,7 @@ export class EasAnchorWorker {
    * Writeback: stamp eas_attestation_uid + eas_schema onto every proof row in
    * the batch (by id). This is the liveness signal system_liveness_v reads.
    */
-  async writebackUid(ids: number[], uid: string): Promise<number> {
+  async writebackUid(ids: number[], uid: string): Promise<number[]> {
     const updated = await this.writeback<{ id: number }>(
       `UPDATE repid_zkp_proofs
           SET eas_attestation_uid = $1, eas_schema = $2
@@ -209,7 +225,51 @@ export class EasAnchorWorker {
       [uid, EAS_ANCHOR_SCHEMA_LABEL, ids],
       { retries: 2, label: 'eas-anchor-writeback-uid' },
     );
-    return updated.length;
+    // The IDS, not the count. `AND eas_attestation_uid IS NULL` means a concurrent anchor can
+    // claim some rows first, so this is the authoritative set of proofs THIS batch anchored —
+    // and therefore exactly the set whose agents should be told. Notifying from the selected
+    // batch instead would announce an anchor we did not perform.
+    return updated.map((r) => r.id);
+  }
+
+  /**
+   * Announce `anchor_confirmed` to every agent whose proof this batch actually anchored.
+   *
+   * WHY THIS EXISTS. A proof is retrievable and verifiable seconds after a score event, but its
+   * on-chain attestation lands a couple of minutes later, in a batch. Until now nothing told the
+   * agent when that happened — the only way to find out was to poll the passport and notice a
+   * field had changed. The anchor ladder made the wait HONEST; this makes it OBSERVABLE.
+   *
+   * Deduplicated by agent: one batch holds up to a hundred proofs and several can belong to the
+   * same agent, which would otherwise fire a hundred webhooks announcing one transaction.
+   *
+   * Every failure is swallowed. An unreachable webhook is not a reason to fail a batch whose
+   * money already moved, and `notifyAgentEvent` audits its own real failures.
+   */
+  private async notifyAnchored(
+    rows: UnanchoredProofRow[],
+    writtenBackIds: number[],
+    uid: string,
+    txHash: string | null,
+  ): Promise<void> {
+    try {
+      const anchored = new Set(writtenBackIds);
+      const agentIds = [
+        ...new Set(rows.filter((r) => anchored.has(r.id) && r.agent_id).map((r) => r.agent_id as string)),
+      ];
+      await Promise.allSettled(
+        agentIds.map((agentId) =>
+          this.notify(
+            agentId,
+            'anchor_confirmed',
+            'Your RepID proof is now anchored on chain.',
+            { eas_attestation_uid: uid, tx_hash: txHash, network: 'base-sepolia', anchor_status: 'ANCHORED' },
+          ),
+        ),
+      );
+    } catch (e: any) {
+      console.error(`[eas-anchor] anchor_confirmed notify threw (anchor NOT affected): ${e?.message ?? e}`);
+    }
   }
 
   /**
@@ -294,7 +354,8 @@ export class EasAnchorWorker {
       };
     }
 
-    const rowsWrittenBack = await this.writebackUid(ids, res.uid);
+    const writtenBackIds = await this.writebackUid(ids, res.uid);
+    const rowsWrittenBack = writtenBackIds.length;
     // Audit-row write is best-effort and MUST NOT abort the backfill or lose the
     // already-completed on-chain anchor: the on-chain attest + writeback (liveness)
     // have already landed above. A failed audit-row insert — returned error OR a
@@ -319,6 +380,11 @@ export class EasAnchorWorker {
         `[eas-anchor] batch audit insert THREW (writeback OK, anchor NOT lost) for batch id ${proofIdMin}..${proofIdMax}: ${e?.message ?? e}`,
       );
     }
+
+    // Tell each agent its on-chain receipt landed. STRICTLY best-effort and AFTER the writeback:
+    // the anchor is already durable, and a webhook nobody answers must never cost us one. Same
+    // rule the audit row above follows, for the same reason.
+    await this.notifyAnchored(rows, writtenBackIds, res.uid, res.txHash ?? null);
 
     console.log(
       `[eas-anchor] anchored batch: ${rows.length} proofs (id ${proofIdMin}..${proofIdMax}) ` +
