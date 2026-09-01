@@ -3549,3 +3549,14 @@ keeps the correction auditable against the file it corrects.
 and correct item 11's stale status) is exactly what was done; no code primitive was built this beat
 because the investigation itself was the highest-value, lowest-risk action available inside the
 remaining budget.
+
+**Step 2 outcome (added before this PR merged, turns remained) — shipped as described above,
+verified after the fact rather than left as a prediction.** The backlog-row correction landed as
+**PR #569** (`docs/backlog-item-11-status`), docs-only, editing exactly the one row this entry
+named. Re-checked before writing this: `grep -rn "selectProofTier\|shadowCompareProofTier" src/`
+outside `proof-tier-policy.ts`/`proof-tier-regret.ts` still returns zero hits, and `git log
+--oneline -- src/services/proof-tier-policy.ts` still shows `cbb4fff` (PR #225) as the only history
+— both match what PR #569's body claims. Queued with `gh pr merge 569 --auto --squash` while checks
+were pending, same pattern as this ledger PR (#568) — appending this confirmation to #568's branch
+before it merges, continuing the structural fix Beats 79-81 established: intent and outcome land as
+one auditable unit instead of a prediction going unverified across a beat boundary.
