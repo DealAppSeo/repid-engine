@@ -3560,3 +3560,39 @@ outside `proof-tier-policy.ts`/`proof-tier-regret.ts` still returns zero hits, a
 were pending, same pattern as this ledger PR (#568) — appending this confirmation to #568's branch
 before it merges, continuing the structural fix Beats 79-81 established: intent and outcome land as
 one auditable unit instead of a prediction going unverified across a beat boundary.
+
+## Beat 83 — 2026-09-01 · verified PR #568/#569 independently; item 9 decision (a) closed — free-tier call count, still shadow-inert
+
+**Step 1 — verified Beat 82's two PRs independently, not their own account.** `gh pr view 568
+--json state,mergedAt,statusCheckRollup` → `MERGED` 2026-09-01T01:14:08Z, 8/8 checks `SUCCESS`
+(the ledger PR). `gh pr view 569 --json state,mergedAt,statusCheckRollup` → `MERGED`
+2026-09-01T01:13:56Z, 8/8 checks `SUCCESS` (the backlog-row-11 correction). Re-ran the grep myself
+rather than trusting either PR body: `grep -rn "selectProofTier\|shadowCompareProofTier" src/`
+outside `proof-tier-policy.ts`/`proof-tier-regret.ts` still returns zero hits, matching Beat 82's
+claim. Cross-checked backlog row 11's current text against what #569 claims to have written — they
+match.
+
+**Step 2 intent: close one of item 9's three named follow-up decisions, not build a fifth isolated
+primitive.** Backlog row 9 (`evaluateFreeTierQuota`, beat 81) named three open decisions: (a) where
+the per-provider daily call count is tracked, (b) whether it plugs into `router.ts`'s `cap_hit`
+reason or a distinct one, (c) fail-open-vs-closed when the count is unavailable. (b) and (c) are
+product decisions this loop's hard lines say not to invent unilaterally (they set real behavior on
+a live routing path). (a) is not — it is a factual question with a knowable answer: does the count
+already exist somewhere, or does it need a new column. Investigating rather than assuming (LESSON
+2/5) found the answer is the same shape as `checkCap`'s own $-spend read: count `llm_call_log` rows
+live, via the same table `./llm-calls-24h.ts` already pages through for the cost/efficiency
+dashboards. Built `getFreeProviderCallsToday(provider)`
+(`src/billing/free-provider-call-count.ts`) — a read-only `{count: 'exact', head: true}` query, a
+24h rolling window matching that existing dashboard convention rather than inventing a
+calendar-day-since-midnight second one. 3/3 tests (exact count; null count → 0; propagates a query
+error rather than swallowing it, matching `caps.ts`'s error-swallow being the thing that hid a
+prior incident — see LESSON 3). `npx tsc --noEmit -p .` clean.
+
+**Deliberately still zero callers.** `grep -rn "getFreeProviderCallsToday" src/` finds only its own
+definition and the test — same shadow-inert shape as items 8/10/11. This does not close item 9: it
+answers (a) so a future wiring beat does not have to re-derive it, and leaves (b)/(c) exactly as
+open as Beat 81 left them, named in the backlog row rather than silently dropped.
+
+**Differs from the step-1 intent** in nothing material — the intent (verify #568/#569, then close
+exactly decision (a) without touching (b)/(c) or inventing a `dailyCallCap` default) is what was
+built.
