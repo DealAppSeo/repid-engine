@@ -3596,3 +3596,48 @@ open as Beat 81 left them, named in the backlog row rather than silently dropped
 **Differs from the step-1 intent** in nothing material — the intent (verify #568/#569, then close
 exactly decision (a) without touching (b)/(c) or inventing a `dailyCallCap` default) is what was
 built.
+
+## Beat 84 — 2026-09-01 · verified PR #571/#572 independently; flagged an unlogged merge (#570); item 8's cascade gap is a missing measurement, not a route choice
+
+**Step 1 — verified Beat 83's own PRs independently, not their own account.** `gh pr view 571
+--json state,mergedAt,statusCheckRollup` → `MERGED` 2026-09-01T04:33:31Z, 8/8 checks `SUCCESS`
+(the ledger PR carrying Beat 83's entry). `gh pr view 572 --json state,mergedAt,statusCheckRollup` → `MERGED`
+2026-09-01T04:35:24Z, 8/8 checks `SUCCESS`, title `feat(billing): free-tier daily call-count read —
+item 9 decision (a), no caller yet` — matches what Beat 83 declared it would ship. Re-ran the grep
+myself: `grep -rn "getFreeProviderCallsToday" src/` returns exactly its own definition and its test
+file, confirming the "still zero callers" claim.
+
+**Also found, not claimed by any beat: PR #570 merged 2026-09-01T05:00:07Z, 8/8 checks green,
+`fix(security): bound POST /account/connect before self-serve accounts go live`** — a real,
+tested, additive rate-limiter fix (mount-order verified by mutation per its own body) with no
+corresponding ledger entry anywhere in this file. This is exactly the failure mode this loop's
+prompt was rewritten to prevent (real PRs landing with zero ledger record) — the difference from
+the four documented turn-cap deaths is that this one DID leave a full, reviewable PR body behind
+rather than nothing, so the record gap is here, not the work. Recorded now so the sequence is
+truthful: #570 shipped between Beat 83's ledger PR and this beat, outside this ledger's numbering,
+by a run this file has no other trace of.
+
+**Step 2 intent: investigate item 8's (ANFIS speculative cascade) open wiring question before
+touching `router.ts`.** Backlog row 8 (beat 80) left "which live call sites adopt cascading" as a
+follow-up decision. Read `router.ts`'s `selectRoute` (line 475-490) rather than assume: the
+`anfisConfidence` value it computes is ANFIS's confidence in its OWN routing recommendation,
+produced before any provider call runs — not a score of what a call actually returned.
+`slm-tier.ts`'s `confidence_required` is the same shape, caller-declared policy pre-call. Grepped
+`src/providers/` and `src/services/anfis-router.ts` for any function that scores a completed
+model's output after the fact: zero hits. `runSpeculativeCascade`'s contract
+(`src/providers/speculative-cascade.ts`) requires `draft()`/`escalate()` to return a MEASURED
+`confidence` of their own output — that data source does not exist anywhere in this repo today.
+So "which call site" was the wrong question; the real gap is a missing output-confidence scorer,
+which is new measurement infrastructure, not a routing choice, and building one was not attempted
+this beat (out of scope for the remaining budget and a decision with real design surface of its
+own — how would output confidence even be scored: logprobs, a judge call, self-report?).
+
+**Step 2 outcome — backlog row 8 corrected in
+`reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md`**, same PR as this ledger entry, with the
+finding above: still NEXT, primitive done, but the blocker restated precisely so a future beat
+does not re-ask "which router path" and instead asks "how do we measure a completed call's
+confidence" — a different and harder question, named so it isn't silently assumed away.
+
+**Differs from the step-1 intent** in nothing material. Step 1 additionally surfaced the #570 gap,
+which was not knowable before running `gh pr list`/`gh pr view` against everything merged since
+Beat 83's ledger PR — recorded as found, not pre-declared.
