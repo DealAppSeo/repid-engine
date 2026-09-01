@@ -94,7 +94,7 @@ describe('EasAnchorWorker.runBatch — key missing → DEGRADE loud, no-op', () 
     const eas = makeEas({ hasKey: false });
     const audit = makeAudit();
     const pg = makePgMock({ selectBatches: [[proof(1, 'c')]] });
-    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg });
+    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg, notifierImpl: makeNotifier() });
     const r = await w.runBatch();
     expect(r.status).toBe('degraded');
     expect(r.reason).toMatch(/attester key missing/i);
@@ -103,12 +103,30 @@ describe('EasAnchorWorker.runBatch — key missing → DEGRADE loud, no-op', () 
   });
 });
 
+/**
+ * A notifier spy.
+ *
+ * Injecting one is not optional here and the first draft proved it: without it these tests
+ * construct the worker with the REAL notifier, which does a live Supabase lookup per agent, and
+ * three of them hung to the 5 s jest timeout against a database that is not there. Injecting it
+ * is also what lets the anchor_confirmed behaviour be asserted at all.
+ */
+const makeNotifier = () => {
+  const calls: Array<{ agentId: string; event: string; metadata: Record<string, unknown> }> = [];
+  const fn = async (agentId: string, event: any, _message: string, metadata: Record<string, unknown>) => {
+    calls.push({ agentId, event, metadata });
+    return { event, delivered: false, reason: 'no_webhook' as const };
+  };
+  return Object.assign(fn, { calls });
+};
+
 describe('EasAnchorWorker.runBatch — no un-anchored work', () => {
   it('returns no_work when the batch select is empty', async () => {
     const w = new EasAnchorWorker({
       easClient: makeEas({ hasKey: true }),
       auditSink: makeAudit(),
       pgQueryImpl: makePgMock({ selectBatches: [[]] }),
+      notifierImpl: makeNotifier(),
     });
     const r = await w.runBatch();
     expect(r.status).toBe('no_work');
@@ -122,7 +140,7 @@ describe('EasAnchorWorker.runBatch — success path', () => {
     const eas = makeEas({ hasKey: true, result: { uid: '0xABCUID', txHash: '0xTXHASH' } });
     const audit = makeAudit();
     const pg = makePgMock({ selectBatches: [rows] });
-    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg });
+    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg, notifierImpl: makeNotifier() });
 
     const r = await w.runBatch();
 
@@ -163,7 +181,7 @@ describe('EasAnchorWorker.runBatch — attest yields no uid → deferred, no wri
     const eas = makeEas({ hasKey: true, result: { uid: null, txHash: null, error: 'broadcast failed' } });
     const audit = makeAudit();
     const pg = makePgMock({ selectBatches: [rows] });
-    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg });
+    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg, notifierImpl: makeNotifier() });
 
     const r = await w.runBatch();
     expect(r.status).toBe('deferred');
@@ -182,7 +200,7 @@ describe('EasAnchorWorker.backfill', () => {
   it('logs an estimate and no-ops (returns degraded reason) when key is missing', async () => {
     const eas = makeEas({ hasKey: false });
     const pg = makePgMock({ count: 250, selectBatches: [] });
-    const w = new EasAnchorWorker({ easClient: eas, auditSink: makeAudit(), pgQueryImpl: pg, batchSize: 100 });
+    const w = new EasAnchorWorker({ easClient: eas, auditSink: makeAudit(), pgQueryImpl: pg, batchSize: 100, notifierImpl: makeNotifier() });
     const res = await w.backfill();
     expect(res.batchesRun).toBe(0);
     expect(res.proofsAnchored).toBe(0);
@@ -197,7 +215,7 @@ describe('EasAnchorWorker.backfill', () => {
     const eas = makeEas({ hasKey: true, result: { uid: '0xU', txHash: '0xT' } });
     const audit = makeAudit();
     const pg = makePgMock({ count: 3, selectBatches: [b1, b2, []] });
-    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg, batchSize: 2 });
+    const w = new EasAnchorWorker({ easClient: eas, auditSink: audit, pgQueryImpl: pg, batchSize: 2, notifierImpl: makeNotifier() });
 
     const res = await w.backfill();
     expect(res.stoppedReason).toBe('drained');
@@ -213,7 +231,7 @@ describe('EasAnchorWorker.backfill', () => {
       count: 10,
       selectBatches: [[proof(1, 'a')], [proof(2, 'b')], [proof(3, 'c')]],
     });
-    const w = new EasAnchorWorker({ easClient: eas, auditSink: makeAudit(), pgQueryImpl: pg, batchSize: 1 });
+    const w = new EasAnchorWorker({ easClient: eas, auditSink: makeAudit(), pgQueryImpl: pg, batchSize: 1, notifierImpl: makeNotifier() });
     const res = await w.backfill({ maxBatches: 2 });
     expect(res.batchesRun).toBe(2);
     expect(res.stoppedReason).toMatch(/maxBatches/);
@@ -222,9 +240,108 @@ describe('EasAnchorWorker.backfill', () => {
   it('stops on a deferred batch rather than spinning forever', async () => {
     const eas = makeEas({ hasKey: true, result: { uid: null, txHash: null, error: 'no gas' } });
     const pg = makePgMock({ count: 5, selectBatches: [[proof(1, 'a')]] });
-    const w = new EasAnchorWorker({ easClient: eas, auditSink: makeAudit(), pgQueryImpl: pg, batchSize: 1 });
+    const w = new EasAnchorWorker({ easClient: eas, auditSink: makeAudit(), pgQueryImpl: pg, batchSize: 1, notifierImpl: makeNotifier() });
     const res = await w.backfill();
     expect(res.batchesRun).toBe(0);
     expect(res.stoppedReason).toMatch(/deferred/);
+  });
+});
+
+/**
+ * anchor_confirmed — telling the agent its on-chain receipt landed.
+ *
+ * The push half of the anchor ladder. `PENDING -> ANCHORED` was made honest on the read side;
+ * without this the only way to learn it had happened was to poll the passport and notice.
+ */
+describe('EasAnchorWorker — anchor_confirmed notification', () => {
+  it('notifies each anchored agent exactly once, with the uid and tx', async () => {
+    const rows = [proof(10, 'c10'), proof(11, 'c11')];
+    const notifier = makeNotifier();
+    const w = new EasAnchorWorker({
+      easClient: makeEas({ hasKey: true, result: { uid: '0xABCUID', txHash: '0xTXHASH' } }),
+      auditSink: makeAudit(),
+      pgQueryImpl: makePgMock({ selectBatches: [rows] }),
+      notifierImpl: notifier,
+    });
+
+    await w.runBatch();
+
+    expect(notifier.calls.map((c) => c.agentId).sort()).toEqual(['agent-10', 'agent-11']);
+    expect(notifier.calls.every((c) => c.event === 'anchor_confirmed')).toBe(true);
+    expect(notifier.calls[0]!.metadata).toMatchObject({
+      eas_attestation_uid: '0xABCUID',
+      tx_hash: '0xTXHASH',
+      anchor_status: 'ANCHORED',
+    });
+  });
+
+  it('deduplicates by agent — one transaction is one notification', async () => {
+    // A batch holds up to a hundred proofs and several can belong to one agent. Without the
+    // dedupe that agent's webhook is hit once per proof to announce a single transaction.
+    const rows: UnanchoredProofRow[] = [
+      { id: 20, agent_id: 'same-agent', tier_proven: 'ESTABLISHED', zk_commitment: 'c20' },
+      { id: 21, agent_id: 'same-agent', tier_proven: 'ESTABLISHED', zk_commitment: 'c21' },
+      { id: 22, agent_id: 'same-agent', tier_proven: 'ESTABLISHED', zk_commitment: 'c22' },
+    ];
+    const notifier = makeNotifier();
+    const w = new EasAnchorWorker({
+      easClient: makeEas({ hasKey: true }), auditSink: makeAudit(),
+      pgQueryImpl: makePgMock({ selectBatches: [rows] }), notifierImpl: notifier,
+    });
+
+    await w.runBatch();
+    expect(notifier.calls).toHaveLength(1);
+    expect(notifier.calls[0]!.agentId).toBe('same-agent');
+  });
+
+  it('announces ONLY the rows this batch actually wrote back', async () => {
+    // The writeback is guarded by `AND eas_attestation_uid IS NULL`, so a concurrent anchor can
+    // claim rows first. Notifying from the SELECTED batch instead of the WRITTEN-BACK ids would
+    // announce an anchor this run did not perform — a claim about work someone else did.
+    const rows = [proof(30, 'c30'), proof(31, 'c31'), proof(32, 'c32')];
+    const notifier = makeNotifier();
+    const w = new EasAnchorWorker({
+      easClient: makeEas({ hasKey: true }), auditSink: makeAudit(),
+      pgQueryImpl: makePgMock({ selectBatches: [rows], writebackCount: () => 1 }),
+      notifierImpl: notifier,
+    });
+
+    const r = await w.runBatch();
+    expect(r.rowsWrittenBack).toBe(1);
+    expect(notifier.calls.map((c) => c.agentId)).toEqual(['agent-30']);
+  });
+
+  it('a throwing notifier NEVER costs the anchor', async () => {
+    // The attestation is already mined and the writeback already landed by the time this runs.
+    // An unreachable webhook must not turn a successful anchor into a failed batch.
+    const boom = Object.assign(async () => { throw new Error('webhook exploded'); }, { calls: [] });
+    const audit = makeAudit();
+    const w = new EasAnchorWorker({
+      easClient: makeEas({ hasKey: true, result: { uid: '0xU', txHash: '0xT' } }),
+      auditSink: audit,
+      pgQueryImpl: makePgMock({ selectBatches: [[proof(40, 'c40')]] }),
+      notifierImpl: boom as never,
+    });
+
+    const r = await w.runBatch();
+    expect(r.status).toBe('anchored');
+    expect(r.easUid).toBe('0xU');
+    expect(r.rowsWrittenBack).toBe(1);
+    expect(audit.rows[0]!.status).toBe('anchored');
+  });
+
+  it('a row with no agent_id is skipped, not sent as undefined', async () => {
+    const rows: UnanchoredProofRow[] = [
+      { id: 50, agent_id: null, tier_proven: 'ESTABLISHED', zk_commitment: 'c50' },
+      proof(51, 'c51'),
+    ];
+    const notifier = makeNotifier();
+    const w = new EasAnchorWorker({
+      easClient: makeEas({ hasKey: true }), auditSink: makeAudit(),
+      pgQueryImpl: makePgMock({ selectBatches: [rows] }), notifierImpl: notifier,
+    });
+
+    await w.runBatch();
+    expect(notifier.calls.map((c) => c.agentId)).toEqual(['agent-51']);
   });
 });

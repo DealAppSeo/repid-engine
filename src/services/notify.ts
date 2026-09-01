@@ -77,9 +77,40 @@ async function deliverTelegram(message: string): Promise<NotifyResult['telegram'
   }
 }
 
+/**
+ * The event names a webhook can subscribe to.
+ *
+ * `score_event` is the only one that existed before 2026-08-31; `anchor_confirmed` is added
+ * with the anchor ladder, so a receiver can be told the moment a proof's on-chain attestation
+ * lands rather than polling the passport for it.
+ */
+export const NOTIFY_EVENTS = ['score_event', 'anchor_confirmed', 'timeout_expiration'] as const;
+export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
+
 interface WebhookConfig {
   url: string;
   secret: string;
+  /** null when the column is unset — NOT the same as an empty subscription. See isSubscribed. */
+  events: string[] | null;
+}
+
+/**
+ * Does this webhook want this event?
+ *
+ * EXPLICIT OPT-IN, and the direction is deliberate. An unset or empty `webhook_events` means
+ * NOTHING is delivered, not everything. Two reasons, and the second is the one that matters:
+ *
+ *   1. It matches the only live consumer this codebase already had —
+ *      `(agent.webhook_events || []).includes('score_event')` in the score-event route. A second
+ *      rule disagreeing with the first at the null boundary is how the tier ladder drifted four
+ *      times.
+ *   2. It means ADDING an event type can never surprise an existing subscriber. Someone who
+ *      configured a webhook before `anchor_confirmed` existed cannot start receiving it by
+ *      accident — they have to ask. The opposite default would silently widen every webhook in
+ *      the system the moment this file gained a constant.
+ */
+export function isSubscribed(events: string[] | null | undefined, event: NotifyEvent): boolean {
+  return Array.isArray(events) && events.includes(event);
 }
 
 async function lookupWebhookConfig(builderId: string): Promise<WebhookConfig | null> {
@@ -99,6 +130,11 @@ async function lookupWebhookConfig(builderId: string): Promise<WebhookConfig | n
     return {
       url: String(data.webhook_url),
       secret: String(data.webhook_secret ?? ''),
+      // This column was SELECTed and then thrown away — every caller was told the subscription
+      // list had been consulted when nothing read it. Harmless so far only because this module
+      // had no callers and no agent has a webhook configured; it is load-bearing the moment
+      // either changes, which is now.
+      events: (data.webhook_events as string[] | null) ?? null,
     };
   } catch {
     return null;
@@ -177,5 +213,108 @@ export async function sendNotification(
   return { telegram, webhook };
 }
 
+/* -------------------------------------------------------------------------- */
+/* Agent-addressed delivery — "your on-chain receipt just landed"              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Three outcomes, never two.
+ *
+ * `not_subscribed` and `no_webhook` are NOT failures and must never be audited as drops. A
+ * webhook that deliberately did not ask for this event, recorded as a failed delivery, is a
+ * non-event reported as a fault — the mirror of the defect the anchor ladder just removed, where
+ * a non-answer was reported as a verdict. Only `delivery_failed` means something went wrong.
+ */
+export type AgentNotifyOutcome =
+  | { event: NotifyEvent; delivered: true; status: number }
+  | { event: NotifyEvent; delivered: false; reason: 'no_webhook' | 'not_subscribed' }
+  | { event: NotifyEvent; delivered: false; reason: 'delivery_failed'; status?: number; error?: string };
+
+async function lookupAgentWebhook(agentId: string): Promise<WebhookConfig | null> {
+  try {
+    const { data } = await db
+      .from('repid_agents')
+      .select('webhook_url, webhook_secret, webhook_events')
+      .eq('id', agentId)
+      .maybeSingle();
+    if (!data?.webhook_url) return null;
+    return {
+      url: String(data.webhook_url),
+      secret: String(data.webhook_secret ?? ''),
+      events: (data.webhook_events as string[] | null) ?? null,
+    };
+  } catch {
+    // A lookup failure is not evidence that the agent has no webhook. It returns null so nothing
+    // is delivered, and the caller reports `no_webhook` — which is why the caller must never
+    // treat that as proof of an unsubscribed agent, only as "nothing was sent".
+    return null;
+  }
+}
+
+/**
+ * Deliver one event to ONE agent's webhook.
+ *
+ * Addressed by agent rather than by builder because that is what the event is about: a specific
+ * proof, for a specific agent, just acquired an on-chain attestation. `sendNotification` above
+ * fans out per BUILDER and routes Telegram to a single owner chat — correct for operator alerts,
+ * wrong for telling a user something happened to their own agent.
+ *
+ * This is deliberately webhook-only: no Telegram. Every anchored batch would otherwise page the
+ * owner's chat once per agent, on a worker that runs every five minutes.
+ */
+export async function notifyAgentEvent(
+  agentId: string,
+  event: NotifyEvent,
+  message: string,
+  metadata: NotifyMetadata = {},
+): Promise<AgentNotifyOutcome> {
+  const cfg = await lookupAgentWebhook(agentId);
+  if (!cfg) return { event, delivered: false, reason: 'no_webhook' };
+  if (!isSubscribed(cfg.events, event)) return { event, delivered: false, reason: 'not_subscribed' };
+
+  // `event` is inside the signed body, not just a header: a receiver that dispatches on the event
+  // name must be able to trust it, and a value outside the preimage can be rewritten in transit.
+  const body = JSON.stringify({
+    event,
+    agent_id: agentId,
+    message,
+    metadata,
+    sent_at: new Date().toISOString(),
+  });
+  const signature = createHmac('sha256', cfg.secret).update(body).digest('hex');
+
+  try {
+    const r = await fetchWithTimeout(
+      cfg.url,
+      { method: 'POST', headers: { 'content-type': 'application/json', 'X-Webhook-Signature': signature }, body },
+      NOTIFY_TIMEOUT_MS,
+    );
+    if (r.ok) return { event, delivered: true, status: r.status };
+    await auditDeliveryFailure(agentId, event, { status: r.status });
+    return { event, delivered: false, reason: 'delivery_failed', status: r.status };
+  } catch (e: any) {
+    const error = e?.name === 'AbortError' ? 'timeout' : (e?.message ?? 'unknown');
+    await auditDeliveryFailure(agentId, event, { error });
+    return { event, delivered: false, reason: 'delivery_failed', error };
+  }
+}
+
+async function auditDeliveryFailure(
+  agentId: string,
+  event: NotifyEvent,
+  detail: { status?: number; error?: string },
+): Promise<void> {
+  try {
+    await emitAuditEvent({
+      event_type: 'notification_failed',
+      source_table: 'notifications',
+      source_id: `notify-agent-${agentId}-${event}-${Date.now()}`,
+      payload: { agent_id: agentId, event, ...detail },
+    });
+  } catch {
+    // Auditing a drop must not itself become a throw inside a worker loop.
+  }
+}
+
 // Helpers exposed for tests so they can drive the individual paths.
-export const _internals = { deliverTelegram, deliverWebhook, lookupWebhookConfig };
+export const _internals = { deliverTelegram, deliverWebhook, lookupWebhookConfig, lookupAgentWebhook };
