@@ -64,7 +64,16 @@ only its own definition) — same shadow-inert shape as items 8/10. Three follow
 remain open, not attempted this beat: where the per-provider daily count is actually tracked (new
 column vs. counting `llm_call_log` rows live), whether it plugs into `router.ts`'s existing
 `cap_hit` reason or reports a distinct one, and fail-open-vs-closed when the count is unavailable.
-NOW.** |
+**Decision (a) closed, beat 83, 2026-09-01: counting `llm_call_log` rows live, not a new column.**
+`getFreeProviderCallsToday(provider)` (`src/billing/free-provider-call-count.ts`) is a read-only
+count query — `.eq('provider', ...).gte('created_at', now-24h)` with `{count: 'exact', head:
+true}`, the same table and rolling-24h convention `./llm-calls-24h.ts` already uses for the
+cost/efficiency dashboards, so this is not a second counting convention. 3/3 tests (exact count,
+null-count-returns-0, propagates a query error rather than swallowing it), `npx tsc --noEmit -p .`
+clean. Zero callers (`grep -rn "getFreeProviderCallsToday" src/` finds only its own definition) —
+still shadow-inert, and deliberately so: decisions (b) and (c) — a configured `dailyCallCap` per
+provider, and whether this plugs into `router.ts`'s `cap_hit` reason or a distinct one — are
+product decisions, not plumbing, and stay open. NOW.** |
 | 10 | **P3 EAS anchoring** of `memory_root` per epoch, batched off-peak | #1 | P3 | CC | `agent_memory_roots.eas_uid` populated; on-chain matches local root | **PARTIAL — investigated by beat 76, 2026-08-31. The anchoring primitive is fully built and tested (`anchorMemoryRoot`/`buildMemoryRootAttest`/`decodeAnchorFields`/`verifyMemoryRootAnchor` in `src/memory/memory-root-anchor.ts`), reusing the existing EAS rail with no new schema — but `anchorMemoryRoot(` has exactly one hit in `src/` (its own definition); every other reference is a test or a doc comment. No cron/route/worker calls it. The item-5 migration says so itself: `supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql:23-24,70` leaves `eas_uid`/`anchored_at` null "until backlog item 10 (EAS anchoring) exists to populate them". Same "wired one end only" shape as item 9's off-peak batching — which needs THIS item's caller to have anywhere to plug into. **Update, beat 79, 2026-08-31: the orchestration layer joining items 9+10 now exists —
 `runMemoryRootAnchorSweep` in `src/memory/memory-root-anchor-sweep.ts` (found already pushed to
 `origin/feat/memory-root-anchor-sweep` by a prior session that built and tested it but never
