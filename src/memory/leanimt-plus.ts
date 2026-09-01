@@ -80,6 +80,27 @@ export class LeanIMTPlus {
     this.leaves = [{ value: 0n, next: 0n, tombstoned: false }];
   }
 
+  /**
+   * Hydrate a live, proof-capable tree from an already leaf_index-ordered row set (e.g. a
+   * persisted agent's `agent_memory_leaves`, sorted by `memory-root-store.ts`'s `orderedLeaves`).
+   * Bypasses insert()/revoke() replay: each row already carries its final tombstone state, and the
+   * row set does not preserve original insertion order, so replaying revoke() correctly is not
+   * possible from rows alone. Position IS what the root binds, so leaves are placed at exactly the
+   * index the caller provides them in — the caller is responsible for that ordering being correct.
+   * Throws on an empty list or a index-0 leaf that isn't the untombstoned sentinel, rather than
+   * silently building a tree no root will ever match.
+   */
+  static fromLeaves(leaves: IndexedLeaf[], opts: LeanIMTPlusOpts = {}): LeanIMTPlus {
+    if (leaves.length === 0) throw new Error('LeanIMTPlus.fromLeaves: leaves must be non-empty (index 0 is the sentinel)');
+    const sentinel = leaves[0]!;
+    if (sentinel.tombstoned || sentinel.value !== 0n) {
+      throw new Error('LeanIMTPlus.fromLeaves: leaves[0] must be the untombstoned sentinel (value 0)');
+    }
+    const tree = new LeanIMTPlus(opts);
+    tree.leaves = leaves.map((l) => ({ ...l }));
+    return tree;
+  }
+
   private digest(l: IndexedLeaf): Hex { return this.leafHash(encodeLeaf(l)); }
   private digests(): Hex[] { return this.leaves.map((l) => this.digest(l)); }
   root(): Hex { return referenceRoot(this.digests(), this.pair); }
