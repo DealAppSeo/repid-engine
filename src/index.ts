@@ -9,6 +9,7 @@ import { isAllowedOrigin } from './utils/cors-origins';
 import helmet from 'helmet';
 import { config } from './config';
 import healthRouter from './routes/health';
+import readinessRouter from './routes/readiness';
 import healthExtendedRouter from './routes/health-extended';
 import agentsRouter from './routes/agents';
 import scoreRouter from './routes/score';
@@ -520,6 +521,16 @@ app.use('/api/v1', faucetRouter);
 // authMiddleware for the same reason as the faucet: brand-new visitors
 // have no API key yet. See src/services/email-otp.ts.
 app.use('/api', agentGateRouter);
+
+// PUBLIC FEATURE-FLAG READINESS (2026-09-02). GET /readiness reports which
+// default-OFF flags this deployment actually has on, in status words from a
+// fixed allowlist — never values, never enumerated env. Mounted BEFORE
+// authMiddleware on purpose: the callers who need it are the ones with no key
+// and no dashboard, and the whole point is that a deployment can answer "did my
+// variable take effect" without anyone logging in to Railway to look. Both
+// flags' states are already observable through behaviour or shipped copy; see
+// src/config/flag-readiness.ts for that argument in full.
+app.use(readinessRouter);
 
 app.use(authMiddleware);
 
