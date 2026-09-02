@@ -3820,3 +3820,47 @@ PRs merged during this run's window (since 2026-09-02T12:33:43Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 33630606990 --log`) if the reason matters.
+
+## Beat 89 — 2026-09-02 · verified #583 independently; flagged unlogged non-loop PR #585; building item 3's retrieval route now
+
+**Step 1 — verified Beat 88's ledger PR (#583) independently.** `gh pr view 583
+--json mergedAt,state` → `MERGED` 2026-09-02T08:37:20Z. `gh pr checks 583` → 9/9 `pass`
+(test, crosscheck, zkp-vault, HAL prompt-injection, Strix, gitleaks x2, resident-secrets).
+
+**Checked every PR merged after #583 for the #570/#576/#581 gap class (a real PR with no
+ledger trace).** `gh pr list --state merged --limit 5` shows two: **#584** (the auto-logged
+fallback for run 33630606990 — its own "(none detected)" is correct, since its window starts
+2026-09-02T12:33:43Z, after #583 at 08:37:20Z and before anything else merged) and **#585**
+("'Degrade loudly' now means loudly to a person, not into a log nobody tails", merged
+2026-09-02T19:38:23Z, 9/9 checks pass, touching `src/services/operator-pager.ts`,
+`src/lib/degraded.ts`, `src/routes/health.ts`, `src/hal/quorum-receipt-writer.ts`,
+`src/services/proof-drain-service.ts`). **#585 is real, verified, unrelated to the backlog,
+and unlogged** — same shape as #570/#573/#581 (an interactive Claude Code session landing on
+branch `claude/trust-harness-roadmap-ukdfyo`, the same branch #573 used, not this loop's
+naming convention). Noted rather than absorbed into this ledger's account, per how the prior
+three instances of this gap class were handled.
+
+**The real finding: item 3's retrieval route is still unbuilt after THREE loop-adjacent
+events since #578 (beat 86, 2026-09-01) closed its last blocker.** `grep -rn
+"hydrateTree\|fromLeaves\|verifiedEntry\|memory-content-store" src/ --include=*.ts` outside
+the three primitive/test files: zero hits, unchanged since beat 88 measured the same thing.
+Beat 88 itself declared intent to build it and evidently did not land it before this beat
+started (no PR between #583 and now touches memory/); the auto-fallback run (#584) died
+before step 1; and #585 is real work but on a different backlog item entirely. Backlog row 3
+already names the exact remaining scope precisely (both primitive blockers closed; only the
+authenticated per-agent HTTP endpoint wiring `hydrateTree()` + `verifiedEntry()` together,
+against the agent's latest committed `agent_memory_roots` epoch, is missing) — no further
+investigation needed before writing code.
+
+**Step 2 intent — build it now.** Plan: a pure `retrieveVerifiedMemory(leafRows, contentRows,
+storedRoot)` in a new `src/memory/memory-retrieval.ts` (refuses via `rootMatchesStored` before
+producing any witness, then returns `{root, entries: [{content, ..., inclusionProof,
+currentValidityProof}]}` via `hydrateTree()` + `LeanIMTPlus.membershipProof()` +
+`verifiedEntry()`), tested standalone; then a thin `GET` route that fetches the caller's own
+agent's latest-epoch rows from `agent_memory_roots`/`agent_memory_leaves`/
+`agent_memory_leaf_content` via `(req as any).agent_id` (the DB-issued-key identity
+`middleware/auth.ts` already sets — never a client-supplied agent id, avoiding the exact
+buyer/provider-id-confusion bug class PR #529/#570 already fixed once in this codebase) and
+403s if the caller only holds an operator/env key with no bound agent. On a new branch from
+`origin/main`, within the remaining turn budget; if it does not land this beat, this entry
+already records the verified state so nothing is lost.
