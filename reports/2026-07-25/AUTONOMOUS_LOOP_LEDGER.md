@@ -3737,3 +3737,36 @@ witness — not attempted this beat, to stay inside budget.
 CI to finish landing (auto-merge will complete it on green), per this loop's own turn-budget
 mandate: the ledger must survive even if a later step runs out of turns. If #578's CI goes red,
 the next beat's step 1 verification will catch it — auto-merge does not land a failing check.
+
+## Beat 87 — 2026-09-02 · verified #578/#579 independently; flagged unlogged PR #573; intend to build item 3's retrieval route
+
+**Step 1 — verified Beat 86's own claims, not its account of them.** `gh pr view 579
+--json state,mergedAt` → `MERGED` 2026-09-01T20:30:57Z (the ledger PR carrying Beat 86's entry).
+`gh pr view 578 --json state,mergedAt` → `MERGED` 2026-09-01T20:32:38Z, 8/8 checks pass. Re-ran the
+"zero callers" claim myself: `grep -rn "memory-content-store\|verifiedEntry" src/` returns only the
+module's own definition and its test file — matches. `npx tsc --noEmit` not re-run this beat
+(no source changed since #578's own green run); trusted the merged CI result rather than
+re-deriving it, per LESSON 1's proportionality note in this loop's own contract.
+
+**Also found, same gap class as #570 and #576: PR #573 merged 2026-09-01T21:33:12Z — AFTER #578/#579
+— with no ledger entry anywhere in this file.** `gh pr view 573` →
+`feat(notify): tell an agent when its on-chain receipt lands, instead of making it poll`, MERGED,
+7/7 checks `SUCCESS` (`zkp-vault`, `HAL prompt-injection / jailbreak probes`, `crosscheck`,
+`gitleaks` x2, `test`, `resident-secrets`). Checked its central claim rather than trusting the PR
+body: `sendNotification`/`notifyAgentEvent` previously had zero callers per this ledger's own
+history (item list never named it) — now `grep -rn "notifyAgentEvent" src/` shows a real caller,
+`src/workers/eas-anchor-worker.ts:53,173`, wired via an injectable `notifierImpl` (so worker tests
+don't hit a live Supabase — the PR body names this as a design fix over its own first draft). Wired
+both ends, tested, green — a real, complete PR, just missing from this record. Recorded here so the
+sequence stays truthful; the work is not in question, only the ledger's coverage of it.
+
+**Step 2 intent — attempt item 3's now-fully-scoped remaining piece: the authenticated per-agent
+retrieval route.** Backlog row 3 states both blockers its acceptance test named are closed at the
+primitive level (`hydrateTree`/`fromLeaves` from #575, `memory-content-store.ts` from #578) and
+names the exact remaining scope: an HTTP endpoint that fetches one agent's `agent_memory_leaves` +
+`agent_memory_leaf_content` rows, calls `hydrateTree()`, produces a witness per entry via
+`verifiedEntry`, and returns `(content, inclusionProof, currentValidityProof, root)`. This is the
+top OPEN backlog item and unblocks item 4 (answer-binding, the Patent #1 keystone) per the
+priority rule. Not yet started as of this entry — building it now, on a new branch, within the
+remaining turn budget; if it does not fit, this entry already records the verified prior state so
+nothing is lost.
