@@ -89,6 +89,7 @@ import { startReleaseRetryWorker } from './services/x402-release-retry-worker';
 import { startStatusDigest } from './services/status-digest';
 import { startHealthProbeWorker } from './workers/health-probe-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
+import { announcePagerStatus } from './services/operator-pager';
 import { easAnchorWorker } from './workers/eas-anchor-worker';
 import { x402Metrics } from './observability/x402-metrics';
 
@@ -788,6 +789,10 @@ const IS_TEST = process.env.NODE_ENV === 'test';
 
 if (!IS_TEST) {
   app.listen(port, '0.0.0.0', () => {
+    // Say ONCE, at boot, whether failures will actually reach a person. If this line says NOT
+    // ARMED then every guarantee downstream of it is void and the process will fail as silently
+    // as it did before — which is precisely the state this is here to make impossible to miss.
+    announcePagerStatus();
     console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
     console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
 
