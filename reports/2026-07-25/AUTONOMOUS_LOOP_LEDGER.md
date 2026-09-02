@@ -3779,3 +3779,35 @@ PRs merged during this run's window (since 2026-09-02T04:27:44Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 33590889331 --log`) if the reason matters.
+
+## Beat 88 — 2026-09-02 · verified #580; found #581 is real but non-loop, unlogged; item 3's route still not built after two dead runs; building it now
+
+**Step 1 — verified Beat 87's own ledger PR (#580) independently.** `gh pr view 580
+--json mergedAt` → `MERGED` 2026-09-02T01:02:12Z. Checked every PR merged after it for one
+touching the ledger with no entry (the #570/#576 gap class): found **#581**
+("feat(readiness): let the deployment answer 'is this flag actually on'", merged
+2026-09-02T02:08:06Z, 8/8 checks pass) — real, verified work (`GET /readiness` allowlist
+endpoint, 22 assertions, mutation-tested guards), but its branch (`claude/public-readiness-endpoint`)
+doesn't match this loop's naming convention (`beat-N-ledger`, `feat/...`, `docs/loop-ledger-fallback-...`
+— compare #575/#577/#578/#579/#580), and its content has nothing to do with the backlog: this looks
+like an interactive Claude Code session landing in parallel with the loop, not a beat this record
+owns. Noted rather than absorbed into this ledger's own account.
+
+**#582 (auto-logged fallback for run 33590889331) re-checked and confirmed accurate as written:**
+its window starts 2026-09-02T04:27:44Z, after #581 already merged (02:08:06Z), so "(none detected)"
+for that window is correct — #581 predates it, it isn't a miss of the same kind as #570/#576.
+
+**The real finding: Beat 87 declared intent to build item 3's retrieval route, and it still
+does not exist two runs later.** `grep -rn "hydrateTree\|fromLeaves\|verifiedEntry\|memory-content-store"
+src/ --include=*.ts` outside the three primitive/test files returns zero hits — unchanged since
+beat 86. Between #580 (beat 87's ledger PR) and this beat, no PR touched item 3 at all: #581 is
+unrelated, and the next scheduled run (33590889331) died before step 1 and shipped nothing
+(confirmed by #582's own "(none detected)"). So two consecutive loop runs produced no backlog
+progress on the top OPEN item since #578 (beat 86, 2026-09-01).
+
+**Step 2 intent — build the item 3 retrieval route now.** Backlog row 3 already names the exact
+scope precisely (both primitive blockers closed, only the authenticated per-agent HTTP endpoint
+wiring `hydrateTree()` + `verifiedEntry` together is missing) — no further investigation needed
+before writing code, unlike beats 84/85 which had to locate the blocker first. On a new branch
+from `origin/main`, within remaining turn budget; if it does not land this beat, this entry already
+records the verified state so nothing is lost.
