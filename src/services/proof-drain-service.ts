@@ -14,6 +14,7 @@ import {
   parseProofDrainChurnMode,
   type ProofDrainChurnMode
 } from './proof-drain-churn-guard';
+import { pageOperator } from './operator-pager';
 
 export interface ProofDrainServiceConfig {
   supabase: SupabaseClient;
@@ -386,6 +387,18 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
         // Better still would be a surface that runs this rather than a comment someone must
         // remember to paste. Deliberately not bundled: a /health field is a public-payload
         // change and belongs in its own review.
+        //
+        // 2026-09-01 — THE PAGE. The paragraph above is right that a console line is not an
+        // alarm, and it stayed right for the twelve days after it was written. This branch now
+        // reaches a person. The reason string is deliberately STABLE (agent and job id go in
+        // the detail payload, not the dedupe key) so a systemic failure — which is what this
+        // always is, since it fires on a type mismatch that affects every write — pages once an
+        // hour instead of once per job.
+        pageOperator(
+          'proof-drain',
+          'canonical write rejected: proofs are minting but are NOT readable by passport/CLI/badge',
+          { pgcode: (error as { code?: string }).code ?? 'unknown', agent_id: args.agentId, job_id: args.jobId ?? null },
+        );
         console.error(
           `[ProofDrain][CANONICAL_WRITE_FAILED] repid_zkp_proofs INSERT rejected for agent=${args.agentId} ` +
             `job=${args.jobId ?? 'none'} pgcode=${(error as { code?: string }).code ?? 'unknown'} — ` +

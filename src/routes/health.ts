@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { config } from '../config';
 import { testHashKeyConnection } from '../engine/hashkey-chain';
+import { pagerStatus } from '../services/operator-pager';
 
 const router = Router();
 
@@ -92,6 +93,11 @@ router.get('/health', async (req: Request, res: Response) => {
     hashkeyBlockNumber: (hashkey as any).blockNumber,
     hashkeyChainId: (hashkey as any).chainId,
     deployerConfigured: !!config.deployerPrivateKey,
+    // Is anything actually watching this process? An unconfigured pager is a monitoring system
+    // that is silently not monitoring — the same defect it exists to catch, one level up. Public
+    // because it must be answerable WITHOUT dashboard access; it exposes only whether the env
+    // vars are set, never their values.
+    operator_pager: pagerStatus(),
     engine: 'HyperDAG RepID Scoring Engine',
     protocol: 'hyperdag.dev',
     validation_queue: {

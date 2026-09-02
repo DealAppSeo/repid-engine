@@ -36,6 +36,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { familyOfResolved, type FactCheckResult, type ProviderVerdict } from './fact-check';
+import { pageOperator } from '../services/operator-pager';
 
 /** Row shape for `public.hal_quorum_receipts` (mirrors migrations/2026-07-13-hal-quorum-receipts.sql). */
 export interface QuorumReceiptRow {
@@ -126,13 +127,35 @@ export function buildQuorumReceipt(
   const familiesUnmapped = result.families_unmapped ?? [];
   const familiesUsed = result.families_used ?? families.length;
 
+  const quorumMet = ctx.quorumMet ?? familiesUsed >= MIN_QUORUM_FAMILIES;
+
+  // A FAILED QUORUM PAGES THE OPERATOR, and the trigger is the system's OWN gate rather than a
+  // provider count someone picked.
+  //
+  // MEASURED 2026-09-01 across 44 events / 30 days: provider participation ranges 2..5 and
+  // families 2..5, and `quorum_met` was TRUE at every single point — including at 2 providers /
+  // 2 families. A hand-chosen floor of 3 would therefore have paged on 15 of those 44 events
+  // (34%) that the system itself considers healthy, which is how a channel gets muted. There is
+  // no defensible provider-count floor in this data; `familiesUsed < MIN_QUORUM_FAMILIES` is the
+  // one boundary that never fired in normal operation, so it is the one worth waking someone for.
+  //
+  // (Sample is small — 44 events in 30 days. It is enough to rule OUT a floor above 2, which is
+  // what it is used for here; it is not enough to characterise the tail.)
+  if (!quorumMet) {
+    pageOperator(
+      'hal',
+      'cross-provider quorum NOT met — a verdict was produced without the family diversity the gate requires',
+      { families_used: familiesUsed, providers_used: result.providers_used, min_families: MIN_QUORUM_FAMILIES },
+    );
+  }
+
   const receipt: QuorumReceiptRow = {
     score_event_id: ctx.scoreEventId ?? null,
     quorum_id: ctx.quorumId,
     agent_id: ctx.agentId ?? null,
     decision: result.decision,
     scoring_decision: ctx.scoringDecision ?? coarseScoringDecision(result.decision),
-    quorum_met: ctx.quorumMet ?? familiesUsed >= MIN_QUORUM_FAMILIES,
+    quorum_met: quorumMet,
     families_used: familiesUsed,
     providers_used: result.providers_used,
     families,
