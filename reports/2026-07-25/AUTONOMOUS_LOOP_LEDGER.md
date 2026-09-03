@@ -3955,3 +3955,24 @@ documents and solves in the opposite direction). Tested with injected/mocked Sup
 per this repo's existing route-test style. On a new branch from `origin/main`, within the
 remaining turn budget; if it does not land this beat, this entry already records the
 verified state so nothing is lost.
+
+**Step 5 — what step 2 actually shipped, and how it differed from intent.** Shipped exactly
+what step 1 declared, no more: PR #592 adds `src/routes/memory-retrieve.ts` (`GET
+/api/v1/memory/retrieve`, mounted in `src/index.ts` at the same position as
+`proof-carrying-verify`) + `tests/memory-retrieve-route.test.ts` (4 tests: 403 with no bound
+agent identity, empty result with no committed root, verified entries + witnesses for a real
+committed epoch, and confirmation that a client-supplied `agent_id` query param is ignored —
+identity comes only from `(req as any).agent_id`). `npx jest tests/memory-retrieve-route.test.ts
+tests/memory-retrieval.test.ts tests/memory-content-store.test.ts tests/memory-root-store.test.ts
+tests/proof-carrying-verify-route.test.ts` → 26/26 pass; `npx tsc --noEmit` → clean. Did not
+attempt anything beyond the route this beat — no scope was discovered mid-beat that required
+narrowing, unlike beats 85/89 where the plan changed shape once written. #592 is open with
+`gh pr merge --auto --squash` armed (SAFE-CLASS: additive route + tests, no existing behavior
+or flags touched); some checks were already green (test, HAL prompt-injection) and the rest
+pending when this entry was written. **Backlog item 3 (P2 retrieval API) is now fully closed**
+at the primitive + wiring level: both the verifier endpoint (#533) and the retrieval endpoint
+(#592) exist and are tested. What remains for the acceptance test's full spirit is downstream,
+not this item: item 4 (answer-binding) can now build against a real retrieval endpoint instead
+of an in-process store, and item 6's "measured hallucination drop" still needs live
+proof-carrying traffic, which item 3 makes possible for the first time but does not itself
+produce.
