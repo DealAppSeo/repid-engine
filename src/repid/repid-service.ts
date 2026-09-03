@@ -9,6 +9,24 @@
  *   - repid_agents IS canonical (NOT agent_repid — that is stale)
  *   - repid_standings view reads from agent_repid (known bug; do not propagate)
  *
+ * HOW WRONG THAT VIEW IS, since "known bug" reads as a rounding error and it is not
+ * [MEASURED 2026-09-03]. `agent_repid` has been frozen since early June: its newest
+ * activity timestamp is months old. Of the agent names present in BOTH it and the
+ * canonical table, the score disagrees on EVERY ONE — not most, all — and the view
+ * covers well under half the agents that exist. So `repid_standings` is not a lagging
+ * leaderboard, it is a different and uniformly incorrect one.
+ *
+ * NOTHING IN THIS REPOSITORY READS EITHER [MEASURED 2026-09-03] — the only mention of
+ * `repid_standings` in `src/` is this comment. But that is a NEGATIVE finding about
+ * this codebase, not about the database: the view is still there, and anything else
+ * with a connection (another service, a dashboard, a human running SQL, an external
+ * consumer) gets those numbers and has no way to know. Absence of a reader HERE is not
+ * absence of a reader, and this class of finding decays silently because someone can
+ * add the reader without touching this file. Re-run the check before repeating it.
+ *
+ * Fixing or dropping the view is DDL against a shared database with consumers this
+ * repo cannot see, so it is not done here on its own initiative.
+ *
  * The service is a thin read-only adapter for the new `/api/v1/repid/*`
  * routes that Sprint R-G (Gemini) calls into.
  */

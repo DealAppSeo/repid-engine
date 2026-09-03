@@ -1,0 +1,130 @@
+-- ══════════════════════════════════════════════════════════════════════════════
+-- DO NOT RUN. NEUTRALISED 2026-09-03. Renamed off `.sql` so no runner or glob can
+-- pick it up, and every statement below is commented out. Kept, not deleted: the
+-- five UIDs it names are genuinely ours and the record of them is worth having.
+-- ══════════════════════════════════════════════════════════════════════════════
+--
+-- THE UIDS ARE REAL. Re-verified on Base Sepolia 2026-09-03: all five resolve,
+-- minted by this system's own attester under its own schema, on-chain timestamps
+-- matching their rows to within a minute. Unlike the 2026-06-03 file beside this
+-- one, nothing here borrows another project's evidence. That file is the reason
+-- the guard exists; this one is a different and subtler failure.
+--
+-- THE FAILURE IS THAT THE SQL DOES NOT IMPLEMENT ITS OWN HEADER. The comments map
+-- each UID to a specific proof id, agent and tier. The statements do not: each is
+--
+--     WHERE merkle_root = <batch root> AND eas_attestation_uid IS NULL LIMIT 1
+--
+-- an UNORDERED predicate with LIMIT 1. Which UID lands on which row is whatever
+-- the planner returns. A documented mapping that the code does not enforce is a
+-- claim nobody is checking.
+--
+-- AND TODAY IT WOULD RELIABLY HIT THE WRONG ROWS [MEASURED 2026-09-03]. The five
+-- rows the header names already carry these UIDs, so `AND eas_attestation_uid IS
+-- NULL` now EXCLUDES exactly its intended targets. Thousands of other rows share
+-- that batch merkle root and have no UID, so a run today would attach five real
+-- attestations to five arbitrary OTHER proofs — and the mapping in this header
+-- would silently become false. The guard clause was written assuming the targets
+-- were empty; they are not, so it now selects against its own intent.
+--
+-- NOT ONE ROW UNDER THAT MERKLE ROOT IS REAL. Every proof sharing it is
+-- `is_real = false`. So the whole batch this file exists to "drive anchored from
+-- 5 to >=10" is simulated, and raising a count of anchored proofs by stamping
+-- more simulated rows raises the number without raising the evidence. That is the
+-- metric moving on its own.
+--
+-- WHAT ACTUALLY HAPPENED TO THE FIVE. They carry the exact mapping this header
+-- documents, which an unordered LIMIT 1 would not reliably produce — consistent
+-- with the real land path (`scripts/land-eas-real.ts`) having written them, and
+-- with this file's own "STAGED only, do not apply" instruction having been
+-- honoured. They are the five proofs now reported as `ANCHORED_INELIGIBLE`
+-- rather than `ANCHORED` (`src/services/anchor-status.ts`): a real attestation
+-- over a proof that was never eligible for one. Left alone they read exactly like
+-- a genuine anchored proof.
+--
+-- IF A DEMO NEEDS ANCHORED PROOFS, MINT THEM. `easAnchorWorker` batches to a
+-- Merkle root and one attestation covering a hundred proofs measured at roughly
+-- $0.0066 in gas. Backfilling a count has never been cheaper than earning it.
+--
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ORIGINAL CONTENT BELOW, UNMODIFIED AND INERT.
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- PHASE C1 (PATH_TO_SHAREABLE 2026-06-05): EAS backfill to drive anchored from 5 to >=10 real UIDs.
+-- Real UIDs from CC fire (verified payload-match on easscan via getAttestation decode == merkle/agent/tier).
+-- Staged only (Sean applies after key provision + land-eas-real if fresh ones, or direct).
+-- When applied: eas_anchored >=10 for qualifying (merkle_root NOT NULL) rows.
+-- Verify: redTeamPayloadMatch (or easscan view) for each; all PAYLOAD_MATCH for the batch merkle.
+-- No fakes; all UIDs real on Base Sepolia, attester funded 0x4F8AD3fB35473b6DEA0559FfbbDe034e2Db504fb.
+-- Rollback: the UPDATEs are reversible if needed (set back to NULL for the ids, but use before/after query).
+
+-- Known batch (from CC 2026-06-04 EAS fire report, 5 UIDs, shared merkle for the attested batch):
+-- merkle_root = 0xd2b8538e9eeec69b1347d14b44d5d1c08ac0a97a2d881ce3ecc37519adb4aea3
+-- schema = constitutional-compliance-v1
+-- UIDs + proofId + agent short + tier:
+-- 0xc5057e7ebd2a7f3d96e5132e1c06da07c17c31e4fda706a1e83f954731c14023 (30879, 32e0e809…d6626, ESTABLISHED)
+-- 0x8a01a97ad65990a9a08be21f727c6da2b88df3995992859833d59fb799c0e7cc (30878, 57a2f83a…0be5, EARNING)
+-- 0x11100c140aa2e9bda99c0ea2d999c106fa63f3ef5dd23ddbdebfd1ba475724ed (30877, 57a2f83a…0be5, EARNING)
+-- 0xb4bb2cabc1326c39e9be6437c47f10503735093ba295d319a3cd39e7b9aba6d1 (30876, 32e0e809…d6626, ESTABLISHED)
+-- 0x20b10434d23e71c8507f6418480c0175235d0a5290b7e9a1deeb7ca53851ce72 (30875, 942860a6…e1e8c, EARNING)
+
+-- Previous 5 anchored (from ground) + these 5 = 10.
+-- The migration assigns the 5 real UIDs to 5 additional qualifying rows sharing the batch merkle (LIMIT to pick distinct).
+-- After apply + optional fresh land with key for more: count >=10, all verifiable on easscan.
+
+-- Verify before/after (Sean):
+-- SELECT count(*) FROM repid_zkp_proofs WHERE eas_attestation_uid IS NOT NULL;  -- expect +5
+-- Then for each new uid, use redTeamPayloadMatch or easscan + decode to confirm.
+
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0xc5057e7ebd2a7f3d96e5132e1c06da07c17c31e4fda706a1e83f954731c14023',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root = '0xd2b8538e9eeec69b1347d14b44d5d1c08ac0a97a2d881ce3ecc37519adb4aea3'
+--   AND eas_attestation_uid IS NULL
+-- LIMIT 1;
+
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0x8a01a97ad65990a9a08be21f727c6da2b88df3995992859833d59fb799c0e7cc',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root = '0xd2b8538e9eeec69b1347d14b44d5d1c08ac0a97a2d881ce3ecc37519adb4aea3'
+--   AND eas_attestation_uid IS NULL
+-- LIMIT 1;
+
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0x11100c140aa2e9bda99c0ea2d999c106fa63f3ef5dd23ddbdebfd1ba475724ed',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root = '0xd2b8538e9eeec69b1347d14b44d5d1c08ac0a97a2d881ce3ecc37519adb4aea3'
+--   AND eas_attestation_uid IS NULL
+-- LIMIT 1;
+
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0xb4bb2cabc1326c39e9be6437c47f10503735093ba295d319a3cd39e7b9aba6d1',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root = '0xd2b8538e9eeec69b1347d14b44d5d1c08ac0a97a2d881ce3ecc37519adb4aea3'
+--   AND eas_attestation_uid IS NULL
+-- LIMIT 1;
+
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0x20b10434d23e71c8507f6418480c0175235d0a5290b7e9a1deeb7ca53851ce72',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root = '0xd2b8538e9eeec69b1347d14b44d5d1c08ac0a97a2d881ce3ecc37519adb4aea3'
+--   AND eas_attestation_uid IS NULL
+-- LIMIT 1;
+
+-- To reach exactly 10+ from current 5, the above adds 5 (distinct rows with the batch merkle).
+-- If more qualifying with this merkle, can extend LIMIT or repeat for fresh UIDs from land-eas-real (run with key).
+-- After apply, re-verify with:
+-- SELECT id, agent_id, tier_proven, merkle_root, eas_attestation_uid FROM repid_zkp_proofs WHERE eas_attestation_uid IN ('0xc5057e7e...','0x8a01a9...') ;
+-- Then for each, call redTeamPayloadMatch(row) or manual easscan decode == row.merkle etc.
+
+-- Rollback (Sean):
+-- UPDATE repid_zkp_proofs SET eas_attestation_uid = NULL, eas_schema = NULL WHERE eas_attestation_uid IN (the 5 UIDs above) AND created_at < now(); -- or specific ids if known pre-apply.
+
+-- References:
+-- CC_REPORT_2026-06-04_EAS_FIRE.md (the 5 UIDs + shared merkle + attester + PAYLOAD_MATCH all 5)
+-- scripts/land-eas-real.ts (the real land path + redteam)
+-- src/services/eas-attestation-service.ts (redTeamPayloadMatch + getAttestation decode)
+-- easscan links: https://base-sepolia.easscan.org/attestation/view/<uid>
+-- Plan: E:\dev\sprints\2026-06-05\PATH_TO_SHAREABLE_2026-06-05.md Phase C1
+
+-- This is STAGED only. Do not apply without Sean co-sign (D-057). Verify LIVE post-apply.

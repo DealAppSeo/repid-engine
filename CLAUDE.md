@@ -66,7 +66,7 @@ npx jest --config jest.config.js tests/repid-score.test.ts   # single file
 npx jest --config jest.config.js -t "<test name substring>"  # single test by name
 ```
 
-**`--config jest.config.js` is not optional.** The repo has *both* a `jest.config.js` and a vestigial `jest` key in `package.json`, so a bare `npx jest ...` aborts with *"Multiple configurations found … Implicit config resolution does not allow multiple configuration files."* `npm test` works only because the script already passes the flag. (The real fix is to delete one of the two configs; until someone does, pass the flag.)
+**`--config jest.config.js` is now redundant, and harmless.** This paragraph used to say the flag was *not optional*: the repo carried **both** a `jest.config.js` and a vestigial `jest` key in `package.json`, so a bare `npx jest ...` aborted with *"Multiple configurations found … Implicit config resolution does not allow multiple configuration files."* It ended "the real fix is to delete one of the two configs; until someone does, pass the flag" — and nobody did, for long enough that the workaround became the documented interface. **Deleted 2026-09-03**; the `package.json` key was dead weight (a bare `preset`/`testEnvironment` pair that named no roots and would have run a different, smaller set of tests had it ever won). `npm test` still passes the flag and the commands above still work verbatim; a bare `npx jest` now also resolves. A durable workaround for a one-line fix is a lesson about workarounds, not about jest.
 
 `SUPABASE_URL` and a service key are required at boot — `src/config.ts:46` throws otherwise (it accepts `SUPABASE_SECRET_KEY`, or a legacy `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SERVICE_KEY` fallback). **No `.env` is committed, and `.env` is gitignored** — `.env.example` is the only env file in the tree and it ships those two values *empty*. So a fresh clone does **not** boot, and several test suites fail at import rather than skipping. Export dummies yourself for local work:
 
@@ -84,15 +84,45 @@ gate on `RUN_INTEGRATION=1`, never on credential presence — see
 
 Real credentials come from Railway env vars at deploy; never commit them.
 
-## Test layout — important quirk
+## Test layout
 
-There are **three** categories of test directory in this repo, and only two of them run:
+**Every `*.test.ts` under `tests/` and under `src/**/__tests__/` runs.** `jest.config.js`
+roots at `['<rootDir>/tests', '<rootDir>/src']` and matches `**/*.test.ts`. New tests may
+be colocated or live in `tests/`; both are covered.
 
-- `tests/*.test.ts` — runs. This is where new tests belong.
-- `src/hal/lib/__tests__/*.test.ts` — **also runs.** `jest.config.js` pins `roots: ['<rootDir>/tests', '<rootDir>/src/hal/lib/__tests__']`, so this one `__tests__` directory (2 files: `adversarial`, `comma-override`) is covered. Don't assume changes under it are untested.
-- Every *other* `src/**/__tests__/` — **not picked up by `npm test`.** There are six such directories (`src/billing`, `src/layers`, `src/providers`, `src/routes`, `src/services`, `src/services/reputation`) and jest never sees them. They also get compiled into `dist/` because `tsconfig.json` only excludes the top-level `tests/` directory, not `__tests__` subfolders.
+**This section used to describe a quirk, and the quirk was a hole [CLOSED 2026-09-03].**
+`roots` named ONE directory under `src` by hand, so six other `src/**/__tests__`
+directories holding 52 assertions were executed by nothing — no local run, no CI — and
+this file recorded that as a layout note rather than a defect. What it cost, once they
+were finally run: **18 of the 52 failed**, and three of the files had gone actively wrong
+in ways a running test would have prevented.
 
-If you add tests, put them under `tests/` to make them run. If you touch a file under one of the six unrooted `__tests__` folders, decide explicitly whether to relocate it or extend the jest `roots` — a green `npm test` says nothing about it.
+- Two asserted the **tuned RepID constants** as literal expected values. Those are exactly
+  what `src/config/scoring-params.ts` exists to keep out of a PUBLIC repo; that refactor
+  stripped them from `src/layers/*.ts` and missed the tests. A third carried a tuned base
+  reward inside a loose inequality and **passed**, so it was never looked at.
+- One asserted, as correct, the cost-**fabrication** behaviour a published retraction
+  exists to prevent (an unpriced model inheriting another model's rate). Had it been
+  running, it would have BLOCKED that fix.
+- Two were unit tests making **live Supabase calls** on a fail-open path, so their verdict
+  tracked network conditions rather than the logic they claimed to test.
+
+The lesson is not "add the directory". A hand-maintained root list fails **silently and in
+the safe-looking direction**: a new `src/foo/__tests__` is simply never run, every suite
+stays green, and the gap is invisible precisely where a test is most likely to be
+colocated with new code. Rooting at `src` is a discovery rule — the next one is picked up
+with no config change and nobody to remember. Prefer a discovery rule to a list anywhere
+this pattern appears.
+
+`tests/scoring-tuning-not-in-repo.test.ts` now enforces the tuning rule mechanically: a
+test asserting an exact value out of a tuned scorer must pin its own parameters
+(`__resetScoringParamsCache` + env), because otherwise its expected number is either a dev
+placeholder (worthless) or production tuning (a leak). Its value-scan half reports
+**NOT_CHECKED** out loud wherever the real parameters are not in the environment — a green
+run there is not evidence the values are absent.
+
+`tsconfig.json` still compiles `src/**/__tests__` into `dist/` (it excludes only the
+top-level `tests/`). Unchanged by the above, and not currently harmful.
 
 ## Architecture
 
@@ -276,7 +306,16 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 ### Table rules (CLAUDE-RULE-5)
 - Canonical agent table: repid_agents (NOT agent_repid — that is stale)
 - Canonical score table: repid_score_events
-- repid_standings view reads from agent_repid — this is a known bug, do not propagate it
+- repid_standings view reads from agent_repid — this is a known bug, do not propagate it.
+  **"Known bug" understates it [MEASURED 2026-09-03]:** `agent_repid` has been frozen
+  since early June, the score disagrees with the canonical table on EVERY agent name
+  present in both — not most, all — and the view covers well under half the agents that
+  exist. It is not a lagging leaderboard; it is a uniformly incorrect one. Nothing in
+  `repid-engine/src` reads either table (only a warning comment names the view), but
+  that is a negative finding about THIS repo, not the database: the view is still there
+  for any other consumer, and a negative finding decays silently because someone can add
+  the reader without touching this file. Re-run before repeating. Dropping or repointing
+  the view is DDL against a shared database with consumers this repo cannot enumerate.
 - trinity_tasks.id is BIGINT not UUID
 - NEVER assume column names — read schema first or ask
 

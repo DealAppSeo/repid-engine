@@ -111,6 +111,7 @@ import { attestationExtractorMiddleware } from './middleware/attestation-extract
 import { versioningMiddleware } from './middleware/versioning';
 import { emergencyHaltMiddleware } from './middleware/emergency-halt';
 import { scoreMonitor } from './engine/score-monitor';
+import { checkStrandedVesting, lastVestingCheck } from './services/vesting-monitor';
 import { refreshModelCatalog, CATALOG_REFRESH_MS } from './hal/model-catalog';
 import { refreshDeadModelEvidence } from './hal/dead-model-evidence';
 
@@ -882,6 +883,38 @@ async function checkStalledAndAlert() {
 if (!IS_TEST) {
   setInterval(checkStalledAndAlert, 60*60*1000);
   checkStalledAndAlert();
+}
+
+// Stranded-vesting monitor — hourly. Reads agents, writes only an operator alert.
+//
+// Asks the one question nobody was asking: is earned RepID sitting past its own
+// vesting cliff, uncredited? Measured 2026-09-03, the answer had been yes for
+// months and nothing surfaced it, because a stranded balance is silent from every
+// direction — plausible score, healthy row, and no query joining the balance to
+// the date.
+//
+// It lives here rather than in CI because CI's database is the disposable TEST
+// project: run there it would find nothing and report a green that proves nothing
+// about production. This process already holds the real credentials.
+//
+// GATED, and the first version of this block was not. It argued the gate "exists to
+// stop WRITES during a halt, and this performs none" — which is false twice over.
+// The monitor DOES write: a finding pages the operator, and the pager's record
+// channel inserts a row. And `tests/emergency-halt.test.ts` pins coverage PER LOOP
+// precisely because index.ts once had six loops hiding behind one plausible-sounding
+// file exemption, found by an independent verifier and not by review. Reasoning your
+// way out of a safety pin on first contact with it is how that happened; the cost
+// here is one paused hourly observation during a halt, which is meant to be short.
+//
+// Gated INSIDE the function rather than at the setInterval, because it is also
+// invoked once at boot — gating only the schedule would leave that call live.
+async function vestingMonitorTick() {
+  if (await shouldParkForHalt(db, 'strandedVestingMonitor')) return;
+  await checkStrandedVesting();
+}
+if (!IS_TEST) {
+  setInterval(() => { void vestingMonitorTick(); }, 60 * 60 * 1000);
+  void vestingMonitorTick();
 }
 
 // Sprint MVP-Delivery Phase 4 (C2) — Cascade Pickup Worker.

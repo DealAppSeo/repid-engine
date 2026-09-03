@@ -27,9 +27,33 @@
  *   NOT_ELIGIBLE  the anchor worker will never pick this row up. A legacy stub, or a row with no
  *                 commitment to put in a Merkle leaf. Calling this PENDING would promise a chain
  *                 write that is not coming.
+ *   ANCHORED_INELIGIBLE
+ *                 an attestation uid EXISTS for a row that the eligibility rule says should never
+ *                 have been anchored. Both halves are true and neither may be dropped.
  *
  * `NOT_ELIGIBLE` is the rung that stops this from being decoration. Without it every legacy stub
  * would read PENDING forever, which is a different false claim from the one being removed.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * WHY THE FIFTH RUNG EXISTS [MEASURED against production 2026-09-03]
+ * ════════════════════════════════════════════════════════════════════════════════
+ * This function returned ANCHORED on the first line, before it looked at eligibility. Measured:
+ * 22,365 rows carry an attestation uid while only 22,360 satisfy the eligibility rule — so five
+ * rows hold a uid they should never have had. They are NOT fabricated: each uid resolves on
+ * Base Sepolia, minted by this system's own attester under its own schema, with on-chain
+ * timestamps matching the rows to within a minute. The system anchored five SIMULATED proofs
+ * (`is_real = false`) to the chain as if they were real, in one 63-second window on 2026-05-30,
+ * and has not repeated it since across the 22,360 eligible rows that followed.
+ *
+ * Reported as bare ANCHORED, those five read exactly like a genuine anchored proof — the file
+ * that exists to stop a status meaning two things at once was doing it. The reader is owed both
+ * facts: there IS an attestation, and the proof under it was never eligible for one.
+ *
+ * REACHABILITY TODAY IS NIL, and saying so is part of the finding rather than a reason to skip
+ * it. The passport surfaces only an agent's LATEST proof; all three affected agents have since
+ * minted real ones, so no live response carries this status. It is a latent hole in the ladder,
+ * not a live wound — but any consumer counting `eas_attestation_uid IS NOT NULL` as "anchored"
+ * still counts those five today.
  */
 
 /**
@@ -45,7 +69,12 @@
 export const ANCHOR_ELIGIBLE_SQL = 'is_real = true' as const;
 export const ANCHOR_ELIGIBLE_SQL_COMMITMENT = 'zk_commitment IS NOT NULL' as const;
 
-export type AnchorStatus = 'ANCHORED' | 'PENDING' | 'OVERDUE' | 'NOT_ELIGIBLE';
+export type AnchorStatus =
+  | 'ANCHORED'
+  | 'ANCHORED_INELIGIBLE'
+  | 'PENDING'
+  | 'OVERDUE'
+  | 'NOT_ELIGIBLE';
 
 export interface AnchorRow {
   eas_attestation_uid?: string | null;
@@ -66,11 +95,15 @@ export interface AnchorRow {
 export const ANCHOR_PENDING_WINDOW_MS = Number(process.env['EAS_ANCHOR_POLL_MS'] ?? 300_000) * 2;
 
 export function deriveAnchorStatus(row: AnchorRow, now: number = Date.now()): AnchorStatus {
-  if (row.eas_attestation_uid) return 'ANCHORED';
-
   // Mirrors the worker's SELECT. A row failing either clause is never selected for a batch, so
   // promising it a chain write would be inventing one.
   const eligible = row.is_real === true && !!row.zk_commitment;
+
+  // ELIGIBILITY IS CONSULTED BEFORE THE UID, NOT AFTER. The uid used to short-circuit on the
+  // first line, which collapsed "anchored, as intended" and "anchored despite never qualifying"
+  // into one word. Five production rows are the second case (see the header).
+  if (row.eas_attestation_uid) return eligible ? 'ANCHORED' : 'ANCHORED_INELIGIBLE';
+
   if (!eligible) return 'NOT_ELIGIBLE';
 
   const createdAt = row.created_at ? new Date(row.created_at).getTime() : NaN;
@@ -124,7 +157,14 @@ export const ANCHOR_NOTES: Record<AnchorStatus, string> = {
   OVERDUE:
     'Not yet anchored, and later than expected. Still queued — the anchor worker retries oldest-first ' +
     'and has not given up — but the delay is worth reporting rather than hiding.',
+  ANCHORED_INELIGIBLE:
+    'An on-chain attestation exists for this proof, but the proof did not meet the anchoring ' +
+    'criteria — it is a simulated proof, or carries no commitment. The attestation is real; treat ' +
+    'it as evidence of the anchoring run, NOT as evidence about this proof. Generate a current ' +
+    'proof for an anchor that means what it says.',
   NOT_ELIGIBLE:
-    'This proof will not be anchored: it carries no commitment the batching Merkle tree can use. ' +
+    'This proof will not be anchored: it is a simulated proof, or carries no commitment the ' +
+    'batching Merkle tree can use. (This note used to name only the missing commitment, which is ' +
+    'the less common of the two causes and read as a diagnosis nobody had made.) ' +
     'Generate a current proof to obtain an on-chain anchor.',
 };

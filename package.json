@@ -88,7 +88,8 @@
     "ops:reconcile": "ts-node scripts/ops/reconcile-settlements.ts",
     "repid:decay": "ts-node scripts/run-repid-decay.ts",
     "repid:decay:apply": "ts-node scripts/run-repid-decay.ts --apply",
-    "probe:hal-shape": "ts-node scripts/liveness-probes/probe-hal-response-shape.ts"
+    "probe:hal-shape": "ts-node scripts/liveness-probes/probe-hal-response-shape.ts",
+    "verify:vesting": "ts-node scripts/verify/vesting-not-stranded.ts"
   },
   "keywords": [],
   "author": "",
@@ -126,13 +127,5 @@
     "jest": "^30.3.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.9"
-  },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "testPathIgnorePatterns": [
-      "/node_modules/",
-      "/dist/"
-    ]
   }
 }

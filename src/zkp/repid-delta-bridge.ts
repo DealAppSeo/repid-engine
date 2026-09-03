@@ -271,6 +271,19 @@ export async function recordDeltaStatement(input: DeltaBridgeInput): Promise<Del
   }
 
   // mode === 'on'
+  //
+  // `expires_at` IS DELIBERATELY NOT SET, AND SETTING IT WOULD BE A REGRESSION.
+  // The column exists on this table and is NULL on every real proof [MEASURED
+  // 2026-09-03]; nothing writes it and nothing reads it. The acceptance gate leg
+  // `zkrepid.expiry_binding` is FAILED because THE CIRCUIT binds no validity window,
+  // so a reader who finds the empty column next to the failing leg will reasonably
+  // conclude that filling it is the fix. It is not: a timestamp in a column the proof
+  // does not commit to reads as expiry and enforces nothing — anyone verifying the
+  // proof directly, which is the whole point of handing someone a proof, sees no
+  // expiry and gets the same verdict. That moves the leg's appearance without moving
+  // the property, which is the same shape as the borrowed attestation UIDs in
+  // migrations/2026-06-03-*.DO-NOT-RUN. The fix is valid_from / valid_until as CIRCUIT
+  // inputs. See reports/2026-09-03/PROOF-CURRENCY-AND-EXPIRY-TRAP.md.
   try {
     const { error } = await db.from('repid_zkp_proofs').insert({
       agent_id: input.agentId,

@@ -29,6 +29,8 @@ const REPUTATION_REGISTRY_BASE_SEPOLIA =
 
 import { deriveIdentityState } from './identity-state';
 import { deriveAnchorStatus, ANCHOR_NOTES, type AnchorStatus } from './anchor-status';
+import { vestingBlock, type VestingBlock } from './vesting-status';
+import { proofClaim, type ProofClaim } from './proof-claim';
 
 export class PassportQueryError extends Error {
   constructor(public step: string, detail: string) {
@@ -62,6 +64,16 @@ export interface AgentPassport {
     repid_score: number;
     tier: string | null;
     activity_30d: number;
+    /**
+     * Earned RepID that `repid_score` does NOT include.
+     *
+     * A new agent's first rewards are held during a vesting cliff, so the score can sit
+     * unmoved while the agent is in fact earning — and the passport said nothing, which
+     * reads as "nothing happened". Worse, measured 2026-09-03: nothing releases the
+     * balance when the cliff ends, so a MATURED state here is reporting a real gap
+     * rather than a countdown. See `vesting-status.ts`.
+     */
+    vesting: VestingBlock;
   };
   identity_erc8004: {
     /**
@@ -113,6 +125,13 @@ export interface AgentPassport {
       anchor_status: AnchorStatus;
       anchor_note: string;
       created_at: string | null;
+      /**
+       * WHAT was proven. `cryptographically_verifiable: true` above says a proof
+       * verifies; it does not say the claim could ever have been false. For a new
+       * agent the threshold is the lowest tier floor — zero — so every valid score
+       * satisfies it. Both facts belong in the response. See `proof-claim.ts`.
+       */
+      claim: ProofClaim;
     } | null;
     disclosure: string;
     proof_endpoint: string;
@@ -130,6 +149,7 @@ async function fetchAgentRow(
 ): Promise<Record<string, any> | null> {
   const cols =
     'id, agent_name, display_name, current_repid, tier, activity_30d, created_at, ' +
+    'vested_repid, vesting_cliff_ends_at, ' +
     'erc8004_token_id, erc8004_address, mint_tx_hash, mint_chain_id, minted_at, conservator_address';
 
   const tryFetch = async (col: string, value: string) => {
@@ -229,7 +249,7 @@ export async function buildAgentPassport(
   // -- Latest ZKP proof row, labeled honestly -------------------------------
   const { data: latestProof, error: proofErr } = await db
     .from('repid_zkp_proofs')
-    .select('scheme, proof_bytes, eas_attestation_uid, eas_schema, created_at, is_real, zk_commitment')
+    .select('scheme, proof_bytes, eas_attestation_uid, eas_schema, created_at, is_real, zk_commitment, statement')
     .eq('agent_id', agentId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -276,6 +296,7 @@ export async function buildAgentPassport(
       // truth and is NOT recomputed here.
       tier: agent.tier ?? null,
       activity_30d: agent.activity_30d ?? 0,
+      vesting: vestingBlock(agent as any),
     },
     identity_erc8004: {
       registered_onchain: identityState,
@@ -330,6 +351,7 @@ export async function buildAgentPassport(
             // answer instead of as "not yet". See anchor-status.ts for the measurement.
             anchor_status: deriveAnchorStatus(latestProof),
             anchor_note: ANCHOR_NOTES[deriveAnchorStatus(latestProof)],
+            claim: proofClaim((latestProof as any).statement),
             created_at: latestProof.created_at ?? null,
           }
         : null,

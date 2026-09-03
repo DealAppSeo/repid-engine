@@ -18,6 +18,10 @@ import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals
 const emitAuditEvent = jest.fn<(e: unknown) => Promise<void>>();
 jest.mock('../src/services/audit-emit', () => ({ emitAuditEvent: (e: unknown) => emitAuditEvent(e) }));
 
+const insert = jest.fn<(row: unknown) => Promise<{ error: unknown }>>();
+const from = jest.fn((t: string) => ({ insert: (row: unknown) => insert({ __table: t, ...(row as object) }) }));
+jest.mock('../src/db', () => ({ db: { from: (t: string) => from(t) } }));
+
 import {
   pageOperator, pagerStatus, announcePagerStatus, _resetPagerCooldown, PAGE_COOLDOWN_MS,
 } from '../src/services/operator-pager';
@@ -28,42 +32,78 @@ const ENV = { ...process.env };
 beforeEach(() => {
   _resetPagerCooldown();
   emitAuditEvent.mockReset().mockResolvedValue(undefined);
+  insert.mockReset().mockResolvedValue({ error: null });
+  from.mockClear();
   process.env['TELEGRAM_BOT_TOKEN'] = 'tok';
   process.env['TELEGRAM_OWNER_CHAT_ID'] = '123';
   global.fetch = jest.fn(async () => new Response('ok', { status: 200 })) as never;
 });
 afterEach(() => { process.env = { ...ENV }; });
 
-describe('armed-ness is reported, never assumed', () => {
-  it('needs BOTH env vars — either alone pages nobody', () => {
+describe('two channels, because one of them could not be armed', () => {
+  // MEASURED 2026-09-02 → 09-03: the single-channel version shipped to production reporting
+  // armed:false with both env vars unset, four checks over ten hours. A pager that cannot be
+  // armed by the person who built it is not a pager. RECORD needs no secret; PUSH needs two.
+  it('PUSH needs BOTH env vars — either alone wakes nobody', () => {
     delete process.env['TELEGRAM_OWNER_CHAT_ID'];
     const s = pagerStatus();
-    expect(s.armed).toBe(false);
+    expect(s.push_armed).toBe(false);
     expect(s.missing).toEqual(['TELEGRAM_OWNER_CHAT_ID']);
-    // A token with no chat id is the trap: it LOOKS configured. It delivers to nobody.
+    // A token with no chat id is the trap: it LOOKS configured and delivers to nobody.
     expect(process.env['TELEGRAM_BOT_TOKEN']).toBeTruthy();
   });
 
-  it('says so at boot, loudly, when it cannot page', () => {
+  it('RECORD is armed regardless — the failure is never LOST', () => {
+    delete process.env['TELEGRAM_BOT_TOKEN'];
+    delete process.env['TELEGRAM_OWNER_CHAT_ID'];
+    const s = pagerStatus();
+    expect(s.armed).toBe(true);                       // captured
+    expect(s.push_armed).toBe(false);                 // but nobody woken
+    expect(s.channels).toEqual({ record: 'ops_alerts', push: 'none' });
+  });
+
+  it('boot says RECORD ONLY — not "nothing is watching", which would be false', () => {
     delete process.env['TELEGRAM_BOT_TOKEN'];
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const s = announcePagerStatus();
-    expect(s.armed).toBe(false);
-    expect(warn.mock.calls[0]![0]).toMatch(/NOT ARMED/);
-    expect(warn.mock.calls[0]![0]).toMatch(/Nothing is watching/);
+    expect(s.push_armed).toBe(false);
+    expect(warn.mock.calls[0]![0]).toMatch(/RECORD ONLY/);
+    expect(warn.mock.calls[0]![0]).toMatch(/NOBODY WILL BE WOKEN/);
     warn.mockRestore();
   });
 
-  it('an unarmed page is still AUDITED — the gap outlives the log line', async () => {
+  it('with push unarmed the alert is still RECORDED, and the audit says which', async () => {
     delete process.env['TELEGRAM_BOT_TOKEN'];
     pageOperator('eas-anchor', 'attester key missing');
     await flush();
-    expect(emitAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'operator_paged',
-        payload: expect.objectContaining({ paged: false, pager_armed: false }),
-      }),
-    );
+    expect(from).toHaveBeenCalledWith('ops_alerts');
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
+      alert_type: 'eas-anchor:attester key missing',
+    }));
+    // "recorded but not pushed" must not collapse into "dropped" — different states.
+    expect(emitAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ recorded: true, pushed: false, push_armed: false }),
+    }));
+  });
+
+  it('a failed RECORD write is reported, not assumed successful', async () => {
+    insert.mockResolvedValue({ error: { code: '42P01', message: 'relation does not exist' } });
+    const err = jest.spyOn(console, 'error').mockImplementation(() => {});
+    pageOperator('proof-drain', 'canonical write rejected');
+    await flush();
+    expect(emitAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ recorded: false }),
+    }));
+    err.mockRestore();
+  });
+
+  it('the dedupe key and the alert_type are the SAME string', async () => {
+    // So a query grouping on alert_type counts CONDITIONS, not repetitions of one condition.
+    pageOperator('hal', 'quorum not met');
+    pageOperator('hal', 'quorum not met');
+    await flush();
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ alert_type: 'hal:quorum not met' }));
   });
 });
 
@@ -79,13 +119,19 @@ describe('it reaches the owner chat and only the owner chat', () => {
     expect(body.text).toMatch(/attester key missing/);
   });
 
-  it('never reads an agent webhook — there is exactly one recipient, from env', async () => {
-    // The separation Sean asked for. If this module ever grew a DB lookup to pick a recipient,
-    // an agent could be told the attester key is missing. It has no database import at all.
+  it('never RESOLVES a recipient from the database', () => {
+    // The separation Sean asked for, restated precisely. The first version of this test banned
+    // the db import outright — a fine proxy while the module had no reason to touch Postgres,
+    // and wrong the moment the RECORD channel started writing ops_alerts. Banning the import
+    // would now block the only channel that can actually be armed without a secret. So it is
+    // narrowed to the property that always mattered: the RECIPIENT comes from env and nowhere
+    // else. Writing an alert row is not reading an address.
     const src = require('node:fs').readFileSync(
       require('node:path').join(__dirname, '..', 'src', 'services', 'operator-pager.ts'), 'utf8');
-    expect(src).not.toMatch(/from '\.\.\/db'/);
-    expect(src).not.toMatch(/webhook_url|repid_agents/);
+    expect(src).not.toMatch(/webhook_url|webhook_secret|repid_agents/);
+    const tables = [...src.matchAll(/\.from\('([a-z_]+)'\)/g)].map((m: string[]) => m[1]);
+    expect([...new Set(tables)]).toEqual(['ops_alerts']);   // the ONLY table it may touch
+    expect(src).toMatch(/process\.env\['TELEGRAM_OWNER_CHAT_ID'\]/);
   });
 });
 
@@ -116,7 +162,7 @@ describe('it cannot break the thing it is watching', () => {
     expect(() => pageOperator('eas-anchor', 'boom')).not.toThrow();
     await flush();
     expect(emitAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ payload: expect.objectContaining({ paged: false, pager_armed: true }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ pushed: false, push_armed: true }) }),
     );
   });
 

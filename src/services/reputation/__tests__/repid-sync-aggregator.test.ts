@@ -115,7 +115,19 @@ describe('RepID Sync Aggregator (XC)', () => {
 
   it('trinity_repid guard throws on any write attempt (read-only archival + pollution)', () => {
     expect(() => assertTrinityRepidReadOnly('trinity_repid')).toThrow(/READ_ONLY_ARCHIVAL_VIOLATION/);
-    expect(() => assertTrinityRepidReadOnly('update trinity_repid set score=999')).toThrow(/5mo freeze/);
+    // Assert the SEMANTICS, not the prose. This line previously matched /5mo freeze/,
+    // which the message no longer says verbatim ("frozen (5+ months)") though it means
+    // exactly the same thing — a test that fails on rewording tells you nothing about
+    // the guard and everything about the copy editor.
+    const thrown = (() => {
+      try { assertTrinityRepidReadOnly('update trinity_repid set score=999'); return null; }
+      catch (e: any) { return String(e?.message ?? e); }
+    })();
+    expect(thrown).not.toBeNull();
+    expect(thrown).toMatch(/READ_ONLY_ARCHIVAL_VIOLATION/);
+    expect(thrown!.toLowerCase()).toMatch(/froze|frozen|freeze/);   // why it is untouchable
+    expect(thrown!.toLowerCase()).toMatch(/pollut/);                // and the second reason
+    expect(thrown!.toLowerCase()).toMatch(/never write|read-only/); // and the instruction
   });
 
   it('dry-run default + guards prevent any current_repid mutation', async () => {
@@ -140,7 +152,11 @@ describe('RepID Sync Aggregator (XC)', () => {
     const r = await rollupAgentRepidScores(true);
     expect(r.dryRun).toBe(true);
     expect(r.agentsUpdated).toBe(0);
-    expect(r.note).toMatch(/lagging rollup stub/);
+    // Same reason as the guard above: match the claim, not the wording. The note says
+    // "rollup stub — implement incremental from events"; it is the STUB-ness and the
+    // untouched archival table that matter, not the adjective order.
+    expect(r.note.toLowerCase()).toMatch(/stub/);
+    expect(r.note.toLowerCase()).toMatch(/trinity_repid/);
   });
 
   it('concurrent safety: two identical batches produce same net (idempotent)', async () => {
