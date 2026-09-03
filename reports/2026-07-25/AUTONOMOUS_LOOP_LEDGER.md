@@ -3921,3 +3921,37 @@ additive module + tests, zero callers, no flags touched); its checks were still 
 when this entry was written. Backlog row 3's remaining scope is now exactly one thing: the
 authenticated `GET` route wiring this primitive to `agent_memory_leaves`/
 `agent_memory_roots`/`agent_memory_leaf_content` via `(req as any).agent_id`.
+
+## Beat 91 — 2026-09-03 · verified #588/#589 independently; building item 3's last remaining piece: the authenticated retrieval route
+
+**Step 1 — verified Beat 90's ledger PR (#588) and its primitive PR (#589) independently.**
+`gh pr view 588 --json mergedAt,state` → `MERGED` 2026-09-03T05:29:53Z. `gh pr view 589
+--json mergedAt,state` → `MERGED` 2026-09-03T05:29:39Z; `gh pr checks 589` → 9/9 pass (test,
+crosscheck, zkp-vault, HAL prompt-injection, Strix, gitleaks x2, resident-secrets). `gh pr
+list --state merged --limit 8` shows nothing merged between #586 and #588/#589 to check for
+the #570/#576/#581/#585 gap class — both are loop-owned, no unlogged PR this beat.
+
+**Backlog row 3's remaining scope, confirmed unchanged since #589 landed:** the pure
+primitive `retrieveVerifiedMemory` (`src/memory/memory-retrieval.ts`) exists and is tested,
+but `grep -rn "retrieveVerifiedMemory" src/routes/` returns zero hits — no HTTP route calls
+it yet. This is the one piece beats 88/89/90 each named as the actual remaining work after
+narrowing down from "a persistence design" (beat 85) through two closed schema blockers
+(beats 85/86) to a tested pure bridge (beat 90).
+
+**Step 2 intent — build the authenticated GET route now, no further scoping needed.** Read
+`src/middleware/auth.ts:307`: `(req as any).agent_id` is set only for a DB-issued key
+(`validateAgentApiKey`), never for an env-allowlist key — so an env key holder gets a clean
+403, not a wrong agent's data. Read `agent_memory_roots`'s own migration comment: "the last
+root this agent committed" is `order by epoch desc limit 1` (an `idx_agent_memory_roots_
+latest` index already exists for this). Read `agent_memory_leaf_content`'s migration:
+content is keyed by `(agent_id, value)`, NOT by epoch — deliberately, so it is fetched
+un-scoped by epoch and left to `retrieveVerifiedMemory` to match against the hydrated tree.
+Plan: new `src/routes/memory-retrieve.ts`, mounted after `authMiddleware` (same position as
+`proof-carrying-verify.ts`, `src/index.ts:595`) — fetch the latest `agent_memory_roots` row,
+its `agent_memory_leaves` at that epoch, and this agent's `agent_memory_leaf_content` rows,
+call `retrieveVerifiedMemory`, JSON-serialize the bigint `IndexedLeaf.value`/`next` fields in
+each witness (the same wire-format problem `proof-carrying-verify.ts`'s own header already
+documents and solves in the opposite direction). Tested with injected/mocked Supabase calls
+per this repo's existing route-test style. On a new branch from `origin/main`, within the
+remaining turn budget; if it does not land this beat, this entry already records the
+verified state so nothing is lost.
