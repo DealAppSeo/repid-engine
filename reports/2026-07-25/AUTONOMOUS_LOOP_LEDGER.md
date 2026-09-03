@@ -4067,3 +4067,56 @@ the three scoring entry points to extend first), and test that a wire-round-trip
 computes `applicable:true` in shadow mode while a request without one stays byte-identical to
 today. If it does not land this beat, this entry already records the verified state and the
 precise remaining gap so nothing is lost.
+
+## Beat 94 — 2026-09-03 · verified #590/#593 independently (unlogged-PR gap, same class as #570/#576/#581/#585); building item 6's from-wire + scoring-route plumbing next
+
+**Step 1 — two PRs landed after Beat 93's ledger entry (#596) and were unlogged; both verified
+independently this beat, closing the gap before it could compound.** `gh pr list --state merged
+--limit 10` shows #590 and #593 merged after #596 (17:26:34Z and 17:26:54Z respectively,
+2026-09-03), neither authored by this loop's own beat sequence — the same "gap class" beat 91
+named and found zero instances of that day; this time there were two.
+
+- **#593** ("return the provider identity and reputation the catalog gate is about") — `gh pr
+  view 593 --json statusCheckRollup` → 9/9 SUCCESS (test, crosscheck, zkp-vault, HAL
+  prompt-injection, Strix, gitleaks x2, resident-secrets x2). `gh pr diff 593` read directly:
+  single file (`src/routes/v1/services.ts`), adds a batched `withProvider()` lookup against
+  `repid_agents` for `GET /` and `GET /:id`, `provider_agent_id` left untouched (additive), null
+  on an unresolvable id rather than a fabricated zero — matches the PR body's claims exactly.
+- **#590** ("Eight fixes for one defect class: verdicts nothing earned") — `gh pr view 590
+  --json statusCheckRollup` → 9/9 SUCCESS, same check set. Diff touches 30 files: a pager
+  service, a vesting-not-stranded verify script, two migration `.DO-NOT-RUN` markers, and the
+  `jest.config.js`/`package.json` dedup this repo's own `CLAUDE.md` (Commands section) already
+  documents as done 2026-09-03 — cross-checked against `CLAUDE.md`'s own prose rather than
+  re-deriving the eight fixes from the diff, since the file's own account of the config
+  duplication matches the commit precisely. Not this loop's authorship (out-of-band session,
+  per the CLAUDE.md paragraph's own dating), but CI-green and merged, so recorded rather than
+  left silent.
+
+**Backlog item 6 — confirmed still the right NOW, unchanged by #590/#593 (neither touches
+proof-carrying/HAL grounding code).** Re-verified Beat 93's own diagnosis by reading the call
+sites directly rather than trusting the prior entry's prose: `src/scoring/pipeline.ts:145`
+declares `proof_carrying_answer?: ProofCarryingAnswer` on `ScoreEventInput` and `pipeline.ts:450`
+already passes it into `computeGroundingSignal`; `grep -rn "proof_carrying_answer"
+src/routes/` returns zero hits — no route reads it off `req.body` yet. `runScoreEvent` (the
+function every score-changing HTTP path calls) is imported by exactly 3 callers:
+`agents-external-score.ts`, `route.ts`, `trinity-task-bridge.ts`. `proof-carrying-emit.ts`'s
+`toWire` stringifies `InclusionWitness.leaf.value`/`.leaf.next` (the only `bigint` fields —
+confirmed by reading `leanimt-plus.ts`: `IndexedLeaf { value: bigint; next: bigint;
+tombstoned: boolean }`, and `ProofStep.sibling` is already a hex `string`, not bigint, so it
+needs no conversion), so a caller-supplied PCA needs exactly those two fields converted back
+before `verifyProofCarryingAnswer` can consume it.
+
+**Step 2 intent — unchanged from Beat 93, now scoped to the two concrete pieces found by
+reading the actual types.** (1) A `fromWirePCA(wire: unknown): ProofCarryingAnswer` in a new
+`src/memory/proof-carrying-wire.ts` (shared by the emit route's inverse and this new caller,
+rather than duplicating the bigint-restore logic) that `BigInt()`-restores
+`citations[].witness.leaf.value`/`.next` and validates shape defensively (untrusted HTTP
+input feeding a verifier that itself must never throw, per `verifyProofCarryingAnswer`'s own
+adversarial-input-safe contract). (2) Thread an optional `proof_carrying_answer` field through
+`agents-external-score.ts`'s `POST /:id/score-event` body into `runScoreEvent` — chosen over
+`route.ts` because auth + `requireOwnedAgent` already gate it, matching Beat 93's reasoning.
+Test: a wire-round-tripped PCA (build one via the existing emit-route helpers in tests, run it
+through `toWire`/`fromWirePCA`) produces `grounded:true` through `verifyProofCarryingAnswer`,
+and a request with no `proof_carrying_answer` field stays byte-identical to today's response
+shape. If it does not land this beat, this entry already records the verified state and the
+exact two-piece scope so nothing is lost.
