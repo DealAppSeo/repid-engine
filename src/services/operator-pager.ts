@@ -26,8 +26,28 @@
  *    is answerable from outside the box. An unconfigured pager is the exact failure this whole
  *    file exists to prevent, one level up: a monitoring system that is silently not monitoring.
  *    It degrades loudly at startup rather than discovering it during an incident.
+ *
+ * TWO CHANNELS, BECAUSE ONE OF THEM COULD NOT BE ARMED [MEASURED 2026-09-02 → 09-03].
+ *
+ * The first version of this file had exactly one channel, Telegram, and shipped to production
+ * reporting `armed: false` with BOTH env vars unset — checked four times over ten hours. So the
+ * thing built to stop silent failure was itself silently not firing, which is the defect it
+ * exists to remove wearing its own uniform. "The operator has not set the variable yet" is a
+ * true sentence and a bad answer.
+ *
+ *   RECORD (ops_alerts)  ALWAYS ON. Production already holds Supabase credentials, so this
+ *                        channel needs no secret anyone has to remember. The row is durable,
+ *                        queryable and has `acknowledged_at`, so an alert can be CLOSED rather
+ *                        than merely emitted. It survives a restart; a Telegram message does not.
+ *   PUSH (Telegram)      OPTIONAL. Wakes a human at 3am. Requires the two env vars.
+ *
+ * The distinction is deliberate: RECORD guarantees the failure is never LOST, PUSH decides
+ * whether anyone finds out TONIGHT. Losing the record is the worse failure and is the one now
+ * impossible. `ops_alerts` was itself a table nothing wrote to — built and never wired, the same
+ * shape as this module before today.
  */
 
+import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 
 const TELEGRAM_API = 'https://api.telegram.org';
@@ -54,9 +74,20 @@ export function _resetPagerCooldown(): void {
 }
 
 export interface PagerStatus {
-  /** True only when BOTH env vars are present. Either alone pages nobody. */
+  /**
+   * Is the failure guaranteed to be CAPTURED? True whenever the record channel is available.
+   *
+   * This used to mean "is Telegram configured", which made one boolean stand for two channels of
+   * very different importance — and read `false` on a system that was, in every sense that
+   * matters for not losing an incident, working. Losing the record and failing to wake someone
+   * are not the same severity and no longer share a field.
+   */
   armed: boolean;
+  /** Will a human be woken? Requires both env vars. */
+  push_armed: boolean;
+  /** Env vars missing for PUSH. Empty does not imply anything about the record channel. */
   missing: string[];
+  channels: { record: 'ops_alerts'; push: 'telegram' | 'none' };
   cooldown_ms: number;
   /** Distinct reasons currently inside their cooldown window — i.e. actively firing. */
   suppressed_reasons: number;
@@ -66,9 +97,15 @@ export function pagerStatus(): PagerStatus {
   const missing: string[] = [];
   if (!process.env['TELEGRAM_BOT_TOKEN']) missing.push('TELEGRAM_BOT_TOKEN');
   if (!process.env['TELEGRAM_OWNER_CHAT_ID']) missing.push('TELEGRAM_OWNER_CHAT_ID');
+  const push_armed = missing.length === 0;
   return {
-    armed: missing.length === 0,
+    // The record channel rides on the Supabase client the whole process depends on; if that were
+    // gone nothing here would be running. Reporting it as a live capability is honest, and
+    // `recordAlert` still reports its own per-write failures rather than assuming success.
+    armed: true,
+    push_armed,
     missing,
+    channels: { record: 'ops_alerts', push: push_armed ? 'telegram' : 'none' },
     cooldown_ms: PAGE_COOLDOWN_MS,
     suppressed_reasons: lastPagedAt.size,
   };
@@ -83,12 +120,13 @@ export function pagerStatus(): PagerStatus {
  */
 export function announcePagerStatus(): PagerStatus {
   const s = pagerStatus();
-  if (s.armed) {
-    console.log(`[operator-pager] ARMED — failures page the owner chat (cooldown ${s.cooldown_ms}ms)`);
+  if (s.push_armed) {
+    console.log(`[operator-pager] ARMED — record: ops_alerts + push: telegram (cooldown ${s.cooldown_ms}ms)`);
   } else {
     console.warn(
-      `[operator-pager] NOT ARMED — missing ${s.missing.join(', ')}. ` +
-        'Degraded states will be logged and NOT paged. Nothing is watching this process.',
+      `[operator-pager] RECORD ONLY — failures ARE captured in ops_alerts and can be queried and ` +
+        `acknowledged, but NOBODY WILL BE WOKEN: missing ${s.missing.join(', ')}. ` +
+        'Set both on the repid-engine service to enable push.',
     );
   }
   return s;
@@ -115,12 +153,18 @@ async function deliver(source: PageSource, reason: string, detail?: Record<strin
   if (last !== undefined && now - last < PAGE_COOLDOWN_MS) return;
   lastPagedAt.set(key, now);
 
+  // RECORD FIRST, and unconditionally. If the process dies immediately after this, the failure
+  // is still on the record and still acknowledgeable. Telegram below may or may not be armed;
+  // this does not care, which is the entire point of splitting the two.
+  const recorded = await recordAlert(source, reason, detail);
+
   const token = process.env['TELEGRAM_BOT_TOKEN'];
   const chatId = process.env['TELEGRAM_OWNER_CHAT_ID'];
   if (!token || !chatId) {
-    // Not armed. Audit it so the gap is discoverable after the fact rather than only in a log
-    // line nobody tailed — the same reason this module exists.
-    await audit(source, reason, { ...detail, paged: false, pager_armed: false });
+    // Push is unarmed — but the alert is NOT lost, it is on the record above. Audit the split so
+    // the distinction survives: "recorded but not pushed" is a different state from "dropped",
+    // and collapsing them is how a monitoring gap gets mistaken for a quiet system.
+    await audit(source, reason, { ...detail, recorded, pushed: false, push_armed: false });
     return;
   }
 
@@ -145,9 +189,37 @@ async function deliver(source: PageSource, reason: string, detail?: Record<strin
     clearTimeout(timer);
   }
 
-  // A page that failed to send is itself a silent failure. Audit both outcomes: the row is the
-  // only durable record that the system tried to tell someone.
-  await audit(source, reason, { ...detail, paged: ok, pager_armed: true });
+  // A push that failed to send is itself a silent failure. Audit both outcomes.
+  await audit(source, reason, { ...detail, recorded, pushed: ok, push_armed: true });
+}
+
+/**
+ * Write the durable alert row. Returns whether it landed — never throws.
+ *
+ * `alert_type` is `${source}:${reason}` so it matches the cooldown key exactly: one row per
+ * distinct condition per window, and a query grouping on alert_type counts conditions rather
+ * than repetitions. `acknowledged_at` stays NULL until a human closes it, which is what makes
+ * this a worklist instead of a log.
+ */
+async function recordAlert(
+  source: PageSource,
+  reason: string,
+  detail?: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    const { error } = await db.from('ops_alerts').insert({
+      alert_type: `${source}:${reason}`.slice(0, 500),
+      notes: detail && Object.keys(detail).length ? JSON.stringify(detail).slice(0, 2000) : null,
+    });
+    if (error) {
+      console.error(`[operator-pager] ops_alerts insert FAILED (${error.code ?? '?'}): ${error.message}`);
+      return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.error(`[operator-pager] ops_alerts insert THREW: ${e?.message ?? e}`);
+    return false;
+  }
 }
 
 async function audit(source: PageSource, reason: string, payload: Record<string, unknown>): Promise<void> {
