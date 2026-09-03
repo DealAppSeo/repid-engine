@@ -306,7 +306,16 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 ### Table rules (CLAUDE-RULE-5)
 - Canonical agent table: repid_agents (NOT agent_repid — that is stale)
 - Canonical score table: repid_score_events
-- repid_standings view reads from agent_repid — this is a known bug, do not propagate it
+- repid_standings view reads from agent_repid — this is a known bug, do not propagate it.
+  **"Known bug" understates it [MEASURED 2026-09-03]:** `agent_repid` has been frozen
+  since early June, the score disagrees with the canonical table on EVERY agent name
+  present in both — not most, all — and the view covers well under half the agents that
+  exist. It is not a lagging leaderboard; it is a uniformly incorrect one. Nothing in
+  `repid-engine/src` reads either table (only a warning comment names the view), but
+  that is a negative finding about THIS repo, not the database: the view is still there
+  for any other consumer, and a negative finding decays silently because someone can add
+  the reader without touching this file. Re-run before repeating. Dropping or repointing
+  the view is DDL against a shared database with consumers this repo cannot enumerate.
 - trinity_tasks.id is BIGINT not UUID
 - NEVER assume column names — read schema first or ask
 
