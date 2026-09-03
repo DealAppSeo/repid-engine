@@ -3,6 +3,7 @@ import { db } from '../db';
 import { config } from '../config';
 import { testHashKeyConnection } from '../engine/hashkey-chain';
 import { pagerStatus } from '../services/operator-pager';
+import { lastVestingCheck } from '../services/vesting-monitor';
 
 const router = Router();
 
@@ -98,6 +99,10 @@ router.get('/health', async (req: Request, res: Response) => {
     // because it must be answerable WITHOUT dashboard access; it exposes only whether the env
     // vars are set, never their values.
     operator_pager: pagerStatus(),
+      // Read-only hourly check. `null` until the first run completes; `checked:false`
+      // when the read failed — neither is the same as "no stranded balance", and the
+      // shape says so rather than reporting a reassuring zero.
+      vesting_monitor: lastVestingCheck(),
     engine: 'HyperDAG RepID Scoring Engine',
     protocol: 'hyperdag.dev',
     validation_queue: {
