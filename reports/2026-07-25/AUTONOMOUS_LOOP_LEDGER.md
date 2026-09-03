@@ -3976,3 +3976,44 @@ not this item: item 4 (answer-binding) can now build against a real retrieval en
 of an in-process store, and item 6's "measured hallucination drop" still needs live
 proof-carrying traffic, which item 3 makes possible for the first time but does not itself
 produce.
+
+## Beat 92 — 2026-09-03 · verified #591/#592 independently; item 3 confirmed closed; building item 4's persisted-retrieval emit gate
+
+**Step 1 — verified Beat 91's ledger PR (#591) and its route PR (#592) independently.**
+`gh pr view 591 --json mergedAt,state` → `MERGED` 2026-09-03T08:39:08Z, 8/8 checks SUCCESS
+(zkp-vault, HAL prompt-injection, crosscheck, gitleaks x2, resident-secrets x2, test).
+`gh pr view 592 --json mergedAt,state` → `MERGED` 2026-09-03T08:38:33Z, 9/9 checks SUCCESS
+(same set + Strix Security Review). `gh pr diff 592` read directly: it adds
+`src/routes/memory-retrieve.ts` (`GET /api/v1/memory/retrieve`, mounted in `src/index.ts` at
+the same position as `proof-carrying-verify`) with a 403 for callers with no bound
+`agent_id`, an empty-result path when the agent has no committed root, and a call into
+`retrieveVerifiedMemory` for a real committed epoch — matching what Beat 91's own entry
+claimed it shipped, no discrepancy found. `gh pr list --state merged --limit 5` shows only
+#587/#588/#589/#591/#592 in the recent window — nothing unlogged to flag.
+
+**Backlog item 3 (P2 retrieval API) — independently confirmed closed, not just re-asserted.**
+Both halves exist and are wired: the verifier (`POST /api/v1/proof-carrying/verify`, #533)
+and the retrieval route (`GET /api/v1/memory/retrieve`, #592) reading real
+`agent_memory_roots`/`agent_memory_leaves`/`agent_memory_leaf_content` rows through the
+tested `retrieveVerifiedMemory` bridge (#589). Beat 91's closing claim holds.
+
+**Step 2 intent — item 4 (answer-binding) is next per the dependency queue's own "NOW"
+marker, and it has a real, previously-unaudited gap.** Read
+`src/memory/proof-carrying-memory.ts`: `bindAnswer`/`verifyProofCarryingAnswer`/
+`emitGroundedAnswer` already exist, are tested across 5 files (`proof-carrying-memory.test.ts`,
+`proof-carrying-e2e.test.ts`, `hal-grounding-root-currency.test.ts`,
+`answer-binding-pins.test.ts`, `proof-carrying-lifecycle-e2e.test.ts`), and the VERIFY half is
+genuinely wired into production: `computeGroundingSignal` (`src/hal/hal-grounding.ts:100`)
+calls `verifyProofCarryingAnswer`, which is called from `src/scoring/pipeline.ts:450` on every
+scoring call. But `emitGroundedAnswer` — the EMIT/gate half — has zero non-test callers
+(`grep -rn "emitGroundedAnswer" src/` outside its own definition returns nothing), and it only
+ever gates against an in-process `ProofCarryingMemory` instance's live tree. Nothing in this
+repo gates an answer against the PERSISTED retrieval item 3 just finished
+(`agent_memory_leaves`/`agent_memory_roots`/`agent_memory_leaf_content` via
+`retrieveVerifiedMemory`) — the two halves item 3 and item 4 both depend on have never been
+connected. Plan: a pure `bindAnswerFromRetrieval(answer, citedValues, retrieval)` in a new
+`src/memory/answer-binding-retrieval.ts` (same abstain-by-throw contract as
+`emitGroundedAnswer`, but keyed against a `VerifiedRetrieval` instead of a live tree), plus a
+thin authenticated `POST /api/v1/proof-carrying/emit` route reusing memory-retrieve.ts's exact
+fetch + identity pattern. Tested the same way item 3's route was tested. If it does not land
+this beat, this entry already records the verified state so nothing is lost.
