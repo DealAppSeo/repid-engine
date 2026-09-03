@@ -3873,3 +3873,38 @@ PRs merged during this run's window (since 2026-09-03T00:57:15Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 33701653727 --log`) if the reason matters.
+
+## Beat 90 — 2026-09-03 · verified #586/#587 independently; item 3's retrieval route unbuilt after 4 dead cycles; building the pure primitive now
+
+**Step 1 — verified Beat 89's ledger PR (#586) and the fallback (#587) independently.**
+`gh pr view 586 --json mergedAt,state` → `MERGED` 2026-09-02T20:29:52Z. `gh pr view 587
+--json body,mergedAt,mergeCommit` → `MERGED` 2026-09-03T01:06:52Z, auto-generated fallback
+for run 33701653727, window since 2026-09-03T00:57:15Z (after #586). `gh pr list --state
+merged --limit 8` shows nothing merged between #586 and #587 to check for the #570/#576/
+#581/#585 gap class — #587's own "(none detected)" is correct as written.
+
+**The real finding: item 3's retrieval route is STILL unbuilt, now after FOUR loop-adjacent
+events since #578 (beat 86, 2026-09-01) closed its last blocker.** `grep -rln "hydrateTree\|
+fromLeaves\|verifiedEntry\|memory-content-store" src/ --include=*.ts` returns only the three
+primitive/test-adjacent files (`memory-content-store.ts`, `proof-carrying-memory.ts`,
+`memory-root-store.ts`, `leanimt-plus.ts`) — unchanged since beats 88 and 89 measured the
+same thing. Beat 89 (#586) declared intent to build `src/memory/memory-retrieval.ts` +
+a thin route; between #586 and now, only the dead fallback run (#587, zero PRs) happened —
+so the intent was never attempted, not attempted-and-failed. This is the same backlog item
+stalling across beats 87, 88, and 89 despite each one finding it fully scoped with no
+remaining investigation needed.
+
+**Step 2 intent — build only the pure retrieval primitive this beat, not the route.**
+Narrowing beat 89's plan on purpose: `retrieveVerifiedMemory(leafRows, contentRows,
+storedRoot)` in a new `src/memory/memory-retrieval.ts`, composing `rootMatchesStored` +
+`hydrateTree` (memory-root-store.ts) with `verifiedEntry` (memory-content-store.ts) and
+`LeanIMTPlus.membershipProof()` (leanimt-plus.ts) — refuses via `rootMatchesStored` before
+producing any witness, drops (never surfaces) a content row that fails its own hash check,
+and returns `{root, entries: [{entry, value, inclusionProof, currentValidityProof}]}`, tested
+standalone against the existing test style (`tests/memory-content-store.test.ts`,
+`tests/leanimt-plus-hydrate.test.ts`). The authenticated HTTP route (fetching from
+`agent_memory_leaves`/`agent_memory_roots`/`agent_memory_leaf_content` via `(req as
+any).agent_id`) is real Supabase-touching work that has not landed in any of the last three
+attempts at this size; shipping the tested pure primitive alone this beat is a smaller,
+completable unit rather than another unlanded route-sized intent. If even this does not
+land within budget, this entry already records the verified state so nothing is lost.
