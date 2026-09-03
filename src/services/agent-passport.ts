@@ -29,6 +29,7 @@ const REPUTATION_REGISTRY_BASE_SEPOLIA =
 
 import { deriveIdentityState } from './identity-state';
 import { deriveAnchorStatus, ANCHOR_NOTES, type AnchorStatus } from './anchor-status';
+import { vestingBlock, type VestingBlock } from './vesting-status';
 
 export class PassportQueryError extends Error {
   constructor(public step: string, detail: string) {
@@ -62,6 +63,16 @@ export interface AgentPassport {
     repid_score: number;
     tier: string | null;
     activity_30d: number;
+    /**
+     * Earned RepID that `repid_score` does NOT include.
+     *
+     * A new agent's first rewards are held during a vesting cliff, so the score can sit
+     * unmoved while the agent is in fact earning — and the passport said nothing, which
+     * reads as "nothing happened". Worse, measured 2026-09-03: nothing releases the
+     * balance when the cliff ends, so a MATURED state here is reporting a real gap
+     * rather than a countdown. See `vesting-status.ts`.
+     */
+    vesting: VestingBlock;
   };
   identity_erc8004: {
     /**
@@ -130,6 +141,7 @@ async function fetchAgentRow(
 ): Promise<Record<string, any> | null> {
   const cols =
     'id, agent_name, display_name, current_repid, tier, activity_30d, created_at, ' +
+    'vested_repid, vesting_cliff_ends_at, ' +
     'erc8004_token_id, erc8004_address, mint_tx_hash, mint_chain_id, minted_at, conservator_address';
 
   const tryFetch = async (col: string, value: string) => {
@@ -276,6 +288,7 @@ export async function buildAgentPassport(
       // truth and is NOT recomputed here.
       tier: agent.tier ?? null,
       activity_30d: agent.activity_30d ?? 0,
+      vesting: vestingBlock(agent as any),
     },
     identity_erc8004: {
       registered_onchain: identityState,

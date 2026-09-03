@@ -122,6 +122,23 @@ function happyScript(agentRow: any = MINTED_AGENT) {
 /* --------------------------- service-level tests -------------------------- */
 
 describe('buildAgentPassport', () => {
+  test('a held balance is reported, so an unmoved score is not read as nothing happening', async () => {
+    // The MVP journey this protects: a stranger creates an agent, earns, and `current_repid`
+    // does not move because the reward is vesting. The passport used to show only the unmoved
+    // number. MATURED is the sharper case — measured 2026-09-03, nothing releases the balance
+    // when the cliff ends, so a passed cliff is a real gap and must not read as a countdown.
+    const script = happyScript();
+    const past = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    script.repid_agents = script.repid_agents.map((r: any, i: number) =>
+      i === 0 && r.data ? { ...r, data: { ...r.data, vested_repid: 500, vesting_cliff_ends_at: past } } : r,
+    );
+    const p = await buildAgentPassport(makeDb(script), MINTED_AGENT.id);
+    expect(p!.reputation.vesting.state).toBe('MATURED');
+    expect(p!.reputation.vesting.vested_repid).toBe(500);
+    expect(p!.reputation.vesting.score_including_vested).toBe(p!.reputation.repid_score + 500);
+    expect(p!.reputation.vesting.note.toLowerCase()).not.toMatch(/will be released/);
+  });
+
   test('a real attestation over an ineligible proof does not read as ANCHORED', async () => {
     // The five production rows in this shape (real uid, `is_real = false`) previously reported
     // identically to a genuine anchored proof on the public passport. The uid stays visible and
@@ -156,6 +173,16 @@ describe('buildAgentPassport', () => {
       repid_score: 1390,
       tier: 'ESTABLISHED',
       activity_30d: 12,
+      // This agent withholds nothing, so the block must say so rather than be absent —
+      // a missing field and "nothing is withheld" are different claims, and the second
+      // is the one a reader needs to distinguish an unmoved score from a held balance.
+      vesting: {
+        state: 'NONE',
+        vested_repid: 0,
+        cliff_ends_at: null,
+        score_including_vested: 1390,
+        note: expect.stringContaining('whole score'),
+      },
     });
 
     expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');
