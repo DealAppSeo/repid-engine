@@ -30,6 +30,7 @@ const REPUTATION_REGISTRY_BASE_SEPOLIA =
 import { deriveIdentityState } from './identity-state';
 import { deriveAnchorStatus, ANCHOR_NOTES, type AnchorStatus } from './anchor-status';
 import { vestingBlock, type VestingBlock } from './vesting-status';
+import { proofClaim, type ProofClaim } from './proof-claim';
 
 export class PassportQueryError extends Error {
   constructor(public step: string, detail: string) {
@@ -124,6 +125,13 @@ export interface AgentPassport {
       anchor_status: AnchorStatus;
       anchor_note: string;
       created_at: string | null;
+      /**
+       * WHAT was proven. `cryptographically_verifiable: true` above says a proof
+       * verifies; it does not say the claim could ever have been false. For a new
+       * agent the threshold is the lowest tier floor — zero — so every valid score
+       * satisfies it. Both facts belong in the response. See `proof-claim.ts`.
+       */
+      claim: ProofClaim;
     } | null;
     disclosure: string;
     proof_endpoint: string;
@@ -241,7 +249,7 @@ export async function buildAgentPassport(
   // -- Latest ZKP proof row, labeled honestly -------------------------------
   const { data: latestProof, error: proofErr } = await db
     .from('repid_zkp_proofs')
-    .select('scheme, proof_bytes, eas_attestation_uid, eas_schema, created_at, is_real, zk_commitment')
+    .select('scheme, proof_bytes, eas_attestation_uid, eas_schema, created_at, is_real, zk_commitment, statement')
     .eq('agent_id', agentId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -343,6 +351,7 @@ export async function buildAgentPassport(
             // answer instead of as "not yet". See anchor-status.ts for the measurement.
             anchor_status: deriveAnchorStatus(latestProof),
             anchor_note: ANCHOR_NOTES[deriveAnchorStatus(latestProof)],
+            claim: proofClaim((latestProof as any).statement),
             created_at: latestProof.created_at ?? null,
           }
         : null,
