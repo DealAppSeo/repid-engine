@@ -4017,3 +4017,53 @@ connected. Plan: a pure `bindAnswerFromRetrieval(answer, citedValues, retrieval)
 thin authenticated `POST /api/v1/proof-carrying/emit` route reusing memory-retrieve.ts's exact
 fetch + identity pattern. Tested the same way item 3's route was tested. If it does not land
 this beat, this entry already records the verified state so nothing is lost.
+
+## Beat 93 — 2026-09-03 · verified #595 independently; item 4 confirmed closed; wiring a real proof-carrying-answer input into scoring next
+
+**Step 1 — verified Beat 92's ledger PR and #595 independently.** `gh pr view 595
+--json mergedAt,state,statusCheckRollup` → `MERGED` 2026-09-03T12:50:19Z, 9/9 checks SUCCESS
+(zkp-vault, HAL prompt-injection, crosscheck, gitleaks x2, resident-secrets x2, test, Strix
+Security Review). `gh pr diff 595` read directly, not trusted from the title: it adds
+`src/memory/answer-binding-retrieval.ts` (`bindAnswerFromRetrieval` — draws citations ONLY
+from a `VerifiedRetrieval`'s already root/content-checked entries, throws `abstain: ...` on
+an empty cite list or a value not currently a verified member) and
+`src/routes/proof-carrying-emit.ts` (`POST /api/v1/proof-carrying/emit`, mounted in
+`src/index.ts` at the `/api/v1/proof-carrying` prefix, same `(req as any).agent_id` identity
+contract as `memory-retrieve.ts`, same bigint-to-string wire transform). Two test files
+(`answer-binding-retrieval.test.ts` unit-level incl. a revoked-value case,
+`proof-carrying-emit-route.test.ts` HTTP-level with a mocked `db`) — matches Beat 92's stated
+intent exactly, no discrepancy found.
+
+**Backlog item 4 (answer-binding) — independently confirmed closed at the primitive+route
+level**, same standard item 3 was held to: a real authenticated route
+(`POST /api/v1/proof-carrying/emit`) now gates an answer against a PERSISTED retrieval
+(`agent_memory_roots`/`agent_memory_leaves`/`agent_memory_leaf_content`), refusing with 409
+`abstain: ...` when the proof set doesn't verify — the acceptance test's "answer w/o valid
+proof set is refused/flagged; binding is checkable" now has a real HTTP path exercising it,
+not just the in-process `emitGroundedAnswer` the backlog table's item-4 row was written
+against. The backlog table's item-4 row still reads stale "NOW" — left uncorrected this beat
+(step 1 is ledger-only; a backlog-table edit belongs with step 2's PR, not bundled into the
+verification entry).
+
+**Step 2 intent — item 6's real remaining gap, found by tracing the call chain, not
+re-reading its backlog row.** `computeGroundingSignal` is called from
+`src/scoring/pipeline.ts:450` with `input.proof_carrying_answer ?? null`
+(`ScoreEventInput.proof_carrying_answer?: ProofCarryingAnswer`, `pipeline.ts:145`) — the
+pipeline-level plumbing already exists. But `grep -rn "proof_carrying_answer" src/routes/`
+returns zero hits: neither scoring route (`agents-external-score.ts`'s
+`POST /:id/score-event`, `agents-external.ts`, `route.ts`) reads it off `req.body`, so no
+external caller — including one that just used #595's new emit route to produce a real,
+verified `ProofCarryingAnswer` — has any way to hand it to a scoring call. That is the actual
+reason "no current traffic carries a proof-carrying answer" (item 6's own stated blocker)
+survives item 3+4 shipping: the gap isn't the retrieval or the binding, it's the last-mile
+route plumbing between them and scoring. Also noted, NOT yet solved: the emit route's wire
+format stringifies the witness's bigint `leaf.value`/`leaf.next` fields
+(`proof-carrying-emit.ts`'s `toWire`), so accepting a caller-supplied PCA back over HTTP needs
+a symmetric from-wire reconstruction before `verifyProofCarryingAnswer` can consume it — a
+real conversion to write carefully, not a one-line body-destructure. Plan: add that
+from-wire helper, thread an optional `proof_carrying_answer` through
+`agents-external-score.ts` (auth + ownership already gate this route, so this is the safest of
+the three scoring entry points to extend first), and test that a wire-round-tripped PCA
+computes `applicable:true` in shadow mode while a request without one stays byte-identical to
+today. If it does not land this beat, this entry already records the verified state and the
+precise remaining gap so nothing is lost.
