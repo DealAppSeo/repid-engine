@@ -72,6 +72,7 @@ import verticalLeaderboardRouter from './routes/vertical-leaderboard';
 import providersRouter from './routes/providers';
 import proofCarryingVerifyRouter from './routes/proof-carrying-verify';
 import memoryRetrieveRouter from './routes/memory-retrieve';
+import proofCarryingEmitRouter from './routes/proof-carrying-emit';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
 import securityStatusRouter from './routes/security-status';
@@ -595,6 +596,7 @@ app.use('/api/v1/admin/caps', adminCapsRouter);
 // routes; the caller supplies memory_root + citations, no server-side memory access needed.
 app.use('/api/v1/proof-carrying', proofCarryingVerifyRouter);
 app.use('/api/v1', memoryRetrieveRouter);
+app.use('/api/v1/proof-carrying', proofCarryingEmitRouter);
 
 app.get('/api/v1/observability/x402-metrics', (req, res) => {
   const apiKey = (req as any).apiKey;
