@@ -11,6 +11,22 @@ jest.mock('../../providers/health', () => ({
   markRateLimit: jest.fn()
 }));
 
+// The route walks the provider chain, and every hop consults `checkCap`, which is a
+// live Supabase SELECT. Unmocked, `/route-debug` hung until jest's 5s timeout while
+// `/providers` (which does no cap lookup) passed — one green and one red in the same
+// file, from the same cause. `checkCap` fails OPEN on error, so this suite's verdict
+// tracked network conditions rather than routing logic. See the header of
+// providers/__tests__/router.tiered.test.ts for the full account.
+jest.mock('../../db', () => {
+  const chain: any = {
+    select: () => chain,
+    eq: () => chain,
+    update: () => chain,
+    single: async () => ({ data: null, error: { message: 'no cap row (mocked)' } }),
+  };
+  return { db: { from: () => chain } };
+});
+
 const app = express();
 app.use(express.json());
 app.use(llmRouter);
