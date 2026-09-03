@@ -3908,3 +3908,16 @@ any).agent_id`) is real Supabase-touching work that has not landed in any of the
 attempts at this size; shipping the tested pure primitive alone this beat is a smaller,
 completable unit rather than another unlanded route-sized intent. If even this does not
 land within budget, this entry already records the verified state so nothing is lost.
+
+**Step 5 — what step 2 actually shipped, and how it differed from intent.** Shipped exactly
+what step 1 declared, no more: PR #589 adds `src/memory/memory-retrieval.ts` (pure
+`retrieveVerifiedMemory`) + `tests/memory-retrieval.test.ts` (5 tests: verified round-trip,
+refuses on root mismatch, drops a tampered content row, drops a revoked content row, empty
+input). `npx jest --config jest.config.js tests/memory-retrieval.test.ts` → 5/5 pass;
+`npx tsc --noEmit` → clean. Did not attempt the HTTP route this beat — narrowed on purpose
+in step 1 rather than discovered as a blocker mid-beat, so nothing here contradicts the
+earlier intent. #589 is open with `gh pr merge --auto --squash` armed (SAFE-CLASS: pure
+additive module + tests, zero callers, no flags touched); its checks were still pending
+when this entry was written. Backlog row 3's remaining scope is now exactly one thing: the
+authenticated `GET` route wiring this primitive to `agent_memory_leaves`/
+`agent_memory_roots`/`agent_memory_leaf_content` via `(req as any).agent_id`.
