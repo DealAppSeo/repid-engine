@@ -19,6 +19,7 @@ import {
   ANCHOR_PENDING_WINDOW_MS,
   ANCHOR_ELIGIBLE_SQL,
   ANCHOR_ELIGIBLE_SQL_COMMITMENT,
+  ANCHOR_NOTES,
   type AnchorStatus,
 } from '../src/services/anchor-status';
 
@@ -27,10 +28,23 @@ const agoMs = (ms: number) => new Date(NOW - ms).toISOString();
 const real = { is_real: true, zk_commitment: '0xabc' };
 
 describe('deriveAnchorStatus', () => {
-  it('an attestation uid is ANCHORED, whatever else the row says', () => {
+  it('an eligible row with a uid is ANCHORED', () => {
     expect(deriveAnchorStatus({ eas_attestation_uid: '0x42de', ...real, created_at: agoMs(0) }, NOW)).toBe('ANCHORED');
-    // …even for a row the worker would never have selected. We hold the uid; that is evidence.
-    expect(deriveAnchorStatus({ eas_attestation_uid: '0x42de', is_real: false }, NOW)).toBe('ANCHORED');
+  });
+
+  it('an INELIGIBLE row with a uid is not ANCHORED — the reasoning here was wrong', () => {
+    // THIS ASSERTION IS INVERTED FROM WHAT IT SAID, and the comment it replaces is the lesson.
+    // It read: "…even for a row the worker would never have selected. We hold the uid; that is
+    // evidence." The uid IS evidence — that an attestation exists. It is not evidence about
+    // THIS PROOF, and the two were treated as one thing.
+    //
+    // Production settled it on 2026-09-03: five rows hold a uid while failing the eligibility
+    // rule, the uids are genuine on Base Sepolia (this system's own attester and schema,
+    // timestamps matching to within a minute), and the proofs under them are `is_real = false`.
+    // Under the old line all five reported identically to a real anchored proof.
+    expect(deriveAnchorStatus({ eas_attestation_uid: '0x42de', is_real: false }, NOW)).toBe(
+      'ANCHORED_INELIGIBLE',
+    );
   });
 
   it('a FRESH eligible proof is PENDING, not "false"', () => {
@@ -119,5 +133,86 @@ describe('the read model cannot drift from the worker that does the writing', ()
       expect(sql).toContain(ANCHOR_ELIGIBLE_SQL);
       expect(sql).toContain(ANCHOR_ELIGIBLE_SQL_COMMITMENT);
     }
+  });
+});
+
+/**
+ * THE FIFTH RUNG — a uid on a row that was never eligible.
+ *
+ * Measured against production 2026-09-03: 22,365 rows carry an attestation uid while 22,360
+ * satisfy the eligibility rule. The five-row difference is real, and the uids are real —
+ * each resolves on Base Sepolia, minted by this system's own attester under its own schema,
+ * on-chain timestamps matching the rows to within a minute. Five SIMULATED proofs were
+ * anchored as if real, in one 63-second window, never repeated since.
+ *
+ * `deriveAnchorStatus` returned ANCHORED for them because it checked the uid before it
+ * checked eligibility — the file written to stop a status meaning two things at once was
+ * doing exactly that.
+ */
+describe('a uid on an ineligible row is neither ANCHORED nor NOT_ELIGIBLE', () => {
+  const uid = '0x' + 'ab'.repeat(32);
+
+  it('reports ANCHORED_INELIGIBLE for a simulated proof that carries a real uid', () => {
+    expect(
+      deriveAnchorStatus({
+        eas_attestation_uid: uid,
+        is_real: false,
+        zk_commitment: '0xcommit',
+        created_at: new Date().toISOString(),
+      }),
+    ).toBe('ANCHORED_INELIGIBLE');
+  });
+
+  it('reports ANCHORED_INELIGIBLE for a uid on a row with no commitment', () => {
+    expect(
+      deriveAnchorStatus({ eas_attestation_uid: uid, is_real: true, zk_commitment: null }),
+    ).toBe('ANCHORED_INELIGIBLE');
+  });
+
+  it('still reports plain ANCHORED when the row WAS eligible — the common case is untouched', () => {
+    expect(
+      deriveAnchorStatus({ eas_attestation_uid: uid, is_real: true, zk_commitment: '0xcommit' }),
+    ).toBe('ANCHORED');
+  });
+
+  it('does not disturb the un-anchored rungs', () => {
+    const now = Date.now();
+    expect(deriveAnchorStatus({ is_real: false, zk_commitment: '0xc' })).toBe('NOT_ELIGIBLE');
+    expect(
+      deriveAnchorStatus({ is_real: true, zk_commitment: '0xc', created_at: new Date(now).toISOString() }, now),
+    ).toBe('PENDING');
+    expect(
+      deriveAnchorStatus(
+        { is_real: true, zk_commitment: '0xc', created_at: new Date(now - ANCHOR_PENDING_WINDOW_MS - 1).toISOString() },
+        now,
+      ),
+    ).toBe('OVERDUE');
+  });
+
+  it('the published `anchored` boolean is UNCHANGED — consumers already read it', () => {
+    // Both halves must stay true at once: `anchored` is a fact about the chain (there IS an
+    // attestation) and `anchor_status` is the fact about this proof. Flipping the boolean to
+    // false would be a second lie, in the field @hyperdag/trustshell already reads.
+    const block = easBlock({ eas_attestation_uid: uid, is_real: false, zk_commitment: '0xc' });
+    expect(block.anchored).toBe(true);
+    expect(block.attestation_uid).toBe(uid);
+    expect(block.anchor_status).toBe('ANCHORED_INELIGIBLE');
+  });
+
+  it('every rung has a note, and the ineligible one says BOTH things', () => {
+    for (const s of Object.keys(ANCHOR_NOTES) as Array<keyof typeof ANCHOR_NOTES>) {
+      expect(ANCHOR_NOTES[s].length).toBeGreaterThan(20);
+    }
+    const note = ANCHOR_NOTES.ANCHORED_INELIGIBLE.toLowerCase();
+    expect(note).toMatch(/attestation exists|an on-chain attestation/); // the uid is real
+    expect(note).toMatch(/did not meet|not.*criteria/);                 // and it did not qualify
+  });
+
+  it('NOT_ELIGIBLE names both causes, not just the rarer one', () => {
+    // The note used to say only "carries no commitment". Of the five production rows, all five
+    // have a commitment and fail on is_real — so the note named the cause that did not apply.
+    const note = ANCHOR_NOTES.NOT_ELIGIBLE.toLowerCase();
+    expect(note).toMatch(/simulated/);
+    expect(note).toMatch(/commitment/);
   });
 });

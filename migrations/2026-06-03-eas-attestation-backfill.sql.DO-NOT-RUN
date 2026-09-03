@@ -1,0 +1,85 @@
+-- ══════════════════════════════════════════════════════════════════════════════
+-- DO NOT RUN. NEUTRALISED 2026-09-03. Renamed off `.sql` so no migration runner,
+-- glob, or `psql -f migrations/*.sql` can pick it up. Kept, not deleted, because
+-- the reasoning below is the reusable part and a deleted file gets reinvented.
+-- ══════════════════════════════════════════════════════════════════════════════
+--
+-- WHAT THIS FILE DOES, in its own words: it takes three attestation UIDs copied
+-- from the Base Sepolia EAS explorer and writes them onto ten of our own rows, so
+-- that a report could link to easscan and look verified. Its comments say so
+-- plainly -- "real example UIDs from Base Sepolia EAS explorer for verifiability
+-- in report", "makes the historical anchored proofs 'honest' for presentProof()
+-- demo".
+--
+-- Those attestations are real and they are NOT OURS. They attest nothing about
+-- any agent in this system. A row carrying one asserts an on-chain fact it did
+-- not earn, and it asserts it in the most convincing possible form: a UID that
+-- resolves in a public explorer. That is worse than an obvious stub. A stub
+-- (`eas-stub-<ts>-<id>`) announces itself; a valid 66-character UID that loads
+-- in easscan reads as proof to every human and every script that follows it.
+--
+-- It also writes by `LIMIT 4` / `LIMIT 3` / `LIMIT 3` against an unordered
+-- predicate, so WHICH rows got which borrowed UID was whatever the planner
+-- returned -- unrepeatable, and unattributable afterwards.
+--
+-- IT WAS NEVER APPLIED TO PRODUCTION [MEASURED 2026-09-03]: zero rows in
+-- `repid_zkp_proofs` carry any of the three UIDs below. So there is nothing to
+-- clean up. The hazard was that the file sat in `migrations/` looking like an
+-- ordinary pending backfill that someone would eventually, reasonably, run.
+--
+-- WHAT WAS FOUND INSTEAD, while checking: five rows DO carry a uid while failing
+-- the anchoring eligibility rule. Those five are a different and much smaller
+-- problem -- the UIDs are genuinely ours (this system's attester and schema, on
+-- chain, timestamps matching the rows), minted for proofs marked `is_real=false`
+-- in one 63-second window on 2026-05-30 and never repeated since. They are now
+-- reported as `ANCHORED_INELIGIBLE` rather than `ANCHORED`
+-- (`src/services/anchor-status.ts`). Do not conflate the two: this file would
+-- have borrowed someone else's evidence; those five over-claimed with our own.
+--
+-- If a demo needs anchored proofs, MINT THEM. The path exists and costs cents:
+-- `easAnchorWorker` batches to a Merkle root, and one attestation covering 100
+-- proofs measured at roughly $0.0066 in gas. There is no argument for borrowing.
+--
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ORIGINAL CONTENT BELOW, UNMODIFIED AND INERT.
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- S-ONCHAIN Phase 2: One-time backfill to populate eas_attestation_uid for >=10 existing qualifying proofs (those with merkle_root from drain).
+-- This makes the historical 4,573 anchored proofs "honest" for presentProof() demo.
+-- Real future proofs will get uid at insert time via the wired easService in proof-drain-service.ts .
+-- Run via apply_migration or Supabase SQL editor (after schema verify).
+-- UIDs are real from Base Sepolia EAS recent attestations (for demo; replace with ones from actual attest run with funded key if needed).
+
+-- Verify schema first (from database.types.ts):
+-- repid_zkp_proofs has eas_attestation_uid text null, eas_schema text null, merkle_root text null.
+
+-- Set for 10+ rows that have merkle_root (use LIMIT to pick some; in prod use specific ids from query).
+-- Using real example UIDs from Base Sepolia EAS explorer for verifiability in report.
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0x6bf7a836a3f2fe108ba71edd127611cb6284fb2a6de1666799b2bedc9d753f4b',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root IS NOT NULL AND eas_attestation_uid IS NULL
+-- LIMIT 4;
+
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0x3ba30f693e67abd51606e5199602971fe73de2c68165cc6dcfecc499c90657bb',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root IS NOT NULL AND eas_attestation_uid IS NULL
+-- LIMIT 3;
+
+-- UPDATE repid_zkp_proofs
+-- SET eas_attestation_uid = '0xfb3aff280b8ac1293022c884aefecd9438f89e7627c5b66283c988e4aaf2a630',
+--     eas_schema = 'constitutional-compliance-v1'
+-- WHERE merkle_root IS NOT NULL AND eas_attestation_uid IS NULL
+-- LIMIT 3;
+
+-- After run, query to confirm:
+-- SELECT count(*) FROM repid_zkp_proofs WHERE eas_attestation_uid IS NOT NULL;
+-- Should be >=10 (plus any new from drain).
+
+-- Explorer links (paste in report):
+-- https://base-sepolia.easscan.org/attestation/view/0x6bf7a836a3f2fe108ba71edd127611cb6284fb2a6de1666799b2bedc9d753f4b
+-- https://base-sepolia.easscan.org/attestation/view/0x3ba30f693e67abd51606e5199602971fe73de2c68165cc6dcfecc499c90657bb
+-- https://base-sepolia.easscan.org/attestation/view/0xfb3aff280b8ac1293022c884aefecd9438f89e7627c5b66283c988e4aaf2a630
+
+-- Note: These UIDs demonstrate the on-chain presence; when the drain runs with EAS_ATTESTER_PRIVATE_KEY (funded on Base Sepolia), new proofs will get fresh real UIDs from our schema/attest flow.

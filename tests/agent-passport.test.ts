@@ -103,6 +103,14 @@ function happyScript(agentRow: any = MINTED_AGENT) {
           scheme: 'plonky3_range_check',
           proof_bytes: 'AAAA',
           eas_attestation_uid: '0xeas',
+          // `is_real` and `zk_commitment` ADDED 2026-09-03. This fixture claims to be a MINTED
+          // agent's proof and omitted both, so it did not satisfy the anchoring eligibility rule
+          // it was standing in for. It passed anyway, because `deriveAnchorStatus` returned
+          // ANCHORED on the uid before it looked at eligibility — a fixture that did not meet
+          // its own description, green because the code never checked. Production has five rows
+          // in exactly that shape; see `src/services/anchor-status.ts`.
+          is_real: true,
+          zk_commitment: '0xcommitment',
           created_at: '2026-07-01T00:00:00.000Z',
         },
         error: null,
@@ -114,6 +122,30 @@ function happyScript(agentRow: any = MINTED_AGENT) {
 /* --------------------------- service-level tests -------------------------- */
 
 describe('buildAgentPassport', () => {
+  test('a real attestation over an ineligible proof does not read as ANCHORED', async () => {
+    // The five production rows in this shape (real uid, `is_real = false`) previously reported
+    // identically to a genuine anchored proof on the public passport. The uid stays visible and
+    // `anchored` stays true — the attestation IS real — but the status now says what it is.
+    const script = happyScript();
+    script.repid_zkp_proofs = [
+      {
+        data: {
+          scheme: 'plonky3_range_check',
+          proof_bytes: 'AAAA',
+          eas_attestation_uid: '0xeas',
+          is_real: false,
+          zk_commitment: '0xcommitment',
+          created_at: '2026-07-01T00:00:00.000Z',
+        },
+        error: null,
+      },
+    ];
+    const p = await buildAgentPassport(makeDb(script), MINTED_AGENT.id);
+    expect(p!.zkp.latest_proof!.eas_attestation_uid).toBe('0xeas');
+    expect(p!.zkp.latest_proof!.anchor_status).toBe('ANCHORED_INELIGIBLE');
+    expect(p!.zkp.latest_proof!.anchor_note.toLowerCase()).toMatch(/did not meet/);
+  });
+
   test('composes the honest passport for a minted agent', async () => {
     const p = await buildAgentPassport(makeDb(happyScript()), MINTED_AGENT.id);
     expect(p).not.toBeNull();
