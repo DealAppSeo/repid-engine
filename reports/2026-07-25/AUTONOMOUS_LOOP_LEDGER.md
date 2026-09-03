@@ -3921,3 +3921,99 @@ additive module + tests, zero callers, no flags touched); its checks were still 
 when this entry was written. Backlog row 3's remaining scope is now exactly one thing: the
 authenticated `GET` route wiring this primitive to `agent_memory_leaves`/
 `agent_memory_roots`/`agent_memory_leaf_content` via `(req as any).agent_id`.
+
+## Beat 91 — 2026-09-03 · verified #588/#589 independently; building item 3's last remaining piece: the authenticated retrieval route
+
+**Step 1 — verified Beat 90's ledger PR (#588) and its primitive PR (#589) independently.**
+`gh pr view 588 --json mergedAt,state` → `MERGED` 2026-09-03T05:29:53Z. `gh pr view 589
+--json mergedAt,state` → `MERGED` 2026-09-03T05:29:39Z; `gh pr checks 589` → 9/9 pass (test,
+crosscheck, zkp-vault, HAL prompt-injection, Strix, gitleaks x2, resident-secrets). `gh pr
+list --state merged --limit 8` shows nothing merged between #586 and #588/#589 to check for
+the #570/#576/#581/#585 gap class — both are loop-owned, no unlogged PR this beat.
+
+**Backlog row 3's remaining scope, confirmed unchanged since #589 landed:** the pure
+primitive `retrieveVerifiedMemory` (`src/memory/memory-retrieval.ts`) exists and is tested,
+but `grep -rn "retrieveVerifiedMemory" src/routes/` returns zero hits — no HTTP route calls
+it yet. This is the one piece beats 88/89/90 each named as the actual remaining work after
+narrowing down from "a persistence design" (beat 85) through two closed schema blockers
+(beats 85/86) to a tested pure bridge (beat 90).
+
+**Step 2 intent — build the authenticated GET route now, no further scoping needed.** Read
+`src/middleware/auth.ts:307`: `(req as any).agent_id` is set only for a DB-issued key
+(`validateAgentApiKey`), never for an env-allowlist key — so an env key holder gets a clean
+403, not a wrong agent's data. Read `agent_memory_roots`'s own migration comment: "the last
+root this agent committed" is `order by epoch desc limit 1` (an `idx_agent_memory_roots_
+latest` index already exists for this). Read `agent_memory_leaf_content`'s migration:
+content is keyed by `(agent_id, value)`, NOT by epoch — deliberately, so it is fetched
+un-scoped by epoch and left to `retrieveVerifiedMemory` to match against the hydrated tree.
+Plan: new `src/routes/memory-retrieve.ts`, mounted after `authMiddleware` (same position as
+`proof-carrying-verify.ts`, `src/index.ts:595`) — fetch the latest `agent_memory_roots` row,
+its `agent_memory_leaves` at that epoch, and this agent's `agent_memory_leaf_content` rows,
+call `retrieveVerifiedMemory`, JSON-serialize the bigint `IndexedLeaf.value`/`next` fields in
+each witness (the same wire-format problem `proof-carrying-verify.ts`'s own header already
+documents and solves in the opposite direction). Tested with injected/mocked Supabase calls
+per this repo's existing route-test style. On a new branch from `origin/main`, within the
+remaining turn budget; if it does not land this beat, this entry already records the
+verified state so nothing is lost.
+
+**Step 5 — what step 2 actually shipped, and how it differed from intent.** Shipped exactly
+what step 1 declared, no more: PR #592 adds `src/routes/memory-retrieve.ts` (`GET
+/api/v1/memory/retrieve`, mounted in `src/index.ts` at the same position as
+`proof-carrying-verify`) + `tests/memory-retrieve-route.test.ts` (4 tests: 403 with no bound
+agent identity, empty result with no committed root, verified entries + witnesses for a real
+committed epoch, and confirmation that a client-supplied `agent_id` query param is ignored —
+identity comes only from `(req as any).agent_id`). `npx jest tests/memory-retrieve-route.test.ts
+tests/memory-retrieval.test.ts tests/memory-content-store.test.ts tests/memory-root-store.test.ts
+tests/proof-carrying-verify-route.test.ts` → 26/26 pass; `npx tsc --noEmit` → clean. Did not
+attempt anything beyond the route this beat — no scope was discovered mid-beat that required
+narrowing, unlike beats 85/89 where the plan changed shape once written. #592 is open with
+`gh pr merge --auto --squash` armed (SAFE-CLASS: additive route + tests, no existing behavior
+or flags touched); some checks were already green (test, HAL prompt-injection) and the rest
+pending when this entry was written. **Backlog item 3 (P2 retrieval API) is now fully closed**
+at the primitive + wiring level: both the verifier endpoint (#533) and the retrieval endpoint
+(#592) exist and are tested. What remains for the acceptance test's full spirit is downstream,
+not this item: item 4 (answer-binding) can now build against a real retrieval endpoint instead
+of an in-process store, and item 6's "measured hallucination drop" still needs live
+proof-carrying traffic, which item 3 makes possible for the first time but does not itself
+produce.
+
+## Beat 92 — 2026-09-03 · verified #591/#592 independently; item 3 confirmed closed; building item 4's persisted-retrieval emit gate
+
+**Step 1 — verified Beat 91's ledger PR (#591) and its route PR (#592) independently.**
+`gh pr view 591 --json mergedAt,state` → `MERGED` 2026-09-03T08:39:08Z, 8/8 checks SUCCESS
+(zkp-vault, HAL prompt-injection, crosscheck, gitleaks x2, resident-secrets x2, test).
+`gh pr view 592 --json mergedAt,state` → `MERGED` 2026-09-03T08:38:33Z, 9/9 checks SUCCESS
+(same set + Strix Security Review). `gh pr diff 592` read directly: it adds
+`src/routes/memory-retrieve.ts` (`GET /api/v1/memory/retrieve`, mounted in `src/index.ts` at
+the same position as `proof-carrying-verify`) with a 403 for callers with no bound
+`agent_id`, an empty-result path when the agent has no committed root, and a call into
+`retrieveVerifiedMemory` for a real committed epoch — matching what Beat 91's own entry
+claimed it shipped, no discrepancy found. `gh pr list --state merged --limit 5` shows only
+#587/#588/#589/#591/#592 in the recent window — nothing unlogged to flag.
+
+**Backlog item 3 (P2 retrieval API) — independently confirmed closed, not just re-asserted.**
+Both halves exist and are wired: the verifier (`POST /api/v1/proof-carrying/verify`, #533)
+and the retrieval route (`GET /api/v1/memory/retrieve`, #592) reading real
+`agent_memory_roots`/`agent_memory_leaves`/`agent_memory_leaf_content` rows through the
+tested `retrieveVerifiedMemory` bridge (#589). Beat 91's closing claim holds.
+
+**Step 2 intent — item 4 (answer-binding) is next per the dependency queue's own "NOW"
+marker, and it has a real, previously-unaudited gap.** Read
+`src/memory/proof-carrying-memory.ts`: `bindAnswer`/`verifyProofCarryingAnswer`/
+`emitGroundedAnswer` already exist, are tested across 5 files (`proof-carrying-memory.test.ts`,
+`proof-carrying-e2e.test.ts`, `hal-grounding-root-currency.test.ts`,
+`answer-binding-pins.test.ts`, `proof-carrying-lifecycle-e2e.test.ts`), and the VERIFY half is
+genuinely wired into production: `computeGroundingSignal` (`src/hal/hal-grounding.ts:100`)
+calls `verifyProofCarryingAnswer`, which is called from `src/scoring/pipeline.ts:450` on every
+scoring call. But `emitGroundedAnswer` — the EMIT/gate half — has zero non-test callers
+(`grep -rn "emitGroundedAnswer" src/` outside its own definition returns nothing), and it only
+ever gates against an in-process `ProofCarryingMemory` instance's live tree. Nothing in this
+repo gates an answer against the PERSISTED retrieval item 3 just finished
+(`agent_memory_leaves`/`agent_memory_roots`/`agent_memory_leaf_content` via
+`retrieveVerifiedMemory`) — the two halves item 3 and item 4 both depend on have never been
+connected. Plan: a pure `bindAnswerFromRetrieval(answer, citedValues, retrieval)` in a new
+`src/memory/answer-binding-retrieval.ts` (same abstain-by-throw contract as
+`emitGroundedAnswer`, but keyed against a `VerifiedRetrieval` instead of a live tree), plus a
+thin authenticated `POST /api/v1/proof-carrying/emit` route reusing memory-retrieve.ts's exact
+fetch + identity pattern. Tested the same way item 3's route was tested. If it does not land
+this beat, this entry already records the verified state so nothing is lost.
