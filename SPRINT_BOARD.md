@@ -205,6 +205,52 @@ Turning the panel on starts scoring real agents on 2-of-3 consensus. That is a
 decision with a number attached, and the number (the calibrated threshold) does
 not exist yet. Sean's, not an agent's.
 
+### Flag observability: 106 of 111 behaviour gates cannot be seen from outside [MEASURED 2026-09-04]
+
+Generalises the quality-hook defect. That flag gated a live scoring path, defaulted
+off, and its state was unreadable outside the Railway dashboard — so the question
+"is it on?" got guessed instead of answered, three times in this project's history.
+`GET /health` now reports it (`service_quality_hook`), on the same contract
+`operator_pager` keeps: whether vars are SET and what they resolved to
+structurally, never a value.
+
+The audit that followed: 426 distinct env names in `src/`, 111 of them real
+behaviour gates (a mode switch or early return, not a URL or a tuning constant).
+**Five are observable.** Four keyless surfaces report any env state at all.
+
+More interesting than the count: a number of these default **ON**, which is the
+more dangerous shape. A default-off gate that nobody knows about is dormant; a
+default-on gate that nobody knows about is live behaviour nobody chose. Several
+score-affecting and money-affecting gates are in that group.
+
+**DO NOT just add them all to `/health`.** `/health` is PUBLIC and unauthenticated
+(`publicPaths` in `src/middleware/auth.ts`). Publishing which money controls,
+circuit breakers and auth requirements are currently off hands an attacker the
+map. The quality-hook entry is safe there because it gates a scoring shadow
+observation — no access, no funds. Anything gating money, chain writes or a
+breaker belongs on an authenticated surface. That split is a decision, not a
+cleanup.
+
+**One caveat any such reporter must not miss.** Several HAL gates resolve
+**DB → env → default** (`src/hal/config.ts`), reading `repid_config`. A reporter
+that reads `process.env` would publish the env value while the gate used the DB
+row — a reporter that disagrees with the thing it reports, which is worse than
+reporting nothing. `getHalConfig()` already computes a per-key `source`; publish
+the resolved value WITH its source.
+
+**Two claims from that audit were REFUTED on re-check, and the shape is worth
+keeping.** `OBSERVABILITY_REQUIRE_AUTH` and `RESILIENCE_REQUIRE_AUTH` both read
+`=== 'true' ? authMiddleware : passthrough`, which looks like "defaults to no
+auth". It is not: both routers mount AFTER the global `app.use(authMiddleware)`,
+and neither path is in `publicPaths`. They are a redundant second layer that is
+off by default, not an open door. Reading a router-local ternary without checking
+mount order gets this exactly backwards — verify the mount, not the ternary.
+
+`MOCK_FACILITATOR` did survive re-check: unset takes the REAL settlement path
+(the code comment says so) and builds a live wallet. It is guarded by the same
+amount ceiling and circuit breaker as the mock branch, so this is documented
+behaviour rather than a trap — but it is three-state, and "unset" is not "false".
+
 ### Designed, not built
 
 The E2E transaction (x402 + ERC-8004 + RepID + HAL in one contract), a chess match as an
