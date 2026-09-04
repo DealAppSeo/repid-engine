@@ -34,7 +34,7 @@
  * Vault upgrade described in agent-key-crypto.ts applies here too.
  */
 import { db } from '../db';
-import { encryptPrivateKey, decryptPrivateKey, KEY_VERSION } from './agent-key-crypto';
+import { encryptPrivateKey, decryptPrivateKey } from './agent-key-crypto';
 import { probeProviderKey, probeFor, supportedProviders, independentFamilies } from './provider-key-probe';
 
 export const BYOK_CUSTODY_ENABLED = process.env.BYOK_CUSTODY_ENABLED === 'true';
@@ -146,7 +146,7 @@ export async function storeProviderKey(
       provider: p.provider,
       label,
       encrypted_key: encrypted,
-      key_version: KEY_VERSION,
+      key_version: encrypted.v, // mirror the ciphertext, never a compile-time constant
       verify_status: 'LIVE',
       verify_detail: probe.detail,
       verified_at: now,
