@@ -10,7 +10,7 @@
  * The service_contract + "count tasks by status" row is the F1 false-negative regression guard:
  * it was misclassified `operational` (HAL suppressed) and MUST now be `deliverable`.
  */
-import { classifyTaskPurpose, TaskPurpose } from '../src/scoring/task-purpose';
+import { classifyTaskPurpose, isDeliverableDomain, TaskPurpose } from '../src/scoring/task-purpose';
 
 interface Case {
   name: string;
@@ -191,4 +191,52 @@ describe('classifyTaskPurpose — F1: explicit deliverable domains beat prompt h
       });
     }
   }
+});
+
+/**
+ * THE ONE-WAY GATE — regression guard for the 2026-09-04 service_contract default.
+ *
+ * `general` is the shape of a fallback nobody chose: it matches no rule in
+ * `classifyTaskPurpose`, so it lands in the DEFAULT branch (deliverable, weight 1)
+ * and HAL penalties apply in full — while `isDeliverableDomain` returns false, so
+ * the reward gate zeroes every positive on the same event.
+ *
+ * That asymmetry is not a bug in either function. Each is right on its own terms:
+ * an unknown domain SHOULD still be punishable (it must not dodge a veto), and an
+ * unknown domain SHOULD NOT be rewarded (a free-form chat run must not mint RepID).
+ * The bug was feeding a KNOWN domain in as unknown — `validation-repid-delta.ts`
+ * defaulted fulfilled service contracts to 'general', so paid work was punishable
+ * and unrewardable at once.
+ *
+ * These assertions exist so that stays deliberate. If someone "simplifies" the
+ * default back to 'general', the last case fails and says why.
+ */
+describe('general is a one-way gate — penalties apply, rewards do not', () => {
+  it('classifies as a deliverable, so HAL penalties apply at full weight', () => {
+    const v = classifyTaskPurpose('general', null);
+    expect(v.purpose).toBe('deliverable');
+    expect(v.halVetoApplies).toBe(true);
+    expect(v.weight).toBe(1);
+  });
+
+  it('is NOT a deliverable domain, so the reward gate zeroes positives', () => {
+    expect(isDeliverableDomain('general')).toBe(false);
+  });
+
+  it('service_contract closes the gate in both directions', () => {
+    // What a fulfilled contract is now labelled. Penalties unchanged (already
+    // weight 1); the reward path becomes reachable. It cannot score worse.
+    const v = classifyTaskPurpose('service_contract', null);
+    expect(v.purpose).toBe('deliverable');
+    expect(v.weight).toBe(1);
+    expect(isDeliverableDomain('service_contract')).toBe(true);
+  });
+
+  it('an unknown domain keeps the asymmetry — punishable, not rewardable', () => {
+    // Deliberate, and the reason the fix was to label the work correctly rather
+    // than to widen DELIVERABLE_DOMAINS: an unknown domain must not mint RepID.
+    const v = classifyTaskPurpose('some-domain-nobody-registered', null);
+    expect(v.halVetoApplies).toBe(true);
+    expect(isDeliverableDomain('some-domain-nobody-registered')).toBe(false);
+  });
 });

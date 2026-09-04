@@ -402,7 +402,23 @@ export async function applyServiceFulfilledDeltas(
       counterparty_agent_id: contract.buyer_agent_id,
       answer_text: deliverable,
       prompt_text: promptText,
-      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
+      // Default 'service_contract', NOT 'general' — the fallback was a one-way gate.
+      //
+      // MEASURED 2026-09-04: 'general' is not in DELIVERABLE_DOMAINS, so the reward
+      // gate (`isDeliverableDomain`, src/routes/agents-external.ts) zeroes every
+      // positive HAL delta on it. But `classifyTaskPurpose('general')` matches no
+      // rule and falls through to the DEFAULT branch — `deliverable, weight 1` —
+      // so HAL penalties apply at full weight. Paid service work was therefore
+      // punishable by HAL and structurally unrewardable, in the same event.
+      //
+      // A fulfilled service contract is a deliverable by construction; labelling it
+      // 'general' was never a policy, it was an untyped fallback. 'service_contract'
+      // is already the first entry in DELIVERABLE_DOMAINS, so this needs no
+      // classifier change — it only stops lying about what the work was.
+      //
+      // Direction of the change: penalties are unaffected (already weight 1); the
+      // reward path becomes reachable. It cannot make an event score worse.
+      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'service_contract',
     },
     halOverride
   );
@@ -417,7 +433,23 @@ export async function applyServiceFulfilledDeltas(
       counterparty_agent_id: contract.provider_agent_id,
       answer_text: deliverable,
       prompt_text: promptText,
-      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
+      // Default 'service_contract', NOT 'general' — the fallback was a one-way gate.
+      //
+      // MEASURED 2026-09-04: 'general' is not in DELIVERABLE_DOMAINS, so the reward
+      // gate (`isDeliverableDomain`, src/routes/agents-external.ts) zeroes every
+      // positive HAL delta on it. But `classifyTaskPurpose('general')` matches no
+      // rule and falls through to the DEFAULT branch — `deliverable, weight 1` —
+      // so HAL penalties apply at full weight. Paid service work was therefore
+      // punishable by HAL and structurally unrewardable, in the same event.
+      //
+      // A fulfilled service contract is a deliverable by construction; labelling it
+      // 'general' was never a policy, it was an untyped fallback. 'service_contract'
+      // is already the first entry in DELIVERABLE_DOMAINS, so this needs no
+      // classifier change — it only stops lying about what the work was.
+      //
+      // Direction of the change: penalties are unaffected (already weight 1); the
+      // reward path becomes reachable. It cannot make an event score worse.
+      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'service_contract',
     },
     halOverride
   );

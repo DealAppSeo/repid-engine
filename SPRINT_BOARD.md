@@ -126,13 +126,27 @@ names the single observation that would close it.
 - **Live fulfilments still pass `task_domain: 'general'`.** So today's real service work
   classifies as non-deliverable and earns nothing from HAL. #603 fixes this for its own
   event only; the existing `SERVICE_FULFILLED` path is untouched.
-- **Peer-verification is dead and was never load-bearing.** Completer last ran 2026-07-04,
-  producer stopped 2026-07-21, 62,841 rows stuck `in_review` with `completed_at` NULL. It
-  has produced **zero** RepID events in its entire history — so its death cost nothing in
-  scoring, but the anti-gaming consequence path `chronic-flag-accumulator` routes to has
-  never once fired.
-- **`PREDICTION_RESOLVE` has gone quiet** — 2,892 events lifetime, 11 since July. Second-
-  largest event type in the ledger. Whether the producer is still wired is UNVERIFIED.
+- **Peer-verification is HALTED BY A FLAG, not broken** [corrected 2026-09-04]. Completer
+  last ran 2026-07-04, producer stopped 2026-07-21, 62,841 rows stuck `in_review` with
+  `completed_at` NULL — but `trinity-task-bridge.ts` gates the producer on
+  `isProducerHalted('peer_verify')`, reading the `PRODUCER_HALT_CLASSES` env var. That is a
+  deliberate circuit breaker (L2 breaker 2.1, "drain-only, fail-loud"), and the stop date is
+  consistent with the flag being set rather than with code rot. **If `peer_verify` appears in
+  `PRODUCER_HALT_CLASSES` on the Railway `repid-engine` service, removing it restarts the
+  producer** — one variable, not a rebuild. UNVERIFIED from here: Railway env is not readable
+  from a cloud session. Check the service Variables before planning any repair work.
+  Separately and still true: it has produced **zero** RepID events in its entire history, so
+  its dormancy cost nothing in scoring, but the anti-gaming consequence path that
+  `chronic-flag-accumulator` routes to has never once fired.
+- **`PREDICTION_RESOLVE` needs a CALLER, not a fix** [MEASURED 2026-09-04]. 2,892 events
+  lifetime, 11 since July — second-largest event type in the ledger. The producer is wired and
+  works: it is emitted from an HTTP route (`src/routes/agents-external.ts`) and from nowhere
+  else. There is no worker, no cron, no scheduled resolver. So the quiet is absent demand, not
+  a broken path — the same shape as the deliverable-traffic finding. Prediction is also the
+  best-behaved RepID substrate available (objectively resolvable, measures calibration,
+  unfakeable because you commit before the outcome, and proper scoring rules make honest
+  reporting optimal), so pointing traffic at that route is a smaller job than building a new
+  event class.
 - **`repid_agents.risk_tolerance` is read by no code.** Dead column. Harmless today, but it
   is the shape a user-settable risk knob would take, and such a knob is a measured +73 RepID
   arbitrage on identical work (`npm run repid:sim`, Part 4). Do not wire it without reading
