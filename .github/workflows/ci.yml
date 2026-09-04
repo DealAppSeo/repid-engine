@@ -97,6 +97,29 @@ jobs:
           RUSTFLAGS: -D warnings
         run: cargo test --locked
 
+      # BOTH PROFILES, ON PURPOSE (added 2026-09-04). `cargo test` above is a
+      # DEBUG build, and two of the soundness gates this job's header advertises
+      # -- "the forgery test that gates the nullifier secret-binding constraint"
+      # -- assert that the PROVER panics on a forged trace. That panic is
+      # Plonky3's `check_constraints`, compiled in only under `debug_assertions`.
+      #
+      # So under `--release` (the profile the crate actually ships) those gates
+      # could not fire, `cargo test --release` had been RED with "did not panic
+      # as expected", and CI never saw it because CI never built that profile.
+      # The circuit was sound throughout -- the VERIFIER rejects both forgeries
+      # -- but the gates were checking nothing in the shipped profile, which is
+      # NOT CHECKED, not passed.
+      #
+      # The release-safe restatements (`*_in_any_profile`) assert the verifier
+      # rejects, so they hold in either profile; this step is what keeps them
+      # honest, and what stops the release profile going red again unobserved.
+      # ~30s on a warm cache, and it is the profile that ships.
+      - name: Soundness gates under the shipped profile (--release)
+        working-directory: zkp-vault
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --locked --release
+
   test:
     runs-on: ubuntu-latest
     steps:
