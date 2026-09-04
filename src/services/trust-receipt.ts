@@ -64,6 +64,31 @@ export interface TrustReceipt {
    * It binds a proof to THIS work. It does NOT assert the work is correct.
    */
   work_statement_hash: string | null;
+  /**
+   * THE PREIMAGE OF THE HASH ABOVE. Published so the receipt is checkable by
+   * someone who does not have the database.
+   *
+   * Until this was added the receipt carried a hash and NOTHING to recompute it
+   * from — `work_statement_hash` with no `work_statement`. A digest whose
+   * preimage is withheld is not evidence; it is an assertion wearing evidence's
+   * clothes, which is the exact failure this receipt exists to avoid.
+   *
+   * Safe to publish: this is the agreed SPEC (deliverable, numbered acceptance
+   * criteria, price, deadline) — the terms both parties bound themselves to. The
+   * request payload and the delivered result are NOT here and never should be.
+   */
+  work_statement: unknown | null;
+  /**
+   * Per-criterion met/not-met, published for the same reason.
+   *
+   * `buyer_satisfaction_score` is derived by the database as
+   * `round(met_count / n_criteria, 4)` and a client-supplied value that
+   * disagrees is refused. Publishing the ratings turns that from a promise into
+   * something an outsider can re-derive.
+   */
+  criterion_ratings: unknown | null;
+  /** The derived score, so the derivation above can be checked against it. */
+  buyer_satisfaction_score: number | null;
   /** Anything we could not establish, stated rather than omitted. */
   caveats: string[];
 }
@@ -73,7 +98,7 @@ const scan = (tx: string) => `https://sepolia.basescan.org/tx/${tx}`;
 export async function buildTrustReceipt(contractId: string): Promise<TrustReceipt | null> {
   const { data: c } = await db
     .from('service_contracts')
-    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at, fulfilled_at, work_statement_hash')
+    .select('id, status, agreed_price_usdc_raw, buyer_agent_id, provider_agent_id, settled_at, fulfilled_at, work_statement_hash, work_statement, criterion_ratings, buyer_satisfaction_score')
     .eq('id', contractId)
     .maybeSingle();
   if (!c) return null;
@@ -197,6 +222,12 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     onchain_link_is_proven: !!onchain,
     zk_proofs: (proofs ?? []).map((p) => ({ scheme: p.scheme, is_real: p.is_real, statement: p.statement })),
     work_statement_hash: c.work_statement_hash ?? null,
+    work_statement: (c as any).work_statement ?? null,
+    criterion_ratings: (c as any).criterion_ratings ?? null,
+    buyer_satisfaction_score:
+      (c as any).buyer_satisfaction_score === null || (c as any).buyer_satisfaction_score === undefined
+        ? null
+        : Number((c as any).buyer_satisfaction_score),
     caveats,
   };
 }
