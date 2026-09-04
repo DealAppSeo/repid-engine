@@ -159,3 +159,38 @@ from repid_agents
 group by 1, 2, 3
 having count(*) > 5
 order by agents desc;
+
+-- ---------------------------------------------------------------------------
+-- 7. WHERE THE [10, 10000] CLAMP IS ACTUALLY ENFORCED, because three source
+--    files name the wrong thing.
+--
+--    `src/testing/redteam-adjudication.ts`, `src/testing/t12-e2e-proof.ts` and
+--    `src/testing/red-team.ts` each write current_repid directly as
+--    `Math.max(0, ...)` and comment that the earned-floor trigger enforces the
+--    floor. It does not. `trg_repid_earned_floor` enforces
+--    `tier_lower_bound(peak_repid)` -- a RATCHET that returns 0 / 500 / 1000 /
+--    5000 / 8000, so for a low-peak agent its floor is 0, not 10. It also never
+--    caps: it only ever raises a value.
+--
+--    The real enforcement point is a CHECK constraint on the table:
+--        repid_agents_current_repid_check
+--        CHECK (current_repid >= 10 AND current_repid <= 10000)
+--
+--    This is good news and it is why those three files were left alone. A
+--    harness that drives an agent past either end does not silently write an
+--    out-of-range score -- the UPDATE raises 23514 and the run dies. It fails
+--    CLOSED. The `Math.max(0, ...)` is a clamp that does not do what it says,
+--    but the database refuses the write it would have allowed, so it is a
+--    latent crash and not a data-integrity hole. Do not "fix" it expecting to
+--    close a live risk; there is not one.
+--
+--    The transferable part: the invariant lives in ONE place that all writers
+--    pass through, and neither the app code nor the trigger the comments cite
+--    is that place. Before trusting a comment about where a rule is enforced,
+--    ask the catalog.
+-- ---------------------------------------------------------------------------
+select conname, pg_get_constraintdef(oid) as def
+from pg_constraint
+where conrelid = 'repid_agents'::regclass
+  and contype = 'c'
+  and pg_get_constraintdef(oid) ilike '%current_repid%';
