@@ -146,6 +146,46 @@ describe('verify-trust-receipt: reputation ledger arithmetic', () => {
     expect(outcomeOf(ledgerLine(out))).toBe('FAILED');
   });
 
+  /**
+   * `to === from + delta` with no published decay is NOT the identity closing.
+   * It means the row balances IF no decay was applied, and the receipt never
+   * says that — a writer that decayed by D and inflated by the same D lands
+   * here too. The verdict stays VERIFIED (the books do balance as published),
+   * but the assumption has to be on the page, or the reader takes the green
+   * tick for a decomposition that was never checked.
+   *
+   * This is not a corner: measured 2026-09-04, decay is unpublished on every
+   * contract-linked event in the live ledger, so this is what a stranger
+   * running the verifier against production sees today.
+   */
+  it('names the no-decay ASSUMPTION when it verified without a published decay', () => {
+    const line = ledgerLine(run(receipt([
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 },
+    ])).out);
+    expect(outcomeOf(line)).toBe('VERIFIED');
+    expect(line).toMatch(/NO decay is published/);
+    expect(line).toMatch(/this receipt does not state/);
+  });
+
+  it('claims the decomposition only for the events that published one', () => {
+    const line = ledgerLine(run(receipt([
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 990, decay: 30 },
+      { agent: 'b', event: 'SERVICE_FULFILLED', delta: 20, from: 2000, to: 2020 },
+    ])).out);
+    expect(outcomeOf(line)).toBe('VERIFIED');
+    expect(line).toMatch(/1 decompose against a published decay/);
+    expect(line).toMatch(/other 1 balance against from\/delta alone/);
+  });
+
+  it('claims a clean decomposition only when every event published a decay', () => {
+    const line = ledgerLine(run(receipt([
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 990, decay: 30 },
+    ])).out);
+    expect(outcomeOf(line)).toBe('VERIFIED');
+    expect(line).toMatch(/every score lands exactly where its own from\/decay\/delta put it/);
+    expect(line).not.toMatch(/does not state/);
+  });
+
   it('separate agents chain independently', () => {
     const { out } = run(receipt([
       { agent: 'buyer', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 },

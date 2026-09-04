@@ -137,7 +137,8 @@ function checkRepIdLedger(r) {
   const last = {};
   const failed = [];
   const undetermined = [];
-  let closed = 0;
+  let closed = 0; // identity decided from a published decay
+  let assumed = 0; // balances only if no decay occurred, which nothing here states
 
   for (const e of events) {
     const where = `${e.agent}/${e.event}`;
@@ -173,16 +174,22 @@ function checkRepIdLedger(r) {
     }
 
     // No decay recorded. Decide what can still be decided.
+    //
+    // `excess === 0` is NOT the identity closing. It means the row balances IF
+    // no decay was applied — and the receipt does not say that. A writer that
+    // decayed by D and inflated the score by the same D lands here too. So it
+    // is counted separately and reported as an assumption, never folded into
+    // the events whose decomposition was actually published.
     const excess = e.to - e.from - e.delta;
     if (excess === 0) {
-      closed++;
+      assumed++;
     } else if (excess > 0 && e.to !== REPID_FLOOR) {
       failed.push(
         `${where}: ${e.from}->${e.to} is ${excess} MORE than its recorded delta of ${e.delta}, and ${e.to} is ` +
           `not the ${REPID_FLOOR} floor — nothing in the engine lifts a score above its own delta`,
       );
     } else if (excess > 0) {
-      closed++; // at the floor: the clamp lifting it is the one legitimate cause
+      assumed++; // at the floor: the clamp lifting it is the one legitimate cause
     } else {
       undetermined.push(`${where}: ${e.from}->${e.to} is ${-excess} LESS than its recorded delta of ${e.delta}`);
     }
@@ -193,16 +200,23 @@ function checkRepIdLedger(r) {
     return record(
       'reputation ledger arithmetic',
       'NOT_CHECKED',
-      `${closed} of ${events.length} event(s) close exactly. The rest moved DOWN by more than their delta, which ` +
+      `${closed + assumed} of ${events.length} event(s) balance. The rest moved DOWN by more than their delta, which ` +
         `decay or the ${REPID_CAP} cap would also do — and this receipt records no decay for them, so an honest ` +
         `decay cannot be told from a rewrite: ${undetermined.join('; ')}`,
     );
   }
+  const scope =
+    assumed === 0
+      ? `every score lands exactly where its own from/decay/delta put it`
+      : closed === 0
+        ? `every score balances against its own from/delta — but NO decay is published for any of them, so this ` +
+          `holds only if none was applied, which this receipt does not state`
+        : `${closed} decompose against a published decay; the other ${assumed} balance against from/delta alone, ` +
+          `which holds only if no decay was applied to them — this receipt does not state that`;
   record(
     'reputation ledger arithmetic',
     'VERIFIED',
-    `${events.length} event(s) chain continuously per agent and every score lands exactly where its own ` +
-      `from/decay/delta put it, inside [${REPID_FLOOR}, ${REPID_CAP}]`,
+    `${events.length} event(s) chain continuously per agent, inside [${REPID_FLOOR}, ${REPID_CAP}]; ${scope}`,
   );
 }
 
