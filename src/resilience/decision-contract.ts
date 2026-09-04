@@ -117,6 +117,31 @@ export const RESILIENCE_MIN_CONFIDENCE = (): number => {
 };
 
 /**
+ * Every environment variable name the two resolvers below COMPOSE at runtime.
+ *
+ * WHY THIS IS EXPORTED RATHER THAN LISTED SOMEWHERE. `known-env-vars.generated.ts`
+ * is built by static analysis of literal `process.env.NAME` reads, and its own
+ * header says dynamically-composed names "are not captured and will not be
+ * typo-checked — that is a known, accepted gap". These sixteen names fall
+ * straight into that gap: only two of them appear as literals anywhere, so
+ * fourteen were invisible to the typo guard, including the one that lets the
+ * brain actuate on PAYMENTS.
+ *
+ * What that costs: the guard warns about a set-but-unknown variable only when it
+ * is a near-miss of a name it KNOWS. With the real name absent from the registry,
+ * `RESILIENCE_ANFIS_ENABLE_PAYMNETS` is close to nothing it knows, so it warns
+ * about nothing — the surface silently never actuates and the operator has a
+ * variable set in the dashboard proving to them that it does.
+ *
+ * Derived from SURFACES rather than written out, so a ninth surface is covered
+ * the moment it is added and there is no second list for anyone to forget.
+ */
+export const SURFACE_ENV_NAMES: readonly string[] = SURFACES.flatMap((s) => [
+  `RESILIENCE_ANFIS_ENABLE_${s.toUpperCase()}`,
+  `RESILIENCE_ANFIS_SHADOW_${s.toUpperCase()}`,
+]);
+
+/**
  * Is a surface's shadow flag ON? Shadow is ON by default for every surface — the brain only LOGS
  * decisions until a surface is explicitly enabled. `RESILIENCE_ANFIS_SHADOW_<SURFACE>=false`
  * combined with `RESILIENCE_ANFIS_ENABLE_<SURFACE>=true` is what lets a surface actuate.

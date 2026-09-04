@@ -2,7 +2,19 @@
 // Regenerated on every `npm run build` (prebuild). Statically discovered
 // from literal `process.env.NAME` / `process.env['NAME']` reads under src/.
 // Dynamically-composed names (e.g. `process.env[`${x}_API_KEY`]`) are not
-// captured and will not be typo-checked — that is a known, accepted gap.
+// captured here. Where such a family is enumerable from a canonical constant,
+// export the composed names and union them into the guard's registry instead of
+// re-listing them — see SURFACE_ENV_NAMES in src/resilience/decision-contract.ts
+// and ALL_KNOWN_ENV_VARS in src/config/env-typo-guard.ts. The gap is only
+// "accepted" where nothing can enumerate it.
+//
+// THE SCAN IS OVER RAW TEXT, NOT PARSED CODE, so a COMMENT that mentions
+// `process.env.SOMETHING` becomes an entry. That is where the bare `X` below
+// comes from: prose in src/config/flag-readiness.ts describing the shape of a
+// gate. Harmless today — the typo guard ignores candidates below its minimum
+// comparison length — but a longer name written in prose would become a real
+// suggestion pointing at a variable nothing reads. Prefer not to spell
+// `process.env.NAME` in a comment.
 //
 // Newline-delimited template string, not a JSON array: a sorted list of
 // ALL_CAPS names quoted one-per-line (e.g. "..._KEY",\n  "...") reliably
@@ -275,6 +287,9 @@ NOTIFICATION_POLL_INTERVAL_MS
 OBSERVABILITY_REQUIRE_AUTH
 OLLAMA_FALLBACK_MODEL
 OLLAMA_URL
+ONCHAIN_IDENTITY_FAIL_TTL
+ONCHAIN_IDENTITY_TIMEOUT_MS
+ONCHAIN_IDENTITY_TTL
 ONCHAIN_REPUTATION_TRIGGER_ENABLED
 ONLY_ATTESTATIONS_LEAVE
 OPENAI_API_KEY
@@ -283,6 +298,7 @@ OPENAI_COMPAT_ENABLED
 OPENROUTER_API_KEY
 OPENROUTER_REFERRER
 OPENROUTER_TITLE
+OPERATOR_PAGE_COOLDOWN_MS
 ORACLE_HMAC_SECRET
 OWNER_CEILING_SHADOW_ENABLED
 PARTICIPANT_RATING_MODE
@@ -333,10 +349,13 @@ REPIDSYNC_WORKER_ENABLED
 REPID_ACTIVE_GATE_MODE
 REPID_API_KEYS
 REPID_API_URL
+REPID_CHALLENGE_LOSS_BASE
 REPID_DECAY_MODE
 REPID_DELTA_FLOOR_RECONCILED
 REPID_DELTA_STATEMENT_MODE
 REPID_ENGINE_VERSION
+REPID_PREDICTION_BASE_REWARD
+REPID_PREDICTION_TAU_DAYS
 REPID_PURPOSE_GATE_ENABLED
 REPID_PURPOSE_GATE_V3
 REPID_RUN_EARN_GATE
@@ -368,7 +387,10 @@ SCORING_RULER_SALT
 SEAN_SIG_SECRET
 SELF_REPORT_EVIDENCE_MODE
 SELF_SERVE_ACCOUNTS_ENABLED
+SERVICE_QUALITY_HOOK_AGENTS
+SERVICE_QUALITY_HOOK_MODE
 SIGNING_KEY_DEV
+SOMETHING
 STAKE_DEPOSIT_AUTH_ENFORCED
 STAKE_ESCROW_ADDRESS
 STAKE_MIN_CONFIRMATIONS
@@ -408,8 +430,10 @@ VERIFY_CACHE_TTL
 VERIFY_REDTEAM_ONCHAIN_OUTBOX
 VERSION_CACHE_TTL_MS
 VERSION_PERSIST_ENABLED
+VESTING_GRACE_HOURS
 VOYAGE_API_KEY
 WRITER_DIRECT_APPLY
+X
 X402_DEMO_ANALYSIS
 X402_ENFORCEMENT_ENABLED
 X402_GATE_SHADOW
