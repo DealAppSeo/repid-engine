@@ -402,7 +402,30 @@ export async function applyServiceFulfilledDeltas(
       counterparty_agent_id: contract.buyer_agent_id,
       answer_text: deliverable,
       prompt_text: promptText,
-      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
+      // Default 'service_contract', NOT 'general' — put paid contract work in its
+      // own competence bucket instead of an untyped one.
+      //
+      // WHAT task_domain ACTUALLY DOES ON THIS PATH [MEASURED 2026-09-04]. This is
+      // `applyValidationEvent`, which does NOT call `classifyTaskPurpose` or
+      // `isDeliverableDomain` — the purpose gate runs in `runScoreEvent` (the HAL
+      // path) and the reward gate in the `agents-external` score-event route.
+      // Neither is reached from here. An earlier version of this comment claimed
+      // the change made a blocked HAL reward reachable; that was wrong, and it is
+      // recorded rather than quietly deleted because the wrong reason was
+      // load-bearing enough to be written down twice.
+      //
+      // What it DOES reach is the `apply_vertical_accuracy` AFTER INSERT trigger on
+      // `repid_score_events`, which buckets each event into
+      // `repid_agents.domain_accuracy` keyed by task_domain (100 when delta >= 0,
+      // else 0, running mean per domain). So the label decides which competence
+      // bucket a fulfilled contract lands in. Under 'general' every paid contract
+      // was scored into the same untyped bucket as everything else unlabelled,
+      // which makes per-domain accuracy meaningless exactly where the work is real.
+      //
+      // 'service_contract' is what the work is, and it is already the first entry
+      // in DELIVERABLE_DOMAINS — so should this path ever be routed through the
+      // purpose gate, it is correctly labelled for that too. No delta changes.
+      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'service_contract',
     },
     halOverride
   );
@@ -417,7 +440,30 @@ export async function applyServiceFulfilledDeltas(
       counterparty_agent_id: contract.provider_agent_id,
       answer_text: deliverable,
       prompt_text: promptText,
-      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'general',
+      // Default 'service_contract', NOT 'general' — put paid contract work in its
+      // own competence bucket instead of an untyped one.
+      //
+      // WHAT task_domain ACTUALLY DOES ON THIS PATH [MEASURED 2026-09-04]. This is
+      // `applyValidationEvent`, which does NOT call `classifyTaskPurpose` or
+      // `isDeliverableDomain` — the purpose gate runs in `runScoreEvent` (the HAL
+      // path) and the reward gate in the `agents-external` score-event route.
+      // Neither is reached from here. An earlier version of this comment claimed
+      // the change made a blocked HAL reward reachable; that was wrong, and it is
+      // recorded rather than quietly deleted because the wrong reason was
+      // load-bearing enough to be written down twice.
+      //
+      // What it DOES reach is the `apply_vertical_accuracy` AFTER INSERT trigger on
+      // `repid_score_events`, which buckets each event into
+      // `repid_agents.domain_accuracy` keyed by task_domain (100 when delta >= 0,
+      // else 0, running mean per domain). So the label decides which competence
+      // bucket a fulfilled contract lands in. Under 'general' every paid contract
+      // was scored into the same untyped bucket as everything else unlabelled,
+      // which makes per-domain accuracy meaningless exactly where the work is real.
+      //
+      // 'service_contract' is what the work is, and it is already the first entry
+      // in DELIVERABLE_DOMAINS — so should this path ever be routed through the
+      // purpose gate, it is correctly labelled for that too. No delta changes.
+      task_domain: typeof payload.task_type === 'string' ? payload.task_type : 'service_contract',
     },
     halOverride
   );
