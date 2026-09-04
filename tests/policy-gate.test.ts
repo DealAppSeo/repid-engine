@@ -44,11 +44,42 @@ describe('Policy Gate — durable RepID move', () => {
     expect(r.authorized_delta).toBe(0);
   });
 
-  it('neutralizes a PENALTY without a >=2-family HAL quorum', () => {
+  it('neutralizes an UNGROUNDED penalty (no quorum, no independent validation)', () => {
     const r = gate(base({ proposed_delta: -10, hal: { mode: 'extractor-fallback', families_used: 1 } }));
     expect(r.durable_move_authorized).toBe(true);
     expect(r.authorized_delta).toBe(0);
-    expect(r.reasons).toContain('penalty_neutralized:no_quorum');
+    expect(r.reasons).toContain('penalty_neutralized:ungrounded');
+  });
+
+  it('GROUNDS a penalty on an independent validation (validator != subject)', () => {
+    const r = gate(base({
+      proposed_delta: -10,
+      hal: { mode: 'extractor-fallback' }, // no quorum
+      validation: { source: 'redteam_adjudication', validation_id: 'chal_9', validator_agent_id: 'finder', subject_agent_id: 'subject' },
+    }));
+    expect(r.authorized_delta).toBe(-10);
+    expect(r.reasons).toContain('penalty_authorized:independent_validation');
+  });
+
+  it('rejects SELF-validation: a validator cannot ground a move against itself', () => {
+    const r = gate(base({
+      proposed_delta: -10,
+      hal: { mode: 'extractor-fallback' },
+      validation: { source: 'redteam_adjudication', validation_id: 'chal_9', validator_agent_id: 'same', subject_agent_id: 'same' },
+    }));
+    expect(r.authorized_delta).toBe(0);
+    expect(r.reasons).toContain('penalty_neutralized:ungrounded');
+  });
+
+  it('GROUNDS a VALIDATOR_REWARD on an independent validation, no settlement/provider needed', () => {
+    const r = gate(base({
+      proposed_delta: 12,
+      hal: { mode: 'extractor', providers_succeeded: 0 },
+      sensors: { tests_passed: false },
+      validation: { source: 'redteam_adjudication', validation_id: 'chal_9', validator_agent_id: 'finder', subject_agent_id: 'subject' },
+    }));
+    expect(r.authorized_delta).toBe(12);
+    expect(r.reasons).toContain('reward_authorized:independent_validation');
   });
 
   it('neutralizes a HAL-claim REWARD with no provider evidence AND no settlement', () => {

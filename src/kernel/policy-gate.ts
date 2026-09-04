@@ -64,6 +64,22 @@ export interface Purpose {
   is_deliverable: boolean;
 }
 
+/**
+ * Independent-validation evidence — grounds a validation-ROLE durable move
+ * (VALIDATION_FAILED penalty, VALIDATOR_REWARD) when there is no HAL fact-check
+ * quorum. Valid ONLY when it links to a real validation record AND the validator
+ * is not the subject (a validator may never judge itself). A bare caller-supplied
+ * `verdict` string is NOT independent validation.
+ */
+export interface ValidationEvidence {
+  validation_id?: string | null;   // links to a recorded validation (peer_verification / adjudication)
+  source?: 'redteam_adjudication' | 'counterparty_dispute' | 'peer_verification' | 'challenge' | null;
+  validator_agent_id?: string | null; // who judged
+  subject_agent_id?: string | null;   // who is judged
+  method?: string | null;             // L0..L5 verification level, when known
+  blinded?: boolean;
+}
+
 export interface EvidenceBundle {
   action_class: ActionClass;
   risk_class: number;
@@ -74,6 +90,7 @@ export interface EvidenceBundle {
   repid?: RepidContext;
   capability?: Capability;
   purpose?: Purpose;
+  validation?: ValidationEvidence;
   budget_remaining?: number;
   constitution_violations?: string[];
 }
@@ -168,28 +185,42 @@ export function gate(b: EvidenceBundle): GateResult {
   const hal = b.hal ?? {};
   const quorumMet = hal.mode === 'fact-check' && (hal.families_used ?? 0) >= QUORUM_MIN;
 
-  // 3d. PENALTY requires a ≥2-family HAL quorum. Otherwise neutralize (fail-safe).
+  // Independent-validation evidence: a linked validation record judged by someone
+  // OTHER than the subject. This is the grounding for validation-role moves
+  // (adjudicated challenges, counterparty disputes) that never run a HAL quorum.
+  const v = b.validation;
+  const indepValidation = !!(
+    v && (v.validation_id || v.source) &&
+    v.validator_agent_id && v.subject_agent_id &&
+    v.validator_agent_id !== v.subject_agent_id
+  );
+
+  // 3d. PENALTY requires grounding: a ≥2-family HAL quorum OR independent
+  //     validation. A bare caller `verdict` is not grounding → neutralize (fail-safe).
   if (delta < 0) {
-    if (hal.error) { reasons.push('penalty_neutralized:hal_error'); return allowZero(reasons); }
-    if (!quorumMet) { reasons.push('penalty_neutralized:no_quorum'); return allowZero(reasons); }
-    reasons.push(`penalty_authorized:families=${hal.families_used}`);
+    if (hal.error && !indepValidation) { reasons.push('penalty_neutralized:hal_error'); return allowZero(reasons); }
+    if (!quorumMet && !indepValidation) { reasons.push('penalty_neutralized:ungrounded'); return allowZero(reasons); }
+    reasons.push(quorumMet ? `penalty_authorized:quorum_families=${hal.families_used}` : 'penalty_authorized:independent_validation');
   }
 
-  // 3e. REWARD requires real evidence — but the RIGHT kind for the event.
-  //   - A HAL claim-quality reward needs ≥1 provider that actually returned a verdict.
-  //   - An ECONOMIC settlement reward (SERVICE_FULFILLED) is authorized by the
-  //     DETERMINISTIC settlement instead (delivery verified / re-exec matched),
-  //     because these events never run a cross-LLM fact-check and must not be
-  //     zeroed for lacking one. Either path is sufficient; absence of both is not.
+  // 3e. REWARD requires the RIGHT evidence for the event:
+  //   - HAL claim-quality reward → ≥1 provider that returned a verdict.
+  //   - ECONOMIC settlement reward → deterministic settlement (delivery verified).
+  //   - VALIDATOR reward → independent validation (they judged someone else's work).
+  //   Any one suffices; absence of all three does not.
   if (delta > 0) {
     const s = b.sensors ?? {};
     const settlementConfirmed = s.tests_passed === true || s.reexec_matched === true;
     const halProviderEvidence = !hal.error && (hal.providers_succeeded ?? 0) >= 1;
-    if (!settlementConfirmed && !halProviderEvidence) {
+    if (!settlementConfirmed && !halProviderEvidence && !indepValidation) {
       reasons.push('reward_neutralized:no_evidence');
       return allowZero(reasons);
     }
-    reasons.push(settlementConfirmed ? 'reward_authorized:settlement_sensors' : 'reward_authorized:provider_evidence');
+    reasons.push(
+      settlementConfirmed ? 'reward_authorized:settlement_sensors'
+      : halProviderEvidence ? 'reward_authorized:provider_evidence'
+      : 'reward_authorized:independent_validation'
+    );
   }
 
   // 3f. High-impact move on thin history ⇒ escalate rather than auto-apply.

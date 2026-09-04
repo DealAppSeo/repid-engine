@@ -110,15 +110,15 @@ export async function adjudicate(input: AdjudicationInput): Promise<Adjudication
   // finder reward → VALIDATOR_REWARD · subject fault → VALIDATION_FAILED · accuser frivolous → VALIDATOR_PENALTY.
   if (input.case === 'good_catch') {
     detected = true;
-    if (input.finder) { deltas.push(await applyDelta(input.finder, 'finder', +REDTEAM_REWARDS.FINDER_REWARD, 'VALIDATOR_REWARD', { challenge_id: input.challenge_id, redteam_case: input.case, evidence: input.evidence ?? null })); attacker = input.finder; deltaAtt = +REDTEAM_REWARDS.FINDER_REWARD; }
-    if (input.subject) { deltas.push(await applyDelta(input.subject, 'subject', -REDTEAM_REWARDS.SUBJECT_PENALTY, 'VALIDATION_FAILED', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'upheld_reject' })); defender = input.subject; deltaDef = -REDTEAM_REWARDS.SUBJECT_PENALTY; }
+    if (input.finder) { deltas.push(await applyDelta(input.finder, 'finder', +REDTEAM_REWARDS.FINDER_REWARD, 'VALIDATOR_REWARD', { challenge_id: input.challenge_id, redteam_case: input.case, evidence: input.evidence ?? null, counterparty_agent_id: input.subject ?? null, validation_source: 'redteam_adjudication' })); attacker = input.finder; deltaAtt = +REDTEAM_REWARDS.FINDER_REWARD; }
+    if (input.subject) { deltas.push(await applyDelta(input.subject, 'subject', -REDTEAM_REWARDS.SUBJECT_PENALTY, 'VALIDATION_FAILED', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'upheld_reject', counterparty_agent_id: input.finder ?? null, validation_source: 'redteam_adjudication' })); defender = input.subject; deltaDef = -REDTEAM_REWARDS.SUBJECT_PENALTY; }
   } else if (input.case === 'lazy_subject') {
     detected = true;
-    if (input.subject) { deltas.push(await applyDelta(input.subject, 'subject', -REDTEAM_REWARDS.SUBJECT_PENALTY, 'VALIDATION_FAILED', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'lazy_artifact', artifact_url: input.artifact_url ?? null })); defender = input.subject; deltaDef = -REDTEAM_REWARDS.SUBJECT_PENALTY; }
-    if (input.finder) { deltas.push(await applyDelta(input.finder, 'finder', +REDTEAM_REWARDS.FINDER_REWARD, 'VALIDATOR_REWARD', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'caught_lazy' })); attacker = input.finder; deltaAtt = +REDTEAM_REWARDS.FINDER_REWARD; }
+    if (input.subject) { deltas.push(await applyDelta(input.subject, 'subject', -REDTEAM_REWARDS.SUBJECT_PENALTY, 'VALIDATION_FAILED', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'lazy_artifact', artifact_url: input.artifact_url ?? null, counterparty_agent_id: input.finder ?? null, validation_source: 'redteam_adjudication' })); defender = input.subject; deltaDef = -REDTEAM_REWARDS.SUBJECT_PENALTY; }
+    if (input.finder) { deltas.push(await applyDelta(input.finder, 'finder', +REDTEAM_REWARDS.FINDER_REWARD, 'VALIDATOR_REWARD', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'caught_lazy', counterparty_agent_id: input.subject ?? null, validation_source: 'redteam_adjudication' })); attacker = input.finder; deltaAtt = +REDTEAM_REWARDS.FINDER_REWARD; }
   } else { // frivolous_reject
     detected = false; falsePositive = true;
-    if (input.finder) { deltas.push(await applyDelta(input.finder, 'accuser', -REDTEAM_REWARDS.ACCUSER_PENALTY, 'VALIDATOR_PENALTY', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'overturned_frivolous' })); attacker = input.finder; deltaAtt = -REDTEAM_REWARDS.ACCUSER_PENALTY; }
+    if (input.finder) { deltas.push(await applyDelta(input.finder, 'accuser', -REDTEAM_REWARDS.ACCUSER_PENALTY, 'VALIDATOR_PENALTY', { challenge_id: input.challenge_id, redteam_case: input.case, reason: 'overturned_frivolous', counterparty_agent_id: input.subject ?? null, validation_source: 'redteam_adjudication' })); attacker = input.finder; deltaAtt = -REDTEAM_REWARDS.ACCUSER_PENALTY; }
     defender = input.subject ?? null; deltaDef = 0; // subject vindicated
   }
 

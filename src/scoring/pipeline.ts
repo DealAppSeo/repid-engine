@@ -875,6 +875,13 @@ export async function applyValidationEvent(
     if (_mode !== 'off') {
       const isSettlement =
         event_type === 'SERVICE_FULFILLED' || event_type === 'SERVICE_SATISFIED' || event_type === 'VALIDATION_PASSED';
+      // Independent-validation evidence for validation-role moves (redteam adjudication,
+      // counterparty dispute). Valid only when the counterparty ≠ the subject (agent_id).
+      const _valSource: any = (metadata?.validation_source)
+        ?? (metadata?.redteam_case ? 'redteam_adjudication'
+          : metadata?.contract_id ? 'counterparty_dispute'
+          : metadata?.challenge_id ? 'challenge' : null);
+      const _validator = metadata?.counterparty_agent_id ?? metadata?.validator_agent_id ?? null;
       const g = evaluateEconomicMove({
         delta,
         settled_receipt_id: 'shadow', // measures evidence-gating; real receipt precondition tracked by receipt_present
@@ -885,10 +892,16 @@ export async function applyValidationEvent(
           hal_score: typeof halScore === 'number' ? halScore : undefined,
           providers_succeeded: Number((halOverride?.hal_signals as any)?.providers_used ?? 0),
         },
+        validation: {
+          validation_id: metadata?.challenge_id ?? metadata?.validation_id ?? metadata?.contract_id ?? null,
+          source: _valSource,
+          validator_agent_id: _validator && _validator !== agent_id ? _validator : null,
+          subject_agent_id: agent_id,
+        },
         settlement_confirmed: isSettlement,
         subject_n: 1, // proxy until the RepID ω lens lands (measures evidence gates, not zero-evidence)
         subject_u: 0.2,
-        is_deliverable: isSettlement,
+        is_deliverable: true, // every applyValidationEvent event is real economic/validation work (not an internal chore)
       });
       gate_shadow = {
         mode: _mode,

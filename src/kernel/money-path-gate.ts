@@ -11,7 +11,7 @@
  * nothing. In enforce mode it applies ONLY `authorized_delta`. Enforce requires
  * the trust_receipts table (settled_receipt_id) and a measurement window.
  */
-import { gate, GateResult, HalEvidence } from './policy-gate';
+import { gate, GateResult, HalEvidence, ValidationEvidence } from './policy-gate';
 
 export interface EconomicMoveInput {
   /** The economic delta the settlement path computed (may be + or -). */
@@ -20,6 +20,8 @@ export interface EconomicMoveInput {
   settled_receipt_id?: string | null;
   /** Real HAL evidence for the event, when it ran one (usually absent for pure settlements). */
   hal?: HalEvidence;
+  /** Independent-validation evidence — grounds validation-role moves (adjudication / dispute). */
+  validation?: ValidationEvidence;
   /** Deterministic settlement confirmation: x402 settled AND delivery verified. */
   settlement_confirmed: boolean;
   /** Subject reputation lens: direct settled episodes + uncertainty. */
@@ -38,6 +40,7 @@ export function evaluateEconomicMove(i: EconomicMoveInput): GateResult {
     proposed_delta: i.delta,
     settled_receipt_id: i.settled_receipt_id ?? null,
     hal: i.hal,
+    validation: i.validation,
     // A confirmed settlement is deterministic reward evidence (see policy-gate §3e).
     sensors: { tests_passed: i.settlement_confirmed },
     repid: { n: i.subject_n, u: i.subject_u },
