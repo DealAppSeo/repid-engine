@@ -377,7 +377,13 @@ function seedClosedRfq(): void {
       id: RFQ_ID,
       buyer_agent_id: BUYER,
       service_type: 'verification',
-      scope: { task: 'verify a claim' },
+      scope: {
+        deliverable: 'Verify the submitted claim against primary sources.',
+        criteria: [
+          'The verdict cites at least one primary source URL.',
+          'The verdict is PASS, FAIL, or ESCALATE with a written reason.',
+        ],
+      },
       min_price_usdc_raw: 10000,
       max_price_usdc_raw: null,
       min_provider_repid: 1000,
