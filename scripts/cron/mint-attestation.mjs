@@ -125,9 +125,62 @@ async function main() {
     const provKey = await mintKey(prov.id, 'living-proof-provider'); keys.push(provKey.id);
 
     // 2. create -> escrow (real x402) -> deliver -> satisfy
-    const create = await api('POST', '/api/v1/contracts', buyerKey.raw, { service_id: svc.id, buyer_agent_id: buyer.id, payload: { content: 'The Base Sepolia chain id is 84532.', title: `living-proof-${Date.now()}`, criteria: ['factual accuracy'], service_type: 'verification' } });
+    //
+    // THE PAYLOAD MUST PARSE AS A WORK STATEMENT, OR THIS RUN STRANDS REAL MONEY.
+    // [BROKE 2026-09-04, fixed same day.] #607 made `work_statement_hash` REQUIRED
+    // to move a contract to `fulfilled`, but left contract CREATION permissive:
+    // `if (spec.ok) insertRow.work_statement = spec.canonical` — an unparseable
+    // payload is accepted, gets no hash, and can then never be fulfilled.
+    //
+    // This script sent `criteria: ['factual accuracy']`, which fails the spec
+    // ("acceptance_criteria must be a non-empty numbered list; each text must be
+    // explicit (>= 24 chars, not a placeholder)"). So the 12:00Z run created a
+    // contract, escrowed REAL testnet USDC through x402, and then died at fulfil
+    // with WORK_STATEMENT_REQUIRED — money committed, delivery impossible. The
+    // create call still returned 201. Nothing failed until 30 seconds later, by
+    // which point the funds were already gone.
+    //
+    // A gate added at one end of a pipeline has to be checked against every
+    // producer feeding the other end. Create being lenient while fulfil is strict
+    // is a trap with money in it, and this script is the only unattended producer.
+    //
+    // The criteria below are what the verification handler is actually paid to
+    // do; they are the text ratings get scored against, so they say something
+    // checkable rather than restating the title.
+    const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const claimText = 'The Base Sepolia chain id is 84532.';
+    const create = await api('POST', '/api/v1/contracts', buyerKey.raw, {
+      service_id: svc.id,
+      buyer_agent_id: buyer.id,
+      agreed_price_usdc_raw: Number(svc.base_price_usdc_raw),
+      payload: {
+        content: claimText,
+        title: `living-proof-${Date.now()}`,
+        service_type: 'verification',
+        deliverable: `A cross-provider factual verification verdict on the claim: "${claimText}"`,
+        acceptance_criteria: [
+          { n: 1, text: 'The verdict states explicitly whether the claim is true or false, without hedging.' },
+          { n: 2, text: 'The verdict names the chain id it verified against, so the check is reproducible.' },
+        ],
+        deadline,
+        agreed_price: { amount_usdc_raw: Number(svc.base_price_usdc_raw), currency: 'USDC' },
+      },
+    });
     if (create.status !== 201 || !create.json?.id) throw new Error('create -> ' + create.status + ' ' + JSON.stringify(create.json).slice(0, 160));
     const cid = create.json.id;
+
+    // CHECK BEFORE THE MONEY MOVES, not after. The create call returns 201 even
+    // when the spec did not parse, so 201 is not evidence the contract can ever
+    // be fulfilled. Escrow is the irreversible step — verify the hash exists
+    // FIRST and abort while aborting is still free. This is the guard whose
+    // absence turned a payload-shape mistake into stranded testnet USDC.
+    if (!create.json?.work_statement_hash) {
+      throw new Error(
+        `create returned 201 but no work_statement_hash for ${cid} — the payload did not parse ` +
+        'as a work statement, so fulfil would fail with WORK_STATEMENT_REQUIRED. Aborting BEFORE ' +
+        'escrow so no funds are committed to a contract that cannot be delivered.'
+      );
+    }
     const header = await buildX402(prov.wallet_address, String(svc.base_price_usdc_raw));
     const escrow = await api('POST', `/api/v1/contracts/${cid}/escrow`, buyerKey.raw, {}, { 'X-PAYMENT': header });
     if (escrow.status !== 200 || escrow.json?.status !== 'escrowed') throw new Error('escrow -> ' + escrow.status + ' ' + JSON.stringify(escrow.json).slice(0, 200));
