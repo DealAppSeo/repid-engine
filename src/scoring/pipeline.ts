@@ -56,6 +56,7 @@ import {
 } from '../services/proof-enqueue-filter';
 import { resolveIssuerIdentity } from './issuer-identity';
 import { evaluateEconomicMove, moneyPathGateMode } from '../kernel/money-path-gate';
+import { writeTrustReceipt } from '../services/trust-receipt-writer';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -792,7 +793,9 @@ export async function applyValidationEvent(
   const decay = assessDecay({ currentRepid: old_repid, activity30d: agent.activity_30d });
   const decayBase = decayedScoreFor(decay);
   // Was Math.max(0, …): floor 0 against a DB floor of 10, and no ceiling at all.
-  const new_repid = clampRepidLoud(decayBase + delta, {
+  // `let` because the money-path gate may, in ENFORCE mode, recompute this from
+  // the gate-authorized delta instead of the raw caller delta (see the gate block below).
+  let new_repid = clampRepidLoud(decayBase + delta, {
     agentId: String(agent_id),
     eventType: event_type,
   });
@@ -869,6 +872,7 @@ export async function applyValidationEvent(
   // only MEASURE what it would authorize (recorded on the event); in ENFORCE (after
   // the trust_receipts table + a measurement window, Sean GO) we apply
   // gate.authorized_delta instead of the raw delta. Never affects the write here.
+  let settled_receipt_id: string | null = null;
   let gate_shadow: Record<string, unknown> | undefined;
   try {
     const _mode = moneyPathGateMode();
@@ -876,36 +880,60 @@ export async function applyValidationEvent(
       const isSettlement =
         event_type === 'SERVICE_FULFILLED' || event_type === 'SERVICE_SATISFIED' || event_type === 'VALIDATION_PASSED';
       // Independent-validation evidence for validation-role moves (redteam adjudication,
-      // counterparty dispute). Valid only when the counterparty ≠ the subject (agent_id).
+      // counterparty dispute). Valid only when the counterparty is not the subject (agent_id).
       const _valSource: any = (metadata?.validation_source)
         ?? (metadata?.redteam_case ? 'redteam_adjudication'
           : metadata?.contract_id ? 'counterparty_dispute'
           : metadata?.challenge_id ? 'challenge' : null);
       const _validator = metadata?.counterparty_agent_id ?? metadata?.validator_agent_id ?? null;
+      const _receiptId = crypto.randomUUID();
+      const _halEvidence = {
+        // gate decision union is clean|flagged|vetoed; engine HALDecision also has
+        // 'abstain' -> map to 'flagged' (advisory, non-authorizing) for the gate.
+        decision: (halDecision === 'clean' || halDecision === 'vetoed' ? halDecision : 'flagged') as 'clean' | 'vetoed' | 'flagged',
+        hal_score: typeof halScore === 'number' ? halScore : undefined,
+        providers_succeeded: Number((halOverride?.hal_signals as any)?.providers_used ?? 0),
+      };
+      const _validation = {
+        validation_id: (metadata?.challenge_id ?? metadata?.validation_id ?? metadata?.contract_id ?? null) as string | null,
+        source: _valSource,
+        validator_agent_id: (_validator && _validator !== agent_id ? _validator : null) as string | null,
+        subject_agent_id: agent_id,
+      };
       const g = evaluateEconomicMove({
         delta,
-        settled_receipt_id: 'shadow', // measures evidence-gating; real receipt precondition tracked by receipt_present
-        hal: {
-          // The gate's decision union is clean|flagged|vetoed; the engine's HALDecision
-          // also has 'abstain' → map it to 'flagged' (advisory, non-authorizing) for the gate.
-          decision: halDecision === 'clean' || halDecision === 'vetoed' ? halDecision : 'flagged',
-          hal_score: typeof halScore === 'number' ? halScore : undefined,
-          providers_succeeded: Number((halOverride?.hal_signals as any)?.providers_used ?? 0),
-        },
-        validation: {
-          validation_id: metadata?.challenge_id ?? metadata?.validation_id ?? metadata?.contract_id ?? null,
-          source: _valSource,
-          validator_agent_id: _validator && _validator !== agent_id ? _validator : null,
-          subject_agent_id: agent_id,
-        },
+        settled_receipt_id: _receiptId, // the receipt written below satisfies the precondition
+        hal: _halEvidence,
+        validation: _validation,
         settlement_confirmed: isSettlement,
-        subject_n: 1, // proxy until the RepID ω lens lands (measures evidence gates, not zero-evidence)
+        subject_n: 1, // proxy until the RepID lens lands (measures evidence gates, not zero-evidence)
         subject_u: 0.2,
         is_deliverable: true, // every applyValidationEvent event is real economic/validation work (not an internal chore)
       });
+      // Write the settlement record (evidence tuple + gate decision). Makes the Trust
+      // Receipt spine real even in shadow. Best-effort in shadow; required in enforce.
+      settled_receipt_id = await writeTrustReceipt(db, {
+        id: _receiptId,
+        action_class: 'durable_repid_move',
+        subject_agent_id: agent_id,
+        contract_id: metadata?.contract_id ?? null,
+        task_id: metadata?.task_id ?? null,
+        evidence_predicate_result: { settlement_confirmed: isSettlement, event_type },
+        hal_evidence: _halEvidence,
+        gate_decision: g.decision,
+        gate_reasons: g.reasons,
+        authorized_delta: g.authorized_delta,
+        outcome: g.decision === 'ALLOW' ? 'success' : g.decision === 'ASK' ? 'escalate' : 'fail',
+      });
+      // ENFORCE: apply exactly what the gate authorized, and only if a receipt exists.
+      if (_mode === 'enforce') {
+        const enforcedDelta = settled_receipt_id ? g.authorized_delta : 0; // no receipt -> no move
+        new_repid = clampRepidLoud(decayBase + enforcedDelta, { agentId: String(agent_id), eventType: event_type });
+      }
       gate_shadow = {
         mode: _mode,
-        receipt_present: false, // trust_receipts not yet wired — enforce stays blocked until it is
+        receipt_id: settled_receipt_id,
+        receipt_present: !!settled_receipt_id,
         would_decision: g.decision,
         would_authorize_delta: g.authorized_delta,
         raw_delta: Math.round(delta),
@@ -914,8 +942,14 @@ export async function applyValidationEvent(
         note: 'subject_n/u are placeholders until the RepID lens lands',
       };
     }
-  } catch {
-    /* shadow measurement must never affect the score write */
+  } catch (e) {
+    // Measurement/receipt must never corrupt a shadow write. In ENFORCE an error is
+    // fail-closed: a move we could not gate or record does not apply.
+    if (moneyPathGateMode() === 'enforce') {
+      new_repid = clampRepidLoud(decayBase + 0, { agentId: String(agent_id), eventType: event_type });
+      console.error('[scoring/pipeline] money-path gate errored in enforce - failing closed (no move):',
+        e instanceof Error ? e.message : String(e));
+    }
   }
 
   const insertPayload = {
@@ -942,6 +976,9 @@ export async function applyValidationEvent(
       metadata?.counterparty_agent_id && metadata.counterparty_agent_id !== agent_id
         ? metadata.counterparty_agent_id
         : null,
+    // The Trust Receipt this durable move is settled against (null until the gate
+    // block wrote one). In enforce mode a non-zero applied delta always carries one.
+    settled_receipt_id,
     answer_text: answerText,
     prompt_text: promptText,
     task_domain: taskDomain,
