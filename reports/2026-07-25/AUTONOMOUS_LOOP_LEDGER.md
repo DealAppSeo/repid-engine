@@ -4331,3 +4331,72 @@ a route-wiring gap the way items 3/4 turned out to be — building further into 
 beat, on top of the verification work already done, would have meant either bypassing a
 Sean-gate or rushing the exact kind of new mechanism this loop is supposed to avoid. Stopping
 here is the honest result for this beat, not a shortfall.
+
+## Beat 99 — 2026-09-04 · verified #608 independently (a real money-leak fix, unlogged — sixth consecutive beat with the gap); corrected a stale SPRINT_BOARD claim #605 had already closed
+
+**Step 1 — PR #608 merged after Beat 98's own ledger PR (#609), unlogged.** `gh pr list --state
+merged --limit 15 --json number,title,mergedAt` shows #608 (`fix: six things wired to paths that
+cannot fire`) merged 2026-09-04T15:46:52Z, three hours after #609 (08:56Z is #607/#605, #609 at
+12:42:58Z) — same unlogged-PR gap flagged in Beats 91/94/95/96/97/98, now a sixth consecutive
+beat with at least one instance. This one carried its own "MERGE BEFORE 12:00Z TOMORROW" banner
+(a live stranding contract) and shipped anyway without a ledger entry, so the gap is not just a
+paperwork miss — it is the same class this loop exists to prevent, this time on the loop's own
+output. Verified independently, not rubber-stamped from the title or body:
+
+- `gh pr view 608 --json statusCheckRollup` → 9/9 SUCCESS on `ab603c4`.
+- **The money-leak claim (item 6), checked against the actual code, not the PR prose.**
+  #607 (merged earlier the same day) made `work_statement_hash` required to reach `fulfilled`
+  but left contract *creation* permissive. `scripts/cron/mint-attestation.mjs:130-179` now
+  carries the fix: a real `acceptance_criteria` payload (verified against
+  `parseWorkStatement`'s actual argument shape, not an approximation) plus a guard — `if
+  (!create.json?.work_statement_hash) throw` — before the escrow call, so a missing hash aborts
+  the run while aborting is still free. Read directly, not inferred from the diff summary.
+- **The quality-hook enrollment claim (item 1).** `grep -n DEFAULT_ENROLLED_AGENTS
+  src/services/service-quality-hook.ts` → `['trinity-shofet', 'trinity-orch']` on current
+  `main` — the PR's claimed fix (the old list resolved by `providerAgentId` but was picked by
+  measuring buyer-side activity) is actually on disk, not just described.
+- **The observability claim (item 2).** `grep -n service_quality_hook
+  src/routes/health.ts` → present, matching the PR's "`GET /health` now reports
+  `{mode, enrolled_count, allowlist}`" claim.
+- Items 3 (peer-verify, documented not fixed — `PEER_VERIFY_PANEL_ENABLED` still defaults
+  `'false'`, confirmed unchanged), 4 (env-typo-guard derived from `SURFACES`), and 5 (two HAL
+  hook bugs) were not independently re-derived this beat — the PR's own verification section
+  already distinguishes VERIFIED (9/9 CI, full suite 504/6923 exit 0, both `parseWorkStatement`
+  cases executed) from NOT_CHECKED (`PRODUCER_HALT_CLASSES` contents — Railway env unreadable
+  from here), and that self-classification held up on every point spot-checked above, so
+  re-deriving the rest would have re-proven what the PR already proved honestly rather than
+  finding anything new. No flag flipped; scope matches the PR's own "Scope" section.
+
+**Step 2 — SPRINT_BOARD.md's "Live fulfilments still pass task_domain: 'general'" note (line
+126) was stale, and stale in a way that would have sent the next beat rebuilding something
+already fixed.** That note (written before #605) claimed real service work "earns nothing from
+HAL" under the `'general'` default and that "the existing SERVICE_FULFILLED path is untouched."
+Both halves no longer hold, for two different reasons:
+
+1. `validation-repid-delta.ts:428,466` (the actual `SERVICE_FULFILLED` sites #605 touched) now
+   default `task_domain` to `'service_contract'`, not `'general'` — read directly on `main`,
+   not from the PR description.
+2. The premise itself was already corrected in-code, dated the same day: the surrounding
+   comment (`validation-repid-delta.ts:405-427`, itself marked `[MEASURED 2026-09-04]`) states
+   this path — `applyValidationEvent` — never calls `classifyTaskPurpose` or
+   `isDeliverableDomain`; the purpose gate lives in `runScoreEvent` (the HAL path) and the
+   reward gate in the `agents-external` score-event route, neither reached from here. So
+   `task_domain` on this path was never wired to a HAL reward decision at all — it only feeds
+   the `apply_vertical_accuracy` trigger's per-domain competence bucket (`repid_agents.
+   domain_accuracy`). "Earns nothing from HAL" was the wrong mechanism attached to a real
+   observation (everything landing in one untyped bucket), and the file itself now says so.
+
+Updated `SPRINT_BOARD.md`'s "Found this session" bullet to state both corrections plainly
+rather than delete the line — deleting a wrong claim loses the reason a future reader would
+otherwise re-derive it. Docs-only, safe-class.
+
+**Investigated for step 2, NOT built — `PREDICTION_RESOLVE` needs a caller.** SPRINT_BOARD names
+this as the smallest real gap left (producer wired via `agents-external.ts`, zero scheduled
+callers, 11 events since July). Read the resolve path (`agents-external.ts:760-937`): it writes
+a real RepID delta through the same `insertScoreEvent`/`WRITER_DIRECT_APPLY` gate as every other
+scored event. Building an automatic resolver means deciding, for an existing prediction, what
+the actual outcome was — that's a new oracle/consequence mechanism touching real scores, not a
+route-wiring gap like items 3/4 turned out to be, and this loop's hard lines are SHADOW-FIRST and
+"no new measurement mechanism rushed" (item 8's cascade scorer was declined on exactly this
+ground, beat 84). Not attempted this beat. If it matters next, the design question is "what
+determines ground truth for an existing prediction" — that's Sean's call, not a beat's.
