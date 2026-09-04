@@ -152,6 +152,59 @@ names the single observation that would close it.
   arbitrage on identical work (`npm run repid:sim`, Part 4). Do not wire it without reading
   that first.
 
+### Peer-verification: never switched on, not broken [MEASURED 2026-09-04]
+
+Supersedes the earlier "peer-verification is dead" entry. It is not dead; its
+consequence path has never executed once, because the only code that computes
+consensus sits behind a flag that defaults OFF.
+
+Two zeroes are the whole finding, and a zero is a finding rather than an
+inventory — so these are stated flat, and every other figure below is a query
+instead of a number (this repo is PUBLIC; live table counts do not belong in it,
+and a count published here is stale the week after anyway):
+
+    peer_verify_queue rows ever reaching `panel_resolved`      0
+    RepID score events ever attributable to peer-verify        0
+
+Against those zeroes: tens of thousands of votes were cast, and six figures of
+verifier tasks were dispatched and fully drained — nothing is pending. Work was
+done. None of it was ever tallied. Re-derive the exact shape yourself with
+`scripts/sql/peer-verify-audit.sql` rather than quoting a number from this file.
+
+`PEER_VERIFY_PANEL_ENABLED` defaults `'false'` (src/services/peer-verify-consensus.ts).
+The panel path is the ONLY writer of `panel_resolved` and the only caller of the
+2-of-3 tally, so every one of those votes went into a system with no enabled
+tally. That is why `chronic-flag-accumulator` — which routes gaming patterns here
+on the promise that "a confirmed peer-verify FAILURE carries the real RepID
+consequence" — has never delivered a consequence: the promise was never wired to
+a live path.
+
+Three switches, stacked, all closed:
+
+  PEER_VERIFY_PANEL_ENABLED   defaults false — no consensus, no resolution, no scoring
+  PRODUCER_HALT_CLASSES       contains peer_verify? producer stopped emitting 2026-07-21
+                              (UNVERIFIED — Railway env is not readable from a cloud run)
+  HAL_CHRONIC_FLAG_ENABLED    defaults false, and its threshold is a placeholder the
+                              code says to calibrate against GA-C's flagged-precision
+                              number first
+
+**When you do re-run the audit, read the consensus count carefully.** Far fewer
+stranded rows reached genuine consensus than reached two agreeing votes, because
+`computeConsensus` returns `all_timeout` whenever `decisive.length === 0` — it
+tests that BEFORE quorum is ever considered. Two agreeing `timeout` votes are not
+a verdict, and a query that counts "two matching votes" overstates the backlog
+several-fold. That mistake was made here first.
+
+FOUR HYPOTHESES TESTED AND KILLED, so nobody re-runs them. Each looked right:
+  1. reader polls a status nobody writes — NO, both writers insert 'pending'
+  2. NULL source_response_id from the chronic-flag insert — NO, every row has one
+  3. queue_id vs source_response_id key mismatch in the tally — NO, 0 mismatches, 1:1
+  4. a large block stranded at consensus — NO; see the all_timeout rule above
+
+Turning the panel on starts scoring real agents on 2-of-3 consensus. That is a
+decision with a number attached, and the number (the calibrated threshold) does
+not exist yet. Sean's, not an agent's.
+
 ### Designed, not built
 
 The E2E transaction (x402 + ERC-8004 + RepID + HAL in one contract), a chess match as an
