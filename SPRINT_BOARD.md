@@ -123,9 +123,18 @@ names the single observation that would close it.
   since ~2026-07-17. FALSE [MEASURED 2026-09-04]: `trinity-nexus` and `trinity-hdm` scored
   on 2026-09-03, `trinity-gcm` and `trinity-veritas` on 09-02. Read liveness from recency,
   never from that line.
-- **Live fulfilments still pass `task_domain: 'general'`.** So today's real service work
-  classifies as non-deliverable and earns nothing from HAL. #603 fixes this for its own
-  event only; the existing `SERVICE_FULFILLED` path is untouched.
+- ~~Live fulfilments still pass `task_domain: 'general'`. So today's real service work
+  classifies as non-deliverable and earns nothing from HAL.~~ **STALE, CORRECTED
+  2026-09-04 (Beat 99).** #605 (merged same day, after this note was written) changed the
+  actual `SERVICE_FULFILLED` sites (`validation-repid-delta.ts:428,466`) to default
+  `task_domain` to `'service_contract'`, not `'general'` — read directly on `main`, not from
+  a PR description. The "earns nothing from HAL" mechanism was also wrong independent of
+  that: this path (`applyValidationEvent`) never calls `classifyTaskPurpose` or
+  `isDeliverableDomain` — the purpose gate lives in `runScoreEvent` (the HAL path) and the
+  reward gate in the `agents-external` score-event route, neither reached from here.
+  `task_domain` here only feeds the `apply_vertical_accuracy` trigger's per-domain
+  competence bucket, not a HAL reward decision. The real observation survives (paid
+  contract work was landing in one untyped bucket); the claimed consequence did not.
 - **Peer-verification is HALTED BY A FLAG, not broken** [corrected 2026-09-04]. Completer
   last ran 2026-07-04, producer stopped 2026-07-21, 62,841 rows stuck `in_review` with
   `completed_at` NULL — but `trinity-task-bridge.ts` gates the producer on
