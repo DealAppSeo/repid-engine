@@ -162,6 +162,12 @@ export interface ServiceQualityObservation {
   /** ENFORCE ONLY — what actually moved. */
   applied?: number;
   score_event_id?: number;
+  /**
+   * NOT_CHECKED ONLY — HalService's own words for why this was not the
+   * provider-backed path. Carried through so a reader of the stored observation
+   * sees the reason, not just the absence of a verdict.
+   */
+  degraded_reason?: string;
   observed_at: string;
 }
 
@@ -274,10 +280,42 @@ export async function recordServiceQuality(
       providersFn: () => buildFactCheckProviders(),
     });
 
+    // WAS THIS ACTUALLY THE PROVIDER-BACKED PATH? Ask that FIRST, and ask it of
+    // the path rather than of a marker.
+    //
+    // [FIXED 2026-09-04, one day after this file was written.] This block used to
+    // check `reward_suppressed` alone. That marker is set by
+    // applyProviderEvidenceGuard only when the decision is `clean` — a
+    // zero-provider `vetoed` gets `veto_suppressed` instead, and a zero-provider
+    // `flagged` gets NEITHER. So two of the three zero-provider outcomes fell
+    // straight through and were recorded here as `checked: true` with a
+    // `hal_decision`, indistinguishable from a real cross-LLM verdict.
+    //
+    // What that would have written into the ledger: the style-extractor's
+    // opinion under the field name of a strictness-2 fact-check. The extractor is
+    // non-discriminative for this purpose (measured AUC ~0.375 — below chance),
+    // and HalService says so itself, loudly, in `degraded_reason`. Two
+    // measurements wearing one name is the defect this repo keeps paying for.
+    //
+    // `degraded_mode` is the canonical marker (src/lib/degraded.ts) and `mode`
+    // states which path ran. Both are checked: a marker can be forgotten at a new
+    // call site, and this file is the proof of that.
+    const halMode = (r as any).mode;
+    if ((r as any).degraded_mode === true || halMode !== 'fact-check') {
+      return {
+        mode: cfg.mode, checked: false,
+        reason: `not_provider_backed (hal_mode=${halMode ?? 'unknown'})`,
+        ...((r as any).degraded_reason ? { degraded_reason: (r as any).degraded_reason } : {}),
+        agent_name: agentName, observed_at,
+      };
+    }
+
     // A REWARD REQUIRES A PROVIDER. `reward_suppressed` is HalService reporting
     // that zero providers succeeded behind this verdict. That is NOT_CHECKED —
     // recording a score from it would be the unearned-reward defect, and in the
     // enforce direction it would move a real agent's reputation on nothing.
+    // Kept BELOW the path check: it stays correct for a fact-check run in which
+    // every provider failed, which the mode alone does not catch.
     if ((r as any).reward_suppressed !== undefined) {
       return {
         mode: cfg.mode, checked: false, reason: 'no_provider_evidence',

@@ -269,6 +269,100 @@ describe('service-quality-hook', () => {
     });
   });
 
+  describe('a degraded HAL run is NOT_CHECKED, whatever its decision', () => {
+    // THE BUG THIS PINS, found 2026-09-04 one day after the hook was written.
+    // The guard checked `reward_suppressed` alone. applyProviderEvidenceGuard
+    // sets that ONLY for a `clean` decision — a zero-provider `vetoed` gets
+    // `veto_suppressed`, and a zero-provider `flagged` gets NEITHER. So two of
+    // the three zero-provider outcomes were recorded as `checked: true` with a
+    // hal_decision, indistinguishable from a real cross-LLM verdict, when what
+    // actually ran was the style-extractor (measured AUC ~0.375 — below chance).
+    // The mock must serve BOTH tables the shadow path touches: the repid_agents
+    // read AND the service_contracts write. An earlier version omitted .update()
+    // and the provider-backed case reported NOT_CHECKED for a reason that had
+    // nothing to do with the guard under test — a red that would have been easy
+    // to "fix" by loosening the assertion instead of the mock.
+    const writes: Array<Record<string, unknown>> = [];
+    const enrolled = () => {
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = 'trinity-shofet';
+      writes.length = 0;
+      dbFrom.mockImplementation((table: string) => {
+        if (table === 'repid_agents') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data: { id: 'p1', agent_name: 'trinity-shofet', current_repid: 1500, tier: 'ESTABLISHED' },
+                }),
+              }),
+            }),
+          };
+        }
+        return {
+          update: (payload: Record<string, unknown>) => {
+            writes.push(payload);
+            return { eq: async () => ({ error: null }) };
+          },
+        };
+      });
+    };
+    const run = () => recordServiceQuality({
+      contractId: 'c1', providerAgentId: 'p1', serviceType: 'verification',
+      result: { answer: 'delivered work' },
+    });
+
+    // Each case is a zero-provider extractor fallback. Only the first was caught
+    // before; the other two are the regression.
+    it.each([
+      ['clean   (was caught — reward_suppressed set)', { decision: 'clean', reward_suppressed: { reason_code: 'NO_PROVIDER_EVIDENCE' } }],
+      ['vetoed  (was NOT caught — veto_suppressed only)', { decision: 'flagged', veto_suppressed: { reason_code: 'NO_PROVIDER_EVIDENCE' } }],
+      ['flagged (was NOT caught — no marker at all)', { decision: 'flagged' }],
+    ])('reports NOT_CHECKED for a degraded %s', async (_label, extra) => {
+      enrolled();
+      halEvaluate.mockResolvedValue({
+        hal_score: 0.42,
+        mode: 'extractor-fallback',
+        degraded_mode: true,
+        degraded_reason: 'strictness-2 requested but fact-check quorum unavailable',
+        ...(extra as object),
+      });
+
+      const obs = await run();
+
+      expect(obs.checked).toBe(false);
+      expect(obs.reason).toMatch(/not_provider_backed|no_provider_evidence/);
+      // The decisive assertion: no verdict may be reported for work nobody checked.
+      expect(obs.hal_decision).toBeUndefined();
+      expect(obs.would_apply).toBeUndefined();
+      // And nothing is stored beside the artifact — a NOT_CHECKED observation
+      // must not leave a row a later reader could mistake for a verdict.
+      expect(writes).toHaveLength(0);
+    });
+
+    it('carries HAL\'s own reason through, so the stored observation says WHY', async () => {
+      enrolled();
+      halEvaluate.mockResolvedValue({
+        hal_score: 0.42, mode: 'extractor-fallback', degraded_mode: true,
+        degraded_reason: 'fact-check quorum unavailable (0 provider(s) configured)',
+        decision: 'flagged',
+      });
+      const obs = await run();
+      expect(obs.degraded_reason).toContain('quorum unavailable');
+    });
+
+    it('still records a verdict when the run WAS provider-backed', async () => {
+      // The guard must not swallow the real path — a check that reports
+      // NOT_CHECKED for everything is not a check.
+      enrolled();
+      halEvaluate.mockResolvedValue({ hal_score: 0.1, mode: 'fact-check', decision: 'clean' });
+      const obs = await run();
+      expect(obs.checked).toBe(true);
+      expect(obs.hal_decision).toBeDefined();
+      expect(writes).toHaveLength(1);
+    });
+  });
+
   describe('never throws into fulfilment', () => {
     it('converts a thrown HAL error into NOT_CHECKED, not a rejection', async () => {
       process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
