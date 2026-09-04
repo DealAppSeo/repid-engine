@@ -106,6 +106,23 @@ export async function attemptResume(agentName: string): Promise<boolean> {
 
     for (const test of shuffled) {
       const response = await sendToAgent(agentName, test.prompt, test.capability);
+      // NOT_CHECKED aborts the assessment; it is never graded. `sendToAgent`
+      // returns null when the probe could not run at all (no adapter, no API
+      // key, the completion threw). Grading that would measure our own
+      // infrastructure and report it as the agent's capability — and one of
+      // those sentinels used to score as a CORRECT answer on a negative probe.
+      //
+      // Aborting rather than skipping is deliberate: a pass rate computed over
+      // whichever probes happened to reach a provider is not the rate this gate
+      // is specified against, and it would silently shrink the denominator until
+      // one lucky answer cleared 0.8.
+      if (response === null) {
+        console.warn(
+          `[SelfHealing] Agent '${agentName}' assessment NOT_CHECKED — a probe could not run ` +
+            `(routing/API key/provider). Agent stays paused; this is not a failed recovery check.`
+        );
+        return false;
+      }
       const correct = evaluateResponse(response, test.expected);
       if (correct) passed++;
     }
