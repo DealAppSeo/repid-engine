@@ -89,16 +89,20 @@ CLAUDE-RULE-5 says outright. Trace the route to the table; do not guess the tabl
 | Deploy the always-on Railway "manager" worker | Railway infra GO | Approve service deploy (prepared on branch when ready) | laptop-closed overnight loop |
 | **`TRUSTRAILS_HMAC_SECRET` is not armed on either aitrinitysymphony surface** — both self-report `ready:false` [MEASURED 2026-09-03 via `GET /api/version`] | env secret | Set a real secret on **both** the Vercel project (www + apex) and the Railway service (app), then re-check `/api/version` shows `ready:true` | compliance-receipt `audit_hash` integrity |
 
-## OPEN AS OF 2026-09-04 (session handoff — do not re-derive)
+## OPEN AS OF 2026-09-04 18:00Z (session handoff — do not re-derive)
 
-Everything below was measured this session against the live database or the code on
-`main`. Dates are attached because a number without one is an assertion.
+Everything below was measured this session against the live database, the deployed
+`/health`, or the code on `main`. Dates are attached because a number without one is
+an assertion. **Items closed during the session were deleted rather than ticked** — a
+list that keeps done work trains its reader to skim, which is how the one urgent row
+gets missed.
 
 ### Human-gated — nothing below moves without Sean
 
 | Item | Where exactly | Value |
 |---|---|---|
-| `SERVICE_QUALITY_HOOK_MODE` | Railway → project `repid-engine` → **service** `repid-engine` → Variables (NOT project-shared) | literal `shadow` |
+| **⚠ Stranded escrow — decide recovery** | contract `133a9048…`, escrowed 2026-09-04 12:00:13Z | Real testnet USDC is committed to a contract that can never be delivered (NULL `work_statement_hash`, `WORK_STATEMENT_REQUIRED` at fulfil). #608 stops NEW ones; it does not release this one. Recovering funds is a money-path write and was deliberately not attempted. |
+| `SERVICE_QUALITY_HOOK_MODE` | Railway → project `repid-engine` → **service** `repid-engine` → Variables (NOT project-shared) | literal `shadow`. **Now verifiable without the dashboard**: `GET /health` → `service_quality_hook.mode`. A MISSING key means the build has not deployed yet — that is not the same as `off`. |
 | `TRUSTRAILS_HMAC_SECRET` | Vercel project `trustrails` **and** Railway `repid-engine` — same value both | generate: `openssl rand -hex 32`. A publicly-known placeholder is in use today, so audit hashes are forgeable. Deleting it from HEAD is not rotation. |
 | `SUPABASE_URL` + `SUPABASE_SECRET_KEY` | Vercel project `trustmarket-landing` | the `sb_secret_…` key from Supabase → Settings → API Keys. NOT `sb_publishable_…` (that one ships in the browser). Route 503s by design until both exist. |
 | trustmarket.dev deploy target | Vercel | domain is served by an April static upload from `trustmarket-coming-soon`, not the landing project — merged fixes will not appear until this is repointed |
@@ -106,16 +110,19 @@ Everything below was measured this session against the live database or the code
 
 ### Verification debts — real work that is NOT_CHECKED until something runs
 
-Neither of these is a failure. Both are claims with no live witness yet, and each
-names the single observation that would close it.
+Neither is a failure. Both are claims with no live witness, and each names the single
+observation that closes it.
 
 - **The 2026-08-17 HAL orientation fix has never scored a real deliverable.** Deliverable
   traffic stopped 2026-08-17, the same day the fix landed. VERIFIED in simulation
   (`npm run repid:sim`: monotone, zero violations), NOT_CHECKED in production. Closes on
   the first `purpose: deliverable` event dated after 2026-08-17.
-- **The service-quality hook (#603) has never executed.** It is on `main` and inert —
-  mode defaults to `off`. Closes on the first row where
-  `service_contracts.metadata ? 'hal_quality_shadow'`.
+- **The service-quality hook has never executed.** Now for a *known* reason rather than an
+  unexplained absence: until #608 its allowlist named the most active BUYER, so every
+  fulfilment reported `agent_not_enrolled` regardless of the flag. Fixed; still inert
+  because the mode defaults to `off`. Closes on the first row where
+  `service_contracts.metadata ? 'hal_quality_shadow'`. Run `npm run verify:quality-hook`
+  before blaming the flag — it answers whether the hook *can* fire at all.
 
 ### Found this session, not yet acted on
 
@@ -123,34 +130,18 @@ names the single observation that would close it.
   since ~2026-07-17. FALSE [MEASURED 2026-09-04]: `trinity-nexus` and `trinity-hdm` scored
   on 2026-09-03, `trinity-gcm` and `trinity-veritas` on 09-02. Read liveness from recency,
   never from that line.
-- **Live fulfilments still pass `task_domain: 'general'`.** So today's real service work
-  classifies as non-deliverable and earns nothing from HAL. #603 fixes this for its own
-  event only; the existing `SERVICE_FULFILLED` path is untouched.
-- **Peer-verification is HALTED BY A FLAG, not broken** [corrected 2026-09-04]. Completer
-  last ran 2026-07-04, producer stopped 2026-07-21, 62,841 rows stuck `in_review` with
-  `completed_at` NULL — but `trinity-task-bridge.ts` gates the producer on
-  `isProducerHalted('peer_verify')`, reading the `PRODUCER_HALT_CLASSES` env var. That is a
-  deliberate circuit breaker (L2 breaker 2.1, "drain-only, fail-loud"), and the stop date is
-  consistent with the flag being set rather than with code rot. **If `peer_verify` appears in
-  `PRODUCER_HALT_CLASSES` on the Railway `repid-engine` service, removing it restarts the
-  producer** — one variable, not a rebuild. UNVERIFIED from here: Railway env is not readable
-  from a cloud session. Check the service Variables before planning any repair work.
-  Separately and still true: it has produced **zero** RepID events in its entire history, so
-  its dormancy cost nothing in scoring, but the anti-gaming consequence path that
-  `chronic-flag-accumulator` routes to has never once fired.
-- **`PREDICTION_RESOLVE` needs a CALLER, not a fix** [MEASURED 2026-09-04]. 2,892 events
-  lifetime, 11 since July — second-largest event type in the ledger. The producer is wired and
-  works: it is emitted from an HTTP route (`src/routes/agents-external.ts`) and from nowhere
-  else. There is no worker, no cron, no scheduled resolver. So the quiet is absent demand, not
-  a broken path — the same shape as the deliverable-traffic finding. Prediction is also the
-  best-behaved RepID substrate available (objectively resolvable, measures calibration,
-  unfakeable because you commit before the outcome, and proper scoring rules make honest
-  reporting optimal), so pointing traffic at that route is a smaller job than building a new
-  event class.
-- **`repid_agents.risk_tolerance` is read by no code.** Dead column. Harmless today, but it
-  is the shape a user-settable risk knob would take, and such a knob is a measured +73 RepID
-  arbitrage on identical work (`npm run repid:sim`, Part 4). Do not wire it without reading
-  that first.
+- **A gate can be added at one end of a pipeline without checking the producers at the
+  other.** #607 made `work_statement_hash` required at fulfil and left CREATE permissive,
+  which stranded money the same day (see the escrow row above; fixed for the cron in #608).
+  The general question is NOT answered: what else creates contracts, and does it produce a
+  parseable work statement? `src/routes/v1/negotiation.ts` is the other writer.
+- **Peer-verification is never-switched-on, not broken.** Full finding and the four killed
+  hypotheses are below; magnitudes live in `scripts/sql/peer-verify-audit.sql`, not here.
+  Still UNVERIFIED from a cloud session: whether `peer_verify` appears in
+  `PRODUCER_HALT_CLASSES` on the Railway service. Read the service Variables first.
+- **106 of 111 behaviour gates are unobservable from outside the process.** See the flag
+  entry below. The obvious fix — publish them all on `/health` — is wrong, because
+  `/health` is public and unauthenticated.
 
 ### Peer-verification: never switched on, not broken [MEASURED 2026-09-04]
 
