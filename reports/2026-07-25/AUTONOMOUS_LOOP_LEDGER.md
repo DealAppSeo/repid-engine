@@ -4163,3 +4163,55 @@ emit-route test helpers, passed through `toWire` then `fromWirePCA`) reaches
 `grounded:true` through `verifyProofCarryingAnswer`, and a request with no field stays
 byte-identical to today's response shape. If it does not land this beat, this entry already
 records the verified state and the exact two-piece scope so nothing is lost.
+
+## Beat 96 — 2026-09-04 · verified #599 independently (unlogged-PR gap, same recurring class); item 6's two-piece plumbing BUILT this beat
+
+**Step 1 — verified #599, the one PR merged after Beat 95's own ledger PR (#600).** `gh pr
+list --state merged --limit 8` shows #599 ("audit(repid): the false-positive recompute
+proposes nothing, and that is the answer") merged 2026-09-04T01:26:20Z, *after* #600
+(2026-09-04T00:58:26Z) despite the lower PR number — creation order, not merge order, so
+number ordering cannot be trusted for this check. Same unlogged-PR gap class flagged in Beats
+91/94/95, recurring again, closed the same way: independent verification before moving on.
+`gh pr view 599 --json statusCheckRollup` → 9/9 SUCCESS (test, crosscheck, zkp-vault, HAL
+prompt-injection, Strix, gitleaks x2, resident-secrets x2). `gh pr diff 599` read directly:
+two new files only (`scripts/repid-recompute.mjs`, `scripts/sql/repid-ledger-audit.sql`), zero
+files modified, `--apply` never invoked — matches the PR body's "nothing was written to any
+score" claim structurally. `node --check scripts/repid-recompute.mjs` passes. The live-ledger
+numbers the PR cites (eligible set empty, −252,990 vs. the prior −475,618, the May-2026-only
+window) were not independently re-queried this beat — no Supabase credential in this session,
+and the PR's own SQL file is the reproduction path for a session that has one; re-running that
+falls to whichever session next holds a live credential, not to this verification. Confirmed
+#599 does not touch item 6: `grep -rn "proof_carrying_answer" src/routes/` before starting
+step 2 still returned zero hits, `ls src/memory/` still had no `proof-carrying-wire.ts` —
+Beat 95's diagnosis stood unchanged.
+
+**Backlog item 6 — the two-piece plumbing BUILT this beat, not just re-diagnosed a fourth
+time.** (1) `src/memory/proof-carrying-wire.ts` — new, exports `fromWirePCA(wire: unknown):
+ProofCarryingAnswer | null`, the exact inverse of `proof-carrying-emit.ts`'s `toWire`:
+restores `citations[].witness.leaf.value`/`.next` via `BigInt()`, validates every field's
+shape first, and returns `null` (never throws) on anything malformed — checked against five
+cases including a non-numeric bigint field and a citation missing its witness. (2)
+`agents-external-score.ts`'s `POST /:id/score-event` now destructures an optional
+`proof_carrying_answer` off the body and passes `fromWirePCA(proof_carrying_answer) ??
+undefined` into `runScoreEvent` — chosen over `route.ts`/`trinity-task-bridge.ts` exactly as
+Beat 94/95 reasoned, since auth + `requireOwnedAgent` already gate this route. A malformed
+value degrades to `undefined` rather than 400ing the whole score event, matching the
+never-throws contract on the wire helper.
+
+**Tests, all passing.** `tests/proof-carrying-wire.test.ts` (new): a real PCA built from
+`bindAnswer` over a live `LeanIMTPlus` tree round-trips through `toWire`/`fromWirePCA` and
+still reads `grounded:true` via `verifyProofCarryingAnswer`; four malformed-shape cases (non-
+object, missing top-level fields, non-numeric bigint field, missing witness) all return
+`null`. `tests/agents-external-score.test.ts` (extended): a request with no
+`proof_carrying_answer` field forwards `undefined` to the mocked `runScoreEvent` (byte-
+identical to today); a malformed one also forwards `undefined` rather than 400ing; a
+well-formed wire PCA (built the same way as the unit test, sent as the HTTP body) arrives at
+`runScoreEvent` with real `bigint` fields restored. `npx tsc --noEmit` clean. Full targeted run
+(`proof-carrying-wire`, `agents-external-score`, `agents-external-score-auth`,
+`proof-carrying-emit-route`): 32/32 passing.
+
+**What's left for item 6, so the next beat doesn't re-derive it:** the plumbing now exists but
+nothing calls it in anger — no live caller assembles a `POST /emit` response into a
+`POST /score-event` body yet, so `computeGroundingSignal` still reports `applicable:false` on
+all current traffic (byte-identical to today, as designed for shadow mode). That end-to-end
+wiring, if it matters next, is a caller/integration task, not a primitive gap.
