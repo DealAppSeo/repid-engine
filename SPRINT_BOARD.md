@@ -89,16 +89,19 @@ CLAUDE-RULE-5 says outright. Trace the route to the table; do not guess the tabl
 | Deploy the always-on Railway "manager" worker | Railway infra GO | Approve service deploy (prepared on branch when ready) | laptop-closed overnight loop |
 | **`TRUSTRAILS_HMAC_SECRET` is not armed on either aitrinitysymphony surface** — both self-report `ready:false` [MEASURED 2026-09-03 via `GET /api/version`] | env secret | Set a real secret on **both** the Vercel project (www + apex) and the Railway service (app), then re-check `/api/version` shows `ready:true` | compliance-receipt `audit_hash` integrity |
 
-## OPEN AS OF 2026-09-04 (session handoff — do not re-derive)
+## OPEN AS OF 2026-09-04 18:00Z (session handoff — do not re-derive)
 
-Everything below was measured this session against the live database or the code on
-`main`. Dates are attached because a number without one is an assertion.
+Everything below was measured this session against the live database, the deployed
+`/health`, or the code on `main`. Dates are attached because a number without one is
+an assertion. **Items closed during the session were deleted rather than ticked** — a
+list that keeps done work trains its reader to skim, which is how the one urgent row
+gets missed.
 
 ### Human-gated — nothing below moves without Sean
 
 | Item | Where exactly | Value |
 |---|---|---|
-| `SERVICE_QUALITY_HOOK_MODE` | Railway → project `repid-engine` → **service** `repid-engine` → Variables (NOT project-shared) | literal `shadow` |
+| **⚠ Stranded escrow — decide recovery** | contract `133a9048…`, escrowed 2026-09-04 12:00:13Z | Real testnet USDC is committed to a contract that can never be delivered (NULL `work_statement_hash`, `WORK_STATEMENT_REQUIRED` at fulfil). #608 stops NEW ones; it does not release this one. Recovering funds is a money-path write and was deliberately not attempted. |
 | `TRUSTRAILS_HMAC_SECRET` | Vercel project `trustrails` **and** Railway `repid-engine` — same value both | generate: `openssl rand -hex 32`. A publicly-known placeholder is in use today, so audit hashes are forgeable. Deleting it from HEAD is not rotation. |
 | `SUPABASE_URL` + `SUPABASE_SECRET_KEY` | Vercel project `trustmarket-landing` | the `sb_secret_…` key from Supabase → Settings → API Keys. NOT `sb_publishable_…` (that one ships in the browser). Route 503s by design until both exist. |
 | trustmarket.dev deploy target | Vercel | domain is served by an April static upload from `trustmarket-coming-soon`, not the landing project — merged fixes will not appear until this is repointed |
@@ -106,16 +109,31 @@ Everything below was measured this session against the live database or the code
 
 ### Verification debts — real work that is NOT_CHECKED until something runs
 
-Neither of these is a failure. Both are claims with no live witness yet, and each
-names the single observation that would close it.
+Neither is a failure. Both are claims with no live witness, and each names the single
+observation that closes it.
 
 - **The 2026-08-17 HAL orientation fix has never scored a real deliverable.** Deliverable
   traffic stopped 2026-08-17, the same day the fix landed. VERIFIED in simulation
   (`npm run repid:sim`: monotone, zero violations), NOT_CHECKED in production. Closes on
   the first `purpose: deliverable` event dated after 2026-08-17.
-- **The service-quality hook (#603) has never executed.** It is on `main` and inert —
-  mode defaults to `off`. Closes on the first row where
-  `service_contracts.metadata ? 'hal_quality_shadow'`.
+- **The service-quality hook has never executed — but everything it needs is now in place.**
+  [MEASURED 2026-09-04 15:56Z, from the public `/health`, not a dashboard:]
+
+      deployed_commit_short  34e9d28          (#608 is live)
+      service_quality_hook   mode=shadow  enrolled_count=2  allowlist=default
+
+  So the flag IS set, and `allowlist: default` means it is using the corrected pair from
+  #608 rather than an env override. Until #608 the allowlist named the most active BUYER,
+  so every fulfilment reported `agent_not_enrolled` at any flag setting — that is why the
+  absence was not evidence of anything.
+
+  **This row is why the observability change was worth making.** "Is the flag set?" was
+  unanswerable for a full session and got guessed; it is now one unauthenticated GET, and
+  the answer was yes the whole time. Closes on the first row where
+  `service_contracts.metadata ? 'hal_quality_shadow'` — expected on the next fulfilment by
+  an enrolled provider (~12:00Z daily). If it does not appear, run
+  `npm run verify:quality-hook` BEFORE suspecting the flag: it distinguishes "nobody
+  enrolled delivered" from "the hook cannot fire at all".
 
 ### Found this session, not yet acted on
 
@@ -160,6 +178,17 @@ names the single observation that would close it.
   is the shape a user-settable risk knob would take, and such a knob is a measured +73 RepID
   arbitrage on identical work (`npm run repid:sim`, Part 4). Do not wire it without reading
   that first.
+- **A gate can be added at one end of a pipeline without checking the producers at the
+  other.** #607 made `work_statement_hash` required at fulfil and left contract CREATE
+  permissive, which stranded real money the same day (see the escrow row above; fixed for
+  the cron in #608). The general question is NOT answered: what else creates contracts, and
+  does it produce a parseable work statement? `src/routes/v1/negotiation.ts` is the other
+  writer.
+- **106 of 111 behaviour gates are unobservable from outside the process** [MEASURED
+  2026-09-04]. See the flag entry below. The obvious fix — publish them all on `/health` —
+  is WRONG: `/health` is public and unauthenticated, so that would hand an attacker a map of
+  which money controls and breakers are currently off. Anything gating funds, chain writes
+  or a breaker needs an authenticated surface. That split is a decision, not a cleanup.
 
 ### Peer-verification: never switched on, not broken [MEASURED 2026-09-04]
 
