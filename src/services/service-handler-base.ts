@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { applyServiceFulfilledDeltas } from './validation-repid-delta';
+import { recordServiceQuality } from './service-quality-hook';
 import type { ServiceContractRow } from '../types';
 
 /**
@@ -213,6 +214,40 @@ export abstract class ServiceHandlerBase {
         provider_agent_id: contract.provider_agent_id,
         buyer_agent_id: contract.buyer_agent_id,
       });
+
+      // QUALITY, as distinct from DELIVERY. Everything above pays for the fact
+      // that work arrived; nothing above asks whether it was any good. This is
+      // the one live path carrying real deliverable work, so it is where a HAL
+      // verdict belongs — see src/services/service-quality-hook.ts for why it is
+      // off by default and scoped to an agent allowlist.
+      //
+      // Deliberately AFTER the deltas: the buyer already has the artifact and
+      // the economy has already settled by the time this runs. It IS awaited —
+      // the observation must be recorded before the contract is reported
+      // processed, or a shadow run would race its own result — but it cannot
+      // fail the fulfilment, because recordServiceQuality returns a NOT_CHECKED
+      // observation instead of throwing. An observation that can undo a
+      // completed delivery is not an observation.
+      const quality = await recordServiceQuality({
+        contractId: contract.id,
+        providerAgentId: contract.provider_agent_id,
+        serviceType: this.serviceType,
+        result,
+        contractMetadata: (contract.metadata as Record<string, unknown>) ?? null,
+      });
+      if (quality.mode !== 'off') {
+        // NOT_CHECKED is logged as loudly as a verdict. A quality probe that
+        // silently declined to run is indistinguishable from one that passed,
+        // and that confusion is the defect class this repo keeps paying for.
+        console.log(
+          `[${this.serviceType}] quality ${quality.mode}: ` +
+            (quality.checked
+              ? `decision=${quality.hal_decision} score=${quality.hal_score} ` +
+                `${quality.mode === 'shadow' ? `would_apply=${quality.would_apply}` : `applied=${quality.applied}`}`
+              : `NOT_CHECKED (${quality.reason})`) +
+            ` contract=${contract.id}`
+        );
+      }
 
       console.log(
         `[${this.serviceType}] fulfilled contract ${contract.id} ` +
