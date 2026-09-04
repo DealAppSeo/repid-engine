@@ -29,6 +29,7 @@ jest.mock('../src/scoring/pipeline', () => ({
 
 import {
   serviceQualityConfig,
+  serviceQualityStatus,
   recordServiceQuality,
   artifactText,
   DEFAULT_ENROLLED_AGENTS,
@@ -104,6 +105,75 @@ describe('service-quality-hook', () => {
       expect(obs.hal_decision).toBeUndefined();
       expect(obs.would_apply).toBeUndefined();
       expect(obs.applied).toBeUndefined();
+    });
+  });
+
+  describe('serviceQualityStatus — the flag has to be readable from outside', () => {
+    it('reports off/default when nothing is set, and never a secret value', () => {
+      // The whole point: "is the flag set?" must be answerable without dashboard
+      // access. It previously was not, and the work stopped on the guess.
+      expect(serviceQualityStatus()).toEqual({
+        mode: 'off', enrolled_count: 2, allowlist: 'default',
+      });
+    });
+
+    it('distinguishes an env-supplied allowlist from the compiled default', () => {
+      // This is the half that fails silently: an env var set on the WRONG
+      // service leaves the process on its compiled default while the operator
+      // believes it took. Same count, different provenance — so report both.
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = 'one, two';
+      expect(serviceQualityStatus()).toEqual({
+        mode: 'shadow', enrolled_count: 2, allowlist: 'env',
+      });
+    });
+
+    it('does not report an allowlist as env-supplied when the var is empty', () => {
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = '   ';
+      expect(serviceQualityStatus().allowlist).toBe('default');
+    });
+
+    it('tracks serviceQualityConfig rather than re-reading the environment', () => {
+      // If these two ever disagree, /health becomes a confident lie about what
+      // the hook is doing — worse than reporting nothing at all.
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'enforce';
+      expect(serviceQualityStatus().mode).toBe(serviceQualityConfig().mode);
+      expect(serviceQualityStatus().enrolled_count).toBe(serviceQualityConfig().agents.size);
+    });
+  });
+
+  describe('the gate reads the PROVIDER, which is the mistake this list already made', () => {
+    it('resolves the enrolled agent by providerAgentId — never the buyer', async () => {
+      // WHY THIS IS PINNED. The default allowlist originally named the most
+      // active agent on service_contracts, which was the most active BUYER. The
+      // hook keys on the provider, so that agent could never match: every
+      // fulfilment would have reported `agent_not_enrolled` forever while the
+      // hook looked correctly wired. The lookup key is the thing that makes
+      // "who is enrolled" answerable, so it is asserted rather than assumed.
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      const eqCalls: Array<[string, unknown]> = [];
+      const tables: string[] = [];
+      dbFrom.mockImplementation((t: string) => {
+        tables.push(t);
+        return {
+          select: () => ({
+            eq: (col: string, val: unknown) => {
+              eqCalls.push([col, val]);
+              return { maybeSingle: async () => ({ data: null }) };
+            },
+          }),
+        };
+      });
+
+      await recordServiceQuality({
+        contractId: 'c1',
+        providerAgentId: 'THE-PROVIDER',
+        serviceType: 'verification',
+        result: { answer: 'anything' },
+      });
+
+      expect(tables).toContain('repid_agents');
+      expect(eqCalls).toContainEqual(['id', 'THE-PROVIDER']);
     });
   });
 

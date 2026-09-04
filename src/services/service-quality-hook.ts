@@ -82,11 +82,51 @@ export interface ServiceQualityConfig {
 }
 
 /**
- * The two agents measured as actually delivering. Overridable via
+ * The two agents measured as actually delivering ON THIS PATH. Overridable via
  * SERVICE_QUALITY_HOOK_AGENTS, but the default is deliberately not "everyone" —
  * a flag flip should widen blast radius on purpose, never by omission.
+ *
+ * CORRECTED 2026-09-04. This list read `['trinity-nexus', 'trinity-orch']`, and
+ * it was measured against the wrong ROLE. `trinity-nexus` is the most active
+ * agent on service contracts — as the BUYER. As a provider it has fulfilled
+ * exactly one contract, in early July. The hook resolves the agent by
+ * `providerAgentId`, so nexus could never have been enrolled by it: every
+ * fulfilment would have reported `agent_not_enrolled`, forever, and the hook
+ * would have looked wired while being incapable of ever producing an
+ * observation. That is the same defect class as the peer-verification panel —
+ * attached to a path that cannot fire — shipped by the same hand that
+ * documented it.
+ *
+ * `trinity-shofet` replaces it: it is the dominant provider by volume, by a
+ * factor of three over the next, and it provided the most recent fulfilment.
+ * `trinity-orch` stays — it is a genuine provider and third by volume.
+ *
+ * The lesson is not the two names. "Most active agent" is not a fact until you
+ * say active AT WHAT; a table with `provider_agent_id` and `buyer_agent_id`
+ * will happily answer the question you did not mean to ask.
  */
-export const DEFAULT_ENROLLED_AGENTS = ['trinity-nexus', 'trinity-orch'] as const;
+export const DEFAULT_ENROLLED_AGENTS = ['trinity-shofet', 'trinity-orch'] as const;
+
+/**
+ * Observable status for /health. Reports whether the hook is switched on and
+ * whether its allowlist came from the environment — never a secret value, the
+ * same contract operator_pager keeps.
+ *
+ * This exists because "is the flag set?" was unanswerable from outside the
+ * Railway dashboard, and an unanswerable question does not stay unanswered — it
+ * gets guessed. It is derived from serviceQualityConfig() rather than re-reading
+ * the environment, so /health cannot drift from what the hook actually does.
+ */
+export function serviceQualityStatus(): {
+  mode: ServiceQualityMode;
+  enrolled_count: number;
+  allowlist: 'env' | 'default';
+} {
+  const agentsRaw = process.env['SERVICE_QUALITY_HOOK_AGENTS'];
+  const fromEnv = typeof agentsRaw === 'string' && agentsRaw.trim().length > 0;
+  const { mode, agents } = serviceQualityConfig();
+  return { mode, enrolled_count: agents.size, allowlist: fromEnv ? 'env' : 'default' };
+}
 
 export function serviceQualityConfig(): ServiceQualityConfig {
   const raw = (process.env['SERVICE_QUALITY_HOOK_MODE'] ?? 'off').toLowerCase();
