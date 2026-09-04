@@ -165,3 +165,64 @@ describe('ratings come from an independent replay, not from the record', () => {
     expect(r[3]!.note).toMatch(/NOT_CHECKED by replay/);
   });
 });
+
+/**
+ * THE SCENARIO MUST BE REPRODUCIBLE, or the hash it prints is not evidence.
+ *
+ * `chess-match.mjs` embeds when the game was played and when the prize claim
+ * expires, and both defaulted to "now" — so two runs of the SAME game produced
+ * two different statement hashes. A hash quoted as evidence that nobody can
+ * recompute is a digest with an unreproducible preimage: one step removed from
+ * publishing a digest with no preimage at all, which is the defect the trust
+ * receipt exists to fix. `--played-at` / `--deadline` make a run pinnable.
+ */
+describe('chess-match.mjs is reproducible when its clock is pinned', () => {
+  const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
+  const { join } = require('node:path') as typeof import('node:path');
+  const SCRIPT = join(__dirname, '..', 'scripts', 'scenarios', 'chess-match.mjs');
+  const PINNED = ['--played-at', '2026-09-04T18:00:00.000Z', '--deadline', '2026-09-11T18:00:00.000Z'];
+
+  const hashOf = (args: string[]): string => {
+    const out = execFileSync('node', [SCRIPT, ...args], { encoding: 'utf8' });
+    const m = out.match(/0x[0-9a-f]{64}/);
+    if (!m) throw new Error(`no statement hash in output:\n${out}`);
+    return m[0];
+  };
+
+  it('the same game with the same clock hashes the same, twice', () => {
+    expect(hashOf(PINNED)).toBe(hashOf(PINNED));
+  });
+
+  it('a different game still hashes differently — pinning did not flatten it', () => {
+    const fools = hashOf(PINNED);
+    const scholars = hashOf([...PINNED, '--moves', 'e4 e5 Qh5 Nc6 Bc4 Nf6 Qxf7#']);
+    expect(scholars).not.toBe(fools);
+  });
+
+  it('moving the DEADLINE moves the hash — it is one of the four hashed fields', () => {
+    const later = hashOf(['--played-at', '2026-09-04T18:00:00.000Z', '--deadline', '2026-09-12T18:00:00.000Z']);
+    expect(later).not.toBe(hashOf(PINNED));
+  });
+
+  /**
+   * This assertion was written the other way round first, expecting `played_at`
+   * to move the hash too. It does not, and the test was wrong rather than the
+   * script.
+   *
+   * The canonical text is FIXED BY THE DATABASE: `work_statement_sha256` covers
+   * exactly acceptance_criteria, agreed_price, deadline and deliverable. Adding
+   * a fifth field here would make the scenario's hash disagree with the one
+   * Postgres computes for the same statement, which is the single thing this
+   * transcription must never do. `played_at` is match metadata, not a term of
+   * the agreement — and what actually protects the outcome is criterion 1, which
+   * carries the move list verbatim and IS hashed.
+   */
+  it('moving only played_at does NOT move the hash — the DB defines the four fields, not us', () => {
+    const other = hashOf(['--played-at', '2026-01-01T00:00:00.000Z', '--deadline', '2026-09-11T18:00:00.000Z']);
+    expect(other).toBe(hashOf(PINNED));
+  });
+
+  it('refuses a malformed timestamp rather than silently hashing NaN', () => {
+    expect(() => hashOf(['--played-at', 'yesterday'])).toThrow();
+  });
+});

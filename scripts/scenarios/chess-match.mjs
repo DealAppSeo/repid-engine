@@ -8,6 +8,8 @@
 //   node scripts/scenarios/chess-match.mjs --moves "e4 e5 Qh5 Nc6 Bc4 Nf6 Qxf7#"
 //   node scripts/scenarios/chess-match.mjs --white A --black B --prize-wei 100000000000000
 //   node scripts/scenarios/chess-match.mjs --out match.json
+//   node scripts/scenarios/chess-match.mjs --played-at 2026-09-04T18:00:00.000Z
+//                                          --deadline  2026-09-11T18:00:00.000Z   # reproducible hash
 //
 // WHY CHESS. The winner is not a judgement call. A checkmate is a fact about a
 // position that anyone can reproduce from the move list, so the outcome needs no
@@ -35,6 +37,17 @@ const BLACK = flag('--black', 'trinity-shofet');
 const PRIZE_WEI = flag('--prize-wei', '100000000000000'); // 0.0001 ETH
 const MOVES = (flag('--moves', 'f3 e5 g4 Qh4#')).trim().split(/\s+/);
 const OUT = flag('--out');
+
+// REPRODUCIBILITY. The statement embeds when the game was played and when the
+// prize claim expires, and both defaulted to "now" — so two runs of the same
+// game produced two different statement hashes, and a hash quoted anywhere as
+// evidence could never be recomputed by the person reading it. That is the same
+// defect as publishing a digest with no preimage, one step removed: the preimage
+// exists but is unreproducible. Pin both and the run is verifiable by anyone.
+const PLAYED_AT = flag('--played-at', new Date().toISOString());
+const DEADLINE = flag('--deadline', new Date(Date.parse(PLAYED_AT) + 7 * 864e5).toISOString());
+if (Number.isNaN(Date.parse(PLAYED_AT))) { console.error('--played-at must be an ISO 8601 timestamp'); process.exit(1); }
+if (Number.isNaN(Date.parse(DEADLINE))) { console.error('--deadline must be an ISO 8601 timestamp'); process.exit(1); }
 
 // ── adjudicate ───────────────────────────────────────────────────────────────
 const board = new Chess();
@@ -77,7 +90,7 @@ const record = {
   final_fen: board.fen(),
   prize_amount: PRIZE_WEI,
   prize_asset: 'ETH',
-  played_at: new Date().toISOString(),
+  played_at: PLAYED_AT,
 };
 const winner = result === 'draw' ? null : (result === 'white_wins' ? WHITE : BLACK);
 
@@ -97,7 +110,7 @@ const statement = {
         : `The result is a draw, so no prize is payable to either player and the stake returns to its source.` },
   ],
   agreed_price: { amount_usdc_raw: 100000, currency: 'USDC' },
-  deadline: new Date(Date.now() + 7 * 864e5).toISOString().replace('Z', 'Z'),
+  deadline: DEADLINE,
 };
 
 function canonicalText(ws) {
