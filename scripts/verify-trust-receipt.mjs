@@ -103,24 +103,133 @@ function checkScore(r) {
   record('satisfaction score', 'VERIFIED', `exactly round(${met}/${ratings.length}, 4) = ${expected}`);
 }
 
-// ── LEG 3 — the reputation ledger chains ────────────────────────────────────
-// Offline and worth doing: each agent's events must run from -> to with no gap.
-// A rewritten delta shows up as a break in the chain.
-function checkRepIdChain(r) {
+// ── LEG 3 — the reputation ledger's arithmetic closes ───────────────────────
+//
+// This leg USED to be `to - from === delta`, and that is not the engine's
+// accounting. `repid_before` is written PRE-decay and `repid_after` is
+// clamp(decayed + delta), so the real identity is
+//
+//     to === clamp(from - decay + delta),  clamp to [10, 10000]
+//
+// Decay and the clamp both move a score without appearing in `delta`. The old
+// check was therefore testing "was decay zero and did the clamp stay out of the
+// way", and on the first exchange where either is false it would have reported
+// FAILED — accusing an honest ledger of a rewrite. Measured against the live
+// ledger on 2026-09-04: it holds on all 1,339 contract-linked events, because
+// no contract-linked event has yet decayed or clamped. A check that passes only
+// because its hard case has not happened yet is a check that fails the day it
+// does, so it is fixed here rather than after the first false accusation.
+//
+// What survives with full force is the direction rule. Decay only ever LOWERS a
+// score, and the only thing that can lift one above its own delta is the floor,
+// which lands exactly on 10. So unexplained UPWARD movement that is not at the
+// floor is impossible on honest data — that stays FAILED.
+const REPID_FLOOR = 10;
+const REPID_CAP = 10000;
+const clampRepId = (n) => Math.max(REPID_FLOOR, Math.min(REPID_CAP, n));
+
+function checkRepIdLedger(r) {
   const events = r.reputation_events ?? [];
-  if (events.length === 0) return record('reputation chain', 'NOT_CHECKED', 'no reputation events on this receipt');
+  if (events.length === 0) {
+    return record('reputation ledger arithmetic', 'NOT_CHECKED', 'no reputation events on this receipt');
+  }
+
   const last = {};
-  const breaks = [];
+  const failed = [];
+  const undetermined = [];
+  let closed = 0;
+
   for (const e of events) {
-    if (e.to - e.from !== e.delta) breaks.push(`${e.agent}/${e.event}: ${e.from}->${e.to} is not a delta of ${e.delta}`);
+    const where = `${e.agent}/${e.event}`;
+
+    // Continuity: this agent's previous event must end where this one starts.
+    // Independent of decay, so it is checkable on every receipt.
     if (last[e.agent] !== undefined && last[e.agent] !== e.from) {
-      breaks.push(`${e.agent}: previous event ended at ${last[e.agent]} but the next starts at ${e.from}`);
+      failed.push(`${e.agent}: the previous event ended at ${last[e.agent]} but the next starts at ${e.from}`);
     }
     last[e.agent] = e.to;
+
+    // A recorded score outside the published range is wrong whatever the delta.
+    if (e.to < REPID_FLOOR || e.to > REPID_CAP) {
+      failed.push(`${where}: ${e.to} is outside the published [${REPID_FLOOR}, ${REPID_CAP}] range`);
+      continue;
+    }
+
+    // Decay recorded => the identity is fully determined, so decide it.
+    if (typeof e.decay === 'number') {
+      if (e.decay < 0) {
+        failed.push(`${where}: decay of ${e.decay} is negative, and decay can only lower a score`);
+        continue;
+      }
+      const expected = clampRepId(e.from - e.decay + e.delta);
+      if (expected !== e.to) {
+        failed.push(
+          `${where}: clamp(${e.from} - ${e.decay} + ${e.delta}) = ${expected}, but the ledger records ${e.to}`,
+        );
+        continue;
+      }
+      closed++;
+      continue;
+    }
+
+    // No decay recorded. Decide what can still be decided.
+    const excess = e.to - e.from - e.delta;
+    if (excess === 0) {
+      closed++;
+    } else if (excess > 0 && e.to !== REPID_FLOOR) {
+      failed.push(
+        `${where}: ${e.from}->${e.to} is ${excess} MORE than its recorded delta of ${e.delta}, and ${e.to} is ` +
+          `not the ${REPID_FLOOR} floor — nothing in the engine lifts a score above its own delta`,
+      );
+    } else if (excess > 0) {
+      closed++; // at the floor: the clamp lifting it is the one legitimate cause
+    } else {
+      undetermined.push(`${where}: ${e.from}->${e.to} is ${-excess} LESS than its recorded delta of ${e.delta}`);
+    }
   }
-  if (breaks.length > 0) return record('reputation chain', 'FAILED', breaks.join('; '));
-  record('reputation chain', 'VERIFIED',
-    `${events.length} event(s) chain continuously per agent, and every delta matches its own from/to`);
+
+  if (failed.length > 0) return record('reputation ledger arithmetic', 'FAILED', failed.join('; '));
+  if (undetermined.length > 0) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      `${closed} of ${events.length} event(s) close exactly. The rest moved DOWN by more than their delta, which ` +
+        `decay or the ${REPID_CAP} cap would also do — and this receipt records no decay for them, so an honest ` +
+        `decay cannot be told from a rewrite: ${undetermined.join('; ')}`,
+    );
+  }
+  record(
+    'reputation ledger arithmetic',
+    'VERIFIED',
+    `${events.length} event(s) chain continuously per agent and every score lands exactly where its own ` +
+      `from/decay/delta put it, inside [${REPID_FLOOR}, ${REPID_CAP}]`,
+  );
+}
+
+// ── LEG 3b — was the delta EARNED? ─────────────────────────────────────────
+//
+// The leg above proves the BOOKS BALANCE. It does not prove the amount was the
+// amount the rules allow, and those are different claims that a reader will
+// merge if only the first is printed. An agent that recorded +500 for work
+// worth +20 passes every other leg of this receipt: its arithmetic closes, its
+// chain is continuous, its work statement hashes, its money moved.
+//
+// Nothing here can close that gap. The three event types a receipt can carry
+// (SERVICE_FULFILLED, SERVICE_SATISFIED, VALIDATION_FAILED — measured against
+// the live ledger 2026-09-04) have no published tariff; their magnitudes come
+// out of the service-contract scorer. Checking them against a number the
+// receipt itself supplies would be circular, so this leg states the limit
+// instead of inventing a check that would pass by construction.
+function checkRepIdEntitlement(r) {
+  const events = r.reputation_events ?? [];
+  if (events.length === 0) return; // leg 3 already said so
+  record(
+    'reputation delta earned',
+    'NOT_CHECKED',
+    `the books balance, but nothing on this receipt shows the ${events.length} recorded delta(s) are the amounts ` +
+      `the rules allow — those magnitudes come from a scorer whose parameters are not published here. Read the ` +
+      `leg above as "the ledger was not rewritten", never as "the reputation was earned".`,
+  );
 }
 
 // ── LEG 4 — the transactions exist on chain ─────────────────────────────────
@@ -176,7 +285,8 @@ console.log('');
 
 checkWorkStatement(receipt);
 checkScore(receipt);
-checkRepIdChain(receipt);
+checkRepIdLedger(receipt);
+checkRepIdEntitlement(receipt);
 await checkChain(receipt);
 
 for (const l of legs) console.log(`  ${GLYPH[l.outcome]} ${l.name.padEnd(28)} ${l.detail}`);

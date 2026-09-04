@@ -49,7 +49,30 @@ export interface TrustReceipt {
    * a licence to tell the flattering version.
    */
   paid_before_delivery: boolean | null;
-  reputation_events: Array<{ agent: string; event: string; delta: number; from: number; to: number }>;
+  /**
+   * The reputation movement this exchange caused, decomposed far enough to be
+   * checked from outside.
+   *
+   * `from`/`to`/`delta` alone are NOT a closed accounting. The engine writes
+   * `repid_before` PRE-decay and `repid_after` as clamp(decayed + delta), so
+   * two things move a score without ever appearing in `delta`: decay, and the
+   * [10, 10000] clamp. A reader comparing `to - from` against `delta` is really
+   * testing whether decay happened to be zero — and on the one occasion it is
+   * not, would call an honest row a forgery.
+   *
+   * `decay` is therefore published alongside, and is `null` — never 0 — when no
+   * writer recorded it. See the mapping below for why that distinction is the
+   * load-bearing part.
+   */
+  reputation_events: Array<{
+    agent: string;
+    event: string;
+    delta: number;
+    from: number;
+    to: number;
+    /** Points removed by decay before the delta applied. `null` = not recorded, which is not 0. */
+    decay: number | null;
+  }>;
   /** ERC-8004. Present only when PROVABLY caused by this contract. */
   onchain_tx: string | null;
   onchain_url: string | null;
@@ -167,7 +190,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
 
   const { data: events } = await db
     .from('repid_score_events')
-    .select('agent_id, event_type, delta, repid_before, repid_after')
+    .select('agent_id, event_type, delta, repid_before, repid_after, metadata')
     .eq('contract_id', contractId)
     .order('created_at');
 
@@ -209,13 +232,28 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     settlement_url: settlement?.tx_hash ? scan(settlement.tx_hash) : null,
     is_simulated: settlement?.is_simulated ?? null,
     paid_before_delivery,
-    reputation_events: (events ?? []).map((e) => ({
-      agent: names[e.agent_id] ?? String(e.agent_id).slice(0, 8),
-      event: e.event_type,
-      delta: e.delta,
-      from: e.repid_before,
-      to: e.repid_after,
-    })),
+    reputation_events: (events ?? []).map((e) => {
+      // `decayApplied` ABSENT and `decayApplied: 0` are different facts and are
+      // published differently. Absent means no writer recorded a decomposition,
+      // so a reader cannot tell an honest decay from a rewritten score; zero
+      // means a writer stated there was none. Collapsing absent to 0 would hand
+      // the verifier a number nobody asserted and let it return VERIFIED on the
+      // strength of it — the same "not checked scored as checked" this receipt
+      // exists to prevent. Measured 2026-09-04: absent on every one of the 1,339
+      // contract-linked events in the ledger, so `null` is the live answer here,
+      // not a defensive branch.
+      const md = (e as { metadata?: Record<string, unknown> | null }).metadata;
+      const hasDecay =
+        !!md && typeof md === 'object' && Object.prototype.hasOwnProperty.call(md, 'decayApplied');
+      return {
+        agent: names[e.agent_id] ?? String(e.agent_id).slice(0, 8),
+        event: e.event_type,
+        delta: e.delta,
+        from: e.repid_before,
+        to: e.repid_after,
+        decay: hasDecay ? Number((md as Record<string, unknown>)['decayApplied']) : null,
+      };
+    }),
     onchain_tx: onchain?.tx_hash ?? null,
     onchain_url: onchain?.tx_hash ? scan(onchain.tx_hash) : null,
     onchain_repid: onchain?.repid_value ?? null,
