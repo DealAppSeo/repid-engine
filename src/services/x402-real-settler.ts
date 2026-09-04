@@ -95,6 +95,50 @@ export function isSettleableToken(spec: TokenSpec): boolean {
  * advertise — listing a placeholder tells the caller to retry with a token that
  * cannot settle.
  */
+/**
+ * Per-asset settlement ceiling. THE GOVERNOR WAS UNIT-BLIND [fixed 2026-09-04].
+ *
+ * Both guards read `if (amountUSDC > 1.0)` and answered
+ * "Governor limit exceeded: max amount is 1.0 USDC". But `amountUSDC` is just a
+ * number and this function takes a `token` argument, so the check compared a
+ * bare float against 1.0 REGARDLESS OF ASSET. `settleX402Payment(from, to, 0.9,
+ * id, 'ETH')` passed a guard whose name, message and intent are all
+ * dollar-denominated, and transferred 0.9 ETH — three orders of magnitude past
+ * what the ceiling was written to allow.
+ *
+ * Nothing had exercised it: the only two callers of the ETH-capable path never
+ * pass 'ETH'. So this is a live trap rather than a live loss, and it is fixed
+ * before the native leg gets used rather than after.
+ *
+ * There is no price oracle here, and inventing one to convert assets to dollars
+ * would be a bigger claim than this module can honestly make. So the ceiling is
+ * declared PER ASSET, in that asset's own units, and an asset with no declared
+ * ceiling is REFUSED. That fails closed: adding a token to the map can no longer
+ * silently inherit a dollar limit that means nothing for it.
+ *
+ * Both are env-overridable because the numbers are policy, not physics.
+ */
+export function governorCeilingFor(symbol: string): number | null {
+  const env = (name: string, fallback: number): number => {
+    const raw = (process.env[name] ?? '').trim();
+    if (raw === '') return fallback;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  switch (symbol) {
+    // Unchanged: the historical ceiling, in the unit it was always meant for.
+    case 'USDC':
+      return env('X402_GOVERNOR_MAX_USDC', 1.0);
+    // New, and deliberately tight. Admits the small native-value transfers this
+    // path exists for with headroom, while being ~1000x below the 1.0 the
+    // unit-blind check was accidentally allowing.
+    case 'ETH':
+      return env('X402_GOVERNOR_MAX_ETH', 0.001);
+    default:
+      return null; // undeclared -> refused by the caller
+  }
+}
+
 export function settleableTokenSymbols(): string[] {
   return Object.entries(BASE_SEPOLIA_TOKENS)
     .filter(([, spec]) => isSettleableToken(spec))
@@ -251,9 +295,20 @@ export async function settleX402Payment(
     }
 
     if (process.env.MOCK_FACILITATOR === 'true') {
-      // 1. Amount Governor check
-      if (amountUSDC > 1.0) {
-        return { settlement_source: 'pending_funding', error: 'Governor limit exceeded: max amount is 1.0 USDC' };
+      // 1. Amount Governor check — PER ASSET. See `governorCeilingFor`.
+      const mockCeiling = governorCeilingFor(token as string);
+      if (mockCeiling === null) {
+        return {
+          settlement_source: 'pending_funding',
+          error: `Governor: no ceiling declared for '${token}', refusing to settle. ` +
+            `Declare one in governorCeilingFor() before settling in this asset.`,
+        };
+      }
+      if (amountUSDC > mockCeiling) {
+        return {
+          settlement_source: 'pending_funding',
+          error: `Governor limit exceeded: max amount is ${mockCeiling} ${token}`,
+        };
       }
 
       // 2. Circuit Breaker check
@@ -332,9 +387,20 @@ export async function settleX402Payment(
     // REAL settlement path (MOCK_FACILITATOR unset). Apply the SAME two safety
     // guards the mock branch has — the real, on-chain path was previously
     // unguarded. Reuses the exact existing checks; introduces no new limits.
-    // (a) Amount Governor: reject amounts above the 1.0 USDC ceiling.
-    if (amountUSDC > 1.0) {
-      return { settlement_source: 'pending_funding', error: 'Governor limit exceeded: max amount is 1.0 USDC' };
+    // (a) Amount Governor: reject amounts above the ceiling FOR THIS ASSET.
+    const ceiling = governorCeilingFor(token as string);
+    if (ceiling === null) {
+      return {
+        settlement_source: 'pending_funding',
+        error: `Governor: no ceiling declared for '${token}', refusing to settle. ` +
+          `Declare one in governorCeilingFor() before settling in this asset.`,
+      };
+    }
+    if (amountUSDC > ceiling) {
+      return {
+        settlement_source: 'pending_funding',
+        error: `Governor limit exceeded: max amount is ${ceiling} ${token}`,
+      };
     }
     // (b) Circuit Breaker: repid_config key cb_disable_x402_settlements == 'true'.
     const { data: cbConfigData } = await supabase
