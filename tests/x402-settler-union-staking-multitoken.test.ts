@@ -73,13 +73,23 @@ describe('x402-real-settler UNION: staking recipient-resolution ∪ multi-token 
   });
 
   afterEach(() => {
+    // Undo any per-test address confirmation so it cannot leak between tests.
+    BASE_SEPOLIA_TOKENS.cbBTC!.address = '0x0000000000000000000000000000000000000000';
     jest.clearAllMocks();
     delete process.env.APM_PRIVATE_KEY;
   });
 
   it('wrong-token payment to a DB-resolved (delegated/custodied) recipient routes to the CORRECT recipient WITH correct token fallback', async () => {
     const usdcAddr = BASE_SEPOLIA_TOKENS.USDC.address;
-    const cbBtcAddr = BASE_SEPOLIA_TOKENS.cbBTC.address;
+    // cbBTC's address in the map is the ZERO ADDRESS (`TODO(review): confirm
+    // Base Sepolia address`), and this test mocks `ethers.Contract` by address —
+    // so it was asserting a settlement INTO an unconfigured token as correct.
+    // The recipient-resolution ∪ token-fallback behaviour it covers is real; the
+    // token it used to cover it was not. Confirm a stand-in for this test only.
+    // (Restored in afterEach; the placeholder itself is pinned in
+    // tests/x402-real-settler.test.ts.)
+    BASE_SEPOLIA_TOKENS.cbBTC!.address = '0x1111111111111111111111111111111111111111';
+    const cbBtcAddr = BASE_SEPOLIA_TOKENS.cbBTC!.address;
 
     // Capture the recipient the transfer is actually sent to.
     let cbBtcTransferTo: string | undefined;
