@@ -89,6 +89,61 @@ CLAUDE-RULE-5 says outright. Trace the route to the table; do not guess the tabl
 | Deploy the always-on Railway "manager" worker | Railway infra GO | Approve service deploy (prepared on branch when ready) | laptop-closed overnight loop |
 | **`TRUSTRAILS_HMAC_SECRET` is not armed on either aitrinitysymphony surface** — both self-report `ready:false` [MEASURED 2026-09-03 via `GET /api/version`] | env secret | Set a real secret on **both** the Vercel project (www + apex) and the Railway service (app), then re-check `/api/version` shows `ready:true` | compliance-receipt `audit_hash` integrity |
 
+## OPEN AS OF 2026-09-04 (session handoff — do not re-derive)
+
+Everything below was measured this session against the live database or the code on
+`main`. Dates are attached because a number without one is an assertion.
+
+### Human-gated — nothing below moves without Sean
+
+| Item | Where exactly | Value |
+|---|---|---|
+| `SERVICE_QUALITY_HOOK_MODE` | Railway → project `repid-engine` → **service** `repid-engine` → Variables (NOT project-shared) | literal `shadow` |
+| `TRUSTRAILS_HMAC_SECRET` | Vercel project `trustrails` **and** Railway `repid-engine` — same value both | generate: `openssl rand -hex 32`. A publicly-known placeholder is in use today, so audit hashes are forgeable. Deleting it from HEAD is not rotation. |
+| `SUPABASE_URL` + `SUPABASE_SECRET_KEY` | Vercel project `trustmarket-landing` | the `sb_secret_…` key from Supabase → Settings → API Keys. NOT `sb_publishable_…` (that one ships in the browser). Route 503s by design until both exist. |
+| trustmarket.dev deploy target | Vercel | domain is served by an April static upload from `trustmarket-coming-soon`, not the landing project — merged fixes will not appear until this is repointed |
+| `www.trustmarket.dev` TLS | DNS / Vercel | certificate invalid |
+
+### Verification debts — real work that is NOT_CHECKED until something runs
+
+Neither of these is a failure. Both are claims with no live witness yet, and each
+names the single observation that would close it.
+
+- **The 2026-08-17 HAL orientation fix has never scored a real deliverable.** Deliverable
+  traffic stopped 2026-08-17, the same day the fix landed. VERIFIED in simulation
+  (`npm run repid:sim`: monotone, zero violations), NOT_CHECKED in production. Closes on
+  the first `purpose: deliverable` event dated after 2026-08-17.
+- **The service-quality hook (#603) has never executed.** It is on `main` and inert —
+  mode defaults to `off`. Closes on the first row where
+  `service_contracts.metadata ? 'hal_quality_shadow'`.
+
+### Found this session, not yet acted on
+
+- **CLAUDE.md is stale and says so nowhere.** It records all 12 Trinity agents as offline
+  since ~2026-07-17. FALSE [MEASURED 2026-09-04]: `trinity-nexus` and `trinity-hdm` scored
+  on 2026-09-03, `trinity-gcm` and `trinity-veritas` on 09-02. Read liveness from recency,
+  never from that line.
+- **Live fulfilments still pass `task_domain: 'general'`.** So today's real service work
+  classifies as non-deliverable and earns nothing from HAL. #603 fixes this for its own
+  event only; the existing `SERVICE_FULFILLED` path is untouched.
+- **Peer-verification is dead and was never load-bearing.** Completer last ran 2026-07-04,
+  producer stopped 2026-07-21, 62,841 rows stuck `in_review` with `completed_at` NULL. It
+  has produced **zero** RepID events in its entire history — so its death cost nothing in
+  scoring, but the anti-gaming consequence path `chronic-flag-accumulator` routes to has
+  never once fired.
+- **`PREDICTION_RESOLVE` has gone quiet** — 2,892 events lifetime, 11 since July. Second-
+  largest event type in the ledger. Whether the producer is still wired is UNVERIFIED.
+- **`repid_agents.risk_tolerance` is read by no code.** Dead column. Harmless today, but it
+  is the shape a user-settable risk knob would take, and such a knob is a measured +73 RepID
+  arbitrage on identical work (`npm run repid:sim`, Part 4). Do not wire it without reading
+  that first.
+
+### Designed, not built
+
+The E2E transaction (x402 + ERC-8004 + RepID + HAL in one contract), a chess match as an
+honesty-under-stakes test, and a posed-problem event class that pays only when someone
+else resolves the question. Reasoning for all three is in the session transcript, not here.
+
 ## DONE (this run)
 
 | Surface | Evidence |
