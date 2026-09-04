@@ -551,6 +551,174 @@ export function validatePrice(
   return { ok: true };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SELLER RESERVE — "I will not go below this"
+//
+// The RFQ already carries a buyer-side band: `min_price_usdc_raw` (a floor the
+// BUYER commits to pay, there so a sub-cent contract cannot farm price-decoupled
+// RepID) and `max_price_usdc_raw` (the buyer's ceiling). Neither is a seller
+// minimum. Until now the only seller-side price fact was
+// `agent_services.base_price_usdc_raw`, which is RECORDED AND NOT ENFORCED — at
+// award it only produces `underbid_ratio` for forensics, so a provider could
+// legally be negotiated far below its own listed price with nothing to stop it.
+//
+// WHY THIS LIVES IN `terms` AND NOT A NEW COLUMN. The a2a DDL is not in
+// `migrations/`; it was applied by hand to the one shared production project.
+// A reserve does not need a column to be binding: `terms` is already inside
+// `offerPreimage()` via `canonicalJson`, so a reserve placed there is covered by
+// `offer_hash`, covered by the actor's signature over `A2A-OFFER-v1:<hash>`, and
+// re-verified by `verifyStoredOfferHash()` on every counter, respond and award.
+// It is as tamper-evident as the price itself, with no DDL against a shared
+// database. Promote it to a column later if you want to query on it; nothing
+// about the guarantee changes.
+//
+// ⚠ WHAT THIS LEAKS, said plainly rather than discovered later. Refusing a
+// counter below the reserve tells the buyer a reserve EXISTS and bounds it from
+// below. A buyer willing to spend its rounds can binary-search the reserve to
+// within a few units. The round cap (`max_rounds * 2`, so 2–10 offers) bounds
+// that search but does not prevent it. A real sealed reserve would refuse
+// silently and let the provider decline instead — that is a different design,
+// and it trades immediate honest feedback for privacy. This one is chosen
+// deliberately: the buyer learns "you cannot have it at that price" at once
+// rather than burning the thread, and NOTHING here pretends the reserve is
+// secret.
+
+/** The key a provider sets in its round `terms` to declare a walk-away floor. */
+export const SELLER_RESERVE_TERM = 'reserve_usdc_raw';
+
+export interface ReserveParse {
+  ok: boolean;
+  /** null means the provider declared none — reserves are OPTIONAL. */
+  reserve: number | null;
+  error?: string;
+  message?: string;
+}
+
+/**
+ * Read a seller reserve out of round terms.
+ *
+ * Absent is fine and returns `{ok:true, reserve:null}` — a provider that names
+ * no floor is simply not using the feature. A PRESENT BUT MALFORMED reserve is
+ * an error, never silently ignored: a provider that thinks it set a floor and
+ * did not is exactly the person this exists to protect.
+ */
+export function parseSellerReserve(terms: unknown): ReserveParse {
+  if (terms === null || terms === undefined || typeof terms !== 'object') {
+    return { ok: true, reserve: null };
+  }
+  const raw = (terms as Record<string, unknown>)[SELLER_RESERVE_TERM];
+  if (raw === undefined || raw === null) return { ok: true, reserve: null };
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0) {
+    return {
+      ok: false,
+      reserve: null,
+      error: 'invalid_reserve',
+      message: `terms.${SELLER_RESERVE_TERM} must be a positive integer in raw USDC units when present`,
+    };
+  }
+  return { ok: true, reserve: raw };
+}
+
+/**
+ * Validate a reserve a provider is DECLARING on its own offer.
+ *
+ * Refused when it is above the offer's own price (a floor above your ask is not
+ * a floor, it is a contradiction), below the RFQ/global floor, or above the
+ * buyer's ceiling — that last one is refused up front rather than discovered
+ * after a thread of rounds that could never have closed.
+ */
+export function validateDeclaredReserve(
+  reserve: number,
+  price: number,
+  rfq: Pick<RfqRow, 'min_price_usdc_raw' | 'max_price_usdc_raw'>,
+  cfg: NegotiationConfig,
+): PriceCheck {
+  const floor = Math.max(cfg.minPriceUsdcRaw, Number(rfq.min_price_usdc_raw));
+  if (reserve < floor) {
+    return {
+      ok: false,
+      error: 'reserve_below_floor',
+      message: `reserve ${reserve} is below the floor ${floor}`,
+    };
+  }
+  if (reserve > price) {
+    return {
+      ok: false,
+      error: 'reserve_above_own_price',
+      message:
+        `reserve ${reserve} is above this offer's own price ${price}. A floor above your own ask ` +
+        `cannot be satisfied by any counter you would accept.`,
+    };
+  }
+  if (rfq.max_price_usdc_raw !== null && reserve > Number(rfq.max_price_usdc_raw)) {
+    return {
+      ok: false,
+      error: 'reserve_above_rfq_max',
+      message:
+        `reserve ${reserve} exceeds the buyer's ceiling ${rfq.max_price_usdc_raw}. This thread could ` +
+        `never close; refusing now rather than after a round of offers.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * The reserve that BINDS a thread: the one declared on the provider's FIRST
+ * offer, if any.
+ *
+ * Immutable on purpose. A reserve a provider may lower once pressed is not a
+ * commitment, it is a negotiating noise — and it would let a provider advertise
+ * a floor, collect the credibility of having one, then drop it. Taking it from
+ * the earliest provider round means the binding value is the one that was hashed
+ * and signed before any counter was seen.
+ */
+export function threadReserve(rounds: readonly RoundRow[]): number | null {
+  const providerRounds = rounds
+    .filter((r) => r.offered_by === 'provider')
+    .sort((a, b) => Number(a.round_no) - Number(b.round_no));
+  const first = providerRounds[0];
+  if (!first) return null;
+  return parseSellerReserve(first.terms).reserve;
+}
+
+/** Refuse a price that breaches the thread's reserve. */
+export function checkAgainstReserve(price: number, reserve: number | null): PriceCheck {
+  if (reserve === null) return { ok: true };
+  if (price < reserve) {
+    return {
+      ok: false,
+      error: 'below_provider_reserve',
+      message:
+        `price_usdc_raw ${price} is below the provider's declared reserve of ${reserve}. The reserve ` +
+        `was fixed on the provider's first offer and is covered by that offer's hash and signature.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * A later provider offer may not move its own reserve.
+ *
+ * Without this the immutability above is decorative: a provider could simply
+ * restate a lower floor on its rebid.
+ */
+export function checkReserveUnchanged(newTerms: unknown, threadReserveValue: number | null): PriceCheck {
+  const parsed = parseSellerReserve(newTerms);
+  if (!parsed.ok) return { ok: false, error: parsed.error!, message: parsed.message! };
+  if (parsed.reserve === null && threadReserveValue === null) return { ok: true };
+  if (parsed.reserve !== threadReserveValue) {
+    return {
+      ok: false,
+      error: 'reserve_immutable',
+      message:
+        `this thread's reserve was fixed at ${threadReserveValue ?? 'none'} on the provider's first ` +
+        `offer and may not be changed to ${parsed.reserve ?? 'none'}. A floor that moves when pressed ` +
+        `is not a commitment.`,
+    };
+  }
+  return { ok: true };
+}
+
 export function validateEta(eta: unknown): PriceCheck {
   if (typeof eta !== 'number' || !Number.isInteger(eta) || eta <= 0) {
     return { ok: false, error: 'invalid_eta', message: 'eta_seconds must be a positive integer' };
