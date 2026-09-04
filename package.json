@@ -89,7 +89,8 @@
     "repid:decay": "ts-node scripts/run-repid-decay.ts",
     "repid:decay:apply": "ts-node scripts/run-repid-decay.ts --apply",
     "probe:hal-shape": "ts-node scripts/liveness-probes/probe-hal-response-shape.ts",
-    "verify:vesting": "ts-node scripts/verify/vesting-not-stranded.ts"
+    "verify:vesting": "ts-node scripts/verify/vesting-not-stranded.ts",
+    "verify:quality-hook": "ts-node scripts/verify/quality-hook-can-fire.ts"
   },
   "keywords": [],
   "author": "",

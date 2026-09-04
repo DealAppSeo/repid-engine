@@ -1,4 +1,17 @@
 import { KNOWN_ENV_VARS } from './known-env-vars.generated';
+import { SURFACE_ENV_NAMES } from '../resilience/decision-contract';
+
+/**
+ * The registry the guard actually checks against: the statically-discovered
+ * names PLUS the ones this codebase composes at runtime and static analysis
+ * therefore cannot see. The generated file's header declares that gap accepted;
+ * this closes the part of it we can enumerate from a canonical list rather than
+ * a hand-written one, so it cannot drift out of date on its own.
+ */
+export const ALL_KNOWN_ENV_VARS: readonly string[] = [
+  ...KNOWN_ENV_VARS,
+  ...SURFACE_ENV_NAMES,
+];
 
 /**
  * A `??`-style default cannot distinguish "unset" from "misspelled" — both
@@ -50,7 +63,7 @@ function levenshtein(a: string, b: string): number {
 
 export function findEnvTypos(
   setNames: readonly string[] = Object.keys(process.env),
-  knownNames: readonly string[] = KNOWN_ENV_VARS,
+  knownNames: readonly string[] = ALL_KNOWN_ENV_VARS,
 ): EnvTypoWarning[] {
   const known = new Set(knownNames);
   const setSet = new Set(setNames);

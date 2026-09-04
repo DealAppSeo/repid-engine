@@ -4,6 +4,7 @@ import { config } from '../config';
 import { testHashKeyConnection } from '../engine/hashkey-chain';
 import { pagerStatus } from '../services/operator-pager';
 import { lastVestingCheck } from '../services/vesting-monitor';
+import { serviceQualityStatus } from '../services/service-quality-hook';
 
 const router = Router();
 
@@ -103,6 +104,19 @@ router.get('/health', async (req: Request, res: Response) => {
       // when the read failed — neither is the same as "no stranded balance", and the
       // shape says so rather than reporting a reassuring zero.
       vesting_monitor: lastVestingCheck(),
+    // Can anyone tell whether the quality hook is switched on? Until now, no —
+    // and that cost a full working session: the hook was reported blocked on an
+    // env var whose state nobody could observe, so the work stopped on a
+    // question that had no way to be answered. A flag that cannot be read from
+    // outside gets GUESSED, and this codebase has already recorded three
+    // consecutive wrong guesses about a Railway variable.
+    //
+    // Same contract as operator_pager above: this reports whether the vars are
+    // SET and what they resolved to structurally, never a secret. `mode` is one
+    // of off|shadow|enforce, and `allowlist` says whether the enrolled set came
+    // from the environment or fell back to the compiled default — which is the
+    // half that silently fails when an env var is set on the wrong service.
+    service_quality_hook: serviceQualityStatus(),
     engine: 'HyperDAG RepID Scoring Engine',
     protocol: 'hyperdag.dev',
     validation_queue: {

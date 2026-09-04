@@ -29,6 +29,7 @@ jest.mock('../src/scoring/pipeline', () => ({
 
 import {
   serviceQualityConfig,
+  serviceQualityStatus,
   recordServiceQuality,
   artifactText,
   DEFAULT_ENROLLED_AGENTS,
@@ -104,6 +105,75 @@ describe('service-quality-hook', () => {
       expect(obs.hal_decision).toBeUndefined();
       expect(obs.would_apply).toBeUndefined();
       expect(obs.applied).toBeUndefined();
+    });
+  });
+
+  describe('serviceQualityStatus — the flag has to be readable from outside', () => {
+    it('reports off/default when nothing is set, and never a secret value', () => {
+      // The whole point: "is the flag set?" must be answerable without dashboard
+      // access. It previously was not, and the work stopped on the guess.
+      expect(serviceQualityStatus()).toEqual({
+        mode: 'off', enrolled_count: 2, allowlist: 'default',
+      });
+    });
+
+    it('distinguishes an env-supplied allowlist from the compiled default', () => {
+      // This is the half that fails silently: an env var set on the WRONG
+      // service leaves the process on its compiled default while the operator
+      // believes it took. Same count, different provenance — so report both.
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = 'one, two';
+      expect(serviceQualityStatus()).toEqual({
+        mode: 'shadow', enrolled_count: 2, allowlist: 'env',
+      });
+    });
+
+    it('does not report an allowlist as env-supplied when the var is empty', () => {
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = '   ';
+      expect(serviceQualityStatus().allowlist).toBe('default');
+    });
+
+    it('tracks serviceQualityConfig rather than re-reading the environment', () => {
+      // If these two ever disagree, /health becomes a confident lie about what
+      // the hook is doing — worse than reporting nothing at all.
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'enforce';
+      expect(serviceQualityStatus().mode).toBe(serviceQualityConfig().mode);
+      expect(serviceQualityStatus().enrolled_count).toBe(serviceQualityConfig().agents.size);
+    });
+  });
+
+  describe('the gate reads the PROVIDER, which is the mistake this list already made', () => {
+    it('resolves the enrolled agent by providerAgentId — never the buyer', async () => {
+      // WHY THIS IS PINNED. The default allowlist originally named the most
+      // active agent on service_contracts, which was the most active BUYER. The
+      // hook keys on the provider, so that agent could never match: every
+      // fulfilment would have reported `agent_not_enrolled` forever while the
+      // hook looked correctly wired. The lookup key is the thing that makes
+      // "who is enrolled" answerable, so it is asserted rather than assumed.
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      const eqCalls: Array<[string, unknown]> = [];
+      const tables: string[] = [];
+      dbFrom.mockImplementation((t: string) => {
+        tables.push(t);
+        return {
+          select: () => ({
+            eq: (col: string, val: unknown) => {
+              eqCalls.push([col, val]);
+              return { maybeSingle: async () => ({ data: null }) };
+            },
+          }),
+        };
+      });
+
+      await recordServiceQuality({
+        contractId: 'c1',
+        providerAgentId: 'THE-PROVIDER',
+        serviceType: 'verification',
+        result: { answer: 'anything' },
+      });
+
+      expect(tables).toContain('repid_agents');
+      expect(eqCalls).toContainEqual(['id', 'THE-PROVIDER']);
     });
   });
 
@@ -196,6 +266,176 @@ describe('service-quality-hook', () => {
       expect(passed['contract_id']).toBe('c9');
       // Idempotent per contract: a retried fulfilment must not score twice.
       expect(passed['idempotency_key']).toBe('service-quality:v1:c9');
+    });
+  });
+
+  describe('a degraded HAL run is NOT_CHECKED, whatever its decision', () => {
+    // THE BUG THIS PINS, found 2026-09-04 one day after the hook was written.
+    // The guard checked `reward_suppressed` alone. applyProviderEvidenceGuard
+    // sets that ONLY for a `clean` decision — a zero-provider `vetoed` gets
+    // `veto_suppressed`, and a zero-provider `flagged` gets NEITHER. So two of
+    // the three zero-provider outcomes were recorded as `checked: true` with a
+    // hal_decision, indistinguishable from a real cross-LLM verdict, when what
+    // actually ran was the style-extractor (measured AUC ~0.375 — below chance).
+    // The mock must serve BOTH tables the shadow path touches: the repid_agents
+    // read AND the service_contracts write. An earlier version omitted .update()
+    // and the provider-backed case reported NOT_CHECKED for a reason that had
+    // nothing to do with the guard under test — a red that would have been easy
+    // to "fix" by loosening the assertion instead of the mock.
+    const writes: Array<Record<string, unknown>> = [];
+    const enrolled = () => {
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = 'trinity-shofet';
+      writes.length = 0;
+      dbFrom.mockImplementation((table: string) => {
+        if (table === 'repid_agents') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data: { id: 'p1', agent_name: 'trinity-shofet', current_repid: 1500, tier: 'ESTABLISHED' },
+                }),
+              }),
+            }),
+          };
+        }
+        return {
+          update: (payload: Record<string, unknown>) => {
+            writes.push(payload);
+            return { eq: async () => ({ error: null }) };
+          },
+        };
+      });
+    };
+    const run = () => recordServiceQuality({
+      contractId: 'c1', providerAgentId: 'p1', serviceType: 'verification',
+      result: { answer: 'delivered work' },
+    });
+
+    // Each case is a zero-provider extractor fallback. Only the first was caught
+    // before; the other two are the regression.
+    it.each([
+      ['clean   (was caught — reward_suppressed set)', { decision: 'clean', reward_suppressed: { reason_code: 'NO_PROVIDER_EVIDENCE' } }],
+      ['vetoed  (was NOT caught — veto_suppressed only)', { decision: 'flagged', veto_suppressed: { reason_code: 'NO_PROVIDER_EVIDENCE' } }],
+      ['flagged (was NOT caught — no marker at all)', { decision: 'flagged' }],
+    ])('reports NOT_CHECKED for a degraded %s', async (_label, extra) => {
+      enrolled();
+      halEvaluate.mockResolvedValue({
+        hal_score: 0.42,
+        mode: 'extractor-fallback',
+        degraded_mode: true,
+        degraded_reason: 'strictness-2 requested but fact-check quorum unavailable',
+        ...(extra as object),
+      });
+
+      const obs = await run();
+
+      expect(obs.checked).toBe(false);
+      expect(obs.reason).toMatch(/not_provider_backed|no_provider_evidence/);
+      // The decisive assertion: no verdict may be reported for work nobody checked.
+      expect(obs.hal_decision).toBeUndefined();
+      expect(obs.would_apply).toBeUndefined();
+      // And nothing is stored beside the artifact — a NOT_CHECKED observation
+      // must not leave a row a later reader could mistake for a verdict.
+      expect(writes).toHaveLength(0);
+    });
+
+    it('carries HAL\'s own reason through, so the stored observation says WHY', async () => {
+      enrolled();
+      halEvaluate.mockResolvedValue({
+        hal_score: 0.42, mode: 'extractor-fallback', degraded_mode: true,
+        degraded_reason: 'fact-check quorum unavailable (0 provider(s) configured)',
+        decision: 'flagged',
+      });
+      const obs = await run();
+      expect(obs.degraded_reason).toContain('quorum unavailable');
+    });
+
+    it('still records a verdict when the run WAS provider-backed', async () => {
+      // The guard must not swallow the real path — a check that reports
+      // NOT_CHECKED for everything is not a check.
+      enrolled();
+      halEvaluate.mockResolvedValue({ hal_score: 0.1, mode: 'fact-check', decision: 'clean' });
+      const obs = await run();
+      expect(obs.checked).toBe(true);
+      expect(obs.hal_decision).toBeDefined();
+      expect(writes).toHaveLength(1);
+    });
+  });
+
+  describe('the shadow must predict ENFORCE, not something adjacent to it', () => {
+    // runScoreEvent does not feed HAL's raw decision to computeDelta. Below two
+    // independent FAMILIES it substitutes 'flagged' first (pipeline.ts,
+    // `decisionNeutralized`/`scoringDecision`), which computes to zero. A shadow
+    // that skipped that step would forecast a reward enforce never pays — and
+    // these observations exist to be read when deciding whether to switch
+    // enforcement on, so an inflated forecast corrupts exactly that decision.
+    const writes2: Array<Record<string, unknown>> = [];
+    const shadowOn = () => {
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = 'trinity-shofet';
+      writes2.length = 0;
+      dbFrom.mockImplementation((table: string) => table === 'repid_agents'
+        ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({
+            data: { id: 'p1', agent_name: 'trinity-shofet', current_repid: 1500, tier: 'ESTABLISHED' },
+          }) }) }) }
+        : { update: (payload: Record<string, unknown>) => {
+            writes2.push(payload); return { eq: async () => ({ error: null }) };
+          } });
+    };
+    const run = () => recordServiceQuality({
+      contractId: 'c1', providerAgentId: 'p1', serviceType: 'verification',
+      result: { answer: 'delivered work' },
+    });
+    // hal_score below 0.40 → deriveHalDecision returns 'clean', the branch that pays.
+    const cleanAt = (signals: Record<string, unknown>) => ({
+      hal_score: 0.1, mode: 'fact-check', decision: 'clean', signals,
+    });
+
+    it('pays nothing when only ONE family voted, even on a clean verdict', async () => {
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 2, families_used: 1 }));
+
+      const obs = await run();
+
+      expect(obs.checked).toBe(true);            // it WAS checked — this is not NOT_CHECKED
+      expect(obs.hal_decision).toBe('clean');    // what HAL said
+      expect(obs.scoring_decision).toBe('flagged'); // what the delta came from
+      expect(obs.quorum_met).toBe(false);
+      expect(obs.would_apply).toBe(0);
+    });
+
+    it('two HOSTS running one model is still one family, and still pays nothing', async () => {
+      // The distinction that makes families the quorum unit: N families behind
+      // one host are N opinions that vanish in a single outage.
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 2, families_used: 1 }));
+      const obs = await run();
+      expect(obs.families_used).toBe(1);
+      expect(obs.would_apply).toBe(0);
+    });
+
+    it('pays when two independent families agreed', async () => {
+      // The guard must not zero everything — a forecast that is always 0 is not
+      // a forecast.
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 2, families_used: 2 }));
+
+      const obs = await run();
+
+      expect(obs.quorum_met).toBe(true);
+      expect(obs.scoring_decision).toBe('clean');
+      expect(obs.would_apply).toBeGreaterThan(0);
+    });
+
+    it('stores both decisions, so a neutralized verdict cannot later read as a real one', async () => {
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 1, families_used: 1 }));
+      await run();
+      const stored = (writes2[0] as any).metadata.hal_quality_shadow;
+      expect(stored.hal_decision).toBe('clean');
+      expect(stored.scoring_decision).toBe('flagged');
+      expect(stored.quorum_met).toBe(false);
     });
   });
 
