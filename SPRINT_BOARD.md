@@ -141,18 +141,54 @@ observation that closes it.
   since ~2026-07-17. FALSE [MEASURED 2026-09-04]: `trinity-nexus` and `trinity-hdm` scored
   on 2026-09-03, `trinity-gcm` and `trinity-veritas` on 09-02. Read liveness from recency,
   never from that line.
+- ~~Live fulfilments still pass `task_domain: 'general'`. So today's real service work
+  classifies as non-deliverable and earns nothing from HAL.~~ **STALE, CORRECTED
+  2026-09-04 (Beat 99).** #605 (merged same day, after this note was written) changed the
+  actual `SERVICE_FULFILLED` sites (`validation-repid-delta.ts:428,466`) to default
+  `task_domain` to `'service_contract'`, not `'general'` — read directly on `main`, not from
+  a PR description. The "earns nothing from HAL" mechanism was also wrong independent of
+  that: this path (`applyValidationEvent`) never calls `classifyTaskPurpose` or
+  `isDeliverableDomain` — the purpose gate lives in `runScoreEvent` (the HAL path) and the
+  reward gate in the `agents-external` score-event route, neither reached from here.
+  `task_domain` here only feeds the `apply_vertical_accuracy` trigger's per-domain
+  competence bucket, not a HAL reward decision. The real observation survives (paid
+  contract work was landing in one untyped bucket); the claimed consequence did not.
+- **Peer-verification is HALTED BY A FLAG, not broken** [corrected 2026-09-04]. Completer
+  last ran 2026-07-04, producer stopped 2026-07-21, 62,841 rows stuck `in_review` with
+  `completed_at` NULL — but `trinity-task-bridge.ts` gates the producer on
+  `isProducerHalted('peer_verify')`, reading the `PRODUCER_HALT_CLASSES` env var. That is a
+  deliberate circuit breaker (L2 breaker 2.1, "drain-only, fail-loud"), and the stop date is
+  consistent with the flag being set rather than with code rot. **If `peer_verify` appears in
+  `PRODUCER_HALT_CLASSES` on the Railway `repid-engine` service, removing it restarts the
+  producer** — one variable, not a rebuild. UNVERIFIED from here: Railway env is not readable
+  from a cloud session. Check the service Variables before planning any repair work.
+  Separately and still true: it has produced **zero** RepID events in its entire history, so
+  its dormancy cost nothing in scoring, but the anti-gaming consequence path that
+  `chronic-flag-accumulator` routes to has never once fired.
+- **`PREDICTION_RESOLVE` needs a CALLER, not a fix** [MEASURED 2026-09-04]. 2,892 events
+  lifetime, 11 since July — second-largest event type in the ledger. The producer is wired and
+  works: it is emitted from an HTTP route (`src/routes/agents-external.ts`) and from nowhere
+  else. There is no worker, no cron, no scheduled resolver. So the quiet is absent demand, not
+  a broken path — the same shape as the deliverable-traffic finding. Prediction is also the
+  best-behaved RepID substrate available (objectively resolvable, measures calibration,
+  unfakeable because you commit before the outcome, and proper scoring rules make honest
+  reporting optimal), so pointing traffic at that route is a smaller job than building a new
+  event class.
+- **`repid_agents.risk_tolerance` is read by no code.** Dead column. Harmless today, but it
+  is the shape a user-settable risk knob would take, and such a knob is a measured +73 RepID
+  arbitrage on identical work (`npm run repid:sim`, Part 4). Do not wire it without reading
+  that first.
 - **A gate can be added at one end of a pipeline without checking the producers at the
-  other.** #607 made `work_statement_hash` required at fulfil and left CREATE permissive,
-  which stranded money the same day (see the escrow row above; fixed for the cron in #608).
-  The general question is NOT answered: what else creates contracts, and does it produce a
-  parseable work statement? `src/routes/v1/negotiation.ts` is the other writer.
-- **Peer-verification is never-switched-on, not broken.** Full finding and the four killed
-  hypotheses are below; magnitudes live in `scripts/sql/peer-verify-audit.sql`, not here.
-  Still UNVERIFIED from a cloud session: whether `peer_verify` appears in
-  `PRODUCER_HALT_CLASSES` on the Railway service. Read the service Variables first.
-- **106 of 111 behaviour gates are unobservable from outside the process.** See the flag
-  entry below. The obvious fix — publish them all on `/health` — is wrong, because
-  `/health` is public and unauthenticated.
+  other.** #607 made `work_statement_hash` required at fulfil and left contract CREATE
+  permissive, which stranded real money the same day (see the escrow row above; fixed for
+  the cron in #608). The general question is NOT answered: what else creates contracts, and
+  does it produce a parseable work statement? `src/routes/v1/negotiation.ts` is the other
+  writer.
+- **106 of 111 behaviour gates are unobservable from outside the process** [MEASURED
+  2026-09-04]. See the flag entry below. The obvious fix — publish them all on `/health` —
+  is WRONG: `/health` is public and unauthenticated, so that would hand an attacker a map of
+  which money controls and breakers are currently off. Anything gating funds, chain writes
+  or a breaker needs an authenticated surface. That split is a decision, not a cleanup.
 
 ### Peer-verification: never switched on, not broken [MEASURED 2026-09-04]
 
