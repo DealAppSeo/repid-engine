@@ -4120,3 +4120,46 @@ through `toWire`/`fromWirePCA`) produces `grounded:true` through `verifyProofCar
 and a request with no `proof_carrying_answer` field stays byte-identical to today's response
 shape. If it does not land this beat, this entry already records the verified state and the
 exact two-piece scope so nothing is lost.
+
+## Beat 95 — 2026-09-04 · verified #597/#598 independently (unlogged-PR gap, again); item 6's from-wire + route plumbing still the NOW, not yet built
+
+**Step 1 — verified Beat 94's ledger PR and the one unlogged PR that followed it.** `gh pr list
+--state merged --limit 15` shows exactly one PR merged after #597 (Beat 94's own ledger PR):
+**#598** ("docs(board): B and C shipped weeks ago; the queue still said QUEUED"), not authored
+by this loop's beat sequence — same unlogged-PR gap class Beat 94 itself flagged for #590/#593,
+recurring once more. `gh pr view 598 --json statusCheckRollup` → 9/9 SUCCESS (test, crosscheck,
+zkp-vault, HAL prompt-injection, Strix, gitleaks x2, resident-secrets x2). `gh pr diff 598` read
+directly rather than trusting the title: it corrects `SPRINT_BOARD.md` rows B and C from
+QUEUED to DONE, citing concrete evidence for each (B: `@hyperdag/trustshell` 1.3.0's
+`presentProof`/`badge.ts`, 33 passing tests; C: `src/services/rating-ingestion.ts`'s
+`admitRating` failing closed on an unrecorded dual-auth decision, routes + `repid_ratings`/
+`repid_outcomes` tables, 39 passing tests) — the diff's claims check out against what it cites,
+no discrepancy found. `gh pr view 597 --json statusCheckRollup,mergedAt` confirms Beat 94's own
+ledger PR merged 2026-09-03T20:27:23Z with the same 9/9 green set.
+
+**Backlog item 6 — Beat 94's planned from-wire + route plumbing was NOT built.** Beat 94's
+"Step 2 intent" named two concrete pieces: a `fromWirePCA` helper in a new
+`src/memory/proof-carrying-wire.ts`, and an optional `proof_carrying_answer` field threaded
+through `agents-external-score.ts`'s `POST /:id/score-event`. Neither exists: `ls src/memory/`
+has no `proof-carrying-wire.ts`, and `grep -rn "proof_carrying_answer" src/routes/` still
+returns zero hits (unchanged from Beat 94's own measurement). Beat 94 must have run out of
+turns before step 2 landed — its ledger entry already said "if it does not land this beat,
+this entry already records the verified state," which held. Re-confirmed the two-piece scope
+is still correct by re-reading the same call sites Beat 94 named: `pipeline.ts:145` still
+declares `proof_carrying_answer?: ProofCarryingAnswer` on `ScoreEventInput`, `pipeline.ts:450`
+still passes it into `computeGroundingSignal`, and `proof-carrying-emit.ts`'s `toWire` still
+stringifies exactly `leaf.value`/`leaf.next` (the only bigint fields on `InclusionWitness`).
+
+**Step 2 intent — build the two pieces this beat.** (1) `src/memory/proof-carrying-wire.ts`
+exporting `fromWirePCA(wire: unknown): ProofCarryingAnswer`, the inverse of
+`proof-carrying-emit.ts`'s `toWire`, restoring `citations[].witness.leaf.value`/`.next` via
+`BigInt()` and validating shape defensively before handing untrusted HTTP input to
+`verifyProofCarryingAnswer` (which must never throw on adversarial input per its own
+contract). (2) Thread an optional `proof_carrying_answer` field through
+`agents-external-score.ts`'s `POST /:id/score-event` body, converting it with `fromWirePCA`
+before calling `runScoreEvent`, chosen over `route.ts`/`trinity-task-bridge.ts` because auth +
+`requireOwnedAgent` already gate it. Test: a wire-round-tripped PCA (built via the existing
+emit-route test helpers, passed through `toWire` then `fromWirePCA`) reaches
+`grounded:true` through `verifyProofCarryingAnswer`, and a request with no field stays
+byte-identical to today's response shape. If it does not land this beat, this entry already
+records the verified state and the exact two-piece scope so nothing is lost.
