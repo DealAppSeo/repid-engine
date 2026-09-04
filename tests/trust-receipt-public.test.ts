@@ -67,6 +67,33 @@ describe('public trust receipt', () => {
       // deliverable body. Publishing it is the point, since a third party must
       // be able to recompute and compare it.
       'work_statement_hash',
+
+      // ── ADDED 2026-09-04, and each is a deliberate publish decision ────────
+      //
+      // The line above says a third party "must be able to recompute and
+      // compare it". They could not. The receipt published the DIGEST and
+      // withheld the PREIMAGE, so an outsider held a hash and nothing to hash.
+      // A digest whose preimage is withheld is not evidence, it is an assertion
+      // wearing evidence's clothes — and it is the receipt's headline property.
+      //
+      // `work_statement` is the agreed SPEC: deliverable, numbered acceptance
+      // criteria, price, deadline — the terms both parties bound themselves to
+      // and which the DB trigger froze at bind time. It is NOT the request
+      // payload and NOT the delivered result; those stay in `payload`/`result`
+      // and are still never published (the test above proves it, and it runs
+      // against a fixture whose payload and result contain sentinels).
+      'work_statement',
+
+      // Per-criterion met/not-met. `buyer_satisfaction_score` is derived by the
+      // database as round(met/total, 4) and a disagreeing client value is
+      // refused — publishing the ratings is what turns that from a promise into
+      // something an outsider can re-derive. A rating carries an optional free
+      // -text `note`, which is a judgement about the work, not the work.
+      'criterion_ratings',
+
+      // The derived score itself, so the derivation has something to be checked
+      // against. Alone it would be one more number to trust.
+      'buyer_satisfaction_score',
     ]);
     // A new field is not automatically safe to publish — this fails until
     // someone decides it is, which is the point.
