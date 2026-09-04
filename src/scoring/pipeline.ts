@@ -55,6 +55,7 @@ import {
   evaluateProofEnqueue,
 } from '../services/proof-enqueue-filter';
 import { resolveIssuerIdentity } from './issuer-identity';
+import { evaluateEconomicMove, moneyPathGateMode } from '../kernel/money-path-gate';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -860,6 +861,50 @@ export async function applyValidationEvent(
       : null;
   }
 
+  // MONEY-PATH GATE (shadow-first; MONEY_PATH_GATE_MODE default 'shadow').
+  //
+  // This is the audit's 🔴 leak: applyValidationEvent applied the RAW caller
+  // `delta` straight to current_repid with no quorum/purpose gate. The deterministic
+  // Policy Gate (src/kernel/policy-gate.ts) is the single authorizer. In SHADOW we
+  // only MEASURE what it would authorize (recorded on the event); in ENFORCE (after
+  // the trust_receipts table + a measurement window, Sean GO) we apply
+  // gate.authorized_delta instead of the raw delta. Never affects the write here.
+  let gate_shadow: Record<string, unknown> | undefined;
+  try {
+    const _mode = moneyPathGateMode();
+    if (_mode !== 'off') {
+      const isSettlement =
+        event_type === 'SERVICE_FULFILLED' || event_type === 'SERVICE_SATISFIED' || event_type === 'VALIDATION_PASSED';
+      const g = evaluateEconomicMove({
+        delta,
+        settled_receipt_id: 'shadow', // measures evidence-gating; real receipt precondition tracked by receipt_present
+        hal: {
+          // The gate's decision union is clean|flagged|vetoed; the engine's HALDecision
+          // also has 'abstain' → map it to 'flagged' (advisory, non-authorizing) for the gate.
+          decision: halDecision === 'clean' || halDecision === 'vetoed' ? halDecision : 'flagged',
+          hal_score: typeof halScore === 'number' ? halScore : undefined,
+          providers_succeeded: Number((halOverride?.hal_signals as any)?.providers_used ?? 0),
+        },
+        settlement_confirmed: isSettlement,
+        subject_n: 1, // proxy until the RepID ω lens lands (measures evidence gates, not zero-evidence)
+        subject_u: 0.2,
+        is_deliverable: isSettlement,
+      });
+      gate_shadow = {
+        mode: _mode,
+        receipt_present: false, // trust_receipts not yet wired — enforce stays blocked until it is
+        would_decision: g.decision,
+        would_authorize_delta: g.authorized_delta,
+        raw_delta: Math.round(delta),
+        diverges: g.authorized_delta !== Math.round(delta),
+        reasons: g.reasons,
+        note: 'subject_n/u are placeholders until the RepID lens lands',
+      };
+    }
+  } catch {
+    /* shadow measurement must never affect the score write */
+  }
+
   const insertPayload = {
     agent_id,
     event_type,
@@ -874,7 +919,7 @@ export async function applyValidationEvent(
     zk_proof_triggered: triggerProof,
     zk_proof_id,
     decision_outcome: halDecision,
-    metadata: { ...decayMetadata(decay), ...(enrichedMetadata as Record<string, unknown>) },
+    metadata: { ...decayMetadata(decay), ...(enrichedMetadata as Record<string, unknown>), ...(gate_shadow ? { gate_shadow } : {}) },
     contract_id: metadata?.contract_id ?? null,
     // Lifted out of metadata onto its own column, exactly as contract_id above is. This
     // writer bypasses insertScoreEvent(), so its self-check is repeated rather than
