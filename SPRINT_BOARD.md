@@ -181,9 +181,25 @@ observation that closes it.
 - **A gate can be added at one end of a pipeline without checking the producers at the
   other.** #607 made `work_statement_hash` required at fulfil and left contract CREATE
   permissive, which stranded real money the same day (see the escrow row above; fixed for
-  the cron in #608). The general question is NOT answered: what else creates contracts, and
-  does it produce a parseable work statement? `src/routes/v1/negotiation.ts` is the other
-  writer.
+  the cron in #608). `src/routes/v1/negotiation.ts`, the other writer, was read end to end
+  (Beat 100, 2026-09-04): **it does not share the content-validity failure #607 was about.**
+  `negotiation.ts:1324-1330` calls `parseWorkStatement(rfq.scope, ...)` and returns 400 on
+  `!spec.ok` **before** calling `acceptAndAward` — an unparseable statement never reaches the
+  money-committing RPC here, unlike the pre-fix cron.
+
+  What the read surfaced instead is narrower and still open. `a2a_accept_and_award` is
+  documented (`a2a-negotiation.ts:57-64`) as one atomic Postgres transaction — RFQ CAS +
+  `service_contracts` insert + `a2a_awards` insert + losing-bid sweep — specifically so a
+  rejected constraint can't leave "a live, payable, un-provenanced contract" behind. The
+  `work_statement` column, though, is bound by a *separate* `.update()` **after** that RPC
+  returns success (`negotiation.ts:1376-1379`), outside the transaction its own neighboring
+  comment describes as the fix for exactly this class of bug. A failure on that update
+  (`WORK_STATEMENT_BIND_FAILED`, 500) leaves the same shape as the stranded-escrow row above:
+  a live, payable contract with `work_statement` unbound — reached by a DB-write failure
+  between two calls, not by unparseable content. Real fix is passing the parsed spec into the
+  RPC so binding is atomic with creation; that RPC's signature is in a migration outside this
+  repo (schema managed externally) and was not read this beat, so changing its call contract
+  blind is a money-path guess, not a fix. Not attempted.
 - **106 of 111 behaviour gates are unobservable from outside the process** [MEASURED
   2026-09-04]. See the flag entry below. The obvious fix — publish them all on `/health` —
   is WRONG: `/health` is public and unauthenticated, so that would hand an attacker a map of
