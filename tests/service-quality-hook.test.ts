@@ -363,6 +363,82 @@ describe('service-quality-hook', () => {
     });
   });
 
+  describe('the shadow must predict ENFORCE, not something adjacent to it', () => {
+    // runScoreEvent does not feed HAL's raw decision to computeDelta. Below two
+    // independent FAMILIES it substitutes 'flagged' first (pipeline.ts,
+    // `decisionNeutralized`/`scoringDecision`), which computes to zero. A shadow
+    // that skipped that step would forecast a reward enforce never pays — and
+    // these observations exist to be read when deciding whether to switch
+    // enforcement on, so an inflated forecast corrupts exactly that decision.
+    const writes2: Array<Record<string, unknown>> = [];
+    const shadowOn = () => {
+      process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';
+      process.env['SERVICE_QUALITY_HOOK_AGENTS'] = 'trinity-shofet';
+      writes2.length = 0;
+      dbFrom.mockImplementation((table: string) => table === 'repid_agents'
+        ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({
+            data: { id: 'p1', agent_name: 'trinity-shofet', current_repid: 1500, tier: 'ESTABLISHED' },
+          }) }) }) }
+        : { update: (payload: Record<string, unknown>) => {
+            writes2.push(payload); return { eq: async () => ({ error: null }) };
+          } });
+    };
+    const run = () => recordServiceQuality({
+      contractId: 'c1', providerAgentId: 'p1', serviceType: 'verification',
+      result: { answer: 'delivered work' },
+    });
+    // hal_score below 0.40 → deriveHalDecision returns 'clean', the branch that pays.
+    const cleanAt = (signals: Record<string, unknown>) => ({
+      hal_score: 0.1, mode: 'fact-check', decision: 'clean', signals,
+    });
+
+    it('pays nothing when only ONE family voted, even on a clean verdict', async () => {
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 2, families_used: 1 }));
+
+      const obs = await run();
+
+      expect(obs.checked).toBe(true);            // it WAS checked — this is not NOT_CHECKED
+      expect(obs.hal_decision).toBe('clean');    // what HAL said
+      expect(obs.scoring_decision).toBe('flagged'); // what the delta came from
+      expect(obs.quorum_met).toBe(false);
+      expect(obs.would_apply).toBe(0);
+    });
+
+    it('two HOSTS running one model is still one family, and still pays nothing', async () => {
+      // The distinction that makes families the quorum unit: N families behind
+      // one host are N opinions that vanish in a single outage.
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 2, families_used: 1 }));
+      const obs = await run();
+      expect(obs.families_used).toBe(1);
+      expect(obs.would_apply).toBe(0);
+    });
+
+    it('pays when two independent families agreed', async () => {
+      // The guard must not zero everything — a forecast that is always 0 is not
+      // a forecast.
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 2, families_used: 2 }));
+
+      const obs = await run();
+
+      expect(obs.quorum_met).toBe(true);
+      expect(obs.scoring_decision).toBe('clean');
+      expect(obs.would_apply).toBeGreaterThan(0);
+    });
+
+    it('stores both decisions, so a neutralized verdict cannot later read as a real one', async () => {
+      shadowOn();
+      halEvaluate.mockResolvedValue(cleanAt({ providers_used: 1, families_used: 1 }));
+      await run();
+      const stored = (writes2[0] as any).metadata.hal_quality_shadow;
+      expect(stored.hal_decision).toBe('clean');
+      expect(stored.scoring_decision).toBe('flagged');
+      expect(stored.quorum_met).toBe(false);
+    });
+  });
+
   describe('never throws into fulfilment', () => {
     it('converts a thrown HAL error into NOT_CHECKED, not a rejection', async () => {
       process.env['SERVICE_QUALITY_HOOK_MODE'] = 'shadow';

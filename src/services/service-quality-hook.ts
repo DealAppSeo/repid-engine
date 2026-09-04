@@ -157,6 +157,16 @@ export interface ServiceQualityObservation {
   hal_decision?: HALDecision;
   purpose?: string;
   purpose_weight?: number;
+  /**
+   * The decision the delta was actually computed from. Differs from
+   * `hal_decision` when the quorum was not met and the verdict was neutralized
+   * to 'flagged' — the same substitution runScoreEvent makes.
+   */
+  scoring_decision?: HALDecision;
+  /** Did >= 2 independent families vote? A verdict below this pays nothing. */
+  quorum_met?: boolean;
+  /** Independent FAMILIES that voted — not hosts. Two hosts running one model is one. */
+  families_used?: number;
   /** SHADOW ONLY — the delta that WOULD have moved the score. Nothing moved. */
   would_apply?: number;
   /** ENFORCE ONLY — what actually moved. */
@@ -334,12 +344,47 @@ export async function recordServiceQuality(
     const hal_decision = deriveHalDecision(hal_score, (r as any).decision === 'vetoed', null);
     const purpose = classifyTaskPurpose(SERVICE_TASK_DOMAIN, null);
 
+    // MIRROR THE PIPELINE'S QUORUM NEUTRALIZATION, or this forecast is inflated.
+    //
+    // runScoreEvent does not feed HAL's raw decision to computeDelta. When fewer
+    // than two INDEPENDENT FAMILIES voted it substitutes 'flagged' first
+    // (src/scoring/pipeline.ts — `decisionNeutralized` / `scoringDecision`),
+    // which computes to a zero delta. A shadow that skips that step predicts a
+    // reward enforce would never pay — and predicting enforce is the entire
+    // purpose of the shadow. Someone reading these observations to decide
+    // whether to switch enforcement on would be reading an inflated forecast.
+    //
+    // FAMILIES, not providers: groq-Llama + cerebras-Llama is ONE opinion behind
+    // two hosts. `families_used` is the quorum unit; providers_used is the
+    // fallback for a result shape that predates it.
+    //
+    // ONE DELIBERATE DIVERGENCE, stated rather than hidden: the pipeline gates
+    // this on `halConfig.decisionRequiresQuorum`, which resolves DB → env →
+    // default and is one repid_config UPDATE away from off. This path mirrors the
+    // DEFAULT (on) rather than reading that row, because a config read here would
+    // add a way for an observation to fail in a function that must never throw.
+    // If the row is ever set to false, this shadow UNDER-predicts rewards. That
+    // is the safe direction for a number used to decide whether to enable
+    // enforcement, and it is why the observation carries `quorum_met` — so a
+    // reader can tell which regime produced it instead of inferring.
+    const QUORUM_MIN = 2;
+    const signals = ((r as any).signals ?? {}) as Record<string, unknown>;
+    const providersUsed = Number(signals['providers_used'] ?? 0);
+    const familiesUsed = Number(signals['families_used'] ?? providersUsed);
+    const quorumCount = process.env['HAL_QUORUM_FAMILY_AWARE'] !== 'false' ? familiesUsed : providersUsed;
+    const quorum_met = Number.isFinite(quorumCount) && quorumCount >= QUORUM_MIN;
+    // `mode === 'fact-check'` is already established by the guard above.
+    const scoringDecision: HALDecision =
+      !quorum_met && hal_decision !== 'flagged' ? 'flagged' : hal_decision;
+
     // Compute the counterfactual, write NOTHING to repid_score_events.
     // vesting_cliff_active is false: `repid_agents` has no such column
     // [MEASURED 2026-09-04], so the live pipeline reads undefined here too.
     const delta = computeDelta({
       hal_score,
-      hal_decision,
+      // The QUORUM-eligible decision, never the raw one — same substitution the
+      // pipeline makes, for the same reason.
+      hal_decision: scoringDecision,
       current_repid: Number((agent as any).current_repid ?? 0),
       agent_tier: String((agent as any).tier ?? 'PROBATIONARY'),
       vesting_cliff_active: false,
@@ -349,7 +394,14 @@ export async function recordServiceQuality(
       mode: 'shadow', checked: true, reason: `evaluated (artifact_source=${source})`,
       agent_name: agentName,
       hal_score,
+      // BOTH decisions are reported. `hal_decision` is what HAL said;
+      // `scoring_decision` is what the delta was actually computed from. Storing
+      // only one of them under a single name is how a neutralized verdict later
+      // gets read as a real one.
       hal_decision,
+      scoring_decision: scoringDecision,
+      quorum_met,
+      families_used: Number.isFinite(familiesUsed) ? familiesUsed : 0,
       purpose: purpose.purpose,
       purpose_weight: purpose.weight,
       would_apply: Math.round(delta.delta_applied * purpose.weight * 10) / 10,
