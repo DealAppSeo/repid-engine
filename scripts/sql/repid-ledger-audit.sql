@@ -194,3 +194,64 @@ from pg_constraint
 where conrelid = 'repid_agents'::regclass
   and contype = 'c'
   and pg_get_constraintdef(oid) ilike '%current_repid%';
+
+-- ---------------------------------------------------------------------------
+-- 8. THE SIGNAL MIX: RepID is STARVED, not mis-tuned [MEASURED 2026-09-04].
+--
+--    The question this answers: "HAL is ~99% of scoring events and has awarded
+--    almost nothing in reward -- are the earning paths broken?" No. Three
+--    separate investigations each ended in "working as designed":
+--
+--    (a) THE TARIFF ISN'T THE PROBLEM. 9 of the engine's 11 positive-reward
+--        event types (REFERRAL, CODE_CONTRIBUTION, SELF_MONITOR, TOOL_PIONEER,
+--        AUDIT_CONTRIBUTION, WORKFLOW_CONTRIBUTION, HANDOFF_COSIGN_VERIFIED,
+--        STAKE, and the deception classes) have NEVER produced a row. They are
+--        reachable only by an agent self-reporting to POST /api/v1/score, which
+--        the engine itself flags as unproven and self-awardable. Turning them on
+--        would be a minting surface, not a fix.
+--
+--    (b) THE REWARD CURVE IS CORRECT. `npm run repid:sim` (real computeDelta +
+--        deriveHalDecision): clean pays +3.00 at risk 0.00 falling to +1.40 at
+--        risk 0.388, monotone, ZERO violations. The 2026-08-17 orientation fix
+--        (hal_score is RISK, the clean branch consumes QUALITY) holds.
+--
+--    (c) THE PREFERENCE ARBITRAGE IS NOT LIVE. The simulator measures a
+--        user-settable flag threshold worth +73 RepID on identical work. No such
+--        knob reaches scoring: `deriveHalDecision` hardcodes 0.40 and takes no
+--        threshold argument, the veto threshold comes from a server-side config
+--        row, and `repid_agents.risk_tolerance` is read by NO code. It is a
+--        design warning about a feature not yet shipped. Do not report it as a
+--        live hole -- but re-run the greps before shipping a risk-tolerance knob.
+--
+--    WHAT IS ACTUALLY TRUE: the purpose gate (symmetric, default ON, correct)
+--    refuses to score work that is not a deliverable, in BOTH directions -- and
+--    almost nothing flowing through HAL is a deliverable. Since 2026-07-01:
+--
+--        peer_verify   19,029   48.6%     applied 0
+--        operational   10,370   26.5%     applied 0
+--        drill          7,085   18.1%     applied 0
+--        monitoring     1,144    2.9%     applied 0
+--        DELIVERABLE       81    0.21%    applied -305
+--
+--    81 events out of 39,135, and the LAST ONE WAS 2026-08-17. The system is
+--    overwhelmingly evaluating itself. No weight change fixes that; deliverable
+--    traffic does.
+--
+--    AND THE FIX HAS NO LIVE WITNESS. Deliverable traffic stopped the same day
+--    the orientation fix landed, so the corrected curve has never scored a real
+--    deliverable. Its 27 clean deliverable rows (avg risk 0.197, quality ~0.80)
+--    computed -3 under the OLD inverted formula where the corrected one pays
+--    ~+2.2 each (~+59). VERIFIED in simulation, NOT_CHECKED in production.
+--    The first real deliverable after 2026-08-17 is the observation that closes
+--    it -- check it rather than assuming the fix works.
+-- ---------------------------------------------------------------------------
+select coalesce(metadata->>'purpose', '(legacy: no purpose recorded)') as purpose,
+       count(*)                                        as rows,
+       round(100.0 * count(*) / sum(count(*)) over (), 2) as pct,
+       sum(repid_delta_calculated)                     as calculated,
+       sum(repid_delta_applied)                        as applied,
+       max(created_at)::date                           as last_seen
+from repid_score_events
+where event_type = 'HAL_SCORE_EVENT' and created_at >= '2026-07-01'
+group by 1
+order by rows desc;
