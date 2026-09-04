@@ -548,6 +548,58 @@ export async function runScoreEvent(
     );
   }
 
+  // SINGLE-SOURCE-OF-TRUTH (shadow): route the HAL move through the SAME Policy Gate
+  // the money path uses, and write a Trust Receipt for it. runScoreEvent's inline
+  // gates (quorum / purpose / hallucination_caught / reward-evidence) stay authoritative
+  // here; the gate shadow-VALIDATES them (agreement recorded on the receipt + metadata)
+  // and gives every HAL move a receipt. Enforce for this path is deferred until shadow
+  // shows the gate agrees with the inline logic — then the inline duplication is deleted.
+  let hal_settled_receipt_id: string | null = null;
+  let hal_gate_shadow: Record<string, unknown> | undefined;
+  try {
+    if (moneyPathGateMode() !== 'off') {
+      const _rid = crypto.randomUUID();
+      const _hal = {
+        decision: (scoringDecision === 'clean' || scoringDecision === 'vetoed' ? scoringDecision : 'flagged') as 'clean' | 'vetoed' | 'flagged',
+        hal_score,
+        mode: (halMode as any) ?? undefined,
+        families_used: familiesUsed,
+        providers_succeeded: providersUsed,
+        error: !!halError,
+      };
+      const gg = evaluateEconomicMove({
+        delta: effectiveDeltaApplied,      // what the inline gates decided to apply
+        settled_receipt_id: _rid,
+        hal: _hal,
+        settlement_confirmed: false,       // HAL claim events are not settlements
+        subject_n: 1, subject_u: 0.2,      // proxy until the RepID lens lands
+        is_deliverable: purposeVerdict.halVetoApplies,
+      });
+      hal_settled_receipt_id = await writeTrustReceipt(db, {
+        id: _rid,
+        action_class: 'durable_repid_move',
+        subject_agent_id: input.agent_id,
+        contract_id: input.contract_id ?? null,
+        evidence_predicate_result: { path: 'HAL_SCORE_EVENT', quorum_met: quorumMet, hallucination_caught, purpose: purposeVerdict.purpose },
+        hal_evidence: _hal,
+        gate_decision: gg.decision,
+        gate_reasons: gg.reasons,
+        authorized_delta: gg.authorized_delta,
+        outcome: gg.decision === 'ALLOW' ? 'success' : gg.decision === 'ASK' ? 'escalate' : 'fail',
+      });
+      hal_gate_shadow = {
+        mode: moneyPathGateMode(),
+        receipt_id: hal_settled_receipt_id,
+        would_authorize_delta: gg.authorized_delta,
+        applied_delta: Math.round(effectiveDeltaApplied),
+        agrees_with_inline: gg.authorized_delta === Math.round(effectiveDeltaApplied),
+        reasons: gg.reasons,
+      };
+    }
+  } catch {
+    /* shadow: never affect the HAL score write */
+  }
+
   // 6. Insert score event.
   const insertPayload: Record<string, unknown> = {
     agent_id: input.agent_id,
@@ -562,6 +614,7 @@ export async function runScoreEvent(
     certainty_at_claim:
       typeof input.certainty === 'number' ? input.certainty : 0.85,
     contract_id: input.contract_id ?? null,
+    settled_receipt_id: hal_settled_receipt_id, // the Trust Receipt this HAL move is recorded against
     llm_provider: canonicalizeProvider(input.provider_used),
     llm_model: input.model_used ?? null,
     hal_score,
@@ -617,6 +670,7 @@ export async function runScoreEvent(
       // — a verdict issued having consulted nothing — is unrecoverable from the ledger.
       reward_unearned: rewardUnearned,
       extractor_decision: decision,
+      ...(hal_gate_shadow ? { gate_shadow: hal_gate_shadow } : {}),
       ...(penaltySuppressed || purposeSuppressed
         ? {
             suppressed_reason: purposeSuppressed ? ('wrong_task_purpose:' + purposeVerdict.purpose) : (quorumUnavailable ? 'quorum_unavailable' : 'no_hallucination_caught'),
