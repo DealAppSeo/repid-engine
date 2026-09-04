@@ -189,7 +189,13 @@ The Supabase project ID is **not** committed; the only artifacts are `SUPABASE_U
 
 ### On-chain integration
 
-`src/engine/hashkey-chain.ts` and `src/routes/hashkey.ts` use `ethers` against the HashKey testnet (defaults: chainId `133`, RPC `https://testnet.hsk.xyz`, contract `0xE3b55a00445dEE1e330f81d113da2E4F28131B69`). `DEPLOYER_PRIVATE_KEY` is optional — read paths work without it; writes require it.
+`src/engine/hashkey-chain.ts` and `src/routes/hashkey.ts` use `ethers` against the HashKey testnet (RPC `https://testnet.hsk.xyz`, contract `0xE3b55a00445dEE1e330f81d113da2E4F28131B69`). `DEPLOYER_PRIVATE_KEY` is optional — read paths work without it; writes require it.
+
+**The chain id was documented here as `133` and the chain answers `177` [MEASURED 2026-09-04].** `/health` reads it live from `provider.getNetwork()` and reported 177 while three places in this repo published 133 — `config.ts`'s default, a hardcoded literal in `HASHKEY_CONFIG`, and `challenge.ts` through it. The one that mattered is `GET /hashkey/config`, whose own comment calls it metadata "for judges and clients": a wallet configured from it signs under EIP-155 for a chain the RPC is not on, and the transaction is rejected.
+
+Two defects, and conflating them is how it survived. There were **two sources of truth that could disagree** — now one, `config.hashkeyChainId` (env `HSK_CHAIN_ID`), which every surface reads. And **nothing compared either against the chain** — unifying two wrong numbers into one wrong number is not a fix, so `chainIdAgreesWithRpc()` compares what we publish against what the RPC reports and `/health` surfaces `hashkeyChainIdAgrees` (`null` = RPC unreachable, which is NOT agreement).
+
+**The DEFAULT is still `133` and that is deliberate, not an oversight.** Whether 177 is HashKey's permanent testnet id or a temporary state of that endpoint is unverified, and silently changing a default that decides which chain a transaction is signed for is a decision, not a cleanup. Production already overrides it. Read `hashkeyChainIdAgrees` rather than trusting either number.
 
 ## Deploy
 
