@@ -4265,3 +4265,69 @@ content rows returns N verified entries with witnesses that pass `verifyProofCar
 style checks; a corrupted content row is excluded rather than returned. If it does not land
 this beat, this entry already records the verified state and the exact scope so nothing is
 lost.
+
+## Beat 98 — 2026-09-04 · verified #605/#607 independently; found Beat 97's own item-3 diagnosis was stale, corrected the backlog instead of re-building it
+
+**Step 1 — two PRs merged after Beat 97's own ledger PR (#606), neither logged.** `gh pr list
+--state merged --limit 15 --json number,title,mergedAt` shows #605 and #607 both merged after
+#606 (08:39:59Z) — same unlogged-PR gap class flagged in Beats 91/94/95/96/97, now a fifth
+consecutive beat with at least one instance. Both verified independently before moving on:
+
+- **#605** ("fix(scoring): label a fulfilled service contract as one, so its competence bucket
+  is real") — `gh pr view 605 --json statusCheckRollup` → 9/9 SUCCESS. `gh pr diff 605` read
+  directly: the PR body itself carries a correction notice (its first draft claimed the wrong
+  reason — a purpose-gate bypass that doesn't exist on this code path — and the PR corrects
+  itself in a follow-up commit rather than silently editing the claim away). The actual change
+  is narrow and matches the corrected reason: `replace_all` on the two `SERVICE_FULFILLED`
+  `task_domain` sites (`'general'` → `'service_contract'`) so `apply_vertical_accuracy`'s
+  per-domain competence bucket stops averaging paid contract outcomes into the untyped bucket.
+  No delta path touched, 3 files, all green.
+- **#607** ("feat: bind work_statement_hash to a canonical spec") — `gh pr view 607
+  --json statusCheckRollup,files` → 9/9 SUCCESS. `gh pr diff 607`: DDL already applied to prod
+  per the PR body (`schema_evolution 2026-09-04-work-statement-bind`), this PR is the engine
+  twin — `work_statement_hash` becomes a server-computed SHA-256 over a canonical work-statement
+  JSON, a client-supplied hash is rejected, and a contract cannot reach `fulfilled` without one
+  already bound. Five live attack cases in the PR body (NULL hash, provider-supplied hash,
+  post-bind mutation, an out-of-statement criterion, settling without ratings) all rejected with
+  named error codes. New migration + rollback file, `src/services/work-statement-spec.ts` new,
+  3 test files including a dedicated migration test. No RepID writes per the PR's own claim,
+  confirmed by the diff touching no scoring path.
+
+**Backlog item 3 (P2 retrieval API) — Beat 97's diagnosis was WRONG, and it was wrong on a
+verification step, not a build step.** Beat 97 grepped `hydrateTree\|fromLeaves\|verifiedEntry`
+against `src/routes/`, got zero hits, and concluded the authenticated retrieval endpoint still
+didn't exist. It does: `GET /api/v1/memory/retrieve` (`src/routes/memory-retrieve.ts`) landed in
+**PR #592, merged 2026-09-03T08:38:33Z — a day before Beat 97 ran**, mounted in `src/index.ts`,
+9/9 checks green. The route calls the higher-level `retrieveVerifiedMemory` bridge
+(`src/memory/memory-retrieval.ts`, PR #589) rather than the three lower-level primitive names
+Beat 97 grepped for, so a correct grep against the wrong symbol set produced a confident wrong
+answer — the same class LESSONS.md rule 5 names for data ("match the real names the system
+emits"), here applied to a verification command instead of a value. Reran the actual test file
+this beat (`npm install --legacy-peer-deps`, then `npx jest tests/memory-retrieve-route.test.ts`
+with dummy Supabase env per this repo's own documented pattern): 4/4 passing.
+
+**Backlog item 4 (answer-binding) — also already closed, and the backlog row itself was stale
+for 3 beats (95-97), independent of Beat 97's item-3 error.** Beat 93 (2026-09-03) had already
+verified `POST /api/v1/proof-carrying/emit` (PR #595) closed this row, but the backlog file's
+own item-4 row still read "NOW (Patent #1 keystone)" — nobody had gone back to update the
+table cell after the ledger entry that closed it. Reran `tests/answer-binding-retrieval.test.ts`
++ `tests/proof-carrying-emit-route.test.ts` this beat: 10/10 passing.
+
+**Step 2 — corrected the backlog file rather than re-building already-shipped work.**
+`reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` rows 3 and 4 updated to DONE with the PR
+numbers, dates, and re-run test evidence above, plus a note on each explaining *why* the
+staleness happened (wrong grep target; table cell never revisited) so the next beat doesn't
+re-derive either fact from scratch. This is a docs-only, safe-class change.
+
+**What's actually left, so the next beat doesn't restart this search.** With items 3 and 4 both
+closed, the remaining open backlog rows are all correctly gated, not simply unbuilt:
+item 7 (ANFIS enablement) needs Sean's GO on `ENGINE_LLM_PROXY`/`ROUTER_STRICT_COST_ORDER`; items
+9/10's orchestration (`runMemoryRootAnchorSweep`, `src/memory/memory-root-anchor-sweep.ts`) is
+built and tested but its own file header explicitly defers wiring a real trigger to Sean, because
+an unattended cron would start spending real EAS-attestation gas from the funded attester wallet
+on a schedule nobody approved; item 8's output-confidence scorer was already flagged (beat 84) as
+"exactly the kind of new measurement mechanism this loop's beats do not rush." None of these are
+a route-wiring gap the way items 3/4 turned out to be — building further into any of them this
+beat, on top of the verification work already done, would have meant either bypassing a
+Sean-gate or rushing the exact kind of new mechanism this loop is supposed to avoid. Stopping
+here is the honest result for this beat, not a shortfall.

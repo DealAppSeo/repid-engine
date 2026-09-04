@@ -80,8 +80,25 @@ endpoint itself** (fetch this agent's `agent_memory_leaves` + `agent_memory_leaf
 `hydrateTree()` them, produce a witness per entry, verify each via `verifiedEntry` before
 returning it) — both blockers item 3's acceptance test named are now closed at the primitive
 level, but nothing yet calls either one from a route. NEXT — this is the actual remaining scope,
-not a further design question. |
-| 4 | **Answer-binding** — gate answer emit on successful verify; answer carries commitment to its proof set | #1 | P2 | CC | answer w/o valid proof set is refused/flagged; binding is checkable | NOW (Patent #1 keystone) |
+not a further design question.
+
+**DONE — PR #592, merged 2026-09-03T08:38:33Z, 9/9 checks green.** `GET /api/v1/memory/retrieve`
+(`src/routes/memory-retrieve.ts`), mounted in `src/index.ts`, identity from `(req as any).agent_id`
+only (never a client-supplied field — 403 for an unbound key). Fetches this agent's latest
+`agent_memory_roots` row, the `agent_memory_leaves` at that epoch, and its
+`agent_memory_leaf_content` rows, then hands all three to the pure `retrieveVerifiedMemory` bridge
+(`src/memory/memory-retrieval.ts`, PR #589) — the acceptance test's full tuple
+`(content, inclusionProof, currentValidityProof, root)` comes back per entry, wire-transformed
+(bigint→string). 4/4 tests in `tests/memory-retrieve-route.test.ts`, reverified 2026-09-04
+(Beat 98) with `npm install --legacy-peer-deps` + a live `npx jest` run, not just read.
+**Beat 97 (2026-09-04) mis-diagnosed this row as still open**, grepping
+`hydrateTree\|fromLeaves\|verifiedEntry` against `src/routes/` and finding zero hits — the route
+calls the higher-level `retrieveVerifiedMemory` bridge, not those three names directly, so the
+grep missed a route that already existed and had already shipped a day earlier. Lesson-5 shape
+(match the real names the system emits, not the ones you expect) applied to a verification step,
+not just a data value. Item 4 (answer-binding) is consequently NOT blocked on this — see item 4's
+own row: it was independently confirmed closed by beat 93. |
+| 4 | **Answer-binding** — gate answer emit on successful verify; answer carries commitment to its proof set | #1 | P2 | CC | answer w/o valid proof set is refused/flagged; binding is checkable | **DONE — PR #595, merged 2026-09-03T12:50:19Z, 9/9 checks green, verified independently by beat 93.** `bindAnswerFromRetrieval` (`src/memory/answer-binding-retrieval.ts`) draws citations only from a `retrieveVerifiedMemory` (item 3) output — already root- and content-checked — and throws `abstain: ...` on an empty cite list or a value that is not currently a verified member (covers the revoked-entry case). `POST /api/v1/proof-carrying/emit` (`src/routes/proof-carrying-emit.ts`) exposes it over HTTP, same `agent_id`-only identity contract as item 3's route. 10/10 tests (`answer-binding-retrieval.test.ts`, `proof-carrying-emit-route.test.ts`), reverified 2026-09-04 (Beat 98) with a live `npx jest` run. This row was stale for 2 beats (94-97) — this repo said "NOW" for work that had already shipped, the same class of staleness the item-3 row above had. |
 | 5 | `agent_memory_leaves` + `agent_memory_roots` tables (additive DDL) | #1 | P1 | CC | append→root deterministic; recompute matches | **DONE — PR #490 (2026-08-28), migration `supabase/migrations/20260828000000_agent_memory_leaves_and_roots.sql` + `src/memory/memory-root-store.ts`, 6/6 tests. Verified by beat 74, 2026-08-30. NOT yet wired into scoring (item 3/6's currency read still has zero callers).** |
 | 6 | **HAL abstain / knowledge-boundary** — refuse/flag when cited evidence lacks a valid inclusion+current-validity proof | #1/#3 | — | GA/CC | ungrounded answer → abstain in shadow; measured hallucination drop | **DONE (primitive + wiring + logging) — `computeGroundingSignal` (`src/hal/hal-grounding.ts:69`), called from `src/scoring/pipeline.ts:450`, logged into score-event `metadata.grounding`/`metadata.grounding_abstained` (`pipeline.ts:587-588`) on every scoring call. `HAL_GROUNDING_MODE` shadow-first, default `shadow`. Verified by beat 71, 2026-08-29, by reading the call site and the write, not the table. REMAINING: no current traffic carries a proof-carrying answer (`applicable:false` today), so the "measured hallucination drop" half of the acceptance test has nothing to measure yet — that needs P2 retrieval (item 3) producing real proof-carrying answers first.** |
 | 7 | **ANFIS enablement** — mint 12 agent keys + `ENGINE_LLM_PROXY` + `ROUTER_STRICT_COST_ORDER` (staged; flips = Sean GO) + 5 acceptance tests | #2 | — | CC | no-leak/injection/ANFIS-decision/live-routing/job-token tests green | NOW (stage) / Sean GO (flip) |
