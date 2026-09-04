@@ -102,7 +102,6 @@ gets missed.
 | Item | Where exactly | Value |
 |---|---|---|
 | **⚠ Stranded escrow — decide recovery** | contract `133a9048…`, escrowed 2026-09-04 12:00:13Z | Real testnet USDC is committed to a contract that can never be delivered (NULL `work_statement_hash`, `WORK_STATEMENT_REQUIRED` at fulfil). #608 stops NEW ones; it does not release this one. Recovering funds is a money-path write and was deliberately not attempted. |
-| `SERVICE_QUALITY_HOOK_MODE` | Railway → project `repid-engine` → **service** `repid-engine` → Variables (NOT project-shared) | literal `shadow`. **Now verifiable without the dashboard**: `GET /health` → `service_quality_hook.mode`. A MISSING key means the build has not deployed yet — that is not the same as `off`. |
 | `TRUSTRAILS_HMAC_SECRET` | Vercel project `trustrails` **and** Railway `repid-engine` — same value both | generate: `openssl rand -hex 32`. A publicly-known placeholder is in use today, so audit hashes are forgeable. Deleting it from HEAD is not rotation. |
 | `SUPABASE_URL` + `SUPABASE_SECRET_KEY` | Vercel project `trustmarket-landing` | the `sb_secret_…` key from Supabase → Settings → API Keys. NOT `sb_publishable_…` (that one ships in the browser). Route 503s by design until both exist. |
 | trustmarket.dev deploy target | Vercel | domain is served by an April static upload from `trustmarket-coming-soon`, not the landing project — merged fixes will not appear until this is repointed |
@@ -117,12 +116,24 @@ observation that closes it.
   traffic stopped 2026-08-17, the same day the fix landed. VERIFIED in simulation
   (`npm run repid:sim`: monotone, zero violations), NOT_CHECKED in production. Closes on
   the first `purpose: deliverable` event dated after 2026-08-17.
-- **The service-quality hook has never executed.** Now for a *known* reason rather than an
-  unexplained absence: until #608 its allowlist named the most active BUYER, so every
-  fulfilment reported `agent_not_enrolled` regardless of the flag. Fixed; still inert
-  because the mode defaults to `off`. Closes on the first row where
-  `service_contracts.metadata ? 'hal_quality_shadow'`. Run `npm run verify:quality-hook`
-  before blaming the flag — it answers whether the hook *can* fire at all.
+- **The service-quality hook has never executed — but everything it needs is now in place.**
+  [MEASURED 2026-09-04 15:56Z, from the public `/health`, not a dashboard:]
+
+      deployed_commit_short  34e9d28          (#608 is live)
+      service_quality_hook   mode=shadow  enrolled_count=2  allowlist=default
+
+  So the flag IS set, and `allowlist: default` means it is using the corrected pair from
+  #608 rather than an env override. Until #608 the allowlist named the most active BUYER,
+  so every fulfilment reported `agent_not_enrolled` at any flag setting — that is why the
+  absence was not evidence of anything.
+
+  **This row is why the observability change was worth making.** "Is the flag set?" was
+  unanswerable for a full session and got guessed; it is now one unauthenticated GET, and
+  the answer was yes the whole time. Closes on the first row where
+  `service_contracts.metadata ? 'hal_quality_shadow'` — expected on the next fulfilment by
+  an enrolled provider (~12:00Z daily). If it does not appear, run
+  `npm run verify:quality-hook` BEFORE suspecting the flag: it distinguishes "nobody
+  enrolled delivered" from "the hook cannot fire at all".
 
 ### Found this session, not yet acted on
 
