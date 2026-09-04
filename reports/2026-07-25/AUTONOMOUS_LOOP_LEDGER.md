@@ -4215,3 +4215,53 @@ nothing calls it in anger — no live caller assembles a `POST /emit` response i
 `POST /score-event` body yet, so `computeGroundingSignal` still reports `applicable:false` on
 all current traffic (byte-identical to today, as designed for shadow mode). That end-to-end
 wiring, if it matters next, is a caller/integration task, not a primitive gap.
+
+## Beat 97 — 2026-09-04 · verified #601/#603/#604 independently (unlogged-PR gap, third recurrence this week); building item 3's authenticated retrieval endpoint next
+
+**Step 1 — three PRs merged after Beat 96's own ledger PR (#602), none logged.** `gh pr list
+--state merged --limit 12 --json number,title,mergedAt` shows #601, #603, #604 all merged after
+#602 (04:36:05Z) — same unlogged-PR gap class flagged in Beats 91/94/95/96, now a fourth
+consecutive beat with at least one instance. All three verified independently before moving on,
+not rubber-stamped from their titles:
+
+- **#601** ("audit(repid): the signal mix — RepID is starved, not mis-tuned") — `gh pr view 601
+  --json statusCheckRollup` → 9/9 SUCCESS. `gh pr diff 601` read directly: single new SQL query
+  appended to `scripts/sql/repid-ledger-audit.sql`, zero files modified, nothing executed against
+  a live DB from this PR itself — matches its own "measured, not fixed" framing. The headline
+  numbers (81/39,135 deliverable events, last 2026-08-17) are cited with their own comment block
+  explaining the three dead ends ruled out (tariff, reward curve, arbitrage knob) rather than
+  asserted bare.
+- **#603** ("feat(scoring): ask HAL whether delivered work was good — shadow-first, two agents")
+  — `gh pr view 603 --json statusCheckRollup` → 9/9 SUCCESS. `gh pr diff 603` read in full: new
+  `src/services/service-quality-hook.ts` gated by `SERVICE_QUALITY_HOOK_MODE` defaulting to
+  `off` (verified in the diff, not the PR body — `raw === 'enforce' ? 'enforce' : raw ===
+  'shadow' ? 'shadow' : 'off'`), an explicit 2-agent allowlist even at `shadow`, and `shadow`
+  writes only to `service_contracts.metadata` — never `repid_score_events`. This is a real
+  scoring-adjacent change but lands provably inert; consistent with this loop's SHADOW-FIRST
+  hard line, so no escalation needed.
+- **#604** ("docs(board): record the 2026-09-04 open items so the next session inherits them")
+  — `gh pr view 604 --json statusCheckRollup` → 9/9 SUCCESS. `gh pr diff 604`: docs-only append
+  to `SPRINT_BOARD.md`, listing human-gated items (Railway/Vercel secrets), verification debts,
+  and the item-3 gap this beat now picks up.
+
+**Backlog item 3 (P2 retrieval API) — the concrete remaining scope, per the backlog file's own
+"NEXT" marker.** Re-read `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` row 3: both
+blockers it once named are closed (`LeanIMTPlus.fromLeaves`/`hydrateTree` from beat 85's PR
+#575; `agent_memory_leaf_content` + `memory-content-store.ts`'s `verifiedEntry` from beat 86).
+What remains, unchanged since beat 86: no route calls either — `grep -rn
+"hydrateTree\|fromLeaves\|verifiedEntry" src/routes/` returns zero hits. This is the single
+highest-priority open item per Sean's "most surfaces" priority: it is the one thing blocking
+item 4 (answer-binding) and item 6's "measured hallucination drop" acceptance criterion (backlog
+row 6's own REMAINING note).
+
+**Step 2 intent.** An authenticated `GET /api/v1/memory/:agentId/retrieve` (or similar,
+following `agents-external-score.ts`'s `requireOwnedAgent` auth pattern since this is
+per-agent data) that: fetches the agent's `agent_memory_leaves` rows, calls `hydrateTree()` to
+get a live prover, fetches matching `agent_memory_leaf_content` rows, verifies each via
+`verifiedEntry` before returning it, and produces an inclusion witness per entry via the
+hydrated tree. Refuses to return unverified content (same fail-closed pattern as
+`memory-publication.ts`'s `auditStoredCommitment` check). Test: a seeded agent with N leaves +
+content rows returns N verified entries with witnesses that pass `verifyProofCarryingAnswer`-
+style checks; a corrupted content row is excluded rather than returned. If it does not land
+this beat, this entry already records the verified state and the exact scope so nothing is
+lost.
