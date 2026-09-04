@@ -1,5 +1,6 @@
 import {
   settleX402Payment,
+  governorCeilingFor,
   BASE_SEPOLIA_TOKENS,
   settleableTokenSymbols,
   isSettleableToken,
@@ -288,6 +289,68 @@ describe('x402-real-settler', () => {
       expect(transferAtZero).not.toHaveBeenCalled();
       // And it is not reported as a holding either.
       expect((result.tokens_held || []).map((t) => t.token)).not.toContain('cbBTC');
+    });
+  });
+
+  // ── THE AMOUNT GOVERNOR WAS UNIT-BLIND ────────────────────────────────────
+  //
+  // Both guards read `if (amountUSDC > 1.0)` and answered "max amount is 1.0
+  // USDC" — but `amountUSDC` is a bare number and this function takes a `token`
+  // argument, so the comparison ignored the asset entirely. 0.9 ETH sailed
+  // through a ceiling whose name, message and intent are all dollar-denominated.
+  //
+  // Nothing exercised it (neither existing caller of the ETH-capable path passes
+  // 'ETH'), so it was a live trap rather than a live loss. These pin it shut
+  // before the native leg is used, which is the whole point of fixing it now.
+  describe('amount governor is per-asset, not a bare float', () => {
+    const saved = { ...process.env };
+    beforeEach(() => {
+      process.env.MOCK_FACILITATOR = 'true'; // governor runs before any chain work
+    });
+    afterEach(() => {
+      process.env = { ...saved };
+    });
+
+    it('declares a ceiling in each asset OWN units, and refuses undeclared assets', () => {
+      expect(governorCeilingFor('USDC')).toBe(1.0); // unchanged
+      expect(governorCeilingFor('ETH')).toBe(0.001);
+      // Fail closed: adding a token to the map cannot silently inherit a dollar
+      // limit that means nothing for it.
+      expect(governorCeilingFor('cbBTC')).toBeNull();
+      expect(governorCeilingFor('WHATEVER')).toBeNull();
+    });
+
+    it('REFUSES 0.9 ETH — the exact amount the unit-blind check let through', async () => {
+      const r = await settleX402Payment('APM', 'VERITAS', 0.9, 'bet_eth_big', 'ETH');
+      expect(r.settlement_source).toBe('pending_funding');
+      expect(r.error).toMatch(/Governor limit exceeded/);
+      // The message must name the real asset and ceiling, not "1.0 USDC".
+      expect(r.error).toMatch(/0\.001 ETH/);
+      expect(r.error).not.toMatch(/USDC/);
+    });
+
+    it('allows a small native transfer — 0.0001 ETH is under the ETH ceiling', async () => {
+      const r = await settleX402Payment('APM', 'VERITAS', 0.0001, 'bet_eth_small', 'ETH');
+      // It must get PAST the governor. Whatever it fails on afterwards (no key,
+      // no chain in this env) is not the governor's refusal.
+      expect(r.error ?? '').not.toMatch(/Governor/);
+    });
+
+    it('leaves the USDC ceiling exactly where it was', async () => {
+      const over = await settleX402Payment('APM', 'VERITAS', 1.5, 'bet_usdc_over', 'USDC');
+      expect(over.error).toMatch(/Governor limit exceeded: max amount is 1 USDC/);
+      const under = await settleX402Payment('APM', 'VERITAS', 0.5, 'bet_usdc_under', 'USDC');
+      expect(under.error ?? '').not.toMatch(/Governor/);
+    });
+
+    it('the ceiling is policy, so it is env-overridable', () => {
+      process.env.X402_GOVERNOR_MAX_ETH = '0.05';
+      expect(governorCeilingFor('ETH')).toBe(0.05);
+      // A nonsense override falls back rather than disabling the guard.
+      process.env.X402_GOVERNOR_MAX_ETH = 'not-a-number';
+      expect(governorCeilingFor('ETH')).toBe(0.001);
+      process.env.X402_GOVERNOR_MAX_ETH = '-5';
+      expect(governorCeilingFor('ETH')).toBe(0.001);
     });
   });
 });
