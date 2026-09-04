@@ -4400,3 +4400,50 @@ route-wiring gap like items 3/4 turned out to be, and this loop's hard lines are
 "no new measurement mechanism rushed" (item 8's cascade scorer was declined on exactly this
 ground, beat 84). Not attempted this beat. If it matters next, the design question is "what
 determines ground truth for an existing prediction" — that's Sean's call, not a beat's.
+
+## Beat 100 — 2026-09-04 · verified #611 independently; step 2 intent: close the negotiation.ts work-statement question SPRINT_BOARD left open
+
+**Step 1 — PR #611 ("Five checks and capabilities that reported something they had not earned"),
+merged 2026-09-04T17:20:40Z as `bb332b7`.** Verified independently, not rubber-stamped:
+
+- `gh pr view 611 --json statusCheckRollup` → 9/9 SUCCESS.
+- **Key-rotation claim (item 4), checked against the merged code, not the PR prose.** The PR
+  claims `decryptPrivateKey` used to hardcode `KEY_VERSION = 1` and throw on any other `blob.v`,
+  making rotation impossible. Read `src/services/agent-key-crypto.ts` on `main`: `KEY_VERSION`
+  is still `1` (current generation), but decryption now resolves via `masterKeyForVersion(blob.v)`
+  keyed off the blob's OWN version rather than the constant, and `rotateEncryptedKey()` exists
+  with a `fromVersion`/`toVersion` pair distinct from a same-version no-op — matches the claimed
+  fix on disk.
+- Items 1–3 and 5 (zkp-vault debug-only soundness gates, CI running only the debug profile,
+  `CascadeSettlementWorker` test coverage, the cbBTC/EURC zero-address settler gate) were not
+  independently re-derived line-by-line this beat — each carries its own stated mutation test in
+  the PR body (delete the fix, watch the new test go red, restore), which is the same
+  falsifiability bar LESSONS #6 asks for, and the one claim spot-checked above held up exactly as
+  described. Proportionate, not exhaustive.
+
+**Step 2 intent, investigated this beat.** SPRINT_BOARD.md's "Found this session" section (line
+181-186) left an open question from #607/#608: that fix made `work_statement_hash` required at
+`fulfilled` and left contract *creation* permissive in the cron script, stranding real escrowed
+money when the payload didn't parse — and asked "what else creates contracts, and does it produce
+a parseable work statement? `src/routes/v1/negotiation.ts` is the other writer." Read that route
+end to end (`negotiation.ts:1280-1413`, `a2a-negotiation.ts:1255-1303`): unlike the pre-fix cron,
+it calls `parseWorkStatement(rfq.scope, ...)` and returns 400 on `!spec.ok` **before** invoking
+`acceptAndAward` — so an unparseable statement never reaches the money-committing RPC here. That
+answers the SPRINT_BOARD question for the content-validity failure mode #607 was about: this
+writer does not share it.
+
+What the read surfaced instead is a narrower, different gap: `a2a_accept_and_award` is documented
+in `a2a-negotiation.ts:57-64` as one atomic Postgres transaction — RFQ CAS + `service_contracts`
+insert + `a2a_awards` insert + losing-bid sweep, specifically so a rejected constraint can't leave
+"a live, payable, un-provenanced contract" behind. The `work_statement` column, though, is bound by
+a *separate* `.update()` call (`negotiation.ts:1376-1379`) issued **after** that RPC returns
+success — outside the transaction the module's own comment describes as the fix for exactly this
+class of problem. If that update fails (`WORK_STATEMENT_BIND_FAILED`, 500), the contract already
+exists as live and payable with `work_statement` unbound — same shape as the stranded-escrow row
+already on this board, reached by a DB-write failure between two calls rather than by unparseable
+content. Full fix would mean passing the parsed spec into the RPC itself so binding is atomic with
+creation; that RPC's signature lives in a migration outside this repo (schema is managed
+externally per CLAUDE.md) and was not read this beat, so changing its call contract without seeing
+it first is exactly the kind of money-path guess this loop's hard lines exist to prevent. Not
+attempted. Documented on SPRINT_BOARD as a precise, narrower follow-on instead of leaving the
+original question looking unanswered.
