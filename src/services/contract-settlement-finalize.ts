@@ -21,17 +21,20 @@
  *   2. status → 'settled'
  *   3. RepID deltas for both parties
  *   4. delayed-outcome registration (flag-gated, no-op when off)
- *   5. ZK work-statement binding
+ *   5. (removed) ZK work-statement hash write — that column is now the SPEC
+ *      hash, bound at award/create by trg_service_contracts_work_statement.
+ *      Writing an exchange hash here would either no-op (already bound) or
+ *      forge a client hash (rejected). The T1 exchange digest still exists in
+ *      work-statement.ts for receipts; it no longer occupies this column.
  *
- * Steps 3-5 are BEST-EFFORT by design, exactly as before. A settlement rolled
- * back because a nudge or a hash write failed would be worse than a weaker
- * receipt — but each failure logs loudly rather than vanishing.
+ * Steps 3-4 are BEST-EFFORT by design, exactly as before. A settlement rolled
+ * back because a nudge failed would be worse than a weaker receipt — but each
+ * failure logs loudly rather than vanishing.
  */
 
 import { db } from '../db';
 import { applyServiceSatisfiedDeltas } from './validation-repid-delta';
 import { registerPendingOutcome } from './outcome-notifier';
-import { workStatementHash } from './work-statement';
 
 export interface FinalizeResult {
   ok: boolean;
@@ -42,19 +45,24 @@ export interface FinalizeResult {
 export async function finalizeSettledContract(args: {
   contractId: string;
   satisfactionScore: number;
-  /** The release outcome, used for the settlement tx inside the ZK binding. */
+  /** Per-criterion {n, met}[] for bound contracts. Null on legacy unbound rows. */
+  criterionRatings?: { n: number; met: boolean }[] | null;
+  /** The release outcome. Kept for callers; no longer hashed into work_statement_hash. */
   releaseResult?: { txHash?: string } | null;
 }): Promise<FinalizeResult> {
   const { contractId, satisfactionScore } = args;
 
   // Two-step update to honor trigger logic ('satisfied' then 'settled').
+  const satisfiedPatch: Record<string, unknown> = {
+    status: 'satisfied',
+    buyer_satisfaction_score: satisfactionScore,
+    satisfied_at: new Date().toISOString(),
+  };
+  if (args.criterionRatings) satisfiedPatch.criterion_ratings = args.criterionRatings;
+
   const { error: err1 } = await db
     .from('service_contracts')
-    .update({
-      status: 'satisfied',
-      buyer_satisfaction_score: satisfactionScore,
-      satisfied_at: new Date().toISOString(),
-    })
+    .update(satisfiedPatch)
     .eq('id', contractId)
     .select()
     .single();
@@ -84,44 +92,6 @@ export async function finalizeSettledContract(args: {
       });
     } catch (e) {
       console.error('Failed to register pending outcome:', e);
-    }
-
-    // ZK BIND T1 — commit this exchange at the moment it settles.
-    //
-    // Recorded HERE and not earlier because the hash covers the settlement tx
-    // and the buyer's acceptance, which do not exist until now. Recorded ONCE:
-    // a later edit to the contract changes the recomputation and no longer
-    // matches, and that disagreement is the tamper-detection, not a bug.
-    try {
-      const { data: full } = await db
-        .from('service_contracts')
-        .select('id, service_id, buyer_agent_id, provider_agent_id, agreed_price_usdc_raw, payload, result')
-        .eq('id', contractId)
-        .maybeSingle();
-      if (full) {
-        const hash = workStatementHash({
-          contract_id: String((full as any).id),
-          service_id: String((full as any).service_id),
-          buyer_agent_id: String((full as any).buyer_agent_id),
-          provider_agent_id: String((full as any).provider_agent_id),
-          agreed_price_usdc_raw: Number((full as any).agreed_price_usdc_raw),
-          settlement_tx: args.releaseResult?.txHash ?? null,
-          verdict: String(((full as any).result as any)?.verdict ?? '') || null,
-          satisfaction_score: Number(satisfactionScore),
-          payload: (full as any).payload,
-          result: (full as any).result,
-        });
-        const { error: bindErr } = await db
-          .from('service_contracts')
-          .update({ work_statement_hash: hash })
-          .eq('id', contractId)
-          .is('work_statement_hash', null);
-        if (bindErr) {
-          console.error(`[zk-bind] FAILED to record work_statement_hash for ${contractId}: ${bindErr.message}`);
-        }
-      }
-    } catch (e) {
-      console.error('[zk-bind] work statement binding threw (settlement unaffected):', e);
     }
   }
 

@@ -21,6 +21,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { todayPT } from '../../lib/time';
+import { parseWorkStatement } from '../../services/work-statement-spec';
 import {
   AGENT_PANEL_COLUMNS,
   AWARD_REASON_CODES,
@@ -1320,6 +1321,14 @@ router.post('/rfqs/:id/accept', async (req: Request, res: Response) => {
 
     const contractExpiresAt = rfq.deadline_at ?? new Date(now.getTime() + eta * 1000).toISOString();
 
+    const spec = parseWorkStatement(rfq.scope, {
+      priceUsdcRaw: price,
+      deadline: contractExpiresAt,
+    });
+    if (!spec.ok) {
+      return fail(res, 400, spec.error, spec.message);
+    }
+
     const outcome = await acceptAndAward({
       p_rfq_id: rfq.id,
       p_bid_id: bid.id,
@@ -1363,6 +1372,19 @@ router.post('/rfqs/:id/accept', async (req: Request, res: Response) => {
     });
 
     if (!outcome.ok) return fail(res, outcome.status, outcome.error, outcome.message);
+
+    const { error: bindErr } = await db
+      .from('service_contracts')
+      .update({ work_statement: spec.canonical })
+      .eq('id', outcome.contract_id);
+    if (bindErr) {
+      return fail(
+        res,
+        500,
+        'WORK_STATEMENT_BIND_FAILED',
+        `award landed but the spec could not be bound: ${bindErr.message}`,
+      );
+    }
 
     return res.status(201).json({
       award_id: outcome.award_id,

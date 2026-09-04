@@ -15901,6 +15901,10 @@ export type Database = {
           service_id: string
           settled_at: string | null
           status: string
+          work_statement: Json | null
+          work_statement_bound_at: string | null
+          work_statement_hash: string | null
+          criterion_ratings: Json | null
           x402_payment_id: string | null
         }
         Insert: {
@@ -15924,6 +15928,10 @@ export type Database = {
           service_id: string
           settled_at?: string | null
           status?: string
+          work_statement?: Json | null
+          work_statement_bound_at?: string | null
+          work_statement_hash?: string | null
+          criterion_ratings?: Json | null
           x402_payment_id?: string | null
         }
         Update: {
@@ -15947,6 +15955,10 @@ export type Database = {
           service_id?: string
           settled_at?: string | null
           status?: string
+          work_statement?: Json | null
+          work_statement_bound_at?: string | null
+          work_statement_hash?: string | null
+          criterion_ratings?: Json | null
           x402_payment_id?: string | null
         }
         Relationships: [

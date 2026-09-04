@@ -11,6 +11,11 @@ import {
 import { isHandledServiceType, directFulfillAllowed } from '../../services/handled-service-types';
 import { boundAgentId, sameAgent } from '../../services/a2a-negotiation';
 import { finalizeSettledContract } from '../../services/contract-settlement-finalize';
+import {
+  parseWorkStatement,
+  parseCriterionRatings,
+  WORK_STATEMENT_ERRORS,
+} from '../../services/work-statement-spec';
 import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
@@ -97,6 +102,38 @@ export function contractPartyRefusal(
   return null;
 }
 
+/**
+ * Bound contracts (non-null work_statement_hash) are rated per numbered
+ * criterion. Legacy unbound rows still accept a bare satisfaction_score so
+ * the 148 fulfilled-without-spec contracts can settle if someone rates them.
+ * The DB trigger re-checks this; this is the 400 rather than a PG exception.
+ */
+export function deriveSatisfyScore(
+  contract: { work_statement?: unknown; work_statement_hash?: unknown },
+  criterionRatings: unknown,
+  satisfactionScore: unknown,
+): { ok: true; score: number; ratings: { n: number; met: boolean }[] | null } | { ok: false; error: string; message: string } {
+  if (contract.work_statement_hash) {
+    const spec = parseWorkStatement(contract.work_statement);
+    if (!spec.ok) {
+      return { ok: false, error: spec.error, message: spec.message };
+    }
+    const rated = parseCriterionRatings(criterionRatings, spec.canonical);
+    if (!rated.ok) {
+      return { ok: false, error: rated.error, message: rated.message };
+    }
+    return { ok: true, score: rated.score, ratings: rated.ratings };
+  }
+  if (satisfactionScore === undefined || satisfactionScore === null) {
+    return { ok: false, error: 'RATING_REQUIRED', message: WORK_STATEMENT_ERRORS.RATING_REQUIRED };
+  }
+  const n = Number(satisfactionScore);
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
+    return { ok: false, error: 'RATING_REQUIRED', message: 'legacy satisfaction_score must be a number in [0,1]' };
+  }
+  return { ok: true, score: n, ratings: null };
+}
+
 function checkGlobalValueCaps(priceUsdcRaw: number, settledTodayRaw: number): { allowed: boolean; error?: string; cap?: number; requested?: number } {
   const enforcement = process.env.VALUE_CAP_ENFORCEMENT || 'enforce';
   const perContractCapRaw = (Number(process.env.VALUE_CAP_PER_CONTRACT_USDC) || 10) * 1_000_000;
@@ -147,9 +184,15 @@ function checkGlobalValueCaps(priceUsdcRaw: number, settledTodayRaw: number): { 
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { service_id, buyer_agent_id, payload, agreed_price_usdc_raw } = req.body;
+    const { service_id, buyer_agent_id, payload, agreed_price_usdc_raw, work_statement, work_statement_hash } = req.body;
     if (!service_id || !buyer_agent_id || !payload) {
       return res.status(400).json({ error: 'service_id, buyer_agent_id, and payload required' });
+    }
+    if (work_statement_hash !== undefined && work_statement_hash !== null) {
+      return res.status(400).json({
+        error: 'WORK_STATEMENT_HASH_NOT_CLIENT_SET',
+        message: WORK_STATEMENT_ERRORS.HASH_NOT_CLIENT_SET,
+      });
     }
 
     // Get service
@@ -192,14 +235,23 @@ router.post('/', async (req: Request, res: Response) => {
       });
     }
 
-    const { data, error } = await db.from('service_contracts').insert({
+    const spec = parseWorkStatement(work_statement ?? payload, {
+      priceUsdcRaw: Number(price),
+      deadline: (payload as { deadline?: string; deadline_at?: string })?.deadline
+        ?? (payload as { deadline_at?: string })?.deadline_at
+        ?? null,
+    });
+    const insertRow: Record<string, unknown> = {
       service_id,
       buyer_agent_id,
       provider_agent_id: service.provider_agent_id,
       agreed_price_usdc_raw: price,
       payload,
-      status: 'pending'
-    }).select().single();
+      status: 'pending',
+    };
+    if (spec.ok) insertRow.work_statement = spec.canonical;
+
+    const { data, error } = await db.from('service_contracts').insert(insertRow).select().single();
 
     if (error) return res.status(400).json({ error: error.message });
     res.status(201).json(data);
@@ -739,6 +791,13 @@ router.post('/:id/fulfill', async (req: Request, res: Response) => {
     );
   }
 
+  if ((req.body as { work_statement_hash?: unknown })?.work_statement_hash) {
+    return res.status(400).json({
+      error: 'WORK_STATEMENT_HASH_NOT_CLIENT_SET',
+      message: WORK_STATEMENT_ERRORS.HASH_NOT_CLIENT_SET,
+    });
+  }
+
   // 4. Atomic state machine guard: update only if status is still escrowed (race prevention)
   const { data, error } = await db.from('service_contracts')
     .update({ status: 'fulfilled', result, fulfilled_at: new Date().toISOString() })
@@ -773,8 +832,19 @@ router.post('/:id/fulfill', async (req: Request, res: Response) => {
 });
 
 router.post('/:id/satisfy', async (req: Request, res: Response) => {
-  const { satisfaction_score } = req.body;
-  if (satisfaction_score === undefined) return res.status(400).json({ error: 'satisfaction_score required' });
+  const { satisfaction_score, criterion_ratings } = req.body;
+
+  const { data: ratingRow, error: ratingErr } = await db.from('service_contracts')
+    .select('id, status, work_statement, work_statement_hash, buyer_agent_id, provider_agent_id')
+    .eq('id', req.params.id)
+    .maybeSingle();
+  if (ratingErr) return res.status(400).json({ error: ratingErr.message });
+  if (!ratingRow) return res.status(404).json({ error: 'Contract not found' });
+
+  const derived = deriveSatisfyScore(ratingRow, criterion_ratings, satisfaction_score);
+  if (!derived.ok) {
+    return res.status(400).json({ error: derived.error, message: derived.message });
+  }
 
   // PAY-ON-VERIFIED-DELIVERY: this is where money actually moves.
   //
@@ -785,7 +855,7 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
   let releaseResult: unknown = null;
   if (isSettleOnDeliveryEnabled()) {
     const { data: pre, error: preErr } = await db.from('service_contracts')
-      .select('id, status, buyer_agent_id, provider_agent_id, agreed_price_usdc_raw, result')
+      .select('id, status, buyer_agent_id, provider_agent_id, agreed_price_usdc_raw, result, work_statement, work_statement_hash')
       .eq('id', req.params.id)
       .maybeSingle();
 
@@ -837,18 +907,18 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
     }
 
     const verdict = String((pre.result as any)?.verdict ?? '').toUpperCase();
-    const passed = verdict === 'PASS' && Number(satisfaction_score) > 0;
+    const passed = verdict === 'PASS' && derived.score > 0;
 
     if (!passed) {
       const voided = await voidAuthorization(
         String(req.params.id),
-        `deliverable rejected: verdict=${verdict || 'NONE'} satisfaction=${satisfaction_score}`
+        `deliverable rejected: verdict=${verdict || 'NONE'} satisfaction=${derived.score}`
       );
       return res.status(409).json({
         error: 'deliverable_rejected',
         message: 'payment authorization voided — no funds moved; the buyer keeps them',
         verdict: verdict || null,
-        satisfaction_score,
+        satisfaction_score: derived.score,
         voided,
       });
     }
@@ -869,7 +939,7 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
       contractId: String(req.params.id),
       requirements,
       deliverableVerified: true,
-      verificationEvidence: `verdict=${verdict} satisfaction=${satisfaction_score}`,
+      verificationEvidence: `verdict=${verdict} satisfaction=${derived.score}`,
     });
     releaseResult = released;
 
@@ -898,7 +968,8 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
   // two can never drift on the money path. See contract-settlement-finalize.ts.
   const finalized = await finalizeSettledContract({
     contractId: String(req.params.id),
-    satisfactionScore: satisfaction_score,
+    satisfactionScore: derived.score,
+    criterionRatings: derived.ratings,
     releaseResult: releaseResult as { txHash?: string } | null,
   });
   if (!finalized.ok) return res.status(400).json({ error: finalized.error });
