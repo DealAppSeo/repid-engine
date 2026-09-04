@@ -22,7 +22,6 @@ import {
   encryptPrivateKey,
   decryptPrivateKey,
   EncryptedKeyBlob,
-  KEY_VERSION,
 } from './agent-key-crypto';
 
 export interface ProvisionedWallet {
@@ -42,7 +41,11 @@ export function provisionWallet(): ProvisionedWallet {
   return {
     address: wallet.address,
     encrypted,
-    keyVersion: KEY_VERSION,
+    // The blob's OWN version, not the compile-time default. Stamping the constant
+    // makes agent_secrets.key_version disagree with the ciphertext the first time
+    // anyone rotates the master key — and that column is what a rotation sweep
+    // reads to decide which rows are left.
+    keyVersion: encrypted.v,
   };
 }
 

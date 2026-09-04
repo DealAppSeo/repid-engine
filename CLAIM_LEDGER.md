@@ -17,7 +17,21 @@ Rules:
    re-verify before re-asserting. Generated types/docs/memory are HINTS, not evidence.
 4. Every agent (CC/Grok/Gemini/T12) writes here. One row = one claim = one owner.
 
-Last updated: 2026-08-07 by CC.
+Last updated: 2026-09-04 by CC.
+
+**Two rows sat in CLAIMED after they were built [MEASURED 2026-09-04].** Both were
+moved to BUILT below on evidence that was already sitting in the repo — 14 passing
+tests for one, 39 for the other. Nobody had re-read the ledger against the code in
+four weeks.
+
+That direction of staleness is the one this file is least protected against. Rule 2
+demotes a claim when a verification FAILS, so an over-claim gets caught; nothing
+walks the other way, and a row that under-states what exists just sits there. The
+cost is not cosmetic: this ledger is what gates external statements, so an audit run
+against it would have found two surfaces reported as vapour that ship working,
+tested code — and the natural next move on reading "asserted, not built" is to build
+it again. Re-read CLAIMED against the code before any audit, not only after a
+failure.
 
 ---
 
@@ -48,13 +62,13 @@ Last updated: 2026-08-07 by CC.
 | x402 payment-proof linking gates positive deltas | `src/services/x402-outcome-link.ts` (+tests); STEP 2 `627e571` caught a real FAIL-OPEN | A live positive-reward run where the anchor is required and present | CC |
 | HAL confidence calibration fit on a frozen holdout | `src/services/hal-calibration.ts` + `scripts/hal-eval/fit-calibration.ts` (ECE) | A published ECE number on the current frozen corpus with its ruler | CC |
 | Outcome classification schema with enforced asymmetric deltas | `src/services/outcome-classification.ts` (+158-line test) | (folded into VERIFIED harness run above; keep here until independent test-count asserted) | CC |
+| TrustShell `presentProof` / badge path | `presentProof` + `verifyProofLocally` on the SDK client, `src/lib/badge.ts` (`renderProofBadge` / `renderProofBadgeMarkdown` / `proofBadgeStatus`), a `badge` CLI command, all exported from `src/lib/index.ts`. **14/14 `tests/badge.test.ts` pass [RUN 2026-09-04]**, and they pin the honest states, not just the happy one: verifier UNAVAILABLE → red and explicitly NOT a pass (fail-closed); no verification run → grey, "we refuse to imply unchecked trust"; the badge NEVER reveals the score in any state; the SVG is self-contained with no external references | A live run against the backend producing a real proof, verified client-side, with the badge rendered from it | CC |
+| TrustMarket rating ingestion consuming fold root + dual-auth decision | `src/services/rating-ingestion.ts` consumes BOTH halves — it imports `Decision` from `./dual-auth-gate` and rejects `outcome_not_authorized` unless the gate said ALLOW, and rejects `fold_root_mismatch` when the claimed root disagrees with the server's. Fails closed by design: "an unrecorded ALLOW is not an ALLOW" (`:151`). **39/39 pass across `tests/rating-ingestion.test.ts` + `tests/participant-rating.test.ts` [RUN 2026-09-04]** | A live rating ingested end-to-end against a real settled interaction; both tables held 0 rows at last check, so the path is tested but unexercised | CC |
 
 ## CLAIMED (asserted, not built)
 
 | Claim | Note |
 |-------|------|
-| TrustShell `presentProof` / badge path | Surface B — being built on branch now |
-| TrustMarket rating ingestion consuming fold root + dual-auth decision | Surface C — schema/API/tests first, no UI theater |
 | TrustTrader backend consuming fold root / RepID | Surface D |
 | trustchat / AISocialMirror shared auth/RepID/gate hooks | Surface E — stub clean interfaces where repos absent |
 | AITrinitySymphony.com correct deploy-target mapping | Surface F — diagnose + PR steps, do NOT flip DNS |

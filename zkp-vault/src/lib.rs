@@ -509,6 +509,15 @@ mod tests {
     // trace and require the prover to reject it.
     // Mutation-tested: deleting the `next.inputs[0] == local.inputs[0]` constraint makes
     // this forgery *provable*, so the test really does gate that one line.
+    //
+    // PROFILE NOTE (2026-09-04): `check_constraints` is compiled in by Plonky3 only
+    // under `debug_assertions`, so this gate is a DEBUG-PROFILE gate. Under `--release`
+    // the prover builds the forged proof and this test fails with "did not panic as
+    // expected" — it was turning `cargo test --release` red while checking nothing.
+    // It is kept (it pins the prover-side rejection and is mutation-tested) and is now
+    // scoped to the profile where it is meaningful. The profile-agnostic restatement,
+    // which asserts the VERIFIER rejects, is `nullifier_secret_binding_holds_in_any_profile`.
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "constraints had nonzero value")]
     fn nullifier_must_use_the_same_secret_as_the_leaf() {
@@ -574,6 +583,10 @@ mod tests {
 
     // GATE 2b — reject a FORGERY: a non-member (secret not in the group) cannot prove.
     // Membership product ≠ 0 → check_constraints rejects (debug), mirroring Plonky3.
+    // PROFILE NOTE (2026-09-04): debug-profile gate — see the note on
+    // `nullifier_must_use_the_same_secret_as_the_leaf`. Release-safe restatement:
+    // `non_member_is_unprovable_in_any_profile`.
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic]
     fn non_member_is_unprovable() {
@@ -652,6 +665,102 @@ mod tests {
         eprintln!(
             "[zkp-vault bench] prove={:.1}ms verify={:.1}ms proof_size={} bytes (hash=poseidon2-babybear16, width={}, group={}, height={})",
             prove_ms, verify_ms, bytes.len(), W, GROUP_SIZE, HEIGHT
+        );
+    }
+
+    // ---- PROFILE-AGNOSTIC SOUNDNESS GATES (added 2026-09-04) -------------------
+    //
+    // The two `#[should_panic]` gates above assert that the PROVER refuses a forged
+    // trace. That refusal is `check_constraints`, which Plonky3 compiles in only under
+    // `debug_assertions` — so under `--release`, the profile this crate actually ships,
+    // both gates are VACUOUS: the prover happily builds a proof and the test fails with
+    // "did not panic as expected".
+    //
+    // A gate that only holds in a build nobody ships is NOT CHECKED, not passed. These
+    // two re-state the same soundness properties in a form that is meaningful in EITHER
+    // profile: the forgery must be rejected SOMEWHERE in the pipeline — by the prover
+    // (debug) or by the verifier (always). Only "prover accepted it AND verifier
+    // accepted it" is a soundness break.
+
+    /// Assert a forged trace is rejected by the prover OR the verifier, in any profile.
+    fn assert_forgery_rejected(
+        label: &str,
+        build: impl FnOnce() -> Proof<VaultConfig> + std::panic::UnwindSafe,
+        context: u64,
+        claimed_nullifier: Val,
+        group: &[Val; GROUP_SIZE],
+    ) {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // the debug-profile panic is expected
+        let built = std::panic::catch_unwind(build);
+        std::panic::set_hook(prev);
+
+        match built {
+            // Prover refused to build it (debug `check_constraints`). Rejected.
+            Err(_) => {}
+            // Prover built it (release). The verifier is now the only thing standing.
+            Ok(proof) => assert!(
+                verify_ownership(&proof, context, claimed_nullifier, group).is_err(),
+                "SOUNDNESS BREAK [{label}]: the prover built a proof from a forged trace \
+                 AND the verifier accepted it"
+            ),
+        }
+    }
+
+    // GATE 0c-rel — the leaf/nullifier secret binding, checked in any profile.
+    #[test]
+    fn nullifier_secret_binding_holds_in_any_profile() {
+        let (secret, agent_id, context) = (777u64, 555u64, 9001u64);
+        let impostor_secret = 888u64;
+        let group = group_with(secret, agent_id);
+
+        let pad = |a: u64, b: u64| {
+            let mut lanes = [Val::ZERO; P2_WIDTH];
+            lanes[0] = Val::from_u64(a);
+            lanes[1] = Val::from_u64(b);
+            lanes
+        };
+        let n = nullifier(impostor_secret, context);
+        let g = group;
+        assert_forgery_rejected(
+            "leaf and nullifier use different secrets",
+            move || {
+                // Row 0 is a genuine member leaf; rows 1.. hash a DIFFERENT secret.
+                let mut inputs = vec![pad(secret, agent_id)];
+                for _ in 1..HEIGHT {
+                    inputs.push(pad(impostor_secret, context));
+                }
+                let forged = generate_trace_rows::<
+                    Val,
+                    LinearLayers,
+                    P2_WIDTH,
+                    P2_SBOX_DEGREE,
+                    P2_SBOX_REGISTERS,
+                    P2_HALF_FULL_ROUNDS,
+                    P2_PARTIAL_ROUNDS,
+                >(inputs, &p2_round_constants(), 0);
+                let config = make_config();
+                prove(&config, &OwnershipAir::new(), forged, &public_values(context, n, &g))
+            },
+            context,
+            n,
+            &group,
+        );
+    }
+
+    // GATE 2b-rel — group membership, checked in any profile.
+    #[test]
+    fn non_member_is_unprovable_in_any_profile() {
+        let context = 9001u64;
+        let group = group_with(777, 555); // real owner is (777,555)
+        let g = group;
+        let n = nullifier(12345, context);
+        assert_forgery_rejected(
+            "non-member claims membership",
+            move || prove_ownership(12345, 67890, context, &g),
+            context,
+            n,
+            &group,
         );
     }
 }

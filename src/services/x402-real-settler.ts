@@ -24,6 +24,32 @@ export interface TokenSpec {
 }
 
 /**
+ * A placeholder address: the entry is DECLARED but its real address was never
+ * confirmed, so nothing may be settled in it.
+ *
+ * `cbBTC` and `EURC` have carried `TODO(review): confirm Base Sepolia address`
+ * since they were added. Being in this map made them SUPPORTED as far as every
+ * caller could tell: `settleX402Payment` validated the requested token by key
+ * existence alone, so a request to settle in cbBTC passed the "Unsupported
+ * token" gate, and the rejection message listed both of them to the caller as
+ * available. The settler then built an `ethers.Contract` against
+ * `0x0000…0000` and called `balanceOf` on it.
+ *
+ * The alternate-token fallback did not pick them, but only by accident: there is
+ * no contract at the zero address, so `balanceOf` either throws (and the loop's
+ * bare `catch` skips it) or returns 0 (and the balance test rejects it). Both
+ * are properties of the chain, not decisions this code makes — and the comment
+ * on that catch says "may throw", which is the tell. A money path should not
+ * depend on which way an unconfigured address happens to fail.
+ *
+ * So placeholders are now excluded EXPLICITLY, at every point they could be
+ * chosen or advertised, and a request naming one is refused as a configuration
+ * gap rather than a caller error. Confirm the address and the entry becomes
+ * settleable with no other change.
+ */
+export const UNCONFIRMED_TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/**
  * Base Sepolia token map. Declaration order is significant: alternate-token
  * fallback selects the FIRST supported ERC-20 token (excluding native ETH)
  * in this order that the agent holds enough of. Keep USDC first so it remains
@@ -52,6 +78,28 @@ export const BASE_SEPOLIA_TOKENS: Record<string, TokenSpec> = {
 };
 
 export type SupportedToken = keyof typeof BASE_SEPOLIA_TOKENS;
+
+/**
+ * Can this entry actually move money? False for an unconfirmed placeholder.
+ *
+ * Native ETH is settleable via a value transfer and carries a sentinel rather
+ * than a contract address, so it is never a placeholder.
+ */
+export function isSettleableToken(spec: TokenSpec): boolean {
+  if (spec.native) return true;
+  return spec.address.toLowerCase() !== UNCONFIRMED_TOKEN_ADDRESS;
+}
+
+/**
+ * The tokens a caller may actually ask for. This is what error messages must
+ * advertise — listing a placeholder tells the caller to retry with a token that
+ * cannot settle.
+ */
+export function settleableTokenSymbols(): string[] {
+  return Object.entries(BASE_SEPOLIA_TOKENS)
+    .filter(([, spec]) => isSettleableToken(spec))
+    .map(([symbol]) => symbol);
+}
 
 // Universal minimal ERC-20 ABI — works for any standard fungible token.
 const erc20Abi = [
@@ -182,7 +230,19 @@ export async function settleX402Payment(
     if (!requestedSpec) {
       return {
         settlement_source: 'pending_funding',
-        error: `Unsupported token '${token}'. Supported tokens: ${Object.keys(BASE_SEPOLIA_TOKENS).join(', ')}`,
+        error: `Unsupported token '${token}'. Supported tokens: ${settleableTokenSymbols().join(', ')}`,
+      };
+    }
+    // Declared but unconfirmed. Separate from "unsupported" on purpose: this is a
+    // gap in OUR config, not a bad request, and saying so is what gets it fixed.
+    // Refusing here is what stops a settlement being attempted against the zero
+    // address at all.
+    if (!isSettleableToken(requestedSpec)) {
+      return {
+        settlement_source: 'pending_funding',
+        error:
+          `Token '${token}' is declared but its Base Sepolia address is unconfirmed, ` +
+          `so it cannot be settled in. Settleable tokens: ${settleableTokenSymbols().join(', ')}`,
       };
     }
 
@@ -322,6 +382,10 @@ export async function settleX402Payment(
       const alternateCandidates: Array<{ symbol: string; spec: TokenSpec; contract: any; balance: bigint }> = [];
 
       for (const [symbol, spec] of Object.entries(BASE_SEPOLIA_TOKENS)) {
+        // Skip placeholders BEFORE touching the chain. Previously this loop
+        // called balanceOf against the zero address and relied on the throw
+        // below to skip it — a guard the chain provided, not this code.
+        if (!isSettleableToken(spec)) continue;
         try {
           let bal: bigint;
           if (spec.native) {
@@ -337,8 +401,10 @@ export async function settleX402Payment(
             held.push({ token: symbol, address: spec.address, balance: bal.toString(), decimals: spec.decimals });
           }
         } catch {
-          // A missing/placeholder token address (e.g. cbBTC/EURC TODO) may throw;
-          // skip it rather than failing the whole settlement.
+          // A genuine RPC/contract error on one token must not fail the whole
+          // settlement. Placeholder addresses no longer reach here — they are
+          // skipped above, by decision rather than by whichever way an
+          // unconfigured address happens to fail.
         }
       }
 

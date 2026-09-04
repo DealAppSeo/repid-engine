@@ -1,4 +1,10 @@
-import { settleX402Payment, BASE_SEPOLIA_TOKENS } from '../src/services/x402-real-settler';
+import {
+  settleX402Payment,
+  BASE_SEPOLIA_TOKENS,
+  settleableTokenSymbols,
+  isSettleableToken,
+  UNCONFIRMED_TOKEN_ADDRESS,
+} from '../src/services/x402-real-settler';
 import { ethers } from 'ethers';
 import { createClient } from '@supabase/supabase-js';
 
@@ -23,8 +29,17 @@ describe('x402-real-settler', () => {
     });
   });
 
+  const REAL_ADDRESSES = Object.fromEntries(
+    Object.entries(BASE_SEPOLIA_TOKENS).map(([k, v]) => [k, v.address])
+  );
+
   afterEach(() => {
     jest.clearAllMocks();
+    // Undo any per-test address confirmation, so a test that pretends a
+    // placeholder is confirmed cannot leak that into the next one.
+    for (const [k, addr] of Object.entries(REAL_ADDRESSES)) {
+      BASE_SEPOLIA_TOKENS[k]!.address = addr as string;
+    }
   });
 
   it('handles happy path correctly', async () => {
@@ -110,9 +125,24 @@ describe('x402-real-settler', () => {
     expect(result.token_address).toBe(BASE_SEPOLIA_TOKENS.USDC.address);
   });
 
+  // ── THESE TWO TESTS USED TO ASSERT THE DEFECT [corrected 2026-09-04] ──────
+  // Both exercise the alternate-token fallback using cbBTC, whose address in the
+  // map is the ZERO ADDRESS (`TODO(review): confirm Base Sepolia address`). They
+  // mock `ethers.Contract` by address, so the mock cheerfully gave 0x0…0 a
+  // healthy balance — and the first one then asserted `token_address` was that
+  // zero address and that a transfer had been CALLED against it. Green, and
+  // pinning a settlement into an unconfigured token as correct behaviour.
+  //
+  // The fallback rule they cover is real and worth testing. The token they used
+  // to cover it was not, so each now confirms cbBTC's address for the duration
+  // of the test — the state the TODO is waiting for — and the placeholder
+  // behaviour is asserted separately below.
+  const CONFIRMED_STANDIN = '0x1111111111111111111111111111111111111111';
+
   it('settles in an alternate token when USDC is short and accept_alternate is set', async () => {
     const usdcAddr = BASE_SEPOLIA_TOKENS.USDC.address;
-    const cbBtcAddr = BASE_SEPOLIA_TOKENS.cbBTC.address;
+    BASE_SEPOLIA_TOKENS.cbBTC!.address = CONFIRMED_STANDIN;
+    const cbBtcAddr = BASE_SEPOLIA_TOKENS.cbBTC!.address;
 
     const cbBtcTransfer = jest.fn().mockResolvedValue({ hash: '0xcbbtc', wait: jest.fn().mockResolvedValue({}) });
 
@@ -141,7 +171,8 @@ describe('x402-real-settler', () => {
 
   it('no balance in requested token → fallback list of what it DOES hold', async () => {
     const usdcAddr = BASE_SEPOLIA_TOKENS.USDC.address;
-    const cbBtcAddr = BASE_SEPOLIA_TOKENS.cbBTC.address;
+    BASE_SEPOLIA_TOKENS.cbBTC!.address = CONFIRMED_STANDIN;
+    const cbBtcAddr = BASE_SEPOLIA_TOKENS.cbBTC!.address;
 
     (ethers.Contract as jest.Mock).mockImplementation((addr: string) => {
       if (addr === usdcAddr) {
@@ -175,5 +206,88 @@ describe('x402-real-settler', () => {
     expect(result.settlement_source).toBe('pending_funding');
     expect(result.error).toContain("Unsupported token 'DOGE'");
     expect(result.error).toContain('USDC');
+  });
+
+  // ── UNCONFIRMED TOKEN ADDRESSES MUST FAIL CLOSED ──────────────────────────
+  //
+  // `cbBTC` and `EURC` are declared with the zero address. Being map keys made
+  // them SUPPORTED to every caller: the requested-token gate checked key
+  // existence only, so a request to settle in cbBTC passed it, and the
+  // "Unsupported token" message listed both back to the caller as available.
+  //
+  // The alternate fallback never picked them, but only because there is no
+  // contract at the zero address — so `balanceOf` throws (skipped by a bare
+  // catch) or returns 0 (rejected by the balance test). Those are properties of
+  // the chain, not decisions this code makes. These pin the decisions.
+  describe('unconfirmed token addresses', () => {
+    it('cbBTC and EURC are still placeholders (this test retires itself)', () => {
+      // If someone confirms an address, this fails and the entry should simply
+      // be removed from the list — that is the intended way for this to end.
+      expect(BASE_SEPOLIA_TOKENS.cbBTC!.address).toBe(UNCONFIRMED_TOKEN_ADDRESS);
+      expect(BASE_SEPOLIA_TOKENS.EURC!.address).toBe(UNCONFIRMED_TOKEN_ADDRESS);
+    });
+
+    it('classifies placeholders as unsettleable and real tokens as settleable', () => {
+      expect(isSettleableToken(BASE_SEPOLIA_TOKENS.USDC!)).toBe(true);
+      expect(isSettleableToken(BASE_SEPOLIA_TOKENS.ETH!)).toBe(true); // native sentinel, not a placeholder
+      expect(isSettleableToken(BASE_SEPOLIA_TOKENS.cbBTC!)).toBe(false);
+      expect(isSettleableToken(BASE_SEPOLIA_TOKENS.EURC!)).toBe(false);
+    });
+
+    it('never advertises a token it cannot settle', () => {
+      const advertised = settleableTokenSymbols();
+      expect(advertised).toContain('USDC');
+      expect(advertised).not.toContain('cbBTC');
+      expect(advertised).not.toContain('EURC');
+    });
+
+    it('refuses a request for a placeholder token, as a config gap not a bad request', async () => {
+      const result = await settleX402Payment('APM', 'VERITAS', 1, 'bet_ph', 'cbBTC');
+      expect(result.settlement_source).toBe('pending_funding');
+      expect(result.error).toMatch(/unconfirmed/i);
+      // And it must not point the caller at another token that cannot settle.
+      expect(result.error).not.toMatch(/EURC/);
+    });
+
+    it('the unsupported-token message lists only settleable tokens', async () => {
+      const result = await settleX402Payment('APM', 'VERITAS', 1, 'bet_bad2', 'DOGE');
+      expect(result.error).toContain('USDC');
+      expect(result.error).not.toContain('cbBTC');
+      expect(result.error).not.toContain('EURC');
+    });
+
+    it('never chooses a placeholder as the alternate, even holding plenty of it', async () => {
+      // The decisive case: the chain's accidental guard is removed by giving the
+      // zero address a huge balance. Only an explicit skip can refuse it now.
+      const usdcAddr = BASE_SEPOLIA_TOKENS.USDC.address;
+      const transferAtZero = jest.fn();
+      (ethers.Contract as jest.Mock).mockImplementation((addr: string) => {
+        if (addr === usdcAddr) {
+          return { balanceOf: jest.fn().mockResolvedValue(0n), transfer: jest.fn() };
+        }
+        if (addr === UNCONFIRMED_TOKEN_ADDRESS) {
+          return {
+            balanceOf: jest.fn().mockResolvedValue(10n ** 18n), // plenty
+            transfer: transferAtZero,
+          };
+        }
+        return { balanceOf: jest.fn().mockResolvedValue(0n), transfer: jest.fn() };
+      });
+      (ethers.Wallet as unknown as jest.Mock).mockImplementation(() => ({ address: '0xmockaddress' }));
+      (ethers.JsonRpcProvider as unknown as jest.Mock).mockImplementation(() => ({
+        getBalance: jest.fn().mockResolvedValue(0n),
+      }));
+
+      const result = await settleX402Payment('APM', 'VERITAS', 1, 'bet_noph', 'USDC', {
+        accept_alternate: true,
+      });
+
+      expect(result.settlement_source).toBe('pending_funding');
+      expect(result.token_address).not.toBe(UNCONFIRMED_TOKEN_ADDRESS);
+      // The assertion that matters: no money moved to the zero address.
+      expect(transferAtZero).not.toHaveBeenCalled();
+      // And it is not reported as a holding either.
+      expect((result.tokens_held || []).map((t) => t.token)).not.toContain('cbBTC');
+    });
   });
 });
