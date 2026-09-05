@@ -4624,3 +4624,55 @@ peer-verify+chronic-flag defaults) plus the 6 pre-existing ones, all pass:
 --noEmit` clean. No flag flipped, no default changed — this is read-only observability of switches
 that already exist, same SAFE-CLASS as the base endpoint. PR opened on its own branch after this
 ledger PR and merged with `gh pr merge <n> --auto --squash`.
+
+## Beat 104 — 2026-09-05 · verified #631 (Beat 103's own build) and #627 independently; #627 was merged but never logged — same recurring gap, eighth time; step 2 extends admin-flags with the two redundant-auth flags SPRINT_BOARD names
+
+**Step 1 — two merged PRs checked against their own diff + CI, not against ledger prose.**
+
+- **#631** (`feat(admin): report the peer-verify "three switches" on /api/v1/admin/flags`,
+  merged 2026-09-05T16:28:36Z) is the PR Beat 103's own entry describes building in its "Step 2"
+  section. `gh pr view 631 --json statusCheckRollup` → 9/9 SUCCESS (CI, HAL adversarial gate,
+  crosscheck, gitleaks ×2, Strix). Read `src/routes/admin-flags.ts` on current `main` directly
+  rather than trusting the prose: `peer_verify_panel_enabled`, `hal_chronic_flag_enabled`,
+  `producer_halt_classes` (reusing `parseHaltClasses` imported from `producer-halt.ts`, with a
+  derived `peer_verify_halted` boolean honoring `all`/`*` wildcards), and `mock_facilitator`
+  reported as one of three explicit strings, are all present exactly as Beat 103 described. Beat
+  103's account holds up independently — this is a case of the self-correction pattern from Beat
+  102 working as intended (intent stated, then confirmed against the merged artifact, not assumed).
+- **#627** (`fix(contracts): one undeliverable contract was starving its provider's queue`) —
+  **found unlogged in any prior ledger entry.** Created 2026-09-05T12:30:59Z (same window as
+  #628), but its `mergedAt` is 2026-09-05T20:02:39Z — nearly 4 hours after #628/#630/#631 all
+  landed, so it sat on auto-merge through three other beats' worth of activity before GitHub
+  actually landed it, which is why it never appeared as "the PR before this one" to any of Beats
+  102-103. `gh pr view 627 --json statusCheckRollup` → 9/9 SUCCESS, same check set as above. Read
+  the diff, not just the title: `service-handler-base.ts`'s `claimNextContract` now offers rows
+  with a non-NULL `work_statement_hash` first via `.not('work_statement_hash', 'is', null)`, and
+  only falls back to the un-hashed rows (logging loudly) when none are waiting — ordering, not
+  exclusion, exactly as the PR body frames it ("a wedged queue traded for a silent one" is the
+  failure mode explicitly avoided). The PR body also documents two of its own mistakes caught
+  before merge (a test double that ignored its own `.eq()` filter arg, and a grep for
+  `claimNextContract` that missed two suites exercising it through `processOne`) — both are visible
+  in the two-commit history (`gh pr view 627 --json commits`) as a real fix commit followed by a
+  real test-double fix commit, not asserted after the fact. This is a real money-shape fix (a
+  provider's queue was retrying the same undeliverable contract roughly once a minute while a
+  deliverable one sat unclaimed) landing with zero ledger record — the same "unlogged-PR gap"
+  Beats 95-101 already named six consecutive times, now an eighth occurrence, just delayed by
+  auto-merge queueing rather than by this loop's own turn cap.
+
+**Step 2 — extending `/api/v1/admin/flags` with the two flags SPRINT_BOARD's flag-observability
+section names and then explicitly refutes as an open door, but which are still gates worth being
+able to read remotely rather than re-derive from source each time.** `OBSERVABILITY_REQUIRE_AUTH`
+(`src/routes/v1/observability.ts:13`, also read by `hitl.ts:8`) and `RESILIENCE_REQUIRE_AUTH`
+(`src/routes/v1/resilience.ts:33`) each gate a **second, redundant** auth check on routers that
+already sit behind the global `app.use(authMiddleware)` — SPRINT_BOARD's own re-check confirmed
+both mount after the global middleware and neither path is in `publicPaths`, so "off" here is
+documented redundant-layer-disabled, not an open door. Reporting them is still worth doing for the
+same reason the rest of this endpoint exists: the question "is this on?" was answered by reading
+source instead of asking the process, three times over per SPRINT_BOARD's own history. Added as
+`observability_require_auth` / `resilience_require_auth`, same `{value, source}` shape as every
+other boolean field already on this route. Additive only, no route touched besides
+`admin-flags.ts` and its test file. New test cases (2 added: both flags default false with
+`source: 'default'`) plus all 11 pre-existing ones pass:
+`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts` → 13/13. `npx tsc
+--noEmit` clean. PR opened on its own branch after this ledger PR and merged with
+`gh pr merge <n> --auto --squash`.
