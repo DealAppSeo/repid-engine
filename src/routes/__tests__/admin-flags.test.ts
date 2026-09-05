@@ -22,6 +22,8 @@ describe('Admin Flags', () => {
     delete process.env.HAL_CHRONIC_FLAG_ENABLED;
     delete process.env.PRODUCER_HALT_CLASSES;
     delete process.env.MOCK_FACILITATOR;
+    delete process.env.OBSERVABILITY_REQUIRE_AUTH;
+    delete process.env.RESILIENCE_REQUIRE_AUTH;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -119,5 +121,19 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.peer_verify_panel_enabled).toEqual({ value: false, source: 'default' });
     expect(res.body.hal_chronic_flag_enabled).toEqual({ value: false, source: 'default' });
+  });
+
+  it('OBSERVABILITY_REQUIRE_AUTH and RESILIENCE_REQUIRE_AUTH default false', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.observability_require_auth).toEqual({ value: false, source: 'default' });
+    expect(res.body.resilience_require_auth).toEqual({ value: false, source: 'default' });
+  });
+
+  it('OBSERVABILITY_REQUIRE_AUTH=true and RESILIENCE_REQUIRE_AUTH=true -> reports true, source env', async () => {
+    process.env.OBSERVABILITY_REQUIRE_AUTH = 'true';
+    process.env.RESILIENCE_REQUIRE_AUTH = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.observability_require_auth).toEqual({ value: true, source: 'env' });
+    expect(res.body.resilience_require_auth).toEqual({ value: true, source: 'env' });
   });
 });

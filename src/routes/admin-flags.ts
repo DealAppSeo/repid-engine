@@ -40,6 +40,14 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * session), and HAL_CHRONIC_FLAG_ENABLED, the consequence path that promise routes
  * to. Plus MOCK_FACILITATOR, which is three-state ('true'/'false'/unset-is-real) —
  * reporting it as a boolean would misreport the unset-real case as false.
+ *
+ * Also reports OBSERVABILITY_REQUIRE_AUTH and RESILIENCE_REQUIRE_AUTH, which
+ * SPRINT_BOARD's flag audit names and then explicitly refutes as an open door:
+ * both routers mount after the global authMiddleware and neither path is in
+ * publicPaths, so these gate a redundant SECOND auth layer, not the only one.
+ * Still worth reporting — the question "is this on?" was answered by reading
+ * source instead of asking the process, which is the pattern this whole route
+ * exists to stop.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -80,6 +88,14 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
         return halted.has('all') || halted.has('*') || halted.has('peer_verify');
       })(),
       source: process.env.PRODUCER_HALT_CLASSES === undefined ? 'default' : 'env',
+    },
+    observability_require_auth: {
+      value: process.env.OBSERVABILITY_REQUIRE_AUTH === 'true',
+      source: process.env.OBSERVABILITY_REQUIRE_AUTH === undefined ? 'default' : 'env',
+    },
+    resilience_require_auth: {
+      value: process.env.RESILIENCE_REQUIRE_AUTH === 'true',
+      source: process.env.RESILIENCE_REQUIRE_AUTH === undefined ? 'default' : 'env',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
