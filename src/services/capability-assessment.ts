@@ -49,7 +49,31 @@ export function evaluateResponse(response: string, expected: any): boolean {
   return false;
 }
 
-export async function sendToAgent(agentName: string, prompt: string, capability: string): Promise<string> {
+/**
+ * Ask the agent a probe question.
+ *
+ * Returns `null` when the probe COULD NOT RUN — no adapter, no API key, or the
+ * completion threw. `null` is not an answer and must never be graded.
+ *
+ * IT USED TO RETURN PROSE FOR ALL THREE, AND THE PROSE WAS GRADED. The strings
+ * were `'Failed to route request'`, `'No API key configured'` and `''`, handed
+ * straight to `evaluateResponse`. For an `expected: false` probe that function
+ * answers "correct" when the response contains "no" — and
+ * `'No API key configured'.toLowerCase()` contains "no", so a MISSING API KEY
+ * scored as a correct answer. `''` failed every probe, so a provider outage read
+ * as an agent that had forgotten how to think.
+ *
+ * Neither is a capability measurement. `runResumeChecks` turns these into a pass
+ * rate that gates `repid_agents.lifecycle_status`, and writes that rate into a
+ * learning event as a fact.
+ *
+ * Blast radius today is smaller than that sounds, and the reason is an accident
+ * rather than a guard: only 1 of the 9 declared probes is `expected: false`, so
+ * the fabricated pass cannot on its own reach the 0.8 resume threshold. Add a
+ * second such probe and it can. The grading was wrong either way, so it is fixed
+ * at the source rather than left resting on the test mix.
+ */
+export async function sendToAgent(agentName: string, prompt: string, capability: string): Promise<string | null> {
   // Fetch agent details
   const { data: agent } = await db
     .from('repid_agents')
@@ -74,12 +98,14 @@ ${prompt}`;
   }, []);
 
   if (!adapter) {
-    return 'Failed to route request';
+    console.warn(`[CapabilityAssessment] NOT_CHECKED for ${agentName}: no adapter could be routed.`);
+    return null;
   }
 
   const apiKey = process.env[`${adapter.name.toUpperCase()}_API_KEY`] || process.env.OPENAI_API_KEY || '';
   if (!apiKey) {
-    return 'No API key configured';
+    console.warn(`[CapabilityAssessment] NOT_CHECKED for ${agentName}: no API key for ${adapter.name}.`);
+    return null;
   }
 
   try {
@@ -89,8 +115,8 @@ ${prompt}`;
     });
     return comp.answer;
   } catch (err: any) {
-    console.error(`[CapabilityAssessment] Agent completion failed for ${agentName}:`, err.message);
-    return '';
+    console.error(`[CapabilityAssessment] NOT_CHECKED for ${agentName}: completion threw:`, err.message);
+    return null;
   }
 }
 
@@ -103,6 +129,18 @@ export async function assessAgentCapabilities(agentName: string): Promise<Record
     let passed = 0;
     for (const test of tests) {
       const response = await sendToAgent(agentName, test.prompt, capability);
+      // NOT_CHECKED. Same rule as `runResumeChecks`: a probe that could not run
+      // is not a wrong answer, and a `{passed, total}` built partly from probes
+      // that never reached a provider would be written to
+      // `repid_agents.capabilities` as a measurement. Abort without writing —
+      // no row beats a fabricated one.
+      if (response === null) {
+        console.warn(
+          `[CapabilityAssessment] NOT_CHECKED for ${agentName} on '${capability}' — a probe ` +
+            `could not run. Writing NOTHING; capabilities left as they were.`
+        );
+        return {};
+      }
       const correct = evaluateResponse(response, test.expected);
       if (correct) {
         passed++;

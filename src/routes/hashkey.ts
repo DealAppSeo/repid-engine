@@ -4,15 +4,44 @@ import { db } from '../db';
 import { testHashKeyConnection } from '../engine/hashkey-chain';
 import { config } from '../config';
 
-// HashKey Chain testnet config — canonical from GMPD v4.3
+// HashKey Chain testnet config.
+//
+// `chainId` USED TO BE THE LITERAL 133 HERE, a second source of truth that could
+// disagree with `config.hashkeyChainId` — and did. MEASURED 2026-09-04 against
+// production: `/health` reports 177, read live from the chain itself via
+// `provider.getNetwork()`, while this constant said 133. `/hashkey/config` exists
+// to tell judges and clients WHICH CHAIN TO USE, so it was handing them a chain
+// id the RPC is not on; a wallet configured from it signs under EIP-155 for a
+// chain that will reject the transaction.
+//
+// One env-controlled value now feeds every surface. That does not make the value
+// CORRECT — see `chainIdAgreesWithRpc` below, which is the part that can tell.
 export const HASHKEY_CONFIG = {
-  chainId: 133,
+  get chainId(): number {
+    return config.hashkeyChainId;
+  },
   chainName: 'HashKey Chain Testnet',
   rpcUrl: 'https://testnet.hsk.xyz',
   contractAddress: '0xE3b55a00445dEE1e330f81d113da2E4F28131B69',
   contractName: 'HyperDAGRepID',
   explorerBase: 'https://hashkeychain-testnet-explorer.alt.technology',
 };
+
+/**
+ * Does the chain id we PUBLISH match the chain the RPC is actually on?
+ *
+ * Three outcomes, never two. `null` means the connection failed, so nothing was
+ * compared — not agreement. Silently reporting a configured constant as though
+ * it had been checked against the chain is precisely how 133 survived while the
+ * network answered 177.
+ */
+export function chainIdAgreesWithRpc(
+  configured: number,
+  reported: number | undefined,
+): boolean | null {
+  if (typeof reported !== 'number' || !Number.isFinite(reported)) return null;
+  return configured === reported;
+}
 
 const router = Router();
 
@@ -27,6 +56,8 @@ router.get('/hashkey', async (_req: Request, res: Response) => {
   return res.json({
     chain: 'HashKey Chain',
     chainId: config.hashkeyChainId,
+    // null = the RPC could not be reached, so this was NOT CHECKED.
+    chainIdAgreesWithRpc: chainIdAgreesWithRpc(config.hashkeyChainId, (connection as { chainId?: number }).chainId),
     rpc: config.hashkeyRpc,
     contract: config.hashkeyContract,
     contractName: HASHKEY_CONFIG.contractName,

@@ -213,6 +213,12 @@ import {
   sharedIdentityKeys,
   sortBidsDeterministic,
   validateAwardRationale,
+  parseSellerReserve,
+  validateDeclaredReserve,
+  threadReserve,
+  checkAgainstReserve,
+  checkReserveUnchanged,
+  SELLER_RESERVE_TERM,
   validatePrice,
   verifyStoredOfferHash,
   type BidRow,
@@ -857,5 +863,129 @@ describe('negotiation is RepID-neutral', () => {
     expect(store['repid_score_events']).toBeUndefined();
     expect(store['repid_proof_queue']).toBeUndefined();
     expect(store['repid_agents']?.map((a) => a.current_repid)).toEqual([2000, 1500, 1500]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SELLER RESERVE — "I will take at least this much"
+//
+// The RFQ band was always buyer-side: `min_price_usdc_raw` is a floor the BUYER
+// commits to pay (so a sub-cent contract cannot farm price-decoupled RepID) and
+// `max_price_usdc_raw` is the buyer's ceiling. The only seller-side price fact
+// was `agent_services.base_price_usdc_raw`, which is recorded and NOT enforced —
+// at award it produces `underbid_ratio` for forensics and nothing else. A
+// provider could be negotiated arbitrarily far below its own listed price.
+//
+// The reserve lives in round `terms`, which is inside `offerPreimage()`, so it
+// is covered by the offer hash and by the actor's signature with no DDL against
+// the shared production database.
+describe('seller reserve', () => {
+  const cfg = negotiationConfig();
+  const rfq = { min_price_usdc_raw: 10000, max_price_usdc_raw: 200000 };
+  const round = (over: Record<string, unknown>) =>
+    ({ offered_by: 'provider', round_no: 1, terms: {}, ...over }) as any;
+
+  describe('parsing', () => {
+    test('absent is fine — reserves are optional, not implied', () => {
+      expect(parseSellerReserve(undefined)).toEqual({ ok: true, reserve: null });
+      expect(parseSellerReserve(null)).toEqual({ ok: true, reserve: null });
+      expect(parseSellerReserve({})).toEqual({ ok: true, reserve: null });
+      expect(parseSellerReserve({ eta_note: 'fast' })).toEqual({ ok: true, reserve: null });
+    });
+
+    test('present but malformed is an ERROR, never a silently ignored field', () => {
+      // A provider that believes it set a floor and did not is exactly who this
+      // protects. Swallowing the typo would hand them a false sense of one.
+      for (const bad of ['120000', 0, -1, 1.5, null === null ? NaN : 0, {}, []]) {
+        const r = parseSellerReserve({ [SELLER_RESERVE_TERM]: bad });
+        if (bad === null) continue;
+        expect(r.ok).toBe(false);
+        expect(r.error).toBe('invalid_reserve');
+      }
+    });
+
+    test('a well-formed reserve reads back', () => {
+      expect(parseSellerReserve({ [SELLER_RESERVE_TERM]: 120000 })).toEqual({ ok: true, reserve: 120000 });
+    });
+  });
+
+  describe('declaring one on your own offer', () => {
+    test('a floor above your own ask is a contradiction, not a floor', () => {
+      const r = validateDeclaredReserve(150000, 120000, rfq, cfg);
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe('reserve_above_own_price');
+    });
+
+    test('a reserve below the system/RFQ floor is refused', () => {
+      expect(validateDeclaredReserve(1, 120000, rfq, cfg).error).toBe('reserve_below_floor');
+    });
+
+    test('a reserve above the buyer ceiling is refused UP FRONT, not after a thread of rounds', () => {
+      const r = validateDeclaredReserve(250000, 250000, rfq, cfg);
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe('reserve_above_rfq_max');
+    });
+
+    test('reserve equal to the ask is legal — "this price or nothing"', () => {
+      expect(validateDeclaredReserve(120000, 120000, rfq, cfg).ok).toBe(true);
+    });
+  });
+
+  describe('which reserve binds the thread', () => {
+    test('the one on the provider FIRST offer', () => {
+      const rounds = [
+        round({ round_no: 1, terms: { [SELLER_RESERVE_TERM]: 120000 } }),
+        round({ round_no: 2, offered_by: 'buyer', terms: { [SELLER_RESERVE_TERM]: 10000 } }),
+      ];
+      // A buyer cannot install a reserve — nor lower one by putting it in a counter.
+      expect(threadReserve(rounds)).toBe(120000);
+    });
+
+    test('null when the provider named none', () => {
+      expect(threadReserve([round({ round_no: 1, terms: {} })])).toBeNull();
+      expect(threadReserve([])).toBeNull();
+    });
+
+    test('a later provider round cannot move it', () => {
+      const bound = 120000;
+      expect(checkReserveUnchanged({ [SELLER_RESERVE_TERM]: bound }, bound).ok).toBe(true);
+      // Lowering it under pressure is the whole failure mode.
+      expect(checkReserveUnchanged({ [SELLER_RESERVE_TERM]: 90000 }, bound).error).toBe('reserve_immutable');
+      // Dropping it entirely is the same move by omission.
+      expect(checkReserveUnchanged({}, bound).error).toBe('reserve_immutable');
+      // And one cannot be introduced mid-thread either.
+      expect(checkReserveUnchanged({ [SELLER_RESERVE_TERM]: 50000 }, null).error).toBe('reserve_immutable');
+    });
+  });
+
+  describe('enforcement', () => {
+    test('below the reserve is refused; at or above it passes', () => {
+      expect(checkAgainstReserve(119999, 120000).error).toBe('below_provider_reserve');
+      expect(checkAgainstReserve(120000, 120000).ok).toBe(true);
+      expect(checkAgainstReserve(150000, 120000).ok).toBe(true);
+    });
+
+    test('no reserve declared means no constraint — the feature is opt-in', () => {
+      expect(checkAgainstReserve(1, null).ok).toBe(true);
+    });
+
+    test('the owner scenario end to end: ask 200000, will not go below 120000', () => {
+      // "I want at least 120000 but I am willing to open at 200000."
+      const ask = 200000;
+      const reserve = 120000;
+      expect(validateDeclaredReserve(reserve, ask, rfq, cfg).ok).toBe(true);
+
+      const rounds = [round({ round_no: 1, terms: { [SELLER_RESERVE_TERM]: reserve } })];
+      const bound = threadReserve(rounds);
+      expect(bound).toBe(reserve);
+
+      // The buyer haggles down — allowed while it stays at or above the floor.
+      expect(checkAgainstReserve(160000, bound).ok).toBe(true);
+      expect(checkAgainstReserve(120000, bound).ok).toBe(true);
+      // And is refused the moment it goes under.
+      expect(checkAgainstReserve(119000, bound).error).toBe('below_provider_reserve');
+      // The provider cannot then be talked into its own undercut.
+      expect(checkReserveUnchanged({ [SELLER_RESERVE_TERM]: 100000 }, bound).error).toBe('reserve_immutable');
+    });
   });
 });

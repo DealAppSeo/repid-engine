@@ -4410,3 +4410,101 @@ fixing it means changing an RPC signature defined in a migration outside this re
 migration first is next beat's work, not a guess this beat should make. PR #619 (ledger) and
 PR #620 (SPRINT_BOARD finding) both docs-only, both `--auto --squash`, both pending CI as this
 entry is written.
+
+## Beat 100 — 2026-09-04 · verified #611 independently; step 2 intent: close the negotiation.ts work-statement question SPRINT_BOARD left open
+
+**Step 1 — PR #611 ("Five checks and capabilities that reported something they had not earned"),
+merged 2026-09-04T17:20:40Z as `bb332b7`.** Verified independently, not rubber-stamped:
+
+- `gh pr view 611 --json statusCheckRollup` → 9/9 SUCCESS.
+- **Key-rotation claim (item 4), checked against the merged code, not the PR prose.** The PR
+  claims `decryptPrivateKey` used to hardcode `KEY_VERSION = 1` and throw on any other `blob.v`,
+  making rotation impossible. Read `src/services/agent-key-crypto.ts` on `main`: `KEY_VERSION`
+  is still `1` (current generation), but decryption now resolves via `masterKeyForVersion(blob.v)`
+  keyed off the blob's OWN version rather than the constant, and `rotateEncryptedKey()` exists
+  with a `fromVersion`/`toVersion` pair distinct from a same-version no-op — matches the claimed
+  fix on disk.
+- Items 1–3 and 5 (zkp-vault debug-only soundness gates, CI running only the debug profile,
+  `CascadeSettlementWorker` test coverage, the cbBTC/EURC zero-address settler gate) were not
+  independently re-derived line-by-line this beat — each carries its own stated mutation test in
+  the PR body (delete the fix, watch the new test go red, restore), which is the same
+  falsifiability bar LESSONS #6 asks for, and the one claim spot-checked above held up exactly as
+  described. Proportionate, not exhaustive.
+
+**Step 2 intent, investigated this beat.** SPRINT_BOARD.md's "Found this session" section (line
+181-186) left an open question from #607/#608: that fix made `work_statement_hash` required at
+`fulfilled` and left contract *creation* permissive in the cron script, stranding real escrowed
+money when the payload didn't parse — and asked "what else creates contracts, and does it produce
+a parseable work statement? `src/routes/v1/negotiation.ts` is the other writer." Read that route
+end to end (`negotiation.ts:1280-1413`, `a2a-negotiation.ts:1255-1303`): unlike the pre-fix cron,
+it calls `parseWorkStatement(rfq.scope, ...)` and returns 400 on `!spec.ok` **before** invoking
+`acceptAndAward` — so an unparseable statement never reaches the money-committing RPC here. That
+answers the SPRINT_BOARD question for the content-validity failure mode #607 was about: this
+writer does not share it.
+
+What the read surfaced instead is a narrower, different gap: `a2a_accept_and_award` is documented
+in `a2a-negotiation.ts:57-64` as one atomic Postgres transaction — RFQ CAS + `service_contracts`
+insert + `a2a_awards` insert + losing-bid sweep, specifically so a rejected constraint can't leave
+"a live, payable, un-provenanced contract" behind. The `work_statement` column, though, is bound by
+a *separate* `.update()` call (`negotiation.ts:1376-1379`) issued **after** that RPC returns
+success — outside the transaction the module's own comment describes as the fix for exactly this
+class of problem. If that update fails (`WORK_STATEMENT_BIND_FAILED`, 500), the contract already
+exists as live and payable with `work_statement` unbound — same shape as the stranded-escrow row
+already on this board, reached by a DB-write failure between two calls rather than by unparseable
+content. Full fix would mean passing the parsed spec into the RPC itself so binding is atomic with
+creation; that RPC's signature lives in a migration outside this repo (schema is managed
+externally per CLAUDE.md) and was not read this beat, so changing its call contract without seeing
+it first is exactly the kind of money-path guess this loop's hard lines exist to prevent. Not
+attempted. Documented on SPRINT_BOARD as a precise, narrower follow-on instead of leaving the
+original question looking unanswered.
+
+## Beat 101 — 2026-09-05 · verified #615/#623 in full, #614/#616/#617/#618 at CI+diff-scope (seventh consecutive beat with the unlogged-PR gap); step 2 intent: authenticated flag-observability endpoint
+
+**Step 1 — six PRs merged after Beat 100's own ledger PR (#619), none logged.** `gh pr list
+--state merged --limit 20 --json number,title,mergedAt` shows #614, #615, #616, #617, #618, #623
+all merged after #619 (2026-09-04T20:27:48Z) — same unlogged-PR gap flagged in Beats
+91/94/95/96/97/98/99, now a **seventh** consecutive beat with at least one instance. (#620,
+merged 20:27:06Z — 42s *before* #619 — is not part of the gap: it is Beat 100's own step-2 docs
+PR, resolving the negotiation.ts question that beat's entry names.) All six show `gh pr view
+--json statusCheckRollup` → 9/9 SUCCESS. Two verified in full against their diffs, not
+rubber-stamped from title or PR body:
+
+- **#615** ("fix(x402): the amount governor was unit-blind, and ETH would have walked through
+  it") — real-money path, so read the full diff. Confirmed on disk: both settlement guards in
+  `src/services/x402-real-settler.ts` used to compare a bare `amountUSDC` float against `1.0`
+  regardless of asset, so `settleX402Payment(from, to, 0.9, id, 'ETH')` would have cleared a
+  dollar-denominated ceiling and sent 0.9 ETH. Fix adds `governorCeilingFor(symbol)` — USDC stays
+  `1.0` (unchanged), ETH gets its own `0.001` ceiling, anything undeclared is **refused**, not
+  defaulted. Both guard sites (mock + real settlement branch) call the new function. Test suite
+  pins both directions (0.9 ETH refused, 0.0001 ETH allowed) plus the fail-closed undeclared-asset
+  case. Matches the PR body's "live trap, not a live loss" framing — neither existing caller
+  passes `'ETH'` today.
+- **#623** ("fix(hashkey): we told clients chain 133 while the chain answered 177") — confirmed
+  against the diff: `HASHKEY_CONFIG.chainId` in `src/routes/hashkey.ts` changed from the hardcoded
+  literal `133` to a getter reading `config.hashkeyChainId`, collapsing the two-sources-of-truth
+  bug the PR describes. New `chainIdAgreesWithRpc()` returns `boolean | null` (`null` = RPC
+  unreachable, explicitly not agreement) and is wired into both `GET /hashkey/config` and
+  `GET /health` (`hashkeyChainIdAgrees`). New test file drives the config module through
+  `jest.isolateModules` with `HSK_CHAIN_ID` set away from the default specifically to catch the
+  "test can't fail because default equals literal" trap its own header calls out. This PR is also
+  the source of the CLAUDE.md hashkey section quoted in this session's own injected context —
+  cross-checked and it matches the merged code, not just the file's prose. Default stayed `133`
+  deliberately per the PR (and CLAUDE.md), which the diff confirms (no change to `config.ts`'s
+  default).
+- **#614, #616, #617, #618** — checked at CI-green + file-scope (changed-files list matches each
+  title's claimed surface: `capability-assessment.ts`/`self-healing.ts` for #614's probe-grading
+  fix; `negotiation.ts`/`a2a-negotiation.ts` for #616's seller reserve; `trust-receipt.ts`/
+  `work-statement-canonical.ts` for #617's portable receipt; `match-statement.ts`/
+  `chess-match.mjs` for #618's scenario), not line-by-line — proportionate given the turn budget
+  and that none of the four touches a money-write or auth path the way #615/#623 do.
+
+**Step 2 intent.** SPRINT_BOARD.md's "Flag observability" section (line 262) names 111 real
+behaviour gates in `src/`, only 5 observable from outside the process — and explicitly rules out
+just adding them all to `/health` (public, unauthenticated) since several gate money/chain-write/
+breaker behaviour. The board's own instruction is to put those on an **authenticated** surface
+instead, resolving DB→env→default (`getHalConfig()`'s existing per-key `source`) rather than
+reading `process.env` directly. This is the single item that most matches this run's priority
+(favor the work touching the most surfaces) and is additive/observability-only — no flag flip, no
+scoring change. Not started yet this beat; if it doesn't land, this entry already records the
+exact scope (auth-gated route, DB→env→default resolution, exclude the 5 already on `/health`) so
+the next beat does not re-derive it.

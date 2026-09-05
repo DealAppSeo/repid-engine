@@ -11,12 +11,29 @@
  *
  * WHAT T1 DOES, AND WHAT IT HONESTLY DOES NOT
  * -------------------------------------------
- * DOES: commits the proof to ONE exchange. A canonical hash over the immutable
- * facts of that exchange is stored on the contract and carried in the proof's
- * statement. Anyone holding the public receipt can RECOMPUTE the hash and check
- * it matches, so a proof cannot be replayed as evidence for a different
- * deliverable, and the exchange's facts cannot be edited after the fact without
- * the hash disagreeing.
+ * ⚠ NOTHING IN `src/` CALLS THIS MODULE [MEASURED 2026-09-04], and the hash that
+ * is actually stored on `service_contracts.work_statement_hash` is NOT this one.
+ * That column is written by the Postgres trigger
+ * `trg_service_contracts_work_statement` -> `work_statement_sha256(ws)`, which
+ * hashes a canonical text over FOUR fields (acceptance_criteria, agreed_price,
+ * deadline, deliverable). This file hashes TEN different inputs — contract id,
+ * agent ids, settlement tx, verdict, satisfaction, payload and result digests.
+ * The two constructions are unrelated and no code bridges them.
+ *
+ * The paragraph below therefore described a third-party recompute of a hash the
+ * system does not produce, from a module nothing runs — and it was the receipt's
+ * headline verifiability property. The LIVE construction is ported, tested
+ * against a production oracle, and exposed to third parties in
+ * `services/work-statement-canonical.ts` + `scripts/verify-trust-receipt.mjs`.
+ * Use those. This module is kept because its ten-input design covers facts the
+ * live one does not (who, how much, which tx, what verdict) and is the shape a
+ * future binding may want — but it is DESIGN, not behaviour, until something
+ * calls it.
+ *
+ * DOES (as designed, once wired): commit the proof to ONE exchange. A canonical
+ * hash over the immutable facts of that exchange, so a proof cannot be replayed
+ * as evidence for a different deliverable, and the exchange's facts cannot be
+ * edited after the fact without the hash disagreeing.
  *
  * DOES NOT: prove the work was correct. The circuit still proves a RepID range.
  * Binding makes the proof *about this exchange*; it does not make it *about
@@ -121,9 +138,11 @@ export interface BindingCheck {
 }
 
 /**
- * Recompute and compare. This is what a third party runs to verify that a proof
- * belongs to the exchange it claims — and what a reconciliation sweep runs to
- * detect a contract edited after settlement.
+ * Recompute and compare.
+ *
+ * NOT what a third party runs today — see the header: no caller exists and this
+ * is not the hash the database stores. `scripts/verify-trust-receipt.mjs` is the
+ * third-party path.
  */
 export function verifyWorkStatement(input: WorkStatementInput, storedHash: string | null): BindingCheck {
   const expected = workStatementHash(input);

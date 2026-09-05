@@ -71,6 +71,11 @@ import {
   validateAwardRationale,
   validateEta,
   validatePrice,
+  parseSellerReserve,
+  validateDeclaredReserve,
+  threadReserve,
+  checkAgainstReserve,
+  checkReserveUnchanged,
   validateWindows,
   verifyOfferSignature,
   verifyStoredOfferHash,
@@ -488,6 +493,20 @@ router.post('/rfqs/:id/bids', async (req: Request, res: Response) => {
     if (!priceCheck.ok) return fail(res, 400, priceCheck.error ?? 'invalid_price', priceCheck.message ?? 'invalid price');
     const etaCheck = validateEta(eta_seconds);
     if (!etaCheck.ok) return fail(res, 400, etaCheck.error ?? 'invalid_eta', etaCheck.message ?? 'invalid eta');
+
+    // SELLER RESERVE (optional). Declared in `terms`, which is inside the offer
+    // preimage — so it is covered by this offer's hash and signature, and fixed
+    // for the thread from here on. A malformed reserve is an error rather than
+    // an ignored field: a provider that believes it set a floor and did not is
+    // exactly who this protects.
+    const reserveParse = parseSellerReserve(terms);
+    if (!reserveParse.ok) {
+      return fail(res, 400, reserveParse.error ?? 'invalid_reserve', reserveParse.message ?? 'invalid reserve');
+    }
+    if (reserveParse.reserve !== null) {
+      const rc = validateDeclaredReserve(reserveParse.reserve, Number(price_usdc_raw), rfq, cfg);
+      if (!rc.ok) return fail(res, 400, rc.error ?? 'invalid_reserve', rc.message ?? 'invalid reserve');
+    }
 
     const provider = await loadAgent(bound);
     if (!provider) return fail(res, 404, 'provider_not_found', 'Provider agent not found');
@@ -917,6 +936,18 @@ router.post('/bids/:bidId/counter', async (req: Request, res: Response) => {
     const etaCheck = validateEta(eta_seconds);
     if (!etaCheck.ok) return fail(res, 400, etaCheck.error ?? 'invalid_eta', etaCheck.message ?? 'invalid eta');
 
+    // The provider's declared floor binds the buyer's counter. 409, not 400:
+    // the counter is well-formed, it is the thread's state that refuses it.
+    // This DOES tell the buyer a reserve exists and bounds it — see the leak
+    // note on SELLER_RESERVE_TERM; that is a deliberate trade, not an oversight.
+    const counterReserve = thread ? threadReserve(thread.rounds) : null;
+    const reserveCheck = checkAgainstReserve(Number(price_usdc_raw), counterReserve);
+    if (!reserveCheck.ok) {
+      return fail(res, 409, reserveCheck.error ?? 'below_provider_reserve', reserveCheck.message ?? 'below reserve', {
+        provider_reserve_usdc_raw: counterReserve,
+      });
+    }
+
     const buyer = await loadAgent(bound);
     if (!buyer) return fail(res, 404, 'buyer_not_found', 'Buyer agent not found');
 
@@ -1028,6 +1059,29 @@ router.post('/bids/:bidId/respond', async (req: Request, res: Response) => {
       price = Number(price_usdc_raw);
       eta = Number(eta_seconds);
       responseTerms = terms ?? {};
+
+      // A provider may not restate a different floor on a later offer. Without
+      // this, immutability is decorative — it could advertise a reserve, collect
+      // the credibility of having one, then drop it when pressed.
+      const unchanged = checkReserveUnchanged(responseTerms, threadReserve(thread ? thread.rounds : []));
+      if (!unchanged.ok) {
+        return fail(res, 409, unchanged.error ?? 'reserve_immutable', unchanged.message ?? 'reserve is immutable');
+      }
+    }
+
+    // Covers BOTH branches. The counter route already refuses a below-reserve
+    // counter, so an accept should never breach it — this is the defence in
+    // depth that makes that a fact rather than an assumption.
+    const respondReserve = threadReserve(thread ? thread.rounds : []);
+    const respondReserveCheck = checkAgainstReserve(price, respondReserve);
+    if (!respondReserveCheck.ok) {
+      return fail(
+        res,
+        409,
+        respondReserveCheck.error ?? 'below_provider_reserve',
+        respondReserveCheck.message ?? 'below reserve',
+        { provider_reserve_usdc_raw: respondReserve },
+      );
     }
 
     const result = await appendRound({
@@ -1231,6 +1285,23 @@ router.post('/rfqs/:id/accept', async (req: Request, res: Response) => {
 
     const priceCheck = validatePrice(price, rfq, cfg);
     if (!priceCheck.ok) return fail(res, 400, priceCheck.error ?? 'invalid_price', priceCheck.message ?? 'invalid price');
+
+    // LAST GATE on the reserve, at the only point money and reputation actually
+    // move. Counter and respond already refuse a breach, so reaching here means
+    // something upstream let one through — which is exactly when a final check
+    // earns its keep. `a2a_accept_and_award` re-reads the price from this same
+    // round, so what is checked here is what gets awarded.
+    const awardReserve = threadReserve(thread.rounds);
+    const awardReserveCheck = checkAgainstReserve(price, awardReserve);
+    if (!awardReserveCheck.ok) {
+      return fail(
+        res,
+        409,
+        awardReserveCheck.error ?? 'below_provider_reserve',
+        awardReserveCheck.message ?? 'below reserve',
+        { provider_reserve_usdc_raw: awardReserve },
+      );
+    }
 
     // Re-run the global value caps against the ROUND price (the accept path
     // inserts service_contracts directly and would otherwise skip them).
