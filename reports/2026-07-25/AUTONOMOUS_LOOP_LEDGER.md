@@ -4447,3 +4447,54 @@ externally per CLAUDE.md) and was not read this beat, so changing its call contr
 it first is exactly the kind of money-path guess this loop's hard lines exist to prevent. Not
 attempted. Documented on SPRINT_BOARD as a precise, narrower follow-on instead of leaving the
 original question looking unanswered.
+
+## Beat 101 — 2026-09-05 · verified #615/#623 in full, #614/#616/#617/#618 at CI+diff-scope (seventh consecutive beat with the unlogged-PR gap); step 2 intent: authenticated flag-observability endpoint
+
+**Step 1 — six PRs merged after Beat 100's own ledger PR (#619), none logged.** `gh pr list
+--state merged --limit 20 --json number,title,mergedAt` shows #614, #615, #616, #617, #618, #623
+all merged after #619 (2026-09-04T20:27:48Z) — same unlogged-PR gap flagged in Beats
+91/94/95/96/97/98/99, now a **seventh** consecutive beat with at least one instance. (#620,
+merged 20:27:06Z — 42s *before* #619 — is not part of the gap: it is Beat 100's own step-2 docs
+PR, resolving the negotiation.ts question that beat's entry names.) All six show `gh pr view
+--json statusCheckRollup` → 9/9 SUCCESS. Two verified in full against their diffs, not
+rubber-stamped from title or PR body:
+
+- **#615** ("fix(x402): the amount governor was unit-blind, and ETH would have walked through
+  it") — real-money path, so read the full diff. Confirmed on disk: both settlement guards in
+  `src/services/x402-real-settler.ts` used to compare a bare `amountUSDC` float against `1.0`
+  regardless of asset, so `settleX402Payment(from, to, 0.9, id, 'ETH')` would have cleared a
+  dollar-denominated ceiling and sent 0.9 ETH. Fix adds `governorCeilingFor(symbol)` — USDC stays
+  `1.0` (unchanged), ETH gets its own `0.001` ceiling, anything undeclared is **refused**, not
+  defaulted. Both guard sites (mock + real settlement branch) call the new function. Test suite
+  pins both directions (0.9 ETH refused, 0.0001 ETH allowed) plus the fail-closed undeclared-asset
+  case. Matches the PR body's "live trap, not a live loss" framing — neither existing caller
+  passes `'ETH'` today.
+- **#623** ("fix(hashkey): we told clients chain 133 while the chain answered 177") — confirmed
+  against the diff: `HASHKEY_CONFIG.chainId` in `src/routes/hashkey.ts` changed from the hardcoded
+  literal `133` to a getter reading `config.hashkeyChainId`, collapsing the two-sources-of-truth
+  bug the PR describes. New `chainIdAgreesWithRpc()` returns `boolean | null` (`null` = RPC
+  unreachable, explicitly not agreement) and is wired into both `GET /hashkey/config` and
+  `GET /health` (`hashkeyChainIdAgrees`). New test file drives the config module through
+  `jest.isolateModules` with `HSK_CHAIN_ID` set away from the default specifically to catch the
+  "test can't fail because default equals literal" trap its own header calls out. This PR is also
+  the source of the CLAUDE.md hashkey section quoted in this session's own injected context —
+  cross-checked and it matches the merged code, not just the file's prose. Default stayed `133`
+  deliberately per the PR (and CLAUDE.md), which the diff confirms (no change to `config.ts`'s
+  default).
+- **#614, #616, #617, #618** — checked at CI-green + file-scope (changed-files list matches each
+  title's claimed surface: `capability-assessment.ts`/`self-healing.ts` for #614's probe-grading
+  fix; `negotiation.ts`/`a2a-negotiation.ts` for #616's seller reserve; `trust-receipt.ts`/
+  `work-statement-canonical.ts` for #617's portable receipt; `match-statement.ts`/
+  `chess-match.mjs` for #618's scenario), not line-by-line — proportionate given the turn budget
+  and that none of the four touches a money-write or auth path the way #615/#623 do.
+
+**Step 2 intent.** SPRINT_BOARD.md's "Flag observability" section (line 262) names 111 real
+behaviour gates in `src/`, only 5 observable from outside the process — and explicitly rules out
+just adding them all to `/health` (public, unauthenticated) since several gate money/chain-write/
+breaker behaviour. The board's own instruction is to put those on an **authenticated** surface
+instead, resolving DB→env→default (`getHalConfig()`'s existing per-key `source`) rather than
+reading `process.env` directly. This is the single item that most matches this run's priority
+(favor the work touching the most surfaces) and is additive/observability-only — no flag flip, no
+scoring change. Not started yet this beat; if it doesn't land, this entry already records the
+exact scope (auth-gated route, DB→env→default resolution, exclude the 5 already on `/health`) so
+the next beat does not re-derive it.
