@@ -27,6 +27,7 @@ import observabilityRouter from './v1/observability';
 import servicesRouter from './v1/services';
 import contractsRouter from './v1/contracts';
 import agentRouter from './v1/agent';
+import toolReceiptRouter from './v1/tool-receipt';
 import runloopLivenessRouter from './v1/runloop-liveness';
 import peerVerificationRouter from './peer-verification';
 import { createAndResolveArenaChallenge } from '../testing/red-team';
@@ -40,6 +41,7 @@ router.use('/hitl', hitlRouter);
 router.use('/status', observabilityRouter);
 router.use('/services', servicesRouter);
 router.use('/contracts', contractsRouter);
+router.use('/tool-receipt', toolReceiptRouter); // authed POST — server-side mint via write_tool_receipt() RPC
 router.use('/peer-verification', peerVerificationRouter);
 // CC2 2026-05-27: alias mount so /api/v1/peer-verify/respond also resolves.
 // The 2026-05-27 sprint dispatched against /peer-verify; the existing live
