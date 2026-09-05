@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { config } from '../config';
 import { testHashKeyConnection } from '../engine/hashkey-chain';
+import { chainIdAgreesWithRpc } from './hashkey';
 import { pagerStatus } from '../services/operator-pager';
 import { lastVestingCheck } from '../services/vesting-monitor';
 import { serviceQualityStatus } from '../services/service-quality-hook';
@@ -93,7 +94,14 @@ router.get('/health', async (req: Request, res: Response) => {
     supabaseConnected,
     hashkeyConnected: (hashkey as any).connected,
     hashkeyBlockNumber: (hashkey as any).blockNumber,
+    // The chain id the RPC ITSELF reports, not the one we configured.
     hashkeyChainId: (hashkey as any).chainId,
+    // Does what we PUBLISH to clients match what the chain says? Measured
+    // 2026-09-04: it did not — we served 133 while the RPC answered 177, and
+    // nothing anywhere compared the two. `null` means the RPC was unreachable
+    // so nothing was compared, which is not agreement.
+    hashkeyChainIdAgrees: chainIdAgreesWithRpc(config.hashkeyChainId, (hashkey as any).chainId),
+    hashkeyChainIdConfigured: config.hashkeyChainId,
     deployerConfigured: !!config.deployerPrivateKey,
     // Is anything actually watching this process? An unconfigured pager is a monitoring system
     // that is silently not monitoring — the same defect it exists to catch, one level up. Public
