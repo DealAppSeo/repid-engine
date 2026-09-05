@@ -4574,3 +4574,53 @@ paragraph is left intact above rather than deleted, per this file's own conventi
 in place with a stated reason. The actual endpoint (same spec: `GET /api/v1/admin/flags`, same
 flag subset, same `getHalConfig()` DB→env→default sourcing) was then built for real this beat, on
 a separate branch/PR opened after this one — see the next ledger entry below.
+
+## Beat 103 — 2026-09-05 · verified #628 (the real endpoint Beat 102's correction promised) actually landed; step 2 extends it with the peer-verify "three switches" SPRINT_BOARD names
+
+**Step 1 — #628 checked against its own diff and CI, not against the ledger prose that promised
+it.** Beat 102's entry ends by pointing at "the next ledger entry below" for the real build; that
+slot was empty until now, and PR #628 (`feat(admin): authenticated flag-observability endpoint`,
+merged 2026-09-05T12:36:01Z, 29 seconds after the Beat 102 ledger PR #626) is exactly that build,
+not a second false claim. `gh pr view 628 --json statusCheckRollup` → 9/9 SUCCESS. Read the full
+diff, not the title: three files (`src/index.ts` +2 lines registering the router,
+`src/routes/admin-flags.ts` new, `src/routes/__tests__/admin-flags.test.ts` new, 6 cases). The
+middleware fails closed both ways — no key or wrong key → 401, `ADMIN_KEY` unset → 503, never a
+silent open door. The route reports `repid_purpose_gate_v3`, `hal_grounding_mode`,
+`constitutional_audit_enabled`, `owner_ceiling_shadow_enabled`, `router_strict_cost_order`, and
+the full HAL S2 bundle via `getHalConfig()` (DB→env→default, with `source` per key) — matching the
+spec Beat 101/102 both named, and matching CLAUDE.md's own Sean-gated flag list. `getHalConfig()`
+throwing degrades to `{error: 'UNAVAILABLE'}` rather than guessing a value. This is the real thing;
+Beat 102's self-correction was accurate and this beat's own verification agrees with it
+independently rather than taking its word.
+
+**Step 2 — extended the same endpoint with the flags SPRINT_BOARD's peer-verification section
+names as the actual reason consensus has never fired once.** That section ("Peer-verification:
+never switched on, not broken") states three stacked switches, all closed, and specifically flags
+one fact as **UNVERIFIED because Railway env isn't readable from a cloud session**: whether
+`PRODUCER_HALT_CLASSES` on the live service contains `peer_verify`. `/api/v1/admin/flags` is
+exactly the surface built last beat to answer questions like that, so this beat closes the gap in
+what it reports rather than starting a new surface. Added, all read via `process.env` (no DB
+resolution involved, unlike HAL S2):
+
+- `peer_verify_panel_enabled` — boolean, mirrors `peer-verify-consensus.ts:53`'s own parse
+  (`(env || 'false').toLowerCase() === 'true'`), default false.
+- `hal_chronic_flag_enabled` — boolean, mirrors `chronic-flag-accumulator.ts:21`
+  (`=== 'true'`), default false. This is the consequence path the panel's promise routes to.
+- `producer_halt_classes` — reuses `parseHaltClasses()` from `src/services/producer-halt.ts`
+  (imported, not reimplemented, so this can't drift from the real parse) to report the full
+  parsed class list **and** a derived `peer_verify_halted` boolean that also honors the
+  `all`/`*` wildcard tokens — this is the single fact SPRINT_BOARD called unverifiable.
+- `mock_facilitator` — reported as one of three explicit strings
+  (`'true (simulated settlement)'` / `'false (settlement disabled, pending_funding)'` /
+  `'unset (real on-chain settlement path)'`), read directly against `x402-real-settler.ts:293-297`
+  rather than assumed, specifically because SPRINT_BOARD's own flag audit warns this one is
+  three-state and reporting it as a boolean would misreport "unset" as "false" when unset is
+  actually the live real-money path.
+
+Additive only — no existing field changed shape, no route touched besides the one file. New test
+cases (5 added: halt-classes unset/two-values/wildcard, mock-facilitator all three states,
+peer-verify+chronic-flag defaults) plus the 6 pre-existing ones, all pass:
+`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts` → 11/11. `npx tsc
+--noEmit` clean. No flag flipped, no default changed — this is read-only observability of switches
+that already exist, same SAFE-CLASS as the base endpoint. PR opened on its own branch after this
+ledger PR and merged with `gh pr merge <n> --auto --squash`.
