@@ -8,7 +8,13 @@ jest.mock('../../src/db', () => {
   // Chainable, thenable mock: every builder method returns the same object;
   // awaiting it resolves to terminalResult; maybeSingle() shifts a queued result.
   const chain: any = {};
-  for (const m of ['from', 'select', 'eq', 'order', 'limit', 'update']) {
+  // `not` is here for claimNextContract's two-pass claim: pass 1 asks for rows
+  // that can actually reach `fulfilled` (non-NULL work_statement_hash), pass 2
+  // falls back to plain FIFO. This double models no filters at all — not even
+  // `eq` — so `not` is a passthrough like the rest, and the queue order below
+  // still drives every case. The FILTERING behaviour is pinned separately in
+  // tests/service-handler-claim-order.test.ts, which does model it.
+  for (const m of ['from', 'select', 'eq', 'not', 'order', 'limit', 'update']) {
     chain[m] = jest.fn(() => chain);
   }
   chain.maybeSingle = jest.fn(async () =>

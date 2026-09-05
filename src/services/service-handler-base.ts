@@ -42,19 +42,45 @@ export abstract class ServiceHandlerBase {
   protected abstract fulfill(contract: ServiceContractRow): Promise<Record<string, unknown>>;
 
   /**
-   * Atomic claim. FIFO (oldest escrowed first). Optimistic-concurrency UPDATE
-   * gated on status still 'escrowed' prevents double-claim. Returns the
-   * claimed contract or null. service_contracts has no processed_at⟺status
-   * biconditional CHECK (verified Phase 2.9.3 Task 2d), so no constraint
-   * conflict like the Phase 2.9.2 validation_queue case.
+   * Atomic claim. FIFO (oldest escrowed first) — but DELIVERABLE rows first.
+   * Optimistic-concurrency UPDATE gated on status still 'escrowed' prevents
+   * double-claim. Returns the claimed contract or null. service_contracts has no
+   * processed_at⟺status biconditional CHECK (verified Phase 2.9.3 Task 2d), so
+   * no constraint conflict like the Phase 2.9.2 validation_queue case.
+   *
+   * ── HEAD-OF-LINE BLOCKING [MEASURED 2026-09-05, live] ────────────────────
+   * Plain FIFO wedges this queue permanently. A contract whose
+   * `work_statement_hash` is NULL can NEVER reach `fulfilled` — the DB refuses
+   * the transition outright (#607; only rows already past fulfilled are
+   * grandfathered). Nothing backfills that column on an existing row. So such a
+   * contract fails, stays `escrowed` (the failure path writes metadata only),
+   * and is therefore selected again by the very next cycle — forever.
+   *
+   * Because the selection is per-provider and oldest-first, ONE undeliverable
+   * row starves every later contract for that provider. Measured: an
+   * undeliverable row from 2026-09-04 was re-claimed and re-failed roughly once
+   * a minute, while a perfectly deliverable contract created 12 minutes earlier
+   * that day sat at `claimed_at: null` — never attempted once. The retry loop
+   * looked healthy from every angle; the work simply never got a turn.
+   *
+   * The fix is ordering, NOT exclusion. Deliverable rows are offered first; if
+   * none exists, the fallback below still picks up the un-hashed ones, so
+   * nothing is silently dropped and the loud failure that makes a stuck
+   * contract visible still happens. Skipping them outright would trade a wedged
+   * queue for a silent one, which is the worse of the two.
    */
   protected async claimNextContract(agentId: string): Promise<ServiceContractRow | null> {
-    const { data: candidate, error: fetchErr } = await db
-      .from('service_contracts')
-      .select('*, agent_services!inner(service_type)')
-      .eq('provider_agent_id', agentId)
-      .eq('status', 'escrowed')
-      .eq('agent_services.service_type', this.serviceType)
+    const baseQuery = () =>
+      db
+        .from('service_contracts')
+        .select('*, agent_services!inner(service_type)')
+        .eq('provider_agent_id', agentId)
+        .eq('status', 'escrowed')
+        .eq('agent_services.service_type', this.serviceType);
+
+    // Pass 1 — oldest contract that CAN actually reach `fulfilled`.
+    let { data: candidate, error: fetchErr } = await baseQuery()
+      .not('work_statement_hash', 'is', null)
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
@@ -67,6 +93,31 @@ export abstract class ServiceHandlerBase {
       );
       return null;
     }
+
+    // Pass 2 — nothing deliverable is waiting, so fall back to plain FIFO. This
+    // preserves the old behaviour exactly when every row is un-hashed, and keeps
+    // the stuck row reaching its loud failure instead of disappearing.
+    if (!candidate) {
+      const fallback = await baseQuery().order('created_at', { ascending: true }).limit(1).maybeSingle();
+      if (fallback.error) {
+        console.error(
+          `[${this.serviceType}] claim fetch error (fallback):`,
+          fallback.error?.message ?? fallback.error,
+          (fallback.error as any)?.stack ?? new Error().stack
+        );
+        return null;
+      }
+      candidate = fallback.data;
+      if (candidate && (candidate as any).work_statement_hash == null) {
+        console.warn(
+          `[${this.serviceType}] claiming contract ${(candidate as any).id} with a NULL ` +
+            'work_statement_hash — it CANNOT reach fulfilled (WORK_STATEMENT_REQUIRED) and will ' +
+            'fail. It is being attempted only because no deliverable contract is waiting. ' +
+            'Clearing or backfilling this row is a money-path decision for the owner.'
+        );
+      }
+    }
+
     if (!candidate) return null;
 
     const { data: claimed, error: claimErr } = await db
