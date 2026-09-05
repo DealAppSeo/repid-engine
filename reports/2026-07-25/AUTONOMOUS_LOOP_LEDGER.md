@@ -4401,6 +4401,16 @@ route-wiring gap like items 3/4 turned out to be, and this loop's hard lines are
 ground, beat 84). Not attempted this beat. If it matters next, the design question is "what
 determines ground truth for an existing prediction" — that's Sean's call, not a beat's.
 
+**Step 5 — what step 2 actually shipped, vs. the intent logged in step 1.** Intent was to
+investigate whether `negotiation.ts` shares #607's content-validity gap. It doesn't build
+anything new: the investigation closed the SPRINT_BOARD open question (negotiation.ts already
+validates before escrow) and replaced it with a narrower, precisely-scoped atomicity gap
+(non-atomic `work_statement` bind after the escrow RPC), documented rather than fixed because
+fixing it means changing an RPC signature defined in a migration outside this repo — reading that
+migration first is next beat's work, not a guess this beat should make. PR #619 (ledger) and
+PR #620 (SPRINT_BOARD finding) both docs-only, both `--auto --squash`, both pending CI as this
+entry is written.
+
 ## Beat 100 — 2026-09-04 · verified #611 independently; step 2 intent: close the negotiation.ts work-statement question SPRINT_BOARD left open
 
 **Step 1 — PR #611 ("Five checks and capabilities that reported something they had not earned"),
