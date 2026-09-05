@@ -4517,3 +4517,52 @@ PRs merged during this run's window (since 2026-09-05T04:23:30Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 33944422829 --log`) if the reason matters.
+
+## Beat 103 — 2026-09-05 · caught and corrected a false "shipped" claim in PR #626 before it merged; built the flag-observability endpoint it described, for real, in #628
+
+**Step 1 — PR #626 (Beat 102's own ledger PR, opened by run 33955199696) claimed a "Step 2" that
+never happened.** Its committed text described `GET /api/v1/admin/flags` as built, tested (6
+cases), and "merged with `--auto --squash`" — written in the past tense, as a completed fact.
+Checked against the run that wrote it, not taken on the ledger's word: `gh run list` showed
+33955199696 at `conclusion: failure`, and `gh run view 33955199696 --log` confirmed the `beat`
+job pushed the branch, opened PR #626, then hit `error_max_turns` immediately after — the
+`ledger-fallback` job for the very next scheduled run (33944422829, already logged in the entry
+above) saw #626 already open and correctly no-op'd, so nothing downstream caught this either.
+Independently confirmed nothing existed: `git ls-files | grep admin-flags` → nothing on `main`,
+`git branch -r | grep -i flag` → no other branch, `gh pr list --state all` → no second PR. Same
+shape as LESSONS #2 (verify the thing itself) and #7 (a red check is a status, not a verdict) —
+here aimed at the PR *before* this one rather than the run itself, which is exactly the gap this
+loop's step-1 verification exists to close.
+
+Corrected in place on PR #626 before merge (not deleted — this file's own convention is to
+annotate a wrong claim with why, since deleting it loses the reason a future reader would
+otherwise re-derive): added a `CORRECTION` paragraph immediately after the false claim, naming
+the run, the log evidence, and the fact nothing existed. #626 then merged carrying both the
+original (wrong) paragraph and its correction, honestly.
+
+**Step 2 — built the actual endpoint, PR #628.** Same spec Beat 101/102 named from
+`SPRINT_BOARD.md`'s flag-observability audit (line 262): `GET /api/v1/admin/flags`, gated
+identically to the existing `/api/v1/admin/caps` (`ADMIN_KEY`/`x-admin-key`), reporting resolved
+value + source for `REPID_PURPOSE_GATE_V3`, `HAL_GROUNDING_MODE`, `CONSTITUTIONAL_AUDIT_ENABLED`,
+`OWNER_CEILING_SHADOW_ENABLED`, `ROUTER_STRICT_COST_ORDER`, and the full HAL S2 quorum bundle via
+`getHalConfig()` (DB→env→default, per the board's own caveat against reading `process.env`
+directly for gates `repid_config` can override). `ENGINE_LLM_PROXY` (named in this loop's own
+hard-lines list) excluded on purpose — confirmed by grep it is not read via `process.env`
+anywhere in `src/` today, only named in a comment in `routing-record.ts` describing a future
+flip; reporting it would publish a switch that does not exist yet.
+
+Verified this time by actually running it, not by writing prose: `npx tsc --noEmit` clean after
+`npm install --legacy-peer-deps`; new `src/routes/__tests__/admin-flags.test.ts` (6 cases:
+no-key/wrong-key/unset-key all refuse — including the unset-`ADMIN_KEY`→503 case, not just wrong
+key — inverted default for `ROUTER_STRICT_COST_ORDER`, env override, `getHalConfig()` throw
+degrading to `UNAVAILABLE`) — `npx jest` ran green, 6/6. Existing `admin-caps.test.ts` re-run as a
+regression check, still 4/4. Additive only: no existing route touched besides two new lines in
+`src/index.ts` registering the router. PR #628 opened SAFE-CLASS and merged with
+`gh pr merge --auto --squash` while checks were pending, per this loop's contract.
+
+**Step 5 — what shipped vs. the intent logged in step 1.** Intent (implicit, since this beat's
+real step 1 finding was the false-claim correction) was to make PR #626's claim true rather than
+leave it standing as a fabrication. That is exactly what happened: the endpoint in #628 matches
+#626's description field-for-field, so the correction and the build together leave the ledger
+accurate rather than merely apologetic. Nothing else attempted this beat — turn budget went to
+verifying the failure mode precisely enough to fix it right, not to a second backlog item.
