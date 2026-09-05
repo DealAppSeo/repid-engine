@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { getHalConfig } from '../hal/config';
 import { groundingMode } from '../hal/hal-grounding';
+import { parseHaltClasses } from '../services/producer-halt';
 
 export const adminFlagsRouter = Router();
 
@@ -30,6 +31,15 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * not read via process.env anywhere in src/ today (grep confirms only a comment
  * in routing-record.ts describes a future flip), so reporting it would publish a
  * switch that does not exist yet.
+ *
+ * Extended to add the "three switches, stacked" SPRINT_BOARD names as the reason
+ * peer-verification consensus has never fired even once despite tens of
+ * thousands of votes cast: PEER_VERIFY_PANEL_ENABLED, PRODUCER_HALT_CLASSES
+ * (parsed, and specifically whether it halts the `peer_verify` class — SPRINT_BOARD
+ * called this exact fact UNVERIFIED because Railway env isn't readable from a cloud
+ * session), and HAL_CHRONIC_FLAG_ENABLED, the consequence path that promise routes
+ * to. Plus MOCK_FACILITATOR, which is three-state ('true'/'false'/unset-is-real) —
+ * reporting it as a boolean would misreport the unset-real case as false.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -54,6 +64,30 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
     router_strict_cost_order: {
       value: process.env.ROUTER_STRICT_COST_ORDER !== 'false',
       source: process.env.ROUTER_STRICT_COST_ORDER === undefined ? 'default' : 'env',
+    },
+    peer_verify_panel_enabled: {
+      value: (process.env.PEER_VERIFY_PANEL_ENABLED || 'false').toLowerCase() === 'true',
+      source: process.env.PEER_VERIFY_PANEL_ENABLED === undefined ? 'default' : 'env',
+    },
+    hal_chronic_flag_enabled: {
+      value: process.env.HAL_CHRONIC_FLAG_ENABLED === 'true',
+      source: process.env.HAL_CHRONIC_FLAG_ENABLED === undefined ? 'default' : 'env',
+    },
+    producer_halt_classes: {
+      value: Array.from(parseHaltClasses(process.env.PRODUCER_HALT_CLASSES)),
+      peer_verify_halted: (() => {
+        const halted = parseHaltClasses(process.env.PRODUCER_HALT_CLASSES);
+        return halted.has('all') || halted.has('*') || halted.has('peer_verify');
+      })(),
+      source: process.env.PRODUCER_HALT_CLASSES === undefined ? 'default' : 'env',
+    },
+    mock_facilitator: {
+      value: process.env.MOCK_FACILITATOR === 'true'
+        ? 'true (simulated settlement)'
+        : process.env.MOCK_FACILITATOR === 'false'
+          ? 'false (settlement disabled, pending_funding)'
+          : 'unset (real on-chain settlement path)',
+      source: process.env.MOCK_FACILITATOR === undefined ? 'default' : 'env',
     },
     hal_s2: halConfig
       ? {
