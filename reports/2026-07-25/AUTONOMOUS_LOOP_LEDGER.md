@@ -4676,3 +4676,14 @@ other boolean field already on this route. Additive only, no route touched besid
 `npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts` → 13/13. `npx tsc
 --noEmit` clean. PR opened on its own branch after this ledger PR and merged with
 `gh pr merge <n> --auto --squash`.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #633, `feat/admin-flags-redundant-auth`, cut from `main` at `addde1f`
+(before #632 landed, per this run's own instruction to cut step 2 from `origin/main` rather than
+wait). No deviation from the stated plan: both fields added with the same `{value, source}` shape,
+13/13 tests pass locally (`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`),
+`npx tsc --noEmit` clean, opened as SAFE-CLASS and merged with `gh pr merge 633 --auto --squash`
+while its checks were still in flight. At the time this closeout was written, both #632 (this
+ledger PR) and #633 were still `OPEN` with checks in progress — not yet confirmed merged, since
+GitHub had not finished the run. Do not read this paragraph as proof either landed; the next
+beat's step 1 is what confirms that independently, same as every other beat in this file.
