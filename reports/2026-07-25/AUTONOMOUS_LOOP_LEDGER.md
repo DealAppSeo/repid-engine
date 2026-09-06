@@ -4977,3 +4977,58 @@ were still in flight. At the time this closeout was written, both #647 (this led
 were still `OPEN` with checks in progress — not yet confirmed merged; the next beat's step 1
 confirms that independently, same as every other beat in this file. No deviation from the stated
 plan.
+
+## Beat 110 — 2026-09-06 · verified #647/#648 landed, diff matches intent; step 2 adds HAL_STRICT_FAMILY_INDEPENDENCE — a boot-time crash-or-warn gate read at two non-adjacent sites
+
+**Step 1 — Beat 109 checked against its own diff + CI, not against its prose.** `gh pr view 647
+--json state,mergedAt` and `gh pr view 648 --json state,mergedAt` both show `MERGED`
+(2026-09-06T16:29:03Z and 2026-09-06T16:28:29Z). `gh pr view 645/646/648 --json
+statusCheckRollup` each show 9/9 SUCCESS (CI test, crosscheck, gitleaks x2, zkp-vault, HAL
+adversarial gate, Strix Security Review). `gh pr diff 648` confirms the change matches Beat
+109's stated intent exactly: `hal_quorum_family_aware` added to `src/routes/admin-flags.ts` with
+the same `{value, source}` shape as every existing field, a `note` naming all three read sites
+(`fact-check.ts`, `service-quality-hook.ts`, `scoring/pipeline.ts`), and two new test cases
+(default true; `=false` reports `source: 'env'`) — both present in the diff exactly as described.
+No gap this time.
+
+**Step 2 — `HAL_STRICT_FAMILY_INDEPENDENCE` (default OFF, `=== 'true'`, warn-not-crash): read at
+two non-adjacent sites, `src/hal/fact-check.ts:2269` (inside `assertFamilyIndependenceAtBoot`,
+which throws after logging a family-collapse violation) and `src/index.ts:1087` (the caller's
+`catch` block, which re-checks the SAME flag to decide whether to rethrow past its own
+try/catch).** Two candidates were checked and rejected before this one, on the actual code rather
+than assumption: `HUMAN_AGENT_BIND_ENABLED` is already reported via
+`src/config/flag-readiness.ts`'s `PUBLIC_FLAGS` allowlist (`GET` endpoint backing
+`/api/v1/human/agents`'s `enabled` field), and `GATE_PROVISIONS_ACCOUNT` is already reported via
+`signupPosture()` on `GET /security/status`. Reporting either on `/api/v1/admin/flags` too would
+be a duplicate surface, not a new one — this loop's "most surfaces" priority means finding gaps,
+not re-covering ground.
+
+`HAL_STRICT_FAMILY_INDEPENDENCE` is a genuine gap: nothing today lets an operator ask, without
+reading source, whether a boot-time family-independence violation (two providers backed by the
+same model family, silently collapsing the quorum's dissent guarantee to one vote) will crash the
+service or only log. Unlike the flags reported so far, this one only matters at process start —
+by the time `/api/v1/admin/flags` answers a request the boot audit has already run and either
+thrown or not — so the value reported is "what this deployment is configured to do next time it
+boots", not "what just happened". Worth stating plainly because it is a different kind of fact
+than every other field on this route.
+
+Reported as `hal_strict_family_independence`, same `{value, source}` shape as every existing
+field, with a `note` naming both call sites and stating the boot-time caveat above. Additive
+only — no existing field's shape changed, no route touched besides `admin-flags.ts` and its test
+file. Not yet built as this entry is opened, per the Beat 106 process correction (ledger PR before
+any step-2 file is touched); the PR follows on its own branch cut from `origin/main`, same
+SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while checks are in flight) as
+every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #650, `feat/admin-flags-hal-strict-family`, cut from `origin/main`.
+`hal_strict_family_independence` added with the same `{value, source}` shape as every existing
+field, plus a `note` naming both call sites (`fact-check.ts`'s
+`assertFamilyIndependenceAtBoot`, `index.ts`'s catch block) and the boot-time caveat. 30/30 tests
+pass locally (`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up
+from 28/28 — 2 new cases), `npx tsc --noEmit` clean after a fresh `npm install
+--legacy-peer-deps` in this runner. Opened as SAFE-CLASS and merged with `gh pr merge 650 --auto
+--squash` while its checks were still in flight. At the time this closeout was written, both
+#649 (this ledger PR) and #650 were still `OPEN` with checks in progress — not yet confirmed
+merged; the next beat's step 1 confirms that independently, same as every other beat in this
+file. No deviation from the stated plan.
