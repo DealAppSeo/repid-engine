@@ -4801,3 +4801,18 @@ route — additive only, no existing field touched. Not yet built as this entry 
 process correction above; the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS
 merge convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior
 beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #640, `feat/admin-flags-pipeline-gates`, cut from `origin/main` at
+`6c42240` (this ledger PR's own base, per the process correction above). Both fields added with
+the same `{value, source}` shape as every existing field; `hal_direct_penalty_requires_hallucination`
+and `repid_purpose_gate_enabled` each default true and flip to `{value: false, source: 'env'}`
+under their respective env override. 17/17 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 15/15 —
+2 new cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this
+runner. Opened as SAFE-CLASS and merged with `gh pr merge 640 --auto --squash` while its checks
+were still in flight. At the time this closeout was written, both #639 (this ledger PR) and #640
+were still `OPEN` with checks in progress — not yet confirmed merged; the next beat's step 1
+confirms that independently, same as every other beat in this file. No deviation from the stated
+plan, and the process correction held this time: ledger PR opened before any step-2 file was
+touched.
