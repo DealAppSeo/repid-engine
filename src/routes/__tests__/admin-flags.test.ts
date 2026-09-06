@@ -24,6 +24,8 @@ describe('Admin Flags', () => {
     delete process.env.MOCK_FACILITATOR;
     delete process.env.OBSERVABILITY_REQUIRE_AUTH;
     delete process.env.RESILIENCE_REQUIRE_AUTH;
+    delete process.env.WRITER_DIRECT_APPLY;
+    delete process.env.STAKE_DEPOSIT_AUTH_ENFORCED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -135,5 +137,24 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.observability_require_auth).toEqual({ value: true, source: 'env' });
     expect(res.body.resilience_require_auth).toEqual({ value: true, source: 'env' });
+  });
+
+  it('WRITER_DIRECT_APPLY and STAKE_DEPOSIT_AUTH_ENFORCED both default true (inverted defaults)', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.writer_direct_apply).toEqual({
+      value: true,
+      source: 'default',
+      note: expect.stringContaining('startRepidSyncWorker'),
+    });
+    expect(res.body.stake_deposit_auth_enforced).toEqual({ value: true, source: 'default' });
+  });
+
+  it('WRITER_DIRECT_APPLY=false and STAKE_DEPOSIT_AUTH_ENFORCED=false -> reports false, source env', async () => {
+    process.env.WRITER_DIRECT_APPLY = 'false';
+    process.env.STAKE_DEPOSIT_AUTH_ENFORCED = 'false';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.writer_direct_apply.value).toBe(false);
+    expect(res.body.writer_direct_apply.source).toBe('env');
+    expect(res.body.stake_deposit_auth_enforced).toEqual({ value: false, source: 'env' });
   });
 });
