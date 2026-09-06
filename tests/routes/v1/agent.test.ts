@@ -14,6 +14,7 @@ jest.mock('../../../src/db', () => {
   const mockUpdate = jest.fn();
   const mockUpsert = jest.fn();
   const mockEq = jest.fn();
+  const mockNot = jest.fn();
   const mockOrder = jest.fn();
   const mockLimit = jest.fn();
   const mockMaybeSingle = jest.fn();
@@ -27,6 +28,8 @@ jest.mock('../../../src/db', () => {
     update: mockUpdate,
     upsert: mockUpsert,
     eq: mockEq,
+    // claimNextContract's pass-1 filter (non-NULL work_statement_hash).
+    not: mockNot,
     order: mockOrder,
     limit: mockLimit,
     maybeSingle: mockMaybeSingle,
@@ -43,6 +46,7 @@ jest.mock('../../../src/db', () => {
   mockInsert.mockReturnValue(dbMock);
   mockUpdate.mockReturnValue(dbMock);
   mockEq.mockReturnValue(dbMock);
+  mockNot.mockReturnValue(dbMock);
   mockOrder.mockReturnValue(dbMock);
   mockLimit.mockReturnValue(dbMock);
 

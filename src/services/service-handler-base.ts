@@ -42,19 +42,69 @@ export abstract class ServiceHandlerBase {
   protected abstract fulfill(contract: ServiceContractRow): Promise<Record<string, unknown>>;
 
   /**
-   * Atomic claim. FIFO (oldest escrowed first). Optimistic-concurrency UPDATE
-   * gated on status still 'escrowed' prevents double-claim. Returns the
-   * claimed contract or null. service_contracts has no processed_at⟺status
-   * biconditional CHECK (verified Phase 2.9.3 Task 2d), so no constraint
-   * conflict like the Phase 2.9.2 validation_queue case.
+   * Atomic claim. FIFO (oldest escrowed first) — but DELIVERABLE rows first.
+   * Optimistic-concurrency UPDATE gated on status still 'escrowed' prevents
+   * double-claim. Returns the claimed contract or null. service_contracts has no
+   * processed_at⟺status biconditional CHECK (verified Phase 2.9.3 Task 2d), so
+   * no constraint conflict like the Phase 2.9.2 validation_queue case.
+   *
+   * ── HEAD-OF-LINE BLOCKING [MEASURED 2026-09-05, live] ────────────────────
+   * Plain FIFO wedges this queue permanently. A contract whose
+   * `work_statement_hash` is NULL can NEVER reach `fulfilled` — the DB refuses
+   * the transition outright (#607; only rows already past fulfilled are
+   * grandfathered). Nothing backfills that column on an existing row. So such a
+   * contract fails, stays `escrowed` (the failure path writes metadata only),
+   * and is therefore selected again by the very next cycle — forever.
+   *
+   * Because the selection is per-provider and oldest-first, ONE undeliverable
+   * row starves every later contract for that provider. Measured: an
+   * undeliverable row from 2026-09-04 was re-claimed and re-failed roughly once
+   * a minute, while a perfectly deliverable contract created 12 minutes earlier
+   * that day sat at `claimed_at: null` — never attempted once. The retry loop
+   * looked healthy from every angle; the work simply never got a turn.
+   *
+   * The fix is ordering, NOT exclusion. Deliverable rows are offered first.
+   *
+   * ── WHY THE FALLBACK NO LONGER DOES THE WORK [MEASURED 2026-09-05] ───────
+   * This comment used to end: "the fallback below still picks up the un-hashed
+   * ones ... Skipping them outright would trade a wedged queue for a silent
+   * one, which is the worse of the two." That framing was wrong, because it
+   * priced the loud failure at zero. It is not free: the loud failure happens
+   * INSIDE `fulfill()`, at the DB transition, i.e. AFTER the handler has
+   * already run peer validation. For the verification handler that is three
+   * LLM calls per attempt.
+   *
+   * Once a minute, forever, that is 4,320 calls a day. Measured in
+   * `llm_call_log`: 356 of 360 consecutive minutes carried exactly 3
+   * `pcp_validation` calls, 4,362 in 24 hours, of which 3,892 FAILED — the
+   * account's Groq daily token allowance was exhausted by this loop and every
+   * other caller then got HTTP 429 for the rest of the day. The visible
+   * consequence: the first genuinely deliverable contract to reach `fulfilled`
+   * after the ordering fix recorded `0 of 3 validator(s) answered` and could
+   * not settle. One un-hashed row was denying the whole system its verification
+   * capacity.
+   *
+   * So the choice was never "wedged vs silent". It was "loud once vs loud 1,440
+   * times a day, paid for in everyone else's quota". Deliverability is a
+   * PRECONDITION, and a precondition is checked before the work, not after it.
+   * The fallback still SURFACES the row — durably, in `metadata.undeliverable`
+   * with a first-seen timestamp, which outlives the `last_error` string the old
+   * path overwrote every minute — but it does not hand it to `fulfill()`.
+   * Nothing is dropped: the row stays `escrowed`, keeps its funds, and is now
+   * queryable rather than merely re-logged.
    */
   protected async claimNextContract(agentId: string): Promise<ServiceContractRow | null> {
-    const { data: candidate, error: fetchErr } = await db
-      .from('service_contracts')
-      .select('*, agent_services!inner(service_type)')
-      .eq('provider_agent_id', agentId)
-      .eq('status', 'escrowed')
-      .eq('agent_services.service_type', this.serviceType)
+    const baseQuery = () =>
+      db
+        .from('service_contracts')
+        .select('*, agent_services!inner(service_type)')
+        .eq('provider_agent_id', agentId)
+        .eq('status', 'escrowed')
+        .eq('agent_services.service_type', this.serviceType);
+
+    // Pass 1 — oldest contract that CAN actually reach `fulfilled`.
+    let { data: candidate, error: fetchErr } = await baseQuery()
+      .not('work_statement_hash', 'is', null)
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
@@ -67,6 +117,29 @@ export abstract class ServiceHandlerBase {
       );
       return null;
     }
+
+    // Pass 2 — nothing deliverable is waiting. Surface any un-hashed rows so a
+    // stuck contract stays visible, but do NOT hand them to `fulfill()`: they
+    // cannot reach `fulfilled`, and attempting them costs real LLM quota every
+    // cycle (see the header). Marking is idempotent, so the write happens once
+    // per row rather than once per minute.
+    if (!candidate) {
+      const fallback = await baseQuery().order('created_at', { ascending: true }).limit(1).maybeSingle();
+      if (fallback.error) {
+        console.error(
+          `[${this.serviceType}] claim fetch error (fallback):`,
+          fallback.error?.message ?? fallback.error,
+          (fallback.error as any)?.stack ?? new Error().stack
+        );
+        return null;
+      }
+      candidate = fallback.data;
+      if (candidate && (candidate as any).work_statement_hash == null) {
+        await this.markUndeliverable(candidate as any);
+        return null;
+      }
+    }
+
     if (!candidate) return null;
 
     const { data: claimed, error: claimErr } = await db
@@ -94,6 +167,65 @@ export abstract class ServiceHandlerBase {
     if (!claimed) return null; // lost the race to another instance — not an error
 
     return claimed as unknown as ServiceContractRow;
+  }
+
+  /**
+   * Record — once — that a contract can never reach `fulfilled`, and why.
+   *
+   * This replaces an attempt-and-fail that cost three LLM calls a minute. It is
+   * deliberately a WRITE and not just a log line: a log line in a restarting
+   * container is not evidence anyone can query, and the `metadata.last_error`
+   * the old path produced was overwritten on every cycle, so it recorded the
+   * most recent attempt rather than the age of the problem. `first_seen_at` is
+   * preserved across calls precisely so the age is answerable.
+   *
+   * It does NOT touch funds, status, or the escrow. Clearing or backfilling an
+   * un-hashed row moves real money and is the owner's decision, not this
+   * worker's.
+   *
+   * KNOWN LIMIT, stated rather than left to be discovered: pass 2 selects the
+   * OLDEST un-hashed row, so with several waiting only that one carries a
+   * marker until it is cleared. The marker adds the reason and the age; it is
+   * not the census. `select … where status='escrowed' and work_statement_hash
+   * is null` finds every one of them and is what an operator count should use.
+   */
+  private async markUndeliverable(candidate: { id: string; metadata?: Record<string, unknown> | null }): Promise<void> {
+    const existing = (candidate.metadata ?? {}) as Record<string, any>;
+    const prior = existing['undeliverable'] as Record<string, any> | undefined;
+    const reason = 'WORK_STATEMENT_REQUIRED: work_statement_hash is NULL and nothing backfills it';
+
+    // Already marked with the same reason ⇒ nothing to say and nothing to write.
+    if (prior && prior['reason'] === reason) return;
+
+    console.warn(
+      `[${this.serviceType}] contract ${candidate.id} is UNDELIVERABLE: ${reason}. ` +
+        'It is being marked and skipped, not attempted — attempting it consumes LLM ' +
+        'quota every cycle and can never succeed. Clearing or backfilling this row ' +
+        'is a money-path decision for the owner.'
+    );
+
+    const { error } = await db
+      .from('service_contracts')
+      .update({
+        metadata: {
+          ...existing,
+          undeliverable: {
+            reason,
+            detected_by: this.serviceType,
+            first_seen_at: prior?.['first_seen_at'] ?? new Date().toISOString(),
+          },
+        },
+      })
+      .eq('id', candidate.id)
+      .eq('status', 'escrowed'); // never overwrite a row that moved on under us
+
+    if (error) {
+      console.error(
+        `[${this.serviceType}] failed to mark ${candidate.id} undeliverable:`,
+        error?.message ?? error,
+        (error as any)?.stack ?? new Error().stack
+      );
+    }
   }
 
   /**
