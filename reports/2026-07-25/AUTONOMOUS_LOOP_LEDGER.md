@@ -4914,3 +4914,53 @@ besides `admin-flags.ts` and its test file. Not yet built as this entry is opene
 process correction Beat 106 established (ledger PR before any step-2 file is touched); the PR
 follows on its own branch cut from `origin/main`, same SAFE-CLASS merge convention
 (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #646, `feat/admin-flags-trinity-bridge`, cut from `origin/main`.
+`trinity_bridge_enabled` added with the same `{value, source}` shape as every existing field,
+plus the cross-referencing `note`. 9/9 CI checks SUCCESS (`gh pr view 646
+--json statusCheckRollup`), including the CI `test` job. Opened as SAFE-CLASS and merged with
+`gh pr merge 646 --auto --squash` while its checks were still in flight. At the time this
+closeout was written, both #645 (this ledger PR) and #646 were still `OPEN` with checks in
+progress — not yet confirmed merged; the next beat's step 1 confirms that independently, same as
+every other beat in this file. No deviation from the stated plan.
+
+## Beat 109 — 2026-09-06 · verified #645/#646 landed, diff matches intent; step 2 adds HAL_QUORUM_FAMILY_AWARE — one flag read identically at three non-adjacent call sites across two subsystems
+
+**Step 1 — Beat 108 checked against its own diff + CI, not against its prose.** `gh pr list
+--state merged` shows `#646` (`feat/admin-flags-trinity-bridge`, mergedAt
+2026-09-06T12:35:32Z) and `#645` (`docs/loop-beat108-ledger`, mergedAt 2026-09-06T12:33:47Z).
+`gh pr view 646 --json statusCheckRollup` → 9/9 SUCCESS (CI test, crosscheck, gitleaks x2,
+zkp-vault, HAL adversarial gate, Strix Security Review). `gh pr diff 646` confirms the change
+matches Beat 108's stated intent exactly: `trinity_bridge_enabled` added to
+`src/routes/admin-flags.ts` with the same `{value, source}` shape as every existing field, a
+`note` cross-referencing `engine_workers_enabled`, and two new test cases (default true; `=false`
+independent of `engine_workers_enabled`) — both present in the diff exactly as described.
+`gh pr list --state merged --limit 10` shows nothing merged since #646 that isn't already in
+this ledger — no repeat of Beat 107's own observation (unlogged PRs landing outside this loop).
+No gap this time.
+
+**Step 2 — `HAL_QUORUM_FAMILY_AWARE` (default true, `!== 'false'`): the same flag, read with the
+identical formula, at three non-adjacent call sites in two different subsystems —
+`src/hal/fact-check.ts:1089`, `src/services/service-quality-hook.ts:374`, and
+`src/scoring/pipeline.ts:352`.** Grepped `!== 'false'` / `?? 'true'` / `=== 'true'` across `src/`
+again, excluding every field `admin-flags.ts` already reports (read directly from the file, not
+from memory of prior beats). Unlike `TRINITY_BRIDGE_ENABLED` vs `ENGINE_WORKERS_ENABLED` (two
+DIFFERENT flags that both had to be true), this is ONE flag whose three read sites agree today —
+but they are three separately-maintained copies of the same boolean expression, in files with no
+import relationship to each other, so nothing stops them from silently diverging the next time
+one is edited. It decides whether HAL quorum (fact-check verdict aggregation, the service-quality
+hook's provider-count check, and the scoring pipeline's own quorum read) counts distinct provider
+*families* (the default, e.g. two OpenRouter-routed models sharing a base model count once) or
+raw provider count. Turning it off anywhere-but-everywhere would make quorum counting
+inconsistent between the three call sites with no error raised — the same class of silent
+cross-file gap `TRINITY_BRIDGE_ENABLED` reported, but here the risk is drift between copies
+rather than a missing second gate.
+
+Reported as `hal_quorum_family_aware`, same `{value, source}` shape as every existing field, with
+a `note` naming the three read sites so a reader sees all three at once instead of grepping.
+Additive only — no existing field's shape changed, no route touched besides `admin-flags.ts` and
+its test file. Not yet built as this entry is opened, per the process correction Beat 106
+established (ledger PR before any step-2 file is touched); the PR follows on its own branch cut
+from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while
+checks are in flight) as every prior beat in this run.
