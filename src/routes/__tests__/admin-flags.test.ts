@@ -28,6 +28,7 @@ describe('Admin Flags', () => {
     delete process.env.STAKE_DEPOSIT_AUTH_ENFORCED;
     delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
     delete process.env.REPID_PURPOSE_GATE_ENABLED;
+    delete process.env.X402_RELEASE_RETRY_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -172,5 +173,58 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.hal_direct_penalty_requires_hallucination).toEqual({ value: false, source: 'env' });
     expect(res.body.repid_purpose_gate_enabled).toEqual({ value: false, source: 'env' });
+  });
+
+  describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
+    // Why this flag gets four tests when the booleans get two: it is money-path
+    // (it releases held USDC), it defaults OFF, and `off` is where an UNSET
+    // variable and a MISSPELT one both land. Reporting a bare mode would make
+    // those indistinguishable, which is the whole reason #636 was filed.
+
+    it('unset -> off, source default, and no note', async () => {
+      const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+      expect(res.body.x402_release_retry).toEqual({ value: 'off', source: 'default' });
+    });
+
+    it('enforce and shadow are reported as themselves, not collapsed to a boolean', async () => {
+      process.env.X402_RELEASE_RETRY_ENABLED = 'enforce';
+      let res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+      expect(res.body.x402_release_retry).toEqual({ value: 'enforce', source: 'env' });
+
+      process.env.X402_RELEASE_RETRY_ENABLED = 'shadow';
+      res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+      expect(res.body.x402_release_retry).toEqual({ value: 'shadow', source: 'env' });
+    });
+
+    it('explicit off is source env with no note — a deliberate choice, not a typo', async () => {
+      // parseRetryMode accepts surrounding whitespace and any case, so a value a
+      // human would call correct must not be reported as unrecognised.
+      process.env.X402_RELEASE_RETRY_ENABLED = '  OFF ';
+      const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+      expect(res.body.x402_release_retry).toEqual({ value: 'off', source: 'env' });
+    });
+
+    it('an unrecognised value resolves to off AND says so, without echoing the value', async () => {
+      // This is the case the endpoint exists for: the variable looks configured,
+      // the worker is doing nothing, and `value: off` alone cannot tell you.
+      process.env.X402_RELEASE_RETRY_ENABLED = 'enfroce';
+      const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+      expect(res.body.x402_release_retry.value).toBe('off');
+      expect(res.body.x402_release_retry.source).toBe('env');
+      expect(res.body.x402_release_retry.note).toMatch(/not off\|shadow\|enforce/);
+      // The route reports resolved state, never env content. A field that echoed
+      // the raw value would make this the one place env content leaves the process.
+      expect(JSON.stringify(res.body.x402_release_retry)).not.toContain('enfroce');
+    });
+
+    it('true/false are unrecognised here — this is NOT a boolean flag', async () => {
+      // The likeliest real-world mistake: every neighbouring flag on this route is
+      // a boolean, so 'true' is the natural thing to type. parseRetryMode does not
+      // accept it, and it silently means off.
+      process.env.X402_RELEASE_RETRY_ENABLED = 'true';
+      const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+      expect(res.body.x402_release_retry.value).toBe('off');
+      expect(res.body.x402_release_retry.note).toBeDefined();
+    });
   });
 });

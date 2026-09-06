@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { getHalConfig } from '../hal/config';
 import { groundingMode } from '../hal/hal-grounding';
 import { parseHaltClasses } from '../services/producer-halt';
+import { parseRetryMode } from '../services/x402-release-retry-worker';
 
 export const adminFlagsRouter = Router();
 
@@ -85,6 +86,42 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  *   (cron / DB-fact / adversarial drills / peer-verify). Reported distinctly
  *   from V3 because the name overlap is exactly the kind of thing a source
  *   read catches and a guess does not.
+ *
+ * Extended a fourth time with X402_RELEASE_RETRY_ENABLED, which is money-path
+ * and was the clearest case yet of the defect this route exists to stop.
+ *
+ * It decides whether x402-release-retry-worker releases held USDC to providers
+ * whose work was delivered and accepted. It defaults OFF, and before this entry
+ * it appeared in exactly two places in the tree: the worker that reads it, and
+ * known-env-vars.generated.ts. So "is the release worker actually running?" was
+ * answerable only by opening Railway or reading source and assuming the default.
+ * That cost a real wrong answer on 2026-09-05: a contract sitting `fulfilled`
+ * and unpaid was diagnosed as "the exact shape the retry worker drains" on the
+ * strength of two matching conditions, when the deciding third — a positive
+ * buyer_satisfaction_score — did not hold. The flag turned out not to be the
+ * cause, but ruling it out required a source dive it should not have.
+ *
+ * Reported as the RESOLVED mode from parseRetryMode, not the raw string, and
+ * three-state like MOCK_FACILITATOR above. `off` is what an unset variable and
+ * a misspelt one BOTH resolve to, and those are very different situations for
+ * an operator: one is a deliberate default, the other is a flag that silently
+ * did nothing. `source` separates them at a glance, and a `note` is attached
+ * when the variable is set to something unrecognised.
+ *
+ * parseRetryMode is IMPORTED rather than re-implemented here, and that is a
+ * deliberate trade: it drags the settlement/scoring chain into this route's
+ * module graph (harmless in production — src/index.ts already imports the same
+ * worker to start it — but it does make this test file load HAL). The
+ * alternative, a five-line re-parse, would create two definitions of how this
+ * mode resolves. This repo has already paid for that shape once: the HashKey
+ * chain id had two sources of truth that could disagree, and unifying them was
+ * the fix. A flag endpoint whose answer can drift from the code it describes is
+ * worse than useless, because it is trusted.
+ *
+ * The unrecognised value itself is deliberately NOT echoed. Nothing here ever
+ * returns env CONTENT, only resolved state, and a typo is diagnosable from
+ * "set but unrecognised" plus Railway; making this the one field that echoes
+ * what an env var contains is a habit worth not starting on a money-path flag.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -143,6 +180,27 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: (process.env.STAKE_DEPOSIT_AUTH_ENFORCED ?? 'true').toLowerCase() !== 'false',
       source: process.env.STAKE_DEPOSIT_AUTH_ENFORCED === undefined ? 'default' : 'env',
     },
+    x402_release_retry: (() => {
+      const raw = process.env['X402_RELEASE_RETRY_ENABLED'];
+      const value = parseRetryMode(raw);
+      const set = raw !== undefined;
+      // Set-but-resolves-to-off is only ambiguous for the literal 'off'. Anything
+      // else that lands on 'off' was not recognised, and the worker is silently
+      // doing nothing while the variable looks configured.
+      const unrecognised = set && value === 'off' && (raw ?? '').trim().toLowerCase() !== 'off';
+      return {
+        value,
+        source: set ? 'env' : 'default',
+        ...(unrecognised
+          ? {
+              note:
+                'X402_RELEASE_RETRY_ENABLED is set to a value that is not off|shadow|enforce, ' +
+                "so it resolved to 'off' and the release worker is doing nothing. The value " +
+                'itself is not echoed here — this route reports resolved state, never env content.',
+            }
+          : {}),
+      };
+    })(),
     hal_direct_penalty_requires_hallucination: {
       value: process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false',
       source: process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION === undefined ? 'default' : 'env',
