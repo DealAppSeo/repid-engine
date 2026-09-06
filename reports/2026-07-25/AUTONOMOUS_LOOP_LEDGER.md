@@ -4865,3 +4865,15 @@ its test file. Not yet built as this entry is opened, per Beat 106's own process
 (ledger PR before any step-2 file is touched); the PR follows on its own branch cut from
 `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while checks
 are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #643, `feat/admin-flags-engine-workers`, cut from `origin/main`.
+`engine_workers_enabled` added with the same `{value, source}` shape as every existing field,
+plus the `note` naming the three gated workers. 24/24 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 22/22 —
+2 new cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this
+runner. Opened as SAFE-CLASS and merged with `gh pr merge 643 --auto --squash` while its checks
+were still in flight. At the time this closeout was written, both #642 (this ledger PR) and #643
+were still `OPEN` with checks in progress — not yet confirmed merged; the next beat's step 1
+confirms that independently, same as every other beat in this file. No deviation from the stated
+plan.
