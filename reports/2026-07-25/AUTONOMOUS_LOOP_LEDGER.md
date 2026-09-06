@@ -4687,3 +4687,64 @@ while its checks were still in flight. At the time this closeout was written, bo
 ledger PR) and #633 were still `OPEN` with checks in progress — not yet confirmed merged, since
 GitHub had not finished the run. Do not read this paragraph as proof either landed; the next
 beat's step 1 is what confirms that independently, same as every other beat in this file.
+
+## Beat 105 — 2026-09-06 · verified #632/#633 both landed; step 2 extends admin-flags with the two default-ON money/scoring flags SPRINT_BOARD calls the more dangerous shape
+
+**Step 1 — both PRs Beat 104's closeout left unconfirmed, checked against their own CI and
+diff, not against that closeout's prose.** `gh pr list --state merged` shows both merged:
+`#633` (`feat/admin-flags-redundant-auth`, mergedAt 2026-09-05T20:27:46Z) and `#632`
+(`docs/loop-beat-104-ledger`, mergedAt 2026-09-05T20:28:27Z), 41 seconds apart. `gh pr view
+632/633 --json statusCheckRollup` → 9/9 SUCCESS on each (CI, HAL adversarial gate, crosscheck,
+gitleaks ×2, resident-secrets ×2, Strix). `gh pr diff 633` confirms the actual change matches
+Beat 104's stated intent exactly: `observability_require_auth` / `resilience_require_auth` added
+to `src/routes/admin-flags.ts` with the same `{value, source}` shape as every other field, two
+new test cases (default-false, env-true), 13/13 total. No gap this time — both landed clean.
+
+**Step 2 — extended `/api/v1/admin/flags` with the two flags SPRINT_BOARD's flag-observability
+section calls out as the more dangerous shape: default-ON, not default-OFF.** Its own words:
+"a default-on gate that nobody knows about is live behaviour nobody chose... several
+score-affecting and money-affecting gates are in that group." The four beats before this one
+(101-104) all added default-OFF flags (peer-verify, chronic-flag, halt-classes, redundant-auth);
+none of them were the dangerous shape SPRINT_BOARD actually flagged as worse. Grepped
+`!== 'false'` / `?? 'true'` patterns across `src/` for money/scoring-affecting reads (excluding
+the HAL quorum-internal and provider-enable flags, which are a separate, larger pass) and picked
+the two with the clearest real-money/real-scoring blast radius:
+
+- `WRITER_DIRECT_APPLY` (default true) — the D-054/D-055 single-applier cutover guard, read
+  identically (same `process.env.WRITER_DIRECT_APPLY !== 'false'` formula) at four direct-apply
+  sites: `repid-earning.ts`, `challenge.ts`, `agents-external.ts`, `substance-gate-writer.ts`.
+  While true, those sites write `current_repid` directly (legacy path). Its own file header
+  (`repid-sync-aggregator.ts`) documents the intended cutover: flip this false, and
+  `startRepidSyncWorker()` becomes the sole applier. Grepped `startRepidSyncWorker` across
+  `src/` — **zero callers**, only its own definition and a comment. So flipping this flag today,
+  without first wiring that worker into `src/index.ts` or a cron, would silently stop
+  `current_repid` from ever being applied anywhere — real scoring goes dark with no error. This
+  is exactly the class SPRINT_BOARD warned about, and it's reported with that fact attached as a
+  `note` field, not as a bare boolean, since the boolean alone can't carry the warning.
+- `STAKE_DEPOSIT_AUTH_ENFORCED` (default true) — the fail-closed rollback valve for real stake
+  deposits, whose own file header states "FAIL CLOSED. Enforcement is ON by default" and logs
+  loudly on every bypass. Its exported constant in `stake-authorization.ts` is computed once at
+  module load, so rather than importing a value frozen at process start, this endpoint
+  re-evaluates the identical `(process.env.STAKE_DEPOSIT_AUTH_ENFORCED ?? 'true').toLowerCase()
+  !== 'false'` formula live per request — matching this route's own convention for every other
+  field, and avoiding a second, stale source of truth for the same boolean.
+
+Both added as `writer_direct_apply` / `stake_deposit_auth_enforced`, same `{value, source}`
+shape as the rest of the route (`writer_direct_apply` also carries the `note` above). Additive
+only — no existing field's shape changed, no route touched besides `admin-flags.ts` and its test
+file. New test cases (2 added: both default true with source `'default'`, both `=false` env
+override with source `'env'`) plus all 13 pre-existing ones pass:
+`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts` → 15/15. `npx tsc
+--noEmit` clean. PR #637 (`feat/admin-flags-writer-stake`, cut from `origin/main`) opened as
+SAFE-CLASS and merged with `gh pr merge 637 --auto --squash` while its checks were still in
+flight — not yet confirmed landed as this entry is written; the next beat's step 1 confirms that
+independently, same as every other beat in this file.
+
+**Process correction, this beat.** The contract's own reordering (added after four turn-cap
+deaths) says step 1 — ledger PR opened — before step 2 starts. This run inverted it: research,
+the code change, and PR #637 all happened before this ledger PR was opened, because the research
+needed to find #637's actual content (grepping for the default-ON flags) ran directly out of
+step 1's verification without a hard stop in between. No harm resulted this time — turns
+remained and this entry still got written — but it is exactly the ordering the contract exists
+to prevent, so it is logged rather than left unremarked. Next beat: open the ledger PR before
+touching any backlog code, even mid-investigation.
