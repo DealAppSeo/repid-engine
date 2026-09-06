@@ -122,6 +122,16 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * returns env CONTENT, only resolved state, and a typo is diagnosable from
  * "set but unrecognised" plus Railway; making this the one field that echoes
  * what an env var contains is a habit worth not starting on a money-path flag.
+ *
+ * Extended a fifth time with ENGINE_WORKERS_ENABLED (default true), a single
+ * flag checked at two non-adjacent call sites in src/index.ts that together
+ * gate THREE worker starts: feedbackLoopWorker.start(), startTrinityTaskBridge(),
+ * and startPeerVerificationReader(db). None of the three were previously
+ * visible from outside the process, and turning this one flag off silently
+ * stops all three at once with no error — piecing that together from source
+ * previously required reading two different places in index.ts. Reported with
+ * a note naming the three workers, since the boolean alone can't say what it
+ * gates.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -208,6 +218,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
     repid_purpose_gate_enabled: {
       value: process.env.REPID_PURPOSE_GATE_ENABLED !== 'false',
       source: process.env.REPID_PURPOSE_GATE_ENABLED === undefined ? 'default' : 'env',
+    },
+    engine_workers_enabled: {
+      value: process.env.ENGINE_WORKERS_ENABLED !== 'false',
+      source: process.env.ENGINE_WORKERS_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates three worker starts in src/index.ts: feedbackLoopWorker, startTrinityTaskBridge, startPeerVerificationReader',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'

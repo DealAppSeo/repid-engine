@@ -29,6 +29,7 @@ describe('Admin Flags', () => {
     delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
     delete process.env.REPID_PURPOSE_GATE_ENABLED;
     delete process.env.X402_RELEASE_RETRY_ENABLED;
+    delete process.env.ENGINE_WORKERS_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -173,6 +174,22 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.hal_direct_penalty_requires_hallucination).toEqual({ value: false, source: 'env' });
     expect(res.body.repid_purpose_gate_enabled).toEqual({ value: false, source: 'env' });
+  });
+
+  it('ENGINE_WORKERS_ENABLED defaults true, with a note naming the three workers it gates', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.engine_workers_enabled).toEqual({
+      value: true,
+      source: 'default',
+      note: expect.stringContaining('feedbackLoopWorker'),
+    });
+  });
+
+  it('ENGINE_WORKERS_ENABLED=false -> reports false, source env', async () => {
+    process.env.ENGINE_WORKERS_ENABLED = 'false';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.engine_workers_enabled.value).toBe(false);
+    expect(res.body.engine_workers_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
