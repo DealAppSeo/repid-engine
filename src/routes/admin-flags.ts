@@ -48,6 +48,26 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * Still worth reporting — the question "is this on?" was answered by reading
  * source instead of asking the process, which is the pattern this whole route
  * exists to stop.
+ *
+ * Extended again with the two flags SPRINT_BOARD singles out as the more
+ * dangerous default-ON shape ("a default-on gate that nobody knows about is
+ * live behaviour nobody chose"), both money/scoring-affecting:
+ *
+ * - WRITER_DIRECT_APPLY (default true): the D-054/D-055 single-applier cutover
+ *   guard read identically at every direct-apply site (repid-earning.ts,
+ *   challenge.ts, agents-external.ts, substance-gate-writer.ts). While true,
+ *   those sites write current_repid directly (legacy behaviour). Flipping it
+ *   false makes repid-sync-aggregator.ts's startRepidSyncWorker() the sole
+ *   applier — but that function has zero callers anywhere in src/ today, so
+ *   flipping this flag without first starting that worker would silently stop
+ *   current_repid from ever being applied. Reported with that fact attached
+ *   rather than as a bare boolean, since the boolean alone can't warn of it.
+ * - STAKE_DEPOSIT_AUTH_ENFORCED (default true): the fail-closed rollback valve
+ *   in stake-authorization.ts guarding real stake deposits. The exported
+ *   constant there is computed once at module load, but this endpoint (like
+ *   every other field above) needs a live per-request read, so the same
+ *   `?? 'true' / !== 'false'` formula is re-evaluated here rather than
+ *   importing a value frozen at process start.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -96,6 +116,15 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
     resilience_require_auth: {
       value: process.env.RESILIENCE_REQUIRE_AUTH === 'true',
       source: process.env.RESILIENCE_REQUIRE_AUTH === undefined ? 'default' : 'env',
+    },
+    writer_direct_apply: {
+      value: process.env.WRITER_DIRECT_APPLY !== 'false',
+      source: process.env.WRITER_DIRECT_APPLY === undefined ? 'default' : 'env',
+      note: 'sole alternate applier is startRepidSyncWorker() (repid-sync-aggregator.ts), which has zero callers in src/ today — flipping this to false without first wiring that worker would silently stop current_repid from ever being applied',
+    },
+    stake_deposit_auth_enforced: {
+      value: (process.env.STAKE_DEPOSIT_AUTH_ENFORCED ?? 'true').toLowerCase() !== 'false',
+      source: process.env.STAKE_DEPOSIT_AUTH_ENFORCED === undefined ? 'default' : 'env',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
