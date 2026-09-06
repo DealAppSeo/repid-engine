@@ -4748,3 +4748,56 @@ step 1's verification without a hard stop in between. No harm resulted this time
 remained and this entry still got written — but it is exactly the ordering the contract exists
 to prevent, so it is logged rather than left unremarked. Next beat: open the ledger PR before
 touching any backlog code, even mid-investigation.
+
+## Beat 106 — 2026-09-06 · verified #637/#638 both landed; step 2 extends admin-flags with two more default-ON scoring gates in the pipeline itself, and this entry is opened before any step-2 code, correcting Beat 105's own process note
+
+**Step 1 — both PRs checked against their own diff + CI, not against Beat 105's prose.**
+`gh pr list --state merged` shows `#637` (`feat/admin-flags-writer-stake`, mergedAt
+2026-09-06T01:09:59Z) and `#638` (`docs/loop-beat-105-ledger`, mergedAt 2026-09-06T01:10:53Z),
+54 seconds apart. `gh pr view 637/638 --json statusCheckRollup` → 9/9 SUCCESS on each (CI, HAL
+adversarial gate, crosscheck, gitleaks ×2, resident-secrets ×2, Strix). `gh pr diff 637` confirms
+the change matches Beat 105's stated intent exactly: `writer_direct_apply` (with the
+`startRepidSyncWorker`-zero-callers `note` field) and `stake_deposit_auth_enforced` added to
+`src/routes/admin-flags.ts`, same `{value, source}` shape as every existing field, two new test
+cases (both default true, both `=false` env override), 15/15 total — read directly against
+current `main`, not assumed from the PR title. No gap this time — both landed clean.
+
+**Process correction, applied this beat.** Beat 105 logged inverting the contract's own
+reordering (code before ledger PR) and asked the next beat to open the ledger PR before touching
+backlog code. This entry is that fix: written and opened as its own PR before any step-2 file is
+touched, restoring the step-1-then-step-2 order the contract exists to enforce.
+
+**Observation, not acted on (out of this beat's scope).** Two PRs are open and unrelated to this
+loop's own branch-naming convention: `#634` (`fix(contracts): stop paying LLM quota to re-fail a
+contract that cannot succeed`, branch `claude/py-brain-restore-service-2h3d86`, opened
+2026-09-05T20:34:47Z) and `#629` (`docs(loop): Beat 103 ledger entry`, branch
+`docs/loop-beat103-ledger`, opened 2026-09-05T12:32:26Z — likely superseded by `#630`, which
+carries the same title and already merged). Neither is touched here: #634 needs its own
+independent verification before any merge decision, and closing #629 as a probable duplicate is a
+judgment call this beat doesn't have budget to make carefully. Flagging so a future beat's step 1
+doesn't rediscover them from scratch.
+
+**Step 2 intent — extend `/api/v1/admin/flags` with two more default-ON scoring gates, this
+time inside `src/scoring/pipeline.ts` itself rather than the money-adjacent services Beat 105
+picked from.** Grepped the same `!== 'false'` pattern across `src/` again (excluding everything
+already reported) and found the pipeline carries its own pair with a clear, documented blast
+radius:
+
+- `HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION` (`pipeline.ts:407`, default true) — gates whether a
+  negative HAL delta actually drains live `current_repid`, or is suppressed as `penalty_suppressed`
+  telemetry-only. The file's own comment states the failure mode this closed: without the gate, a
+  blind-extractor veto with no caught hallucination still wrote `old_repid - 10`, pinning agents to
+  the tier floor while `peak_repid` sat 2-3x higher.
+- `REPID_PURPOSE_GATE_ENABLED` (`pipeline.ts:424`, default true) — a distinct flag from the
+  already-reported `REPID_PURPOSE_GATE_V3` (default OFF, a narrower tail-domain sub-flag riding
+  the same gate). This one is the base purpose gate itself: whether a HAL veto is allowed to move
+  RepID at all on non-deliverable surfaces (cron / DB-fact / adversarial drills / peer-verify),
+  applied symmetrically per the file's own XC-asymmetry-red-team comment. The name overlap with
+  V3 is exactly the kind of thing that gets misread from outside without a source-line read —
+  reporting both together, distinctly, is the point.
+
+Both read live per-request with the same `{value, source}` shape as every other field on this
+route — additive only, no existing field touched. Not yet built as this entry is opened, per the
+process correction above; the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS
+merge convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior
+beat in this run.
