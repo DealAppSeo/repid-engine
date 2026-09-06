@@ -32,6 +32,7 @@ describe('Admin Flags', () => {
     delete process.env.ENGINE_WORKERS_ENABLED;
     delete process.env.TRINITY_BRIDGE_ENABLED;
     delete process.env.HAL_QUORUM_FAMILY_AWARE;
+    delete process.env.HAL_STRICT_FAMILY_INDEPENDENCE;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -238,6 +239,24 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.hal_quorum_family_aware.value).toBe(false);
     expect(res.body.hal_quorum_family_aware.source).toBe('env');
+  });
+
+  it('HAL_STRICT_FAMILY_INDEPENDENCE defaults false (warn-not-crash), with a note naming both call sites and the boot-time caveat', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_strict_family_independence).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('fact-check.ts'),
+    });
+    expect(res.body.hal_strict_family_independence.note).toEqual(expect.stringContaining('index.ts'));
+    expect(res.body.hal_strict_family_independence.note).toEqual(expect.stringContaining('NEXT boot'));
+  });
+
+  it('HAL_STRICT_FAMILY_INDEPENDENCE=true -> reports true, source env', async () => {
+    process.env.HAL_STRICT_FAMILY_INDEPENDENCE = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_strict_family_independence.value).toBe(true);
+    expect(res.body.hal_strict_family_independence.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
