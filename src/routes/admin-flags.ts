@@ -257,6 +257,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       source: process.env.HAL_QUORUM_FAMILY_AWARE === undefined ? 'default' : 'env',
       note: 'read with the identical formula at three non-adjacent sites: src/hal/fact-check.ts, src/services/service-quality-hook.ts, src/scoring/pipeline.ts — no shared import, so the three can silently diverge if only one is edited',
     },
+    hal_strict_family_independence: {
+      value: process.env.HAL_STRICT_FAMILY_INDEPENDENCE === 'true',
+      source: process.env.HAL_STRICT_FAMILY_INDEPENDENCE === undefined ? 'default' : 'env',
+      note: 'boot-time only — decides whether assertFamilyIndependenceAtBoot() (src/hal/fact-check.ts) throws past its caller in src/index.ts on a family-collapse violation, or only logs. The audit runs once at process start, so this value describes what the NEXT boot will do, not anything that happened on this one',
+    },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
         ? 'true (simulated settlement)'
