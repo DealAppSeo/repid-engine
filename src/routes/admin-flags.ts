@@ -68,6 +68,23 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  *   every other field above) needs a live per-request read, so the same
  *   `?? 'true' / !== 'false'` formula is re-evaluated here rather than
  *   importing a value frozen at process start.
+ *
+ * Extended a third time with two more default-ON scoring gates, this time
+ * from src/scoring/pipeline.ts itself:
+ *
+ * - HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION (default true): gates whether a
+ *   negative HAL delta actually drains live current_repid, or is suppressed
+ *   as penalty_suppressed telemetry-only. pipeline.ts's own comment states
+ *   the failure mode this closed: without the gate, a blind-extractor veto
+ *   with no caught hallucination still wrote old_repid-10, pinning agents to
+ *   the tier floor while peak_repid sat 2-3x higher.
+ * - REPID_PURPOSE_GATE_ENABLED (default true): the base purpose gate — a
+ *   distinct flag from REPID_PURPOSE_GATE_V3 above, which is a narrower
+ *   tail-domain sub-flag riding the SAME gate (default OFF). This one decides
+ *   whether a HAL veto may move RepID at all on non-deliverable surfaces
+ *   (cron / DB-fact / adversarial drills / peer-verify). Reported distinctly
+ *   from V3 because the name overlap is exactly the kind of thing a source
+ *   read catches and a guess does not.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -125,6 +142,14 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
     stake_deposit_auth_enforced: {
       value: (process.env.STAKE_DEPOSIT_AUTH_ENFORCED ?? 'true').toLowerCase() !== 'false',
       source: process.env.STAKE_DEPOSIT_AUTH_ENFORCED === undefined ? 'default' : 'env',
+    },
+    hal_direct_penalty_requires_hallucination: {
+      value: process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION !== 'false',
+      source: process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION === undefined ? 'default' : 'env',
+    },
+    repid_purpose_gate_enabled: {
+      value: process.env.REPID_PURPOSE_GATE_ENABLED !== 'false',
+      source: process.env.REPID_PURPOSE_GATE_ENABLED === undefined ? 'default' : 'env',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
