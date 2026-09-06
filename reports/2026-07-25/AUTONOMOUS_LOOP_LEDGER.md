@@ -4739,3 +4739,12 @@ override with source `'env'`) plus all 13 pre-existing ones pass:
 SAFE-CLASS and merged with `gh pr merge 637 --auto --squash` while its checks were still in
 flight — not yet confirmed landed as this entry is written; the next beat's step 1 confirms that
 independently, same as every other beat in this file.
+
+**Process correction, this beat.** The contract's own reordering (added after four turn-cap
+deaths) says step 1 — ledger PR opened — before step 2 starts. This run inverted it: research,
+the code change, and PR #637 all happened before this ledger PR was opened, because the research
+needed to find #637's actual content (grepping for the default-ON flags) ran directly out of
+step 1's verification without a hard stop in between. No harm resulted this time — turns
+remained and this entry still got written — but it is exactly the ordering the contract exists
+to prevent, so it is logged rather than left unremarked. Next beat: open the ledger PR before
+touching any backlog code, even mid-investigation.
