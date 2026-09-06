@@ -26,6 +26,8 @@ describe('Admin Flags', () => {
     delete process.env.RESILIENCE_REQUIRE_AUTH;
     delete process.env.WRITER_DIRECT_APPLY;
     delete process.env.STAKE_DEPOSIT_AUTH_ENFORCED;
+    delete process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION;
+    delete process.env.REPID_PURPOSE_GATE_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -156,5 +158,19 @@ describe('Admin Flags', () => {
     expect(res.body.writer_direct_apply.value).toBe(false);
     expect(res.body.writer_direct_apply.source).toBe('env');
     expect(res.body.stake_deposit_auth_enforced).toEqual({ value: false, source: 'env' });
+  });
+
+  it('HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION and REPID_PURPOSE_GATE_ENABLED both default true', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_direct_penalty_requires_hallucination).toEqual({ value: true, source: 'default' });
+    expect(res.body.repid_purpose_gate_enabled).toEqual({ value: true, source: 'default' });
+  });
+
+  it('HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION=false and REPID_PURPOSE_GATE_ENABLED=false -> reports false, source env', async () => {
+    process.env.HAL_DIRECT_PENALTY_REQUIRES_HALLUCINATION = 'false';
+    process.env.REPID_PURPOSE_GATE_ENABLED = 'false';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_direct_penalty_requires_hallucination).toEqual({ value: false, source: 'env' });
+    expect(res.body.repid_purpose_gate_enabled).toEqual({ value: false, source: 'env' });
   });
 });
