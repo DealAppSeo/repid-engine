@@ -4816,3 +4816,64 @@ were still `OPEN` with checks in progress — not yet confirmed merged; the next
 confirms that independently, same as every other beat in this file. No deviation from the stated
 plan, and the process correction held this time: ledger PR opened before any step-2 file was
 touched.
+
+## Beat 107 — 2026-09-06 · verified #639/#640 landed; two more PRs merged since without a ledger entry (one of them this exact cadence, done outside this loop); step 2 adds ENGINE_WORKERS_ENABLED, a single flag gating three separate worker starts
+
+**Step 1 — Beat 106 checked against its own diff + CI, not against its prose.** `gh pr list
+--state merged` shows `#640` (`feat/admin-flags-pipeline-gates`, mergedAt
+2026-09-06T04:34:12Z) and `#639` (`docs/loop-beat106-ledger`, mergedAt 2026-09-06T04:34:39Z),
+27 seconds apart. `gh pr view 640 --json statusCheckRollup` → 9/9 SUCCESS. `gh pr diff 640`
+confirms the change matches Beat 106's stated intent exactly: `hal_direct_penalty_requires_hallucination`
+and `repid_purpose_gate_enabled` added to `src/routes/admin-flags.ts`, same `{value, source}`
+shape as every existing field, two new test cases (both default true, both `=false` env
+override), 17/17 total — read directly against current `main`. No gap this time.
+
+**Observation — two more PRs landed on `main` since Beat 106's closeout, neither logged here.**
+`git log origin/main` shows, ahead of #639/#640: `#634` (`fix(contracts): stop paying LLM quota
+to re-fail a contract that cannot succeed`, mergedAt 2026-09-06T06:07:02Z, 9/9 SUCCESS) and `#641`
+(`feat(admin): report X402_RELEASE_RETRY_ENABLED on /api/v1/admin/flags`, mergedAt
+2026-09-06T06:44:47Z, 9/9 SUCCESS, closes issue #636). Both merged from
+`claude/py-brain-restore-service-2h3d86` — a branch name reused across unrelated PRs (#627, #634,
+#641), not this loop's own `feat/admin-flags-*` / `docs/loop-beat*-ledger` convention, so neither
+came from this ledger's own step 2. #634 was already flagged as unverified-by-this-loop in Beat
+106's own "observation, not acted on" paragraph; it is now merged and out of scope here, same as
+before. **#641 is the more relevant one**: it is exactly this loop's own cadence (a fourth
+default-relevant flag added to `/api/v1/admin/flags`, same `{value, source}` shape, additive
+only) but was authored and merged outside this ledger's branches, so Beat 106 never had a chance
+to log its intent. Read directly against current `src/routes/admin-flags.ts`: `x402_release_retry`
+is present, reports the resolved three-state mode from `parseRetryMode` (not a raw boolean), and
+carries a `note` field for the set-but-unrecognised case — consistent with every prior entry's
+shape. Recorded here after the fact so the ledger's own history of this route stays complete;
+nothing about it needed fixing.
+
+**Step 2 — `ENGINE_WORKERS_ENABLED` (`src/index.ts:1075` and `:1326`, default true): one flag
+gating three separate worker starts, none of the three previously visible from outside the
+process.** Grepped `!== 'false'` / `?? 'true'` across `src/` again (excluding everything already
+reported) looking for the next clear blast-radius candidate. Most remaining hits are provider-enable
+toggles (`ROUTER_ENABLE_*`, `HAL_S2_ENABLE_*`) or quorum-internal switches — a separate, larger
+pass per this route's own header comment. `ENGINE_WORKERS_ENABLED` stood out: it is checked at two
+non-adjacent call sites in `src/index.ts` and between them gates `feedbackLoopWorker.start()`
+(line 1075-1077), `startTrinityTaskBridge()` and `startPeerVerificationReader(db)` (line
+1326-1329) — three workers, one env var, true by default. Turning it off silently stops all three
+at once with no error, which is exactly the class this route exists to make visible rather than
+requiring a source read of two different places in `index.ts` to piece together.
+
+Reported as `engine_workers_enabled`, same `{value, source}` shape as every existing field, with
+a `note` naming the three workers it gates (so the boolean alone doesn't understate what flips).
+Additive only — no existing field's shape changed, no route touched besides `admin-flags.ts` and
+its test file. Not yet built as this entry is opened, per Beat 106's own process correction
+(ledger PR before any step-2 file is touched); the PR follows on its own branch cut from
+`origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while checks
+are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #643, `feat/admin-flags-engine-workers`, cut from `origin/main`.
+`engine_workers_enabled` added with the same `{value, source}` shape as every existing field,
+plus the `note` naming the three gated workers. 24/24 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 22/22 —
+2 new cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this
+runner. Opened as SAFE-CLASS and merged with `gh pr merge 643 --auto --squash` while its checks
+were still in flight. At the time this closeout was written, both #642 (this ledger PR) and #643
+were still `OPEN` with checks in progress — not yet confirmed merged; the next beat's step 1
+confirms that independently, same as every other beat in this file. No deviation from the stated
+plan.
