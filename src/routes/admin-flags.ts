@@ -143,6 +143,18 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * REPID_PURPOSE_GATE_ENABLED vs REPID_PURPOSE_GATE_V3 above. Reported with a
  * note pointing at engine_workers_enabled so a reader of either field learns
  * about the other.
+ *
+ * Extended a seventh time with HAL_QUORUM_FAMILY_AWARE (default true): unlike the
+ * pair above, this is ONE flag read with the identical `!== 'false'` formula at
+ * three non-adjacent call sites with no import relationship between them —
+ * src/hal/fact-check.ts, src/services/service-quality-hook.ts, and
+ * src/scoring/pipeline.ts. It decides whether HAL quorum is counted by distinct
+ * provider family (default — two same-base-model routes count once) or by raw
+ * provider count. All three agree today, but they are three separately-maintained
+ * copies of the same expression, so nothing stops one from being edited without
+ * the other two and producing inconsistent quorum counting with no error raised.
+ * Reported with a note naming all three sites so a reader sees the whole set
+ * instead of grepping for it.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -239,6 +251,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.TRINITY_BRIDGE_ENABLED !== 'false',
       source: process.env.TRINITY_BRIDGE_ENABLED === undefined ? 'default' : 'env',
       note: 'second, independent gate on the same worker as engine_workers_enabled: startTrinityTaskBridge() is only called when engine_workers_enabled is true, AND the bridge itself checks this flag before running — both must be true',
+    },
+    hal_quorum_family_aware: {
+      value: process.env.HAL_QUORUM_FAMILY_AWARE !== 'false',
+      source: process.env.HAL_QUORUM_FAMILY_AWARE === undefined ? 'default' : 'env',
+      note: 'read with the identical formula at three non-adjacent sites: src/hal/fact-check.ts, src/services/service-quality-hook.ts, src/scoring/pipeline.ts — no shared import, so the three can silently diverge if only one is edited',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'

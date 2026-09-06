@@ -31,6 +31,7 @@ describe('Admin Flags', () => {
     delete process.env.X402_RELEASE_RETRY_ENABLED;
     delete process.env.ENGINE_WORKERS_ENABLED;
     delete process.env.TRINITY_BRIDGE_ENABLED;
+    delete process.env.HAL_QUORUM_FAMILY_AWARE;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -215,6 +216,28 @@ describe('Admin Flags', () => {
       source: 'default',
       note: expect.stringContaining('feedbackLoopWorker'),
     });
+  });
+
+  it('HAL_QUORUM_FAMILY_AWARE defaults true, with a note naming all three read sites', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_quorum_family_aware).toEqual({
+      value: true,
+      source: 'default',
+      note: expect.stringContaining('fact-check.ts'),
+    });
+    expect(res.body.hal_quorum_family_aware.note).toEqual(
+      expect.stringContaining('service-quality-hook.ts')
+    );
+    expect(res.body.hal_quorum_family_aware.note).toEqual(
+      expect.stringContaining('scoring/pipeline.ts')
+    );
+  });
+
+  it('HAL_QUORUM_FAMILY_AWARE=false -> reports false, source env', async () => {
+    process.env.HAL_QUORUM_FAMILY_AWARE = 'false';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_quorum_family_aware.value).toBe(false);
+    expect(res.body.hal_quorum_family_aware.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
