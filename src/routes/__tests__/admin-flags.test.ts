@@ -30,6 +30,7 @@ describe('Admin Flags', () => {
     delete process.env.REPID_PURPOSE_GATE_ENABLED;
     delete process.env.X402_RELEASE_RETRY_ENABLED;
     delete process.env.ENGINE_WORKERS_ENABLED;
+    delete process.env.TRINITY_BRIDGE_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -190,6 +191,30 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.engine_workers_enabled.value).toBe(false);
     expect(res.body.engine_workers_enabled.source).toBe('env');
+  });
+
+  it('TRINITY_BRIDGE_ENABLED defaults true, with a note cross-referencing engine_workers_enabled', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.trinity_bridge_enabled).toEqual({
+      value: true,
+      source: 'default',
+      note: expect.stringContaining('engine_workers_enabled'),
+    });
+  });
+
+  it('TRINITY_BRIDGE_ENABLED=false -> reports false, source env, independent of ENGINE_WORKERS_ENABLED', async () => {
+    process.env.TRINITY_BRIDGE_ENABLED = 'false';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.trinity_bridge_enabled).toEqual({
+      value: false,
+      source: 'env',
+      note: expect.stringContaining('engine_workers_enabled'),
+    });
+    expect(res.body.engine_workers_enabled).toEqual({
+      value: true,
+      source: 'default',
+      note: expect.stringContaining('feedbackLoopWorker'),
+    });
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {

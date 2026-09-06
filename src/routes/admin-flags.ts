@@ -132,6 +132,17 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * previously required reading two different places in index.ts. Reported with
  * a note naming the three workers, since the boolean alone can't say what it
  * gates.
+ *
+ * Extended a sixth time with TRINITY_BRIDGE_ENABLED (default true): the trinity
+ * task bridge is not gated by ENGINE_WORKERS_ENABLED alone. src/index.ts only
+ * CALLS startTrinityTaskBridge() when ENGINE_WORKERS_ENABLED !== 'false', but
+ * the function itself (src/services/trinity-task-bridge.ts) independently
+ * checks TRINITY_BRIDGE_ENABLED !== 'false' and returns early if that is false.
+ * Both must be true for the bridge to run — a second gate in a different file,
+ * with no cross-reference between the two, same name-overlap trap as
+ * REPID_PURPOSE_GATE_ENABLED vs REPID_PURPOSE_GATE_V3 above. Reported with a
+ * note pointing at engine_workers_enabled so a reader of either field learns
+ * about the other.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -223,6 +234,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.ENGINE_WORKERS_ENABLED !== 'false',
       source: process.env.ENGINE_WORKERS_ENABLED === undefined ? 'default' : 'env',
       note: 'gates three worker starts in src/index.ts: feedbackLoopWorker, startTrinityTaskBridge, startPeerVerificationReader',
+    },
+    trinity_bridge_enabled: {
+      value: process.env.TRINITY_BRIDGE_ENABLED !== 'false',
+      source: process.env.TRINITY_BRIDGE_ENABLED === undefined ? 'default' : 'env',
+      note: 'second, independent gate on the same worker as engine_workers_enabled: startTrinityTaskBridge() is only called when engine_workers_enabled is true, AND the bridge itself checks this flag before running — both must be true',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
