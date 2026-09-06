@@ -4877,3 +4877,40 @@ were still in flight. At the time this closeout was written, both #642 (this led
 were still `OPEN` with checks in progress — not yet confirmed merged; the next beat's step 1
 confirms that independently, same as every other beat in this file. No deviation from the stated
 plan.
+
+## Beat 108 — 2026-09-06 · verified #642/#643 landed, diff matches intent; step 2 adds TRINITY_BRIDGE_ENABLED — a second, independent gate on a worker `ENGINE_WORKERS_ENABLED` already reports
+
+**Step 1 — Beat 107 checked against its own diff + CI, not against its prose.** `gh pr list
+--state merged` shows `#643` (`feat/admin-flags-engine-workers`, mergedAt
+2026-09-06T08:33:41Z) and `#642` (`docs/loop-beat107-ledger`, mergedAt 2026-09-06T08:33:44Z), 3
+seconds apart. `gh pr view 643 --json statusCheckRollup` → 9/9 SUCCESS. `gh pr diff 643` confirms
+the change matches Beat 107's stated intent exactly: `engine_workers_enabled` added to
+`src/routes/admin-flags.ts` with the same `{value, source}` shape as every existing field, plus
+a `note` naming the three gated workers (`feedbackLoopWorker`, `startTrinityTaskBridge`,
+`startPeerVerificationReader`); two new test cases (default true, `=false` env override), both
+present in the diff exactly as described. `git log origin/main` shows nothing merged since #642
+that isn't already in this ledger — no repeat of Beat 107's own observation (unlogged PRs from
+outside this loop). No gap this time.
+
+**Step 2 — `TRINITY_BRIDGE_ENABLED` (`src/services/trinity-task-bridge.ts:11,86`, default true):
+a second, independent flag gating a worker Beat 107 already reported as gated by
+`ENGINE_WORKERS_ENABLED` alone.** Grepped `!== 'false'` / `?? 'true'` across `src/` again
+excluding everything already reported (`admin-flags.ts`'s own field list, read directly, is the
+exclusion set). Read `src/index.ts:1326-1329`: `startTrinityTaskBridge()` is only CALLED when
+`ENGINE_WORKERS_ENABLED !== 'false'`. Read `src/services/trinity-task-bridge.ts:11,85-87`: the
+function itself independently checks `process.env.TRINITY_BRIDGE_ENABLED !== 'false'` and returns
+early (logged, not thrown) if false. So the peer-verification producer this bridge feeds needs
+BOTH flags true — Beat 107's note named three workers gated by one flag, and this is the
+correction: one of those three has a second gate the note didn't say existed, checked in a
+different file with no cross-reference between the two. That is exactly the class this route
+exists to make visible rather than requiring two separate source reads to piece together — the
+same shape as `REPID_PURPOSE_GATE_ENABLED` vs `REPID_PURPOSE_GATE_V3` (Beat 105/106), a
+name-overlap that reads as one flag from outside and is two.
+
+Reported as `trinity_bridge_enabled`, same `{value, source}` shape as every existing field, with
+a `note` cross-referencing `engine_workers_enabled` so a reader of either field learns about the
+other without a source dive. Additive only — no existing field's shape changed, no route touched
+besides `admin-flags.ts` and its test file. Not yet built as this entry is opened, per the
+process correction Beat 106 established (ledger PR before any step-2 file is touched); the PR
+follows on its own branch cut from `origin/main`, same SAFE-CLASS merge convention
+(`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in this run.
