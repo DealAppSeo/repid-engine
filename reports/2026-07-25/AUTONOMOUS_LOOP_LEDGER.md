@@ -5251,3 +5251,47 @@ with `gh pr merge 658 --auto --squash` while its checks were still in flight. At
 closeout was written, both #657 (this ledger PR) and #658 were still `OPEN` with checks in
 progress — not yet confirmed merged; the next beat's step 1 confirms that independently, same as
 every other beat in this file. No deviation from the stated plan.
+
+## Beat 115 — 2026-09-07 · verified #657/#658 landed, diff matches intent; step 2 intent: ONCHAIN_REPUTATION_TRIGGER_ENABLED — a twelfth flag, this one gating an inline real-money on-chain write
+
+**Step 1 — Beat 114 checked against its own diff + CI, not against its prose.** `gh pr view 658
+--json state,mergedAt,statusCheckRollup` shows `MERGED` (2026-09-07T12:41:15Z) with 9/9 checks
+`SUCCESS` (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL prompt-injection
+probes, Strix Security Review). `gh pr diff 658` confirms the change matches Beat 114's stated
+intent exactly: `x402_recovery_worker_enabled` added to `src/routes/admin-flags.ts` with the same
+`{value, source}` shape as every existing field, a `note` naming the worker
+(`x402-recovery-worker.ts`), the circuit breaker it checks (`cb_disable_x402_settlements`), and
+the on-chain-reputation consequence chain — all present in the diff, plus two new test cases
+(default false with a note containing both `x402-recovery-worker.ts` and
+`cb_disable_x402_settlements`; `=true` reports `source: 'env'`). `gh pr list --state merged
+--limit 5` shows nothing merged since #658 without a ledger entry — no gap.
+
+**Step 2 — `ONCHAIN_REPUTATION_TRIGGER_ENABLED` (default OFF).** Gates
+`maybeWriteOnChainReputation()` (`src/services/onchain-reputation-trigger.ts`), called inline from
+`validation-repid-delta.ts` at settlement time. Its own header calls it the "buy-loop last mile":
+`applyServiceFulfilledDeltas()` writes the RepID delta immediately, but on-chain ERC-8004
+attestation otherwise happens only asynchronously via `FeedbackLoopWorker` (itself gated behind
+`ENGINE_WORKERS_ENABLED` plus a 24h drain-mode rate limit), so a completed real purchase could sit
+for minutes-to-forever with no verifiable on-chain reputation trail. When flipped on, it performs a
+real `writeRepIDFeedback` chain write (gas-spending) for any REAL (non-simulated) settlement whose
+agent holds an `erc8004_token_id` and clears the Established tier floor (1000) — gated a second way
+by whether a signing key is configured (`ERC8004_REPUTATION_WRITER_KEY` /
+`ERC8004_MINTER_PRIVATE_KEY` / `ERC8004_OPERATOR_KEY`); absent a key it logs loud and skips rather
+than pretending success. Chosen over the ~15 other unreported `*_ENABLED` flags regrepped this beat
+(`RPC_ROTATION_ENABLED`, `REAL_STAKING_ENABLED` — Sean-gated real-money, excluded from this
+observability pass same as the hard-line flags always have been —, `EXECUTION_FLOOR_ENABLED`,
+`HAL_QUORUM_RECEIPT_ENABLED`, `SELF_SERVE_ACCOUNTS_ENABLED`, `HITL_EXPIRY_SWEEPER_ENABLED`,
+`NOTIFICATION_DISPATCHER_ENABLED`, `LISTING_BRIDGE_ENABLED`, `STATUS_DIGEST_ENABLED`,
+`VALIDATION_WORKER_ENABLED`, and more) because it is the one that spends real gas on a live chain
+write per call, not merely a liveness/notification signal or a second read-path gate — "touches the
+most surfaces" read here, as with the recovery worker before it, as: which flag's answer changes
+whether real money/gas moves.
+
+Reported as `onchain_reputation_trigger_enabled`, same `{value, source}` shape as every existing
+field, with a `note` naming the function (`maybeWriteOnChainReputation`), the tier floor (1000),
+and the signing-key precondition that determines whether a `true` value actually writes on-chain or
+only logs "would attest but no signing key". Additive only — no existing field's shape changed, no
+route touched besides `admin-flags.ts` and its test file. Not yet built as this entry is opened, per
+the Beat 106 process correction (ledger PR before any step-2 file is touched); the PR follows on
+its own branch cut from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto
+--squash` while checks are in flight) as every prior beat in this run.
