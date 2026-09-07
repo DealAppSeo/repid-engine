@@ -199,6 +199,21 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * on-chain reputation writes. Real money movement (re-settles via
  * x402Facilitator), gated additionally by the cb_disable_x402_settlements
  * circuit breaker checked inside the worker itself.
+ *
+ * Extended a twelfth time with ONCHAIN_REPUTATION_TRIGGER_ENABLED (default
+ * OFF) — gates maybeWriteOnChainReputation()
+ * (src/services/onchain-reputation-trigger.ts), called inline from
+ * validation-repid-delta.ts at settlement time. Its own header calls it the
+ * "buy-loop last mile": applyServiceFulfilledDeltas() writes the RepID delta
+ * immediately, but on-chain ERC-8004 attestation otherwise happens only
+ * asynchronously via FeedbackLoopWorker (itself gated behind
+ * ENGINE_WORKERS_ENABLED plus a 24h drain-mode rate limit). When true it
+ * performs a real, gas-spending chain write for any REAL (non-simulated)
+ * settlement whose agent holds an erc8004_token_id and clears the
+ * Established tier floor (1000) — and even then only if a signing key is
+ * configured; absent one it logs loud and skips rather than pretending
+ * success. A true value alone does not mean it wrote on-chain, same caveat
+ * as eas_anchor_worker_enabled's attester-key precondition above.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -325,6 +340,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.X402_RECOVERY_WORKER_ENABLED === 'true',
       source: process.env.X402_RECOVERY_WORKER_ENABLED === undefined ? 'default' : 'env',
       note: 'gates startRecoveryWorker() (src/services/x402-recovery-worker.ts), which polls x402_settlement_failures and re-settles via x402Facilitator unless the cb_disable_x402_settlements circuit breaker is tripped. Real money movement, not a read path. Without it running, failed x402 settlements are never retried, which starves FeedbackLoopWorker of the *_settled events that drive on-chain reputation writes',
+    },
+    onchain_reputation_trigger_enabled: {
+      value: process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED === 'true',
+      source: process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates maybeWriteOnChainReputation() (src/services/onchain-reputation-trigger.ts), an inline real on-chain ERC-8004 reputation write at settlement time for non-simulated contracts whose agent holds an erc8004_token_id and clears the Established tier floor (1000). Gas-spending. A true value alone does not mean it wrote on-chain: it also requires a signing key (ERC8004_REPUTATION_WRITER_KEY / ERC8004_MINTER_PRIVATE_KEY / ERC8004_OPERATOR_KEY) — without one it logs loud and skips',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
