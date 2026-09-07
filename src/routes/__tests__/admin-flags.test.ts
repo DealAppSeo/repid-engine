@@ -34,6 +34,7 @@ describe('Admin Flags', () => {
     delete process.env.HAL_QUORUM_FAMILY_AWARE;
     delete process.env.HAL_STRICT_FAMILY_INDEPENDENCE;
     delete process.env.CASCADE_SETTLEMENT_ENABLED;
+    delete process.env.DISPUTE_WORKER_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -275,6 +276,23 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.cascade_settlement_enabled.value).toBe(true);
     expect(res.body.cascade_settlement_enabled.source).toBe('env');
+  });
+
+  it('DISPUTE_WORKER_ENABLED defaults false, with a note naming the worker and its resolution path', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.dispute_worker_enabled).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('dispute-resolution-worker.ts'),
+    });
+    expect(res.body.dispute_worker_enabled.note).toEqual(expect.stringContaining('applyServiceDisputeResolution'));
+  });
+
+  it('DISPUTE_WORKER_ENABLED=true -> reports true, source env', async () => {
+    process.env.DISPUTE_WORKER_ENABLED = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.dispute_worker_enabled.value).toBe(true);
+    expect(res.body.dispute_worker_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
