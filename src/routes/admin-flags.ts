@@ -170,6 +170,16 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * an HTTP endpoint that needs an external caller every cycle. Whether the
  * money-draining path is live was previously answerable only by reading
  * src/index.ts and this worker's own source comment.
+ *
+ * Extended a ninth time with DISPUTE_WORKER_ENABLED (default OFF) — the gap
+ * the CASCADE_SETTLEMENT_ENABLED note above named and deferred rather than
+ * bundle in. Gates DisputeResolutionWorker (dispute-resolution-worker.ts),
+ * whose poll loop claims the next pending dispute, runs runPCP and
+ * runAdversarialJudge, and calls applyServiceDisputeResolution — the
+ * escrow->disputed counterpart to cascade-settlement-worker.ts's
+ * escrow->fulfilled path. Without it running, a disputed service_contracts
+ * row has no server-side path to a resolved verdict, same "no other driver"
+ * shape as the cascade worker, on the other branch of the same lifecycle.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -281,6 +291,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.CASCADE_SETTLEMENT_ENABLED === 'true',
       source: process.env.CASCADE_SETTLEMENT_ENABLED === undefined ? 'default' : 'env',
       note: 'gates cascade-settlement-worker.ts, the server-side driver of escrowed->fulfilled service_contracts; economically active (drives RepID deltas via applyServiceFulfilledDeltas). Without it, escrowed contracts have no other server-side path forward — the alternates are a frozen agent loop and an HTTP endpoint needing an external caller',
+    },
+    dispute_worker_enabled: {
+      value: process.env.DISPUTE_WORKER_ENABLED === 'true',
+      source: process.env.DISPUTE_WORKER_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates dispute-resolution-worker.ts, the server-side driver of disputed service_contracts; polls for pending disputes and resolves them via runPCP / runAdversarialJudge into applyServiceDisputeResolution. Without it, disputed contracts have no server-side path to a resolved verdict — the escrow->disputed counterpart to cascade_settlement_enabled\'s escrow->fulfilled path',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
