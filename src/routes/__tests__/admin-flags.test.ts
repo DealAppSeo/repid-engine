@@ -33,6 +33,7 @@ describe('Admin Flags', () => {
     delete process.env.TRINITY_BRIDGE_ENABLED;
     delete process.env.HAL_QUORUM_FAMILY_AWARE;
     delete process.env.HAL_STRICT_FAMILY_INDEPENDENCE;
+    delete process.env.CASCADE_SETTLEMENT_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -257,6 +258,23 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.hal_strict_family_independence.value).toBe(true);
     expect(res.body.hal_strict_family_independence.source).toBe('env');
+  });
+
+  it('CASCADE_SETTLEMENT_ENABLED defaults false, with a note naming the worker and its RepID-delta effect', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.cascade_settlement_enabled).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('cascade-settlement-worker.ts'),
+    });
+    expect(res.body.cascade_settlement_enabled.note).toEqual(expect.stringContaining('applyServiceFulfilledDeltas'));
+  });
+
+  it('CASCADE_SETTLEMENT_ENABLED=true -> reports true, source env', async () => {
+    process.env.CASCADE_SETTLEMENT_ENABLED = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.cascade_settlement_enabled.value).toBe(true);
+    expect(res.body.cascade_settlement_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
