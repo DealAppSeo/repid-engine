@@ -5351,3 +5351,17 @@ yet built as this entry is opened, per the Beat 106 process correction (ledger P
 file is touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge
 convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in
 this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #662, `feat/admin-flags-x402-enforcement`, cut from `origin/main`.
+`x402_enforcement_enabled` added with the same `{value, source}` shape as every existing field,
+plus a `note` naming the route (`POST /escrow` in `contracts.ts`), stating the default (false) is
+the legacy no-payment-check path, and naming the other two read sites (`exchange-next-step.ts`,
+`listing-offers.ts`). 42/42 tests pass locally (`npx jest --config jest.config.js
+src/routes/__tests__/admin-flags.test.ts`, up from 40/40 — 2 new cases), `npx tsc --noEmit` clean
+after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CLASS and merged with
+`gh pr merge 662 --auto --squash` while its checks were still in flight. At the time this closeout
+was written, both #661 (this ledger PR) and #662 were still `OPEN` with `mergeStateStatus: BLOCKED`
+(waiting on required checks, not a real conflict) — not yet confirmed merged; the next beat's step
+1 confirms that independently, same as every other beat in this file. No deviation from the stated
+plan.
