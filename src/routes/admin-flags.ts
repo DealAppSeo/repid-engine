@@ -189,6 +189,16 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * the running server instead of re-read from source. A true value alone does
  * not mean it is anchoring: start() also requires an attester key, and logs
  * degraded without starting if one is missing.
+ *
+ * Extended an eleventh time with X402_RECOVERY_WORKER_ENABLED (default OFF)
+ * — gates startRecoveryWorker() (src/services/x402-recovery-worker.ts). Its
+ * own bootstrap comment in src/index.ts calls it "the COLD MODULE behind the
+ * ERC-8004 dormancy": the function existed but was never wired into
+ * bootstrap, so failed x402 settlements were never retried, which starved
+ * the already-running FeedbackLoopWorker of the *_settled events that drive
+ * on-chain reputation writes. Real money movement (re-settles via
+ * x402Facilitator), gated additionally by the cb_disable_x402_settlements
+ * circuit breaker checked inside the worker itself.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -310,6 +320,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.EAS_ANCHOR_WORKER_ENABLED === 'true',
       source: process.env.EAS_ANCHOR_WORKER_ENABLED === undefined ? 'default' : 'env',
       note: 'gates easAnchorWorker.start() (src/index.ts), the in-process poller that anchors real EAS attestations to Base Sepolia. Also requires an attester key at start time (hasAttesterKey()) — true here without one means the worker logged degraded and did not start. When both are true it posts real on-chain transactions on a timer (EAS_ANCHOR_POLL_MS, default 5 min)',
+    },
+    x402_recovery_worker_enabled: {
+      value: process.env.X402_RECOVERY_WORKER_ENABLED === 'true',
+      source: process.env.X402_RECOVERY_WORKER_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates startRecoveryWorker() (src/services/x402-recovery-worker.ts), which polls x402_settlement_failures and re-settles via x402Facilitator unless the cb_disable_x402_settlements circuit breaker is tripped. Real money movement, not a read path. Without it running, failed x402 settlements are never retried, which starves FeedbackLoopWorker of the *_settled events that drive on-chain reputation writes',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'

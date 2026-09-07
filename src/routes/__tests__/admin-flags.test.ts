@@ -36,6 +36,7 @@ describe('Admin Flags', () => {
     delete process.env.CASCADE_SETTLEMENT_ENABLED;
     delete process.env.DISPUTE_WORKER_ENABLED;
     delete process.env.EAS_ANCHOR_WORKER_ENABLED;
+    delete process.env.X402_RECOVERY_WORKER_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -311,6 +312,23 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.eas_anchor_worker_enabled.value).toBe(true);
     expect(res.body.eas_anchor_worker_enabled.source).toBe('env');
+  });
+
+  it('X402_RECOVERY_WORKER_ENABLED defaults false, with a note naming the worker and the circuit breaker', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.x402_recovery_worker_enabled).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('x402-recovery-worker.ts'),
+    });
+    expect(res.body.x402_recovery_worker_enabled.note).toEqual(expect.stringContaining('cb_disable_x402_settlements'));
+  });
+
+  it('X402_RECOVERY_WORKER_ENABLED=true -> reports true, source env', async () => {
+    process.env.X402_RECOVERY_WORKER_ENABLED = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.x402_recovery_worker_enabled.value).toBe(true);
+    expect(res.body.x402_recovery_worker_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
