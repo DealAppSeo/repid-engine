@@ -5077,3 +5077,17 @@ as this entry is opened, per the Beat 106 process correction (ledger PR before a
 touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge
 convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in
 this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #652, `feat/admin-flags-cascade-settlement`, cut from `origin/main`.
+`cascade_settlement_enabled` added with the same `{value, source}` shape as every existing field,
+plus a `note` naming the worker (`cascade-settlement-worker.ts`), the delta function it drives
+(`applyServiceFulfilledDeltas`), and the fact that escrowed contracts have no other server-side
+path forward without it. 32/32 tests pass locally (`npx jest --config jest.config.js
+src/routes/__tests__/admin-flags.test.ts`, up from 30/30 — 2 new cases), `npx tsc --noEmit` clean
+after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CLASS and merged
+with `gh pr merge 652 --auto --squash` while its checks were still in flight. At the time this
+closeout was written, both #651 (this ledger PR) and #652 were still `OPEN` with checks in
+progress (`mergeStateStatus: BLOCKED`, which here means pending-checks, not a real conflict) —
+not yet confirmed merged; the next beat's step 1 confirms that independently, same as every other
+beat in this file. No deviation from the stated plan.
