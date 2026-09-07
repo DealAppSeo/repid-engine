@@ -5139,3 +5139,43 @@ flight. At the time this closeout was written, both #653 (this ledger PR) and #6
 `OPEN` with checks in progress (`mergeStateStatus: BLOCKED`, which here means pending-checks, not
 a real conflict) — not yet confirmed merged; the next beat's step 1 confirms that independently,
 same as every other beat in this file. No deviation from the stated plan.
+
+## Beat 113 — 2026-09-07 · verified #653/#654 landed, diff matches intent; step 2 adds EAS_ANCHOR_WORKER_ENABLED — a tenth flag, this one CLAUDE.md itself already names
+
+**Step 1 — Beat 112 checked against its own diff + CI, not against its prose.** `gh pr view 653
+--json state,mergedAt` and `gh pr view 654 --json state,mergedAt` both show `MERGED`
+(2026-09-07T04:34:24Z and 2026-09-07T04:34:09Z). `gh pr view 654 --json statusCheckRollup` shows
+9/9 SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL prompt-injection
+probes, Strix Security Review). `gh pr diff 654` confirms the change matches Beat 112's stated
+intent exactly: `dispute_worker_enabled` added to `src/routes/admin-flags.ts` with the same
+`{value, source}` shape as every existing field, a `note` naming the worker
+(`dispute-resolution-worker.ts`), its poll target, and `applyServiceDisputeResolution` as the
+resolution path — all present in the diff as described, plus two new test cases (default false;
+`=true` reports `source: 'env'`). `gh pr list --state merged --limit 5` shows nothing merged since
+#654 without a ledger entry — no gap this time.
+
+**Step 2 — `EAS_ANCHOR_WORKER_ENABLED` (default OFF via `!== 'true'`): the gate on
+`easAnchorWorker.start()` (`src/workers/eas-anchor-worker.ts:447-453`), called from
+`src/index.ts:1153`.** Chosen over the ~20 other unreported `*_ENABLED` flags found by grepping
+`src/workers` and `src/services` (EAS_ANCHOR_WORKER_ENABLED, HEALTH_PROBE_ENABLED,
+NOTIFICATION_DISPATCHER_ENABLED, BYOK_CUSTODY_ENABLED, LISTING_BRIDGE_ENABLED, and more) because
+`CLAUDE.md`'s own attestation-minter section already names this exact worker — "the one thing
+that mints EAS attestations, `easAnchorWorker`, runs in-process inside the API server" — so
+reporting it closes a gap between what the docs assert and what the running server can be asked
+to confirm about itself, the "touches the most surfaces" priority applied literally. Read the
+worker's actual source, not the name: when disabled it only logs and returns; when enabled it
+additionally requires `hasAttesterKey()` before starting the poll loop (else it logs degraded and
+still does not start), and once running it posts real EAS attestations to Base Sepolia on a
+timer (`EAS_ANCHOR_POLL_MS`, default 5 min) gated on top by the L0 global-halt check inside
+`tickGuarded()`. Without this flag, no un-anchored real proof is ever anchored by this in-process
+path — CLAUDE.md separately measured that queue as empty on 2026-08-29, so today this is a
+report on a dormant-but-wired path, not a live money-mover; the value is knowing which is true
+without re-reading three files.
+
+Reported as `eas_anchor_worker_enabled`, same `{value, source}` shape as every existing field,
+with a `note` naming the worker, the attester-key precondition, and the fact that it posts real
+Base Sepolia transactions when both are true. Additive only — no existing field's shape changed,
+no route touched besides `admin-flags.ts` and its test file. Not yet built as this entry is
+opened, per the Beat 106 process correction (ledger PR before any step-2 file is touched); the PR
+follows on its own branch cut from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge
+<n> --auto --squash` while checks are in flight) as every prior beat in this run.
