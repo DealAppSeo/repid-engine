@@ -5032,3 +5032,62 @@ from 28/28 — 2 new cases), `npx tsc --noEmit` clean after a fresh `npm install
 #649 (this ledger PR) and #650 were still `OPEN` with checks in progress — not yet confirmed
 merged; the next beat's step 1 confirms that independently, same as every other beat in this
 file. No deviation from the stated plan.
+
+## Beat 111 — 2026-09-07 · verified #649/#650 landed, diff matches intent; step 2 adds CASCADE_SETTLEMENT_ENABLED — the money-path worker gate that drains escrowed contracts
+
+**Step 1 — Beat 110 checked against its own diff + CI, not against its prose.** `gh pr view 649
+--json state,mergedAt` and `gh pr view 650 --json state,mergedAt` both show `MERGED`
+(2026-09-06T20:28:51Z and 2026-09-06T20:28:24Z). `gh pr view 650 --json statusCheckRollup` shows
+9/9 SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL prompt-injection
+probes, Strix Security Review). `gh pr diff 650` confirms the change matches Beat 110's stated
+intent exactly: `hal_strict_family_independence` added to `src/routes/admin-flags.ts` with the
+same `{value, source}` shape as every existing field, a `note` naming both call sites
+(`fact-check.ts`'s `assertFamilyIndependenceAtBoot`, `index.ts`'s catch block) and the boot-time
+caveat ("describes what the NEXT boot will do"), and two new test cases (default false; `=true`
+reports `source: 'env'`) — both present in the diff exactly as described. `gh pr list --state
+merged --limit 10` shows nothing merged since #650 that isn't already in this ledger — no gap.
+
+**Step 2 — `CASCADE_SETTLEMENT_ENABLED` (default OFF, `=== 'true'`): the gate on the
+server-side worker that actually drains escrowed `service_contracts` and drives real RepID
+deltas (`src/workers/cascade-settlement-worker.ts:133`).** Grepped every `process.env.X ===
+'true'` / `!== 'false'` gate in `src/` again, filtered against every field `admin-flags.ts`
+already reports. This one stood out over several other candidates
+(`HAL_GROUND_TRUTH_GATE`, `BFT_DISJOINT_ENFORCE`, `HAL_SBFA_SHADOW`/`_ENFORCE`,
+`ONCHAIN_REPUTATION_TRIGGER_ENABLED`) because its own file header states plainly what it is:
+"economically active (drives RepID deltas via `applyServiceFulfilledDeltas`), so it ships OFF
+and is enabled deliberately, mirroring the `DisputeResolutionWorker` (`DISPUTE_WORKER_ENABLED`)
+precedent." That file header also names the actual stakes — without this worker running, escrowed
+contracts pile up indefinitely because the only other drivers are a frozen agent loop
+(`ConstitutionalAgentV4.runLoop`, gated behind `ESCALATION_CONTRACT`) and an HTTP endpoint that
+needs an external caller. Whether the money-draining path is live at all was previously
+answerable only by reading `src/index.ts:1097-1099` and this worker's own comment — the exact gap
+this route exists to close, and a sharper instance of it than most fields reported so far since
+this one gates real economic activity, not just an internal consistency check.
+
+`DISPUTE_WORKER_ENABLED` (same shape, same OFF-by-default, explicitly named as this flag's
+precedent) is a second genuine gap of the identical kind, not yet reported either — left for a
+future beat rather than bundled here, to keep this PR to the one-flag-per-beat pattern every
+prior entry in this run has used.
+
+Reported as `cascade_settlement_enabled`, same `{value, source}` shape as every existing field,
+with a `note` naming the worker, the deltas it drives, and the fact that without it running
+escrowed contracts have no other server-side path to `fulfilled`. Additive only — no existing
+field's shape changed, no route touched besides `admin-flags.ts` and its test file. Not yet built
+as this entry is opened, per the Beat 106 process correction (ledger PR before any step-2 file is
+touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge
+convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in
+this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #652, `feat/admin-flags-cascade-settlement`, cut from `origin/main`.
+`cascade_settlement_enabled` added with the same `{value, source}` shape as every existing field,
+plus a `note` naming the worker (`cascade-settlement-worker.ts`), the delta function it drives
+(`applyServiceFulfilledDeltas`), and the fact that escrowed contracts have no other server-side
+path forward without it. 32/32 tests pass locally (`npx jest --config jest.config.js
+src/routes/__tests__/admin-flags.test.ts`, up from 30/30 — 2 new cases), `npx tsc --noEmit` clean
+after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CLASS and merged
+with `gh pr merge 652 --auto --squash` while its checks were still in flight. At the time this
+closeout was written, both #651 (this ledger PR) and #652 were still `OPEN` with checks in
+progress (`mergeStateStatus: BLOCKED`, which here means pending-checks, not a real conflict) —
+not yet confirmed merged; the next beat's step 1 confirms that independently, same as every other
+beat in this file. No deviation from the stated plan.
