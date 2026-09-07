@@ -214,6 +214,19 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * configured; absent one it logs loud and skips rather than pretending
  * success. A true value alone does not mean it wrote on-chain, same caveat
  * as eas_anchor_worker_enabled's attester-key precondition above.
+ *
+ * Extended a thirteenth time with X402_ENFORCEMENT_ENABLED, and this one
+ * inverts the pattern every prior flag in this list follows: elsewhere,
+ * default OFF means inert. Here `POST /escrow` (src/routes/v1/contracts.ts,
+ * whose own comment calls this route "where money actually commits") reads
+ * it, and with it unset/false the route takes the LEGACY branch — a contract
+ * moves pending -> escrowed with no X-PAYMENT header checked at all. Only
+ * `true` requires actual payment authorization before escrowing. So the
+ * default here is the state with no payment gate, not the state where
+ * nothing runs. Also read in src/routes/v1/exchange-next-step.ts (describes
+ * it to the caller as the next-step contract) and src/routes/v1/listing-offers.ts
+ * (passes it through) — more distinct call sites in src/ than any flag this
+ * pass has added so far.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -345,6 +358,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED === 'true',
       source: process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED === undefined ? 'default' : 'env',
       note: 'gates maybeWriteOnChainReputation() (src/services/onchain-reputation-trigger.ts), an inline real on-chain ERC-8004 reputation write at settlement time for non-simulated contracts whose agent holds an erc8004_token_id and clears the Established tier floor (1000). Gas-spending. A true value alone does not mean it wrote on-chain: it also requires a signing key (ERC8004_REPUTATION_WRITER_KEY / ERC8004_MINTER_PRIVATE_KEY / ERC8004_OPERATOR_KEY) — without one it logs loud and skips',
+    },
+    x402_enforcement_enabled: {
+      value: process.env.X402_ENFORCEMENT_ENABLED === 'true',
+      source: process.env.X402_ENFORCEMENT_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates POST /escrow (src/routes/v1/contracts.ts) — "where money actually commits" per the route\'s own comment. Default false takes the legacy branch: pending -> escrowed with no X-PAYMENT header checked at all. Only true requires real payment authorization before escrowing. Unlike every other flag in this list, the default here is the state with no payment gate, not the inert one. Also read in exchange-next-step.ts and listing-offers.ts',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'

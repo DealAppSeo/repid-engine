@@ -38,6 +38,7 @@ describe('Admin Flags', () => {
     delete process.env.EAS_ANCHOR_WORKER_ENABLED;
     delete process.env.X402_RECOVERY_WORKER_ENABLED;
     delete process.env.ONCHAIN_REPUTATION_TRIGGER_ENABLED;
+    delete process.env.X402_ENFORCEMENT_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -347,6 +348,23 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.onchain_reputation_trigger_enabled.value).toBe(true);
     expect(res.body.onchain_reputation_trigger_enabled.source).toBe('env');
+  });
+
+  it('X402_ENFORCEMENT_ENABLED defaults false, with a note naming the legacy no-payment-check branch', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.x402_enforcement_enabled).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('/escrow'),
+    });
+    expect(res.body.x402_enforcement_enabled.note).toEqual(expect.stringContaining('no X-PAYMENT header'));
+  });
+
+  it('X402_ENFORCEMENT_ENABLED=true -> reports true, source env', async () => {
+    process.env.X402_ENFORCEMENT_ENABLED = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.x402_enforcement_enabled.value).toBe(true);
+    expect(res.body.x402_enforcement_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
