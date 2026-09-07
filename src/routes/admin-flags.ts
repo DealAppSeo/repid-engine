@@ -155,6 +155,21 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * the other two and producing inconsistent quorum counting with no error raised.
  * Reported with a note naming all three sites so a reader sees the whole set
  * instead of grepping for it.
+ *
+ * Extended an eighth time with CASCADE_SETTLEMENT_ENABLED (default OFF): the
+ * gate on cascade-settlement-worker.ts, the server-side driver that polls
+ * escrowed service_contracts and runs the existing verification handlers'
+ * processOne() to advance them escrowed->fulfilled (or ->disputed), driving
+ * real RepID deltas via applyServiceFulfilledDeltas. The worker's own header
+ * calls this "economically active... ships OFF and is enabled deliberately",
+ * mirroring the DisputeResolutionWorker/DISPUTE_WORKER_ENABLED precedent
+ * (that flag is a second, not-yet-reported instance of the same gap — left
+ * for a future pass). Without this worker running, escrowed contracts have
+ * no other server-side path forward: the only alternates are a frozen agent
+ * loop (ConstitutionalAgentV4.runLoop, gated behind ESCALATION_CONTRACT) and
+ * an HTTP endpoint that needs an external caller every cycle. Whether the
+ * money-draining path is live was previously answerable only by reading
+ * src/index.ts and this worker's own source comment.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -261,6 +276,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.HAL_STRICT_FAMILY_INDEPENDENCE === 'true',
       source: process.env.HAL_STRICT_FAMILY_INDEPENDENCE === undefined ? 'default' : 'env',
       note: 'boot-time only — decides whether assertFamilyIndependenceAtBoot() (src/hal/fact-check.ts) throws past its caller in src/index.ts on a family-collapse violation, or only logs. The audit runs once at process start, so this value describes what the NEXT boot will do, not anything that happened on this one',
+    },
+    cascade_settlement_enabled: {
+      value: process.env.CASCADE_SETTLEMENT_ENABLED === 'true',
+      source: process.env.CASCADE_SETTLEMENT_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates cascade-settlement-worker.ts, the server-side driver of escrowed->fulfilled service_contracts; economically active (drives RepID deltas via applyServiceFulfilledDeltas). Without it, escrowed contracts have no other server-side path forward — the alternates are a frozen agent loop and an HTTP endpoint needing an external caller',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
