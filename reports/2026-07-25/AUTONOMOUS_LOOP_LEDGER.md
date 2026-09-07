@@ -5091,3 +5091,51 @@ closeout was written, both #651 (this ledger PR) and #652 were still `OPEN` with
 progress (`mergeStateStatus: BLOCKED`, which here means pending-checks, not a real conflict) —
 not yet confirmed merged; the next beat's step 1 confirms that independently, same as every other
 beat in this file. No deviation from the stated plan.
+
+## Beat 112 — 2026-09-07 · verified #651/#652 landed, diff matches intent; step 2 adds DISPUTE_WORKER_ENABLED — the gap Beat 111 named and deferred
+
+**Step 1 — Beat 111 checked against its own diff + CI, not against its prose.** `gh pr view 651
+--json state,mergedAt` and `gh pr view 652 --json state,mergedAt` both show `MERGED`
+(2026-09-07T01:07:58Z and 2026-09-07T01:08:13Z). `gh pr view 652 --json statusCheckRollup` shows
+9/9 SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL prompt-injection
+probes, Strix Security Review). `gh pr diff 652` confirms the change matches Beat 111's stated
+intent exactly: `cascade_settlement_enabled` added to `src/routes/admin-flags.ts` with the same
+`{value, source}` shape as every existing field, a `note` naming the worker
+(`cascade-settlement-worker.ts`), the delta function it drives (`applyServiceFulfilledDeltas`),
+and the no-other-path claim, plus two new test cases (default false; `=true` reports `source:
+'env'`) — both present in the diff exactly as described. `gh pr list --state merged --limit 5`
+shows nothing merged since #652 without a ledger entry — no gap this time.
+
+**Step 2 — `DISPUTE_WORKER_ENABLED` (default OFF, `=== 'true'`): the gate on
+`DisputeResolutionWorker` (`src/workers/dispute-resolution-worker.ts:12`), named explicitly by
+Beat 111 as "a second, not-yet-reported instance of the same gap" as `CASCADE_SETTLEMENT_ENABLED`
+and deferred rather than bundled, to keep the one-flag-per-beat pattern this run has used since
+Beat 106.** Read the worker's actual source (not assumed from the name) before writing the note:
+`start()` returns early and only logs when the flag is not exactly `'true'`; when it does run, its
+poll loop's `processOne()` claims the next pending dispute and calls `runPCP` /
+`runAdversarialJudge` before `applyServiceDisputeResolution` — the counterpart to
+`cascade-settlement-worker.ts`'s escrow→fulfilled path, but for the escrow→disputed path. Without
+it running, a `service_contracts` row that reaches `disputed` has no server-side path to a
+resolved verdict — same "no other driver" shape Beat 111 documented for the cascade worker, on
+the other branch of the same lifecycle.
+
+Reported as `dispute_worker_enabled`, same `{value, source}` shape as every existing field, with
+a `note` naming the worker, its poll target, and the resolution path it drives. Additive only —
+no existing field's shape changed, no route touched besides `admin-flags.ts` and its test file.
+Not yet built as this entry is opened, per the Beat 106 process correction (ledger PR before any
+step-2 file is touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS
+merge convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior
+beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #654, `feat/admin-flags-dispute-worker`, cut from `origin/main`.
+`dispute_worker_enabled` added with the same `{value, source}` shape as every existing field,
+plus a `note` naming the worker (`dispute-resolution-worker.ts`), its poll target, and the
+resolution path it drives (`applyServiceDisputeResolution`). 34/34 tests pass locally (`npx jest
+--config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 32/32 — 2 new cases),
+`npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this runner. Opened as
+SAFE-CLASS and merged with `gh pr merge 654 --auto --squash` while its checks were still in
+flight. At the time this closeout was written, both #653 (this ledger PR) and #654 were still
+`OPEN` with checks in progress (`mergeStateStatus: BLOCKED`, which here means pending-checks, not
+a real conflict) — not yet confirmed merged; the next beat's step 1 confirms that independently,
+same as every other beat in this file. No deviation from the stated plan.
