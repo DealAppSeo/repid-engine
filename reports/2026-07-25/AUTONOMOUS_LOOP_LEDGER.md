@@ -5307,3 +5307,61 @@ after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CL
 was written, both #659 (this ledger PR) and #660 were still `OPEN` with checks in progress — not
 yet confirmed merged; the next beat's step 1 confirms that independently, same as every other beat
 in this file. No deviation from the stated plan.
+
+## Beat 116 — 2026-09-07 · verified #659/#660 landed, diff matches intent; step 2 intent: X402_ENFORCEMENT_ENABLED — the escrow payment-enforcement switch itself
+
+**Step 1 — Beat 115 checked against its own diff + CI, not against its prose.** `gh pr view 660
+--json state,mergedAt,statusCheckRollup` shows `MERGED` (2026-09-07T16:30:20Z) with 9/9 checks
+`SUCCESS` (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL prompt-injection
+probes, Strix Security Review). `git show a0650cb -- src/routes/admin-flags.ts` confirms the
+change matches Beat 115's stated intent exactly: `onchain_reputation_trigger_enabled` added with
+the same `{value, source}` shape as every existing field, a `note` naming the function
+(`maybeWriteOnChainReputation`), the tier floor (1000), and the signing-key precondition
+(`ERC8004_REPUTATION_WRITER_KEY` / `ERC8004_MINTER_PRIVATE_KEY` / `ERC8004_OPERATOR_KEY`) — all
+present in the diff, 20 lines added to the route plus 18 to its test file. `gh pr list --state
+merged --limit 5` shows #659 (this ledger PR) also merged, nothing merged since without a ledger
+entry — no gap.
+
+**Step 2 — `X402_ENFORCEMENT_ENABLED` (default OFF, and here the OFF state is the risky one, not
+the safe one).** Regrepped all `*_ENABLED` flags in `src/` against the current
+`admin-flags.ts` (11 flags already reported there; 49 distinct names exist in `src/` total).
+Every flag reported so far in this pass has the shape "default OFF = inert, true = does the
+interesting/risky thing". `X402_ENFORCEMENT_ENABLED` inverts that: read at
+`src/routes/v1/contracts.ts:335` inside `POST /escrow` — the route's own comment calls this "the
+expensive one" and "where money actually commits" — with it **unset/false** (default), escrow
+takes the *legacy* branch: `service_contracts.status` flips `pending -> escrowed` with **no
+X-PAYMENT header checked at all**, on any contract a caller can reach. Only when **true** does the
+route require actual x402 payment authorization before escrowing. So the default-OFF state here is
+the one where money moves with no payment gate, not the one where a worker sits idle — the same
+"default state is the dangerous one" shape CLAUDE.md's WRITER_DIRECT_APPLY entry already flagged,
+and worth reporting for exactly that reason. It is also read three more places
+(`exchange-next-step.ts` describing the caller's next step, `listing-offers.ts` passing it through,
+`index.ts`, `auth.ts` and `contract-party-guard.ts` in comments/branches) — more distinct call
+sites than any flag added in this pass so far, which is the literal "touches the most surfaces"
+priority. Not Sean-gated per CLAUDE.md's hard-line list (that names "real-money X402/STAKE" as
+never-flip, which this respects — the change only reads and reports the flag's current state, it
+does not flip it, same as `x402_recovery_worker_enabled` and `onchain_reputation_trigger_enabled`
+before it).
+
+Reported as `x402_enforcement_enabled`, same `{value, source}` shape as every existing field, with
+a `note` naming the route (`POST /escrow` in `contracts.ts`), stating plainly that the default
+(false) is the legacy no-payment-check path, and naming the other three read sites. Additive only —
+no existing field's shape changed, no route touched besides `admin-flags.ts` and its test file. Not
+yet built as this entry is opened, per the Beat 106 process correction (ledger PR before any step-2
+file is touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge
+convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in
+this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #662, `feat/admin-flags-x402-enforcement`, cut from `origin/main`.
+`x402_enforcement_enabled` added with the same `{value, source}` shape as every existing field,
+plus a `note` naming the route (`POST /escrow` in `contracts.ts`), stating the default (false) is
+the legacy no-payment-check path, and naming the other two read sites (`exchange-next-step.ts`,
+`listing-offers.ts`). 42/42 tests pass locally (`npx jest --config jest.config.js
+src/routes/__tests__/admin-flags.test.ts`, up from 40/40 — 2 new cases), `npx tsc --noEmit` clean
+after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CLASS and merged with
+`gh pr merge 662 --auto --squash` while its checks were still in flight. At the time this closeout
+was written, both #661 (this ledger PR) and #662 were still `OPEN` with `mergeStateStatus: BLOCKED`
+(waiting on required checks, not a real conflict) — not yet confirmed merged; the next beat's step
+1 confirms that independently, same as every other beat in this file. No deviation from the stated
+plan.
