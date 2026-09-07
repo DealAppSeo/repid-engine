@@ -1,15 +1,15 @@
 /**
- * tool-receipt-route.test.ts — POST /api/v1/tool-receipt.
- * Verifies it mints via the RPC (never a direct insert), validates the body, and
- * maps failures to honest status codes. db is mocked; no network, no DB.
+ * tool-receipt-route.test.ts — POST /api/v1/tool-receipt (mint) + GET /verified (feed).
+ * Mint goes via the RPC (never a direct insert); the verified feed returns only
+ * cryptographically-verified rows + the verdict headline. db is mocked; no network.
  */
 import express from 'express';
 import request from 'supertest';
 
 const rpc = jest.fn();
-jest.mock('../src/db', () => ({ db: { rpc: (...a: any[]) => rpc(...a) } }));
+const from = jest.fn();
+jest.mock('../src/db', () => ({ db: { rpc: (...a: any[]) => rpc(...a), from: (...a: any[]) => from(...a) } }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 import toolReceiptRouter from '../src/routes/v1/tool-receipt';
 
 const app = express();
@@ -20,7 +20,7 @@ const HEX_A = 'a'.repeat(64);
 const HEX_B = 'b'.repeat(64);
 const good = { agent_id: 'trinity-x', tool_name: 'hal-evaluate', input_hash: HEX_A, output_hash: HEX_B };
 
-beforeEach(() => rpc.mockReset());
+beforeEach(() => { rpc.mockReset(); from.mockReset(); });
 
 describe('POST /api/v1/tool-receipt', () => {
   it('mints via write_tool_receipt RPC and returns 201 + receipt_id', async () => {
@@ -50,5 +50,30 @@ describe('POST /api/v1/tool-receipt', () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'RECEIPT_SIGNING_KEY_UNPROVISIONED' } });
     const res = await request(app).post('/api/v1/tool-receipt').send(good);
     expect(res.status).toBe(502);
+  });
+});
+
+describe('GET /api/v1/tool-receipt/verified', () => {
+  it('returns ONLY verified receipts + a verdict headline (quarantined counted, not shown)', async () => {
+    const rows = [
+      { verified: true, quarantine_reason: null, tool_name: 'trustshell.mvp.selftest' },
+      { verified: false, quarantine_reason: 'legacy_sig_v1' },
+      { verified: false, quarantine_reason: 'legacy_sig_v1' },
+      { verified: false, quarantine_reason: 'no_minter_direct_insert' },
+    ];
+    const allRows = { data: rows, error: null };                                   // verifiedReceiptStats: await select()
+    const verifiedOnly = { data: [{ tool_name: 'trustshell.mvp.selftest' }], error: null }; // listVerifiedReceipts: await limit()
+    const q: any = { eq: () => q, order: () => q, limit: () => Promise.resolve(verifiedOnly), then: (r: any) => r(allRows) };
+    from.mockReturnValue({ select: () => q });
+
+    const res = await request(app).get('/api/v1/tool-receipt/verified');
+    expect(res.status).toBe(200);
+    expect(res.body.stats.total).toBe(4);
+    expect(res.body.stats.verified).toBe(1);
+    expect(res.body.stats.quarantined).toBe(3);
+    expect(res.body.stats.by_reason.legacy_sig_v1).toBe(2);
+    expect(res.body.stats.by_reason.no_minter_direct_insert).toBe(1);
+    expect(res.body.count).toBe(1);
+    expect(res.body.receipts).toHaveLength(1);
   });
 });

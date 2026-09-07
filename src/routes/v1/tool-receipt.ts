@@ -18,11 +18,28 @@
  */
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
-import { writeToolReceipt } from '../../services/trustshell-tool-receipt';
+import { writeToolReceipt, verifiedReceiptStats, listVerifiedReceipts } from '../../services/trustshell-tool-receipt';
 
 const router = Router();
 
 const HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * GET /api/v1/tool-receipt/verified — the honest receipt feed. Returns ONLY
+ * cryptographically-verified receipts (HMAC recomputed against the signing key)
+ * plus the verdict headline (verified vs quarantined-with-reason). Forged/legacy
+ * rows are counted in stats.by_reason but never rendered. Reads the service_role
+ * view — this is the surface a public trust page should proxy.
+ */
+router.get('/verified', async (req: Request, res: Response) => {
+  const rawLimit = Number((req.query.limit as string) ?? '50');
+  const limit = Number.isFinite(rawLimit) ? rawLimit : 50;
+  const [stats, receipts] = await Promise.all([
+    verifiedReceiptStats(db),
+    listVerifiedReceipts(db, limit),
+  ]);
+  return res.json({ stats, receipts, count: receipts.length });
+});
 
 router.post('/', async (req: Request, res: Response) => {
   const b = (req.body ?? {}) as Record<string, unknown>;

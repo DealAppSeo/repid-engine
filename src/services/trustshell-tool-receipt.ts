@@ -43,6 +43,61 @@ export function toolReceiptsEnabled(): boolean {
   return process.env.TRUSTSHELL_TOOL_RECEIPTS === 'true';
 }
 
+/** Verdict counts over v_trustshell_tool_receipts_verified — the honest headline
+ *  for a trust surface ("N verified / M quarantined"). Never throws. */
+export async function verifiedReceiptStats(
+  db: SupabaseClient,
+): Promise<{ total: number; verified: number; quarantined: number; by_reason: Record<string, number> }> {
+  const empty = { total: 0, verified: 0, quarantined: 0, by_reason: {} as Record<string, number> };
+  try {
+    const { data, error } = await db
+      .from('v_trustshell_tool_receipts_verified')
+      .select('verified, quarantine_reason');
+    if (error || !data) {
+      if (error) console.error('[tool-receipt] verifiedReceiptStats failed:', error.message);
+      return empty;
+    }
+    const out = { ...empty, by_reason: {} as Record<string, number> };
+    for (const row of data as Array<{ verified: boolean; quarantine_reason: string | null }>) {
+      out.total += 1;
+      if (row.verified) out.verified += 1;
+      else {
+        out.quarantined += 1;
+        const k = row.quarantine_reason ?? 'unknown';
+        out.by_reason[k] = (out.by_reason[k] ?? 0) + 1;
+      }
+    }
+    return out;
+  } catch (e: unknown) {
+    console.error('[tool-receipt] verifiedReceiptStats threw:', e instanceof Error ? e.message : String(e));
+    return empty;
+  }
+}
+
+/** List ONLY cryptographically-verified receipts (verified=true), newest first.
+ *  This is what a public trust surface should render. Never throws. */
+export async function listVerifiedReceipts(
+  db: SupabaseClient,
+  limit = 50,
+): Promise<Array<Record<string, unknown>>> {
+  try {
+    const { data, error } = await db
+      .from('v_trustshell_tool_receipts_verified')
+      .select('id, vertical, agent_id, tool_name, tool_version, input_hash, output_hash, execution_time_ms, created_at')
+      .eq('verified', true)
+      .order('created_at', { ascending: false })
+      .limit(Math.min(Math.max(1, limit), 200));
+    if (error || !data) {
+      if (error) console.error('[tool-receipt] listVerifiedReceipts failed:', error.message);
+      return [];
+    }
+    return data as Array<Record<string, unknown>>;
+  } catch (e: unknown) {
+    console.error('[tool-receipt] listVerifiedReceipts threw:', e instanceof Error ? e.message : String(e));
+    return [];
+  }
+}
+
 export async function writeToolReceipt(
   db: SupabaseClient,
   r: ToolReceiptInput,
