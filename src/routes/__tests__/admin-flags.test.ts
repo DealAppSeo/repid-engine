@@ -35,6 +35,7 @@ describe('Admin Flags', () => {
     delete process.env.HAL_STRICT_FAMILY_INDEPENDENCE;
     delete process.env.CASCADE_SETTLEMENT_ENABLED;
     delete process.env.DISPUTE_WORKER_ENABLED;
+    delete process.env.EAS_ANCHOR_WORKER_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -293,6 +294,23 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.dispute_worker_enabled.value).toBe(true);
     expect(res.body.dispute_worker_enabled.source).toBe('env');
+  });
+
+  it('EAS_ANCHOR_WORKER_ENABLED defaults false, with a note naming the worker and the attester-key precondition', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.eas_anchor_worker_enabled).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('easAnchorWorker'),
+    });
+    expect(res.body.eas_anchor_worker_enabled.note).toEqual(expect.stringContaining('attester key'));
+  });
+
+  it('EAS_ANCHOR_WORKER_ENABLED=true -> reports true, source env', async () => {
+    process.env.EAS_ANCHOR_WORKER_ENABLED = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.eas_anchor_worker_enabled.value).toBe(true);
+    expect(res.body.eas_anchor_worker_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {

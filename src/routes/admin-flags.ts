@@ -180,6 +180,15 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * escrow->fulfilled path. Without it running, a disputed service_contracts
  * row has no server-side path to a resolved verdict, same "no other driver"
  * shape as the cascade worker, on the other branch of the same lifecycle.
+ *
+ * Extended a tenth time with EAS_ANCHOR_WORKER_ENABLED (default OFF) — gates
+ * easAnchorWorker.start() (src/index.ts), the in-process poller that anchors
+ * real EAS attestations to Base Sepolia. CLAUDE.md's attestation-minter
+ * section already names this exact worker as the one thing in this repo that
+ * mints EAS attestations; this field lets that claim be confirmed against
+ * the running server instead of re-read from source. A true value alone does
+ * not mean it is anchoring: start() also requires an attester key, and logs
+ * degraded without starting if one is missing.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -296,6 +305,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.DISPUTE_WORKER_ENABLED === 'true',
       source: process.env.DISPUTE_WORKER_ENABLED === undefined ? 'default' : 'env',
       note: 'gates dispute-resolution-worker.ts, the server-side driver of disputed service_contracts; polls for pending disputes and resolves them via runPCP / runAdversarialJudge into applyServiceDisputeResolution. Without it, disputed contracts have no server-side path to a resolved verdict — the escrow->disputed counterpart to cascade_settlement_enabled\'s escrow->fulfilled path',
+    },
+    eas_anchor_worker_enabled: {
+      value: process.env.EAS_ANCHOR_WORKER_ENABLED === 'true',
+      source: process.env.EAS_ANCHOR_WORKER_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates easAnchorWorker.start() (src/index.ts), the in-process poller that anchors real EAS attestations to Base Sepolia. Also requires an attester key at start time (hasAttesterKey()) — true here without one means the worker logged degraded and did not start. When both are true it posts real on-chain transactions on a timer (EAS_ANCHOR_POLL_MS, default 5 min)',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
