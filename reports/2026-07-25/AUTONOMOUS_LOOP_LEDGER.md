@@ -5191,3 +5191,50 @@ Opened as SAFE-CLASS and merged with `gh pr merge 656 --auto --squash` while its
 still in flight. At the time this closeout was written, both #655 (this ledger PR) and #656 were
 still `OPEN` with checks in progress — not yet confirmed merged; the next beat's step 1 confirms
 that independently, same as every other beat in this file. No deviation from the stated plan.
+
+## Beat 114 — 2026-09-07 · verified #655/#656 landed, diff matches intent; step 2 intent: X402_RECOVERY_WORKER_ENABLED — an eleventh flag, this one gating a real-money re-settlement path
+
+**Step 1 — Beat 113 checked against its own diff + CI, not against its prose.** `gh pr view 655
+--json state,mergedAt` and `gh pr view 656 --json state,mergedAt` both show `MERGED`
+(2026-09-07T08:41:37Z and 2026-09-07T08:41:23Z). `gh pr view 656 --json statusCheckRollup` shows
+9/9 SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL prompt-injection
+probes, Strix Security Review). `gh pr diff 656` confirms the change matches Beat 113's stated
+intent exactly: `eas_anchor_worker_enabled` added to `src/routes/admin-flags.ts` with the same
+`{value, source}` shape as every existing field, a `note` naming the worker (`easAnchorWorker`),
+the attester-key precondition, and the real-Base-Sepolia-transaction consequence when both are
+true — all present in the diff, plus two new test cases (default false with a note containing
+both `easAnchorWorker` and `attester key`; `=true` reports `source: 'env'`). `gh pr list --state
+merged --limit 5` shows nothing merged since #656 without a ledger entry — no gap.
+
+**Step 2 — `X402_RECOVERY_WORKER_ENABLED` (default OFF; gated additionally on `!== 'true'` at
+`src/index.ts:1108`, unlike most flags here which gate on `!== 'false'`).** Gates
+`startRecoveryWorker()` (`src/services/x402-recovery-worker.ts`), which polls
+`x402_settlement_failures` for unresolved rows (`attempt_count < 5`), checks the
+`cb_disable_x402_settlements` circuit breaker in `repid_config`, and re-settles via
+`x402Facilitator` — real money movement, not a read path. Its own bootstrap comment in
+`src/index.ts` calls it "the COLD MODULE behind the ERC-8004 dormancy": `startRecoveryWorker()`
+existed but was never wired into bootstrap, so failed x402 settlements were never retried, which
+starved the already-running `FeedbackLoopWorker` of fresh `*_settled` events and produced ~5 days
+of no on-chain reputation writes despite a present writer key — CLAUDE.md's
+`erc8004_reputation_writes` flat-line story from the attestation-minter section, told from the
+other worker's side of the same lifecycle. Chosen over the ~20 other unreported `*_ENABLED` flags
+(HEALTH_PROBE_ENABLED, NOTIFICATION_DISPATCHER_ENABLED, HITL_EXPIRY_SWEEPER_ENABLED,
+STATUS_DIGEST_ENABLED, BYOK_CUSTODY_ENABLED, LISTING_BRIDGE_ENABLED, and more, re-grepped this
+beat from `src/index.ts` + `src/workers`/`src/services`) because it is economically active like
+CASCADE_SETTLEMENT_ENABLED and DISPUTE_WORKER_ENABLED before it, not merely a liveness or
+notification signal — "touches the most surfaces" read here as: which flag's answer changes
+whether real money moves.
+
+Also worth naming, since it sits right next to the field being added: an OWNERSHIP GUARD inside
+`processRecoveryQueue` skips any failure row whose `idempotency_key` already has a row in
+`x402_settlements`, deferring it to `x402-release-retry-worker` instead — so this worker cannot
+double-settle a deferred-release contract. That guard is existing code, unchanged here; it is
+reported only as a `note` field, the same additive pattern as every prior flag in this file.
+
+Reported as `x402_recovery_worker_enabled`, same `{value, source}` shape as every existing field,
+with a `note` naming the worker, the circuit breaker it checks, and the on-chain-reputation
+consequence chain it closes when running. Additive only — no existing field's shape changed, no
+route touched besides `admin-flags.ts` and its test file. Not yet built as this entry is opened,
+per the Beat 106 process correction (ledger PR before any step-2 file is touched); the PR follows
+on its own branch cut from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n>
+--auto --squash` while checks are in flight) as every prior beat in this run.
