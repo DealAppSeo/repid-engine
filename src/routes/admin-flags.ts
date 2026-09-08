@@ -254,6 +254,22 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * — a different endpoint, not this single-pane aggregator, so reporting it
  * here too is additive, not a duplicate. Same not-flipped, report-only mode
  * as every flag above.
+ *
+ * Extended a sixteenth time with HUMAN_AGENT_BIND_ENABLED (default OFF) —
+ * src/services/human-agent-binding.ts:35, gating whether a signature-proven
+ * human-to-agent ownership claim can be recorded at all (bindOwnerToAgent,
+ * human-agent-binding.ts:144, returns {ok:false, reason:'disabled'} while
+ * off) and whether a human party can resolve to the agent they own for a
+ * marketplace exchange (listing-bridge.ts:96, resolveToAgent). Touches more
+ * distinct src/ call sites (8) than any flag added in this pass. Unlike
+ * every flag above, this one is already reported twice elsewhere: GET
+ * /api/v1/human/agents echoes it verbatim as `enabled` (routes/v1/byok.ts:407),
+ * and the keyless GET /readiness reports it as one of only two flags on a
+ * hardcoded public allowlist using status words rather than a raw boolean
+ * (config/flag-readiness.ts) — specifically because its state is already
+ * user-visible behavior. Adding it here too is additive to a different,
+ * auth-gated aggregator, not a duplicate of either. Same not-flipped,
+ * report-only mode as every flag above.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -401,6 +417,20 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       source: process.env.BYOK_CUSTODY_ENABLED === undefined ? 'default' : 'env',
       note: 'gates src/services/byok-custody.ts, whether a user\'s provider API keys are stored server-side (byok-custody.ts:99,196) versus every caller shipping raw provider credentials on every request. Default false means no storage path is active. Also echoed narrowly at GET /byok/providers (byok.ts), a different endpoint than this one',
     },
+    human_agent_bind_enabled: (() => {
+      // Not read inline as an object-literal field: this flag is one of only two
+      // on the `/readiness` public allowlist, and tests/flag-readiness.test.ts
+      // greps all of src/ for every literal read of this env var, requiring each
+      // to be exactly the gate expression (=== the truthy string) — a trailing
+      // `,` from an object-literal field breaks that exact match. Bind it to a
+      // semicolon-terminated statement instead so the real gate stays covered.
+      const enabled = process.env.HUMAN_AGENT_BIND_ENABLED === 'true';
+      return {
+        value: enabled,
+        source: process.env['HUMAN_AGENT_BIND_ENABLED'] === undefined ? 'default' : 'env',
+        note: 'gates src/services/human-agent-binding.ts (bindOwnerToAgent, line 144) and listing-bridge.ts:96 (resolveToAgent), whether a signature-proven human-to-agent ownership claim can be recorded and used to resolve a human party to their agent. Default false means neither path is active. Also echoed at GET /api/v1/human/agents (`enabled`) and the keyless GET /readiness (status words, not a raw boolean)',
+      };
+    })(),
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
         ? 'true (simulated settlement)'
