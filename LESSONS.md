@@ -26,7 +26,7 @@ It converts a known gap into false coverage, so you stop looking. Both ends coun
 **Apply:** name the caller AND the consumer, or say it is inert. Check the write's error, not just that you called it.
 
 ## 4. Evidence outranks the label
-*Proof:* `event_type` is caller-supplied, so it can never upgrade trust; classifying the RepID ledger on evidence showed 97.5% of score gained is externally verifiable. [lessons/hal-eval.md]
+*Proof:* `event_type` is caller-supplied, so it can never upgrade trust; a file named `plonky3-stub.ts` had ZERO callers while the live path wrote 22,373 EAS-attested real proofs — a filename and a CLAUDE.md line are labels too, and one session repeated both. [lessons/hal-eval.md]
 **Apply:** classify on the hardest-to-forge artifact present — contract, attestation, proof, economic impact — never on the label.
 
 ## 5. Match the real names, not the tidy ones you imagine

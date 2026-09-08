@@ -16,8 +16,10 @@
  *
  * Requires read credentials (SUPABASE_URL + a service key) in the environment,
  * exactly as any other read against prod. The NAIVE after-value it prints is
- * `current_repid + delta` WITHOUT decay, the [10,10000] clamp, or the money-path
- * gate — labelled as such, because those are the live writer's job, not a copy's.
+ * `current_repid + delta` WITHOUT decay or the [10,10000] clamp — labelled as
+ * such, because those are the live writer's job, not a copy's. (This header also
+ * used to name a "money-path gate"; no such gate applies to the delta — see the
+ * correction in src/services/settlement-score-shadow.ts.)
  */
 import { db } from '../../src/db';
 import {
