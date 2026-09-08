@@ -5365,3 +5365,38 @@ was written, both #661 (this ledger PR) and #662 were still `OPEN` with `mergeSt
 (waiting on required checks, not a real conflict) — not yet confirmed merged; the next beat's step
 1 confirms that independently, same as every other beat in this file. No deviation from the stated
 plan.
+
+## Beat 117 — 2026-09-08 · verified #661/#662 landed, diff matches intent; step 2 intent: REAL_STAKING_ENABLED — the real-vs-simulated stake deposit switch
+
+**Step 1 — Beat 116 checked against its own diff + CI, not against its prose.** `gh pr checks 662`
+shows 9/9 SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL
+prompt-injection probes, Strix Security Review), and `gh pr view 662 --json state,mergedAt` shows
+`MERGED` at 2026-09-07T20:29:13Z. `git log origin/main --oneline -5` confirms 26da0a4 (#662) and
+924a332 (#661, this ledger's own prior entry) are both on `origin/main` — no gap since. `git show
+26da0a4 -- src/routes/admin-flags.ts` matches Beat 116's stated intent: `x402_enforcement_enabled`
+added with the same `{value, source}` shape as every existing field, a `note` naming the route
+(`POST /escrow` in `contracts.ts`), stating the default (false) is the legacy no-payment-check
+path, and naming the other two read sites (`exchange-next-step.ts`, `listing-offers.ts`).
+
+**Step 2 — `REAL_STAKING_ENABLED` (default OFF).** Regrepped all `*_ENABLED` flags in `src/`
+against the current `admin-flags.ts`: 26 already reported there; of the ones still missing,
+`REAL_STAKING_ENABLED` is the clearest money-path gap left. It lives at `src/config.ts:65-66` as
+`config.realStakingEnabled`, consumed at exactly two call sites, both in `src/services/
+stake-vault.ts` (lines 65 and 223) — a single, clean read path, no duplicate-formula risk like
+`hal_quorum_family_aware` had. Its own header comment (`deposit-verifier.ts:1-25`) states the
+behavior plainly: default OFF preserves simulated-accounting stakes (`is_simulated=true`); when
+true, `POST /stake/deposit` requires a real Base Sepolia `tx_hash` that `deposit-verifier.ts`
+verifies on-chain (token, recipient, amount, confirmations, and a balance delta check) before the
+stake is recorded as REAL. This is exactly the "real-money ... STAKE" surface CLAUDE.md's hard-line
+list names as never-flip — but, same as `x402_enforcement_enabled` and `onchain_reputation_trigger_
+enabled` before it, this entry only reads and reports the flag's current resolved state; it does
+not flip it.
+
+Reported as `real_staking_enabled`, same `{value, source}` shape as every existing field, with a
+`note` naming the two call sites (`stake-vault.ts:65,223`), stating plainly that default-false
+means all stakes are simulated-accounting and true requires on-chain verification via
+`deposit-verifier.ts`. Additive only — no existing field's shape changed, no route touched besides
+`admin-flags.ts` and its test file. Not yet built as this entry is opened, per the Beat 106 process
+correction (ledger PR before any step-2 file is touched); the PR follows on its own branch cut from
+`origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while checks are
+in flight) as every prior beat in this run.
