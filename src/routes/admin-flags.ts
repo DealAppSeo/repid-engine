@@ -243,6 +243,17 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * SUPABASE_URL/SUPABASE_SECRET_KEY are unset, which this route's own test
  * file does not set; the formula is copied verbatim from config.ts:66 rather
  * than re-derived.
+ *
+ * Extended a fifteenth time with BYOK_CUSTODY_ENABLED (default OFF) —
+ * src/services/byok-custody.ts:40, gating whether a user's provider API keys
+ * are stored server-side at all (byok-custody.ts:99,196) versus every caller
+ * shipping raw provider credentials on every request. That module's own
+ * header calls it "original work that touches live state" landing
+ * finished-and-inert per CLAUDE_RULES 23. It is already echoed narrowly at
+ * `GET /byok/providers` (src/routes/v1/byok.ts:193, `{enabled, providers}`)
+ * — a different endpoint, not this single-pane aggregator, so reporting it
+ * here too is additive, not a duplicate. Same not-flipped, report-only mode
+ * as every flag above.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -384,6 +395,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: (process.env.REAL_STAKING_ENABLED || '').toLowerCase() === 'true',
       source: process.env.REAL_STAKING_ENABLED === undefined ? 'default' : 'env',
       note: 'gates config.realStakingEnabled, consumed at stake-vault.ts:65,223. Default false records all stakes as simulated-accounting (is_simulated=true, no chain interaction). true requires POST /stake/deposit to supply a real Base Sepolia tx_hash verified on-chain by deposit-verifier.ts (token, recipient, amount, confirmations, balance delta) before the stake is recorded as REAL',
+    },
+    byok_custody_enabled: {
+      value: process.env.BYOK_CUSTODY_ENABLED === 'true',
+      source: process.env.BYOK_CUSTODY_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates src/services/byok-custody.ts, whether a user\'s provider API keys are stored server-side (byok-custody.ts:99,196) versus every caller shipping raw provider credentials on every request. Default false means no storage path is active. Also echoed narrowly at GET /byok/providers (byok.ts), a different endpoint than this one',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
