@@ -185,7 +185,23 @@ The Supabase project ID is **not** committed; the only artifacts are `SUPABASE_U
 - `src/layers/` — pure-ish scoring math (decay, prediction, challenge, ecosystem-need, constitutional-audit). Most are stubs awaiting Sprint 3.
 - `src/engine/` — orchestration (`repid-update`, `badges`, `mcp`, `score-monitor`, `production-logger`, `hashkey-chain`).
 - `src/routes/` — Express routers, mounted in `src/index.ts`. **Order matters**: `challengeRouter` is mounted before `scoreRouter` because of conflicting `/challenge` paths.
-- `src/zkp/` — `plonky3-stub.ts` (always-on) and `plonky3-real.ts` (Sprint 3 wiring). Both log to `trinity_agent_logs`.
+- `src/zkp/` — **this line was wrong in both halves, and it misled a session on 2026-09-08.**
+  It read *"`plonky3-stub.ts` (always-on) and `plonky3-real.ts` (Sprint 3 wiring)"*. MEASURED:
+  `generateProofStub` has **zero callers** — the sha256 stub is dead code, not "always-on" — and the
+  real path is not future work. `repid_zkp_proofs` holds **22,373 `plonky3_range_check` proofs with
+  `is_real = true`**, every one carrying proof bytes, a commitment and an EAS attestation, first
+  written 2026-06-07 09:58:57Z and still writing (last 2026-09-08 12:00:54Z). The `sha256-stub`
+  scheme stopped at 09:26:28Z that same morning — a clean cutover visible to the minute.
+  Re-run: `select * from v_repid_zkp_scheme_truth;`
+  **A filename is a label.** `-stub` in a name is not evidence about production, and this file
+  turned that label into a documented fact that a later reader repeated. LESSONS rule 4.
+  Still true: the `/prove/trade_auth` bridge in `plonky3-real.ts` has **no default URL**, so it
+  HMAC-fallbacks (loudly: `is_real:false`, `degraded_mode`) unless `PLONKY3_PROVER_URL` /
+  `ZKP_SERVICE_URL` is set — unlike the postcard paths, which hardcode
+  `zkp-postcard-production.up.railway.app`. Whether that var is set is NOT CHECKED from here.
+  `zkp-vault/` is a genuine Rust Plonky3 STARK (anonymous ownership, D-019, 7/7 incl. forgery and
+  tamper rejection) but its own README says the HTTP wrapper is NOT done, so the bridge cannot
+  reach it, and its FRI params are explicitly not production soundness.
 
 ### On-chain integration
 
