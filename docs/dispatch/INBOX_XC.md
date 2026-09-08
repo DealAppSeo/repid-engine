@@ -63,8 +63,8 @@ have read a file outside this repo, and do not invent its contents.
   `ESTABLISHED` and `EARNING` have **no such gate today**. That asymmetry is the single
   most important input to your analysis — reason about what it does and does not protect
   when the population gains a large number of zero-counterparty accounts.
-- `PAY_AUTH_MODE` is **observe**: the ControlProof gate records what it would decide and
-  does not decide it.
+- Payment gating, where it exists, is `STAKE_DEPOSIT_AUTH_ENFORCED` / the ControlProof
+  path. There is no pay-auth mode env var in this engine's generated registry.
 - `CONSTITUTIONAL_AUDIT_ENABLED` defaults **FALSE** and the layer is non-load-bearing.
 
 **Read these files — they are the actual subject:**

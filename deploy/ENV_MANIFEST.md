@@ -68,7 +68,7 @@ keys. Representative names (from INFRA_INVENTORY §11):
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `DEEPSEEK_API_KEY`,
 `GEMINI_API_KEY`, `GROK_API_KEY` (xAI), `MISTRAL_API_KEY`, `FIREWORKS_API_KEY`, `COHERE_API_KEY`,
 `TOGETHER_API_KEY`, `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, `PORTKEY_API_KEY`, `ASI1_API_KEY`,
-`HUGGINGFACE_API_KEY` (+ any `*_API_KEY` the live HAL provider list resolves).
+`HUGGINGFACE_API_TOKEN` (+ any `*_API_KEY` the live HAL provider list resolves).
 
 ## 7) HAL / FEATURE FLAGS (non-secret; control behavior — MUST match Railway for identical behavior)
 | Key | Secret? | Notes |

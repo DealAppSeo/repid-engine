@@ -175,7 +175,7 @@ revisited together when a real verifier lands.
 **Still preview-only.** Nothing on this path is persisted, and the response says
 `persisted: false` in the shape. Rung 0 accrues nothing.
 
-## A latent hole to close before `PAY_AUTH_MODE` ever goes to enforce
+## A latent hole to close before pay-auth enforcement is ever switched on
 
 **CONFIRMED from the red-team pass**, and the one finding in it that survived checking.
 `computeAuthority` (`src/services/authority-math.ts`) takes an early return when
@@ -184,7 +184,7 @@ revisited together when a real verifier lands.
 `snapshotAuthority` as `builder?.auth_method === 'token_only'`, which is exactly what anonymous
 signup writes. So the `BUILDER_FLOOR` does not apply to a token-only row.
 
-**Severity: latent, not live.** `PAY_AUTH_MODE` is `observe` — the gate records what it would
+**Severity: latent, not live.** The ControlProof path currently records what it would
 decide and does not decide it — so this number currently gates nothing. It becomes a real
 authority bypass on the day enforcement is switched on, which is precisely the kind of hole that
 gets discovered by the flip rather than before it.

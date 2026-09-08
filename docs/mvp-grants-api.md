@@ -120,7 +120,7 @@ cannot block it.** Idempotent: revoking an already-revoked grant is refused, not
 with a warning.** Response is `MEASURED` (authorized, every caveat verified), `NOT_CHECKED`
 (authorized, but a caveat like `maxCalls` couldn't be evaluated from this context), or `FAILED`.
 
-**G8, by omission, not by code:** nothing in this module is wired into `PAY_AUTH_MODE` or the
+**G8, by omission, not by code:** nothing in this module is wired into the
 pay route. A grant existing does not gate a payment today — that stays a separate, explicit,
 observe-mode decision for whoever owns the pay path.
 
