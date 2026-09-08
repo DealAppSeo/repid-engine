@@ -216,6 +216,19 @@ The server binds `0.0.0.0:$PORT` (default 3000).
 
 ### Canonical data facts
 - Supabase project: qnnpjhlxljtqyigedwkb (AITrinitySymphony)
+- **Wallet addresses live in `trinity-ecosystem/docs/AGENT-ADDRESSES.md`** — all 12 T12
+  agents by squad, deployer (old and current), custodian, the two ERC-8004 role addresses,
+  and the IdentityRegistry. They were scattered across THIS repo — `scripts/mint-t12-correct.js`,
+  `src/services/repid-attestation.ts`, `src/routes/v1/launch-status.ts`, a `scratch/` JSON —
+  with nothing naming them as a set, so every session asked a human instead of grepping.
+  **Addresses are public and belong in a doc; the keys behind `ERC8004_OPERATOR_KEY`,
+  `ERC8004_WRITER_V2__KEY` and `DEPLOYER_PRIVATE_KEY` are not, and this repo is PUBLIC.**
+  Naming the variable is fine; pasting a value is an incident.
+  **One defect that list found, still unfixed here [MEASURED 2026-09-08]:**
+  `scripts/mint-t12-correct.js` records `trinity-apm` as a **39-hex-character** address where
+  every other address in the file is 40 — a missing `3`. That is not a valid address at all;
+  `ethers` rejects it before any call, so that entry cannot ever have minted. Fixing it changes
+  where an identity token is minted, so it is a decision, not a cleanup — do not do it silently.
 - **RepID range: 10 floor / 10,000 CAP.** 10,000 is the ceiling the clamp enforces, not any
   agent's score. STARTING_REPID is **200** in code (`src/scoring/repid-constants.ts`) — Sean's
   stated intent as of 2026-08-29 is **1,000**, so a new agent has room to fall as well as rise.
