@@ -227,6 +227,22 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * it to the caller as the next-step contract) and src/routes/v1/listing-offers.ts
  * (passes it through) — more distinct call sites in src/ than any flag this
  * pass has added so far.
+ *
+ * Extended a fourteenth time with REAL_STAKING_ENABLED (default OFF) — the
+ * exact "real-money ... STAKE" surface CLAUDE.md's hard-line list names, read
+ * here in the same not-flipped, report-only mode as x402_enforcement_enabled
+ * above. Lives at src/config.ts as config.realStakingEnabled and is consumed
+ * at exactly two call sites, both in src/services/stake-vault.ts (lines 65
+ * and 223). Default false preserves simulated-accounting stakes
+ * (is_simulated=true, no chain interaction). true requires POST
+ * /stake/deposit to supply a real Base Sepolia tx_hash that
+ * deposit-verifier.ts verifies on-chain — token, recipient, amount,
+ * confirmations, and a balance-delta check — before the stake is recorded as
+ * REAL. Read directly from process.env here (not via an import of
+ * src/config.ts) because config.ts throws at import time when
+ * SUPABASE_URL/SUPABASE_SECRET_KEY are unset, which this route's own test
+ * file does not set; the formula is copied verbatim from config.ts:66 rather
+ * than re-derived.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -363,6 +379,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.X402_ENFORCEMENT_ENABLED === 'true',
       source: process.env.X402_ENFORCEMENT_ENABLED === undefined ? 'default' : 'env',
       note: 'gates POST /escrow (src/routes/v1/contracts.ts) — "where money actually commits" per the route\'s own comment. Default false takes the legacy branch: pending -> escrowed with no X-PAYMENT header checked at all. Only true requires real payment authorization before escrowing. Unlike every other flag in this list, the default here is the state with no payment gate, not the inert one. Also read in exchange-next-step.ts and listing-offers.ts',
+    },
+    real_staking_enabled: {
+      value: (process.env.REAL_STAKING_ENABLED || '').toLowerCase() === 'true',
+      source: process.env.REAL_STAKING_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates config.realStakingEnabled, consumed at stake-vault.ts:65,223. Default false records all stakes as simulated-accounting (is_simulated=true, no chain interaction). true requires POST /stake/deposit to supply a real Base Sepolia tx_hash verified on-chain by deposit-verifier.ts (token, recipient, amount, confirmations, balance delta) before the stake is recorded as REAL',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
