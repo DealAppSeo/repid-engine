@@ -4,43 +4,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## READ `LESSONS.md` FIRST — it is shared with XC, GA and the swarm
 
-**Every surface has an entry point now; `hyperdag-protocol` had none until 2026-09-08.**
-A `find` for `CLAUDE.md`/`AGENTS.md`/`LESSONS.md` across its whole tree returned nothing,
-so an agent starting there saw no rules, no hard stops, and no sign that either existed
-elsewhere. A missing file raises no warning and fails no check — it just produces an
-agent working with less context than it believes it has. Read yours first:
+**THIS REPO IS TRUE NORTH. `LESSONS.md` is the file every agent on this system reads
+first**, and it is injected verbatim into every XC/GA dispatch. If you are working in
+any sibling repo, that is still the file — come back here for it.
 
-| surface | read first |
-|---|---|
-| `repid-engine` | `LESSONS.md`, then this file |
-| `trinity-ecosystem` | `CLAUDE.md`, then `docs/PRIOR-WORK-INDEX.md` |
-| `trustshell` | `AGENTS.md` (`CLAUDE.md` is a one-line `@AGENTS.md` include) |
-| `trinity-symphony-shared` | `CLAUDE.md` — lane rules; take a lane before touching a repo |
-| `hyperdag-protocol` | `CLAUDE.md` |
+**This file deliberately does NOT list the other repos.** It did until 2026-09-08, as a
+five-row table of sibling entry points, and that table was already wrong when it merged:
+`DealAppSeo/trustrails-dev` is live and was not in it. **The shape was the defect, not
+the missing row.** The Trust\* ecosystem spans TrustShell, TrustMarket, TrustRepID,
+TrustRails, TrustTrader, TrustCRE, TrustEscrow and TrustMedical on this same
+HAL / RepID / ERC-8004 / x402 harness, plus whatever third parties build via TrustMarket.
+A per-repo list of all siblings is N tables of N rows: adding a surface means editing
+every other repo, and forgetting fails **silently and in the safe-looking direction** —
+the new surface is simply unlisted, nothing breaks, and an agent landing there sees no
+pointer. That is the exact defect the table was added to fix, reintroduced one level up.
+Same lesson as the hand-maintained jest `roots` list under **Test layout**: *prefer a
+discovery rule to a list anywhere this pattern appears.*
 
-**THIS TABLE IS NOT EXHAUSTIVE, AND THAT IS A KNOWN DEFECT — do not read absence from
-it as "that surface has no rules".** It lists the five repos one session could reach.
-The Trust\* ecosystem is far wider: TrustShell, TrustMarket, TrustRepID, TrustRails,
-TrustTrader, TrustCRE, TrustEscrow and TrustMedical are all planned on this same HAL /
-RepID / ERC-8004 / x402 harness, plus whatever third parties build via TrustMarket.
-`DealAppSeo/trustrails-dev` is live TODAY (see the deployment table in
-`trinity-ecosystem/CLAUDE.md`) and is already missing from the rows above — this table
-shipped incomplete.
+**So: a star, not a mesh.** Every repo names true north and nothing else. One line per
+repo, a new surface touches only itself, no table exists to go stale. To learn which
+repos exist, read the session's own source list or ask — never a checked-in inventory.
 
-**The shape is the bug, not the missing row.** A per-repo list of all sibling repos is
-N tables of N rows: adding a surface means editing every other repo, and forgetting to
-fails silently and in the safe-looking direction — the new surface simply is not listed,
-nothing breaks, and an agent landing there sees no pointer. That is precisely the failure
-this section was written to fix, reintroduced one level up. It is the same lesson as the
-hand-maintained jest `roots` list recorded under **Test layout**: *prefer a discovery rule
-to a list anywhere this pattern appears*, and this is that pattern.
+### Two tiers, and this is the internal one
 
-**The fix is a star, not a mesh:** every repo's entry point carries ONE line — true north
-is `repid-engine/LESSONS.md` — and says nothing about its siblings. One row per repo
-instead of N, a new surface touches only itself, and no table exists to go stale. Pending
-a decision on whether outside builders get a separate PUBLISHED contract rather than this
-internal file, which is capped at 6000 characters precisely because it is a dispatch
-payload and is full of dated retractions a stranger should not meet first.
+| tier | who | where |
+|---|---|---|
+| **Internal** — operating log, dated, changes without notice | our agents (CC, XC, GA, the swarm) | **`LESSONS.md`**, then this file |
+| **Published** — the contract we keep | outside developers building on the ecosystem | **`hyperdag-protocol/BUILDERS.md`** |
+
+Decided by Sean 2026-09-08. Origin — a TrustShell agent, a TrustMarket agent, a direct
+integration — is an **authorization** input, not a third documentation tier: per-origin
+docs on every surface is the same N-tables trap. Capability belongs to the principal, not
+the door it entered through; if it varied by surface, the surface would become the attack
+surface and the most open door would be the one everyone picked.
+
+**Never answer an outside builder from this file or `LESSONS.md`.** They are public and
+readable, but they are a working log, not a promise — much of both exists to stop one
+specific past mistake recurring. Answer from `BUILDERS.md`; if it does not cover the
+question, that is a gap in `BUILDERS.md` to fix.
 
 [`LESSONS.md`](LESSONS.md) at the repo root holds the operating rules every agent on this
 system works under. It is **injected verbatim** into every XC/GA dispatch by
