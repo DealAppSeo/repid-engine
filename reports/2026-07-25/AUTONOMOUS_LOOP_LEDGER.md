@@ -5655,3 +5655,16 @@ besides `admin-flags.ts` and its test file. Not yet built as this entry is opene
 process correction (ledger PR before any step-2 file is touched); the PR follows on its own branch
 cut from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while
 checks are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #682, `feat/admin-flags-agent-self-serve-keys-enabled`, cut from
+`origin/main`. `agent_self_serve_keys_enabled` added with the same `{value, source}` shape as
+every existing boolean field, plus a `note` naming the gate sites
+(`agent-self-serve-key.ts:111,170`), what it gates (wallet-signature key self-issuance, never
+admin-scoped), and the existing public echo at `GET /api/v1/agent-keys`. 52/52 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 50/50 — 2 new
+cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this runner.
+Opened as SAFE-CLASS and merged with `gh pr merge 682 --auto --squash` while its checks were still
+in flight. At the time this closeout was written, both #681 (this ledger PR) and #682 were still
+`OPEN`/pending checks — not yet confirmed merged; the next beat's step 1 confirms that
+independently, same as every other beat in this file. No deviation from the stated plan.
