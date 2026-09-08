@@ -5543,3 +5543,48 @@ PRs merged during this run's window (since 2026-09-08T12:32:25Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 34226652092 --log`) if the reason matters.
+
+## Beat 120 — 2026-09-08 · verified #672 landed, diff matches intent; step 2 intent: LISTING_BRIDGE_ENABLED
+
+**Step 1 — the docs-only #672 checked against its own diff + CI, not against its prose.**
+`gh pr view 672 --json state,mergedAt,statusCheckRollup` shows `MERGED` at 2026-09-08T15:44:32Z
+with 9/9 checks SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL
+prompt-injection probes, Strix Security Review). `git log origin/main --oneline -3` confirms
+8352e6a (#672) is on `origin/main`, immediately after b5bd8f7 (#670, the settlement-score shadow
+observer) and 9b05877 (#671, the auto-logged fallback entry for the run that died before step 1 —
+already accounted for in this ledger, not a gap). `git show 8352e6a -- src/services/validation-repid-delta.ts`
+matches the PR's stated intent exactly: the T2 touchpoint comment at line 584 changed from
+`buyer +15` to `buyer +15×score`, a one-line diff with no behaviour change, correcting the same
+class of comment/code disagreement #670 had already fixed at line 174 and left standing here. The
+neighbouring T1 row (`buyer +5`, no multiply) was checked and correctly left alone.
+
+**Step 2 — `LISTING_BRIDGE_ENABLED` (default OFF), the marketplace-listing-to-contract bridge.**
+Rebuilt the flag census from scratch rather than trusting the prior beat's list: grepped every
+`process.env.[A-Z_]+_ENABLED` read in `src/` (not just `export const` declarations, which missed
+several) against the 17 fields `/admin/flags` currently reports. 27 flags are read in `src/` but
+absent from the aggregator. Six tie for the most distinct call-site files (4 each):
+`LISTING_BRIDGE_ENABLED`, `HITL_CALLBACK_ENABLED`, `HAL_LOCAL_FALLBACK_ENABLED`,
+`EXECUTION_FLOOR_ENABLED`, `ANFIS_RETUNE_ENABLED`, `AGENT_SELF_SERVE_KEYS_ENABLED`.
+`LISTING_BRIDGE_ENABLED` is chosen because it is already echoed narrowly elsewhere — same
+additive precedent as `byok_custody_enabled` and `human_agent_bind_enabled` before it — at the
+keyless `GET /listings/offers/info` (`listing-offers.ts:79`, `{enabled: LISTING_BRIDGE_ENABLED}`),
+so adding it to the auth-gated single-pane aggregator is additive, not a duplicate.
+
+It lives at `src/services/listing-bridge.ts:45`
+(`export const LISTING_BRIDGE_ENABLED = process.env.LISTING_BRIDGE_ENABLED === 'true'`), gating
+whether an accepted marketplace offer can create a real `service_contracts` row at all
+(`listing-bridge.ts:147,244`). The module's own header states plainly: "Creates contracts, which
+is the head of the path that moves money — lands finished and inert per CLAUDE_RULES 23." Not
+Sean-gated per CLAUDE.md's hard-line list (that names real-money X402/STAKE specifically; this
+gates contract *creation*, not a payment settlement — `x402_enforcement_enabled` already covers
+the actual payment gate at `/escrow` and is reported separately). This change only reads and
+reports current state — it does not flip the flag.
+
+Reported as `listing_bridge_enabled`, same `{value, source}` shape as every existing boolean
+field, with a `note` naming the gate module (`listing-bridge.ts:147,244`), what it gates (contract
+creation from an accepted offer), and the existing narrower echo at `GET /listings/offers/info`.
+Additive only — no existing field's shape changed, no route touched besides `admin-flags.ts` and
+its test file. Not yet built as this entry is opened, per the Beat 106 process correction (ledger
+PR before any step-2 file is touched); the PR follows on its own branch cut from `origin/main`,
+same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while checks are in flight) as
+every prior beat in this run.
