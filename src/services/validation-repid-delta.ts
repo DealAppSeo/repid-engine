@@ -581,7 +581,7 @@ export async function applyServiceSatisfiedDeltas(
 // The THIRD and deepest RepID touchpoint for an A2A transaction, weight rising
 // across the three:
 //   T1 SERVICE_FULFILLED (settled, immediate, small)   provider +10 / buyer +5
-//   T2 SERVICE_SATISFIED (to-spec, mins–hrs)           provider +30×score / buyer +15
+//   T2 SERVICE_SATISFIED (to-spec, mins–hrs)           provider +30×score / buyer +15×score
 //   T3 SERVICE_OUTCOME   (held-up-in-use, 24h–72h)  ← LARGEST weight, hardest to game
 //
 // 3-state rating → provider delta:
