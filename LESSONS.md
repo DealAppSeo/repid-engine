@@ -14,7 +14,7 @@ New lessons replace or generalise old ones.
 
 ## 1. A claim needs the capability that produces it
 *Proof:* T12 with one tool → 18/18 reports, zero real measurements; GA with no shell → a review citing line numbers for a file it never opened. [lessons/dispatch.md]
-**Apply:** refuse the dispatch or supply the evidence, and say what you could not check. **"I could not measure this" is a SUCCESS** — a guess that scores better wins otherwise. Every failure returns a REASON; `''` reads as "nothing there" and the model fills the silence.
+**Apply:** refuse the dispatch or supply the evidence, and say what you could not check. **"I could not measure this" is a SUCCESS** — otherwise a guess that scores better wins. Every failure returns a REASON; `''` reads as "nothing there" and the model fills it.
 
 ## 2. Verify the thing itself, never a proxy for it
 *Proof:* `gemini -p` worked in a shell so "headless auth works" was recorded, but the dispatcher's `spawnSync` had none → ENOENT; the confirming script "exited 0" for the `git` call that ran last. [lessons/dispatch.md]
@@ -22,11 +22,11 @@ New lessons replace or generalise old ones.
 
 ## 3. A mechanism wired at one end only is worse than an absent one
 It converts a known gap into false coverage, so you stop looking. Both ends count — a caller, and a reader.
-*Proof:* `canAssign()` built + tested with zero callers; the dispatch self-chain refused on its own transcript, so it never ran a 2nd cycle until fixed; a daemon that logged COMPLETE while its DB update silently failed lost 7 handoffs. [lessons/dispatch.md]
+*Proof:* `canAssign()` built + tested with zero callers; a daemon logged COMPLETE while its DB update silently failed, losing 7 handoffs. [lessons/dispatch.md]
 **Apply:** name the caller AND the consumer, or say it is inert. Check the write's error, not just that you called it.
 
 ## 4. Evidence outranks the label
-*Proof:* `event_type` is caller-supplied, so it can never upgrade trust; a file named `plonky3-stub.ts` had ZERO callers while the live path wrote 22,373 EAS-attested real proofs — a filename and a CLAUDE.md line are labels too, and one session repeated both. [lessons/hal-eval.md]
+*Proof:* `event_type` is caller-supplied, so it never upgrades trust; a filename and a doc line are labels too — rule 12. [lessons/hal-eval.md]
 **Apply:** classify on the hardest-to-forge artifact present — contract, attestation, proof, economic impact — never on the label.
 
 ## 5. Match the real names, not the tidy ones you imagine
@@ -51,11 +51,15 @@ It converts a known gap into false coverage, so you stop looking. Both ends coun
 
 ## 10. A new input channel inherits the trust of the channel it arrives on
 *Proof:* a memory tool injects recalled text into a user-role turn, which the provenance auditor counts as sourced evidence — installing it would have disabled the auditor built to catch that.
-**Apply:** when you add a channel (memory, an MCP browser, a fetch tool), ask what already trusts it. Mark recalled/fetched content `[R]` at the boundary — the line is recency-of-derivation, not source type.
+**Apply:** adding a channel (memory, MCP browser, fetch), ask what already trusts it. Mark recalled/fetched content `[R]` at the boundary — the line is recency-of-derivation, not source type.
 
 ## 11. When a machine-checked invariant rejects your design, the design is wrong
-*Proof:* lane globs are tested pairwise; the author's first draft collided on all 21 pairs, and loosening the matcher to fit would have made every lease untrustworthy. [lessons/zkp.md for the proof-arity analogue]
+*Proof:* lane globs are tested pairwise; a first draft collided on all 21 pairs, and loosening the matcher to fit would have made every lease untrustworthy. [lessons/zkp.md]
 **Apply:** fix the input, not the checker. A checker you edit to pass is no longer a checker.
+
+## 12. Fix the thing AND whatever says the wrong thing about it
+*Proof:* CLAUDE.md called `plonky3-stub.ts` "always-on" — zero callers, while the live path had written 22,373 attested proofs since June. A later session read that back as fact: a wrong line outlives the bug.
+**Apply:** correct the describing file in the SAME change — comment, CLAUDE.md, AGENTS.md, README — saying what was wrong, not only what is right. TRUE NORTH per surface, read yours first: `repid-engine/CLAUDE.md`, `trustshell/AGENTS.md`, `trinity-ecosystem/CLAUDE.md`, `trinity-symphony-shared`.
 
 ---
 
