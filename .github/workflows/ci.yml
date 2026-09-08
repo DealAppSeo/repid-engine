@@ -142,6 +142,13 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
 
+      # Runs EVERY `check:*` script by discovery — adding one needs no edit here.
+      # A hand-maintained chain is what kept five suites out of CI in the sibling
+      # repo. Exit 2 means a guard could not run, which fails the job on purpose:
+      # a build where a check did not run is not a verified build.
+      - name: Repo checks (discovers every check:* script)
+        run: npm run check
+
       - name: Unit tests
         env:
           SUPABASE_URL: http://localhost:54321
