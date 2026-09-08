@@ -72,9 +72,18 @@ That has inverted:
 | typical stamp latency on new messages | ~7 minutes |
 
 Because the triager stamps `read_at` within minutes, the reader's candidate query now matches
-**zero rows for every inbox, permanently**. Its zero-candidate branch used to print
+**zero rows for every inbox outside a ~7-minute window** — the gap between a message being
+written and the triager stamping it. Its zero-candidate branch used to print
 `VERIFIED. Inbox has no unread messages` — a false green over a mailbox that is being consumed
 by something else.
+
+**Do not read a row found inside that window as evidence this is fixed.** An earlier draft of
+this file said *"zero rows, permanently"*, and that word is wrong in the direction that costs
+the most: run the reader within seven minutes of a write and you will see a candidate, conclude
+the finding was overstated, and discard a real defect. Measured 2026-09-08 at 20:40Z — row 49
+was sitting unstamped at that moment while the other 48 were triaged. The defect is that any
+reader on a schedule coarser than the window, or running after triage, sees nothing and calls
+it success.
 
 That is the same defect the script's own header was written to prevent, arriving from the
 other side, and it is LESSONS rule 6: a check that cannot fail is a liability. **Fixed**: the

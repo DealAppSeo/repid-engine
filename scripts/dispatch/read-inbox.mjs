@@ -31,11 +31,20 @@
  * WHAT THAT DOES TO THIS SCRIPT — READ THIS BEFORE TRUSTING ITS OUTPUT
  * ─────────────────────────────────────────────────────────────────────────────
  * This reader's candidate query is `read_at IS NULL`. The triager stamps
- * read_at on every message within minutes of arrival. So this script now
- * matches ZERO rows for EVERY inbox, permanently, and its zero-candidate branch
- * used to print:
+ * read_at on every message within minutes of arrival. So this script matches
+ * zero rows for every inbox OUTSIDE a ~7-minute window -- the gap between a
+ * write and the triager stamping it -- and its zero-candidate branch used to
+ * print:
  *
  *     "VERIFIED. Inbox has no unread messages"
+ *
+ * DO NOT read a candidate found inside that window as evidence this is fixed.
+ * An earlier draft of this comment said "ZERO rows, permanently". That word is
+ * wrong in the direction that costs the most: run this script within seven
+ * minutes of a write, see a row, and discard a real defect as overstated.
+ * MEASURED 2026-09-08T20:40Z -- row 49 was unstamped at that moment while the
+ * other 48 were triaged. The defect is that a reader on any schedule coarser
+ * than the window, or running after triage, sees nothing and calls it success.
  *
  * That is a false green, and it is the SAME defect this file was written to
  * prevent, arriving from the other side. The header above warns that a reader
