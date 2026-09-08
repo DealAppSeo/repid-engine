@@ -122,6 +122,44 @@ function detectTag(row) {
 }
 
 /**
+ * Decide what "zero unread" actually means.
+ *
+ * ZERO UNREAD HAS TWO CAUSES AND THEY ARE NOT THE SAME RESULT, which is the
+ * whole point of this function. Reporting one number for both is how a blind
+ * reader reports success.
+ *
+ *   'empty'   no rows for this recipient at all. A true VERIFIED 0.
+ *   'ours'    rows exist and THIS reader answered them. Also VERIFIED.
+ *   'foreign' rows exist and somebody else stamped read_at first. NOT_CHECKED —
+ *             the reader keys off `read_at IS NULL`, so a third party that
+ *             stamps read_at makes every message invisible to it. "0 unread"
+ *             then means "I cannot observe this inbox", not "nothing was sent".
+ *
+ * MEASURED 2026-09-08: 'foreign' is what actually holds. All 48 rows in
+ * ai_dispatch carry read_at, and the only reply_from in the table is
+ * `dispatch-triage` — an external writer, absent from this repo's entire
+ * history. Before that the empty branch printed VERIFIED unconditionally,
+ * which is LESSONS rule 6: a check that cannot fail is a liability.
+ *
+ * Ownership is decided by reply_from prefix, because that is the only evidence
+ * that separates the cases — this reader always writes `${RUNNER_BASE}-${pid}`.
+ *
+ * @param {{reply_from?: string|null}[]} stampedRows rows with read_at NOT NULL
+ * @param {string} runnerBase this reader's reply_from prefix
+ */
+function classifyEmptyInbox(stampedRows, runnerBase) {
+  const rows = Array.isArray(stampedRows) ? stampedRows : [];
+  if (rows.length === 0) return { outcome: 'empty', total: 0, foreign: [] };
+
+  const foreign = [...new Set(rows.map((r) => r.reply_from ?? '(null)'))]
+    .filter((f) => !f.startsWith(runnerBase))
+    .sort();
+
+  if (foreign.length === 0) return { outcome: 'ours', total: rows.length, foreign };
+  return { outcome: 'foreign', total: rows.length, foreign };
+}
+
+/**
  * Format the fleet-state answer.
  *
  * Kept here rather than in the handler so it is testable without a database,
@@ -164,5 +202,6 @@ module.exports = {
   releasePatch,
   planFor,
   detectTag,
+  classifyEmptyInbox,
   formatFleetState,
 };

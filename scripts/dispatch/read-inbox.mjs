@@ -6,12 +6,78 @@
  * WHY
  * ─────────────────────────────────────────────────────────────────────────────
  * ai_dispatch is a mailbox with per-agent inbox views and read_at / reply_at /
- * reply_from columns already in place. Nothing has ever read it: every row has
- * read_at NULL and reply_at NULL, going back months. Somebody built a mailbox
- * with read receipts and nobody has ever opened it.
+ * reply_from columns already in place. This is the reader.
  *
- * That absence is the reason messages keep being written into it and nothing
- * comes back. This is the reader.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THIS HEADER USED TO SAY "NOTHING HAS EVER READ IT". THAT IS NOW FALSE.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * When this file was written (#486) the claim was true and it was the whole
+ * reason the file exists: every row had read_at NULL going back months.
+ *
+ * MEASURED 2026-09-08 against the live table, and it has inverted completely:
+ *
+ *   48 of 48 rows have read_at set. 48 of 48 have reply_at set.
+ *   There is exactly ONE distinct reply_from in the entire table: `dispatch-triage`.
+ *   It began at 2026-08-31T15:30Z and BACKFILLED every row back to 2026-04-04.
+ *   Every row now carries status='triaged'.
+ *   Its reply is a fixed form: "TRIAGE — automated. Content was read as DATA and
+ *   NOT executed. […] needs a reply from a human/agent: YES".
+ *
+ * `dispatch-triage` is NOT in this repository — the string appears nowhere in
+ * the working tree and nowhere in the full git history. It is an external
+ * writer against the same table.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT THAT DOES TO THIS SCRIPT — READ THIS BEFORE TRUSTING ITS OUTPUT
+ * ─────────────────────────────────────────────────────────────────────────────
+ * This reader's candidate query is `read_at IS NULL`. The triager stamps
+ * read_at on every message within minutes of arrival. So this script matches
+ * zero rows for every inbox OUTSIDE a ~7-minute window -- the gap between a
+ * write and the triager stamping it -- and its zero-candidate branch used to
+ * print:
+ *
+ *     "VERIFIED. Inbox has no unread messages"
+ *
+ * DO NOT read a candidate found inside that window as evidence this is fixed.
+ * An earlier draft of this comment said "ZERO rows, permanently". That word is
+ * wrong in the direction that costs the most: run this script within seven
+ * minutes of a write, see a row, and discard a real defect as overstated.
+ * MEASURED 2026-09-08T20:40Z -- row 49 was unstamped at that moment while the
+ * other 48 were triaged. The defect is that a reader on any schedule coarser
+ * than the window, or running after triage, sees nothing and calls it success.
+ *
+ * That is a false green, and it is the SAME defect this file was written to
+ * prevent, arriving from the other side. The header above warns that a reader
+ * which stamps read_at and returns filler converts an honest zero into a
+ * dishonest hundred-percent. A third party now does exactly that, and this
+ * script's own success message launders it. LESSONS rule 6: a check that cannot
+ * fail is a liability.
+ *
+ * So the empty case now DISCRIMINATES (see `main`): an inbox with no rows at all
+ * is a true VERIFIED 0; an inbox whose rows were all stamped read by somebody
+ * other than this reader is NOT_CHECKED (exit 2), because this reader can no
+ * longer observe whether anything was addressed to it.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT IS STILL MISSING — AND IT WAS NEVER BUILT, IT DID NOT BREAK
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The mailbox has a WRITER (agents insert rows), a TRIAGER (external,
+ * classifies and stops), and this READER (answers `#tag` questions it can
+ * answer from the database). It has NO DELIVERER: nothing carries a triaged
+ * message the last step to the agent that should act on it. The triager's own
+ * reply says "needs a reply from a human/agent: YES" and then nothing consumes
+ * that verdict.
+ *
+ * No deliverer was ever built. Evidence, not inference: no file matching
+ * deliver* has ever existed in this repository's history; #486 (the only commit
+ * that has ever touched this script) shipped the reader, its library and its
+ * test and nothing else; and `reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md`
+ * records the gap being named and deliberately left open — "I have no verified
+ * path from 'agent produces text' to 'repo artifact a verifier can check' […]
+ * It needs a real dispatch→artifact→verify loop designed first."
+ *
+ * See `docs/dispatch/MAILBOX_DELIVERY.md` for the full path and what has to
+ * invoke this script.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE ONE RULE THAT MATTERS
@@ -33,7 +99,14 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * USAGE
  * ─────────────────────────────────────────────────────────────────────────────
+ *   npm run dispatch:read-inbox -- --to cc [--limit 5] [--dry-run]
  *   node scripts/dispatch/read-inbox.mjs --to cc [--limit 5] [--dry-run]
+ *
+ * The npm script exists so this file is DISCOVERABLE. It is deliberately NOT a
+ * `check:*` script: `npm run check` runs those with no Supabase credential, and
+ * a network-dependent drain is not a build gate. Nothing invokes it on a
+ * schedule — see `docs/dispatch/MAILBOX_DELIVERY.md`, which names that as the
+ * open gap rather than inventing a scheduler for it.
  *
  *   --to <name>    recipient inbox to drain (required)
  *   --limit <n>    max messages this run (default 5)
@@ -47,7 +120,7 @@
 
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { claimPatch, replyPatch, releasePatch, planFor, formatFleetState } = require('./inbox-lib.js');
+const { claimPatch, replyPatch, releasePatch, planFor, classifyEmptyInbox, formatFleetState } = require('./inbox-lib.js');
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -78,7 +151,8 @@ if (!URL_BASE || !KEY) {
 }
 
 /** A run id so a claim is traceable to the process that made it. */
-const RUNNER = `${process.env.DISPATCH_RUNNER || 'read-inbox'}-${process.pid}`;
+const RUNNER_BASE = process.env.DISPATCH_RUNNER || 'read-inbox';
+const RUNNER = `${RUNNER_BASE}-${process.pid}`;
 
 const headers = {
   apikey: KEY,
@@ -129,8 +203,45 @@ async function main() {
   );
 
   if (candidates.length === 0) {
-    console.log(`read-inbox — VERIFIED. Inbox "${TO}" has no unread messages (read_at IS NULL).`);
-    return 0;
+    // ZERO UNREAD HAS TWO CAUSES AND THEY ARE NOT THE SAME RESULT.
+    //
+    // Cause A: nothing was ever addressed to this inbox. A true VERIFIED 0.
+    // Cause B: something else stamped read_at on every row before this reader
+    //   saw them. Then "no unread" means "I cannot see my own mail", which is
+    //   NOT_CHECKED — and printing VERIFIED over it is the false green the
+    //   header describes. As of 2026-09-08, cause B is what actually holds:
+    //   `dispatch-triage` stamps read_at within minutes and backfilled the
+    //   whole table.
+    //
+    // Distinguished by WHO stamped it, which is the only evidence that
+    // separates them. Rows this reader answered carry reply_from = RUNNER.
+    // Classification lives in inbox-lib.js so a CJS test can require it — the
+    // same constraint that split that file out. Logic here would be untestable.
+    const stamped = await rest(
+      `ai_dispatch?select=reply_from&to_ai=eq.${encodeURIComponent(TO)}&read_at=not.is.null`,
+    );
+    const verdict = classifyEmptyInbox(stamped, RUNNER_BASE);
+
+    if (verdict.outcome === 'empty') {
+      console.log(`read-inbox — VERIFIED. Inbox "${TO}" is empty: no messages at all, read or unread.`);
+      return 0;
+    }
+
+    if (verdict.outcome === 'ours') {
+      console.log(
+        `read-inbox — VERIFIED. Inbox "${TO}" has no unread messages; ` +
+          `all ${verdict.total} read row(s) were answered by this reader.`,
+      );
+      return 0;
+    }
+
+    console.error(`read-inbox — NOT_CHECKED. Inbox "${TO}" reports 0 unread, but that is not an empty inbox.`);
+    console.error(`  ${verdict.total} row(s) already have read_at set, stamped by: ${verdict.foreign.join(', ')}.`);
+    console.error('  This reader keys off `read_at IS NULL`, so a third party that stamps read_at');
+    console.error('  makes every message invisible to it. "0 unread" here means "I cannot observe');
+    console.error('  this inbox", not "nothing was sent". Exiting 2, not 0.');
+    console.error('  See docs/dispatch/MAILBOX_DELIVERY.md.');
+    return 2;
   }
 
   console.log(`read-inbox — ${candidates.length} unread in "${TO}"${DRY ? ' (dry run)' : ''}\n`);
