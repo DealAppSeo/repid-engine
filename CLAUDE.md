@@ -54,6 +54,41 @@ generalise an existing one. Narratives stay in `reports/<date>/`.
 >
 > The code remains proprietary by licence; it is not private by access.
 
+## OPERATOR ENVIRONMENT — do not infer this, it is written here
+
+**Sean runs Windows, in PowerShell 5.1.** His prompt looks like `PS C:\Users\Cash4>`.
+Node is **v22.17.0** [MEASURED 2026-09-08, from the operator running `node --version`].
+
+- **`&&` is a syntax error** in this PowerShell. Chain with `;`, or give one command per line.
+- Commands must be **PowerShell**, not bash: no `export`, no `$(...)`, no `~/`, no `&&`.
+- **Write for someone who will paste your block verbatim and cannot debug a fragment.**
+  Give the whole block, say where to paste it, and say what a correct result looks like.
+  Never hand over a snippet that assumes a working directory or a shell you did not check.
+
+**The section immediately below is bash, and the operator cannot run it as written.**
+`export SUPABASE_URL=... SUPABASE_SERVICE_KEY=...` is the documented way to boot a local
+checkout, and it fails in PowerShell — `export` is not a command there, and one statement
+cannot set two variables. The PowerShell form is two lines:
+
+```powershell
+$env:SUPABASE_URL = "http://localhost:54321"
+$env:SUPABASE_SERVICE_KEY = "dummy"
+```
+
+That is the whole reason this block exists: a quickstart the operator cannot execute is not
+a quickstart, and nothing in the file said which shell it assumed.
+
+**The committed `C:/Users/Cash4/repos/...` paths here DO corroborate Windows** — they appear
+in `XC_S-VERIFY1_REPORT.md` and others. Note the direction: they agree with the live reading,
+so they are evidence. The sibling repo `DealAppSeo/trustshell` carries the same block warning
+about mac-style `/Users/Cash4/...` strings that do NOT match his machine, and a session there
+inferred "the operator is on a Mac" from exactly those. **A committed path is a claim about
+whoever wrote it, not a reading of the machine you are talking to** — it happens to be right
+here and was wrong there. Ask, or read the prompt in the transcript.
+
+**Asking is cheap and is not a failure.** Anything about the operator's machine is one
+question answered in seconds with certainty. No amount of inference beats that.
+
 ## Commands
 
 ```bash
