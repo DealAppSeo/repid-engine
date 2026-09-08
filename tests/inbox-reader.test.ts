@@ -175,3 +175,72 @@ describe('the fleet answer never reports absence as failure', () => {
     expect(out).toMatch(/never "down"/);
   });
 });
+
+/**
+ * ZERO UNREAD IS NOT ONE RESULT.
+ *
+ * The reader selects on `read_at IS NULL`. On 2026-09-08 an external writer
+ * (`dispatch-triage`, absent from this repo's entire history) was measured
+ * stamping read_at on all 48 rows of `ai_dispatch` within minutes of arrival,
+ * having backfilled the table back to 2026-04-04. That makes every message
+ * invisible to this reader — and the empty branch used to print
+ * "VERIFIED. Inbox has no unread messages" over it.
+ *
+ * A blind reader reporting success is the exact defect this script's header was
+ * written to prevent, arriving from the other side. These tests hold the
+ * discrimination in place.
+ */
+describe('an inbox this reader cannot see is NOT_CHECKED, never VERIFIED', () => {
+  const MINE = 'read-inbox';
+
+  it('no rows at all is a true empty inbox', () => {
+    expect(lib.classifyEmptyInbox([], MINE).outcome).toBe('empty');
+  });
+
+  it('rows this reader answered are still VERIFIED', () => {
+    const v = lib.classifyEmptyInbox(
+      [{ reply_from: 'read-inbox-123' }, { reply_from: 'read-inbox-456' }],
+      MINE,
+    );
+    expect(v.outcome).toBe('ours');
+    expect(v.total).toBe(2);
+    expect(v.foreign).toEqual([]);
+  });
+
+  it('rows stamped by a THIRD PARTY are foreign — the live 2026-09-08 case', () => {
+    const v = lib.classifyEmptyInbox(
+      [{ reply_from: 'dispatch-triage' }, { reply_from: 'dispatch-triage' }],
+      MINE,
+    );
+    expect(v.outcome).toBe('foreign');
+    expect(v.foreign).toEqual(['dispatch-triage']);
+  });
+
+  it('names every foreign stamper, so the report says WHO blinded it', () => {
+    const v = lib.classifyEmptyInbox(
+      [{ reply_from: 'dispatch-triage' }, { reply_from: 'some-other-bot' }, { reply_from: 'read-inbox-1' }],
+      MINE,
+    );
+    expect(v.outcome).toBe('foreign');
+    expect(v.foreign).toEqual(['dispatch-triage', 'some-other-bot']);
+  });
+
+  it('ONE foreign row among ours is still foreign — a majority is not a quorum', () => {
+    const v = lib.classifyEmptyInbox(
+      [{ reply_from: 'read-inbox-1' }, { reply_from: 'read-inbox-2' }, { reply_from: 'dispatch-triage' }],
+      MINE,
+    );
+    expect(v.outcome).toBe('foreign');
+  });
+
+  it('a read_at with NO reply_from is foreign, not ours — an unattributed stamp is not our work', () => {
+    const v = lib.classifyEmptyInbox([{ reply_from: null }], MINE);
+    expect(v.outcome).toBe('foreign');
+    expect(v.foreign).toEqual(['(null)']);
+  });
+
+  it('honours DISPATCH_RUNNER, so a renamed runner does not read its own work as foreign', () => {
+    const v = lib.classifyEmptyInbox([{ reply_from: 'cc-drain-9' }], 'cc-drain');
+    expect(v.outcome).toBe('ours');
+  });
+});

@@ -140,6 +140,8 @@ const ALLOWLIST = {
   CLASSIFIER_PACE_MS: 'scripts/test-classifier.ts only; generator scans src/.',
   CROSS_LLM_PACE_MS: 'scripts/test-classifier.ts only; generator scans src/.',
   CC_DRAIN_BATCH: 'scripts/cc-drain-once.ts only; generator scans src/.',
+  DISPATCH_RUNNER:
+    'Real read in scripts/dispatch/read-inbox.mjs (claim provenance); the generator scans src/ only, and the walk above scans .md/.ts/.tsx only, so an .mjs read can never reach the registry.',
   FIRECRAWL_SMOKE_AGENT_ID: 'scripts/firecrawl-smoke.ts only; generator scans src/.',
   WINDOW_HOURS: 'scripts/cost/spend-readout.ts only; generator scans src/.',
   WALLET_ADDRESS: 'scripts/check-testnet-balance.ts only; generator scans src/.',
