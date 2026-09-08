@@ -270,6 +270,18 @@ adminFlagsRouter.use((req: Request, res: Response, next: NextFunction) => {
  * user-visible behavior. Adding it here too is additive to a different,
  * auth-gated aggregator, not a duplicate of either. Same not-flipped,
  * report-only mode as every flag above.
+ *
+ * Extended a seventeenth time with LISTING_BRIDGE_ENABLED (default OFF) —
+ * src/services/listing-bridge.ts:45, gating whether an accepted marketplace
+ * offer can create a real service_contracts row at all (listing-bridge.ts:147,244).
+ * The module's own header calls this "the head of the path that moves money —
+ * lands finished and inert per CLAUDE_RULES 23". Not the payment gate itself
+ * (x402_enforcement_enabled above covers POST /escrow); this gates contract
+ * *creation* from an accepted offer. Already echoed narrowly at the keyless
+ * GET /listings/offers/info (listing-offers.ts:79, `{enabled}`) — a different
+ * endpoint, not this single-pane aggregator, so reporting it here too is
+ * additive, not a duplicate. Same not-flipped, report-only mode as every flag
+ * above.
  */
 adminFlagsRouter.get('/', async (req: Request, res: Response) => {
   const halConfig = await getHalConfig().catch(() => null);
@@ -431,6 +443,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
         note: 'gates src/services/human-agent-binding.ts (bindOwnerToAgent, line 144) and listing-bridge.ts:96 (resolveToAgent), whether a signature-proven human-to-agent ownership claim can be recorded and used to resolve a human party to their agent. Default false means neither path is active. Also echoed at GET /api/v1/human/agents (`enabled`) and the keyless GET /readiness (status words, not a raw boolean)',
       };
     })(),
+    listing_bridge_enabled: {
+      value: process.env.LISTING_BRIDGE_ENABLED === 'true',
+      source: process.env.LISTING_BRIDGE_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates src/services/listing-bridge.ts, whether an accepted marketplace offer can create a real service_contracts row (listing-bridge.ts:147,244) — not the payment gate itself (see x402_enforcement_enabled). Default false means no contract creation path is active. Also echoed narrowly at keyless GET /listings/offers/info (`enabled`), a different endpoint than this one',
+    },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
         ? 'true (simulated settlement)'
