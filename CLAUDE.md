@@ -18,6 +18,30 @@ agent working with less context than it believes it has. Read yours first:
 | `trinity-symphony-shared` | `CLAUDE.md` — lane rules; take a lane before touching a repo |
 | `hyperdag-protocol` | `CLAUDE.md` |
 
+**THIS TABLE IS NOT EXHAUSTIVE, AND THAT IS A KNOWN DEFECT — do not read absence from
+it as "that surface has no rules".** It lists the five repos one session could reach.
+The Trust\* ecosystem is far wider: TrustShell, TrustMarket, TrustRepID, TrustRails,
+TrustTrader, TrustCRE, TrustEscrow and TrustMedical are all planned on this same HAL /
+RepID / ERC-8004 / x402 harness, plus whatever third parties build via TrustMarket.
+`DealAppSeo/trustrails-dev` is live TODAY (see the deployment table in
+`trinity-ecosystem/CLAUDE.md`) and is already missing from the rows above — this table
+shipped incomplete.
+
+**The shape is the bug, not the missing row.** A per-repo list of all sibling repos is
+N tables of N rows: adding a surface means editing every other repo, and forgetting to
+fails silently and in the safe-looking direction — the new surface simply is not listed,
+nothing breaks, and an agent landing there sees no pointer. That is precisely the failure
+this section was written to fix, reintroduced one level up. It is the same lesson as the
+hand-maintained jest `roots` list recorded under **Test layout**: *prefer a discovery rule
+to a list anywhere this pattern appears*, and this is that pattern.
+
+**The fix is a star, not a mesh:** every repo's entry point carries ONE line — true north
+is `repid-engine/LESSONS.md` — and says nothing about its siblings. One row per repo
+instead of N, a new surface touches only itself, and no table exists to go stale. Pending
+a decision on whether outside builders get a separate PUBLISHED contract rather than this
+internal file, which is capped at 6000 characters precisely because it is a dispatch
+payload and is full of dated retractions a stranger should not meet first.
+
 [`LESSONS.md`](LESSONS.md) at the repo root holds the operating rules every agent on this
 system works under. It is **injected verbatim** into every XC/GA dispatch by
 `scripts/dispatch/run-agent.mjs`, and it is the one place a lesson is durable across
