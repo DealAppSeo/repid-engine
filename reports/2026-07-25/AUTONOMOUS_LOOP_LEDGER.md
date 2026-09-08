@@ -5522,3 +5522,15 @@ yet built as this entry is opened, per the Beat 106 process correction (ledger P
 file is touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge
 convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in
 this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #669, `feat/admin-flags-human-agent-bind-enabled`, cut from `origin/main`.
+`human_agent_bind_enabled` added with the same `{value, source}` shape as every existing field,
+plus a `note` naming both gate sites (`human-agent-binding.ts:144`, `listing-bridge.ts:96`) and
+both existing echoes (`GET /api/v1/human/agents`, keyless `GET /readiness`). 48/48 tests pass
+locally (`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from
+46/46 — 2 new cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in
+this runner. Opened as SAFE-CLASS and merged with `gh pr merge 669 --auto --squash` while its
+checks were still in flight. At the time this closeout was written, both #668 (this ledger PR) and
+#669 were still `OPEN`/pending checks — not yet confirmed merged; the next beat's step 1 confirms
+that independently, same as every other beat in this file. No deviation from the stated plan.
