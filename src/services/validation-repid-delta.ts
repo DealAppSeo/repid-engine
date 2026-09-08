@@ -166,9 +166,12 @@ const SERVICE_FULFILLED_DELTAS = {
   buyer: 5,
 } as const;
 
-const SERVICE_SATISFIED_DELTA_BASE = {
+// Exported so the settlement-score SHADOW observer computes its would-be delta
+// from the SAME constant the live writer applies — one source, no drift. The
+// export adds no behaviour; the live apply below is unchanged.
+export const SERVICE_SATISFIED_DELTA_BASE = {
   provider: 30,  // multiplied by satisfaction_score
-  buyer: 15,
+  buyer: 15,     // also multiplied by satisfaction_score (see applyServiceSatisfiedDeltas)
 } as const;
 
 const SERVICE_DISPUTE_DELTAS = {
