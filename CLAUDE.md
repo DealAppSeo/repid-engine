@@ -219,6 +219,28 @@ Railway + nixpacks. `nixpacks.toml` overrides install with `npm install --legacy
 
 The server binds `0.0.0.0:$PORT` (default 3000).
 
+## Strix reviews this repo, and NOTHING here makes you wait for it
+
+**Both halves cost a merge on 2026-09-08 (#675).** Strix is installed on
+`repid-engine`, but it is **ADVISORY here — not a required check**. On
+`DealAppSeo/trustshell` the same bot IS in the branch ruleset, so GitHub physically
+refuses a merge before the verdict. Here nothing refuses. The only thing between a
+PR and an unreviewed merge is the agent deciding to wait, and an agent that learned
+"the gate will stop me" on trustshell carries a false premise into this repo.
+
+**Strix does not review DRAFTS, so an absent Strix check on a draft is not evidence
+Strix is absent** — it is evidence the PR is a draft. That inference is what failed:
+#675 was opened as a draft, its check list showed no Strix, and the session concluded
+the repo does not use Strix at all. It does. Marking the PR ready started Strix within
+**6 seconds**, and the merge landed **1 second after that**. The verdict (clean, as it
+turned out) arrived after the squash.
+
+So the sequence is: open the PR → get CI green → **mark it ready** → wait for the
+verdict → merge. A clean verdict arriving later does not make an early merge sound;
+that is how the habit survives. Automatic re-review on push is off, so after any push
+comment `@strix-security` — a required check that goes ABSENT is neither pending nor
+passing, and on this repo an absent one blocks nothing at all.
+
 ## Conventions worth knowing
 
 - `tsconfig.json` enables `strict` and `noUncheckedIndexedAccess` — array/object index access returns `T | undefined`. Expect to handle that explicitly.
