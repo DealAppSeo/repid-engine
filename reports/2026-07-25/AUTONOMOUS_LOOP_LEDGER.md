@@ -5601,3 +5601,70 @@ after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CL
 was written, both #673 (this ledger PR) and #674 were still `OPEN`/pending checks — not yet
 confirmed merged; the next beat's step 1 confirms that independently, same as every other beat in
 this file. No deviation from the stated plan.
+
+## Beat 121 — 2026-09-08 · verified #673/#674 landed, diff matches intent; five non-loop PRs landed since; step 2 intent: AGENT_SELF_SERVE_KEYS_ENABLED
+
+**Step 1 — Beat 120 checked against its own diff + CI, not against its prose.**
+`gh pr view 674 --json state,mergedAt,statusCheckRollup` shows `MERGED` with 9/9 checks SUCCESS
+(test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL prompt-injection probes, Strix
+Security Review). `git log origin/main --oneline` confirms d7e0d90 (#674) and e229c31 (#673, this
+ledger's own prior entry) are both on `origin/main`. `git show d7e0d90 -- src/routes/admin-flags.ts`
+matches Beat 120's stated intent exactly: `listing_bridge_enabled` added with the same
+`{value, source}` shape as every existing field, a `note` naming the gate sites
+(`listing-bridge.ts:147,244`) and the existing narrower echo at `GET /listings/offers/info`.
+
+**Five commits landed on `origin/main` between #674 and this beat, none carrying a ledger entry**
+(same as #667 before them — noted so the next beat does not mistake this for a gap): 019d1e4 (#675,
+docs+measure correcting two documented mechanisms plus the money-path gate), e783111 (#677, docs on
+Strix being advisory-only here), 1481e31 (#679, docs on the operator's PowerShell environment),
+2d8071a (#678, a new `tests/named-env-vars.test.ts` + `scripts/generate-env-registry.mjs` that fails
+CI when docs/comments name an env var absent from a generated registry), 3213c78 (#680, CI running
+every `check:*` script by discovery rather than a hand-maintained list). Spot-checked #680 and #678
+via `gh pr view --json state,mergedAt,statusCheckRollup`: both `MERGED`, 9/9 checks green. These
+carry no admin-flags changes and no conflict with this beat's step 2 — `known-env-vars.generated.ts`
+(from #678) is a superset registry for a docs-typo guard, orthogonal to what `/admin/flags` reports
+at runtime. One open PR exists outside this loop's chain, `#676` ("docs: receipt↔contract linkage
+proposal, read-only, no DDL"), `mergeStateStatus: UNKNOWN` — not touched here, not part of this
+loop's pattern, left for whoever opened it.
+
+**Step 2 — `AGENT_SELF_SERVE_KEYS_ENABLED` (default OFF), the human-free agent API-key mint.**
+Rebuilt the flag census again: of the five 4-call-site flags Beat 120 left tied
+(`HITL_CALLBACK_ENABLED`, `HAL_LOCAL_FALLBACK_ENABLED`, `EXECUTION_FLOOR_ENABLED`,
+`ANFIS_RETUNE_ENABLED`, `AGENT_SELF_SERVE_KEYS_ENABLED`), this one is chosen on the same
+already-echoed-elsewhere precedent as every flag added this pass: `GET /api/v1/agent-keys`
+(`src/routes/v1/agent-keys.ts:40`) already returns `{enabled: AGENT_SELF_SERVE_KEYS_ENABLED, ...}`
+publicly, so adding it to the auth-gated `/admin/flags` aggregator is additive, not a duplicate.
+
+It lives at `src/services/agent-self-serve-key.ts:53-54`
+(`export const AGENT_SELF_SERVE_KEYS_ENABLED = process.env.AGENT_SELF_SERVE_KEYS_ENABLED === 'true'`),
+gating whether an agent can prove wallet ownership by signature (`verifyMessage`, no human in the
+loop) and mint itself a scoped API key — both `requestKeyChallenge` and `issueKeyFromSignature`
+(lines 111, 170) return early when the flag is off. The module's own header states this is
+"original work that mints live credentials, so it lands finished and inert per CLAUDE_RULES 23" —
+same shape as every flag added this pass. Not Sean-gated per CLAUDE.md's hard-line list (that names
+ENGINE_LLM_PROXY, ROUTER_STRICT_COST_ORDER, HAL_GROUNDING_MODE=enforce, REPID_PURPOSE_GATE_V3, and
+real-money X402/STAKE specifically; this mints a *scoped, non-admin* key — explicitly excluded from
+minting further keys per the module header — not a funds-moving or model-routing switch). This
+change only reads and reports current state — it does not flip the flag.
+
+Reported as `agent_self_serve_keys_enabled`, same `{value, source}` shape as every existing boolean
+field, with a `note` naming the gate module (`agent-self-serve-key.ts:111,170`), what it gates
+(wallet-signature key issuance, no admin scope grantable), and the existing public echo at
+`GET /api/v1/agent-keys`. Additive only — no existing field's shape changed, no route touched
+besides `admin-flags.ts` and its test file. Not yet built as this entry is opened, per the Beat 106
+process correction (ledger PR before any step-2 file is touched); the PR follows on its own branch
+cut from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while
+checks are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #682, `feat/admin-flags-agent-self-serve-keys-enabled`, cut from
+`origin/main`. `agent_self_serve_keys_enabled` added with the same `{value, source}` shape as
+every existing boolean field, plus a `note` naming the gate sites
+(`agent-self-serve-key.ts:111,170`), what it gates (wallet-signature key self-issuance, never
+admin-scoped), and the existing public echo at `GET /api/v1/agent-keys`. 52/52 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 50/50 — 2 new
+cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this runner.
+Opened as SAFE-CLASS and merged with `gh pr merge 682 --auto --squash` while its checks were still
+in flight. At the time this closeout was written, both #681 (this ledger PR) and #682 were still
+`OPEN`/pending checks — not yet confirmed merged; the next beat's step 1 confirms that
+independently, same as every other beat in this file. No deviation from the stated plan.
