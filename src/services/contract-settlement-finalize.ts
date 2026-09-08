@@ -35,6 +35,7 @@
 import { db } from '../db';
 import { applyServiceSatisfiedDeltas } from './validation-repid-delta';
 import { registerPendingOutcome } from './outcome-notifier';
+import { observeSettlementScore } from './settlement-score-shadow';
 
 export interface FinalizeResult {
   ok: boolean;
@@ -93,6 +94,29 @@ export async function finalizeSettledContract(args: {
     } catch (e) {
       console.error('Failed to register pending outcome:', e);
     }
+
+    // SHADOW cross-check (default OFF via SETTLEMENT_SCORE_SHADOW_ENABLED). This
+    // path already applied the real satisfied deltas above; the observer records
+    // — to trinity_agent_logs only — what a settlement WOULD score, so the
+    // eventual A2A settlement driver (which will call the same
+    // applyServiceSatisfiedDeltas) can be measured against a live cross-check
+    // before it is turned on. It moves no RepID, writes no score event, and
+    // never throws into settlement.
+    void observeSettlementScore({
+      contract: {
+        id: (step2 as any).id,
+        provider_agent_id: (step2 as any).provider_agent_id,
+        buyer_agent_id: (step2 as any).buyer_agent_id,
+        buyer_satisfaction_score:
+          typeof (step2 as any).buyer_satisfaction_score === 'number'
+            ? (step2 as any).buyer_satisfaction_score
+            : satisfactionScore,
+        status: (step2 as any).status,
+        metadata: (step2 as any).metadata,
+        payload: (step2 as any).payload,
+        x402_payment_id: (step2 as any).x402_payment_id ?? null,
+      },
+    }).catch((e) => console.error('[settlement-score-shadow] observe threw (settlement unaffected):', e));
   }
 
   return { ok: true, contract: step2 as Record<string, unknown> };
