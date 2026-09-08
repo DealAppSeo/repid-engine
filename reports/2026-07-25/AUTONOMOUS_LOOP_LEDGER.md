@@ -5400,3 +5400,21 @@ means all stakes are simulated-accounting and true requires on-chain verificatio
 correction (ledger PR before any step-2 file is touched); the PR follows on its own branch cut from
 `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while checks are
 in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the intent
+above states — PR #664, `feat/admin-flags-real-staking-enabled`, cut from `origin/main`.
+`real_staking_enabled` added with the same `{value, source}` shape as every existing field, plus a
+`note` naming the two call sites (`stake-vault.ts:65,223`) and the on-chain verification path
+(`deposit-verifier.ts`). Read directly via `process.env.REAL_STAKING_ENABLED` (formula copied
+verbatim from `config.ts:66`) rather than importing `src/config.ts`, since that module throws at
+import time when `SUPABASE_URL`/`SUPABASE_SECRET_KEY` are unset and this route's own test file does
+not set them — confirmed by first trying the import path, hitting no failure directly but reasoning
+from `config.ts`'s own throw (verified by reading it, not by triggering it) that a report-only route
+should not gain a hard dependency on Supabase env just to read one boolean. 44/44 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 42/42 — 2 new
+cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this runner.
+Opened as SAFE-CLASS and merged with `gh pr merge 664 --auto --squash` while its checks were still
+in flight. At the time this closeout was written, both #663 (this ledger PR) and #664 were still
+`OPEN` with `mergeStateStatus: BLOCKED` (waiting on required checks, not a real conflict) — not yet
+confirmed merged; the next beat's step 1 confirms that independently, same as every other beat in
+this file. No deviation from the stated plan.
