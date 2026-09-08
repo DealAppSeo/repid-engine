@@ -5418,3 +5418,46 @@ in flight. At the time this closeout was written, both #663 (this ledger PR) and
 `OPEN` with `mergeStateStatus: BLOCKED` (waiting on required checks, not a real conflict) — not yet
 confirmed merged; the next beat's step 1 confirms that independently, same as every other beat in
 this file. No deviation from the stated plan.
+
+## Beat 118 — 2026-09-08 · verified #663/#664 landed, diff matches intent; step 2 intent: BYOK_CUSTODY_ENABLED — the provider-key-custody gate
+
+**Step 1 — Beat 117 checked against its own diff + CI, not against its prose.** `gh pr checks 664`
+shows 9/9 SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL
+prompt-injection probes, Strix Security Review), and `gh pr view 664 --json state,mergedAt` shows
+`MERGED` at 2026-09-08T01:03:43Z. `git log origin/main --oneline -5` confirms f16baf4 (#664) and
+c8fd01e (#663, this ledger's own prior entry) are both on `origin/main` — no gap since. `git show
+f16baf4 -- src/routes/admin-flags.ts` matches Beat 117's stated intent exactly: `real_staking_enabled`
+added with the same `{value, source}` shape as every existing field, a `note` naming the two call
+sites (`stake-vault.ts:65,223`) and the on-chain verification path (`deposit-verifier.ts`), read
+directly via `process.env.REAL_STAKING_ENABLED` rather than importing `src/config.ts`.
+
+**Step 2 — `BYOK_CUSTODY_ENABLED` (default OFF).** Regrepped all `*_ENABLED` flags in `src/`
+against the current `admin-flags.ts`: 14 already reported there (this pass's additions plus
+pre-existing ones); of roughly 35 still missing, `BYOK_CUSTODY_ENABLED` is the clearest custody-
+scope gap. It lives at `src/services/byok-custody.ts:40` (`export const BYOK_CUSTODY_ENABLED =
+process.env.BYOK_CUSTODY_ENABLED === 'true'`), gating whether the service stores a user's provider
+API keys at all (`byok-custody.ts:99,196`) versus every caller shipping raw provider credentials on
+every request. The module's own header names three custody rules — store only after a live probe,
+never return a stored key, decrypt only at point of use — and states plainly this is "original work
+that touches live state" landing finished-and-inert per CLAUDE_RULES 23, switched on only after Sean
+has seen it work. It also documents the actual security ceiling: encryption reuses
+`agent-key-crypto.ts` (AES-256-GCM) under the single `AGENT_KEY_MASTER` symmetric key — anyone
+holding that env var plus DB access can decrypt every user's stored provider keys, though provider
+API keys (unlike wallet private keys) are revocable, rate-limited, and cannot move funds. There is
+already a narrower report of this flag at `GET /byok/providers` (`src/routes/v1/byok.ts:193`,
+`{enabled, providers}`), but that is a different endpoint, not the single-pane `/admin/flags`
+aggregator every other flag in this pass reports through — adding it there is additive, not a
+duplicate.
+
+Reported as `byok_custody_enabled`, same `{value, source}` shape as every existing field, with a
+`note` naming the module (`byok-custody.ts`), the two internal gate sites, the `/byok/providers`
+echo endpoint, and the `AGENT_KEY_MASTER` custody ceiling in one sentence — without repeating key
+material or any table/row detail (CLAUDE.md's public-repo rule: state the finding, not an
+inventory). Additive only — no existing field's shape changed, no route touched besides
+`admin-flags.ts` and its test file. Not Sean-gated per CLAUDE.md's hard-line list (that names
+real-money X402/STAKE flags specifically; this is provider-API-key custody, not a funds-moving
+flag, and this change only reads and reports its current state — it does not flip it). Not yet
+built as this entry is opened, per the Beat 106 process correction (ledger PR before any step-2
+file is touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge
+convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in
+this run.
