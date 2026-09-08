@@ -448,6 +448,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       source: process.env.LISTING_BRIDGE_ENABLED === undefined ? 'default' : 'env',
       note: 'gates src/services/listing-bridge.ts, whether an accepted marketplace offer can create a real service_contracts row (listing-bridge.ts:147,244) — not the payment gate itself (see x402_enforcement_enabled). Default false means no contract creation path is active. Also echoed narrowly at keyless GET /listings/offers/info (`enabled`), a different endpoint than this one',
     },
+    agent_self_serve_keys_enabled: {
+      value: process.env.AGENT_SELF_SERVE_KEYS_ENABLED === 'true',
+      source: process.env.AGENT_SELF_SERVE_KEYS_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates src/services/agent-self-serve-key.ts, whether an agent can prove wallet ownership by signature and mint itself a scoped API key with no human approval (requestKeyChallenge/issueKeyFromSignature, agent-self-serve-key.ts:111,170) — never an admin-scoped key, per the module\'s own design. Default false means no self-issuance path is active. Also echoed publicly at GET /api/v1/agent-keys (`enabled`), a different endpoint than this one',
+    },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
         ? 'true (simulated settlement)'
