@@ -5474,3 +5474,51 @@ was written, both #665 (this ledger PR) and #666 were still `OPEN` with `mergeSt
 (waiting on required checks, not a real conflict) — not yet confirmed merged; the next beat's step
 1 confirms that independently, same as every other beat in this file. No deviation from the stated
 plan.
+
+## Beat 119 — 2026-09-08 · verified #665/#666 landed, diff matches intent; step 2 intent: HUMAN_AGENT_BIND_ENABLED — the ownership-binding gate
+
+**Step 1 — Beat 118 checked against its own diff + CI, not against its prose.** `gh pr checks 666`
+shows 9/9 SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL
+prompt-injection probes, Strix Security Review), and `gh pr view 666 --json state,mergedAt` shows
+`MERGED` at 2026-09-08T04:32:00Z. `git log origin/main --oneline -6` confirms 9e333da (#666) and
+8389464 (#665, this ledger's own prior entry) are both on `origin/main`, immediately followed by
+a65a13c (#667, a docs-only wallet-address correction authored directly by Sean, not part of this
+loop's PR chain and carrying no ledger entry of its own — noted here only so the next beat does not
+mistake it for a gap in this sequence). `git show 9e333da -- src/routes/admin-flags.ts` matches
+Beat 118's stated intent exactly: `byok_custody_enabled` added with the same `{value, source}`
+shape as every existing field, a `note` naming the gate module (`byok-custody.ts:99,196`) and the
+narrower existing echo at `GET /byok/providers`.
+
+**Step 2 — `HUMAN_AGENT_BIND_ENABLED` (default OFF).** Regrepped all `*_ENABLED` flags in `src/`
+against the current `admin-flags.ts`: 15 already reported there; of 36 still missing, this one
+touches the most files of any candidate checked (`AGENT_GATE_ENABLED` 3, `X402_RELEASE_RETRY_ENABLED`
+3, `HITL_EXPIRY_SWEEPER_ENABLED` 3, `IDENTITY_TOKENS_ENABLED` 3, `AGENT_SELF_SERVE_KEYS_ENABLED` 4,
+`LISTING_BRIDGE_ENABLED` 4 — `HUMAN_AGENT_BIND_ENABLED` touches **8**), which is this pass's
+"do more with less" priority read literally. It lives at `src/services/human-agent-binding.ts:35`
+(`export const HUMAN_AGENT_BIND_ENABLED = process.env.HUMAN_AGENT_BIND_ENABLED === 'true'`), gating
+whether `bindOwnerToAgent` will record a signature-proven human-to-agent ownership claim at all
+(`human-agent-binding.ts:144`, returns `{ok:false, reason:'disabled'}` while off) and whether
+`listing-bridge.ts:resolveToAgent` will resolve a human party to the agent they own for a
+marketplace exchange (`listing-bridge.ts:96`, same off-path prose). The module's own header states
+this is "original work touching live state" landing finished-and-inert per CLAUDE_RULES 23 — same
+shape as `byok_custody_enabled` and `real_staking_enabled` before it, not Sean-gated per CLAUDE.md's
+hard-line list (that names real-money X402/STAKE specifically; this gates an ownership *claim*, not
+a fund movement).
+
+Unlike every flag added in this pass so far, this one is **already reported twice**, and neither
+existing report is the aggregator: (1) `GET /api/v1/human/agents` echoes it verbatim as `enabled`
+(`routes/v1/byok.ts:407`), and (2) the keyless `GET /readiness` (`routes/readiness.ts`,
+`config/flag-readiness.ts`) reports it as one of only two flags on a hardcoded public allowlist,
+using status words (`on`/`off`/`ignored_value`) rather than a raw boolean, specifically because its
+state is already user-visible behavior. Adding it to `/admin/flags` too is the same additive move
+Beat 118 made for `byok_custody_enabled` (also echoed elsewhere first) — a different, auth-gated
+single-pane aggregator, not a duplicate of either.
+
+Reported as `human_agent_bind_enabled`, same `{value, source}` shape as every existing field, with
+a `note` naming both gate sites (`human-agent-binding.ts:144`, `listing-bridge.ts:96`) and both
+existing echoes (`GET /api/v1/human/agents`, `GET /readiness`) in one sentence. Additive only — no
+existing field's shape changed, no route touched besides `admin-flags.ts` and its test file. Not
+yet built as this entry is opened, per the Beat 106 process correction (ledger PR before any step-2
+file is touched); the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge
+convention (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in
+this run.
