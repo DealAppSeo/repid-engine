@@ -4,6 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## READ `LESSONS.md` FIRST — it is shared with XC, GA and the swarm
 
+**Every surface has an entry point now; `hyperdag-protocol` had none until 2026-09-08.**
+A `find` for `CLAUDE.md`/`AGENTS.md`/`LESSONS.md` across its whole tree returned nothing,
+so an agent starting there saw no rules, no hard stops, and no sign that either existed
+elsewhere. A missing file raises no warning and fails no check — it just produces an
+agent working with less context than it believes it has. Read yours first:
+
+| surface | read first |
+|---|---|
+| `repid-engine` | `LESSONS.md`, then this file |
+| `trinity-ecosystem` | `CLAUDE.md`, then `docs/PRIOR-WORK-INDEX.md` |
+| `trustshell` | `AGENTS.md` (`CLAUDE.md` is a one-line `@AGENTS.md` include) |
+| `trinity-symphony-shared` | `CLAUDE.md` — lane rules; take a lane before touching a repo |
+| `hyperdag-protocol` | `CLAUDE.md` |
+
 [`LESSONS.md`](LESSONS.md) at the repo root holds the operating rules every agent on this
 system works under. It is **injected verbatim** into every XC/GA dispatch by
 `scripts/dispatch/run-agent.mjs`, and it is the one place a lesson is durable across
@@ -453,7 +467,15 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 ### Hard stops — never touch without explicit permission
 - RepID scoring formula T=floor(2000×log₁₀...) — never appear in public docs
 - ANFIS parameters — never in public docs
-- Marco De Rossi's files in hyperdag-protocol: ERC8004SPEC.md, contracts/, test/, abis/
+- Marco De Rossi's files in hyperdag-protocol, **under `packages/contracts/`**:
+  `packages/contracts/ERC8004SPEC.md`, `packages/contracts/contracts/`,
+  `packages/contracts/test/`, `packages/contracts/abis/`.
+  **This line used to give the bare names as if they sat at that repo's root, and none
+  of them do** [MEASURED 2026-09-08]. All four are one directory down. An agent that
+  checked the documented path, found nothing, and concluded the hard stop had gone
+  stale would have read a live prohibition as a dead one — the failure mode is silent
+  and lands on the one set of files that must not be touched. `hyperdag-protocol` now
+  carries its own `CLAUDE.md` naming them at the correct paths.
 - Sprint-3 stubs (EAS, ZKP) — do not remove or "fix" passing stubs
 
 ### Deploy facts
