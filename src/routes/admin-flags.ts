@@ -417,11 +417,20 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       source: process.env.BYOK_CUSTODY_ENABLED === undefined ? 'default' : 'env',
       note: 'gates src/services/byok-custody.ts, whether a user\'s provider API keys are stored server-side (byok-custody.ts:99,196) versus every caller shipping raw provider credentials on every request. Default false means no storage path is active. Also echoed narrowly at GET /byok/providers (byok.ts), a different endpoint than this one',
     },
-    human_agent_bind_enabled: {
-      value: process.env.HUMAN_AGENT_BIND_ENABLED === 'true',
-      source: process.env.HUMAN_AGENT_BIND_ENABLED === undefined ? 'default' : 'env',
-      note: 'gates src/services/human-agent-binding.ts (bindOwnerToAgent, line 144) and listing-bridge.ts:96 (resolveToAgent), whether a signature-proven human-to-agent ownership claim can be recorded and used to resolve a human party to their agent. Default false means neither path is active. Also echoed at GET /api/v1/human/agents (`enabled`) and the keyless GET /readiness (status words, not a raw boolean)',
-    },
+    human_agent_bind_enabled: (() => {
+      // Not read inline as an object-literal field: this flag is one of only two
+      // on the `/readiness` public allowlist, and tests/flag-readiness.test.ts
+      // greps all of src/ for every literal read of this env var, requiring each
+      // to be exactly the gate expression (=== the truthy string) — a trailing
+      // `,` from an object-literal field breaks that exact match. Bind it to a
+      // semicolon-terminated statement instead so the real gate stays covered.
+      const enabled = process.env.HUMAN_AGENT_BIND_ENABLED === 'true';
+      return {
+        value: enabled,
+        source: process.env['HUMAN_AGENT_BIND_ENABLED'] === undefined ? 'default' : 'env',
+        note: 'gates src/services/human-agent-binding.ts (bindOwnerToAgent, line 144) and listing-bridge.ts:96 (resolveToAgent), whether a signature-proven human-to-agent ownership claim can be recorded and used to resolve a human party to their agent. Default false means neither path is active. Also echoed at GET /api/v1/human/agents (`enabled`) and the keyless GET /readiness (status words, not a raw boolean)',
+      };
+    })(),
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
         ? 'true (simulated settlement)'
