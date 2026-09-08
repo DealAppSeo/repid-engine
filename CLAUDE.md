@@ -238,6 +238,38 @@ The Supabase project ID is **not** committed; the only artifacts are `SUPABASE_U
   tamper rejection) but its own README says the HTTP wrapper is NOT done, so the bridge cannot
   reach it, and its FRI params are explicitly not production soundness.
 
+### Pointing HAL at a local OpenAI-compatible gateway (OmniRoute, Ollama, LM Studio)
+
+**This capability already exists and was documented nowhere** [MEASURED 2026-09-08], which is
+why it kept being discussed as if it needed building. `localLlmBaseUrl()`
+(`src/hal/cross-llm-client.ts`) returns `LOCAL_LLM_BASE_URL || OPENAI_BASE_URL || ''`, and
+`resolveProviderEndpoint(defaultEndpoint, base, 'openai-compat')` (`src/hal/local-llm.ts`)
+rewrites EVERY openai-compat provider endpoint to `<base>/chat/completions` when it is set.
+Groq, Cerebras, DeepSeek and Fireworks all route through it. Both names are already in
+`known-env-vars.generated.ts`.
+
+So a local gateway needs **no code change** — one variable:
+
+```powershell
+$env:LOCAL_LLM_BASE_URL = "http://localhost:20128/v1"   # e.g. OmniRoute's endpoint
+```
+
+Anthropic-native calls are deliberately NOT redirected (`callType !== 'openai-compat'` returns
+the default endpoint untouched), so a gateway that only speaks OpenAI shape cannot silently
+break them.
+
+**Three things to know before pointing production at one.**
+
+1. **It moves every openai-compat provider at once.** Cross-LLM consensus is load-bearing for
+   fact-check; a gateway that degrades takes the whole quorum with it, which is the shape of the
+   Groq model-retirement outage recorded under Deploy facts. Set it in a dev environment and
+   measure the quorum before setting it anywhere that scores.
+2. **A gateway that fans out to third-party free tiers changes who sees the prompt.** The
+   variable is one line; the egress consequence is not. `ONLY_ATTESTATIONS_LEAVE` exists for
+   exactly this boundary question and treats a LOCAL host differently from a remote one — read
+   that path before assuming "local gateway" means "nothing leaves".
+3. **It is a redirect, not a fallback.** When set, the default endpoints are not tried.
+
 ### On-chain integration
 
 `src/engine/hashkey-chain.ts` and `src/routes/hashkey.ts` use `ethers` against the HashKey testnet (RPC `https://testnet.hsk.xyz`, contract `0xE3b55a00445dEE1e330f81d113da2E4F28131B69`). `DEPLOYER_PRIVATE_KEY` is optional — read paths work without it; writes require it.
