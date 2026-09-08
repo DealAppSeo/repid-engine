@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL || 'https://qnnpjhlxljtqyigedwkb.supabase.co';
-// Need a valid key, ideally from env. Assuming we have SUPABASE_SERVICE_ROLE_KEY or ANON_KEY
+// Need a valid key, ideally from env (service-role). Falls through to the db module.
 // but we might not in standard execution context unless loaded. We'll use the db module instead.
 import { db } from '../src/db';
 

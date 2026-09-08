@@ -26,7 +26,7 @@
  *   G7  auditor != doer for cold/auditor-class grants                        -- decideMint
  *   G8  a grant never approves/denies payment directly (still a separate,
  *       observe-mode question) -- NOT this module's job; nothing here is wired into
- *       PAY_AUTH_MODE or the pay route. Enforcing G8 is "don't wire it up", not code to test.
+ *       the pay route. Enforcing G8 is "don't wire it up", not code to test.
  *
  * FOLLOW-UP (before merge): two gaps closed after comparing this module's first pass against
  * agent-delegation.ts's own established shape --

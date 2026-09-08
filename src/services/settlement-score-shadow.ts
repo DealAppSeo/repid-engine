@@ -44,14 +44,14 @@
  * WHY THE WOULD-BE DELTA IS NOT THE FINAL current_repid. The live writer applies
  * `clamp(decay(current_repid) + delta)`.
  *
- * This comment used to add "and runs it through the money-path gate
- * (`MONEY_PATH_GATE_MODE`)". THERE IS NO SUCH GATE AND NO SUCH VARIABLE
- * [MEASURED 2026-09-08]: `MONEY_PATH_GATE_MODE` appeared nowhere in this
- * repository except this sentence — not in code, not in the generated env
- * registry. A named env var reads as a real control, so the sentence invented a
- * safety mechanism a reader would then assume was protecting the money path. The
- * real money-path gate is `X402_ENFORCEMENT_ENABLED` (`src/index.ts`,
- * `processCascadeQueue`), and it gates escrow admission, not the delta.
+ * An earlier revision of this comment named a money-path gate environment
+ * variable that did not exist [MEASURED 2026-09-08]: the name appeared nowhere
+ * in this repository except that sentence — not in code, not in the generated
+ * env registry. A named env var reads as a real control, so the sentence
+ * invented a safety mechanism a reader would then assume was protecting the
+ * money path. The real money-path gate is `X402_ENFORCEMENT_ENABLED`
+ * (`src/index.ts`, `processCascadeQueue`), and it gates escrow admission, not
+ * the delta.
  *
  * This module reports the raw satisfied delta and a
  * NAIVE `current_repid + delta` preview, both explicitly labelled — it does not

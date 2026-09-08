@@ -5,8 +5,8 @@
  * This router is CRUD over agent_listings / rental_records ONLY. It records intent + lifecycle.
  * NO money moves, NOTHING settles on-chain. Creating a rental writes a rental_record and returns
  * a settlement-disabled note — it does NOT transfer USDC, escrow, or touch any on-chain contract.
- * The MARKETPLACE_SETTLEMENT_ENABLED gate below is hard-wired OFF for V2; flipping the env var is a
- * no-op here (the settlement code path does not exist yet by design).
+ * Settlement is hardcoded off for V2 in this file; flipping an environment
+ * variable is a no-op here (the settlement code path does not exist yet by design).
  *
  * KEY ECONOMIC RULE: RepID earned during a rental attributes to the AGENT, not the renter
  * (rental_records.rep_id_earned_during_rental). The full UI + live economics defer to TrustMarket.dev.

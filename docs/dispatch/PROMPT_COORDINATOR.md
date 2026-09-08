@@ -106,7 +106,7 @@ point: shadow rows measure whether the two regimes order agents differently,
 instead of anyone arguing about whether they would.
 
 Do NOT build the confidence gate, the hierarchy, or the A2 statement yet. Do NOT
-flip PAY_AUTH_MODE. Do NOT touch the floor's shape — that rides on a decision
+flip a pay-auth enforcement flag. Do NOT touch the floor's shape — that rides on a decision
 Sean has not made.
 
 ────────────────────────────────────────────────────────────────────────────
