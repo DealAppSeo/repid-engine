@@ -4,6 +4,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## READ `LESSONS.md` FIRST — it is shared with XC, GA and the swarm
 
+**Every surface has an entry point now; `hyperdag-protocol` had none until 2026-09-08.**
+A `find` for `CLAUDE.md`/`AGENTS.md`/`LESSONS.md` across its whole tree returned nothing,
+so an agent starting there saw no rules, no hard stops, and no sign that either existed
+elsewhere. A missing file raises no warning and fails no check — it just produces an
+agent working with less context than it believes it has. Read yours first:
+
+| surface | read first |
+|---|---|
+| `repid-engine` | `LESSONS.md`, then this file |
+| `trinity-ecosystem` | `CLAUDE.md`, then `docs/PRIOR-WORK-INDEX.md` |
+| `trustshell` | `AGENTS.md` (`CLAUDE.md` is a one-line `@AGENTS.md` include) |
+| `trinity-symphony-shared` | `CLAUDE.md` — lane rules; take a lane before touching a repo |
+| `hyperdag-protocol` | `CLAUDE.md` |
+
+**THIS TABLE IS NOT EXHAUSTIVE, AND THAT IS A KNOWN DEFECT — do not read absence from
+it as "that surface has no rules".** It lists the five repos one session could reach.
+The Trust\* ecosystem is far wider: TrustShell, TrustMarket, TrustRepID, TrustRails,
+TrustTrader, TrustCRE, TrustEscrow and TrustMedical are all planned on this same HAL /
+RepID / ERC-8004 / x402 harness, plus whatever third parties build via TrustMarket.
+`DealAppSeo/trustrails-dev` is live TODAY (see the deployment table in
+`trinity-ecosystem/CLAUDE.md`) and is already missing from the rows above — this table
+shipped incomplete.
+
+**The shape is the bug, not the missing row.** A per-repo list of all sibling repos is
+N tables of N rows: adding a surface means editing every other repo, and forgetting to
+fails silently and in the safe-looking direction — the new surface simply is not listed,
+nothing breaks, and an agent landing there sees no pointer. That is precisely the failure
+this section was written to fix, reintroduced one level up. It is the same lesson as the
+hand-maintained jest `roots` list recorded under **Test layout**: *prefer a discovery rule
+to a list anywhere this pattern appears*, and this is that pattern.
+
+**The fix is a star, not a mesh:** every repo's entry point carries ONE line — true north
+is `repid-engine/LESSONS.md` — and says nothing about its siblings. One row per repo
+instead of N, a new surface touches only itself, and no table exists to go stale. Pending
+a decision on whether outside builders get a separate PUBLISHED contract rather than this
+internal file, which is capped at 6000 characters precisely because it is a dispatch
+payload and is full of dated retractions a stranger should not meet first.
+
 [`LESSONS.md`](LESSONS.md) at the repo root holds the operating rules every agent on this
 system works under. It is **injected verbatim** into every XC/GA dispatch by
 `scripts/dispatch/run-agent.mjs`, and it is the one place a lesson is durable across
@@ -453,7 +491,15 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 ### Hard stops — never touch without explicit permission
 - RepID scoring formula T=floor(2000×log₁₀...) — never appear in public docs
 - ANFIS parameters — never in public docs
-- Marco De Rossi's files in hyperdag-protocol: ERC8004SPEC.md, contracts/, test/, abis/
+- Marco De Rossi's files in hyperdag-protocol, **under `packages/contracts/`**:
+  `packages/contracts/ERC8004SPEC.md`, `packages/contracts/contracts/`,
+  `packages/contracts/test/`, `packages/contracts/abis/`.
+  **This line used to give the bare names as if they sat at that repo's root, and none
+  of them do** [MEASURED 2026-09-08]. All four are one directory down. An agent that
+  checked the documented path, found nothing, and concluded the hard stop had gone
+  stale would have read a live prohibition as a dead one — the failure mode is silent
+  and lands on the one set of files that must not be touched. `hyperdag-protocol` now
+  carries its own `CLAUDE.md` naming them at the correct paths.
 - Sprint-3 stubs (EAS, ZKP) — do not remove or "fix" passing stubs
 
 ### Deploy facts
