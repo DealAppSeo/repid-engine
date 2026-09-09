@@ -5722,3 +5722,17 @@ shape changes, no route touched besides `admin-flags.ts` and its test file. Not 
 entry is opened, per the Beat 106 process correction (ledger PR before any step-2 file is touched);
 the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge convention
 (`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #689, `feat/admin-flags-hal-local-fallback-enabled`, cut from
+`origin/main`. `hal_local_fallback_enabled` added with the same `{value, source}` shape as every
+existing boolean field, plus a `note` naming the gate site (`hal/fact-check.ts:1131-1132`), what it
+does when true (fabricates a fact-check-shaped verdict from a substring match, not a real quorum),
+and the two existing internal guards (`provider_health.succeeded`, `reward_suppressed`) that
+already treat that output as unearned. 54/54 tests pass locally (`npx jest --config jest.config.js
+src/routes/__tests__/admin-flags.test.ts`, up from 52/52 — 2 new cases), `npx tsc --noEmit` clean
+after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CLASS and merged with
+`gh pr merge 689 --auto --squash` while its checks were still in flight. At the time this closeout
+was written, both #688 (this ledger PR) and #689 were still `OPEN`/pending checks — not yet
+confirmed merged; the next beat's step 1 confirms that independently, same as every other beat in
+this file. No deviation from the stated plan.
