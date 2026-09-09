@@ -358,6 +358,18 @@ break them.
    that only some code honours fails **silently and in the safe-looking direction**, which is the
    house defect.
 
+   **AND "a second path" UNDERSTATES IT — the measured surface is 26 files** [MEASURED
+   2026-09-09 by `tests/provider-egress-guard.test.ts`, which now pins the number]. The judge
+   is one of twenty-six: the whole of `src/providers/`, `src/hal/lib/cross-llm/`, the key
+   probe, `pcp-validator.ts`, `badges.ts` and more all name provider hosts directly. **This
+   paragraph has now been too reassuring three times in a row** — first "changes who sees the
+   prompt", then "your whole keyring", then "a second path" — each correction still short of
+   the measurement. That is the argument for the guard rather than the prose: a count that
+   fails the build cannot drift toward comfort. The guard fails BOTH ways (a new file appears,
+   or a listed one stops matching), so the inventory cannot rot into an old measurement
+   wearing a permanent label. Most of the 26 are legitimate provider adapters; the guard
+   makes no claim they are wrong, only that they are countable.
+
    **How this was found is the reusable part.** `provider_health` holds a daily anthropic row,
    and anthropic-dialect providers are DROPPED under a local base — so the row looks like proof
    the variable was unset. It is not: that row comes from this judge, which hardcodes
