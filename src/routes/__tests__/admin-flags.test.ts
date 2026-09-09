@@ -46,6 +46,7 @@ describe('Admin Flags', () => {
     delete process.env.AGENT_SELF_SERVE_KEYS_ENABLED;
     delete process.env.HAL_LOCAL_FALLBACK_ENABLED;
     delete process.env.EXECUTION_FLOOR_ENABLED;
+    delete process.env.HITL_CALLBACK_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -485,6 +486,22 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.execution_floor_enabled.value).toBe(true);
     expect(res.body.execution_floor_enabled.source).toBe('env');
+  });
+
+  it('HITL_CALLBACK_ENABLED defaults false, with a note naming hitl-notification-dispatcher.ts', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hitl_callback_enabled).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('hitl-notification-dispatcher.ts'),
+    });
+  });
+
+  it('HITL_CALLBACK_ENABLED=true -> reports true, source env', async () => {
+    process.env.HITL_CALLBACK_ENABLED = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hitl_callback_enabled.value).toBe(true);
+    expect(res.body.hitl_callback_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
