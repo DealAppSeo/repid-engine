@@ -62,8 +62,14 @@ function buildStatus(): SelfHostStatus {
   const hostedDb = !!process.env.SUPABASE_URL;
   const localBase = LOCAL_LLM_BASE_URL || null;
   // Illustrative classification of a cloud LLM egress under the current boundary.
+  // The host here is a neutral, reserved example (RFC 2606 `.example`) on purpose: the
+  // classification depends ONLY on whether the host is local (src/selfhost/egress-guard.ts:
+  // classifyEgress → isLocalHost), never on which provider it is, and the host string is not
+  // surfaced in the status output. Using a real provider host here made this file read as a
+  // provider CALLSITE in the egress inventory when it performs no egress at all — no fetch, no
+  // bearer. A non-local example keeps the verdict byte-identical and off that list.
   const sampleCloudLlm = classifyEgress(
-    'https://api.groq.com/openai/v1/chat/completions',
+    'https://cloud-llm.example/v1/chat/completions',
     'prompt',
     ONLY_ATTESTATIONS_LEAVE,
   );
