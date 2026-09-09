@@ -10,8 +10,10 @@ would go stale, it is marked NOT CHECKED and names the observation that would
 close it.
 
 Landed as: [#695](https://github.com/DealAppSeo/repid-engine/pull/695) (the
-doc corrections) and [#696](https://github.com/DealAppSeo/repid-engine/pull/696)
-(the guard). Neither changes runtime behaviour.
+doc corrections, squashed as `62664f7`) and
+[#696](https://github.com/DealAppSeo/repid-engine/pull/696) (the guard, squashed
+as `43b6372`). Neither changes runtime behaviour. Both SHAs are on `main` — the
+claims below are checkable against the tree, not only against this file.
 
 ---
 
