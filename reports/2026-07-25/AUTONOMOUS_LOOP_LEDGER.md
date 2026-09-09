@@ -5668,3 +5668,71 @@ Opened as SAFE-CLASS and merged with `gh pr merge 682 --auto --squash` while its
 in flight. At the time this closeout was written, both #681 (this ledger PR) and #682 were still
 `OPEN`/pending checks — not yet confirmed merged; the next beat's step 1 confirms that
 independently, same as every other beat in this file. No deviation from the stated plan.
+
+## Beat 122 — 2026-09-09 · verified #681/#682 landed, diff matches intent; six non-loop PRs landed since; step 2 intent: HAL_LOCAL_FALLBACK_ENABLED
+
+**Step 1 — Beat 121 checked against its own diff + CI, not against its prose.**
+`gh pr view 682 --json state,mergedAt,statusCheckRollup` shows `MERGED` at 2026-09-08T20:28:28Z
+with 9/9 checks SUCCESS (test, crosscheck, gitleaks x2, resident-secrets x2, zkp-vault, HAL
+prompt-injection probes, Strix Security Review). `gh pr view 681` (this ledger's own prior entry)
+likewise `MERGED`, 9/9 green. `git log 5397ec1..origin/main` confirms both are on `origin/main`.
+`git show 5397ec1 -- src/routes/admin-flags.ts` matches Beat 121's stated intent exactly:
+`agent_self_serve_keys_enabled` added with the same `{value, source}` shape as every existing
+field, a `note` naming the gate sites (`agent-self-serve-key.ts:111,170`) and the existing public
+echo at `GET /api/v1/agent-keys`.
+
+**Six commits landed on `origin/main` between #682 and this beat, none carrying a ledger entry**
+(same non-gap pattern as #667 and the five before #681 — noted so the next beat does not mistake
+this for a loop failure): b53a2b9 (#683, LESSONS rule 12), b335517 (#684, local-gateway plug point
++ DECISION_LOG for D-019/D-020), 5b0a9a9 (#685, dispatch mailbox-reader fix), 5d0bb0a (#686, hard-stop
+path correction), cc125e6 (#687, "star not mesh" CLAUDE.md rewrite — this file's current header),
+6084a7a (#676, receipt↔contract linkage proposal, read-only/no-DDL — the one PR Beat 121 flagged as
+open/outside this loop's chain is now merged). All docs/lessons; none touch `admin-flags.ts` or
+conflict with this beat's step 2.
+
+**Step 2 — `HAL_LOCAL_FALLBACK_ENABLED` (default OFF), the fact-check no-quorum local heuristic.**
+Of the four flags Beat 120 left tied at the top of the census (`HITL_CALLBACK_ENABLED`,
+`HAL_LOCAL_FALLBACK_ENABLED`, `EXECUTION_FLOOR_ENABLED`, `ANFIS_RETUNE_ENABLED` —
+`AGENT_SELF_SERVE_KEYS_ENABLED`, the fifth, was Beat 121's pick), re-grepped all four fresh rather
+than trusting the old count: each now has 3 non-test call-site files, not 4 — the census shifts as
+the tree changes, so it is re-derived each beat, not carried forward. None of the four has an
+existing narrow public echo the way `byok_custody_enabled`, `human_agent_bind_enabled`,
+`listing_bridge_enabled` and `agent_self_serve_keys_enabled` each did before being added — so this
+pick breaks that precedent on tie-break grounds, not a public echo. `HAL_LOCAL_FALLBACK_ENABLED` is
+chosen on priority grounds instead (Sean 2026-07-27: audit-evidence first): its own module comments
+(`src/hal/service.ts:135`, `src/routes/agents-external.ts:623`) document that when this flag is
+true, `src/hal/fact-check.ts`'s zero-provider path *fabricates* `providers_used: 1` and `mode:
+'fact-check'` for a `deliverable.includes('false')` substring check scored 0.8 — "a no-provider veto
+wearing a fact-check's clothes" that two independent guards (`provider_health.succeeded` in
+`hal/service.ts`, `reward_suppressed` in `agents-external.ts`) exist specifically to unmask. Whether
+this flag is live in prod is exactly the kind of fact CLAUDE.md's audit-evidence priority calls for
+surfacing, and today it is invisible outside the process. This change only reads and reports current
+state — it does not flip the flag, and it does not touch the guards that already neutralize it when
+on.
+
+Will report as `hal_local_fallback_enabled`, same `{value, source}` shape as every existing boolean
+field, with a `note` naming the gate site (`hal/fact-check.ts:1131-1132`), what it does when true
+(fabricates a fact-check-shaped verdict from a substring match, no LLM quorum involved), and the two
+existing internal guards that treat its output as unearned (`provider_health.succeeded` /
+`reward_suppressed`) so a reader does not mistake "reported true" for "quorum working". Not
+Sean-gated per CLAUDE.md's hard-line list (that names ENGINE_LLM_PROXY, ROUTER_STRICT_COST_ORDER,
+HAL_GROUNDING_MODE=enforce, REPID_PURPOSE_GATE_V3, and real-money X402/STAKE specifically; this is a
+fact-check degrade path already fenced by the two guards above). Additive only — no existing field's
+shape changes, no route touched besides `admin-flags.ts` and its test file. Not yet built as this
+entry is opened, per the Beat 106 process correction (ledger PR before any step-2 file is touched);
+the PR follows on its own branch cut from `origin/main`, same SAFE-CLASS merge convention
+(`gh pr merge <n> --auto --squash` while checks are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #689, `feat/admin-flags-hal-local-fallback-enabled`, cut from
+`origin/main`. `hal_local_fallback_enabled` added with the same `{value, source}` shape as every
+existing boolean field, plus a `note` naming the gate site (`hal/fact-check.ts:1131-1132`), what it
+does when true (fabricates a fact-check-shaped verdict from a substring match, not a real quorum),
+and the two existing internal guards (`provider_health.succeeded`, `reward_suppressed`) that
+already treat that output as unearned. 54/54 tests pass locally (`npx jest --config jest.config.js
+src/routes/__tests__/admin-flags.test.ts`, up from 52/52 — 2 new cases), `npx tsc --noEmit` clean
+after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CLASS and merged with
+`gh pr merge 689 --auto --squash` while its checks were still in flight. At the time this closeout
+was written, both #688 (this ledger PR) and #689 were still `OPEN`/pending checks — not yet
+confirmed merged; the next beat's step 1 confirms that independently, same as every other beat in
+this file. No deviation from the stated plan.
