@@ -5781,3 +5781,17 @@ besides `admin-flags.ts` and its test file. Not yet built as this entry is opene
 106 process correction (ledger PR before any step-2 file is touched); the PR follows on its own
 branch cut from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto
 --squash` while checks are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #694, `feat/admin-flags-execution-floor-enabled`, cut from
+`origin/main`. `execution_floor_enabled` added with the same `{value, source}` shape as every
+existing boolean field, reusing the real `executionFloorEnabled()` from
+`src/hal/execution-floor.ts` (rather than re-deriving the env check) so the reported value can
+never drift from the gate's actual logic, plus a `note` naming the gate site
+(`hal/execution-floor.ts:38-40`) and what it does in each state. 56/56 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 54/54 — 2
+new cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this
+runner. Opened as SAFE-CLASS and merged with `gh pr merge 694 --auto --squash` while its checks
+were still in flight. At the time this closeout was written, both #693 (this ledger PR) and #694
+were still `OPEN`/pending checks — not yet confirmed merged; the next beat's step 1 confirms that
+independently, same as every other beat in this file. No deviation from the stated plan.
