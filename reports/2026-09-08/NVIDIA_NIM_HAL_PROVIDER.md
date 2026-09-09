@@ -134,6 +134,22 @@ Concretely, for a NIM + gateway combination:
   own endpoint, leave `LOCAL_LLM_BASE_URL` unset (anthropic-dialect members are
   dropped under a local base; NIM, being openai, is redirected instead).
 
+> **The credential half, added 2026-09-09.** The list above enumerates what the redirect does to
+> *routing* and stops there, which reads as though the cost were a wrong-verdict risk. It is not
+> the whole cost: the redirect rewrites `p.endpoint` and leaves `p.apiKey` **untouched**, so
+> `queryProvider` sends `Authorization: Bearer <that provider's key>` to the new host. The key
+> follows the endpoint.
+>
+> **MEASURED 2026-09-09** — quorum built with one distinct fake key per provider and
+> `LOCAL_LLM_BASE_URL` set: **10 of 10 providers redirected, 10 distinct credentials handed to
+> that one host** (groq, fireworks, deepseek, gemini, mistral, zai, nvidia-nim, openrouter, gloo,
+> qwen). A floor, not a ceiling — cerebras was absent only because its own dead-model skip had
+> already dropped it.
+>
+> So the NIM key is not the exposure; it is one of the ten measured. "Local gateway" must mean a host you
+> control. Anthropic-dialect members are dropped rather than redirected, so their key is the one
+> that does not travel — which the routing note above already says, without saying why it matters.
+
 ## Recommendation
 
 Ship default-OFF as-is. Before flipping `HAL_S2_ENABLE_NVIDIA_NIM=true`: set the

@@ -319,10 +319,28 @@ break them.
    fact-check; a gateway that degrades takes the whole quorum with it, which is the shape of the
    Groq model-retirement outage recorded under Deploy facts. Set it in a dev environment and
    measure the quorum before setting it anywhere that scores.
-2. **A gateway that fans out to third-party free tiers changes who sees the prompt.** The
-   variable is one line; the egress consequence is not. `ONLY_ATTESTATIONS_LEAVE` exists for
-   exactly this boundary question and treats a LOCAL host differently from a remote one — read
-   that path before assuming "local gateway" means "nothing leaves".
+2. **It sends that host your API KEYS, not just your prompts** [MEASURED 2026-09-09]. This
+   line used to say a gateway "changes who sees the prompt", which understates it by a category:
+   the prompt is the smaller half. `src/hal/fact-check.ts` rewrites `p.endpoint` under the
+   redirect and leaves `p.apiKey` **untouched**, and `queryProvider` then sends
+   `Authorization: Bearer <that provider's key>` to whatever the new endpoint is. So the key
+   follows the endpoint.
+
+   Measured by building the quorum with one distinct fake key per provider and
+   `LOCAL_LLM_BASE_URL` set: **10 of 10 providers redirected, and 10 distinct credentials handed
+   to that single host** — groq, fireworks, deepseek, gemini, mistral, zai, nvidia-nim,
+   openrouter, gloo, qwen. Ten is a FLOOR, not a ceiling: cerebras was absent only because its
+   own dead-model skip had already dropped it, and would have been an eleventh.
+
+   One variable, your whole provider keyring, to one address. So "local gateway" has to mean a
+   host **you control**. Pointing it at a third-party aggregator — including one that fans out to
+   free tiers — does not share a workload with that service, it hands over the credentials to
+   every other service you pay for. Anthropic-native members are the one exception: they are
+   DROPPED rather than redirected (wrong wire format), so their key does not travel.
+
+   `ONLY_ATTESTATIONS_LEAVE` exists for exactly this boundary question and treats a LOCAL host
+   differently from a remote one — read that path before assuming "local gateway" means
+   "nothing leaves".
 3. **It is a redirect, not a fallback.** When set, the default endpoints are not tried.
 
 ### On-chain integration
