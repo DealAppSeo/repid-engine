@@ -35,6 +35,13 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { ethers } from 'ethers';
+import {
+  rateDeliverable,
+  classifyContractStatus,
+  classifySatisfyResponse,
+  ACCEPTANCE_CRITERIA,
+  CLAIM_TEXT,
+} from './rate-deliverable.mjs';
 
 const BASE = (process.env.ENGINE_BASE_URL || 'https://repid-engine-production.up.railway.app').replace(/\/+$/, '');
 const RPC = process.env.BASE_SEPOLIA_RPC || process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
@@ -148,7 +155,7 @@ async function main() {
     // do; they are the text ratings get scored against, so they say something
     // checkable rather than restating the title.
     const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    const claimText = 'The Base Sepolia chain id is 84532.';
+    const claimText = CLAIM_TEXT;
     const create = await api('POST', '/api/v1/contracts', buyerKey.raw, {
       service_id: svc.id,
       buyer_agent_id: buyer.id,
@@ -158,10 +165,7 @@ async function main() {
         title: `living-proof-${Date.now()}`,
         service_type: 'verification',
         deliverable: `A cross-provider factual verification verdict on the claim: "${claimText}"`,
-        acceptance_criteria: [
-          { n: 1, text: 'The verdict states explicitly whether the claim is true or false, without hedging.' },
-          { n: 2, text: 'The verdict names the chain id it verified against, so the check is reproducible.' },
-        ],
+        acceptance_criteria: ACCEPTANCE_CRITERIA,
         deadline,
         agreed_price: { amount_usdc_raw: Number(svc.base_price_usdc_raw), currency: 'USDC' },
       },
@@ -188,11 +192,77 @@ async function main() {
     // deliver via the registered handler (provider identity), then satisfy (poll for cascade delivery).
     const processResp = await api('POST', '/api/v1/agent/process-contracts', provKey.raw, { agent_name: prov.agent_name });
     console.log(`[mint-attestation] process-contracts -> ${processResp.status}`);
+    // RATE THE DELIVERABLE, DO NOT ASSERT A SCORE.
+    //
+    // [BROKE 2026-09-05, found 2026-09-09.] This sent `{satisfaction_score: 1}`,
+    // and once contracts became work-statement-bound that stopped being accepted
+    // at all: `deriveSatisfyScore` requires `criterion_ratings` whenever
+    // `work_statement_hash` is set, and the legacy scalar branch is unreachable
+    // for every contract this script now creates. So satisfy returned 400
+    // RATING_REQUIRED on every attempt, all 8 polls failed, and five consecutive
+    // daily runs left real USDC sitting authorized-but-uncaptured. The escrow fix
+    // did not strand the money; it moved where the stranding happened.
+    //
+    // The replacement rates the criteria AGAINST THE DELIVERED RESULT rather than
+    // hardcoding a verdict. `satisfaction_score: 1` was an assertion the buyer had
+    // no basis for — the same "recorded as if it had been checked" shape this
+    // codebase keeps removing, and it sat on the one path that moves real money.
     let settled = false;
     for (let i = 0; i < 8 && !settled; i++) {
-      const s = await api('POST', `/api/v1/contracts/${cid}/satisfy`, buyerKey.raw, { satisfaction_score: 1 });
-      console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> ${s.status} ${s.json?.status ?? ''}`);
-      if (s.status === 200 && s.json?.status === 'settled') { settled = true; break; }
+      // Read what was actually delivered before rating it. A rating derived from
+      // nothing is the defect being fixed, so a contract we cannot read is NOT
+      // rated: we wait and retry rather than guessing a score in either
+      // direction. Guessing high pays for unseen work; guessing low VOIDS a
+      // legitimate payment. Neither is ours to invent.
+      const got = await api('GET', `/api/v1/contracts/${cid}`, buyerKey.raw);
+      if (got.status !== 200) {
+        console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> contract read ${got.status}; not rating`);
+        await sleep(15000);
+        continue;
+      }
+      const status = got.json?.status;
+      const next = classifyContractStatus(status);
+      if (next === 'settled') {
+        // Satisfy moved the money and we misread its answer. Re-polling this to
+        // the timeout below would report a FAILURE on a contract that SUCCEEDED.
+        console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> already settled`);
+        settled = true;
+        break;
+      }
+      if (next === 'terminal') {
+        throw new Error(
+          `contract is '${status}' and cannot reach fulfilled — this is not a delivery timeout`,
+        );
+      }
+      if (next !== 'rate') {
+        console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> status '${status}', awaiting delivery`);
+        await sleep(15000);
+        continue;
+      }
+
+      const ratings = rateDeliverable(got.json.result);
+      const met = ratings.filter((r) => r.met).length;
+      console.log(
+        `[mint-attestation] rated deliverable ${met}/${ratings.length}: ` +
+        ratings.map((r) => `n${r.n}=${r.met ? 'met' : 'NOT met'}`).join(' '),
+      );
+
+      const s = await api('POST', `/api/v1/contracts/${cid}/satisfy`, buyerKey.raw, { criterion_ratings: ratings });
+      console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> ${s.status} ${s.json?.status ?? s.json?.error ?? ''}`);
+      const answer = classifySatisfyResponse(s.status, s.json);
+      if (answer === 'settled') { settled = true; break; }
+      if (answer === 'voided') {
+        throw new Error(
+          `deliverable rated ${met}/${ratings.length}; payment authorization voided, no funds moved. ` +
+          'This is the pay-on-verified-delivery path working, not a bug in it.',
+        );
+      }
+      if (answer === 'reject') {
+        throw new Error(
+          `satisfy refused (${s.status} ${s.json?.error}): ${s.json?.message} — ` +
+          'waiting cannot fix this; the ratings or the caller no longer match the contract.',
+        );
+      }
       await sleep(15000);
     }
     if (!settled) throw new Error('contract never reached settled (cascade delivery timeout)');
