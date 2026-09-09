@@ -1595,6 +1595,12 @@ export interface FactCheckProviderEnable {
   anthropic?: boolean;
   /** Z.AI direct — the `glm` family from the vendor's free tier. Optional so callers compile. */
   zai?: boolean;
+  /**
+   * NVIDIA NIM direct — the `nvidia` (Nemotron) family from NVIDIA's own hosted
+   * gateway. Opt-in, NEVER auto-backfilled (a stray key must not silently widen
+   * the load-bearing quorum). Optional so existing callers compile.
+   */
+  nvidiaNim?: boolean;
 }
 
 /**
@@ -1947,6 +1953,43 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   if (z && (enabled.zai || ab)) {
     add({ name: 'zai', endpoint: 'https://api.z.ai/api/paas/v4/chat/completions', apiKey: z, family: 'glm' }, 'HAL_S2_ZAI_MODEL', 'glm-4.5-flash');
   }
+  // NVIDIA NIM — the `nvidia` (Nemotron) family bought DIRECT from NVIDIA's hosted gateway
+  // (integrate.api.nvidia.com), OpenAI-compatible so no dialect is needed. Reads NVIDIA_NIM_API_KEY.
+  //
+  // OPT-IN ONLY, and deliberately NOT auto-backfilled (`enabled.nvidiaNim` with no `|| ab`): a key
+  // appearing in env must NOT silently add a voice to the load-bearing quorum before its effect on
+  // the aggregate has been measured (task requirement 3; the fireworks block above is the precedent).
+  //
+  // FAMILY IS DECLARED 'nvidia' EXPLICITLY, matching the `or-nemotron` OpenRouter member. That makes
+  // two things true and one thing the operator's responsibility:
+  //   - Nemotron is NVIDIA's own architecture, independent of the always-on groq(llama)/cerebras(glm)
+  //     families — so it is a genuine additional vote toward MIN_QUORUM_FOR_VETO=2, and
+  //   - if `HAL_S2_ENABLE_FRONTIER_FREE` is also on, `or-nemotron` is ALSO family 'nvidia' on OpenRouter,
+  //     so the two DEDUPE to one family vote (correct — same weights, different host), never two.
+  //   - OVERRIDE CAVEAT: `HAL_S2_NVIDIA_NIM_MODEL` can point NIM at a non-Nemotron model this gateway
+  //     also serves (llama/deepseek/qwen). The declared family stays 'nvidia', so an operator who
+  //     switches to e.g. a Llama model MUST account for the collapse with groq's llama family
+  //     themselves — the label will no longer match the weights. Prefer a Nemotron id.
+  //
+  // MODEL IS DOCUMENTATION-SOURCED, NOT MEASURED. No NVIDIA key is reachable from a dev sandbox, so
+  // the default id below is from NVIDIA's published catalog, unverified against a live call. Treat a
+  // green build as NOT_CHECKED on this string; the first real verification is post-deploy against
+  // `provider_health` with Sean's key. Override with HAL_S2_NVIDIA_NIM_MODEL. A non-responding NIM
+  // returns an ERROR verdict and is EXCLUDED from aggregation (never scored as a zero) — same path
+  // as every other provider, so a dead model degrades the quorum, it does not bias it.
+  //
+  // KEY NAME — REUSE, NOT CREATE. The canonical name is NVIDIA_NIM_API_KEY, but the credential
+  // already saved (verified: names only) is NIM_API_KEY. Reading both — canonical first, saved
+  // fallback — reuses the existing key with no new secret and still honours the canonical name if
+  // one is set later. If NEITHER is present the provider is simply absent (nothing to dial).
+  const nim = (process.env.NVIDIA_NIM_API_KEY ?? process.env.NIM_API_KEY)?.trim();
+  if (nim && enabled.nvidiaNim) {
+    add(
+      { name: 'nvidia-nim', endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', apiKey: nim, family: 'nvidia', tier: 'escalation' },
+      'HAL_S2_NVIDIA_NIM_MODEL',
+      'nvidia/nemotron-4-340b-instruct',
+    );
+  }
   // OpenRouter — LAST backfill resort (aggregator). Its family derives from the configured model, so the
   // DEFAULT is a QWEN model — a family distinct from the always-on hosts (groq=llama, cerebras=glm) and
   // the other backfill families (deepseek/gemini/mistral). A llama default would collapse with groq and
@@ -2230,6 +2273,10 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
     // make it impossible to tell which change did what if the next run is still degraded.
     gloo: process.env.HAL_S2_ENABLE_GLOO === 'true',
     zai: process.env.HAL_S2_ENABLE_ZAI === 'true',
+    // Opt-in, default OFF (flag unset → off), like every non-groq/cerebras provider. Requires an
+    // explicit HAL_S2_ENABLE_NVIDIA_NIM=true; a bare NVIDIA_NIM_API_KEY does NOT enable it (the add
+    // block above has no auto-backfill), so the quorum is byte-identical until the flag is flipped.
+    nvidiaNim: process.env.HAL_S2_ENABLE_NVIDIA_NIM === 'true',
   });
 }
 

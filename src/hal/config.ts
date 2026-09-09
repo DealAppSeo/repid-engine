@@ -41,6 +41,7 @@ const PROVIDER_ENABLE_KEYS = [
   'HAL_S2_ENABLE_QWEN',
   'HAL_S2_ENABLE_ANTHROPIC',
   'HAL_S2_ENABLE_GLOO',
+  'HAL_S2_ENABLE_NVIDIA_NIM',
 ] as const;
 
 const BOOL_KEYS = [
@@ -79,6 +80,10 @@ const PROVIDER_DEFAULTS: Record<(typeof PROVIDER_ENABLE_KEYS)[number], boolean> 
   HAL_S2_ENABLE_QWEN: false,
   HAL_S2_ENABLE_ANTHROPIC: false,
   HAL_S2_ENABLE_GLOO: false,
+  // NVIDIA NIM — opt-in, DEFAULT OFF. Never auto-backfilled: it must not join the
+  // load-bearing fact-check quorum on key-presence alone, before its quorum
+  // effect has been measured (see buildFactCheckProviders + the PR's quorum note).
+  HAL_S2_ENABLE_NVIDIA_NIM: false,
 };
 
 const TTL_MS = (() => {
