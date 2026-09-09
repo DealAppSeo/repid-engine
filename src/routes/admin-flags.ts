@@ -453,6 +453,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       source: process.env.AGENT_SELF_SERVE_KEYS_ENABLED === undefined ? 'default' : 'env',
       note: 'gates src/services/agent-self-serve-key.ts, whether an agent can prove wallet ownership by signature and mint itself a scoped API key with no human approval (requestKeyChallenge/issueKeyFromSignature, agent-self-serve-key.ts:111,170) — never an admin-scoped key, per the module\'s own design. Default false means no self-issuance path is active. Also echoed publicly at GET /api/v1/agent-keys (`enabled`), a different endpoint than this one',
     },
+    hal_local_fallback_enabled: {
+      value: process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true',
+      source: process.env.HAL_LOCAL_FALLBACK_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates src/hal/fact-check.ts (line 1131-1132): when true, a zero-provider quorum fabricates a fact-check-shaped verdict from a substring check (`deliverable.includes(\'false\')`) instead of returning neutral 0.5. Default false means the neutral-fallback path is used instead. Two existing internal guards already treat the fabricated output as unearned rather than a real verdict: `provider_health.succeeded` (hal/service.ts) and `reward_suppressed` (routes/agents-external.ts) — reporting this flag as true does not mean the quorum ran',
+    },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
         ? 'true (simulated settlement)'
