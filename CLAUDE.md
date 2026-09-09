@@ -313,6 +313,13 @@ Anthropic-native calls are deliberately NOT redirected (`callType !== 'openai-co
 the default endpoint untouched), so a gateway that only speaks OpenAI shape cannot silently
 break them.
 
+**NEITHER VARIABLE IS SET ON THE `repid-engine` SERVICE** [MEASURED 2026-09-09, operator reading
+the Variables tab: no `LOCAL_LLM_BASE_URL`, no `OPENAI_BASE_URL`]. So everything below describes
+what WOULD happen, not what is happening — the redirect is not active and no key is being
+forwarded anywhere today. `OPENAI_API_KEY` is set, but that is the credential, not the base URL,
+and it does not trigger the redirect. This is dated because it is one dashboard edit from being
+false again.
+
 **Four things to know before pointing production at one.**
 
 1. **It moves every openai-compat provider at once.** Cross-LLM consensus is load-bearing for
@@ -586,9 +593,23 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 - Sprint-3 stubs (EAS, ZKP) — do not remove or "fix" passing stubs
 
 ### Deploy facts
-- Railway project: **`repid-engine`** — its own project, 4 services: `repid-engine` (the API,
-  repid-engine-production.up.railway.app), `receipt-indexer`, `proof-drain-worker`,
-  `attestation-minter`.
+- Railway project: **`repid-engine`** — its own project. **The SERVICE COUNT IS DISPUTED as of
+  2026-09-09 and you must not act on either number without looking.** This line said "4 services"
+  (`repid-engine` the API at repid-engine-production.up.railway.app, `receipt-indexer`,
+  `proof-drain-worker`, `attestation-minter`); the operator, reading the dashboard on 2026-09-09,
+  counted **three** and did not see `attestation-minter`.
+  **Do NOT resolve that by deleting the minter from this file.** Its daily job is VERIFIABLY ALIVE:
+  `service_contracts` carries a row from the 12:00Z cron every day without a gap through
+  2026-09-08 12:00:38Z [MEASURED 2026-09-09], and `railway.cron.json` in this repo declares
+  `node scripts/cron/mint-attestation.mjs` on `0 12 * * *` with `restartPolicyType: NEVER`.
+  A Railway **cron** service renders differently from a web service — no domain, a next-run time —
+  so "I don't see it in the list" and "it ran yesterday" are both consistent with it existing.
+  The observation that settles it: the names of the services actually on the project canvas.
+  **The reusable part is the shape.** A dashboard glance and a database reading disagreed, and the
+  tempting move was to trust the human looking at the screen and past-tense the whole section.
+  That would have recorded a live daily job as dead — a false negative in the safe-looking
+  direction, which is this file's house defect. When two sources conflict, write down BOTH and name
+  the observation that decides, rather than picking the one that arrived most recently.
   **Corrected 2026-07-30 (verified against the Railway dashboard).** This line previously read
   "Railway project: AITrinitySymphony", which is wrong and caused a wallet-custody master key to be
   configured in the wrong project. `AITrinitySymphony` is the separate *Trinity swarm* project
@@ -715,8 +736,11 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
 - `AGENT_KEY_MASTER` (agent wallet custody, `src/services/agent-key-crypto.ts`) belongs ONLY on the
   `repid-engine` service. `receipt-indexer` (chain reads) and `proof-drain-worker` (EAS attestor key)
   must not have it — it decrypts every custodied agent wallet private key.
+  **`AGENT_KEY_MASTER` IS present on the `repid-engine` service** [MEASURED 2026-09-09, operator
+  reading the Variables tab]. That is where it belongs, so this is the expected state and needs no
+  action — recorded because "belongs only here" was until now a rule with no reading behind it.
   `attestation-minter`: **half-settled 2026-08-29 — the assumption is dead, the presence question
-  is not.** SETTLED: the signing key it actually uses is `BASE_SEPOLIA_PRIVATE_KEY`, read from the
+  is not, and it is now blocked behind the disputed service count above.** SETTLED: the signing key it actually uses is `BASE_SEPOLIA_PRIVATE_KEY`, read from the
   script's own source, so "an attestor must need `AGENT_KEY_MASTER`" is refuted — it does not.
   STILL UNVERIFIED: whether `AGENT_KEY_MASTER` is *also* set there. The build log names only
   `BASE_SEPOLIA_PRIVATE_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, and **absence from that list is much

@@ -171,7 +171,17 @@ chokepoint"* from an aspiration into something CI can refuse.
 
 ---
 
-## 5. Still NOT CHECKED
+## 5. CLOSED since publication, and what is still open
+
+**The Railway question is answered, and the answer is the safe one** [MEASURED 2026-09-09, hours
+after this report was written]. Neither `LOCAL_LLM_BASE_URL` nor `OPENAI_BASE_URL` is set on the
+`repid-engine` service. **The ten-credential handover is hypothetical, not live.**
+
+That is worth recording for a reason beyond the result: §5 below named the exact observation that
+would close it, and naming it is what got it made. A caveat that says only "unverified" is read as
+decoration and never paid.
+
+## 5b. Still NOT CHECKED
 
 **Whether `LOCAL_LLM_BASE_URL` or `OPENAI_BASE_URL` is set on any Railway
 service.** Four read paths were tried and all are dead: `/health` does not expose
