@@ -3,12 +3,11 @@
 **INJECTED, not filed.** `run-agent.mjs` prepends this to every dispatch, and a SessionStart
 hook injects it into Claude sessions. One file, many readers — disagreement becomes a merge
 conflict, not two quiet truths. Filing a lesson never prevented recurrence (116 unread reports
-prove it); putting it in front of the worker does.
+prove it).
 
 **HARD CAP 6000 chars** (`tests/lessons-injectable.test.ts`) — the cap IS the mechanism, never
-raise it. This file keeps every RULE plus a one-line proof; full narratives live in
-`lessons/<domain>.md` packs the dispatcher appends by trigger (dispatch, hal-eval, schema, zkp).
-New lessons replace or generalise old ones.
+raise it. Every RULE plus a one-line proof; narratives live in `lessons/<domain>.md` packs the
+dispatcher appends by trigger. New lessons replace or generalise old ones.
 
 ---
 
@@ -21,7 +20,7 @@ New lessons replace or generalise old ones.
 **Apply:** call what you will call, how you will call it. Exit 0 covers the last command, not your intent; a banner is a label, not a result. Installed ≠ runnable. Committed ≠ landed ≠ deployed. Pin versions in git.
 
 ## 3. A mechanism wired at one end only is worse than an absent one
-It converts a known gap into false coverage, so you stop looking. Both ends count — a caller, and a reader.
+It converts a known gap into false coverage, so you stop looking.
 *Proof:* `canAssign()` built + tested with zero callers; a daemon logged COMPLETE while its DB update silently failed, losing 7 handoffs. [lessons/dispatch.md]
 **Apply:** name the caller AND the consumer, or say it is inert. Check the write's error, not just that you called it.
 
@@ -33,9 +32,10 @@ It converts a known gap into false coverage, so you stop looking. Both ends coun
 *Proof:* `INTEGRITY_TYPES` held bare `'DECEPTION'` but the engine writes `DEFENDED_DECEPTION_FABRICATED_CITATION`, so a fabricator passed a gate; a `status` CHECK rejected `CANCELLED`. [lessons/schema.md]
 **Apply:** read the values the system emits; query the real schema/constraints. Prefer prefix/substring match — an exact-match list **fails open** for every value added later.
 
-## 6. A test that cannot fail is a liability; one that expires by itself is an asset
-*Proof:* a suite reported "11 passed" in both its on and off runs — flag-guarded tests returned early and still counted; the L0-halt check scans the filesystem, so it reddens when main grows a new tick loop. [lessons/dispatch.md]
-**Apply:** break the property and watch it go red, then revert; a skip reports as skipped. Encode checks so time breaks them, not someone re-reading them.
+## 6. An instrument that cannot return the other answer has measured nothing
+**An ABSENCE — NULL, 0 rows, no match, "not set" — is not evidence until the instrument is shown capable of a PRESENCE.** Tests, greps, queries, views, controls: one defect.
+*Proof:* a suite reported "11 passed" in both its on and off runs; a non-vacuity check grepped a symbol jest never emits, so 3 induced failures read as success; `v_fleet_truth_realwork` NULLs a 7-day LEFT JOIN over a 2-row table — read as "12 agents never worked". They had. [lessons/dispatch.md]
+**Apply:** break the property, watch it go red, revert; a skip reports as skipped. Read the view (`pg_get_viewdef`) and the query window before believing a NULL. Encode checks so time breaks them.
 
 ## 7. A red check is a status, not a verdict
 *Proof:* `Cannot find module 'pg'` was a worktree with no `npm install`; ~150 "failures" were a Windows-only ESM path + a dummy Supabase URL satisfying a presence check, all green on CI. [lessons/schema.md]
@@ -59,8 +59,8 @@ It converts a known gap into false coverage, so you stop looking. Both ends coun
 
 ## 12. Fix the thing AND whatever says the wrong thing about it
 *Proof:* CLAUDE.md called `plonky3-stub.ts` "always-on" — zero callers, while the live path had written 22,373 attested proofs since June. A later session read that back as fact: a wrong line outlives the bug.
-**Apply:** correct the describing file in the SAME change — comment, CLAUDE.md, AGENTS.md, README — saying what was wrong, not only what is right. TRUE NORTH per surface, read yours first: `repid-engine/CLAUDE.md`, `trustshell/AGENTS.md`, `trinity-ecosystem/CLAUDE.md`, `trinity-symphony-shared`.
+**Apply:** correct the describing file in the SAME change — comment, CLAUDE.md, AGENTS.md, README — saying what was wrong, not only what is right. TRUE NORTH is the entry point of the repo you are in — read it first; never a checked-in list of the others.
 
 ---
 
-*Add a lesson only when it has cost something twice. Delete one when it is enforced by code. Domain detail lives in `lessons/`, appended by the dispatcher when a brief's text triggers it.*
+*Add a lesson only when it has cost something twice. Delete one when code enforces it.*
