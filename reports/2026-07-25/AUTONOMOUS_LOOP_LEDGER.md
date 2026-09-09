@@ -5736,3 +5736,62 @@ after a fresh `npm install --legacy-peer-deps` in this runner. Opened as SAFE-CL
 was written, both #688 (this ledger PR) and #689 were still `OPEN`/pending checks — not yet
 confirmed merged; the next beat's step 1 confirms that independently, same as every other beat in
 this file. No deviation from the stated plan.
+
+## Beat 123 — 2026-09-09 · verified #688/#689 landed, diff matches intent; #690/#691 landed since; step 2 intent: EXECUTION_FLOOR_ENABLED
+
+**Step 1 — Beat 122 checked against its own diff + CI, not against its prose.**
+`gh pr view 688 --json state,mergedAt` and `gh pr view 689 --json state,mergedAt` both show
+`MERGED` at 2026-09-09T01:03:2xZ, `689`'s `statusCheckRollup` 9/9 SUCCESS.
+`git show 25b5db5 -- src/routes/admin-flags.ts` matches Beat 122's stated intent exactly:
+`hal_local_fallback_enabled` added with the same `{value, source}` shape as every existing
+field, a `note` naming the gate site (`hal/fact-check.ts:1131-1132`), what it does when true
+(fabricates a fact-check-shaped verdict from a substring match, not a real quorum), and the two
+existing internal guards (`provider_health.succeeded`, `reward_suppressed`) that already treat
+that output as unearned.
+
+**Two commits landed on `origin/main` between #689 and this beat, neither carrying a ledger
+entry** (same non-gap pattern noted every beat since #667): fd222a3 (#690, NVIDIA NIM as an
+opt-in fact-check provider, default OFF, tested byte-identical when off) and 51b2510 (#691,
+`supabase-trinity` skill). Neither touches `admin-flags.ts` or conflicts with this beat's step 2.
+
+**Step 2 — `EXECUTION_FLOOR_ENABLED` (default OFF), the "execution beats explanation" primacy
+gate.** Re-grepped the three flags Beat 122 left tied (`HITL_CALLBACK_ENABLED`,
+`EXECUTION_FLOOR_ENABLED`, `ANFIS_RETUNE_ENABLED`) fresh rather than trusting the old count:
+each still has exactly 3 non-test call-site files, and none is yet reported on
+`GET /api/v1/admin/flags` (grepped `admin-flags.ts` for all three — zero hits). None has an
+existing narrow public echo the way the last four picks did, so tie-break is on priority
+grounds again (Sean 2026-07-27: audit-evidence first). `EXECUTION_FLOOR_ENABLED`
+(`src/hal/execution-floor.ts:38-40`) gates whether a deterministic checker's verdict (pure
+arithmetic or an on-chain read — never shell/code/db, which are recognized but marked
+`executed:false`) is AUTHORITATIVE over HAL's LLM-quorum opinion for the same claim. Its own
+header states the SHADOW-FIRST contract: OFF (default) still COMPUTES the verdict for logging,
+but `applyToHal()` returns the HAL decision UNCHANGED — a HAL-adjacent audit-evidence flag whose
+live state is invisible outside the process, same shape as `hal_local_fallback_enabled`. This
+change only reads and reports current state — it does not flip the flag, and it is not on
+CLAUDE.md's Sean-gated hard-line list (`ENGINE_LLM_PROXY`, `ROUTER_STRICT_COST_ORDER`,
+`HAL_GROUNDING_MODE=enforce`, `REPID_PURPOSE_GATE_V3`, real-money X402/STAKE).
+
+Will report as `execution_floor_enabled`, same `{value, source}` shape as every existing boolean
+field, with a `note` naming the gate site (`hal/execution-floor.ts:38-40`), what it does when
+true (a determined arithmetic/on-chain verdict overrides the HAL decision for that specific
+claim) and when false (verdict computed + available for logging only, HAL decision unchanged),
+plus the safety scope (only arithmetic + on-chain are actually executed; `code`/`db` claims are
+recognized but never run). Additive only — no existing field's shape changes, no route touched
+besides `admin-flags.ts` and its test file. Not yet built as this entry is opened, per the Beat
+106 process correction (ledger PR before any step-2 file is touched); the PR follows on its own
+branch cut from `origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto
+--squash` while checks are in flight) as every prior beat in this run.
+
+**Closeout, appended before this PR merged (turns remained).** Step 2 shipped exactly as the
+intent above states — PR #694, `feat/admin-flags-execution-floor-enabled`, cut from
+`origin/main`. `execution_floor_enabled` added with the same `{value, source}` shape as every
+existing boolean field, reusing the real `executionFloorEnabled()` from
+`src/hal/execution-floor.ts` (rather than re-deriving the env check) so the reported value can
+never drift from the gate's actual logic, plus a `note` naming the gate site
+(`hal/execution-floor.ts:38-40`) and what it does in each state. 56/56 tests pass locally
+(`npx jest --config jest.config.js src/routes/__tests__/admin-flags.test.ts`, up from 54/54 — 2
+new cases), `npx tsc --noEmit` clean after a fresh `npm install --legacy-peer-deps` in this
+runner. Opened as SAFE-CLASS and merged with `gh pr merge 694 --auto --squash` while its checks
+were still in flight. At the time this closeout was written, both #693 (this ledger PR) and #694
+were still `OPEN`/pending checks — not yet confirmed merged; the next beat's step 1 confirms that
+independently, same as every other beat in this file. No deviation from the stated plan.
