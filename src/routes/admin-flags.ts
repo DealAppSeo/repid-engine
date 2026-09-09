@@ -3,6 +3,7 @@ import { getHalConfig } from '../hal/config';
 import { groundingMode } from '../hal/hal-grounding';
 import { parseHaltClasses } from '../services/producer-halt';
 import { parseRetryMode } from '../services/x402-release-retry-worker';
+import { executionFloorEnabled } from '../hal/execution-floor';
 
 export const adminFlagsRouter = Router();
 
@@ -457,6 +458,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       value: process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true',
       source: process.env.HAL_LOCAL_FALLBACK_ENABLED === undefined ? 'default' : 'env',
       note: 'gates src/hal/fact-check.ts (line 1131-1132): when true, a zero-provider quorum fabricates a fact-check-shaped verdict from a substring check (`deliverable.includes(\'false\')`) instead of returning neutral 0.5. Default false means the neutral-fallback path is used instead. Two existing internal guards already treat the fabricated output as unearned rather than a real verdict: `provider_health.succeeded` (hal/service.ts) and `reward_suppressed` (routes/agents-external.ts) — reporting this flag as true does not mean the quorum ran',
+    },
+    execution_floor_enabled: {
+      value: executionFloorEnabled(),
+      source: process.env.EXECUTION_FLOOR_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates src/hal/execution-floor.ts (executionFloorEnabled, line 38-40): when true, a determined verdict from a deterministic checker (pure arithmetic or an on-chain read only — `code`/`db` claims are recognized but never executed) becomes AUTHORITATIVE and overrides the HAL LLM-quorum decision for that specific claim via applyToHal(). Default false means the verdict is still COMPUTED and available for logging, but applyToHal() returns the HAL decision UNCHANGED — shadow-first, zero live behavior change until deliberately flipped',
     },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
