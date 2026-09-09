@@ -313,7 +313,7 @@ Anthropic-native calls are deliberately NOT redirected (`callType !== 'openai-co
 the default endpoint untouched), so a gateway that only speaks OpenAI shape cannot silently
 break them.
 
-**Three things to know before pointing production at one.**
+**Four things to know before pointing production at one.**
 
 1. **It moves every openai-compat provider at once.** Cross-LLM consensus is load-bearing for
    fact-check; a gateway that degrades takes the whole quorum with it, which is the shape of the
@@ -342,6 +342,30 @@ break them.
    differently from a remote one — read that path before assuming "local gateway" means
    "nothing leaves".
 3. **It is a redirect, not a fallback.** When set, the default endpoints are not tried.
+4. **It is NOT a comprehensive egress control — a second production path ignores it entirely**
+   [MEASURED 2026-09-09]. `src/services/adversarial-judge.ts` carries its own provider list with
+   **six hardcoded endpoints** (`api.anthropic.com`, `api.groq.com`, `api.openai.com`,
+   `generativelanguage.googleapis.com`, `api.deepseek.com`, `api.cerebras.ai`), reads the SAME
+   `GROQ_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `CEREBRAS_API_KEY`, and references
+   `resolveProviderEndpoint` / `LOCAL_LLM_BASE_URL` **zero times**. It runs in production —
+   three callers — `validation-queue-worker.ts`, `cross-validation-service-handler.ts` and
+   `handlers/zkp-audit-handler.ts` — and a daily 12:00Z cron visible in `provider_health`
+   (`source = adversarial_judge`).
+
+   So setting the variable moves the **fact-check quorum** and leaves the judge calling out
+   directly. Reading points 1-3 and concluding "local gateway means nothing leaves" is wrong, and
+   that is exactly the inference `ONLY_ATTESTATIONS_LEAVE` exists to support — a boundary control
+   that only some code honours fails **silently and in the safe-looking direction**, which is the
+   house defect.
+
+   **How this was found is the reusable part.** `provider_health` holds a daily anthropic row,
+   and anthropic-dialect providers are DROPPED under a local base — so the row looks like proof
+   the variable was unset. It is not: that row comes from this judge, which hardcodes
+   `api.anthropic.com` and would have succeeded either way. **A negative control only controls if
+   the code path you are reading actually passes through the mechanism.** Check that first.
+
+   Whether the judge SHOULD honour the redirect is a decision, not a cleanup — it changes which
+   host production LLM traffic reaches. Do not "fix" it silently.
 
 ### On-chain integration
 
