@@ -2,7 +2,9 @@
  * PROVIDER EGRESS GUARD — an inventory of every place in `src/` that names an LLM provider
  * host, split by role, with the callsite list built to SHRINK.
  *
- *   MEASURED 2026-09-09: 26 files
+ *   MEASURED 2026-09-09: 26 files → 25 after src/selfhost.ts retired 2026-09-09 (it named a
+ *                        provider host only as an ILLUSTRATIVE arg to classifyEgress — no fetch,
+ *                        no bearer — so it was never an egress callsite; see that commit).
  *   TARGET:              CALLSITES -> 0
  *   ADAPTERS / PROBES / NOISE: allowed to stay
  *
@@ -111,7 +113,6 @@ const CALLSITES: readonly string[] = [
   'src/hal/lib/clients/embedding.ts',
   'src/hal/lib/cross-llm/embedding-client.ts',
   'src/hal/lib/cross-llm/index.ts',
-  'src/selfhost.ts',
   'src/services/adversarial-judge.ts',
   'src/services/pcp-validator.ts',
   'src/services/validation-repid-delta.ts',
@@ -122,7 +123,7 @@ const CALLSITES: readonly string[] = [
  * Raising it means a new direct caller was admitted, which is the thing this file exists
  * to refuse — take that to review as a decision, not as a test edit.
  */
-const CALLSITE_CEILING = 13;
+const CALLSITE_CEILING = 12;
 
 const BASELINE: readonly string[] = [...ADAPTERS, ...PROBES, ...NOISE, ...CALLSITES];
 const MAY_DISAPPEAR_QUIETLY = new Set(CALLSITES);
@@ -179,7 +180,7 @@ describe('provider egress surface is pinned and shrinking, not described', () =>
   it('the roles partition the surface with nothing double-counted', () => {
     expect(BASELINE.length).toBe(new Set(BASELINE).size);
     expect(measured.length).toBe(BASELINE.length);
-    expect(ADAPTERS.length + PROBES.length + NOISE.length + CALLSITES.length).toBe(26);
+    expect(ADAPTERS.length + PROBES.length + NOISE.length + CALLSITES.length).toBe(25);
   });
 
   it('the judge is a CALLSITE, which is the finding that motivated this guard', () => {
