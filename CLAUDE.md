@@ -487,6 +487,36 @@ passing, and on this repo an absent one blocks nothing at all.
 - φ = 1.61803398875, ε = 1e-8, BFT_THRESHOLD = 0.618
 - REPID_HITL_GATE = 70, CONFIDENCE_GATE = 0.8
 
+### T12 LIVENESS: `v_fleet_truth_realwork` REPORTS NULL FOR AGENTS THAT WORKED
+
+**Do not read a NULL `last_realwork_at` as "this agent never worked."** It means "nothing
+matched in the last 7 days", and the view is looking in a table the work is not recorded in.
+A session on 2026-09-09 read that NULL across all 12 agents and told the operator the fleet
+was dead. It was not: heavy free-tier loops had been running days earlier.
+
+Two defects, both in the view:
+
+1. **A 7-day window behind a LEFT JOIN.** `realwork` filters
+   `created_at > now() - '7 days'`, then LEFT JOINs onto `v_fleet_truth`. Anything older
+   than a week arrives as NULL — indistinguishable from never.
+2. **It reads `trinity_agent_logs`, which holds 2 qualifying rows in its entire history**
+   (both `trinity-veritas`, 2026-02-20) [MEASURED 2026-09-09]. The loop work is not there.
+
+Where it actually is: **`llm_call_log`** is the load-bearing record —
+provider, tier, `cost_usd`, `created_at`. Per-day call volume and the free/paid split come
+from there, and it is the only table that showed the loops had ever run.
+
+**Also do not join `agent_evergreen` to `repid_agents` by name.** `agent_evergreen.agent_name`
+holds uppercase short names (`HDM`, `APM`, `VERITAS`, `NEXUS`, `TORCH`, `GCM`, `MEL`,
+`ANTIGRAV`); `repid_agents` holds slugs (`trinity-hdm`, …). They never match, and
+`ANTIGRAV` has no counterpart in the T12 roster at all.
+
+**The class, which is the reusable part.** This is `repid_standings` reading `agent_repid`
+again: a view that answers confidently from the wrong source. A negative reading from a view
+you have not read the definition of is NOT a measurement — it is the view's opinion. Run
+`pg_get_viewdef(...)` before believing a NULL, and prefer the base table when the answer
+decides whether something gets rebuilt.
+
 ### Tier is database-derived (do NOT treat as a bug)
 
 `repid_agents.tier` is overwritten on every INSERT/UPDATE by the Postgres
