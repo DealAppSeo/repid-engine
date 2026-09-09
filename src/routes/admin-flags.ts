@@ -464,6 +464,11 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
       source: process.env.EXECUTION_FLOOR_ENABLED === undefined ? 'default' : 'env',
       note: 'gates src/hal/execution-floor.ts (executionFloorEnabled, line 38-40): when true, a determined verdict from a deterministic checker (pure arithmetic or an on-chain read only — `code`/`db` claims are recognized but never executed) becomes AUTHORITATIVE and overrides the HAL LLM-quorum decision for that specific claim via applyToHal(). Default false means the verdict is still COMPUTED and available for logging, but applyToHal() returns the HAL decision UNCHANGED — shadow-first, zero live behavior change until deliberately flipped',
     },
+    hitl_callback_enabled: {
+      value: process.env.HITL_CALLBACK_ENABLED === 'true',
+      source: process.env.HITL_CALLBACK_ENABLED === undefined ? 'default' : 'env',
+      note: 'gates src/services/hitl-notification-dispatcher.ts (line 198): when true AND HITL_CALLBACK_HMAC_SECRET is also set, Telegram HITL notifications get inline-keyboard buttons wired to an HMAC-verified callback handler (hitl-callback-handler.ts). Default false (or the secret unset) means no keyboards are attached, so the webhook\'s callback_query branch never fires and existing message-only HITL traffic is unaffected',
+    },
     mock_facilitator: {
       value: process.env.MOCK_FACILITATOR === 'true'
         ? 'true (simulated settlement)'
