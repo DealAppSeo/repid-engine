@@ -252,7 +252,23 @@ The engine reads/writes only these tables (no migrations live in this repo — s
   honestly — but do not treat that module as the enforcement point, which is the whole reason
   the constraint exists.
 
-The Supabase project ID is **not** committed; the only artifacts are `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` injected at runtime.
+~~The Supabase project ID is **not** committed~~ — **FALSE, MEASURED 2026-09-09.**
+The ref appears in **86 files on `main`**, including this one: the *Canonical data facts*
+section above states it outright. So this file contradicted itself, and a reader who
+trusted the line would have treated a committed identifier as a leak — or, as happened,
+declined a useful config on a premise that was already void.
+
+**It is not a secret, and treating it as one is its own error.** A project ref grants
+nothing without a key; it is in `trinity-ecosystem/CLAUDE.md`, in migrations here, and it
+ships in `trustrails-dev`'s page source inside the public `SUPABASE_URL`. What must never
+be committed is a **key value** — `SUPABASE_SERVICE_KEY`, `SUPABASE_SECRET_KEY`, any
+`sb_secret_…`. Naming the variable is fine; pasting the value is the incident.
+
+Credentials still come from Railway env vars at runtime and are never committed.
+
+*Found by Strix on #691, which observed the ref "is already present throughout this public
+repository" while this line claimed the opposite. A guard reading the repo beat the doc
+describing it.*
 
 ### Layers vs engine vs routes
 

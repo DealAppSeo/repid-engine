@@ -140,6 +140,8 @@ const ALLOWLIST = {
   CLASSIFIER_PACE_MS: 'scripts/test-classifier.ts only; generator scans src/.',
   CROSS_LLM_PACE_MS: 'scripts/test-classifier.ts only; generator scans src/.',
   CC_DRAIN_BATCH: 'scripts/cc-drain-once.ts only; generator scans src/.',
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+    'Named in .claude/skills/supabase-trinity/SKILL.md, which covers the whole Trinity Supabase surface including the Next.js frontends. It is a real variable in trinity-ecosystem and trustrails-dev (read by getSupabaseBrowser), but NOT in this repo — repid-engine is an Express API with no Next.js client, so the generator that scans this src/ can never see it. Allowlisted rather than narrowing the matcher: the guard is right that it is absent here.',
   DISPATCH_RUNNER:
     'Real read in scripts/dispatch/read-inbox.mjs (claim provenance); the generator scans src/ only, and the walk above scans .md/.ts/.tsx only, so an .mjs read can never reach the registry.',
   FIRECRAWL_SMOKE_AGENT_ID: 'scripts/firecrawl-smoke.ts only; generator scans src/.',
