@@ -70,8 +70,11 @@ describe('NVIDIA NIM fact-check provider — default OFF, opt-in only', () => {
     expect(nim!.model).toBeTruthy(); // a model resolved (documentation-sourced default or override)
   });
 
-  it('reuses the already-saved NIM_API_KEY when the canonical NVIDIA_NIM_API_KEY is unset', () => {
-    process.env.NIM_API_KEY = 'saved-nim-key'; // the name actually in .env.master
+  it('still accepts the legacy NIM_API_KEY when the canonical NVIDIA_NIM_API_KEY is unset', () => {
+    // NOT the name in .env.master any more -- renamed to the canonical one 2026-09-09. This test
+    // pins the compatibility shim for environments that still carry the old name; it is not
+    // evidence about what any particular machine holds.
+    process.env.NIM_API_KEY = 'legacy-nim-key';
     process.env.HAL_S2_ENABLE_NVIDIA_NIM = 'true';
     expect(buildFactCheckProviders().map((p) => p.name)).toContain('nvidia-nim');
   });

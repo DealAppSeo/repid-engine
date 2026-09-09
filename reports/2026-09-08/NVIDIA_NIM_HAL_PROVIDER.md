@@ -43,6 +43,22 @@ canonical name first, the already-saved key as fallback. No new secret is create
 Sean's choice: rename to the canonical `NVIDIA_NIM_API_KEY`, or leave `NIM_API_KEY`
 as the working fallback. Both env names are in the regenerated registry.
 
+> **RESOLVED 2026-09-09 — renamed to canonical.** The operator renamed the variable in
+> `.env.master`; the file now holds exactly one NIM variable and it is
+> **`NVIDIA_NIM_API_KEY`** [MEASURED, names only — the rename script printed variable
+> names and never a value]. So the paragraph above is now a record of what was true on
+> 2026-09-08, not a description of the current machine, and the `NIM_API_KEY` fallback is
+> no longer the path that fires there.
+>
+> **The fallback stays in code, deliberately.** It is now a compatibility shim rather than
+> the primary read. Whether Railway carries either name is **NOT CHECKED** — nothing in
+> this session read that service's Variables, and one machine's env file is not evidence
+> about a deployment. Deleting the shim is a deployment decision, not a cleanup.
+>
+> This note exists because the finding above states the saved name as a present-tense
+> fact. A dated measurement that reads as a standing fact is exactly what sends the next
+> agent looking for a variable that is no longer there.
+
 ## Default OFF, and off means byte-identical — VERIFIED
 
 `tests/hal-nvidia-nim-provider.test.ts` (6 tests, all pass):

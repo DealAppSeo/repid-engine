@@ -1978,10 +1978,16 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // returns an ERROR verdict and is EXCLUDED from aggregation (never scored as a zero) — same path
   // as every other provider, so a dead model degrades the quorum, it does not bias it.
   //
-  // KEY NAME — REUSE, NOT CREATE. The canonical name is NVIDIA_NIM_API_KEY, but the credential
-  // already saved (verified: names only) is NIM_API_KEY. Reading both — canonical first, saved
-  // fallback — reuses the existing key with no new secret and still honours the canonical name if
-  // one is set later. If NEITHER is present the provider is simply absent (nothing to dial).
+  // KEY NAME. The canonical name is NVIDIA_NIM_API_KEY and that IS the name now saved
+  // [MEASURED 2026-09-09, names only, from the operator's own rename: `.env.master` holds exactly
+  // one NIM variable and it is NVIDIA_NIM_API_KEY]. This comment previously said the saved
+  // credential was NIM_API_KEY — true when written on 2026-09-08, false the moment it was renamed.
+  //
+  // The NIM_API_KEY fallback is therefore NO LONGER the primary path; it is a compatibility shim
+  // for any environment still carrying the old name. Whether Railway carries either name is
+  // NOT CHECKED from here. Do not delete the fallback on the strength of one machine's env file —
+  // that is a deployment question, not a code-reading one. If NEITHER name is present the provider
+  // is simply absent (nothing to dial), which is the correct keyless behaviour.
   const nim = (process.env.NVIDIA_NIM_API_KEY ?? process.env.NIM_API_KEY)?.trim();
   if (nim && enabled.nvidiaNim) {
     add(
