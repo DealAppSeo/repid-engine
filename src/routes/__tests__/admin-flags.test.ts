@@ -44,6 +44,7 @@ describe('Admin Flags', () => {
     delete process.env['HUMAN_AGENT_BIND_ENABLED'];
     delete process.env.LISTING_BRIDGE_ENABLED;
     delete process.env.AGENT_SELF_SERVE_KEYS_ENABLED;
+    delete process.env.HAL_LOCAL_FALLBACK_ENABLED;
     mockGetHalConfig.mockResolvedValue({
       providers: { HAL_S2_ENABLE_GROQ: true, HAL_S2_ENABLE_CEREBRAS: true },
       strictness: 2,
@@ -451,6 +452,22 @@ describe('Admin Flags', () => {
     const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
     expect(res.body.agent_self_serve_keys_enabled.value).toBe(true);
     expect(res.body.agent_self_serve_keys_enabled.source).toBe('env');
+  });
+
+  it('HAL_LOCAL_FALLBACK_ENABLED defaults false, with a note naming fact-check.ts', async () => {
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_local_fallback_enabled).toEqual({
+      value: false,
+      source: 'default',
+      note: expect.stringContaining('fact-check.ts'),
+    });
+  });
+
+  it('HAL_LOCAL_FALLBACK_ENABLED=true -> reports true, source env', async () => {
+    process.env.HAL_LOCAL_FALLBACK_ENABLED = 'true';
+    const res = await request(app).get('/api/v1/admin/flags').set('x-admin-key', 'secret');
+    expect(res.body.hal_local_fallback_enabled.value).toBe(true);
+    expect(res.body.hal_local_fallback_enabled.source).toBe('env');
   });
 
   describe('x402_release_retry — three-state, and unset must not look like a typo', () => {
