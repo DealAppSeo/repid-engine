@@ -125,6 +125,58 @@ const CALLSITES: readonly string[] = [
  */
 const CALLSITE_CEILING = 12;
 
+/**
+ * HYP-5 inventory (2026-09-09). Hosts each CALLSITE *names*, measured by
+ * substring, not by "does it fetch". Comments count. This is layer 1.
+ * Do not change live egress in the same commit as this table.
+ */
+const CALLSITE_HOSTS: Readonly<Record<string, readonly string[]>> = {
+  'src/engine/badges.ts': ['api.cerebras.ai'],
+  'src/hal/classifier.ts': ['api.groq.com'],
+  'src/hal/completeness.ts': ['api.groq.com'],
+  'src/hal/crag.ts': ['generativelanguage.googleapis.com', 'openrouter.ai'],
+  'src/hal/cross-llm-client.ts': [
+    'api.anthropic.com',
+    'api.cerebras.ai',
+    'api.deepseek.com',
+    'api.fireworks.ai',
+    'api.groq.com',
+    'api.openai.com',
+  ],
+  'src/hal/fact-check.ts': [
+    'api.anthropic.com',
+    'api.cerebras.ai',
+    'api.deepseek.com',
+    'api.fireworks.ai',
+    'api.groq.com',
+    'api.mistral.ai',
+    'api.z.ai',
+    'dashscope-intl.aliyuncs.com',
+    'generativelanguage.googleapis.com',
+    'integrate.api.nvidia.com',
+    'openrouter.ai',
+  ],
+  'src/hal/lib/clients/embedding.ts': ['api.openai.com'],
+  'src/hal/lib/cross-llm/embedding-client.ts': ['api.openai.com'],
+  'src/hal/lib/cross-llm/index.ts': [
+    'api.anthropic.com',
+    'api.cerebras.ai',
+    'api.deepseek.com',
+    'api.fireworks.ai',
+    'api.groq.com',
+  ],
+  'src/services/adversarial-judge.ts': [
+    'api.anthropic.com',
+    'api.cerebras.ai',
+    'api.deepseek.com',
+    'api.groq.com',
+    'api.openai.com',
+    'generativelanguage.googleapis.com',
+  ],
+  'src/services/pcp-validator.ts': ['api.groq.com'],
+  'src/services/validation-repid-delta.ts': ['api.cerebras.ai', 'api.groq.com'],
+};
+
 const BASELINE: readonly string[] = [...ADAPTERS, ...PROBES, ...NOISE, ...CALLSITES];
 const MAY_DISAPPEAR_QUIETLY = new Set(CALLSITES);
 
@@ -194,5 +246,17 @@ describe('provider egress surface is pinned and shrinking, not described', () =>
     expect(PROVIDER_HOSTS.some((h) => 'const e = "https://example.test/v1";'.includes(h))).toBe(
       false,
     );
+  });
+
+  it('every CALLSITE has a pinned host inventory, measured not assumed', () => {
+    expect(Object.keys(CALLSITE_HOSTS).sort()).toEqual([...CALLSITES].sort());
+    for (const f of CALLSITES) {
+      const text = fs.readFileSync(path.join(REPO, f), 'utf8');
+      const found = PROVIDER_HOSTS.filter((h) => text.includes(h)).sort();
+      expect({ file: f, hosts: found }).toEqual({
+        file: f,
+        hosts: [...CALLSITE_HOSTS[f]].sort(),
+      });
+    }
   });
 });
