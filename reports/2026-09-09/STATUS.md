@@ -60,4 +60,27 @@ HOLD: feat/hyp-5-egress-inventory — do not merge.
 
 KILL: nothing.
 
-PULL-NEXT: DealAppSeo/trustmarket shadow listing stub
+PULL-NEXT: trustmarket deepen shadow verify-a-claim (buy stays false)
+
+---
+
+## Sprint 2026-09-10 — HYP-5 shadow ratchet only
+
+`src/hal/shadow-provider-fetch.ts` throws on use. No CALLSITE imports it.
+Live ceiling still 12. Live fetch paths untouched.
+
+```
+npx jest tests/provider-egress-shadow.test.ts tests/provider-egress-guard.test.ts --no-coverage
+```
+
+Exit: **0**. 10 passed.
+
+---
+
+PROMOTE: (later) shadow chokepoint after a wrap that lowers CALLSITE_CEILING.
+
+HOLD: feat/hyp-5-egress-inventory — do not merge. Do not wrap live callers.
+
+KILL: nothing.
+
+PULL-NEXT: trustmarket deepen shadow verify-a-claim (buy stays false)
