@@ -5796,6 +5796,58 @@ were still in flight. At the time this closeout was written, both #693 (this led
 were still `OPEN`/pending checks — not yet confirmed merged; the next beat's step 1 confirms that
 independently, same as every other beat in this file. No deviation from the stated plan.
 
+## Beat 124 — 2026-09-09 · verified #693/#694 landed, diff matches intent; six non-loop PRs landed since; step 2 intent: HITL_CALLBACK_ENABLED
+
+**Step 1 — Beat 123 checked against its own diff + CI, not against its prose.**
+`git log 21fcf47..origin/main` confirms both `21fcf47` (#693, this ledger's own prior entry) and
+`f003470` (#694) are on `origin/main` (gh GraphQL calls in this runner intermittently hit a shared
+rate limit — `gh pr view --json ...` failed twice with "API rate limit already exceeded" while
+`gh api rate_limit` reported 5000/5000 remaining seconds later, so the limit is shared across
+concurrent sessions, not exhausted by this one; fell back to REST, which worked: `gh api
+repos/DealAppSeo/repid-engine/commits/f003470/check-runs` shows 6/6 SUCCESS — build-and-deploy,
+test, zkp-vault, gitleaks, crosscheck, resident-secrets). `git show f003470 -- src/routes/admin-flags.ts`
+matches Beat 123's stated intent exactly: `execution_floor_enabled` added reusing the real
+`executionFloorEnabled()` from `src/hal/execution-floor.ts` (not a re-derived env check), same
+`{value, source}` shape as every existing field, with a `note` naming the gate site
+(`hal/execution-floor.ts:38-40`) and both states' behavior.
+
+**Six commits landed on `origin/main` between #694 and this beat, none carrying a ledger entry**
+(same non-gap pattern noted every beat since #667): 9dbe672 (#692, docs — the saved NIM credential
+name), 62664f7 (#695, docs — corrected `LOCAL_LLM_BASE_URL` coverage claims), 43b6372 (#696, test —
+pinned the 26-file provider-egress surface split by role with a shrink-only `CALLSITE_CEILING`),
+e161e9a (#697, docs/reports — the egress surface writeup), e66b5c8 (#698, docs — closed the Railway
+egress question, recorded the service-count dispute rather than resolving it wrongly), ec032fb
+(#700, test — SDK import-graph guard + provider-fetch chokepoint + first callsite retired). None
+touch `admin-flags.ts`; no conflict with this beat's step 2.
+
+**Step 2 — `HITL_CALLBACK_ENABLED` (default OFF), the Telegram HITL inline-keyboard gate.**
+Re-grepped the two flags Beat 123 left tied (`HITL_CALLBACK_ENABLED`, `ANFIS_RETUNE_ENABLED`) fresh
+rather than trusting the old count: each still has exactly 3 non-test call-site files, and neither
+is yet reported on `GET /api/v1/admin/flags` (grepped for both — zero hits). Neither has an existing
+narrow public echo. Tie-break: `ANFIS_RETUNE_ENABLED` sits directly next to CLAUDE.md's named hard
+stop "ANFIS parameters — never in public docs" — reporting a boolean gate is not the same as
+reporting a tuned parameter, but the adjacency is exactly the kind of thing worth staying clear of
+without a reason to cross it, so it stays on the tied list rather than being picked. `HITL_CALLBACK_ENABLED`
+has no such adjacency: it gates whether `hitl-notification-dispatcher.ts:198` attaches Telegram
+inline-keyboard buttons to a human-in-the-loop notification (`process.env.HITL_CALLBACK_ENABLED ===
+'true' && !!process.env.HITL_CALLBACK_HMAC_SECRET` — both must be true). Its own comment
+(`hitl-callback-handler.ts:11-17`) documents the fully-gated boot semantics: when off, the webhook's
+`callback_query` branch never fires because no keyboards were ever attached, so existing message-only
+traffic is unaffected. Not on CLAUDE.md's Sean-gated hard-line list (`ENGINE_LLM_PROXY`,
+`ROUTER_STRICT_COST_ORDER`, `HAL_GROUNDING_MODE=enforce`, `REPID_PURPOSE_GATE_V3`, real-money
+X402/STAKE) — this is a notification UI feature gate, not a scoring/routing/money switch. This
+change only reads and reports current state — it does not flip the flag.
+
+Will report as `hitl_callback_enabled`, same `{value, source}` shape as every existing boolean
+field, with a `note` naming the gate site (`hitl-notification-dispatcher.ts:198`), the second
+required condition (`HITL_CALLBACK_HMAC_SECRET` must also be set), and what turns on when true
+(Telegram inline-keyboard buttons on HITL notifications, wired to an HMAC-verified callback
+handler). Additive only — no existing field's shape changes, no route touched besides
+`admin-flags.ts` and its test file. Not yet built as this entry is opened, per the Beat 106 process
+correction (ledger PR before any step-2 file is touched); the PR follows on its own branch cut from
+`origin/main`, same SAFE-CLASS merge convention (`gh pr merge <n> --auto --squash` while checks are
+in flight) as every prior beat in this run.
+
 ## Beat 124 — 2026-09-09 · verified #693/#694 landed, diff matches intent; six non-loop PRs landed since; step 2 intent: ANFIS_RETUNE_ENABLED
 
 **Step 1 — Beat 123 checked against its own diff + CI, not against its prose.**
@@ -5883,3 +5935,30 @@ PRs merged during this run's window (since 2026-09-10T04:25:21Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 34437118067 --log`) if the reason matters.
+
+## Beat (auto-logged, run 34455453730) — agent did not reach step 1 (ledger)
+
+**Auto-generated by the ledger-fallback job** — the `beat` job (result: `failure`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/34455453730
+
+PRs merged during this run's window (since 2026-09-10T08:29:38Z):
+- (none detected)
+
+The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 34455453730 --log`) if the reason matters.
+
+## Beat (auto-logged, run 34477249214) — agent did not reach step 1 (ledger)
+
+**Auto-generated by the ledger-fallback job** — the `beat` job (result: `failure`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/34477249214
+
+PRs merged during this run's window (since 2026-09-10T12:31:57Z):
+- (none detected)
+
+The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 34477249214 --log`) if the reason matters.
+
+## Beat (auto-logged, run 34501616274) — agent did not reach step 1 (ledger)
+
+**Auto-generated by the ledger-fallback job** — the `beat` job (result: `failure`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/34501616274
+
+PRs merged during this run's window (since 2026-09-10T16:21:51Z):
+- (none detected)
+
+The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 34501616274 --log`) if the reason matters.
