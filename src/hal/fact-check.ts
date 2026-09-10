@@ -27,6 +27,7 @@ import crypto from 'crypto';
 // to a local server; ONLY_ATTESTATIONS_LEAVE refuses any remaining cloud prompt egress. Both are
 // default-OFF: unset → hosted behavior byte-identical.
 import { resolveProviderEndpoint } from './local-llm';
+import { gateOpenRouterModel, halAllowPaid } from './hal-free-gate';
 import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 // CROSS-FIX 2026-07-05 — hardened registry-family lookup (single source of family truth). resolveFamily
 // is REGISTRY-ONLY and THROWS on an unmapped/ambiguous model. HAL is a LIVE scoring path and MUST NOT
@@ -2012,7 +2013,18 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // live /models list first.
   const or = process.env.OPENROUTER_API_KEY?.trim();
   if (or && (enabled.openrouter || ab)) {
-    add({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', 'qwen/qwen-2.5-72b-instruct');
+    // FREE-TIER GATE (Sean 2026-09-10): the paid default `qwen/qwen-2.5-72b-instruct` and any paid
+    // HAL_S2_OPENROUTER_MODEL override must NOT fire while allow_paid=false. Under the hold, fall back
+    // to the verified-live `:free` slug (nvidia/nemotron-3-ultra-550b-a55b:free, same one the frontier
+    // tier uses). See src/hal/hal-free-gate.ts + E:\dev\living-docs\ENGINE_HAL_GATE.md.
+    const orGate = gateOpenRouterModel({
+      operatorModel: process.env.HAL_S2_OPENROUTER_MODEL?.trim(),
+      paidDefault: 'qwen/qwen-2.5-72b-instruct',
+      freeDefault: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+      allowPaid: halAllowPaid(),
+    });
+    if (orGate.ignoreOperatorModel) console.warn(`[hal] free-tier gate: ${orGate.reason}`);
+    add({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', orGate.staticDefault, 'openrouter', orGate.ignoreOperatorModel);
 
     // ── CONSOLIDATION SLOTS ────────────────────────────────────────────────────────────
     // One gateway can carry several families, which is the whole point of consolidating:
