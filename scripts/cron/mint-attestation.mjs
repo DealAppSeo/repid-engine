@@ -35,6 +35,7 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { ethers } from 'ethers';
+import { rateDeliverable } from './rate-deliverable.cjs';
 
 const BASE = (process.env.ENGINE_BASE_URL || 'https://repid-engine-production.up.railway.app').replace(/\/+$/, '');
 const RPC = process.env.BASE_SEPOLIA_RPC || process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
@@ -158,9 +159,22 @@ async function main() {
         title: `living-proof-${Date.now()}`,
         service_type: 'verification',
         deliverable: `A cross-provider factual verification verdict on the claim: "${claimText}"`,
+        // MEASURED against a real deliverable (2026-09-09) before being written
+        // here. The handler returns a STRUCTURED verdict — {verdict, score,
+        // confidence, validators, validator_count, attempted_validator_count} —
+        // and no prose. Criterion 2 previously read "names the chain id it
+        // verified against"; nothing in that payload carries a chain id, so it
+        // was unmeetable by construction and would have scored `met: false` on
+        // every run forever. A criterion nobody can satisfy is not a high bar,
+        // it is a broken instrument.
+        //
+        // It now asks for the answered/asked counts, which the payload does
+        // carry and which are the exact distinction that cost twelve days in
+        // August: a silent panel scored as agreement. The buyer checks it on
+        // every run.
         acceptance_criteria: [
           { n: 1, text: 'The verdict states explicitly whether the claim is true or false, without hedging.' },
-          { n: 2, text: 'The verdict names the chain id it verified against, so the check is reproducible.' },
+          { n: 2, text: 'The verdict reports how many validators were asked and how many answered, so silence cannot be counted as agreement.' },
         ],
         deadline,
         agreed_price: { amount_usdc_raw: Number(svc.base_price_usdc_raw), currency: 'USDC' },
@@ -188,14 +202,57 @@ async function main() {
     // deliver via the registered handler (provider identity), then satisfy (poll for cascade delivery).
     const processResp = await api('POST', '/api/v1/agent/process-contracts', provKey.raw, { agent_name: prov.agent_name });
     console.log(`[mint-attestation] process-contracts -> ${processResp.status}`);
-    let settled = false;
-    for (let i = 0; i < 8 && !settled; i++) {
-      const s = await api('POST', `/api/v1/contracts/${cid}/satisfy`, buyerKey.raw, { satisfaction_score: 1 });
-      console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> ${s.status} ${s.json?.status ?? ''}`);
-      if (s.status === 200 && s.json?.status === 'settled') { settled = true; break; }
+    // WAIT FOR THE DELIVERABLE, THEN RATE WHAT IT ACTUALLY SAYS.
+    //
+    // [BROKE 2026-09-05, five consecutive silent failures, fixed 2026-09-10.]
+    // This loop used to POST `{ satisfaction_score: 1 }` immediately and repeat.
+    // Both halves were wrong once this script started writing work statements.
+    //
+    // `deriveSatisfyScore` IGNORES `satisfaction_score` entirely when the
+    // contract carries a `work_statement_hash`, and requires a `met` rating for
+    // every numbered criterion instead. So every attempt returned 400
+    // RATING_REQUIRED — before the money path, which is why it left no trace
+    // anywhere queryable: no release attempted, no authorization voided, the
+    // settlement row untouched at `authorized`. Five days of contracts reached
+    // `fulfilled` with PASS and simply stopped, and the database recorded
+    // nothing to distinguish that from "waiting on the buyer".
+    //
+    // This is the SAME trap as the payload bug 40 lines above, in the other
+    // direction: that one taught the script to write a work statement, and this
+    // half was never taught to rate against one. A gate added at one end of a
+    // pipeline has to be checked against every producer feeding the other end —
+    // including the one you just fixed.
+    //
+    // Rating before delivery is not merely useless, it is DANGEROUS: a score of
+    // 0 routes to `deliverable_rejected`, which VOIDS the authorization. So we
+    // poll until the contract is actually `fulfilled`, read the deliverable, and
+    // rate it once on evidence. `met: true` is never assumed — a deliverable
+    // that does not meet a criterion is reported as not meeting it, and the
+    // buyer declining to pay for it is the system working.
+    let deliverable = null;
+    for (let i = 0; i < 8 && !deliverable; i++) {
+      // GET /:id returns the contract row directly (verified against the route,
+      // which does `res.json(data)` on a `select('*')` — not wrapped).
+      const g = await api('GET', `/api/v1/contracts/${cid}`, buyerKey.raw);
+      const st = g.json?.status;
+      console.log(`[mint-attestation] delivery poll ${i + 1}/8 -> ${g.status} status=${st ?? 'unknown'}`);
+      if (g.status === 200 && st === 'fulfilled' && g.json?.result) { deliverable = g.json.result; break; }
       await sleep(15000);
     }
-    if (!settled) throw new Error('contract never reached settled (cascade delivery timeout)');
+    if (!deliverable) throw new Error('contract never reached fulfilled (cascade delivery timeout)');
+
+    const ratings = rateDeliverable(deliverable);
+    console.log('[mint-attestation] ratings ' + JSON.stringify(ratings));
+    const s = await api('POST', `/api/v1/contracts/${cid}/satisfy`, buyerKey.raw, { criterion_ratings: ratings });
+    console.log(`[mint-attestation] satisfy -> ${s.status} ${s.json?.status ?? ''}`);
+    if (s.status !== 200 || s.json?.status !== 'settled') {
+      throw new Error(
+        `satisfy -> ${s.status} ${JSON.stringify(s.json).slice(0, 200)} — ratings were ` +
+        `${JSON.stringify(ratings)}. A 400 here means the ratings did not match the work ` +
+        'statement; a 409 means the deliverable was rejected and the authorization voided.'
+      );
+    }
+
     console.log('[mint-attestation] settled; waiting for the on-chain write...');
 
     // 3. wait for the FeedbackLoopWorker's on-chain write, then VERIFY it on Base Sepolia.
