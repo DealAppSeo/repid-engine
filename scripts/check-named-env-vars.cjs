@@ -90,6 +90,8 @@ const ALLOWLIST = {
     'Composed at runtime via XAI_KEY_VARS; generator only captures literal process.env.NAME under src/.',
   CONTRACT_PARTY_ENFORCEMENT:
     'Read as process.env[PARTY_ENFORCEMENT_ENV]; generator misses indirection.',
+  HAL_S2_OPENROUTER_MODEL:
+    'Real long-standing HAL backfill override, read as process.env[envVar] via resolveModelFor (envVar passed as a string to add()); generator only captures literal process.env.NAME so it misses the indirection. Named in hal-free-gate.ts doc comment.',
   ZKREPID_DISCLOSURE_MODE:
     'Read as process.env[MODE_ENV]; generator misses indirection.',
   TASK_CRITERIA_GATE:
