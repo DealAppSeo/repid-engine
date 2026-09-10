@@ -79,6 +79,9 @@ describe('factCheck — resilience (3/2/1/0)', () => {
     expect(r.providers_used).toBe(2);
     expect(r.degraded).toBe(false);
     expect(r.decision).toBe('vetoed');
+    // Honesty seam: engine `degraded` means <2 succeeded. 2-of-3 is quorum
+    // `partial`, which is what README calls live-degraded. Do not collapse them.
+    expect(r.quorum).toBe('partial');
   });
 
   test('1 provider up (two fail) → degraded, still scored', async () => {

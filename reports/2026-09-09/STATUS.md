@@ -33,4 +33,31 @@ HOLD: feat/hyp-5-egress-inventory — do not merge. Do not wrap callers this loo
 
 KILL: nothing. Guard still fails both ways; inventory matches the tree.
 
-PULL-NEXT: HAL-degraded inventory (repid-engine)
+PULL-NEXT: HAL-degraded inventory (this repo, sprint 3)
+
+---
+
+## Sprint 3 — HAL quorum inventory
+
+No keys spent. No production env change.
+
+Engine already has `degraded` (<2 succeeded) and `quorum: full|partial|low|outage`.
+Pinned: 2-of-3 HTTP500 → `degraded: false`, `quorum: 'partial'`.
+```
+npx jest tests/hal/fact-check.test.ts --no-coverage
+```
+Exit: **0**. 23 passed.
+
+Live 6-provider why-table: `reports/2026-09-09/HAL-QUORUM-INVENTORY.md` (dated CC-ASSESS / MCP probe, not re-run).
+
+Did not add a second degraded field. README "live-degraded" ≠ engine `degraded`.
+
+---
+
+PROMOTE: (later) fact-check quorum-partial pin + HYP-5 host inventory.
+
+HOLD: feat/hyp-5-egress-inventory — do not merge.
+
+KILL: nothing.
+
+PULL-NEXT: DealAppSeo/trustmarket shadow listing stub
