@@ -35,13 +35,7 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { ethers } from 'ethers';
-import {
-  rateDeliverable,
-  classifyContractStatus,
-  classifySatisfyResponse,
-  ACCEPTANCE_CRITERIA,
-  CLAIM_TEXT,
-} from './rate-deliverable.mjs';
+import { rateDeliverable } from './rate-deliverable.cjs';
 
 const BASE = (process.env.ENGINE_BASE_URL || 'https://repid-engine-production.up.railway.app').replace(/\/+$/, '');
 const RPC = process.env.BASE_SEPOLIA_RPC || process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
@@ -155,7 +149,7 @@ async function main() {
     // do; they are the text ratings get scored against, so they say something
     // checkable rather than restating the title.
     const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    const claimText = CLAIM_TEXT;
+    const claimText = 'The Base Sepolia chain id is 84532.';
     const create = await api('POST', '/api/v1/contracts', buyerKey.raw, {
       service_id: svc.id,
       buyer_agent_id: buyer.id,
@@ -165,7 +159,23 @@ async function main() {
         title: `living-proof-${Date.now()}`,
         service_type: 'verification',
         deliverable: `A cross-provider factual verification verdict on the claim: "${claimText}"`,
-        acceptance_criteria: ACCEPTANCE_CRITERIA,
+        // MEASURED against a real deliverable (2026-09-09) before being written
+        // here. The handler returns a STRUCTURED verdict — {verdict, score,
+        // confidence, validators, validator_count, attempted_validator_count} —
+        // and no prose. Criterion 2 previously read "names the chain id it
+        // verified against"; nothing in that payload carries a chain id, so it
+        // was unmeetable by construction and would have scored `met: false` on
+        // every run forever. A criterion nobody can satisfy is not a high bar,
+        // it is a broken instrument.
+        //
+        // It now asks for the answered/asked counts, which the payload does
+        // carry and which are the exact distinction that cost twelve days in
+        // August: a silent panel scored as agreement. The buyer checks it on
+        // every run.
+        acceptance_criteria: [
+          { n: 1, text: 'The verdict states explicitly whether the claim is true or false, without hedging.' },
+          { n: 2, text: 'The verdict reports how many validators were asked and how many answered, so silence cannot be counted as agreement.' },
+        ],
         deadline,
         agreed_price: { amount_usdc_raw: Number(svc.base_price_usdc_raw), currency: 'USDC' },
       },
@@ -192,80 +202,57 @@ async function main() {
     // deliver via the registered handler (provider identity), then satisfy (poll for cascade delivery).
     const processResp = await api('POST', '/api/v1/agent/process-contracts', provKey.raw, { agent_name: prov.agent_name });
     console.log(`[mint-attestation] process-contracts -> ${processResp.status}`);
-    // RATE THE DELIVERABLE, DO NOT ASSERT A SCORE.
+    // WAIT FOR THE DELIVERABLE, THEN RATE WHAT IT ACTUALLY SAYS.
     //
-    // [BROKE 2026-09-05, found 2026-09-09.] This sent `{satisfaction_score: 1}`,
-    // and once contracts became work-statement-bound that stopped being accepted
-    // at all: `deriveSatisfyScore` requires `criterion_ratings` whenever
-    // `work_statement_hash` is set, and the legacy scalar branch is unreachable
-    // for every contract this script now creates. So satisfy returned 400
-    // RATING_REQUIRED on every attempt, all 8 polls failed, and five consecutive
-    // daily runs left real USDC sitting authorized-but-uncaptured. The escrow fix
-    // did not strand the money; it moved where the stranding happened.
+    // [BROKE 2026-09-05, five consecutive silent failures, fixed 2026-09-10.]
+    // This loop used to POST `{ satisfaction_score: 1 }` immediately and repeat.
+    // Both halves were wrong once this script started writing work statements.
     //
-    // The replacement rates the criteria AGAINST THE DELIVERED RESULT rather than
-    // hardcoding a verdict. `satisfaction_score: 1` was an assertion the buyer had
-    // no basis for — the same "recorded as if it had been checked" shape this
-    // codebase keeps removing, and it sat on the one path that moves real money.
-    let settled = false;
-    for (let i = 0; i < 8 && !settled; i++) {
-      // Read what was actually delivered before rating it. A rating derived from
-      // nothing is the defect being fixed, so a contract we cannot read is NOT
-      // rated: we wait and retry rather than guessing a score in either
-      // direction. Guessing high pays for unseen work; guessing low VOIDS a
-      // legitimate payment. Neither is ours to invent.
-      const got = await api('GET', `/api/v1/contracts/${cid}`, buyerKey.raw);
-      if (got.status !== 200) {
-        console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> contract read ${got.status}; not rating`);
-        await sleep(15000);
-        continue;
-      }
-      const status = got.json?.status;
-      const next = classifyContractStatus(status);
-      if (next === 'settled') {
-        // Satisfy moved the money and we misread its answer. Re-polling this to
-        // the timeout below would report a FAILURE on a contract that SUCCEEDED.
-        console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> already settled`);
-        settled = true;
-        break;
-      }
-      if (next === 'terminal') {
-        throw new Error(
-          `contract is '${status}' and cannot reach fulfilled — this is not a delivery timeout`,
-        );
-      }
-      if (next !== 'rate') {
-        console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> status '${status}', awaiting delivery`);
-        await sleep(15000);
-        continue;
-      }
-
-      const ratings = rateDeliverable(got.json.result);
-      const met = ratings.filter((r) => r.met).length;
-      console.log(
-        `[mint-attestation] rated deliverable ${met}/${ratings.length}: ` +
-        ratings.map((r) => `n${r.n}=${r.met ? 'met' : 'NOT met'}`).join(' '),
-      );
-
-      const s = await api('POST', `/api/v1/contracts/${cid}/satisfy`, buyerKey.raw, { criterion_ratings: ratings });
-      console.log(`[mint-attestation] satisfy attempt ${i + 1}/8 -> ${s.status} ${s.json?.status ?? s.json?.error ?? ''}`);
-      const answer = classifySatisfyResponse(s.status, s.json);
-      if (answer === 'settled') { settled = true; break; }
-      if (answer === 'voided') {
-        throw new Error(
-          `deliverable rated ${met}/${ratings.length}; payment authorization voided, no funds moved. ` +
-          'This is the pay-on-verified-delivery path working, not a bug in it.',
-        );
-      }
-      if (answer === 'reject') {
-        throw new Error(
-          `satisfy refused (${s.status} ${s.json?.error}): ${s.json?.message} — ` +
-          'waiting cannot fix this; the ratings or the caller no longer match the contract.',
-        );
-      }
+    // `deriveSatisfyScore` IGNORES `satisfaction_score` entirely when the
+    // contract carries a `work_statement_hash`, and requires a `met` rating for
+    // every numbered criterion instead. So every attempt returned 400
+    // RATING_REQUIRED — before the money path, which is why it left no trace
+    // anywhere queryable: no release attempted, no authorization voided, the
+    // settlement row untouched at `authorized`. Five days of contracts reached
+    // `fulfilled` with PASS and simply stopped, and the database recorded
+    // nothing to distinguish that from "waiting on the buyer".
+    //
+    // This is the SAME trap as the payload bug 40 lines above, in the other
+    // direction: that one taught the script to write a work statement, and this
+    // half was never taught to rate against one. A gate added at one end of a
+    // pipeline has to be checked against every producer feeding the other end —
+    // including the one you just fixed.
+    //
+    // Rating before delivery is not merely useless, it is DANGEROUS: a score of
+    // 0 routes to `deliverable_rejected`, which VOIDS the authorization. So we
+    // poll until the contract is actually `fulfilled`, read the deliverable, and
+    // rate it once on evidence. `met: true` is never assumed — a deliverable
+    // that does not meet a criterion is reported as not meeting it, and the
+    // buyer declining to pay for it is the system working.
+    let deliverable = null;
+    for (let i = 0; i < 8 && !deliverable; i++) {
+      // GET /:id returns the contract row directly (verified against the route,
+      // which does `res.json(data)` on a `select('*')` — not wrapped).
+      const g = await api('GET', `/api/v1/contracts/${cid}`, buyerKey.raw);
+      const st = g.json?.status;
+      console.log(`[mint-attestation] delivery poll ${i + 1}/8 -> ${g.status} status=${st ?? 'unknown'}`);
+      if (g.status === 200 && st === 'fulfilled' && g.json?.result) { deliverable = g.json.result; break; }
       await sleep(15000);
     }
-    if (!settled) throw new Error('contract never reached settled (cascade delivery timeout)');
+    if (!deliverable) throw new Error('contract never reached fulfilled (cascade delivery timeout)');
+
+    const ratings = rateDeliverable(deliverable);
+    console.log('[mint-attestation] ratings ' + JSON.stringify(ratings));
+    const s = await api('POST', `/api/v1/contracts/${cid}/satisfy`, buyerKey.raw, { criterion_ratings: ratings });
+    console.log(`[mint-attestation] satisfy -> ${s.status} ${s.json?.status ?? ''}`);
+    if (s.status !== 200 || s.json?.status !== 'settled') {
+      throw new Error(
+        `satisfy -> ${s.status} ${JSON.stringify(s.json).slice(0, 200)} — ratings were ` +
+        `${JSON.stringify(ratings)}. A 400 here means the ratings did not match the work ` +
+        'statement; a 409 means the deliverable was rejected and the authorization voided.'
+      );
+    }
+
     console.log('[mint-attestation] settled; waiting for the on-chain write...');
 
     // 3. wait for the FeedbackLoopWorker's on-chain write, then VERIFY it on Base Sepolia.
