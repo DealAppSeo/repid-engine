@@ -20,9 +20,24 @@
  *   GET /api/v1/observability/onchain-stats
  *     → { agents_minted, lifetime_onchain_writes, as_of }
  *     agents_minted = count of repid_agents with erc8004_token_id (mock-excluded
- *     by default, same rule); lifetime_onchain_writes = real row count of
- *     erc8004_reputation_writes. NO hard-coded constants — these were frozen at
- *     agents_minted=4 / lifetime_onchain_writes=32 since 2026-05-24; now live.
+ *     by default, same rule); lifetime_onchain_writes = the count of rows that
+ *     are actually VERIFIABLE ON BASESCAN — see the filter below. NO hard-coded
+ *     constants — these were frozen at agents_minted=4 /
+ *     lifetime_onchain_writes=32 since 2026-05-24; now live.
+ *
+ *     "Real row count" USED TO MEAN `count('*')` with no filter, and that
+ *     over-claimed on the public landing page [MEASURED 2026-09-13]: the page
+ *     labels this number "lifetime on-chain reputation writes" directly beneath
+ *     the heading "Live on Base Sepolia. Receipts, not promises." and beside the
+ *     registry addresses "(verifiable on basescan)". The unfiltered count was
+ *     106 where only 93 rows back that claim —
+ *       - 5 rows carry a literal placeholder tx (`0xmock_reputation_tx_…`,
+ *         block_number 123456) written 2026-05-11. Nothing to look up.
+ *       - 8 rows sit on 0x8004A818… (a DIFFERENT contract), not the canonical
+ *         ReputationRegistry the page prints. Real txs, wrong claim.
+ *     A number offered as a basescan receipt must be one. Publishing a row that
+ *     cannot be looked up is the house defect — NOT_CHECKED rendered as passed —
+ *     landed on the page that says "receipts, not promises".
  *
  * SCHEMA-FIRST (verified via Supabase MCP 2026-07-07, project qnnpjhlxljtqyigedwkb):
  *   repid_agents:  id(uuid), agent_id(text), agent_name(text), display_name(text),
@@ -36,6 +51,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { isMockAgentId } from '../../constants/public-surfaces';
+import { getActiveNetwork } from '../../config/network';
 
 const router = Router();
 
@@ -99,19 +115,41 @@ router.get('/observability/onchain-stats', async (req: Request, res: Response) =
       .filter((a: any) => withMock || !isMockAgentId(a.agent_id))
       .length;
 
-    // lifetime_onchain_writes: real row count of erc8004_reputation_writes.
-    const { count: writesCount, error: writesErr } = await db
+    // lifetime_onchain_writes: only rows a reader can actually verify on
+    // basescan. Filtered in-process for the same reason agents_minted is just
+    // above — the predicate is not expressible as a PostgREST HEAD count — so
+    // the two halves of this endpoint stay one idiom.
+    const { data: writeRows, error: writesErr } = await db
       .from('erc8004_reputation_writes')
-      .select('*', { count: 'exact', head: true });
+      .select('tx_hash, contract_address');
 
     if (writesErr) {
       console.error('[observability-public] onchain-stats writes query failed:', writesErr.message ?? writesErr);
       return res.status(500).json({ error: 'query_failed', message: writesErr.message ?? 'query failed' });
     }
 
+    // The canonical ReputationRegistry this number claims to describe. When the
+    // active network has no address configured, the contract half of the filter
+    // is SKIPPED rather than applied against '' — an empty config must not
+    // silently zero a public number. The tx_hash half is unconditional: a row
+    // with no real transaction is unverifiable on any network.
+    const reputationRegistry = (getActiveNetwork().contracts.reputationRegistry || '').toLowerCase();
+    const REAL_TX = /^0x[0-9a-f]{64}$/i;
+
+    const allWriteRows = writeRows ?? [];
+    const verifiableWrites = allWriteRows.filter((w: any) => {
+      if (!REAL_TX.test(String(w?.tx_hash ?? ''))) return false;
+      if (!reputationRegistry) return true;
+      return String(w?.contract_address ?? '').toLowerCase() === reputationRegistry;
+    }).length;
+
     return res.json({
       agents_minted: agentsMinted,
-      lifetime_onchain_writes: writesCount ?? 0,
+      lifetime_onchain_writes: verifiableWrites,
+      // Published on purpose. The verified count is LOWER than the raw table
+      // size, and a bare drop with nothing explaining it invites a later
+      // "fix" back to the over-claim. This names the gap instead.
+      onchain_writes_excluded_unverifiable: allWriteRows.length - verifiableWrites,
       as_of: new Date().toISOString(),
     });
   } catch (e: any) {
