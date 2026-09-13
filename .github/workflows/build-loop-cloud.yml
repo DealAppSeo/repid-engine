@@ -128,9 +128,18 @@ jobs:
             real-money X402/STAKE); no secrets in code; NEVER an immediate/manual merge (only --auto on safe-class);
             never bulk-delete trinity_tasks; surface to Sean (in the ledger) ONLY a ready-merge-needing-him, a
             secret/infra flip, or a real fork. Keep this beat bounded and STOP when it is done.
+          # Model is a repo VARIABLE (Settings → Variables → Actions → BUILD_LOOP_MODEL)
+          # with a valid default, NOT a hardcoded literal. The prior hardcode
+          # `claude-sonnet-5` stopped resolving provider-side around 2026-09-10:
+          # the API rejected every beat in ~254ms with is_error, total_cost_usd=0,
+          # modelUsage={}, num_turns=1 — so the loop died at turn 1 and only the
+          # fallback logger committed empty "beat"-less entries (16+ in a row).
+          # Same class as the Groq `llama-3.3-70b-versatile` retirement in LESSONS:
+          # a retired model name is now a variable, so the next one is a config
+          # change, not a code edit + redeploy.
           claude_args: |
             --max-turns 40
-            --model claude-sonnet-5
+            --model ${{ vars.BUILD_LOOP_MODEL || 'claude-sonnet-4-6' }}
             --allowedTools Edit,Read,Write,Bash,Glob,Grep
 
   # Beats 64-67 all showed the same failure: the 40-turn cap kills the `beat`
