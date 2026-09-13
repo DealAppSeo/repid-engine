@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import * as dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 
 dotenv.config();
 
@@ -40,6 +41,19 @@ export async function postReputationSignal(input: {
   txHash: string;
   blockNumber: number;
 }> {
+  // Circuit breaker (fail-closed) — this is a second, independent on-chain
+  // reputation-write path (its own wallet + contract), so it needs the same
+  // guard as writeRepIDFeedback or the breaker is bypassable through here.
+  try {
+    await assertBreakerClosed('cb_disable_onchain_writes');
+  } catch (breakerErr: any) {
+    console.warn(
+      `[erc8004-poster] skipped_write: on-chain giveFeedback refused — ${breakerErr?.message}. ` +
+        `agentId=${input.agentId} receiptId=${input.receiptId}`
+    );
+    throw breakerErr;
+  }
+
   const pk = process.env.ERC8004_OPERATOR_KEY;
   if (!pk) {
     throw new Error('Missing ERC8004_OPERATOR_KEY environment variable. SEAN DOES THIS FIRST.');

@@ -21,6 +21,7 @@ import { ethers } from 'ethers';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getProvider } from '../clients/rpc-with-failover';
 import { getActiveNetwork } from '../config/network';
+import { assertBreakerClosed } from '../middleware/circuit-breaker';
 import reputationAbiRaw from '../contracts/ReputationRegistry.abi.json';
 
 const REPUTATION_ABI =
@@ -96,6 +97,22 @@ export class Erc8004ReputationWriter {
    * Tag1 = "hyperdag_repid", tag2 = "tier:<TIER>".
    */
   async writeRepIDFeedback(args: WriteRepIDArgs): Promise<WriteRepIDResult> {
+    // Circuit breaker (fail-closed). This is the single chokepoint every RepID
+    // reputation write routes through — writeRepIDCanonical, the feedback-loop
+    // worker, the onchain-reputation trigger and the /agents-reputation route
+    // all land here — so one guard covers them all. Prior to this the
+    // cb_disable_onchain_writes flag was inert and writes landed while it read
+    // `true`.
+    try {
+      await assertBreakerClosed('cb_disable_onchain_writes');
+    } catch (breakerErr: any) {
+      console.warn(
+        `[erc8004-reputation] skipped_write: on-chain giveFeedback refused — ${breakerErr?.message}. ` +
+          `tokenId=${args.agentTokenId} repid=${args.repid} tier=${args.tier}`
+      );
+      throw breakerErr;
+    }
+
     const tag1 = Erc8004ReputationWriter.DEFAULTS.TAG_HYPERDAG_REPID;
     const tag2 = this.tierTag(args.tier);
     const endpoint = args.endpoint ?? '';
