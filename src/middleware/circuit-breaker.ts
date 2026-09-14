@@ -49,6 +49,40 @@ export async function isTripped(key: BreakerKey): Promise<boolean> {
   return value;
 }
 
+/**
+ * Non-HTTP breaker guard for state-changing chokepoints (e.g. on-chain writes).
+ *
+ * Differs from `isTripped()` in its failure posture: `isTripped()` fails OPEN
+ * (returns `false`) when the breaker row can't be read, which is correct for
+ * read-only hot paths that must not stall on a transient DB blip. A write guard
+ * must fail CLOSED — an unreadable breaker means we cannot prove the write is
+ * permitted, so we refuse it. Throws on both "tripped" and "unreadable".
+ *
+ * Callers should catch, log a `skipped_write`, and propagate — see
+ * `erc8004-reputation.ts` / `erc8004-poster.ts`.
+ */
+export async function assertBreakerClosed(key: BreakerKey): Promise<void> {
+  const now = Date.now();
+  const cached = cache[key];
+  let value: boolean;
+  if (cached && now - cached.at < CACHE_TTL_MS) {
+    value = cached.value;
+  } else {
+    const { data, error } = await db.from('repid_config').select('value').eq('key', key).maybeSingle();
+    if (error || !data) {
+      // Fail CLOSED: cannot confirm the breaker is open → refuse the write.
+      throw new Error(
+        `circuit_breaker_unreadable: ${key} — failing closed (${error?.message ?? 'no config row'})`
+      );
+    }
+    value = String((data as any).value).toLowerCase() === 'true';
+    cache[key] = { value, at: now };
+  }
+  if (value) {
+    throw new Error(`circuit_breaker_open: ${key} — action refused (fail-closed).`);
+  }
+}
+
 export function breaker(key: BreakerKey) {
   return async (_req: Request, res: Response, next: NextFunction) => {
     try {
