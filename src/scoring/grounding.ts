@@ -304,8 +304,9 @@ export async function resolveGrounding(input: ResolveGroundingInput): Promise<Gr
 
 async function resolveGroundingInner(input: ResolveGroundingInput): Promise<GroundingResult> {
   if (!input.evidence) return zero('ungrounded');
+  const evidence = input.evidence;
 
-  const evidenceId = evidenceIdOf(input.evidence);
+  const evidenceId = evidenceIdOf(evidence);
   const scope = evidenceUniqueScope();
   const lockKey = scope === 'global' ? `e:${evidenceId}` : `${evidenceId}:${input.agentId}:${input.eventType}`;
 
@@ -319,12 +320,12 @@ async function resolveGroundingInner(input: ResolveGroundingInput): Promise<Grou
     }
 
     let resolved: GroundingResult;
-    if (input.evidence.kind === 'payment') {
-      resolved = await resolvePayment(input.evidence, input);
-    } else if (input.evidence.kind === 'validation') {
-      resolved = await resolveValidation(input.evidence, input);
+    if (evidence.kind === 'payment') {
+      resolved = await resolvePayment(evidence, input);
+    } else if (evidence.kind === 'validation') {
+      resolved = await resolveValidation(evidence, input);
     } else {
-      resolved = await resolveProtocol(input.evidence, input);
+      resolved = await resolveProtocol(evidence, input);
     }
 
     resolved = { ...resolved, evidence_id: evidenceId };
