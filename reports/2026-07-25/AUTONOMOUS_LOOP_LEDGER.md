@@ -6232,32 +6232,35 @@ $0 cost, `is_error: true`**. Claude Code action initializes (`"Claude Code initi
 model `claude-sonnet-4-6`) then immediately returns `subtype: "success", is_error: true`
 with no tokens consumed. Pattern: the API returns an error before generating any output.
 
-**Root cause [V]:** Context window overflow on the first call. The prompt sent to the model
-includes: (a) the system prompt (CLAUDE.md — ~30k chars, very large), (b) LESSONS.md injected
-verbatim (~6k chars), (c) multiple large `<system-reminder>` blocks (gitStatus, fleet state,
-available agents, skills, deferred tools, etc.), and (d) the beat prompt itself (multi-screen).
-The combined input exceeds the model's context limit before any response is generated. Evidence:
-285ms / $0 / 1 turn / no tokens — consistent with a pre-generation rejection, not a mid-turn
-cap. This session (interactive) works because it receives the same content spread across turns
-with caching, not all at once as a single system-prompt payload.
+**Root cause [PLAUSIBLE — not fully confirmed]:** The workflow fix PR #737 (2026-09-10) switched
+from the retired `claude-sonnet-5` to `vars.BUILD_LOOP_MODEL || 'claude-sonnet-4-6'`. The
+model IS resolving to `claude-sonnet-4-6` (confirmed in the init log). So the model name is
+NOT the issue. The failure is in the **first API call** with a valid model already loaded.
+Context window is also ruled out: CLAUDE.md is ~56k chars ≈ 14k tokens, LESSONS.md 6k chars
+≈ 1.5k tokens — total well under the 200k token limit even with the full beat prompt.
 
-**What the prior beats actually shipped:** Nothing — zero PRs merged via beat jobs since the
-last real beat (circa 2026-09-12). The fallback job keeps the ledger from going completely dark
-but does not ship any backlog work.
+Most likely remaining cause: **`secrets.ANTHROPIC_API_KEY` is expired or invalid**. The key
+IS set (non-empty, as shown in the log), but an expired key still produces a 401 on the first
+API call — which would cause exactly this pattern (initialized with $0, no tokens, instant
+failure). This is a **Sean-surface item**: the ANTHROPIC_API_KEY secret in the repid-engine
+repo's Actions secrets needs to be verified and rotated if expired. The `BUILD_LOOP_MODEL`
+variable should also be confirmed as `claude-sonnet-4-6` or unset (so the valid fallback applies).
 
-**Step 2-4 intent:** The context overflow is the blocker. Three approaches in order of
-invasiveness: (A) trim CLAUDE.md (the largest single contributor — the workflow injects
-the entire file); (B) reduce or split the beat prompt; (C) switch the beat to a smaller model
-that has a larger effective input window. Option A is the safest (CLAUDE.md has significant
-narrative padding that is not operating-critical). This beat will attempt to identify safe
-trimming candidates in CLAUDE.md and produce a reduced version on a separate branch. If
-that is not possible within remaining turns, this entry already captures the diagnosis so
-the next beat can act on it without re-deriving it.
+**CORRECTION from the draft ledger entry:** The initial draft said "context window overflow" —
+this was wrong. 56k chars is ~14k tokens, nowhere near 200k. The draft was hypothesis-first
+before completing the math. Corrected in this same commit.
 
-**Mistakes (prior beats):** 20+ beats lost with no ledger entry before this session. The
-fallback job preserved the record but no backlog items advanced.
+**What the prior beats actually shipped:** Nothing — zero real PRs since circa 2026-09-10
+(when the model-fix PR itself landed). All subsequent PRs are auto-logged stubs.
 
-**Next:** Fix the context overflow so beats can function. Option A (trim CLAUDE.md) is the
-best first move — it reduces the payload on every future beat without changing the model or
-the beat prompt structure. A 30% reduction in CLAUDE.md would likely be sufficient given the
-pattern of this failure.
+**Step 2-4 intent:** Surface the API key check to Sean (above). If turns remain, make the
+workflow more diagnostic: add `echo "Exit code: $?"` after the claude-code-action step so
+the next failure's exit code is visible in the log. This is additive-only and safe-class.
+
+**Mistakes:** (1) 20+ beats lost — fallback job prevented ledger blackout, no backlog items
+advanced. (2) Initial hypothesis in this entry was wrong (context overflow ruled out after
+computing actual token counts). Corrected before PR merged.
+
+**Next (Sean action):** Check and rotate `ANTHROPIC_API_KEY` in repo Actions secrets if
+expired. Confirm `BUILD_LOOP_MODEL` variable is either unset or set to `claude-sonnet-4-6`.
+Once the key is valid, beats should resume automatically.
