@@ -6,6 +6,8 @@ import { clampEventDelta, MAX_ABS_EVENT_DELTA } from '../src/services/wisdom-nor
 import {
   BASE_SEPOLIA_USDC,
   createMemoryGroundingStore,
+  enforceGroundedDelta,
+  parseGroundingMode,
   resolveGrounding,
   type ChainReader,
 } from '../src/scoring/grounding';
@@ -217,13 +219,25 @@ export async function runX8Probes(): Promise<ProbeRow[]> {
     detail: `highs=${e2High}/3 reasons=${e2Reasons.join(',')}`,
   });
 
+  // F1 mutant: GROUNDING_MODE default OFF; enforce zeroes ungrounded deltas.
+  const defaultOff = parseGroundingMode(undefined) === 'off';
+  const mutantZero = enforceGroundedDelta(25, 0, 'enforce') === 0;
+  const mutantKeep = enforceGroundedDelta(25, 'high', 'enforce') === 25;
+  const offLeaves = enforceGroundedDelta(25, 0, 'off') === 25;
+  rows.push({
+    id: 'F1',
+    name: 'GROUNDING_MODE enforce default OFF + mutant',
+    verdict: defaultOff && mutantZero && mutantKeep && offLeaves ? 'PASS' : 'FAIL',
+    detail: `default=${parseGroundingMode(undefined)} mutant_ungrounded=${enforceGroundedDelta(25, 0, 'enforce')} mutant_high=${enforceGroundedDelta(25, 'high', 'enforce')}`,
+  });
+
   return rows;
 }
 
 describe('X8 adversarial probes', () => {
   it('all probes run and return PASS or FAIL', async () => {
     const rows = await runX8Probes();
-    expect(rows.map((r) => r.id)).toEqual(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'E1', 'E2']);
+    expect(rows.map((r) => r.id)).toEqual(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'E1', 'E2', 'F1']);
     for (const r of rows) {
       expect(['PASS', 'FAIL']).toContain(r.verdict);
     }

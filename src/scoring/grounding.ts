@@ -25,10 +25,16 @@ export type EvidenceKind = 'payment' | 'validation' | 'protocol';
 export type GroundingMode = 'off' | 'shadow' | 'enforce';
 
 export function parseGroundingMode(raw: string | undefined | null): GroundingMode {
-  const v = (raw ?? '').trim().toLowerCase();
+  const v = (raw ?? 'off').trim().toLowerCase();
   if (v === 'enforce') return 'enforce';
-  if (v === 'off') return 'off';
-  return 'shadow';
+  if (v === 'shadow') return 'shadow';
+  return 'off';
+}
+
+/** Enforce: ungrounded events contribute 0 delta. Default OFF — shadow/off leave delta alone. */
+export function enforceGroundedDelta(delta: number, g: GVerified, mode: GroundingMode): number {
+  if (mode !== 'enforce') return delta;
+  return g === 0 ? 0 : delta;
 }
 
 export function groundingMode(): GroundingMode {

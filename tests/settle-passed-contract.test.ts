@@ -10,11 +10,20 @@ function memoryDb() {
   const rows = new Map<string, Record<string, unknown>>([
     [CID, { id: CID, status: 'fulfilled', settled_at: null, last_error: null }],
   ]);
+  const x402 = new Map<string, Record<string, unknown>>([
+    [CID, { idempotency_key: CID, status: 'authorized', tx_hash: null }],
+  ]);
   return {
     rows,
+    x402,
     async updateContract(id: string, patch: Record<string, unknown>) {
       const cur = rows.get(id) ?? {};
       rows.set(id, { ...cur, ...patch });
+      return { error: null };
+    },
+    async updateX402(id: string, patch: Record<string, unknown>) {
+      const cur = x402.get(id) ?? {};
+      x402.set(id, { ...cur, ...patch });
       return { error: null };
     },
   };
@@ -35,8 +44,14 @@ describe('E4 settlePassedOrFail', () => {
       }),
     });
     expect(out.ok).toBe(true);
-    if (out.ok) expect(out.settled_at).toBe('2026-09-15T00:00:00.000Z');
+    if (out.ok) {
+      expect(out.settled_at).toBe('2026-09-15T00:00:00.000Z');
+      expect(out.x402_status).toBe('settled');
+    }
+    expect(db.rows.get(CID)!.settled_at).toBe('2026-09-15T00:00:00.000Z');
+    expect(db.rows.get(CID)!.status).toBe('settled');
     expect(db.rows.get(CID)!.last_error).toBeNull();
+    expect(db.x402.get(CID)!.status).toBe('settled');
   });
 
   it('PASS + release FAILED writes last_error — not a quiet NULL settled_at', async () => {
@@ -59,5 +74,6 @@ describe('E4 settlePassedOrFail', () => {
     }
     expect(db.rows.get(CID)!.settled_at).toBeNull();
     expect(db.rows.get(CID)!.last_error).toMatch(/payment_release_failed/);
+    expect(db.x402.get(CID)!.status).toBe('authorized');
   });
 });

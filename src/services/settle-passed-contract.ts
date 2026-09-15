@@ -9,15 +9,17 @@ export interface SettlementRow {
 }
 
 export type SettleOutcome =
-  | { ok: true; settled_at: string; last_error: null }
-  | { ok: false; settled_at: null; last_error: string; code: string };
+  | { ok: true; settled_at: string; last_error: null; x402_status: 'settled' }
+  | { ok: false; settled_at: null; last_error: string; code: string; x402_status: string | null };
 
 export interface SettleDb {
   updateContract(id: string, patch: Record<string, unknown>): Promise<{ error: string | null }>;
+  /** F1: x402 row keyed by contract id (idempotency_key). */
+  updateX402?(id: string, patch: Record<string, unknown>): Promise<{ error: string | null }>;
 }
 
 export function typedSettlementFailure(code: string, message: string): SettleOutcome {
-  return { ok: false, settled_at: null, last_error: `${code}: ${message}`, code };
+  return { ok: false, settled_at: null, last_error: `${code}: ${message}`, code, x402_status: null };
 }
 
 /**
@@ -66,6 +68,13 @@ export async function settlePassedOrFail(args: {
     return fail;
   }
   const settledAt = finalized.contract?.settled_at ?? new Date().toISOString();
-  await args.db.updateContract(args.contractId, { last_error: null });
-  return { ok: true, settled_at: settledAt, last_error: null };
+  await args.db.updateContract(args.contractId, {
+    last_error: null,
+    status: 'settled',
+    settled_at: settledAt,
+  });
+  if (args.db.updateX402) {
+    await args.db.updateX402(args.contractId, { status: 'settled' });
+  }
+  return { ok: true, settled_at: settledAt, last_error: null, x402_status: 'settled' };
 }
