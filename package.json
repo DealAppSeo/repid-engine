@@ -23,6 +23,7 @@
     "harness:down": "node scripts/adversarial-harness/down.mjs",
     "harness:probe": "node scripts/adversarial-harness/run.mjs --probes-only",
     "grounding:diff": "ts-node scripts/grounding/diff-report.ts",
+    "decay:stop-diff": "ts-node scripts/identity/decay-stop-diff.ts",
     "test:regression": "jest --config jest.config.js tests/regression",
     "decay:sweep": "ts-node scripts/decay/run-decay-sweep.ts",
     "heartbeat": "ts-node scripts/heartbeat/run-heartbeat.ts",

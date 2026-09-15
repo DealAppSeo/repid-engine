@@ -35,6 +35,11 @@
 -- );
 -- COMMIT;
 
+-- C9 flag: DECAY_BOUND_MODE = off | shadow | enforce (default shadow).
+-- Shadow records DECAY_HELD_BOUND / DECAY_WOULD_APPLY; enforce is the sweep's
+-- existing hard-stop (sweep still cannot move scores). rollback: unset the env.
+-- trinity_changelog prod row is Sean-gated; this file is the artifact.
+
 -- rollback_sql:
 -- drop table if exists public.repid_grounding_claims;
 -- drop table if exists public.repid_custody_log;
