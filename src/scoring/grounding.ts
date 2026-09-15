@@ -11,6 +11,8 @@
 import { createHash } from 'node:crypto';
 
 export const GROUNDING_FLOOR_USD = 0.10;
+/** Same (from, to) pair cannot stack g_verified inside this window. */
+export const WASH_WINDOW_MS = 60 * 60 * 1000;
 export const USDC_DECIMALS = 6;
 export const USDC_FLOOR_UNITS = BigInt(Math.round(GROUNDING_FLOOR_USD * 10 ** USDC_DECIMALS));
 
@@ -113,6 +115,8 @@ export interface GroundingClaimRow {
   g_verified: GVerified;
   reason: string;
   created_at: string;
+  from_addr?: string | null;
+  to_addr?: string | null;
 }
 
 export interface GroundingStore {
@@ -123,6 +127,7 @@ export interface GroundingStore {
   ): Promise<GroundingClaimRow | null>;
   /** X9 fix (optional): unique on evidence_id alone. */
   findClaimByEvidence?(evidenceId: string): Promise<GroundingClaimRow | null>;
+  findRecentPair?(fromAddr: string, toAddr: string, sinceIso: string): Promise<GroundingClaimRow | null>;
   insertClaim(row: GroundingClaimRow): Promise<'ok' | 'duplicate'>;
 }
 
@@ -229,6 +234,21 @@ export function createMemoryGroundingStore(): GroundingStore {
       }
       return null;
     },
+    async findRecentPair(fromAddr, toAddr, sinceIso) {
+      const f = fromAddr.toLowerCase();
+      const t = toAddr.toLowerCase();
+      for (const row of rows.values()) {
+        if (
+          row.g_verified !== 0 &&
+          (row.from_addr || '').toLowerCase() === f &&
+          (row.to_addr || '').toLowerCase() === t &&
+          row.created_at >= sinceIso
+        ) {
+          return row;
+        }
+      }
+      return null;
+    },
     async insertClaim(row) {
       for (const existing of rows.values()) {
         if (existing.evidence_id === row.evidence_id) return 'duplicate';
@@ -311,6 +331,8 @@ async function resolveGroundingInner(input: ResolveGroundingInput): Promise<Grou
         g_verified: resolved.g_verified,
         reason: resolved.reason,
         created_at: (input.now ?? new Date()).toISOString(),
+        from_addr: resolved.parties?.from ?? null,
+        to_addr: resolved.parties?.to ?? null,
       });
       if (inserted === 'duplicate') {
         return zero('duplicate_evidence', { evidence_id: evidenceId, reused: true });
@@ -350,8 +372,16 @@ async function resolvePayment(
   const partyHit = wallets.some((w) => w === transfer.from || w === transfer.to);
   if (!partyHit) return zero('parties_mismatch', { amount_usd: amountUsd, parties });
 
-  if (transfer.units < USDC_FLOOR_UNITS) {
+  // E2: floor is EXCLUSIVE of the bound. Looping exactly $0.10 does not ground.
+  if (transfer.units <= USDC_FLOOR_UNITS) {
     return zero('below_floor', { amount_usd: amountUsd, parties });
+  }
+
+  const nowMs = (input.now ?? new Date()).getTime();
+  if (input.store.findRecentPair) {
+    const since = new Date(nowMs - WASH_WINDOW_MS).toISOString();
+    const prior = await input.store.findRecentPair(transfer.from, transfer.to, since);
+    if (prior) return zero('wash_window', { amount_usd: amountUsd, parties });
   }
 
   // High: verified payment, parties join, at/above floor. Low reserved for

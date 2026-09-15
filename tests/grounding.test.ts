@@ -52,7 +52,7 @@ function chainWith(opts: {
     },
     async getReceipt() {
       return opts.receipt === undefined
-        ? { status: 1, blockNumber: 1, logs: [transferLog(COUNTERPARTY, WALLET, 100_000n)] }
+        ? { status: 1, blockNumber: 1, logs: [transferLog(COUNTERPARTY, WALLET, 100_001n)] }
         : opts.receipt;
     },
   };
@@ -106,7 +106,7 @@ describe('C8 grounding resolver', () => {
     expect(second.reason).toBe('duplicate_evidence');
   });
 
-  it('a $0.001 real settlement does NOT ground; a $0.10 one does', async () => {
+  it('a $0.001 real settlement does NOT ground; the $0.10 bound is exclusive', async () => {
     const dust = await resolveGrounding({
       agentId: AGENT,
       eventType: 'CODE_CONTRIBUTION',
@@ -132,8 +132,21 @@ describe('C8 grounding resolver', () => {
         receipt: { status: 1, blockNumber: 1, logs: [transferLog(COUNTERPARTY, WALLET, 100_000n)] },
       }),
     });
-    expect(floor.g_verified).toBe('high');
+    expect(floor.g_verified).toBe(0);
+    expect(floor.reason).toBe('below_floor');
     expect(floor.amount_usd).toBeCloseTo(0.1);
+
+    const above = await resolveGrounding({
+      agentId: AGENT,
+      eventType: 'CODE_CONTRIBUTION',
+      evidence: { kind: 'payment', txHash: '0x' + '11'.repeat(32) },
+      agentWallets: [WALLET],
+      store: createMemoryGroundingStore(),
+      chain: chainWith({
+        receipt: { status: 1, blockNumber: 1, logs: [transferLog(COUNTERPARTY, WALLET, 100_001n)] },
+      }),
+    });
+    expect(above.g_verified).toBe('high');
   });
 
   it('simulated settlements never ground', async () => {
