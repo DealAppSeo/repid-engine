@@ -20,6 +20,7 @@ import {
   type ValidationLookup,
   type ProtocolLookup,
 } from '../scoring/grounding';
+import { scoreLaneFromGrounding } from '../scoring/score-lane';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -650,6 +651,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
             g_verified: groundingMeta.g_verified,
             grounding_reason: groundingMeta.reason,
             grounding_reused: groundingMeta.reused,
+            ...scoreLaneFromGrounding(groundingMeta.g_verified),
           }
         : {}),
       // Decomposition of what actually moved the score (decay / delta / clamp) and
