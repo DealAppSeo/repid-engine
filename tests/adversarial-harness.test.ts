@@ -20,7 +20,9 @@ export interface ProbeRow {
 }
 
 const AGENT = '00000000-0000-4000-8000-0000000000e1';
+const AGENT_B = '00000000-0000-4000-8000-0000000000e2';
 const WALLET = '0x1111111111111111111111111111111111111111';
+const WALLET_B = '0x3333333333333333333333333333333333333333';
 const OTHER = '0x2222222222222222222222222222222222222222';
 const WRITER = '0xb242688800000000000000000000000000000000';
 const TX = '0x' + '11'.repeat(32);
@@ -39,7 +41,7 @@ function log(from: string, to: string, units: bigint) {
     data: '0x' + units.toString(16).padStart(64, '0'),
   };
 }
-function chain(units: bigint, found = true): ChainReader {
+function chain(units: bigint, found = true, payee: string = WALLET): ChainReader {
   return {
     chainId: 84532,
     async getTransaction() {
@@ -49,7 +51,7 @@ function chain(units: bigint, found = true): ChainReader {
     },
     async getReceipt() {
       return found
-        ? { status: 1, blockNumber: 1, logs: [log(OTHER, WALLET, units)] }
+        ? { status: 1, blockNumber: 1, logs: [log(OTHER, payee, units)] }
         : null;
     },
   };
@@ -162,13 +164,39 @@ export async function runX8Probes(): Promise<ProbeRow[]> {
   }
   rows.push({ id: 'A7', name: 'giveFeedback from non-writer', verdict: a7, detail: a7detail });
 
+  // E1 — unique on evidence_id only. Same settlement, two agents: second must be resisted.
+  const e1Store = createMemoryGroundingStore();
+  const e1Pay = { kind: 'payment' as const, txHash: TX };
+  await resolveGrounding({
+    agentId: AGENT,
+    eventType: 'CODE_CONTRIBUTION',
+    evidence: e1Pay,
+    agentWallets: [WALLET],
+    store: e1Store,
+    chain: chain(100_000n, true, WALLET),
+  });
+  const e1b = await resolveGrounding({
+    agentId: AGENT_B,
+    eventType: 'CODE_CONTRIBUTION',
+    evidence: e1Pay,
+    agentWallets: [WALLET_B],
+    store: e1Store,
+    chain: chain(100_000n, true, WALLET_B),
+  });
+  rows.push({
+    id: 'E1',
+    name: 'reuse one settlement across two agents',
+    verdict: e1b.g_verified === 0 && e1b.reused ? 'PASS' : 'FAIL',
+    detail: `agent_b g_verified=${e1b.g_verified} reused=${e1b.reused} reason=${e1b.reason}`,
+  });
+
   return rows;
 }
 
 describe('X8 adversarial probes', () => {
-  it('all seven probes run and return PASS or FAIL', async () => {
+  it('all probes run and return PASS or FAIL', async () => {
     const rows = await runX8Probes();
-    expect(rows).toHaveLength(7);
+    expect(rows.map((r) => r.id)).toEqual(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'E1']);
     for (const r of rows) {
       expect(['PASS', 'FAIL']).toContain(r.verdict);
     }
