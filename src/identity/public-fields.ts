@@ -69,3 +69,15 @@ export function decayBoundMode(raw: string | undefined | null = process.env.DECA
   if (v === 'off' || v === 'enforce') return v;
   return 'shadow';
 }
+
+/**
+ * E6: C9/C10 writes only on scratch (LOCAL_MODE) or an explicit enforce flag.
+ * No prod backfill.
+ */
+export function identityWritesEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if ((env.IDENTITY_FEATURES || '').toLowerCase() === 'off') return false;
+  if ((env.IDENTITY_FEATURES || '').toLowerCase() === 'enforce') return true;
+  return (env.LOCAL_MODE || '').toLowerCase() === 'true';
+}
