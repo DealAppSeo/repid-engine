@@ -113,6 +113,27 @@ export class Erc8004ReputationWriter {
       throw breakerErr;
     }
 
+    // #10 MAINNET GUARD (audit 2606.26028): RepID scores are Base Sepolia (testnet) ONLY for the
+    // MVP. Refuse any on-chain reputation write to a non-Sepolia chain unless explicitly enabled,
+    // so a stray NETWORK=base cannot copy testnet scores onto mainnet — an on-chain write is
+    // permanent and cannot be retracted. Sepolia = 84532.
+    if (this.chainId !== 84532 && process.env.ALLOW_MAINNET_REPUTATION_WRITES !== 'true') {
+      throw new Error(
+        `refusing on-chain reputation write on chainId=${this.chainId} — mainnet reputation writes ` +
+          `are disabled (MVP is Base Sepolia only; set ALLOW_MAINNET_REPUTATION_WRITES=true to override)`
+      );
+    }
+
+    // #2 VALUE-RANGE ASSERT (audit 2606.26028): giveFeedback.value carries the RepID as a raw
+    // int128 with valueDecimals=0. Refuse a non-integer or a value outside the canonical
+    // [10, 10000] band — a malformed current_repid must fail loudly here, never land on-chain.
+    if (!Number.isInteger(args.repid) || args.repid < 10 || args.repid > 10000) {
+      throw new Error(
+        `refusing on-chain reputation write: value out of range (repid=${args.repid}; ` +
+          `expected an integer in [10, 10000])`
+      );
+    }
+
     const tag1 = Erc8004ReputationWriter.DEFAULTS.TAG_HYPERDAG_REPID;
     const tag2 = this.tierTag(args.tier);
     const endpoint = args.endpoint ?? '';
