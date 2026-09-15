@@ -85,6 +85,37 @@ describe('X9 attacks on C8', () => {
     expect(b.reused).toBe(false);
   });
 
+  it('A2 one-line fix: GROUNDING_EVIDENCE_UNIQUE=global resists reuse across agents', async () => {
+    const prev = process.env.GROUNDING_EVIDENCE_UNIQUE;
+    process.env.GROUNDING_EVIDENCE_UNIQUE = 'global';
+    try {
+      const store = createMemoryGroundingStore();
+      const evidence = { kind: 'payment' as const, txHash: TX };
+      const a = await resolveGrounding({
+        agentId: AGENT_A,
+        eventType: 'CODE_CONTRIBUTION',
+        evidence,
+        agentWallets: [WALLET_A],
+        store,
+        chain: chainTo(WALLET_A, 100_000n),
+      });
+      const b = await resolveGrounding({
+        agentId: AGENT_B,
+        eventType: 'CODE_CONTRIBUTION',
+        evidence,
+        agentWallets: [WALLET_B],
+        store,
+        chain: chainTo(WALLET_B, 100_000n),
+      });
+      expect(a.g_verified).toBe('high');
+      expect(b.g_verified).toBe(0);
+      expect(b.reused).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.GROUNDING_EVIDENCE_UNIQUE;
+      else process.env.GROUNDING_EVIDENCE_UNIQUE = prev;
+    }
+  });
+
   it('A3 $0.10 wash loop — floor is inclusive, cheapest grounded wash is $0.10', async () => {
     const r = await resolveGrounding({
       agentId: AGENT_A,

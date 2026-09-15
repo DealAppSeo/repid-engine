@@ -232,6 +232,12 @@ describe('buildAgentPassport', () => {
         score_including_vested: 1390,
         note: expect.stringContaining('whole score'),
       },
+      // C9: last_verified_action is public. Kind is not on this row → bound/display_tier null.
+      last_verified_action: MINTED_AGENT.minted_at,
+      idle_days: expect.any(Number),
+      bound: null,
+      kind: null,
+      display_tier: null,
     });
 
     expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');

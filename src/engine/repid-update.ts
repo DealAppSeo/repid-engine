@@ -741,6 +741,11 @@ function dbGroundingStore(): GroundingStore {
         .maybeSingle();
       return data ?? null;
     },
+    async findClaimByEvidence(evidenceId) {
+      const { data } = await db.from('repid_grounding_claims').select('*').eq('evidence_id', evidenceId);
+      const rows = Array.isArray(data) ? data : data ? [data] : [];
+      return rows[0] ?? null;
+    },
     async insertClaim(row) {
       const { error } = await db.from('repid_grounding_claims').insert(row);
       if (error && (String(error.code) === '23505' || /duplicate/i.test(error.message || ''))) {

@@ -121,7 +121,16 @@ export interface GroundingStore {
     agentId: string,
     eventType: string,
   ): Promise<GroundingClaimRow | null>;
+  /** X9 fix (optional): unique on evidence_id alone. */
+  findClaimByEvidence?(evidenceId: string): Promise<GroundingClaimRow | null>;
   insertClaim(row: GroundingClaimRow): Promise<'ok' | 'duplicate'>;
+}
+
+/** C8 default is per-agent. X9 attack 2 is closed by GROUNDING_EVIDENCE_UNIQUE=global. */
+export function evidenceUniqueScope(
+  raw: string | undefined | null = process.env.GROUNDING_EVIDENCE_UNIQUE,
+): 'agent' | 'global' {
+  return (raw ?? '').trim().toLowerCase() === 'global' ? 'global' : 'agent';
 }
 
 export interface GroundingResult {
@@ -210,6 +219,12 @@ export function createMemoryGroundingStore(): GroundingStore {
     async findClaim(e, a, t) {
       return rows.get(key(e, a, t)) ?? null;
     },
+    async findClaimByEvidence(evidenceId) {
+      for (const row of rows.values()) {
+        if (row.evidence_id === evidenceId) return row;
+      }
+      return null;
+    },
     async insertClaim(row) {
       const k = key(row.evidence_id, row.agent_id, row.event_type);
       if (rows.has(k)) return 'duplicate';
@@ -259,10 +274,14 @@ async function resolveGroundingInner(input: ResolveGroundingInput): Promise<Grou
   if (!input.evidence) return zero('ungrounded');
 
   const evidenceId = evidenceIdOf(input.evidence);
-  const lockKey = `${evidenceId}:${input.agentId}:${input.eventType}`;
+  const scope = evidenceUniqueScope();
+  const lockKey = scope === 'global' ? evidenceId : `${evidenceId}:${input.agentId}:${input.eventType}`;
 
   return withLock(lockKey, async () => {
-    const existing = await input.store.findClaim(evidenceId, input.agentId, input.eventType);
+    const existing =
+      scope === 'global' && input.store.findClaimByEvidence
+        ? await input.store.findClaimByEvidence(evidenceId)
+        : await input.store.findClaim(evidenceId, input.agentId, input.eventType);
     if (existing) {
       return zero('duplicate_evidence', { evidence_id: evidenceId, reused: true });
     }

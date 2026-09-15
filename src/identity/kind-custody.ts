@@ -42,6 +42,13 @@ export function isBoundKind(kind: AgentKind): boolean {
   return kind !== 'DBT';
 }
 
+/** C9 A3: currently decaying AND bound → would stop under the new rule. */
+export function whoWouldStopDecaying<T extends { id: string; kind: AgentKind; would_remove: number }>(
+  roster: T[],
+): T[] {
+  return roster.filter((r) => isBoundKind(r.kind) && r.would_remove > 0);
+}
+
 export function derivedBound(agent: Pick<AgentIdentity, 'kind'>): boolean {
   return isBoundKind(agent.kind);
 }

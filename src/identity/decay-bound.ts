@@ -7,6 +7,7 @@
  */
 import { assessDecay, type DecayAssessment, type DecayMode } from '../scoring/decay-bridge';
 import { isBoundKind, type AgentKind } from './kind-custody';
+import { idleDaysSince } from './idle';
 
 export type TypedDecayEvent = 'DECAY_APPLIED' | 'DECAY_HELD_BOUND' | 'DECAY_WOULD_APPLY';
 
@@ -29,12 +30,7 @@ export interface BoundDecayResult {
   event: { type: TypedDecayEvent; delta: number } | null;
 }
 
-export function idleDaysSince(lastVerifiedAction: string | null, now: Date): number | null {
-  if (!lastVerifiedAction) return null;
-  const t = Date.parse(lastVerifiedAction);
-  if (!Number.isFinite(t)) return null;
-  return Math.max(0, Math.floor((now.getTime() - t) / (24 * 60 * 60 * 1000)));
-}
+export { idleDaysSince } from './idle';
 
 export function applyBoundAwareDecay(input: BoundDecayInput): BoundDecayResult {
   const now = input.now ?? new Date();
@@ -90,8 +86,4 @@ export function applyBoundAwareDecay(input: BoundDecayInput): BoundDecayResult {
   };
 }
 
-export function whoWouldStopDecaying<T extends { id: string; kind: AgentKind; would_remove: number }>(
-  roster: T[],
-): T[] {
-  return roster.filter((r) => isBoundKind(r.kind) && r.would_remove > 0);
-}
+export { whoWouldStopDecaying } from './kind-custody';
