@@ -1,0 +1,10 @@
+{
+  "chain": "base-sepolia",
+  "chainId": 84532,
+  "rpc": "https://sepolia.base.org",
+  "forkBlock": 46862654,
+  "reputationRegistry": "0x8004B663056A597Dffe9eCcC1965A193B7388713",
+  "identityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+  "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "note": "Pinned 2026-09-15 from public Base Sepolia RPC. SYNTHETIC harness only — never prod agent ids."
+}

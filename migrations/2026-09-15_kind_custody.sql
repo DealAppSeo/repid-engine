@@ -1,0 +1,45 @@
+-- LOOP C7 — kind/custody. ADDITIVE ONLY. DO NOT APPLY without Sean.
+-- rollback_sql is in the footer. trinity_changelog row is Sean-gated (prod DDL).
+-- This file is the artifact; it is not a live migration.
+
+-- BEGIN;
+-- alter table public.repid_agents
+--   add column if not exists kind text not null default 'DBT'
+--     check (kind in ('DBT','ABT','SBT','IBT')),
+--   add column if not exists custodian_id uuid null,
+--   add column if not exists last_verified_action timestamptz null;
+--
+-- -- bound is DERIVED, never stored as a writable column.
+-- create or replace view public.v_agent_bound as
+--   select id, kind, (kind <> 'DBT') as bound, custodian_id
+--   from public.repid_agents;
+--
+-- create table if not exists public.repid_custody_log (
+--   id bigserial primary key,
+--   agent_id uuid not null,
+--   custodian_id uuid not null,
+--   valid_from timestamptz not null,
+--   valid_to timestamptz null,
+--   reason text not null check (reason in ('claim','rebind','personhood','genesis'))
+-- );
+-- -- INSERT-only: no UPDATE/DELETE grants to authenticated/anon.
+--
+-- create table if not exists public.repid_grounding_claims (
+--   evidence_id text not null,
+--   agent_id uuid not null,
+--   event_type text not null,
+--   g_verified text not null,
+--   reason text not null,
+--   created_at timestamptz not null default now(),
+--   primary key (evidence_id, agent_id, event_type)
+-- );
+-- COMMIT;
+
+-- rollback_sql:
+-- drop table if exists public.repid_grounding_claims;
+-- drop table if exists public.repid_custody_log;
+-- drop view if exists public.v_agent_bound;
+-- alter table public.repid_agents
+--   drop column if exists kind,
+--   drop column if exists custodian_id,
+--   drop column if exists last_verified_action;
