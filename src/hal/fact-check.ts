@@ -27,7 +27,7 @@ import crypto from 'crypto';
 // to a local server; ONLY_ATTESTATIONS_LEAVE refuses any remaining cloud prompt egress. Both are
 // default-OFF: unset → hosted behavior byte-identical.
 import { resolveProviderEndpoint } from './local-llm';
-import { gateOpenRouterModel, halAllowPaid } from './hal-free-gate';
+import { gateOpenRouterModel, gateZaiModel, gateGeminiUnderHold, halAllowPaid } from './hal-free-gate';
 import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 // CROSS-FIX 2026-07-05 — hardened registry-family lookup (single source of family truth). resolveFamily
 // is REGISTRY-ONLY and THROWS on an unmapped/ambiguous model. HAL is a LIVE scoring path and MUST NOT
@@ -1602,6 +1602,8 @@ export interface FactCheckProviderEnable {
    * the load-bearing quorum). Optional so existing callers compile.
    */
   nvidiaNim?: boolean;
+  /** Together.ai — independent `llama` family on a free-tier key. Optional so callers compile. */
+  together?: boolean;
 }
 
 /**
@@ -1887,8 +1889,21 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const directGeminiDead = isMeasuredDead('gemini', directGeminiModel || 'gemini-2.5-flash');
   const geminiViaOpenRouter =
     !!orForGemini && !geminiForcedDirect && (geminiForcedViaOr || !gm || directGeminiDead);
+  const geminiHold = gateGeminiUnderHold(halAllowPaid());
   if ((gm || orForGemini) && (enabled.gemini || ab)) {
-    if (geminiViaOpenRouter) {
+    // FREE-TIER HOLD: do not dial Google's prepaid direct endpoint (MEASURED 2026-09-14:
+    // gemini-2.5-flash → HTTP 429 prepayment credits depleted). The gemini family still
+    // votes, via OpenRouter's live :free Gemma slug, when an OR key is present.
+    if (geminiHold.skipDirect && orForGemini) {
+      console.warn(`[hal] free-tier gate: ${geminiHold.reason}`);
+      add(
+        { name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini, family: 'gemini' },
+        '__unset__',
+        geminiHold.openRouterFreeSlug,
+        'openrouter',
+        true,
+      );
+    } else if (geminiViaOpenRouter) {
       if (directGeminiDead && gm) {
         console.warn(
           `[hal] quorum: gemini failing back to OpenRouter — the direct model has been MEASURED dead. ` +
@@ -1952,7 +1967,47 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // forces it on and HAL_QUORUM_AUTOBACKFILL=false restores pure per-provider gating.
   const z = process.env.ZAI_API_KEY?.trim();
   if (z && (enabled.zai || ab)) {
-    add({ name: 'zai', endpoint: 'https://api.z.ai/api/paas/v4/chat/completions', apiKey: z, family: 'glm' }, 'HAL_S2_ZAI_MODEL', 'glm-4.5-flash');
+    // FREE-TIER HOLD: catalog self-heal picked glm-5-turbo on production (MEASURED 2026-09-14:
+    // HTTP 429 "Insufficient balance"). Pin Flash and do not let the catalog re-pick a paid id.
+    const zaiGate = gateZaiModel({
+      operatorModel: process.env.HAL_S2_ZAI_MODEL?.trim(),
+      freeDefault: 'glm-4.5-flash',
+      allowPaid: halAllowPaid(),
+    });
+    if (zaiGate.ignoreOperatorModel) console.warn(`[hal] free-tier gate: ${zaiGate.reason}`);
+    if (!halAllowPaid()) {
+      out.push({
+        name: 'zai',
+        endpoint: 'https://api.z.ai/api/paas/v4/chat/completions',
+        apiKey: z,
+        model: zaiGate.staticDefault,
+        family: 'glm',
+        tier: 'free',
+      });
+      familiesTaken.add('glm');
+    } else {
+      add({ name: 'zai', endpoint: 'https://api.z.ai/api/paas/v4/chat/completions', apiKey: z, family: 'glm' }, 'HAL_S2_ZAI_MODEL', zaiGate.staticDefault, 'zai', zaiGate.ignoreOperatorModel);
+    }
+  }
+  // TOGETHER.AI — free-wave `llama` family. TOGETHER_API_KEY is on Railway production
+  // [MEASURED 2026-09-14, names only]. Groq's live model is openai/gpt-oss-20b (family
+  // openai), so a Together Llama vote is an independent family, not a groq duplicate.
+  // Auto-backfilled on key presence like zai. OpenAI-compatible. Model is the 8B Instruct
+  // Turbo id Together documents for the free tier; NOT_CHECKED against a live call from
+  // this sandbox — first verification is post-deploy provider_health.
+  const tg = process.env.TOGETHER_API_KEY?.trim();
+  if (tg && (enabled.together || ab)) {
+    add(
+      {
+        name: 'together',
+        endpoint: 'https://api.together.xyz/v1/chat/completions',
+        apiKey: tg,
+        family: 'llama',
+        tier: 'free',
+      },
+      'HAL_S2_TOGETHER_MODEL',
+      'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+    );
   }
   // NVIDIA NIM — the `nvidia` (Nemotron) family bought DIRECT from NVIDIA's hosted gateway
   // (integrate.api.nvidia.com), OpenAI-compatible so no dialect is needed. Reads NVIDIA_NIM_API_KEY.
@@ -2295,6 +2350,7 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
     // explicit HAL_S2_ENABLE_NVIDIA_NIM=true; a bare NVIDIA_NIM_API_KEY does NOT enable it (the add
     // block above has no auto-backfill), so the quorum is byte-identical until the flag is flipped.
     nvidiaNim: process.env.HAL_S2_ENABLE_NVIDIA_NIM === 'true',
+    together: process.env.HAL_S2_ENABLE_TOGETHER === 'true' || process.env.HAL_S2_ENABLE_TOGETHERAI === 'true',
   });
 }
 

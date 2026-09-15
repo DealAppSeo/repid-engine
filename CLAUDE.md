@@ -86,6 +86,11 @@ generalise an existing one. Narratives stay in `reports/<date>/`.
 > - State FINDINGS, not inventories. *"A production key was committed and must be
 >   rotated"* is actionable. The key, the project id, the row counts and the service
 >   names are an incident.
+>
+> **2026-09-14 — legacy anon/service-role rotate incident is CLOSED.** Those keys
+> are dead. New publishable (public by design) + secret keys are live. Do not keep
+> raising "rotate the exposed anon JWT" for the dead pair. Site may embed the
+> publishable key. Secret stays off git and off the browser.
 > - Secrets in git HISTORY are public even after the file is deleted from `HEAD`.
 >   Deletion is not rotation.
 > - `scripts/hooks/publication-guard.js` blocks the shapes it can recognise. It cannot

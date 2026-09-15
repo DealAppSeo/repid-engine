@@ -1,4 +1,12 @@
-import { gateOpenRouterModel, halAllowPaid, isFreeSlug } from '../src/hal/hal-free-gate';
+import {
+  gateOpenRouterModel,
+  gateZaiModel,
+  gateGeminiUnderHold,
+  halAllowPaid,
+  isFreeSlug,
+  isFreeZaiModel,
+  GEMINI_FREE_OPENROUTER_SLUG,
+} from '../src/hal/hal-free-gate';
 
 const PAID = 'qwen/qwen-2.5-72b-instruct';
 const FREE = 'nvidia/nemotron-3-ultra-550b-a55b:free';
@@ -66,6 +74,43 @@ describe('hal-free-gate: gateOpenRouterModel', () => {
       const r = gateOpenRouterModel({ operatorModel: op, paidDefault: PAID, freeDefault: FREE, allowPaid: false });
       expect(isFreeSlug(r.staticDefault)).toBe(true);
     }
+  });
+});
+
+describe('hal-free-gate: gateZaiModel', () => {
+  const FLASH = 'glm-4.5-flash';
+  it('pins Flash when allow_paid=false and catalog/operator would pick glm-5-turbo', () => {
+    const r = gateZaiModel({ operatorModel: 'glm-5-turbo', freeDefault: FLASH, allowPaid: false });
+    expect(r.staticDefault).toBe(FLASH);
+    expect(r.ignoreOperatorModel).toBe(true);
+    expect(r.reason).toMatch(/REFUSED/);
+  });
+  it('honours an operator Flash pin under the hold', () => {
+    const r = gateZaiModel({ operatorModel: FLASH, freeDefault: FLASH, allowPaid: false });
+    expect(r.staticDefault).toBe(FLASH);
+    expect(isFreeZaiModel(r.staticDefault)).toBe(true);
+  });
+  it('allows glm-5-turbo only when allow_paid=true', () => {
+    const r = gateZaiModel({ operatorModel: 'glm-5-turbo', freeDefault: FLASH, allowPaid: true });
+    expect(r.staticDefault).toBe('glm-5-turbo');
+    expect(r.ignoreOperatorModel).toBe(false);
+  });
+  it('treats turbo/pro as paid', () => {
+    expect(isFreeZaiModel('glm-5-turbo')).toBe(false);
+    expect(isFreeZaiModel('glm-4.7')).toBe(false);
+    expect(isFreeZaiModel('glm-4.5-flash')).toBe(true);
+  });
+});
+
+describe('hal-free-gate: gateGeminiUnderHold', () => {
+  it('skips paid Gemini direct while allow_paid=false', () => {
+    const r = gateGeminiUnderHold(false);
+    expect(r.skipDirect).toBe(true);
+    expect(isFreeSlug(r.openRouterFreeSlug)).toBe(true);
+    expect(r.openRouterFreeSlug).toBe(GEMINI_FREE_OPENROUTER_SLUG);
+  });
+  it('permits direct Gemini when allow_paid=true', () => {
+    expect(gateGeminiUnderHold(true).skipDirect).toBe(false);
   });
 });
 
