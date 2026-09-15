@@ -1,0 +1,61 @@
+-- LOOP C7 — kind/custody. ADDITIVE ONLY. DO NOT APPLY without Sean.
+-- rollback_sql is in the footer. trinity_changelog row is Sean-gated (prod DDL).
+-- This file is the artifact; it is not a live migration.
+
+-- BEGIN;
+-- alter table public.repid_agents
+--   add column if not exists kind text not null default 'DBT'
+--     check (kind in ('DBT','ABT','SBT','IBT')),
+--   add column if not exists custodian_id uuid null,
+--   add column if not exists last_verified_action timestamptz null;
+--
+-- -- bound is DERIVED, never stored as a writable column.
+-- create or replace view public.v_agent_bound as
+--   select id, kind, (kind <> 'DBT') as bound, custodian_id
+--   from public.repid_agents;
+--
+-- create table if not exists public.repid_custody_log (
+--   id bigserial primary key,
+--   agent_id uuid not null,
+--   custodian_id uuid not null,
+--   valid_from timestamptz not null,
+--   valid_to timestamptz null,
+--   reason text not null check (reason in ('claim','rebind','personhood','genesis'))
+-- );
+-- -- INSERT-only: no UPDATE/DELETE grants to authenticated/anon.
+--
+-- create table if not exists public.repid_grounding_claims (
+--   evidence_id text not null,
+--   agent_id uuid not null,
+--   event_type text not null,
+--   g_verified text not null,
+--   reason text not null,
+--   created_at timestamptz not null default now(),
+--   primary key (evidence_id)
+-- );
+-- -- E1/E3: one evidence_id grounds at most one event, across agents.
+-- -- create unique index if not exists repid_grounding_claims_evidence_id_uidx
+-- --   on public.repid_grounding_claims (evidence_id);
+-- COMMIT;
+
+-- C9 flag: DECAY_BOUND_MODE = off | shadow | enforce (default shadow).
+-- Shadow records DECAY_HELD_BOUND / DECAY_WOULD_APPLY; enforce is the sweep's
+-- existing hard-stop (sweep still cannot move scores). rollback: unset the env.
+-- trinity_changelog prod row is Sean-gated; this file is the artifact.
+
+-- E3 replay: unique(evidence_id) IS the primary key above. The engine also holds
+-- an in-process lock on evidence_id (src/scoring/grounding.ts withLock). The
+-- index below is belt-and-suspenders if the PK is ever widened; do not apply
+-- without Sean.
+-- CREATE UNIQUE INDEX IF NOT EXISTS uq_repid_grounding_claims_evidence_id
+--   ON public.repid_grounding_claims (evidence_id);
+
+-- rollback_sql:
+-- DROP INDEX IF EXISTS public.uq_repid_grounding_claims_evidence_id;
+-- drop table if exists public.repid_grounding_claims;
+-- drop table if exists public.repid_custody_log;
+-- drop view if exists public.v_agent_bound;
+-- alter table public.repid_agents
+--   drop column if exists kind,
+--   drop column if exists custodian_id,
+--   drop column if exists last_verified_action;

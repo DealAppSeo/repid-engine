@@ -22,6 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getProvider } from '../clients/rpc-with-failover';
 import { getActiveNetwork } from '../config/network';
 import { assertBreakerClosed } from '../middleware/circuit-breaker';
+import { assertFeedbackWriterAllowed } from './erc8004-writer-allowlist';
 import reputationAbiRaw from '../contracts/ReputationRegistry.abi.json';
 
 const REPUTATION_ABI =
@@ -133,6 +134,8 @@ export class Erc8004ReputationWriter {
           `expected an integer in [10, 10000])`
       );
     }
+
+    assertFeedbackWriterAllowed(this.wallet.address);
 
     const tag1 = Erc8004ReputationWriter.DEFAULTS.TAG_HYPERDAG_REPID;
     const tag2 = this.tierTag(args.tier);

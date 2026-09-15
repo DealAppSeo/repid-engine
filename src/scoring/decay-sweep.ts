@@ -42,6 +42,9 @@ interface RosterRow {
   id: string;
   current_repid: number | null;
   activity_30d: number | null;
+  /** C9: when kind is bound, the sweep still never moves a score; would_remove becomes 0. */
+  kind?: 'DBT' | 'ABT' | 'SBT' | 'IBT' | null;
+  last_verified_action?: string | null;
 }
 
 export interface DecaySweepObservation {
@@ -52,6 +55,8 @@ export interface DecaySweepObservation {
   would_remove: number;
   factor: number;
   activity_30d: number;
+  bound?: boolean;
+  last_verified_action?: string | null;
 }
 
 export interface DecaySweepResult {
@@ -105,6 +110,7 @@ export function observeAgent(row: RosterRow): DecaySweepObservation | null {
     : 0;
 
   // Mode is pinned, never read from env. See the header.
+  const bound = row.kind === 'ABT' || row.kind === 'SBT' || row.kind === 'IBT';
   const a: DecayAssessment = assessDecay({
     currentRepid: before,
     activity30d: activity,
@@ -115,10 +121,12 @@ export function observeAgent(row: RosterRow): DecaySweepObservation | null {
     agent_id: row.id,
     mode: 'shadow',
     repid_before: a.from,
-    decayed_to: a.decayed_to,
-    would_remove: a.would_remove,
+    decayed_to: bound ? a.from : a.decayed_to,
+    would_remove: bound ? 0 : a.would_remove,
     factor: Number(a.factor.toFixed(6)),
     activity_30d: a.activity_30d,
+    bound,
+    last_verified_action: row.last_verified_action ?? null,
   };
 }
 
