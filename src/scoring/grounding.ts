@@ -126,11 +126,15 @@ export interface GroundingStore {
   insertClaim(row: GroundingClaimRow): Promise<'ok' | 'duplicate'>;
 }
 
-/** C8 default is per-agent. X9 attack 2 is closed by GROUNDING_EVIDENCE_UNIQUE=global. */
+/**
+ * E1: unique is evidence_id only. One settlement grounds at most one scoring event,
+ * across agents. GROUNDING_EVIDENCE_UNIQUE=agent is a test-only rollback to the
+ * hole X9 found; production default is global.
+ */
 export function evidenceUniqueScope(
   raw: string | undefined | null = process.env.GROUNDING_EVIDENCE_UNIQUE,
 ): 'agent' | 'global' {
-  return (raw ?? '').trim().toLowerCase() === 'global' ? 'global' : 'agent';
+  return (raw ?? 'global').trim().toLowerCase() === 'agent' ? 'agent' : 'global';
 }
 
 export interface GroundingResult {
@@ -226,8 +230,10 @@ export function createMemoryGroundingStore(): GroundingStore {
       return null;
     },
     async insertClaim(row) {
+      for (const existing of rows.values()) {
+        if (existing.evidence_id === row.evidence_id) return 'duplicate';
+      }
       const k = key(row.evidence_id, row.agent_id, row.event_type);
-      if (rows.has(k)) return 'duplicate';
       rows.set(k, row);
       return 'ok';
     },
@@ -275,7 +281,7 @@ async function resolveGroundingInner(input: ResolveGroundingInput): Promise<Grou
 
   const evidenceId = evidenceIdOf(input.evidence);
   const scope = evidenceUniqueScope();
-  const lockKey = scope === 'global' ? evidenceId : `${evidenceId}:${input.agentId}:${input.eventType}`;
+  const lockKey = scope === 'global' ? `e:${evidenceId}` : `${evidenceId}:${input.agentId}:${input.eventType}`;
 
   return withLock(lockKey, async () => {
     const existing =

@@ -31,8 +31,11 @@
 --   g_verified text not null,
 --   reason text not null,
 --   created_at timestamptz not null default now(),
---   primary key (evidence_id, agent_id, event_type)
+--   primary key (evidence_id)
 -- );
+-- -- E1/E3: one evidence_id grounds at most one event, across agents.
+-- -- create unique index if not exists repid_grounding_claims_evidence_id_uidx
+-- --   on public.repid_grounding_claims (evidence_id);
 -- COMMIT;
 
 -- C9 flag: DECAY_BOUND_MODE = off | shadow | enforce (default shadow).

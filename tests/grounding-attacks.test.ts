@@ -79,10 +79,9 @@ describe('X9 attacks on C8', () => {
       chain: chainTo(WALLET_B, 100_000n),
     });
     expect(a.g_verified).toBe('high');
-    // Specified unique is (evidence, agent, event_type), so agent B is a new key.
-    // X9 reports this as FAIL (accepted): evidence-alone would have blocked it.
-    expect(b.g_verified).toBe('high');
-    expect(b.reused).toBe(false);
+    // E1: unique is evidence_id only — agent B is resisted.
+    expect(b.g_verified).toBe(0);
+    expect(b.reused).toBe(true);
   });
 
   it('A2 one-line fix: GROUNDING_EVIDENCE_UNIQUE=global resists reuse across agents', async () => {
