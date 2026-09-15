@@ -43,7 +43,15 @@
 -- existing hard-stop (sweep still cannot move scores). rollback: unset the env.
 -- trinity_changelog prod row is Sean-gated; this file is the artifact.
 
+-- E3 replay: unique(evidence_id) IS the primary key above. The engine also holds
+-- an in-process lock on evidence_id (src/scoring/grounding.ts withLock). The
+-- index below is belt-and-suspenders if the PK is ever widened; do not apply
+-- without Sean.
+-- CREATE UNIQUE INDEX IF NOT EXISTS uq_repid_grounding_claims_evidence_id
+--   ON public.repid_grounding_claims (evidence_id);
+
 -- rollback_sql:
+-- DROP INDEX IF EXISTS public.uq_repid_grounding_claims_evidence_id;
 -- drop table if exists public.repid_grounding_claims;
 -- drop table if exists public.repid_custody_log;
 -- drop view if exists public.v_agent_bound;
