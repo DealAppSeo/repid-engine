@@ -956,9 +956,13 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
       released.status !== 'ALREADY_SETTLED' &&
       released.status !== 'SETTLED_UNRECORDED'
     ) {
+      // E4 / #644: typed failure on the row — never a quiet NULL settled_at after PASS.
+      const last_error = `payment_release_failed: ${released.status}`;
+      await db.from('service_contracts').update({ last_error }).eq('id', req.params.id);
       return res.status(409).json({
         error: 'payment_release_failed',
         message: 'the deliverable passed but the payment could not be released — contract left fulfilled, not settled',
+        last_error,
         release: released,
       });
     }
@@ -972,7 +976,11 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
     criterionRatings: derived.ratings,
     releaseResult: releaseResult as { txHash?: string } | null,
   });
-  if (!finalized.ok) return res.status(400).json({ error: finalized.error });
+  if (!finalized.ok) {
+    const last_error = `finalize_failed: ${finalized.error}`;
+    await db.from('service_contracts').update({ last_error }).eq('id', req.params.id);
+    return res.status(400).json({ error: finalized.error, last_error });
+  }
   const step2 = finalized.contract;
 
   res.json(releaseResult ? { ...step2, payment_release: releaseResult } : step2);
