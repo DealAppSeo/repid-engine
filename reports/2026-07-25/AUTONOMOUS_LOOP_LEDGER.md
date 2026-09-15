@@ -6261,3 +6261,29 @@ in follow-up PR before the next beat could act on the wrong diagnosis.
 **Next (Sean action required):** Check and rotate `ANTHROPIC_API_KEY` in repo Actions secrets
 if expired. Confirm `BUILD_LOOP_MODEL` variable is either unset or set to `claude-sonnet-4-6`.
 Once the key is valid, beats should resume automatically (the workflow itself is correct).
+
+## Beat (2026-09-15, second run this date) — first successful beat since ~2026-09-10; API key confirmed live; open PRs surveyed; backlog items 7-11 all PARTIAL/wired-one-end
+
+**Prior beat verified [V]:** Beat 2026-09-15 (PR #753, corrected from #752) diagnosed 20+ consecutive auto-logged failures as a likely expired/invalid `ANTHROPIC_API_KEY`. **Independent verification: this beat is running successfully right now — direct evidence the key is now valid.** The corrected root-cause (key, not context overflow) stands. The self-correction in #753 was accurate.
+
+**What the prior beats actually shipped:** Nothing — zero real PRs from ~2026-09-10 to 2026-09-15. All subsequent merged commits are auto-logged ledger stubs.
+
+**Open PRs surveyed [V via gh pr list]:**
+- #754 — feat(x8): adversarial harness + C8 grounding shadow + C9/C10 (DRAFT, 2026-09-15)
+- #749 — fix(scoring): opportunity-grade delta reject bound (DRAFT, 2026-09-15)
+- #748 — fix(onchain-guards): value-range + hard mainnet-refusal on giveFeedback (OPEN, 2026-09-15)
+- #743 — fix(hal): pin free-tier quorum — refuse glm-5-turbo + paid Gemini under hold (DRAFT, 2026-09-14)
+- #739 — fix(scoring): per-event output cap on scaled reward (DRAFT, 2026-09-13)
+
+These appear to be from other sessions running during the beat-failure window. I did not author them.
+
+**Backlog status at beat start [R from backlog doc]:**
+- Items 1-6, 20 DONE; items 7-11 PARTIAL (primitives built, all "wired one end only" / uncalled / shadow-inert).
+- Item 7 (ANFIS enablement) is "NOW (stage) / Sean GO (flip)" — the highest actionable item.
+- Items 8-11 each have a named blocker or Sean-gated infra flip before they activate.
+
+**Step 2-4 intent:** Investigate the one OPEN (non-draft) PR #748 for safety class; if clean and SAFE-CLASS (additive + tested), arm auto-merge. Then look at item 7 or 9/10/11 for the next build increment. The presence of 5 open PRs from other sessions may mean the queue has moved; will check each before acting.
+
+**Mistakes from prior beats:** 20+ beats completely lost. No new false claims to correct.
+
+**Next:** (1) Check #748's CI and diff — is it SAFE-CLASS? (2) Check #739/#749 — what do they fix and are they ready? (3) Advance backlog item 7 or an unblocked PARTIAL item.
