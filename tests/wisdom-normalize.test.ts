@@ -17,9 +17,11 @@
 import {
   normalizeWisdomForReward,
   clampEventDelta,
+  capScaledReward,
   WISDOM_FORMULA_MIN,
   WISDOM_FORMULA_MAX,
   MAX_ABS_EVENT_DELTA,
+  MAX_ABS_SCALED_REWARD,
 } from '../src/services/wisdom-normalize';
 import { calculateFullReward } from '../src/reward-formula';
 
@@ -72,6 +74,99 @@ describe('clampEventDelta', () => {
   test('non-finite rewards become delta 0, never a crash', () => {
     expect(clampEventDelta(Infinity)).toEqual({ delta: 0, clamped: true });
     expect(clampEventDelta(NaN)).toEqual({ delta: 0, clamped: true });
+  });
+});
+
+describe('capScaledReward — per-event output cap (get_scaled_reward stand-in)', () => {
+  test('sane rewards pass through', () => {
+    expect(capScaledReward(19)).toEqual({ reward: 19, capped: false });
+    expect(capScaledReward(-9)).toEqual({ reward: -9, capped: false });
+    expect(capScaledReward(MAX_ABS_SCALED_REWARD)).toEqual({ reward: MAX_ABS_SCALED_REWARD, capped: false });
+  });
+
+  test('one event cannot fill the 10–10000 scale', () => {
+    expect(capScaledReward(9990)).toEqual({ reward: MAX_ABS_SCALED_REWARD, capped: true });
+    expect(capScaledReward(-9990)).toEqual({ reward: -MAX_ABS_SCALED_REWARD, capped: true });
+    expect(Math.abs(capScaledReward(322194662852).reward)).toBe(MAX_ABS_SCALED_REWARD);
+  });
+
+  test('non-finite → 0 (same posture as clampEventDelta)', () => {
+    expect(capScaledReward(Infinity)).toEqual({ reward: 0, capped: true });
+    expect(capScaledReward(NaN)).toEqual({ reward: 0, capped: true });
+  });
+
+  test('count-floor: vdrCount=0 + exploding formula still cannot exceed the cap', () => {
+    const r = calculateFullReward(
+      {
+        baseDelta: 9,
+        isValidator: true,
+        impactUSDC: 0,
+        domainAccuracy: 1.0,
+        alignmentExponent: 1.0,
+        challengerRepID: 200,
+        targetRepID: 200,
+        collusionRisk: 0,
+        isExploration: false,
+        isGenesis: false,
+        wisdomScore: 1.0,
+        informationParity: 1.0,
+        daysAsNewDBT: 999,
+        vdrCount: 0,
+        latencyPenalty: 1.0,
+        keystoneFactor: 1.0,
+        mentorshipBonus: 1.0,
+        confessionFactor: 1.0,
+        isHuman: false,
+      } as any,
+      1.618033988749895,
+      5,
+    );
+    const { reward, capped } = capScaledReward(r.reward);
+    expect(Math.abs(reward)).toBeLessThanOrEqual(MAX_ABS_SCALED_REWARD);
+    // A healthy count-floor path should not even trip the cap.
+    expect(capped).toBe(false);
+  });
+
+  test('config injection: impactCap cannot raise the output cap (constant, not repid_config)', () => {
+    const r = calculateFullReward(
+      {
+        baseDelta: 9,
+        isValidator: true,
+        impactUSDC: 1e12,
+        domainAccuracy: 1.0,
+        alignmentExponent: 40,
+        challengerRepID: 10,
+        targetRepID: 10000,
+        collusionRisk: 99,
+        isExploration: true,
+        isGenesis: true,
+        wisdomScore: 2.0,
+        informationParity: 10,
+        daysAsNewDBT: 0,
+        vdrCount: 0,
+        latencyPenalty: 1.0,
+        keystoneFactor: 10,
+        mentorshipBonus: 10,
+        confessionFactor: 10,
+        isHuman: true,
+      } as any,
+      1.618033988749895,
+      1e9, // poisoned impact_factor_cap
+    );
+    expect(Math.abs(r.reward)).toBeGreaterThan(MAX_ABS_SCALED_REWARD);
+    const { reward, capped } = capScaledReward(r.reward);
+    expect(capped).toBe(true);
+    expect(reward).toBe(MAX_ABS_SCALED_REWARD);
+  });
+
+  test('race: two sequential events are each capped independently (no shared budget — remaining hole)', () => {
+    // Documented, not closed: N parallel score-events can still sum past the
+    // per-event cap. Closing that needs a per-agent rate limit, not this PR.
+    const a = capScaledReward(9990).reward;
+    const b = capScaledReward(9990).reward;
+    expect(a).toBe(MAX_ABS_SCALED_REWARD);
+    expect(b).toBe(MAX_ABS_SCALED_REWARD);
+    expect(a + b).toBe(MAX_ABS_SCALED_REWARD * 2);
   });
 });
 
