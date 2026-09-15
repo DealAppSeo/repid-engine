@@ -11,6 +11,7 @@ import { STARTING_REPID } from '../scoring/repid-constants';
 import { FIXED_DELTAS, type RepIdEventType } from '../scoring/repid-deltas';
 import {
   evidenceFromCallerRef,
+  enforceGroundedDelta,
   groundingMode,
   resolveGrounding,
   type GroundingEvidence,
@@ -515,12 +516,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // repid_after === repid_before, mode 'shadow-deception'. (Enforce mode and all
   // non-deception events keep the normal decay + delta behavior.)
   const isShadowDeception = isDeception && decMode === 'shadow';
-  const finalDelta = isShadowDeception ? 0 : computedDelta;
+  let finalDelta = isShadowDeception ? 0 : computedDelta;
 
   // 7 — New RepID and tier (uses the APPLIED delta; shadow deception => no move).
   // On the shadow-deception path the score is left UNCHANGED (no decay applied),
   // so repid_after === repid_before and the event is a pure measurement.
-  const newRepId = isShadowDeception
+  let newRepId = isShadowDeception
     ? agent.current_repid
     : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
@@ -554,6 +555,13 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       validationLookup: input.groundingDeps?.validationLookup,
       protocolLookup: input.groundingDeps?.protocolLookup,
     });
+    const gated = enforceGroundedDelta(finalDelta, groundingMeta.g_verified, groundingMode());
+    if (gated !== finalDelta) {
+      finalDelta = gated;
+      newRepId = isShadowDeception
+        ? agent.current_repid
+        : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
+    }
   }
 
   const ledger = assessLedger({
