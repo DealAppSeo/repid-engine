@@ -99,7 +99,7 @@ export async function runX8Probes(): Promise<ProbeRow[]> {
     evidence: pay,
     agentWallets: [WALLET],
     store,
-    chain: chain(100_000n),
+    chain: chain(100_001n),
   });
   const replay = await resolveGrounding({
     agentId: AGENT,
@@ -107,7 +107,7 @@ export async function runX8Probes(): Promise<ProbeRow[]> {
     evidence: pay,
     agentWallets: [WALLET],
     store,
-    chain: chain(100_000n),
+    chain: chain(100_001n),
   });
   rows.push({
     id: 'A3',
@@ -173,7 +173,7 @@ export async function runX8Probes(): Promise<ProbeRow[]> {
     evidence: e1Pay,
     agentWallets: [WALLET],
     store: e1Store,
-    chain: chain(100_000n, true, WALLET),
+    chain: chain(100_001n, true, WALLET),
   });
   const e1b = await resolveGrounding({
     agentId: AGENT_B,
@@ -181,7 +181,7 @@ export async function runX8Probes(): Promise<ProbeRow[]> {
     evidence: e1Pay,
     agentWallets: [WALLET_B],
     store: e1Store,
-    chain: chain(100_000n, true, WALLET_B),
+    chain: chain(100_001n, true, WALLET_B),
   });
   rows.push({
     id: 'E1',
@@ -190,13 +190,40 @@ export async function runX8Probes(): Promise<ProbeRow[]> {
     detail: `agent_b g_verified=${e1b.g_verified} reused=${e1b.reused} reason=${e1b.reason}`,
   });
 
+  // E2 — $0.10 wash loop: three distinct txs at the floor, same pair. None may ground.
+  const e2Store = createMemoryGroundingStore();
+  let e2High = 0;
+  const e2Reasons: string[] = [];
+  for (let i = 1; i <= 3; i++) {
+    const hex = i.toString(16).padStart(2, '0');
+    const txHash = '0x' + hex.repeat(32);
+    const r = await resolveGrounding({
+      agentId: AGENT,
+      eventType: 'CODE_CONTRIBUTION',
+      evidence: { kind: 'payment', txHash },
+      agentWallets: [WALLET],
+      store: e2Store,
+      chain: chain(100_000n, true, WALLET),
+    });
+    // chain() ignores txHash on the RPC mock — each call still looks like a new
+    // evidence_id because evidenceIdOf hashes the caller-supplied txHash.
+    if (r.g_verified !== 0) e2High += 1;
+    e2Reasons.push(r.reason);
+  }
+  rows.push({
+    id: 'E2',
+    name: '$0.10 wash loop',
+    verdict: e2High === 0 ? 'PASS' : 'FAIL',
+    detail: `highs=${e2High}/3 reasons=${e2Reasons.join(',')}`,
+  });
+
   return rows;
 }
 
 describe('X8 adversarial probes', () => {
   it('all probes run and return PASS or FAIL', async () => {
     const rows = await runX8Probes();
-    expect(rows.map((r) => r.id)).toEqual(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'E1']);
+    expect(rows.map((r) => r.id)).toEqual(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'E1', 'E2']);
     for (const r of rows) {
       expect(['PASS', 'FAIL']).toContain(r.verdict);
     }

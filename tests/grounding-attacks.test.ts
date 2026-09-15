@@ -52,7 +52,7 @@ describe('X9 attacks on C8', () => {
       evidence: { kind: 'payment', txHash: TX },
       agentWallets: [WALLET_A],
       store: createMemoryGroundingStore(),
-      chain: chainTo(STRANGER, 100_000n),
+      chain: chainTo(STRANGER, 100_001n),
     });
     expect(r.g_verified).toBe(0);
     expect(r.reason).toBe('parties_mismatch');
@@ -67,7 +67,7 @@ describe('X9 attacks on C8', () => {
       evidence,
       agentWallets: [WALLET_A],
       store,
-      chain: chainTo(WALLET_A, 100_000n),
+      chain: chainTo(WALLET_A, 100_001n),
     });
     const b = await resolveGrounding({
       agentId: AGENT_B,
@@ -76,7 +76,7 @@ describe('X9 attacks on C8', () => {
       agentWallets: [WALLET_B],
       store,
       // same tx, but this agent is not a party — still tests the unique key.
-      chain: chainTo(WALLET_B, 100_000n),
+      chain: chainTo(WALLET_B, 100_001n),
     });
     expect(a.g_verified).toBe('high');
     // E1: unique is evidence_id only — agent B is resisted.
@@ -96,7 +96,7 @@ describe('X9 attacks on C8', () => {
         evidence,
         agentWallets: [WALLET_A],
         store,
-        chain: chainTo(WALLET_A, 100_000n),
+        chain: chainTo(WALLET_A, 100_001n),
       });
       const b = await resolveGrounding({
         agentId: AGENT_B,
@@ -104,7 +104,7 @@ describe('X9 attacks on C8', () => {
         evidence,
         agentWallets: [WALLET_B],
         store,
-        chain: chainTo(WALLET_B, 100_000n),
+        chain: chainTo(WALLET_B, 100_001n),
       });
       expect(a.g_verified).toBe('high');
       expect(b.g_verified).toBe(0);
@@ -115,7 +115,7 @@ describe('X9 attacks on C8', () => {
     }
   });
 
-  it('A3 $0.10 wash loop — floor is inclusive, cheapest grounded wash is $0.10', async () => {
+  it('A3 $0.10 wash loop — floor is exclusive, $0.10 does not ground', async () => {
     const r = await resolveGrounding({
       agentId: AGENT_A,
       eventType: 'CODE_CONTRIBUTION',
@@ -124,7 +124,8 @@ describe('X9 attacks on C8', () => {
       store: createMemoryGroundingStore(),
       chain: chainTo(WALLET_A, 100_000n),
     });
-    expect(r.g_verified).toBe('high');
+    expect(r.g_verified).toBe(0);
+    expect(r.reason).toBe('below_floor');
     expect(r.amount_usd).toBeCloseTo(GROUNDING_FLOOR_USD);
   });
 
@@ -155,7 +156,7 @@ describe('X9 attacks on C8', () => {
         evidence,
         agentWallets: [WALLET_A],
         store,
-        chain: chainTo(WALLET_A, 100_000n),
+        chain: chainTo(WALLET_A, 100_001n),
       });
     const [x, y] = await Promise.all([call(), call()]);
     const highs = [x, y].filter((r) => r.g_verified === 'high');
