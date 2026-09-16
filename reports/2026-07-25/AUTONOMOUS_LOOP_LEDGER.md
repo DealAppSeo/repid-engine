@@ -6287,3 +6287,24 @@ These appear to be from other sessions running during the beat-failure window. I
 **Mistakes from prior beats:** 20+ beats completely lost. No new false claims to correct.
 
 **Next:** (1) Check #748's CI and diff — is it SAFE-CLASS? (2) Check #739/#749 — what do they fix and are they ready? (3) Advance backlog item 7 or an unblocked PARTIAL item.
+
+## Beat (2026-09-16) — prior beat verified; three draft PRs surveyed; item 9 decisions (b)/(c) targeted
+
+**Prior beat verified [V]:** The 2026-09-15 second-run beat (PR #755, commit f04ba5d) claimed:
+- API key live (this beat running successfully is direct evidence)
+- PR #748 (onchain-guards: value-range + mainnet-refusal on giveFeedback) was the only non-draft open PR — **[V] merged as commit c8ce028** on main
+- PR #754 (adversarial harness + settle path) — **[V] merged as commit 987c8c1** on main
+- Items 1-6, 20 DONE; items 7-11 PARTIAL — **[R from backlog doc, not re-verified this beat]**
+
+All verifiable claims held. Prior beat's stated intent ("investigate #748 for safety class, then look at item 7 or 9/10/11") was partially executed: #748 merged (green), no backlog items advanced — that is honest and the ledger entry says so.
+
+**Current state [V via gh pr list + git log]:**
+- `origin/main` = `987c8c1`
+- 3 open draft PRs: #749 (fix scoring delta reject bound, cc-authored 2026-09-14), #743 (fix HAL free-tier quorum, xc-authored 2026-09-14), #739 (fix scoring scaled reward cap, xc-authored 2026-09-13)
+- No non-draft open PRs
+
+**Step 2 intent:** Independently verify draft PR #749 (cc-authored — someone else verified this loop doesn't self-validate). If clean, mark ready. Then check whether item 9's decisions (b)/(c) (configuring a `dailyCallCap` per provider and wiring `evaluateFreeTierQuota` into the router's existing `cap_hit` path) are writable without a Sean-gated flag flip — the primitive exists and has zero callers, but both decisions were left explicitly open.
+
+**Step 3-4 intent:** If PR #749 holds, mark it ready and arm auto-merge if SAFE-CLASS. For item 9: if decisions (b)/(c) reduce to a small, additive, tested change, ship it as a branch; if they require a product call, surface to Sean.
+
+**Mistakes from prior beats:** Nothing new to correct beyond what's already logged.
