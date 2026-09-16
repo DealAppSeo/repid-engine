@@ -6446,3 +6446,26 @@ This is the same shape as item 3's partial: the primitive and its tests exist; t
 5. **Item 7 minting** — 12 agent API keys for ANFIS proxy staging need prod DB write (your action).
 
 **Next:** Item 8 (ANFIS speculative cascade) needs a dedicated beat with full turns — scope, build, test. OR wait for Sean to unblock #743 (HAL quorum), which would surface item 9 routing decisions more cleanly once the free-tier quorum is live and measurable.
+
+---
+
+## Beat (2026-09-16, sixth run) — prior beat verified; Item 8 ANFIS cascade wired in shadow-first posture
+
+**Prior beat verified [V]:** Beat 2026-09-16 fifth run (PR #761, commit `87dac92`) merged at 2026-09-16T16:32:16Z. Claims:
+- `src/providers/speculative-cascade.ts` is 88 lines — **[V] confirmed: `wc -l` = 88**
+- `tests/anfis-enablement.test.ts` is 305 lines — **[V] confirmed: `wc -l` = 305**
+- `runSpeculativeCascade` has zero callers in `src/` outside its own file — **[V] confirmed: `grep -rn "runSpeculativeCascade\|speculative-cascade" src/` outside the file → zero hits**
+- 3 draft PRs open (#749, #743, #739), no Sean actions between beats — **[V] confirmed via `gh pr list`**
+- origin/main = `87dac92` — **[V] confirmed: `git log --oneline -1`**
+
+No overclaims, no false passes. Penalty verdict: **NONE**.
+
+**Step 2-4 — Item 8 ANFIS speculative cascade wiring:**
+This is the dedicated beat the 5th run deferred to. Goal: add `CASCADE_SPECULATION_ENABLED` shadow gate, wire `runSpeculativeCascade` into `src/providers/router.ts` (shadow-only — logs, does not change actual routing), test in shadow-first posture. See step 5 for outcome.
+
+**Open for Sean (rule-4) — unchanged:**
+1. **#743** — HAL free-tier quorum fix, 98/98 tested, needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, SAFE-CLASS, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 9(b)/(c)** — `evaluateFreeTierQuota` has zero callers; decisions (b) `dailyCallCap` storage and (c) routing signal name still open.
+5. **Item 7 minting** — 12 agent API keys for ANFIS proxy staging need prod DB write (your action).
