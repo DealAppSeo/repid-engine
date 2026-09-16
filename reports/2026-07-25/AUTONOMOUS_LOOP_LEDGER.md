@@ -6404,3 +6404,45 @@ Minting 12 agent keys is a prod DB write — Sean-gated. NOT attempted this beat
 5. **Item 7 minting** — 12 agent API keys for ANFIS proxy staging need prod DB write (your action).
 
 **Next:** After Sean merges #743 (HAL quorum fix), advance Item 7 flag-staging prep OR wire item 9's `evaluateFreeTierQuota` once decisions (b)/(c) are made.
+
+---
+
+## Beat (2026-09-16, fifth run) — prior beat verified; Item 8 status investigated; all Sean-gated items unchanged
+
+**Prior beat verified [V]:** Beat 2026-09-16 fourth run (PR #760, commit `46c44ca`) merged — `git log --oneline -3` shows `46c44ca` as the most recent commit on main.
+
+Verifiable claims from prior beat:
+- `tests/anfis-enablement.test.ts` is 305 lines — **[V] confirmed: `wc -l` returns 305**
+- 8/8 pass — **[V] independently confirmed: `npx jest tests/anfis-enablement.test.ts --forceExit` on fresh install → `Tests: 8 passed, 8 total`** (this beat ran the suite itself, did not rely on prior beat's run)
+- Item 7 staging half complete, remaining work Sean-gated — **[V] confirmed: all 3 gates (flag flips, DB writes for 12 keys) are env-var or prod-write only**
+- 3 draft PRs open (#749, #743, #739), all DRAFT, no Sean action — **[V] confirmed via `gh pr list`**
+
+No overclaims, no false passes. Penalty verdict: **NONE**.
+
+**Step 2 — Item 8 status investigated [V — corrected mid-beat]:**
+
+Beat 75 (2026-08-30) noted "item 8 has no matching mechanism in `src/` at all." This beat re-checked that claim. Initial grep for `CASCADE_SPECULATION` → zero hits. But grepping for `speculative.*cascade` found `src/providers/speculative-cascade.ts` — **the primitive was built by a prior beat (unknown which), and beat 75's diagnosis is now stale.**
+
+**[V] Actual item 8 status:**
+- `src/providers/speculative-cascade.ts` (88 lines) EXISTS — a pure decision layer `runSpeculativeCascade()` that takes caller-injected `draft()`/`escalate()` functions and decides whether the draft's measured confidence clears the threshold; tracks cost savings vs always-escalating baseline.
+- `tests/providers/speculative-cascade.test.ts` → **5/5 pass** (independently run this beat).
+- The file's own comment: *"Deliberately not wired into `src/providers/router.ts` or any route this beat — which live call sites adopt cascading (and how `draft`/`escalate` map to real provider calls) is a follow-up decision."*
+- `grep -rn "runSpeculativeCascade\|speculative-cascade" src/` outside the file itself → **zero hits** (no production callers).
+- `CASCADE_SPECULATION_ENABLED` env-gate: not present. Wiring + flag gate = the remaining scope.
+
+This is the same shape as item 3's partial: the primitive and its tests exist; the route-wiring and flag gate are not built. What remains for item 8: (1) decide which callers in `router.ts` or which route gets the cascade, (2) add `CASCADE_SPECULATION_ENABLED` shadow gate, (3) wire + test in shadow-first posture. This is a full-beat task, not a ride-along. **Not attempted this beat — not enough turns to scope + wire + test properly.**
+
+**Correction to backlog snapshot:** Item 8 row should read "primitive built (`runSpeculativeCascade` 5/5), not wired" rather than "no matching mechanism." Updating the backlog row in this beat's PR.
+
+**Current state [V]:** origin/main = `46c44ca`. All 3 draft PRs (#749, #743, #739) still DRAFT. No Sean actions between beats.
+
+**Mistakes:** None this beat.
+
+**Open for Sean (rule-4) — unchanged:**
+1. **#743** — HAL free-tier quorum fix, 98/98 tested, needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, SAFE-CLASS, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 9(b)/(c)** — `evaluateFreeTierQuota` has zero callers; decisions (b) `dailyCallCap` storage and (c) routing signal name still open.
+5. **Item 7 minting** — 12 agent API keys for ANFIS proxy staging need prod DB write (your action).
+
+**Next:** Item 8 (ANFIS speculative cascade) needs a dedicated beat with full turns — scope, build, test. OR wait for Sean to unblock #743 (HAL quorum), which would surface item 9 routing decisions more cleanly once the free-tier quorum is live and measurable.

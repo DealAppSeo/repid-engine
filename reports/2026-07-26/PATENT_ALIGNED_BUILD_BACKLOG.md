@@ -34,9 +34,12 @@
 - ⚠ Items 3-4, 7, 10 (retrieval API, answer-binding, ANFIS enablement, EAS anchoring) show partial
   name-grep hits in `src/` as of 2026-08-27 but have not been verified wired the way item 20 was —
   do not assume done or not-done from this line, check the item.
-- 🔶 **Items 8/9** (ANFIS speculative cascade / SCHEDULE axis) investigated by beat 75, 2026-08-30 —
-  neither is a name-grep-only guess anymore, but neither is done either. See their rows: item 9 has
-  a real, tested primitive with zero callers; item 8 has no matching mechanism in `src/` at all.
+- 🔶 **Items 8/9** (ANFIS speculative cascade / SCHEDULE axis) — item 9 has a real, tested primitive
+  with zero callers (decisions (b)/(c) needed from Sean). Item 8's "no matching mechanism in src/"
+  diagnosis (beat 75, 2026-08-30) is **stale**: `src/providers/speculative-cascade.ts` (88 lines,
+  `runSpeculativeCascade`, 5/5 tests) was built by a prior beat. Not wired: zero callers in
+  `src/` outside the file itself; `CASCADE_SPECULATION_ENABLED` gate not present.
+  What remains: wiring decision (which callers), flag gate, shadow-first posture. [MEASURED 2026-09-16, beat 5th run]
 
 ## Dependency-ordered queue
 | # | Task | Patent | Phase | Tier | Acceptance test | When |
