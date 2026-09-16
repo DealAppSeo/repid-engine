@@ -6365,3 +6365,42 @@ Verifiable claims from prior beat:
 4. **Item 9(b)/(c)** — `evaluateFreeTierQuota` primitive built/tested, zero callers. Decision needed: (b) `dailyCallCap` storage strategy, (c) routing signal name (`cap_hit` or `free_quota_hit`).
 
 **Next:** Item 7 ANFIS staging half (mint 12 agent keys + acceptance tests, no Sean GO needed). Dedicated beat.
+
+---
+
+## Beat (2026-09-16, fourth run) — prior beat verified; Item 7 ANFIS staging acceptance tests
+
+**Prior beat verified [V]:** Beat 2026-09-16 third run (PR #759, commit `d9940e3`) merged at HEAD. Claims:
+- origin/main = `19231d3` at prior beat start — **[V]** confirmed: `d9940e3` (#759) is current HEAD, which merges the prior beats linearly
+- 3 draft PRs open (#749, #743, #739), all DRAFT — **[V]** confirmed via `gh pr list`: exact same 3, all still DRAFT, no Sean action between beats
+- #743 flagged to Sean as highest-impact merge-ready item — **[V]** present in #759 PR body and ledger entry; no Sean response yet (no merges)
+
+All verifiable claims from the prior beat hold. No overclaims, no false passes.
+
+**Step 2 — ANFIS staging half (Item 7, acceptance tests):**
+Item 7's staging half is: mint 12 agent keys + 5 acceptance tests (no-leak / server-side inject / ANFIS-decision / live-routing / job-token). Flag flips (`ENGINE_LLM_PROXY`, `ROUTER_STRICT_COST_ORDER`) are Sean-gated and not touched.
+
+Minting 12 agent keys is a prod DB write — Sean-gated. NOT attempted this beat per hard lines.
+
+**[CORRECTION — caught before committing, not after]** The 5 acceptance tests were identified as a potential this-beat build target. Before writing them, this beat verified whether they already existed: `tests/anfis-enablement.test.ts` (305 lines) was found in the repo, covering all 5 criteria: (a) no-leak, (b) server-side inject, (c) ANFIS-present, (d) live-routing with `ROUTER_STRICT_COST_ORDER` gate, (e) job-token auth. This would have been writing something already done — a RULE-2 violation.
+
+**[V] Tests verified live:** `npx jest --config jest.config.js tests/anfis-enablement.test.ts --forceExit` → **8/8 pass** (including 2 subtests under criteria d and e). All green.
+
+**What remains in Item 7 [V by reading the test file and cross-checking src/]:**
+- The 5 acceptance tests exist and pass ✓
+- Flag flips (`ENGINE_LLM_PROXY`, `ROUTER_STRICT_COST_ORDER`) need Sean GO ✗
+- 12 agent API keys need prod DB write — Sean-gated ✗
+- Item 7 is FURTHER ALONG than the backlog row's "NOW (stage) / Sean GO (flip)" implied: staging work (acceptance tests) was already done by a prior session. The remaining items are ALL Sean-gated. Updating the ledger accordingly.
+
+**Shipped this beat:** Nothing new in code — this beat's contribution is the independent [V] that Item 7's staging half is complete (8/8 tests passing), and the ledger record preventing a prior-work redo.
+
+**Mistakes:** None this beat.
+
+**Open for Sean (rule-4) — unchanged from prior beat:**
+1. **#743** — HAL free-tier quorum fix, 98/98 tested, needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, SAFE-CLASS, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 9(b)/(c)** — `evaluateFreeTierQuota` has zero callers; decisions (b) `dailyCallCap` storage and (c) routing signal name still open.
+5. **Item 7 minting** — 12 agent API keys for ANFIS proxy staging need prod DB write (your action).
+
+**Next:** After Sean merges #743 (HAL quorum fix), advance Item 7 flag-staging prep OR wire item 9's `evaluateFreeTierQuota` once decisions (b)/(c) are made.
