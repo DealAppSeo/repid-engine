@@ -6308,3 +6308,21 @@ All verifiable claims held. Prior beat's stated intent ("investigate #748 for sa
 **Step 3-4 intent:** If PR #749 holds, mark it ready and arm auto-merge if SAFE-CLASS. For item 9: if decisions (b)/(c) reduce to a small, additive, tested change, ship it as a branch; if they require a product call, surface to Sean.
 
 **Mistakes from prior beats:** Nothing new to correct beyond what's already logged.
+
+## Beat (2026-09-16, second run) — prior beat verified; #749 blocked by Sean flag; item 9(b)/(c) assessed
+
+**Prior beat verified [V]:** Beat 2026-09-16 (PR #757, commit 6d0f47b) shipped as docs-only ledger entry and merged at 2026-09-16T01:02:12Z. Prior beat stated *intent* to check #749 and investigate item 9 decisions (b)/(c) — it did not execute those steps (honest: the entry says "intent"). No backlog items were advanced.
+
+Verifiable claims from prior beat:
+- origin/main = `987c8c1` at beat start — **[V] confirmed: git log shows 6d0f47b (#757) on top, merges 987c8c1 below**
+- 3 draft PRs open (#749, #743, #739), no non-draft — **[V] still accurate: same 3 open, all DRAFT**
+
+**PR #749 check [V]:** Body contains explicit "Do not merge" (Sean 2026-09-14 pre-launch guard). Cannot arm auto-merge regardless of CI status. Left as DRAFT per Sean's instruction.
+
+**PR #743 and #739 not checked this beat** — turns already at limit for safe ledger-first execution. Noted as remaining.
+
+**Item 9 decisions (b)/(c) not advanced this beat.** The two open sub-decisions are: (b) configured `dailyCallCap` per provider (a product decision — where/how the cap value is stored per provider); (c) whether `evaluateFreeTierQuota` plugs into router.ts's existing `cap_hit` reason or a distinct one. Both require a product call before any code is written; neither is a clear additive-only wiring. Surfacing to Sean: item 9's primitive (`evaluateFreeTierQuota`) is built and tested with zero callers — decisions (b) and (c) are the gate. If Sean has a preference on (b) `dailyCallCap` storage (env var per provider vs. a config table vs. hardcoded defaults) and (c) routing signal naming (`cap_hit` or a new `free_quota_hit`), this loop can wire it in one beat.
+
+**Mistakes:** Steps 2-4 of prior beat were stated as intent only and not executed — this beat confirms that gap. No new false claims.
+
+**Next:** (1) Check #743 and #739 — what do they fix, are they SAFE-CLASS and Sean-clear? (2) If Sean provides decisions for item 9(b)/(c), wire `evaluateFreeTierQuota` into `router.ts`. (3) Item 7 (ANFIS enablement staging) remains the highest actionable backlog item; its staging half (mint 12 agent keys, acceptance tests) does not require Sean GO — only the flag flip does.
