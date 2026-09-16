@@ -6326,3 +6326,42 @@ Verifiable claims from prior beat:
 **Mistakes:** Steps 2-4 of prior beat were stated as intent only and not executed — this beat confirms that gap. No new false claims.
 
 **Next:** (1) Check #743 and #739 — what do they fix, are they SAFE-CLASS and Sean-clear? (2) If Sean provides decisions for item 9(b)/(c), wire `evaluateFreeTierQuota` into `router.ts`. (3) Item 7 (ANFIS enablement staging) remains the highest actionable backlog item; its staging half (mint 12 agent keys, acceptance tests) does not require Sean GO — only the flag flip does.
+
+---
+
+## Beat (2026-09-16, third run) — prior beat verified; #743 and #739 checked; #743 flagged to Sean as highest-impact merge-ready item
+
+**Prior beat verified [V]:** Beat 2026-09-16 second run (PR #758, commit `19231d3`) merged at 2026-09-16T04:30:32Z. Claims:
+- PR #749 Sean-blocked ("Do not merge" flag) — **[V] confirmed** in #749 body: "Draft — do not merge"
+- #743 and #739 not checked — **honest**, confirmed by prior entry text
+- Item 9(b)/(c) surfaced to Sean — **[V]** surfaced in #758 body; no Sean response yet (no new PRs, no ledger comments)
+- origin/main = `19231d3` at prior beat end — **[V]** `git log` confirms `19231d3` is current HEAD
+
+**PRs #743 and #739 checked this beat [V]:**
+
+**PR #743** (`feat/xc-2026-09-14-hal-free-quorum`) — `fix(hal): pin free-tier quorum — refuse glm-5-turbo and paid Gemini under the hold`:
+- Body: "Draft. Do not merge. Does not deploy. Does not flip flags." Explicit "DoD not met until Sean recycles Railway" — needs a Railway recycle after merge to go live.
+- **What it fixes:** Live quorum was 2/5 succeeded at last measure (2026-09-14): glm-5-turbo and paid Gemini firing instead of free alternatives. This PR pins Z.AI to `glm-4.5-flash`, routes paid Gemini via OpenRouter `:free` (Gemma), adds Together as a free llama family. `npx jest tests/hal-free-gate.test.ts tests/hal-model-selfheal.test.ts` → 98/98 per body.
+- **Safety class:** SAFE — does not flip enable flags, does not fund keys, does not deploy. A scoring-inert routing correction.
+- **Gate:** Sean must (a) mark ready and merge, then (b) recycle the Railway service to reload provider config. Cannot auto-merge here.
+
+**PR #739** (`feat/xc-2026-09-13-scaled-reward-cap`) — `fix(scoring): per-event output cap on scaled reward`:
+- Body: "Draft — do not merge. Did not flip `REPID_RUN_EARN_GATE`."
+- **What it fixes:** `clampEventDelta ±9990` allows one poisoned factor to fill the full scale in a single insert. Adds `capScaledReward` / `MAX_ABS_SCALED_REWARD = 50` in `wisdom-normalize.ts` before the earn-gate and `clampEventDelta`.
+- **Safety class:** SAFE-CLASS (additive code constant, not a flag flip, tested) — but Sean has flagged explicitly.
+- **Gate:** Sean must mark ready. Cannot auto-merge without that.
+
+**Current state [V]:** origin/main = `19231d3`. All 3 draft PRs remain DRAFT with explicit "Do not merge". No new Sean actions.
+
+**Step 2-4 intent:**
+- #743 is highest-impact of the three ready drafts — the HAL quorum is live-degraded (2/5 families). Surfacing to Sean as: "merge-ready, needs Railway recycle after." Item 7 (ANFIS staging) is the highest loop-actionable backlog item (no Sean GO needed for the staging half), but is large enough to need its own dedicated beat. This beat stops here to preserve the ledger record.
+
+**Mistakes:** None new. Prior beat's unchecked items are now checked.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix, tested (98/98), needs you to mark ready + merge + recycle Railway service. Live quorum was 2/5 at last measure; this is the fix.
+2. **#739** — per-event scaled reward cap, SAFE-CLASS, also needs your "ready" signal.
+3. **#749** — delta reject bound, also drafted by you with "do not merge"; awaiting your clearance.
+4. **Item 9(b)/(c)** — `evaluateFreeTierQuota` primitive built/tested, zero callers. Decision needed: (b) `dailyCallCap` storage strategy, (c) routing signal name (`cap_hit` or `free_quota_hit`).
+
+**Next:** Item 7 ANFIS staging half (mint 12 agent keys + acceptance tests, no Sean GO needed). Dedicated beat.
