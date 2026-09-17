@@ -19,6 +19,7 @@ import { applyEscalationOnly } from '../services/anfis-escalation-gate'; // 2026
 import { persistShadowDecision } from '../services/anfis-shadow-persist'; // persist shadow decision so ANFIS is measurable (shadow-only, no routing change)
 import { operationalCostClass, declaredFree, defaultBlendedPrice } from './cost-class';
 import { buildRoutingRecord, summarizeRoutingRecord, RoutingRecord } from '../decisioning/routing-record';
+import { shadowCascadeDecision } from './speculative-cascade-shadow'; // item 8 shadow — inert unless CASCADE_SPECULATION_ENABLED=true
 
 export interface RouteRequest {
   prompt: string;
@@ -468,6 +469,18 @@ export async function routeRequest(
     console.warn('[router-record] failed to build routing record:', e?.message ?? e);
     return result;
   }
+
+  // Item 8 — speculative cascade shadow (inert unless CASCADE_SPECULATION_ENABLED=true).
+  // Uses anfisConfidence as a proxy for draft output quality; logs what the cascade would
+  // have decided without making any additional provider calls. Fire-and-forget: a shadow
+  // log failure must never break routing.
+  void shadowCascadeDecision({
+    anfisConfidence: result.anfisConfidence,
+    staticTier: result.staticTier,
+    anfisTier: result.anfisTier,
+  }).catch((e: unknown) => {
+    console.warn('[cascade-shadow] error (inert):', (e as Error)?.message ?? e);
+  });
 
   return { ...result, routingRecord: record };
 }
