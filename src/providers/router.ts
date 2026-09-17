@@ -20,6 +20,7 @@ import { persistShadowDecision } from '../services/anfis-shadow-persist'; // per
 import { operationalCostClass, declaredFree, defaultBlendedPrice } from './cost-class';
 import { buildRoutingRecord, summarizeRoutingRecord, RoutingRecord } from '../decisioning/routing-record';
 import { shadowCascadeDecision } from './speculative-cascade-shadow'; // item 8 shadow — inert unless CASCADE_SPECULATION_ENABLED=true
+import { shadowFreeTierQuota } from './free-tier-quota-shadow'; // item 9 shadow — inert unless FREE_TIER_QUOTA_SHADOW_ENABLED=true
 
 export interface RouteRequest {
   prompt: string;
@@ -480,6 +481,13 @@ export async function routeRequest(
     anfisTier: result.anfisTier,
   }).catch((e: unknown) => {
     console.warn('[cascade-shadow] error (inert):', (e as Error)?.message ?? e);
+  });
+
+  // Item 9 — free-tier quota shadow (inert unless FREE_TIER_QUOTA_SHADOW_ENABLED=true).
+  // Logs when the chosen provider would have hit its daily call-count ceiling, without
+  // blocking. Fire-and-forget: a DB error or any failure must never break routing.
+  void shadowFreeTierQuota(result.decision.chosen_provider).catch((e: unknown) => {
+    console.warn('[free-tier-quota-shadow] error (inert):', (e as Error)?.message ?? e);
   });
 
   return { ...result, routingRecord: record };
