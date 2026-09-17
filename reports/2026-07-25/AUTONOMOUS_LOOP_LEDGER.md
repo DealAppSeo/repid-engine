@@ -6606,3 +6606,39 @@ Build `src/providers/free-tier-quota-shadow.ts` + wire into `router.ts` after th
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm item 9 feature PR merges. (2) Item 10 EAS anchoring sweep — needs Sean GO for gas spend (concrete proposal: mount `runMemoryRootAnchorSweep` on a daily cron in `src/index.ts`, funding from the existing attester wallet; no new infra). (3) Item 11 `selectProofTier` shadow log — sketch PolicyAxes mapping from existing router context.
+
+---
+
+## Beat (2026-09-17, fifth run) — prior beat verified; item 11 selectProofTier shadow wired
+
+**Prior beat verified [V]:** Beat 2026-09-17 fourth run (PRs #767 ledger + #768 feature, HEAD `f28f304`) is on main.
+- origin/main = `f28f304` — **[V]** confirmed via `git log --oneline -1`.
+- `src/providers/free-tier-quota-shadow.ts` EXISTS (69 lines) — **[V]** confirmed: `ls` + `wc -l` → 69.
+- `shadowFreeTierQuota` wired in `router.ts` line 489, AFTER return path, fire-and-forget — **[V]** confirmed: `grep -n "shadowFreeTierQuota" src/providers/router.ts` → lines 23, 486, 489.
+- `FREE_TIER_DAILY_CAP_DEFAULT` and `FREE_TIER_QUOTA_SHADOW_ENABLED` in `known-env-vars.generated.ts` — **[V]** confirmed: grep hits on both names.
+- 3 draft PRs (#749, #743, #739) still DRAFT, no Sean actions — **[V]** confirmed via `gh pr list`.
+- `selectProofTier` still has zero callers in `src/` outside own file/tests — **[V]** confirmed: `grep -rn "selectProofTier" src/` → only definition + corpus.
+
+No overclaims in prior beat. Penalty verdict: **NONE**.
+
+**Intent for steps 2-4 (stated before feature PR open):**
+Item 11: wire `selectProofTier` into scoring pipeline as a shadow log. Mapping PolicyAxes from `updateRepId` context: `stakes` from event type + agent tier, `costPressure` constant 0.3, `privacy` constant 0.5, `latencyUrgency` constant 0.2 (async pipeline), `reliabilityRequired` from stakes proxy. Gate: `PROOF_TIER_SHADOW_ENABLED` (default off). Wire after score event written, fire-and-forget. New file `src/scoring/proof-tier-shadow.ts`. SAFE-CLASS.
+
+**Step 5 — what shipped:**
+- `src/scoring/proof-tier-shadow.ts` (new): `shadowProofTier(eventType, agentTier)` maps event context to PolicyAxes (documented inline), calls `selectProofTier`, emits `[PROOF-TIER-SHADOW] JSON` with tier decision, axes, drivers, confidence. Fire-and-forget async. Gate: `PROOF_TIER_SHADOW_ENABLED=true` (default off).
+- `src/scoring/pipeline.ts` wired: `void shadowProofTier(input.eventType, agent.tier).catch(...)` after score event insert.
+- `known-env-vars.generated.ts`: `PROOF_TIER_SHADOW_ENABLED` added.
+- Tests: `tests/scoring/proof-tier-shadow.test.ts` — gate-off returns null; gate-on + CHALLENGE → high tier logged; gate-on + REFERRAL → lower tier; gate-on + VETERAN agent raises reliability axis. 5/5 pass, `tsc --noEmit` clean.
+- Feature PR number logged in step 5 if turns permit (see below).
+
+**Mistakes:** None this beat.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 11 shadow PR** (SAFE-CLASS, armed `--auto --squash`; `PROOF_TIER_SHADOW_ENABLED` off by default).
+5. **Item 10 EAS anchoring sweep** — concrete proposal: mount `runMemoryRootAnchorSweep` on a daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm item 11 PR merges. (2) Item 10 — if Sean GO, wire cron and open for merge. (3) Items 8/9 have shipped their shadow phases; once Sean enables flags, measurement begins.
