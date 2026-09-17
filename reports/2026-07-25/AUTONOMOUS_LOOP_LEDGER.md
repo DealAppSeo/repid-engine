@@ -6502,3 +6502,34 @@ Armed `gh pr merge 763 --auto --squash` (per beat contract for SAFE-CLASS).
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm #763 merged cleanly. (2) Wire item 9's `evaluateFreeTierQuota` once Sean provides decisions (b)/(c). (3) Item 10 or 11 as next shadow-first primitive if item 9 remains blocked.
+
+---
+
+## Beat (2026-09-17, second run) — prior beat verified; #763 CI failure was mis-diagnosed; env-var fix pushed
+
+**Prior beat verified [V]:** Beat 2026-09-17 (PR #764, commit `7e18426`) is on main. Claims checked:
+- origin/main = `0a2a80a` at prior beat start — **[V]** `7e18426` (#764) is current HEAD, `0a2a80a` is its parent
+- PR #763 is OPEN, auto-merge armed — **[V]** confirmed via `gh pr view 763`: state OPEN, auto-merge on
+- 3 draft PRs (#749, #743, #739) still open — **[V]** `gh pr list` shows same 3, all DRAFT
+- Prior beat stated: *"CI `test: FAILURE` is the pre-existing x402/network fixture pattern, not diff-caused"* — **[V→REFUTED]** The actual failing check is `check:named-env-vars`, not x402. `gh run view 35146786000 --log-failed` → `FAILED — 1 of 1: check:named-env-vars`. This is a real regression introduced by #763, not a pre-existing pattern.
+
+**Penalty: prior beat made a false claim about the CI failure nature.** The claim "pre-existing x402/network fixture pattern" was not verified before it was asserted — the prior beat read the check name incorrectly or did not check the failure detail. Ledger rule 2 violation (asserting without verifying). Logged and corrected here.
+
+**Root cause and fix [V]:**
+- `src/providers/speculative-cascade-shadow.ts` introduces `process.env['CASCADE_SPECULATION_ENABLED']` but `src/config/known-env-vars.generated.ts` did not include it — the registry had 439 names; `check:named-env-vars` scanned the PR branch's source and found the unregistered read.
+- Fix: added `CASCADE_SPECULATION_ENABLED` in alphabetical order (between `CASCADE_SETTLEMENT_POLL_MS` and `CEREBRAS_API_KEY`). Verified locally: `node scripts/check-named-env-vars.cjs` → `VERIFIED, registry 440 names`.
+- Pushed to `feat/cc-2026-09-16-cascade-shadow` (PR #763 branch) as commit `a65b3e4`. CI will re-run; all other checks (Strix, gitleaks, crosscheck, zkp-vault) were already SUCCESS — only `test`/`check:named-env-vars` was failing.
+
+**No new backlog items advanced this beat.** The entire beat was spent catching and correcting the prior beat's false CI claim and delivering the fix. Turns used for verification and repair; turning remains too low for a new feature wire.
+
+**Mistakes this beat:** None new. The prior beat's false claim is recorded above.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **#763** — Item 8 cascade shadow; `check:named-env-vars` fix pushed (`a65b3e4`), CI re-running; once `test` passes it is SAFE-CLASS and auto-merge will land it.
+5. **Item 9(b)/(c)** — `evaluateFreeTierQuota` zero callers; decisions needed.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm #763 CI passes and merges. (2) Wire item 9 once Sean provides (b)/(c) decisions. (3) Item 10/11 shadow-first if item 9 blocked.
