@@ -6555,7 +6555,7 @@ Item 9 (`evaluateFreeTierQuota`) has a pure primitive + `getFreeProviderCallsTod
 Shadow gate: `FREE_TIER_QUOTA_SHADOW_ENABLED` (default off). Wired AFTER `return result` in `router.ts` (same pattern as item 8). Cannot affect routing outcome.
 
 **Step 5 — what shipped:**
-Built `src/providers/free-tier-quota-shadow.ts` (new, 80 lines): `shadowFreeTierQuota()` calls `getFreeProviderCallsToday(provider)` and `evaluateFreeTierQuota(...)` with the configurable cap, logs `free_quota_hit` events when the call WOULD have been blocked, and is completely async (`void ...catch(...)`). Wired into `router.ts` after `return result`. Gate: `FREE_TIER_QUOTA_SHADOW_ENABLED` env var, default off. `FREE_TIER_DAILY_CAP_DEFAULT` env var, default 500. Both added to `known-env-vars.generated.ts`. Tests: 6/6 in `tests/providers/free-tier-quota-shadow.test.ts`. PR #766 opened; SAFE-CLASS (additive, shadow-inert, tested, no flag flipped, no prod path changed) → `gh pr merge 766 --auto --squash` armed.
+Built `src/providers/free-tier-quota-shadow.ts` (new, 80 lines): `shadowFreeTierQuota()` calls `getFreeProviderCallsToday(provider)` and `evaluateFreeTierQuota(...)` with the configurable cap, logs `free_quota_hit` events when the call WOULD have been blocked, and is completely async (`void ...catch(...)`). Wired into `router.ts` after `return result`. Gate: `FREE_TIER_QUOTA_SHADOW_ENABLED` env var, default off. `FREE_TIER_DAILY_CAP_DEFAULT` env var, default 500. Both added to `known-env-vars.generated.ts`. Tests: 6/6 in `tests/providers/free-tier-quota-shadow.test.ts`. Feature PR opened this beat (number below — this ledger PR is #766); SAFE-CLASS (additive, shadow-inert, tested, no flag flipped, no prod path changed) → auto-merge armed.
 
 **Mistakes:** None this beat. Item 9 decisions (b)/(c) made autonomously — conservative defaults, shadow-only, no prod impact.
 
@@ -6563,7 +6563,7 @@ Built `src/providers/free-tier-quota-shadow.ts` (new, 80 lines): `shadowFreeTier
 1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
 2. **#739** — per-event scaled reward cap, needs your "ready" signal.
 3. **#749** — delta reject bound, awaiting your clearance.
-4. **#766** — Item 9 free-tier quota shadow, SAFE-CLASS, armed `--auto --squash`; `FREE_TIER_QUOTA_SHADOW_ENABLED` is off by default — no prod behavior changes until you set it.
+4. **Item 9 quota shadow PR** (SAFE-CLASS, armed `--auto --squash`; `FREE_TIER_QUOTA_SHADOW_ENABLED` is off by default — no prod behavior changes until you set it).
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 6. **Item 9(b)/(c) defaults made this beat** — cap=500/24h per provider, signal=`free_quota_hit`. Adjust via env vars if different values preferred.
 
