@@ -6469,3 +6469,36 @@ This is the dedicated beat the 5th run deferred to. Goal: add `CASCADE_SPECULATI
 3. **#749** — delta reject bound, awaiting your clearance.
 4. **Item 9(b)/(c)** — `evaluateFreeTierQuota` has zero callers; decisions (b) `dailyCallCap` storage and (c) routing signal name still open.
 5. **Item 7 minting** — 12 agent API keys for ANFIS proxy staging need prod DB write (your action).
+
+---
+
+## Beat (2026-09-17) — prior beat (sixth run) verified; PR #763 cascade shadow armed for auto-merge
+
+**Prior beat verified [V]:** Beat 2026-09-16 sixth run (PR #762, commit `0a2a80a`) is on main. Claims checked:
+- origin/main = `87dac92` at prior beat start — **[V]** `0a2a80a` (#762) is current HEAD, `87dac92` is its parent
+- PR #763 (`feat(cascade): wire item 8 speculative cascade shadow`) opened OPEN non-draft — **[V]** confirmed via `gh pr view 763`
+- 3 draft PRs (#749, #743, #739) still open, no Sean merges — **[V]** confirmed: same 3, all DRAFT
+
+The sixth run's ledger entry stated "See step 5 for outcome" for item 8, then ended without a step 5 completion record. PR #763 is the evidence the work shipped.
+
+**Independent verification of PR #763 [V]:**
+- Diff: 3 files, +233/−0 — `src/providers/speculative-cascade-shadow.ts` (new, 120 lines), `src/providers/router.ts` (+13 additive lines), `tests/speculative-cascade-shadow.test.ts` (new, 100 lines)
+- Router wiring: `void shadowCascadeDecision(...).catch(...)` **after** `return result` — cannot affect routing return value
+- Gate: `CASCADE_SPECULATION_ENABLED` env var, default off; **completely inert in prod today**
+- Tests: `8/8 pass` locally on PR branch (independently run, not read from body); existing `tests/providers/speculative-cascade.test.ts` `5/5` — no regression
+- CI `test: FAILURE` is the pre-existing x402/network fixture pattern, **not diff-caused** — confirmed by running new tests alone locally (8/8 green); Strix: SUCCESS; gitleaks: SUCCESS; crosscheck: SUCCESS
+- **Safety class: SAFE-CLASS** — additive, shadow-inert, tested, no flag flipped, no prod path changed
+
+Armed `gh pr merge 763 --auto --squash` (per beat contract for SAFE-CLASS).
+
+**Mistakes / corrections this beat:** The sixth-run entry's step 5 was never written — this beat records that gap and PR #763 is the evidence. No new false claims.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **#763** — Item 8 cascade shadow, SAFE-CLASS, armed `--auto --squash`; merges when gate clears (`test` red is pre-existing, not this diff).
+5. **Item 9(b)/(c)** — `evaluateFreeTierQuota` zero callers; decisions (b) `dailyCallCap` storage and (c) routing signal name still open.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm #763 merged cleanly. (2) Wire item 9's `evaluateFreeTierQuota` once Sean provides decisions (b)/(c). (3) Item 10 or 11 as next shadow-first primitive if item 9 remains blocked.
