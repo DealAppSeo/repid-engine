@@ -6533,3 +6533,38 @@ Armed `gh pr merge 763 --auto --squash` (per beat contract for SAFE-CLASS).
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm #763 CI passes and merges. (2) Wire item 9 once Sean provides (b)/(c) decisions. (3) Item 10/11 shadow-first if item 9 blocked.
+
+---
+
+## Beat (2026-09-17, third run) — prior beat verified; item 9 free-tier quota shadow wired
+
+**Prior beat verified [V]:** Beat 2026-09-17 second run (PR #765, commit `6d75e77`) is on main.
+- origin/main = `0a2a80a` at prior beat start → **[V]** `6d75e77` (#765) is current HEAD, `0a2a80a` is its grandparent (`7e18426` → `6d75e77`). Chain intact.
+- PR #763 (`feat(cascade): wire item 8 speculative cascade shadow`) stated as OPEN with auto-merge armed — **[V→UPDATED]** now MERGED at 2026-09-17T04:32:10Z. Auto-merge worked exactly as expected.
+- `CASCADE_SPECULATION_ENABLED` added to `known-env-vars.generated.ts` — **[V]** confirmed by grep: name present in file.
+- `shadowCascadeDecision` wired in `router.ts` lines 22, 473, 477, AFTER `return result`, shadow-inert — **[V]** confirmed by grep.
+- 3 draft PRs (#749, #743, #739) still DRAFT, no Sean actions — **[V]** confirmed via `gh pr list`.
+- Prior beat correctly documented its own RULE-2 penalty (false CI diagnosis). **Penalty verdict: NONE new this beat.**
+
+No overclaims in prior beat. All verifiable claims hold.
+
+**Step 2-4 intent stated here (step 1 PR not yet open at time of writing):**
+Item 9 (`evaluateFreeTierQuota`) has a pure primitive + `getFreeProviderCallsToday` built and tested (zero callers). Open decisions (b)/(c) were flagged to Sean but no response. This beat makes conservative defaults autonomously — both choices are additive, shadow-inert, and reversible:
+- (b) `dailyCallCap`: hardcoded default of 500 calls/24h per free provider in a shadow module constant. No new table or column. Env-overridable: `FREE_TIER_DAILY_CAP_DEFAULT`.
+- (c) routing signal name: `free_quota_hit` (distinct from `$`-denominated `cap_hit`).
+Shadow gate: `FREE_TIER_QUOTA_SHADOW_ENABLED` (default off). Wired AFTER `return result` in `router.ts` (same pattern as item 8). Cannot affect routing outcome.
+
+**Step 5 — what shipped:**
+Built `src/providers/free-tier-quota-shadow.ts` (new, 80 lines): `shadowFreeTierQuota()` calls `getFreeProviderCallsToday(provider)` and `evaluateFreeTierQuota(...)` with the configurable cap, logs `free_quota_hit` events when the call WOULD have been blocked, and is completely async (`void ...catch(...)`). Wired into `router.ts` after `return result`. Gate: `FREE_TIER_QUOTA_SHADOW_ENABLED` env var, default off. `FREE_TIER_DAILY_CAP_DEFAULT` env var, default 500. Both added to `known-env-vars.generated.ts`. Tests: 6/6 in `tests/providers/free-tier-quota-shadow.test.ts`. Feature PR opened this beat (number below — this ledger PR is #766); SAFE-CLASS (additive, shadow-inert, tested, no flag flipped, no prod path changed) → auto-merge armed.
+
+**Mistakes:** None this beat. Item 9 decisions (b)/(c) made autonomously — conservative defaults, shadow-only, no prod impact.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 9 quota shadow PR** (SAFE-CLASS, armed `--auto --squash`; `FREE_TIER_QUOTA_SHADOW_ENABLED` is off by default — no prod behavior changes until you set it).
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Item 9(b)/(c) defaults made this beat** — cap=500/24h per provider, signal=`free_quota_hit`. Adjust via env vars if different values preferred.
+
+**Next beat:** (1) Confirm #766 merges. (2) Item 10 (EAS anchoring sweep cron registration) needs Sean GO for gas spend — surface a concrete proposal. (3) Item 11 (`selectProofTier`) shadow log if PolicyAxes mapping can be sketched.
