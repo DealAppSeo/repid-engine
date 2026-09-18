@@ -5,8 +5,11 @@
  *   MEASURED 2026-09-09: 26 files → 25 after src/selfhost.ts retired 2026-09-09 (it named a
  *                        provider host only as an ILLUSTRATIVE arg to classifyEgress — no fetch,
  *                        no bearer — so it was never an egress callsite; see that commit).
- *   TARGET:              CALLSITES -> 0
- *   ADAPTERS / PROBES / NOISE: allowed to stay
+ *   MEASURED 2026-09-18: CALLSITES 12 → 4. Type-A constants/comments/defaults moved to
+ *                        src/egress/provider-hosts.ts (REGISTRY). Type-B files that
+ *                        fetch() a host literal stay on CALLSITES (wrap-judge, not this slice).
+ *   TARGET:              CALLSITES -> 0  (not this PR — live fetch literals remain)
+ *   ADAPTERS / PROBES / NOISE / REGISTRY: allowed to stay
  *
  * WHY THIS EXISTS. `LOCAL_LLM_BASE_URL` reads like an egress control — set it and every
  * openai-compat provider in the fact-check quorum is redirected. It is not one.
@@ -18,7 +21,7 @@
  * Prose describing a boundary decays, and it decays toward reassurance. A count that fails
  * the build does not.
  *
- * ── FOUR ROLES, because "may know a hostname" and "may present a bearer" are different
+ * ── FIVE ROLES, because "may know a hostname" and "may present a bearer" are different
  * permissions and one flat list cannot express that. Roles were MEASURED, not assumed:
  *
  *   ADAPTER   src/providers/* — naming its own host IS the job. Expected to stay.
@@ -27,8 +30,12 @@
  *   NOISE     the host appears only in a COMMENT. `config.ts:24` and `local-llm.ts:7` are
  *             prose about the redirect, not calls. The hostname matcher is a superset and
  *             this is where that shows.
+ *   REGISTRY  src/egress/provider-hosts.ts — naming every provider host IS the job.
+ *             Callsites import from here so they stop matching. Allowed to stay.
  *   CALLSITE  everything else: business logic that reached for a provider directly.
- *             THIS IS THE SHRINK LIST. Every entry removed is the win.
+ *             THIS IS THE SHRINK LIST. Type-A (constant/comment/default) entries drop
+ *             off by importing the registry. Type-B (fetch/new OpenAI with a host
+ *             literal) stay until the wrap-judge slice.
  *
  * ── THE DESIGN BUG THIS FIXES. The first version of this guard failed whenever ANY listed
  * file stopped matching, calling it "list rot". That punishes the exact outcome the guard
@@ -99,23 +106,21 @@ const PROBES: readonly string[] = ['src/services/provider-key-probe.ts'];
 const NOISE: readonly string[] = ['src/config.ts', 'src/hal/local-llm.ts'];
 
 /**
+ * Naming every provider host is the entire purpose of the file. Expected to stay.
+ * Callsites import from here so they stop matching the hostname grep.
+ */
+const REGISTRY: readonly string[] = ['src/egress/provider-hosts.ts'];
+
+/**
  * THE SHRINK LIST. Business logic that reached for a provider directly.
- * Removing an entry — because the file now goes through the registry or the future
- * chokepoint — is the intended motion, and must LOWER `CALLSITE_CEILING` in the same commit.
+ * Type-A entries (HAL cluster defaults + validation-repid-delta) retired 2026-09-18
+ * by importing the registry. Type-B live fetch() literals stay until wrap-judge.
  */
 const CALLSITES: readonly string[] = [
   'src/engine/badges.ts',
-  'src/hal/classifier.ts',
   'src/hal/completeness.ts',
-  'src/hal/crag.ts',
-  'src/hal/cross-llm-client.ts',
-  'src/hal/fact-check.ts',
-  'src/hal/lib/clients/embedding.ts',
-  'src/hal/lib/cross-llm/embedding-client.ts',
-  'src/hal/lib/cross-llm/index.ts',
   'src/services/adversarial-judge.ts',
   'src/services/pcp-validator.ts',
-  'src/services/validation-repid-delta.ts',
 ];
 
 /**
@@ -123,9 +128,9 @@ const CALLSITES: readonly string[] = [
  * Raising it means a new direct caller was admitted, which is the thing this file exists
  * to refuse — take that to review as a decision, not as a test edit.
  */
-const CALLSITE_CEILING = 12;
+const CALLSITE_CEILING = 4;
 
-const BASELINE: readonly string[] = [...ADAPTERS, ...PROBES, ...NOISE, ...CALLSITES];
+const BASELINE: readonly string[] = [...ADAPTERS, ...PROBES, ...NOISE, ...REGISTRY, ...CALLSITES];
 const MAY_DISAPPEAR_QUIETLY = new Set(CALLSITES);
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -164,7 +169,7 @@ describe('provider egress surface is pinned and shrinking, not described', () =>
     expect(CALLSITES.length).toBeLessThanOrEqual(CALLSITE_CEILING);
   });
 
-  it('an ADAPTER / PROBE / NOISE entry that stops matching is rot — it moved or was deleted', () => {
+  it('an ADAPTER / PROBE / NOISE / REGISTRY entry that stops matching is rot — it moved or was deleted', () => {
     const gone = BASELINE.filter((f) => !measured.includes(f) && !MAY_DISAPPEAR_QUIETLY.has(f));
     expect(gone).toEqual([]);
   });
@@ -180,12 +185,28 @@ describe('provider egress surface is pinned and shrinking, not described', () =>
   it('the roles partition the surface with nothing double-counted', () => {
     expect(BASELINE.length).toBe(new Set(BASELINE).size);
     expect(measured.length).toBe(BASELINE.length);
-    expect(ADAPTERS.length + PROBES.length + NOISE.length + CALLSITES.length).toBe(25);
+    expect(
+      ADAPTERS.length + PROBES.length + NOISE.length + REGISTRY.length + CALLSITES.length,
+    ).toBe(18);
   });
 
   it('the judge is a CALLSITE, which is the finding that motivated this guard', () => {
     expect(CALLSITES).toContain('src/services/adversarial-judge.ts');
     expect(measured).toContain('src/services/adversarial-judge.ts');
+  });
+
+  it('the registry still names the six hosts that made the judge a callsite', () => {
+    const registry = fs.readFileSync(path.join(REPO, 'src/egress/provider-hosts.ts'), 'utf8');
+    for (const host of [
+      'api.anthropic.com',
+      'api.groq.com',
+      'api.openai.com',
+      'generativelanguage.googleapis.com',
+      'api.deepseek.com',
+      'api.cerebras.ai',
+    ]) {
+      expect(registry).toContain(host);
+    }
   });
 
   it('the matcher matches — non-vacuity of the detector itself', () => {

@@ -9,6 +9,7 @@
  * in explicitly.
  */
 import type { HALEmbeddingClient } from '../types';
+import { PROVIDER_URLS } from '../../../egress/provider-hosts';
 
 /* ---------------- xenova (local, no network, no key) ---------------- */
 
@@ -76,7 +77,7 @@ export function buildOpenAIEmbeddingClient(
     throw new Error('buildOpenAIEmbeddingClient: apiKey is required');
   }
   const model = options.model ?? 'text-embedding-3-small';
-  const endpoint = options.endpoint ?? 'https://api.openai.com/v1/embeddings';
+  const endpoint = options.endpoint ?? PROVIDER_URLS.openaiEmbeddings;
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   async function callEmbed(input: string | string[]): Promise<number[][]> {

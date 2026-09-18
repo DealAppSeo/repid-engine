@@ -27,6 +27,7 @@ import crypto from 'crypto';
 // to a local server; ONLY_ATTESTATIONS_LEAVE refuses any remaining cloud prompt egress. Both are
 // default-OFF: unset → hosted behavior byte-identical.
 import { resolveProviderEndpoint } from './local-llm';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
 import { gateOpenRouterModel, halAllowPaid } from './hal-free-gate';
 import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 // CROSS-FIX 2026-07-05 — hardened registry-family lookup (single source of family truth). resolveFamily
@@ -1814,7 +1815,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // green build here as NOT_CHECKED on these two strings.
   const g = process.env.GROQ_API_KEY?.trim();
   if (g && enabled.groq) {
-    add({ name: 'groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: g }, 'HAL_S2_GROQ_MODEL', 'openai/gpt-oss-20b');
+    add({ name: 'groq', endpoint: PROVIDER_URLS.groqChatCompletions, apiKey: g }, 'HAL_S2_GROQ_MODEL', 'openai/gpt-oss-20b');
   }
   // CEREBRAS HAS NO DEFAULT MODEL, deliberately — see cerebrasDeadModelSkip(). The replacement
   // named in the NOT_CHECKED caveat above never worked: the ledger says every call it made
@@ -1831,12 +1832,12 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // R6/2026-06-04 — fireworks DROPPED from the quorum (account suspended 2026-06-04 → 100% fail, ~31%
   // of calls wasted). Opt-in only (default OFF); never auto-backfilled. Reversible: flip the flag.
   const f = process.env.FIREWORKS_API_KEY?.trim();
-  if (f && enabled.fireworks) out.push({ name: 'fireworks', endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions', apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
+  if (f && enabled.fireworks) out.push({ name: 'fireworks', endpoint: PROVIDER_URLS.fireworksChatCompletions, apiKey: f, model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5' });
   // R4 — DeepSeek (cheap paid) is the most reliable quorum anchor so a >= 2-family quorum forms even
   // when the free tiers (groq/cerebras) throttle under prod burst. Cheapest backfill member → first.
   const d = process.env.DEEPSEEK_API_KEY?.trim();
   if (d && (enabled.deepseek || ab)) {
-    add({ name: 'deepseek', endpoint: 'https://api.deepseek.com/chat/completions', apiKey: d, family: 'deepseek' }, 'HAL_S2_DEEPSEEK_MODEL', 'deepseek-chat');
+    add({ name: 'deepseek', endpoint: PROVIDER_URLS.deepseekChatCompletions, apiKey: d, family: 'deepseek' }, 'HAL_S2_DEEPSEEK_MODEL', 'deepseek-chat');
   }
   // R5 — additional independent families so >= 2 families assemble even when groq/cerebras throttle.
   // Auto-backfilled when their key is present (HAL_QUORUM_AUTOBACKFILL); else opt-in per enable flag.
@@ -1896,7 +1897,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
         );
       }
       add(
-        { name: 'gemini', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orForGemini!, family: 'gemini' },
+        { name: 'gemini', endpoint: PROVIDER_URLS.openrouterChatCompletions, apiKey: orForGemini!, family: 'gemini' },
         overrideIsOpenRouterSlug ? 'HAL_S2_GEMINI_MODEL' : '__unset__',
         'google/gemini-3.5-flash',
         'openrouter', // the HOST — its slugs, not Google's. See resolveModelFor.
@@ -1920,7 +1921,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
       // them and turns every comparison into a measurement without its ruler
       // (CLAUDE_RULES 24). Bump it explicitly when re-measuring.
       add(
-        { name: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey: gm, family: 'gemini' },
+        { name: 'gemini', endpoint: PROVIDER_URLS.geminiOpenAiCompatChatCompletions, apiKey: gm, family: 'gemini' },
         overrideIsOpenRouterSlug ? '__unset__' : 'HAL_S2_GEMINI_MODEL',
         'gemini-2.5-flash',
       );
@@ -1928,7 +1929,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
   if (ms && (enabled.mistral || ab)) {
-    add({ name: 'mistral', endpoint: 'https://api.mistral.ai/v1/chat/completions', apiKey: ms, family: 'mistral' }, 'HAL_S2_MISTRAL_MODEL', 'mistral-small-latest');
+    add({ name: 'mistral', endpoint: PROVIDER_URLS.mistralChatCompletions, apiKey: ms, family: 'mistral' }, 'HAL_S2_MISTRAL_MODEL', 'mistral-small-latest');
   }
   // Z.AI DIRECT — the `glm` family bought from the vendor instead of a reseller.
   //
@@ -1952,10 +1953,10 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // forces it on and HAL_QUORUM_AUTOBACKFILL=false restores pure per-provider gating.
   const z = process.env.ZAI_API_KEY?.trim();
   if (z && (enabled.zai || ab)) {
-    add({ name: 'zai', endpoint: 'https://api.z.ai/api/paas/v4/chat/completions', apiKey: z, family: 'glm' }, 'HAL_S2_ZAI_MODEL', 'glm-4.5-flash');
+    add({ name: 'zai', endpoint: PROVIDER_URLS.zaiChatCompletions, apiKey: z, family: 'glm' }, 'HAL_S2_ZAI_MODEL', 'glm-4.5-flash');
   }
-  // NVIDIA NIM — the `nvidia` (Nemotron) family bought DIRECT from NVIDIA's hosted gateway
-  // (integrate.api.nvidia.com), OpenAI-compatible so no dialect is needed. Reads NVIDIA_NIM_API_KEY.
+  // NVIDIA NIM — the `nvidia` (Nemotron) family bought DIRECT from NVIDIA's hosted gateway,
+  // OpenAI-compatible so no dialect is needed. Reads NVIDIA_NIM_API_KEY.
   //
   // OPT-IN ONLY, and deliberately NOT auto-backfilled (`enabled.nvidiaNim` with no `|| ab`): a key
   // appearing in env must NOT silently add a voice to the load-bearing quorum before its effect on
@@ -1992,7 +1993,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const nim = (process.env.NVIDIA_NIM_API_KEY ?? process.env.NIM_API_KEY)?.trim();
   if (nim && enabled.nvidiaNim) {
     add(
-      { name: 'nvidia-nim', endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', apiKey: nim, family: 'nvidia', tier: 'escalation' },
+      { name: 'nvidia-nim', endpoint: PROVIDER_URLS.nvidiaNimChatCompletions, apiKey: nim, family: 'nvidia', tier: 'escalation' },
       'HAL_S2_NVIDIA_NIM_MODEL',
       'nvidia/nemotron-4-340b-instruct',
     );
@@ -2024,7 +2025,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
       allowPaid: halAllowPaid(),
     });
     if (orGate.ignoreOperatorModel) console.warn(`[hal] free-tier gate: ${orGate.reason}`);
-    add({ name: 'openrouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', orGate.staticDefault, 'openrouter', orGate.ignoreOperatorModel);
+    add({ name: 'openrouter', endpoint: PROVIDER_URLS.openrouterChatCompletions, apiKey: or }, 'HAL_S2_OPENROUTER_MODEL', orGate.staticDefault, 'openrouter', orGate.ignoreOperatorModel);
 
     // ── CONSOLIDATION SLOTS ────────────────────────────────────────────────────────────
     // One gateway can carry several families, which is the whole point of consolidating:
@@ -2045,7 +2046,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     const slots = Math.min(Math.max(Number(process.env.HAL_S2_OPENROUTER_SLOTS) || 1, 1), 6);
     for (let i = 2; i <= slots; i++) {
       add(
-        { name: `openrouter-${i}`, endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: or },
+        { name: `openrouter-${i}`, endpoint: PROVIDER_URLS.openrouterChatCompletions, apiKey: or },
         `HAL_S2_OPENROUTER_MODEL_${i}`,
         undefined,
         'openrouter',
@@ -2103,7 +2104,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   if (c && enabled.cerebras) {
     const pinUnusable = !!cerebrasDeadModelSkip();
     add(
-      { name: 'cerebras', endpoint: 'https://api.cerebras.ai/v1/chat/completions', apiKey: c },
+      { name: 'cerebras', endpoint: PROVIDER_URLS.cerebrasChatCompletions, apiKey: c },
       'HAL_S2_CEREBRAS_MODEL',
       pinUnusable ? undefined : cerebrasModel,
       'cerebras',
@@ -2162,7 +2163,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     add(
       {
         name: 'anthropic',
-        endpoint: process.env.HAL_S2_ANTHROPIC_ENDPOINT ?? 'https://api.anthropic.com/v1/messages',
+        endpoint: process.env.HAL_S2_ANTHROPIC_ENDPOINT ?? PROVIDER_URLS.anthropicMessages,
         apiKey: an,
         family: 'anthropic',
         dialect: 'anthropic',
@@ -2176,7 +2177,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // qwen stays opt-in (endpoint region varies per key) — NOT auto-backfilled.
   const qw = (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY)?.trim();
   if (qw && enabled.qwen) {
-    out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
+    out.push({ name: 'qwen', endpoint: process.env.HAL_S2_QWEN_ENDPOINT ?? PROVIDER_URLS.qwenDashscopeChatCompletions, apiKey: qw, model: process.env.HAL_S2_QWEN_MODEL ?? 'qwen-plus', family: 'qwen' });
   }
   // FRONTIER PANEL (opt-in, HAL_S2_ENABLE_FRONTIER, default OFF → prod unchanged). Adds STRONG models
   // as standing quorum members — the panel's ceiling is set by its members, and the free 8B panel's
@@ -2188,7 +2189,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const orFront = process.env.OPENROUTER_API_KEY?.trim();
   const frontierOn = process.env.HAL_S2_ENABLE_FRONTIER === 'true';
   if (orFront && frontierOn) {
-    out.push({ name: 'or-gpt', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_OPENAI_MODEL ?? 'openai/gpt-4o', family: 'openai', tier: 'escalation' });
+    out.push({ name: 'or-gpt', endpoint: PROVIDER_URLS.openrouterChatCompletions, apiKey: orFront, model: process.env.HAL_S2_FRONTIER_OPENAI_MODEL ?? 'openai/gpt-4o', family: 'openai', tier: 'escalation' });
     // PREFER THE DIRECT ACCOUNT OVER THE AGGREGATOR FOR THE SAME FAMILY. `or-claude` declares
     // family 'anthropic', and so does the direct member added above — with both present they are
     // ONE vote, not two, and `assertFamilyIndependenceAtBoot` would (correctly) log a violation
@@ -2197,7 +2198,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     // OpenRouter's shared one. Same reasoning as gemini-direct above. If the direct key is absent,
     // or-claude is added exactly as before.
     if (!out.some((p) => p.family === 'anthropic')) {
-      out.push({ name: 'or-claude', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
+      out.push({ name: 'or-claude', endpoint: PROVIDER_URLS.openrouterChatCompletions, apiKey: orFront, model: process.env.HAL_S2_FRONTIER_ANTHROPIC_MODEL ?? 'anthropic/claude-sonnet-4', family: 'anthropic', tier: 'escalation' });
     }
   }
   // FREE FRONTIER MEMBER (opt-in, HAL_S2_ENABLE_FRONTIER_FREE, default OFF → prod unchanged).
@@ -2223,7 +2224,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // A run where this voter 429s measures NOTHING about quality — check its vote count before reading
   // any F1 delta, per CLAUDE_RULES 24 (a dead provider is a provider failure, not a regression).
   if (orFront && process.env.HAL_S2_ENABLE_FRONTIER_FREE === 'true') {
-    out.push({ name: 'or-nemotron', endpoint: 'https://openrouter.ai/api/v1/chat/completions', apiKey: orFront, model: process.env.HAL_S2_FRONTIER_FREE_MODEL ?? 'nvidia/nemotron-3-ultra-550b-a55b:free', family: 'nvidia', tier: 'escalation' });
+    out.push({ name: 'or-nemotron', endpoint: PROVIDER_URLS.openrouterChatCompletions, apiKey: orFront, model: process.env.HAL_S2_FRONTIER_FREE_MODEL ?? 'nvidia/nemotron-3-ultra-550b-a55b:free', family: 'nvidia', tier: 'escalation' });
   }
   // DATA-LOCALITY: when LOCAL_LLM_BASE_URL (or OPENAI_BASE_URL) is set, redirect every openai-compat
   // fact-check provider to the local base (Ollama/vLLM/LiteLLM can host several model names on one

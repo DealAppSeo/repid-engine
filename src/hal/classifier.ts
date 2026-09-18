@@ -18,6 +18,7 @@ import { db } from '../db';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import { strictModeOrFallback } from './lib/strict-mode';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 export type Category =
   | 'factual'
@@ -65,7 +66,7 @@ Rules: time-sensitive overrides factual when temporal markers present. Math over
 Confidence: high=unambiguous, medium=fits two, low=malformed.`;
 
 const DEFAULT_MODEL = 'openai/gpt-oss-20b';
-const DEFAULT_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
+const DEFAULT_ENDPOINT = PROVIDER_URLS.groqChatCompletions;
 const DEFAULT_TIMEOUT_MS = 5000;
 
 function hashPrompt(prompt: string): string {
