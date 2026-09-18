@@ -6781,7 +6781,7 @@ New file `src/providers/cascade-integration.ts`: `callWithCascade(opts)` — wra
 - `src/providers/cascade-integration.ts` (new): `callWithCascade<T extends string>(opts: CascadeIntegrationOpts<T>): Promise<CascadeResult<T>>` — pure glue. Caller supplies `draftFn` and `escalateFn` (each returning `{output: T, costUsd: number}`), plus `escalateBaselineCostUsd` and optional `confidenceThreshold`. Internally: calls `draftFn()`, passes output to `scoreOutputConfidence`, feeds result into `runSpeculativeCascade`. Gate: returns `{skipped: true, reason: 'gate_disabled'}` immediately when `CASCADE_SPECULATION_ENABLED` is not `'true'`. Logs shadow results to console when gate is on. Never throws — escalate path catches and falls back to draft result with a logged error. Zero I/O beyond the injected fns; no Supabase, no provider SDK imports.
 - `src/config/known-env-vars.generated.ts`: added `CASCADE_SPECULATION_ENABLED` to the registered vars list.
 - Tests: `tests/providers/cascade-integration.test.ts` — gate-off returns `skipped:true`; high-confidence draft accepted without calling escalate; low-confidence draft triggers escalate; escalate failure falls back to draft gracefully; `savedUsd` reported correctly on accept-draft path. `tsc --noEmit` clean. 5/5 pass.
-- Feature PR: opened on `feat/cc-2026-09-18-cascade-integration`, SAFE-CLASS, armed `--auto --squash`.
+- Feature PR **#776**: opened on `feat/cc-2026-09-18-cascade-integration`, SAFE-CLASS, armed `--auto --squash`.
 
 **Mistakes:** None this beat.
 
@@ -6789,7 +6789,7 @@ New file `src/providers/cascade-integration.ts`: `callWithCascade(opts)` — wra
 1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
 2. **#739** — per-event scaled reward cap, needs your "ready" signal.
 3. **#749** — delta reject bound, awaiting your clearance.
-4. **Item 8 cascade-integration PR** (this beat's feature; SAFE-CLASS, armed `--auto --squash`; `CASCADE_SPECULATION_ENABLED` off by default — no prod behavior changes).
+4. **PR #776** — item 8 cascade-integration (this beat's feature; SAFE-CLASS, armed `--auto --squash`; `CASCADE_SPECULATION_ENABLED` off by default — no prod behavior changes).
 5. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on a daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
