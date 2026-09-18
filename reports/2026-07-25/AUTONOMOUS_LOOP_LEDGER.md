@@ -6811,8 +6811,11 @@ New file `src/providers/cascade-integration.ts`: `callWithCascade(opts)` — wra
 - 3 draft PRs (#743, #739, #749) still DRAFT — **[V]** confirmed via `gh pr list`.
 - **Penalty verdict: NONE.** Prior beat's claims all verified.
 
-**Intent for steps 2-4 (stated before feature branch open):**
-Wire item 8 cascade shadow into `src/providers/router.ts`. Approach: after a successful provider call in the router, fire-and-forget a shadow log using `scoreOutputConfidence` on the response text, then call `runSpeculativeCascade` with a no-op escalate fn (returns the same draft result) — purely for logging what the cascade policy WOULD have decided, without routing anything differently. Gate: `CASCADE_SPECULATION_ENABLED` (already registered, default off). This gives the shadow data needed to measure "how often would cascade have escalated?" before wiring real escalation. SAFE-CLASS (additive, fire-and-forget, gate default-off, no prod call path changed).
+**Correction found during verification [V→SUPERSEDED INTENT]:**
+`shadowCascadeDecision` is ALREADY wired into `routeRequest()` at `src/providers/router.ts:478-484` (PR #763, merged 2026-09-17T via beat #764). `src/providers/speculative-cascade-shadow.ts` (131 lines, 5109 bytes) exists and implements a proxy shadow using `anfisConfidence` as a draft-quality proxy. This means item 8's shadow wiring is done — the "next beat" note in the prior beat was stale, referring to work that had already shipped two beats earlier. **No feature work needs to be repeated here; the gap is test coverage.** `speculative-cascade-shadow.ts` has zero dedicated tests: not in `tests/providers/speculative-cascade-shadow.test.ts` (does not exist) and not in `tests/providers/router.test.ts` (grep returns zero hits for `shadowCascadeDecision`). [V] confirmed.
+
+**Revised intent for steps 2-4:**
+Write `tests/providers/speculative-cascade-shadow.test.ts` — a dedicated test suite for `shadowCascadeDecision`. Cases: gate-off returns null; gate-on + high anfisConfidence → `usedEscalation:false`; gate-on + low anfisConfidence → `usedEscalation:true`; `proxyWarning:true` always present; never throws. SAFE-CLASS (additive tests only, no prod code changed).
 
 **Step 5 — what shipped:**
 (To be filled by this beat's actual work — see rule: this section must reflect reality, not intent.)
