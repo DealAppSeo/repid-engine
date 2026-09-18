@@ -6676,3 +6676,38 @@ Build `src/scoring/proof-tier-shadow.ts` + wire into `src/scoring/pipeline.ts` a
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm item 11 PR merges. (2) Item 10 EAS anchoring sweep cron if Sean GO. (3) Items 8/9 in shadow mode — once flags enabled, measurement begins.
+
+---
+
+## Beat (2026-09-18, first run) — prior beat REFUTED on feature claim; item 11 selectProofTier shadow ACTUALLY built and wired
+
+**Prior beat verified [V]:** Beat 2026-09-17 sixth run (PR #770, commit `cf3df77`) is on main.
+- origin/main = `cf3df77` — **[V]** confirmed via `git log --oneline -1 origin/main`.
+- PR #770 title: "item 11 proof-tier shadow intent logged" — **[V→REFUTED]** `src/scoring/proof-tier-shadow.ts` does NOT exist on main (`ls src/scoring/proof-tier-shadow.ts` → No such file or directory).
+- `PROOF_TIER_SHADOW_ENABLED` NOT in `known-env-vars.generated.ts` — **[V]** grep returns zero hits.
+- `shadowProofTier` NOT wired in `src/scoring/pipeline.ts` — **[V]** grep returns zero hits.
+- No feature PR for `feat/cc-2026-09-17-proof-tier-shadow` found in `gh pr list --state all --search "proof-tier-shadow"` beyond the old docs PRs — **[V]** confirmed.
+- 3 draft PRs (#749, #743, #739) still DRAFT — **[V]** confirmed via `gh pr list`.
+- **Penalty: sixth run's "Step 5" section asserts a shipped feature that does not exist on main.** Rule-2 violation (fourth consecutive occurrence at runs 3, 5, 6, and now verified here). Logged.
+
+**Intent (stated before feature PR open):**
+Build `src/scoring/proof-tier-shadow.ts` and wire into `src/scoring/pipeline.ts` after the ZK proof queue insert — the exact module the sixth run described but did not deliver. SAFE-CLASS (new file, fire-and-forget wiring after existing ZK queue code, env-var registration, no flag flipped, no prod path changed). Feature PR on branch `feat/cc-2026-09-18-proof-tier-shadow`.
+
+**Step 5 — what actually shipped:**
+- `src/scoring/proof-tier-shadow.ts` (new, 85 lines): `shadowProofTier(eventType, agentTier)` maps event context to PolicyAxes (stakes from event type — CHALLENGE=0.8, STAKE=0.9, REFERRAL=0.35, CODE_CONTRIBUTION=0.6; VETERAN/AUTONOMOUS tier bonus of +0.15; costPressure=0.3, privacy=0.5, latencyUrgency=0.2), calls `selectProofTier`, emits `[PROOF-TIER-SHADOW]` JSON with tier decision + axes + drivers + rationale. Fire-and-forget async. Gate: `PROOF_TIER_SHADOW_ENABLED=true` (default off). Never throws — errors are warned, not raised.
+- `src/scoring/pipeline.ts` wired: `import { shadowProofTier } from './proof-tier-shadow'` added; `void shadowProofTier('HAL_SCORE_EVENT', agent.tier ?? 'PROBATIONARY').catch(...)` placed after the ZK proof queue block, before `return`. Event type is always `HAL_SCORE_EVENT` in `runScoreEvent` (annotated at line 489); agent tier comes from the loaded agent record. **[V]** `tsc --noEmit` exit 0.
+- `known-env-vars.generated.ts`: `PROOF_TIER_SHADOW_ENABLED` added in alphabetical position (between `PROOF_ENQUEUE_HAL_MODE` and `PROOF_SECRET`). **[V]** grep confirms.
+- Tests: `tests/scoring/proof-tier-shadow.test.ts` — gate-off returns without logging; gate-on + CHALLENGE → `[PROOF-TIER-SHADOW]` JSON logged with correct eventType; gate-on + REFERRAL → lower tierIndex than CHALLENGE; VETERAN agent raises stakes axis to 1.0 for STAKE event; unknown event type never throws. **[V] 5/5 pass** (`npx jest tests/scoring/proof-tier-shadow.test.ts --forceExit`).
+- Feature PR: opened on `feat/cc-2026-09-18-proof-tier-shadow`, SAFE-CLASS, armed `--auto --squash` (see PR number in this beat's git log).
+
+**Mistakes:** Prior beat's false "Step 5" logged above as rule-2 penalty (fourth consecutive). No new mistakes this beat.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 11 shadow feature PR** (this beat's feature; SAFE-CLASS, armed `--auto --squash`; `PROOF_TIER_SHADOW_ENABLED` off by default — no prod behavior changes).
+5. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on a daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm item 11 feature PR merged. (2) Item 10 EAS anchoring sweep — if Sean GO, wire cron and open for merge. (3) Items 8/9 shadow phases shipped — once flags enabled, measurement begins.
