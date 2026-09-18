@@ -6711,3 +6711,50 @@ Build `src/scoring/proof-tier-shadow.ts` and wire into `src/scoring/pipeline.ts`
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm item 11 feature PR merged. (2) Item 10 EAS anchoring sweep — if Sean GO, wire cron and open for merge. (3) Items 8/9 shadow phases shipped — once flags enabled, measurement begins.
+
+---
+
+## Beat (2026-09-18, second run) — prior beat VERIFIED clean; item 8 output-confidence scorer primitive built
+
+**Prior beat verified [V]:** Beat 2026-09-18 first run (PR #771 docs + PR #772 feature, commit `b674c30` on main with `6de0396` parent).
+- origin/main = `b674c30` — **[V]** confirmed via `git log --oneline -1 origin/main`.
+- PR #772 MERGED at 2026-09-18T01:04:13Z, title "feat(scoring): wire item 11 selectProofTier shadow into pipeline (PROOF_TIER_SHADOW_ENABLED, default off)" — **[V]** `gh pr view 772 --json state,mergedAt`.
+- `src/scoring/proof-tier-shadow.ts` EXISTS on main (92 lines) — **[V]** `ls -la`. File is 92 lines, not 85 as claimed in prior beat; minor discrepancy, not material.
+- `shadowProofTier` wired in `src/scoring/pipeline.ts` at line 762, fire-and-forget after ZK proof queue block — **[V]** `grep -n shadowProofTier src/scoring/pipeline.ts`.
+- `PROOF_TIER_SHADOW_ENABLED` registered in `src/config/known-env-vars.generated.ts` at line 343 — **[V]** grep confirms. Prior beat cited path `src/hal/known-env-vars.generated.ts` which does not exist; the correct path is `src/config/`. Docs-only imprecision; functionality real.
+- `selectProofTier` called from shadow module — **[V]** `grep -n selectProofTier src/scoring/proof-tier-shadow.ts` → line 73.
+- Tests 5/5 pass — **[V]** `./node_modules/.bin/jest --config jest.config.js --forceExit tests/scoring/proof-tier-shadow.test.ts` → 5/5, 1 suite.
+- 3 draft PRs (#743, #739, #749) still DRAFT — **[V]** confirmed via `gh pr list`.
+- **Penalty verdict: NONE.** Two precision notes: file is 92 lines (not 85), env-var path had wrong directory in docs. Neither changes the substance — module exists, wired, tested, gate default-off.
+
+**Backlog state after item 11 ships:**
+- Items 1-6, 11, 20: DONE ✅
+- Item 7: needs Sean prod DB write (12 agent keys)
+- Item 8: PARTIAL — `runSpeculativeCascade` primitive exists, zero callers; blocker is no post-call output-confidence scorer in this repo
+- Item 9: PARTIAL shadow shipped (`FREE_TIER_QUOTA_SHADOW_ENABLED` off by default)
+- Item 10: PARTIAL — orchestration built; needs Sean GO for gas spend (cron wiring triggers real gas)
+- Items 12+: LATER
+
+**Next actionable without Sean GO: Item 8 — build the output-confidence scorer primitive.**
+The blocker documented in the backlog: no code can supply the `draft()`/`escalate()` contract's required `MEASURED confidence of an actual model output`. `anfisConfidence` in `router.ts` is pre-call routing confidence, not post-call output quality. Building a pure post-call scorer (`scoreOutputConfidence`) is additive, shadow-inert, and unblocks wiring `runSpeculativeCascade` in a future beat. SAFE-CLASS.
+
+**Intent for steps 2-4 (stated before feature PR open):**
+New file `src/providers/output-confidence-scorer.ts`: `scoreOutputConfidence(output, {eventType?, provider?})` — heuristic post-call scorer returning `{confidence: number, factors: string[]}`. Heuristics: response length (very short = low confidence), refusal/uncertainty markers (hedges like "I'm not sure", "I don't know", "cannot confirm" → penalty), factual-claim density (presence of numbers/proper nouns = higher base), self-contradictory phrasing (though short to start). Returns value in [0, 1]. Pure function, no I/O. Gate: always computable; callers gate on their own flags. This gives `runSpeculativeCascade` a real `confidence` input without requiring a live model call from this scorer. SAFE-CLASS.
+
+**Step 5 — what shipped:**
+- `src/providers/output-confidence-scorer.ts` (new): `scoreOutputConfidence(output: string, opts?: {provider?: string, eventType?: string}): OutputConfidenceResult` — pure heuristic scorer, no I/O, deterministic. Factors: `length_penalty` (< 50 chars = 0.3, < 150 = 0.6 floor), `uncertainty_markers` (counts "I'm not sure"/"I don't know"/"cannot confirm"/"I'm unable"/similar → each -0.12, floor 0.1), `factual_density` (digit + uppercase-word ratio → up to +0.1 bonus), `refusal_pattern` (full refusal phrases → confidence 0.05 hard floor). Returns `{confidence: number, factors: Record<string, number>}` with final value clamped to [0.05, 0.95]. Never throws.
+- `src/config/known-env-vars.generated.ts`: no new env vars needed — scorer is always computable, gates live in callers.
+- Tests: `tests/providers/output-confidence-scorer.test.ts` — short response (< 50 chars) → low confidence; uncertainty markers → lower confidence; confident long response → high confidence; refusal pattern → floor 0.05; empty string → handled without throw. `tsc --noEmit` clean.
+- Feature PR: opened on `feat/cc-2026-09-18-output-confidence-scorer`, SAFE-CLASS, armed `--auto --squash`.
+
+**Mistakes:** None this beat.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 8 output-confidence scorer PR** (this beat's feature; SAFE-CLASS, armed `--auto --squash`; pure primitive, zero effect on routing until wired).
+5. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on a daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm output-confidence scorer PR merged. (2) Wire `runSpeculativeCascade` using `scoreOutputConfidence` as the draft/escalate confidence source — closes item 8's "missing measurement facility" blocker. (3) Item 10 EAS cron if Sean GO.
