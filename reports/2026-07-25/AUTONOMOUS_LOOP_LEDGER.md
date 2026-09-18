@@ -6794,3 +6794,40 @@ New file `src/providers/cascade-integration.ts`: `callWithCascade(opts)` — wra
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm cascade-integration PR merged. (2) Wire `callWithCascade` into at least one real call site in `src/hal/` or `src/providers/router.ts` as a shadow-only log (gate off by default). (3) Item 9 free-tier quota decisions (b)/(c) if turns allow.
+
+---
+
+## Beat (2026-09-18, fourth run) — prior beat VERIFIED clean; item 8 cascade shadow wiring into router
+
+**Prior beat verified [V]:** Beat 2026-09-18 third run (PR #775 docs + PR #776 feature, HEAD `7898333` on main).
+- origin/main = `7898333` — **[V]** confirmed via `git log --oneline -1 origin/main`.
+- PR #776 MERGED at 2026-09-18T08:37:58Z, title "feat(providers): item 8 cascade-integration — wire runSpeculativeCascade + scoreOutputConfidence under CASCADE_SPECULATION_ENABLED gate" — **[V]** `gh pr view 776 --json state,mergedAt`.
+- PR #775 MERGED at 2026-09-18T08:38:34Z, title "docs(loop): beat 2026-09-18 third run..." — **[V]** `gh pr view 775 --json state,mergedAt`.
+- `src/providers/cascade-integration.ts` EXISTS on main (4124 bytes) — **[V]** `ls -la`.
+- `CASCADE_SPECULATION_ENABLED` registered at `src/config/known-env-vars.generated.ts` line 76 — **[V]** `grep -n CASCADE_SPECULATION_ENABLED`.
+- `callWithCascade` internally calls `scoreOutputConfidence` (line 60, 68) and `runSpeculativeCascade` (line 79) — **[V]** `grep -n` on file.
+- `callWithCascade` has **zero callers** in `src/` outside its own definition — **[V]** `grep -rn "callWithCascade" src/` returns empty beyond cascade-integration.ts itself.
+- Tests 5/5 pass — **[V]** `./node_modules/.bin/jest --config jest.config.js tests/providers/cascade-integration.test.ts --forceExit` → 5/5, 1 suite.
+- 3 draft PRs (#743, #739, #749) still DRAFT — **[V]** confirmed via `gh pr list`.
+- **Penalty verdict: NONE.** Prior beat's claims all verified.
+
+**Correction found during verification [V→SUPERSEDED INTENT]:**
+`shadowCascadeDecision` is ALREADY wired into `routeRequest()` at `src/providers/router.ts:478-484` (PR #763, merged 2026-09-17T via beat #764). `src/providers/speculative-cascade-shadow.ts` (131 lines, 5109 bytes) exists and implements a proxy shadow using `anfisConfidence` as a draft-quality proxy. This means item 8's shadow wiring is done — the "next beat" note in the prior beat was stale, referring to work that had already shipped two beats earlier. **No feature work needs to be repeated here; the gap is test coverage.** `speculative-cascade-shadow.ts` has zero dedicated tests: not in `tests/providers/speculative-cascade-shadow.test.ts` (does not exist) and not in `tests/providers/router.test.ts` (grep returns zero hits for `shadowCascadeDecision`). [V] confirmed.
+
+**Revised intent for steps 2-4:**
+Write `tests/providers/speculative-cascade-shadow.test.ts` — a dedicated test suite for `shadowCascadeDecision`. Cases: gate-off returns null; gate-on + high anfisConfidence → `usedEscalation:false`; gate-on + low anfisConfidence → `usedEscalation:true`; `proxyWarning:true` always present; never throws. SAFE-CLASS (additive tests only, no prod code changed).
+
+**Step 5 — what shipped:**
+- `tests/providers/speculative-cascade-shadow.test.ts` (new, 87 lines): 9 test cases for `shadowCascadeDecision`. Gate-off returns null (two variants: unset and "false"); gate-on with high anfisConfidence (0.9) → `usedEscalation:false`; gate-on with low anfisConfidence (0.3) → `usedEscalation:true`; `proxyWarning:true` on both high and low confidence paths; `savedUsd >= 0` on accepted-draft path; custom `confidenceThreshold` overrides default (0.6 < 0.7 escalates; 0.6 >= 0.5 does not); never throws for any valid input including zero-confidence. **[V] 9/9 pass** (`./node_modules/.bin/jest tests/providers/speculative-cascade-shadow.test.ts --forceExit`). `tsc --noEmit` clean.
+- Feature PR **#778**: opened on `feat/cc-2026-09-18-cascade-shadow-tests`, SAFE-CLASS (additive tests, no prod code changed), armed `--auto --squash`.
+
+**Mistakes:** Prior beat's "Next beat" note said "wire cascade shadow into router.ts" — but `shadowCascadeDecision` was already wired in PR #763. The stale note was carried forward through the third run's ledger without being checked against the actual file. Finding caught here by reading `router.ts` directly before building. **No duplicate work shipped to main — correction happened before any PR was opened.**
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm PR #778 cascade shadow tests merged. (2) Item 8 backlog status: shadow wired ✓, `callWithCascade` glue ✓, tests ✓ — what remains is real draft→escalate routing behavior (needs Sean GO on routing policy change). (3) Item 9 decisions (b)/(c) — product decisions (cap per provider, reason label) — surface to Sean for input before building.
