@@ -6818,9 +6818,10 @@ New file `src/providers/cascade-integration.ts`: `callWithCascade(opts)` — wra
 Write `tests/providers/speculative-cascade-shadow.test.ts` — a dedicated test suite for `shadowCascadeDecision`. Cases: gate-off returns null; gate-on + high anfisConfidence → `usedEscalation:false`; gate-on + low anfisConfidence → `usedEscalation:true`; `proxyWarning:true` always present; never throws. SAFE-CLASS (additive tests only, no prod code changed).
 
 **Step 5 — what shipped:**
-(To be filled by this beat's actual work — see rule: this section must reflect reality, not intent.)
+- `tests/providers/speculative-cascade-shadow.test.ts` (new, 87 lines): 9 test cases for `shadowCascadeDecision`. Gate-off returns null (two variants: unset and "false"); gate-on with high anfisConfidence (0.9) → `usedEscalation:false`; gate-on with low anfisConfidence (0.3) → `usedEscalation:true`; `proxyWarning:true` on both high and low confidence paths; `savedUsd >= 0` on accepted-draft path; custom `confidenceThreshold` overrides default (0.6 < 0.7 escalates; 0.6 >= 0.5 does not); never throws for any valid input including zero-confidence. **[V] 9/9 pass** (`./node_modules/.bin/jest tests/providers/speculative-cascade-shadow.test.ts --forceExit`). `tsc --noEmit` clean.
+- Feature PR **#778**: opened on `feat/cc-2026-09-18-cascade-shadow-tests`, SAFE-CLASS (additive tests, no prod code changed), armed `--auto --squash`.
 
-**Mistakes:** (See verification above — none from prior beat.)
+**Mistakes:** Prior beat's "Next beat" note said "wire cascade shadow into router.ts" — but `shadowCascadeDecision` was already wired in PR #763. The stale note was carried forward through the third run's ledger without being checked against the actual file. Finding caught here by reading `router.ts` directly before building. **No duplicate work shipped to main — correction happened before any PR was opened.**
 
 **Open for Sean (rule-4):**
 1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
@@ -6829,4 +6830,4 @@ Write `tests/providers/speculative-cascade-shadow.test.ts` — a dedicated test 
 4. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
-**Next beat:** (1) Confirm this beat's feature PR merged. (2) If cascade shadow is wired, enable flag in dev environment to collect first data points. (3) Item 9 decisions (b)/(c) if turns allow.
+**Next beat:** (1) Confirm PR #778 cascade shadow tests merged. (2) Item 8 backlog status: shadow wired ✓, `callWithCascade` glue ✓, tests ✓ — what remains is real draft→escalate routing behavior (needs Sean GO on routing policy change). (3) Item 9 decisions (b)/(c) — product decisions (cap per provider, reason label) — surface to Sean for input before building.
