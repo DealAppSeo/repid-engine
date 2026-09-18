@@ -6758,3 +6758,39 @@ New file `src/providers/output-confidence-scorer.ts`: `scoreOutputConfidence(out
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm output-confidence scorer PR merged. (2) Wire `runSpeculativeCascade` using `scoreOutputConfidence` as the draft/escalate confidence source — closes item 8's "missing measurement facility" blocker. (3) Item 10 EAS cron if Sean GO.
+
+---
+
+## Beat (2026-09-18, third run) — prior beat VERIFIED clean; item 8 cascade wiring built
+
+**Prior beat verified [V]:** Beat 2026-09-18 second run (PR #773 docs + PR #774 feature, commit `30e0955` on main).
+- origin/main = `30e0955` — **[V]** confirmed via `git log --oneline -1 origin/main`.
+- PR #774 MERGED at 2026-09-18T04:35:36Z, title "feat(providers): item 8 output-confidence-scorer — post-call heuristic scorer for runSpeculativeCascade" — **[V]** `gh pr view 774 --json state,mergedAt`.
+- `src/providers/output-confidence-scorer.ts` EXISTS on main (121 lines, 4058 bytes) — **[V]** `ls -la`. Prior beat cited "5 tests" but `npx jest` reports 7/7 — the scorer file itself had 7 test cases; the "5" in prior beat counted the test *scenarios* described in prose but understated the actual count. Not a defect — the extra 2 tests are positive: both pass.
+- `src/providers/speculative-cascade.ts` EXISTS (88 lines) — **[V]** `ls -la`.
+- Tests 7/7 pass — **[V]** `npx jest --config jest.config.js tests/providers/output-confidence-scorer.test.ts --forceExit` → 7/7, 1 suite.
+- **Penalty verdict: NONE.** Minor imprecision: prior beat said "5 tests" but 7 exist and pass — all pass, none removed. Substance intact.
+
+**Backlog state entering this beat:**
+- Item 8 blocker ("missing measurement facility") CLOSED by #774. What remains: wire `runSpeculativeCascade` + `scoreOutputConfidence` into the provider pipeline under a `CASCADE_SPECULATION_ENABLED` shadow gate. Decision on which callers still open.
+
+**Intent for steps 2-4 (stated before feature branch):**
+New file `src/providers/cascade-integration.ts`: `callWithCascade(opts)` — wraps any two-tier provider call (cheap draft fn + strong escalate fn) using `scoreOutputConfidence` to measure the draft's output confidence, then routes through `runSpeculativeCascade`. Gate: `CASCADE_SPECULATION_ENABLED` env var (default off). No callers wired in `router.ts` yet — this beat ships the tested glue layer; which production call sites adopt it is a follow-up decision once the shadow produces data. SAFE-CLASS (additive, gate-off by default).
+
+**Step 5 — what shipped:**
+- `src/providers/cascade-integration.ts` (new): `callWithCascade<T extends string>(opts: CascadeIntegrationOpts<T>): Promise<CascadeResult<T>>` — pure glue. Caller supplies `draftFn` and `escalateFn` (each returning `{output: T, costUsd: number}`), plus `escalateBaselineCostUsd` and optional `confidenceThreshold`. Internally: calls `draftFn()`, passes output to `scoreOutputConfidence`, feeds result into `runSpeculativeCascade`. Gate: returns `{skipped: true, reason: 'gate_disabled'}` immediately when `CASCADE_SPECULATION_ENABLED` is not `'true'`. Logs shadow results to console when gate is on. Never throws — escalate path catches and falls back to draft result with a logged error. Zero I/O beyond the injected fns; no Supabase, no provider SDK imports.
+- `src/config/known-env-vars.generated.ts`: added `CASCADE_SPECULATION_ENABLED` to the registered vars list.
+- Tests: `tests/providers/cascade-integration.test.ts` — gate-off returns `skipped:true`; high-confidence draft accepted without calling escalate; low-confidence draft triggers escalate; escalate failure falls back to draft gracefully; `savedUsd` reported correctly on accept-draft path. `tsc --noEmit` clean. 5/5 pass.
+- Feature PR **#776**: opened on `feat/cc-2026-09-18-cascade-integration`, SAFE-CLASS, armed `--auto --squash`.
+
+**Mistakes:** None this beat.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **PR #776** — item 8 cascade-integration (this beat's feature; SAFE-CLASS, armed `--auto --squash`; `CASCADE_SPECULATION_ENABLED` off by default — no prod behavior changes).
+5. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on a daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm cascade-integration PR merged. (2) Wire `callWithCascade` into at least one real call site in `src/hal/` or `src/providers/router.ts` as a shadow-only log (gate off by default). (3) Item 9 free-tier quota decisions (b)/(c) if turns allow.
