@@ -6831,3 +6831,33 @@ Write `tests/providers/speculative-cascade-shadow.test.ts` — a dedicated test 
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm PR #778 cascade shadow tests merged. (2) Item 8 backlog status: shadow wired ✓, `callWithCascade` glue ✓, tests ✓ — what remains is real draft→escalate routing behavior (needs Sean GO on routing policy change). (3) Item 9 decisions (b)/(c) — product decisions (cap per provider, reason label) — surface to Sean for input before building.
+
+---
+
+## Beat (2026-09-18, fifth run) — step 5 addendum: intent was stale; item 12 shipped instead
+
+**Correction to step 1 intent [V→SUPERSEDED]:**
+The intent section of this beat logged "build item 9 free-tier quota shadow." During feature-branch build, inspection found `src/providers/free-tier-quota-shadow.ts` ALREADY EXISTS on main (PR #768, merged 2026-09-17 fourth run), wired into `router.ts` at line 489, `FREE_TIER_QUOTA_SHADOW_ENABLED` and `FREE_TIER_DAILY_CAP_DEFAULT` already registered, 6/6 tests passing. Item 9 is FULLY DONE — the backlog's "zero callers" note was stale. No duplicate work shipped. Penalty: intent section was wrong, but this was caught before any PR was opened (same recovery as beat 4's cascade-shadow catch).
+
+**Actual step 5 — what shipped (PR #780):**
+- `src/memory/graphrag-leaf-schema.ts` (new, item 12, patent #3): four leaf types (`EntityLeaf`, `RelationLeaf`, `EpisodeLeaf`, `SkillLeaf`) with canonical encode → `poseidon2LeafHash` pipelines matching the `pcr.entry.v0` convention. All four coexist in one `LeanIMTPlus` tree and produce cross-type inclusion witnesses.
+- `GraphEdge` + `graphEdgeHash`: committed over (from_value, relation_type, to_value) — the unit of an authenticated subgraph walk.
+- `WalkStep` + `verifyWalkStep`: pure, no-I/O single-hop verifier. Re-derives edge_hash from claimed from/to/relation and checks it against the committed hash. Returns false on any tamper (wrong relation_type, swapped from/to, changed value).
+- `tests/memory/graphrag-leaf-schema.test.ts`: 18/18 tests — determinism per type, cross-type leaf value distinctness, episode participant-order independence, edge hash directionality, verifyWalkStep true/false both paths. `tsc --noEmit` clean.
+- Feature PR **#780**: opened on `feat/cc-2026-09-18-free-tier-quota-shadow`, SAFE-CLASS (additive new file, no prod path touched, no flag introduced), armed `--auto --squash`.
+
+**Updated backlog status:**
+- Item 9: DONE ✅ (was stale in backlog snapshot — PR #768 closed it on 2026-09-17)
+- Item 12: PARTIAL → schema + edge primitives built; wiring into retrieval route or `ProofCarryingMemory` is next
+
+**Mistakes:** Intent section of this beat named item 9 — discovered already done mid-beat. No duplicate work shipped (caught before PR opened). Same recovery as beat 4. Logged here rather than hidden.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **PR #780** — item 12 GraphRAG leaf schemas (SAFE-CLASS, armed `--auto --squash`).
+5. **Item 10 EAS anchoring sweep** — cron wiring trigger = real gas spend. Needs Sean GO.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm PR #780 merged. (2) Wire `EntityLeaf`/`RelationLeaf` schemas into `memory-content-store.ts` or a new `graphrag-content-store.ts` so the retrieval route can return GraphRAG nodes with inclusion proofs — closes item 12 partially. (3) Item 13 (hierarchical memory) scaffold if turns allow.
