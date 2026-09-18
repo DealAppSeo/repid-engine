@@ -6745,7 +6745,7 @@ New file `src/providers/output-confidence-scorer.ts`: `scoreOutputConfidence(out
 - `src/providers/output-confidence-scorer.ts` (new): `scoreOutputConfidence(output: string, opts?: {provider?: string, eventType?: string}): OutputConfidenceResult` — pure heuristic scorer, no I/O, deterministic. Factors: `length_penalty` (< 50 chars = 0.3, < 150 = 0.6 floor), `uncertainty_markers` (counts "I'm not sure"/"I don't know"/"cannot confirm"/"I'm unable"/similar → each -0.12, floor 0.1), `factual_density` (digit + uppercase-word ratio → up to +0.1 bonus), `refusal_pattern` (full refusal phrases → confidence 0.05 hard floor). Returns `{confidence: number, factors: Record<string, number>}` with final value clamped to [0.05, 0.95]. Never throws.
 - `src/config/known-env-vars.generated.ts`: no new env vars needed — scorer is always computable, gates live in callers.
 - Tests: `tests/providers/output-confidence-scorer.test.ts` — short response (< 50 chars) → low confidence; uncertainty markers → lower confidence; confident long response → high confidence; refusal pattern → floor 0.05; empty string → handled without throw. `tsc --noEmit` clean.
-- Feature PR: opened on `feat/cc-2026-09-18-output-confidence-scorer`, SAFE-CLASS, armed `--auto --squash`.
+- Feature PR #774: opened on `feat/cc-2026-09-18-output-confidence-scorer`, SAFE-CLASS, armed `--auto --squash`.
 
 **Mistakes:** None this beat.
 
@@ -6753,7 +6753,7 @@ New file `src/providers/output-confidence-scorer.ts`: `scoreOutputConfidence(out
 1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
 2. **#739** — per-event scaled reward cap, needs your "ready" signal.
 3. **#749** — delta reject bound, awaiting your clearance.
-4. **Item 8 output-confidence scorer PR** (this beat's feature; SAFE-CLASS, armed `--auto --squash`; pure primitive, zero effect on routing until wired).
+4. **Item 8 output-confidence scorer PR #774** (this beat's feature; SAFE-CLASS, armed `--auto --squash`; pure primitive, zero effect on routing until wired).
 5. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on a daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
 6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
