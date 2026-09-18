@@ -6853,9 +6853,9 @@ Write `tests/providers/speculative-cascade-shadow.test.ts` — a dedicated test 
 **Intent for steps 2-4 (stated before feature PR open):**
 Wire item 9's two primitives into `router.ts` under a `FREE_TIER_QUOTA_SHADOW_ENABLED` shadow gate. New helper `shadowFreeTierQuota(provider, Supabase)` — calls `getFreeProviderCallsToday`, feeds into `evaluateFreeTierQuota` with default cap `FREE_TIER_DAILY_CAP` (env, default 500), logs `[FREE-TIER-QUOTA-SHADOW]` JSON. Called fire-and-forget inside `router.ts`'s candidate-scoring loop for each FREE_PROVIDERS member. Never blocks routing. Decision (c): `free_tier_quota_hit` as a distinct reason label (not `cap_hit`) so shadow data reads cleanly vs $-cap data. SAFE-CLASS (additive, shadow-inert, fire-and-forget, two new env vars, no routing path changed).
 
-**Step 5 — what shipped:** *(to be filled after feature PR is opened)*
+**Step 5 — what shipped:** `src/memory/graphrag-leaf-schema.ts` (172 lines): four GraphRAG leaf types (EntityLeaf, RelationLeaf, EpisodeLeaf, SkillLeaf) each with canonical encode → `poseidon2LeafHash` pipeline; `GraphEdge`/`encodeGraphEdge`/`graphEdgeHash` for committed directed edges; `WalkStep`/`verifyWalkStep` for single-hop edge-hash consistency. 18/18 tests (`tests/memory/graphrag-leaf-schema.test.ts`). Feature PR **#780** merged at 2026-09-18T16:32:37Z. Full multi-hop walk verifier (each node's inclusion witness against the root) explicitly deferred to follow-up — `verifyWalkStep` checks edge hash only, not tree membership. **NOTE (sixth-run correction): item 9 (`shadowFreeTierQuota` in `router.ts`) was already wired in PR #768 BEFORE this beat; the stated "intent" for item 9 was stale — item 9 was not built this beat, it was already done.**
 
-**Mistakes:** *(none so far this beat)*
+**Mistakes:** Step 5 was left "to be filled after feature PR is opened" and never filled — the ledger record was incomplete. **Rule-6 violation: one beat, one incomplete record.** Sixth-run retroactively supplies the missing entry. Additionally, the intent stated for this beat (item 9 free-tier quota shadow wiring) was stale — `shadowFreeTierQuota` was already wired into `router.ts:489` via PR #768. The beat correctly redirected to item 12, but the intent note misleads future readers.
 
 **Open for Sean (rule-4):**
 1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
@@ -6864,4 +6864,44 @@ Wire item 9's two primitives into `router.ts` under a `FREE_TIER_QUOTA_SHADOW_EN
 4. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
-**Next beat:** *(to be updated after feature ships)*
+**Next beat:** (1) Confirm item 12 graphrag schemas shipped (PR #780, done). (2) Build `verifyAuthenticatedWalk` — multi-hop walk verifier that chains inclusion witnesses against the root. (3) Item 9 already wired — no action needed.
+
+---
+
+## Beat (2026-09-18, sixth run) — prior beat VERIFIED (retroactive Step 5 filled); item 12 authenticated walk verifier built
+
+**Prior beat verified [V]:** Beat 2026-09-18 fifth run (PR #779 docs + PR #780 feature, HEAD `69e5378` on main).
+- origin/main = `69e5378` — **[V]** confirmed via `git log --oneline -1 origin/main`.
+- PR #780 MERGED at 2026-09-18T16:32:37Z, title "feat(memory): item 12 GraphRAG-native leaf schemas — patent #3 foundation" — **[V]** `gh pr view 780 --json state,mergedAt,title`.
+- PR #779 MERGED at 2026-09-18T16:28:08Z, title "docs(loop): beat 2026-09-18 fifth run..." — **[V]** `gh pr view 779 --json state,mergedAt`.
+- `src/memory/graphrag-leaf-schema.ts` EXISTS on main (172 lines) — **[V]** `wc -l`.
+- Tests 18/18 pass — **[V]** `./node_modules/.bin/jest --config jest.config.js tests/memory/graphrag-leaf-schema.test.ts --forceExit` → 18/18, 1 suite.
+- Item 9 (`shadowFreeTierQuota`) already wired at `src/providers/router.ts:489` via PR #768 — **[V]** `grep -n shadowFreeTierQuota src/providers/router.ts`. The 5th beat's stated intent for item 9 was stale.
+- 3 draft PRs (#743, #739, #749) confirmed DRAFT — **[V]** `gh pr list`.
+- **Penalty verdict: Rule-6 violation** — fifth beat's ledger Step 5 was left "to be filled" and never filled. Retroactive entry supplied above. No phantom claims; the item 12 schemas actually shipped and pass. Penalty is documentation only, not a false claim about produced assets.
+
+**Backlog state entering this beat:**
+- Item 12: leaf schemas DONE (PR #780, 18/18). What remains per acceptance test: "a multi-hop walk verifies hop-by-hop against the root" — `verifyWalkStep` checks edge-hash consistency only; it does not verify that each node's `from_value`/`to_value` has an inclusion witness in a LeanIMTPlus tree. The full verifier is buildable as a pure function: `verifyAuthenticatedWalk(steps, tree)` — hydrated `LeanIMTPlus` instance passed in; for each step verify edge hash via `verifyWalkStep` + generate inclusion witness for `from_value` and `to_value` from the tree. SAFE-CLASS (additive pure function, no I/O).
+- Item 9: shadow wired (PR #768) — DONE at shadow level. Decisions (b)/(c) for live enforcement remain Sean-gated.
+- Item 10: orchestration built, Sean GO needed for gas.
+- Items 8: shadow and glue complete, Sean GO needed for live routing.
+
+**Intent for steps 2-4 (stated before feature branch):**
+New export `verifyAuthenticatedWalk(steps: WalkStep[], tree: LeanIMTPlus): AuthenticatedWalkResult` in `src/memory/graphrag-leaf-schema.ts`. For each step: (1) `verifyWalkStep(step)` — edge hash consistency; (2) generate inclusion proof for `step.from_value` via `tree.generateMembershipWitness`; (3) generate inclusion proof for `step.to_value` similarly; (4) verify each witness. Returns `{valid: boolean, steps: StepResult[], failAt?: number}`. Pure function, no I/O, injected tree. Tests: zero-step walk valid; one valid step; one step with bad edge hash fails; one step where `from_value` not in tree fails; multi-hop (3 steps) all valid; multi-hop fails at middle step. SAFE-CLASS.
+
+**Step 5 — what shipped:**
+- `src/memory/graphrag-leaf-schema.ts`: added `AuthenticatedWalkResult`, `StepVerification`, and `verifyAuthenticatedWalk(steps, tree)` (exported). Implementation: iterates each WalkStep — edge-hash check via `verifyWalkStep`; for non-empty trees generates inclusion witness for `from_value` and `to_value` and verifies each; collects per-step results; returns `{valid: true}` only when all steps pass. Early-exit on first failure with `failAt` index. Empty walk is trivially valid. Never throws — catches tree errors and marks step as `nodeNotFound`.
+- Tests: `tests/memory/graphrag-walk-verifier.test.ts` — empty walk valid; single valid step (both nodes in tree); step with tampered edge hash fails; `from_value` not in tree fails; `to_value` not in tree fails; 3-hop walk all valid; 3-hop walk fails at middle step with correct `failAt:1`; single-node tree with self-referential step. **[V] 8/8 pass** (`./node_modules/.bin/jest tests/memory/graphrag-walk-verifier.test.ts --forceExit`). `tsc --noEmit` clean.
+- Feature PR: opened on `feat/cc-2026-09-18-graphrag-walk-verifier`, SAFE-CLASS (additive export + additive tests, no existing behavior changed), armed `--auto --squash`.
+
+**Mistakes:** None this beat.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 12 walk verifier PR** (this beat's feature; SAFE-CLASS, armed `--auto --squash`; closes item 12's acceptance test).
+5. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+6. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Confirm walk verifier PR merged. (2) Update backlog item 12 to DONE with verification evidence. (3) Item 9 decisions (b)/(c) or Item 10 if Sean GO arrives.
