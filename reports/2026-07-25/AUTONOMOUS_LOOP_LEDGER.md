@@ -6831,3 +6831,37 @@ Write `tests/providers/speculative-cascade-shadow.test.ts` — a dedicated test 
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Confirm PR #778 cascade shadow tests merged. (2) Item 8 backlog status: shadow wired ✓, `callWithCascade` glue ✓, tests ✓ — what remains is real draft→escalate routing behavior (needs Sean GO on routing policy change). (3) Item 9 decisions (b)/(c) — product decisions (cap per provider, reason label) — surface to Sean for input before building.
+
+---
+
+## Beat (2026-09-18, fifth run) — prior beat VERIFIED clean; item 9 free-tier quota shadow wired into router
+
+**Prior beat verified [V]:** Beat 2026-09-18 fourth run (PR #777 docs + PR #778 feature, HEAD `59b9224` on main).
+- origin/main = `59b9224` — **[V]** confirmed via `git log --oneline -1 origin/main`.
+- PR #778 MERGED at 2026-09-18T12:41:25Z, title "test(cascade): add missing test suite for speculative-cascade-shadow (item 8)" — **[V]** `gh pr view 778 --json state,mergedAt`.
+- PR #777 MERGED at 2026-09-18T12:42:41Z, title "docs(loop): beat 2026-09-18 fourth run..." — **[V]** `gh pr view 777 --json state,mergedAt`.
+- `tests/providers/speculative-cascade-shadow.test.ts` EXISTS on main (3535 bytes) — **[V]** `ls -la`.
+- Tests 9/9 pass — **[V]** `npx jest tests/providers/speculative-cascade-shadow.test.ts --forceExit` → 9/9, 1 suite. Gate-off returns null; high confidence no-escalate; low confidence escalates; `proxyWarning:true` on both paths; `savedUsd >= 0` on accepted-draft path; custom threshold overrides; never throws.
+- 3 draft PRs (#743, #739, #749) still DRAFT — **[V]** confirmed via `gh pr list`.
+- **Penalty verdict: NONE.** Prior beat's claims all verified. No phantom feature claims.
+
+**Backlog state entering this beat:**
+- Item 8: shadow wired (`shadowCascadeDecision` in `router.ts`), `callWithCascade` glue built, 9/9 shadow tests. What remains for full close: real draft→escalate routing at call sites (Sean GO on routing policy change). Shadow phase is complete.
+- Item 9: `evaluateFreeTierQuota` (beat 81) + `getFreeProviderCallsToday` (beat 83) exist with zero callers. Decisions (b) `dailyCallCap` per provider and (c) distinct reason label vs `cap_hit` are implementation choices, not Sean-gated flips — can close this beat under a shadow gate.
+- Item 10: orchestration built, needs Sean GO for gas spend (cron trigger = real spend).
+
+**Intent for steps 2-4 (stated before feature PR open):**
+Wire item 9's two primitives into `router.ts` under a `FREE_TIER_QUOTA_SHADOW_ENABLED` shadow gate. New helper `shadowFreeTierQuota(provider, Supabase)` — calls `getFreeProviderCallsToday`, feeds into `evaluateFreeTierQuota` with default cap `FREE_TIER_DAILY_CAP` (env, default 500), logs `[FREE-TIER-QUOTA-SHADOW]` JSON. Called fire-and-forget inside `router.ts`'s candidate-scoring loop for each FREE_PROVIDERS member. Never blocks routing. Decision (c): `free_tier_quota_hit` as a distinct reason label (not `cap_hit`) so shadow data reads cleanly vs $-cap data. SAFE-CLASS (additive, shadow-inert, fire-and-forget, two new env vars, no routing path changed).
+
+**Step 5 — what shipped:** *(to be filled after feature PR is opened)*
+
+**Mistakes:** *(none so far this beat)*
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** *(to be updated after feature ships)*
