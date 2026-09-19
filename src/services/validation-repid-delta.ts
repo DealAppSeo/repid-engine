@@ -5,6 +5,7 @@ import { hasTruthySimFlag } from '../utils/truthy';
 import type { HALProviderConfig } from '../hal/lib/types';
 import { factCheck, buildFactCheckProviders, factCheckOptsFromEnv } from '../hal/fact-check';
 import { maybeWriteOnChainReputation } from './onchain-reputation-trigger';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 /**
  * Phase 2.7.4 — Canonical RepID delta restoration (2026-05-16)
@@ -260,7 +261,7 @@ export function buildFreeHalProviders(): HALProviderConfig[] {
     out.push({
       provider: 'groq',
       model: process.env.HAL_S2_GROQ_MODEL ?? 'llama-3.3-70b-versatile',
-      endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+      endpoint: PROVIDER_URLS.groqChatCompletions,
       apiKey: groqKey,
       callType: 'openai-compat',
     });
@@ -270,7 +271,7 @@ export function buildFreeHalProviders(): HALProviderConfig[] {
     out.push({
       provider: 'cerebras',
       model: process.env.HAL_S2_CEREBRAS_MODEL ?? 'llama3.1-8b',
-      endpoint: 'https://api.cerebras.ai/v1/chat/completions',
+      endpoint: PROVIDER_URLS.cerebrasChatCompletions,
       apiKey: cerebrasKey,
       callType: 'openai-compat',
     });

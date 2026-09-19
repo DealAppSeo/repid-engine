@@ -26,6 +26,7 @@
 
 import type { EvidenceSnippet } from './retrieval';
 import { grokApiKey } from '../providers/xai-key';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 export type CragGrade = 'Correct' | 'Ambiguous' | 'Incorrect';
 
@@ -172,7 +173,7 @@ function resolveGrader(): GraderCfg | null {
   if (or) {
     return {
       name: 'gemini',
-      endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+      endpoint: PROVIDER_URLS.openrouterChatCompletions,
       apiKey: or,
       model: process.env.HAL_CRAG_GEMINI_MODEL ?? 'google/gemini-2.5-flash',
     };
@@ -180,7 +181,7 @@ function resolveGrader(): GraderCfg | null {
   if (gm) {
     return {
       name: 'gemini',
-      endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      endpoint: PROVIDER_URLS.geminiOpenAiCompatChatCompletions,
       apiKey: gm,
       model: process.env.HAL_CRAG_GEMINI_MODEL ?? 'gemini-2.5-flash',
     };

@@ -17,6 +17,7 @@ import { computeAgreement, checkPythagoreanComma } from './agreement';
 import { queryProvider, type ProviderAnswer } from './providers';
 import { pgQuery } from '../../../db/direct-pg';
 import { isRetiredModel } from '../../retired-models';
+import { PROVIDER_URLS } from '../../../egress/provider-hosts';
 
 export interface CrossLLMOptions {
   providers: HALProviderConfig[];
@@ -109,7 +110,7 @@ function resolveSingleFallback(excludeNames: string[]): HALProviderConfig | null
     {
       provider: 'groq',
       model: process.env.CROSS_LLM_PROVIDER_1_MODEL ?? 'openai/gpt-oss-120b',
-      endpoint: process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ?? 'https://api.groq.com/openai/v1/chat/completions',
+      endpoint: process.env.CROSS_LLM_PROVIDER_1_ENDPOINT ?? PROVIDER_URLS.groqChatCompletions,
       apiKey: process.env.GROQ_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
@@ -118,28 +119,28 @@ function resolveSingleFallback(excludeNames: string[]): HALProviderConfig | null
       // NO DEFAULT: both ids ever shipped here are retired (see src/hal/retired-models.ts),
       // and an unset env now means "cerebras is not a candidate" rather than "dial a 404".
       model: process.env.HAL_S2_CEREBRAS_MODEL ?? '',
-      endpoint: 'https://api.cerebras.ai/v1/chat/completions',
+      endpoint: PROVIDER_URLS.cerebrasChatCompletions,
       apiKey: process.env.CEREBRAS_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'fireworks',
       model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5',
-      endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions',
+      endpoint: PROVIDER_URLS.fireworksChatCompletions,
       apiKey: process.env.FIREWORKS_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'deepseek',
       model: process.env.CROSS_LLM_PROVIDER_3_MODEL ?? 'deepseek-chat',
-      endpoint: process.env.CROSS_LLM_PROVIDER_3_ENDPOINT ?? 'https://api.deepseek.com/v1/chat/completions',
+      endpoint: process.env.CROSS_LLM_PROVIDER_3_ENDPOINT ?? PROVIDER_URLS.deepseekV1ChatCompletions,
       apiKey: process.env.DEEPSEEK_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'anthropic',
       model: process.env.CROSS_LLM_PROVIDER_2_MODEL ?? 'claude-haiku-4-5-20251001',
-      endpoint: process.env.CROSS_LLM_PROVIDER_2_ENDPOINT ?? 'https://api.anthropic.com/v1/messages',
+      endpoint: process.env.CROSS_LLM_PROVIDER_2_ENDPOINT ?? PROVIDER_URLS.anthropicMessages,
       apiKey: process.env.ANTHROPIC_API_KEY ?? '',
       callType: 'anthropic-native' as const,
     }

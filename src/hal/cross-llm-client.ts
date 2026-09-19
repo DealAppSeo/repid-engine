@@ -45,6 +45,7 @@ import { pgQuery } from '../db/direct-pg';
 import { resolveProviderEndpoint } from './local-llm';
 import { isRetiredModel } from './retired-models';
 import { assertPromptEgressAllowed, isLocalHost } from '../selfhost/egress-guard';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 // BYO / local-model base-URL override for the openai-compat quorum. Read at call
 // time (not import time) so tests and a mid-run env flip both see it. Empty →
@@ -86,10 +87,10 @@ const COMMA_MAJOR_GAP = 0.10;
 const COMMA_MAJOR_AVG = 0.75;
 const COMMA_MINOR_GAP = 0.15;
 
-const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions';
-const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
-const OPENAI_EMBEDDING_ENDPOINT = 'https://api.openai.com/v1/embeddings';
+const GROQ_ENDPOINT = PROVIDER_URLS.groqChatCompletions;
+const DEEPSEEK_ENDPOINT = PROVIDER_URLS.deepseekV1ChatCompletions;
+const ANTHROPIC_ENDPOINT = PROVIDER_URLS.anthropicMessages;
+const OPENAI_EMBEDDING_ENDPOINT = PROVIDER_URLS.openaiEmbeddings;
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 
 /** Turn an openai-compat BASE url into its `/embeddings` endpoint (idempotent). */
@@ -273,14 +274,14 @@ function resolveSingleFallback(excludeNames: string[]): Omit<ProviderConfig, 'sq
       // NO DEFAULT: both ids ever shipped here are retired (see src/hal/retired-models.ts),
       // and an unset env now means "cerebras is not a candidate" rather than "dial a 404".
       model: process.env.HAL_S2_CEREBRAS_MODEL ?? '',
-      endpoint: resolveProviderEndpoint('https://api.cerebras.ai/v1/chat/completions', base, 'openai-compat'),
+      endpoint: resolveProviderEndpoint(PROVIDER_URLS.cerebrasChatCompletions, base, 'openai-compat'),
       apiKey: process.env.CEREBRAS_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },
     {
       provider: 'fireworks',
       model: process.env.HAL_S2_FIREWORKS_MODEL ?? 'accounts/fireworks/models/kimi-k2p5',
-      endpoint: resolveProviderEndpoint('https://api.fireworks.ai/inference/v1/chat/completions', base, 'openai-compat'),
+      endpoint: resolveProviderEndpoint(PROVIDER_URLS.fireworksChatCompletions, base, 'openai-compat'),
       apiKey: process.env.FIREWORKS_API_KEY ?? '',
       callType: 'openai-compat' as const,
     },

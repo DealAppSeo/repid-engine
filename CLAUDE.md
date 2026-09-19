@@ -380,14 +380,13 @@ false again.
    **The list is split by ROLE and built to SHRINK.** `ADAPTERS` (10, `src/providers/*` —
    naming its own host is the job), `PROBES` (1 — dials providers to test credentials),
    `NOISE` (2 — the host is only in a comment; the matcher is a superset and this is where
-   that shows), and `CALLSITES` (13 — business logic that reached for a provider directly).
-   **TARGET: CALLSITES → 0.** A `CALLSITE_CEILING` ratchet may only be lowered, so a new
-   direct caller cannot be admitted by editing the list — it trips the NEW-file check, and
-   adding it to the list to silence that trips the ratchet. And a callsite that stops
-   matching reports as **PROGRESS**, not rot: the first version of this guard failed on any
-   listed file that stopped matching, which punished the exact cleanup it exists to drive.
-   **Knowing a URL is not presenting a bearer** — this is hostname inventory only, which
-   catches neither an SDK client with an embedded base URL nor a runtime-assembled host.
+   that shows), `REGISTRY` (1 — `src/egress/provider-hosts.ts`, type-A constants live here),
+   and `CALLSITES` (**4** as of 2026-09-18 — files that still `fetch()` a host literal:
+   the judge, pcp-validator, badges, completeness). Type-A HAL defaults import the registry
+   and dropped off. A `CALLSITE_CEILING` ratchet may only be lowered. **Knowing a URL is not
+   presenting a bearer** — this is hostname inventory only, which catches neither an SDK
+   client with an embedded base URL nor a runtime-assembled host. Wrapping those four live
+   fetches is a later slice.
 
    **How this was found is the reusable part.** `provider_health` holds a daily anthropic row,
    and anthropic-dialect providers are DROPPED under a local base — so the row looks like proof
