@@ -10,7 +10,7 @@ How repid-engine routes LLM calls and which providers are configured. Verified `
 ## Provider matrix (tier-0 adapters; prod key status verified)
 | Provider | Adapter | API key env var | Prod key present | Status |
 |---|---|---|---|---|
-| Groq | `src/providers/groq.ts` | `GROQ_API_KEY` | ✅ | Working (HAL cross-LLM #1, `llama-3.1-8b-instant`) |
+| Groq | `src/providers/groq.ts` | `GROQ_API_KEY` | ✅ | Working (HAL cross-LLM; live model `openai/gpt-oss-20b`. `llama-3.1-8b-instant` and `llama-3.3-70b-versatile` retired 2026-08-16) |
 | Anthropic | `src/providers/anthropic.ts` | `ANTHROPIC_API_KEY` | ✅ | Working (chat default `anthropic-direct`; cross-LLM `claude-haiku-4-5-20251001`) |
 | Cerebras | `src/providers/cerebras.ts` | `CEREBRAS_API_KEY` | ✅ | Working (HAL strictness-2 quorum, `zai-glm-4.7`) |
 | Fireworks | (HAL fact-check) | `FIREWORKS_API_KEY` | ✅ | Working (HAL strictness-2 quorum) |
@@ -32,7 +32,7 @@ The discriminative fact-check (`buildFactCheckProviders` in `src/hal/fact-check.
 
 | Provider | Model (default; `HAL_S2_*_MODEL` overrides) | Status | Notes |
 |---|---|---|---|
-| **groq** | `llama-3.1-8b-instant` | ✅ working | was `llama-3.3-70b-versatile` → **429** on free tier under burst; 8b-instant has a far higher free RPM |
+| **groq** | `openai/gpt-oss-20b` | ✅ working (measured 2026-09-14) | `llama-3.1-8b-instant` / `llama-3.3-70b-versatile` retired 2026-08-16 (see `src/hal/retired-models.ts`) |
 | **cerebras** | `zai-glm-4.7` | ✅ working | was `llama3.1-8b` → **404** (no access on this key); glm returns the verdict in the `reasoning` field (now parsed) and needs `max_tokens ≥ 512` |
 | **fireworks** | `kimi-k2p5` | ✅ working | verbose reasoning model; `parseVerdict` now picks the JSON object carrying a `verdict` key (not the first brace) |
 
