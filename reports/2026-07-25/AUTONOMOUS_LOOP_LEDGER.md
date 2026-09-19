@@ -7054,3 +7054,41 @@ Start item 13 (hierarchical durable memory) with a pure heat-score primitive. `s
 6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO. Relevant flags: `ENGINE_LLM_PROXY`, `ROUTER_STRICT_COST_ORDER`, `FREE_TIER_QUOTA_SHADOW_ENABLED` (live enforcement + cap values), `PROOF_TIER_SHADOW_ENABLED` enforce mode, `CASCADE_SPECULATION_ENABLED` live routing.
 
 **Next beat:** (1) Confirm PR #790 merged. (2) Advance item 13: `runHeatEvictionSweep` orchestrator — fetches leaves from `agent_memory_leaves`, classifies heat, marks cold-tier leaves (additive `heat_tier` column on existing table), preserves root. SAFE-CLASS if shadow-only with no real eviction until Sean GO.
+
+---
+
+## Beat (2026-09-19, sixth run) — fifth run VERIFIED; item 13 heat-eviction sweep orchestrator built
+
+**Prior beat verified [V]:** Beat 2026-09-19, fifth run (PR #790 docs + PR #791 feature, HEAD `7bc507e` on main after PR #782 also merged).
+- origin/main = `7bc507e` — **[V]** `git log --oneline -1 origin/main`.
+- PR #791 MERGED at 2026-09-19T16:30:43Z, "feat(memory): item 13 heat-score primitive — computeHeatScore, classifyHeatTier, eviction selectors" — **[V]** `gh pr view 791 --json state,mergedAt,title`.
+- PR #790 MERGED at 2026-09-19T16:30:48Z, docs PR — **[V]** `gh pr view 790 --json state,mergedAt`.
+- `src/memory/memory-heat.ts` EXISTS (96 lines; ledger claimed 87 — minor line-count discrepancy, not a phantom). All 4 exported functions at documented signatures — **[V]** `wc -l src/memory/memory-heat.ts` → 96; `grep -n "computeHeatScore\|classifyHeatTier\|selectEviction\|selectReactivation"`.
+- Tests 16/16 pass — **[V]** `./node_modules/.bin/jest tests/memory/memory-heat.test.ts --forceExit` → 16/16.
+- PR #782 "refactor(egress): HYP-5 retire type-A CALLSITES 12 → 4 via host registry" merged at 2026-09-19T17:58:49Z by another session — **[V]** `gh pr view 782 --json state,mergedAt`. Now HEAD of main.
+- **Penalty: NONE.** All fifth-run claims verified present and passing. Line-count discrepancy (87 stated vs 96 actual) is minor and does not represent a phantom feature. Fifth-run process fix (docs PR opened without --auto; Step 5 filled before arming) held: Step 5 was filled before the docs PR was armed, ending the 4-consecutive-run Rule-6 violation streak.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791, 16/16 tests). Orchestrator not yet built.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-sweep.ts` — `runHeatEvictionSweep(leaves: HeatLeaf[], opts?): HeatEvictionReport`. Classifies all leaves by tier (hot/warm/cold/on_chain), returns eviction candidates (coldest-first, up to `evictionLimit`) and reactivation candidates (cold leaves warming past `reactivationMinHeat`). Pure function, all I/O injected, no DB write, no flag flip. Tests: empty input; all-hot (no eviction candidates); all-cold (all candidates, limit respected); mixed tiers; on_chain never evicted; reactivation subset of cold; stats totals correct. SAFE-CLASS (additive module, no callers wired, no prod path changed).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-sweep.ts` (114 lines): `runHeatEvictionSweep(leaves, opts)` → `HeatEvictionReport`. Classifies all leaves by heat tier (hot/warm/cold/on_chain), returns eviction candidates (coldest-first, up to `evictionLimit`, heat ≤ `evictionMaxHeat`) and reactivation candidates (cold leaves warming past `reactivationMinHeat`, warmest-first). Pure function, no I/O, no DB write. `tests/memory/memory-heat-sweep.test.ts` (130 lines) — **10/10 pass**: empty; all-hot (no eviction); all-cold + limit; mixed tiers; on_chain never evicted; eviction sorted coldest-first; reactivation threshold; stats totals correct; no mutation of input. `tsc --noEmit` clean. Feature PR **#795** opened on `feat/cc-2026-09-19-memory-heat-sweep`, SAFE-CLASS (additive module, zero callers in `src/` outside definition, no prod path changed), armed `--auto --squash`. **[V]** `./node_modules/.bin/jest tests/memory/memory-heat-sweep.test.ts --forceExit` → 10/10; `tsc --noEmit` → exit 0.
+
+One test fix mid-build: `warmingColdLeaf` initially used 35-day-old access (heat ≈ 0.314, warm tier) instead of 45-day-old (heat ≈ 0.257, cold tier above reactivation threshold). Fixed before committing.
+
+**Mistakes:** None new.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix, needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+
+**Next beat:** (1) Confirm sixth-run PRs merged. (2) Wire `runHeatEvictionSweep` into a shadow log path (console `[HEAT-EVICTION-SHADOW]` gated on `HEAT_EVICTION_SHADOW_ENABLED`, default off) — additive caller, same shadow-first pattern as item 11/grounding. (3) Or item 14 (Plonky3 AIR) if turns allow and Sean GO not needed.
