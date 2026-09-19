@@ -17,13 +17,9 @@
  *   - credential presentation + the assertion of WHICH credential source resolved,
  *   - the `ONLY_ATTESTATIONS_LEAVE` egress-boundary check (src/selfhost/egress-guard.ts),
  *   - the Sealer.
- * They attach HERE, once, instead of in each of the ~13 callsites the hostname guard counts.
- *
- * ── HOW A CALLSITE RETIRES ITSELF: replace a direct `fetch(<provider-url>, init)` with
- * `providerFetch(<provider-url>, init)` AND move the host literal out of the callsite (to the
- * provider registry), so the file stops naming a provider host. That removes one line from the
- * CALLSITES list in provider-egress-guard.test.ts and lowers its ceiling by one. Routing live
- * production fetches is a later slice; this file must land first.
+ * They attach HERE, once. HYP-10 routed the four remaining type-B callsites
+ * (badges, completeness, adversarial-judge, pcp-validator) through this function
+ * with no host/header change. Honouring LOCAL_LLM_BASE_URL is HYP-11.
  */
 
 /**

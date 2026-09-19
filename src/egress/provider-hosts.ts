@@ -1,10 +1,10 @@
 /**
  * Provider host registry — the one place business logic may learn a provider URL.
  *
- * HYP-5 type-A inventory: CALLSITES drop off by importing these constants
- * instead of spelling a hostname. Files that fetch() a host literal stay on
- * CALLSITES (wrap-judge, not this slice). Does not wrap fetch, change who
- * presents a Bearer, honour LOCAL_LLM_BASE_URL on new paths, or attach a Sealer.
+ * Host literals for business logic. Type-A files import these so they stop
+ * matching the hostname grep. Type-B live fetches (HYP-10) also import them and
+ * call through providerFetch. Does not honour LOCAL_LLM_BASE_URL (HYP-11) or
+ * change who presents a Bearer.
  *
  * Naming every provider host IS this file's job, the same way naming its own
  * host is an adapter's job. The hostname guard pins it as REGISTRY, allowed to
