@@ -6924,3 +6924,30 @@ New export `verifyAuthenticatedWalk(steps: WalkStep[], tree: LeanIMTPlus): Authe
 
 **Intent for steps 2-4 (stated before feature branch):**
 Add `verifyAuthenticatedWalk(steps: WalkStep[], tree: LeanIMTPlus): AuthenticatedWalkResult` to `src/memory/graphrag-leaf-schema.ts`. Per step: (1) `verifyWalkStep` — edge-hash check; (2) generate + verify inclusion witnesses for `from_value` and `to_value` from the hydrated tree. Tests: empty walk valid; single valid step; bad edge hash fails; `from_value` not in tree fails; `to_value` not in tree fails; 3-hop all valid; 3-hop fails at middle with correct `failAt:1`. SAFE-CLASS (additive export + tests).
+
+**Step 5 — what shipped (retroactively filled by second run):**
+`verifyAuthenticatedWalk` added to `src/memory/graphrag-leaf-schema.ts` (file grew from 172 → 250 lines). `tests/memory/graphrag-walk-verifier.test.ts` (8 tests). Feature PR **#785** MERGED at 2026-09-19T01:05:05Z. **[V]** `gh pr view 785`, `grep -n verifyAuthenticatedWalk src/memory/graphrag-leaf-schema.ts` → line 204, `npx jest tests/memory/graphrag-walk-verifier.test.ts --forceExit` → 8/8. Item 12 acceptance test MET.
+
+**Mistakes (retroactive):** Step 5 was not filled before the docs PR (#784) merged. Rule-6 violation; corrected here by the second run's verifier.
+
+---
+
+## Beat (2026-09-19, second run) — first run's walk verifier VERIFIED; item 11 proof-tier shadow wired
+
+**Prior beat verified [V]:** Beat 2026-09-19, first run (PR #784 docs + PR #785 feature, HEAD `99b8edc` on main).
+- origin/main = `99b8edc` — **[V]** `git log --oneline -1 origin/main`.
+- PR #785 MERGED at 2026-09-19T01:05:05Z, "feat(memory): item 12 authenticated walk verifier — verifyAuthenticatedWalk hop-by-hop against root" — **[V]** `gh pr view 785 --json state,mergedAt,title`.
+- PR #784 MERGED at 2026-09-19T01:01:32Z — **[V]** `gh pr view 784 --json state,mergedAt`.
+- `verifyAuthenticatedWalk` at `src/memory/graphrag-leaf-schema.ts:204`, file 250 lines — **[V]** `grep -n verifyAuthenticatedWalk`.
+- Tests 8/8 pass — **[V]** `npx jest tests/memory/graphrag-walk-verifier.test.ts --forceExit` → 8/8.
+- Prior beat's Step 5 was not filled (Rule-6 violation) — retroactively corrected above.
+- **Penalty verdict: Rule-6 violation (incomplete ledger, same class as 5th run).** Substance intact — all shipped artifacts verified present and passing. No false claims about features.
+
+**Backlog state entering this beat:**
+- Item 12: DONE (PR #785, 8/8 tests, acceptance test met). Backlog snapshot to be updated.
+- Item 11: `selectProofTier`/`shadowCompareProofTier` (`src/services/proof-tier-policy.ts`) — zero callers in `src/`. The stated blocker is that nothing computes the 5 `PolicyAxes` from a real call's context. Actionable: derive proxy axes from available scoring context + wire `shadowCompareProofTier` into `src/scoring/pipeline.ts` alongside the existing HAL grounding shadow. SAFE-CLASS (shadow-only, no routing change).
+- Items 8/9: shadow complete, Sean GO for live enforcement.
+- Item 10: Sean GO for gas.
+
+**Intent for steps 2-4 (stated before feature branch):**
+Wire `shadowCompareProofTier` into `src/scoring/pipeline.ts` as a shadow-only log — no routing effect, gate `PROOF_TIER_SHADOW_ENABLED` (default off). Derive proxy `PolicyAxes` from scoring context: `stakes = clamp(|finalDelta| / 100, 0, 1)`, `costPressure = 0` (no cost data at score time), `privacy = 0` (no PII signal at score time), `latencyUrgency = 0` (scoring is async), `reliabilityRequired = 1.0` (scoring is always high-reliability). Log `[PROOF-TIER-SHADOW]` JSON to console. SAFE-CLASS (additive wiring, shadow-only, new file + 2-line pipeline addition).
