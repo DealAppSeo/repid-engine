@@ -4,6 +4,15 @@ import { calculateCost } from '../billing/pricing';
 import crypto from 'crypto';
 import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS, geminiGenerateContentUrl } from '../egress/provider-hosts';
+import { resolveProviderEndpoint } from '../hal/local-llm';
+
+function localLlmBaseUrl(): string {
+  return (process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '').trim();
+}
+
+function openaiCompatUrl(cloud: string): string {
+  return resolveProviderEndpoint(cloud, localLlmBaseUrl(), 'openai-compat');
+}
 
 /**
  * Defect 1 fix (2026-05-18) — adversarial judge provider ROTATION.
@@ -56,7 +65,8 @@ interface JudgeAttempt {
     | 'unparseable'
     | 'no_verdict_or_zero_confidence'
     | `http_${number}`
-    | 'skipped_claimer_family';
+    | 'skipped_claimer_family'
+    | 'skipped_not_openai_compat';
   detail?: string;
 }
 
@@ -156,13 +166,13 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'groq',
     model: 'llama-3.3-70b-versatile',
     apiKey: () => process.env.GROQ_API_KEY,
-    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.groqChatCompletions, p, m, k),
+    call: (p, m, k) => callOpenAICompatible(openaiCompatUrl(PROVIDER_URLS.groqChatCompletions), p, m, k),
   },
   {
     family: 'openai',
     model: 'gpt-4o-mini',
     apiKey: () => process.env.OPENAI_API_KEY,
-    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.openaiChatCompletions, p, m, k),
+    call: (p, m, k) => callOpenAICompatible(openaiCompatUrl(PROVIDER_URLS.openaiChatCompletions), p, m, k),
   },
   {
     family: 'gemini',
@@ -198,13 +208,13 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'deepseek',
     model: 'deepseek-chat',
     apiKey: () => process.env.DEEPSEEK_API_KEY,
-    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.deepseekV1ChatCompletions, p, m, k),
+    call: (p, m, k) => callOpenAICompatible(openaiCompatUrl(PROVIDER_URLS.deepseekV1ChatCompletions), p, m, k),
   },
   {
     family: 'cerebras',
     model: 'llama-3.3-70b',
     apiKey: () => process.env.CEREBRAS_API_KEY,
-    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.cerebrasChatCompletions, p, m, k),
+    call: (p, m, k) => callOpenAICompatible(openaiCompatUrl(PROVIDER_URLS.cerebrasChatCompletions), p, m, k),
   },
 ];
 
@@ -290,8 +300,20 @@ Output ONLY valid JSON.`;
   const skipFamily = claimerFamily(taskData);
   const attempts: JudgeAttempt[] = [];
   const taskId = taskData?.id != null ? String(taskData.id) : null;
+  const localBase = localLlmBaseUrl();
 
   for (const p of PROVIDERS) {
+    // Anthropic Messages and Gemini generateContent are not openai-compat.
+    // Skip under a local base rather than leak to cloud or pretend a llama speaks them.
+    if (localBase && (p.family === 'anthropic' || p.family === 'gemini')) {
+      attempts.push({ provider: p.family, failure_mode: 'skipped_not_openai_compat' });
+      await recordProviderHealth({
+        provider: p.family, model: p.model, outcome: 'skipped',
+        failure_mode: 'skipped_not_openai_compat', task_id: taskId,
+      });
+      continue;
+    }
+
     if (skipFamily && p.family === skipFamily) {
       attempts.push({ provider: p.family, failure_mode: 'skipped_claimer_family' });
       await recordProviderHealth({
