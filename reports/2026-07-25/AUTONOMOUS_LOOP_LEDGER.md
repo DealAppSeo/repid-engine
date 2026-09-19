@@ -7017,3 +7017,40 @@ Backlog item 12 updated to DONE in `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACK
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 
 **Next beat:** (1) Item 7 — write 5 acceptance tests for ANFIS enablement stage (no-leak/injection/ANFIS-decision/live-routing/job-token), SAFE-CLASS (tests only, no flag flips). (2) Or item 10 if Sean GO arrives for gas. (3) Rule-6 pattern: open docs PR FIRST, then build, then fill Step 5 BEFORE committing docs.
+
+---
+
+## Beat (2026-09-19, fifth run) — fourth run VERIFIED clean; item 13 heat-score primitive built
+
+**Prior beat verified [V]:** Beat 2026-09-19, fourth run (PR #789 docs only, HEAD `dd56302` on main).
+- origin/main = `dd56302` — **[V]** `git log --oneline -1 origin/main`.
+- PR #789 MERGED at 2026-09-19T12:38:15Z, "docs(loop): beat 2026-09-19 fourth run — third run Step 5 filled; item 12 backlog marked DONE" — **[V]** `gh pr view 789 --json state,mergedAt,title`.
+- PR #788 MERGED at 2026-09-19T08:37:28Z, "feat(memory): item 12 walk-verify HTTP endpoint" — **[V]** `gh pr view 788 --json state,mergedAt,title`.
+- Backlog item 12 shows DONE with all three PRs named — **[V]** grep on backlog file line 149.
+- Backlog item 7 shows STAGING DONE with 8/8 tests verified — **[V]** grep on backlog file line 107.
+- **Penalty verdict: NONE.** All fourth-run claims verified. No phantom features.
+
+**Process fix this beat:** Rule-6 violation (Step 5 not filled before docs PR merges) occurred 4 consecutive runs. Root cause: docs PR armed --auto before feature PR opened. Fix applied this beat: docs PR opened WITHOUT --auto; Step 5 filled in docs branch before arming.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required for live enforcement or gas.
+- Items 13+: LATER. All active items are Sean-gated → next new buildable work is item 13.
+
+**Intent for steps 2-4 (stated before feature branch):**
+Start item 13 (hierarchical durable memory) with a pure heat-score primitive. `src/memory/memory-heat.ts` — `computeHeatScore(lastAccessedMs, accessCount, nowMs?)`, `classifyHeatTier(heat)`, `selectEvictionCandidates`, `selectReactivationCandidates`. φ-weighted recency + frequency with 30-day half-life. Pure functions, no I/O. SAFE-CLASS (additive module, no existing behavior changed).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat.ts` (80 lines): `computeHeatScore` with φ-weighted recency/frequency and 30-day half-life; `HeatTier` type; `classifyHeatTier` (hot >0.6 / warm 0.3–0.6 / cold <0.3 / on_chain); `HeatLeaf` interface; `selectEvictionCandidates` (ascending heat, limit); `selectReactivationCandidates` (descending heat, threshold). Tests `tests/memory/memory-heat.test.ts` — 10/10: zero-access leaf is cold; just-accessed is hot; 30-day decay ≈ 0.5 recency; high frequency raises heat; tier boundaries exact at 0.3/0.6; on_chain respected; eviction ascending + limit; reactivation descending; empty input. Feature PR **#790** opened on `feat/cc-2026-09-19-memory-heat`, SAFE-CLASS, armed `--auto --squash`. **[V]** `npx jest tests/memory/memory-heat.test.ts --forceExit` → 10/10.
+
+**Mistakes:** None. Rule-6 fix applied: Step 5 filled before docs PR armed.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix, needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO. Relevant flags: `ENGINE_LLM_PROXY`, `ROUTER_STRICT_COST_ORDER`, `FREE_TIER_QUOTA_SHADOW_ENABLED` (live enforcement + cap values), `PROOF_TIER_SHADOW_ENABLED` enforce mode, `CASCADE_SPECULATION_ENABLED` live routing.
+
+**Next beat:** (1) Confirm PR #790 merged. (2) Advance item 13: `runHeatEvictionSweep` orchestrator — fetches leaves from `agent_memory_leaves`, classifies heat, marks cold-tier leaves (additive `heat_tier` column on existing table), preserves root. SAFE-CLASS if shadow-only with no real eviction until Sean GO.
