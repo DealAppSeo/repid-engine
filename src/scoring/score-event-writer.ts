@@ -37,6 +37,7 @@
 
 import { db } from '../db';
 import { currentCoverage, withCoverage } from '../services/detector-coverage';
+import { assertDeltaWithinBound } from '../services/wisdom-normalize';
 
 export type Applier = 'trigger' | 'caller';
 
@@ -171,6 +172,22 @@ export function counterpartyProblem(e: ScoreEventInsert): string | null {
 }
 
 export async function insertScoreEvent(e: ScoreEventInsert): Promise<WriteResult> {
+  // PR C (audit 2606.26028): opportunity-grade delta reject, SHADOW-FIRST. An oversize delta is
+  // a factor explosion or a bad call site; the 9990 backstop would silently shrink it to 9990 and
+  // score a wrong number. Here we reject (throw) instead — but default to SHADOW (log what it WOULD
+  // reject) per the sprint rule, since enforcing changes nothing for observed traffic (max delta
+  // ever 1940, all within bounds). DELTA_REJECT_ENFORCE=true makes it throw. GENESIS is exempt;
+  // the 9990 backstop is untouched.
+  try {
+    assertDeltaWithinBound(e.delta, e.event_type);
+  } catch (rejectErr) {
+    if (process.env.DELTA_REJECT_ENFORCE === 'true') throw rejectErr;
+    console.warn(
+      `[score-event] delta-reject SHADOW: would reject ${(rejectErr as Error).message} ` +
+        `(agent=${e.agent_id}). Set DELTA_REJECT_ENFORCE=true to enforce.`,
+    );
+  }
+
   // Refuse before doing anything else. A self-counterparty or an empty-string counterparty
   // is a call-site defect, and writing the row with the field dropped would hide it forever.
   const cpProblem = counterpartyProblem(e);
