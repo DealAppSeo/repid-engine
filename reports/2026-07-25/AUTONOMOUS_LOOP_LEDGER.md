@@ -7077,7 +7077,9 @@ Start item 13 (hierarchical durable memory) with a pure heat-score primitive. `s
 `src/memory/memory-heat-sweep.ts` — `runHeatEvictionSweep(leaves: HeatLeaf[], opts?): HeatEvictionReport`. Classifies all leaves by tier (hot/warm/cold/on_chain), returns eviction candidates (coldest-first, up to `evictionLimit`) and reactivation candidates (cold leaves warming past `reactivationMinHeat`). Pure function, all I/O injected, no DB write, no flag flip. Tests: empty input; all-hot (no eviction candidates); all-cold (all candidates, limit respected); mixed tiers; on_chain never evicted; reactivation subset of cold; stats totals correct. SAFE-CLASS (additive module, no callers wired, no prod path changed).
 
 **Step 5 — what shipped:**
-[To be filled before this docs PR is armed — process fix carried forward from fifth run.]
+`src/memory/memory-heat-sweep.ts` (114 lines): `runHeatEvictionSweep(leaves, opts)` → `HeatEvictionReport`. Classifies all leaves by heat tier (hot/warm/cold/on_chain), returns eviction candidates (coldest-first, up to `evictionLimit`, heat ≤ `evictionMaxHeat`) and reactivation candidates (cold leaves warming past `reactivationMinHeat`, warmest-first). Pure function, no I/O, no DB write. `tests/memory/memory-heat-sweep.test.ts` (130 lines) — **10/10 pass**: empty; all-hot (no eviction); all-cold + limit; mixed tiers; on_chain never evicted; eviction sorted coldest-first; reactivation threshold; stats totals correct; no mutation of input. `tsc --noEmit` clean. Feature PR **#795** opened on `feat/cc-2026-09-19-memory-heat-sweep`, SAFE-CLASS (additive module, zero callers in `src/` outside definition, no prod path changed), armed `--auto --squash`. **[V]** `./node_modules/.bin/jest tests/memory/memory-heat-sweep.test.ts --forceExit` → 10/10; `tsc --noEmit` → exit 0.
+
+One test fix mid-build: `warmingColdLeaf` initially used 35-day-old access (heat ≈ 0.314, warm tier) instead of 45-day-old (heat ≈ 0.257, cold tier above reactivation threshold). Fixed before committing.
 
 **Mistakes:** None new.
 
