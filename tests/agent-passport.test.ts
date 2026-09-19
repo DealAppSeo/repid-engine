@@ -272,6 +272,8 @@ describe('buildAgentPassport', () => {
       anchor_status: 'ANCHORED',
       anchor_note: expect.stringContaining('on-chain receipt'),
       created_at: '2026-07-01T00:00:00.000Z',
+      freshness: 'FAILED',
+      age_days: expect.any(Number),
       // WHAT was proven, not merely that something verifies. The threshold was absent
       // from this response entirely until 2026-09-03, which left no way to tell a
       // cleared bar from one no score could trip on.

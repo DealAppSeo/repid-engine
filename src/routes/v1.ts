@@ -19,6 +19,7 @@ import { createAnonymousBuilder } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
 import { generateCard } from '../services/zkp-card-generator';
 import { buildAgentPassport, PassportQueryError } from '../services/agent-passport';
+import { proofFreshnessVerdict } from '../zkp/proof-freshness';
 import { verifyProofLocally, type VerifyFn } from '../services/trust-harness-verify';
 import { renderCardHtml } from '../services/zkp-card-renderer';
 import substanceGateRouter from './v1/substance-gate';
@@ -279,10 +280,13 @@ router.post('/verify-proof', async (req: Request, res: Response) => {
     tier,
   });
 
+  const freshness = proofFreshnessVerdict(proofRow.created_at ?? null);
   res.json({
     ...result,
     tier,
     agent_id,
+    freshness: freshness.verdict,
+    age_days: freshness.ageDays,
   });
 });
 
