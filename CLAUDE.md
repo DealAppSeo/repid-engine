@@ -381,12 +381,12 @@ false again.
    naming its own host is the job), `PROBES` (1 — dials providers to test credentials),
    `NOISE` (2 — the host is only in a comment; the matcher is a superset and this is where
    that shows), `REGISTRY` (1 — `src/egress/provider-hosts.ts`, type-A constants live here),
-   and `CALLSITES` (**4** as of 2026-09-18 — files that still `fetch()` a host literal:
-   the judge, pcp-validator, badges, completeness). Type-A HAL defaults import the registry
-   and dropped off. A `CALLSITE_CEILING` ratchet may only be lowered. **Knowing a URL is not
-   presenting a bearer** — this is hostname inventory only, which catches neither an SDK
-   client with an embedded base URL nor a runtime-assembled host. Wrapping those four live
-   fetches is a later slice.
+   and `CALLSITES` (**0** as of 2026-09-19 — type-B live fetches now go through
+   `providerFetch` + `PROVIDER_URLS`; ceiling is 0). A `CALLSITE_CEILING` ratchet
+   may only be lowered. **Knowing a URL is not presenting a bearer** — this is
+   hostname inventory only, which catches neither an SDK client with an embedded
+   base URL nor a runtime-assembled host. Honouring `LOCAL_LLM_BASE_URL` on those
+   four is a later slice (HYP-11).
 
    **How this was found is the reusable part.** `provider_health` holds a daily anthropic row,
    and anthropic-dialect providers are DROPPED under a local base — so the row looks like proof

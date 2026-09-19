@@ -6,9 +6,10 @@
  *                        provider host only as an ILLUSTRATIVE arg to classifyEgress — no fetch,
  *                        no bearer — so it was never an egress callsite; see that commit).
  *   MEASURED 2026-09-18: CALLSITES 12 → 4. Type-A constants/comments/defaults moved to
- *                        src/egress/provider-hosts.ts (REGISTRY). Type-B files that
- *                        fetch() a host literal stay on CALLSITES (wrap-judge, not this slice).
- *   TARGET:              CALLSITES -> 0  (not this PR — live fetch literals remain)
+ *                        src/egress/provider-hosts.ts (REGISTRY).
+ *   MEASURED 2026-09-19: CALLSITES 4 → 0. Type-B live fetches now go through
+ *                        providerFetch + PROVIDER_URLS (HYP-10). No host/header change.
+ *   TARGET:              CALLSITES -> 0  (reached)
  *   ADAPTERS / PROBES / NOISE / REGISTRY: allowed to stay
  *
  * WHY THIS EXISTS. `LOCAL_LLM_BASE_URL` reads like an egress control — set it and every
@@ -33,9 +34,8 @@
  *   REGISTRY  src/egress/provider-hosts.ts — naming every provider host IS the job.
  *             Callsites import from here so they stop matching. Allowed to stay.
  *   CALLSITE  everything else: business logic that reached for a provider directly.
- *             THIS IS THE SHRINK LIST. Type-A (constant/comment/default) entries drop
- *             off by importing the registry. Type-B (fetch/new OpenAI with a host
- *             literal) stay until the wrap-judge slice.
+ *             THIS IS THE SHRINK LIST. Target reached: the list is empty. A new
+ *             direct caller cannot be admitted without raising CALLSITE_CEILING.
  *
  * ── THE DESIGN BUG THIS FIXES. The first version of this guard failed whenever ANY listed
  * file stopped matching, calling it "list rot". That punishes the exact outcome the guard
@@ -113,22 +113,18 @@ const REGISTRY: readonly string[] = ['src/egress/provider-hosts.ts'];
 
 /**
  * THE SHRINK LIST. Business logic that reached for a provider directly.
- * Type-A entries (HAL cluster defaults + validation-repid-delta) retired 2026-09-18
- * by importing the registry. Type-B live fetch() literals stay until wrap-judge.
+ * Type-A retired 2026-09-18 via the registry. Type-B live fetches retired 2026-09-19
+ * via providerFetch + PROVIDER_URLS (HYP-10). The list MUST stay empty — a new entry
+ * without raising CALLSITE_CEILING trips the ratchet.
  */
-const CALLSITES: readonly string[] = [
-  'src/engine/badges.ts',
-  'src/hal/completeness.ts',
-  'src/services/adversarial-judge.ts',
-  'src/services/pcp-validator.ts',
-];
+const CALLSITES: readonly string[] = [];
 
 /**
  * RATCHET. Lower this when a callsite is retired; never raise it.
  * Raising it means a new direct caller was admitted, which is the thing this file exists
  * to refuse — take that to review as a decision, not as a test edit.
  */
-const CALLSITE_CEILING = 4;
+const CALLSITE_CEILING = 0;
 
 const BASELINE: readonly string[] = [...ADAPTERS, ...PROBES, ...NOISE, ...REGISTRY, ...CALLSITES];
 const MAY_DISAPPEAR_QUIETLY = new Set(CALLSITES);
@@ -187,12 +183,23 @@ describe('provider egress surface is pinned and shrinking, not described', () =>
     expect(measured.length).toBe(BASELINE.length);
     expect(
       ADAPTERS.length + PROBES.length + NOISE.length + REGISTRY.length + CALLSITES.length,
-    ).toBe(18);
+    ).toBe(14);
   });
 
-  it('the judge is a CALLSITE, which is the finding that motivated this guard', () => {
-    expect(CALLSITES).toContain('src/services/adversarial-judge.ts');
-    expect(measured).toContain('src/services/adversarial-judge.ts');
+  it('the four former type-B files no longer name a host — they wrap providerFetch', () => {
+    const former = [
+      'src/engine/badges.ts',
+      'src/hal/completeness.ts',
+      'src/services/adversarial-judge.ts',
+      'src/services/pcp-validator.ts',
+    ];
+    for (const f of former) {
+      expect(CALLSITES).not.toContain(f);
+      expect(measured).not.toContain(f);
+      const src = fs.readFileSync(path.join(REPO, f), 'utf8');
+      expect(src).toContain('providerFetch');
+      expect(src).toContain('PROVIDER_URLS');
+    }
   });
 
   it('the registry still names the six hosts that made the judge a callsite', () => {
