@@ -25,6 +25,7 @@
  */
 
 import { poseidon2LeafHash } from '../zkp/poseidon2-leaf';
+import { LeanIMTPlus, verifyMembership } from './leanimt-plus';
 
 // ── Entity ─────────────────────────────────────────────────────────────────────
 
@@ -169,4 +170,81 @@ export function verifyWalkStep(step: WalkStep): boolean {
     to_value: step.to_value,
   });
   return derived === step.edge_hash;
+}
+
+// ── Authenticated walk verifier ───────────────────────────────────────────────
+
+export interface StepVerification {
+  index: number;
+  edgeHashValid: boolean;
+  fromNodeIncluded: boolean;
+  toNodeIncluded: boolean;
+  valid: boolean;
+  error?: string;
+}
+
+export interface AuthenticatedWalkResult {
+  valid: boolean;
+  steps: StepVerification[];
+  failAt?: number;
+}
+
+/**
+ * Verify an authenticated multi-hop subgraph walk against a hydrated LeanIMTPlus.
+ *
+ * For each step, checks three things in order:
+ *   1. edge_hash consistency (verifyWalkStep)
+ *   2. from_value has a valid inclusion witness in `tree`
+ *   3. to_value has a valid inclusion witness in `tree`
+ *
+ * Stops on the first failing step and sets `failAt` to that step's index.
+ * An empty walk is trivially valid. Never throws — node-not-found or parse
+ * errors are caught and recorded in `StepVerification.error`.
+ */
+export function verifyAuthenticatedWalk(
+  steps: WalkStep[],
+  tree: LeanIMTPlus,
+): AuthenticatedWalkResult {
+  if (steps.length === 0) return { valid: true, steps: [] };
+
+  const root = tree.root();
+  const verified: StepVerification[] = [];
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    const sv: StepVerification = {
+      index: i,
+      edgeHashValid: false,
+      fromNodeIncluded: false,
+      toNodeIncluded: false,
+      valid: false,
+    };
+
+    sv.edgeHashValid = verifyWalkStep(step);
+
+    try {
+      const fromV = BigInt(step.from_value);
+      const fromW = tree.membershipProof(fromV);
+      sv.fromNodeIncluded = verifyMembership(fromV, fromW, root);
+    } catch (e) {
+      sv.error = `from_value not in tree: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    if (!sv.error) {
+      try {
+        const toV = BigInt(step.to_value);
+        const toW = tree.membershipProof(toV);
+        sv.toNodeIncluded = verifyMembership(toV, toW, root);
+      } catch (e) {
+        sv.error = `to_value not in tree: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
+    sv.valid = sv.edgeHashValid && sv.fromNodeIncluded && sv.toNodeIncluded;
+    verified.push(sv);
+
+    if (!sv.valid) return { valid: false, steps: verified, failAt: i };
+  }
+
+  return { valid: true, steps: verified };
 }
