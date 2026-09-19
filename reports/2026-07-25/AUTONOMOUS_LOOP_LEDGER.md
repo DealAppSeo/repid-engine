@@ -6951,3 +6951,32 @@ Add `verifyAuthenticatedWalk(steps: WalkStep[], tree: LeanIMTPlus): Authenticate
 
 **Intent for steps 2-4 (stated before feature branch):**
 Wire `shadowCompareProofTier` into `src/scoring/pipeline.ts` as a shadow-only log — no routing effect, gate `PROOF_TIER_SHADOW_ENABLED` (default off). Derive proxy `PolicyAxes` from scoring context: `stakes = clamp(|finalDelta| / 100, 0, 1)`, `costPressure = 0` (no cost data at score time), `privacy = 0` (no PII signal at score time), `latencyUrgency = 0` (scoring is async), `reliabilityRequired = 1.0` (scoring is always high-reliability). Log `[PROOF-TIER-SHADOW]` JSON to console. SAFE-CLASS (additive wiring, shadow-only, new file + 2-line pipeline addition).
+
+**Step 5 — what shipped (retroactively filled by third run):**
+Item 11 shadow was ALREADY wired in PR #772 (`feat(scoring): wire item 11 selectProofTier shadow into pipeline (PROOF_TIER_SHADOW_ENABLED, default off)`) — confirmed `src/scoring/proof-tier-shadow.ts` (92 lines, wired at `pipeline.ts:58`), `tests/scoring/proof-tier-shadow.test.ts` (5/5 pass). **[V]** `grep -n shadowProofTier src/scoring/pipeline.ts` → line 58; `npx jest tests/scoring/proof-tier-shadow.test.ts --forceExit` → 5/5. The second run's intent was stale — the feature was done before this beat ran, same pattern as 4th run finding cascade shadow already wired (PR #763). No duplicate work shipped. The second run produced no feature PR and did not build its stated intent.
+
+**Mistakes (retroactive):** Step 5 was not filled before docs PR (#786) merged. Rule-6 violation, third time this loop cycle. Retroactively corrected here by the third run. Pattern: the ledger docs PR is opened before the feature PR, and the Step 5 note "to be filled after" is then lost when the beat hits the turn cap.
+
+---
+
+## Beat (2026-09-19, third run) — second run Step 5 RETRACTED; item 12 walk-verify HTTP endpoint built
+
+**Prior beat verified [V]:** Beat 2026-09-19, second run (PR #786 docs only, HEAD `7f1dc04` on main).
+- origin/main = `7f1dc04` — **[V]** `git log --oneline -1 origin/main`.
+- PR #786 MERGED at 2026-09-19T04:30:56Z, "docs(loop): beat 2026-09-19 second run — first run verified; item 11 proof-tier shadow intent logged" — **[V]** `gh pr view 786 --json state,mergedAt`.
+- **[X] RETRACTION — second run's Step 5 not filled.** Ledger shows intent for item 11 shadow wiring but no Step 5 entry. The stated feature (wire `shadowCompareProofTier`) was already done in PR #772 (BEFORE this beat ran). `grep -n "import.*shadowProofTier" src/scoring/pipeline.ts` → line 58 [V]; `npx jest tests/scoring/proof-tier-shadow.test.ts --forceExit` → 5/5 [V]. No duplicate work shipped; the second run produced no feature PR.
+- Item 12 `verifyAuthenticatedWalk` at `src/memory/graphrag-leaf-schema.ts:204` — **[V]** `grep -n verifyAuthenticatedWalk`.
+- Tests 8/8 pass for walk verifier — **[V]** `npx jest tests/memory/graphrag-walk-verifier.test.ts --forceExit`.
+- `tests/scoring/proof-tier-shadow.test.ts` EXISTS, 5/5 pass — **[V]**.
+- **Penalty verdict: Rule-6 violation (Step 5 missing, third consecutive occurrence).** No false claims about shipped features. Second run correctly found prior beat's walk verifier; the Rule-6 gap is the Step 5 slot.
+
+**Backlog state entering this beat:**
+- Item 12: `verifyAuthenticatedWalk` primitive DONE (PR #785, 8/8 tests). Acceptance test says "a multi-hop walk verifies hop-by-hop against the root" — the pure function does this; no HTTP endpoint exposes it yet (unlike item 3's verifier, which shipped `POST /api/v1/proof-carrying/verify`).
+- Item 11: shadow wired (PR #772, 5/5 tests), PROOF_TIER_SHADOW_ENABLED gated. Enforcement = Sean GO.
+- Items 8/9: shadow complete. Items 10: Sean GO for gas.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`POST /api/v1/memory/verify-walk` — HTTP endpoint exposing `verifyAuthenticatedWalk` over the existing auth rail. Accepts `{steps: WalkStep[]}` (agent_id from bearer key, never client-supplied), fetches the agent's latest `agent_memory_roots` row, hydrates the tree via `LeanIMTPlus.fromLeaves()` + `memory-root-store.ts`, then calls `verifyAuthenticatedWalk(steps, tree)`. Returns `{valid, steps: StepResult[], failAt?}`. New file `src/routes/memory-walk-verify.ts`, mounted in `src/index.ts`, 4+ tests in `tests/routes/memory-walk-verify.test.ts`. SAFE-CLASS (additive route, no existing behavior changed).
+
+**Step 5 — what shipped:**
+To be filled after feature PR is opened.
