@@ -6978,5 +6978,42 @@ Item 11 shadow was ALREADY wired in PR #772 (`feat(scoring): wire item 11 select
 **Intent for steps 2-4 (stated before feature branch):**
 `POST /api/v1/memory/verify-walk` — HTTP endpoint exposing `verifyAuthenticatedWalk` over the existing auth rail. Accepts `{steps: WalkStep[]}` (agent_id from bearer key, never client-supplied), fetches the agent's latest `agent_memory_roots` row, hydrates the tree via `LeanIMTPlus.fromLeaves()` + `memory-root-store.ts`, then calls `verifyAuthenticatedWalk(steps, tree)`. Returns `{valid, steps: StepResult[], failAt?}`. New file `src/routes/memory-walk-verify.ts`, mounted in `src/index.ts`, 4+ tests in `tests/routes/memory-walk-verify.test.ts`. SAFE-CLASS (additive route, no existing behavior changed).
 
+**Step 5 — what shipped (retroactively filled by fourth run):**
+`src/routes/memory-walk-verify.ts` (74 lines, new) + `tests/memory-walk-verify-route.test.ts` (145 lines, new) + `src/index.ts` (+2, mount). Route `POST /api/v1/memory/verify-walk` fetches the agent's latest `agent_memory_roots` row, hydrates the tree via `hydrateTree()`, and calls `verifyAuthenticatedWalk(steps, tree)` — returning `{valid, steps: StepResult[], failAt?}`. Agent identity from bearer key only (same contract as memory-retrieve). `memoryWalkVerifyRouter` mounted at `src/index.ts:76`. 7/7 tests pass (`memory-walk-verify-route.test.ts`). Feature PR **#788** MERGED at 2026-09-19T08:37:28Z. Item 12 acceptance test ("a multi-hop walk verifies hop-by-hop against the root") is NOW MET — pure function + HTTP endpoint both exist. **Third consecutive Rule-6 violation (Step 5 not filled before docs PR #787 merged).**
+
+---
+
+## Beat (2026-09-19, fourth run) — third run's Step 5 retroactively filled; walk-verify HTTP endpoint independently verified; item 12 backlog marked DONE
+
+**Prior beat verified [V]:** Beat 2026-09-19, third run (PR #787 docs + PR #788 feature, HEAD `b799df3` on main).
+- origin/main = `b799df3` — **[V]** `git log --oneline -1 origin/main`.
+- PR #788 MERGED at 2026-09-19T08:37:28Z, "feat(memory): item 12 walk-verify HTTP endpoint — POST /api/v1/memory/verify-walk" — **[V]** `gh pr view 788 --json state,mergedAt,title`.
+- PR #787 MERGED at 2026-09-19T08:32:56Z, docs PR for third run — **[V]** `gh pr view 787 --json state,mergedAt`.
+- PR #788 diff: 3 files changed (`src/index.ts` +2, `src/routes/memory-walk-verify.ts` +74 new, `tests/memory-walk-verify-route.test.ts` +145 new) — **[V]** `git show b799df3 --stat`.
+- `memoryWalkVerifyRouter` mounted at `src/index.ts:76` — **[V]** `grep -n "verify-walk\|memory-walk-verify" src/index.ts`.
+- 7/7 tests pass — **[V]** `./node_modules/.bin/jest --config jest.config.js tests/memory-walk-verify-route.test.ts --forceExit` → 7/7, 1 suite.
+- Third run's Step 5 was "To be filled after feature PR is opened" — retroactively filled above (same Rule-6 pattern as 2nd/5th/6th runs).
+- **Penalty verdict: Rule-6 violation (Step 5 missing again, fourth consecutive occurrence).** No false claims — all stated artifacts verified present and passing. Item 12's acceptance test IS met by PR #788.
+
+**Backlog state entering this beat:**
+- Item 12: FULLY DONE — leaf schemas (PR #780), walk verifier (PR #785), HTTP endpoint (PR #788), backlog table updated to DONE this beat.
+- Items 8/9/11: shadow complete. Sean GO for live enforcement.
+- Item 10: orchestration built. Sean GO for gas.
+- Item 7: NOW (stage) — 5 acceptance tests for ANFIS enablement stage not yet written.
+- Items 13+: LATER.
+
+**Intent for steps 2-4:** Update backlog item 12 to DONE with [V] evidence. Then determine next buildable item that is not Sean-gated.
+
 **Step 5 — what shipped:**
-To be filled after feature PR is opened.
+Backlog item 12 updated to DONE in `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` with verified evidence (leaf schemas PR #780 + walk verifier PR #785 + HTTP endpoint PR #788, 8/8 + 7/7 tests). Backlog item 7 updated: the 5 staging acceptance tests were **already built and passing** (`tests/anfis-enablement.test.ts`, 8/8) — row was stale ("NOW (stage)"). Verified by running them directly this beat. Remaining for item 7: Sean GO for flag flips + agent key minting. No feature code shipped — this beat's work was verification + two stale backlog rows corrected.
+
+**Mistakes:** None new of my own. Retroactively filled third run's Step 5 (Rule-6 violation, fourth occurrence of the pattern). Corrected backlog item 12 from LATER to DONE.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — proposal: mount `runMemoryRootAnchorSweep` on daily cron in `src/index.ts` alongside `scoreMonitor`, funding from existing attester wallet. Needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+
+**Next beat:** (1) Item 7 — write 5 acceptance tests for ANFIS enablement stage (no-leak/injection/ANFIS-decision/live-routing/job-token), SAFE-CLASS (tests only, no flag flips). (2) Or item 10 if Sean GO arrives for gas. (3) Rule-6 pattern: open docs PR FIRST, then build, then fill Step 5 BEFORE committing docs.
