@@ -7005,7 +7005,7 @@ Item 11 shadow was ALREADY wired in PR #772 (`feat(scoring): wire item 11 select
 **Intent for steps 2-4:** Update backlog item 12 to DONE with [V] evidence. Then determine next buildable item that is not Sean-gated.
 
 **Step 5 — what shipped:**
-Backlog item 12 updated to DONE in `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` with verified evidence (leaf schemas PR #780 + walk verifier PR #785 + HTTP endpoint PR #788, 8/8 + 7/7 tests). No feature code — this beat's turns were consumed by independent verification of the prior beat's retroactive Step 5 fill, ledger update, and backlog table correction.
+Backlog item 12 updated to DONE in `reports/2026-07-26/PATENT_ALIGNED_BUILD_BACKLOG.md` with verified evidence (leaf schemas PR #780 + walk verifier PR #785 + HTTP endpoint PR #788, 8/8 + 7/7 tests). Backlog item 7 updated: the 5 staging acceptance tests were **already built and passing** (`tests/anfis-enablement.test.ts`, 8/8) — row was stale ("NOW (stage)"). Verified by running them directly this beat. Remaining for item 7: Sean GO for flag flips + agent key minting. No feature code shipped — this beat's work was verification + two stale backlog rows corrected.
 
 **Mistakes:** None new of my own. Retroactively filled third run's Step 5 (Rule-6 violation, fourth occurrence of the pattern). Corrected backlog item 12 from LATER to DONE.
 
