@@ -7153,9 +7153,9 @@ Additive migration adding `last_accessed_at timestamptz DEFAULT now()` and `acce
 `src/memory/memory-heat-db-sweep.ts` — DB-backed wrapper: fetches agent's `agent_memory_leaves` rows (using `last_accessed_at`, `access_count`), maps to `HeatLeaf[]`, calls `runHeatEvictionSweep`, returns the report. Shadow-only (no tombstoning). `fetchAgentLeaves(supabase, agentId)` injected for testability. Tests: empty agent; leaves map to HeatLeaf correctly; eviction/reactivation report returned; tombstoned leaves excluded; DB error propagated. SAFE-CLASS (additive module, no callers wired, no prod path changed).
 
 **Step 5 — what shipped:**
-[TO BE FILLED BEFORE ARMING --auto]
+`src/memory/memory-heat-db-sweep.ts` (96 lines): `fetchAgentLeaves(supabase, agentId)` — parallel queries for non-tombstoned `agent_memory_leaves` rows and anchored `agent_memory_roots` epochs; throws on any DB error. `rowsToHeatLeaves(rows, anchoredEpochs)` — maps rows to `HeatLeaf[]` (string id, `lastAccessedMs` from ISO timestamp, `isAnchored` from epoch set). `runHeatEvictionSweepForAgent(supabase, agentId, opts?, fetchFn?)` — orchestrates fetch → map → `runHeatEvictionSweep`. All Supabase I/O injected via `fetchFn` parameter (default = `fetchAgentLeaves`). Tests `tests/memory/memory-heat-db-sweep.test.ts` — **14/14 pass**: empty agent; hot leaf excluded from eviction; cold leaf in candidates; anchored epoch → `on_chain` tier, never evicted; DB error propagated; `fetchFn` called with correct args; `evictionLimit` option respected (3 cold leaves → limit=1 → 1 candidate). Feature PR **#803** opened on `feat/cc-2026-09-20-memory-heat-db-sweep`, SAFE-CLASS (additive module, zero callers in `src/` outside definition, no prod path changed), armed `--auto --squash` at 2026-09-20T04:29:21Z (`autoMergeRequest.enabledAt` non-null — **[V]** `gh pr view 803 --json autoMergeRequest`). **[V]** `npx jest tests/memory/memory-heat-db-sweep.test.ts --forceExit` → 14/14; `tsc --noEmit` → exit 0.
 
-**Mistakes:** [TO BE FILLED]
+**Mistakes:** None.
 
 **Open for Sean (rule-4):**
 1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
@@ -7165,6 +7165,6 @@ Additive migration adding `last_accessed_at timestamptz DEFAULT now()` and `acce
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
 
-**Next beat:** [TO BE FILLED]
+**Next beat:** (1) Confirm PR #803 merged. (2) Advance item 13: expose `runHeatEvictionSweepForAgent` via a cron or a health endpoint so shadow logs flow — the first point where the heat classification becomes observable in prod. OR (3) Build item 9's missing decision: a configured `dailyCallCap` per provider + plug `evaluateFreeTierQuota` into `router.ts`'s cap path (decisions (b)/(c) still open, noted as NOW in the backlog). Whichever unblocks more downstream work.
 
 **Next beat:** (1) Confirm sixth-run PRs merged. (2) Wire `runHeatEvictionSweep` into a shadow log path (console `[HEAT-EVICTION-SHADOW]` gated on `HEAT_EVICTION_SHADOW_ENABLED`, default off) — additive caller, same shadow-first pattern as item 11/grounding. (3) Or item 14 (Plonky3 AIR) if turns allow and Sean GO not needed.
