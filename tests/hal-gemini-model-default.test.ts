@@ -35,10 +35,11 @@ const ENABLE_GEMINI_ONLY = {
 /** Build with a dummy key so no network is touched and no real key is read. */
 function geminiCfg(env: Record<string, string | undefined> = {}) {
   const saved: Record<string, string | undefined> = {};
-  const keys = ['GEMINI_API_KEY', 'HAL_S2_GEMINI_MODEL', 'OPENROUTER_API_KEY', ...Object.keys(env)];
+  const keys = ['GEMINI_API_KEY', 'HAL_S2_GEMINI_MODEL', 'OPENROUTER_API_KEY', 'SEAN_PAID_LOOP', ...Object.keys(env)];
   for (const k of keys) saved[k] = process.env[k];
   try {
     process.env.GEMINI_API_KEY = 'test-key-not-real';
+    process.env.SEAN_PAID_LOOP = 'true';
     delete process.env.HAL_S2_GEMINI_MODEL;
     // OpenRouter re-routes the gemini family when present; unset it so we exercise the
     // DIRECT Google endpoint, which is the one that carried the retired default.

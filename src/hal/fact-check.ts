@@ -28,7 +28,7 @@ import crypto from 'crypto';
 // default-OFF: unset → hosted behavior byte-identical.
 import { resolveProviderEndpoint } from './local-llm';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
-import { gateOpenRouterModel, halAllowPaid } from './hal-free-gate';
+import { gateOpenRouterModel, gateZaiModel, gateGeminiUnderHold, halAllowPaid } from './hal-free-gate';
 import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 // CROSS-FIX 2026-07-05 — hardened registry-family lookup (single source of family truth). resolveFamily
 // is REGISTRY-ONLY and THROWS on an unmapped/ambiguous model. HAL is a LIVE scoring path and MUST NOT
@@ -125,8 +125,8 @@ export interface FactCheckProviderCfg {
 /**
  * R6 — cost class for cheapest-first quorum assembly. free (groq/gemini/cerebras/mistral/qwen) →
  * cheap-paid (deepseek) → escalation (fireworks/anthropic/openai/asi1/togetherai/litellm). The quorum
- * stops escalating the moment >= 2 distinct families respond, so pricier providers are only paid for
- * when the free tier can't form a quorum.
+ * stops escalating the moment >= FREE_WAVE_STOP_FAMILIES (3) distinct families respond, so pricier
+ * providers are only paid for when the free wave cannot assemble three families.
  */
 export function costTierOf(p: { name: string; family?: string }): 'free' | 'cheap' | 'escalation' {
   const k = `${p.name} ${p.family ?? ''}`.toLowerCase();
@@ -814,6 +814,8 @@ async function grokTiebreak(
  * inflated the score — this gate adds the missing quorum requirement.
  */
 const MIN_QUORUM_FOR_VETO = 2;
+/** Cost-ordered waves keep calling cheaper-then-dearer until this many families answer. */
+const FREE_WAVE_STOP_FAMILIES = 3;
 
 function computeQuorum(succeeded: number, attempted: number): 'full' | 'partial' | 'low' | 'outage' {
   if (succeeded === 0) return 'outage';
@@ -982,8 +984,9 @@ export async function factCheck(
     new Set(vs.filter((v) => v.verdict !== 'ERROR').map((v) => familyByName.get(v.provider) ?? v.provider)).size;
 
   // R6 — CHEAPEST-FIRST quorum assembly: call free → cheap → escalation in waves, stopping the moment
-  // >= MIN_QUORUM_FOR_VETO distinct families respond (so paid providers are only hit when free can't
-  // form a quorum). Revertible via HAL_QUORUM_COST_ORDERED=false (→ all providers in parallel, prior).
+  // >= FREE_WAVE_STOP_FAMILIES distinct families respond (so paid providers are only hit when the
+  // free wave cannot assemble three families). Veto still requires MIN_QUORUM_FOR_VETO=2.
+  // Revertible via HAL_QUORUM_COST_ORDERED=false (→ all providers in parallel, prior).
   const costOrdered = process.env.HAL_QUORUM_COST_ORDERED !== 'false';
   let verdicts: ProviderVerdict[] = [];
   let attempted = 0;
@@ -1013,7 +1016,7 @@ export async function factCheck(
     for (const wave of waves) {
       verdicts.push(...(await settle(wave)));
       attempted += wave.length;
-      if (distinctFamilies(verdicts) >= MIN_QUORUM_FOR_VETO) break; // quorum formed — don't escalate to pricier tiers
+      if (distinctFamilies(verdicts) >= FREE_WAVE_STOP_FAMILIES) break;
     }
   } else {
     verdicts = await settle(activeProviders);
@@ -1888,8 +1891,22 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   const directGeminiDead = isMeasuredDead('gemini', directGeminiModel || 'gemini-2.5-flash');
   const geminiViaOpenRouter =
     !!orForGemini && !geminiForcedDirect && (geminiForcedViaOr || !gm || directGeminiDead);
+  const geminiHold = gateGeminiUnderHold(halAllowPaid());
   if ((gm || orForGemini) && (enabled.gemini || ab)) {
-    if (geminiViaOpenRouter) {
+    // FREE-TIER HOLD: do not dial Google's prepaid direct endpoint. The gemini family
+    // still votes via OpenRouter's live :free Gemma slug when an OR key is present.
+    if (geminiHold.skipDirect && orForGemini) {
+      console.warn(`[hal] free-tier gate: ${geminiHold.reason}`);
+      add(
+        { name: 'gemini', endpoint: PROVIDER_URLS.openrouterChatCompletions, apiKey: orForGemini, family: 'gemini' },
+        '__unset__',
+        geminiHold.openRouterFreeSlug,
+        'openrouter',
+        true,
+      );
+    } else if (geminiHold.skipDirect) {
+      console.warn(`[hal] free-tier gate: ${geminiHold.reason} — no OPENROUTER_API_KEY, gemini family omitted`);
+    } else if (geminiViaOpenRouter) {
       if (directGeminiDead && gm) {
         console.warn(
           `[hal] quorum: gemini failing back to OpenRouter — the direct model has been MEASURED dead. ` +
@@ -1953,7 +1970,31 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // forces it on and HAL_QUORUM_AUTOBACKFILL=false restores pure per-provider gating.
   const z = process.env.ZAI_API_KEY?.trim();
   if (z && (enabled.zai || ab)) {
-    add({ name: 'zai', endpoint: PROVIDER_URLS.zaiChatCompletions, apiKey: z, family: 'glm' }, 'HAL_S2_ZAI_MODEL', 'glm-4.5-flash');
+    const zaiGate = gateZaiModel({
+      operatorModel: process.env.HAL_S2_ZAI_MODEL?.trim(),
+      freeDefault: 'glm-4.5-flash',
+      allowPaid: halAllowPaid(),
+    });
+    if (zaiGate.ignoreOperatorModel) console.warn(`[hal] free-tier gate: ${zaiGate.reason}`);
+    if (!halAllowPaid()) {
+      out.push({
+        name: 'zai',
+        endpoint: PROVIDER_URLS.zaiChatCompletions,
+        apiKey: z,
+        model: zaiGate.staticDefault,
+        family: 'glm',
+        tier: 'free',
+      });
+      familiesTaken.add('glm');
+    } else {
+      add(
+        { name: 'zai', endpoint: PROVIDER_URLS.zaiChatCompletions, apiKey: z, family: 'glm' },
+        'HAL_S2_ZAI_MODEL',
+        zaiGate.staticDefault,
+        'zai',
+        zaiGate.ignoreOperatorModel,
+      );
+    }
   }
   // NVIDIA NIM — the `nvidia` (Nemotron) family bought DIRECT from NVIDIA's hosted gateway,
   // OpenAI-compatible so no dialect is needed. Reads NVIDIA_NIM_API_KEY.

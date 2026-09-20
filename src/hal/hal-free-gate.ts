@@ -92,3 +92,79 @@ export function gateOpenRouterModel(input: OpenRouterGateInput): OpenRouterGateR
       : `allow_paid=false — paid default suppressed, using ${freeDefault}`,
   };
 }
+
+/**
+ * Z.AI free-tier ids. MEASURED 2026-09-14: production catalog-substituted `glm-5-turbo`
+ * (HTTP 429 "Insufficient balance") even though the shipped default is `glm-4.5-flash`.
+ * Flash is the vendor's permanent free model (src/providers/zai.ts). Anything with
+ * turbo/pro/plus, or glm-5 without flash, is treated as paid.
+ */
+export function isFreeZaiModel(model: string | undefined | null): boolean {
+  if (typeof model !== 'string' || !model.trim()) return false;
+  const m = model.trim().toLowerCase();
+  if (/turbo|pro|plus/.test(m)) return false;
+  return /flash/.test(m);
+}
+
+export interface ZaiGateInput {
+  operatorModel?: string;
+  freeDefault: string;
+  allowPaid: boolean;
+}
+
+export function gateZaiModel(input: ZaiGateInput): OpenRouterGateResult {
+  const { operatorModel, freeDefault, allowPaid } = input;
+  const op = operatorModel?.trim() || undefined;
+  if (allowPaid) {
+    return {
+      staticDefault: op || freeDefault,
+      ignoreOperatorModel: false,
+      reason: 'allow_paid=true — paid Z.AI slugs permitted',
+    };
+  }
+  if (op && isFreeZaiModel(op)) {
+    return {
+      staticDefault: op,
+      ignoreOperatorModel: true,
+      reason: `allow_paid=false — using operator free Z.AI slug ${op}`,
+    };
+  }
+  return {
+    staticDefault: freeDefault,
+    ignoreOperatorModel: true,
+    reason: op
+      ? `allow_paid=false — REFUSED paid HAL_S2_ZAI_MODEL='${op}', using ${freeDefault}`
+      : `allow_paid=false — catalog must not pick glm-5-turbo; pinning ${freeDefault}`,
+  };
+}
+
+/** OpenRouter :free Gemma — live on /api/v1/models 2026-09-14. Family maps to gemini. */
+export const GEMINI_FREE_OPENROUTER_SLUG = 'google/gemma-4-31b-it:free';
+
+export interface GeminiHoldGateResult {
+  /** When true, do not dial Google's paid direct endpoint. */
+  skipDirect: boolean;
+  /** OpenRouter :free slug to use instead, if an OR key is present. */
+  openRouterFreeSlug: string;
+  reason: string;
+}
+
+/**
+ * Under allow_paid=false, the direct Gemini endpoint is a prepaid Google bill.
+ * MEASURED 2026-09-14: `gemini-2.5-flash` → HTTP 429 "prepayment credits are depleted".
+ * Route the gemini family through OpenRouter's live :free Gemma slug instead.
+ */
+export function gateGeminiUnderHold(allowPaid: boolean): GeminiHoldGateResult {
+  if (allowPaid) {
+    return {
+      skipDirect: false,
+      openRouterFreeSlug: GEMINI_FREE_OPENROUTER_SLUG,
+      reason: 'allow_paid=true — direct Gemini permitted',
+    };
+  }
+  return {
+    skipDirect: true,
+    openRouterFreeSlug: GEMINI_FREE_OPENROUTER_SLUG,
+    reason: `allow_paid=false — skip paid Gemini direct (credits-depleted 429); use ${GEMINI_FREE_OPENROUTER_SLUG}`,
+  };
+}
