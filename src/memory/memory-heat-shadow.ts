@@ -14,6 +14,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { runHeatEvictionSweepForAgent } from './memory-heat-db-sweep';
 import type { HeatSweepOptions } from './memory-heat-sweep';
+import { writeHeatTiers } from './memory-heat-tier-writer';
+import type { HeatTier } from './memory-heat';
 
 /** Injected for testability — real default is runHeatEvictionSweepForAgent. */
 export type SweepFn = typeof runHeatEvictionSweepForAgent;
@@ -28,13 +30,21 @@ export async function logHeatSweepShadow(
 
   try {
     const report = await sweepFn(supabase, agentId, opts);
-    const { stats, evictionCandidates, reactivationCandidates } = report;
+    const { stats, evictionCandidates, reactivationCandidates, hot, warm, cold, onChain } = report;
     console.log(
       `[HEAT-EVICTION-SHADOW] ${agentId} ` +
         `hot=${stats.hotCount} warm=${stats.warmCount} cold=${stats.coldCount} ` +
         `on_chain=${stats.onChainCount} evict=${evictionCandidates.length} ` +
         `reactivate=${reactivationCandidates.length}`,
     );
+
+    // Persist tier classifications — shadow-only (flag-gated through this caller).
+    const tierMap = new Map<string, HeatTier>();
+    for (const leaf of hot) tierMap.set(leaf.id, 'hot');
+    for (const leaf of warm) tierMap.set(leaf.id, 'warm');
+    for (const leaf of cold) tierMap.set(leaf.id, 'cold');
+    for (const leaf of onChain) tierMap.set(leaf.id, 'on_chain');
+    await writeHeatTiers(supabase, agentId, tierMap);
   } catch (err) {
     console.warn(`[HEAT-EVICTION-SHADOW] ${agentId} sweep error:`, err);
   }
