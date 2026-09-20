@@ -7204,3 +7204,25 @@ Additive migration adding `last_accessed_at timestamptz DEFAULT now()` and `acce
 7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway when you want heat-eviction logs flowing; no scoring or tombstoning risk, flag-gated.
 
 **Next beat:** (1) Confirm PR #805 merged. (2) Advance item 13: wire actual cold-tier marking (additive `heat_tier` column on `agent_memory_leaves`) so shadow log can report WOULD-evict with DB persistence — still no real eviction, just durable classification. OR (3) Item 9 decisions (b)/(c): configured `dailyCallCap` per provider + plug `evaluateFreeTierQuota` into `router.ts`.
+
+---
+
+## Beat (2026-09-20, fourth run) — third run VERIFIED with finding; PR #805 CI failure diagnosed and fixed
+
+**Prior beat verified [V]:** Beat 2026-09-20, third run (PR #804 docs + PR #805 feature claimed "armed --auto --squash").
+- origin/main = `9d2713c` — **[V]** `git log --oneline -3 origin/main` (PR #804 docs merged, `9d2713c`).
+- PR #805 state: **OPEN, not merged** — **[V]** `gh pr view 805 --json state,mergedAt,title` → `"state":"OPEN","mergedAt":null`. The third run's ledger said PR #805 was opened and armed; it was, but CI failed and --auto did not land it.
+- CI failure on PR #805: `check:named-env-vars` FAILED — `HEAT_EVICTION_SHADOW_ENABLED` referenced in `src/memory/memory-heat-shadow.ts:10` but absent from `src/config/known-env-vars.generated.ts` — **[V]** `gh run view 35499770153 --log-failed` → `unknown env-var names: 1 tokens, 1 locations / HEAT_EVICTION_SHADOW_ENABLED`.
+- `src/memory/memory-heat-shadow.ts` EXISTS on the feature branch — **[V]** checked out `feat/cc-2026-09-20-memory-heat-shadow`.
+- **Penalty: MINOR.** The shadow file and 8/8 tests shipped as claimed. The CI failure was a registry omission the third run should have caught (every prior feature flag in this repo — `CASCADE_SPECULATION_ENABLED`, `FREE_TIER_QUOTA_SHADOW_ENABLED`, `PROOF_TIER_SHADOW_ENABLED` — is in the registry). The --auto PR did not land; nothing broken in prod.
+
+**Fix applied this beat:**
+Added `HEAT_EVICTION_SHADOW_ENABLED` to `src/config/known-env-vars.generated.ts` in correct alphabetical position (after `HEALTH_PROBE_TIMEOUT_MS`, before `HF_API_KEY` — HEAT > HEALTH because T > L). Two commits pushed to `feat/cc-2026-09-20-memory-heat-shadow`: first at wrong position (before HEALTH_*), second corrected. CI re-run triggered. **[V]** `gh pr checks 805` (Strix pass, gitleaks pass, jailbreak pass; `test` re-running after push `47b027c`).
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791) + heat-eviction sweep (PR #795) + access-tracking (PR #800) + DB-backed orchestrator (PR #803) + shadow-log caller (PR #805, CI fix pushed, re-running). All sweep functions pure, zero DB callers outside definitions.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`supabase/migrations/20260920010000_agent_memory_heat_tier.sql` — additive column `heat_tier text CHECK (heat_tier IN ('hot','warm','cold','on_chain')) DEFAULT NULL` on `agent_memory_leaves`. New helper `src/memory/memory-heat-tier-writer.ts` — `writeHeatTiers(supabase, agentId, tiers: Map<string, HeatTier>)` updates each leaf's `heat_tier` from a sweep report. Wired shadow-only into `logHeatSweepShadow` (after the existing log call, only when flag is on). SAFE-CLASS (additive DDL + shadow-only writer, no scoring path changed, flag-gated).
