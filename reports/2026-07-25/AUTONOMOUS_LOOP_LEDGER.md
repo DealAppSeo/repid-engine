@@ -7130,4 +7130,41 @@ Additive migration adding `last_accessed_at timestamptz DEFAULT now()` and `acce
 
 **Next beat:** (1) Confirm PR #798 merged. (2) Advance item 13: wire `runHeatEvictionSweep` into a DB-backed orchestrator using the new `last_accessed_at`/`access_count` columns — shadow-only sweep that logs which leaves WOULD be evicted, no actual tombstoning. SAFE-CLASS (pure reader + log, no write path changed).
 
+---
+
+## Beat (2026-09-20, second run) — first run VERIFIED (PR number corrected); item 13 DB-backed heat sweep built
+
+**Prior beat verified [V]:** Beat 2026-09-20, first run (PR #798 docs + PR #800 feature, HEAD `61c3885` on main after PR #799 also merged by another session).
+- origin/main = `61c3885` — **[V]** `git log --oneline -1 origin/main`.
+- PR #800 MERGED at 2026-09-20T01:10:47Z, "feat(memory): item 13 access tracking — last_accessed_at/access_count on agent_memory_leaves, 7/7 tests" — **[V]** `gh pr view 800 --json state,mergedAt,title`.
+- PR #798 MERGED at 2026-09-20T01:08:23Z, docs PR — **[V]** `gh pr view 798 --json state,mergedAt`.
+- **CORRECTION: ledger's first run claimed "Feature PR #798" — false. #798 was the docs PR (`docs/cc-2026-09-20-beat-loop`); feature landed as PR #800 (`feat/cc-2026-09-20-memory-leaf-access-tracking`).** A PR number reporting slip; the feature code shipped correctly.
+- `src/memory/memory-leaf-access.ts` EXISTS; `recordLeafAccess` wired fire-and-forget in `src/routes/memory-retrieve.ts:82` — **[V]** `ls`/`grep`.
+- Tests **7/7 pass** — **[V]** `npx jest tests/memory/memory-leaf-access.test.ts --forceExit` re-ran independently.
+- PR #799 (HAL free-wave gates, another session) merged at 2026-09-20T04:05:21Z — **[V]** `gh pr view 799 --json state,mergedAt`.
+- **Penalty verdict: NONE.** Feature present, tests pass, wiring confirmed. PR number mismatch (#798 vs #800) is a reporting slip, not a phantom feature or faked pass.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791, 16/16) + heat-eviction sweep orchestrator (PR #795, 10/10) + access-tracking DDL + instrumentation (PR #800, 7/7). Both sweep functions are pure with no DB callers. Next: DB-backed orchestrator using the new columns.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-db-sweep.ts` — DB-backed wrapper: fetches agent's `agent_memory_leaves` rows (using `last_accessed_at`, `access_count`), maps to `HeatLeaf[]`, calls `runHeatEvictionSweep`, returns the report. Shadow-only (no tombstoning). `fetchAgentLeaves(supabase, agentId)` injected for testability. Tests: empty agent; leaves map to HeatLeaf correctly; eviction/reactivation report returned; tombstoned leaves excluded; DB error propagated. SAFE-CLASS (additive module, no callers wired, no prod path changed).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-db-sweep.ts` (96 lines): `fetchAgentLeaves(supabase, agentId)` — parallel queries for non-tombstoned `agent_memory_leaves` rows and anchored `agent_memory_roots` epochs; throws on any DB error. `rowsToHeatLeaves(rows, anchoredEpochs)` — maps rows to `HeatLeaf[]` (string id, `lastAccessedMs` from ISO timestamp, `isAnchored` from epoch set). `runHeatEvictionSweepForAgent(supabase, agentId, opts?, fetchFn?)` — orchestrates fetch → map → `runHeatEvictionSweep`. All Supabase I/O injected via `fetchFn` parameter (default = `fetchAgentLeaves`). Tests `tests/memory/memory-heat-db-sweep.test.ts` — **14/14 pass**: empty agent; hot leaf excluded from eviction; cold leaf in candidates; anchored epoch → `on_chain` tier, never evicted; DB error propagated; `fetchFn` called with correct args; `evictionLimit` option respected (3 cold leaves → limit=1 → 1 candidate). Feature PR **#803** opened on `feat/cc-2026-09-20-memory-heat-db-sweep`, SAFE-CLASS (additive module, zero callers in `src/` outside definition, no prod path changed), armed `--auto --squash` at 2026-09-20T04:29:21Z (`autoMergeRequest.enabledAt` non-null — **[V]** `gh pr view 803 --json autoMergeRequest`). **[V]** `npx jest tests/memory/memory-heat-db-sweep.test.ts --forceExit` → 14/14; `tsc --noEmit` → exit 0.
+
+**Mistakes:** None.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+
+**Next beat:** (1) Confirm PR #803 merged. (2) Advance item 13: expose `runHeatEvictionSweepForAgent` via a cron or a health endpoint so shadow logs flow — the first point where the heat classification becomes observable in prod. OR (3) Build item 9's missing decision: a configured `dailyCallCap` per provider + plug `evaluateFreeTierQuota` into `router.ts`'s cap path (decisions (b)/(c) still open, noted as NOW in the backlog). Whichever unblocks more downstream work.
+
 **Next beat:** (1) Confirm sixth-run PRs merged. (2) Wire `runHeatEvictionSweep` into a shadow log path (console `[HEAT-EVICTION-SHADOW]` gated on `HEAT_EVICTION_SHADOW_ENABLED`, default off) — additive caller, same shadow-first pattern as item 11/grounding. (3) Or item 14 (Plonky3 AIR) if turns allow and Sean GO not needed.
