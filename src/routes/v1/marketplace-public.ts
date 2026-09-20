@@ -4,6 +4,9 @@
  * GET /api/v1/marketplace/recent-transactions
  *   Returns the last N settled service contracts (real + simulated), joined to
  *   their x402 settlement, for the /market page's "recent settlements" panel.
+ * GET /api/v1/marketplace/mock-receipt
+ *   One simulated fixture (same field names) so TrustMarket can hang a
+ *   first-receipt UI. Always is_simulated=true. Does not flip settlement.
  *
  * PUBLIC (read-only): this router is mounted BEFORE authMiddleware in
  * src/index.ts, so it needs no API key — same posture as the other public
@@ -109,6 +112,41 @@ router.get('/recent-transactions', async (req: Request, res: Response) => {
     console.error('[marketplace-public] recent-transactions unexpected error:', e?.message ?? String(e));
     return res.status(500).json({ error: 'internal_error', message: e?.message ?? String(e) });
   }
+});
+
+/**
+ * GET /api/v1/marketplace/mock-receipt
+ *
+ * One simulated settlement row, same field names as /recent-transactions, so
+ * TrustMarket can hang a first-receipt UI without waiting for a live settle
+ * and without flipping MARKETPLACE_SETTLEMENT_ENABLED (hard-off in marketplace.ts;
+ * env is not consulted here either).
+ *
+ * No DB write. No money. tx_hash is always null. is_simulated is always true.
+ * Synthetic contract_id (00000000-…) — not a production extract.
+ */
+export const MOCK_RECEIPT_CONTRACT_ID = '00000000-0000-0000-0000-000000000001';
+
+router.get('/mock-receipt', (_req: Request, res: Response) => {
+  return res.json({
+    kind: 'mock_receipt',
+    contract_id: MOCK_RECEIPT_CONTRACT_ID,
+    service_type: 'verification',
+    service_name: 'Verify-a-claim',
+    amount: 100000,
+    asset: 'USDC',
+    is_simulated: true,
+    tx_hash: null,
+    status: 'settled',
+    provider_agent_id: '00000000-0000-0000-0000-000000000002',
+    provider_agent_name: 'trinity-shofet',
+    buyer_agent_id: '00000000-0000-0000-0000-000000000003',
+    buyer_agent_name: 'trinity-nexus',
+    settled_at: '2026-09-20T00:00:00.000Z',
+    settlement_enabled: false,
+    receipt_json_path: `/api/v1/receipt/${MOCK_RECEIPT_CONTRACT_ID}.json`,
+    note: 'Simulated fixture for TrustMarket first-receipt UI. No money moved. MARKETPLACE_SETTLEMENT_ENABLED stays hard-off.',
+  });
 });
 
 export default router;
