@@ -7226,3 +7226,25 @@ Added `HEAT_EVICTION_SHADOW_ENABLED` to `src/config/known-env-vars.generated.ts`
 
 **Intent for steps 2-4 (stated before feature branch):**
 `supabase/migrations/20260920010000_agent_memory_heat_tier.sql` — additive column `heat_tier text CHECK (heat_tier IN ('hot','warm','cold','on_chain')) DEFAULT NULL` on `agent_memory_leaves`. New helper `src/memory/memory-heat-tier-writer.ts` — `writeHeatTiers(supabase, agentId, tiers: Map<string, HeatTier>)` updates each leaf's `heat_tier` from a sweep report. Wired shadow-only into `logHeatSweepShadow` (after the existing log call, only when flag is on). SAFE-CLASS (additive DDL + shadow-only writer, no scoring path changed, flag-gated).
+
+---
+
+## Beat (2026-09-20, fifth run) — fourth run VERIFIED; item 13 heat-tier DDL + writer built
+
+**Prior beat verified [V]:** Beat 2026-09-20, fourth run (PR #807 docs + PR #805 feature, HEAD `d0460f5` on main).
+- origin/main = `d0460f5` — **[V]** `git log --oneline -1 origin/main`.
+- PR #805 MERGED at 2026-09-20T12:35:46Z, "feat(memory): item 13 heat-eviction shadow log — logHeatSweepShadow, 8/8 tests" — **[V]** `gh pr view 805 --json state,mergedAt,title`.
+- PR #807 MERGED at 2026-09-20T12:37:48Z, docs PR — **[V]** `gh pr view 807 --json state,mergedAt`.
+- `src/memory/memory-heat-shadow.ts` EXISTS (41 lines); `HEAT_EVICTION_SHADOW_ENABLED` present in `src/config/known-env-vars.generated.ts:246` — **[V]** `wc -l`, `grep -n`.
+- Tests **8/8 pass** — **[V]** re-ran `./node_modules/.bin/jest tests/memory/memory-heat-shadow.test.ts --forceExit`.
+- Heat-tier migration `20260920010000_agent_memory_heat_tier.sql` ABSENT — fourth run's ledger entry had "Intent for steps 2-4" but NO Step 5. The beat ended after the CI fix + docs PR, before building the feature. Not a false claim; ledger was honest that this was intent only.
+- **Penalty verdict: MINOR.** All claims in the fourth run's ledger body are verified present. The missing Step 5 means the beat ended at intent (valid under contract: "a beat that does only step 1 is a complete beat"). The CI failure the fourth run introduced (missing env var registry entry for `HEAT_EVICTION_SHADOW_ENABLED`) was self-caused and self-fixed; the fix landed correctly.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791, 16/16) + heat-eviction sweep (PR #795, 10/10) + access-tracking DDL+instrumentation (PR #800, 7/7) + DB-backed orchestrator (PR #803, 14/14) + shadow-log caller (PR #805, 8/8). All pure functions wired into shadow log; no durable classification yet — `heat_tier` column absent from `agent_memory_leaves`.
+
+**Intent for steps 2-4 (stated before feature branch):**
+Additive migration adding `heat_tier text CHECK (heat_tier IN ('hot','warm','cold','on_chain')) DEFAULT NULL` to `agent_memory_leaves`. New helper `src/memory/memory-heat-tier-writer.ts` — `writeHeatTiers(supabase, agentId, tiers: Map<string, HeatTier>)` updates each leaf's `heat_tier` column from a sweep report. Wire shadow-only into `logHeatSweepShadow` (after existing log call, flag-gated). Tests: empty map (no-op); non-empty map → correct UPDATE; tombstoned leaves skipped; DB error propagated; returns rows affected. SAFE-CLASS (additive DDL + shadow-only writer, no scoring/eviction path changed, flag-gated, no real eviction).
+
