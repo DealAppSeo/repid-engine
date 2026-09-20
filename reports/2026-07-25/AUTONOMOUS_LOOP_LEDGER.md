@@ -7248,3 +7248,22 @@ Added `HEAT_EVICTION_SHADOW_ENABLED` to `src/config/known-env-vars.generated.ts`
 **Intent for steps 2-4 (stated before feature branch):**
 Additive migration adding `heat_tier text CHECK (heat_tier IN ('hot','warm','cold','on_chain')) DEFAULT NULL` to `agent_memory_leaves`. New helper `src/memory/memory-heat-tier-writer.ts` — `writeHeatTiers(supabase, agentId, tiers: Map<string, HeatTier>)` updates each leaf's `heat_tier` column from a sweep report. Wire shadow-only into `logHeatSweepShadow` (after existing log call, flag-gated). Tests: empty map (no-op); non-empty map → correct UPDATE; tombstoned leaves skipped; DB error propagated; returns rows affected. SAFE-CLASS (additive DDL + shadow-only writer, no scoring/eviction path changed, flag-gated, no real eviction).
 
+---
+
+## Beat (2026-09-20, sixth run) — fifth run VERIFIED (intent only, no feature); item 13 heat-tier DDL + writer built
+
+**Prior beat verified [V]:** Beat 2026-09-20, fifth run (PR #808 docs only, no feature PR, HEAD `d3798a5` on main).
+- origin/main = `d3798a5` — **[V]** `git log --oneline -1 origin/main`.
+- PR #808 MERGED at 2026-09-20T16:28:07Z, "docs(loop): beat 2026-09-20 fifth run — fourth run verified; item 13 heat-tier DDL intent" — **[V]** `gh pr view 808 --json state,mergedAt,title`.
+- No feature PR for heat-tier DDL exists — **[V]** `gh pr list --search "heat-tier"` → empty. Ledger's fifth run entry ends at "Intent for steps 2-4" with no Step 5. Second consecutive intent-only beat (fourth and fifth both ended at intent).
+- `src/memory/memory-heat-shadow.ts` EXISTS; `HEAT_EVICTION_SHADOW_ENABLED` at line 246 of `src/config/known-env-vars.generated.ts` — **[V]** confirmed present.
+- **Penalty verdict: MINOR.** All fifth run's claims are verified. "Intent only" is allowed by contract; two consecutive such beats is a pattern worth noting but not a false claim.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791, 16/16) + heat-eviction sweep (PR #795, 10/10) + access-tracking DDL+instrumentation (PR #800, 7/7) + DB-backed orchestrator (PR #803, 14/14) + shadow-log caller (PR #805, 8/8). No durable `heat_tier` classification yet.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`supabase/migrations/20260920020000_agent_memory_heat_tier.sql` — additive column `heat_tier text CHECK (heat_tier IN ('hot','warm','cold','on_chain')) DEFAULT NULL` on `agent_memory_leaves`. `src/memory/memory-heat-tier-writer.ts` — `writeHeatTiers(supabase, agentId, tiers: Map<string, HeatTier>)` UPDATE each non-tombstoned leaf's `heat_tier` from sweep report. Wire shadow-only into `logHeatSweepShadow` (after existing log, only when flag on). Tests: empty map (no-op); single leaf updated; multiple leaves; tombstoned excluded; DB error propagated; returns rows affected; `logHeatSweepShadow` calls writer when flag on. SAFE-CLASS (additive DDL + shadow-only writer, flag-gated).
+
