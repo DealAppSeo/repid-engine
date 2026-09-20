@@ -7168,3 +7168,39 @@ Additive migration adding `last_accessed_at timestamptz DEFAULT now()` and `acce
 **Next beat:** (1) Confirm PR #803 merged. (2) Advance item 13: expose `runHeatEvictionSweepForAgent` via a cron or a health endpoint so shadow logs flow — the first point where the heat classification becomes observable in prod. OR (3) Build item 9's missing decision: a configured `dailyCallCap` per provider + plug `evaluateFreeTierQuota` into `router.ts`'s cap path (decisions (b)/(c) still open, noted as NOW in the backlog). Whichever unblocks more downstream work.
 
 **Next beat:** (1) Confirm sixth-run PRs merged. (2) Wire `runHeatEvictionSweep` into a shadow log path (console `[HEAT-EVICTION-SHADOW]` gated on `HEAT_EVICTION_SHADOW_ENABLED`, default off) — additive caller, same shadow-first pattern as item 11/grounding. (3) Or item 14 (Plonky3 AIR) if turns allow and Sean GO not needed.
+
+---
+
+## Beat (2026-09-20, third run) — second run VERIFIED; item 13 shadow-log caller built
+
+**Prior beat verified [V]:** Beat 2026-09-20, second run (PR #802 docs + PR #803 feature, HEAD `a1f1274` on main).
+- origin/main = `a1f1274` — **[V]** `git log --oneline -1 origin/main`.
+- PR #803 MERGED at 2026-09-20T04:33:38Z, "feat(memory): item 13 heat DB-backed sweep — runHeatEvictionSweepForAgent, 14/14 tests" — **[V]** `gh pr view 803 --json state,mergedAt,title`.
+- PR #802 MERGED at 2026-09-20T04:34:33Z, docs PR — **[V]** `gh pr view 802 --json state,mergedAt`.
+- `src/memory/memory-heat-db-sweep.ts` EXISTS (98 lines; ledger claimed 96 — minor line-count discrepancy, not a phantom). `runHeatEvictionSweepForAgent` present — **[V]** `wc -l`, `grep`.
+- Tests **14/14 pass** — **[V]** `./node_modules/.bin/jest tests/memory/memory-heat-db-sweep.test.ts --forceExit` → 14/14.
+- **Penalty verdict: NONE.** All second-run claims verified present and passing. Line-count discrepancy (96 vs 98 actual) is minor.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791) + heat-eviction sweep (PR #795) + access-tracking (PR #800) + DB-backed orchestrator (PR #803). All three sweep functions have zero callers in `src/` outside their definitions. Shadow-log caller is the next wiring step that makes heat classification observable without touching prod scoring or tombstoning.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-shadow.ts` — `logHeatSweepShadow(supabase, agentId, opts?)` calls `runHeatEvictionSweepForAgent` and logs a `[HEAT-EVICTION-SHADOW]` JSON summary (agentId, tierCounts, eviction candidates count, reactivation candidates count) to console, gated on `HEAT_EVICTION_SHADOW_ENABLED` env var (default off). Wired into `scoreMonitor`'s 5-minute interval (`src/engine/score-monitor.ts`) as a fire-and-forget call per live agent. SAFE-CLASS (additive module + two-line hook in existing monitor, no scoring path changed, flag default-off).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-shadow.ts` (41 lines): `logHeatSweepShadow(supabase, agentId, opts?, sweepFn?)` — reads `HEAT_EVICTION_SHADOW_ENABLED` (returns early if not `"true"`), calls `runHeatEvictionSweepForAgent`, logs `[HEAT-EVICTION-SHADOW] <agentId> hot=N warm=N cold=N on_chain=N evict=N reactivate=N`. Errors caught and `console.warn`'d — never throws, never blocks. `src/engine/score-monitor.ts`: one-line fire-and-forget `logHeatSweepShadow(db, agent.id).catch(() => undefined)` inside the per-agent loop. Tests `tests/memory/memory-heat-shadow.test.ts` — **8/8 pass**: flag off → no-op; flag on → logs summary; agentId/opts/supabase forwarded; error from sweep → warns not throws; log format contains all 6 required fields (hot/warm/cold/on_chain/evict/reactivate); returns undefined. Feature PR **#805** opened on `feat/cc-2026-09-20-memory-heat-shadow`, SAFE-CLASS (additive module + fire-and-forget monitor hook, flag default-off, zero prod path changed), armed `--auto --squash` (`autoMergeRequest.enabledAt` non-null — **[V]** `gh pr view 805 --json autoMergeRequest`). **[V]** `./node_modules/.bin/jest tests/memory/memory-heat-shadow.test.ts --forceExit` → 8/8; `tsc --noEmit` → exit 0.
+
+**Mistakes:** None.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway when you want heat-eviction logs flowing; no scoring or tombstoning risk, flag-gated.
+
+**Next beat:** (1) Confirm PR #805 merged. (2) Advance item 13: wire actual cold-tier marking (additive `heat_tier` column on `agent_memory_leaves`) so shadow log can report WOULD-evict with DB persistence — still no real eviction, just durable classification. OR (3) Item 9 decisions (b)/(c): configured `dailyCallCap` per provider + plug `evaluateFreeTierQuota` into `router.ts`.
