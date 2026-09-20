@@ -7091,4 +7091,43 @@ One test fix mid-build: `warmingColdLeaf` initially used 35-day-old access (heat
 5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
 6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
 
+**Next beat:** (1) Confirm PR #795 merged (done). (2) Advance item 13: add `last_accessed_at`/`access_count` tracking to `agent_memory_leaves` (additive DDL + instrument the retrieve route) so `runHeatEvictionSweep` can be driven from real DB heat data. SAFE-CLASS (additive migration + two-line route hook).
+
+---
+
+## Beat (2026-09-20, first run) — sixth run VERIFIED; item 13 access-tracking DDL + instrumentation built
+
+**Prior beat verified [V]:** Beat 2026-09-19, sixth run (PR #794 docs + PR #795 feature, HEAD `2fd67e2` on main after PR #793 also merged by another session).
+- origin/main = `2fd67e2` — **[V]** `git log --oneline -1 origin/main`.
+- PR #795 MERGED at 2026-09-19T20:30:31Z, "feat(memory): item 13 heat-eviction sweep orchestrator — runHeatEvictionSweep, 10/10 tests" — **[V]** `gh pr view 795 --json state,mergedAt,title`.
+- PR #794 MERGED at 2026-09-19T20:30:59Z, docs PR — **[V]** `gh pr view 794 --json state,mergedAt`.
+- `src/memory/memory-heat-sweep.ts` EXISTS (114 lines), `runHeatEvictionSweep` at line 68 — **[V]** `wc -l`, `grep -n`.
+- Tests **10/10 pass** — **[V]** `npx jest tests/memory/memory-heat-sweep.test.ts --forceExit` → 10/10.
+- Sixth run's ledger entry was incomplete (no "Next beat" line). The entry body correctly describes what shipped; the missing tail is recorded here rather than patched.
+- PR #793 (HYP-10, type-B CALLSITES 4→0 via providerFetch, another session) merged at 2026-09-19 — **[V]** `gh pr view 793 --json state,mergedAt`. Egress refactor, no behavior change, not this beat's work.
+- **Penalty verdict: NONE.** All sixth-run claims verified present and passing. Ledger truncation (no "Next beat" entry) is a documentation gap, not a false claim.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required for live enforcement or gas.
+- Item 13: heat-score primitive (PR #791, 16/16) + heat-eviction sweep orchestrator (PR #795, 10/10). Both are **pure functions with zero DB callers**. Driving the sweep from real data requires `last_accessed_at` and `access_count` on `agent_memory_leaves` — neither column exists today.
+
+**Intent for steps 2-4 (stated before feature branch):**
+Additive migration adding `last_accessed_at timestamptz DEFAULT now()` and `access_count int NOT NULL DEFAULT 1` to `agent_memory_leaves`. Instrument `GET /api/v1/memory/retrieve` (the existing route in `src/routes/memory-retrieve.ts`) to increment `access_count` + update `last_accessed_at` on each retrieval, fire-and-forget (never blocks the response). New helper `src/memory/memory-leaf-access.ts` — `recordLeafAccess(supabase, agentId)`. SAFE-CLASS (additive DDL + fire-and-forget instrumentation, no routing or scoring path changed).
+
+**Step 5 — what shipped:**
+`supabase/migrations/20260920000000_agent_memory_leaf_access_tracking.sql` — additive migration: `last_accessed_at timestamptz NOT NULL DEFAULT now()` and `access_count int NOT NULL DEFAULT 1` on `agent_memory_leaves`; `updated_at` trigger (same pattern as other tables). `src/memory/memory-leaf-access.ts` (44 lines): `recordLeafAccess(supabase, agentId)` — increments `access_count` + sets `last_accessed_at = now()` for the agent's non-tombstoned leaves in a single UPDATE, returning rows affected. `src/routes/memory-retrieve.ts`: fire-and-forget call to `recordLeafAccess` after the successful retrieve response is sent (`.then()` only, never `await`, never blocks). Tests `tests/memory/memory-leaf-access.test.ts` — **7/7 pass**: no rows → no-op; single leaf → count incremented; multiple leaves → all bumped; tombstoned excluded; supabase error → caught not rethrown; agentId injected correctly; return value is rows affected. Feature PR **#798** opened on `feat/cc-2026-09-20-memory-leaf-access-tracking`, SAFE-CLASS (additive migration + fire-and-forget hook), armed `--auto --squash`. **[V]** `npx jest tests/memory/memory-leaf-access.test.ts --forceExit` → 7/7; `tsc --noEmit` → exit 0.
+
+**Mistakes:** None.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+
+**Next beat:** (1) Confirm PR #798 merged. (2) Advance item 13: wire `runHeatEvictionSweep` into a DB-backed orchestrator using the new `last_accessed_at`/`access_count` columns — shadow-only sweep that logs which leaves WOULD be evicted, no actual tombstoning. SAFE-CLASS (pure reader + log, no write path changed).
+
 **Next beat:** (1) Confirm sixth-run PRs merged. (2) Wire `runHeatEvictionSweep` into a shadow log path (console `[HEAT-EVICTION-SHADOW]` gated on `HEAT_EVICTION_SHADOW_ENABLED`, default off) — additive caller, same shadow-first pattern as item 11/grounding. (3) Or item 14 (Plonky3 AIR) if turns allow and Sean GO not needed.
