@@ -26,6 +26,11 @@ export const PROVIDER_URLS = {
   deepseekV1ChatCompletions: 'https://api.deepseek.com/v1/chat/completions',
   fireworksChatCompletions: 'https://api.fireworks.ai/inference/v1/chat/completions',
   openrouterChatCompletions: 'https://openrouter.ai/api/v1/chat/completions',
+  // System One (typed-decision) route. A SEPARATE API from chat completions, not a
+  // variant of it: a System One model cannot generate chat text at all, so the
+  // messages[] shape 400s here. Same host as the line above, so no new host is
+  // admitted to the registry by this entry.
+  openrouterSystemOne: 'https://openrouter.ai/api/v1/systemone',
   geminiOpenAiCompatChatCompletions:
     'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
   geminiGenerateContentOrigin: 'https://generativelanguage.googleapis.com',
