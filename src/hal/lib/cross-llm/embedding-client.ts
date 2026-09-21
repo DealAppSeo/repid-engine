@@ -61,7 +61,7 @@ export class OpenAIEmbeddingClient implements EmbeddingClient {
     async embedMany(texts: string[]): Promise<number[][]> {
         // DATA-LOCALITY: refuse to send content to a non-local embedder when
         // ONLY_ATTESTATIONS_LEAVE is engaged. A local endpoint (LOCAL_LLM_BASE_URL
-        // pointed at Ollama/vLLM) passes; api.openai.com throws. Caught upstream
+        // pointed at Ollama/vLLM) passes; the hosted OpenAI embeddings endpoint throws. Caught upstream
         // (FallbackEmbeddingClient / computeAgreement) → honest degrade, never a
         // silent cloud call.
         assertPromptEgressAllowed(this.endpoint, 'embedding');

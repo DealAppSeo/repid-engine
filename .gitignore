@@ -2,6 +2,7 @@ node_modules/
 dist/
 # LOCAL_MODE persistent store (src/selfhost/local-store.ts) — operator data, never committed
 .repid-local/
+.harness/
 .env
 .env.local
 .env*.local

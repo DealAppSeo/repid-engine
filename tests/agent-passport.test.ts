@@ -232,6 +232,12 @@ describe('buildAgentPassport', () => {
         score_including_vested: 1390,
         note: expect.stringContaining('whole score'),
       },
+      // C9: last_verified_action is public. Kind is not on this row → bound/display_tier null.
+      last_verified_action: MINTED_AGENT.minted_at,
+      idle_days: expect.any(Number),
+      bound: null,
+      kind: null,
+      display_tier: null,
     });
 
     expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');
@@ -266,6 +272,8 @@ describe('buildAgentPassport', () => {
       anchor_status: 'ANCHORED',
       anchor_note: expect.stringContaining('on-chain receipt'),
       created_at: '2026-07-01T00:00:00.000Z',
+      freshness: 'FAILED',
+      age_days: expect.any(Number),
       // WHAT was proven, not merely that something verifies. The threshold was absent
       // from this response entirely until 2026-09-03, which left no way to tell a
       // cleared bar from one no score could trip on.

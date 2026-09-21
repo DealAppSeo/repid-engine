@@ -1,0 +1,8 @@
+{
+  "ladder": [3, 7, 12, 21],
+  "defaultRung": 0,
+  "unclaimedCeiling": "Bronze",
+  "displayTiers": ["Bronze", "Silver", "Gold", "Platinum"],
+  "claimInheritsPercent": 100,
+  "transferVests": true
+}

@@ -1,8 +1,9 @@
-// Using global fetch
 import { db } from '../db';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import crypto from 'crypto';
+import { providerFetch } from '../egress/provider-fetch';
+import { PROVIDER_URLS, geminiGenerateContentUrl } from '../egress/provider-hosts';
 
 /**
  * Defect 1 fix (2026-05-18) — adversarial judge provider ROTATION.
@@ -88,7 +89,7 @@ async function callOpenAICompatible(
 ): Promise<{ text: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const { signal, clear } = withTimeout();
   try {
-    const res = await fetch(endpoint, {
+    const res = await providerFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
@@ -121,7 +122,7 @@ const PROVIDERS: ProviderSpec[] = [
     call: async (prompt, model, apiKey) => {
       const { signal, clear } = withTimeout();
       try {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
+        const res = await providerFetch(PROVIDER_URLS.anthropicMessages, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -155,13 +156,13 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'groq',
     model: 'llama-3.3-70b-versatile',
     apiKey: () => process.env.GROQ_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.groq.com/openai/v1/chat/completions', p, m, k),
+    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.groqChatCompletions, p, m, k),
   },
   {
     family: 'openai',
     model: 'gpt-4o-mini',
     apiKey: () => process.env.OPENAI_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.openai.com/v1/chat/completions', p, m, k),
+    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.openaiChatCompletions, p, m, k),
   },
   {
     family: 'gemini',
@@ -170,18 +171,15 @@ const PROVIDERS: ProviderSpec[] = [
     call: async (prompt, model, apiKey) => {
       const { signal, clear } = withTimeout();
       try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
-            }),
-            signal,
-          }
-        );
+        const res = await providerFetch(geminiGenerateContentUrl(model, apiKey), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
+          }),
+          signal,
+        });
         if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => ''));
         const json: any = await res.json();
         return {
@@ -200,13 +198,13 @@ const PROVIDERS: ProviderSpec[] = [
     family: 'deepseek',
     model: 'deepseek-chat',
     apiKey: () => process.env.DEEPSEEK_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.deepseek.com/v1/chat/completions', p, m, k),
+    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.deepseekV1ChatCompletions, p, m, k),
   },
   {
     family: 'cerebras',
     model: 'llama-3.3-70b',
     apiKey: () => process.env.CEREBRAS_API_KEY,
-    call: (p, m, k) => callOpenAICompatible('https://api.cerebras.ai/v1/chat/completions', p, m, k),
+    call: (p, m, k) => callOpenAICompatible(PROVIDER_URLS.cerebrasChatCompletions, p, m, k),
   },
 ];
 

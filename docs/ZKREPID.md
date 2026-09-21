@@ -88,6 +88,7 @@ asks "why isn't Poseidon2 in there?" and either adds it or renames the directory
 | `src/zkp/leaf-dual-write.ts` | general leaf-encoding migration machinery |
 | `src/zkp/proof-router.ts` | routes proofs by type; not RepID-specific |
 | `src/zkp/proof-statement-guard.ts` | a general fail-closed statement builder/validator |
+| `src/zkp/proof-freshness.ts` | a served-proof age label (ageDays>7 FAILED); not a RepID statement, circuit, or identity binding |
 | `src/zk-proof/prover.ts` | a generic prover request/response wrapper |
 
 Also outside the boundary, and not renameable from here: the `zkp-vault/` Rust crate, and

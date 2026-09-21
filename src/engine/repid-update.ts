@@ -9,6 +9,19 @@ import { DETECTION_CONFIRM_THRESHOLD } from './behavioral-integrity';
 import { assessLedger, ledgerColumns, ledgerMetadata, logLedger } from './ledger-reconcile';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { FIXED_DELTAS, type RepIdEventType } from '../scoring/repid-deltas';
+import {
+  evidenceFromCallerRef,
+  enforceGroundedDelta,
+  groundingMode,
+  resolveGrounding,
+  type GroundingEvidence,
+  type GroundingResult,
+  type GroundingStore,
+  type ChainReader,
+  type ValidationLookup,
+  type ProtocolLookup,
+} from '../scoring/grounding';
+import { scoreLaneFromGrounding } from '../scoring/score-lane';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -70,6 +83,15 @@ export interface RepIdUpdateInput {
   // required (adding it does not break any caller); the SELF_REPORT_EVIDENCE_MODE
   // gate below only USES it: in `enforce` mode an unproven self-report earns 0.
   evidence?: { kind: string; ref: string };
+  /** C8 — structured evidence. Preferred over `evidence.ref` when both exist. */
+  groundingEvidence?: GroundingEvidence;
+  /** Test seam. Production uses the db-backed store and no chain unless GROUNDING_RPC_URL is set. */
+  groundingDeps?: {
+    store?: GroundingStore;
+    chain?: ChainReader;
+    validationLookup?: ValidationLookup;
+    protocolLookup?: ProtocolLookup;
+  };
 }
 
 export interface RepIdUpdateResult {
@@ -93,6 +115,8 @@ export interface RepIdUpdateResult {
     processingMs: number;
   };
   newBadges?: BadgeAward[];
+  /** C8 shadow label. Never changes current_repid by itself. */
+  gVerified?: GroundingResult['g_verified'];
 }
 
 export function computeTier(repId: number): string {
@@ -492,12 +516,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // repid_after === repid_before, mode 'shadow-deception'. (Enforce mode and all
   // non-deception events keep the normal decay + delta behavior.)
   const isShadowDeception = isDeception && decMode === 'shadow';
-  const finalDelta = isShadowDeception ? 0 : computedDelta;
+  let finalDelta = isShadowDeception ? 0 : computedDelta;
 
   // 7 — New RepID and tier (uses the APPLIED delta; shadow deception => no move).
   // On the shadow-deception path the score is left UNCHANGED (no decay applied),
   // so repid_after === repid_before and the event is a pure measurement.
-  const newRepId = isShadowDeception
+  let newRepId = isShadowDeception
     ? agent.current_repid
     : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
@@ -514,6 +538,32 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // assessment depends on WHO applies: with the app applying, the movement is
   // after-before; without it, the DB trigger applies the bare delta.
   const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
+  // C8 — resolve grounding in shadow. Fail closed to 0. Does not change
+  // finalDelta / current_repid (enforce is a later ticket).
+  let groundingMeta: GroundingResult | null = null;
+  if (groundingMode() !== 'off') {
+    const wallets = [agent.wallet_address, agent.erc8004_address].filter(
+      (a: unknown): a is string => typeof a === 'string' && a.length > 0,
+    );
+    groundingMeta = await resolveGrounding({
+      agentId: input.agentId,
+      eventType: input.eventType,
+      evidence: input.groundingEvidence ?? evidenceFromCallerRef(input.evidence),
+      agentWallets: wallets,
+      store: input.groundingDeps?.store ?? dbGroundingStore(),
+      chain: input.groundingDeps?.chain,
+      validationLookup: input.groundingDeps?.validationLookup,
+      protocolLookup: input.groundingDeps?.protocolLookup,
+    });
+    const gated = enforceGroundedDelta(finalDelta, groundingMeta.g_verified, groundingMode());
+    if (gated !== finalDelta) {
+      finalDelta = gated;
+      newRepId = isShadowDeception
+        ? agent.current_repid
+        : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
+    }
+  }
+
   const ledger = assessLedger({
     before: agent.current_repid,
     decayedTo: isShadowDeception ? agent.current_repid : decayedRepId,
@@ -604,6 +654,14 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // In shadow (default) the top-level `delta` is UNCHANGED — would_gate only
       // flags what enforce WOULD have zeroed.
       self_report_evidence: selfReportEvidenceMeta,
+      ...(groundingMeta
+        ? {
+            g_verified: groundingMeta.g_verified,
+            grounding_reason: groundingMeta.reason,
+            grounding_reused: groundingMeta.reused,
+            ...scoreLaneFromGrounding(groundingMeta.g_verified),
+          }
+        : {}),
       // Decomposition of what actually moved the score (decay / delta / clamp) and
       // whether this row reconciles. Empty object in `off` — no key is added to any
       // event by default; shadow records it so the enforce flip can be sized.
@@ -677,6 +735,35 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       processingMs: audit.processingMs,
     },
     newBadges,
+    gVerified: groundingMeta?.g_verified ?? 0,
+  };
+}
+
+function dbGroundingStore(): GroundingStore {
+  return {
+    async findClaim(evidenceId, agentId, eventType) {
+      const { data } = await db
+        .from('repid_grounding_claims')
+        .select('*')
+        .eq('evidence_id', evidenceId)
+        .eq('agent_id', agentId)
+        .eq('event_type', eventType)
+        .maybeSingle();
+      return data ?? null;
+    },
+    async findClaimByEvidence(evidenceId) {
+      const { data } = await db.from('repid_grounding_claims').select('*').eq('evidence_id', evidenceId);
+      const rows = Array.isArray(data) ? data : data ? [data] : [];
+      return rows[0] ?? null;
+    },
+    async insertClaim(row) {
+      const { error } = await db.from('repid_grounding_claims').insert(row);
+      if (error && (String(error.code) === '23505' || /duplicate/i.test(error.message || ''))) {
+        return 'duplicate';
+      }
+      if (error) throw new Error(error.message);
+      return 'ok';
+    },
   };
 }
 

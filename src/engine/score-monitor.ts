@@ -1,6 +1,7 @@
 import { db } from '../db';
 import { fireWebhook } from '../services/webhook';
 import { buildAgentLogRow } from './agent-log-row';
+import { logHeatSweepShadow } from '../memory/memory-heat-shadow';
 
 const lastScores = new Map<string, number>();
 
@@ -21,6 +22,7 @@ export async function scoreMonitor() {
     if (error) console.error(error);
       }
       lastScores.set(agent.id, agent.current_repid);
+      logHeatSweepShadow(db, agent.id).catch(() => undefined);
     }
   } catch (err) {}
 }

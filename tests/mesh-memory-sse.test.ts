@@ -266,21 +266,22 @@ describe('mesh-memory SSE cell — honest leakage profile (documented in code)',
     expect(res.postings.ct.length).toBeGreaterThan(0);
   });
 
-  it('the host CANNOT learn the postings of an un-queried keyword', () => {
+  it('the host cannot decrypt any postings blob without the user key', () => {
     const { cell } = makeCell();
-    // Without the client ever issuing the token, the host holds only an opaque
-    // encrypted blob for each keyword and cannot enumerate the plaintext ids.
+    const attacker = new MeshMemoryClient(OTHER_KEY);
+    const salt = Buffer.from(cell.salt(), 'base64');
+    const { deriveSubkey } = require('../src/services/mesh-memory/crypto');
+    const wrongPost = deriveSubkey((attacker as any)['master'], salt, 'mesh-memory:sse:postings:v1');
+
+    // The host can see the opaque token and the AES-GCM blob, but without the
+    // user's postings key it still cannot decrypt the record-id list.
     const view = cell.hostView();
-    for (const token of Object.keys(view.index)) {
-      // Best the host can do without a key: see a GCM blob. Assert it is opaque.
-      const blob = view.index[token]!;
+    for (const [token, blob] of Object.entries(view.index)) {
       expect(blob).toHaveProperty('iv');
       expect(blob).toHaveProperty('tag');
       expect(blob).toHaveProperty('ct');
-      // No plaintext record id ('m1'..'m4') is recoverable from the raw blob bytes.
-      const decoded = Buffer.from(blob.ct, 'base64').toString('latin1');
-      expect(decoded).not.toContain('m1');
-      expect(decoded).not.toContain('m2');
+      const wrongKw = deriveSubkey(wrongPost, salt, `postings:${token}`);
+      expect(() => gcmDecrypt(wrongKw, blob)).toThrow();
     }
   });
 });
