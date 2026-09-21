@@ -7327,3 +7327,39 @@ Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only rout
 
 **Next beat:** (1) Confirm PR #817 merged. (2) Advance item 13: item 13's acceptance test is "low-heat leaves flushed to cold; root preserved; reactivation triggers". The eviction writer (PR #817) closes "flushed to cold". Remaining: root preservation after eviction (re-compute root after tombstoning) and reactivation triggers (promote a cold leaf back when its heat rises). Both can be shadow-only primitives. OR advance item 14 (Plonky3 AIR) if that requires no Sean GO for the shadow-first slice.
 
+---
+
+## Beat (2026-09-21, third run) — second run VERIFIED; item 13 evict-and-update-root built
+
+**Prior beat verified [V]:** Beat 2026-09-21, second run (PR #816 docs + PR #817 feature, HEAD `50daf5b` on main).
+- origin/main = `50daf5b` — **[V]** `git log --oneline -1 origin/main`.
+- PR #817 MERGED at 2026-09-21T04:38:37Z, "feat(memory): item 13 heat-eviction writer — performHeatEviction, 8/8 tests, HEAT_EVICTION_ENABLED flag" — **[V]** `gh pr view 817 --json state,mergedAt,title`.
+- PR #816 MERGED at 2026-09-21T04:39:09Z, docs PR — **[V]** `gh pr view 816 --json state,mergedAt`.
+- `src/memory/memory-heat-evict.ts` EXISTS (96 lines; ledger claimed 90 — minor discrepancy), `performHeatEviction` exported, gated on `HEAT_EVICTION_ENABLED` at line 77 — **[V]** `wc -l`, `grep -n`.
+- `HEAT_EVICTION_ENABLED` at line 251 of `src/config/known-env-vars.generated.ts` — **[V]** `grep -n`.
+- Tests **8/8 pass** — **[V]** re-ran `./node_modules/.bin/jest tests/memory/memory-heat-evict.test.ts --forceExit` independently.
+- **Penalty verdict: MINOR.** All second-run claims present and passing. Line count discrepancy (claimed 90, actual 96) is minor.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791, 16/16) + heat-eviction sweep (PR #795, 10/10) + access-tracking (PR #800, 7/7) + DB-backed orchestrator (PR #803, 14/14) + shadow-log caller (PR #805, 8/8) + heat-tier DDL + `writeHeatTiers` (PR #810, 7/7) + heat-status route (PR #814, 4/4) + eviction writer `performHeatEviction` (PR #817, 8/8). Remaining acceptance-test items: "root preserved" (after tombstoning, recompute and store new Merkle root) and "reactivation triggers" (cold leaf promoted when heat rises).
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-evict-root.ts` — `evictAndUpdateRoot(supabase, agentId, opts?)` orchestrates `performHeatEviction` → `hydrateTree` from remaining non-tombstoned leaves → `storeRoot` via `memory-root-store.ts`. Returns `{evictedCount, evictedIds, skipped, newRoot?}`. Flag-gated on `HEAT_EVICTION_ENABLED` (returns skipped when off). SAFE-CLASS (additive module, zero callers wired in prod paths, flag default-off, no scoring/tombstoning path beyond what PR #817 already established).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-evict-root.ts` (97 lines): `evictAndUpdateRoot(supabase, agentId, opts?, fetchFn?, evictLeafFn?, fetchRootLeavesFn?, storeRootFn?)` — calls `performHeatEviction`, then if leaves were evicted: re-fetches non-tombstoned leaves via `fetchRootLeavesFn`, calls `recomputeRoot`, and stores the new root to `agent_memory_roots` via `storeRootFn` (epoch = max existing + 1). Returns `{evictedCount, evictedIds, skipped, newRoot?, newEpoch?}`. Gated on `HEAT_EVICTION_ENABLED` (default off) — inherits from `performHeatEviction`. All DB I/O injected for testability. Tests `tests/memory/memory-heat-evict-root.test.ts` — **7/7**: flag off (no fetch/store); no cold candidates (no root update); 1 cold leaf evicted (root + epoch returned, args forwarded); fetchRootLeaves error; storeRoot error; root determinism; supabase handle forwarded. `tsc --noEmit` → exit 0. Zero callers in `src/` outside definition (SAFE-CLASS). Feature PR **#821** opened on `feat/cc-2026-09-21-memory-heat-evict-root`, armed `--auto --squash` (`autoMergeRequest.enabledAt` non-null **[V]**).
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway to get shadow logs flowing (no scoring/eviction risk).
+8. **`HEAT_EVICTION_ENABLED=true`** — flip when ready for actual cold-leaf tombstoning; shadow mode first is recommended.
+
+**Next beat:** (1) Confirm third-run PRs (#820 docs, #821 feature) merged. (2) Advance item 13: build reactivation trigger (`src/memory/memory-heat-reactivate.ts` — promote cold leaf back when `runHeatEvictionSweepForAgent` returns it in `reactivationCandidates`; update `heat_tier=warm` on the leaf row). Final piece of item 13 acceptance test ("reactivation triggers"). SAFE-CLASS (additive module, flag-gated, no prod path changed).
+
