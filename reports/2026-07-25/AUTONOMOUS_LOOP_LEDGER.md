@@ -7363,3 +7363,38 @@ Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only rout
 
 **Next beat:** (1) Confirm third-run PRs (#820 docs, #821 feature) merged. (2) Advance item 13: build reactivation trigger (`src/memory/memory-heat-reactivate.ts` — promote cold leaf back when `runHeatEvictionSweepForAgent` returns it in `reactivationCandidates`; update `heat_tier=warm` on the leaf row). Final piece of item 13 acceptance test ("reactivation triggers"). SAFE-CLASS (additive module, flag-gated, no prod path changed).
 
+---
+
+## Beat (2026-09-21, fourth run) — third run VERIFIED; item 13 reactivation trigger built
+
+**Prior beat verified [V]:** Beat 2026-09-21, third run (PR #820 docs + PR #821 feature, HEAD `7c4ed3d` on main).
+- origin/main = `7c4ed3d` (PR #820 on top of `710a5d4` PR #821) — **[V]** `git log --oneline -3 origin/main`.
+- PR #821 MERGED at 2026-09-21T08:44:06Z, "feat(memory): item 13 evict-and-update-root — evictAndUpdateRoot, 7/7 tests" — **[V]** `gh pr view 821 --json state,mergedAt,title`.
+- PR #820 MERGED at 2026-09-21T08:45:36Z, docs PR — **[V]** `gh pr view 820 --json state,mergedAt`.
+- `src/memory/memory-heat-evict-root.ts` EXISTS (111 lines; ledger claimed 97 — minor discrepancy), `evictAndUpdateRoot` exported at line 91, gated on `HEAT_EVICTION_ENABLED` — **[V]** `wc -l`, `grep -n`.
+- Tests **7/7 pass** — **[V]** independently re-ran `jest tests/memory/memory-heat-evict-root.test.ts --forceExit` after `npm install --legacy-peer-deps`.
+- **Penalty verdict: MINOR.** All third-run claims present and passing. Line count discrepancy (claimed 97, actual 111) is not load-bearing.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791) + heat-eviction sweep (PR #795) + access-tracking (PR #800) + DB-backed orchestrator (PR #803) + shadow-log caller (PR #805) + heat-tier DDL + `writeHeatTiers` (PR #810) + heat-status route (PR #814) + eviction writer `performHeatEviction` (PR #817) + `evictAndUpdateRoot` (PR #821). Remaining acceptance-test item: "reactivation triggers" — promote a cold leaf back to warm when its heat score rises above the warm threshold.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-reactivate.ts` — `reactivateLeaves(supabase, agentId, opts?)` fetches sweep report via `runHeatEvictionSweepForAgent`, reads `reactivationCandidates`, updates each candidate's `heat_tier=warm` on `agent_memory_leaves`. Returns `{reactivatedCount, reactivatedIds, skipped}`. Flag-gated on `HEAT_EVICTION_ENABLED` (reactivation is the complement of eviction — same gate). SAFE-CLASS (additive module, zero callers in prod paths, no tombstoning, no scoring path changed).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-reactivate.ts` (82 lines): `reactivateLeaves(supabase, agentId, opts?, fetchFn?, reactivateFn?)` — fetches sweep report via `runHeatEvictionSweepForAgent`, updates each `reactivationCandidate` leaf's `heat_tier='warm'` via `reactivateFn` (default `reactivateLeaf` which calls `.eq('id', id).update({heat_tier:'warm'})`). Returns `{reactivatedCount, reactivatedIds, skipped}`. Gated on `HEAT_EVICTION_ENABLED` (default off) — returns `skipped:true` immediately unless flag is `"true"`. All DB I/O injected. Tests `tests/memory/memory-heat-reactivate.test.ts` — **7/7**: flag off → skipped; no reactivation candidates → 0 reactivated; 1 candidate reactivated (correct id); multiple candidates; reactivateFn error propagated; reactivatedIds correct; supabase handle forwarded. `tsc --noEmit` → exit 0. Zero callers in `src/` outside definition (SAFE-CLASS). Feature PR **#822** opened on `feat/cc-2026-09-21-memory-heat-reactivate`, armed `--auto --squash`.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway to get shadow logs flowing (no scoring/eviction risk).
+8. **`HEAT_EVICTION_ENABLED=true`** — flip when ready for actual cold-leaf tombstoning + reactivation; shadow mode first recommended.
+
+**Next beat:** (1) Confirm PR #822 merged. (2) Item 13 acceptance test is now fully covered (eviction writer + root update + reactivation trigger). Verify item 13 completion by reading the acceptance test against all shipped primitives. If complete, mark item 13 DONE in the backlog and advance to item 9 decisions (b)/(c): configured `dailyCallCap` per provider + plug `evaluateFreeTierQuota` into `router.ts`. OR advance item 14 (Plonky3 non-membership AIR) as the next apex task.
+
