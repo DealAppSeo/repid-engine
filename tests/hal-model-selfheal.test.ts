@@ -319,11 +319,14 @@ describe('gemini routes DIRECT by default — splitting it from the shared OpenR
       buildFactCheckProvidersWith({ ...ALL_OFF, gemini: true }).find((p) => p.name === 'gemini'),
     );
 
-  it('with BOTH keys present, gemini goes to Google directly', () => {
-    // THE CHANGE. Previously OpenRouter won whenever its key existed, putting two of the quorum's
-    // families on one account and one credit pool — a pool that has returned `HTTP 402 … requires
-    // more credits` 8,762 times against 16,643 successes.
+  it('under the free-tier hold, BOTH keys still skip paid Gemini direct (credits-depleted 429)', () => {
     const g = geminiOf({ GEMINI_API_KEY: 'k', OPENROUTER_API_KEY: 'k' })!;
+    expect(g.endpoint).toContain('openrouter.ai');
+    expect(g.model).toBe('google/gemma-4-31b-it:free');
+  });
+
+  it('with paid authorised, BOTH keys send gemini to Google directly', () => {
+    const g = geminiOf({ GEMINI_API_KEY: 'k', OPENROUTER_API_KEY: 'k', SEAN_PAID_LOOP: 'loop' })!;
     expect(g.endpoint).toContain('generativelanguage.googleapis.com');
     expect(g.model).toBe('gemini-2.5-flash');
   });
@@ -331,7 +334,7 @@ describe('gemini routes DIRECT by default — splitting it from the shared OpenR
   it('with no Gemini key it still falls back to OpenRouter — the family is never simply dropped', () => {
     const g = geminiOf({ OPENROUTER_API_KEY: 'k' })!;
     expect(g.endpoint).toContain('openrouter.ai');
-    expect(g.model).toBe('google/gemini-3.5-flash');
+    expect(g.model).toBe('google/gemma-4-31b-it:free');
   });
 
   it('the flag forces the re-route back on, without a release', () => {
@@ -339,23 +342,23 @@ describe('gemini routes DIRECT by default — splitting it from the shared OpenR
     expect(g.endpoint).toContain('openrouter.ai');
   });
 
-  it('THE SLUG NAMESPACES DO NOT MIX: an OpenRouter-shaped override never lands on the direct endpoint', () => {
-    // `google/gemini-3.5-flash` is a valid OpenRouter slug and a guaranteed 404 on Google's own
-    // endpoint. One env var applied to whichever route we happened to pick would silently break the
-    // model, so an override only applies to the endpoint whose shape it matches.
-    const g = geminiOf({ GEMINI_API_KEY: 'k', HAL_S2_GEMINI_MODEL: 'google/gemini-3.5-flash' })!;
-    expect(g.endpoint).toContain('generativelanguage.googleapis.com');
-    expect(g.model).toBe('gemini-2.5-flash'); // the direct default, NOT the OpenRouter slug
+  it('under the hold, a Gemini-only key does not dial paid Google', () => {
+    expect(geminiOf({ GEMINI_API_KEY: 'k', HAL_S2_GEMINI_MODEL: 'google/gemini-3.5-flash' })).toBeUndefined();
   });
 
-  it('and a direct-shaped override IS honoured on the direct endpoint', () => {
-    const g = geminiOf({ GEMINI_API_KEY: 'k', HAL_S2_GEMINI_MODEL: 'gemini-3.5-flash' })!;
+  it('and a direct-shaped override IS honoured on the direct endpoint when paid is allowed', () => {
+    const g = geminiOf({
+      GEMINI_API_KEY: 'k',
+      HAL_S2_GEMINI_MODEL: 'gemini-3.5-flash',
+      SEAN_PAID_LOOP: 'loop',
+    })!;
     expect(g.model).toBe('gemini-3.5-flash');
   });
 
-  it('gemini and openrouter are now separate HOSTS, which is the point of the change', () => {
-    const out = withEnv({ GEMINI_API_KEY: 'k', OPENROUTER_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'false' }, () =>
-      buildFactCheckProvidersWith({ ...ALL_OFF, gemini: true, openrouter: true }),
+  it('with paid authorised, gemini and openrouter are separate HOSTS', () => {
+    const out = withEnv(
+      { GEMINI_API_KEY: 'k', OPENROUTER_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'false', SEAN_PAID_LOOP: 'loop' },
+      () => buildFactCheckProvidersWith({ ...ALL_OFF, gemini: true, openrouter: true }),
     );
     const hosts = out.map((p) => new URL(p.endpoint).host);
     expect(new Set(hosts).size).toBe(out.length); // no two members share an account
@@ -729,8 +732,12 @@ describe('zai is a first-class quorum member', () => {
     expect(z).toBeUndefined();
   });
 
-  it('an operator model override is honoured', () => {
-    expect(zaiOf({ ZAI_API_KEY: 'k', HAL_S2_ZAI_MODEL: 'glm-4.7' })!.model).toBe('glm-4.7');
+  it('an operator model override is honoured only when paid is allowed', () => {
+    expect(zaiOf({ ZAI_API_KEY: 'k', HAL_S2_ZAI_MODEL: 'glm-4.7' })!.model).toBe('glm-4.5-flash');
+    expect(zaiOf({ ZAI_API_KEY: 'k', HAL_S2_ZAI_MODEL: 'glm-5-turbo' })!.model).toBe('glm-4.5-flash');
+    expect(
+      zaiOf({ ZAI_API_KEY: 'k', HAL_S2_ZAI_MODEL: 'glm-4.7', SEAN_PAID_LOOP: 'loop' })!.model,
+    ).toBe('glm-4.7');
   });
 
   it('THE POINT: it adds a family the panel did not have, so the veto floor gets real headroom', () => {
@@ -754,7 +761,7 @@ describe('zai is a first-class quorum member', () => {
       rows: [{ provider: 'zai', model: 'glm-4.5-flash', successes: 0, not_found: 5, other_failures: 0, liveness: 'DEAD' }],
       refreshed_at: 'now',
     });
-    const z = zaiOf({ ZAI_API_KEY: 'k' });
+    const z = zaiOf({ ZAI_API_KEY: 'k', SEAN_PAID_LOOP: 'loop' });
     expect(z!.model).toBe('glm-4.9-flash');
     expect(z!.selection?.substituted).toBe(true);
   });
@@ -800,7 +807,7 @@ describe('cerebras picks against the whole panel, not a prefix of it', () => {
   it('THE BUG IT FIXES: with gemini in the panel, cerebras must not buy the gemini family', () => {
     catalogOfferingBoth();
     const out = withEnv(
-      { CEREBRAS_API_KEY: 'k', GEMINI_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' },
+      { CEREBRAS_API_KEY: 'k', GEMINI_API_KEY: 'k', OPENROUTER_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' },
       () => buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }),
     );
     const cer = out.find((p) => p.name === 'cerebras');
@@ -813,7 +820,7 @@ describe('cerebras picks against the whole panel, not a prefix of it', () => {
   it('THE PANEL IS ACTUALLY WIDER — the count, not just the label', () => {
     catalogOfferingBoth();
     const out = withEnv(
-      { CEREBRAS_API_KEY: 'k', GEMINI_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' },
+      { CEREBRAS_API_KEY: 'k', GEMINI_API_KEY: 'k', OPENROUTER_API_KEY: 'k', HAL_QUORUM_AUTOBACKFILL: 'true' },
       () => buildFactCheckProvidersWith({ ...ALL_OFF, cerebras: true }),
     );
     const families = new Set(out.map((p) => p.family));

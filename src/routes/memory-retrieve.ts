@@ -24,6 +24,7 @@
 import express from 'express';
 import { db } from '../db';
 import { retrieveVerifiedMemory } from '../memory/memory-retrieval';
+import { recordLeafAccess } from '../memory/memory-leaf-access';
 import type { MemoryLeafRow } from '../memory/memory-root-store';
 import type { MemoryContentRow } from '../memory/memory-content-store';
 
@@ -77,6 +78,8 @@ router.get('/memory/retrieve', async (req, res) => {
       rootRow.root,
     );
     res.json(toWire(result));
+    // fire-and-forget: never awaited, never blocks the response already sent
+    recordLeafAccess(db, agentId).catch(() => { /* swallowed — tracking must not surface errors */ });
   } catch (e: any) {
     res.status(409).json({ error: 'stored leaf rows do not recompute to the committed root', detail: e?.message });
   }

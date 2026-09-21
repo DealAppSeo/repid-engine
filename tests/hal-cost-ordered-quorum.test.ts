@@ -1,7 +1,7 @@
 /**
  * S-R6 — cheapest-first quorum assembly. factCheck calls providers in cost tiers (free → cheap →
- * escalation) and STOPS the moment >= 2 distinct families respond, so paid providers are only hit
- * when the free tier can't form a quorum. Reversible via HAL_QUORUM_COST_ORDERED=false. Also covers
+ * escalation) and STOPS the moment >= 3 distinct families respond, so paid providers are only hit
+ * when the free wave cannot assemble three families. Reversible via HAL_QUORUM_COST_ORDERED=false. Also covers
  * costTierOf. Mocks global.fetch + src/db so no network/Supabase.
  */
 jest.mock('../src/db', () => ({ db: { from: () => ({ insert: () => Promise.resolve({ error: null }) }) } }));
@@ -16,7 +16,7 @@ describe('buildFactCheckProviders reads enable flags (R5/R6 wiring)', () => {
     // when their key is present). This test asserts the PER-PROVIDER opt-in gating, so it turns
     // auto-backfill OFF to exercise the reversible legacy path.
     process.env.HAL_QUORUM_AUTOBACKFILL = 'false';
-    process.env.GEMINI_API_KEY = 'k'; process.env.MISTRAL_API_KEY = 'k'; process.env.QWEN_API_KEY = 'k';
+    process.env.GEMINI_API_KEY = 'k'; process.env.OPENROUTER_API_KEY = 'k'; process.env.MISTRAL_API_KEY = 'k'; process.env.QWEN_API_KEY = 'k';
     delete process.env.HAL_S2_ENABLE_GEMINI; delete process.env.HAL_S2_ENABLE_MISTRAL; delete process.env.HAL_S2_ENABLE_QWEN;
     expect(buildFactCheckProviders().map((p) => p.name)).not.toContain('gemini');
     process.env.HAL_S2_ENABLE_GEMINI = 'true'; process.env.HAL_S2_ENABLE_MISTRAL = 'true'; process.env.HAL_S2_ENABLE_QWEN = 'true';
@@ -30,7 +30,7 @@ describe('buildFactCheckProviders reads enable flags (R5/R6 wiring)', () => {
 
   it('auto-backfill ON (default) auto-includes gemini/mistral when their key is present', () => {
     delete process.env.HAL_QUORUM_AUTOBACKFILL; // default → ON
-    process.env.GEMINI_API_KEY = 'k'; process.env.MISTRAL_API_KEY = 'k';
+    process.env.GEMINI_API_KEY = 'k'; process.env.OPENROUTER_API_KEY = 'k'; process.env.MISTRAL_API_KEY = 'k';
     delete process.env.HAL_S2_ENABLE_GEMINI; delete process.env.HAL_S2_ENABLE_MISTRAL;
     const names = buildFactCheckProviders().map((p) => p.name);
     expect(names).toEqual(expect.arrayContaining(['gemini', 'mistral']));
@@ -67,12 +67,19 @@ describe('costTierOf', () => {
 describe('cheapest-first quorum assembly', () => {
   const providers = [P('groq', 'llama'), P('gemini', 'gemini'), P('deepseek', 'deepseek')];
 
-  it('2 free families respond → paid deepseek is NOT called', async () => {
+  it('2 free families respond → still escalates to cheap (stop is 3 families)', async () => {
     const r = await factCheck('claim', providers);
-    expect(r.families_used).toBe(2);
     expect(called.some((u) => u.includes('groq'))).toBe(true);
     expect(called.some((u) => u.includes('gemini'))).toBe(true);
-    expect(called.some((u) => u.includes('deepseek'))).toBe(false); // escalation avoided → cost saved
+    expect(called.some((u) => u.includes('deepseek'))).toBe(true);
+    expect(r.families_used).toBe(3);
+  });
+
+  it('3 free families respond → paid deepseek is NOT called', async () => {
+    const threeFree = [P('groq', 'llama'), P('gemini', 'gemini'), P('mistral', 'mistral'), P('deepseek', 'deepseek')];
+    const r = await factCheck('claim', threeFree);
+    expect(r.families_used).toBe(3);
+    expect(called.some((u) => u.includes('deepseek'))).toBe(false);
   });
 
   it('only 1 free family up → escalates to cheap deepseek to reach quorum', async () => {
