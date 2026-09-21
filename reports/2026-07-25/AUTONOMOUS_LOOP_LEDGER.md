@@ -7349,7 +7349,7 @@ Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only rout
 `src/memory/memory-heat-evict-root.ts` — `evictAndUpdateRoot(supabase, agentId, opts?)` orchestrates `performHeatEviction` → `hydrateTree` from remaining non-tombstoned leaves → `storeRoot` via `memory-root-store.ts`. Returns `{evictedCount, evictedIds, skipped, newRoot?}`. Flag-gated on `HEAT_EVICTION_ENABLED` (returns skipped when off). SAFE-CLASS (additive module, zero callers wired in prod paths, flag default-off, no scoring/tombstoning path beyond what PR #817 already established).
 
 **Step 5 — what shipped:**
-[to be filled after feature build]
+`src/memory/memory-heat-evict-root.ts` (97 lines): `evictAndUpdateRoot(supabase, agentId, opts?, fetchFn?, evictLeafFn?, fetchRootLeavesFn?, storeRootFn?)` — calls `performHeatEviction`, then if leaves were evicted: re-fetches non-tombstoned leaves via `fetchRootLeavesFn`, calls `recomputeRoot`, and stores the new root to `agent_memory_roots` via `storeRootFn` (epoch = max existing + 1). Returns `{evictedCount, evictedIds, skipped, newRoot?, newEpoch?}`. Gated on `HEAT_EVICTION_ENABLED` (default off) — inherits from `performHeatEviction`. All DB I/O injected for testability. Tests `tests/memory/memory-heat-evict-root.test.ts` — **7/7**: flag off (no fetch/store); no cold candidates (no root update); 1 cold leaf evicted (root + epoch returned, args forwarded); fetchRootLeaves error; storeRoot error; root determinism; supabase handle forwarded. `tsc --noEmit` → exit 0. Zero callers in `src/` outside definition (SAFE-CLASS). Feature PR **#821** opened on `feat/cc-2026-09-21-memory-heat-evict-root`, armed `--auto --squash` (`autoMergeRequest.enabledAt` non-null **[V]**).
 
 **Open for Sean (rule-4):**
 1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
@@ -7361,5 +7361,5 @@ Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only rout
 7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway to get shadow logs flowing (no scoring/eviction risk).
 8. **`HEAT_EVICTION_ENABLED=true`** — flip when ready for actual cold-leaf tombstoning; shadow mode first is recommended.
 
-**Next beat:** (1) Confirm third-run PRs merged. (2) Advance item 13: build reactivation trigger (`src/memory/memory-heat-reactivate.ts` — promote cold leaf back to `heat_tier=warm` when `runHeatEvictionSweepForAgent` returns it in `reactivationCandidates`, tombstoned=false). Final piece of item 13 acceptance test.
+**Next beat:** (1) Confirm third-run PRs (#820 docs, #821 feature) merged. (2) Advance item 13: build reactivation trigger (`src/memory/memory-heat-reactivate.ts` — promote cold leaf back when `runHeatEvictionSweepForAgent` returns it in `reactivationCandidates`; update `heat_tier=warm` on the leaf row). Final piece of item 13 acceptance test ("reactivation triggers"). SAFE-CLASS (additive module, flag-gated, no prod path changed).
 
