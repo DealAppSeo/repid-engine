@@ -7289,3 +7289,41 @@ Additive migration adding `heat_tier text CHECK (heat_tier IN ('hot','warm','col
 **Intent for steps 2-4 (stated before feature branch):**
 Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only route (no auth bypass; uses same `agent_id` from `req.apiKey` binding) that calls `runHeatEvictionSweepForAgent` for the calling agent and returns the tier classification summary (hot/warm/cold/on_chain counts, eviction/reactivation candidates). Shadow-only (no tombstoning, no writes). This makes heat classification observable in prod without risk. SAFE-CLASS (additive route, no scoring/eviction path changed, read-only). Tests: no agent_id on key → 403; sweep returns summary → 200 with tier counts; sweep error → 500.
 
+**Step 5 — what shipped:**
+`GET /api/v1/memory/heat-status` route (PR #814, merged 2026-09-21T01:09:15Z): `src/routes/memory-heat-status.ts` mounted at `src/index.ts:77`. Returns tier counts (hot/warm/cold/on_chain) + eviction/reactivation candidate counts by calling `runHeatEvictionSweepForAgent` for the calling agent. 4/4 tests in `tests/memory-heat-status-route.test.ts` (403 without agent_id, 200 with tier summary, 500 on sweep error, verifies tier count fields). SAFE-CLASS (read-only, no tombstoning, no scoring path changed). Also note: PR #812 (feat/dispatch: the deliverer — bridge ai_dispatch to XC dispatcher) merged by another session at 2026-09-21T02:52:49Z — not this loop's work.
+
+---
+
+## Beat (2026-09-21, second run) — first run VERIFIED; item 13 heat-eviction writer built
+
+**Prior beat verified [V]:** Beat 2026-09-21, first run (PR #813 docs + PR #814 feature, HEAD `cc3e2b6` before #812 merged).
+- origin/main = `c88e6e4` (after PR #812 merged by another session) — **[V]** `git log --oneline -1 origin/main`.
+- PR #814 MERGED at 2026-09-21T01:09:15Z, "feat(memory): item 13 heat-status route — GET /api/v1/memory/heat-status, 4/4 tests" — **[V]** `gh pr view 814 --json state,mergedAt,title`.
+- PR #813 MERGED at 2026-09-21T01:07:14Z, docs PR — **[V]** `gh pr view 813 --json state,mergedAt`.
+- `src/routes/memory-heat-status.ts` EXISTS; mounted at `src/index.ts:77` — **[V]** `ls src/routes/memory-heat-status.ts`; `grep -n "memory-heat-status" src/index.ts`.
+- Tests **4/4 pass** — **[V]** `./node_modules/.bin/jest tests/memory-heat-status-route.test.ts --forceExit` → 4/4.
+- **Penalty verdict: MINOR.** First run's ledger entry ends at "Intent for steps 2-4" with no Step 5 written in the body (retroactively filled above). Feature shipped and verified; documentation omission only. PR #812 (dispatch deliverer) merged by another session — not this loop's work, not this loop's omission.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791) + heat-eviction sweep (PR #795) + access-tracking (PR #800) + DB-backed orchestrator (PR #803) + shadow-log caller (PR #805) + heat-tier DDL + `writeHeatTiers` (PR #810) + heat-status route (PR #814, 4/4). All shadow-only — no real eviction has run. Item 13 acceptance test: "low-heat leaves flushed to cold; root preserved; reactivation triggers". Remaining: actual eviction writer (tombstoning, flag-gated).
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-evict.ts` — `performHeatEviction(supabase, agentId, opts?)` fetches the sweep report (via `runHeatEvictionSweepForAgent`), tombstones each eviction candidate (`tombstoned=true`), returns count and list of evicted leaf IDs. Gated on `HEAT_EVICTION_ENABLED` (default off) — no eviction occurs unless flag is `"true"`. `src/config/known-env-vars.generated.ts` updated. SAFE-CLASS (additive module, flag default-off, no callers in existing prod paths).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-evict.ts` (90 lines): `performHeatEviction(supabase, agentId, opts?, fetchFn?, evictLeafFn?)` — fetches sweep report via `runHeatEvictionSweepForAgent`, tombstones each eviction candidate via `evictLeafFn` (default `tombstoneLeaf`), returns `{evictedCount, evictedIds, skipped}`. Gated on `HEAT_EVICTION_ENABLED` (default off) — returns `skipped:true` immediately unless flag is `"true"`. `HEAT_EVICTION_ENABLED` added to `src/config/known-env-vars.generated.ts` before `HEAT_EVICTION_SHADOW_ENABLED` (alphabetical). Tests `tests/memory/memory-heat-evict.test.ts` — **8/8**: flag off → skipped; flag="false" → skipped; flag on + cold leaf → evicted (id correct); hot leaf not evicted; evictFn returns 0 (already tombstoned) → not counted; DB error propagated; evictionLimit=2 on 3 cold leaves → 2 evicted; tombstoneLeaf exported. `tsc --noEmit` → exit 0. Feature PR **#817** opened on `feat/cc-2026-09-21-memory-heat-evict`, SAFE-CLASS (additive module, zero callers wired, flag default-off, no prod path changed), armed `--auto --squash` (`autoMergeRequest.enabledAt` non-null **[V]**).
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway to get shadow logs flowing (no scoring/eviction risk).
+8. **`HEAT_EVICTION_ENABLED=true`** — flip when ready for actual cold-leaf tombstoning; shadow mode first is recommended.
+
+**Next beat:** (1) Confirm PR #817 merged. (2) Advance item 13: item 13's acceptance test is "low-heat leaves flushed to cold; root preserved; reactivation triggers". The eviction writer (PR #817) closes "flushed to cold". Remaining: root preservation after eviction (re-compute root after tombstoning) and reactivation triggers (promote a cold leaf back when its heat rises). Both can be shadow-only primitives. OR advance item 14 (Plonky3 AIR) if that requires no Sean GO for the shadow-first slice.
+
