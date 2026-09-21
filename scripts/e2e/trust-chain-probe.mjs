@@ -79,7 +79,7 @@ async function main() {
   add({ id: 'db', says: 'this probe can read the database', status: 'PASS', detail: 'PostgREST reachable.' });
 
   // ── 1. A human account exists ────────────────────────────────────────────────────────────
-  const humans = await rest('repid_agents?select=agent_name,builder_id,tier,current_repid&is_human=is.true&limit=5');
+  const humans = await rest('repid_agents?select=id,agent_name,builder_id,tier,current_repid&is_human=is.true&limit=5');
   add(humans.length
     ? { id: 'human', says: 'a human RepID account exists', status: 'PASS',
         detail: `${humans.length} is_human agent(s); e.g. ${humans[0].agent_name} tier=${humans[0].tier} repid=${humans[0].current_repid}` }
@@ -161,15 +161,38 @@ async function main() {
 
   // ── 8. RepID moves for BOTH sides ────────────────────────────────────────────────────────
   const ev = await rest('repid_score_events?select=id,created_at&order=created_at.desc&limit=1');
-  const humanEv = await rest('repid_score_events?select=id&agent_id=in.(' +
-    humans.map((h) => `"${h.builder_id ?? h.agent_name}"`).join(',') + ')&limit=1').catch(() => []);
-  add(ev.length
-    ? { id: 'repid', says: 'transactions move RepID', status: humanEv.length ? 'PASS' : 'APPROXIMATE',
-        detail: humanEv.length
-          ? `newest score event ${ev[0].created_at}; human-side events present`
-          : `newest score event ${ev[0].created_at}, but none attributable to a human account — ` +
-            'agent-side only, so "moves the human\'s RepID" is unproven.' }
-    : { id: 'repid', says: 'transactions move RepID', status: 'FAILED', detail: 'no score events at all.' });
+
+  // The human-side read is kept SEPARABLE from its verdict on purpose.
+  //
+  // This leg first shipped as `.catch(() => [])` feeding `humanEv.length ? PASS : APPROXIMATE`,
+  // so a query that FAILED produced an empty array and was then reported as "no human-side
+  // events" — a failed read scored as a measured negative, in the harness whose entire job is
+  // to stop exactly that. `null` here means NOT_CHECKED and can never be counted as zero.
+  //
+  // It also joined on the wrong column. `repid_score_events.agent_id` is `repid_agents.id`;
+  // the first version filtered on `builder_id ?? agent_name`, which matches nothing, so it
+  // would have reported "no human events" against a table that has them.
+  let humanEv = null;
+  try {
+    const ids = humans.map((h) => h.id).filter(Boolean).map((v) => encodeURIComponent(v));
+    if (ids.length) humanEv = await rest(`repid_score_events?select=id&agent_id=in.(${ids.join(',')})&limit=1`);
+  } catch {
+    humanEv = null; // read failed — NOT the same as "none found"
+  }
+
+  if (!ev.length) {
+    add({ id: 'repid', says: 'transactions move RepID', status: 'FAILED', detail: 'no score events at all.' });
+  } else if (humanEv === null) {
+    add({ id: 'repid', says: 'transactions move RepID', status: 'NOT_CHECKED',
+          detail: `newest score event ${ev[0].created_at}, but the human-side read did not complete. ` +
+                  'This says nothing about whether human RepID moves — it is an absence, not a negative.' });
+  } else {
+    add({ id: 'repid', says: 'transactions move RepID', status: humanEv.length ? 'PASS' : 'APPROXIMATE',
+          detail: humanEv.length
+            ? `newest score event ${ev[0].created_at}; human-side events present`
+            : `newest score event ${ev[0].created_at}, but none attributable to a human account — ` +
+              'agent-side only, so "moves the human\'s RepID" is unproven.' });
+  }
 
   // ── 9. HAL answers with named providers ──────────────────────────────────────────────────
   const health = await engine('/health');
