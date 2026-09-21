@@ -1,9 +1,9 @@
-# INBOX_XC — red-team the least-friction signup ladder before it is built
+# INBOX_XC — red-team the deliverer BEFORE its cron is switched on
 
 ## Task
 
-**Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is findings and a
-specification returned as text. Do not claim to have created, edited or committed a file.
+**Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is findings returned as
+text. Do not claim to have created, edited or committed a file.
 
 **Dispatch:**
 ```
@@ -15,31 +15,30 @@ node scripts/dispatch/run-agent.mjs --agent xc --inbox docs/dispatch/INBOX_XC.md
 
 ### Why this task exists
 
-The product is about to grow a **progressive-trust signup**: a visitor can arrive with no
-wallet, no email and no account, do real things, and see their RepID move — proving more
-about themselves only as the stakes rise. That is the MVP's front door and it is not built
-yet. **You are being asked BEFORE it is built, not after**, because the failure direction
-here is "anyone can mint reputation", and that is far cheaper to prevent than to unwind.
+A bridge was just built between two queues that had never touched. `claude-cloud` writes
+rows into the `ai_dispatch` table; the working dispatcher (`run-agent.mjs`) reads
+`docs/dispatch/INBOX_XC.md`, a git file. `docs/dispatch/MAILBOX_DELIVERY.md` states it
+outright: *"a deliverer has never existed."* `scripts/dispatch/deliver-inbox.mjs` is now
+that deliverer, and `.github/workflows/deliver-inbox-cloud.yml` is the scheduler.
 
-The operator's stated intent, verbatim, because it is not written anywhere in this repo:
+**Its cron is commented out and has never run on a schedule.** You are being asked in the
+window between "it exists" and "it runs unattended every fifteen minutes", because that is
+the only cheap moment. Once it is on, it takes a row written by something else, turns that
+row's `content` into an LLM prompt, and runs it on a GitHub runner that is holding a
+Supabase service-role key and a GitHub PAT — with no human watching any individual run.
 
-> *"we want to create the signup with the least friction possible … for most users we want
-> them to see value before we ask for too much info … without us ever taking seeing or
-> having access to their info or wallet, we never take custody. So as they do a few things
-> and learn, see the value hopefully, and their RepID goes up slightly because they are
-> learning … even though at a certain point they obviously will have to 2FA and I see
-> value in 4FA before they start exchanging high risk data."*
-
-Your job is to find where that intent, implemented naively, breaks the guarantee that a
-RepID is **earned**.
+**You are red-teaming work that was authored in the same session that is briefing you.**
+Say so plainly where you find something. The brief below states what was already found and
+fixed; do not stop at re-finding those.
 
 ---
 
 ### Facts you need, inlined
 
 You have `reasoning` and `repo_read`. **`repo_read` is scoped to this workspace only** —
-you cannot open `trinity-ecosystem`, `trustshell` or `hyperdag-protocol`. Do not claim to
-have read a file outside this repo, and do not invent its contents.
+you cannot open `trinity-ecosystem`, `trustshell` or `hyperdag-protocol`, and you cannot
+check out a branch. Do not claim to have read a file outside this repo, and do not invent
+its contents.
 
 **The trust vocabulary — four states, and the distinctions ARE the product:**
 
@@ -52,89 +51,121 @@ have read a file outside this repo, and do not invent its contents.
 
 **Exit codes:** `0` VERIFIED, `2` NOT_CHECKED, anything else FAILED.
 
-**Canonical facts (do not re-derive, do not contradict):**
-- Tiers: `PROBATIONARY` 0–499 · `EARNING` 500–999 · `ESTABLISHED` 1000–4999 ·
-  `AUTONOMOUS` 5000–7999 · `VETERAN` 8000–10000. RepID clamps to [10, 10000].
-- `tier` is **database-derived**. A Postgres trigger overwrites it on every write to
-  `current_repid`. Never design a policy that writes tier directly.
-- **There is already an anti-Sybil gate, and it is load-bearing to this task.** The live
-  `compute_tier(integer, uuid)` overload demotes on counterparty count: `VETERAN` and
-  `AUTONOMOUS` each require **>= 2 unique counterparties**, else they fall one tier.
-  `ESTABLISHED` and `EARNING` have **no such gate today**. That asymmetry is the single
-  most important input to your analysis — reason about what it does and does not protect
-  when the population gains a large number of zero-counterparty accounts.
-- Payment gating, where it exists, is `STAKE_DEPOSIT_AUTH_ENFORCED` / the ControlProof
-  path. There is no pay-auth mode env var in this engine's generated registry.
-- `CONSTITUTIONAL_AUDIT_ENABLED` defaults **FALSE** and the layer is non-load-bearing.
+**The trust boundary, stated exactly, because everything below turns on it:**
 
-**Read these files — they are the actual subject:**
-- `src/services/stake-authorization.ts` — the existing authorization ladder
-  (`session` / `wallet_signature` / `operator` / `unenforced`). Note that it already
-  escalates on the **risk of the action** (a real on-chain deposit demands a wallet
-  signature; a simulated one accepts a session). Read the module header first.
-- `src/services/anonymous-signup.ts` — what a no-wallet visitor actually gets: a 32-byte
-  random token stored on the builder row, `auth_method: 'token_only'`,
-  `earns_repid_rewards: false`, and an address derived from the token that is
-  **deliberately not a valid checksummed address** and holds no key.
-- `src/services/auth-token.ts` — `verifyFullAccountToken()`: a JWT requiring `builder_id`
-  **and** `email`. An anonymous visitor has neither.
-- `src/services/bounty-authorization.ts` — read the header. It is the clearest worked
-  example in this repo of a fix that *looks* correct and closes nothing: requiring the
-  `admin` scope would have authorised everyone, because public registration grants
-  `admin` to every new agent. **Assume the same shape of mistake is available here.**
-- `src/routes/agents-external-score.ts` — a route that until recently required no
-  credential at all, and the reasoning that closed it.
+- A row's `content` field becomes the agent's prompt **verbatim**. It is written to a temp
+  file and passed as `--inbox <path>`, so it never reaches a shell command line. That
+  closes command injection. It does **not** close prompt injection, and nothing claims it
+  does.
+- The agent that receives it holds `reasoning, repo_read` — **no shell, no write scope.**
+  Whether that is *enforced* by `run-agent.mjs` or merely *requested* is the first thing
+  worth establishing, and it is the hinge of most of what follows.
+- The runner executing all of this holds, simultaneously: a Supabase **service-role** key
+  (`rolbypassrls = true` — it ignores every RLS policy on the project), `LOOP_GH_PAT` with
+  `contents: write` and `pull-requests: write`, and a credential file at the path named by
+  `TRUSTKEYS_ENV_MASTER` containing `XAI_API_KEY`. That file lives in the runner temp
+  directory, **outside the repository checkout**.
 
-**The measured gap this task is about:** `/builder/token-signup` mints a credential into
-`builders.session_token`, and four routes in `src/routes/v1.ts` resolve a builder by that
-column — so it is a real, used credential. But `/stake/deposit`'s session tier accepts
-**only** full-account JWTs. So the product issues a credential its own ladder will not
-accept. Confirmed against production 2026-08-28: sign up, present the token you were
-handed one call earlier, receive `invalid_session`.
+**Two findings are already closed. Do not re-report them as new; do check whether the fix
+is complete.**
+
+1. **CWE-94, GitHub Actions script injection.** The workflow inputs were interpolated as
+   `${{ inputs.to }}` directly into a `run:` block, so a crafted `to` executed on the
+   runner with the keyring in scope. Found by Strix, **reproduced before fixing**. Fixed
+   two ways: inputs now arrive as environment variables and are expanded inside a quoted
+   bash array, and `to` / `limit` are `type: choice`, validated by GitHub against a literal
+   list before the job starts.
+2. **Module-scope `process.exit`** made the script untestable; the preconditions moved into
+   `checkPreconditions()` behind an `isMain` guard.
+
+**Read these files — they are the subject:**
+- `scripts/dispatch/deliver-inbox.mjs` — the deliverer. Read the header comments; they
+  state the design intent you are testing against.
+- `scripts/dispatch/deliver-lib.js` — `AGENT_FOR` and `buildReply`, the decision logic.
+- `scripts/dispatch/inbox-lib.js` — `claimPatch`, `replyPatch`, `releasePatch`. The claim is
+  a compare-and-swap. **Establish whether it expires.**
+- `.github/workflows/deliver-inbox-cloud.yml` — the scheduler, permissions, credential
+  handling and the commented-out cron.
+- `scripts/dispatch/run-agent.mjs` — the dispatcher being reused unchanged. Its capability
+  refusal, evidence fencing, claim audit and secret pruning are the guarantees this bridge
+  is relying on without re-implementing. **Relying on a guarantee is not the same as that
+  guarantee holding.**
+- `scripts/dispatch/read-inbox.mjs` — the prior art, and a worked example of the failure
+  this repo keeps making: it selects on `read_at IS NULL`, `dispatch-triage` stamps
+  `read_at` within about seven minutes, so it matches zero rows on any coarser schedule —
+  and its zero-row branch printed VERIFIED. **An empty result reported as success.**
 
 ---
 
 ### Deliverables — four sets of findings
 
-### 1. Attack the anonymous rung
+### 1. The selector, and who can reach it
 
-Assume the bottom rung is added: a `builders.session_token` match authorises **simulated**
-stake on its own row only, with real deposits still requiring a wallet signature.
+The deliverer selects on `status = 'triaged'` **and** `reply_from = 'dispatch-triage'` and
+an age floor of `DISPATCH_MIN_AGE_MIN`.
 
-Find what that buys an attacker. At minimum reason about: unbounded free account creation;
-what a token-only account can reach that it should not; whether "its own row only" is
-actually enforceable given how the builder is resolved; and whether any downstream consumer
-treats a token-only account as equivalent to a full one.
+Reason about what it takes to get a row selected, and therefore to get arbitrary text in
+front of an LLM running on that runner. Who or what can write a row; who or what can set
+those two fields; whether the age floor is a control or only a settling delay; and what a
+row crafted specifically to be selected would look like.
+
+**Then the question that matters:** given the agent holds no shell and no write scope, what
+is the *worst reachable outcome* of a hostile `content`? Argue it concretely rather than
+asserting that prompt injection is bad. Consider at minimum: the credential file sitting
+outside the checkout, what `repo_read` actually permits, and the fact that the agent's
+output is written back into a database row that a human will later read to decide whether
+this system is behaving.
 
 **Name the single highest-severity path you find, and say plainly if you find none.**
 
-### 2. Rank the two RepID options by failure direction
+### 2. Attack the honesty of the reply
 
-The operator must choose between:
+`buildReply` exists because this system has twice caught fabricated self-reports — a commit
+hash that did not exist, and a claimed HTTP 200 against an endpoint that 404'd. So the
+reply is built from things checked after the run: the exit code, git state, and whether a
+transcript appeared. Agent output is fenced under a CLAIM heading.
 
-- **(A) Provisional-and-vesting** — an anonymous user's RepID moves as they act, is
-  recorded against the token-only row, and becomes *earned* only when they bind an
-  identity. A Sybil farm accumulates nothing that vests.
-- **(B) Preview-only** — the number shown is not persisted as earned at all.
+**Attack that separation.** The VERIFIED section is supposed to be untouchable by the agent
+and the CLAIM section is supposed to be visibly quarantined. Examine whether each actually
+is. Specific things worth your attention, not as a checklist to tick but as starting points:
 
-For each: what does an attacker gain, what does an honest user lose, and **which way does
-it fail when the implementation is subtly wrong** — because that, not the happy path, is
-what should decide it. Note explicitly whether the existing counterparty gate covers (A),
-and at which tier it stops helping.
+- The agent's output is interpolated into a fenced block. What does agent-authored text
+  containing a fence delimiter do to the rendered reply a human reads?
+- `transcripts` is decided by whether a changed path *contains* the substring `reports/`.
+- New-file detection subtracts the before-state by line containment. What happens to a file
+  that was already dirty before the run?
+- `ok` is `exit code 0 and no spawn error`. Enumerate the ways a run can exit 0 having
+  accomplished nothing, and say whether the reply would read as `done`.
 
-### 3. The escalation ladder itself
+For each: does it let an agent, or a hostile row, cause a reply that a human would read as
+stronger evidence than it is? That is the severity question here — not whether the field is
+wrong, but whether being wrong is *visible*.
 
-Specify the ladder as predicates: for each rung, what is proven, what it unlocks, and what
-the system must refuse. Cover the operator's 2FA/4FA intent as *thresholds on action risk*,
-not on user identity. State where each rung's decision is MEASURED vs NOT_CHECKED.
+### 3. The unattended failure modes
 
-**Design for observe first.** Say explicitly what would have to be true to enforce.
+The cron is off. Assume it is switched on at fifteen-minute intervals against a backlog,
+with nobody reading individual runs for a week.
 
-### 4. What must never be reachable
+Reason about what accumulates. At minimum: what happens to a claimed row when the runner is
+killed mid-dispatch (the job cap and the inner dispatch timeout are close together — work
+out which fires first and what state that leaves); whether two concurrent runs can collide
+given the concurrency group and the runner identifier construction; and whether a
+permanently misconfigured deployment can sit at exit 2 indefinitely.
 
-The short list of capabilities that must remain closed to a token-only account no matter
-how the ladder evolves, each with the reason it is on the list. This is the list a future
-change gets checked against, so it is worth more than a long one.
+**That last one is deliberate and you should attack the decision, not just describe it.**
+Exit 2 is `NOT_CHECKED` and is surfaced as a warning, not a failure, on the stated reasoning
+that a workflow which goes red for environmental reasons trains readers to ignore its red.
+Both directions have a cost. Say which is worse *here*, and what would make the yellow state
+impossible to ignore forever without making it noise.
+
+### 4. What must be true before the cron goes on
+
+A short list of preconditions, each with the reason it is on the list and how it would be
+checked. This is the list the operator reads before uncommenting two lines, so a short list
+that is actually checkable beats a long one.
+
+State explicitly which preconditions are MEASURED today, which are NOT_CHECKED, and which
+cannot be established without running the thing.
 
 ---
 
@@ -142,20 +173,23 @@ change gets checked against, so it is worth more than a long one.
 
 - Every finding names the file and the mechanism, not just the symptom.
 - Every status distinguishes all four vocabulary states. No two-state booleans.
-- Each finding carries **what it does NOT establish**. A boundary stated is worth more
-  than a claim overreached.
+- Each finding carries **what it does NOT establish**. A boundary stated is worth more than
+  a claim overreached.
 - Where you are uncertain, write **UNVERIFIED** and say what would settle it.
 - Severity is ranked by **which way the control fails**, not by how alarming the component
   sounds. A gate that fails closed and a gate that fails open are not comparable.
+- If you conclude the design is sound on some axis, say so and say what would change your
+  mind. A red-team that finds nothing and reports that honestly is a result.
 
 ### What will be rejected
 
-- Any claim you read a file outside this workspace.
+- Any claim you read a file outside this workspace, or read a branch other than the one
+  checked out.
 - Any invented test output, command output, or measurement. On 2026-08-05 a dispatch
   returned a review containing fabricated test results; that is the specific failure this
   lane's constraints exist to prevent. **If you did not run it, you did not run it.**
+- Re-reporting the two closed findings above as new discoveries.
 - A recommendation to loosen an authorization path without stating its failure direction.
-- Filling in a Sprint-3 stub.
 
 ### Note on where this lands
 
