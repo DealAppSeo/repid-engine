@@ -232,6 +232,56 @@ describe('KILL SWITCH — if TypeSafe disappears, HAL is unchanged', () => {
   });
 });
 
+describe('ONLY_ATTESTATIONS_LEAVE — the prefilter must not defeat the boundary it precedes', () => {
+  // This hop carries the DELIVERABLE (up to 2000 chars of `state`) and runs BEFORE
+  // the fact-check quorum. fact-check.ts and cross-llm-client.ts both assert the
+  // boundary before sending a prompt out; this file did not, so on a self-hosted
+  // node the guarded quorum would refuse the cloud call AFTER this one had already
+  // made it. These tests pin that it now fails CLOSED.
+  afterEach(() => {
+    delete process.env.ONLY_ATTESTATIONS_LEAVE;
+  });
+
+  it('does NOT dial out at all when the boundary is engaged', async () => {
+    process.env.HAL_JEV_PREFILTER_ENABLED = 'true';
+    process.env.OPENROUTER_API_KEY = 'k';
+    process.env.ONLY_ATTESTATIONS_LEAVE = 'true';
+    (providerFetch as jest.Mock).mockResolvedValue(sysOne({ claim_is_factual: 0.01 }));
+
+    const r = await jevPrefilter(HAIKU);
+    // The deliverable never leaves: providerFetch is never reached.
+    expect(providerFetch as jest.Mock).not.toHaveBeenCalled();
+    expect(r).toEqual({ skipHal: false, reason: 'unavailable' });
+  });
+
+  it('the boundary refusal never skips HAL — it degrades to the guarded quorum', async () => {
+    process.env.HAL_JEV_PREFILTER_ENABLED = 'true';
+    process.env.OPENROUTER_API_KEY = 'k';
+    process.env.ONLY_ATTESTATIONS_LEAVE = 'true';
+    // Even a response that WOULD have said "not factual" cannot cause a skip,
+    // because the call is refused before it is made.
+    (providerFetch as jest.Mock).mockResolvedValue(
+      sysOne({ claim_is_factual: 0.0, worth_hal_quorum: 0.0 }),
+    );
+
+    const r = await svc().evaluate({ text: HAIKU });
+    expect(r.decision_reason).not.toBe('skipped_not_factual');
+    expect(factCheck as jest.Mock).toHaveBeenCalledTimes(1);
+  });
+
+  it('with the boundary OFF the hop still works — the guard is not a kill switch', async () => {
+    process.env.HAL_JEV_PREFILTER_ENABLED = 'true';
+    process.env.OPENROUTER_API_KEY = 'k';
+    (providerFetch as jest.Mock).mockResolvedValue(
+      sysOne({ claim_is_factual: 0.01, worth_hal_quorum: 0.01 }),
+    );
+
+    const r = await jevPrefilter(HAIKU);
+    expect(providerFetch as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(r.skipHal).toBe(true);
+  });
+});
+
 describe('response-shape ambiguity is absorbed, not guessed', () => {
   it('accepts a bare noul number', async () => {
     process.env.HAL_JEV_PREFILTER_ENABLED = 'true';

@@ -27,6 +27,7 @@
  */
 import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
+import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 
 /**
  * Model id on the System One route.
@@ -89,6 +90,25 @@ export async function jevPrefilter(text: string): Promise<JevPrefilterResult> {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   if (!key) return { skipHal: false, reason: 'unavailable' };
   try {
+    // DATA-LOCALITY BOUNDARY (ONLY_ATTESTATIONS_LEAVE) — and this one is
+    // load-bearing in a way the other prompt guards are not.
+    //
+    // `state` is the deliverable itself, up to 2000 characters of it, and this hop
+    // runs BEFORE the fact-check quorum. fact-check.ts:667 and
+    // cross-llm-client.ts:467 both assert this boundary before sending a prompt
+    // out; this file did not. So on a self-hosted node with the boundary engaged,
+    // the guarded quorum would correctly refuse to send the text to a cloud host
+    // — AFTER this unguarded prefilter had already sent it. A prefilter that
+    // defeats the boundary it sits in front of is worse than an unguarded leaf
+    // call: the downstream guard can no longer compensate, because the data is
+    // already gone. Found by Strix on #806, against code I wrote.
+    //
+    // Fails CLOSED: the guard throws, the existing catch turns that into
+    // `unavailable`, and HAL proceeds to its own (guarded) quorum. Refusing the
+    // hop is the correct behaviour here rather than redirecting it — System One
+    // is not an OpenAI-compatible chat route, so a LOCAL_LLM_BASE_URL redirect
+    // could not serve it even if one were attempted.
+    assertPromptEgressAllowed(PROVIDER_URLS.openrouterSystemOne, 'prompt');
     const res = await providerFetch(PROVIDER_URLS.openrouterSystemOne, {
       method: 'POST',
       headers: {
