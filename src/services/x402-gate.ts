@@ -35,7 +35,9 @@
  * a link that currently resolves for ZERO rows. A naive repoint grants REAL spending power
  * against DEMO money: today's defect fails CLOSED (under-granting), that one fails OPEN.
  *
- * The corrected computation exists, is pure, is tested, and is SHADOW-ONLY with no caller:
+ * The corrected computation exists, is pure and is tested. It was SHADOW-ONLY WITH NO CALLER
+ * until 2026-09-21; `services/stake-authority-shadow.ts` is now its caller, still shadow — it
+ * observes and records the gap and changes no decision here.
  * `services/stake-authority-resolver.ts`. Full analysis and the flip criteria:
  * `reports/2026-08-11/STAKE_AUTHORITY_DEFECT.md`.
  *
@@ -45,6 +47,7 @@
  */
 import { db } from '../db';
 import { observeOwnerCeiling } from './owner-ceiling-shadow';
+import { observeStakeAuthority } from './stake-authority-shadow';
 
 export type Tier = 'PROBATIONARY' | 'EARNING' | 'ESTABLISHED' | 'AUTONOMOUS' | 'VETERAN';
 
@@ -204,6 +207,17 @@ export async function checkTransactionAuthority(
   // unset the observer performs no reads and no writes.
   void observeOwnerCeiling({ agent: input.agent, amount: input.amount, decision }).catch(() => {
     /* observeOwnerCeiling catches its own failures; this guards the promise itself. */
+  });
+
+  // POSTED COLLATERAL vs THE PREDICTION MARKET, IN SHADOW. `decision.stake_available` above is
+  // summed from `agent_stakes` (wagers) and `sponsorship_records`; the real collateral in
+  // `stake_deposits` is never read — see this file's header. This call computes what the gate
+  // WOULD have seen, records the gap, and returns a value this function ignores. It gives
+  // `stake-authority-resolver.ts` its first caller; that module had none, so its correction has
+  // never once been exercised against live traffic. Inert unless STAKE_AUTHORITY_SHADOW_ENABLED
+  // is set: with it unset the observer performs no reads and no writes.
+  void observeStakeAuthority({ agent: input.agent, amount: input.amount, decision }).catch(() => {
+    /* observeStakeAuthority catches its own failures; this guards the promise itself. */
   });
 
   return { ...decision, agent_exists };
