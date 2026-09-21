@@ -7267,3 +7267,25 @@ Additive migration adding `heat_tier text CHECK (heat_tier IN ('hot','warm','col
 **Intent for steps 2-4 (stated before feature branch):**
 `supabase/migrations/20260920020000_agent_memory_heat_tier.sql` — additive column `heat_tier text CHECK (heat_tier IN ('hot','warm','cold','on_chain')) DEFAULT NULL` on `agent_memory_leaves`. `src/memory/memory-heat-tier-writer.ts` — `writeHeatTiers(supabase, agentId, tiers: Map<string, HeatTier>)` UPDATE each non-tombstoned leaf's `heat_tier` from sweep report. Wire shadow-only into `logHeatSweepShadow` (after existing log, only when flag on). Tests: empty map (no-op); single leaf updated; multiple leaves; tombstoned excluded; DB error propagated; returns rows affected; `logHeatSweepShadow` calls writer when flag on. SAFE-CLASS (additive DDL + shadow-only writer, flag-gated).
 
+---
+
+## Beat (2026-09-21, first run) — sixth run VERIFIED; item 13 heat-tier DDL + writer confirmed; backlog state updated
+
+**Prior beat verified [V]:** Beat 2026-09-20, sixth run (PR #809 docs + PR #810 feature, HEAD `562274a` on main).
+- origin/main = `562274a` — **[V]** `git log --oneline -1 origin/main`.
+- PR #810 MERGED at 2026-09-20T20:30:12Z, "feat(memory): item 13 heat-tier DDL + writer — writeHeatTiers, 7/7 tests, wired into shadow log" — **[V]** `gh pr view 810 --json state,mergedAt,title`.
+- PR #809 MERGED at 2026-09-20T20:26:16Z, docs PR — **[V]** `gh pr view 809 --json state,mergedAt`.
+- Migration `supabase/migrations/20260920020000_agent_memory_heat_tier.sql` EXISTS — **[V]** `ls supabase/migrations/ | grep heat`.
+- `src/memory/memory-heat-tier-writer.ts` EXISTS (61 lines), `writeHeatTiers` exported at line 26 — **[V]** `wc -l`, `grep -n`.
+- `writeHeatTiers` wired into `src/memory/memory-heat-shadow.ts` at line 47 (imported line 17) — **[V]** `grep -n "writeHeatTiers" src/memory/memory-heat-shadow.ts`.
+- Tests **7/7 pass** — **[V]** `./node_modules/.bin/jest tests/memory/memory-heat-tier-writer.test.ts --forceExit` → 7 passed.
+- **Penalty verdict: NONE.** The sixth run's ledger correctly labeled the heat-tier DDL + writer as shipped. All claims present and passing. Note: the sixth run's ledger entry had "Intent for steps 2-4" but no "Step 5" — the feature shipped (PR #810 merged) but Step 5 was not written into the ledger body. Not a false claim; just an omission of the confirmation paragraph. All artifacts verified present.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791, 16/16) + heat-eviction sweep (PR #795, 10/10) + access-tracking DDL+instrumentation (PR #800, 7/7) + DB-backed orchestrator (PR #803, 14/14) + shadow-log caller (PR #805, 8/8) + heat-tier DDL + `writeHeatTiers` writer wired into shadow log (PR #810, 7/7). Durable `heat_tier` classification now exists on `agent_memory_leaves`. Remaining: expose via a route or cron so shadow logs become observable in prod, OR build item 9 decisions (b)/(c).
+
+**Intent for steps 2-4 (stated before feature branch):**
+Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only route (no auth bypass; uses same `agent_id` from `req.apiKey` binding) that calls `runHeatEvictionSweepForAgent` for the calling agent and returns the tier classification summary (hot/warm/cold/on_chain counts, eviction/reactivation candidates). Shadow-only (no tombstoning, no writes). This makes heat classification observable in prod without risk. SAFE-CLASS (additive route, no scoring/eviction path changed, read-only). Tests: no agent_id on key → 403; sweep returns summary → 200 with tier counts; sweep error → 500.
+
