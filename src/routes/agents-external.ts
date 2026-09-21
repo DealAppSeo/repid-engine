@@ -26,6 +26,7 @@ import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 import { provisionWallet, persistProvisionedWallet } from '../services/agent-wallet-manager';
 import { emitDeceptionShadow } from '../engine/deception-emitter';
 import { insertScoreEvent } from '../scoring/score-event-writer';
+import { publicIdentityFields } from '../identity/public-fields';
 
 const router = Router();
 
@@ -1097,6 +1098,13 @@ router.get('/:id/repid', async (req: Request, res: Response) => {
     agent_type: (agent as any).agent_type ?? 'external',
     last_updated: (agent as any).last_updated,
     badge_url: `https://trustrepid.dev/badge/${agentId}.svg`,
+    ...((f) => ({
+      last_verified_action: f.last_verified_action,
+      idle_days: f.idle_days,
+      bound: f.bound,
+      kind: f.kind,
+      display_tier: f.display_tier,
+    }))(publicIdentityFields(agent as any)),
   });
 });
 

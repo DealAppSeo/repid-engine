@@ -31,6 +31,8 @@ import { deriveIdentityState } from './identity-state';
 import { deriveAnchorStatus, ANCHOR_NOTES, type AnchorStatus } from './anchor-status';
 import { vestingBlock, type VestingBlock } from './vesting-status';
 import { proofClaim, type ProofClaim } from './proof-claim';
+import { publicIdentityFields } from '../identity/public-fields';
+import { proofFreshnessVerdict, type ProofFreshnessVerdict } from '../zkp/proof-freshness';
 
 export class PassportQueryError extends Error {
   constructor(public step: string, detail: string) {
@@ -74,6 +76,13 @@ export interface AgentPassport {
      * rather than a countdown. See `vesting-status.ts`.
      */
     vesting: VestingBlock;
+    /** C9: public staleness. Bound entities do not silently rot. */
+    last_verified_action: string | null;
+    idle_days: number | null;
+    bound: boolean | null;
+    kind: string | null;
+    /** C10: unclaimed DBT cannot display above Bronze. Null when kind is not on the row. */
+    display_tier: string | null;
   };
   identity_erc8004: {
     /**
@@ -125,6 +134,9 @@ export interface AgentPassport {
       anchor_status: AnchorStatus;
       anchor_note: string;
       created_at: string | null;
+      /** Trustshell zkrepid.freshness: FAILED when ageDays > 7. Not silent. */
+      freshness: ProofFreshnessVerdict;
+      age_days: number | null;
       /**
        * WHAT was proven. `cryptographically_verifiable: true` above says a proof
        * verifies; it does not say the claim could ever have been false. For a new
@@ -297,6 +309,13 @@ export async function buildAgentPassport(
       tier: agent.tier ?? null,
       activity_30d: agent.activity_30d ?? 0,
       vesting: vestingBlock(agent as any),
+      ...((f) => ({
+        last_verified_action: f.last_verified_action,
+        idle_days: f.idle_days,
+        bound: f.bound,
+        kind: f.kind,
+        display_tier: f.display_tier,
+      }))(publicIdentityFields(agent as any)),
     },
     identity_erc8004: {
       registered_onchain: identityState,
@@ -353,6 +372,8 @@ export async function buildAgentPassport(
             anchor_note: ANCHOR_NOTES[deriveAnchorStatus(latestProof)],
             claim: proofClaim((latestProof as any).statement),
             created_at: latestProof.created_at ?? null,
+            freshness: proofFreshnessVerdict(latestProof.created_at ?? null).verdict,
+            age_days: proofFreshnessVerdict(latestProof.created_at ?? null).ageDays,
           }
         : null,
       // D-019: never describe the proof as attesting agent behavior.

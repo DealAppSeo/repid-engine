@@ -11,6 +11,7 @@ import { factCheck, buildFactCheckProviders, type FactCheckProviderCfg, type Fac
 import { evaluate } from './lib/evaluate';
 import { markDegraded } from '../lib/degraded';
 import { applyExecutionFloor, type FloorReport } from './execution-floor';
+import { jevPrefilter } from './jev-prefilter';
 
 export type Product = 'trustshell' | 'trusttrader' | 'trustcre' | 'default';
 
@@ -360,6 +361,19 @@ export class HalService {
     // default; falls back to this.providersFn when absent.
     const providersFn = req.providersFn ?? this.providersFn;
     if (strictness === 2) {
+      const jev = await jevPrefilter(req.text);
+      if (jev.skipHal) {
+        return {
+          hal_score: 0,
+          decision: 'abstain',
+          decision_reason: jev.reason,
+          mode: 'fact-check',
+          strictness,
+          product,
+          signals: { jev_prefilter: jev.reason },
+          latency_ms: Date.now() - start,
+        };
+      }
       const providers = providersFn();
       if (providers.length > 0) {
         const fc = await factCheck(req.text, providers, {

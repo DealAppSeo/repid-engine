@@ -11,6 +11,9 @@
  *
  * Returns a 0..1 completeness score (1 = fully covers; low = significant omissions).
  */
+import { providerFetch } from '../egress/provider-fetch';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
+
 export type LlmFn = (prompt: string) => Promise<string>;
 
 export function isCompletenessEnabled(): boolean {
@@ -47,7 +50,7 @@ export async function checkCompleteness(prompt: string, response: string, callLL
 async function defaultGroqCall(prompt: string): Promise<string> {
   const key = process.env.GROQ_API_KEY?.trim();
   if (!key) throw new Error('GROQ_API_KEY not set');
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const res = await providerFetch(PROVIDER_URLS.groqChatCompletions, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({

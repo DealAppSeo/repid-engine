@@ -1,4 +1,6 @@
 import { db } from '../db';
+import { providerFetch } from '../egress/provider-fetch';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 export interface BadgeAward {
   badge_name: string;
@@ -326,7 +328,7 @@ export async function suggestConstitutionalRules(
     try {
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 5000);
-      const cb = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+      const cb = await providerFetch(PROVIDER_URLS.cerebrasChatCompletions, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

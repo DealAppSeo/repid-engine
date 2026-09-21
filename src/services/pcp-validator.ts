@@ -2,8 +2,8 @@ import { db } from '../db';
 import { logLlmCall } from '../billing/log-call';
 import { calculateCost } from '../billing/pricing';
 import crypto from 'crypto';
-
-// Using global fetch
+import { providerFetch } from '../egress/provider-fetch';
+import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 /**
  * The validator model, and why it is not a literal any more.
@@ -90,7 +90,7 @@ ${taskData.result}`;
       const apiKey = process.env.GROQ_API_KEY;
       if (!apiKey) throw new Error('No GROQ_API_KEY');
       
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const res = await providerFetch(PROVIDER_URLS.groqChatCompletions, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

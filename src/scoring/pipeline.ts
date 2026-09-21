@@ -55,6 +55,7 @@ import {
   evaluateProofEnqueue,
 } from '../services/proof-enqueue-filter';
 import { resolveIssuerIdentity } from './issuer-identity';
+import { shadowProofTier } from './proof-tier-shadow'; // item 11 shadow — inert unless PROOF_TIER_SHADOW_ENABLED=true
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -756,6 +757,11 @@ export async function runScoreEvent(
 
   // 9. Leaderboard refresh — repid_leaderboard_public is a regular VIEW
   //    (not materialized) per Phase 1 schema query, so no refresh needed.
+
+  // Item 11 shadow — observe which proof tier would have been required.
+  void shadowProofTier('HAL_SCORE_EVENT', agent.tier ?? 'PROBATIONARY').catch((e: unknown) => {
+    console.warn('[scoring/pipeline] shadowProofTier error (inert):', (e as Error)?.message ?? e);
+  });
 
   return {
     score_event_id,

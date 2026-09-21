@@ -131,6 +131,10 @@ export const NOT_ZKREPID: readonly { readonly path: string; readonly why: string
   { path: 'zkp/leaf-dual-write', why: 'general leaf-encoding migration machinery' },
   { path: 'zkp/proof-router', why: 'routes proofs by type; not RepID-specific' },
   { path: 'zkp/proof-statement-guard', why: 'a general fail-closed statement builder/validator' },
+  {
+    path: 'zkp/proof-freshness',
+    why: 'a served-proof age label (ageDays>7 FAILED); not a RepID statement, circuit, or identity binding',
+  },
   { path: 'zk-proof/prover', why: 'a generic prover request/response wrapper' },
 ];
 
