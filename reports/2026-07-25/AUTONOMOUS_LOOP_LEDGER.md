@@ -7313,5 +7313,17 @@ Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only rout
 `src/memory/memory-heat-evict.ts` — `performHeatEviction(supabase, agentId, opts?)` fetches the sweep report (via `runHeatEvictionSweepForAgent`), tombstones each eviction candidate (`tombstoned=true`), returns count and list of evicted leaf IDs. Gated on `HEAT_EVICTION_ENABLED` (default off) — no eviction occurs unless flag is `"true"`. `src/config/known-env-vars.generated.ts` updated. SAFE-CLASS (additive module, flag default-off, no callers in existing prod paths).
 
 **Step 5 — what shipped:**
-[To be filled before docs PR is armed]
+`src/memory/memory-heat-evict.ts` (90 lines): `performHeatEviction(supabase, agentId, opts?, fetchFn?, evictLeafFn?)` — fetches sweep report via `runHeatEvictionSweepForAgent`, tombstones each eviction candidate via `evictLeafFn` (default `tombstoneLeaf`), returns `{evictedCount, evictedIds, skipped}`. Gated on `HEAT_EVICTION_ENABLED` (default off) — returns `skipped:true` immediately unless flag is `"true"`. `HEAT_EVICTION_ENABLED` added to `src/config/known-env-vars.generated.ts` before `HEAT_EVICTION_SHADOW_ENABLED` (alphabetical). Tests `tests/memory/memory-heat-evict.test.ts` — **8/8**: flag off → skipped; flag="false" → skipped; flag on + cold leaf → evicted (id correct); hot leaf not evicted; evictFn returns 0 (already tombstoned) → not counted; DB error propagated; evictionLimit=2 on 3 cold leaves → 2 evicted; tombstoneLeaf exported. `tsc --noEmit` → exit 0. Feature PR **#817** opened on `feat/cc-2026-09-21-memory-heat-evict`, SAFE-CLASS (additive module, zero callers wired, flag default-off, no prod path changed), armed `--auto --squash` (`autoMergeRequest.enabledAt` non-null **[V]**).
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway to get shadow logs flowing (no scoring/eviction risk).
+8. **`HEAT_EVICTION_ENABLED=true`** — flip when ready for actual cold-leaf tombstoning; shadow mode first is recommended.
+
+**Next beat:** (1) Confirm PR #817 merged. (2) Advance item 13: item 13's acceptance test is "low-heat leaves flushed to cold; root preserved; reactivation triggers". The eviction writer (PR #817) closes "flushed to cold". Remaining: root preservation after eviction (re-compute root after tombstoning) and reactivation triggers (promote a cold leaf back when its heat rises). Both can be shadow-only primitives. OR advance item 14 (Plonky3 AIR) if that requires no Sean GO for the shadow-first slice.
 
