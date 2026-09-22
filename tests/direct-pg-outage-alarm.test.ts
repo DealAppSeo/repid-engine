@@ -91,15 +91,15 @@ describe('direct-pg outage alarm', () => {
       const h = mod.directPgHealth();
       expect(h.state).toBe('connected');
       expect(h.lastSuccessAt).not.toBeNull();
-      expect(h.lastError).toBeNull();
+      expect(h.lastErrorKind).toBeNull();
       expect(h.consecutiveFailures).toBe(0);
     });
 
-    it('a failed query reports failing, carrying the error a human can act on', async () => {
+    it('a failed query reports failing, classified so a human knows which remedy', async () => {
       await failOnce();
       const h = mod.directPgHealth();
       expect(h.state).toBe('failing');
-      expect(h.lastError).toContain('password authentication failed');
+      expect(h.lastErrorKind).toBe('auth_failed');
     });
 
     it('a success after failures clears the state back to connected', async () => {
@@ -108,7 +108,7 @@ describe('direct-pg outage alarm', () => {
       queryImpl.mockResolvedValueOnce({ rows: [] });
       await mod.pgQuery('SELECT 1', [], { retries: 1 });
       expect(mod.directPgHealth().state).toBe('connected');
-      expect(mod.directPgHealth().lastError).toBeNull();
+      expect(mod.directPgHealth().lastErrorKind).toBeNull();
     });
 
     it('issues NO query of its own — /health polls it on every request', async () => {
@@ -120,11 +120,55 @@ describe('direct-pg outage alarm', () => {
       expect(queryImpl.mock.calls.length).toBe(before);
     });
 
-    it('never puts the credential in what it reports', async () => {
-      await failOnce();
+    /**
+     * THE TEST THIS REPLACES WAS RIGHT AND INSUFFICIENT, which is why it is worth
+     * keeping the story. It asserted the CREDENTIAL never reaches the payload. True,
+     * and it passed — while the raw node-postgres message did reach it, on a PUBLIC
+     * unauthenticated endpoint, carrying the database role and project ref, the
+     * pooler host or IP, and (via the timeout label, which defaults to the first 48
+     * characters of the query) RAW SQL AND TABLE NAMES. Strix caught it; the test
+     * did not, because it asked about one specific string instead of the property.
+     *
+     * The property is: NOTHING from the raw error text reaches the payload. That is
+     * asserted by rendering with a message stuffed with every shape at once and
+     * requiring none of it to survive.
+     */
+    it('THE LOAD-BEARING ONE: no fragment of the raw error reaches the public payload', async () => {
+      const nasty =
+        'password authentication failed for user "postgres.qnnpjhlxljtqyigedwkb" ' +
+        'connect ECONNREFUSED 10.1.2.3:6543 aws-0-us-west-1.pooler.supabase.com ' +
+        'query timeout after 10000ms: SELECT secret_col FROM repid_agents WHERE';
+      queryImpl.mockRejectedValueOnce(new Error(nasty));
+      await expect(mod.pgQuery('SELECT 1', [], { retries: 1 })).rejects.toThrow();
+
       const rendered = JSON.stringify(mod.directPgHealth());
-      expect(rendered).not.toContain('pw@');
-      expect(rendered).not.toContain('qnnpjhlxljtqyigedwkb:');
+      for (const fragment of [
+        'qnnpjhlxljtqyigedwkb',   // project ref
+        'postgres.',              // role
+        '10.1.2.3',               // IP
+        'pooler.supabase.com',    // host
+        'secret_col',             // column name
+        'repid_agents',           // table name
+        'SELECT',                 // SQL
+        'password authentication',
+      ]) {
+        expect(rendered).not.toContain(fragment);
+      }
+      // And it still says something an operator can act on.
+      expect(JSON.parse(rendered).lastErrorKind).toBe('auth_failed');
+    });
+
+    it('classifies each failure shape to a distinct remedy, and never guesses', () => {
+      const c = mod.classifyDirectPgError;
+      expect(c('password authentication failed for user "postgres.abc"')).toBe('auth_failed');
+      expect(c('connect ECONNREFUSED 10.0.0.1:6543')).toBe('unreachable');
+      expect(c('getaddrinfo ENOTFOUND db.example.com')).toBe('unreachable');
+      expect(c('[direct-pg] query timeout after 10000ms: SELECT 1')).toBe('timeout');
+      expect(c('DATABASE_URL is not set')).toBe('config');
+      // An unrecognised failure is `other`, NOT sorted into a neighbouring bucket.
+      // A confidently wrong classification is worse than an honestly vague one.
+      expect(c('something nobody anticipated')).toBe('other');
+      expect(c(null)).toBeNull();
     });
   });
 
