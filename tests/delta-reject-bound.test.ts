@@ -6,6 +6,7 @@ import {
   clampEventDelta,
   MAX_ABS_EVENT_DELTA,
   deltaRejectBound,
+  DELTA_REJECT_BOUND_DEFAULT,
 } from '../src/services/wisdom-normalize';
 
 describe('PR C — opportunity-grade delta reject bound', () => {
@@ -65,5 +66,24 @@ describe('PR C — opportunity-grade delta reject bound', () => {
       expect(err.bound).toBe(300);
       expect(err.message).toMatch(/oversize_delta_rejected/);
     }
+  });
+
+  // A guard that silently does nothing is worse than no guard: it reports a
+  // protection it is not providing. With a normal object literal these keys
+  // resolve to inherited members (all truthy), so `??` never reached the
+  // default, deltaRejectBound returned a FUNCTION, and `Math.abs(d) > fn` was
+  // false — 999999 sailed through with no throw and no log. Measured, not
+  // hypothesised. Found by Strix; fixed by giving BOUNDS a null prototype.
+  it('rejects oversize deltas for prototype-named event types', () => {
+    for (const evil of ['toString', 'constructor', 'valueOf', '__proto__', 'hasOwnProperty']) {
+      expect(deltaRejectBound(evil)).toBe(DELTA_REJECT_BOUND_DEFAULT);
+      expect(() => assertDeltaWithinBound(999999, evil)).toThrow(OversizeDeltaError);
+    }
+  });
+
+  it('a prototype-named type still gets the real bound when one is declared', () => {
+    // guards the fix itself: null-prototype must not break ordinary lookups
+    expect(deltaRejectBound('SERVICE_FULFILLED')).toBe(500);
+    expect(deltaRejectBound('GENESIS')).toBe(Infinity);
   });
 });

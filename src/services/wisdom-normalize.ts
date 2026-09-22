@@ -108,12 +108,29 @@ export class OversizeDeltaError extends Error {
 /** Default reject bound for any event type not listed below. p99 observed = 42. */
 export const DELTA_REJECT_BOUND_DEFAULT = 100;
 
-/** Per-type reject bounds = observed max + margin. Unlisted types use the default. */
-export const DELTA_REJECT_BOUNDS: Readonly<Record<string, number>> = {
-  SERVICE_FULFILLED: 500, // observed max 364
-  VALIDATION_FAILED: 300, // observed max 250
-  CHALLENGE_WIN: 150,     // observed max 100
-};
+/**
+ * Per-type reject bounds = observed max + margin. Unlisted types use the default.
+ *
+ * NULL-PROTOTYPE ON PURPOSE. As a normal object literal, `BOUNDS[eventType]` resolves
+ * inherited members for the keys every object has — `toString`, `constructor`,
+ * `valueOf`, `__proto__` — and each is truthy, so the `??` below never reaches the
+ * default. `deltaRejectBound('toString')` then returns a FUNCTION, and
+ * `Math.abs(delta) > <function>` is `false`, so a 999999 delta passes a guard whose
+ * only job is to reject it. Silently: no throw, no log, no evidence.
+ *
+ * Fixed at the data structure rather than at the one lookup, so a second lookup added
+ * later cannot reintroduce it. Found by Strix on this PR; the behaviour was measured,
+ * not assumed, and is pinned by `rejects oversize deltas for prototype-named event
+ * types` in tests/delta-reject-bound.test.ts.
+ */
+export const DELTA_REJECT_BOUNDS: Readonly<Record<string, number>> = Object.assign(
+  Object.create(null) as Record<string, number>,
+  {
+    SERVICE_FULFILLED: 500, // observed max 364
+    VALIDATION_FAILED: 300, // observed max 250
+    CHALLENGE_WIN: 150,     // observed max 100
+  },
+);
 
 /** Event types exempt from the reject bound (still subject to the 9990 backstop). */
 export const DELTA_REJECT_EXEMPT: ReadonlySet<string> = new Set(['GENESIS']); // observed 1940
