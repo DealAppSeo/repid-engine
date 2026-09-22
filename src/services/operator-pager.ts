@@ -64,7 +64,24 @@ export const PAGE_COOLDOWN_MS = Number(process.env['OPERATOR_PAGE_COOLDOWN_MS'] 
  * 'anchor' and would have mislabelled every anchor-worker page as generic 'degraded' — the one
  * subsystem this was built for. 'proof-drain' is added by the drain wiring below.
  */
-export type PageSource = 'eas-anchor' | 'proof-drain' | 'hal' | 'zkp' | 'x402' | 'degraded';
+export type PageSource =
+  | 'eas-anchor'
+  | 'proof-drain'
+  | 'hal'
+  | 'zkp'
+  | 'x402'
+  | 'degraded'
+  /**
+   * The direct-Postgres path itself (`db/direct-pg.ts`), added 2026-09-22.
+   *
+   * Deliberately its OWN source rather than folded into 'proof-drain'. When this
+   * breaks, every pgQuery caller breaks at once — the proof drain, the feedback
+   * loop, the EAS anchor worker — and paging under one consumer's name would send
+   * the reader to debug that consumer instead of the connection they all share.
+   * That is not hypothetical: it is what a two-day outage looked like from the
+   * outside on the day this was added.
+   */
+  | 'direct-pg';
 
 const lastPagedAt = new Map<string, number>();
 
