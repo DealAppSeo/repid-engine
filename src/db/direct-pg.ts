@@ -29,6 +29,10 @@
  */
 import { Pool, type QueryResult, type QueryResultRow } from 'pg';
 import { publishHealth, deriveBreakerState } from '../resilience/health-bus';
+// The RECORD channel is always on (no env var), which is what makes a lost DB path
+// impossible to lose. See the header of operator-pager.ts. No import cycle: the pager
+// reaches supabase-js via `../db` (src/db.ts), which does not import this file.
+import { pageOperator } from '../services/operator-pager';
 import { assertLocalDataStore } from '../selfhost/egress-guard';
 
 const DEFAULT_QUERY_TIMEOUT_MS = 10_000;
@@ -42,6 +46,15 @@ let pool: Pool | null = null;
 let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 let circuitOpenLogged = false;
+
+/**
+ * State for `directPgHealth()`. `everAttempted` is the one that matters: before any
+ * query has run, the honest answer is NOT CHECKED, and a reporter that defaulted to
+ * "connected" would say this path is fine at the exact moment nobody has tested it.
+ */
+let everAttempted = false;
+let lastSuccessAtMs = 0;
+let lastErrorMsg: string | null = null;
 
 // --- Resilience surface signal (B1) ---------------------------------------------------------------
 // The DB endpoint name for the health-bus. Derived from the pooler host:port so a deployment with a
@@ -185,6 +198,9 @@ export async function pgQuery<T extends QueryResultRow = any>(
       // Success — reset the breaker.
       consecutiveFailures = 0;
       circuitOpenLogged = false;
+      everAttempted = true;
+      lastSuccessAtMs = Date.now();
+      lastErrorMsg = null;
       publishDbHealth(Date.now() - callStart, true);
       return result.rows;
     } catch (err) {
@@ -211,12 +227,36 @@ export async function pgQuery<T extends QueryResultRow = any>(
 
   // All attempts for THIS call failed → count one consecutive failure.
   consecutiveFailures += 1;
+  everAttempted = true;
+  lastErrorMsg = lastErr instanceof Error ? lastErr.message : String(lastErr);
   if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD && !circuitOpenLogged) {
     circuitOpenUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
     circuitOpenLogged = true;
     console.error(
       `[direct-pg] CIRCUIT OPEN — ${CIRCUIT_BREAKER_THRESHOLD}+ consecutive failed calls; ` +
-        `cool-down ${CIRCUIT_COOLDOWN_MS}ms (5min). Last error: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`
+        `cool-down ${CIRCUIT_COOLDOWN_MS}ms (5min). Last error: ${lastErrorMsg}`
+    );
+    // THE PAGE. A console line is not an alarm, and this one had nobody reading it.
+    //
+    // MEASURED 2026-09-22: every direct-Postgres path in this project — the proof
+    // drain, the feedback loop, the EAS anchor worker — had been failing
+    // `password authentication failed for user "postgres"` for over two days. The
+    // proof queue reached 40,312 pending. Railway showed all four services SUCCESS,
+    // `/health` reported `supabaseConnected: true` (it tests supabase-js, a
+    // different path), and `ops_alerts` held not one row about it: the pager was
+    // wired only to the canonical-WRITE-rejected branch, so a connection that never
+    // opens paged nobody. Green everywhere, a third of the backend dead.
+    //
+    // The reason string is deliberately STABLE and carries no query label, so the
+    // pager's dedupe collapses a project-wide outage into one page per window
+    // instead of one per caller. The detail payload carries what differs.
+    //
+    // Guarded by `circuitOpenLogged`, so this fires on the OPENING edge only — not
+    // on every failed call, and not again until a success resets the breaker.
+    pageOperator(
+      'direct-pg',
+      'the direct Postgres path is down — every pgQuery caller (proof drain, feedback loop, EAS anchor) is failing',
+      { endpoint: dbEndpoint(), consecutive_failures: consecutiveFailures, last_error: lastErrorMsg },
     );
   }
   publishDbHealth(Date.now() - callStart, false, lastErr instanceof Error ? lastErr.message : String(lastErr));
@@ -226,6 +266,65 @@ export async function pgQuery<T extends QueryResultRow = any>(
 /** True while the process-wide breaker is open (B1 degrade trigger). Exported for the wrappers/tests. */
 export function isCircuitOpen(): boolean {
   return Date.now() < circuitOpenUntil;
+}
+
+export interface DirectPgHealth {
+  /**
+   * THREE OUTCOMES, NEVER TWO.
+   *
+   *   'connected'    a query succeeded and the breaker is closed.
+   *   'failing'      the breaker is open, or the last call failed.
+   *   'not_checked'  no query has been attempted in this process yet.
+   *
+   * The third is the one this exists for. `/health` reported `supabaseConnected:
+   * true` throughout a two-day outage of this path, because it tests supabase-js
+   * and never touches Postgres directly — a true field read as a claim about
+   * something it never measured. Collapsing 'not_checked' into 'connected' here
+   * would rebuild that defect one layer down.
+   */
+  state: 'connected' | 'failing' | 'not_checked';
+  circuitOpen: boolean;
+  consecutiveFailures: number;
+  /** Where we are dialling — host CLASS and port only, never the credential. */
+  endpoint: string;
+  lastError: string | null;
+  lastSuccessAt: string | null;
+  circuitOpenUntil: string | null;
+}
+
+/**
+ * What the direct-Postgres path is actually doing, for `/health`.
+ *
+ * Reads process state only — it issues NO query, so a monitoring endpoint can call
+ * it on every request without adding load to an upstream that may already be sick.
+ * That also means it reports what this process has SEEN, which is the honest scope.
+ */
+export function directPgHealth(): DirectPgHealth {
+  const open = Date.now() < circuitOpenUntil;
+  const state: DirectPgHealth['state'] = !everAttempted
+    ? 'not_checked'
+    : open || consecutiveFailures > 0
+      ? 'failing'
+      : 'connected';
+  return {
+    state,
+    circuitOpen: open,
+    consecutiveFailures,
+    endpoint: dbEndpoint(),
+    lastError: lastErrorMsg,
+    lastSuccessAt: lastSuccessAtMs ? new Date(lastSuccessAtMs).toISOString() : null,
+    circuitOpenUntil: open ? new Date(circuitOpenUntil).toISOString() : null,
+  };
+}
+
+/** Test-only: reset module state so each case starts from a known point. */
+export function __resetDirectPgHealthForTests(): void {
+  consecutiveFailures = 0;
+  circuitOpenUntil = 0;
+  circuitOpenLogged = false;
+  everAttempted = false;
+  lastSuccessAtMs = 0;
+  lastErrorMsg = null;
 }
 
 // ==================================================================================================

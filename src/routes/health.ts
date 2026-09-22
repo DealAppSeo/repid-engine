@@ -4,6 +4,7 @@ import { config } from '../config';
 import { testHashKeyConnection } from '../engine/hashkey-chain';
 import { chainIdAgreesWithRpc } from './hashkey';
 import { pagerStatus } from '../services/operator-pager';
+import { directPgHealth } from '../db/direct-pg';
 import { lastVestingCheck } from '../services/vesting-monitor';
 import { serviceQualityStatus } from '../services/service-quality-hook';
 
@@ -91,7 +92,28 @@ router.get('/health', async (req: Request, res: Response) => {
     deployed_commit: DEPLOYED_COMMIT,
     deployed_commit_short: DEPLOYED_COMMIT_SHORT,
     timestamp: new Date().toISOString(),
+    // WHAT THIS FIELD DOES AND DOES NOT MEAN. It is a supabase-js (PostgREST) read.
+    // It says nothing whatever about the DIRECT Postgres path below, and reading it
+    // as "the database is fine" is what made a two-day outage invisible: on
+    // 2026-09-22 every pgQuery caller in this project was failing `password
+    // authentication failed for user "postgres"` while this field read `true`, the
+    // site answered, and Railway showed all four services SUCCESS.
     supabaseConnected,
+    // THE OTHER HALF OF "IS THE DATABASE UP", AND IT HAD NO SURFACE AT ALL.
+    //
+    // `proof-drain-service.ts` already said this belonged here — "Better still would
+    // be a surface that runs this rather than a comment someone must remember to
+    // paste. Deliberately not bundled: a /health field is a public-payload change and
+    // belongs in its own review." This is that review.
+    //
+    // The proof drain, the feedback loop and the EAS anchor worker all ride this path
+    // and none of them is reachable through `supabaseConnected`. Three outcomes, and
+    // `not_checked` (no query attempted yet in this process) is deliberately NOT
+    // folded into `connected`.
+    //
+    // Reads process state only — no query is issued, so a monitor polling /health
+    // adds no load to an upstream that may already be sick.
+    direct_postgres: directPgHealth(),
     hashkeyConnected: (hashkey as any).connected,
     hashkeyBlockNumber: (hashkey as any).blockNumber,
     // The chain id the RPC ITSELF reports, not the one we configured.
