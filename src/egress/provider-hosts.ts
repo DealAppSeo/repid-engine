@@ -37,6 +37,10 @@ export const PROVIDER_URLS = {
   mistralChatCompletions: 'https://api.mistral.ai/v1/chat/completions',
   zaiChatCompletions: 'https://api.z.ai/api/paas/v4/chat/completions',
   nvidiaNimChatCompletions: 'https://integrate.api.nvidia.com/v1/chat/completions',
+  // Together.ai — the `llama` family on its free tier. Added for the free wave: it is an
+  // independent family from groq (whose live model is openai/gpt-oss-20b, family `openai`),
+  // so a Together vote genuinely widens the quorum rather than duplicating one.
+  togetherChatCompletions: 'https://api.together.xyz/v1/chat/completions',
   qwenDashscopeChatCompletions:
     'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions',
 } as const;

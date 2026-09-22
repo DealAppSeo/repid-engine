@@ -1601,6 +1601,12 @@ export interface FactCheckProviderEnable {
   /** Z.AI direct — the `glm` family from the vendor's free tier. Optional so callers compile. */
   zai?: boolean;
   /**
+   * Together.ai — the `llama` family on its free tier. OPT-IN, and deliberately NOT
+   * auto-backfilled: see the provider block for why this follows nvidiaNim rather than zai.
+   * Optional so callers compile.
+   */
+  together?: boolean;
+  /**
    * NVIDIA NIM direct — the `nvidia` (Nemotron) family from NVIDIA's own hosted
    * gateway. Opt-in, NEVER auto-backfilled (a stray key must not silently widen
    * the load-bearing quorum). Optional so existing callers compile.
@@ -1996,6 +2002,40 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
       );
     }
   }
+  // TOGETHER.AI — the `llama` family on its free tier. Groq's live model is
+  // openai/gpt-oss-20b (family `openai`), so a Together Llama vote is an INDEPENDENT
+  // family rather than a groq duplicate — which is the property FREE_WAVE_STOP_FAMILIES
+  // and MIN_QUORUM_FOR_VETO actually depend on. Ported from #743, which is otherwise
+  // superseded: main already carries that PR's cost-ordered escalation (in a stronger
+  // form — a free-wave stop at three families rather than its two) and its zai paid-model pin (via
+  // gateZaiModel's free-default whitelist, which does not need to name glm-5-turbo).
+  //
+  // OPT-IN, NOT AUTO-BACKFILLED — `enabled.together` with no `|| ab`, and this is a
+  // DELIBERATE DEVIATION from #743, which backfilled it on key presence "like zai".
+  // This is a NEW outbound host, and the rule this repo already wrote for nvidiaNim
+  // applies with more force to a vendor the quorum has never dialled: "a stray key must
+  // not silently widen the load-bearing quorum". Set HAL_S2_ENABLE_TOGETHER=true to use it.
+  //
+  // The egress boundary is inherited, not re-implemented: queryProvider asserts
+  // assertPromptEgressAllowed(cfg.endpoint, 'prompt') for every provider, so this host is
+  // refused under ONLY_ATTESTATIONS_LEAVE exactly like the others.
+  //
+  // NOT_CHECKED: no live call was made from this sandbox — neither the key's validity nor
+  // the model id. First real verification is post-deploy `provider_health`.
+  const tg = process.env.TOGETHER_API_KEY?.trim();
+  if (tg && enabled.together) {
+    add(
+      {
+        name: 'together',
+        endpoint: PROVIDER_URLS.togetherChatCompletions,
+        apiKey: tg,
+        family: 'llama',
+        tier: 'free',
+      },
+      'HAL_S2_TOGETHER_MODEL',
+      'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+    );
+  }
   // NVIDIA NIM — the `nvidia` (Nemotron) family bought DIRECT from NVIDIA's hosted gateway,
   // OpenAI-compatible so no dialect is needed. Reads NVIDIA_NIM_API_KEY.
   //
@@ -2337,6 +2377,10 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
     // explicit HAL_S2_ENABLE_NVIDIA_NIM=true; a bare NVIDIA_NIM_API_KEY does NOT enable it (the add
     // block above has no auto-backfill), so the quorum is byte-identical until the flag is flipped.
     nvidiaNim: process.env.HAL_S2_ENABLE_NVIDIA_NIM === 'true',
+    // Opt-in, default OFF, for the same reason as nvidiaNim above and with one more: this is
+    // a host the quorum has never dialled. A bare TOGETHER_API_KEY does NOT enable it, so the
+    // set of hosts production reaches is byte-identical until HAL_S2_ENABLE_TOGETHER=true.
+    together: process.env.HAL_S2_ENABLE_TOGETHER === 'true',
   });
 }
 
