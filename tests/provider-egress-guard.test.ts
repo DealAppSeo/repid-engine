@@ -83,6 +83,12 @@ const PROVIDER_HOSTS = [
   'integrate.api.nvidia.com',
   'api.z.ai',
   'dashscope-intl.aliyuncs.com',
+  // Added with the Together.ai provider. WITHOUT THIS LINE THE GUARD IS BLIND TO IT:
+  // measured while porting #743 — an inline 'https://api.together.xyz/...' literal placed
+  // directly in src/hal/fact-check.ts passed this suite untouched, because a host absent
+  // from this list simply is not looked for. A new provider host must be added here in the
+  // same change that introduces it, or the ratchet silently does not cover it.
+  'api.together.xyz',
 ] as const;
 
 /** Naming its own provider's host is the entire purpose of the file. Expected to stay. */

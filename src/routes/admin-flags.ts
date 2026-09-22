@@ -4,6 +4,7 @@ import { groundingMode } from '../hal/hal-grounding';
 import { parseHaltClasses } from '../services/producer-halt';
 import { parseRetryMode } from '../services/x402-release-retry-worker';
 import { executionFloorEnabled } from '../hal/execution-floor';
+import { stakeAuthorityShadowEnabled } from '../services/stake-authority-shadow';
 
 export const adminFlagsRouter = Router();
 
@@ -303,6 +304,21 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
     owner_ceiling_shadow_enabled: {
       value: String(process.env['OWNER_CEILING_SHADOW_ENABLED'] ?? '').toLowerCase() === 'true',
       source: process.env['OWNER_CEILING_SHADOW_ENABLED'] === undefined ? 'default' : 'env',
+    },
+    // Sibling of the row above, and the reason this one is here: the stake-authority
+    // observer changes NO behaviour, so unlike SELF_SERVE_ACCOUNTS_ENABLED or
+    // HUMAN_AGENT_BIND_ENABLED its state is invisible from outside the process. It could
+    // not go in `flag-readiness.ts`'s PUBLIC_FLAGS — that allowlist is for gates an
+    // unauthenticated caller can already infer from behaviour, and adding one that cannot
+    // be is a disclosure decision rather than a maintenance edit. Here, behind the admin
+    // key, it is exactly the money/scoring-affecting gate this route was built to expose.
+    //
+    // Calls the gate's own predicate instead of restating `=== 'true'` inline. A reporter
+    // that redefines the rule it reports on can drift from the gate and announce a feature
+    // as on while it is off — the one failure a flag reporter must not have.
+    stake_authority_shadow_enabled: {
+      value: stakeAuthorityShadowEnabled(),
+      source: process.env['STAKE_AUTHORITY_SHADOW_ENABLED'] === undefined ? 'default' : 'env',
     },
     router_strict_cost_order: {
       value: process.env.ROUTER_STRICT_COST_ORDER !== 'false',
