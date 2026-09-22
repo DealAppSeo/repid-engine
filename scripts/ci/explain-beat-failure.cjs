@@ -93,6 +93,22 @@ const MAX_STRING = 2000;
 const OTHER_MESSAGE_CAP = 20;
 
 /**
+ * MEASURED 2026-09-22 06:18Z, dispatched run 35694245161 — the first run to carry
+ * this script. It worked: it surfaced a synthetic assistant message carrying
+ * `is_api_error_message: true` and a request_id, which no previous log had shown.
+ * And it then hid the one field that mattered:
+ *
+ *     .message.content[0].text : [depth limit]
+ *
+ * The cap was 3 and the error text sits at `.message.content[0].text`. Worse, the
+ * array index burned a level of its own, so a one-element array cost as much depth
+ * as a nested object. Both are fixed. Breadth, string length and message count still
+ * bound the output, so this does not uncap the log — it stops the diagnostic from
+ * truncating exactly the thing it exists to print.
+ */
+const MAX_DEPTH = 6;
+
+/**
  * Credential shapes, most-specific first. Defence in depth only — see the header
  * for why this is the weakest of the three controls and must not be leaned on.
  */
@@ -180,7 +196,7 @@ function findInitModel(messages) {
  * bounding depth, breadth and length. Used ONLY under the gate.
  */
 function flatten(value, prefix, depth, out) {
-  if (depth > 3) {
+  if (depth > MAX_DEPTH) {
     out.push(`${prefix} : [depth limit]`);
   } else if (value === null || value === undefined) {
     out.push(`${prefix} : ${String(value)}`);
@@ -192,7 +208,9 @@ function flatten(value, prefix, depth, out) {
     if (value.length === 0) {
       out.push(`${prefix} : []`);
     } else {
-      value.slice(0, 5).forEach((v, i) => flatten(v, `${prefix}[${i}]`, depth + 1, out));
+      // Array index does NOT burn a depth level: `content[0].text` is one field,
+      // not two. Counting it cost the 2026-09-22 06:18Z run its error text.
+      value.slice(0, 5).forEach((v, i) => flatten(v, `${prefix}[${i}]`, depth, out));
       if (value.length > 5) out.push(`${prefix}[…] : ${value.length - 5} more element(s)`);
     }
   } else if (typeof value === 'object') {
@@ -342,6 +360,7 @@ module.exports = {
   explain,
   redact,
   flatten,
+  MAX_DEPTH,
   parseMessages,
   findResult,
   findInitModel,
