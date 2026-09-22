@@ -98,3 +98,80 @@ export function capScaledReward(raw: number): { reward: number; capped: boolean 
   const reward = Math.max(-MAX_ABS_SCALED_REWARD, Math.min(MAX_ABS_SCALED_REWARD, raw));
   return { reward, capped: reward !== raw };
 }
+
+// ── PR C (audit 2606.26028): opportunity-grade delta reject ──────────────────
+//
+// MAX_ABS_EVENT_DELTA (9990) above is the OVERFLOW backstop: it silently SHRINKS an
+// insane delta to 9990 so the row persists instead of 500ing the path. It has fired 0
+// times in 152,306 events [VERIFIED 2026-09-14] and is intentionally left untouched.
+//
+// This is the opposite tool: a much tighter bound that REJECTS (throws), never truncates,
+// so a factor explosion or a bad call site fails loudly instead of quietly scoring 9990.
+// Bounds are observed-max + margin [VERIFIED repid_score_events 2026-09-14]: p99 |delta| = 42;
+// only the listed types legitimately exceed the default. GENESIS (the genesis grant, observed
+// 1940) is EXEMPT and relies on the 9990 backstop. remint reuses the original event's type and
+// redemption is a modifier inside negative-delta events (computeRedemptionModifier) — neither
+// emits its own type, so neither needs a carve-out.
+
+/** Named error: an event delta exceeded its opportunity-grade reject bound. */
+export class OversizeDeltaError extends Error {
+  constructor(
+    public readonly eventType: string,
+    public readonly delta: number,
+    public readonly bound: number,
+  ) {
+    super(
+      `oversize_delta_rejected: event_type=${eventType} |delta|=${Math.abs(delta)} ` +
+        `exceeds reject bound ${bound} — rejected, NOT truncated (distinct from the 9990 overflow backstop)`,
+    );
+    this.name = 'OversizeDeltaError';
+  }
+}
+
+/** Default reject bound for any event type not listed below. p99 observed = 42. */
+export const DELTA_REJECT_BOUND_DEFAULT = 100;
+
+/**
+ * Per-type reject bounds = observed max + margin. Unlisted types use the default.
+ *
+ * NULL-PROTOTYPE ON PURPOSE. As a normal object literal, `BOUNDS[eventType]` resolves
+ * inherited members for the keys every object has — `toString`, `constructor`,
+ * `valueOf`, `__proto__` — and each is truthy, so the `??` below never reaches the
+ * default. `deltaRejectBound('toString')` then returns a FUNCTION, and
+ * `Math.abs(delta) > <function>` is `false`, so a 999999 delta passes a guard whose
+ * only job is to reject it. Silently: no throw, no log, no evidence.
+ *
+ * Fixed at the data structure rather than at the one lookup, so a second lookup added
+ * later cannot reintroduce it. Found by Strix on this PR; the behaviour was measured,
+ * not assumed, and is pinned by `rejects oversize deltas for prototype-named event
+ * types` in tests/delta-reject-bound.test.ts.
+ */
+export const DELTA_REJECT_BOUNDS: Readonly<Record<string, number>> = Object.assign(
+  Object.create(null) as Record<string, number>,
+  {
+    SERVICE_FULFILLED: 500, // observed max 364
+    VALIDATION_FAILED: 300, // observed max 250
+    CHALLENGE_WIN: 150,     // observed max 100
+  },
+);
+
+/** Event types exempt from the reject bound (still subject to the 9990 backstop). */
+export const DELTA_REJECT_EXEMPT: ReadonlySet<string> = new Set(['GENESIS']); // observed 1940
+
+/** The bound that applies to an event type (Infinity when exempt). */
+export function deltaRejectBound(eventType: string): number {
+  if (DELTA_REJECT_EXEMPT.has(eventType)) return Infinity;
+  return DELTA_REJECT_BOUNDS[eventType] ?? DELTA_REJECT_BOUND_DEFAULT;
+}
+
+/**
+ * Reject (throw), never truncate, a delta above its type's opportunity bound. Returns void on
+ * accept. Non-finite is left to clampEventDelta (→0); it is a crash case, not an "oversize" one.
+ */
+export function assertDeltaWithinBound(rawDelta: number, eventType: string): void {
+  if (!Number.isFinite(rawDelta)) return;
+  const bound = deltaRejectBound(eventType);
+  if (Math.abs(rawDelta) > bound) {
+    throw new OversizeDeltaError(eventType, Math.round(rawDelta), bound);
+  }
+}
