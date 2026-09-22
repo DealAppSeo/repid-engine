@@ -268,6 +268,29 @@ export function isCircuitOpen(): boolean {
   return Date.now() < circuitOpenUntil;
 }
 
+/**
+ * The public vocabulary for "what went wrong", chosen so each value implies a
+ * different remedy. `other` is deliberately present and deliberately uninformative:
+ * an unrecognised failure must not be silently sorted into a neighbouring bucket,
+ * which would make the classification confidently wrong rather than honestly vague.
+ */
+export type DirectPgErrorKind = 'auth_failed' | 'unreachable' | 'timeout' | 'config' | 'other';
+
+/** Classify without quoting. Order matters: the most specific match wins. */
+export function classifyDirectPgError(msg: string | null): DirectPgErrorKind | null {
+  if (!msg) return null;
+  const m = msg.toLowerCase();
+  if (m.includes('password authentication failed') || m.includes('no pg_hba') || m.includes('role ') && m.includes('does not exist')) {
+    return 'auth_failed';
+  }
+  if (m.includes('timeout') || m.includes('etimedout')) return 'timeout';
+  if (m.includes('enotfound') || m.includes('econnrefused') || m.includes('econnreset') || m.includes('ehostunreach') || m.includes('getaddrinfo')) {
+    return 'unreachable';
+  }
+  if (m.includes('is not set') || m.includes('database_url') || m.includes('supabase_db_url')) return 'config';
+  return 'other';
+}
+
 export interface DirectPgHealth {
   /**
    * THREE OUTCOMES, NEVER TWO.
@@ -287,7 +310,30 @@ export interface DirectPgHealth {
   consecutiveFailures: number;
   /** Where we are dialling — host CLASS and port only, never the credential. */
   endpoint: string;
-  lastError: string | null;
+  /**
+   * WHY THIS IS A CLASSIFICATION AND NOT THE ERROR TEXT.
+   *
+   * The first version of this field was `lastError: string`, the raw node-postgres
+   * message, and `/health` is PUBLIC and unauthenticated. Strix caught it on the PR
+   * that added it (CWE-209). The credential never reached the field — a test
+   * asserted that, and the test was right and insufficient. What did reach it:
+   *
+   *   the role and project ref   password authentication failed for user "postgres.<ref>"
+   *   the pooler host or IP      getaddrinfo ENOTFOUND … / connect ECONNREFUSED …:6543
+   *   RAW SQL AND TABLE NAMES    "query timeout after 10000ms: <label>", where the
+   *                              label defaults to the first 48 characters of the query
+   *
+   * The offered fix was a redaction pass — regexes masking hosts, IPs and the
+   * timeout label. That is a BLOCKLIST: it enumerates what is sensitive and lets
+   * through whatever it failed to think of, which is the failure shape this
+   * codebase keeps paying for. A classification is an allowlist by construction.
+   * Nothing from the raw string can escape, because the raw string is never
+   * rendered — only one of these constants is.
+   *
+   * The full text is NOT lost. It goes to the console and to the `ops_alerts` page
+   * payload, both server-side, where the operator who needs it already is.
+   */
+  lastErrorKind: DirectPgErrorKind | null;
   lastSuccessAt: string | null;
   circuitOpenUntil: string | null;
 }
@@ -311,7 +357,7 @@ export function directPgHealth(): DirectPgHealth {
     circuitOpen: open,
     consecutiveFailures,
     endpoint: dbEndpoint(),
-    lastError: lastErrorMsg,
+    lastErrorKind: classifyDirectPgError(lastErrorMsg),
     lastSuccessAt: lastSuccessAtMs ? new Date(lastSuccessAtMs).toISOString() : null,
     circuitOpenUntil: open ? new Date(circuitOpenUntil).toISOString() : null,
   };
