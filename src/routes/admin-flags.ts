@@ -5,6 +5,7 @@ import { parseHaltClasses } from '../services/producer-halt';
 import { parseRetryMode } from '../services/x402-release-retry-worker';
 import { executionFloorEnabled } from '../hal/execution-floor';
 import { stakeAuthorityShadowEnabled } from '../services/stake-authority-shadow';
+import { typedVerdictShadowEnabled } from '../services/typed-verdict-shadow';
 
 export const adminFlagsRouter = Router();
 
@@ -319,6 +320,15 @@ adminFlagsRouter.get('/', async (req: Request, res: Response) => {
     stake_authority_shadow_enabled: {
       value: stakeAuthorityShadowEnabled(),
       source: process.env['STAKE_AUTHORITY_SHADOW_ENABLED'] === undefined ? 'default' : 'env',
+    },
+    // Same reasoning as the two shadow rows above: this observer changes NOTHING,
+    // so its state is invisible from outside the process. A flag that is off and
+    // unlisted is indistinguishable from a feature that was never built — and the
+    // table it writes to is empty either way, which is the one reading that must
+    // not be ambiguous.
+    typed_verdict_shadow_enabled: {
+      value: typedVerdictShadowEnabled(),
+      source: process.env['TYPED_VERDICT_SHADOW_ENABLED'] === undefined ? 'default' : 'env',
     },
     router_strict_cost_order: {
       value: process.env.ROUTER_STRICT_COST_ORDER !== 'false',
