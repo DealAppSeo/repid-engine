@@ -64,8 +64,24 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       if (birthRate.halted) return;
     }
 
-    // 1. Fetch pending queue entries
-    const { data: pending, error } = await db
+    // 1. Fetch pending queue entries, plus any whose LEASE HAS EXPIRED.
+    //
+    // A claim and its verdict are two steps (claim here, verdict via POST
+    // /respond after an LLM call and an HMAC sign). Nothing releases the row if
+    // the middle fails, so before `claimed_at` existed a dead verifier stranded
+    // the row permanently: 62,841 sit in `in_review` with verifier_agent_id NULL,
+    // frozen since 2026-07-21 [MEASURED 2026-09-22].
+    //
+    // Those legacy rows are NOT picked up here, and that is deliberate rather
+    // than an oversight: `claimed_at` is NULL on every row claimed before the
+    // migration, and NULL never satisfies `< staleBefore`. Reclaiming them would
+    // produce no fact-verified row anyway — this table has no artifact column for
+    // evidence and no task reference to recover one from. Draining them is a
+    // separate, explicit decision.
+    const leaseTtlMin = Number(process.env['PEER_VERIFY_LEASE_TTL_MIN'] ?? 30);
+    const staleBefore = new Date(Date.now() - leaseTtlMin * 60_000).toISOString();
+
+    const { data: pendingRows, error } = await db
       .from('peer_verification_queue')
       .select('*')
       .eq('verification_status', 'pending')
@@ -76,17 +92,54 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       return;
     }
 
+    const { data: expiredRows, error: expiredErr } = await db
+      .from('peer_verification_queue')
+      .select('*')
+      .eq('verification_status', 'in_review')
+      .is('verifier_agent_id', null)
+      .lt('claimed_at', staleBefore)
+      .limit(10);
+
+    if (expiredErr) {
+      // NOT_CHECKED, not "none expired": if this read failed we do not know. Say so
+      // and continue with pending only, rather than reporting a clean sweep.
+      console.error(
+        '[PeerVerificationReader] NOT_CHECKED: expired-lease scan failed:',
+        expiredErr.message
+      );
+    } else if (expiredRows && expiredRows.length > 0) {
+      console.log(
+        `[PeerVerificationReader] reclaiming ${expiredRows.length} row(s) whose ` +
+          `lease expired (> ${leaseTtlMin}m in in_review with no verifier).`
+      );
+    }
+
+    const pending = [...(pendingRows ?? []), ...(expiredRows ?? [])];
+
     if (!pending || pending.length === 0) {
       return;
     }
 
     for (const entry of pending) {
-      // 2. Claim row by setting status to in_review
-      const { data: claimed, error: claimErr } = await db
+      // 2. Claim the row: set in_review AND stamp the lease.
+      //
+      // The CAS is on the status we OBSERVED, not a hardcoded 'pending', because a
+      // row may also be arriving here with an expired lease. For that case the CAS
+      // additionally pins `claimed_at` to the value we read, so a lease another
+      // worker has since refreshed is never stolen — its claimed_at moved, the
+      // match fails, and we skip. A live claim is therefore unstealable while a
+      // dead one is reclaimable, which is the whole point of the column.
+      const claimQuery = db
         .from('peer_verification_queue')
-        .update({ verification_status: 'in_review' })
+        .update({ verification_status: 'in_review', claimed_at: new Date().toISOString() })
         .eq('id', entry.id)
-        .eq('verification_status', 'pending')
+        .eq('verification_status', entry.verification_status);
+
+      const { data: claimed, error: claimErr } = await (
+        entry.verification_status === 'in_review'
+          ? claimQuery.eq('claimed_at', entry.claimed_at as string)
+          : claimQuery
+      )
         .select('*')
         .single();
 

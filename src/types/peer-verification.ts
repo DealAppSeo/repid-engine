@@ -11,4 +11,12 @@ export interface PeerVerificationQueueEntry {
   verifier_signature?: string | null;
   created_at?: string;
   completed_at?: string | null;
+  /**
+   * When verification_status last moved to in_review. NULL on every row claimed
+   * before 2026-09-22, which is exactly why the reclaim predicate
+   * (claimed_at < now() - ttl) cannot match the 62,841 legacy wedged rows.
+   */
+  claimed_at?: string | null;
+  /** Why a row was closed without a verdict, e.g. recursive_meta_verification. */
+  closure_reason?: string | null;
 }
