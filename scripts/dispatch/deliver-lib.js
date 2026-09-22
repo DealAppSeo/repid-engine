@@ -28,6 +28,49 @@ const AGENT_FOR = { xc: 'xc', xc2: 'xc' };
  * CLAIM heading, and the VERIFIED section contains only the exit code, the repo's
  * git state and whether a transcript actually appeared on disk.
  */
+/**
+ * Fence untrusted text so it CANNOT escape its quarantine.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY A FIXED ``` FENCE WAS A VULNERABILITY, NOT A STYLE CHOICE
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The reply below puts the agent's own words under "AGENT'S OWN OUTPUT — A CLAIM,
+ * NOT A VERDICT" and wraps them in a fence, while "VERIFIED HERE" above it is
+ * built only from things this runner observed after the run. That separation is
+ * the entire honesty guarantee of the bridge.
+ *
+ * It was enforced by a literal three-backtick fence. A fenced block ends at the
+ * first fence AT LEAST AS LONG as its opener, so any output containing ``` closed
+ * the block early and everything after it rendered as ordinary prose, at the same
+ * level as the VERIFIED section. `ai_dispatch.content` becomes the agent's prompt
+ * verbatim, so a hostile row can simply ask for exactly that: emit a closing
+ * fence, then text shaped like "VERIFIED HERE (not self-reported): ...". A human
+ * then reads a fabricated claim as something this runner checked.
+ *
+ * `.slice(-2500)` keeps the TAIL, which is the cheapest half for an attacker to
+ * control — the payload only has to survive into the last 2500 characters.
+ *
+ * THE FIX IS THE FENCE LENGTH, NOT FILTERING THE TEXT. CommonMark closes a
+ * backtick fence only on a run of backticks at least as long as the opener, so an
+ * opener longer than the longest run present in the body cannot be closed from
+ * inside it. Nothing is stripped, escaped or rewritten: the agent's output is
+ * reproduced byte for byte, which matters because this transcript is evidence and
+ * a sanitiser that quietly edits it would destroy the thing it is protecting.
+ * Tilde fences cannot close a backtick fence, so they are not a second vector.
+ *
+ * This is a quarantine for a MARKDOWN READER, and must not be mistaken for a
+ * capability boundary: text inside the fence is still untrusted, and the VERIFIED
+ * section above remains the only part built from observed artifacts.
+ */
+function fenceUntrusted(body) {
+  let longestRun = 0;
+  for (const match of String(body).matchAll(/`+/g)) {
+    if (match[0].length > longestRun) longestRun = match[0].length;
+  }
+  const fence = '`'.repeat(Math.max(3, longestRun + 1));
+  return `${fence}\n${body}\n${fence}`;
+}
+
 function buildReply({ row, agentKey, run, before, after, runner }) {
   const newLines = after.status
     .split('\n')
@@ -72,9 +115,8 @@ function buildReply({ row, agentKey, run, before, after, runner }) {
     `\n\nNOT CHECKED:\n` +
     notChecked.map((v) => `  - ${v}`).join('\n') +
     `\n\nAGENT'S OWN OUTPUT — A CLAIM, NOT A VERDICT:\n` +
-    '```\n' +
-    (run.stdout || run.stderr || '(no output)').slice(-2500) +
-    '\n```\n' +
+    fenceUntrusted((run.stdout || run.stderr || '(no output)').slice(-2500)) +
+    '\n' +
     (ok
       ? ''
       : '\nThis row is reported as blocked rather than done: the dispatcher did not exit 0. ' +
@@ -83,4 +125,4 @@ function buildReply({ row, agentKey, run, before, after, runner }) {
   return { ok, text };
 }
 
-module.exports = { AGENT_FOR, buildReply };
+module.exports = { AGENT_FOR, buildReply, fenceUntrusted };
