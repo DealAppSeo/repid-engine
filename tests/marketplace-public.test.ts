@@ -152,3 +152,26 @@ describe('GET /api/v1/marketplace/recent-transactions', () => {
     expect(res.body.error).toBe('query_failed');
   });
 });
+
+describe('GET /api/v1/marketplace/mock-receipt', () => {
+  test('returns one simulated receipt TrustMarket can hang a first-receipt UI on', async () => {
+    const res = await request(makeApp()).get('/api/v1/marketplace/mock-receipt');
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('mock_receipt');
+    expect(res.body.is_simulated).toBe(true);
+    expect(res.body.tx_hash).toBeNull();
+    expect(res.body.settlement_enabled).toBe(false);
+    expect(res.body.contract_id).toMatch(/^00000000-0000-0000-0000-/);
+    expect(res.body.receipt_json_path).toBe(`/api/v1/receipt/${res.body.contract_id}.json`);
+    expect(res.body.asset).toBe('USDC');
+    expect(typeof res.body.amount).toBe('number');
+    expect(res.body.status).toBe('settled');
+  });
+
+  test('does not consult MARKETPLACE_SETTLEMENT_ENABLED as an env flip — the constant stays hard-off', async () => {
+    const { MARKETPLACE_SETTLEMENT_ENABLED } = require('../src/routes/v1/marketplace');
+    expect(MARKETPLACE_SETTLEMENT_ENABLED).toBe(false);
+    const res = await request(makeApp()).get('/api/v1/marketplace/mock-receipt');
+    expect(res.body.settlement_enabled).toBe(MARKETPLACE_SETTLEMENT_ENABLED);
+  });
+});

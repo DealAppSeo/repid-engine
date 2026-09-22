@@ -7327,3 +7327,110 @@ Item 13 next logical step: `GET /api/v1/memory/heat-status` — a read-only rout
 
 **Next beat:** (1) Confirm PR #817 merged. (2) Advance item 13: item 13's acceptance test is "low-heat leaves flushed to cold; root preserved; reactivation triggers". The eviction writer (PR #817) closes "flushed to cold". Remaining: root preservation after eviction (re-compute root after tombstoning) and reactivation triggers (promote a cold leaf back when its heat rises). Both can be shadow-only primitives. OR advance item 14 (Plonky3 AIR) if that requires no Sean GO for the shadow-first slice.
 
+---
+
+## Beat (2026-09-21, third run) — second run VERIFIED; item 13 evict-and-update-root built
+
+**Prior beat verified [V]:** Beat 2026-09-21, second run (PR #816 docs + PR #817 feature, HEAD `50daf5b` on main).
+- origin/main = `50daf5b` — **[V]** `git log --oneline -1 origin/main`.
+- PR #817 MERGED at 2026-09-21T04:38:37Z, "feat(memory): item 13 heat-eviction writer — performHeatEviction, 8/8 tests, HEAT_EVICTION_ENABLED flag" — **[V]** `gh pr view 817 --json state,mergedAt,title`.
+- PR #816 MERGED at 2026-09-21T04:39:09Z, docs PR — **[V]** `gh pr view 816 --json state,mergedAt`.
+- `src/memory/memory-heat-evict.ts` EXISTS (96 lines; ledger claimed 90 — minor discrepancy), `performHeatEviction` exported, gated on `HEAT_EVICTION_ENABLED` at line 77 — **[V]** `wc -l`, `grep -n`.
+- `HEAT_EVICTION_ENABLED` at line 251 of `src/config/known-env-vars.generated.ts` — **[V]** `grep -n`.
+- Tests **8/8 pass** — **[V]** re-ran `./node_modules/.bin/jest tests/memory/memory-heat-evict.test.ts --forceExit` independently.
+- **Penalty verdict: MINOR.** All second-run claims present and passing. Line count discrepancy (claimed 90, actual 96) is minor.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791, 16/16) + heat-eviction sweep (PR #795, 10/10) + access-tracking (PR #800, 7/7) + DB-backed orchestrator (PR #803, 14/14) + shadow-log caller (PR #805, 8/8) + heat-tier DDL + `writeHeatTiers` (PR #810, 7/7) + heat-status route (PR #814, 4/4) + eviction writer `performHeatEviction` (PR #817, 8/8). Remaining acceptance-test items: "root preserved" (after tombstoning, recompute and store new Merkle root) and "reactivation triggers" (cold leaf promoted when heat rises).
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-evict-root.ts` — `evictAndUpdateRoot(supabase, agentId, opts?)` orchestrates `performHeatEviction` → `hydrateTree` from remaining non-tombstoned leaves → `storeRoot` via `memory-root-store.ts`. Returns `{evictedCount, evictedIds, skipped, newRoot?}`. Flag-gated on `HEAT_EVICTION_ENABLED` (returns skipped when off). SAFE-CLASS (additive module, zero callers wired in prod paths, flag default-off, no scoring/tombstoning path beyond what PR #817 already established).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-evict-root.ts` (97 lines): `evictAndUpdateRoot(supabase, agentId, opts?, fetchFn?, evictLeafFn?, fetchRootLeavesFn?, storeRootFn?)` — calls `performHeatEviction`, then if leaves were evicted: re-fetches non-tombstoned leaves via `fetchRootLeavesFn`, calls `recomputeRoot`, and stores the new root to `agent_memory_roots` via `storeRootFn` (epoch = max existing + 1). Returns `{evictedCount, evictedIds, skipped, newRoot?, newEpoch?}`. Gated on `HEAT_EVICTION_ENABLED` (default off) — inherits from `performHeatEviction`. All DB I/O injected for testability. Tests `tests/memory/memory-heat-evict-root.test.ts` — **7/7**: flag off (no fetch/store); no cold candidates (no root update); 1 cold leaf evicted (root + epoch returned, args forwarded); fetchRootLeaves error; storeRoot error; root determinism; supabase handle forwarded. `tsc --noEmit` → exit 0. Zero callers in `src/` outside definition (SAFE-CLASS). Feature PR **#821** opened on `feat/cc-2026-09-21-memory-heat-evict-root`, armed `--auto --squash` (`autoMergeRequest.enabledAt` non-null **[V]**).
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway to get shadow logs flowing (no scoring/eviction risk).
+8. **`HEAT_EVICTION_ENABLED=true`** — flip when ready for actual cold-leaf tombstoning; shadow mode first is recommended.
+
+**Next beat:** (1) Confirm third-run PRs (#820 docs, #821 feature) merged. (2) Advance item 13: build reactivation trigger (`src/memory/memory-heat-reactivate.ts` — promote cold leaf back when `runHeatEvictionSweepForAgent` returns it in `reactivationCandidates`; update `heat_tier=warm` on the leaf row). Final piece of item 13 acceptance test ("reactivation triggers"). SAFE-CLASS (additive module, flag-gated, no prod path changed).
+
+---
+
+## Beat (2026-09-21, fourth run) — third run VERIFIED; item 13 reactivation trigger built
+
+**Prior beat verified [V]:** Beat 2026-09-21, third run (PR #820 docs + PR #821 feature, HEAD `7c4ed3d` on main).
+- origin/main = `7c4ed3d` (PR #820 on top of `710a5d4` PR #821) — **[V]** `git log --oneline -3 origin/main`.
+- PR #821 MERGED at 2026-09-21T08:44:06Z, "feat(memory): item 13 evict-and-update-root — evictAndUpdateRoot, 7/7 tests" — **[V]** `gh pr view 821 --json state,mergedAt,title`.
+- PR #820 MERGED at 2026-09-21T08:45:36Z, docs PR — **[V]** `gh pr view 820 --json state,mergedAt`.
+- `src/memory/memory-heat-evict-root.ts` EXISTS (111 lines; ledger claimed 97 — minor discrepancy), `evictAndUpdateRoot` exported at line 91, gated on `HEAT_EVICTION_ENABLED` — **[V]** `wc -l`, `grep -n`.
+- Tests **7/7 pass** — **[V]** independently re-ran `jest tests/memory/memory-heat-evict-root.test.ts --forceExit` after `npm install --legacy-peer-deps`.
+- **Penalty verdict: MINOR.** All third-run claims present and passing. Line count discrepancy (claimed 97, actual 111) is not load-bearing.
+
+**Backlog state entering this beat:**
+- Items 1–6, 12: DONE.
+- Items 7–11: shadow/staging complete, Sean GO required.
+- Item 13: heat-score primitive (PR #791) + heat-eviction sweep (PR #795) + access-tracking (PR #800) + DB-backed orchestrator (PR #803) + shadow-log caller (PR #805) + heat-tier DDL + `writeHeatTiers` (PR #810) + heat-status route (PR #814) + eviction writer `performHeatEviction` (PR #817) + `evictAndUpdateRoot` (PR #821). Remaining acceptance-test item: "reactivation triggers" — promote a cold leaf back to warm when its heat score rises above the warm threshold.
+
+**Intent for steps 2-4 (stated before feature branch):**
+`src/memory/memory-heat-reactivate.ts` — `reactivateLeaves(supabase, agentId, opts?)` fetches sweep report via `runHeatEvictionSweepForAgent`, reads `reactivationCandidates`, updates each candidate's `heat_tier=warm` on `agent_memory_leaves`. Returns `{reactivatedCount, reactivatedIds, skipped}`. Flag-gated on `HEAT_EVICTION_ENABLED` (reactivation is the complement of eviction — same gate). SAFE-CLASS (additive module, zero callers in prod paths, no tombstoning, no scoring path changed).
+
+**Step 5 — what shipped:**
+`src/memory/memory-heat-reactivate.ts` (82 lines): `reactivateLeaves(supabase, agentId, opts?, fetchFn?, reactivateFn?)` — fetches sweep report via `runHeatEvictionSweepForAgent`, updates each `reactivationCandidate` leaf's `heat_tier='warm'` via `reactivateFn` (default `reactivateLeaf` which calls `.eq('id', id).update({heat_tier:'warm'})`). Returns `{reactivatedCount, reactivatedIds, skipped}`. Gated on `HEAT_EVICTION_ENABLED` (default off) — returns `skipped:true` immediately unless flag is `"true"`. All DB I/O injected. Tests `tests/memory/memory-heat-reactivate.test.ts` — **7/7**: flag off → skipped; no reactivation candidates → 0 reactivated; 1 candidate reactivated (correct id); multiple candidates; reactivateFn error propagated; reactivatedIds correct; supabase handle forwarded. `tsc --noEmit` → exit 0. Zero callers in `src/` outside definition (SAFE-CLASS). Feature PR **#822** opened on `feat/cc-2026-09-21-memory-heat-reactivate`, armed `--auto --squash`.
+
+**Open for Sean (rule-4):**
+1. **#743** — HAL free-tier quorum fix (98/98 tested), needs mark-ready + merge + Railway recycle.
+2. **#739** — per-event scaled reward cap, needs your "ready" signal.
+3. **#749** — delta reject bound, awaiting your clearance.
+4. **Item 10 EAS anchoring sweep** — needs Sean GO for real gas spend.
+5. **Item 7 minting** — 12 agent API keys need prod DB write (your action).
+6. **Items 7–11 all Sean-gated** — all active backlog waiting on your GO.
+7. **`HEAT_EVICTION_SHADOW_ENABLED=true`** — flip in Railway to get shadow logs flowing (no scoring/eviction risk).
+8. **`HEAT_EVICTION_ENABLED=true`** — flip when ready for actual cold-leaf tombstoning + reactivation; shadow mode first recommended.
+
+**Next beat:** (1) Confirm PR #822 merged. (2) Item 13 acceptance test is now fully covered (eviction writer + root update + reactivation trigger). Verify item 13 completion by reading the acceptance test against all shipped primitives. If complete, mark item 13 DONE in the backlog and advance to item 9 decisions (b)/(c): configured `dailyCallCap` per provider + plug `evaluateFreeTierQuota` into `router.ts`. OR advance item 14 (Plonky3 non-membership AIR) as the next apex task.
+
+
+## Beat (auto-logged, run 35625411648) — agent did not reach step 1 (ledger)
+
+**Auto-generated by the ledger-fallback job** — the `beat` job (result: `failure`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/35625411648
+
+PRs merged during this run's window (since 2026-09-21T16:24:35Z):
+- (none detected)
+
+The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 35625411648 --log`) if the reason matters.
+
+## Beat (auto-logged, run 35650570177) — agent did not reach step 1 (ledger)
+
+**Auto-generated by the ledger-fallback job** — the `beat` job (result: `failure`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/35650570177
+
+PRs merged during this run's window (since 2026-09-21T20:21:40Z):
+- (none detected)
+
+The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 35650570177 --log`) if the reason matters.
+
+## Beat (auto-logged, run 35673881095) — agent did not reach step 1 (ledger)
+
+**Auto-generated by the ledger-fallback job** — the `beat` job (result: `failure`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/35673881095
+
+PRs merged during this run's window (since 2026-09-22T00:55:38Z):
+- (none detected)
+
+The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 35673881095 --log`) if the reason matters.
+
+## Beat (auto-logged, run 35686830998) — agent did not reach step 1 (ledger)
+
+**Auto-generated by the ledger-fallback job** — the `beat` job (result: `failure`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/35686830998
+
+PRs merged during this run's window (since 2026-09-22T04:25:30Z):
+- (none detected)
+
+The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 35686830998 --log`) if the reason matters.
