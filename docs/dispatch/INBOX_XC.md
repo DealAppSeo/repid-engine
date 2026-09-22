@@ -1,197 +1,112 @@
-# INBOX_XC — red-team the deliverer BEFORE its cron is switched on
+# INBOX_XC — red-team the verification gate BEFORE it is built
 
 ## Task
 
 **Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is findings returned as
-text. Do not claim to have created, edited or committed a file.
+text. Do not claim to have created, edited or committed a file. Do not claim to have
+run anything: you hold `reasoning` and `repo_read` only, `repo_read` is scoped to THIS
+workspace, and no evidence commands were run for you.
 
-**Dispatch:**
-```
-node scripts/dispatch/run-agent.mjs --agent xc --inbox docs/dispatch/INBOX_XC.md \
-  --requires reasoning,repo_read
-```
+**Three outcomes, never two: VERIFIED / NOT_CHECKED / FAILED.** "I could not check this"
+is a SUCCESS. A guess that scores better is the failure mode this lane exists to catch.
 
 ---
 
 ### Why this task exists
 
-A bridge was just built between two queues that had never touched. `claude-cloud` writes
-rows into the `ai_dispatch` table; the working dispatcher (`run-agent.mjs`) reads
-`docs/dispatch/INBOX_XC.md`, a git file. `docs/dispatch/MAILBOX_DELIVERY.md` states it
-outright: *"a deliverer has never existed."* `scripts/dispatch/deliver-inbox.mjs` is now
-that deliverer, and `.github/workflows/deliver-inbox-cloud.yml` is the scheduler.
+This repo is about to close its first learning loop. Today an agent marks its own work
+`done` and nothing independent ever checks it. The proposed gate is:
 
-**Its cron is commented out and has never run on a schedule.** You are being asked in the
-window between "it exists" and "it runs unattended every fifteen minutes", because that is
-the only cheap moment. Once it is on, it takes a row written by something else, turns that
-row's `content` into an LLM prompt, and runs it on a GitHub runner that is holding a
-Supabase service-role key and a GitHub PAT — with no human watching any individual run.
+1. **Facts in code.** Deterministic, no LLM: did git HEAD move, did the test exit 0,
+   does the row exist, did /health return 200, does the transcript sha match.
+2. **Judgment by a typed decision model.** One question — "does this evidence support
+   this claim?" — answered as a typed value, not prose.
+3. **HITL on disagreement or low confidence.** A human on a phone, not another agent.
+4. **`done` is never terminal.** Only the verifier writes `verified` / `failed`.
 
-**You are red-teaming work that was authored in the same session that is briefing you.**
-Say so plainly where you find something. The brief below states what was already found and
-fixed; do not stop at re-finding those.
-
----
-
-### Facts you need, inlined
-
-You have `reasoning` and `repo_read`. **`repo_read` is scoped to this workspace only** —
-you cannot open `trinity-ecosystem`, `trustshell` or `hyperdag-protocol`, and you cannot
-check out a branch. Do not claim to have read a file outside this repo, and do not invent
-its contents.
-
-**The trust vocabulary — four states, and the distinctions ARE the product:**
-
-| State | Means |
-|---|---|
-| `MEASURED` | A named check ran and passed. Traceable to that check. |
-| `APPROXIMATE` | Measured against a documented proxy. Always carries its caveat. |
-| `NOT_CHECKED` | Nobody looked. **Not** a warning, **not** a failure — an absence. |
-| `FAILED` | A check ran and did not pass. |
-
-**Exit codes:** `0` VERIFIED, `2` NOT_CHECKED, anything else FAILED.
-
-**The trust boundary, stated exactly, because everything below turns on it:**
-
-- A row's `content` field becomes the agent's prompt **verbatim**. It is written to a temp
-  file and passed as `--inbox <path>`, so it never reaches a shell command line. That
-  closes command injection. It does **not** close prompt injection, and nothing claims it
-  does.
-- The agent that receives it holds `reasoning, repo_read` — **no shell, no write scope.**
-  Whether that is *enforced* by `run-agent.mjs` or merely *requested* is the first thing
-  worth establishing, and it is the hinge of most of what follows.
-- The runner executing all of this holds, simultaneously: a Supabase **service-role** key
-  (`rolbypassrls = true` — it ignores every RLS policy on the project), `LOOP_GH_PAT` with
-  `contents: write` and `pull-requests: write`, and a credential file at the path named by
-  `TRUSTKEYS_ENV_MASTER` containing `XAI_API_KEY`. That file lives in the runner temp
-  directory, **outside the repository checkout**.
-
-**Two findings are already closed. Do not re-report them as new; do check whether the fix
-is complete.**
-
-1. **CWE-94, GitHub Actions script injection.** The workflow inputs were interpolated as
-   `${{ inputs.to }}` directly into a `run:` block, so a crafted `to` executed on the
-   runner with the keyring in scope. Found by Strix, **reproduced before fixing**. Fixed
-   two ways: inputs now arrive as environment variables and are expanded inside a quoted
-   bash array, and `to` / `limit` are `type: choice`, validated by GitHub against a literal
-   list before the job starts.
-2. **Module-scope `process.exit`** made the script untestable; the preconditions moved into
-   `checkPreconditions()` behind an `isMain` guard.
-
-**Read these files — they are the subject:**
-- `scripts/dispatch/deliver-inbox.mjs` — the deliverer. Read the header comments; they
-  state the design intent you are testing against.
-- `scripts/dispatch/deliver-lib.js` — `AGENT_FOR` and `buildReply`, the decision logic.
-- `scripts/dispatch/inbox-lib.js` — `claimPatch`, `replyPatch`, `releasePatch`. The claim is
-  a compare-and-swap. **Establish whether it expires.**
-- `.github/workflows/deliver-inbox-cloud.yml` — the scheduler, permissions, credential
-  handling and the commented-out cron.
-- `scripts/dispatch/run-agent.mjs` — the dispatcher being reused unchanged. Its capability
-  refusal, evidence fencing, claim audit and secret pruning are the guarantees this bridge
-  is relying on without re-implementing. **Relying on a guarantee is not the same as that
-  guarantee holding.**
-- `scripts/dispatch/read-inbox.mjs` — the prior art, and a worked example of the failure
-  this repo keeps making: it selects on `read_at IS NULL`, `dispatch-triage` stamps
-  `read_at` within about seven minutes, so it matches zero rows on any coarser schedule —
-  and its zero-row branch printed VERIFIED. **An empty result reported as success.**
+**You are being asked in the window between "designed" and "built", because that is the
+only cheap moment.** Once this gate is live it decides which agents earn RepID, and RepID
+decides which agents get routed future work. A gate that can be influenced by the worker
+it judges does not degrade gracefully — it inverts, and the least honest agent wins.
 
 ---
 
-### Deliverables — four sets of findings
+### Facts you need, inlined (you cannot reach the database or the other repos)
 
-### 1. The selector, and who can reach it
+These are MEASURED readings from the live production database on 2026-09-22. Treat them
+as given; you cannot re-run them and must not claim you did.
 
-The deliverer selects on `status = 'triaged'` **and** `reply_from = 'dispatch-triage'` and
-an age floor of `DISPATCH_MIN_AGE_MIN`.
+**A. The existing peer-verification queue already ran, then wedged.**
+`peer_verification_queue` holds 140,187 rows:
 
-Reason about what it takes to get a row selected, and therefore to get arbitrary text in
-front of an LLM running on that runner. Who or what can write a row; who or what can set
-those two fields; whether the age floor is a control or only a settling delay; and what a
-row crafted specifically to be selected would look like.
+    in_review   62,841   verifier_agent_id IS NULL on ALL of them   (frozen 2026-07-21)
+    timeout     41,495
+    disputed    30,797
+    verified     5,054
 
-**Then the question that matters:** given the agent holds no shell and no write scope, what
-is the *worst reachable outcome* of a hostile `content`? Argue it concretely rather than
-asserting that prompt injection is bad. Consider at minimum: the credential file sitting
-outside the checkout, what `repo_read` actually permits, and the fact that the agent's
-output is written back into a database row that a human will later read to decide whether
-this system is behaving.
+**B. Its columns are exactly:**
 
-**Name the single highest-severity path you find, and say plainly if you find none.**
+    id, source_response_id, source_agent_id, certainty_at_claim,
+    verification_status, verifier_agent_id, verifier_response_id,
+    verifier_signature, created_at, completed_at, threshold_used, claim_text
 
-### 2. Attack the honesty of the reply
+There is **no `claimed_at` and no `updated_at`.**
 
-`buildReply` exists because this system has twice caught fabricated self-reports — a commit
-hash that did not exist, and a claimed HTTP 200 against an endpoint that 404'd. So the
-reply is built from things checked after the run: the exit code, git state, and whether a
-transcript appeared. Agent output is fenced under a CLAIM heading.
+**C. The claim step and the completion step are separate, and the claim is not exclusive.**
+In the agent runtime (a sibling repo you cannot open), the claim is:
 
-**Attack that separation.** The VERIFIED section is supposed to be untouchable by the agent
-and the CLAIM section is supposed to be visibly quarantined. Examine whether each actually
-is. Specific things worth your attention, not as a checklist to tick but as starting points:
+    UPDATE peer_verification_queue SET verification_status = 'in_review'
+     WHERE id = $1 AND verification_status IN ('pending', 'in_review')
 
-- The agent's output is interpolated into a fenced block. What does agent-authored text
-  containing a fence delimiter do to the rendered reply a human reads?
-- `transcripts` is decided by whether a changed path *contains* the substring `reports/`.
-- New-file detection subtracts the before-state by line containment. What happens to a file
-  that was already dirty before the run?
-- `ok` is `exit code 0 and no spawn error`. Enumerate the ways a run can exit 0 having
-  accomplished nothing, and say whether the reply would read as `done`.
+Note it re-accepts `in_review`. The verdict is then written by a SEPARATE HTTP POST to
+`/api/v1/peer-verification/respond`, carrying an HMAC signature over
+`${queueId}:${verifierResponseId}:${verdict}`, after an LLM call. Nothing releases the
+row if the LLM call, the signing, or the POST fails.
 
-For each: does it let an agent, or a hostile row, cause a reply that a human would read as
-stronger evidence than it is? That is the severity question here — not whether the field is
-wrong, but whether being wrong is *visible*.
+**D. A recursion is already in the data.** Sampling 24 rows, roughly 19 had `claim_text`
+of the form:
 
-### 3. The unattended failure modes
+    "Peer verification completed with verdict: disputed. Response ID: <uuid>"
 
-The cron is off. Assume it is switched on at fifteen-minute intervals against a backlog,
-with nobody reading individual runs for a week.
+i.e. the queue is verifying its own verification outputs, which are then re-enqueued.
+Some rows carry `verification_status = disputed` while their `claim_text` says
+`verdict: verified`. `certainty_at_claim` is 0 on nearly all of them.
 
-Reason about what accumulates. At minimum: what happens to a claimed row when the runner is
-killed mid-dispatch (the job cap and the inner dispatch timeout are close together — work
-out which fires first and what state that leaves); whether two concurrent runs can collide
-given the concurrency group and the runner identifier construction; and whether a
-permanently misconfigured deployment can sit at exit 2 indefinitely.
+**E. The real work claims that are in there look like this**, with no evidence attached:
 
-**That last one is deliberate and you should attack the decision, not just describe it.**
-Exit 2 is `NOT_CHECKED` and is surfaced as a warning, not a failure, on the stated reasoning
-that a workflow which goes red for environmental reasons trains readers to ignore its red.
-Both directions have a cost. Say which is worse *here*, and what would make the yellow state
-impossible to ignore forever without making it noise.
-
-### 4. What must be true before the cron goes on
-
-A short list of preconditions, each with the reason it is on the list and how it would be
-checked. This is the list the operator reads before uncommenting two lines, so a short list
-that is actually checkable beats a long one.
-
-State explicitly which preconditions are MEASURED today, which are NOT_CHECKED, and which
-cannot be established without running the thing.
+    "The task is complete. The 'save_artifact' tool has been called to finalize the
+     Agent Health Sweep report."
+    "The WSCE Calibration Check task has been completed, and the results have been
+     saved as a report artifact."
 
 ---
 
-### Acceptance criteria
+### What to return
 
-- Every finding names the file and the mechanism, not just the symptom.
-- Every status distinguishes all four vocabulary states. No two-state booleans.
-- Each finding carries **what it does NOT establish**. A boundary stated is worth more than
-  a claim overreached.
-- Where you are uncertain, write **UNVERIFIED** and say what would settle it.
-- Severity is ranked by **which way the control fails**, not by how alarming the component
-  sounds. A gate that fails closed and a gate that fails open are not comparable.
-- If you conclude the design is sound on some axis, say so and say what would change your
-  mind. A red-team that finds nothing and reports that honestly is a result.
+**1. Worker-influences-own-verification.** Enumerate every path by which the agent that
+produced a claim can affect the verdict on that claim. Consider at minimum: being
+selected as its own verifier; selecting a colluding verifier; shaping `claim_text` so a
+typed decision model reads it as self-evidently true; producing an artifact that satisfies
+the fact-gate without doing the work (a file that exists but is empty, a test that passes
+vacuously, a 200 from an endpoint that ignores its input); and re-enqueueing its own
+verdict as a new claim (finding D — say whether that is the only instance of that shape
+you can find in this repo, or one of several).
 
-### What will be rejected
+**2. Rank by which way each fails when subtly wrong.** For each path, say whether the
+failure direction is "honest work marked failed" or "fabricated work marked verified".
+Rank the second kind first. Name which you would fix before the gate goes live at all.
 
-- Any claim you read a file outside this workspace, or read a branch other than the one
-  checked out.
-- Any invented test output, command output, or measurement. On 2026-08-05 a dispatch
-  returned a review containing fabricated test results; that is the specific failure this
-  lane's constraints exist to prevent. **If you did not run it, you did not run it.**
-- Re-reporting the two closed findings above as new discoveries.
-- A recommendation to loosen an authorization path without stating its failure direction.
+**3. The fact-gate's own limits.** For each of the five deterministic checks in the design
+above, name a claim that would pass that check while being false. Be concrete. If a check
+has no such claim, say so — that is a useful finding too.
 
-### Note on where this lands
+**4. The lease.** Given B and C, specify the minimum change that makes a stale claim
+reclaimable without making a live claim stealable. State what breaks if the TTL is too
+short and what breaks if it is too long.
 
-`repid-engine` is a **PUBLIC** repository. State findings, not inventories. Do not include
-credentials, project identifiers, row counts or service names in your output.
+**5. Say plainly where you are re-finding something the brief already told you**, and
+where you found something the brief did not contain. Do not pad the second list.
+
+Worked example of the mistake most likely here, from this repo: a review once cited exact
+line numbers for a file it had never opened, and graded itself `[R]`. The dishonesty was
+in the SPECIFICS, not the confidence label. If you name a file or a line, you opened it.
