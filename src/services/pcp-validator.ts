@@ -4,6 +4,7 @@ import { calculateCost } from '../billing/pricing';
 import crypto from 'crypto';
 import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
+import { resolveProviderEndpoint } from '../hal/local-llm';
 
 /**
  * The validator model, and why it is not a literal any more.
@@ -90,7 +91,12 @@ ${taskData.result}`;
       const apiKey = process.env.GROQ_API_KEY;
       if (!apiKey) throw new Error('No GROQ_API_KEY');
       
-      const res = await providerFetch(PROVIDER_URLS.groqChatCompletions, {
+      const endpoint = resolveProviderEndpoint(
+        PROVIDER_URLS.groqChatCompletions,
+        process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '',
+        'openai-compat',
+      );
+      const res = await providerFetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

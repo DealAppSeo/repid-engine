@@ -349,15 +349,13 @@ false again.
    differently from a remote one — read that path before assuming "local gateway" means
    "nothing leaves".
 3. **It is a redirect, not a fallback.** When set, the default endpoints are not tried.
-4. **It is NOT a comprehensive egress control — a second production path ignores it entirely**
-   [MEASURED 2026-09-09]. `src/services/adversarial-judge.ts` carries its own provider list with
-   **six hardcoded endpoints** (`api.anthropic.com`, `api.groq.com`, `api.openai.com`,
-   `generativelanguage.googleapis.com`, `api.deepseek.com`, `api.cerebras.ai`), reads the SAME
-   `GROQ_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `CEREBRAS_API_KEY`, and references
-   `resolveProviderEndpoint` / `LOCAL_LLM_BASE_URL` **zero times**. It runs in production —
-   three callers — `validation-queue-worker.ts`, `cross-validation-service-handler.ts` and
-   `handlers/zkp-audit-handler.ts` — and a daily 12:00Z cron visible in `provider_health`
-   (`source = adversarial_judge`).
+4. **It is NOT a comprehensive egress control by hostname inventory alone**
+   [MEASURED 2026-09-09; openai-compat redirect wired 2026-09-19, HYP-11]. The judge,
+   badges, completeness, and pcp-validator openai-compat calls now go through
+   `resolveProviderEndpoint` the same way HAL fact-check does. **Anthropic Messages and
+   Gemini generateContent are not openai-compat** — a local llama cannot speak those
+   dialects, so under `LOCAL_LLM_BASE_URL` they are **skipped** (`skipped_not_openai_compat`),
+   not redirected and not leaked to cloud. Do not pretend they are openai-compat.
 
    So setting the variable moves the **fact-check quorum** and leaves the judge calling out
    directly. Reading points 1-3 and concluding "local gateway means nothing leaves" is wrong, and
@@ -385,8 +383,8 @@ false again.
    `providerFetch` + `PROVIDER_URLS`; ceiling is 0). A `CALLSITE_CEILING` ratchet
    may only be lowered. **Knowing a URL is not presenting a bearer** — this is
    hostname inventory only, which catches neither an SDK client with an embedded
-   base URL nor a runtime-assembled host. Honouring `LOCAL_LLM_BASE_URL` on those
-   four is a later slice (HYP-11).
+   base URL nor a runtime-assembled host. The four former type-B files honour
+   `LOCAL_LLM_BASE_URL` for openai-compat (HYP-11); Anthropic/Gemini stay explicit skips.
 
    **How this was found is the reusable part.** `provider_health` holds a daily anthropic row,
    and anthropic-dialect providers are DROPPED under a local base — so the row looks like proof
@@ -394,8 +392,8 @@ false again.
    `api.anthropic.com` and would have succeeded either way. **A negative control only controls if
    the code path you are reading actually passes through the mechanism.** Check that first.
 
-   Whether the judge SHOULD honour the redirect is a decision, not a cleanup — it changes which
-   host production LLM traffic reaches. Do not "fix" it silently.
+   Whether Anthropic should stay cloud under a local base was the remaining decision:
+   it is skipped, not redirected.
 
 ### On-chain integration
 

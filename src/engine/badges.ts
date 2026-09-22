@@ -1,6 +1,7 @@
 import { db } from '../db';
 import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
+import { resolveProviderEndpoint } from '../hal/local-llm';
 
 export interface BadgeAward {
   badge_name: string;
@@ -328,7 +329,12 @@ export async function suggestConstitutionalRules(
     try {
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 5000);
-      const cb = await providerFetch(PROVIDER_URLS.cerebrasChatCompletions, {
+      const endpoint = resolveProviderEndpoint(
+        PROVIDER_URLS.cerebrasChatCompletions,
+        process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '',
+        'openai-compat',
+      );
+      const cb = await providerFetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

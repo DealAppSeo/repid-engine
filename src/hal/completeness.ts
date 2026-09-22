@@ -13,6 +13,7 @@
  */
 import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
+import { resolveProviderEndpoint } from './local-llm';
 
 export type LlmFn = (prompt: string) => Promise<string>;
 
@@ -50,7 +51,12 @@ export async function checkCompleteness(prompt: string, response: string, callLL
 async function defaultGroqCall(prompt: string): Promise<string> {
   const key = process.env.GROQ_API_KEY?.trim();
   if (!key) throw new Error('GROQ_API_KEY not set');
-  const res = await providerFetch(PROVIDER_URLS.groqChatCompletions, {
+  const endpoint = resolveProviderEndpoint(
+    PROVIDER_URLS.groqChatCompletions,
+    process.env.LOCAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || '',
+    'openai-compat',
+  );
+  const res = await providerFetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({
