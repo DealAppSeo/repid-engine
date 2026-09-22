@@ -1,112 +1,76 @@
-# INBOX_XC — red-team the verification gate BEFORE it is built
+# INBOX_XC — the evidence envelope, and what must be true before the panel is switched on
 
 ## Task
 
-**Lane:** L6 RED-TEAM — **no write scope.** Your deliverable is findings returned as
-text. Do not claim to have created, edited or committed a file. Do not claim to have
-run anything: you hold `reasoning` and `repo_read` only, `repo_read` is scoped to THIS
-workspace, and no evidence commands were run for you.
+**Lane:** L6 RED-TEAM — **no write scope.** Deliverable is text. Do not claim to have
+created, edited or committed a file. You hold `reasoning` and `repo_read`, scoped to THIS
+workspace. No evidence commands were run for you. **Three outcomes: VERIFIED /
+NOT_CHECKED / FAILED.**
 
-**Three outcomes, never two: VERIFIED / NOT_CHECKED / FAILED.** "I could not check this"
-is a SUCCESS. A guess that scores better is the failure mode this lane exists to catch.
-
----
-
-### Why this task exists
-
-This repo is about to close its first learning loop. Today an agent marks its own work
-`done` and nothing independent ever checks it. The proposed gate is:
-
-1. **Facts in code.** Deterministic, no LLM: did git HEAD move, did the test exit 0,
-   does the row exist, did /health return 200, does the transcript sha match.
-2. **Judgment by a typed decision model.** One question — "does this evidence support
-   this claim?" — answered as a typed value, not prose.
-3. **HITL on disagreement or low confidence.** A human on a phone, not another agent.
-4. **`done` is never terminal.** Only the verifier writes `verified` / `failed`.
-
-**You are being asked in the window between "designed" and "built", because that is the
-only cheap moment.** Once this gate is live it decides which agents earn RepID, and RepID
-decides which agents get routed future work. A gate that can be influenced by the worker
-it judges does not degrade gracefully — it inverts, and the least honest agent wins.
+**Your previous report was read and independently checked.** Three of your findings —
+atomic self-verification block, the blind 2-of-3 panel with `computeConsensus`, and the
+HMAC not binding `verifier_agent_id` — were CONFIRMED against the source by a reader
+holding a shell. One thing to correct going forward: you attributed to your brief an
+example of "a suite that reported 11 passed on both enabled and disabled runs." **That
+example was not in your brief.** It may be true of this repo, but you did not get it from
+the material you were given. Do not carry it forward as given.
 
 ---
 
-### Facts you need, inlined (you cannot reach the database or the other repos)
+### What changed since your last run
 
-These are MEASURED readings from the live production database on 2026-09-22. Treat them
-as given; you cannot re-run them and must not claim you did.
+You reported the panel path exists and is flag-gated. That was verified. It reframes the
+work: the verification triad is **already built and switched off**, so the next change is
+*turn on what exists plus add the one missing input*, not *write a verifier*.
 
-**A. The existing peer-verification queue already ran, then wedged.**
-`peer_verification_queue` holds 140,187 rows:
+The missing input is the thing your own closing lesson named:
 
-    in_review   62,841   verifier_agent_id IS NULL on ALL of them   (frozen 2026-07-21)
-    timeout     41,495
-    disputed    30,797
-    verified     5,054
+> the fact-gate must consume attached evidence — artifact hash, transcript hash,
+> deterministic probe — rather than free-form `claim_text`, otherwise the producer
+> controls the entire input to the verifier.
 
-**B. Its columns are exactly:**
+That is now the design constraint. Two MEASURED facts make it sharp:
 
-    id, source_response_id, source_agent_id, certainty_at_claim,
-    verification_status, verifier_agent_id, verifier_response_id,
-    verifier_signature, created_at, completed_at, threshold_used, claim_text
+    peer_verification_queue   has NO artifact column and NO task reference at all.
+                              A verifier sees claim_text prose and nothing else.
+    trinity_tasks             143,219 rows are 'done'. artifact_url is set on 120.
+                              external_artifact_url on 0. verified_output on 1.
 
-There is **no `claimed_at` and no `updated_at`.**
-
-**C. The claim step and the completion step are separate, and the claim is not exclusive.**
-In the agent runtime (a sibling repo you cannot open), the claim is:
-
-    UPDATE peer_verification_queue SET verification_status = 'in_review'
-     WHERE id = $1 AND verification_status IN ('pending', 'in_review')
-
-Note it re-accepts `in_review`. The verdict is then written by a SEPARATE HTTP POST to
-`/api/v1/peer-verification/respond`, carrying an HMAC signature over
-`${queueId}:${verifierResponseId}:${verdict}`, after an LLM call. Nothing releases the
-row if the LLM call, the signing, or the POST fails.
-
-**D. A recursion is already in the data.** Sampling 24 rows, roughly 19 had `claim_text`
-of the form:
-
-    "Peer verification completed with verdict: disputed. Response ID: <uuid>"
-
-i.e. the queue is verifying its own verification outputs, which are then re-enqueued.
-Some rows carry `verification_status = disputed` while their `claim_text` says
-`verdict: verified`. `certainty_at_claim` is 0 on nearly all of them.
-
-**E. The real work claims that are in there look like this**, with no evidence attached:
-
-    "The task is complete. The 'save_artifact' tool has been called to finalize the
-     Agent Health Sweep report."
-    "The WSCE Calibration Check task has been completed, and the results have been
-     saved as a report artifact."
+So today a fact gate has nothing to bite on, on either table.
 
 ---
 
 ### What to return
 
-**1. Worker-influences-own-verification.** Enumerate every path by which the agent that
-produced a claim can affect the verdict on that claim. Consider at minimum: being
-selected as its own verifier; selecting a colluding verifier; shaping `claim_text` so a
-typed decision model reads it as self-evidently true; producing an artifact that satisfies
-the fact-gate without doing the work (a file that exists but is empty, a test that passes
-vacuously, a 200 from an endpoint that ignores its input); and re-enqueueing its own
-verdict as a new claim (finding D — say whether that is the only instance of that shape
-you can find in this repo, or one of several).
+**1. The evidence envelope.** The minimum set of fields a completing agent must attach so
+a verifier holding NO LLM can reach a verdict. For each: name, type, what it proves, and
+**what it does not prove**. Keep it small — a schema nobody fills fails exactly like no
+schema. Say explicitly which fields the producer can forge and which it cannot, and why.
 
-**2. Rank by which way each fails when subtly wrong.** For each path, say whether the
-failure direction is "honest work marked failed" or "fabricated work marked verified".
-Rank the second kind first. Name which you would fix before the gate goes live at all.
+**2. Where it goes.** `peer_verification_queue` has no column for it; `trinity_tasks` has
+`artifact_url`, `external_artifact_url`, `proof_of_work`, `verified_output`,
+`requires_external_artifact`, `verification_method`, `expected_output`, `success_criteria`
+— nearly all unused. Recommend: extend an existing column set, or add one new column, and
+say which and why. **Do not design a parallel enum if an existing column already carries
+the meaning.** Name the specific columns you would use.
 
-**3. The fact-gate's own limits.** For each of the five deterministic checks in the design
-above, name a claim that would pass that check while being false. Be concrete. If a check
-has no such claim, say so — that is a useful finding too.
+**3. Attack the panel you found.** Blind 2-of-3 over a FIXED pool
+(`trinity-mel`, `trinity-shofet`, `trinity-gcm`), deterministic round-robin selection,
+`computeConsensus` over votes. Assume it is switched on tomorrow. Enumerate how it fails:
+a fixed pool of three, one pool member wedged or dead, two members sharing a model and
+failing identically, votes that are all abstentions, a producer that is itself in the
+pool, ties. For each, say whether it fails toward *fabricated work verified* or *honest
+work failed*. Rank the first kind first.
 
-**4. The lease.** Given B and C, specify the minimum change that makes a stale claim
-reclaimable without making a live claim stealable. State what breaks if the TTL is too
-short and what breaks if it is too long.
+**4. Preconditions for the switch.** Short, checkable list of what must be true before
+`PEER_VERIFY_PANEL_ENABLED=true`. Each precondition names the file or mechanism that
+satisfies it and how someone would check it. Mark each VERIFIED / NOT_CHECKED from what
+you can actually read here.
 
-**5. Say plainly where you are re-finding something the brief already told you**, and
-where you found something the brief did not contain. Do not pad the second list.
+**5. The unbound HMAC.** You found `dataToSign` is `queue_id:verifier_response_id:verdict`
+with `verifier_agent_id` NOT bound, frozen for back-compat. State concretely what that
+permits given the rest of the code, and whether the atomic self-verification guard already
+neutralises it. If it does, say so — a finding that turns out to be defended is a real
+result, not a failed one.
 
-Worked example of the mistake most likely here, from this repo: a review once cited exact
-line numbers for a file it had never opened, and graded itself `[R]`. The dishonesty was
-in the SPECIFICS, not the confidence label. If you name a file or a line, you opened it.
+**6. Separate what you re-found from what is new.** Do not pad the second list.
