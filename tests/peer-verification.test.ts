@@ -86,9 +86,12 @@ describe('HAL Peer Verification Unit Tests', () => {
     let mockDb: any;
     let updatedQueueEntries: any[] = [];
     let insertedTasks: any[] = [];
+    /** Records each expired-lease scan the reader issues. */
+    let expiredScans: Array<{ status: string; ltCol: string }> = [];
 
     beforeEach(() => {
       updatedQueueEntries = [];
+      expiredScans = [];
       insertedTasks = [];
       mockDb = {
         from: (table: string) => {
@@ -96,6 +99,25 @@ describe('HAL Peer Verification Unit Tests', () => {
             return {
               select: () => ({
                 eq: (col: string, val: string) => ({
+                  // EXPIRED-LEASE SCAN. The reader also asks for rows stuck in
+                  // in_review whose lease has run out:
+                  //   .eq('verification_status','in_review')
+                  //     .is('verifier_agent_id', null)
+                  //     .lt('claimed_at', staleBefore)
+                  // This double answers that branch with NO rows, which is the
+                  // honest answer for this fixture: its two rows are `pending` and
+                  // carry no claimed_at, and a NULL claimed_at can never satisfy
+                  // `< staleBefore`. That is the property that keeps the 62,841
+                  // legacy wedged rows out of the reclaim path, so it is asserted
+                  // here rather than assumed.
+                  is: (_c: string, _v: unknown) => ({
+                    lt: (ltCol: string, _ltVal: string) => ({
+                      limit: async () => {
+                        expiredScans.push({ status: val, ltCol });
+                        return { data: [], error: null };
+                      }
+                    })
+                  }),
                   limit: async () => {
                     return {
                       data: [
@@ -185,6 +207,32 @@ describe('HAL Peer Verification Unit Tests', () => {
           return {} as any;
         }
       };
+    });
+
+    test('expired-lease scan runs, and a NULL claimed_at row is never reclaimed', async () => {
+      await processPeerVerificationQueue(mockDb);
+
+      // The reader must actually ask for expired leases — not silently skip the
+      // branch. A reclaim path that is never queried is the same defect as no
+      // reclaim path at all.
+      expect(expiredScans).toHaveLength(1);
+      expect(expiredScans[0]).toEqual({ status: 'in_review', ltCol: 'claimed_at' });
+
+      // And it must still claim only the two pending rows: the expired branch
+      // returned nothing, so nothing legacy was dragged in.
+      expect(updatedQueueEntries).toHaveLength(2);
+    });
+
+    test('the claim stamps claimed_at, so a later reclaim can date it', async () => {
+      await processPeerVerificationQueue(mockDb);
+
+      for (const entry of updatedQueueEntries) {
+        expect(entry.verification_status).toBe('in_review');
+        // Without this the row is indistinguishable from one claimed in July,
+        // which is exactly how 62,841 rows wedged.
+        expect(typeof entry.claimed_at).toBe('string');
+        expect(Number.isNaN(Date.parse(entry.claimed_at))).toBe(false);
+      }
     });
 
     test('stateless round-robin logic maps tasks to verifiers correctly, skipping claimant', async () => {
