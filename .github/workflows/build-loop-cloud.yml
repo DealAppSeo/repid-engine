@@ -142,6 +142,29 @@ jobs:
             --model ${{ vars.BUILD_LOOP_MODEL || 'claude-sonnet-4-6' }}
             --allowedTools Edit,Read,Write,Bash,Glob,Grep
 
+      # WHY THIS STEP EXISTS. The action above deliberately suppresses the agent's
+      # output ("full output hidden for security") and saves it to a temp file that
+      # is never uploaded as an artifact. Correct default for a PUBLIC repo — and it
+      # means that when the API refuses the FIRST call, the one line naming the cause
+      # is discarded with the runner. MEASURED 2026-09-21/22: four consecutive beats
+      # (runs 35625411648, 35650570177, 35673881095, 35686830998) ended at num_turns=1,
+      # $0, modelUsage {} in ~240ms, and the cause was unrecoverable afterwards. The
+      # run before them reached 36 turns and billed $1.14 on the same model and the
+      # same Claude Code 2.1.278, so nothing repo-side had changed.
+      #
+      # The script prints the refusal ONLY when num_turns <= 1. That gate is the
+      # control, not the redactor it also runs: at turn <= 1 the agent never took a
+      # turn, so it read no file, ran no command and queried no database, and there is
+      # no transcript to disclose. Above the gate it prints a one-line notice and
+      # nothing else. Do not widen it to "see more" — see the script header.
+      #
+      # continue-on-error because this also runs on SUCCESSFUL beats: a reporter must
+      # never be able to turn a green beat red. The script exits 0 on every path.
+      - name: Explain a beat that died before turn 2
+        if: always()
+        continue-on-error: true
+        run: node scripts/ci/explain-beat-failure.cjs "${RUNNER_TEMP}/claude-execution-output.json"
+
   # Beats 64-67 all showed the same failure: the 40-turn cap kills the `beat`
   # job mid-investigation, real PRs still land (auto-merge was already set
   # before the runner died), but step 1 — the ledger entry — never ran
