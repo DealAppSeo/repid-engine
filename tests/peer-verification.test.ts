@@ -86,8 +86,12 @@ describe('HAL Peer Verification Unit Tests', () => {
     let mockDb: any;
     let updatedQueueEntries: any[] = [];
     let insertedTasks: any[] = [];
-    /** Records each expired-lease scan the reader issues. */
-    let expiredScans: Array<{ status: string; ltCol: string }> = [];
+    /** Records each expired-lease scan the reader issues, with EVERY `.lt()`
+     *  predicate it carried. Both matter: `claimed_at` is what dates a stale
+     *  lease, and `reclaim_count` is the budget that bounds how often one row may
+     *  be recycled. A scan missing the budget is the unbounded loop that produced
+     *  339 tasks from 7 rows on 2026-09-23. */
+    let expiredScans: Array<{ status: string; ltCol: string; ltCols: string[] }> = [];
 
     beforeEach(() => {
       updatedQueueEntries = [];
@@ -110,14 +114,24 @@ describe('HAL Peer Verification Unit Tests', () => {
                   // `< staleBefore`. That is the property that keeps the 62,841
                   // legacy wedged rows out of the reclaim path, so it is asserted
                   // here rather than assumed.
-                  is: (_c: string, _v: unknown) => ({
-                    lt: (ltCol: string, _ltVal: string) => ({
+                  // `.lt()` is CHAINABLE here because the reader issues two of
+                  // them — claimed_at (the lease) and reclaim_count (the budget).
+                  // A mock that only accepted one would break the chain and record
+                  // nothing, which reads identically to "the reader never scanned".
+                  is: (_c: string, _v: unknown) => {
+                    const ltCols: string[] = [];
+                    const node: any = {
+                      lt: (ltCol: string, _ltVal: string) => {
+                        ltCols.push(ltCol);
+                        return node;
+                      },
                       limit: async () => {
-                        expiredScans.push({ status: val, ltCol });
+                        expiredScans.push({ status: val, ltCol: ltCols[0] as string, ltCols });
                         return { data: [], error: null };
-                      }
-                    })
-                  }),
+                      },
+                    };
+                    return node;
+                  },
                   limit: async () => {
                     return {
                       data: [
@@ -209,18 +223,47 @@ describe('HAL Peer Verification Unit Tests', () => {
       };
     });
 
-    test('expired-lease scan runs, and a NULL claimed_at row is never reclaimed', async () => {
+    // This assertion used to read "the expired-lease scan runs", unconditionally,
+    // on the premise that "a reclaim path that is never queried is the same defect
+    // as no reclaim path at all". MEASURED 2026-09-23, that premise is false in one
+    // specific state: with the panel disabled, nothing posts the verdict that
+    // clears a lease, so every reclaim is guaranteed to expire again. 7 queue rows
+    // produced 339 peer_verify tasks in 8 hours that way. So the scan running is
+    // correct ONLY when the panel is on, and both halves are pinned below rather
+    // than the assertion being softened.
+    test('panel DISABLED: the expired-lease scan is skipped (breaker 2.4)', async () => {
+      delete process.env.PEER_VERIFY_PANEL_ENABLED;
       await processPeerVerificationQueue(mockDb);
 
-      // The reader must actually ask for expired leases — not silently skip the
-      // branch. A reclaim path that is never queried is the same defect as no
-      // reclaim path at all.
-      expect(expiredScans).toHaveLength(1);
-      expect(expiredScans[0]).toEqual({ status: 'in_review', ltCol: 'claimed_at' });
+      // Not queried at all — reclaiming a lease the panel cannot clear is an
+      // unbounded spawn loop, not a recovery.
+      expect(expiredScans).toHaveLength(0);
 
-      // And it must still claim only the two pending rows: the expired branch
-      // returned nothing, so nothing legacy was dragged in.
+      // Draining is untouched: the two pending rows still get claimed. A breaker
+      // that also stopped new work would be a different bug.
       expect(updatedQueueEntries).toHaveLength(2);
+    });
+
+    test('panel ENABLED: the expired-lease scan runs, and a NULL claimed_at row is never reclaimed', async () => {
+      process.env.PEER_VERIFY_PANEL_ENABLED = 'true';
+      try {
+        await processPeerVerificationQueue(mockDb);
+
+        // With the panel on, a verdict CAN land, so a stale lease is genuinely
+        // recoverable and the reader must still ask for one.
+        expect(expiredScans).toHaveLength(1);
+        expect(expiredScans[0]?.status).toBe('in_review');
+        // Both predicates, not just the lease. Dropping `reclaim_count` would
+        // restore the unbounded recycle while this test still passed on the lease
+        // alone — which is exactly the shape of the bug being fixed.
+        expect(expiredScans[0]?.ltCols).toEqual(['claimed_at', 'reclaim_count']);
+
+        // And it must still claim only the two pending rows: the expired branch
+        // returned nothing, so nothing legacy was dragged in.
+        expect(updatedQueueEntries).toHaveLength(2);
+      } finally {
+        delete process.env.PEER_VERIFY_PANEL_ENABLED;
+      }
     });
 
     test('the claim stamps claimed_at, so a later reclaim can date it', async () => {

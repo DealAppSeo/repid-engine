@@ -92,13 +92,62 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       return;
     }
 
-    const { data: expiredRows, error: expiredErr } = await db
-      .from('peer_verification_queue')
-      .select('*')
-      .eq('verification_status', 'in_review')
-      .is('verifier_agent_id', null)
-      .lt('claimed_at', staleBefore)
-      .limit(10);
+    // L2 breaker 2.4 — NEVER RECLAIM A LEASE NOTHING CAN CLEAR.
+    //
+    // The verdict that releases a row is posted by the PANEL. When
+    // PEER_VERIFY_PANEL_ENABLED is false the panel never runs, so a reclaimed row
+    // is guaranteed — not merely likely — to expire again, be reclaimed again, and
+    // spawn another peer_verify task every TTL, for ever.
+    //
+    // That is not hypothetical. MEASURED 2026-09-23: 7 queue rows produced 339
+    // peer_verify tasks in 8 hours. 7 rows x 2 reclaims/hr (30m TTL) x 3 panel
+    // members = 42 tasks/hr, which is the plateau the fleet actually ran at, to the
+    // task. Across all 140,194 rows this table has ever held, `verifier_agent_id`
+    // is non-null on ZERO of them — no verdict has ever landed, so every claim
+    // this reader has ever made was already certain to expire.
+    //
+    // The lease migration said this in advance and was not followed:
+    //   "a reclaimed row re-wedges on the next provider hiccup. The column is the
+    //    fix; the reclaim is a separate, later decision that this migration
+    //    deliberately does NOT make."
+    // (migrations/2026_09_22_peer_verification_queue_lease_and_closure.sql)
+    // The column and the reclaim shipped together in #841 anyway, and the loop
+    // started the next morning at 06:58Z.
+    //
+    // Dating a stale claim is still correct and is kept. Acting on that date while
+    // the releasing step is switched off is what is wrong, so the reclaim is gated
+    // on the panel rather than removed.
+    const panelOn = peerVerifyPanelEnabled();
+
+    // BACKUP BOUND (belt to the gate's braces). Even with the panel ON, a row whose
+    // verdict keeps failing would recycle for ever. A reclaim budget makes the worst
+    // case finite instead of unbounded: past the cap the row is closed as
+    // 'timeout' — a vocabulary this table already uses — and stops being eligible.
+    // Chosen because the gate above depends on one env var being false; if someone
+    // enables the panel before the verdict path is proven, this is what holds.
+    const reclaimCap = Number(process.env['PEER_VERIFY_RECLAIM_CAP'] ?? 3);
+
+    let expiredRows: PeerVerificationQueueEntry[] | null = null;
+    let expiredErr: { message: string } | null = null;
+
+    if (!panelOn) {
+      console.log(
+        '[PeerVerificationReader] panel DISABLED (PEER_VERIFY_PANEL_ENABLED) — ' +
+          'expired-lease reclaim skipped: nothing can post the verdict that would ' +
+          'clear the lease, so reclaiming is an unbounded spawn loop (breaker 2.4)'
+      );
+    } else {
+      const res = await db
+        .from('peer_verification_queue')
+        .select('*')
+        .eq('verification_status', 'in_review')
+        .is('verifier_agent_id', null)
+        .lt('claimed_at', staleBefore)
+        .lt('reclaim_count', reclaimCap)
+        .limit(10);
+      expiredRows = res.data as PeerVerificationQueueEntry[] | null;
+      expiredErr = res.error;
+    }
 
     if (expiredErr) {
       // NOT_CHECKED, not "none expired": if this read failed we do not know. Say so
@@ -129,9 +178,17 @@ export async function processPeerVerificationQueue(db: SupabaseClient): Promise<
       // worker has since refreshed is never stolen — its claimed_at moved, the
       // match fails, and we skip. A live claim is therefore unstealable while a
       // dead one is reclaimable, which is the whole point of the column.
+      // A RECLAIM spends budget; a first claim does not. Incrementing here rather
+      // than in the select keeps the count honest under the CAS below: a claim that
+      // loses the race never lands, so it never charges the row.
+      const isReclaim = entry.verification_status === 'in_review';
       const claimQuery = db
         .from('peer_verification_queue')
-        .update({ verification_status: 'in_review', claimed_at: new Date().toISOString() })
+        .update({
+          verification_status: 'in_review',
+          claimed_at: new Date().toISOString(),
+          ...(isReclaim ? { reclaim_count: (entry.reclaim_count ?? 0) + 1 } : {}),
+        })
         .eq('id', entry.id)
         .eq('verification_status', entry.verification_status);
 
