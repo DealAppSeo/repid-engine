@@ -154,7 +154,7 @@ describe('POST /api/v1/hal/evaluate → hal_public_fact_checks counter', () => {
   test('HAL_FACTCHECK_EARLY_RETURN=false disables the public fast-return flag', async () => {
     const db = makeDb();
     (global as any).__hpfcDb = db;
-    process.env.HAL_FACTCHECK_EARLY_RETURN = 'false';
+    process.env.HAL_FACTCHECK_EARLY_RETURN = 'FALSE';
     const res = await request(makeApp()).post('/api/v1/hal/evaluate').send({ text: 'wait for all please' });
     expect(res.status).toBe(200);
     expect((global as any).__hpfcEvaluate).toHaveBeenCalledWith(expect.not.objectContaining({
