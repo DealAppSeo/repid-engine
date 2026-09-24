@@ -25,8 +25,14 @@ jest.mock('../src/hal/service', () => ({
 }));
 
 jest.mock('../src/cache/hal-cache', () => ({
-  getCachedHalResult: async () => (global as any).__hpfcCached ?? null,
-  cacheHalResult: async () => undefined,
+  getCachedHalResult: async (_text: string, provider: string) => {
+    (global as any).__hpfcCacheReads = [...((global as any).__hpfcCacheReads ?? []), provider];
+    return (global as any).__hpfcCached ?? null;
+  },
+  cacheHalResult: async (_text: string, provider: string) => {
+    (global as any).__hpfcCacheWrites = [...((global as any).__hpfcCacheWrites ?? []), provider];
+    return undefined;
+  },
 }));
 
 import request from 'supertest';
@@ -76,6 +82,8 @@ const CLEAN_RESULT = { hal_score: 0.12, decision: 'clean', mode: 'fact-check', s
 beforeEach(() => {
   (global as any).__hpfcCached = null;
   (global as any).__hpfcEvaluate = jest.fn(async () => CLEAN_RESULT);
+  (global as any).__hpfcCacheReads = [];
+  (global as any).__hpfcCacheWrites = [];
   delete process.env.HAL_FACTCHECK_EARLY_RETURN;
 });
 
@@ -152,6 +160,18 @@ describe('POST /api/v1/hal/evaluate → hal_public_fact_checks counter', () => {
     expect((global as any).__hpfcEvaluate).toHaveBeenCalledWith(expect.not.objectContaining({
       factCheckEarlyReturn: true,
     }));
+  });
+
+  test('cache key changes with the public early-return mode', async () => {
+    const db = makeDb();
+    (global as any).__hpfcDb = db;
+
+    await request(makeApp()).post('/api/v1/hal/evaluate').send({ text: 'cache me' });
+    process.env.HAL_FACTCHECK_EARLY_RETURN = 'false';
+    await request(makeApp()).post('/api/v1/hal/evaluate').send({ text: 'cache me' });
+
+    expect((global as any).__hpfcCacheReads).toEqual(['sdefault:er1', 'sdefault:er0']);
+    expect((global as any).__hpfcCacheWrites).toEqual(['sdefault:er1', 'sdefault:er0']);
   });
 
   test('rejects empty text with 400 and writes nothing', async () => {

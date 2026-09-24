@@ -93,7 +93,8 @@ router.post('/evaluate', async (req: Request, res: Response) => {
   try {
     // S-CACHE Phase 2 — return a cached verdict for the same (text, strictness) within the TTL,
     // skipping the LLM/extractor work. The cache key folds strictness in as the "provider".
-    const cacheProvider = `s${s ?? 'default'}`;
+    const factCheckEarlyReturn = process.env.HAL_FACTCHECK_EARLY_RETURN !== 'false';
+    const cacheProvider = `s${s ?? 'default'}:${factCheckEarlyReturn ? 'er1' : 'er0'}`;
     const cached = await getCachedHalResult(text, cacheProvider);
     // Cached hits are NOT re-counted: the underlying evaluation was already recorded on its first
     // (fresh) run, so counting the cache-serve would double-count the same (text, strictness).
@@ -113,7 +114,7 @@ router.post('/evaluate', async (req: Request, res: Response) => {
       text,
       context: context as any,
       strictness: s,
-      factCheckEarlyReturn: process.env.HAL_FACTCHECK_EARLY_RETURN !== 'false',
+      factCheckEarlyReturn,
     });
     void cacheHalResult(text, cacheProvider, result);
     // Source-tagged public counter — fire-and-forget, after a successful fresh evaluation.
