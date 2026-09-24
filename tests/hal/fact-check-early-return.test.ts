@@ -78,7 +78,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await jest.runOnlyPendingTimersAsync();
+  jest.clearAllTimers();
   jest.useRealTimers();
 });
 

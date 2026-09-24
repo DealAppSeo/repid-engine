@@ -1220,7 +1220,8 @@ export async function factCheck(
   const late = verdicts
     .filter((v) => v.late === true)
     .map((v) => ({ name: v.provider, note: v.note ?? 'NOT_CHECKED' }));
-  const quorum = computeQuorum(providers_used, attempted);
+  const attemptedForSummary = verdicts.filter((v) => v.late !== true).length;
+  const quorum = computeQuorum(providers_used, attemptedForSummary);
 
   // ── PUBLISH DETECTOR COVERAGE ────────────────────────────────────────────────────────
   // Every RepID score event records what was watching when it moved (detector-coverage.ts).
@@ -1252,7 +1253,7 @@ export async function factCheck(
     // branches below already set structured markers (degraded / fallback_used /
     // quorum_note); this adds the missing LOG line so the degrade is visible in
     // Railway logs, not just in the returned object.
-    console.warn(`[hal] DEGRADED (loud fallback): fact-check quorum unavailable — 0/${attempted} providers responded${failed.length ? ` (failures: ${failed.map((f) => f.name).join(', ')})` : ''}; ${process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true' ? 'using local_slm heuristic (NOT a cross-LLM fact-check)' : 'returning neutral 0.5, caller falls back to extractor'}`);
+    console.warn(`[hal] DEGRADED (loud fallback): fact-check quorum unavailable — 0/${attemptedForSummary} providers responded${failed.length ? ` (failures: ${failed.map((f) => f.name).join(', ')})` : ''}; ${process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true' ? 'using local_slm heuristic (NOT a cross-LLM fact-check)' : 'returning neutral 0.5, caller falls back to extractor'}`);
     if (process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true') {
       const localVerdict: Verdict = deliverable.toLowerCase().includes('false') || deliverable.toLowerCase().includes('error') ? 'FALSE' : 'TRUE';
       const localScore = localVerdict === 'FALSE' ? 0.8 : 0.2;
@@ -1272,7 +1273,7 @@ export async function factCheck(
         degraded: true,
         latency_ms: Date.now() - start,
         quorum,
-        provider_health: { attempted: attempted, succeeded: 0, failed, ...(late.length ? { late } : {}), ...skipped },
+        provider_health: { attempted: attemptedForSummary, succeeded: 0, failed, ...(late.length ? { late } : {}), ...skipped },
         fallback_used: 'local_slm',
         confidence: 'degraded',
       };
@@ -1281,8 +1282,8 @@ export async function factCheck(
     // No truth signal available — neutral score; caller falls back to extractor.
     return {
       hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
-      quorum, provider_health: { attempted: attempted, succeeded: 0, failed, ...(late.length ? { late } : {}), ...skipped },
-      quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
+      quorum, provider_health: { attempted: attemptedForSummary, succeeded: 0, failed, ...(late.length ? { late } : {}), ...skipped },
+      quorum_note: `No provider responded (0/${attemptedForSummary}); neutral score, caller falls back to extractor.`,
       ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
       ...(weightDedupField ? { weight_dedup: weightDedupField } : {}),
     };
@@ -1336,7 +1337,7 @@ export async function factCheck(
     // providers; a lone provider downgrades to 'clean'. hal_score preserved; only decision changes.
     if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
       decision = 'clean';
-      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
+      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
     }
 
     // CC1 verdict-driven gate (HAL_VERDICT_DRIVEN_VETO, default OFF): a 'vetoed' baseDecision with
@@ -1658,7 +1659,7 @@ export async function factCheck(
 
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, independent_hosts, agreement, degraded: quorumCount < 2, latency_ms,
-    quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed, ...(late.length ? { late } : {}), ...skipped },
+    quorum, provider_health: { attempted: attemptedForSummary, succeeded: providers_used, failed, ...(late.length ? { late } : {}), ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),
