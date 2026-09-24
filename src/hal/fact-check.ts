@@ -746,6 +746,9 @@ async function queryProvider(
     return { provider: cfg.name, model: cfg.model, verdict: parsed.verdict, confidence: parsed.confidence, note: parsed.note, latency_ms };
   } catch (e: any) {
     const latency_ms = Date.now() - start;
+    if (e?.name === 'AbortError' && abortSignal?.aborted) {
+      return { ...lateVerdict(cfg), latency_ms };
+    }
     const error = e?.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : e?.message ?? String(e);
     logLlmCall({
       call_id,
