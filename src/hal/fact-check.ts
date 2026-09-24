@@ -1043,8 +1043,16 @@ export async function factCheck(
     const controllers = ps.map(() => new AbortController());
     const pending = new Set(ps.map((_, i) => i));
     const settledVerdicts: ProviderVerdict[] = [];
-    const launched = ps.map((p, i) =>
-      queryProvider(p, deliverable, maxTokens, quorumId, opts.agentId, controllers[i]!.signal)
+    const launched = ps.map((p, i) => {
+      const state: {
+        settled: boolean;
+        result?: { index: number; verdict: ProviderVerdict };
+        promise: Promise<{ index: number; verdict: ProviderVerdict }>;
+      } = {
+        settled: false,
+        promise: Promise.resolve({ index: i, verdict: lateVerdict(p) }),
+      };
+      state.promise = queryProvider(p, deliverable, maxTokens, quorumId, opts.agentId, controllers[i]!.signal)
         .then((verdict) => ({ index: i, verdict }))
         .catch((reason) => ({
           index: i,
@@ -1056,19 +1064,29 @@ export async function factCheck(
             error: String(reason),
             latency_ms: 0,
           },
-        })),
-    );
+        }))
+        .then((result) => {
+          state.settled = true;
+          state.result = result;
+          return result;
+        });
+      return state;
+    });
     while (pending.size > 0) {
-      const { index, verdict } = await Promise.race([...pending].map((i) => launched[i]!));
+      const { index, verdict } = await Promise.race([...pending].map((i) => launched[i]!.promise));
       if (!pending.delete(index)) continue;
       settledVerdicts.push(verdict);
       if (twoFamilyAgreement([...seedVerdicts, ...settledVerdicts])) {
+        for (const i of [...pending].filter((pendingIndex) => launched[pendingIndex]!.settled)) {
+          pending.delete(i);
+          settledVerdicts.push(launched[i]!.result!.verdict);
+        }
         const lateIndices = [...pending];
         const lateVerdicts = lateIndices.map((i) => {
           controllers[i]!.abort();
           return lateVerdict(ps[i]!);
         });
-        void Promise.allSettled(lateIndices.map((i) => launched[i]!));
+        void Promise.allSettled(lateIndices.map((i) => launched[i]!.promise));
         return { verdicts: [...seedVerdicts, ...settledVerdicts, ...lateVerdicts], earlyReturn: true };
       }
     }
