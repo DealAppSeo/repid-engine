@@ -1061,10 +1061,12 @@ export async function factCheck(
       if (!pending.delete(index)) continue;
       settledVerdicts.push(verdict);
       if (twoFamilyAgreement([...seedVerdicts, ...settledVerdicts])) {
-        const lateVerdicts = [...pending].map((i) => {
+        const lateIndices = [...pending];
+        const lateVerdicts = lateIndices.map((i) => {
           controllers[i]!.abort();
           return lateVerdict(ps[i]!);
         });
+        await Promise.allSettled(lateIndices.map((i) => launched[i]!));
         return { verdicts: [...settledVerdicts, ...lateVerdicts], earlyReturn: true };
       }
     }
