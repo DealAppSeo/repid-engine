@@ -663,6 +663,7 @@ async function queryProvider(
   quorumId?: string,
   agentId?: string,
   abortSignal?: AbortSignal,
+  abortVerdict?: ProviderVerdict,
 ): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
@@ -747,7 +748,8 @@ async function queryProvider(
   } catch (e: any) {
     const latency_ms = Date.now() - start;
     if (e?.name === 'AbortError' && abortSignal?.aborted) {
-      return { ...lateVerdict(cfg), latency_ms };
+      if (abortVerdict) abortVerdict.latency_ms = latency_ms;
+      return abortVerdict ?? { ...lateVerdict(cfg), latency_ms };
     }
     const error = e?.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : e?.message ?? String(e);
     logLlmCall({
@@ -1047,15 +1049,18 @@ export async function factCheck(
     const pending = new Set(ps.map((_, i) => i));
     const settledVerdicts: ProviderVerdict[] = [];
     const launched = ps.map((p, i) => {
+      const late = lateVerdict(p);
       const state: {
         settled: boolean;
         result?: { index: number; verdict: ProviderVerdict };
         promise: Promise<{ index: number; verdict: ProviderVerdict }>;
+        lateVerdict: ProviderVerdict;
       } = {
         settled: false,
-        promise: Promise.resolve({ index: i, verdict: lateVerdict(p) }),
+        promise: Promise.resolve({ index: i, verdict: late }),
+        lateVerdict: late,
       };
-      state.promise = queryProvider(p, deliverable, maxTokens, quorumId, opts.agentId, controllers[i]!.signal)
+      state.promise = queryProvider(p, deliverable, maxTokens, quorumId, opts.agentId, controllers[i]!.signal, late)
         .then((verdict) => ({ index: i, verdict }))
         .catch((reason) => ({
           index: i,
@@ -1085,10 +1090,8 @@ export async function factCheck(
           settledVerdicts.push(launched[i]!.result!.verdict);
         }
         const lateIndices = [...pending];
-        const lateVerdicts = lateIndices.map((i) => {
-          controllers[i]!.abort();
-          return lateVerdict(ps[i]!);
-        });
+        const lateVerdicts = lateIndices.map((i) => launched[i]!.lateVerdict);
+        for (const i of lateIndices) controllers[i]!.abort();
         void Promise.allSettled(lateIndices.map((i) => launched[i]!.promise));
         return { verdicts: [...seedVerdicts, ...settledVerdicts, ...lateVerdicts], earlyReturn: true };
       }
