@@ -1037,7 +1037,7 @@ export async function factCheck(
     ps: FactCheckProviderCfg[],
     seedVerdicts: ProviderVerdict[],
   ): Promise<{ verdicts: ProviderVerdict[]; earlyReturn: boolean }> => {
-    if (!opts.earlyReturnOnAgreement || ps.length === 0) return { verdicts: await settle(ps), earlyReturn: false };
+    if (!opts.earlyReturnOnAgreement || ps.length === 0) return { verdicts: [...seedVerdicts, ...(await settle(ps))], earlyReturn: false };
     const controllers = ps.map(() => new AbortController());
     const pending = new Set(ps.map((_, i) => i));
     const settledVerdicts: ProviderVerdict[] = [];
@@ -1067,10 +1067,10 @@ export async function factCheck(
           return lateVerdict(ps[i]!);
         });
         void Promise.allSettled(lateIndices.map((i) => launched[i]!));
-        return { verdicts: [...settledVerdicts, ...lateVerdicts], earlyReturn: true };
+        return { verdicts: [...seedVerdicts, ...settledVerdicts, ...lateVerdicts], earlyReturn: true };
       }
     }
-    return { verdicts: settledVerdicts, earlyReturn: false };
+    return { verdicts: [...seedVerdicts, ...settledVerdicts], earlyReturn: false };
   };
 
   // R6 — CHEAPEST-FIRST quorum assembly: call free → cheap → escalation in waves, stopping the moment
@@ -1105,7 +1105,7 @@ export async function factCheck(
     const waves = [0, 1, 2].map((r) => activeProviders.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
     for (const wave of waves) {
       const waveResult = await settleWithOptionalEarlyReturn(wave, verdicts);
-      verdicts.push(...waveResult.verdicts);
+      verdicts = waveResult.verdicts;
       attempted += wave.length;
       if (waveResult.earlyReturn) break;
       if (distinctFamilies(verdicts) >= FREE_WAVE_STOP_FAMILIES) break;
