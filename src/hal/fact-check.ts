@@ -1224,7 +1224,8 @@ export async function factCheck(
 
   // S-CACHE Phase 5 — record real-time provider health from the quorum (no-op without REDIS_URL).
   for (const v of verdicts) {
-    void recordProviderCall(v.provider, v.verdict !== 'ERROR' && v.late !== true, v.latency_ms);
+    if (v.late === true) continue;
+    void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
   }
 
   // CC1 provider-failure hardening: surface per-provider health + quorum.
