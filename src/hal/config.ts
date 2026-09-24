@@ -30,8 +30,16 @@
  */
 import { db } from '../db';
 
-/** repid_config keys this layer resolves. */
-const PROVIDER_ENABLE_KEYS = [
+/**
+ * repid_config keys this layer resolves.
+ *
+ * EXPORTED so `tests/hal-config-pipeline-coverage.test.ts` can pin the
+ * correspondence between this list and the provider map the live scoring path
+ * actually passes (src/scoring/pipeline.ts). Resolving a key here does NOT make
+ * it reach the quorum — the map has to pass it too, and a key resolved but never
+ * passed is invisible: no error, no log, the provider is simply absent.
+ */
+export const PROVIDER_ENABLE_KEYS = [
   'HAL_S2_ENABLE_GROQ',
   'HAL_S2_ENABLE_CEREBRAS',
   'HAL_S2_ENABLE_FIREWORKS',
@@ -42,6 +50,11 @@ const PROVIDER_ENABLE_KEYS = [
   'HAL_S2_ENABLE_ANTHROPIC',
   'HAL_S2_ENABLE_GLOO',
   'HAL_S2_ENABLE_NVIDIA_NIM',
+  // Z.AI — the `glm` family, free tier. ADDED 2026-09-24: it was absent from this
+  // list AND from the pipeline map, so no repid_config row and no env var could
+  // turn it on. It reached the quorum only via HAL_QUORUM_AUTOBACKFILL (key
+  // presence), and vanished the moment that was set to false.
+  'HAL_S2_ENABLE_ZAI',
 ] as const;
 
 const BOOL_KEYS = [
@@ -84,6 +97,10 @@ const PROVIDER_DEFAULTS: Record<(typeof PROVIDER_ENABLE_KEYS)[number], boolean> 
   // load-bearing fact-check quorum on key-presence alone, before its quorum
   // effect has been measured (see buildFactCheckProviders + the PR's quorum note).
   HAL_S2_ENABLE_NVIDIA_NIM: false,
+  // Z.AI — opt-in, DEFAULT OFF, matching every provider other than groq/cerebras.
+  // Default-off keeps this change inert for any deployment that does not ask for
+  // zai: the quorum is byte-identical until a repid_config row or env var says true.
+  HAL_S2_ENABLE_ZAI: false,
 };
 
 const TTL_MS = (() => {
