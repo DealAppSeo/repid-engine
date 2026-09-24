@@ -218,6 +218,7 @@ export interface ProviderVerdict {
   error?: string;
   latency_ms: number;
   counted?: boolean;
+  late?: boolean;
 }
 
 export type HalDecision = 'vetoed' | 'flagged' | 'clean' | 'abstain';
@@ -857,6 +858,7 @@ function lateVerdict(p: FactCheckProviderCfg): ProviderVerdict {
     note: 'NOT_CHECKED: late after 2-family agreement',
     latency_ms: 0,
     counted: false,
+    late: true,
   };
 }
 
@@ -1198,7 +1200,7 @@ export async function factCheck(
     .filter((v) => v.verdict === 'ERROR')
     .map((v) => ({ name: v.provider, error: v.error ?? 'unknown' }));
   const late = verdicts
-    .filter((v) => v.counted === false)
+    .filter((v) => v.late === true)
     .map((v) => ({ name: v.provider, note: v.note ?? 'NOT_CHECKED' }));
   const quorum = computeQuorum(providers_used, attempted);
 
