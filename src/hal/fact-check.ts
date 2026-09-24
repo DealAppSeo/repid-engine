@@ -217,6 +217,8 @@ export interface ProviderVerdict {
   note?: string;
   error?: string;
   latency_ms: number;
+  counted?: boolean;
+  late?: boolean;
 }
 
 export type HalDecision = 'vetoed' | 'flagged' | 'clean' | 'abstain';
@@ -305,6 +307,8 @@ export interface FactCheckResult {
      * succeeded / failed / skipped.
      */
     skipped?: FactCheckProviderSkip[];
+    /** Providers whose calls were launched but whose verdicts were not waited for after an early-agree return. */
+    late?: Array<{ name: string; note: string }>;
     /**
      * Providers that ran on a model they SELECTED rather than the one they were configured with,
      * because the configured id had been measured unusable on this credential.
@@ -408,6 +412,7 @@ export interface FactCheckOpts {
   flagThreshold?: number; // default 0.35
   perProviderTimeoutMs?: number; // default 12000
   maxTokens?: number; // default 120
+  earlyReturnOnAgreement?: boolean; // public path only — return after 2 agreeing families
   // WS1.2a — SLOW-PATH controls (all optional; ignored unless HAL_RETRIEVAL_ENABLED==='true').
   forceRetrieval?: boolean; // explicit "verify this" — always trigger the slow path
   highStakes?: boolean; // caller-declared high-stakes (RepID/financial/code/on-chain) claim → trigger
@@ -651,9 +656,22 @@ async function postWith429Retry(cfg: FactCheckProviderCfg, body: string, signal:
   return res;
 }
 
-async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, maxTokens: number, quorumId?: string, agentId?: string): Promise<ProviderVerdict> {
+async function queryProvider(
+  cfg: FactCheckProviderCfg,
+  deliverable: string,
+  maxTokens: number,
+  quorumId?: string,
+  agentId?: string,
+  abortSignal?: AbortSignal,
+  abortVerdict?: ProviderVerdict,
+): Promise<ProviderVerdict> {
   const start = Date.now();
   const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (abortSignal) {
+    if (abortSignal.aborted) controller.abort();
+    else abortSignal.addEventListener('abort', onAbort, { once: true });
+  }
   // R5 — configurable per-call timeout so one slow provider can't stall the family quorum.
   const timeoutMs = cfg.timeoutMs ?? (Number(process.env.HAL_S2_TIMEOUT_MS) || 12_000);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -729,6 +747,10 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     return { provider: cfg.name, model: cfg.model, verdict: parsed.verdict, confidence: parsed.confidence, note: parsed.note, latency_ms };
   } catch (e: any) {
     const latency_ms = Date.now() - start;
+    if (e?.name === 'AbortError' && abortSignal?.aborted) {
+      if (abortVerdict) abortVerdict.latency_ms = latency_ms;
+      return abortVerdict ?? { ...lateVerdict(cfg), latency_ms };
+    }
     const error = e?.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : e?.message ?? String(e);
     logLlmCall({
       call_id,
@@ -745,6 +767,7 @@ async function queryProvider(cfg: FactCheckProviderCfg, deliverable: string, max
     }).catch(err => console.error('[fact-check] logLlmCall error:', err));
     return { provider: cfg.name, model: cfg.model, verdict: 'ERROR', confidence: 0, error, latency_ms };
   } finally {
+    abortSignal?.removeEventListener('abort', onAbort);
     clearTimeout(timer);
   }
 }
@@ -821,6 +844,27 @@ function computeQuorum(succeeded: number, attempted: number): 'full' | 'partial'
   if (succeeded === 0) return 'outage';
   if (succeeded === 1) return 'low';
   return succeeded >= attempted ? 'full' : 'partial';
+}
+
+function isCountedVerdict(v: ProviderVerdict): boolean {
+  return (v.counted ?? true) && v.verdict !== 'ERROR';
+}
+
+function isAgreementVerdict(v: ProviderVerdict): v is ProviderVerdict & { verdict: 'TRUE' | 'FALSE' } {
+  return (v.counted ?? true) && (v.verdict === 'TRUE' || v.verdict === 'FALSE');
+}
+
+function lateVerdict(p: FactCheckProviderCfg): ProviderVerdict {
+  return {
+    provider: p.name,
+    model: p.model,
+    verdict: 'UNCERTAIN',
+    confidence: 0,
+    note: 'NOT_CHECKED: late after 2-family agreement',
+    latency_ms: 0,
+    counted: false,
+    late: true,
+  };
 }
 
 /**
@@ -980,8 +1024,85 @@ export async function factCheck(
     return s.map((r, i) => r.status === 'fulfilled' ? r.value
       : { provider: ps[i]!.name, model: ps[i]!.model, verdict: 'ERROR' as Verdict, confidence: 0, error: String((r as PromiseRejectedResult).reason), latency_ms: 0 });
   };
+  const endpointByName = new Map(activeProviders.map((p) => [p.name, p.endpoint]));
+  const hostOf = (name: string): string => {
+    const ep = endpointByName.get(name);
+    if (!ep) return name; // unknown endpoint counts as its own host — never collapse an unknown
+    try { return new URL(ep).host; } catch { return ep; }
+  };
   const distinctFamilies = (vs: ProviderVerdict[]) =>
-    new Set(vs.filter((v) => v.verdict !== 'ERROR').map((v) => familyByName.get(v.provider) ?? v.provider)).size;
+    new Set(vs.filter(isCountedVerdict).map((v) => familyByName.get(v.provider) ?? v.provider)).size;
+  const twoFamilyAgreement = (vs: ProviderVerdict[]): { verdict: 'TRUE' | 'FALSE'; families: string[] } | null => {
+    const byVerdict = new Map<'TRUE' | 'FALSE', Map<string, string>>([
+      ['TRUE', new Map()],
+      ['FALSE', new Map()],
+    ]);
+    for (const v of vs) {
+      if (!isAgreementVerdict(v)) continue;
+      const family = familyByName.get(v.provider) ?? v.provider;
+      const families = byVerdict.get(v.verdict)!;
+      families.set(family, hostOf(v.provider));
+      if (families.size >= 2 && new Set(families.values()).size >= 2) return { verdict: v.verdict, families: [...families.keys()] };
+    }
+    return null;
+  };
+  const settleWithOptionalEarlyReturn = async (
+    ps: FactCheckProviderCfg[],
+    seedVerdicts: ProviderVerdict[],
+  ): Promise<{ verdicts: ProviderVerdict[]; earlyReturn: boolean }> => {
+    if (!opts.earlyReturnOnAgreement || ps.length === 0) return { verdicts: [...seedVerdicts, ...(await settle(ps))], earlyReturn: false };
+    const controllers = ps.map(() => new AbortController());
+    const pending = new Set(ps.map((_, i) => i));
+    const settledVerdicts: ProviderVerdict[] = [];
+    const launched = ps.map((p, i) => {
+      const late = lateVerdict(p);
+      const state: {
+        settled: boolean;
+        result?: { index: number; verdict: ProviderVerdict };
+        promise: Promise<{ index: number; verdict: ProviderVerdict }>;
+        lateVerdict: ProviderVerdict;
+      } = {
+        settled: false,
+        promise: Promise.resolve({ index: i, verdict: late }),
+        lateVerdict: late,
+      };
+      state.promise = queryProvider(p, deliverable, maxTokens, quorumId, opts.agentId, controllers[i]!.signal, late)
+        .then((verdict) => ({ index: i, verdict }))
+        .catch((reason) => ({
+          index: i,
+          verdict: {
+            provider: p.name,
+            model: p.model,
+            verdict: 'ERROR' as Verdict,
+            confidence: 0,
+            error: String(reason),
+            latency_ms: 0,
+          },
+        }))
+        .then((result) => {
+          state.settled = true;
+          state.result = result;
+          return result;
+        });
+      return state;
+    });
+    while (pending.size > 0) {
+      const { index, verdict } = await Promise.race([...pending].map((i) => launched[i]!.promise));
+      if (!pending.delete(index)) continue;
+      settledVerdicts.push(verdict);
+      if (twoFamilyAgreement([...seedVerdicts, ...settledVerdicts])) {
+        const lateIndices = [...pending];
+        for (const i of lateIndices) {
+          pending.delete(i);
+          controllers[i]!.abort();
+        }
+        const lateVerdicts = lateIndices.map((i) => launched[i]!.lateVerdict);
+        void Promise.allSettled(lateIndices.map((i) => launched[i]!.promise));
+        return { verdicts: [...seedVerdicts, ...settledVerdicts, ...lateVerdicts], earlyReturn: true };
+      }
+    }
+    return { verdicts: [...seedVerdicts, ...settledVerdicts], earlyReturn: false };
+  };
 
   // R6 — CHEAPEST-FIRST quorum assembly: call free → cheap → escalation in waves, stopping the moment
   // >= FREE_WAVE_STOP_FAMILIES distinct families respond (so paid providers are only hit when the
@@ -1014,12 +1135,15 @@ export async function factCheck(
     const rank = (p: FactCheckProviderCfg) => ({ free: 0, cheap: 1, escalation: 2 })[p.tier ?? costTierOf({ name: p.name, family: familyByName.get(p.name) })];
     const waves = [0, 1, 2].map((r) => activeProviders.filter((p) => rank(p) === r)).filter((w) => w.length > 0);
     for (const wave of waves) {
-      verdicts.push(...(await settle(wave)));
+      const waveResult = await settleWithOptionalEarlyReturn(wave, verdicts);
+      verdicts = waveResult.verdicts;
       attempted += wave.length;
+      if (waveResult.earlyReturn) break;
       if (distinctFamilies(verdicts) >= FREE_WAVE_STOP_FAMILIES) break;
     }
   } else {
-    verdicts = await settle(activeProviders);
+    const allResult = await settleWithOptionalEarlyReturn(activeProviders, []);
+    verdicts = allResult.verdicts;
     attempted = activeProviders.length;
   }
 
@@ -1037,7 +1161,7 @@ export async function factCheck(
   // Env-gated (HAL_ESCALATE_GROK, default off) and FAIL-SAFE (flag off / no key / Grok error → no-op,
   // current tied behavior preserved). Done here so the tiebreak vote flows through ALL downstream math.
   if (process.env.HAL_ESCALATE_GROK === 'true' && grokApiKey()) {
-    const okPre = verdicts.filter((v) => v.verdict !== 'ERROR');
+    const okPre = verdicts.filter(isCountedVerdict);
     const famCount = (want: Verdict) =>
       new Set(okPre.filter((v) => v.verdict === want).map((v) => familyByName.get(v.provider) ?? v.provider)).size;
     const fN = famCount('FALSE');
@@ -1056,7 +1180,7 @@ export async function factCheck(
     }
   }
 
-  const ok = verdicts.filter((v) => v.verdict !== 'ERROR');
+  const ok = verdicts.filter(isCountedVerdict);
   const providers_used = ok.length;
   const latency_ms = Date.now() - start;
 
@@ -1082,12 +1206,6 @@ export async function factCheck(
   // someone who thinks to ask. Counted from the endpoint ORIGIN, not the provider name: the
   // consolidation slots are `openrouter`, `openrouter-2`, `openrouter-3` — three names, three
   // families, ONE host.
-  const endpointByName = new Map(activeProviders.map((p) => [p.name, p.endpoint]));
-  const hostOf = (name: string): string => {
-    const ep = endpointByName.get(name);
-    if (!ep) return name; // unknown endpoint counts as its own host — never collapse an unknown
-    try { return new URL(ep).host; } catch { return ep; }
-  };
   const hostsSet = new Set(ok.map((v) => hostOf(v.provider)));
   const independent_hosts = hostsSet.size;
   // Quorum is counted in families by default; HAL_QUORUM_FAMILY_AWARE=false reverts to host count.
@@ -1095,13 +1213,20 @@ export async function factCheck(
   const quorumCount = familyAware ? families_used : providers_used;
 
   // S-CACHE Phase 5 — record real-time provider health from the quorum (no-op without REDIS_URL).
-  for (const v of verdicts) void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
+  for (const v of verdicts) {
+    if (v.late === true) continue;
+    void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
+  }
 
   // CC1 provider-failure hardening: surface per-provider health + quorum.
   const failed = verdicts
     .filter((v) => v.verdict === 'ERROR')
     .map((v) => ({ name: v.provider, error: v.error ?? 'unknown' }));
-  const quorum = computeQuorum(providers_used, attempted);
+  const late = verdicts
+    .filter((v) => v.late === true)
+    .map((v) => ({ name: v.provider, note: v.note ?? 'NOT_CHECKED' }));
+  const attemptedForSummary = verdicts.filter((v) => v.late !== true).length;
+  const quorum = computeQuorum(providers_used, attemptedForSummary);
 
   // ── PUBLISH DETECTOR COVERAGE ────────────────────────────────────────────────────────
   // Every RepID score event records what was watching when it moved (detector-coverage.ts).
@@ -1122,9 +1247,9 @@ export async function factCheck(
     verdicts.map((v) => ({
       name: v.provider,
       live: v.verdict !== 'ERROR',
-      // Short, enumerable code — never the raw upstream prose, which can be long and can
-      // quote the request. The full text stays in the logs.
-      ...(v.verdict === 'ERROR' ? { reason: shortFailureReason(v.error) } : {}),
+      ...(v.verdict === 'ERROR'
+        ? { reason: shortFailureReason(v.error) }
+        : {}),
     })),
   );
 
@@ -1133,7 +1258,7 @@ export async function factCheck(
     // branches below already set structured markers (degraded / fallback_used /
     // quorum_note); this adds the missing LOG line so the degrade is visible in
     // Railway logs, not just in the returned object.
-    console.warn(`[hal] DEGRADED (loud fallback): fact-check quorum unavailable — 0/${attempted} providers responded${failed.length ? ` (failures: ${failed.map((f) => f.name).join(', ')})` : ''}; ${process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true' ? 'using local_slm heuristic (NOT a cross-LLM fact-check)' : 'returning neutral 0.5, caller falls back to extractor'}`);
+    console.warn(`[hal] DEGRADED (loud fallback): fact-check quorum unavailable — 0/${attemptedForSummary} providers responded${failed.length ? ` (failures: ${failed.map((f) => f.name).join(', ')})` : ''}; ${process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true' ? 'using local_slm heuristic (NOT a cross-LLM fact-check)' : 'returning neutral 0.5, caller falls back to extractor'}`);
     if (process.env.HAL_LOCAL_FALLBACK_ENABLED === 'true') {
       const localVerdict: Verdict = deliverable.toLowerCase().includes('false') || deliverable.toLowerCase().includes('error') ? 'FALSE' : 'TRUE';
       const localScore = localVerdict === 'FALSE' ? 0.8 : 0.2;
@@ -1153,7 +1278,7 @@ export async function factCheck(
         degraded: true,
         latency_ms: Date.now() - start,
         quorum,
-        provider_health: { attempted: attempted, succeeded: 0, failed, ...skipped },
+        provider_health: { attempted: attemptedForSummary, succeeded: 0, failed, ...(late.length ? { late } : {}), ...skipped },
         fallback_used: 'local_slm',
         confidence: 'degraded',
       };
@@ -1162,8 +1287,8 @@ export async function factCheck(
     // No truth signal available — neutral score; caller falls back to extractor.
     return {
       hal_score: 0.5, decision: 'flagged', verdicts, providers_used: 0, agreement: null, degraded: true, latency_ms,
-      quorum, provider_health: { attempted: attempted, succeeded: 0, failed, ...skipped },
-      quorum_note: `No provider responded (0/${attempted}); neutral score, caller falls back to extractor.`,
+      quorum, provider_health: { attempted: attemptedForSummary, succeeded: 0, failed, ...(late.length ? { late } : {}), ...skipped },
+      quorum_note: `No provider responded (0/${attemptedForSummary}); neutral score, caller falls back to extractor.`,
       ...(familiesUnmapped.length ? { families_unmapped: familiesUnmapped } : {}),
       ...(weightDedupField ? { weight_dedup: weightDedupField } : {}),
     };
@@ -1217,7 +1342,7 @@ export async function factCheck(
     // providers; a lone provider downgrades to 'clean'. hal_score preserved; only decision changes.
     if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
       decision = 'clean';
-      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attempted} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
+      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
     }
 
     // CC1 verdict-driven gate (HAL_VERDICT_DRIVEN_VETO, default OFF): a 'vetoed' baseDecision with
@@ -1329,7 +1454,7 @@ export async function factCheck(
       // (measured on production 2026-08-28: 4 distinct families, trace read "0 independent
       // families"). It is `familyByName`, the same registry-primary map every other family
       // computation in this quorum uses, so the independence signal cannot fork into two answers.
-      const votes = votesFromVerdicts(verdicts, (provider) => familyByName.get(provider));
+      const votes = votesFromVerdicts(ok, (provider) => familyByName.get(provider));
       // Placeholder oracle until GA wires the verified-outcome oracle (§2.1). NOT a real reliability source.
       const oracle = new ConstantReliabilityOracle(0.7, 4);
       const v = sbfaConsensus({ votes, stakes: sbfaStakes(), action: sbfaAction(), category: 'factual', oracle });
@@ -1539,7 +1664,7 @@ export async function factCheck(
 
   return {
     hal_score, decision, verdicts, providers_used, families_used, families, independent_hosts, agreement, degraded: quorumCount < 2, latency_ms,
-    quorum, provider_health: { attempted: attempted, succeeded: providers_used, failed, ...skipped },
+    quorum, provider_health: { attempted: attemptedForSummary, succeeded: providers_used, failed, ...(late.length ? { late } : {}), ...skipped },
     ...(groundTruthField ? { ground_truth: groundTruthField } : {}),
     ...(decision_reason ? { decision_reason } : {}),
     ...(quorum_note ? { quorum_note } : {}),

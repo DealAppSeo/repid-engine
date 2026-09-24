@@ -101,7 +101,7 @@ export async function runValidationHarness(strictness: 1 | 2 = 1): Promise<Detai
 
     const factCheckProviders = buildFactCheckProviders();
     const activeProviders = strictness === 2 && Array.isArray(halRes.provider_responses)
-      ? halRes.provider_responses.filter((pr: any) => pr.verdict !== 'ERROR').map((pr: any) => pr.provider)
+      ? halRes.provider_responses.filter((pr: any) => pr.verdict !== 'ERROR' && pr.counted !== false).map((pr: any) => pr.provider)
       : [];
     const activeModels = activeProviders.map(provName => {
       const matched = factCheckProviders.find(p => p.name === provName);
