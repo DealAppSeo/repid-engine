@@ -85,6 +85,7 @@ import efficiencyRouter from './routes/efficiency';
 // S-CACHE — DragonflyDB cache stats (public read; graceful no-op without REDIS_URL).
 import cacheStatsRouter from './routes/cache-stats';
 import faucetRouter from './routes/faucet'; // E2E FAUCET step — public read-only faucet info + balance check (no key custody)
+import humanPathRouter from './routes/human-path'; // human walk in shadow — records the six steps, performs none
 import { agentGateRouter } from './routes/agent-gate'; // T0.5 email-OTP gate + run metering status
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
@@ -523,6 +524,11 @@ app.use('/api/v1', securityStatusRouter);
 // lets them confirm their own balance is enough to stake. No key custody, no writes, no tx.
 // Mounted BEFORE authMiddleware so new users (who have no API key yet) can reach it.
 app.use('/api/v1', faucetRouter);
+
+// Human walk in shadow: sign up → connect wallet → testnet tokens → stake →
+// bind agents → blast-radius cap. Read-only, before auth, same reason as the
+// faucet — the caller has no key yet. Performs none of the six steps.
+app.use('/api/v1', humanPathRouter);
 
 // T0.5 agent gate (email OTP + run metering status). Mounted BEFORE
 // authMiddleware for the same reason as the faucet: brand-new visitors

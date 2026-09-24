@@ -35,6 +35,9 @@
 import { logAgentEvent, buildAgentLogRow } from '../engine/agent-log';
 import { ownerPerTxCap, resolveOwner, type OwnerResolution } from './agent-owner-resolver';
 import type { AuthorityDecision } from './x402-gate';
+import { attenuateCeiling, type AttenuatedCeiling } from './attenuate-ceiling';
+
+export { attenuateCeiling, type AttenuatedCeiling };
 
 /**
  * Default OFF. Reading the flag per call (not at import) so a deployment can turn
@@ -45,38 +48,6 @@ import type { AuthorityDecision } from './x402-gate';
  */
 export function ownerCeilingShadowEnabled(): boolean {
   return String(process.env['OWNER_CEILING_SHADOW_ENABLED'] ?? '').toLowerCase() === 'true';
-}
-
-export interface AttenuatedCeiling {
-  ceiling: number;
-  /** True when the owner's limit — not the agent's tier — is what binds. */
-  narrowed: boolean;
-  boundBy: 'agent_tier' | 'owner_limit';
-}
-
-/**
- * The attenuation algebra, in one line and one direction.
- *
- * An owner may only ever NARROW what their agent can do
- * (`trinity-ecosystem/lib/trustshell/identity/capability.ts`: "a delegation may
- * only ever NARROW authority"). So:
- *   - no owner limit               → the agent's tier ceiling, unchanged.
- *   - an owner limit above the tier → the tier still binds. An owner cannot
- *                                     promote their agent by writing a big number.
- *   - an owner limit below the tier → the owner's limit binds.
- *   - a malformed or negative limit → 0. Fails CLOSED: a limit we cannot read is
- *                                     not a licence to use the wider one.
- * Pure.
- */
-export function attenuateCeiling(agentCeiling: number, ownerCap: number | null | undefined): AttenuatedCeiling {
-  const agent = Number.isFinite(agentCeiling) ? Math.max(0, agentCeiling) : 0;
-  if (ownerCap === null || ownerCap === undefined) {
-    return { ceiling: agent, narrowed: false, boundBy: 'agent_tier' };
-  }
-  const owner = Number.isFinite(ownerCap) ? Number(ownerCap) : 0;
-  const clamped = Math.max(0, owner);
-  if (clamped >= agent) return { ceiling: agent, narrowed: false, boundBy: 'agent_tier' };
-  return { ceiling: clamped, narrowed: true, boundBy: 'owner_limit' };
 }
 
 export type ShadowVerdict =
