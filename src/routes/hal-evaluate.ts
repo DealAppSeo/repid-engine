@@ -109,7 +109,12 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     // caller — but its PRESENCE lets a verifier assert it got a real evaluation.
     if (cached) return res.json({ ...cached, cached: true, injection });
 
-    const result = await halService.evaluate({ text, context: context as any, strictness: s });
+    const result = await halService.evaluate({
+      text,
+      context: context as any,
+      strictness: s,
+      factCheckEarlyReturn: process.env.HAL_FACTCHECK_EARLY_RETURN !== 'false',
+    });
     void cacheHalResult(text, cacheProvider, result);
     // Source-tagged public counter — fire-and-forget, after a successful fresh evaluation.
     recordPublicFactCheck(resolveSource(source), text, result);

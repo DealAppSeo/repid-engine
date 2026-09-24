@@ -38,6 +38,12 @@ export interface HalEvaluationRequest {
    * being it.
    */
   agentId?: string;
+  /**
+   * Public verify/evaluate fast path only: let factCheck() return as soon as two independent
+   * families agree, instead of waiting for a slower third voter. Internal scoring callers leave
+   * this unset so they keep the historical wait-for-all behavior.
+   */
+  factCheckEarlyReturn?: boolean;
 }
 
 export interface HalEvaluationResponse {
@@ -379,6 +385,7 @@ export class HalService {
         const fc = await factCheck(req.text, providers, {
           vetoThreshold,
           flagThreshold,
+          ...(req.factCheckEarlyReturn ? { earlyReturnOnAgreement: true } : {}),
           ...(req.agentId ? { agentId: req.agentId } : {}),
         });
         if (fc.providers_used > 0) {
