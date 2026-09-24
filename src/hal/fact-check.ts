@@ -1085,23 +1085,13 @@ export async function factCheck(
       if (!pending.delete(index)) continue;
       settledVerdicts.push(verdict);
       if (twoFamilyAgreement([...seedVerdicts, ...settledVerdicts])) {
-        for (const i of [...pending].filter((pendingIndex) => launched[pendingIndex]!.settled)) {
+        const lateIndices = [...pending];
+        for (const i of lateIndices) {
           pending.delete(i);
-          settledVerdicts.push(launched[i]!.result!.verdict);
+          controllers[i]!.abort();
         }
-        const postAbortLateIndices: number[] = [];
-        for (const i of [...pending]) controllers[i]!.abort();
-        for (const i of [...pending]) {
-          if (launched[i]!.settled) {
-            pending.delete(i);
-            settledVerdicts.push(launched[i]!.result!.verdict);
-          } else {
-            pending.delete(i);
-            postAbortLateIndices.push(i);
-          }
-        }
-        const lateVerdicts = postAbortLateIndices.map((i) => launched[i]!.lateVerdict);
-        void Promise.allSettled(postAbortLateIndices.map((i) => launched[i]!.promise));
+        const lateVerdicts = lateIndices.map((i) => launched[i]!.lateVerdict);
+        void Promise.allSettled(lateIndices.map((i) => launched[i]!.promise));
         return { verdicts: [...seedVerdicts, ...settledVerdicts, ...lateVerdicts], earlyReturn: true };
       }
     }
