@@ -1024,19 +1024,25 @@ export async function factCheck(
     return s.map((r, i) => r.status === 'fulfilled' ? r.value
       : { provider: ps[i]!.name, model: ps[i]!.model, verdict: 'ERROR' as Verdict, confidence: 0, error: String((r as PromiseRejectedResult).reason), latency_ms: 0 });
   };
+  const endpointByName = new Map(activeProviders.map((p) => [p.name, p.endpoint]));
+  const hostOf = (name: string): string => {
+    const ep = endpointByName.get(name);
+    if (!ep) return name; // unknown endpoint counts as its own host — never collapse an unknown
+    try { return new URL(ep).host; } catch { return ep; }
+  };
   const distinctFamilies = (vs: ProviderVerdict[]) =>
     new Set(vs.filter(isCountedVerdict).map((v) => familyByName.get(v.provider) ?? v.provider)).size;
   const twoFamilyAgreement = (vs: ProviderVerdict[]): { verdict: 'TRUE' | 'FALSE'; families: string[] } | null => {
-    const byVerdict = new Map<'TRUE' | 'FALSE', Set<string>>([
-      ['TRUE', new Set()],
-      ['FALSE', new Set()],
+    const byVerdict = new Map<'TRUE' | 'FALSE', Map<string, string>>([
+      ['TRUE', new Map()],
+      ['FALSE', new Map()],
     ]);
     for (const v of vs) {
       if (!isAgreementVerdict(v)) continue;
       const family = familyByName.get(v.provider) ?? v.provider;
       const families = byVerdict.get(v.verdict)!;
-      families.add(family);
-      if (families.size >= 2) return { verdict: v.verdict, families: [...families] };
+      families.set(family, hostOf(v.provider));
+      if (families.size >= 2 && new Set(families.values()).size >= 2) return { verdict: v.verdict, families: [...families.keys()] };
     }
     return null;
   };
@@ -1200,12 +1206,6 @@ export async function factCheck(
   // someone who thinks to ask. Counted from the endpoint ORIGIN, not the provider name: the
   // consolidation slots are `openrouter`, `openrouter-2`, `openrouter-3` — three names, three
   // families, ONE host.
-  const endpointByName = new Map(activeProviders.map((p) => [p.name, p.endpoint]));
-  const hostOf = (name: string): string => {
-    const ep = endpointByName.get(name);
-    if (!ep) return name; // unknown endpoint counts as its own host — never collapse an unknown
-    try { return new URL(ep).host; } catch { return ep; }
-  };
   const hostsSet = new Set(ok.map((v) => hostOf(v.provider)));
   const independent_hosts = hostsSet.size;
   // Quorum is counted in families by default; HAL_QUORUM_FAMILY_AWARE=false reverts to host count.

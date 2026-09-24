@@ -22,9 +22,9 @@ type Plan = {
 };
 
 const PROVIDERS: FactCheckProviderCfg[] = [
-  { name: 'groq-fast', endpoint: 'http://x/groq', apiKey: 'k1', model: 'groq-model', family: 'openai', tier: 'free' },
-  { name: 'cerebras-fast', endpoint: 'http://x/cerebras', apiKey: 'k2', model: 'cerebras-model', family: 'qwen', tier: 'free' },
-  { name: 'zai-slow', endpoint: 'http://x/zai', apiKey: 'k3', model: 'zai-model', family: 'glm', tier: 'free' },
+  { name: 'groq-fast', endpoint: 'http://groq.test/groq', apiKey: 'k1', model: 'groq-model', family: 'openai', tier: 'free' },
+  { name: 'cerebras-fast', endpoint: 'http://cerebras.test/cerebras', apiKey: 'k2', model: 'cerebras-model', family: 'qwen', tier: 'free' },
+  { name: 'zai-slow', endpoint: 'http://zai.test/zai', apiKey: 'k3', model: 'zai-model', family: 'glm', tier: 'free' },
 ];
 
 const originalFetch = global.fetch;
