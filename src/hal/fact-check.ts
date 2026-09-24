@@ -1066,7 +1066,7 @@ export async function factCheck(
           controllers[i]!.abort();
           return lateVerdict(ps[i]!);
         });
-        await Promise.allSettled(lateIndices.map((i) => launched[i]!));
+        void Promise.allSettled(lateIndices.map((i) => launched[i]!));
         return { verdicts: [...settledVerdicts, ...lateVerdicts], earlyReturn: true };
       }
     }
