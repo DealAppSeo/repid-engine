@@ -16,7 +16,7 @@
  * ceiling would exist in the source, read correctly to a reviewer, and do nothing. That is
  * this repository's signature defect: a system reporting a protection it has not earned.
  *
- * With `SELF_SERVE_ACCOUNTS_ENABLED` unset (the production default), the HANDLER returns 503
+ * With `SELF_SERVE_ACCOUNTS_ENABLED` unset (the code default), the HANDLER returns 503
  * `disabled`. So:
  *
  *   - if the limiter is mounted correctly, the first five calls reach the handler (503) and

@@ -194,4 +194,12 @@ describe('human-path shadow', () => {
     const source = readFileSync(join(SRC, 'routes', 'faucet.ts'), 'utf8');
     expect(source).toContain('dispenses: false');
   });
+
+  it('GET /api/v1/human/path is mounted before auth, so an unknown path is not the answer', () => {
+    const index = readFileSync(join(SRC, 'index.ts'), 'utf8');
+    const mount = index.indexOf("app.use('/api/v1', humanPathRouter)");
+    const auth = index.indexOf('app.use(authMiddleware)');
+    expect(mount).toBeGreaterThan(-1);
+    expect(auth).toBeGreaterThan(mount);
+  });
 });

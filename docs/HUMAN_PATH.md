@@ -9,7 +9,7 @@ Keyless reads of `repid-engine-production`, deployed commit `553d1cd` (this rout
 | `GET /readiness` | `SELF_SERVE_ACCOUNTS_ENABLED` **on**, `HUMAN_AGENT_BIND_ENABLED` **on**. `misconfigured` empty. |
 | `GET /api/v1/security/status` → `account_creation` | Password **RETIRED**. Email-OTP **OPEN** (provisioning, delivery, and token signing all configured). |
 | `GET /api/v1/faucet/info` | `dispenses: false`, `chain_id` 84532, network name Base Sepolia. Three public faucet URLs. |
-| `GET /api/v1/faucet/balance` with no address | **400** `MISSING_ADDRESS`. No RPC. |
+| `GET /api/v1/faucet/balance` with no address | **400**, missing address. No RPC. |
 | `POST /api/v1/account/connect` `{}` | **401** `signature_required`. The flag-off response is 503, and that was not what came back. The handler checks the flag, then the signature, and inserts only after both. |
 | `POST /api/v1/human/bind` `{}` | **401** `signature_required`. That check runs before the bind flag is consulted, so this 401 does not measure the flag. `/readiness` does. |
 | `POST /api/v1/stake/deposit` `{}` | **400** `builder_address and amount required`, before any credit. |

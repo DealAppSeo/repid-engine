@@ -115,7 +115,7 @@ const STEPS: readonly Omit<HumanPathStep, 'order'>[] = [
     applied: false,
     persisted: false,
     would:
-      'Token-signup inserts a token_only builder. Email-OTP is the full-account door; its posture is on this response. Password signup is retired.',
+      'Email OTP is the full-account door; its posture is on this response. Password signup is retired. POST /api/v1/builder/token-signup inserts a builder only when TOKEN_SIGNUP_ENABLED is the exact string true; otherwise it answers 410 and writes nothing.',
     refuses: 'Does not insert a builder and does not send a verification code.',
   },
   {
