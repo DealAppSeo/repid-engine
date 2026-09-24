@@ -1096,6 +1096,7 @@ export async function factCheck(
             pending.delete(i);
             settledVerdicts.push(launched[i]!.result!.verdict);
           } else {
+            pending.delete(i);
             postAbortLateIndices.push(i);
           }
         }
@@ -1223,8 +1224,7 @@ export async function factCheck(
 
   // S-CACHE Phase 5 — record real-time provider health from the quorum (no-op without REDIS_URL).
   for (const v of verdicts) {
-    if (v.counted === false) continue;
-    void recordProviderCall(v.provider, v.verdict !== 'ERROR', v.latency_ms);
+    void recordProviderCall(v.provider, v.verdict !== 'ERROR' && v.late !== true, v.latency_ms);
   }
 
   // CC1 provider-failure hardening: surface per-provider health + quorum.
