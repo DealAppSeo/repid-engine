@@ -300,6 +300,14 @@ export async function runScoreEvent(
           gemini: halConfig.providers.HAL_S2_ENABLE_GEMINI,
           mistral: halConfig.providers.HAL_S2_ENABLE_MISTRAL,
           qwen: halConfig.providers.HAL_S2_ENABLE_QWEN,
+          // Z.AI — the `glm` family, and the third FREE family this quorum has.
+          // MEASURED 2026-09-23: without it the free wave assembles only two families
+          // (qwen via cerebras, openai via groq), one short of the free wave's
+          // three-distinct-family stop threshold, so every quorum escalates to the
+          // cheap-paid wave. zai used to arrive here only
+          // through HAL_QUORUM_AUTOBACKFILL; when that was set to false it disappeared with
+          // no error and no log, because it was passed by nothing.
+          zai: halConfig.providers.HAL_S2_ENABLE_ZAI,
           // openrouter is not (yet) a repid_config knob; it rides the HAL_QUORUM_AUTOBACKFILL
           // default (key-present → included). Explicit opt-in via HAL_S2_ENABLE_OPENROUTER env.
           openrouter: process.env.HAL_S2_ENABLE_OPENROUTER === 'true',
