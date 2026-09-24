@@ -1089,10 +1089,18 @@ export async function factCheck(
           pending.delete(i);
           settledVerdicts.push(launched[i]!.result!.verdict);
         }
-        const lateIndices = [...pending];
-        const lateVerdicts = lateIndices.map((i) => launched[i]!.lateVerdict);
-        for (const i of lateIndices) controllers[i]!.abort();
-        void Promise.allSettled(lateIndices.map((i) => launched[i]!.promise));
+        const postAbortLateIndices: number[] = [];
+        for (const i of [...pending]) controllers[i]!.abort();
+        for (const i of [...pending]) {
+          if (launched[i]!.settled) {
+            pending.delete(i);
+            settledVerdicts.push(launched[i]!.result!.verdict);
+          } else {
+            postAbortLateIndices.push(i);
+          }
+        }
+        const lateVerdicts = postAbortLateIndices.map((i) => launched[i]!.lateVerdict);
+        void Promise.allSettled(postAbortLateIndices.map((i) => launched[i]!.promise));
         return { verdicts: [...seedVerdicts, ...settledVerdicts, ...lateVerdicts], earlyReturn: true };
       }
     }
