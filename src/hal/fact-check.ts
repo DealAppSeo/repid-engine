@@ -1246,7 +1246,7 @@ export async function factCheck(
   publishDetectorSnapshot(
     verdicts.map((v) => ({
       name: v.provider,
-      live: isCountedVerdict(v),
+      live: v.verdict !== 'ERROR',,
       // Short, enumerable code — never the raw upstream prose, which can be long and can
       // quote the request. The full text stays in the logs.
       ...(v.verdict === 'ERROR' ? { reason: shortFailureReason(v.error) } : {}),
