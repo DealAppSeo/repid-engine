@@ -63,6 +63,8 @@ const CLOSED = {
 };
 
 export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow {
+  const stakeAvailableUsdc = input.stakeAvailableUsdc;
+
   if (input.bound !== true) {
     return {
       ...CLOSED,
@@ -75,7 +77,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
     };
   }
 
-  if (input.stakeAvailableUsdc === undefined) {
+  if (stakeAvailableUsdc === undefined) {
     return {
       ...CLOSED,
       spend: 'deny',
@@ -87,7 +89,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
     };
   }
 
-  if (!(input.stakeAvailableUsdc > 0)) {
+  if (stakeAvailableUsdc === null || stakeAvailableUsdc <= 0) {
     return {
       ...CLOSED,
       spend: 'deny',
