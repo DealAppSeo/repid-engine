@@ -43,6 +43,23 @@ describe('honesty A', () => {
     expect(bucketVerdict(undefined)).toBe('NOT_CHECKED');
   });
 
+  it('writer_enabled is false when the variable is unset, and only the exact string true sets it', () => {
+    const saved = process.env.HAL_QUORUM_RECEIPT_ENABLED;
+    try {
+      delete process.env.HAL_QUORUM_RECEIPT_ENABLED;
+      expect(aggregateHonestyA([]).writer_enabled).toBe(false);
+      expect(honestyANotChecked(HONESTY_A_LLM_LOG_GAP).writer_enabled).toBe(false);
+      expect(aggregateHonestyA([], {}).writer_enabled).toBe(false);
+      expect(aggregateHonestyA([], { HAL_QUORUM_RECEIPT_ENABLED: 'TRUE' }).writer_enabled).toBe(false);
+      expect(aggregateHonestyA([], { HAL_QUORUM_RECEIPT_ENABLED: 'on' }).writer_enabled).toBe(false);
+      expect(aggregateHonestyA([], { HAL_QUORUM_RECEIPT_ENABLED: '1' }).writer_enabled).toBe(false);
+      expect(aggregateHonestyA([], { HAL_QUORUM_RECEIPT_ENABLED: 'true' }).writer_enabled).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.HAL_QUORUM_RECEIPT_ENABLED;
+      else process.env.HAL_QUORUM_RECEIPT_ENABLED = saved;
+    }
+  });
+
   it('a failed read is NOT_CHECKED with no rows, not a zero count', () => {
     const report = honestyANotChecked(HONESTY_A_LLM_LOG_GAP);
     expect(report.status).toBe('NOT_CHECKED');
