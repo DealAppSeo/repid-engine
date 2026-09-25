@@ -27,6 +27,13 @@ function app() {
 }
 
 describe('POST /api/v1/proof/verify', () => {
+  it('GET with no body is 400, not 500', async () => {
+    const res = await request(app()).get('/api/v1/proof/verify');
+    expect(res.status).toBe(400);
+    expect(res.body.verified).toBe(false);
+    expect(res.body.scheme).toBe('plonky3_range_check');
+  });
+
   it('accepts the known-good plonky3_range_check fixture and rejects one flipped byte', async () => {
     expect(meta.scheme).toBe('plonky3_range_check');
     const honest = await request(app())
