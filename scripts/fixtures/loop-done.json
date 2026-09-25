@@ -1,0 +1,7 @@
+{
+  "pr": "881",
+  "checks": [
+    { "name": "test", "conclusion": "SUCCESS" },
+    { "name": "zkp-vault", "conclusion": "SUCCESS" }
+  ]
+}
