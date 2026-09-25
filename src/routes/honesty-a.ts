@@ -12,10 +12,17 @@ import {
   HONESTY_A_PAGE_CAP,
   HONESTY_A_WINDOW_DAYS,
   honestyANotChecked,
+  type HonestyAReport,
   type HonestyVote,
 } from '../services/honesty-a';
+import { noteHonestyACall } from '../services/honesty-a-last';
 
 const router = Router();
+
+function send(res: Response, report: HonestyAReport): void {
+  noteHonestyACall(report.status);
+  res.json(report);
+}
 
 router.get('/honesty-a', async (_req: Request, res: Response): Promise<void> => {
   const since = new Date(Date.now() - HONESTY_A_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -26,22 +33,23 @@ router.get('/honesty-a', async (_req: Request, res: Response): Promise<void> => 
       .gte('created_at', since)
       .limit(HONESTY_A_PAGE_CAP);
     if (error) {
-      res.json(honestyANotChecked(`${HONESTY_A_LLM_LOG_GAP} Vote read failed: ${error.message}`));
+      send(res, honestyANotChecked(`${HONESTY_A_LLM_LOG_GAP} Vote read failed: ${error.message}`));
       return;
     }
     const votes = (data ?? []) as HonestyVote[];
     if (votes.length >= HONESTY_A_PAGE_CAP) {
-      res.json(
+      send(
+        res,
         honestyANotChecked(
           `${HONESTY_A_LLM_LOG_GAP} The vote read hit ${HONESTY_A_PAGE_CAP} rows. A partial page is not a count.`,
         ),
       );
       return;
     }
-    res.json(aggregateHonestyA(votes));
+    send(res, aggregateHonestyA(votes));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    res.json(honestyANotChecked(`${HONESTY_A_LLM_LOG_GAP} Vote read threw: ${message}`));
+    send(res, honestyANotChecked(`${HONESTY_A_LLM_LOG_GAP} Vote read threw: ${message}`));
   }
 });
 
