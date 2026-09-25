@@ -54,6 +54,8 @@ import request from 'supertest';
 import {
   classifyFlag,
   describeFlagReadiness,
+  exactTrueFlags,
+  EXACT_TRUE_FLAGS,
   PUBLIC_FLAGS,
   TRUTHY,
 } from '../src/config/flag-readiness';
@@ -143,6 +145,56 @@ describe('describeFlagReadiness — the allowlist is closed', () => {
     // is a disclosure decision, and this fails if someone treats it as a maintenance edit.
     for (const f of PUBLIC_FLAGS) {
       expect(f.why.length).toBeGreaterThan(40);
+    }
+  });
+});
+
+describe('exact_true — true only for the exact string, unset is false', () => {
+  it.each(EXACT_TRUE_FLAGS.map((f) => f.name))('%s', (name) => {
+    expect(exactTrueFlags({})[name]).toBe(false);
+    expect(exactTrueFlags({ [name]: undefined })[name]).toBe(false);
+    expect(exactTrueFlags({ [name]: '' })[name]).toBe(false);
+    expect(exactTrueFlags({ [name]: 'TRUE' })[name]).toBe(false);
+    expect(exactTrueFlags({ [name]: 'True' })[name]).toBe(false);
+    expect(exactTrueFlags({ [name]: '1' })[name]).toBe(false);
+    expect(exactTrueFlags({ [name]: ' true' })[name]).toBe(false);
+    expect(exactTrueFlags({ [name]: 'true' })[name]).toBe(true);
+  });
+
+  it('names only those two public exact-true flags and never echoes a non-true value', () => {
+    const env = Object.fromEntries(EXACT_TRUE_FLAGS.map((f) => [f.name, 'sk-live-secret-value']));
+    const out = exactTrueFlags(env);
+    expect(Object.keys(out).sort()).toEqual(EXACT_TRUE_FLAGS.map((f) => f.name).sort());
+    expect(JSON.stringify(out)).not.toContain('sk-live-secret-value');
+    for (const name of Object.keys(out)) expect(out[name]).toBe(false);
+  });
+
+  it('every flag carries the argument for why the boolean is safe to publish', () => {
+    for (const f of EXACT_TRUE_FLAGS) expect(f.why.length).toBeGreaterThan(40);
+  });
+
+  it('GET /readiness returns false for each when unset, and does not change a gate', async () => {
+    const saved = Object.fromEntries(EXACT_TRUE_FLAGS.map((f) => [f.name, process.env[f.name]]));
+    try {
+      for (const f of EXACT_TRUE_FLAGS) delete process.env[f.name];
+      const off = await request(app).get('/readiness');
+      expect(off.status).toBe(200);
+      for (const f of EXACT_TRUE_FLAGS) expect(off.body.exact_true[f.name]).toBe(false);
+      expect(off.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBeUndefined();
+
+      process.env.REAL_STAKING_ENABLED = 'true';
+      process.env.OWNER_CEILING_SHADOW_ENABLED = 'TRUE';
+      process.env.STAKE_AUTHORITY_SHADOW_ENABLED = '1';
+      const mixed = await request(app).get('/readiness');
+      expect(mixed.body.exact_true.REAL_STAKING_ENABLED).toBe(true);
+      expect(mixed.body.exact_true.OWNER_CEILING_SHADOW_ENABLED).toBe(false);
+      expect(mixed.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBeUndefined();
+      expect(JSON.stringify(mixed.body.exact_true)).not.toContain('TRUE');
+    } finally {
+      for (const f of EXACT_TRUE_FLAGS) {
+        if (saved[f.name] === undefined) delete process.env[f.name];
+        else process.env[f.name] = saved[f.name];
+      }
     }
   });
 });

@@ -35,7 +35,7 @@
 // gates and report the very staleness it exists to expose.
 
 import { Router, Request, Response } from 'express';
-import { describeFlagReadiness, PUBLIC_FLAGS, TRUTHY } from '../config/flag-readiness';
+import { describeFlagReadiness, exactTrueFlags, PUBLIC_FLAGS, TRUTHY } from '../config/flag-readiness';
 
 const router = Router();
 
@@ -80,6 +80,10 @@ router.get('/readiness', (_req: Request, res: Response) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     flags,
+    // Separate from `flags` on purpose. Those words describe gates that compare
+    // with `=== 'true'` and latch at boot. These three booleans are an exact
+    // string reading of gates that case-fold, and this object does not change them.
+    exact_true: exactTrueFlags(process.env),
     misconfigured,
     restart_required: restartRequired,
     deployed_commit: DEPLOYED_COMMIT,
