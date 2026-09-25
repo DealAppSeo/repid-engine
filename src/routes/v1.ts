@@ -15,7 +15,7 @@ import { createTipRequest, deliverTip } from '../services/x402-server';
 import { placeBet, resolveBet, signOracleOutcome } from '../services/linked-bet-resolver';
 import { startTradingRound, resolveOpenRounds, getTraderState } from '../services/agent-trader';
 import { getTwoBuilderSnapshot, getTimeseries, bootstrapDemoSnapshots } from '../services/two-builder-demo';
-import { createAnonymousBuilder } from '../services/anonymous-signup';
+import { createAnonymousBuilder, tokenSignupEnabled } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
 import { generateCard } from '../services/zkp-card-generator';
 import { buildAgentPassport, PassportQueryError } from '../services/agent-passport';
@@ -438,10 +438,19 @@ router.post('/builder/register', async (req: Request, res: Response) => {
   return res.json(r);
 });
 
-// Live demo — token-only anonymous signup. No wallet required.
-// Returns { token, builder_id, builder_address, repid_rewards_eligible: false, message }.
-// See src/services/anonymous-signup.ts.
+// Token-only signup inserts a builder. Closed unless TOKEN_SIGNUP_ENABLED is
+// the exact string true. Email OTP is the account path; this door contradicted
+// that. 410, no insert, no row delete. See anonymous-signup.ts.
 router.post('/builder/token-signup', async (_req: Request, res: Response) => {
+  if (!tokenSignupEnabled()) {
+    return res.status(410).json({
+      ok: false,
+      applied: false,
+      error: 'token_signup_closed',
+      message:
+        'Token signup is closed. It inserts a builder, and email OTP is the account path. No row was written.',
+    });
+  }
   try {
     const r = await createAnonymousBuilder();
     if (!r.ok) return res.status(500).json(r);

@@ -54,6 +54,19 @@ import { STARTING_REPID } from '../scoring/repid-constants';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 
+/**
+ * Token-signup inserts a builder. Default closed.
+ *
+ * The public posture says email OTP is the only account-creation path. This
+ * route was still a live insert, which made that sentence false. It stays
+ * closed unless TOKEN_SIGNUP_ENABLED is the exact string `true` — `TRUE`, `1`,
+ * and unset all stay closed. Read per call so a test can prove the closed
+ * door does not insert. Existing rows are left where they are.
+ */
+export function tokenSignupEnabled(): boolean {
+  return process.env.TOKEN_SIGNUP_ENABLED === 'true';
+}
+
 const TOKEN_LEN_BYTES = 32;
 
 export interface AnonymousBuilderResult {
@@ -75,6 +88,18 @@ export function deriveAddressFromToken(token: string): string {
 }
 
 export async function createAnonymousBuilder(): Promise<AnonymousBuilderResult> {
+  if (!tokenSignupEnabled()) {
+    return {
+      ok: false,
+      token: '',
+      builder_id: '',
+      builder_address: '',
+      repid_rewards_eligible: false,
+      message: 'Token signup is closed. Email OTP is the account path. No row was written.',
+      error: 'token_signup_closed',
+    };
+  }
+
   const token = randomBytes(TOKEN_LEN_BYTES).toString('hex');
   const address = deriveAddressFromToken(token);
 

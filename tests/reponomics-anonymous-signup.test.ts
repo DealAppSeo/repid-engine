@@ -63,7 +63,25 @@ describe('anonymous-signup — deriveAddressFromToken', () => {
 });
 
 describe('anonymous-signup — createAnonymousBuilder', () => {
+  const saved = process.env.TOKEN_SIGNUP_ENABLED;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.TOKEN_SIGNUP_ENABLED;
+    else process.env.TOKEN_SIGNUP_ENABLED = saved;
+  });
+
+  it('writes nothing when the flag is unset', async () => {
+    delete process.env.TOKEN_SIGNUP_ENABLED;
+    const dbMod: any = require('../src/db');
+    const before = dbMod._getLastInsert();
+    const r = await createAnonymousBuilder();
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('token_signup_closed');
+    expect(dbMod._getLastInsert()).toBe(before);
+  });
+
   it('returns ok=true with token + builder_id + builder_address', async () => {
+    process.env.TOKEN_SIGNUP_ENABLED = 'true';
     const r = await createAnonymousBuilder();
     expect(r.ok).toBe(true);
     expect(r.token).toMatch(/^[0-9a-f]{64}$/);                       // 32 bytes hex
@@ -74,6 +92,7 @@ describe('anonymous-signup — createAnonymousBuilder', () => {
   });
 
   it('persists the row with auth_method=token_only and earns_repid_rewards=false', async () => {
+    process.env.TOKEN_SIGNUP_ENABLED = 'true';
     await createAnonymousBuilder();
     const dbMod: any = require('../src/db');
     const last = dbMod._getLastInsert();
@@ -86,6 +105,7 @@ describe('anonymous-signup — createAnonymousBuilder', () => {
   });
 
   it('two calls produce different tokens', async () => {
+    process.env.TOKEN_SIGNUP_ENABLED = 'true';
     const r1 = await createAnonymousBuilder();
     const r2 = await createAnonymousBuilder();
     expect(r1.token).not.toBe(r2.token);

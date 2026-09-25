@@ -130,9 +130,9 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       tier: 'PROBATIONARY',
       badges: ['Genesis'],
       suggestedRules,
-      message: 'Save your privateId — it is your only credential. We do not store your identity.',
+      message: 'Save your privateId. This route also writes it into constitution on the new row.',
       zkpCommitment,
-      warning: 'CRITICAL: Save your privateId now. We do not store it. It cannot be recovered.',
+      warning: 'This is not a zero-knowledge registration. privateId is stored in constitution.privateId. The wallet human path is GET /api/v1/human/path and it applies nothing.',
       nextStep: `Visit repid.dev/check?id=${newAgent.id} to see your profile.`,
     });
   } catch (err: any) {

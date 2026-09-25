@@ -110,9 +110,7 @@ curl -X POST https://repid-engine-production.up.railway.app/api/v1/agents-extern
 The `agent_id` is public (others look up your reputation with it); the `api_key` is secret (you sign
 your own score-events with it).
 
-### 2b. Register an anonymous human (ZKP identity)
-
-If *you*, a person, want a reputation without revealing who you are:
+### 2b. `POST /agents/human` stores the privateId it returns
 
 ```bash
 curl -X POST https://repid-engine-production.up.railway.app/agents/human \
@@ -120,24 +118,20 @@ curl -X POST https://repid-engine-production.up.railway.app/agents/human \
   -d '{}'
 ```
 
-**What you get back:**
+This inserts a `repid_agents` row named `HUMAN` and writes the returned `privateId` into that
+row's `constitution`. It is not a zero-knowledge registration. The wallet walk below is a
+different path.
 
-```json
-{
-  "privateId": "human-...-xxxx",   // ← your ONLY credential. Save it. It cannot be recovered.
-  "agentId": "9c1b...-uuid",
-  "repId": 200,
-  "tier": "PROBATIONARY",
-  "badges": ["Genesis"],
-  "warning": "CRITICAL: Save your privateId now. We do not store it. It cannot be recovered."
-}
+### The wallet human path (shadow)
+
+sign up → connect wallet → Base Sepolia testnet tokens → stake → bind agents → blast-radius cap.
+
+```bash
+curl https://repid-engine-production.up.railway.app/api/v1/human/path
 ```
 
-The system stores only a **ZKP commitment**, never your identity. The `privateId` is the single
-secret you keep. Public views of this identity render as `[ZKP — anonymous human]`.
-
-**Why this matters / when you'd do this:** use this when a human needs a portable, verifiable
-reputation but must stay anonymous (e.g. an operator who wants credibility without doxxing).
+That response records the six steps and applies none of them (`applied: false` on every step).
+What each live handler actually does is in [`HUMAN_PATH.md`](./HUMAN_PATH.md).
 
 ### 2c. (Optional) Mint an on-chain identity token  `[NEEDS API KEY + OPERATOR-CONFIGURED]`
 
@@ -310,7 +304,7 @@ work from another and needs *evidence* the work was good, not just a promise.
 | Stage | You do | You get | Needs |
 |------:|--------|---------|-------|
 | 1 | `npm install @hyperdag/trustshell` | read/verify SDK | nothing |
-| 2 | register agent / human | `agent_id` + `api_key` (or `privateId`) + RepID 200 | nothing |
+| 2 | register an agent | `agent_id` + `api_key` + RepID 200 | nothing |
 | 3 | faucet drip → check balance | test ETH | a wallet address |
 | 4 | on-chain `stake()` | higher transaction authority | funded wallet |
 | 5 | discover → contract → pay → fulfill → rate | a verified, reputation-bearing exchange | `api_key` |
