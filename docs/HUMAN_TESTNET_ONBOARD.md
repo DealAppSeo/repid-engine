@@ -20,7 +20,7 @@ The engine does not dispense. `GET /api/v1/faucet/info` returns `dispenses: fals
    `https://repid-engine-production.up.railway.app/api/v1/faucet/balance?address=YOUR_ADDRESS`
    and read the balance. That call only reads.
 
-4. Create the account with the email code, not with token signup. Token signup (`POST /api/v1/builder/token-signup`) inserts a builder row. In this branch it answers **410** and writes nothing unless an operator set the flag to the exact string `true`. Email OTP is the account path. On the deployed process measured 2026-09-24 (commit `553d1cd`) that OTP door was open. This branch is not deployed yet, so production token-signup was not called and is not yet fenced.
+4. Create the account with the email code, not with token signup. Token signup (`POST /api/v1/builder/token-signup`) inserts a builder row. In this branch it answers **410** and writes nothing unless an operator set the flag to the exact string `true`. Email OTP is the account path. Production was not called for token signup, so that door is **NOT_CHECKED** there. Email OTP was open on the deployed process (commit `a7c6ad0`, measured 2026-09-25).
 
 5. Connect the wallet by signing the sentence the site shows you. Signing is not a payment. An empty connect, with no signature, is rejected: **401** `signature_required`, and no account row is inserted. Measured on production 2026-09-24: that door is open, and the empty call returned that 401.
 
@@ -69,11 +69,31 @@ Nothing in that picture moves a token. `enforced` stays false.
 | Amount over the smaller cap | Deny |
 | Amount under the smaller cap | Would allow, and still not applied |
 
+## Route table
+
+Measured keyless against production commit `a7c6ad0` at 2026-09-25 04:00Z. This branch is that commit plus this table. Token signup and `POST /agents/human` were not called. No token was moved.
+
+| route | this branch | production | NOT_CHECKED |
+|---|---|---|---|
+| `GET /api/v1/human/path` | 200, `applied: false` on every step | 200, `applied: false` on every step | |
+| `GET /api/v1/faucet/info` | `dispenses: false` | `dispenses: false`, chain id 84532 | |
+| `GET /api/v1/faucet/balance` with no address | 400, missing address | 400, missing address | |
+| `POST /api/v1/account/connect` with `{}` | 401 `signature_required` when the door is open; no insert | 401 `signature_required` | |
+| `POST /api/v1/stake/deposit` with `{}` | 400, missing `builder_address` and `amount`; no credit | 400, same missing fields | |
+| `POST /api/v1/human/bind` with `{}` | 401 `signature_required` before any binding write | 401 `signature_required` | |
+| `POST /api/v1/builder/token-signup` | 410 unless the flag is the exact string `true`; no insert | not called | NOT_CHECKED |
+| `POST /agents/human` | writes the returned private id into `constitution` | not called | NOT_CHECKED |
+| `REAL_STAKING_ENABLED` | gate unchanged; not on `GET /readiness` | absent from `GET /readiness` | NOT_CHECKED |
+| `OWNER_CEILING_SHADOW_ENABLED` | observer only; not a payment decision | absent from `GET /readiness` | NOT_CHECKED |
+| `STAKE_AUTHORITY_SHADOW_ENABLED` | observer only; not a payment decision | absent from `GET /readiness` | NOT_CHECKED |
+
+`GET /readiness` on that deploy reported `SELF_SERVE_ACCOUNTS_ENABLED` on and `HUMAN_AGENT_BIND_ENABLED` on.
+
 ## Still unwired
 
 - Owner-ceiling enforce. `observeOwnerCeiling` records a comparison. `checkTransactionAuthority` ignores it.
 - Stake-authority enforce. The live gate still sums `agent_stakes` (a prediction market). Posted collateral is `stake_deposits`. `repid_agents` has no `stake_amount` column. This work does not add one.
 - `REAL_STAKING_ENABLED`, `OWNER_CEILING_SHADOW_ENABLED`, and `STAKE_AUTHORITY_SHADOW_ENABLED` are not on the public readiness list. Production values are **not checked**.
-- `GET /api/v1/human/path` is mounted on this branch, before auth, and returns `applied: false` on every step. The deployed commit `553d1cd` does not have it, so production still answers 401 for that path.
-- Token signup is closed in this branch (410, no insert) unless the flag is exactly `true`. Production on `553d1cd` was not called and is not yet fenced. No rows were deleted.
+- `GET /api/v1/human/path` is on the deployed commit `a7c6ad0` and answered 200 with `applied: false` on every step (measured 2026-09-25).
+- Token signup is closed in this branch (410, no insert) unless the flag is exactly `true`. Production was not called. No rows were deleted.
 - No mainnet. No testnet token was moved.
