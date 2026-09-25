@@ -22,6 +22,7 @@ import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import honestyARouter from './routes/honesty-a';
 import proofVerifyRouter from './routes/proof-verify';
+import helpBRouter from './routes/help-b';
 import socialQueueRouter from './routes/social-queue';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import agentKeysRouter from './routes/v1/agent-keys';
@@ -363,6 +364,8 @@ app.use('/api/v1/hal', halEvaluateRouter);
 app.use('/api/v1/hal', honestyARouter);
 // Local proof check. Does not mint and does not write a chain transaction.
 app.use('/api/v1', proofVerifyRouter);
+// Help B writes are closed unless the flag is the exact string true.
+app.use('/api/v1', helpBRouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
 // Self-serve agent API keys (2026-08-02) — challenge/response over the wallet an

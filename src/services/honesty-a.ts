@@ -35,8 +35,18 @@ export interface HonestyAReport {
   window_days: 7;
   status: 'counted' | 'NOT_CHECKED';
   source: typeof HONESTY_A_SOURCE;
+  /**
+   * True only when HAL_QUORUM_RECEIPT_ENABLED is the exact string `true`.
+   * Unset is false. This does not change the writer, and it does not turn it on.
+   */
+  writer_enabled: boolean;
   gap: string | null;
   rows: HonestyARow[] | null;
+}
+
+/** Exact-string reading. `TRUE`, `on`, and `1` are false here. */
+export function voteWriterEnabled(env: Record<string, string | undefined>): boolean {
+  return env.HAL_QUORUM_RECEIPT_ENABLED === 'true';
 }
 
 export function bucketVerdict(verdict: unknown): 'TRUE' | 'FALSE' | 'NOT_CHECKED' {
@@ -45,7 +55,10 @@ export function bucketVerdict(verdict: unknown): 'TRUE' | 'FALSE' | 'NOT_CHECKED
   return 'NOT_CHECKED';
 }
 
-export function aggregateHonestyA(votes: readonly HonestyVote[]): HonestyAReport {
+export function aggregateHonestyA(
+  votes: readonly HonestyVote[],
+  env: Record<string, string | undefined> = process.env,
+): HonestyAReport {
   const buckets = new Map<string, HonestyARow>();
   for (const vote of votes) {
     const family = vote.family && vote.family.length > 0 ? vote.family : 'NOT_CHECKED';
@@ -65,16 +78,21 @@ export function aggregateHonestyA(votes: readonly HonestyVote[]): HonestyAReport
     window_days: HONESTY_A_WINDOW_DAYS,
     status: 'counted',
     source: HONESTY_A_SOURCE,
+    writer_enabled: voteWriterEnabled(env),
     gap: null,
     rows,
   };
 }
 
-export function honestyANotChecked(gap: string): HonestyAReport {
+export function honestyANotChecked(
+  gap: string,
+  env: Record<string, string | undefined> = process.env,
+): HonestyAReport {
   return {
     window_days: HONESTY_A_WINDOW_DAYS,
     status: 'NOT_CHECKED',
     source: HONESTY_A_SOURCE,
+    writer_enabled: voteWriterEnabled(env),
     gap,
     rows: null,
   };

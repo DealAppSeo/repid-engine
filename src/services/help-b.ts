@@ -32,6 +32,11 @@ const RATERS = new Set<RaterType>(['human', 'agent']);
 const SUBJECTS = new Set<HelpSubject>(['family', 'agent']);
 const DIMS = new Set<HelpDim>(['helpful', 'deep', 'accurate']);
 
+/** Exact string `true` only. Unset is closed. Does not write. */
+export function helpBWritesEnabled(): boolean {
+  return process.env.HELP_B_WRITES_ENABLED === 'true';
+}
+
 function inRange(value: number): boolean {
   return Number.isFinite(value) && value >= 0 && value <= 1;
 }
