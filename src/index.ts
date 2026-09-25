@@ -86,6 +86,7 @@ import efficiencyRouter from './routes/efficiency';
 import cacheStatsRouter from './routes/cache-stats';
 import faucetRouter from './routes/faucet'; // E2E FAUCET step — public read-only faucet info + balance check (no key custody)
 import humanPathRouter from './routes/human-path'; // human walk in shadow — records the six steps, performs none
+import afterCreateRouter from './routes/after-create';
 import { agentGateRouter } from './routes/agent-gate'; // T0.5 email-OTP gate + run metering status
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
@@ -529,6 +530,8 @@ app.use('/api/v1', faucetRouter);
 // bind agents → blast-radius cap. Read-only, before auth, same reason as the
 // faucet — the caller has no key yet. Performs none of the six steps.
 app.use('/api/v1', humanPathRouter);
+// After-create capability card. Read-only, before auth. can_stake stays false.
+app.use('/api/v1', afterCreateRouter);
 
 // T0.5 agent gate (email OTP + run metering status). Mounted BEFORE
 // authMiddleware for the same reason as the faucet: brand-new visitors
