@@ -20,6 +20,7 @@ import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
+import honestyARouter from './routes/honesty-a';
 import socialQueueRouter from './routes/social-queue';
 import apiKeyRequestsRouter from './routes/v1/api-key-requests';
 import agentKeysRouter from './routes/v1/agent-keys';
@@ -356,6 +357,8 @@ const halPublicLimit = Number(process.env.HAL_PUBLIC_RATE_LIMIT) > 0 ? Number(pr
 const halPublicWindow = Number(process.env.HAL_PUBLIC_RATE_WINDOW_SEC) > 0 ? Number(process.env.HAL_PUBLIC_RATE_WINDOW_SEC) : 86400;
 app.use('/api/v1/hal/evaluate', ipRateLimit(halPublicLimit, halPublicWindow));
 app.use('/api/v1/hal', halEvaluateRouter);
+// Honesty A is a keyless read. It does not score and it does not write.
+app.use('/api/v1/hal', honestyARouter);
 // API key issuance V0 — public intake (developers have no key yet). Before authMiddleware.
 app.use('/api/v1/api-key-requests', apiKeyRequestsRouter);
 // Self-serve agent API keys (2026-08-02) — challenge/response over the wallet an
