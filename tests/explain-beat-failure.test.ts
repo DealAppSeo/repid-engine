@@ -212,8 +212,32 @@ describe('NOT CHECKED is never silently a pass', () => {
 
 describe('flatten bounds its own output', () => {
   it('stops at the depth limit instead of recursing forever', () => {
-    const deep = { a: { b: { c: { d: { e: 'too far' } } } } };
+    const deep = { a: { b: { c: { d: { e: { f: { g: 'too far' } } } } } } };
     expect(mod.flatten(deep, '', 0, []).join('\n')).toContain('[depth limit]');
+  });
+
+  // REGRESSION, measured 2026-09-22 06:18Z on dispatched run 35694245161: the first
+  // real run of this script surfaced the API error message but printed
+  // `.message.content[0].text : [depth limit]` — it truncated the single field the
+  // whole diagnostic exists to show. Depth was 3 and the array index burned a level.
+  it('prints the API error text at .message.content[0].text', () => {
+    const synthetic = JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: '<synthetic>',
+        content: [{ type: 'text', text: 'API Error: 400 invalid_request_error CAUSE_MARKER' }],
+      },
+      error: 'unknown',
+      is_api_error_message: true,
+    });
+    const text = mod.explain(`${INIT}\n${synthetic}\n${DEAD_RESULT}`).lines.join('\n');
+    expect(text).toContain('CAUSE_MARKER');
+    expect(text).not.toMatch(/content\[0\]\.text : \[depth limit\]/);
+  });
+
+  it('an array index does not consume a depth level', () => {
+    const viaArray = { a: { b: { c: [{ d: 'reached' }] } } };
+    expect(mod.flatten(viaArray, '', 0, []).join('\n')).toContain('reached');
   });
 
   it('survives a self-referential object', () => {
