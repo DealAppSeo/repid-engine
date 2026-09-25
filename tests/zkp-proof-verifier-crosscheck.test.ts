@@ -88,7 +88,7 @@ function verifyFailClosed(
 const FIX_DIR = join(__dirname, 'fixtures', 'zkp');
 const meta = JSON.parse(
   readFileSync(join(FIX_DIR, 'leaf-rangecheck.synthetic.json'), 'utf8')
-) as { SYNTHETIC: boolean; statement: Statement; proof_file: string; proof_bytes_len: number };
+) as { SYNTHETIC: boolean; statement: Statement; proof_file: string; proof_bytes_len: number; scheme: string };
 
 const PROOF_BYTES = readFileSync(join(FIX_DIR, meta.proof_file));
 const PROOF_B64 = PROOF_BYTES.toString('base64');
@@ -104,6 +104,19 @@ describe('cross-crate: a SYNTHETIC range-check proof through @hyperdag/proof-ver
     expect(PROOF_BYTES.length).toBe(meta.proof_bytes_len);
     // Sanity: a NIL-variant synthetic agent id, never a real one.
     expect(HONEST.agent_id).toBe('00000000-0000-4000-8000-0000000000aa');
+  });
+
+  it('plonky3_range_check fixture verifies, and one flipped byte fails', () => {
+    expect(meta.scheme).toBe('plonky3_range_check');
+    const honest = verify(PROOF_B64, HONEST);
+    expect(honest.verified).toBe(true);
+    expect(honest.error).toBeNull();
+
+    const tampered = Buffer.from(PROOF_BYTES);
+    tampered[0] = (tampered[0] ?? 0) ^ 0x01;
+    const flipped = verify(tampered.toString('base64'), HONEST);
+    expect(flipped.verified).toBe(false);
+    expect(flipped.error).toBeTruthy();
   });
 
   it('ACCEPTS the honest statement (verified === true)', () => {
