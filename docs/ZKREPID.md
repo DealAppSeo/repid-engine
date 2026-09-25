@@ -86,6 +86,7 @@ asks "why isn't Poseidon2 in there?" and either adds it or renames the directory
 | `src/zkp/plonky3-stub.ts` | a proving backend, usable for any statement |
 | `src/zkp/commitment.ts` | general POSTCARD commitment construction |
 | `src/zkp/leaf-dual-write.ts` | general leaf-encoding migration machinery |
+| `src/zkp/range-check-verify.ts` | wraps the existing proof-verifier for plonky3_range_check; not a RepID statement or a new circuit |
 | `src/zkp/proof-router.ts` | routes proofs by type; not RepID-specific |
 | `src/zkp/proof-statement-guard.ts` | a general fail-closed statement builder/validator |
 | `src/zkp/proof-freshness.ts` | a served-proof age label (ageDays>7 FAILED); not a RepID statement, circuit, or identity binding |

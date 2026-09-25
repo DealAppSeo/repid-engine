@@ -129,6 +129,7 @@ export const NOT_ZKREPID: readonly { readonly path: string; readonly why: string
   { path: 'zkp/plonky3-stub', why: 'a proving backend, usable for any statement' },
   { path: 'zkp/commitment', why: 'general POSTCARD commitment construction' },
   { path: 'zkp/leaf-dual-write', why: 'general leaf-encoding migration machinery' },
+  { path: 'zkp/range-check-verify', why: 'wraps the existing proof-verifier for plonky3_range_check; not a RepID statement or a new circuit' },
   { path: 'zkp/proof-router', why: 'routes proofs by type; not RepID-specific' },
   { path: 'zkp/proof-statement-guard', why: 'a general fail-closed statement builder/validator' },
   {
