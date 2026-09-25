@@ -161,7 +161,7 @@ describe('exact_true — true only for the exact string, unset is false', () => 
     expect(exactTrueFlags({ [name]: 'true' })[name]).toBe(true);
   });
 
-  it('names only those three flags and never echoes a non-true value', () => {
+  it('names only those two public exact-true flags and never echoes a non-true value', () => {
     const env = Object.fromEntries(EXACT_TRUE_FLAGS.map((f) => [f.name, 'sk-live-secret-value']));
     const out = exactTrueFlags(env);
     expect(Object.keys(out).sort()).toEqual(EXACT_TRUE_FLAGS.map((f) => f.name).sort());
@@ -180,6 +180,7 @@ describe('exact_true — true only for the exact string, unset is false', () => 
       const off = await request(app).get('/readiness');
       expect(off.status).toBe(200);
       for (const f of EXACT_TRUE_FLAGS) expect(off.body.exact_true[f.name]).toBe(false);
+      expect(off.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBeUndefined();
 
       process.env.REAL_STAKING_ENABLED = 'true';
       process.env.OWNER_CEILING_SHADOW_ENABLED = 'TRUE';
@@ -187,7 +188,7 @@ describe('exact_true — true only for the exact string, unset is false', () => 
       const mixed = await request(app).get('/readiness');
       expect(mixed.body.exact_true.REAL_STAKING_ENABLED).toBe(true);
       expect(mixed.body.exact_true.OWNER_CEILING_SHADOW_ENABLED).toBe(false);
-      expect(mixed.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBe(false);
+      expect(mixed.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBeUndefined();
       expect(JSON.stringify(mixed.body.exact_true)).not.toContain('TRUE');
     } finally {
       for (const f of EXACT_TRUE_FLAGS) {
