@@ -2197,7 +2197,7 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
   // that is a deployment question, not a code-reading one. If NEITHER name is present the provider
   // is simply absent (nothing to dial), which is the correct keyless behaviour.
   const nim = (process.env.NVIDIA_NIM_API_KEY ?? process.env.NIM_API_KEY)?.trim();
-  if (nim && enabled.nvidiaNim) {
+  if (nim && enabled.nvidiaNim && process.env.HAL_S2_ENABLE_NIM === 'true') {
     add(
       { name: 'nvidia-nim', endpoint: PROVIDER_URLS.nvidiaNimChatCompletions, apiKey: nim, family: 'nvidia', tier: 'escalation' },
       'HAL_S2_NVIDIA_NIM_MODEL',
@@ -2480,6 +2480,12 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
  * =true opt-in. Thin wrapper over buildFactCheckProvidersWith() so the env path
  * and the runtime-config path share one builder.
  */
+
+/** Historical opt-in. A true result does not add the provider. */
+export function historicalNvidiaNimFlag(): boolean {
+  return process.env.HAL_S2_ENABLE_NVIDIA_NIM === 'true';
+}
+
 export function buildFactCheckProviders(): FactCheckProviderCfg[] {
   return buildFactCheckProvidersWith({
     groq: true,
@@ -2498,10 +2504,8 @@ export function buildFactCheckProviders(): FactCheckProviderCfg[] {
     // make it impossible to tell which change did what if the next run is still degraded.
     gloo: process.env.HAL_S2_ENABLE_GLOO === 'true',
     zai: process.env.HAL_S2_ENABLE_ZAI === 'true',
-    // Opt-in, default OFF (flag unset → off), like every non-groq/cerebras provider. Requires an
-    // explicit HAL_S2_ENABLE_NVIDIA_NIM=true; a bare NVIDIA_NIM_API_KEY does NOT enable it (the add
-    // block above has no auto-backfill), so the quorum is byte-identical until the flag is flipped.
-    nvidiaNim: process.env.HAL_S2_ENABLE_NVIDIA_NIM === 'true',
+    // Opt-in, default off. Added only when process.env.HAL_S2_ENABLE_NIM is the exact string true.
+    nvidiaNim: process.env.HAL_S2_ENABLE_NIM === 'true',
     // Opt-in, default OFF, for the same reason as nvidiaNim above and with one more: this is
     // a host the quorum has never dialled. A bare TOGETHER_API_KEY does NOT enable it, so the
     // set of hosts production reaches is byte-identical until HAL_S2_ENABLE_TOGETHER=true.
