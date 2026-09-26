@@ -16,7 +16,7 @@ function fail(message) {
 function applyRatings(start, events) {
   let score = start;
   for (const event of events) {
-    if (event.kind !== 'rating') continue;
+    if (event.kind !== 'rating' && event.kind !== 'nonprofit-help') continue;
     if (event.rater_id === event.subject_id) continue;
     const delta = Number(event.delta);
     if (!Number.isFinite(delta) || delta <= 0) continue;
@@ -42,6 +42,18 @@ if (selfScore > start) fail('self-only ratings raised the score');
 
 const raised = applyRatings(start, fixture.counterparty);
 if (!(raised > start)) fail('a counterparty rating did not raise the score');
+
+if (!Array.isArray(fixture.nonprofit_help)) fail('nonprofit-help fixture missing');
+const helped = applyRatings(start, fixture.nonprofit_help);
+if (helped !== start + 1) fail(`nonprofit-help moved the score by ${helped - start}`);
+
+if (!Array.isArray(fixture.self_rate_zero)) fail('self-rate fixture missing');
+const zeroSelf = fixture.self_rate_zero.some(
+  (event) => event.rater_id === event.subject_id && Number(event.delta) === 0,
+);
+if (!zeroSelf) fail('self-rate fixture is not a zero self rating');
+const zeroScore = applyRatings(start, fixture.self_rate_zero);
+if (zeroScore !== start) fail('self-rate 0 changed the score');
 
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
