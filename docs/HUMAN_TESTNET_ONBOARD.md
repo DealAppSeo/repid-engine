@@ -26,7 +26,7 @@ The engine does not dispense. `GET /api/v1/faucet/info` returns `dispenses: fals
 
 6. Stake is a later, separate signature, and this page does not do it. An empty stake call is rejected: **400**, missing `builder_address` and `amount`, before any credit. Whether production treats a chain transfer as real (`REAL_STAKING_ENABLED`) was **not checked**.
 
-7. Bind an agent only if you mean to own it. **Bound** means you signed a sentence that names your wallet, that agent, and the scope. The engine recovers the signer. A database column that merely stores your account id next to the agent is **linked**, and linked is not bound. An unbound agent cannot spend under the shadow rule below.
+7. Bind an agent only if you mean to own it. **Bound** means a signature that names your wallet and that agent. The engine recovers the signer. A database column that merely stores your account id next to the agent is **linked**, and linked is not bound. An unbound agent cannot spend under the shadow rule below.
 
 8. The blast-radius cap is recorded and not enforced. Your cap can only shrink the agent's cap. Over that number, the shadow says deny. The live payment decision does not read it yet.
 

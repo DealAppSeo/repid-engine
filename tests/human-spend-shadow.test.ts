@@ -36,13 +36,26 @@ describe('human spend shadow', () => {
     expect(none.applied).toBe(false);
     expect(none.enforced).toBe(false);
 
-    const notLooked = shadowHumanSpend({
+    const humanFirst = shadowHumanSpend({
       amountUsdc: 1,
       agentCapUsdc: 100,
       bound: true,
     });
-    expect(notLooked.reason).toBe('stake_not_checked');
-    expect(notLooked.spend).toBe('deny');
+    expect(humanFirst.reason).toBe('owner_cap_not_checked');
+    expect(humanFirst.spend).toBe('deny');
+    expect(humanFirst.applied).toBe(false);
+
+    const stakeNotLooked = shadowHumanSpend({
+      amountUsdc: 1,
+      agentCapUsdc: 100,
+      ownerCapUsdc: 50,
+      bound: true,
+    });
+    expect(stakeNotLooked.reason).toBe('stake_not_checked');
+    expect(stakeNotLooked.human_cap_usdc).toBe(50);
+    expect(stakeNotLooked.agent_cap_usdc).toBe(100);
+    expect(stakeNotLooked.spend).toBe('deny');
+    expect(stakeNotLooked.applied).toBe(false);
   });
 
   it('stake present makes the effective cap visible, and over the minimum denies', () => {
@@ -91,6 +104,8 @@ describe('human spend shadow', () => {
     });
     expect(unbound.spend).toBe('deny');
     expect(unbound.reason).toBe('unbound_agent');
+    expect(unbound.human_cap_usdc).toBe(100);
+    expect(unbound.agent_cap_usdc).toBe(100);
     expect(unbound.applied).toBe(false);
 
     const collateral = resolveCollateral(
