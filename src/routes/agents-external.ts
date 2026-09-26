@@ -14,7 +14,7 @@ import { summarizeProvenance, describeProvenance, type ScoreEventRow } from '../
  * `sample_size` so the decomposition is never read as a lifetime total.
  */
 const PROVENANCE_SAMPLE = 500;
-import { normalizeWisdomForReward, clampEventDelta } from '../services/wisdom-normalize';
+import { normalizeWisdomForReward, clampEventDelta, capScaledReward } from '../services/wisdom-normalize';
 import { extractHALSignals, extractHALSignalsWithCrossLLM } from '../services/hal-signals';
 import { deriveHalDecision } from '../scoring/pipeline';
 import { STARTING_REPID } from '../scoring/repid-constants';
@@ -734,7 +734,17 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
     const positiveEarned = isDeliverableDomain(task_domain) || factCheckClean;
     const earnGateEnforced = process.env.REPID_RUN_EARN_GATE === 'true';
     let purposeSuppressed = false;
-    let preClamp = halApproved ? rewardResult.reward : -Math.abs(baseDelta);
+    // Output cap FIRST (code constant). Config-injected impact_factor_cap / a
+    // zero count-floor cannot walk the full 10–10000 scale in one event.
+    // Earn-gate stays SHADOW unless REPID_RUN_EARN_GATE=true (Sean-gated).
+    const uncapped = halApproved ? rewardResult.reward : -Math.abs(baseDelta);
+    const scaled = capScaledReward(uncapped);
+    if (scaled.capped) {
+      console.error(
+        `[score-event] scaled-reward CAPPED for ${agentId}: raw=${uncapped} → ${scaled.reward} (breakdown=${JSON.stringify(rewardResult.breakdown ?? {})})`
+      );
+    }
+    let preClamp = scaled.reward;
     if (preClamp > 0 && !positiveEarned) {
       if (earnGateEnforced) {
         console.warn(`[score-event] earn-gate ENFORCED: unverified non-deliverable (domain=${task_domain}) reward ${preClamp} → 0 for ${agentId}`);
