@@ -1,0 +1,15 @@
+{
+  "start_score": 1000,
+  "self_only": [
+    { "kind": "rating", "rater_id": "agent-a", "subject_id": "agent-a", "delta": 25 },
+    { "kind": "rating", "rater_id": "agent-b", "subject_id": "agent-b", "delta": 40 }
+  ],
+  "counterparty": [
+    { "kind": "rating", "rater_id": "agent-b", "subject_id": "agent-a", "delta": 25 }
+  ],
+  "votes": [
+    { "family": "llama", "host": "groq" },
+    { "family": "llama", "host": "groq", "first_pass_verdict": null },
+    { "family": "llama", "host": "groq", "first_pass_verdict": 0 }
+  ]
+}
