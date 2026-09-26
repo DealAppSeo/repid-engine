@@ -1,8 +1,9 @@
 /**
  * GET /api/v1/hal/honesty-a — read-only 7-day verdict counts.
  *
- * Selects family, provider, and verdict only. No claim text, no user id, no agent id,
- * no latency. A database error or a full page is NOT_CHECKED, not a fabricated count.
+ * Selects family, host, the blended verdict, and the two passes.
+ * No claim text and no user id. A database error or a full page is NOT_CHECKED,
+ * not a fabricated count. A missing first pass is counted as NOT_CHECKED, not as 0.
  */
 import { Router, type Request, type Response } from 'express';
 import { db } from '../db';
@@ -29,7 +30,7 @@ router.get('/honesty-a', async (_req: Request, res: Response): Promise<void> => 
   try {
     const { data, error } = await db
       .from('hal_quorum_validator_votes')
-      .select('family, provider, verdict')
+      .select('family, provider, host, verdict, first_pass_verdict, post_hal_verdict')
       .gte('created_at', since)
       .limit(HONESTY_A_PAGE_CAP);
     if (error) {
