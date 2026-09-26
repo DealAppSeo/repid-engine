@@ -4,14 +4,29 @@
  * HAL_QUORUM_RECEIPT_ENABLED is the exact string true.
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { normalizePassVote, writePassVote, type PassVoteInput } from '../src/hal/first-pass-vote';
 
-function client() {
+function client(columns: 'present' | 'missing' = 'present') {
   const inserts: { table: string; rows: Record<string, unknown>[] }[] = [];
   return {
     inserts,
     from(table: string) {
       return {
+        select(columnsSql: string) {
+          return {
+            async limit(_n: number) {
+              if (!columnsSql.includes('first_pass_verdict') || !columnsSql.includes('post_hal_at')) {
+                return { error: { message: 'column "first_pass_verdict" does not exist' } };
+              }
+              if (columns === 'missing') {
+                return { error: { message: 'column "first_pass_verdict" does not exist' } };
+              }
+              return { error: null };
+            },
+          };
+        },
         async insert(payload: Record<string, unknown>) {
           inserts.push({ table, rows: [payload] });
           return { error: null };
@@ -98,6 +113,21 @@ describe('first pass vs HAL', () => {
     expect(row?.first_pass_verdict).not.toBe(0);
     expect(row?.verdict).toBe('NOT_CHECKED');
     expect(row?.verdict).not.toBe(0);
+  });
+
+  it('does not insert when the migration columns are missing', async () => {
+    const sql = readFileSync(
+      path.join(__dirname, '..', 'migrations', '2026-09-26-hal-vote-first-pass.sql'),
+      'utf8',
+    );
+    for (const col of ['host', 'first_pass_verdict', 'first_pass_at', 'post_hal_verdict', 'post_hal_at']) {
+      expect(sql).toContain(col);
+    }
+    const db = client('missing');
+    const res = await writePassVote(db, GOOD, OPEN);
+    expect(res.written).toBe(false);
+    expect(res.skippedReason).toBe('columns-missing');
+    expect(db.inserts).toHaveLength(0);
   });
 
   it('stays closed unless the flag is the exact string true', async () => {

@@ -35,13 +35,22 @@ export type PassVoteRefusal = 'post-hal-without-first-pass';
 
 export interface PassVoteWriteResult {
   written: boolean;
-  skippedReason?: 'flag-off' | PassVoteRefusal | 'insert-error';
+  skippedReason?: 'flag-off' | PassVoteRefusal | 'columns-missing' | 'insert-error';
 }
 
-type VoteInsertClient = {
-  from: (table: string) => {
-    insert: (row: StoredPassVote) => Promise<{ error: { message: string } | null }>;
+/** Columns the staged migration adds. A table without them cannot take this row. */
+export const PASS_VOTE_COLUMNS =
+  'host, first_pass_verdict, first_pass_at, post_hal_verdict, post_hal_at';
+
+type Probe = {
+  select: (columns: string) => {
+    limit: (n: number) => Promise<{ error: { message: string } | null }>;
   };
+  insert: (row: StoredPassVote) => Promise<{ error: { message: string } | null }>;
+};
+
+type VoteInsertClient = {
+  from: (table: string) => Probe;
 };
 
 function exactTrue(env: Record<string, string | undefined>): boolean {
@@ -102,7 +111,14 @@ export async function writePassVote(
   if (!exactTrue(env)) return { written: false, skippedReason: 'flag-off' };
   const normalized = normalizePassVote(input);
   if (!normalized.ok) return { written: false, skippedReason: normalized.skippedReason };
-  const { error } = await client.from('hal_quorum_validator_votes').insert(normalized.row);
+  const table = client.from('hal_quorum_validator_votes');
+  try {
+    const probe = await table.select(PASS_VOTE_COLUMNS).limit(0);
+    if (probe.error) return { written: false, skippedReason: 'columns-missing' };
+  } catch {
+    return { written: false, skippedReason: 'columns-missing' };
+  }
+  const { error } = await table.insert(normalized.row);
   if (error) return { written: false, skippedReason: 'insert-error' };
   return { written: true };
 }
