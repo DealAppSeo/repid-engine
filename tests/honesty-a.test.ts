@@ -9,6 +9,7 @@ import {
   bucketVerdict,
   honestyANotChecked,
   HONESTY_A_LLM_LOG_GAP,
+  readPassVerdict,
 } from '../src/services/honesty-a';
 
 const SRC = resolve(__dirname, '..', 'src');
@@ -25,9 +26,67 @@ describe('honesty A', () => {
     ]);
     expect(report.status).toBe('counted');
     expect(report.rows).toEqual([
-      { family: 'llama', host: 'groq', TRUE: 2, FALSE: 1, NOT_CHECKED: 2 },
-      { family: 'qwen', host: 'fireworks', TRUE: 0, FALSE: 1, NOT_CHECKED: 0 },
+      {
+        family: 'llama',
+        host: 'groq',
+        TRUE: 2,
+        FALSE: 1,
+        NOT_CHECKED: 2,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 5 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 5 },
+      },
+      {
+        family: 'qwen',
+        host: 'fireworks',
+        TRUE: 0,
+        FALSE: 1,
+        NOT_CHECKED: 0,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+      },
     ]);
+  });
+
+  it('counts first_pass separately from post_hal', () => {
+    const report = aggregateHonestyA([
+      {
+        family: 'llama',
+        host: 'groq',
+        verdict: 'TRUE',
+        first_pass_verdict: 'TRUE',
+        post_hal_verdict: 'FALSE',
+      },
+    ]);
+    expect(report.rows).toEqual([
+      {
+        family: 'llama',
+        host: 'groq',
+        TRUE: 1,
+        FALSE: 0,
+        NOT_CHECKED: 0,
+        first_pass: { TRUE: 1, FALSE: 0, NOT_CHECKED: 0 },
+        post_hal: { TRUE: 0, FALSE: 1, NOT_CHECKED: 0 },
+      },
+    ]);
+  });
+
+  it('a missing first_pass is NOT_CHECKED, not 0', () => {
+    const missing = readPassVerdict(undefined);
+    expect(missing.status).toBe('NOT_CHECKED');
+    expect(missing.verdict).toBeNull();
+    expect(missing.verdict).not.toBe(0);
+
+    const zero = readPassVerdict(0);
+    expect(zero.status).toBe('NOT_CHECKED');
+    expect(zero.verdict).toBeNull();
+    expect(zero.verdict).not.toBe(0);
+
+    const report = aggregateHonestyA([
+      { family: 'llama', host: 'groq', post_hal_verdict: 'FALSE' },
+    ]);
+    expect(report.rows?.[0]?.first_pass).toEqual({ TRUE: 0, FALSE: 0, NOT_CHECKED: 1 });
+    expect(report.rows?.[0]?.post_hal).toEqual({ TRUE: 0, FALSE: 1, NOT_CHECKED: 0 });
+    expect(report.rows?.[0]?.first_pass.NOT_CHECKED).not.toBe(0);
   });
 
   it('a latency-only row is NOT_CHECKED and does not become TRUE', () => {
@@ -78,11 +137,13 @@ describe('honesty A', () => {
 
     const route = readFileSync(join(SRC, 'routes', 'honesty-a.ts'), 'utf8');
     expect(route).toContain(".from('hal_quorum_validator_votes')");
-    expect(route).toContain(".select('family, provider, verdict')");
+    expect(route).toContain(
+      ".select('family, provider, host, verdict, first_pass_verdict, post_hal_verdict')",
+    );
     expect(route).not.toContain("from('llm_call_log')");
     expect(route).not.toContain('user_id');
     expect(route).not.toContain('agent_id');
-    expect(route).toContain(".select('family, provider, verdict')");
+    expect(route).not.toContain('prompt');
 
     const logRow = readFileSync(join(SRC, 'types', 'database.types.ts'), 'utf8');
     const start = logRow.indexOf('llm_call_log:');
