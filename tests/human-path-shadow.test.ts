@@ -106,7 +106,16 @@ describe('human-path shadow', () => {
       expect(step.applied).toBe(false);
       expect(step.persisted).toBe(false);
     });
-    expect(body.testnet_tokens.dispenses).toBe(false);
+    expect(body.testnet_tokens).toEqual({
+      dispenses: false,
+      chain_id: 84532,
+      reads: ['GET /api/v1/faucet/info', 'GET /api/v1/faucet/balance'],
+    });
+    const bind = body.steps.find((step) => step.id === 'bind_agents');
+    expect(bind?.applied).toBe(false);
+    expect(bind?.would).toContain('wallet');
+    expect(bind?.would).toContain('agent');
+    expect(body.steps.every((step) => step.applied === false)).toBe(true);
   });
 
   it('uses the same ceiling algebra the owner-ceiling shadow re-exports', () => {

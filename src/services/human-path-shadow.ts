@@ -89,6 +89,7 @@ export interface HumanPathShadow {
   connect_wallet: { live_gate: PublishedGate };
   testnet_tokens: {
     dispenses: false;
+    chain_id: 84532;
     reads: ['GET /api/v1/faucet/info', 'GET /api/v1/faucet/balance'];
   };
   stake: { live_gate: UnpublishedGate };
@@ -135,7 +136,7 @@ const STEPS: readonly Omit<HumanPathStep, 'order'>[] = [
     applied: false,
     persisted: false,
     would:
-      'The live faucet routes name the public Base Sepolia faucets and can read a wallet balance. They dispense nothing. The chain they report comes from getActiveNetwork().',
+      'Base Sepolia, chain id 84532. The live faucet routes name the public faucets and can read a wallet balance. They dispense nothing.',
     refuses: 'Does not dispense tokens and does not dial an RPC.',
   },
   {
@@ -155,7 +156,7 @@ const STEPS: readonly Omit<HumanPathStep, 'order'>[] = [
     applied: false,
     persisted: false,
     would:
-      'A signature over the bind message inserts one live owner for an agent. The flag defaults off, and a second live owner in the same scope is refused.',
+      'Bind is a signature that names the wallet and the agent. The live handler recovers the signer. A stored account id next to an agent is not a bind. The flag defaults off.',
     refuses: 'Does not insert or revoke a binding.',
   },
   {
@@ -210,6 +211,7 @@ export function shadowHumanPath(input: HumanPathInput = {}): HumanPathShadow {
     connect_wallet: { live_gate: published('SELF_SERVE_ACCOUNTS_ENABLED') },
     testnet_tokens: {
       dispenses: false,
+      chain_id: 84532,
       reads: ['GET /api/v1/faucet/info', 'GET /api/v1/faucet/balance'],
     },
     stake: { live_gate: unpublished('REAL_STAKING_ENABLED') },
