@@ -1,0 +1,88 @@
+{
+  "claims": [
+    {
+      "id": "surgeon-mother",
+      "trap": "surgeon",
+      "claim": "The surgeon is the boy's mother.",
+      "first_pass_verdict": "FALSE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "TRUE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "surgeon-none",
+      "trap": "surgeon",
+      "claim": "The story has no possible surgeon.",
+      "first_pass_verdict": 0,
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "dollar-gone",
+      "trap": "missing-dollar",
+      "claim": "One dollar from the thirty is gone.",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "dollar-sum",
+      "trap": "missing-dollar",
+      "claim": "Twenty-seven plus the two-dollar tip accounts for the original thirty.",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "birthday-23",
+      "trap": "birthday",
+      "claim": "Twenty-three people give about a one-half chance of a shared birthday.",
+      "first_pass_verdict": "FALSE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "TRUE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "birthday-183",
+      "trap": "birthday",
+      "claim": "The chance stays below one half until one hundred eighty-three people are in the room.",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z"
+    },
+    {
+      "id": "ravens-apple",
+      "trap": "ravens",
+      "claim": "A green apple is evidence that all ravens are black.",
+      "first_pass_verdict": "FALSE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": null
+    },
+    {
+      "id": "ravens-sample",
+      "trap": "ravens",
+      "claim": "A sample of black ravens proves that every raven is black.",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "monty-two-thirds",
+      "trap": "monty-underspecified",
+      "claim": "Switching wins with probability two thirds when the host's rule is unstated.",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "monty-rule",
+      "trap": "monty-underspecified",
+      "claim": "An unstated host rule still fixes the odds of switching.",
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    }
+  ]
+}
