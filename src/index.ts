@@ -542,6 +542,7 @@ app.use('/api/v1', faucetRouter);
 app.use('/api/v1', humanPathRouter);
 // After-create capability card. Read-only, before auth. can_stake stays false.
 app.use('/api/v1', afterCreateRouter);
+// Join kit. Read-only, before auth. can_stake stays false on this card.
 app.use('/api/v1', joinKitRouter);
 
 // T0.5 agent gate (email OTP + run metering status). Mounted BEFORE
