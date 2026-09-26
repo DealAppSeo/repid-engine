@@ -1,10 +1,9 @@
 import express from 'express';
 import request from 'supertest';
 import { exactTrueFlags, TRUTHY } from '../src/config/flag-readiness';
-import { joinKit } from '../src/services/join-kit';
-import joinKitRouter from '../src/routes/join-kit';
+import joinKitRouter, { joinKit } from '../src/routes/join-kit';
 
-describe('join kit', () => {
+describe('GET /api/v1/join-kit', () => {
   const savedBind = process.env.HUMAN_AGENT_BIND_ENABLED;
   const savedStake = process.env.REAL_STAKING_ENABLED;
 
@@ -15,13 +14,26 @@ describe('join kit', () => {
     else process.env.REAL_STAKING_ENABLED = savedStake;
   });
 
-  it('can_verify is true and can_stake stays false even when staking is exact true', () => {
+  it('names the doors, can verify, and keeps can_stake false', async () => {
     delete process.env.HUMAN_AGENT_BIND_ENABLED;
     process.env.REAL_STAKING_ENABLED = 'true';
-    const card = joinKit(process.env);
-    expect(card).toEqual({ can_verify: true, can_bind: false, can_stake: false });
+    const app = express();
+    app.use('/api/v1', joinKitRouter);
+    const res = await request(app).get('/api/v1/join-kit');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      verify: '/api/v1/repid/verify',
+      status: '/readiness',
+      repid: '/api/v1/repid/:agentId',
+      proof: '/api/v1/proof/verify',
+      honesty_a: '/api/v1/hal/honesty-a',
+      after_create: '/api/v1/after-create',
+      can_verify: true,
+      can_bind: false,
+      can_stake: false,
+    });
     expect(exactTrueFlags({ REAL_STAKING_ENABLED: 'true' }).REAL_STAKING_ENABLED).toBe(true);
-    expect(card.can_stake).toBe(false);
+    expect(joinKit(process.env).can_stake).toBe(false);
   });
 
   it('can_bind follows the exact-true bind flag', () => {
@@ -32,16 +44,5 @@ describe('join kit', () => {
     expect(joinKit({ HUMAN_AGENT_BIND_ENABLED: 'true', REAL_STAKING_ENABLED: 'true' }).can_stake).toBe(
       false,
     );
-  });
-
-  it('GET /api/v1/join-kit returns the card', async () => {
-    delete process.env.HUMAN_AGENT_BIND_ENABLED;
-    const app = express();
-    app.use('/api/v1', joinKitRouter);
-    const res = await request(app).get('/api/v1/join-kit');
-    expect(res.status).toBe(200);
-    expect(res.body.can_verify).toBe(true);
-    expect(res.body.can_bind).toBe(false);
-    expect(res.body.can_stake).toBe(false);
   });
 });
