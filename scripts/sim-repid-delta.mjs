@@ -67,4 +67,10 @@ for (const value of samples) {
   if (reading.verdict === 0) fail('first_pass missing was stored as 0');
 }
 
-process.stdout.write('ok\n');
+process.stdout.write(
+  `nonprofit_help_score\t${helped}\n` +
+    `nonprofit_help_delta\t${helped - start}\n` +
+    `self_rate_zero_score\t${zeroScore}\n` +
+    `self_rate_zero_delta\t${zeroScore - start}\n` +
+    `first_pass\tNOT_CHECKED\n`,
+);
