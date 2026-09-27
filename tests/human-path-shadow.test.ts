@@ -109,6 +109,7 @@ describe('human-path shadow', () => {
     expect(body.testnet_tokens).toEqual({
       dispenses: false,
       chain_id: 84532,
+      sends_eth: false,
       reads: ['GET /api/v1/faucet/info', 'GET /api/v1/faucet/balance'],
     });
     const bind = body.steps.find((step) => step.id === 'bind_agents');
