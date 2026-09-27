@@ -16,6 +16,7 @@
 
 import { attenuateCeiling } from './attenuate-ceiling';
 import { signupPosture, type SignupPosture } from './signup-posture';
+import { testnetOnly } from './testnet-only';
 
 export const HUMAN_PATH_ORDER = [
   'signup',
@@ -90,6 +91,7 @@ export interface HumanPathShadow {
   testnet_tokens: {
     dispenses: false;
     chain_id: 84532;
+    sends_eth: false;
     reads: ['GET /api/v1/faucet/info', 'GET /api/v1/faucet/balance'];
   };
   stake: { live_gate: UnpublishedGate };
@@ -212,6 +214,7 @@ export function shadowHumanPath(input: HumanPathInput = {}): HumanPathShadow {
     testnet_tokens: {
       dispenses: false,
       chain_id: 84532,
+      sends_eth: testnetOnly().sends_eth,
       reads: ['GET /api/v1/faucet/info', 'GET /api/v1/faucet/balance'],
     },
     stake: { live_gate: unpublished('REAL_STAKING_ENABLED') },
