@@ -43,12 +43,16 @@ export type HumanSpendReason =
   | 'over_cap'
   | 'under_cap';
 
+export type SpendCheck = 'human_cap' | 'agent_cap' | 'deny_unbound';
+
 export interface HumanSpendShadow {
   mode: 'shadow';
   applied: false;
   enforced: false;
   spend: 'deny' | 'would_allow';
   reason: HumanSpendReason;
+  /** Gates this call reached, in order. Human cap, then agent cap, then unbound. */
+  visited: SpendCheck[];
   human_cap_usdc: number | null;
   agent_cap_usdc: number | null;
   /** min(human, agent). Null when the cap was not computed. */
@@ -68,6 +72,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
       ...CLOSED,
       spend: 'deny',
       reason: 'owner_cap_not_checked',
+      visited: ['human_cap'],
       human_cap_usdc: null,
       agent_cap_usdc: input.agentCapUsdc,
       effective_cap_usdc: null,
@@ -87,6 +92,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
       ...CLOSED,
       spend: 'deny',
       reason: 'unbound_agent',
+      visited: ['human_cap', 'agent_cap', 'deny_unbound'],
       ...visible,
       detail: 'Human cap, then agent cap. An unbound agent cannot spend. A linked account is not a signature. Nothing was applied.',
     };
@@ -97,6 +103,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
       ...CLOSED,
       spend: 'deny',
       reason: 'stake_not_checked',
+      visited: ['human_cap', 'agent_cap'],
       ...visible,
       detail: 'Human cap, then agent cap. Stake was not checked. A missing measurement is not zero. Nothing was applied.',
     };
@@ -107,6 +114,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
       ...CLOSED,
       spend: 'deny',
       reason: 'no_stake',
+      visited: ['human_cap', 'agent_cap'],
       ...visible,
       detail: 'Human cap, then agent cap. No stake means no spend. Nothing was applied.',
     };
@@ -117,6 +125,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
       ...CLOSED,
       spend: 'deny',
       reason: 'over_cap',
+      visited: ['human_cap', 'agent_cap'],
       ...visible,
       detail: `Amount is over the effective cap ${attenuated.ceiling} (human cap, then agent cap, the minimum). Fail closed. Nothing was applied.`,
     };
@@ -126,6 +135,7 @@ export function shadowHumanSpend(input: HumanSpendShadowInput): HumanSpendShadow
     ...CLOSED,
     spend: 'would_allow',
     reason: 'under_cap',
+    visited: ['human_cap', 'agent_cap'],
     ...visible,
     detail: `Under the effective cap ${attenuated.ceiling}. Recorded only. The live gate was not asked.`,
   };
