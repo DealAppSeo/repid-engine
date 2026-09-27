@@ -7,6 +7,12 @@
   "counterparty": [
     { "kind": "rating", "rater_id": "agent-b", "subject_id": "agent-a", "delta": 25 }
   ],
+  "nonprofit_help": [
+    { "kind": "nonprofit-help", "rater_id": "agent-b", "subject_id": "agent-a", "delta": 1 }
+  ],
+  "self_rate_zero": [
+    { "kind": "rating", "rater_id": "agent-a", "subject_id": "agent-a", "delta": 0 }
+  ],
   "votes": [
     { "family": "llama", "host": "groq" },
     { "family": "llama", "host": "groq", "first_pass_verdict": null },

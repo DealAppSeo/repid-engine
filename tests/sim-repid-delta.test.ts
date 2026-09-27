@@ -18,5 +18,7 @@ describe('sim-repid-delta', () => {
     expect(src).not.toContain('fetch(');
     expect(src).toContain("status: 'NOT_CHECKED'");
     expect(src).toContain('rater_id === event.subject_id');
+    expect(src).toContain('nonprofit-help');
+    expect(src).toContain('self-rate 0 changed the score');
   });
 });
