@@ -107,14 +107,17 @@ export interface FlagReadiness {
  * Booleans on GET /readiness. True only when the variable is the exact string
  * `true`. Unset, empty, `TRUE`, and `1` are false.
  *
- * These gates case-fold (`toLowerCase() === 'true'`). This report does
- * not. A false here is not a claim that a case-folded gate is off, and adding
- * the field does not change the gate. The raw value is never returned.
+ * This report does not case-fold and does not change a gate. A false here is
+ * not a claim that a case-folded gate is off. The raw value is never returned.
  */
 export const EXACT_TRUE_FLAGS: readonly { name: string; why: string }[] = [
   {
     name: 'REAL_STAKING_ENABLED',
     why: 'Whether a deposit can be recorded as a real chain transfer. Published as a boolean so the production value is no longer unmeasured. Exact string true only; the gate is not modified.',
+  },
+  {
+    name: 'HUMAN_AGENT_BIND_ENABLED',
+    why: 'Whether a human wallet can bind to an agent. Published as a boolean. Exact string true only. Listing this boolean does not set the variable and does not change the gate.',
   },
   {
     name: 'OWNER_CEILING_SHADOW_ENABLED',
