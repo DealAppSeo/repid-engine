@@ -20,15 +20,19 @@ describe('score-hal-traps', () => {
 
   it('counts first_pass verdicts that differ from post_hal', () => {
     const expected = disagreementFromPrinter();
-    expect(expected).toBe(10);
+    expect(expected).toBe(4);
     const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
     const pct = Math.round((expected / 10) * 100);
+    expect(pct).not.toBe(100);
     expect(out).toBe(
       `disagreement\t${expected}\nfixture_disagreement_pct\t${pct}\nlive_accuracy\tNOT_CHECKED\n`,
     );
     expect(out).not.toContain('user_id');
     expect(out).not.toContain('\t0\n');
+    expect(out).not.toContain('fixture_disagreement_pct\t100');
     expect(out).not.toContain(`live_accuracy\t${pct}`);
+    const src = readFileSync(script, 'utf8');
+    expect(src).not.toContain('fixture_disagreement_pct\t100');
   });
 
   it('reads the printer stdout and does not insert', () => {

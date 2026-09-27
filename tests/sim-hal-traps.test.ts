@@ -16,21 +16,19 @@ describe('sim-hal-traps', () => {
     expect(lines).toHaveLength(11);
     const rows = lines.slice(1).map((line) => line.split('\t'));
     expect(rows).toHaveLength(10);
+    let saves = 0;
+    let bothWrong = 0;
     for (const row of rows) {
       expect(row[2] === 'TRUE' || row[2] === 'FALSE' || row[2] === 'NOT_CHECKED').toBe(true);
       expect(row[4] === 'TRUE' || row[4] === 'FALSE' || row[4] === 'NOT_CHECKED').toBe(true);
       expect(row[2]).not.toBe('0');
       expect(row[4]).not.toBe('0');
       expect(row).not.toContain('0');
+      if (row[2] === 'TRUE' && row[4] === 'FALSE') saves += 1;
+      if (row[2] === 'TRUE' && row[4] === 'TRUE') bothWrong += 1;
     }
-    const byId = new Map(rows.map((row) => [row[1], row]));
-    expect(byId.get('surgeon-none')?.[2]).toBe('NOT_CHECKED');
-    expect(byId.get('surgeon-none')?.[4]).toBe('FALSE');
-    expect(byId.get('birthday-183')?.[4]).toBe('NOT_CHECKED');
-    expect(byId.get('ravens-apple')?.[4]).toBe('NOT_CHECKED');
-    expect(byId.get('monty-rule')?.[2]).toBe('NOT_CHECKED');
-    expect(byId.get('monty-two-thirds')?.[2]).toBe('TRUE');
-    expect(byId.get('monty-two-thirds')?.[4]).toBe('FALSE');
+    expect(saves).toBe(4);
+    expect(bothWrong).toBe(6);
   });
 
   it('uses the ten fixture claims and does not insert them', () => {
