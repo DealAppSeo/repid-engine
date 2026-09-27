@@ -22,15 +22,21 @@ describe('score-hal-traps', () => {
     const expected = disagreementFromPrinter();
     expect(expected).toBe(10);
     const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
-    expect(out).toBe(`disagreement\t${expected}\n`);
+    const pct = Math.round((expected / 10) * 100);
+    expect(out).toBe(
+      `disagreement\t${expected}\nfixture_disagreement_pct\t${pct}\nlive_accuracy\tNOT_CHECKED\n`,
+    );
     expect(out).not.toContain('user_id');
     expect(out).not.toContain('\t0\n');
+    expect(out).not.toContain(`live_accuracy\t${pct}`);
   });
 
   it('reads the printer stdout and does not insert', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('sim-hal-traps.mjs');
     expect(src).toContain('disagreement');
+    expect(src).toContain('fixture_disagreement_pct');
+    expect(src).toContain('NOT_CHECKED');
     expect(src).not.toContain('supabase');
     expect(src).not.toContain('fetch(');
     expect(src).not.toContain('.insert(');
