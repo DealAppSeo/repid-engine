@@ -1,6 +1,7 @@
 /**
  * Count disagreements in the sim-hal-traps table.
  * A row counts when its first_pass verdict differs from its post_hal verdict.
+ * The percent is the fixture only. Live accuracy stays NOT_CHECKED.
  * Reads that script's stdout only. Does not insert a row.
  */
 import { spawnSync } from 'node:child_process';
@@ -38,4 +39,8 @@ for (const line of rows) {
   if (first !== post) disagreement += 1;
 }
 
-process.stdout.write(`disagreement\t${disagreement}\n`);
+const fixturePct = Math.round((disagreement / rows.length) * 100);
+if (!Number.isInteger(fixturePct)) fail('fixture percent is not an integer');
+process.stdout.write(
+  `disagreement\t${disagreement}\nfixture_disagreement_pct\t${fixturePct}\nlive_accuracy\tNOT_CHECKED\n`,
+);
