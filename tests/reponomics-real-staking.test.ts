@@ -120,6 +120,7 @@ function mockProvider(opts: {
   head?: number;
   balBefore?: bigint;
   balAfter?: bigint;
+  chainId?: string | number | null;
 } = {}): EthProviderLike {
   const {
     receipt = {
@@ -130,6 +131,7 @@ function mockProvider(opts: {
     head = 105,
     balBefore = 0n,
     balAfter = 100_000_000n,
+    chainId = '0x14a34',
   } = opts;
   return {
     getTransactionReceipt: jest.fn(async () => receipt),
@@ -138,6 +140,11 @@ function mockProvider(opts: {
       // balanceOf(escrow): return balAfter at deposit block, balBefore one earlier.
       const bal = tx.blockTag === 100 ? balAfter : balBefore;
       return iface.encodeFunctionResult('balanceOf', [bal]);
+    }),
+    send: jest.fn(async (method: string) => {
+      if (method !== 'eth_chainId') throw new Error(`unexpected rpc ${method}`);
+      if (chainId === null) throw new Error('eth_chainId unavailable');
+      return chainId;
     }),
   };
 }
@@ -260,6 +267,21 @@ describe('deposit-verifier — verifyDeposit', () => {
     expect(r.verified).toBe(false);
     expect(r.reason).toMatch(/invalid or missing tx_hash/i);
   });
+
+  it('rejects eth_chainId other than 84532 before credit', async () => {
+    __setProviderFactory(() => mockProvider({ chainId: '0x1' }));
+    const r = await verifyDeposit(base);
+    expect(r.verified).toBe(false);
+    expect(r.reason).toMatch(/84532/);
+    expect(r.observedAmount).toBeUndefined();
+  });
+
+  it('rejects an unreadable eth_chainId', async () => {
+    __setProviderFactory(() => mockProvider({ chainId: null }));
+    const r = await verifyDeposit(base);
+    expect(r.verified).toBe(false);
+    expect(r.reason).toMatch(/eth_chainId/);
+  });
 });
 
 // ===========================================================================
@@ -332,6 +354,18 @@ describe('stake-vault — depositStake real-staking routing', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/duplicate tx_hash/i);
     expect(dbState.inserts.length).toBe(0);
+  });
+
+  it('flag ON: a chain other than 84532 records no credit', async () => {
+    mockConfig.realStakingEnabled = true;
+    __setProviderFactory(() => mockProvider({ chainId: '0x1' }));
+    seedBuilderFound();
+    dbState.selectResults['stake_deposits'] = [{ data: [], error: null }];
+    const r = await depositStake(BUILDER_ADDR, 100_000_000n, VALID_TX);
+    expect(r.ok).toBe(false);
+    expect(r.verified).toBe(false);
+    expect(r.error).toMatch(/84532/);
+    expect(dbState.inserts).toHaveLength(0);
   });
 
   it('flag ON: rejects an on-chain-unverified deposit (short amount)', async () => {

@@ -15,6 +15,8 @@
  *   5. balance     — balanceOf(escrow) increased by >= the claimed amount
  *                    across the deposit block (belt-and-suspenders vs. a
  *                    forged/re-entrant Transfer log).
+ *   6. chain       — eth_chainId is 84532. Any other id, or an unreadable
+ *                    id, is refused before a credit is recorded.
  *
  * The ethers provider is injectable so this module is unit-testable without a
  * live RPC (see tests/reponomics-real-staking.test.ts).
@@ -26,6 +28,7 @@
 
 import { ethers } from 'ethers';
 import { config } from '../config';
+import { BASE_SEPOLIA_CHAIN_ID } from './testnet-only';
 
 // ERC-20 Transfer event signature + balanceOf, the only surface we touch.
 const ERC20_ABI = [
@@ -59,6 +62,7 @@ export interface EthProviderLike {
   getTransactionReceipt(txHash: string): Promise<ethers.TransactionReceipt | null>;
   getBlockNumber(): Promise<number>;
   call(tx: { to: string; data: string; blockTag?: ethers.BlockTag }): Promise<string>;
+  send?(method: string, params: readonly unknown[]): Promise<unknown>;
 }
 
 let providerFactory: () => EthProviderLike = () =>
@@ -72,6 +76,32 @@ export function __setProviderFactory(f?: () => EthProviderLike): void {
 }
 
 const iface = new ethers.Interface(ERC20_ABI);
+
+function parseChainId(raw: unknown): number | null {
+  if (typeof raw === 'bigint') {
+    const n = Number(raw);
+    return Number.isSafeInteger(n) ? n : null;
+  }
+  if (typeof raw === 'number' && Number.isInteger(raw)) return raw;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(text)) {
+      const n = Number.parseInt(text, 16);
+      return Number.isSafeInteger(n) ? n : null;
+    }
+    if (/^[0-9]+$/.test(text)) {
+      const n = Number.parseInt(text, 10);
+      return Number.isSafeInteger(n) ? n : null;
+    }
+  }
+  return null;
+}
+
+async function readEthChainId(provider: EthProviderLike): Promise<number | null> {
+  if (typeof provider.send !== 'function') return null;
+  const raw = await provider.send('eth_chainId', []);
+  return parseChainId(raw);
+}
 
 function eqAddr(a?: string | null, b?: string | null): boolean {
   if (!a || !b) return false;
@@ -97,6 +127,16 @@ export async function verifyDeposit(input: VerifyDepositInput): Promise<VerifyDe
   if (claimedAmount <= 0n) return { verified: false, reason: 'claimed amount must be positive' };
 
   const provider = providerFactory();
+
+  let chainId: number | null;
+  try {
+    chainId = await readEthChainId(provider);
+  } catch (e: any) {
+    return { verified: false, reason: `eth_chainId unreadable: ${e?.message ?? e}` };
+  }
+  if (chainId !== BASE_SEPOLIA_CHAIN_ID) {
+    return { verified: false, reason: 'eth_chainId is not 84532' };
+  }
 
   let receipt: ethers.TransactionReceipt | null;
   try {
