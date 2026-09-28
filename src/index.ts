@@ -91,6 +91,7 @@ import cacheStatsRouter from './routes/cache-stats';
 import faucetRouter from './routes/faucet'; // E2E FAUCET step — public read-only faucet info + balance check (no key custody)
 import humanPathRouter from './routes/human-path'; // human walk in shadow — records the six steps, performs none
 import bindPreviewRouter from './routes/human-bind-preview';
+import unbindPreviewRouter from './routes/human-unbind-preview';
 import afterCreateRouter from './routes/after-create';
 import joinKitRouter from './routes/join-kit';
 import trustmarketJoinRouter from './routes/trustmarket-join';
@@ -547,6 +548,8 @@ app.use('/api/v1', faucetRouter);
 app.use('/api/v1', humanPathRouter);
 // Bind preview. Empty body is 401. It names wallet and agent and inserts nothing.
 app.use('/api/v1', bindPreviewRouter);
+// Unbind preview. Empty body is 401. It names wallet and agent and inserts nothing.
+app.use('/api/v1', unbindPreviewRouter);
 // After-create capability card. Read-only, before auth. can_stake stays false.
 app.use('/api/v1', afterCreateRouter);
 // Join kit. Read-only, before auth. can_stake stays false on this card.
