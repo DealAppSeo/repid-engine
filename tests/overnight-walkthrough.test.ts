@@ -93,7 +93,11 @@ describe('overnight walkthrough (mocked network)', () => {
       expect(typeof res.body.exact_true[flag.name]).toBe('boolean');
     }
     expect(EXACT_TRUE_FLAGS.map((flag) => flag.name)).toEqual(
-      expect.arrayContaining(['REAL_STAKING_ENABLED', 'OWNER_CEILING_SHADOW_ENABLED']),
+      expect.arrayContaining([
+        'HUMAN_AGENT_BIND_ENABLED',
+        'REAL_STAKING_ENABLED',
+        'OWNER_CEILING_SHADOW_ENABLED',
+      ]),
     );
   });
 
