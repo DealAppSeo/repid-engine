@@ -65,7 +65,22 @@ export function jevPrefilterEnabled(): boolean {
   return process.env.HAL_JEV_PREFILTER_ENABLED === 'true';
 }
 
-export type JevPrefilterReason = 'flag_off' | 'skipped_not_factual' | 'factual' | 'unavailable';
+export type JevPrefilterReason =
+  | 'flag_off'
+  | 'skipped_not_factual'
+  | 'factual'
+  | 'unavailable'
+  | 'refused_scheme';
+
+export function jevSchemeGate(scheme: string): {
+  accepted: boolean;
+  reason: 'plonky3_range_check' | 'refused';
+} {
+  if (scheme === 'plonky3_range_check') {
+    return { accepted: true, reason: 'plonky3_range_check' };
+  }
+  return { accepted: false, reason: 'refused' };
+}
 
 export interface JevPrefilterResult {
   skipHal: boolean;
@@ -83,7 +98,10 @@ const Q_WORTH_QUORUM =
   'Would independent fact-checking of this text by multiple providers ' +
   'produce a meaningful verdict?';
 
-export async function jevPrefilter(text: string): Promise<JevPrefilterResult> {
+export async function jevPrefilter(text: string, scheme?: string): Promise<JevPrefilterResult> {
+  if (typeof scheme === 'string' && !jevSchemeGate(scheme).accepted) {
+    return { skipHal: false, reason: 'refused_scheme' };
+  }
   if (!jevPrefilterEnabled()) {
     return { skipHal: false, reason: 'flag_off' };
   }

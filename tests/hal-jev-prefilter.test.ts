@@ -43,6 +43,7 @@ import {
   jevPrefilter,
   jevPrefilterEnabled,
   jevModel,
+  jevSchemeGate,
   jevSkipThreshold,
   JEV_MODEL_DEFAULT,
   JEV_SKIP_THRESHOLD_DEFAULT,
@@ -327,5 +328,24 @@ describe('model id and threshold are env-overridable (Groq-retirement lesson)', 
     expect(jevSkipThreshold()).toBe(JEV_SKIP_THRESHOLD_DEFAULT);
     process.env.HAL_JEV_SKIP_THRESHOLD = '7';
     expect(jevSkipThreshold()).toBe(JEV_SKIP_THRESHOLD_DEFAULT);
+  });
+});
+
+describe('scheme gate', () => {
+  it('accepts only plonky3_range_check and refuses every other scheme before any fetch', async () => {
+    expect(jevSchemeGate('plonky3_range_check')).toEqual({
+      accepted: true,
+      reason: 'plonky3_range_check',
+    });
+    for (const scheme of ['sha256-stub', 'postcard', 'plonky3', '']) {
+      expect(jevSchemeGate(scheme)).toEqual({ accepted: false, reason: 'refused' });
+    }
+    process.env.HAL_JEV_PREFILTER_ENABLED = 'true';
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    await expect(jevPrefilter(PARIS, 'postcard')).resolves.toEqual({
+      skipHal: false,
+      reason: 'refused_scheme',
+    });
+    expect(providerFetch as jest.Mock).not.toHaveBeenCalled();
   });
 });
