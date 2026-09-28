@@ -21,6 +21,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import honestyARouter from './routes/honesty-a';
+import memoryPolicyRouter from './routes/memory-policy';
 import proofVerifyRouter from './routes/proof-verify';
 import helpBRouter from './routes/help-b';
 import socialQueueRouter from './routes/social-queue';
@@ -365,6 +366,8 @@ app.use('/api/v1/hal/evaluate', ipRateLimit(halPublicLimit, halPublicWindow));
 app.use('/api/v1/hal', halEvaluateRouter);
 // Honesty A is a keyless read. It does not score and it does not write.
 app.use('/api/v1/hal', honestyARouter);
+// Memory policy is a keyless read. It does not write.
+app.use('/api/v1', memoryPolicyRouter);
 // Local proof check. Does not mint and does not write a chain transaction.
 app.use('/api/v1', proofVerifyRouter);
 // Help B writes are closed unless the flag is the exact string true.
