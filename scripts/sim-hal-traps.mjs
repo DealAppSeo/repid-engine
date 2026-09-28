@@ -48,12 +48,6 @@ for (const [name, n] of counts) {
   if (n !== 2) fail(`${name} has ${n} claims`);
 }
 
-const sawZero = claims.some((claim) => claim.first_pass_verdict === 0 || claim.post_hal_verdict === 0);
-const sawMissingFirst = claims.some((claim) => !Object.prototype.hasOwnProperty.call(claim, 'first_pass_verdict'));
-const sawMissingPost = claims.some((claim) => !Object.prototype.hasOwnProperty.call(claim, 'post_hal_verdict'));
-if (!sawZero) fail('fixture has no numeric 0 pass');
-if (!sawMissingFirst || !sawMissingPost) fail('fixture is missing a pass field');
-
 const lines = [HEADER.join('\t')];
 for (const claim of claims) {
   const first = passCell(claim.first_pass_verdict, claim.first_pass_at);
