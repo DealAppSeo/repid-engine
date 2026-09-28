@@ -126,6 +126,16 @@ describe('honesty A', () => {
     expect(report.gap).toContain('no verdict column');
   });
 
+  it('a counted empty read is rows [] and is not a NOT_CHECKED null', () => {
+    const counted = aggregateHonestyA([]);
+    const missed = honestyANotChecked(HONESTY_A_LLM_LOG_GAP);
+    expect(counted.status).toBe('counted');
+    expect(counted.rows).toEqual([]);
+    expect(missed.status).toBe('NOT_CHECKED');
+    expect(missed.rows).toBeNull();
+    expect(counted.rows).not.toBe(missed.rows);
+  });
+
   it('the payload contract has no prompt and no user id, and the route does not read llm_call_log', () => {
     const report = aggregateHonestyA([
       { family: 'llama', provider: 'groq', verdict: 'TRUE' },
