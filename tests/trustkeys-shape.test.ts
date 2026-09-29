@@ -39,6 +39,7 @@ describe('trustkeys-shape', () => {
       SUPABASE_SERVICE_ROLE_KEY: publishable,
       SUPABASE_SERVICE_KEY: jwt,
       DATABASE_URL: database,
+      SUPABASE_PUBLISHABLE_KEY: publishable,
     };
   }
 
@@ -52,6 +53,7 @@ describe('trustkeys-shape', () => {
         'SUPABASE_SERVICE_ROLE_KEY\tsb_publishable',
         'SUPABASE_SERVICE_KEY\tjwt_eyJ',
         'DATABASE_URL\tpostgresql',
+        'SUPABASE_PUBLISHABLE_KEY\tsb_publishable',
       ].join('\n') + '\n',
     );
     expect(result.out).not.toContain(secret);
