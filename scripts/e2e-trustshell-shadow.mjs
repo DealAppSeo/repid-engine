@@ -80,8 +80,11 @@ async function main() {
   if (card.body.can_stake !== false) fail('can_stake');
   if (typeof card.body.can_bind !== 'boolean') fail('can_bind');
   if (sequence && card.body.can_bind !== false) fail('can_bind followed a non-exact flag');
+  if (card.body.applied !== false) fail('after-create applied');
+  if (card.body.can_rate_models === 0 || card.body.can_rate_models === false) fail('can_rate_models invented');
   const honestyCounted = first.body?.status === 'counted';
-  if (card.body.can_rate_models !== honestyCounted) fail('can_rate_models');
+  if (honestyCounted && card.body.can_rate_models !== true) fail('can_rate_models');
+  if (!honestyCounted && card.body.can_rate_models !== 'NOT_CHECKED') fail('can_rate_models miss');
 
   if (sequence) {
     const empty = await get('/api/v1/hal/honesty-a');
