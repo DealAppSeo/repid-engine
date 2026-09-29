@@ -43,19 +43,23 @@ describe('can_rate_models', () => {
     (require('../src/db') as { __setHonestyMode: (m: 'error' | 'rows') => void }).__setHonestyMode('error');
   });
 
-  it('a counted fixture that was not the route stays false, and can_stake stays false', () => {
+  it('a counted fixture that was not the route is NOT_CHECKED, and can_stake stays false', () => {
     aggregateHonestyA([{ family: 'llama', provider: 'groq', verdict: 'TRUE' }]);
     const card = afterCreateCard({});
-    expect(card.can_rate_models).toBe(false);
+    expect(card.can_rate_models).toBe('NOT_CHECKED');
+    expect(card.can_rate_models).not.toBe(0);
     expect(card.can_stake).toBe(false);
+    expect(card.applied).toBe(false);
   });
 
-  it('NOT_CHECKED from the route stays false', async () => {
+  it('NOT_CHECKED from the route stays NOT_CHECKED', async () => {
     const res = await request(app()).get('/api/v1/hal/honesty-a');
     expect(res.body.status).toBe('NOT_CHECKED');
     const card = afterCreateCard({});
-    expect(card.can_rate_models).toBe(false);
+    expect(card.can_rate_models).toBe('NOT_CHECKED');
+    expect(card.can_rate_models).not.toBe(0);
     expect(card.can_stake).toBe(false);
+    expect(card.applied).toBe(false);
   });
 
   it('counted from the route is true', async () => {
@@ -64,6 +68,8 @@ describe('can_rate_models', () => {
     expect(res.body.status).toBe('counted');
     const card = afterCreateCard({ REAL_STAKING_ENABLED: 'true' });
     expect(card.can_rate_models).toBe(true);
+    expect(card.can_rate_models).not.toBe(0);
     expect(card.can_stake).toBe(false);
+    expect(card.applied).toBe(false);
   });
 });

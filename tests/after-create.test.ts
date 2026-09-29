@@ -19,7 +19,7 @@ describe('after-create card', () => {
     else process.env.REAL_STAKING_ENABLED = savedStake;
   });
 
-  it('can_verify is true, can_stake stays false, and can_rate_models is false', () => {
+  it('can_verify is true, can_stake stays false, and a miss is NOT_CHECKED', () => {
     delete process.env.HUMAN_AGENT_BIND_ENABLED;
     process.env.REAL_STAKING_ENABLED = 'true';
     const card = afterCreateCard(process.env);
@@ -28,8 +28,11 @@ describe('after-create card', () => {
       can_verify: true,
       can_bind: false,
       can_stake: false,
-      can_rate_models: false,
+      can_rate_models: 'NOT_CHECKED',
+      applied: false,
     });
+    expect(card.can_rate_models).not.toBe(0);
+    expect(card.applied).toBe(false);
     expect(exactTrueFlags({ REAL_STAKING_ENABLED: 'true' }).REAL_STAKING_ENABLED).toBe(true);
     expect(card.can_stake).toBe(false);
   });
@@ -49,8 +52,12 @@ describe('after-create card', () => {
     app.use('/api/v1', afterCreateRouter);
     const res = await request(app).get('/api/v1/after-create');
     expect(res.status).toBe(200);
-    expect(res.body.can_stake).toBe(false);
     expect(res.body.can_verify).toBe(true);
+    expect(typeof res.body.can_bind).toBe('boolean');
+    expect(res.body.can_stake).toBe(false);
+    expect(res.body.can_rate_models === true || res.body.can_rate_models === 'NOT_CHECKED').toBe(true);
+    expect(res.body.can_rate_models).not.toBe(0);
+    expect(res.body.applied).toBe(false);
     const route = readFileSync(join(SRC, 'routes', 'after-create.ts'), 'utf8');
     expect(route).not.toContain('token-signup');
     expect(route).not.toContain('tokenSignup');
