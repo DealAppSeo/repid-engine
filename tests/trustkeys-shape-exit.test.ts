@@ -26,6 +26,7 @@ describe('trustkeys-shape exit', () => {
     expect(result.code).toBe(2);
     expect(result.out).toContain('SUPABASE_SECRET_KEY\tunset');
     expect(result.out).toContain('DATABASE_URL\tunset');
+    expect(result.out).toContain('SUPABASE_PUBLISHABLE_KEY\tunset');
     expect(result.out).not.toContain(secret);
     expect(result.out).not.toContain('shape-pass');
   });
@@ -36,10 +37,12 @@ describe('trustkeys-shape exit', () => {
       SUPABASE_SERVICE_ROLE_KEY: secret,
       SUPABASE_SERVICE_KEY: 'sb_publishable_SHAPE_SENTINEL',
       DATABASE_URL: database,
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_SHAPE_SENTINEL',
     });
     expect(result.code).toBe(0);
     expect(result.out).toContain('SUPABASE_SECRET_KEY\tsb_secret');
     expect(result.out).toContain('DATABASE_URL\tpostgresql');
+    expect(result.out).toContain('SUPABASE_PUBLISHABLE_KEY\tsb_publishable');
     expect(result.out).not.toContain(secret);
     expect(result.out).not.toContain(database);
     expect(result.out).not.toContain('shape-pass');

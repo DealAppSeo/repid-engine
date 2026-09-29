@@ -8,6 +8,7 @@ const NAMES = [
   'SUPABASE_SERVICE_ROLE_KEY',
   'SUPABASE_SERVICE_KEY',
   'DATABASE_URL',
+  'SUPABASE_PUBLISHABLE_KEY',
 ];
 
 const KNOWN = new Set(['sb_secret', 'sb_publishable', 'postgresql', 'jwt_eyJ']);
