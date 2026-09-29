@@ -123,6 +123,10 @@ export const EXACT_TRUE_FLAGS: readonly { name: string; why: string }[] = [
     name: 'OWNER_CEILING_SHADOW_ENABLED',
     why: 'Whether the owner-ceiling observer reads anything. The observer does not decide a payment. Exact string true only; enforce stays off.',
   },
+  {
+    name: 'STAKE_AUTHORITY_SHADOW_ENABLED',
+    why: 'Whether the stake-authority observer reads anything. The observer does not move a stake and does not send ETH. Exact string true only; this report does not set the variable.',
+  },
 ];
 
 /** True only for the exact string `true`. Unset is false. Does not case-fold. */
