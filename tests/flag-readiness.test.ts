@@ -180,7 +180,7 @@ describe('exact_true — true only for the exact string, unset is false', () => 
       const off = await request(app).get('/readiness');
       expect(off.status).toBe(200);
       for (const f of EXACT_TRUE_FLAGS) expect(off.body.exact_true[f.name]).toBe(false);
-      expect(off.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBeUndefined();
+      expect(off.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBe(false);
 
       process.env.REAL_STAKING_ENABLED = 'true';
       process.env.OWNER_CEILING_SHADOW_ENABLED = 'TRUE';
@@ -191,7 +191,16 @@ describe('exact_true — true only for the exact string, unset is false', () => 
       expect(typeof mixed.body.exact_true.HUMAN_AGENT_BIND_ENABLED).toBe('boolean');
       expect(typeof mixed.body.exact_true.REAL_STAKING_ENABLED).toBe('boolean');
       expect(mixed.body.exact_true.OWNER_CEILING_SHADOW_ENABLED).toBe(false);
-      expect(mixed.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBeUndefined();
+      expect(mixed.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBe(false);
+      expect(typeof mixed.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBe('boolean');
+
+      process.env.REAL_STAKING_ENABLED = 'TRUE';
+      process.env.OWNER_CEILING_SHADOW_ENABLED = '1';
+      process.env.STAKE_AUTHORITY_SHADOW_ENABLED = 'true';
+      const exact = await request(app).get('/readiness');
+      expect(exact.body.exact_true.REAL_STAKING_ENABLED).toBe(false);
+      expect(exact.body.exact_true.OWNER_CEILING_SHADOW_ENABLED).toBe(false);
+      expect(exact.body.exact_true.STAKE_AUTHORITY_SHADOW_ENABLED).toBe(true);
       expect(JSON.stringify(mixed.body.exact_true)).not.toContain('TRUE');
     } finally {
       for (const f of EXACT_TRUE_FLAGS) {
