@@ -20,10 +20,24 @@ describe('laya classify', () => {
 
   it('does not call a paid API', () => {
     const src = readFileSync(path.join(__dirname, '..', 'src', 'laya', 'classify.ts'), 'utf8');
+    expect(src).toContain('postcardCommitmentSha256');
+    expect(src).not.toContain('zkp-postcard');
     expect(src).not.toContain('fetch(');
     expect(src).not.toContain('axios');
     expect(src).not.toContain('process.env');
     expect(src).not.toContain('openai');
     expect(src).not.toContain('anthropic');
+  });
+
+  it('reuses one local postcard digest on the cheap route only', () => {
+    const first = classify('hello', () => 0);
+    const second = classify('hello again', () => 0);
+    expect(first.reuse).toBe('postcard');
+    expect(first.postcard).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(second.postcard).toBe(first.postcard);
+    expect(classify('  ', () => 0).reuse).toBeNull();
+    expect(classify('  ', () => 0).postcard).toBeNull();
+    expect(classify('attest this claim', () => 0).reuse).toBeNull();
+    expect(classify('attest this claim', () => 0).postcard).toBeNull();
   });
 });
