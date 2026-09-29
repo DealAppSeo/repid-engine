@@ -17,9 +17,19 @@ describe('spend preview fixture', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       rates: [50, 100],
+      assets: [
+        { usdc: 50, eth: 1, cbbtc: 1 },
+        { usdc: 100, eth: 2, cbbtc: 2 },
+      ],
       applied: false,
       persisted: false,
     });
+    expect(res.body.applied).toBe(false);
+    for (const row of res.body.assets as { usdc: number; eth: number; cbbtc: number }[]) {
+      expect(row.usdc === 50 || row.usdc === 100).toBe(true);
+      expect(typeof row.eth).toBe('number');
+      expect(typeof row.cbbtc).toBe('number');
+    }
   });
 
   it('is mounted before auth and does not insert or fetch', () => {
@@ -36,6 +46,8 @@ describe('spend preview fixture', () => {
       expect(src).not.toContain('supabase');
       expect(src).not.toContain('from(');
       expect(src).not.toContain('fetch(');
+      expect(src).not.toContain('sendTransaction');
+      expect(src).not.toContain('ethers');
     }
   });
 });
