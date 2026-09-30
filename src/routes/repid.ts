@@ -24,6 +24,7 @@ import { generateProof } from '../zk-proof/prover';
 import { fireWebhook } from '../services/webhook';
 import { publicError } from './public-error';
 import { previewCatalog, previewRepId } from '../engine/repid-preview';
+import { repidScoreTier } from '../services/repid-score-tier';
 import { REPID_MAX, REPID_MIN } from '../scoring/repid-deltas';
 import { easBlock } from '../services/anchor-status';
 
@@ -63,12 +64,6 @@ async function resolveAgentUuid(raw: string): Promise<string | null> {
 
 /* ------------------------ Public routes ----------------------------- */
 
-// GET /api/v1/repid/:agentId — current RepID for an agent
-// Public lookup endpoint: ANY failure to retrieve (not-found OR
-// upstream DB issue) is reported as 404. The DB error is still
-// logged server-side for ops visibility. This matches the pre-
-// existing /repid/:agent_id route's lenient behavior in v1.ts so
-// the existing tests/repid-score.test.ts smoke test stays green.
 /**
  * PREVIEW — what actions are worth, for a visitor who has proven nothing.
  *
@@ -132,6 +127,8 @@ repidPublicRouter.get('/repid/preview/project', (req: Request, res: Response) =>
   return res.json({ ok: true, ...previewRepId({ baseRepId, eventTypes }) });
 });
 
+// GET /api/v1/repid/:agentId — score and tier only.
+// A missing id is NOT_CHECKED, never 0. This handler does not insert.
 repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => {
   try {
     // Shared resolver — NOT a fourth inline copy. This block used to duplicate
@@ -142,11 +139,16 @@ repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => 
     // its three siblings kept the copy and kept the bug.
     const resolvedId = await resolveAgentUuid(String(req.params.agentId ?? ''));
     if (!resolvedId) {
-      return res.status(404).json({ error: 'AGENT_NOT_FOUND', agent_id: String(req.params.agentId ?? '').slice(0, 128) });
+      res.status(200).json(repidScoreTier(null));
+      return;
     }
     const lookup = await getRepIDForAgent(resolvedId);
-    res.json(lookup);
+    res.status(200).json(repidScoreTier({ score: lookup.repid_score, tier: lookup.tier }));
   } catch (e: any) {
+    if (e?.code === 'AGENT_NOT_FOUND') {
+      res.status(200).json(repidScoreTier(null));
+      return;
+    }
     if (e?.code === 'DATABASE_ERROR') {
       console.error(`[repid] lookup db error for ${req.params.agentId}: ${e.message}`);
     }

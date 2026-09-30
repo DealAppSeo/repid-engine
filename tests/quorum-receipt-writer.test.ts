@@ -86,6 +86,48 @@ function makeFakeClient() {
   return client;
 }
 
+function passVoteInserts(inserts: FakeInsert[]): FakeInsert[] {
+  return inserts.filter(
+    (i) => i.table === 'hal_quorum_validator_votes' && i.rows.length === 1 && 'host' in i.rows[0],
+  );
+}
+
+function makeProbeClient(probeError: { message: string } | null) {
+  const inserts: FakeInsert[] = [];
+  let nextId = 1000;
+  const client = {
+    from(table: string) {
+      return {
+        select(_cols: string) {
+          return {
+            limit(_n: number) {
+              return Promise.resolve({ error: probeError });
+            },
+          };
+        },
+        insert(payload: any) {
+          const rows = Array.isArray(payload) ? payload : [payload];
+          inserts.push({ table, rows });
+          return {
+            select(_cols: string) {
+              return {
+                async single() {
+                  return { data: { id: ++nextId }, error: null };
+                },
+              };
+            },
+            then(resolve: (v: { error: null }) => void) {
+              resolve({ error: null });
+            },
+          };
+        },
+      };
+    },
+    inserts,
+  };
+  return client;
+}
+
 describe('HAL family-quorum receipt writer', () => {
   const OLD_ENV = { ...process.env };
   afterEach(() => {
@@ -171,6 +213,48 @@ describe('HAL family-quorum receipt writer', () => {
     expect(familiesByProvider.groq).toBe('llama');
     expect(familiesByProvider.gemini).toBe('gemini');
     expect(familiesByProvider.deepseek).toBe('deepseek');
+  });
+
+  test('exact true inserts one pass-vote row and does not move a score', async () => {
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    process.env.HAL_QUORUM_RECEIPT_SAMPLE_RATE = '1.0';
+    const client = makeProbeClient(null);
+    const res = await writeQuorumReceipt(client as any, SYNTHETIC_QUORUM, CTX);
+
+    expect(res.written).toBe(true);
+    const tables = new Set(client.inserts.map((i) => i.table));
+    expect(tables.has('repid_agents')).toBe(false);
+    expect(tables.has('repid_score_events')).toBe(false);
+    const pass = client.inserts.filter(
+      (i) => i.table === 'hal_quorum_validator_votes' && i.rows.length === 1 && 'host' in i.rows[0],
+    );
+    expect(pass).toHaveLength(1);
+    const row = pass[0]!.rows[0];
+    expect(row.receipt_id).toBe(res.receiptId);
+    expect(row.host).toBe('groq');
+    expect(row.family).toBe('llama');
+    expect(row.first_pass_verdict).toBe('FALSE');
+    expect(row).not.toHaveProperty('user_id');
+    expect(row).not.toHaveProperty('claim');
+    expect(JSON.stringify(row)).not.toMatch(/user_id|claim/);
+  });
+
+  test('TRUE, on, and a missing column do not insert the pass-vote row', async () => {
+    process.env.HAL_QUORUM_RECEIPT_SAMPLE_RATE = '1.0';
+    for (const flag of ['TRUE', 'on', '1']) {
+      process.env.HAL_QUORUM_RECEIPT_ENABLED = flag;
+      const client = makeProbeClient(null);
+      await writeQuorumReceipt(client as any, SYNTHETIC_QUORUM, CTX);
+      const pass = passVoteInserts(client.inserts);
+      expect(pass).toHaveLength(0);
+    }
+
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    const missing = makeProbeClient({ message: 'column host does not exist' });
+    const res = await writeQuorumReceipt(missing as any, SYNTHETIC_QUORUM, CTX);
+    expect(res.written).toBe(true);
+    expect(passVoteInserts(missing.inserts)).toHaveLength(0);
+    expect(missing.inserts.some((i) => i.table === 'hal_quorum_receipts')).toBe(true);
   });
 
   test('unmapped family surfaces in receipt.families_unmapped (spoofable-vote visibility)', () => {

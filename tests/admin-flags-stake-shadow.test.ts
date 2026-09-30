@@ -52,11 +52,16 @@ describe('admin/flags — stake_authority_shadow_enabled is reported', () => {
   });
 
   it('is NOT added to the public readiness allowlist — that would be a disclosure decision', () => {
-    // flag-readiness.ts's PUBLIC_FLAGS is for gates an unauthenticated caller can already
-    // infer from behaviour. This one changes no behaviour, so it cannot be inferred, and
+    // PUBLIC_FLAGS is for gates an unauthenticated caller can already infer from
+    // behaviour. This one changes no behaviour, so it cannot be inferred, and
     // putting it there would disclose rather than report.
+    // exact_true is a separate boolean report. This scan does not read that list.
     const readiness = readFileSync(join(__dirname, '../src/config/flag-readiness.ts'), 'utf8');
-    expect(readiness).not.toContain(FLAG);
+    const start = readiness.indexOf('export const PUBLIC_FLAGS');
+    const end = readiness.indexOf('export const TRUTHY');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(readiness.slice(start, end)).not.toContain(FLAG);
   });
 });
 

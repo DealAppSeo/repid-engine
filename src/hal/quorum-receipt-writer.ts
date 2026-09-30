@@ -36,6 +36,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { familyOfResolved, type FactCheckResult, type ProviderVerdict } from './fact-check';
+import { writePassVote } from './first-pass-vote';
 import { pageOperator } from '../services/operator-pager';
 
 /** Row shape for `public.hal_quorum_receipts` (mirrors migrations/2026-07-13-hal-quorum-receipts.sql). */
@@ -193,6 +194,38 @@ export interface QuorumReceiptWriteResult {
   error?: string;
 }
 
+const ONE_VOTE_AT = '1970-01-01T00:00:00.000Z';
+
+/**
+ * One pass-vote row after the receipt exists. Exact string `true` only.
+ * A missing column skips the insert. This does not throw and does not move a score.
+ */
+async function writeOneVoteAfterQuorum(
+  client: Pick<SupabaseClient, 'from'>,
+  receiptId: number,
+  votes: QuorumValidatorVoteRow[],
+): Promise<void> {
+  const closed = votes.find((v) => v.verdict === 'TRUE' || v.verdict === 'FALSE');
+  const family = closed?.family ?? votes[0]?.family ?? 'quorum';
+  const host = closed?.provider ?? votes[0]?.provider ?? 'quorum';
+  try {
+    await writePassVote(
+      client as unknown as Parameters<typeof writePassVote>[0],
+      {
+        receipt_id: receiptId,
+        family,
+        host,
+        ...(closed
+          ? { first_pass_verdict: closed.verdict, first_pass_at: ONE_VOTE_AT }
+          : {}),
+      },
+      process.env,
+    );
+  } catch {
+    // Fail closed: a broken client must not escape into scoring.
+  }
+}
+
 /**
  * Persist ONE quorum receipt + its validator votes via the injected client. Gated by
  * `HAL_QUORUM_RECEIPT_ENABLED` (default OFF) and `HAL_QUORUM_RECEIPT_SAMPLE_RATE`. Never throws.
@@ -238,6 +271,8 @@ export async function writeQuorumReceipt(
         );
       }
     }
+
+    await writeOneVoteAfterQuorum(client, receiptId, votes);
 
     return { written: true, receiptId, voteCount: votes.length };
   } catch (e: any) {
