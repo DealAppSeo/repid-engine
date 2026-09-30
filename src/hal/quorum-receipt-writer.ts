@@ -36,7 +36,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { familyOfResolved, type FactCheckResult, type ProviderVerdict } from './fact-check';
-import { writePassVote } from './first-pass-vote';
+import { probePassVoteColumns, writePassVote } from './first-pass-vote';
 import { pageOperator } from '../services/operator-pager';
 
 /** Row shape for `public.hal_quorum_receipts` (mirrors migrations/2026-07-13-hal-quorum-receipts.sql). */
@@ -241,6 +241,13 @@ export async function writeQuorumReceipt(
 ): Promise<QuorumReceiptWriteResult> {
   if (!quorumReceiptWriteEnabled()) return { written: false, skippedReason: 'flag-off' };
   if (!sampleHit()) return { written: false, skippedReason: 'sampled-out' };
+
+  const columns = await probePassVoteColumns(
+    client as unknown as Parameters<typeof probePassVoteColumns>[0],
+  );
+  if (columns === 'columns-missing') {
+    return { written: false, skippedReason: 'columns-missing' };
+  }
 
   try {
     const { receipt, votes } = buildQuorumReceipt(result, ctx);

@@ -60,6 +60,13 @@ function makeFakeClient() {
     from(table: string) {
       const captured: FakeInsert = { table, rows: [] };
       return {
+        select(_cols: string) {
+          return {
+            limit(_n: number) {
+              return Promise.resolve({ error: null });
+            },
+          };
+        },
         insert(payload: any) {
           captured.rows = Array.isArray(payload) ? payload : [payload];
           inserts.push(captured);
@@ -195,7 +202,8 @@ describe('HAL family-quorum receipt writer', () => {
     const receiptInserts = client.inserts.filter((i) => i.table === 'hal_quorum_receipts');
     const voteInserts = client.inserts.filter((i) => i.table === 'hal_quorum_validator_votes');
     expect(receiptInserts).toHaveLength(1);
-    expect(voteInserts).toHaveLength(1);
+    const bulkVotes = voteInserts.filter((i) => i.rows.length === 4);
+    expect(bulkVotes).toHaveLength(1);
 
     // The persisted receipt row carries the disjoint-family metadata.
     const receiptRow = receiptInserts[0]!.rows[0];
@@ -205,7 +213,7 @@ describe('HAL family-quorum receipt writer', () => {
     expect(receiptRow.scoring_decision).toBe('veto');
 
     // Every vote row is linked to the receipt id and carries its family.
-    const voteRows = voteInserts[0]!.rows;
+    const voteRows = bulkVotes[0]!.rows;
     expect(voteRows).toHaveLength(4);
     for (const v of voteRows) expect(v.receipt_id).toBe(res.receiptId);
     // The three independent voting families are each present on their own vote row.
@@ -234,6 +242,8 @@ describe('HAL family-quorum receipt writer', () => {
     expect(row.host).toBe('groq');
     expect(row.family).toBe('llama');
     expect(row.first_pass_verdict).toBe('FALSE');
+    expect(row.first_pass_at).toBe('1970-01-01T00:00:00.000Z');
+    expect(row.first_pass_at).not.toBe(0);
     expect(row).not.toHaveProperty('user_id');
     expect(row).not.toHaveProperty('claim');
     expect(JSON.stringify(row)).not.toMatch(/user_id|claim/);
@@ -252,9 +262,9 @@ describe('HAL family-quorum receipt writer', () => {
     process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
     const missing = makeProbeClient({ message: 'column host does not exist' });
     const res = await writeQuorumReceipt(missing as any, SYNTHETIC_QUORUM, CTX);
-    expect(res.written).toBe(true);
-    expect(passVoteInserts(missing.inserts)).toHaveLength(0);
-    expect(missing.inserts.some((i) => i.table === 'hal_quorum_receipts')).toBe(true);
+    expect(res.written).toBe(false);
+    expect(res.skippedReason).toBe('columns-missing');
+    expect(missing.inserts).toHaveLength(0);
   });
 
   test('unmapped family surfaces in receipt.families_unmapped (spoofable-vote visibility)', () => {
