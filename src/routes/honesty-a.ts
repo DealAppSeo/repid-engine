@@ -34,7 +34,12 @@ router.get('/honesty-a', async (_req: Request, res: Response): Promise<void> => 
       .gte('created_at', since)
       .limit(HONESTY_A_PAGE_CAP);
     if (error) {
-      send(res, honestyANotChecked(`${HONESTY_A_LLM_LOG_GAP} Vote read failed: ${error.message}`));
+      const report = honestyANotChecked(`${HONESTY_A_LLM_LOG_GAP} Vote read failed: ${error.message}`);
+      if (/column/i.test(error.message ?? '')) {
+        send(res, { ...report, first_pass: 'NOT_CHECKED' });
+        return;
+      }
+      send(res, report);
       return;
     }
     const votes = (data ?? []) as HonestyVote[];

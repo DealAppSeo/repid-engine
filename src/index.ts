@@ -36,6 +36,7 @@ import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import ratingsRouter from './routes/v1/ratings';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import halLatestRouter from './routes/hal-latest';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import negotiationRouter from './routes/v1/negotiation';
@@ -435,6 +436,7 @@ app.use('/api/v1/marketplace', marketplacePublicRouter);
 // can check this without trusting us", and a receipt behind an API key does not
 // make that claim. Read-only; serves facts ABOUT an exchange, never the work
 // itself (no payload, no result). See services/trust-receipt.ts.
+app.use('/api/v1', halLatestRouter);
 app.use('/api/v1', receiptPublicRouter);
 // BYOK CUSTODY + HUMAN↔AGENT BINDING (2026-08-01). Mounted before
 // authMiddleware because it does NOT use the API-key identity — every request
