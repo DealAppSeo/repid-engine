@@ -58,6 +58,8 @@ export interface HonestyAReport {
   writer_enabled: boolean;
   gap: string | null;
   rows: HonestyARow[] | null;
+  /** Present on a counted read with no rows. The string NOT_CHECKED, never the number 0. */
+  first_pass?: 'NOT_CHECKED';
 }
 
 /** Exact-string reading. `TRUE`, `on`, and `1` are false here. */
@@ -120,7 +122,7 @@ export function aggregateHonestyA(
   const rows = [...buckets.values()].sort((a, b) =>
     a.family === b.family ? a.host.localeCompare(b.host) : a.family.localeCompare(b.family),
   );
-  return {
+  const report: HonestyAReport = {
     window_days: HONESTY_A_WINDOW_DAYS,
     status: 'counted',
     source: HONESTY_A_SOURCE,
@@ -128,6 +130,10 @@ export function aggregateHonestyA(
     gap: null,
     rows,
   };
+  if (rows.length === 0) {
+    return { ...report, first_pass: 'NOT_CHECKED' };
+  }
+  return report;
 }
 
 export function honestyANotChecked(
