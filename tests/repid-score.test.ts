@@ -13,6 +13,8 @@ jest.mock('../src/db', () => ({
 describe('RepID Score Endpoint', () => {
   it('should return 404 for invalid agent (with no auth)', async () => {
     const res = await request(app).get('/api/v1/repid/not-found-id');
-    expect(res.status).toBe(404); // passes because auth is bypassed
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ score: 'NOT_CHECKED', tier: 'NOT_CHECKED' });
+    expect(res.body.score).not.toBe(0);
   });
 });

@@ -72,7 +72,7 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     _testHelpers().resetCache();
   });
 
-  test('GET /api/v1/repid/:agentId — 200 with cached source', async () => {
+  test('GET /api/v1/repid/:agentId — score and tier only', async () => {
     setMaybeSingle({
       id: 'agent-int-1',
       current_repid: 4500,
@@ -81,17 +81,16 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     });
     const r = await request(buildApp()).get('/api/v1/repid/agent-int-1');
     expect(r.status).toBe(200);
-    expect(r.body.agent_id).toBe('agent-int-1');
-    expect(r.body.repid_score).toBe(4500);
-    expect(r.body.tier).toBe('ESTABLISHED');
-    expect(r.body.source).toBe('cached');
+    expect(r.body).toEqual({ score: 4500, tier: 'ESTABLISHED' });
+    expect(Object.keys(r.body).sort()).toEqual(['score', 'tier']);
   });
 
-  test('GET /api/v1/repid/:agentId — 404 when not found', async () => {
+  test('GET /api/v1/repid/:agentId — missing id is NOT_CHECKED, not 0', async () => {
     setMaybeSingle(null);
     const r = await request(buildApp()).get('/api/v1/repid/ghost');
-    expect(r.status).toBe(404);
-    expect(r.body.error).toBe('AGENT_NOT_FOUND');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ score: 'NOT_CHECKED', tier: 'NOT_CHECKED' });
+    expect(r.body.score).not.toBe(0);
   });
 
   test('GET /api/v1/repid/:agentId/history — 200 with events array', async () => {
