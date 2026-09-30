@@ -26,6 +26,20 @@ jest.mock('../src/db', () => ({
               const data = state.votes.filter((row) => String(row.created_at) >= since);
               return { limit: async () => ({ data, error: null }) };
             },
+            order() {
+              return {
+                limit() {
+                  return {
+                    maybeSingle: async () => {
+                      const sorted = [...state.votes].sort((a, b) =>
+                        String(b.created_at).localeCompare(String(a.created_at)),
+                      );
+                      return { data: sorted[0] ?? null, error: null };
+                    },
+                  };
+                },
+              };
+            },
           };
         },
         insert(row: Row) {
@@ -51,11 +65,14 @@ jest.mock('../src/db', () => ({
 const halReceiptRouter = require('../src/routes/hal-receipt').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const honestyARouter = require('../src/routes/honesty-a').default;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const halLatestRouter = require('../src/routes/hal-latest').default;
 
 const app = express();
 app.use(express.json());
 app.use('/api/v1/hal', halReceiptRouter);
 app.use('/api/v1/hal', honestyARouter);
+app.use('/api/v1', halLatestRouter);
 
 const GOOD = { family: 'llama', host: 'groq', verdict: 'FALSE' };
 
@@ -93,12 +110,15 @@ describe('POST /api/v1/hal/receipt', () => {
     const res = await request(app).post('/api/v1/hal/receipt').send(GOOD);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ written: true });
+    expect(state.inserts).toHaveLength(1);
+    expect(state.inserts[0]?.table).toBe('hal_quorum_validator_votes');
     const votes = state.inserts.filter((item) => item.table === 'hal_quorum_validator_votes');
     expect(votes).toHaveLength(1);
     const row = votes[0]!.row;
     expect(row.family).toBe('llama');
     expect(row.host).toBe('groq');
     expect(row.verdict).toBe('FALSE');
+    expect(typeof row.created_at).toBe('string');
     expect(row).not.toHaveProperty('user_id');
     expect(row).not.toHaveProperty('claim');
     expect(row).not.toHaveProperty('prompt');
@@ -114,6 +134,17 @@ describe('POST /api/v1/hal/receipt', () => {
     expect(honesty.body.rows[0].family).toBe('llama');
     expect(honesty.body.rows[0].host).toBe('groq');
     expect(honesty.body.rows[0].FALSE).toBe(1);
+
+    const latest = await request(app).get('/api/v1/receipt/hal-latest');
+    expect(latest.status).toBe(200);
+    expect(latest.body).toEqual({
+      family: 'llama',
+      host: 'groq',
+      verdict: 'FALSE',
+      created_at: row.created_at,
+    });
+    expect(JSON.stringify(latest.body)).not.toContain('user_id');
+    expect(JSON.stringify(latest.body)).not.toContain('claim');
   });
 
   it('rejects a body that carries claim text', async () => {
