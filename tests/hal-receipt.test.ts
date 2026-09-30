@@ -175,9 +175,39 @@ describe('POST /api/v1/hal/receipt', () => {
     const fixture = JSON.parse(
       readFileSync(path.join(__dirname, 'fixtures', 'hal-receipt-glm.json'), 'utf8'),
     ) as { family: string; host: string; verdict: string };
+    delete process.env.HAL_QUORUM_RECEIPT_ENABLED;
+    const off = await request(app).post('/api/v1/hal/receipt').send(fixture);
+    expect(off.status).toBe(204);
+    expect(state.inserts).toHaveLength(0);
+
+    reset();
     process.env.HAL_QUORUM_RECEIPT_ENABLED = 'TRUE';
     const folded = await request(app).post('/api/v1/hal/receipt').send(fixture);
     expect(folded.status).toBe(204);
+    expect(state.inserts).toHaveLength(0);
+
+    reset();
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    const claim = await request(app)
+      .post('/api/v1/hal/receipt')
+      .send({ ...fixture, claim: 'bitcoin text' });
+    const prompt = await request(app)
+      .post('/api/v1/hal/receipt')
+      .send({ ...fixture, prompt: 'say something' });
+    const user = await request(app)
+      .post('/api/v1/hal/receipt')
+      .send({ ...fixture, user_id: 'abc' });
+    expect(claim.status).toBe(400);
+    expect(prompt.status).toBe(400);
+    expect(user.status).toBe(400);
+    expect(state.inserts).toHaveLength(0);
+
+    reset();
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    state.probeError = { message: 'column host does not exist' };
+    const missing = await request(app).post('/api/v1/hal/receipt').send(fixture);
+    expect(missing.status).toBe(200);
+    expect(missing.body).toEqual({ written: false, reason: 'columns-missing' });
     expect(state.inserts).toHaveLength(0);
 
     reset();
