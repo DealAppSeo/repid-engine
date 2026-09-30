@@ -76,6 +76,29 @@ export function clampEventDelta(rawDelta: number): { delta: number; clamped: boo
   return { delta, clamped: delta !== Math.round(rawDelta) };
 }
 
+/**
+ * Per-event OUTPUT cap on the scaled reward (the number `calculateFullReward`
+ * returns, and the live stand-in for the SQL `get_scaled_reward` rpc which is
+ * not on this scoring path).
+ *
+ * `clampEventDelta` (±9990) is the int4 / full-scale backstop — one event is
+ * still allowed to walk the entire 10–10000 range. That is the hole: a
+ * poisoned factor, a config-injected `impact_factor_cap`, or a count-floor of
+ * 0 with an exploding multiplier fills the scale in a single insert.
+ *
+ * This cap is a CODE CONSTANT, not a `repid_config` value, so a config-row
+ * injection cannot raise it. It does NOT rate-limit parallel events (N
+ * capped events still sum); that remaining hole is documented in the tests
+ * and is not this PR.
+ */
+export const MAX_ABS_SCALED_REWARD = 50;
+
+export function capScaledReward(raw: number): { reward: number; capped: boolean } {
+  if (!Number.isFinite(raw)) return { reward: 0, capped: true };
+  const reward = Math.max(-MAX_ABS_SCALED_REWARD, Math.min(MAX_ABS_SCALED_REWARD, raw));
+  return { reward, capped: reward !== raw };
+}
+
 // ── PR C (audit 2606.26028): opportunity-grade delta reject ──────────────────
 //
 // MAX_ABS_EVENT_DELTA (9990) above is the OVERFLOW backstop: it silently SHRINKS an
