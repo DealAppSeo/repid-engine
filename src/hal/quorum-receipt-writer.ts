@@ -36,7 +36,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { familyOfResolved, type FactCheckResult, type ProviderVerdict } from './fact-check';
-import { writePassVote } from './first-pass-vote';
+import { PASS_VOTE_COLUMNS, writePassVote } from './first-pass-vote';
 import { pageOperator } from '../services/operator-pager';
 
 /** Row shape for `public.hal_quorum_receipts` (mirrors migrations/2026-07-13-hal-quorum-receipts.sql). */
@@ -280,4 +280,78 @@ export async function writeQuorumReceipt(
     console.error(`[hal] hal_quorum_receipt write EXCEPTION (quorum_id=${ctx.quorumId}): ${e?.message ?? e}`);
     return { written: false, skippedReason: 'exception', error: e?.message ?? String(e) };
   }
+}
+
+export interface ReceiptVoteInput {
+  family: string;
+  host: string;
+  verdict: 'TRUE' | 'FALSE' | 'NOT_CHECKED';
+}
+
+export interface ReceiptVoteResult {
+  written: boolean;
+  reason?: 'flag-off' | 'columns-missing' | 'insert-error';
+}
+
+/**
+ * One vote on the existing votes table. The parent receipt exists only so the
+ * foreign key can point at a row. A failed column probe inserts nothing.
+ * Exact string `true` only. This does not move a score.
+ */
+export async function writeReceiptVote(
+  client: Pick<SupabaseClient, 'from'>,
+  input: ReceiptVoteInput,
+  env: Record<string, string | undefined>,
+): Promise<ReceiptVoteResult> {
+  if (env.HAL_QUORUM_RECEIPT_ENABLED !== 'true') return { written: false, reason: 'flag-off' };
+  const votes = client as unknown as Parameters<typeof writePassVote>[0];
+  try {
+    const probe = await votes.from('hal_quorum_validator_votes').select(PASS_VOTE_COLUMNS).limit(0);
+    if (probe.error) return { written: false, reason: 'columns-missing' };
+  } catch {
+    return { written: false, reason: 'columns-missing' };
+  }
+
+  const decision = input.verdict === 'FALSE' ? 'vetoed' : input.verdict === 'TRUE' ? 'clean' : 'abstain';
+  const scoring = input.verdict === 'FALSE' ? 'veto' : 'pass';
+  const receipt: QuorumReceiptRow = {
+    score_event_id: null,
+    quorum_id: `hal-receipt-${Date.now()}`,
+    agent_id: null,
+    decision,
+    scoring_decision: scoring,
+    quorum_met: false,
+    families_used: 1,
+    providers_used: 1,
+    families: [input.family],
+    families_unmapped: [],
+    agreement: null,
+    hal_score: null,
+    hal_mode: 'fact-check',
+    sbfa_decision: null,
+    sbfa_belief: null,
+    sbfa_ignorance: null,
+    decision_source: 'quorum',
+  };
+
+  const { data, error } = await client.from('hal_quorum_receipts').insert(receipt).select('id').single();
+  const receiptId = Number((data as { id?: unknown } | null)?.id);
+  if (error || !Number.isFinite(receiptId)) return { written: false, reason: 'insert-error' };
+
+  const pass = await writePassVote(
+    votes,
+    {
+      receipt_id: receiptId,
+      family: input.family,
+      host: input.host,
+      ...(input.verdict === 'NOT_CHECKED'
+        ? {}
+        : { first_pass_verdict: input.verdict, first_pass_at: new Date().toISOString() }),
+    },
+    env,
+  );
+  if (!pass.written) {
+    return { written: false, reason: pass.skippedReason === 'columns-missing' ? 'columns-missing' : 'insert-error' };
+  }
+  return { written: true };
 }
