@@ -96,6 +96,7 @@ import spendPreviewRouter from './routes/human-spend-preview';
 import afterCreateRouter from './routes/after-create';
 import joinKitRouter from './routes/join-kit';
 import trustmarketJoinRouter from './routes/trustmarket-join';
+import onboardUnlockRouter from './routes/onboard-unlock';
 import { agentGateRouter } from './routes/agent-gate'; // T0.5 email-OTP gate + run metering status
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
@@ -559,6 +560,8 @@ app.use('/api/v1', afterCreateRouter);
 app.use('/api/v1', joinKitRouter);
 // TrustMarket join card. Read-only, before auth. can_list and can_stake stay false.
 app.use('/api/v1', trustmarketJoinRouter);
+// Receipt unlock. Read-only, before auth. Count 1 unlocks layer 1 only.
+app.use('/api/v1', onboardUnlockRouter);
 
 // T0.5 agent gate (email OTP + run metering status). Mounted BEFORE
 // authMiddleware for the same reason as the faucet: brand-new visitors
