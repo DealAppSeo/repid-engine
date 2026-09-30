@@ -40,6 +40,7 @@ import marketplacePublicRouter from './routes/v1/marketplace-public';
 import halLatestRouter from './routes/hal-latest';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
+import humanBindStagingRouter from './routes/human-bind-staging';
 import negotiationRouter from './routes/v1/negotiation';
 import marketDiscoverRouter from './routes/v1/market-discover';
 import marketplaceP0Router from './routes/marketplace'; // TrustMarket-light P0: list/browse
@@ -454,6 +455,7 @@ app.use('/api/v1', receiptPublicRouter);
 // execute — the router would answer first and the ceiling would be decorative.
 // Same placement as externalScoreLimiter and subscribeLimiter below.
 app.use('/api/v1/account/connect', accountConnectLimiter);
+app.use('/api/v1', humanBindStagingRouter);
 app.use('/api/v1', byokRouter);
 // Live-numbers (2026-07-07): PUBLIC read-only observability surface the
 // TrustShell.dev landing reads for its minted-agent leaderboard + on-chain
