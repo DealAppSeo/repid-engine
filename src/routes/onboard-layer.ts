@@ -1,6 +1,7 @@
 /**
  * GET /api/v1/onboard/layer
- * Returns { layer: 0 } when the counted receipt total is 0.
+ * Returns { layer: n } when the counted receipt total is the integer n.
+ * A missing count is NOT_CHECKED, never 0.
  * Does not query a database by itself.
  */
 import { Router, type Request, type Response } from 'express';

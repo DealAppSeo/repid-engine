@@ -1,13 +1,15 @@
 /**
  * Onboard layer from a counted receipt total.
- * A count of 0 is layer 0. A missing count is NOT_CHECKED, never 0.
+ * A non-negative integer count is that layer. A missing count is NOT_CHECKED, never 0.
  * This module does not query or insert.
  */
 
 export type OnboardLayer = { layer: number | 'NOT_CHECKED' };
 
 export function onboardLayer(counted: number | 'NOT_CHECKED'): OnboardLayer {
-  if (counted === 0) return { layer: 0 };
+  if (typeof counted === 'number' && Number.isInteger(counted) && counted >= 0) {
+    return { layer: counted };
+  }
   return { layer: 'NOT_CHECKED' };
 }
 
