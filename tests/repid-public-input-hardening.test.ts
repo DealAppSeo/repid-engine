@@ -18,7 +18,8 @@
  * tree for weeks; its siblings kept the copy and kept the bug.
  *
  * TWO PROPERTIES, both regression-tested here:
- *   1. An unresolvable agent id is a 404, never a 500 — the raw string never reaches the DB.
+ *   1. An unresolvable agent id never 500s — the raw string never reaches a uuid column.
+ *      The score card answers 200 NOT_CHECKED. History and zkp stay 404.
  *   2. No public error body carries upstream error text. It is logged, not served.
  *
  * The db module is mocked, so this needs no credentials and no network: it exercises the
@@ -68,15 +69,24 @@ const HOSTILE_IDS = [
 ];
 
 const PATHS = ['', '/history', '/zkp'] as const;
+const NOT_FOUND_SUFFIXES = ['/history', '/zkp'] as const;
 
-describe('an unresolvable agent id is a 404, never a 500', () => {
+describe('an unresolvable agent id never 500s', () => {
   beforeEach(() => { attempted.length = 0; });
 
-  for (const suffix of PATHS) {
-    test.each(HOSTILE_IDS)(`GET /repid/:id${suffix || ''} with %j`, async (id) => {
+  test.each(HOSTILE_IDS)('GET /repid/:id with %j is NOT_CHECKED, never 0', async (id) => {
+    const res = await request(app).get(`/api/v1/repid/${encodeURIComponent(id)}`);
+    expect(res.status).not.toBe(500);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ score: 'NOT_CHECKED', tier: 'NOT_CHECKED' });
+    expect(res.body.score).not.toBe(0);
+  });
+
+  for (const suffix of NOT_FOUND_SUFFIXES) {
+    test.each(HOSTILE_IDS)(`GET /repid/:id${suffix} with %j is 404`, async (id) => {
       const res = await request(app).get(`/api/v1/repid/${encodeURIComponent(id)}${suffix}`);
-      // 404 is the contract. A 500 here means the raw string reached a uuid column again.
-      expect(`${suffix || '/'} ${id} -> ${res.status}`).toBe(`${suffix || '/'} ${id} -> 404`);
+      // A 500 here means the raw string reached a uuid column again.
+      expect(`${suffix} ${id} -> ${res.status}`).toBe(`${suffix} ${id} -> 404`);
     });
   }
 
