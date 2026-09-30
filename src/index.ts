@@ -98,6 +98,7 @@ import joinKitRouter from './routes/join-kit';
 import trustmarketJoinRouter from './routes/trustmarket-join';
 import onboardLayerRouter from './routes/onboard-layer';
 import beltsRouter from './routes/belts';
+import whyRouter from './routes/why';
 import { agentGateRouter } from './routes/agent-gate'; // T0.5 email-OTP gate + run metering status
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
@@ -565,6 +566,8 @@ app.use('/api/v1', trustmarketJoinRouter);
 app.use('/api/v1', onboardLayerRouter);
 // Public belt ids. Read-only, before auth.
 app.use('/api/v1', beltsRouter);
+// Why card. Read-only, before auth. Four sentences.
+app.use('/api/v1', whyRouter);
 
 // T0.5 agent gate (email OTP + run metering status). Mounted BEFORE
 // authMiddleware for the same reason as the faucet: brand-new visitors
