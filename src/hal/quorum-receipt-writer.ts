@@ -292,7 +292,7 @@ export async function writeQuorumReceipt(
 export interface ReceiptVoteInput {
   family: string;
   host: string;
-  verdict: 'TRUE' | 'FALSE' | 'NOT_CHECKED';
+  verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'NOT_CHECKED';
 }
 
 export interface ReceiptVoteResult {
@@ -318,9 +318,10 @@ export async function writeReceiptVote(
       receipt_id: Date.now(),
       family: input.family,
       host: input.host,
-      ...(input.verdict === 'NOT_CHECKED'
-        ? {}
-        : { first_pass_verdict: input.verdict, first_pass_at: new Date().toISOString() }),
+      verdict: input.verdict,
+      ...(input.verdict === 'TRUE' || input.verdict === 'FALSE'
+        ? { first_pass_verdict: input.verdict, first_pass_at: new Date().toISOString() }
+        : {}),
     },
     env,
   );

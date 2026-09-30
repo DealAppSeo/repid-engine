@@ -13,6 +13,7 @@ export interface PassVoteInput {
   receipt_id: number;
   family: string;
   host: string;
+  verdict?: unknown;
   first_pass_verdict?: unknown;
   first_pass_at?: unknown;
   post_hal_verdict?: unknown;
@@ -24,7 +25,7 @@ export interface StoredPassVote {
   provider: string;
   family: string;
   host: string;
-  verdict: 'TRUE' | 'FALSE' | 'NOT_CHECKED';
+  verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'NOT_CHECKED';
   first_pass_verdict: 'TRUE' | 'FALSE' | null;
   first_pass_at: string | null;
   post_hal_verdict: 'TRUE' | 'FALSE' | null;
@@ -81,6 +82,7 @@ export function normalizePassVote(
 ): { ok: true; row: StoredPassVote } | { ok: false; skippedReason: PassVoteRefusal } {
   const firstVerdict = closedVerdict(input.first_pass_verdict);
   const firstAt = timestamp(input.first_pass_at);
+  const surface = input.verdict === 'UNCERTAIN' ? 'UNCERTAIN' : null;
   const postVerdict = closedVerdict(input.post_hal_verdict);
   const postAt = timestamp(input.post_hal_at);
   const firstComplete = firstVerdict !== null && firstAt !== null;
@@ -95,7 +97,7 @@ export function normalizePassVote(
       provider: input.host,
       family: input.family,
       host: input.host,
-      verdict: firstVerdict ?? 'NOT_CHECKED',
+      verdict: firstVerdict ?? surface ?? 'NOT_CHECKED',
       first_pass_verdict: firstVerdict,
       first_pass_at: firstComplete ? firstAt : null,
       post_hal_verdict: firstComplete ? postVerdict : null,

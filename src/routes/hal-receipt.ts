@@ -10,11 +10,13 @@ import { writeReceiptVote } from '../hal/quorum-receipt-writer';
 const router = Router();
 const ALLOWED = new Set(['family', 'host', 'verdict']);
 
-function isVerdict(value: unknown): value is 'TRUE' | 'FALSE' | 'NOT_CHECKED' {
-  return value === 'TRUE' || value === 'FALSE' || value === 'NOT_CHECKED';
+function isVerdict(value: unknown): value is 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'NOT_CHECKED' {
+  return value === 'TRUE' || value === 'FALSE' || value === 'UNCERTAIN' || value === 'NOT_CHECKED';
 }
 
-function readBody(body: unknown): { family: string; host: string; verdict: 'TRUE' | 'FALSE' | 'NOT_CHECKED' } | null {
+function readBody(
+  body: unknown,
+): { family: string; host: string; verdict: 'TRUE' | 'FALSE' | 'UNCERTAIN' | 'NOT_CHECKED' } | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const record = body as Record<string, unknown>;
   for (const key of Object.keys(record)) {

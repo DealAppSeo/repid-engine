@@ -244,4 +244,75 @@ describe('POST /api/v1/hal/receipt', () => {
     expect(JSON.stringify(honesty.body)).not.toContain('user_id');
     expect(JSON.stringify(honesty.body)).not.toContain('"claim"');
   });
+
+  it('accepts UNCERTAIN and still refuses extras, a folded flag, and missing columns', async () => {
+    const body = { family: 'glm', host: 'cerebras', verdict: 'UNCERTAIN' };
+    delete process.env.HAL_QUORUM_RECEIPT_ENABLED;
+    const off = await request(app).post('/api/v1/hal/receipt').send(body);
+    expect(off.status).toBe(204);
+    expect(state.inserts).toHaveLength(0);
+
+    reset();
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    const claim = await request(app)
+      .post('/api/v1/hal/receipt')
+      .send({ ...body, claim: 'bitcoin text' });
+    const prompt = await request(app)
+      .post('/api/v1/hal/receipt')
+      .send({ ...body, prompt: 'say something' });
+    const user = await request(app)
+      .post('/api/v1/hal/receipt')
+      .send({ ...body, user_id: 'abc' });
+    const maybe = await request(app)
+      .post('/api/v1/hal/receipt')
+      .send({ ...body, verdict: 'MAYBE' });
+    expect(claim.status).toBe(400);
+    expect(prompt.status).toBe(400);
+    expect(user.status).toBe(400);
+    expect(maybe.status).toBe(400);
+    expect(state.inserts).toHaveLength(0);
+
+    reset();
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    state.probeError = { message: 'column host does not exist' };
+    const missing = await request(app).post('/api/v1/hal/receipt').send(body);
+    expect(missing.status).toBe(200);
+    expect(missing.body).toEqual({ written: false, reason: 'columns-missing' });
+    expect(state.inserts).toHaveLength(0);
+
+    reset();
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    const before = await request(app).get('/api/v1/receipt/hal-latest');
+    expect(before.status).toBe(404);
+    expect(before.body).toEqual({ error: 'not_found' });
+
+    const res = await request(app).post('/api/v1/hal/receipt').send(body);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ written: true });
+    expect(state.inserts).toHaveLength(1);
+    expect(state.inserts[0]?.table).toBe('hal_quorum_validator_votes');
+    const row = state.inserts[0]!.row;
+    expect(row.family).toBe('glm');
+    expect(row.host).toBe('cerebras');
+    expect(row.verdict).toBe('UNCERTAIN');
+    expect(row.first_pass_verdict).toBeNull();
+    expect(row).not.toHaveProperty('claim');
+    expect(row).not.toHaveProperty('user_id');
+
+    const latest = await request(app).get('/api/v1/receipt/hal-latest');
+    expect(latest.status).toBe(200);
+    expect(latest.body).toEqual({
+      family: 'glm',
+      host: 'cerebras',
+      verdict: 'UNCERTAIN',
+      created_at: row.created_at,
+    });
+    expect(JSON.stringify(latest.body)).not.toContain('claim');
+
+    const honesty = await request(app).get('/api/v1/hal/honesty-a');
+    expect(honesty.status).toBe(200);
+    expect(honesty.body.rows).toHaveLength(1);
+    expect(honesty.body.rows[0].first_pass).toEqual({ TRUE: 0, FALSE: 0, NOT_CHECKED: 1 });
+    expect(honesty.body.rows[0].first_pass).not.toBe(0);
+  });
 });
