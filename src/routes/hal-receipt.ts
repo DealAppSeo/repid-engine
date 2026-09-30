@@ -42,10 +42,11 @@ router.post('/receipt', async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await writeReceiptVote(db, input, process.env);
     if (!result.written) {
-      res.status(200).json({
-        written: false,
-        reason: result.reason === 'columns-missing' ? 'columns-missing' : 'insert-error',
-      });
+      const reason =
+        result.reason === 'columns-missing' || result.reason === 'receipt-missing'
+          ? result.reason
+          : 'insert-error';
+      res.status(200).json({ written: false, reason });
       return;
     }
     res.status(200).json({ written: true });
