@@ -1,4 +1,6 @@
 import express from 'express';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import request from 'supertest';
 
 type Row = Record<string, unknown>;
@@ -167,5 +169,49 @@ describe('POST /api/v1/hal/receipt', () => {
     expect(prompt.status).toBe(400);
     expect(user.status).toBe(400);
     expect(state.inserts).toHaveLength(0);
+  });
+
+  it('posts the glm cerebras FALSE fixture only when the flag is exact true', async () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(__dirname, 'fixtures', 'hal-receipt-glm.json'), 'utf8'),
+    ) as { family: string; host: string; verdict: string };
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'TRUE';
+    const folded = await request(app).post('/api/v1/hal/receipt').send(fixture);
+    expect(folded.status).toBe(204);
+    expect(state.inserts).toHaveLength(0);
+
+    reset();
+    process.env.HAL_QUORUM_RECEIPT_ENABLED = 'true';
+    const before = await request(app).get('/api/v1/receipt/hal-latest');
+    expect(before.status).toBe(404);
+    expect(before.body).toEqual({ error: 'not_found' });
+
+    const res = await request(app).post('/api/v1/hal/receipt').send(fixture);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ written: true });
+    expect(state.inserts).toHaveLength(1);
+    expect(state.inserts[0]?.table).toBe('hal_quorum_validator_votes');
+    const row = state.inserts[0]!.row;
+    expect(row.family).toBe('glm');
+    expect(row.host).toBe('cerebras');
+    expect(row.verdict).toBe('FALSE');
+    expect(row).not.toHaveProperty('claim');
+
+    const latest = await request(app).get('/api/v1/receipt/hal-latest');
+    expect(latest.status).toBe(200);
+    expect(latest.body).toEqual({
+      family: 'glm',
+      host: 'cerebras',
+      verdict: 'FALSE',
+      created_at: row.created_at,
+    });
+    expect(JSON.stringify(latest.body)).not.toContain('claim');
+
+    const honesty = await request(app).get('/api/v1/hal/honesty-a');
+    expect(honesty.status).toBe(200);
+    expect(honesty.body.status).toBe('counted');
+    expect(honesty.body.rows[0].first_pass).toEqual({ TRUE: 0, FALSE: 1, NOT_CHECKED: 0 });
+    expect(JSON.stringify(honesty.body)).not.toContain('user_id');
+    expect(JSON.stringify(honesty.body)).not.toContain('"claim"');
   });
 });
