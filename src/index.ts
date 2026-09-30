@@ -21,6 +21,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import honestyARouter from './routes/honesty-a';
+import halReceiptRouter from './routes/hal-receipt';
 import memoryPolicyRouter from './routes/memory-policy';
 import proofVerifyRouter from './routes/proof-verify';
 import helpBRouter from './routes/help-b';
@@ -36,6 +37,7 @@ import federationRouter from './routes/v1/federation';
 import marketplaceRouter from './routes/v1/marketplace';
 import ratingsRouter from './routes/v1/ratings';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
+import halLatestRouter from './routes/hal-latest';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import negotiationRouter from './routes/v1/negotiation';
@@ -372,6 +374,8 @@ app.use('/api/v1/hal/evaluate', ipRateLimit(halPublicLimit, halPublicWindow));
 app.use('/api/v1/hal', halEvaluateRouter);
 // Honesty A is a keyless read. It does not score and it does not write.
 app.use('/api/v1/hal', honestyARouter);
+// One vote row. Inserts only when the flag is the exact string true.
+app.use('/api/v1/hal', halReceiptRouter);
 // Memory policy is a keyless read. It does not write.
 app.use('/api/v1', memoryPolicyRouter);
 // Local proof check. Does not mint and does not write a chain transaction.
@@ -435,6 +439,7 @@ app.use('/api/v1/marketplace', marketplacePublicRouter);
 // can check this without trusting us", and a receipt behind an API key does not
 // make that claim. Read-only; serves facts ABOUT an exchange, never the work
 // itself (no payload, no result). See services/trust-receipt.ts.
+app.use('/api/v1', halLatestRouter);
 app.use('/api/v1', receiptPublicRouter);
 // BYOK CUSTODY + HUMAN↔AGENT BINDING (2026-08-01). Mounted before
 // authMiddleware because it does NOT use the API-key identity — every request

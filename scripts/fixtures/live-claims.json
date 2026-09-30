@@ -1,0 +1,82 @@
+[
+  {
+    "id": "musk-bitcoin",
+    "receipt_id": 1,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "FALSE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "FALSE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  },
+  {
+    "id": "vitamin-c",
+    "receipt_id": 2,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "TRUE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "TRUE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  },
+  {
+    "id": "surgeon",
+    "receipt_id": 3,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "TRUE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "FALSE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  },
+  {
+    "id": "missing-dollar",
+    "receipt_id": 4,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "TRUE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "FALSE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  },
+  {
+    "id": "birthday",
+    "receipt_id": 5,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "TRUE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "FALSE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  },
+  {
+    "id": "ravens",
+    "receipt_id": 6,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "TRUE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "FALSE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  },
+  {
+    "id": "cold-fusion",
+    "receipt_id": 7,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "FALSE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "FALSE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  },
+  {
+    "id": "eiffel-rome",
+    "receipt_id": 8,
+    "family": "llama",
+    "host": "groq",
+    "first_pass_verdict": "FALSE",
+    "first_pass_at": "2026-09-29T00:00:00.000Z",
+    "post_hal_verdict": "FALSE",
+    "post_hal_at": "2026-09-29T00:01:00.000Z"
+  }
+]
