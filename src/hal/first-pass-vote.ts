@@ -105,6 +105,18 @@ export function normalizePassVote(
   };
 }
 
+export async function probePassVoteColumns(
+  client: VoteInsertClient,
+): Promise<'ok' | 'columns-missing'> {
+  try {
+    const probe = await client.from('hal_quorum_validator_votes').select(PASS_VOTE_COLUMNS).limit(0);
+    if (probe.error) return 'columns-missing';
+    return 'ok';
+  } catch {
+    return 'columns-missing';
+  }
+}
+
 export async function writePassVote(
   client: VoteInsertClient,
   input: PassVoteInput,
@@ -113,13 +125,10 @@ export async function writePassVote(
   if (!exactTrue(env)) return { written: false, skippedReason: 'flag-off' };
   const normalized = normalizePassVote(input);
   if (!normalized.ok) return { written: false, skippedReason: normalized.skippedReason };
-  const table = client.from('hal_quorum_validator_votes');
-  try {
-    const probe = await table.select(PASS_VOTE_COLUMNS).limit(0);
-    if (probe.error) return { written: false, skippedReason: 'columns-missing' };
-  } catch {
+  if ((await probePassVoteColumns(client)) === 'columns-missing') {
     return { written: false, skippedReason: 'columns-missing' };
   }
+  const table = client.from('hal_quorum_validator_votes');
   const { error } = await table.insert(normalized.row);
   if (error) return { written: false, skippedReason: 'insert-error' };
   return { written: true };
