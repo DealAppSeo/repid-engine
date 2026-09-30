@@ -29,6 +29,7 @@ export interface StoredPassVote {
   first_pass_at: string | null;
   post_hal_verdict: 'TRUE' | 'FALSE' | null;
   post_hal_at: string | null;
+  created_at: string;
 }
 
 export type PassVoteRefusal = 'post-hal-without-first-pass';
@@ -99,6 +100,7 @@ export function normalizePassVote(
       first_pass_at: firstComplete ? firstAt : null,
       post_hal_verdict: firstComplete ? postVerdict : null,
       post_hal_at: firstComplete && postVerdict !== null ? postAt : null,
+      created_at: new Date().toISOString(),
     },
   };
 }
