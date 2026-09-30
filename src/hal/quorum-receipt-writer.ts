@@ -210,7 +210,7 @@ async function writeOneVoteAfterQuorum(
   const host = closed?.provider ?? votes[0]?.provider ?? 'quorum';
   try {
     await writePassVote(
-      client as Parameters<typeof writePassVote>[0],
+      client as unknown as Parameters<typeof writePassVote>[0],
       {
         receipt_id: receiptId,
         family,
