@@ -31,21 +31,37 @@ describe('trustkeys-shape exit', () => {
     expect(result.out).not.toContain('shape-pass');
   });
 
-  it('exits 0 for sb_secret and postgresql and does not print the value', () => {
+  it('exits 0 for sb_secret, postgresql, and jwt and does not print the value', () => {
+    const jwt = 'eyJhbGciOiJub25lIn0.e30.sig';
     const result = run({
       SUPABASE_SECRET_KEY: secret,
       SUPABASE_SERVICE_ROLE_KEY: secret,
-      SUPABASE_SERVICE_KEY: 'sb_publishable_SHAPE_SENTINEL',
+      SUPABASE_SERVICE_KEY: jwt,
       DATABASE_URL: database,
-      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_SHAPE_SENTINEL',
+      SUPABASE_PUBLISHABLE_KEY: secret,
     });
     expect(result.code).toBe(0);
     expect(result.out).toContain('SUPABASE_SECRET_KEY\tsb_secret');
+    expect(result.out).toContain('SUPABASE_SERVICE_KEY\tjwt');
     expect(result.out).toContain('DATABASE_URL\tpostgresql');
-    expect(result.out).toContain('SUPABASE_PUBLISHABLE_KEY\tsb_publishable');
     expect(result.out).not.toContain(secret);
+    expect(result.out).not.toContain(jwt);
     expect(result.out).not.toContain(database);
     expect(result.out).not.toContain('shape-pass');
-    expect(result.out).not.toContain('sb_publishable_SHAPE_SENTINEL');
+  });
+
+  it('prints other for a publishable-looking fake and does not print the value', () => {
+    const publishable = 'sb_publishable_SHAPE_SENTINEL';
+    const result = run({
+      SUPABASE_SECRET_KEY: secret,
+      SUPABASE_SERVICE_ROLE_KEY: secret,
+      SUPABASE_SERVICE_KEY: secret,
+      DATABASE_URL: database,
+      SUPABASE_PUBLISHABLE_KEY: publishable,
+    });
+    expect(result.code).toBe(2);
+    expect(result.out).toContain('SUPABASE_PUBLISHABLE_KEY\tother');
+    expect(result.out).not.toContain(publishable);
+    expect(result.out).not.toContain(secret);
   });
 });

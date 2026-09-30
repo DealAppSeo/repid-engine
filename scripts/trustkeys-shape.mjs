@@ -1,7 +1,9 @@
 /**
  * Classify a fixed list of env names by value shape.
- * Prints the name and the shape word only. Never prints a value.
- * Exit 0 when every name is a known shape. Exit 2 when any name is unset or other.
+ * Prints the name and one of: sb_secret, postgresql, jwt, unset, other.
+ * Never prints a value.
+ * Exit 0 when every name is sb_secret, postgresql, or jwt.
+ * Exit 2 when any name is unset or other.
  */
 const NAMES = [
   'SUPABASE_SECRET_KEY',
@@ -11,14 +13,13 @@ const NAMES = [
   'SUPABASE_PUBLISHABLE_KEY',
 ];
 
-const KNOWN = new Set(['sb_secret', 'sb_publishable', 'postgresql', 'jwt_eyJ']);
+const KNOWN = new Set(['sb_secret', 'postgresql', 'jwt']);
 
 function shape(value) {
   if (typeof value !== 'string' || value.length === 0) return 'unset';
   if (value.startsWith('sb_secret_')) return 'sb_secret';
-  if (value.startsWith('sb_publishable_')) return 'sb_publishable';
   if (value.startsWith('postgresql://') || value.startsWith('postgres://')) return 'postgresql';
-  if (value.startsWith('eyJ')) return 'jwt_eyJ';
+  if (value.startsWith('eyJ')) return 'jwt';
   return 'other';
 }
 

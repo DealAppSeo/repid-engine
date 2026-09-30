@@ -43,17 +43,17 @@ describe('trustkeys-shape', () => {
     };
   }
 
-  it('exits 0 for known shapes and does not print values', () => {
+  it('prints sb_secret, postgresql, jwt, unset, or other and does not print values', () => {
     const result = run(known());
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(2);
     expect(result.err).toBe('');
     expect(result.out).toBe(
       [
         'SUPABASE_SECRET_KEY\tsb_secret',
-        'SUPABASE_SERVICE_ROLE_KEY\tsb_publishable',
-        'SUPABASE_SERVICE_KEY\tjwt_eyJ',
+        'SUPABASE_SERVICE_ROLE_KEY\tother',
+        'SUPABASE_SERVICE_KEY\tjwt',
         'DATABASE_URL\tpostgresql',
-        'SUPABASE_PUBLISHABLE_KEY\tsb_publishable',
+        'SUPABASE_PUBLISHABLE_KEY\tother',
       ].join('\n') + '\n',
     );
     expect(result.out).not.toContain(secret);
@@ -84,7 +84,13 @@ describe('trustkeys-shape', () => {
 
   it('accepts a postgres scheme without printing it', () => {
     const url = 'postgres://shape-user:shape-pass@example.invalid/db';
-    const result = run({ ...known(), DATABASE_URL: url });
+    const result = run({
+      SUPABASE_SECRET_KEY: secret,
+      SUPABASE_SERVICE_ROLE_KEY: secret,
+      SUPABASE_SERVICE_KEY: jwt,
+      DATABASE_URL: url,
+      SUPABASE_PUBLISHABLE_KEY: jwt,
+    });
     expect(result.code).toBe(0);
     expect(result.out).toContain('DATABASE_URL\tpostgresql');
     expect(result.out).not.toContain(url);
@@ -94,9 +100,11 @@ describe('trustkeys-shape', () => {
   it('does not read a file and does not insert', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('sb_secret_');
-    expect(src).toContain('sb_publishable_');
     expect(src).toContain('postgresql://');
     expect(src).toContain('eyJ');
+    expect(src).toContain("'jwt'");
+    expect(src).not.toContain('jwt_eyJ');
+    expect(src).not.toContain('sb_publishable');
     expect(src).not.toContain('readFileSync');
     expect(src).not.toContain('supabase');
     expect(src).not.toContain('fetch(');
