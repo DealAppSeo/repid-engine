@@ -7935,4 +7935,29 @@ Advance item 13 backlog: build the missing `memory-heat-reactivate.ts` feature a
 PRs merged during this run's window (since 2026-09-30T20:24:41Z):
 - (none detected)
 
+## Beat (2026-10-01, second run) — prior beat verified; item 13 reactivation confirmed shipped; #1015/#1016/#1017 armed
+
+**Prior beat verified [V] (2026-10-01, first run):**
+- PR #1010 (feat(human): insert one staging bind row): **MERGED 2026-10-01T01:13:00Z** — `gh pr view 1010 --json state,mergedAt` = MERGED. Beat's armed SAFE-CLASS PR landed as claimed.
+- PR #1012 (feat(memory): item 13 heat-reactivation writer — reactivateLeaves, 9/9 tests, HEAT_EVICTION_ENABLED flag): **MERGED 2026-10-01T01:20:44Z** — `gh pr view 1012 --json state,mergedAt` = MERGED. Beat's item-13 intent fully landed.
+- PR #1013 (feat(laya): local classify returns route and latency): **MERGED 2026-10-01T01:55:54Z** — additional Laya work shipped the same run.
+- PR #1011 (docs/loop ledger): MERGED (commit `7f5c4a5c` on main). Ledger survived as intended.
+- **Verdict: CLEAN.** All four claimed or intended outcomes confirmed merged.
+
+**Current state [V]:** `origin/main` = `38d7bd2f`. Open PRs: **#1015** (feat(laya): GET classify uses the same handler), **#1016** (feat(hal): one fixture receipt returns written and id), **#1017** (feat(hal): one receipt writer for HAL and fixtures). All three: `baseRefName=main`, MERGEABLE, all checks SUCCESS (CI/test, crosscheck, gitleaks, HAL adversarial gate, Strix Security Review).
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Arm #1015, #1016, #1017 (all SAFE-CLASS: additive, tested, Strix clean, based on main). Then advance backlog item 9 decision (b)/(c) — `dailyCallCap` config per provider and quota wiring into `router.ts` — the non-Sean-gated follow-up `evaluateFreeTierQuota` has been waiting since beat 81.
+
+**STEP 2 — ARMED #1015, #1016, #1017 --auto --squash.** All three are XC-authored, based on main, all checks green including Strix Security Review. Additive, tested, no enable-flag flips. Safe-class for auto-merge while CI is already green.
+
+**STEP 3 — item 9 decisions (b)/(c): see below if turns remain, else next beat.**
+
+**Open for Sean (rule-4):**
+1. **Nothing new that needs Sean** — items 7, 10, HEAT_EVICTION_ENABLED prod flip all remain Sean-gated. No change.
+2. Item 13 reactivation (reactivateLeaves) is on main; `HEAT_EVICTION_ENABLED` flag exists but the eviction side (flushColdLeaves, dormancy consolidation) is not yet built. The acceptance test ("low-heat leaves flushed to cold; root preserved; reactivation triggers") is partially met — reactivation triggers work, eviction does not yet. Noting for honest backlog state.
+
+**Next beat:** (1) Confirm #1015/#1016/#1017 merged. (2) Advance item 9 (b)/(c): wire `evaluateFreeTierQuota` into `router.ts` with a configured `dailyCallCap`, decide `cap_hit` vs distinct reason, fail-open when count unavailable. (3) Advance item 8 output-confidence scorer if item 9 lands cleanly.
+
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 36772430584 --log`) if the reason matters.
