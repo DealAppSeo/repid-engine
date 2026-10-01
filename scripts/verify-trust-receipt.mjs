@@ -134,6 +134,20 @@ function checkRepIdLedger(r) {
     return record('reputation ledger arithmetic', 'NOT_CHECKED', 'no reputation events on this receipt');
   }
 
+  // An event with no agent identifier cannot be chain-checked per agent. Treat
+  // absence as NOT_CHECKED, never as numeric 0 and never as a forged FAILED.
+  const missingAgent = events.findIndex((e) => {
+    const a = e?.agent;
+    return a === undefined || a === null || a === '';
+  });
+  if (missingAgent >= 0) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      `event ${missingAgent + 1} has no agent identifier — the ledger cannot be chain-checked without knowing whose score moved`,
+    );
+  }
+
   const last = {};
   const failed = [];
   const undetermined = [];

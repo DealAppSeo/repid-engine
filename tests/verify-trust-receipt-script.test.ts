@@ -206,6 +206,26 @@ describe('verify-trust-receipt: reputation ledger arithmetic', () => {
   });
 });
 
+describe('verify-trust-receipt: missing agent identifier is NOT_CHECKED, never FAILED or numeric 0', () => {
+  it.each([
+    ['absent agent key', { event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }],
+    ['null agent', { agent: null, event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }],
+    ['empty string agent', { agent: '', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }],
+  ])('%s', (_label, event) => {
+    const r = receipt([event as RepEvent]);
+    (r as any).claim = 'XC2-SENSITIVE-CLAIM-TEXT-LEAK';
+    (r as any).user_id = 'XC2-USER-ID-LEAK';
+    const { out } = run(r);
+    const line = ledgerLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).toMatch(/no agent identifier/);
+    expect(line).not.toMatch(/0 of \d+ event\(s\) balance/);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+});
+
 describe('verify-trust-receipt: the delta-earned leg states what it cannot prove', () => {
   it('is always NOT_CHECKED when there are events, however clean the arithmetic', () => {
     const { out } = run(receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]));
