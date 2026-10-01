@@ -9,7 +9,18 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'hal-traps.json');
-const TRAPS = ['surgeon', 'missing-dollar', 'birthday', 'ravens', 'monty-underspecified'];
+const TRAPS = [
+  'surgeon',
+  'missing-dollar',
+  'tuesday-boy',
+  'monty',
+  'average-speed',
+  'disease',
+  'ropes',
+  'two-envelope',
+  'birthday',
+  'ravens',
+];
 const HEADER = ['trap', 'first_pass', 'post_hal', 'disagree'];
 
 function fail(message) {
@@ -67,10 +78,16 @@ for (const claim of claims) {
   if (claim.expected !== 'TRUE' && claim.expected !== 'FALSE') {
     fail(`${claim.id} expected is not TRUE or FALSE`);
   }
+  if (claim.trap === 'disease' && (claim.expected === 99 || claim.expected === '99')) {
+    fail('disease expected is 99');
+  }
+  if (claim.trap === 'average-speed' && (claim.expected === 45 || claim.expected === '45')) {
+    fail('average speed expected is 45');
+  }
   if (JSON.stringify(claim).includes('user_id')) fail('fixture carries a user id');
 }
 for (const [name, n] of counts) {
-  if (n !== 2) fail(`${name} has ${n} claims`);
+  if (n !== 1) fail(`${name} has ${n} claims`);
 }
 
 const lines = [HEADER.join('\t')];
