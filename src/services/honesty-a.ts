@@ -100,15 +100,29 @@ function addPass(counts: PassCounts, verdict: unknown): void {
   counts[reading.verdict] += 1;
 }
 
+/**
+ * Returns the value when it is a usable family/host key, or null when it is
+ * missing, empty, or contains only whitespace/control characters. CR-only (\r),
+ * whitespace-only, NBSP, ZWSP and BOM strings are treated as blank and land
+ * under NOT_CHECKED rather than becoming real bucket keys.
+ */
+function normalizeHonestyKey(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') return null;
+  if (value.replace(/[\s\u200B\uFEFF]/g, '').length === 0) return null;
+  return value;
+}
+
 export function aggregateHonestyA(
   votes: readonly HonestyVote[],
   env: Record<string, string | undefined> = process.env,
 ): HonestyAReport {
   const buckets = new Map<string, HonestyARow>();
   for (const vote of votes) {
-    const family = vote.family && vote.family.length > 0 ? vote.family : 'NOT_CHECKED';
-    const namedHost = vote.host && vote.host.length > 0 ? vote.host : vote.provider;
-    const host = namedHost && namedHost.length > 0 ? namedHost : 'NOT_CHECKED';
+    const family = normalizeHonestyKey(vote.family) ?? 'NOT_CHECKED';
+    const namedHost = normalizeHonestyKey(vote.host);
+    const fallbackProvider = normalizeHonestyKey(vote.provider);
+    const host = namedHost ?? fallbackProvider ?? 'NOT_CHECKED';
     const key = `${family}\n${host}`;
     let row = buckets.get(key);
     if (!row) {
