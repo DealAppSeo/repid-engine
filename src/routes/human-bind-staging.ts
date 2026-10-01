@@ -33,7 +33,8 @@ router.post('/human/bind', async (req: Request, res: Response, next: NextFunctio
     res.status(400).json({ error: 'rejected' });
     return;
   }
-  if (process.env.HUMAN_AGENT_BIND_ENABLED !== 'true') {
+  const bindEnabled = process.env.HUMAN_AGENT_BIND_ENABLED === 'true';
+  if (!bindEnabled) {
     res.status(410).json({ error: 'disabled' });
     return;
   }
