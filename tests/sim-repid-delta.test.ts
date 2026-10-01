@@ -19,6 +19,13 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string;
         delta: number;
       }[];
+      false_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -26,6 +33,19 @@ describe('sim-repid-delta', () => {
     expect(trap?.first_pass_verdict).toBe('FALSE');
     expect(trap?.rater_id).not.toBe(trap?.subject_id);
     expect(Number(trap?.delta)).toBeGreaterThan(0);
+    const falseThenTrue = fixture.false_then_true[0];
+    expect(falseThenTrue?.kind).toBe('first-pass');
+    expect(falseThenTrue?.first_pass_verdict).toBe('FALSE');
+    expect(falseThenTrue?.rater_id).not.toBe(falseThenTrue?.subject_id);
+    expect(Number(falseThenTrue?.delta)).toBeGreaterThan(0);
+    const laterTrue = fixture.false_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === falseThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(laterTrue).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -35,6 +55,7 @@ describe('sim-repid-delta', () => {
     expect(out).toBe(
       `before\t${fixture.start_score}\n` +
         `after_false_first_pass\t${fixture.start_score}\n` +
+        `after_false_then_true\t${fixture.start_score}\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -64,6 +85,7 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('self-rate 0 changed the score');
     expect(src).toContain("event.kind === 'first-pass'");
     expect(src).toContain('FALSE first pass raised the score');
+    expect(src).toContain('FALSE first pass followed by TRUE raised the score');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
