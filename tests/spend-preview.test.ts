@@ -23,6 +23,7 @@ describe('spend preview fixture', () => {
       ],
       applied: false,
       persisted: false,
+      sends_eth: false,
     });
     expect(res.body.applied).toBe(false);
     for (const row of res.body.assets as { usdc: number; eth: number; cbbtc: number }[]) {
