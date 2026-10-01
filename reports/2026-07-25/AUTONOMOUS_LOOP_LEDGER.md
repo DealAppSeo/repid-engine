@@ -7961,3 +7961,30 @@ PRs merged during this run's window (since 2026-09-30T20:24:41Z):
 **Next beat:** (1) Confirm #1015/#1016/#1017 merged. (2) Advance item 9 (b)/(c): wire `evaluateFreeTierQuota` into `router.ts` with a configured `dailyCallCap`, decide `cap_hit` vs distinct reason, fail-open when count unavailable. (3) Advance item 8 output-confidence scorer if item 9 lands cleanly.
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 36772430584 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-01, third run) — second run verified; item 9 shadow confirmed wired; item 13 eviction side intent
+
+**Prior beat verified [V] (2026-10-01, second run):**
+- PR #1015 (feat(laya): answer GET classify with the same handler): **MERGED** — `git log --oneline | grep '#1015'` = `aa8667e7`. ✓
+- PR #1016 (feat(hal): write one fixture receipt when flag is exact true): **MERGED** — `git log --oneline | grep '#1016'` = `523416e1`. ✓
+- PR #1017 (feat(hal): share one receipt writer with fixture path): **MERGED** — `git log --oneline | grep '#1017'` = `50050117`. ✓
+- PR #1018 (docs/loop ledger second run): **MERGED** — `git log --oneline | grep '#1018'` = `4e04e7fb`. ✓
+- Also merged since then: PR #1019 (fix(hal): omit a missing first_pass and refuse claim keys) = `5cff046b`. ✓
+- Second run's item 9 (b)/(c) "shadow wiring COMPLETE" claim [V]: `free-tier-quota-shadow.ts` EXISTS and is imported at `router.ts:23`, called fire-and-forget at `router.ts:489`. Committed in PR #768 (well before this run). Second run's ledger correctly measured an existing fact — **CLEAN.**
+- **No open PRs** — `gh pr list --state open` = empty. Main is healthy.
+- **Penalty verdict: NONE.** All stated outcomes confirmed merged or measured. No fabrication.
+
+**Backlog state [V] (item 9 remaining):** Decisions (b)/(c) and shadow wiring complete (PR #768). Remaining open half: off-peak-windows wiring (`isOffPeakHour`/`selectOffPeakBatch` in `memory-root-anchor.ts:112-125`) has zero callers in `src/` — still true. `FREE_TIER_QUOTA_SHADOW_ENABLED=true` to observe in prod is Sean-gated (Railway env var).
+
+**Backlog state [V] (item 13):** Reactivation side merged (PR #1012, `reactivateLeaves`, 9/9 tests, `HEAT_EVICTION_ENABLED` flag). Eviction side — flush low-heat leaves to cold, dormancy/night consolidation, root preservation — **not yet built**. Acceptance test half-met.
+
+**Intent for steps 2-4:** Build item 13 eviction side — `flushColdLeaves` primitive + tests, additive, shadow-first behind the existing `HEAT_EVICTION_ENABLED` flag, off `origin/main`, standalone non-stacking PR. If turns run short, stop here — ledger complete.
+
+**Open for Sean (rule-4):**
+1. **Nothing new requiring Sean** — no pending PRs; armed PRs all landed.
+2. **Standing (unchanged):** items 7, 10 (EAS anchoring gas spend), HEAT_EVICTION_ENABLED prod enable, FREE_TIER_QUOTA_SHADOW_ENABLED prod observe — all Sean-gated. No change in status.
+3. Item 13 eviction: will ship this beat if turns remain; see step-5 entry below if present.
+
+**Next beat:** (1) Confirm item 13 eviction PR merged if shipped. (2) Wire off-peak-windows (`isOffPeakHour`/`selectOffPeakBatch`) to the EAS anchor sweep caller if item 13 eviction lands. (3) Item 8 output-confidence scorer for speculative cascade.
