@@ -142,6 +142,23 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.string_zero_first_pass)) fail('string-zero first pass fixture missing');
+const stringZeroPass = fixture.string_zero_first_pass[0];
+if (!stringZeroPass || stringZeroPass.kind !== 'first-pass') fail('string-zero first pass fixture is not a first pass');
+if (stringZeroPass.first_pass_verdict !== '0') fail('string-zero first pass fixture is not string "0"');
+if (stringZeroPass.rater_id === stringZeroPass.subject_id) fail('string-zero first pass is a self rating');
+if (!(Number(stringZeroPass.delta) > 0)) fail('string-zero first pass delta is not positive');
+const laterPositiveAfterStringZero = fixture.string_zero_first_pass.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === stringZeroPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositiveAfterStringZero) fail('string-zero first pass fixture has no later positive rating for the same subject');
+const afterStringZeroFirstPass = applyRatings(start, fixture.string_zero_first_pass);
+if (afterStringZeroFirstPass !== start) fail(`string-zero first pass raised the score from ${start} to ${afterStringZeroFirstPass}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -188,6 +205,8 @@ process.stdout.write(
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_string_zero_first_pass\t${afterStringZeroFirstPass}\n` +
+    `string_zero_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
