@@ -134,6 +134,18 @@ function checkRepIdLedger(r) {
     return record('reputation ledger arithmetic', 'NOT_CHECKED', 'no reputation events on this receipt');
   }
 
+  // An event whose label is absent or null cannot be named for continuity or
+  // decomposition. That is NOT_CHECKED — never a synthetic label invented as a
+  // measured pass, and never a false FAILED forgery for missing data.
+  const missingEventLabel = events.findIndex((e) => e?.event === undefined || e?.event === null);
+  if (missingEventLabel >= 0) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      `event ${missingEventLabel + 1} has no event label — the verifier cannot name this row for continuity / decomposition`,
+    );
+  }
+
   const last = {};
   const failed = [];
   const undetermined = [];

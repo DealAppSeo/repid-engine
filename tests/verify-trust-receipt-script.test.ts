@@ -30,11 +30,12 @@ const DIR = mkdtempSync(join(tmpdir(), 'receipt-verify-'));
 
 interface RepEvent {
   agent: string;
-  event: string;
+  event?: string | null;
   delta: number;
   from: number;
   to: number;
   decay?: number | null;
+  kind?: string | null;
 }
 
 /** A receipt with only the fields these legs read. */
@@ -202,6 +203,40 @@ describe('verify-trust-receipt: reputation ledger arithmetic', () => {
       { agent: 'buyer', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 },
       { agent: 'provider', event: 'SERVICE_FULFILLED', delta: 20, from: 3000, to: 3020 },
     ]));
+    expect(outcomeOf(ledgerLine(out))).toBe('VERIFIED');
+  });
+});
+
+describe('verify-trust-receipt: missing event label is NOT_CHECKED, never pass or forgery', () => {
+  it.each([
+    [
+      'absent event key',
+      { agent: 'a', delta: 20, from: 1000, to: 1020, decay: null, kind: 'SERVICE_FULFILLED' },
+    ],
+    [
+      'null event',
+      { agent: 'a', event: null, delta: 20, from: 1000, to: 1020, decay: null, kind: 'SERVICE_FULFILLED' },
+    ],
+  ])(
+    'NOT_CHECKED when %s',
+    (_label, event) => {
+      const { out } = run(receipt([event as RepEvent]));
+      const line = ledgerLine(out);
+      expect(outcomeOf(line)).toBe('NOT_CHECKED');
+      expect(line).toMatch(/\?\?/);
+      expect(line).not.toMatch(/FAIL/);
+      expect(line).toMatch(/no event label/);
+      expect(line).toMatch(/continuity \/ decomposition/);
+      expect(line).not.toMatch(/0 of \d+ event\(s\) balance/);
+      expect(out).not.toMatch(/\bclaim\b/);
+      expect(out).not.toMatch(/\buser_id\b/);
+    },
+  );
+
+  it('still VERIFIED when the event label is present and the arithmetic closes', () => {
+    const { out } = run(
+      receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020, kind: 'SERVICE' }]),
+    );
     expect(outcomeOf(ledgerLine(out))).toBe('VERIFIED');
   });
 });
