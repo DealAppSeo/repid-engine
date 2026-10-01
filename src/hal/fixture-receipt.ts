@@ -3,6 +3,7 @@
  * Writes only when the flag is the exact string true. Unset writes nothing.
  * The row has no claim text. This does not score.
  */
+import { sealReceiptInsert } from './receipt-payload';
 export interface FixtureReceiptResult {
   written: boolean;
   id?: number;
@@ -38,7 +39,7 @@ export async function writeFixtureReceipt(
   try {
     const { data, error } = await client
       .from('hal_quorum_receipts')
-      .insert(FIXTURE_ROW)
+      .insert(sealReceiptInsert(FIXTURE_ROW))
       .select('id')
       .single();
     const raw = data?.id;

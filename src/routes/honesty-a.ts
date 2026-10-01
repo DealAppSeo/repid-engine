@@ -4,6 +4,7 @@
  * Selects family, host, the blended verdict, and the two passes.
  * No claim text and no user id. A database error or a full page is NOT_CHECKED,
  * not a fabricated count. A missing first pass is counted as NOT_CHECKED, not as 0.
+ * A missing first_pass column omits that key. It is never 0 and it is not zero-filled.
  */
 import { Router, type Request, type Response } from 'express';
 import { db } from '../db';
@@ -36,7 +37,9 @@ router.get('/honesty-a', async (_req: Request, res: Response): Promise<void> => 
     if (error) {
       const report = honestyANotChecked(`${HONESTY_A_LLM_LOG_GAP} Vote read failed: ${error.message}`);
       if (/column/i.test(error.message ?? '')) {
-        send(res, { ...report, first_pass: 'NOT_CHECKED' });
+        const body: HonestyAReport = { ...report };
+        delete body.first_pass;
+        send(res, body);
         return;
       }
       send(res, report);
