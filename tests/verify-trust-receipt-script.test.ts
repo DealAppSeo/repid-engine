@@ -220,7 +220,10 @@ describe('verify-trust-receipt: missing event label is NOT_CHECKED, never pass o
   ])(
     'NOT_CHECKED when %s',
     (_label, event) => {
-      const { out } = run(receipt([event as RepEvent]));
+      const r = receipt([event as RepEvent]);
+      (r as any).claim = 'XC2-SENSITIVE-CLAIM-TEXT';
+      (r as any).user_id = 'XC2-USER-ID-LEAK';
+      const { out } = run(r);
       const line = ledgerLine(out);
       expect(outcomeOf(line)).toBe('NOT_CHECKED');
       expect(line).toMatch(/\?\?/);
@@ -228,6 +231,8 @@ describe('verify-trust-receipt: missing event label is NOT_CHECKED, never pass o
       expect(line).toMatch(/no event label/);
       expect(line).toMatch(/continuity \/ decomposition/);
       expect(line).not.toMatch(/0 of \d+ event\(s\) balance/);
+      expect(out).not.toContain('XC2-SENSITIVE-CLAIM-TEXT');
+      expect(out).not.toContain('XC2-USER-ID-LEAK');
       expect(out).not.toMatch(/\bclaim\b/);
       expect(out).not.toMatch(/\buser_id\b/);
     },
