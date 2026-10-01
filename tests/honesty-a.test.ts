@@ -70,6 +70,54 @@ describe('honesty A', () => {
     ]);
   });
 
+  it('all three families NOT_CHECKED keeps buckets separate and never collapses to FALSE or 0', () => {
+    const report = aggregateHonestyA([
+      { family: 'llama', host: 'groq', verdict: 'UNCERTAIN', first_pass_verdict: undefined, post_hal_verdict: 'ERROR' },
+      { family: 'qwen', host: 'fireworks', verdict: null, first_pass_verdict: 0, post_hal_verdict: '' },
+      { family: 'glm', host: 'zai', verdict: 'TIMEOUT', first_pass_verdict: 'UNCERTAIN', post_hal_verdict: null },
+    ]);
+    expect(report.status).toBe('counted');
+    expect(report.rows).toHaveLength(3);
+    for (const row of report.rows ?? []) {
+      expect(row.TRUE).toBe(0);
+      expect(row.FALSE).toBe(0);
+      expect(row.NOT_CHECKED).toBe(1);
+      expect(row.first_pass).toEqual({ TRUE: 0, FALSE: 0, NOT_CHECKED: 1 });
+      expect(row.post_hal).toEqual({ TRUE: 0, FALSE: 0, NOT_CHECKED: 1 });
+      expect(row.first_pass.NOT_CHECKED).not.toBe(0);
+      expect(row.post_hal.NOT_CHECKED).not.toBe(0);
+    }
+    expect(report.rows).toEqual([
+      {
+        family: 'glm',
+        host: 'zai',
+        TRUE: 0,
+        FALSE: 0,
+        NOT_CHECKED: 1,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+      },
+      {
+        family: 'llama',
+        host: 'groq',
+        TRUE: 0,
+        FALSE: 0,
+        NOT_CHECKED: 1,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+      },
+      {
+        family: 'qwen',
+        host: 'fireworks',
+        TRUE: 0,
+        FALSE: 0,
+        NOT_CHECKED: 1,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+      },
+    ]);
+  });
+
   it('a missing first_pass is NOT_CHECKED, not 0', () => {
     const missing = readPassVerdict(undefined);
     expect(missing.status).toBe('NOT_CHECKED');
