@@ -134,6 +134,21 @@ function checkRepIdLedger(r) {
     return record('reputation ledger arithmetic', 'NOT_CHECKED', 'no reputation events on this receipt');
   }
 
+  // An event whose kind (event type) is unreadable cannot be identified or
+  // chain-checked. Absence, null, or empty string is NOT_CHECKED — never a
+  // numeric 0 stand-in and never a false FAILED forgery for missing data.
+  const missingKind = events.findIndex((e) => {
+    const kind = e?.event;
+    return kind === undefined || kind === null || kind === '';
+  });
+  if (missingKind >= 0) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      `event ${missingKind + 1} has no event kind — the ledger cannot identify what reputation movement this records`,
+    );
+  }
+
   const last = {};
   const failed = [];
   const undetermined = [];
