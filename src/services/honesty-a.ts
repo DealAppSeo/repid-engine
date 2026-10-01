@@ -100,15 +100,25 @@ function addPass(counts: PassCounts, verdict: unknown): void {
   counts[reading.verdict] += 1;
 }
 
+function resolveFamilyOrHost(
+  value: string | null | undefined,
+  fallback: string | null | undefined,
+): string {
+  if (value == null || value.length === 0 || /^\n+$/.test(value)) {
+    return fallback ?? 'NOT_CHECKED';
+  }
+  return value;
+}
+
 export function aggregateHonestyA(
   votes: readonly HonestyVote[],
   env: Record<string, string | undefined> = process.env,
 ): HonestyAReport {
   const buckets = new Map<string, HonestyARow>();
   for (const vote of votes) {
-    const family = vote.family && vote.family.length > 0 ? vote.family : 'NOT_CHECKED';
-    const namedHost = vote.host && vote.host.length > 0 ? vote.host : vote.provider;
-    const host = namedHost && namedHost.length > 0 ? namedHost : 'NOT_CHECKED';
+    const family = resolveFamilyOrHost(vote.family, 'NOT_CHECKED');
+    const namedHost = resolveFamilyOrHost(vote.host, vote.provider);
+    const host = resolveFamilyOrHost(namedHost, 'NOT_CHECKED');
     const key = `${family}\n${host}`;
     let row = buckets.get(key);
     if (!row) {
