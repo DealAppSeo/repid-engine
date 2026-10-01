@@ -142,6 +142,23 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.infinity_first_pass)) fail('infinity first pass fixture missing');
+const infinityPass = fixture.infinity_first_pass[0];
+if (!infinityPass || infinityPass.kind !== 'first-pass') fail('infinity first pass fixture is not a first pass');
+if (infinityPass.first_pass_verdict !== 'Infinity') fail('infinity first pass fixture is not Infinity');
+if (infinityPass.rater_id === infinityPass.subject_id) fail('infinity first pass is a self rating');
+if (!(Number(infinityPass.delta) > 0)) fail('infinity first pass delta is not positive');
+const laterPositiveInfinity = fixture.infinity_first_pass.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === infinityPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositiveInfinity) fail('infinity first pass fixture has no later positive rating for the same subject');
+const afterInfinityFirstPass = applyRatings(start, fixture.infinity_first_pass);
+if (afterInfinityFirstPass !== start) fail(`Infinity first pass raised the score from ${start} to ${afterInfinityFirstPass}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -188,6 +205,8 @@ process.stdout.write(
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_infinity_first_pass\t${afterInfinityFirstPass}\n` +
+    `infinity_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
