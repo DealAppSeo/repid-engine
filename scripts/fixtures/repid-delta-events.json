@@ -13,6 +13,15 @@
   "self_rate_zero": [
     { "kind": "rating", "rater_id": "agent-a", "subject_id": "agent-a", "delta": 0 }
   ],
+  "false_first_pass": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "FALSE",
+      "delta": 25
+    }
+  ],
   "votes": [
     { "family": "llama", "host": "groq" },
     { "family": "llama", "host": "groq", "first_pass_verdict": null },
