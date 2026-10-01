@@ -23,10 +23,16 @@ function applyRatings(start, events) {
   const truePassedSubjects = new Set();
   for (const event of events) {
     if (event.kind === 'first-pass') {
-      if (event.subject_id && event.first_pass_verdict !== 'TRUE') {
-        blockedSubjects.add(event.subject_id);
-      } else if (event.first_pass_verdict === 'TRUE' && event.subject_id) {
-        truePassedSubjects.add(event.subject_id);
+      const reading = readFirstPass(event.first_pass_verdict);
+      if (event.subject_id) {
+        if (reading.verdict === 'TRUE') {
+          truePassedSubjects.add(event.subject_id);
+        } else {
+          // FALSE and every NOT_CHECKED shape (missing, lowercase "true"/"yes",
+          // whitespace, "0", "null", "undefined", "false", "NaN", "Infinity",
+          // etc.) block raises. Only exact uppercase TRUE/FALSE are counted.
+          blockedSubjects.add(event.subject_id);
+        }
       }
       continue;
     }
@@ -142,11 +148,47 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.lowercase_true_then_true)) fail('lowercase-true-then-true fixture missing');
+const lowercaseTruePass = fixture.lowercase_true_then_true[0];
+if (!lowercaseTruePass || lowercaseTruePass.kind !== 'first-pass') fail('lowercase-true-then-true fixture is not a first pass');
+if (lowercaseTruePass.first_pass_verdict !== 'true') fail('lowercase-true-then-true fixture is not lowercase true');
+if (lowercaseTruePass.rater_id === lowercaseTruePass.subject_id) fail('lowercase-true-then-true first pass is a self rating');
+if (!(Number(lowercaseTruePass.delta) > 0)) fail('lowercase-true-then-true first pass delta is not positive');
+const laterTrueAfterLowercaseTrue = fixture.lowercase_true_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === lowercaseTruePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterTrueAfterLowercaseTrue) fail('lowercase-true-then-true fixture has no later positive rating for the same subject');
+const afterLowercaseTrueThenTrue = applyRatings(start, fixture.lowercase_true_then_true);
+if (afterLowercaseTrueThenTrue !== start) fail(`lowercase "true" first pass followed by TRUE raised the score from ${start} to ${afterLowercaseTrueThenTrue}`);
+
+if (!Array.isArray(fixture.yes_then_true)) fail('yes-then-true fixture missing');
+const yesPass = fixture.yes_then_true[0];
+if (!yesPass || yesPass.kind !== 'first-pass') fail('yes-then-true fixture is not a first pass');
+if (yesPass.first_pass_verdict !== 'yes') fail('yes-then-true fixture is not yes');
+if (yesPass.rater_id === yesPass.subject_id) fail('yes-then-true first pass is a self rating');
+if (!(Number(yesPass.delta) > 0)) fail('yes-then-true first pass delta is not positive');
+const laterTrueAfterYes = fixture.yes_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === yesPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterTrueAfterYes) fail('yes-then-true fixture has no later positive rating for the same subject');
+const afterYesThenTrue = applyRatings(start, fixture.yes_then_true);
+if (afterYesThenTrue !== start) fail(`"yes" first pass followed by TRUE raised the score from ${start} to ${afterYesThenTrue}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
   0,
   'NOT_CHECKED',
+  'true',
+  'yes',
 ];
 for (const value of samples) {
   const reading = readFirstPass(value);
@@ -188,6 +230,8 @@ process.stdout.write(
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_lowercase_true_first_pass\t${afterLowercaseTrueThenTrue}\n` +
+    `after_yes_first_pass\t${afterYesThenTrue}\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

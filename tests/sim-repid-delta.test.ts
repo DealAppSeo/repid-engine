@@ -41,6 +41,20 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string | null | undefined;
         delta: number;
       }[];
+      lowercase_true_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
+      yes_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -88,6 +102,32 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(laterPositive).toBeDefined();
+    const lowercaseTrueThenTrue = fixture.lowercase_true_then_true[0];
+    expect(lowercaseTrueThenTrue?.kind).toBe('first-pass');
+    expect(lowercaseTrueThenTrue?.first_pass_verdict).toBe('true');
+    expect(lowercaseTrueThenTrue?.rater_id).not.toBe(lowercaseTrueThenTrue?.subject_id);
+    expect(Number(lowercaseTrueThenTrue?.delta)).toBeGreaterThan(0);
+    const laterTrueAfterLowercaseTrue = fixture.lowercase_true_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === lowercaseTrueThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(laterTrueAfterLowercaseTrue).toBeDefined();
+    const yesThenTrue = fixture.yes_then_true[0];
+    expect(yesThenTrue?.kind).toBe('first-pass');
+    expect(yesThenTrue?.first_pass_verdict).toBe('yes');
+    expect(yesThenTrue?.rater_id).not.toBe(yesThenTrue?.subject_id);
+    expect(Number(yesThenTrue?.delta)).toBeGreaterThan(0);
+    const laterTrueAfterYes = fixture.yes_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === yesThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(laterTrueAfterYes).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -101,6 +141,8 @@ describe('sim-repid-delta', () => {
         `after_true_then_hal_veto\t${fixture.start_score - Number(halVeto?.delta)}\n` +
         `after_notchecked_first_pass\t${fixture.start_score}\n` +
         `notchecked_first_pass_status\tNOT_CHECKED\n` +
+        `after_lowercase_true_first_pass\t${fixture.start_score}\n` +
+        `after_yes_first_pass\t${fixture.start_score}\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -130,6 +172,19 @@ describe('sim-repid-delta', () => {
     expect(score).toBeLessThanOrEqual(fixture.start_score);
   });
 
+  it('treats lowercase "true" and "yes" first-pass verdicts as NOT_CHECKED and does not raise the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const lowercaseTrueMatch = out.match(/after_lowercase_true_first_pass\t(\d+)/);
+    const yesMatch = out.match(/after_yes_first_pass\t(\d+)/);
+    expect(lowercaseTrueMatch).toBeTruthy();
+    expect(yesMatch).toBeTruthy();
+    expect(Number(lowercaseTrueMatch?.[1])).toBe(fixture.start_score);
+    expect(Number(yesMatch?.[1])).toBe(fixture.start_score);
+  });
+
   it('reads the fixture file and does not dial a database', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('repid-delta-events.json');
@@ -147,6 +202,8 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('NOT_CHECKED first pass followed by TRUE raised the score');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain('notchecked_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('lowercase "true" first pass followed by TRUE raised the score');
+    expect(src).toContain('"yes" first pass followed by TRUE raised the score');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
     expect(src).toContain('missing_rater\\tNOT_CHECKED');
