@@ -35,6 +35,7 @@ function applyRatings(start, events) {
     if (blockedSubjects.has(event.subject_id)) continue;
     const delta = Number(event.delta);
     if (!Number.isFinite(delta) || delta <= 0) continue;
+    if (event.kind === 'rating' && event.first_pass_verdict !== 'TRUE') continue;
     score += delta;
   }
   return score;
@@ -57,6 +58,15 @@ if (selfScore > start) fail('self-only ratings raised the score');
 
 const raised = applyRatings(start, fixture.counterparty);
 if (!(raised > start)) fail('a counterparty rating did not raise the score');
+
+if (!Array.isArray(fixture.empty_first_pass)) fail('empty first pass fixture missing');
+const emptyPass = fixture.empty_first_pass[0];
+if (!emptyPass || emptyPass.kind !== 'rating') fail('empty first pass fixture is not a rating');
+if (emptyPass.first_pass_verdict !== '') fail('empty first pass fixture verdict is not empty string');
+if (emptyPass.rater_id === emptyPass.subject_id) fail('empty first pass is a self rating');
+if (!(Number(emptyPass.delta) > 0)) fail('empty first pass delta is not positive');
+const afterEmpty = applyRatings(start, fixture.empty_first_pass);
+if (afterEmpty !== start) fail(`empty first pass raised the score from ${start} to ${afterEmpty}`);
 
 if (!Array.isArray(fixture.nonprofit_help)) fail('nonprofit-help fixture missing');
 const helped = applyRatings(start, fixture.nonprofit_help);
@@ -138,6 +148,7 @@ process.stdout.write(
   `before\t${start}\n` +
     `after_false_first_pass\t${afterFalse}\n` +
     `after_false_then_true\t${afterFalseThenTrue}\n` +
+    `after_empty_first_pass\t${afterEmpty}\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

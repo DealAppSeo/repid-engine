@@ -5,7 +5,10 @@
     { "kind": "rating", "rater_id": "agent-b", "subject_id": "agent-b", "delta": 40 }
   ],
   "counterparty": [
-    { "kind": "rating", "rater_id": "agent-b", "subject_id": "agent-a", "delta": 25 }
+    { "kind": "rating", "rater_id": "agent-b", "subject_id": "agent-a", "first_pass_verdict": "TRUE", "delta": 25 }
+  ],
+  "empty_first_pass": [
+    { "kind": "rating", "rater_id": "agent-c", "subject_id": "agent-a", "first_pass_verdict": "", "delta": 25 }
   ],
   "nonprofit_help": [
     { "kind": "nonprofit-help", "rater_id": "agent-b", "subject_id": "agent-a", "delta": 1 }
