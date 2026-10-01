@@ -47,11 +47,22 @@ if (process.env.HAL_QUORUM_RECEIPT_ENABLED !== 'true') {
             },
           };
         },
-        async insert(row) {
+        insert(row) {
           if (Object.prototype.hasOwnProperty.call(row, 'user_id')) {
             throw new Error('user id is not a vote field');
           }
-          return { error: null };
+          if (Object.prototype.hasOwnProperty.call(row, 'claim')) {
+            throw new Error('claim text is not stored');
+          }
+          const payload = { data: { id: 1 }, error: null };
+          return {
+            select() {
+              return { async single() { return payload; } };
+            },
+            then(onOk, onErr) {
+              return Promise.resolve({ error: null }).then(onOk, onErr);
+            },
+          };
         },
       };
     },

@@ -33,6 +33,7 @@ describe('POST /api/v1/laya/classify', () => {
 
   it('GET with no body returns ask and latency_ms', async () => {
     const res = await request(app).get('/api/v1/laya/classify');
+    expect(res.status).not.toBe(404);
     expect(res.status).toBe(200);
     expect(res.body.route).toBe('ask');
     expect(res.body.latency_ms).toEqual(expect.any(Number));
