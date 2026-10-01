@@ -7,25 +7,38 @@ describe('sim-repid-aware', () => {
   const root = path.join(__dirname, '..');
   const script = path.join(root, 'scripts', 'sim-repid-aware.mjs');
 
-  it('prints arms A B C as FIXTURE until a calls file exists', () => {
+  it('prints arm, verdict, and refuse as NOT_CHECKED until a calls file exists', () => {
     const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
     expect(out).toBe(
-      'arm\tA\tFIXTURE\n' +
-        'arm\tB\tFIXTURE\n' +
-        'arm\tC\tFIXTURE\n' +
-        'error_rate\tNOT_CHECKED\n' +
-        'refuse_rate\tNOT_CHECKED\n' +
-        'same_direction_miss\tNOT_CHECKED\n',
+      'arm\tverdict\trefuse\n' +
+        'A\tNOT_CHECKED\tNOT_CHECKED\n' +
+        'B\tNOT_CHECKED\tNOT_CHECKED\n' +
+        'C\tNOT_CHECKED\tNOT_CHECKED\n',
     );
     for (const line of out.trim().split(/\r?\n/)) {
       expect(line.split('\t')).not.toContain('0');
     }
+    expect(out).not.toContain('bare');
+    expect(out).not.toContain('check-this');
+    expect(out).not.toContain('later-rater');
   });
 
-  it('reads hal-traps on the fixture run and does not call a vendor', () => {
+  it('reads the arm prompts on the fixture run and does not call a vendor', () => {
     const src = readFileSync(script, 'utf8');
-    expect(src).toContain('hal-traps.json');
-    expect(src).toContain('FIXTURE');
+    const arms = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-aware-arms.json'), 'utf8'),
+    ) as { arms: { arm: string; prompt: string }[] };
+    expect(arms.arms.map((row) => [row.arm, row.prompt])).toEqual([
+      ['A', 'bare'],
+      ['B', 'check-this'],
+      ['C', 'later-rater'],
+    ]);
+    for (const row of arms.arms) {
+      expect(row.prompt.includes('.')).toBe(false);
+      expect(row.prompt.includes(' ')).toBe(false);
+    }
+    expect(src).toContain('repid-aware-arms.json');
+    expect(src).toContain('later-rater');
     expect(src).toContain('error_rate');
     expect(src).toContain('refuse_rate');
     expect(src).toContain('same_direction_miss');
@@ -33,11 +46,12 @@ describe('sim-repid-aware', () => {
     expect(src).not.toContain('supabase');
     expect(src).not.toContain('fetch(');
     expect(src).not.toContain('process.env');
+    expect(src).not.toContain('hal-traps.json');
     const branch = src.slice(src.indexOf('const callsArg'));
     const ifBlock = branch.slice(branch.indexOf('if (callsArg)'), branch.indexOf('} else {'));
     expect(ifBlock).toContain('printCalls(');
-    expect(ifBlock).not.toContain('trapsPath');
-    expect(ifBlock).not.toContain('hal-traps.json');
+    expect(ifBlock).not.toContain('armsPath');
+    expect(ifBlock).not.toContain('repid-aware-arms.json');
     expect(branch).toContain('printFixture()');
   });
 
