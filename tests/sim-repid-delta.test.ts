@@ -41,6 +41,20 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string | null | undefined;
         delta: number;
       }[];
+      false_literal_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
+      nan_literal_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -88,6 +102,32 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(laterPositive).toBeDefined();
+    const falseLiteralThenTrue = fixture.false_literal_then_true[0];
+    expect(falseLiteralThenTrue?.kind).toBe('first-pass');
+    expect(falseLiteralThenTrue?.first_pass_verdict).toBe('false');
+    expect(falseLiteralThenTrue?.rater_id).not.toBe(falseLiteralThenTrue?.subject_id);
+    expect(Number(falseLiteralThenTrue?.delta)).toBeGreaterThan(0);
+    const laterPositiveAfterFalseLiteral = fixture.false_literal_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === falseLiteralThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(laterPositiveAfterFalseLiteral).toBeDefined();
+    const nanLiteralThenTrue = fixture.nan_literal_then_true[0];
+    expect(nanLiteralThenTrue?.kind).toBe('first-pass');
+    expect(nanLiteralThenTrue?.first_pass_verdict).toBe('NaN');
+    expect(nanLiteralThenTrue?.rater_id).not.toBe(nanLiteralThenTrue?.subject_id);
+    expect(Number(nanLiteralThenTrue?.delta)).toBeGreaterThan(0);
+    const laterPositiveAfterNanLiteral = fixture.nan_literal_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === nanLiteralThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(laterPositiveAfterNanLiteral).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -101,6 +141,10 @@ describe('sim-repid-delta', () => {
         `after_true_then_hal_veto\t${fixture.start_score - Number(halVeto?.delta)}\n` +
         `after_notchecked_first_pass\t${fixture.start_score}\n` +
         `notchecked_first_pass_status\tNOT_CHECKED\n` +
+        `after_false_literal_first_pass\t${fixture.start_score}\n` +
+        `false_literal_first_pass_status\tNOT_CHECKED\n` +
+        `after_nan_literal_first_pass\t${fixture.start_score}\n` +
+        `nan_literal_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -130,6 +174,30 @@ describe('sim-repid-delta', () => {
     expect(score).toBeLessThanOrEqual(fixture.start_score);
   });
 
+  it('never raises the score when the first pass verdict is the literal string "false"', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const scoreMatch = out.match(/after_false_literal_first_pass\t(\d+)/);
+    expect(scoreMatch).toBeTruthy();
+    const score = Number(scoreMatch?.[1]);
+    expect(score).toBe(fixture.start_score);
+    expect(out).toContain('false_literal_first_pass_status\tNOT_CHECKED');
+  });
+
+  it('never raises the score when the first pass verdict is the literal string "NaN"', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const scoreMatch = out.match(/after_nan_literal_first_pass\t(\d+)/);
+    expect(scoreMatch).toBeTruthy();
+    const score = Number(scoreMatch?.[1]);
+    expect(score).toBe(fixture.start_score);
+    expect(out).toContain('nan_literal_first_pass_status\tNOT_CHECKED');
+  });
+
   it('reads the fixture file and does not dial a database', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('repid-delta-events.json');
@@ -145,8 +213,12 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('TRUE first pass followed by HAL veto raised the score');
     expect(src).toContain('after_true_then_hal_veto');
     expect(src).toContain('NOT_CHECKED first pass followed by TRUE raised the score');
+    expect(src).toContain('literal "false" first pass raised the score');
+    expect(src).toContain('literal "NaN" first pass raised the score');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain('notchecked_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('false_literal_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('nan_literal_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
     expect(src).toContain('missing_rater\\tNOT_CHECKED');

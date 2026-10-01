@@ -142,6 +142,46 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.false_literal_then_true)) fail('false-literal first pass fixture missing');
+const falseLiteralPass = fixture.false_literal_then_true[0];
+if (!falseLiteralPass || falseLiteralPass.kind !== 'first-pass') fail('false-literal first pass fixture is not a first pass');
+if (falseLiteralPass.first_pass_verdict !== 'false') fail('false-literal first pass fixture is not the literal string "false"');
+if (falseLiteralPass.rater_id === falseLiteralPass.subject_id) fail('false-literal first pass is a self rating');
+if (!(Number(falseLiteralPass.delta) > 0)) fail('false-literal first pass delta is not positive');
+const laterPositiveAfterFalseLiteral = fixture.false_literal_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === falseLiteralPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositiveAfterFalseLiteral) fail('false-literal first pass fixture has no later positive rating for the same subject');
+const afterFalseLiteralFirstPass = applyRatings(start, fixture.false_literal_then_true);
+if (afterFalseLiteralFirstPass !== start) fail(`literal "false" first pass raised the score from ${start} to ${afterFalseLiteralFirstPass}`);
+const falseLiteralReading = readFirstPass(falseLiteralPass.first_pass_verdict);
+if (falseLiteralReading.status !== 'NOT_CHECKED') fail('literal "false" was not NOT_CHECKED');
+if (falseLiteralReading.verdict === 0) fail('literal "false" was stored as numeric 0');
+
+if (!Array.isArray(fixture.nan_literal_then_true)) fail('nan-literal first pass fixture missing');
+const nanLiteralPass = fixture.nan_literal_then_true[0];
+if (!nanLiteralPass || nanLiteralPass.kind !== 'first-pass') fail('nan-literal first pass fixture is not a first pass');
+if (nanLiteralPass.first_pass_verdict !== 'NaN') fail('nan-literal first pass fixture is not the literal string "NaN"');
+if (nanLiteralPass.rater_id === nanLiteralPass.subject_id) fail('nan-literal first pass is a self rating');
+if (!(Number(nanLiteralPass.delta) > 0)) fail('nan-literal first pass delta is not positive');
+const laterPositiveAfterNanLiteral = fixture.nan_literal_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === nanLiteralPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositiveAfterNanLiteral) fail('nan-literal first pass fixture has no later positive rating for the same subject');
+const afterNanLiteralFirstPass = applyRatings(start, fixture.nan_literal_then_true);
+if (afterNanLiteralFirstPass !== start) fail(`literal "NaN" first pass raised the score from ${start} to ${afterNanLiteralFirstPass}`);
+const nanLiteralReading = readFirstPass(nanLiteralPass.first_pass_verdict);
+if (nanLiteralReading.status !== 'NOT_CHECKED') fail('literal "NaN" was not NOT_CHECKED');
+if (nanLiteralReading.verdict === 0) fail('literal "NaN" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -188,6 +228,10 @@ process.stdout.write(
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_false_literal_first_pass\t${afterFalseLiteralFirstPass}\n` +
+    `false_literal_first_pass_status\tNOT_CHECKED\n` +
+    `after_nan_literal_first_pass\t${afterNanLiteralFirstPass}\n` +
+    `nan_literal_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

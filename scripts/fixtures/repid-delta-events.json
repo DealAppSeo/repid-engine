@@ -67,6 +67,36 @@
       "delta": 25
     }
   ],
+  "false_literal_then_true": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "false",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
+  "nan_literal_then_true": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "NaN",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
   "rater_gate": [
     {
       "kind": "rating",
@@ -100,6 +130,8 @@
   "votes": [
     { "family": "llama", "host": "groq" },
     { "family": "llama", "host": "groq", "first_pass_verdict": null },
-    { "family": "llama", "host": "groq", "first_pass_verdict": 0 }
+    { "family": "llama", "host": "groq", "first_pass_verdict": 0 },
+    { "family": "llama", "host": "groq", "first_pass_verdict": "false" },
+    { "family": "llama", "host": "groq", "first_pass_verdict": "NaN" }
   ]
 }
