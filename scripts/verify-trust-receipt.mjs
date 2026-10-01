@@ -143,6 +143,14 @@ function checkRepIdLedger(r) {
   for (const e of events) {
     const where = `${e.agent}/${e.event}`;
 
+    // A missing or non-numeric delta makes the arithmetic for this event
+    // uncheckable. It is NOT_CHECKED, never a false FAILED forgery, and never
+    // silently treated as numeric 0.
+    if (!Number.isFinite(e.delta)) {
+      undetermined.push(`${where}: delta is missing or not a number, so the ledger arithmetic cannot be checked`);
+      continue;
+    }
+
     // Continuity: this agent's previous event must end where this one starts.
     // Independent of decay, so it is checkable on every receipt.
     if (last[e.agent] !== undefined && last[e.agent] !== e.from) {
