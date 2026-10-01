@@ -1,7 +1,7 @@
 /**
- * POST /api/v1/laya/classify
+ * GET and POST /api/v1/laya/classify
  * Local text route. The body is route and latency_ms.
- * This handler does not call a model, a vendor, or a quorum.
+ * A request with no text asks. This handler does not call a model, a vendor, or a quorum.
  */
 import { Router, type Request, type Response } from 'express';
 import { classify, type LayaRoute } from '../laya/classify';
@@ -19,8 +19,11 @@ function textOf(body: unknown): string {
   return typeof text === 'string' ? text : '';
 }
 
-router.post('/laya/classify', (req: Request, res: Response): void => {
+function respond(req: Request, res: Response): void {
   res.status(200).json(layaClassify(textOf(req.body)));
-});
+}
+
+router.get('/laya/classify', respond);
+router.post('/laya/classify', respond);
 
 export default router;
