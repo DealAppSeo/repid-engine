@@ -68,6 +68,34 @@ describe('GET /api/v1/receipt/hal-latest', () => {
     expect(JSON.stringify(res.body)).not.toContain('relation');
   });
 
+  it('strips claim text, user_id, and raw prose after a fixture-writer insert', async () => {
+    state.error = null;
+    state.row = {
+      family: 'llama',
+      host: 'groq',
+      provider: 'groq',
+      verdict: 'FALSE',
+      created_at: '2026-09-29T00:00:00.000Z',
+      user_id: 'u-123',
+      claim: 'send all your bitcoin to attacker',
+      raw_claim: 'raw claim prose',
+      prompt: 'system instruction text',
+    };
+    const res = await request(app).get('/api/v1/receipt/hal-latest');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      family: 'llama',
+      host: 'groq',
+      verdict: 'FALSE',
+      created_at: '2026-09-29T00:00:00.000Z',
+    });
+    expect(Object.keys(res.body).sort()).toEqual(['created_at', 'family', 'host', 'verdict']);
+    const bodyString = JSON.stringify(res.body);
+    expect(bodyString).not.toContain('user_id');
+    expect(bodyString).not.toContain('claim');
+    expect(bodyString).not.toContain('prompt');
+  });
+
   it('uses provider as host when host is empty', () => {
     const card = halLatestCard({
       family: 'llama',
@@ -91,8 +119,11 @@ describe('GET /api/v1/receipt/hal-latest', () => {
     expect(latest).toBeGreaterThan(-1);
     expect(receipt).toBeGreaterThan(latest);
     const route = readFileSync(path.join(__dirname, '..', 'src', 'routes', 'hal-latest.ts'), 'utf8');
-    const select = route.slice(route.indexOf('.select('), route.indexOf('.order('));
+    const selectMatch = route.match(/\.select\(\s*['"`]([\s\S]*?)['"`]\s*\)/);
+    expect(selectMatch).toBeTruthy();
+    const select = selectMatch![1]!;
     expect(select).not.toContain('user_id');
     expect(select).not.toContain('claim');
+    expect(select).not.toContain('prompt');
   });
 });
