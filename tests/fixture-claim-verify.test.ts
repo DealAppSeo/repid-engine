@@ -75,6 +75,28 @@ describe('mocked fixture verify', () => {
     expect(db.inserts).toHaveLength(0);
   });
 
+  it('includes the receipt id and the family verdicts, and a claim key fails', async () => {
+    const db = mock('present');
+    const poisoned = { ...claim, claim: 'the surgeon is the mother' };
+    const res = await verifyFixtureClaim(db.client, poisoned, OPEN);
+    expect(res.receipt_id).toBe('1');
+    expect(res.families).toEqual([{ family: 'llama', verdict: 'FALSE' }]);
+    expect(Object.prototype.hasOwnProperty.call(res, 'claim')).toBe(false);
+    expect(JSON.stringify(res)).not.toContain('claim');
+    expect(JSON.stringify(res)).not.toContain('surgeon');
+
+    const missing = await verifyFixtureClaim(
+      db.client,
+      { ...claim, first_pass_verdict: 0, receipt_id: 0 },
+      OPEN,
+    );
+    expect(missing.receipt_id).toBe('NOT_CHECKED');
+    expect(missing.families[0]?.verdict).toBe('NOT_CHECKED');
+    expect(missing.families[0]?.verdict).not.toBe(0);
+    expect(missing.receipt_id).not.toBe(0);
+    expect(missing).not.toHaveProperty('claim');
+  });
+
   it('does not dial a database from the verify module', () => {
     const src = readFileSync(path.join(__dirname, '..', 'src', 'hal', 'fixture-claim-verify.ts'), 'utf8');
     expect(src).toContain('writeV1Receipt');
