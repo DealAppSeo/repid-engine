@@ -29,9 +29,18 @@ function mock(columns: 'present' | 'missing') {
             },
           };
         },
-        async insert(row: Record<string, unknown>) {
+        insert(row: Record<string, unknown>) {
           inserts.push({ table, row });
-          return { error: null };
+          const id = inserts.filter((item) => item.table === 'hal_quorum_receipts').length || 1;
+          const payload = { data: { id }, error: null };
+          return {
+            select() {
+              return { async single() { return payload; } };
+            },
+            then(onOk: (value: { error: null }) => unknown, onErr?: (error: unknown) => unknown) {
+              return Promise.resolve({ error: null }).then(onOk, onErr);
+            },
+          };
         },
       };
     },
@@ -70,9 +79,11 @@ describe('e2e live pack', () => {
     const { lines } = await runLivePack(claims, db.client, { HAL_QUORUM_RECEIPT_ENABLED: 'true' });
     expect(lines.map((line) => line.split('\t')[0])).toEqual(IDS);
     expect(lines.every((line) => line.endsWith('\tinserted'))).toBe(true);
-    expect(db.inserts).toHaveLength(8);
+    const parents = db.inserts.filter((item) => item.table === 'hal_quorum_receipts');
+    const votes = db.inserts.filter((item) => item.table === 'hal_quorum_validator_votes');
+    expect(parents).toHaveLength(8);
+    expect(votes).toHaveLength(8);
     for (const insert of db.inserts) {
-      expect(insert.table).toBe('hal_quorum_validator_votes');
       expect(insert.row).not.toHaveProperty('user_id');
       expect(JSON.stringify(insert.row)).not.toContain('user_id');
       expect(Object.keys(insert.row)).not.toContain('claim');

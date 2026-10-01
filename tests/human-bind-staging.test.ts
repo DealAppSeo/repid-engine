@@ -3,7 +3,11 @@ import request from 'supertest';
 
 type Row = { wallet: string; agent_id: string };
 
-const state: { rows: Row[]; failCode: string | null } = { rows: [], failCode: null };
+const state: { rows: Row[]; keys: Set<string>; failCode: string | null } = {
+  rows: [],
+  keys: new Set<string>(),
+  failCode: null,
+};
 
 jest.mock('../src/db', () => ({
   db: {
@@ -16,8 +20,9 @@ jest.mock('../src/db', () => ({
             state.failCode = null;
             return Promise.resolve({ error: { code } });
           }
-          const dup = state.rows.some((item) => item.wallet === row.wallet && item.agent_id === row.agent_id);
-          if (dup) return Promise.resolve({ error: { code: '23505' } });
+          const key = `${row.wallet}\0${row.agent_id}`;
+          if (state.keys.has(key)) return Promise.resolve({ error: { code: '23505' } });
+          state.keys.add(key);
           state.rows.push({ wallet: row.wallet, agent_id: row.agent_id });
           return Promise.resolve({ error: null });
         },
@@ -46,6 +51,7 @@ describe('POST /api/v1/human/bind staging row', () => {
 
   beforeEach(() => {
     state.rows = [];
+    state.keys = new Set<string>();
     state.failCode = null;
     delete process.env.HUMAN_AGENT_BIND_ENABLED;
   });
@@ -69,6 +75,7 @@ describe('POST /api/v1/human/bind staging row', () => {
     expect(unset.status).toBe(410);
     expect(unset.body).toEqual({ error: 'disabled' });
     expect(state.rows).toHaveLength(0);
+    expect(state.keys.size).toBe(0);
 
     process.env.HUMAN_AGENT_BIND_ENABLED = 'TRUE';
     const folded = await request(app()).post('/api/v1/human/bind').send(PAIR);

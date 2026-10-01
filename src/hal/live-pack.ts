@@ -3,7 +3,7 @@
  * This module does not open a database or a network connection.
  */
 import { verifyFixtureClaim } from './fixture-claim-verify';
-import type { PassVoteWriteResult } from './first-pass-vote';
+import type { V1ReceiptResult } from './v1-receipt-writer';
 
 export interface LiveClaim {
   id: string;
@@ -32,7 +32,7 @@ export async function runLivePack(
   const enabled = env.HAL_QUORUM_RECEIPT_ENABLED === 'true';
   const lines: string[] = [];
   for (const claim of claims) {
-    let result: PassVoteWriteResult | null = null;
+    let result: V1ReceiptResult | null = null;
     if (enabled) {
       result = await verifyFixtureClaim(
         client,
@@ -42,6 +42,7 @@ export async function runLivePack(
           host: claim.host,
           first_pass_verdict: claim.first_pass_verdict,
           first_pass_at: claim.first_pass_at,
+          post_hal_verdict: claim.post_hal_verdict,
         },
         env,
       );
@@ -50,7 +51,7 @@ export async function runLivePack(
       ? 'skipped'
       : result?.written
         ? 'inserted'
-        : result?.skippedReason === 'columns-missing'
+        : result?.reason === 'columns-missing' || result?.skippedReason === 'columns-missing'
           ? 'columns-missing'
           : 'skipped';
     lines.push(

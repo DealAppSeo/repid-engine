@@ -24,9 +24,18 @@ function mock(columns: 'present' | 'missing') {
             },
           };
         },
-        async insert(row: Record<string, unknown>) {
+        insert(row: Record<string, unknown>) {
           inserts.push({ table, row });
-          return { error: null };
+          const id = inserts.filter((item) => item.table === 'hal_quorum_receipts').length || 1;
+          const payload = { data: { id }, error: null };
+          return {
+            select() {
+              return { async single() { return payload; } };
+            },
+            then(onOk: (value: { error: null }) => unknown, onErr?: (error: unknown) => unknown) {
+              return Promise.resolve({ error: null }).then(onOk, onErr);
+            },
+          };
         },
       };
     },
@@ -45,27 +54,30 @@ describe('mocked fixture verify', () => {
     const db = mock('present');
     const res = await verifyFixtureClaim(db.client, claim, OPEN);
     expect(res.written).toBe(true);
-    expect(db.inserts).toHaveLength(1);
-    expect(db.inserts[0]?.table).toBe('hal_quorum_validator_votes');
-    expect(db.inserts[0]?.row).toMatchObject({
+    expect(db.inserts).toHaveLength(2);
+    const parent = db.inserts.find((item) => item.table === 'hal_quorum_receipts');
+    const vote = db.inserts.find((item) => item.table === 'hal_quorum_validator_votes');
+    expect(parent?.row).not.toHaveProperty('claim');
+    expect(vote?.row).toMatchObject({
       host: 'groq',
       first_pass_verdict: 'FALSE',
       first_pass_at: '2026-09-26T12:00:00.000Z',
     });
-    expect(JSON.stringify(db.inserts[0]?.row)).not.toContain('user_id');
+    expect(vote?.row).not.toHaveProperty('claim');
+    expect(JSON.stringify(db.inserts)).not.toContain('user_id');
   });
 
   it('inserts nothing when the columns are missing', async () => {
     const db = mock('missing');
     const res = await verifyFixtureClaim(db.client, claim, OPEN);
     expect(res.written).toBe(false);
-    expect(res.skippedReason).toBe('columns-missing');
+    expect(res.reason).toBe('columns-missing');
     expect(db.inserts).toHaveLength(0);
   });
 
   it('does not dial a database from the verify module', () => {
     const src = readFileSync(path.join(__dirname, '..', 'src', 'hal', 'fixture-claim-verify.ts'), 'utf8');
-    expect(src).toContain('writePassVote');
+    expect(src).toContain('writeV1Receipt');
     expect(src).not.toContain('supabase');
     expect(src).not.toContain('fetch(');
     expect(src).not.toContain('.insert(');
