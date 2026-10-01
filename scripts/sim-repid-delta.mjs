@@ -27,6 +27,7 @@ function applyRatings(start, events) {
       }
       continue;
     }
+    if (event.kind === 'hal-clean') continue;
     if (event.kind !== 'rating' && event.kind !== 'nonprofit-help') continue;
     if (event.rater_id === event.subject_id) continue;
     if (event.rater_role === 'owner') continue;
@@ -96,6 +97,58 @@ if (!laterTrue) fail('false-then-true fixture has no later positive rating for t
 const afterFalseThenTrue = applyRatings(start, fixture.false_then_true);
 if (afterFalseThenTrue !== start) fail(`FALSE first pass followed by TRUE raised the score from ${start} to ${afterFalseThenTrue}`);
 
+if (!Array.isArray(fixture.true_first_pass_then_self)) fail('true first pass then self fixture missing');
+const truePassThenSelf = fixture.true_first_pass_then_self[0];
+if (!truePassThenSelf || truePassThenSelf.kind !== 'first-pass') {
+  fail('true first pass then self fixture is not a first pass');
+}
+if (truePassThenSelf.first_pass_verdict !== 'TRUE') {
+  fail('true first pass then self fixture is not TRUE');
+}
+if (truePassThenSelf.rater_id === truePassThenSelf.subject_id) {
+  fail('true first pass then self is a self rating');
+}
+if (!(Number(truePassThenSelf.delta) > 0)) fail('true first pass then self delta is not positive');
+const laterSelfAfterTrue = fixture.true_first_pass_then_self.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.rater_id === event.subject_id &&
+    event.subject_id === truePassThenSelf.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterSelfAfterTrue) {
+  fail('true first pass then self fixture has no later positive self rating for the same subject');
+}
+const afterTrueFirstPassSelf = applyRatings(start, fixture.true_first_pass_then_self);
+if (afterTrueFirstPassSelf !== start) {
+  fail(`TRUE first pass followed by self rating raised the score from ${start} to ${afterTrueFirstPassSelf}`);
+}
+
+if (!Array.isArray(fixture.clean_hal_then_self)) fail('clean hal then self fixture missing');
+const cleanHalEvent = fixture.clean_hal_then_self[0];
+if (!cleanHalEvent || cleanHalEvent.kind !== 'hal-clean') {
+  fail('clean hal then self fixture is not a hal-clean event');
+}
+if (cleanHalEvent.hal_decision !== 'clean') {
+  fail('clean hal then self fixture hal_decision is not clean');
+}
+const laterSelfAfterCleanHal = fixture.clean_hal_then_self.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.rater_id === event.subject_id &&
+    event.subject_id === cleanHalEvent.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterSelfAfterCleanHal) {
+  fail('clean hal then self fixture has no later positive self rating for the same subject');
+}
+const afterCleanHalSelf = applyRatings(start, fixture.clean_hal_then_self);
+if (afterCleanHalSelf !== start) {
+  fail(`clean HAL followed by self rating raised the score from ${start} to ${afterCleanHalSelf}`);
+}
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -138,6 +191,10 @@ process.stdout.write(
   `before\t${start}\n` +
     `after_false_first_pass\t${afterFalse}\n` +
     `after_false_then_true\t${afterFalseThenTrue}\n` +
+    `after_true_first_pass_self\t${afterTrueFirstPassSelf}\n` +
+    `true_first_pass_self_delta\t${afterTrueFirstPassSelf - start}\n` +
+    `after_clean_hal_self\t${afterCleanHalSelf}\n` +
+    `clean_hal_self_delta\t${afterCleanHalSelf - start}\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

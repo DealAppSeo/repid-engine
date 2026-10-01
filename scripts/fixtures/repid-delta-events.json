@@ -37,6 +37,34 @@
       "delta": 25
     }
   ],
+  "true_first_pass_then_self": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-x",
+      "subject_id": "agent-y",
+      "first_pass_verdict": "TRUE",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-y",
+      "subject_id": "agent-y",
+      "delta": 1000
+    }
+  ],
+  "clean_hal_then_self": [
+    {
+      "kind": "hal-clean",
+      "subject_id": "agent-z",
+      "hal_decision": "clean"
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-z",
+      "subject_id": "agent-z",
+      "delta": 1000
+    }
+  ],
   "rater_gate": [
     {
       "kind": "rating",

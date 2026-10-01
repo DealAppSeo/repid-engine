@@ -56,6 +56,10 @@ describe('sim-repid-delta', () => {
       `before\t${fixture.start_score}\n` +
         `after_false_first_pass\t${fixture.start_score}\n` +
         `after_false_then_true\t${fixture.start_score}\n` +
+        `after_true_first_pass_self\t${fixture.start_score}\n` +
+        `true_first_pass_self_delta\t0\n` +
+        `after_clean_hal_self\t${fixture.start_score}\n` +
+        `clean_hal_self_delta\t0\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -86,6 +90,9 @@ describe('sim-repid-delta', () => {
     expect(src).toContain("event.kind === 'first-pass'");
     expect(src).toContain('FALSE first pass raised the score');
     expect(src).toContain('FALSE first pass followed by TRUE raised the score');
+    expect(src).toContain('TRUE first pass followed by self rating raised the score');
+    expect(src).toContain('clean HAL followed by self rating raised the score');
+    expect(src).toContain('hal-clean');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
