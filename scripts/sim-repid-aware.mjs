@@ -1,14 +1,20 @@
 /**
- * First run reads scripts/fixtures/hal-traps.json and prints arms A, B, and C as FIXTURE.
+ * First run reads scripts/fixtures/repid-aware-arms.json.
+ * Arms A and B are prompt fixtures. Arm C is a later rater row, not a sentence.
+ * The fixture run prints arm, verdict, and refuse. Missing stays NOT_CHECKED, never 0.
  * A calls JSON path, when present, is the only file read. It does not call a vendor.
- * A missing family is NOT_CHECKED, never 0.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const trapsPath = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'hal-traps.json');
+const armsPath = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'repid-aware-arms.json');
 const ARMS = ['A', 'B', 'C'];
+const PROMPTS = [
+  ['A', 'bare'],
+  ['B', 'check-this'],
+  ['C', 'later-rater'],
+];
 
 function fail(message) {
   process.stderr.write(`FAIL: ${message}\n`);
@@ -46,16 +52,18 @@ function readCall(row) {
 }
 
 function printFixture() {
-  const traps = JSON.parse(readFileSync(trapsPath, 'utf8'));
-  if (!Array.isArray(traps.claims) || traps.claims.length !== 10) fail('hal traps fixture missing');
-  const lines = [
-    'arm\tA\tFIXTURE',
-    'arm\tB\tFIXTURE',
-    'arm\tC\tFIXTURE',
-    'error_rate\tNOT_CHECKED',
-    'refuse_rate\tNOT_CHECKED',
-    'same_direction_miss\tNOT_CHECKED',
-  ];
+  const fixture = JSON.parse(readFileSync(armsPath, 'utf8'));
+  if (!Array.isArray(fixture.arms) || fixture.arms.length !== 3) fail('arm file must have three arms');
+  const lines = ['arm\tverdict\trefuse'];
+  for (let i = 0; i < PROMPTS.length; i += 1) {
+    const row = fixture.arms[i];
+    const want = PROMPTS[i];
+    if (!row || row.arm !== want[0] || row.prompt !== want[1]) fail(`arm ${want[0]} is not ${want[1]}`);
+    if (typeof row.prompt !== 'string' || row.prompt.length === 0) fail(`arm ${want[0]} prompt is missing`);
+    if (row.prompt === 0 || row.prompt === '0') fail('missing arm printed 0');
+    if (row.prompt.includes('.') || row.prompt.includes(' ')) fail(`arm ${row.arm} is a sentence`);
+    lines.push([row.arm, 'NOT_CHECKED', 'NOT_CHECKED'].join('\t'));
+  }
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 
