@@ -9,6 +9,8 @@
  * Unset, TRUE, on, and 1 do not insert. This module does not set that variable.
  */
 
+import { sealReceiptInsert } from './receipt-payload';
+
 export interface PassVoteInput {
   receipt_id: number;
   family: string;
@@ -131,7 +133,13 @@ export async function writePassVote(
     return { written: false, skippedReason: 'columns-missing' };
   }
   const table = client.from('hal_quorum_validator_votes');
-  const { error } = await table.insert(normalized.row);
+  let row: StoredPassVote;
+  try {
+    row = sealReceiptInsert(normalized.row);
+  } catch {
+    return { written: false, skippedReason: 'insert-error' };
+  }
+  const { error } = await table.insert(row);
   if (error) return { written: false, skippedReason: 'insert-error' };
   return { written: true };
 }

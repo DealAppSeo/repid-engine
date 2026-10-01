@@ -37,6 +37,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { familyOfResolved, type FactCheckResult, type ProviderVerdict } from './fact-check';
 import { probePassVoteColumns, writePassVote, type PassVoteWriteResult } from './first-pass-vote';
+import { sealReceiptInsert } from './receipt-payload';
 import { pageOperator } from '../services/operator-pager';
 
 /** Row shape for `public.hal_quorum_receipts` (mirrors migrations/2026-07-13-hal-quorum-receipts.sql). */
@@ -254,7 +255,7 @@ export async function writeQuorumReceipt(
 
     const { data, error } = await client
       .from('hal_quorum_receipts')
-      .insert(receipt)
+      .insert(sealReceiptInsert(receipt))
       .select('id')
       .single();
 
@@ -269,7 +270,7 @@ export async function writeQuorumReceipt(
     const receiptId = (data as { id: number }).id;
 
     if (votes.length > 0) {
-      const voteRows = votes.map((v) => ({ ...v, receipt_id: receiptId }));
+      const voteRows = votes.map((v) => sealReceiptInsert({ ...v, receipt_id: receiptId }));
       const { error: voteErr } = await client.from('hal_quorum_validator_votes').insert(voteRows);
       if (voteErr) {
         // Receipt is durable; log the vote-detail loss but do not fail the write.
@@ -350,14 +351,14 @@ async function insertReceiptParent(
   try {
     const { data, error } = await client
       .from('hal_quorum_receipts')
-      .insert({
+      .insert(sealReceiptInsert({
         quorum_id: `hal-receipt-${Date.now()}`,
         decision: input.verdict,
         scoring_decision: input.verdict === 'FALSE' ? 'veto' : 'pass',
         quorum_met: false,
         families_used: 1,
         providers_used: 1,
-      })
+      }))
       .select('id')
       .single();
     const raw = (data as { id?: unknown } | null)?.id;

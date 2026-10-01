@@ -58,8 +58,9 @@ describe('GET /api/v1/hal/honesty-a rows', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('NOT_CHECKED');
     expect(res.body.rows).toBeNull();
-    expect(res.body.first_pass).toBe('NOT_CHECKED');
+    expect(Object.prototype.hasOwnProperty.call(res.body, 'first_pass')).toBe(false);
     expect(res.body.first_pass).not.toBe(0);
+    expect(JSON.stringify(res.body)).not.toMatch(/"first_pass"\s*:/);
     const json = JSON.stringify(res.body);
     expect(json).not.toContain('user_id');
     expect(json).not.toContain('email');
