@@ -31,6 +31,15 @@ describe('POST /api/v1/laya/classify', () => {
     }
   });
 
+  it('GET with no body returns ask and latency_ms', async () => {
+    const res = await request(app).get('/api/v1/laya/classify');
+    expect(res.status).toBe(200);
+    expect(res.body.route).toBe('ask');
+    expect(res.body.latency_ms).toEqual(expect.any(Number));
+    expect(res.body.latency_ms).toBeGreaterThanOrEqual(0);
+    expect(Object.keys(res.body).sort()).toEqual(['latency_ms', 'route']);
+  });
+
   it('is mounted before auth and does not call a quorum or a vendor', () => {
     const root = path.join(__dirname, '..');
     const indexSrc = readFileSync(path.join(root, 'src', 'index.ts'), 'utf8');
