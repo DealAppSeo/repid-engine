@@ -216,3 +216,59 @@ describe('verify-trust-receipt: the delta-earned leg states what it cannot prove
     expect(out).not.toMatch(/reputation delta earned/);
   });
 });
+
+describe('verify-trust-receipt: reputation ledger absence and unreadable fields are NOT_CHECKED, never FAILED', () => {
+  it('NOT_CHECKED when reputation_events is missing entirely', () => {
+    const { out } = run({
+      contract_id: 'test-contract',
+      settled_at: '2026-09-04T00:00:00Z',
+      buyer: 'buyer-agent',
+      provider: 'provider-agent',
+      claim: 'XC2-SENSITIVE-CLAIM-TEXT',
+      user_id: 'XC2-USER-ID-LEAK',
+    });
+    expect(outcomeOf(ledgerLine(out))).toBe('NOT_CHECKED');
+    expect(ledgerLine(out)).not.toMatch(/FAIL/);
+    expect(ledgerLine(out)).toMatch(/no reputation events/);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+
+  it('NOT_CHECKED when reputation_events is an empty array', () => {
+    const { out } = run(receipt([]));
+    expect(outcomeOf(ledgerLine(out))).toBe('NOT_CHECKED');
+    expect(ledgerLine(out)).not.toMatch(/FAIL/);
+    expect(ledgerLine(out)).toMatch(/no reputation events/);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+
+  it.each([
+    ['a string', 'this is not an array'],
+    ['an object', { foo: 1 }],
+    ['null', null],
+  ])('NOT_CHECKED when reputation_events is %s', (_label, reputation_events) => {
+    const { out } = run({ ...receipt([]), reputation_events });
+    expect(outcomeOf(ledgerLine(out))).toBe('NOT_CHECKED');
+    expect(ledgerLine(out)).not.toMatch(/FAIL/);
+    expect(ledgerLine(out)).toMatch(/not a readable array/);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+
+  it.each([
+    ['missing from/to/delta', { agent: 'a', event: 'SERVICE_FULFILLED' }],
+    ['non-numeric from', { agent: 'a', event: 'SERVICE_FULFILLED', from: 'one', to: 1020, delta: 20 }],
+    ['non-numeric delta', { agent: 'a', event: 'SERVICE_FULFILLED', from: 1000, to: 1020, delta: null }],
+    ['non-finite decay', { agent: 'a', event: 'SERVICE_FULFILLED', from: 1000, to: 990, delta: 20, decay: 'thirty' }],
+  ])('NOT_CHECKED when an event has %s', (_label, event) => {
+    const { out } = run(receipt([event as RepEvent]));
+    expect(outcomeOf(ledgerLine(out))).toBe('NOT_CHECKED');
+    expect(ledgerLine(out)).not.toMatch(/FAIL/);
+    expect(ledgerLine(out)).toMatch(/cannot read/);
+    expect(ledgerLine(out)).not.toMatch(/0 of \d+ event\(s\) balance/);
+    expect(ledgerLine(out)).not.toMatch(/NaN/);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+});

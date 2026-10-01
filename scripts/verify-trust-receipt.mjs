@@ -129,9 +129,46 @@ const REPID_CAP = 10000;
 const clampRepId = (n) => Math.max(REPID_FLOOR, Math.min(REPID_CAP, n));
 
 function checkRepIdLedger(r) {
-  const events = r.reputation_events ?? [];
+  const events = r.reputation_events;
+  if (!Array.isArray(events)) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      events === undefined
+        ? 'no reputation events on this receipt'
+        : 'reputation_events is not a readable array',
+    );
+  }
   if (events.length === 0) {
     return record('reputation ledger arithmetic', 'NOT_CHECKED', 'no reputation events on this receipt');
+  }
+
+  // Reject malformed events before doing arithmetic — unreadable fields are
+  // NOT_CHECKED, never a false FAILED forgery and never reported as numeric 0.
+  const unreadable = [];
+  for (const e of events) {
+    if (!e || typeof e !== 'object') {
+      unreadable.push('event is not an object');
+      continue;
+    }
+    const id = `${typeof e.agent === 'string' ? e.agent : '?'}/${typeof e.event === 'string' ? e.event : '?'}`;
+    const fieldsOk =
+      typeof e.agent === 'string' &&
+      typeof e.event === 'string' &&
+      Number.isFinite(e.from) &&
+      Number.isFinite(e.to) &&
+      Number.isFinite(e.delta) &&
+      (e.decay === undefined || e.decay === null || Number.isFinite(e.decay));
+    if (!fieldsOk) {
+      unreadable.push(`${id}: ledger fields are missing or not numbers`);
+    }
+  }
+  if (unreadable.length > 0) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      `cannot read ${unreadable.length} event(s): ${unreadable.join('; ')}`,
+    );
   }
 
   const last = {};
@@ -235,8 +272,8 @@ function checkRepIdLedger(r) {
 // receipt itself supplies would be circular, so this leg states the limit
 // instead of inventing a check that would pass by construction.
 function checkRepIdEntitlement(r) {
-  const events = r.reputation_events ?? [];
-  if (events.length === 0) return; // leg 3 already said so
+  const events = r.reputation_events;
+  if (!Array.isArray(events) || events.length === 0) return; // leg 3 already said so
   record(
     'reputation delta earned',
     'NOT_CHECKED',
