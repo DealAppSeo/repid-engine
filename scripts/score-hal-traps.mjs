@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'sim-hal-traps.mjs');
-const HEADER = 'trap\tid\tfirst_pass_verdict\tfirst_pass_at\tpost_hal_verdict\tpost_hal_at';
+const HEADER = 'trap\tfirst_pass\tpost_hal\tdisagree';
 
 function fail(message) {
   process.stderr.write(`FAIL: ${message}\n`);
@@ -33,10 +33,18 @@ if (rows.length !== 10) fail(`expected 10 rows, got ${rows.length}`);
 let disagreement = 0;
 for (const line of rows) {
   const cell = line.split('\t');
-  if (cell.length !== 6) fail('short row');
-  const first = verdict(cell[2], 'first_pass');
-  const post = verdict(cell[4], 'post_hal');
-  if (first !== post) disagreement += 1;
+  if (cell.length !== 4) fail('short row');
+  const first = verdict(cell[1], 'first_pass');
+  const post = verdict(cell[2], 'post_hal');
+  const disagree = verdict(cell[3], 'disagree');
+  if (disagree === '0' || disagree === 0) fail('disagree printed 0');
+  if (first === 'NOT_CHECKED' || post === 'NOT_CHECKED') {
+    if (disagree !== 'NOT_CHECKED') fail('a missing pass was scored as a disagreement');
+    continue;
+  }
+  if (first !== post && disagree !== 'TRUE') fail('disagree missed a split');
+  if (first === post && disagree !== 'FALSE') fail('disagree marked an agreement');
+  if (disagree === 'TRUE') disagreement += 1;
 }
 
 const fixturePct = Math.round((disagreement / rows.length) * 100);

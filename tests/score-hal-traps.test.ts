@@ -13,7 +13,7 @@ describe('score-hal-traps', () => {
     let count = 0;
     for (const line of lines.slice(1)) {
       const cell = line.split('\t');
-      if (cell[2] !== cell[4]) count += 1;
+      if (cell[3] === 'TRUE') count += 1;
     }
     return count;
   }
