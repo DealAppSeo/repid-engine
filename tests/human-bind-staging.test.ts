@@ -42,9 +42,17 @@ function app() {
 }
 
 describe('POST /api/v1/human/bind staging row', () => {
+  const saved = process.env.HUMAN_AGENT_BIND_ENABLED;
+
   beforeEach(() => {
     state.rows = [];
     state.failCode = null;
+    delete process.env.HUMAN_AGENT_BIND_ENABLED;
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.HUMAN_AGENT_BIND_ENABLED;
+    else process.env.HUMAN_AGENT_BIND_ENABLED = saved;
   });
 
   it('requires wallet and agent and inserts nothing when one is missing', async () => {
@@ -56,7 +64,20 @@ describe('POST /api/v1/human/bind staging row', () => {
     expect(state.rows).toHaveLength(0);
   });
 
+  it('returns 410 and inserts nothing unless the flag is the exact string true', async () => {
+    const unset = await request(app()).post('/api/v1/human/bind').send(PAIR);
+    expect(unset.status).toBe(410);
+    expect(unset.body).toEqual({ error: 'disabled' });
+    expect(state.rows).toHaveLength(0);
+
+    process.env.HUMAN_AGENT_BIND_ENABLED = 'TRUE';
+    const folded = await request(app()).post('/api/v1/human/bind').send(PAIR);
+    expect(folded.status).toBe(410);
+    expect(state.rows).toHaveLength(0);
+  });
+
   it('inserts one row and returns 409 for the same pair', async () => {
+    process.env.HUMAN_AGENT_BIND_ENABLED = 'true';
     const first = await request(app()).post('/api/v1/human/bind').send(PAIR);
     expect(first.status).toBe(201);
     expect(first.body).toEqual({ ok: true });
