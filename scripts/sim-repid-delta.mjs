@@ -23,7 +23,7 @@ function applyRatings(start, events) {
   const truePassedSubjects = new Set();
   for (const event of events) {
     if (event.kind === 'first-pass') {
-      if (event.first_pass_verdict === 'FALSE' && event.subject_id) {
+      if (event.subject_id && event.first_pass_verdict !== 'TRUE') {
         blockedSubjects.add(event.subject_id);
       } else if (event.first_pass_verdict === 'TRUE' && event.subject_id) {
         truePassedSubjects.add(event.subject_id);
@@ -123,10 +123,30 @@ if (!halVeto) fail('true-then-hal-veto fixture has no later HAL veto for the sam
 const afterTrueThenHalVeto = applyRatings(start, fixture.true_then_hal_veto);
 if (afterTrueThenHalVeto > start) fail(`TRUE first pass followed by HAL veto raised the score from ${start} to ${afterTrueThenHalVeto}`);
 
+if (!Array.isArray(fixture.notchecked_then_true)) fail('notchecked-then-true fixture missing');
+const notcheckedPass = fixture.notchecked_then_true[0];
+if (!notcheckedPass || notcheckedPass.kind !== 'first-pass') fail('notchecked-then-true fixture is not a first pass');
+if (notcheckedPass.first_pass_verdict !== undefined && notcheckedPass.first_pass_verdict !== null) {
+  fail('notchecked-then-true fixture has an explicit verdict');
+}
+if (notcheckedPass.rater_id === notcheckedPass.subject_id) fail('notchecked-then-true first pass is a self rating');
+if (!(Number(notcheckedPass.delta) > 0)) fail('notchecked-then-true first pass delta is not positive');
+const laterPositive = fixture.notchecked_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === notcheckedPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositive) fail('notchecked-then-true fixture has no later positive rating for the same subject');
+const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
+if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
   0,
+  'NOT_CHECKED',
 ];
 for (const value of samples) {
   const reading = readFirstPass(value);
@@ -166,6 +186,8 @@ process.stdout.write(
     `after_false_first_pass\t${afterFalse}\n` +
     `after_false_then_true\t${afterFalseThenTrue}\n` +
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
+    `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
+    `notchecked_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
