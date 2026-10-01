@@ -16,6 +16,7 @@ function fail(message) {
 function applyRatings(start, events) {
   let score = start;
   for (const event of events) {
+    if (event.kind === 'first-pass') continue;
     if (event.kind !== 'rating' && event.kind !== 'nonprofit-help') continue;
     if (event.rater_id === event.subject_id) continue;
     const delta = Number(event.delta);
@@ -55,6 +56,15 @@ if (!zeroSelf) fail('self-rate fixture is not a zero self rating');
 const zeroScore = applyRatings(start, fixture.self_rate_zero);
 if (zeroScore !== start) fail('self-rate 0 changed the score');
 
+if (!Array.isArray(fixture.false_first_pass)) fail('false first pass fixture missing');
+const falsePass = fixture.false_first_pass[0];
+if (!falsePass || falsePass.kind !== 'first-pass') fail('false first pass fixture is not a first pass');
+if (falsePass.first_pass_verdict !== 'FALSE') fail('false first pass fixture is not FALSE');
+if (falsePass.rater_id === falsePass.subject_id) fail('false first pass is a self rating');
+if (!(Number(falsePass.delta) > 0)) fail('false first pass delta is not positive');
+const afterFalse = applyRatings(start, fixture.false_first_pass);
+if (afterFalse !== start) fail(`FALSE first pass raised the score from ${start} to ${afterFalse}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -68,7 +78,12 @@ for (const value of samples) {
 }
 
 process.stdout.write(
-  `nonprofit_help_score\t${helped}\n` +
+  `before\t${start}\n` +
+    `after_false_first_pass\t${afterFalse}\n` +
+    `after_counterparty_help\t${helped}\n` +
+    `after_self_rating\t${selfScore}\n` +
+    `live_accuracy\tNOT_CHECKED\n` +
+    `nonprofit_help_score\t${helped}\n` +
     `nonprofit_help_delta\t${helped - start}\n` +
     `self_rate_zero_score\t${zeroScore}\n` +
     `self_rate_zero_delta\t${zeroScore - start}\n` +
