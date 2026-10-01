@@ -49,6 +49,32 @@ function receipt(events: RepEvent[]): Record<string, unknown> {
   };
 }
 
+/** A work statement whose fields are deliberately distinctive. */
+function sampleWorkStatement(): Record<string, unknown> {
+  return {
+    deliverable: 'A deliverable that contains the word claim and should never be printed',
+    deadline: '2026-09-11T00:00:00.000Z',
+    agreed_price: { currency: 'USDC', amount_usdc_raw: 50000 },
+    acceptance_criteria: [{ n: 1, text: 'Criterion one' }],
+  };
+}
+
+/** A receipt that also carries a work statement for the binding leg. */
+function wsReceipt(
+  events: RepEvent[],
+  workStatement: Record<string, unknown> | null,
+  workStatementHash?: string | null,
+): Record<string, unknown> {
+  const r = receipt(events);
+  if (workStatement !== null) {
+    r.work_statement = workStatement;
+  }
+  if (workStatementHash !== undefined) {
+    r.work_statement_hash = workStatementHash;
+  }
+  return r;
+}
+
 /** Run the real script against a receipt; never throws on a non-zero exit. */
 function run(r: Record<string, unknown>): { code: number; out: string } {
   const file = join(DIR, `r-${Math.random().toString(36).slice(2)}.json`);
@@ -77,6 +103,13 @@ function runFile(file: string): { code: number; out: string } {
 function ledgerLine(out: string): string {
   const line = out.split('\n').find((l) => l.includes('reputation ledger arithmetic'));
   if (!line) throw new Error(`no ledger leg in output:\n${out}`);
+  return line;
+}
+
+/** The `work statement binding` line, as the script prints it. */
+function workStatementBindingLine(out: string): string {
+  const line = out.split('\n').find((l) => l.includes('work statement binding'));
+  if (!line) throw new Error(`no work-statement binding leg in output:\n${out}`);
   return line;
 }
 const outcomeOf = (line: string): 'VERIFIED' | 'NOT_CHECKED' | 'FAILED' =>
@@ -243,6 +276,46 @@ describe('verify-trust-receipt: missing event label is NOT_CHECKED, never pass o
       receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020, kind: 'SERVICE' }]),
     );
     expect(outcomeOf(ledgerLine(out))).toBe('VERIFIED');
+  });
+});
+
+describe('verify-trust-receipt: work statement binding when no hash is stored', () => {
+  it('is NOT_CHECKED when work_statement_hash is absent', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement()));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+  });
+
+  it('is NOT_CHECKED when work_statement_hash is an empty string', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement(), ''));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+  });
+
+  it('is NOT_CHECKED when work_statement_hash is null', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement(), null));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+  });
+
+  it('is NOT_CHECKED when work_statement_hash is the number 0, and never prints it as a stored hash', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement(), 0 as unknown as string));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+    expect(line).not.toMatch(/0x0+/);
+    expect(line).not.toMatch(/\b0\b/);
+  });
+
+  it('does not print claim text or user_id in stdout/stderr', () => {
+    const r = wsReceipt([], sampleWorkStatement(), null);
+    r.user_id = 'secret-user-123';
+    const { out } = run(r);
+    expect(out).not.toContain('user_id');
+    expect(out).not.toContain('claim');
   });
 });
 
