@@ -7988,3 +7988,28 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 3. Item 13 eviction: will ship this beat if turns remain; see step-5 entry below if present.
 
 **Next beat:** (1) Confirm item 13 eviction PR merged if shipped. (2) Wire off-peak-windows (`isOffPeakHour`/`selectOffPeakBatch`) to the EAS anchor sweep caller if item 13 eviction lands. (3) Item 8 output-confidence scorer for speculative cascade.
+
+---
+
+## Beat (2026-10-01, fourth run) — third run corrected; item 13 fully built; eviction HTTP route shipped
+
+**Prior beat verified [V] (2026-10-01, third run):**
+- PR #1020 (docs/loop ledger third run): **MERGED** — `git log --oneline` = `4d2e3532`. ✓
+- Third run's "item 9 shadow wiring confirmed" claim [V]: `src/providers/free-tier-quota-shadow.ts` exists, imported at `router.ts:23`, called fire-and-forget at `router.ts:490`. **CONFIRMED.** ✓
+- Third run's item 13 backlog state was **STALE — CORRECTED HERE**. The third run stated: "Eviction side — flush low-heat leaves to cold, dormancy/night consolidation, root preservation — **not yet built**." This is false: `performHeatEviction` (`src/memory/memory-heat-evict.ts`, PR #817, merged 2026-09-21, 8/8 tests) and `evictAndUpdateRoot` (`src/memory/memory-heat-evict-root.ts`, PR #821, merged 2026-09-21, 7/7 tests) are both on main and both passing. **24/24 heat-eviction tests pass** (memory-heat-evict + memory-heat-evict-root + memory-heat-reactivate, verified by running `npx jest` with dummy env). **Penalty verdict: NONE.** The error was a stale backlog read (item 13's PARTIAL row had not been updated after PRs #817/#821 landed) — not a fabricated pass.
+
+**Actual item 13 state [V] (as-built, independently measured):**
+- `performHeatEviction` (PR #817): tombstones cold-tier leaves. ✓
+- `evictAndUpdateRoot` (PR #821): eviction + Merkle root recomputation + storage. ✓
+- `reactivateLeaves` (PR #1012): cold→warm promotion. ✓
+- All acceptance criteria primitives done. **Remaining gap**: no HTTP route calls any of these — zero callers in `src/routes/` or `src/index.ts`. Status GET (`GET /api/v1/memory/heat-status`) exists; POST trigger does not.
+
+**Intent for steps 2-4:** Build `POST /api/v1/memory/evict` route — calls `evictAndUpdateRoot(supabase, agentId)` with agentId from `(req as any).agent_id` (same identity contract as memory-retrieve). Shadow-first: flag `HEAT_EVICTION_ENABLED` gates the primitive (returns `skipped:true` when off, never tombstones in prod without Sean's flag flip). Additive, tested, standalone PR off origin/main.
+
+**STEP 2-4 — shipped `POST /api/v1/memory/evict`** (see step-5 note for outcome).
+
+**Open for Sean (rule-4):**
+1. **Nothing new requiring Sean** — feature PR armed `--auto --squash` if turns allowed; see step-5.
+2. **Standing (unchanged):** `HEAT_EVICTION_ENABLED` prod enable, items 7/10, `FREE_TIER_QUOTA_SHADOW_ENABLED` observe — all Sean-gated.
+
+**Next beat:** (1) Confirm eviction route PR merged. (2) Update item 13 backlog row to reflect DONE (all acceptance criteria met at primitive + HTTP level). (3) Item 8 output-confidence scorer for speculative cascade.
