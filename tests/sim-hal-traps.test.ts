@@ -46,35 +46,41 @@ describe('sim-hal-traps', () => {
     };
     expect(fixture.claims).toHaveLength(10);
     const expected: Record<string, string> = {
-      'surgeon-mother': 'TRUE',
-      'surgeon-none': 'FALSE',
-      'dollar-gone': 'FALSE',
-      'dollar-sum': 'FALSE',
-      'birthday-23': 'TRUE',
-      'birthday-183': 'FALSE',
-      'ravens-apple': 'TRUE',
-      'ravens-sample': 'FALSE',
-      'monty-two-thirds': 'FALSE',
-      'monty-rule': 'FALSE',
+      surgeon: 'TRUE',
+      'missing-dollar': 'FALSE',
+      'tuesday-boy': 'FALSE',
+      monty: 'FALSE',
+      'average-speed': 'FALSE',
+      disease: 'FALSE',
+      ropes: 'TRUE',
+      'two-envelope': 'FALSE',
+      birthday: 'TRUE',
+      ravens: 'TRUE',
     };
     for (const claim of fixture.claims) {
       expect(claim.expected).toBe(expected[claim.id]);
       expect(claim.expected === 'TRUE' || claim.expected === 'FALSE').toBe(true);
+      expect(claim.expected).not.toBe('99');
+      expect(claim.expected).not.toBe('45');
       expect(claim.claim.endsWith('.')).toBe(true);
       expect(claim.claim.slice(0, -1).includes('.')).toBe(false);
     }
+    const disease = fixture.claims.find((claim) => claim.id === 'disease');
+    const speed = fixture.claims.find((claim) => claim.id === 'average-speed');
+    expect(disease?.expected).toBe('FALSE');
+    expect(speed?.expected).toBe('FALSE');
     const traps = fixture.claims.map((claim) => claim.trap).sort();
     expect(traps).toEqual([
+      'average-speed',
       'birthday',
-      'birthday',
+      'disease',
       'missing-dollar',
-      'missing-dollar',
-      'monty-underspecified',
-      'monty-underspecified',
+      'monty',
       'ravens',
-      'ravens',
+      'ropes',
       'surgeon',
-      'surgeon',
+      'tuesday-boy',
+      'two-envelope',
     ]);
     expect(src).toContain('hal-traps.json');
     expect(src).toContain("'NOT_CHECKED'");

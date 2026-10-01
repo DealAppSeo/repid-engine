@@ -1,7 +1,7 @@
 {
   "claims": [
     {
-      "id": "surgeon-mother",
+      "id": "surgeon",
       "trap": "surgeon",
       "claim": "The surgeon is the boy's mother.",
       "expected": "TRUE",
@@ -11,29 +11,29 @@
       "post_hal_at": "2026-09-26T12:01:00.000Z"
     },
     {
-      "id": "surgeon-none",
-      "trap": "surgeon",
-      "claim": "The story has no possible surgeon.",
-      "expected": "FALSE",
-      "first_pass_verdict": "TRUE",
-      "first_pass_at": "2026-09-26T12:00:00.000Z",
-      "post_hal_verdict": "TRUE",
-      "post_hal_at": "2026-09-26T12:01:00.000Z"
-    },
-    {
-      "id": "dollar-gone",
+      "id": "missing-dollar",
       "trap": "missing-dollar",
       "claim": "One dollar from the thirty is gone.",
       "expected": "FALSE",
       "first_pass_verdict": "TRUE",
       "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "TRUE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "tuesday-boy",
+      "trap": "tuesday-boy",
+      "claim": "A Tuesday birthday makes the chance of two boys one third.",
+      "expected": "FALSE",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
       "post_hal_verdict": "FALSE",
       "post_hal_at": "2026-09-26T12:01:00.000Z"
     },
     {
-      "id": "dollar-sum",
-      "trap": "missing-dollar",
-      "claim": "Twenty-seven plus the two-dollar tip accounts for the original thirty.",
+      "id": "monty",
+      "trap": "monty",
+      "claim": "An unstated host rule still fixes switching at two thirds.",
       "expected": "FALSE",
       "first_pass_verdict": "TRUE",
       "first_pass_at": "2026-09-26T12:00:00.000Z",
@@ -41,60 +41,60 @@
       "post_hal_at": "2026-09-26T12:01:00.000Z"
     },
     {
-      "id": "birthday-23",
+      "id": "average-speed",
+      "trap": "average-speed",
+      "claim": "The average of thirty miles an hour out and sixty back is forty-five.",
+      "expected": "FALSE",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "disease",
+      "trap": "disease",
+      "claim": "A ninety-nine percent accurate test means a ninety-nine percent chance of the disease.",
+      "expected": "FALSE",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "TRUE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "ropes",
+      "trap": "ropes",
+      "claim": "Lighting both ends of one rope and one end of the other measures forty-five minutes.",
+      "expected": "TRUE",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "FALSE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "two-envelope",
+      "trap": "two-envelope",
+      "claim": "Switching envelopes doubles the expected amount.",
+      "expected": "FALSE",
+      "first_pass_verdict": "TRUE",
+      "first_pass_at": "2026-09-26T12:00:00.000Z",
+      "post_hal_verdict": "TRUE",
+      "post_hal_at": "2026-09-26T12:01:00.000Z"
+    },
+    {
+      "id": "birthday",
       "trap": "birthday",
       "claim": "Twenty-three people give about a one-half chance of a shared birthday.",
       "expected": "TRUE",
       "first_pass_verdict": "TRUE",
       "first_pass_at": "2026-09-26T12:00:00.000Z",
-      "post_hal_verdict": "FALSE",
-      "post_hal_at": "2026-09-26T12:01:00.000Z"
-    },
-    {
-      "id": "birthday-183",
-      "trap": "birthday",
-      "claim": "The chance stays below one half until one hundred eighty-three people are in the room.",
-      "expected": "FALSE",
-      "first_pass_verdict": "TRUE",
-      "first_pass_at": "2026-09-26T12:00:00.000Z",
       "post_hal_verdict": "TRUE",
       "post_hal_at": "2026-09-26T12:01:00.000Z"
     },
     {
-      "id": "ravens-apple",
+      "id": "ravens",
       "trap": "ravens",
       "claim": "A green apple is evidence that all ravens are black.",
       "expected": "TRUE",
-      "first_pass_verdict": "TRUE",
-      "first_pass_at": "2026-09-26T12:00:00.000Z",
-      "post_hal_verdict": "FALSE",
-      "post_hal_at": "2026-09-26T12:01:00.000Z"
-    },
-    {
-      "id": "ravens-sample",
-      "trap": "ravens",
-      "claim": "A sample of black ravens proves that every raven is black.",
-      "expected": "FALSE",
-      "first_pass_verdict": "TRUE",
-      "first_pass_at": "2026-09-26T12:00:00.000Z",
-      "post_hal_verdict": "TRUE",
-      "post_hal_at": "2026-09-26T12:01:00.000Z"
-    },
-    {
-      "id": "monty-two-thirds",
-      "trap": "monty-underspecified",
-      "claim": "Switching wins with probability two thirds when the host's rule is unstated.",
-      "expected": "FALSE",
-      "first_pass_verdict": "TRUE",
-      "first_pass_at": "2026-09-26T12:00:00.000Z",
-      "post_hal_verdict": "TRUE",
-      "post_hal_at": "2026-09-26T12:01:00.000Z"
-    },
-    {
-      "id": "monty-rule",
-      "trap": "monty-underspecified",
-      "claim": "An unstated host rule still fixes the odds of switching.",
-      "expected": "FALSE",
       "first_pass_verdict": "TRUE",
       "first_pass_at": "2026-09-26T12:00:00.000Z",
       "post_hal_verdict": "TRUE",
