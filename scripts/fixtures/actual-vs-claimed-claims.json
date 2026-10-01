@@ -1,0 +1,27 @@
+[
+  {
+    "id": "musk-bitcoin",
+    "claim": "Elon Musk created Bitcoin.",
+    "claimed": "FALSE"
+  },
+  {
+    "id": "vitamin-c",
+    "claim": "Vitamin C prevents the common cold.",
+    "claimed": "TRUE"
+  },
+  {
+    "id": "surgeon",
+    "claim": "The surgeon is the boy's father.",
+    "claimed": "TRUE"
+  },
+  {
+    "id": "cold-fusion",
+    "claim": "Cold fusion has been demonstrated at room temperature.",
+    "claimed": "FALSE"
+  },
+  {
+    "id": "eiffel-rome",
+    "claim": "The Eiffel Tower is in Rome.",
+    "claimed": "FALSE"
+  }
+]
