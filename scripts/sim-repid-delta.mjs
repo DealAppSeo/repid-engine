@@ -20,10 +20,13 @@ function presentRater(id) {
 function applyRatings(start, events) {
   let score = start;
   const blockedSubjects = new Set();
+  const truePassedSubjects = new Set();
   for (const event of events) {
     if (event.kind === 'first-pass') {
       if (event.first_pass_verdict === 'FALSE' && event.subject_id) {
         blockedSubjects.add(event.subject_id);
+      } else if (event.first_pass_verdict === 'TRUE' && event.subject_id) {
+        truePassedSubjects.add(event.subject_id);
       }
       continue;
     }
@@ -34,7 +37,16 @@ function applyRatings(start, events) {
     if (!presentRater(event.rater_id)) continue;
     if (blockedSubjects.has(event.subject_id)) continue;
     const delta = Number(event.delta);
-    if (!Number.isFinite(delta) || delta <= 0) continue;
+    if (!Number.isFinite(delta)) continue;
+    if (event.hal_decision === 'vetoed') {
+      if (truePassedSubjects.has(event.subject_id)) {
+        // HAL veto after a TRUE first pass is a tax or zero earn, never a raise.
+        score -= Math.abs(delta);
+      }
+      // HAL veto with no TRUE first pass (NOT_CHECKED or FALSE) is dropped; score never rises.
+      continue;
+    }
+    if (delta <= 0) continue;
     score += delta;
   }
   return score;
@@ -96,6 +108,26 @@ if (!laterTrue) fail('false-then-true fixture has no later positive rating for t
 const afterFalseThenTrue = applyRatings(start, fixture.false_then_true);
 if (afterFalseThenTrue !== start) fail(`FALSE first pass followed by TRUE raised the score from ${start} to ${afterFalseThenTrue}`);
 
+if (!Array.isArray(fixture.notchecked_then_hal_veto)) fail('notchecked-then-hal-veto fixture missing');
+const notcheckedHalPass = fixture.notchecked_then_hal_veto[0];
+if (!notcheckedHalPass || notcheckedHalPass.kind !== 'first-pass') fail('notchecked-then-hal-veto fixture is not a first pass');
+if (notcheckedHalPass.first_pass_verdict !== undefined && notcheckedHalPass.first_pass_verdict !== null) {
+  fail('notchecked-then-hal-veto fixture has an explicit verdict');
+}
+if (notcheckedHalPass.rater_id === notcheckedHalPass.subject_id) fail('notchecked-then-hal-veto first pass is a self rating');
+if (!(Number(notcheckedHalPass.delta) > 0)) fail('notchecked-then-hal-veto first pass delta is not positive');
+const notcheckedHalVeto = fixture.notchecked_then_hal_veto.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === notcheckedHalPass.subject_id &&
+    event.hal_decision === 'vetoed' &&
+    Number(event.delta) > 0,
+);
+if (!notcheckedHalVeto) fail('notchecked-then-hal-veto fixture has no later HAL veto for the same subject');
+const afterNotcheckedHalVeto = applyRatings(start, fixture.notchecked_then_hal_veto);
+if (afterNotcheckedHalVeto !== start) fail(`NOT_CHECKED first pass followed by HAL veto changed the score from ${start} to ${afterNotcheckedHalVeto}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -138,6 +170,8 @@ process.stdout.write(
   `before\t${start}\n` +
     `after_false_first_pass\t${afterFalse}\n` +
     `after_false_then_true\t${afterFalseThenTrue}\n` +
+    `after_notchecked_hal_veto\t${afterNotcheckedHalVeto}\n` +
+    `notchecked_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

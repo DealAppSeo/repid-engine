@@ -26,6 +26,14 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string;
         delta: number;
       }[];
+      notchecked_then_hal_veto: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string | undefined;
+        hal_decision?: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -46,6 +54,20 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(laterTrue).toBeDefined();
+    const notcheckedHal = fixture.notchecked_then_hal_veto[0];
+    expect(notcheckedHal?.kind).toBe('first-pass');
+    expect(notcheckedHal?.first_pass_verdict).toBeUndefined();
+    expect(notcheckedHal?.rater_id).not.toBe(notcheckedHal?.subject_id);
+    expect(Number(notcheckedHal?.delta)).toBeGreaterThan(0);
+    const laterVeto = fixture.notchecked_then_hal_veto.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === notcheckedHal?.subject_id &&
+        event.hal_decision === 'vetoed' &&
+        Number(event.delta) > 0,
+    );
+    expect(laterVeto).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -56,6 +78,8 @@ describe('sim-repid-delta', () => {
       `before\t${fixture.start_score}\n` +
         `after_false_first_pass\t${fixture.start_score}\n` +
         `after_false_then_true\t${fixture.start_score}\n` +
+        `after_notchecked_hal_veto\t${fixture.start_score}\n` +
+        `notchecked_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -86,6 +110,7 @@ describe('sim-repid-delta', () => {
     expect(src).toContain("event.kind === 'first-pass'");
     expect(src).toContain('FALSE first pass raised the score');
     expect(src).toContain('FALSE first pass followed by TRUE raised the score');
+    expect(src).toContain('NOT_CHECKED first pass followed by HAL veto changed the score');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
