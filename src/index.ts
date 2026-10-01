@@ -38,6 +38,7 @@ import marketplaceRouter from './routes/v1/marketplace';
 import ratingsRouter from './routes/v1/ratings';
 import marketplacePublicRouter from './routes/v1/marketplace-public';
 import halLatestRouter from './routes/hal-latest';
+import receiptVerifyRouter from './routes/receipt-verify';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import humanBindStagingRouter from './routes/human-bind-staging';
@@ -443,6 +444,9 @@ app.use('/api/v1/marketplace', marketplacePublicRouter);
 // make that claim. Read-only; serves facts ABOUT an exchange, never the work
 // itself (no payload, no result). See services/trust-receipt.ts.
 app.use('/api/v1', halLatestRouter);
+// Fixture verify body: receipt id and family verdicts. No claim text. No insert.
+// Mounted before /receipt/:id so "verify" is not read as a contract id.
+app.use('/api/v1', receiptVerifyRouter);
 app.use('/api/v1', receiptPublicRouter);
 // BYOK CUSTODY + HUMAN↔AGENT BINDING (2026-08-01). Mounted before
 // authMiddleware because it does NOT use the API-key identity — every request
