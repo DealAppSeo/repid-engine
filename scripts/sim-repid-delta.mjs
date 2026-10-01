@@ -19,13 +19,20 @@ function presentRater(id) {
 
 function applyRatings(start, events) {
   let score = start;
+  const blockedSubjects = new Set();
   for (const event of events) {
-    if (event.kind === 'first-pass') continue;
+    if (event.kind === 'first-pass') {
+      if (event.first_pass_verdict === 'FALSE' && event.subject_id) {
+        blockedSubjects.add(event.subject_id);
+      }
+      continue;
+    }
     if (event.kind !== 'rating' && event.kind !== 'nonprofit-help') continue;
     if (event.rater_id === event.subject_id) continue;
     if (event.rater_role === 'owner') continue;
     if (typeof event.rater_family === 'string' && event.rater_family === event.subject_family) continue;
     if (!presentRater(event.rater_id)) continue;
+    if (blockedSubjects.has(event.subject_id)) continue;
     const delta = Number(event.delta);
     if (!Number.isFinite(delta) || delta <= 0) continue;
     score += delta;
@@ -72,6 +79,23 @@ if (!(Number(falsePass.delta) > 0)) fail('false first pass delta is not positive
 const afterFalse = applyRatings(start, fixture.false_first_pass);
 if (afterFalse !== start) fail(`FALSE first pass raised the score from ${start} to ${afterFalse}`);
 
+if (!Array.isArray(fixture.false_then_true)) fail('false-then-true fixture missing');
+const falseThenTruePass = fixture.false_then_true[0];
+if (!falseThenTruePass || falseThenTruePass.kind !== 'first-pass') fail('false-then-true fixture is not a first pass');
+if (falseThenTruePass.first_pass_verdict !== 'FALSE') fail('false-then-true fixture is not FALSE');
+if (falseThenTruePass.rater_id === falseThenTruePass.subject_id) fail('false-then-true first pass is a self rating');
+if (!(Number(falseThenTruePass.delta) > 0)) fail('false-then-true first pass delta is not positive');
+const laterTrue = fixture.false_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === falseThenTruePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterTrue) fail('false-then-true fixture has no later positive rating for the same subject');
+const afterFalseThenTrue = applyRatings(start, fixture.false_then_true);
+if (afterFalseThenTrue !== start) fail(`FALSE first pass followed by TRUE raised the score from ${start} to ${afterFalseThenTrue}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -113,6 +137,7 @@ if (gated !== start + 1) fail(`rater gate moved the score by ${gated - start}`);
 process.stdout.write(
   `before\t${start}\n` +
     `after_false_first_pass\t${afterFalse}\n` +
+    `after_false_then_true\t${afterFalseThenTrue}\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
