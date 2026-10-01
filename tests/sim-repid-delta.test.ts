@@ -26,6 +26,14 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string;
         delta: number;
       }[];
+      true_then_hal_veto: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        hal_decision?: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -46,6 +54,20 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(laterTrue).toBeDefined();
+    const trueThenHal = fixture.true_then_hal_veto[0];
+    expect(trueThenHal?.kind).toBe('first-pass');
+    expect(trueThenHal?.first_pass_verdict).toBe('TRUE');
+    expect(trueThenHal?.rater_id).not.toBe(trueThenHal?.subject_id);
+    expect(Number(trueThenHal?.delta)).toBeGreaterThan(0);
+    const halVeto = fixture.true_then_hal_veto.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === trueThenHal?.subject_id &&
+        event.hal_decision === 'vetoed' &&
+        Number(event.delta) > 0,
+    );
+    expect(halVeto).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -56,6 +78,7 @@ describe('sim-repid-delta', () => {
       `before\t${fixture.start_score}\n` +
         `after_false_first_pass\t${fixture.start_score}\n` +
         `after_false_then_true\t${fixture.start_score}\n` +
+        `after_true_then_hal_veto\t${fixture.start_score - Number(halVeto?.delta)}\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -74,6 +97,17 @@ describe('sim-repid-delta', () => {
     expect(out).not.toContain('missing_rater\t0');
   });
 
+  it('never raises the score after a TRUE first pass followed by a HAL veto', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_true_then_hal_veto\t(\d+)/);
+    expect(match).toBeTruthy();
+    const score = Number(match?.[1]);
+    expect(score).toBeLessThanOrEqual(fixture.start_score);
+  });
+
   it('reads the fixture file and does not dial a database', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('repid-delta-events.json');
@@ -86,6 +120,8 @@ describe('sim-repid-delta', () => {
     expect(src).toContain("event.kind === 'first-pass'");
     expect(src).toContain('FALSE first pass raised the score');
     expect(src).toContain('FALSE first pass followed by TRUE raised the score');
+    expect(src).toContain('TRUE first pass followed by HAL veto raised the score');
+    expect(src).toContain('after_true_then_hal_veto');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
