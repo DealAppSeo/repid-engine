@@ -297,6 +297,30 @@ console.log(`  settled  ${receipt.settled_at ?? '(not settled)'}  ${receipt.pric
 console.log(`  parties  ${receipt.buyer} -> ${receipt.provider}`);
 console.log('');
 
+// ── LEG 0 — the receipt identifies the exchange it claims to be about ───────
+//
+// These are presence checks, not forgeries. A receipt that cannot even name its
+// contract or settlement time has nothing to disagree with — it simply has not
+// been checked. They are recorded only when missing so a bare but present id
+// does not borrow a "VERIFIED" that would turn an otherwise empty receipt into
+// a pass.
+function checkReceiptIdentity(r) {
+  if (typeof r.contract_id !== 'string' || r.contract_id.trim() === '') {
+    record('contract identity', 'NOT_CHECKED',
+      typeof r.contract_id === 'number' && r.contract_id === 0
+        ? 'contract_id is the numeric value 0, which does not name a contract'
+        : 'receipt does not name a contract_id');
+  }
+
+  if (typeof r.settled_at !== 'string' || r.settled_at.trim() === '') {
+    record('settlement timestamp', 'NOT_CHECKED',
+      typeof r.settled_at === 'number' && r.settled_at === 0
+        ? 'settled_at is the numeric value 0, which is not a timestamp'
+        : 'receipt does not state when it settled');
+  }
+}
+
+checkReceiptIdentity(receipt);
 checkWorkStatement(receipt);
 checkScore(receipt);
 checkRepIdLedger(receipt);

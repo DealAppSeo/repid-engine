@@ -216,3 +216,85 @@ describe('verify-trust-receipt: the delta-earned leg states what it cannot prove
     expect(out).not.toMatch(/reputation delta earned/);
   });
 });
+
+/** Find a leg line by its human-readable name. */
+function legLine(out: string, label: string): string {
+  const line = out.split('\n').find((l) => l.includes(label));
+  if (!line) throw new Error(`no ${label} leg in output:\n${out}`);
+  return line;
+}
+
+function assertNoPrivacyLeak(out: string, claimValue: string, userValue: string) {
+  expect(out).not.toMatch(/\bclaim\b/);
+  expect(out).not.toMatch(/\buser_id\b/);
+  expect(out).not.toContain(claimValue);
+  expect(out).not.toContain(userValue);
+}
+
+describe('verify-trust-receipt: contract_id and settled_at absence is NOT_CHECKED, never FAILED', () => {
+  const claim = 'XC2-SENSITIVE-CLAIM-TEXT';
+  const userId = 'XC2-USER-ID-LEAK';
+
+  it('NOT_CHECKED when contract_id is absent', () => {
+    const { contract_id: _drop, ...withoutId } = receipt([
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 },
+    ]);
+    const { out } = run({ ...withoutId, claim, user_id: userId });
+    const line = legLine(out, 'contract identity');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).not.toMatch(/\b0\b/);
+    assertNoPrivacyLeak(out, claim, userId);
+  });
+
+  it('NOT_CHECKED when settled_at is absent', () => {
+    const { settled_at: _drop, ...withoutSettled } = receipt([
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 },
+    ]);
+    const { out } = run({ ...withoutSettled, claim, user_id: userId });
+    const line = legLine(out, 'settlement timestamp');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).not.toMatch(/\b0\b/);
+    assertNoPrivacyLeak(out, claim, userId);
+  });
+
+  it('NOT_CHECKED on both affected legs when contract_id and settled_at are absent', () => {
+    const { contract_id: _id, settled_at: _settled, ...withoutBoth } = receipt([]);
+    const { out, code } = run({ ...withoutBoth, claim, user_id: userId });
+    expect(outcomeOf(legLine(out, 'contract identity'))).toBe('NOT_CHECKED');
+    expect(outcomeOf(legLine(out, 'settlement timestamp'))).toBe('NOT_CHECKED');
+    expect(out).not.toMatch(/FAIL/);
+    assertNoPrivacyLeak(out, claim, userId);
+    // With no verifiable legs, the script must exit 2, not 0 or 1.
+    expect(code).toBe(2);
+  });
+
+  it.each([
+    ['contract_id', 'contract identity', { contract_id: '' }],
+    ['settled_at', 'settlement timestamp', { settled_at: '' }],
+  ] as const)('NOT_CHECKED when %s is an empty string', (_field, label, override) => {
+    const { out } = run({ ...receipt([]), ...override, claim, user_id: userId });
+    const line = legLine(out, label);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).not.toMatch(/\b0\b/);
+    assertNoPrivacyLeak(out, claim, userId);
+  });
+
+  it.each([
+    ['contract_id', 'contract identity', { contract_id: 0 }],
+    ['settled_at', 'settlement timestamp', { settled_at: 0 }],
+  ] as const)('NOT_CHECKED when %s is the numeric value 0', (_field, label, override) => {
+    const { out } = run({ ...receipt([]), ...override, claim, user_id: userId });
+    const line = legLine(out, label);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    assertNoPrivacyLeak(out, claim, userId);
+  });
+
+});
