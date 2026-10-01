@@ -53,19 +53,29 @@
       "delta": 25
     }
   ],
+<<<<<<< HEAD
   "false_then_hal_veto": [
+=======
+  "notchecked_then_true": [
+>>>>>>> origin/main
     {
       "kind": "first-pass",
       "rater_id": "agent-b",
       "subject_id": "agent-a",
+<<<<<<< HEAD
       "first_pass_verdict": "FALSE",
+=======
+>>>>>>> origin/main
       "delta": 25
     },
     {
       "kind": "rating",
       "rater_id": "agent-b",
       "subject_id": "agent-a",
+<<<<<<< HEAD
       "hal_decision": "vetoed",
+=======
+>>>>>>> origin/main
       "delta": 25
     }
   ],

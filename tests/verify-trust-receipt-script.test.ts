@@ -61,6 +61,17 @@ function run(r: Record<string, unknown>): { code: number; out: string } {
   }
 }
 
+/** Run the script against an existing file path (used for missing-file cases). */
+function runFile(file: string): { code: number; out: string } {
+  try {
+    const out = execFileSync('node', [SCRIPT, '--file', file], { encoding: 'utf8' });
+    return { code: 0, out };
+  } catch (err) {
+    const e = err as { status?: number; stdout?: string; stderr?: string };
+    return { code: e.status ?? -1, out: `${e.stdout ?? ''}${e.stderr ?? ''}` };
+  }
+}
+
 /** The `reputation ledger arithmetic` line, as the script prints it. */
 function ledgerLine(out: string): string {
   const line = out.split('\n').find((l) => l.includes('reputation ledger arithmetic'));
@@ -214,5 +225,47 @@ describe('verify-trust-receipt: the delta-earned leg states what it cannot prove
   it('is absent when there are no events, rather than asserting about nothing', () => {
     const { out } = run(receipt([]));
     expect(out).not.toMatch(/reputation delta earned/);
+  });
+});
+
+describe('verify-trust-receipt: stdout privacy — claim text and user_id never leak', () => {
+  it('does not print top-level claim or user_id fields from the receipt', () => {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    (r as any).claim = 'XC2-SENSITIVE-CLAIM-TEXT-LEAK';
+    (r as any).user_id = 'XC2-USER-ID-LEAK';
+    const { code, out } = run(r);
+    expect(code).toBe(0);
+    expect(out).not.toContain('XC2-SENSITIVE-CLAIM-TEXT-LEAK');
+    expect(out).not.toContain('XC2-USER-ID-LEAK');
+    // The verifier prints only facts it checked; the field names themselves must not appear.
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+
+  it('does not leak claim text nested in work_statement or criterion_ratings', () => {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    (r as any).work_statement = {
+      deliverable: 'do the thing',
+      deadline: '2026-10-01',
+      agreed_price: { amount_usdc_raw: 1000000, currency: 'USDC' },
+      acceptance_criteria: [{ n: 1, text: 'XC2-SECRET-WORK-STATEMENT-TEXT' }],
+    };
+    (r as any).criterion_ratings = [{ n: 1, met: true, note: 'XC2-SECRET-RATING-NOTE' }];
+    r.buyer_satisfaction_score = 1.0;
+    const { code, out } = run(r);
+    expect(code).toBe(0);
+    expect(out).not.toContain('XC2-SECRET-WORK-STATEMENT-TEXT');
+    expect(out).not.toContain('XC2-SECRET-RATING-NOTE');
+  });
+});
+
+describe('verify-trust-receipt: missing receipt file', () => {
+  it('returns NOT_CHECKED and exits 2, never 0', () => {
+    const { code, out } = runFile(join(DIR, 'this-file-does-not-exist.json'));
+    expect(code).toBe(2);
+    expect(out).toMatch(/NOT_CHECKED/);
+    expect(out).toMatch(/could not load a receipt/);
+    expect(out).not.toMatch(/VERIFIED/);
+    expect(out).not.toMatch(/FAILED/);
   });
 });
