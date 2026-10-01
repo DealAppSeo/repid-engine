@@ -23,10 +23,17 @@ function applyRatings(start, events) {
   const truePassedSubjects = new Set();
   for (const event of events) {
     if (event.kind === 'first-pass') {
-      if (event.subject_id && event.first_pass_verdict !== 'TRUE') {
-        blockedSubjects.add(event.subject_id);
-      } else if (event.first_pass_verdict === 'TRUE' && event.subject_id) {
+      const first = readFirstPass(event.first_pass_verdict);
+      if (!event.subject_id) continue;
+      if (first.verdict === 'TRUE') {
         truePassedSubjects.add(event.subject_id);
+      } else if (first.verdict === 'FALSE') {
+        blockedSubjects.add(event.subject_id);
+      } else {
+        // NOT_CHECKED: missing, null, empty, whitespace, title-case 'True'/'False',
+        // numeric 0, 'null', 'undefined', 'false', 'NaN', infinities, 'true', 'yes', etc.
+        // Block so an unverified first pass can never raise the score.
+        blockedSubjects.add(event.subject_id);
       }
       continue;
     }
@@ -142,6 +149,40 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.titlecase_true_first_pass)) fail('titlecase-true first pass fixture missing');
+const titlecaseTruePass = fixture.titlecase_true_first_pass[0];
+if (!titlecaseTruePass || titlecaseTruePass.kind !== 'first-pass') fail('titlecase-true fixture is not a first pass');
+if (titlecaseTruePass.first_pass_verdict !== 'True') fail('titlecase-true fixture is not the title-case string "True"');
+if (titlecaseTruePass.rater_id === titlecaseTruePass.subject_id) fail('titlecase-true first pass is a self rating');
+if (!(Number(titlecaseTruePass.delta) > 0)) fail('titlecase-true first pass delta is not positive');
+const titlecaseTrueLater = fixture.titlecase_true_first_pass.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === titlecaseTruePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!titlecaseTrueLater) fail('titlecase-true fixture has no later positive rating for the same subject');
+const afterTitlecaseTrue = applyRatings(start, fixture.titlecase_true_first_pass);
+if (afterTitlecaseTrue !== start) fail(`Title-case "True" first pass raised the score from ${start} to ${afterTitlecaseTrue}`);
+
+if (!Array.isArray(fixture.titlecase_false_first_pass)) fail('titlecase-false first pass fixture missing');
+const titlecaseFalsePass = fixture.titlecase_false_first_pass[0];
+if (!titlecaseFalsePass || titlecaseFalsePass.kind !== 'first-pass') fail('titlecase-false fixture is not a first pass');
+if (titlecaseFalsePass.first_pass_verdict !== 'False') fail('titlecase-false fixture is not the title-case string "False"');
+if (titlecaseFalsePass.rater_id === titlecaseFalsePass.subject_id) fail('titlecase-false first pass is a self rating');
+if (!(Number(titlecaseFalsePass.delta) > 0)) fail('titlecase-false first pass delta is not positive');
+const titlecaseFalseLater = fixture.titlecase_false_first_pass.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === titlecaseFalsePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!titlecaseFalseLater) fail('titlecase-false fixture has no later positive rating for the same subject');
+const afterTitlecaseFalse = applyRatings(start, fixture.titlecase_false_first_pass);
+if (afterTitlecaseFalse !== start) fail(`Title-case "False" first pass raised the score from ${start} to ${afterTitlecaseFalse}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -188,6 +229,9 @@ process.stdout.write(
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_titlecase_true_first_pass\t${afterTitlecaseTrue}\n` +
+    `after_titlecase_false_first_pass\t${afterTitlecaseFalse}\n` +
+    `titlecase_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

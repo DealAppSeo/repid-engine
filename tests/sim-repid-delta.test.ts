@@ -41,6 +41,20 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string | null | undefined;
         delta: number;
       }[];
+      titlecase_true_first_pass: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
+      titlecase_false_first_pass: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -88,6 +102,32 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(laterPositive).toBeDefined();
+    const titlecaseTrue = fixture.titlecase_true_first_pass[0];
+    expect(titlecaseTrue?.kind).toBe('first-pass');
+    expect(titlecaseTrue?.first_pass_verdict).toBe('True');
+    expect(titlecaseTrue?.rater_id).not.toBe(titlecaseTrue?.subject_id);
+    expect(Number(titlecaseTrue?.delta)).toBeGreaterThan(0);
+    const titlecaseTrueLater = fixture.titlecase_true_first_pass.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === titlecaseTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(titlecaseTrueLater).toBeDefined();
+    const titlecaseFalse = fixture.titlecase_false_first_pass[0];
+    expect(titlecaseFalse?.kind).toBe('first-pass');
+    expect(titlecaseFalse?.first_pass_verdict).toBe('False');
+    expect(titlecaseFalse?.rater_id).not.toBe(titlecaseFalse?.subject_id);
+    expect(Number(titlecaseFalse?.delta)).toBeGreaterThan(0);
+    const titlecaseFalseLater = fixture.titlecase_false_first_pass.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === titlecaseFalse?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(titlecaseFalseLater).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -101,6 +141,9 @@ describe('sim-repid-delta', () => {
         `after_true_then_hal_veto\t${fixture.start_score - Number(halVeto?.delta)}\n` +
         `after_notchecked_first_pass\t${fixture.start_score}\n` +
         `notchecked_first_pass_status\tNOT_CHECKED\n` +
+        `after_titlecase_true_first_pass\t${fixture.start_score}\n` +
+        `after_titlecase_false_first_pass\t${fixture.start_score}\n` +
+        `titlecase_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -130,6 +173,20 @@ describe('sim-repid-delta', () => {
     expect(score).toBeLessThanOrEqual(fixture.start_score);
   });
 
+  it('treats title-case "True" and "False" as NOT_CHECKED and never raises the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const trueMatch = out.match(/after_titlecase_true_first_pass\t(\d+)/);
+    const falseMatch = out.match(/after_titlecase_false_first_pass\t(\d+)/);
+    expect(trueMatch).toBeTruthy();
+    expect(falseMatch).toBeTruthy();
+    expect(Number(trueMatch?.[1])).toBe(fixture.start_score);
+    expect(Number(falseMatch?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('titlecase_first_pass_status\tNOT_CHECKED');
+  });
+
   it('reads the fixture file and does not dial a database', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('repid-delta-events.json');
@@ -145,8 +202,11 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('TRUE first pass followed by HAL veto raised the score');
     expect(src).toContain('after_true_then_hal_veto');
     expect(src).toContain('NOT_CHECKED first pass followed by TRUE raised the score');
+    expect(src).toContain('Title-case "True" first pass raised the score');
+    expect(src).toContain('Title-case "False" first pass raised the score');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain('notchecked_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('titlecase_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
     expect(src).toContain('missing_rater\\tNOT_CHECKED');
