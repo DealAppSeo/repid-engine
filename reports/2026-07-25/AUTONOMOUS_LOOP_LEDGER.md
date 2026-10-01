@@ -8013,3 +8013,32 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 2. **Standing (unchanged):** `HEAT_EVICTION_ENABLED` prod enable, items 7/10, `FREE_TIER_QUOTA_SHADOW_ENABLED` observe — all Sean-gated.
 
 **Next beat:** (1) Confirm eviction route PR merged. (2) Update item 13 backlog row to reflect DONE (all acceptance criteria met at primitive + HTTP level). (3) Item 8 output-confidence scorer for speculative cascade.
+
+---
+
+## Beat (2026-10-01, fifth run) — fourth run verified; open PRs armed; item 8 speculative cascade scoped
+
+**Prior beat verified [V] (2026-10-01, fourth run):**
+- PR #1022 (`feat(memory): item 13 heat-eviction HTTP route — POST /memory/evict`): **MERGED** — `git log --oneline` = `ab18da76`. ✓
+- PR #1021 (docs/loop ledger fourth run): **MERGED** — `git log --oneline` = `a2d628c2`. ✓
+- Route file exists and mounted: `src/routes/memory-heat-evict-route.ts` present; imported at `src/index.ts:85`. ✓
+- Item 13 state [V]: `performHeatEviction` (PR #817), `evictAndUpdateRoot` (PR #821), `reactivateLeaves` (PR #1012), and now `POST /api/v1/memory/evict` (PR #1022) all on main. All three acceptance criteria met (flushed, root preserved, reactivation triggers) + HTTP route mounted, shadow-first behind `HEAT_EVICTION_ENABLED`. **Item 13 is DONE at primitive + HTTP level.** Prod enable remains Sean-gated.
+- **Penalty verdict: NONE.** All claimed outcomes confirmed on main. No fabrication.
+
+**Current state [V]:** `origin/main` = `52ff0854`. Open PRs: **#1028** (Extend sim-repid-delta anti-game: FALSE first pass + later TRUE no-raise), **#1029** (Expose honest x402 and erc8004 pointer paths in join-kit), **#1031** (docs: add X402_SITE_GATE.md), **#1032** (Add CFO belt skill: receipts, spend caps, and shadow-not-live stake language). All four: MERGEABLE, all CI checks SUCCESS (test, crosscheck, gitleaks, HAL adversarial gate, Strix Security Review).
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Arm #1028, #1029, #1031, #1032 (all SAFE-CLASS: tested/additive/docs, all checks green). Then scope item 8 (output-confidence scorer for speculative cascade) and build if bounded.
+
+**STEP 2 — ARMED #1028, #1029, #1031, #1032 --auto --squash.** All MERGEABLE, all checks green including Strix. Additive and docs-only; no enable-flag flips.
+
+**Item 8 scope [V]:** `runSpeculativeCascade` (`src/providers/speculative-cascade.ts`) exists, 5/5 tests, zero callers (`grep -rn "runSpeculativeCascade" src/` = definition only). Blocker from backlog: no output-confidence scorer exists — `anfisConfidence` in `router.ts` is pre-call routing confidence, not post-call output scoring. Building a post-call output scorer is a real design decision (what signal? token-prob? LLM self-rating? cross-model consensus?). This beat does NOT attempt it — it is a measurement facility decision, not plumbing. **Item 8 stays PARTIAL pending that design call.**
+
+**Open for Sean (rule-4):**
+1. **Nothing new requiring Sean** — PRs #1028/#1029/#1031/#1032 armed `--auto --squash`.
+2. **Item 13 DONE at code level.** Prod enable: `HEAT_EVICTION_ENABLED=true` on Railway when ready.
+3. **Standing (unchanged):** items 7, 10 (EAS anchoring gas spend), `FREE_TIER_QUOTA_SHADOW_ENABLED` observe — all Sean-gated.
+4. **Item 8 design question (not urgent):** output-confidence scorer signal — recommend LLM self-rating or cross-model agreement score; neither is built. Decision needed before item 8 can wire.
+
+**Next beat:** (1) Confirm #1028/#1029/#1031/#1032 merged. (2) Update item 13 backlog row to DONE. (3) Item 8 output-confidence scorer — build only after design call on signal source.
