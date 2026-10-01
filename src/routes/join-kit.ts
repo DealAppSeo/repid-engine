@@ -16,6 +16,8 @@ export function joinKit(env: Record<string, string | undefined> = process.env) {
     proof: '/api/v1/proof/verify',
     honesty_a: '/api/v1/hal/honesty-a',
     after_create: '/api/v1/after-create',
+    x402: '/api/v1/x402/:uuid/trade-analysis',
+    erc8004: '/api/v1/erc8004/validate/:agent_id',
     can_verify: true as const,
     can_bind: env.HUMAN_AGENT_BIND_ENABLED === TRUTHY,
     can_stake: false as const,
