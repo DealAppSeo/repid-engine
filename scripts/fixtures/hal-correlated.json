@@ -1,0 +1,109 @@
+{
+  "claims": [
+    {
+      "id": "all-true",
+      "claim": "A bat is a flying mammal.",
+      "first_pass": {
+        "llama": "TRUE",
+        "gemini": "TRUE"
+      },
+      "post_hal": "TRUE",
+      "expected": {
+        "first_pass": { "TRUE": 2, "FALSE": 0, "NOT_CHECKED": 0 },
+        "post_hal": { "TRUE": 2, "FALSE": 0, "NOT_CHECKED": 0 }
+      }
+    },
+    {
+      "id": "all-false",
+      "claim": "Two plus two equals five.",
+      "first_pass": {
+        "llama": "FALSE",
+        "gemini": "FALSE"
+      },
+      "post_hal": "FALSE",
+      "expected": {
+        "first_pass": { "TRUE": 0, "FALSE": 2, "NOT_CHECKED": 0 },
+        "post_hal": { "TRUE": 0, "FALSE": 2, "NOT_CHECKED": 0 }
+      }
+    },
+    {
+      "id": "split-true-wins",
+      "claim": "The Earth orbits the Sun.",
+      "first_pass": {
+        "llama": "TRUE",
+        "gemini": "FALSE"
+      },
+      "post_hal": "TRUE",
+      "expected": {
+        "first_pass": { "TRUE": 1, "FALSE": 1, "NOT_CHECKED": 0 },
+        "post_hal": { "TRUE": 1, "FALSE": 0, "NOT_CHECKED": 1 }
+      }
+    },
+    {
+      "id": "split-false-wins",
+      "claim": "The Sun orbits the Earth.",
+      "first_pass": {
+        "llama": "TRUE",
+        "gemini": "FALSE"
+      },
+      "post_hal": "FALSE",
+      "expected": {
+        "first_pass": { "TRUE": 1, "FALSE": 1, "NOT_CHECKED": 0 },
+        "post_hal": { "TRUE": 0, "FALSE": 2, "NOT_CHECKED": 0 }
+      }
+    },
+    {
+      "id": "one-missing",
+      "claim": "Water boils at one hundred degrees Celsius at sea level.",
+      "first_pass": {
+        "llama": "TRUE",
+        "deepseek": "NOT_CHECKED"
+      },
+      "post_hal": "TRUE",
+      "expected": {
+        "first_pass": { "TRUE": 1, "FALSE": 0, "NOT_CHECKED": 1 },
+        "post_hal": { "TRUE": 2, "FALSE": 0, "NOT_CHECKED": 0 }
+      }
+    },
+    {
+      "id": "false-becomes-false",
+      "claim": "A square has five sides.",
+      "first_pass": {
+        "llama": "FALSE",
+        "deepseek": "NOT_CHECKED"
+      },
+      "post_hal": "FALSE",
+      "expected": {
+        "first_pass": { "TRUE": 0, "FALSE": 1, "NOT_CHECKED": 1 },
+        "post_hal": { "TRUE": 0, "FALSE": 2, "NOT_CHECKED": 0 }
+      }
+    },
+    {
+      "id": "post-unclear",
+      "claim": "The next coin flip will land heads.",
+      "first_pass": {
+        "llama": "TRUE",
+        "gemini": "FALSE"
+      },
+      "post_hal": "NOT_CHECKED",
+      "expected": {
+        "first_pass": { "TRUE": 1, "FALSE": 1, "NOT_CHECKED": 0 },
+        "post_hal": { "TRUE": 0, "FALSE": 0, "NOT_CHECKED": 2 }
+      }
+    },
+    {
+      "id": "three-family-mixed",
+      "claim": "Vaccines reduce the risk of severe disease.",
+      "first_pass": {
+        "llama": "TRUE",
+        "gemini": "FALSE",
+        "deepseek": "NOT_CHECKED"
+      },
+      "post_hal": "TRUE",
+      "expected": {
+        "first_pass": { "TRUE": 1, "FALSE": 1, "NOT_CHECKED": 1 },
+        "post_hal": { "TRUE": 2, "FALSE": 0, "NOT_CHECKED": 1 }
+      }
+    }
+  ]
+}
