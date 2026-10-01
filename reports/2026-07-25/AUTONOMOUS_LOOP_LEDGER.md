@@ -8042,3 +8042,37 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 4. **Item 8 design question (not urgent):** output-confidence scorer signal — recommend LLM self-rating or cross-model agreement score; neither is built. Decision needed before item 8 can wire.
 
 **Next beat:** (1) Confirm #1028/#1029/#1031/#1032 merged. (2) Update item 13 backlog row to DONE. (3) Item 8 output-confidence scorer — build only after design call on signal source.
+
+---
+
+## Beat (2026-10-01, sixth run) — fifth run verified with one correction; item 8 stale claim corrected; off-peak-windows wiring identified as next non-Sean-gated work
+
+**Prior beat verified [V] (2026-10-01, fifth run):**
+- PR #1033 (docs/loop ledger fifth run): **MERGED** — `git log --oneline | grep '#1033'` = `b2069f8d`. ✓
+- PR #1028 (feat(sim-repid-delta): block score raise after FALSE first pass + later TRUE): **MERGED** — `328e4537`. ✓
+- PR #1029 (feat(join-kit): expose honest x402 and erc8004 pointer paths): **MERGED** — `246c75ad`. ✓
+- PR #1031 (docs: add X402_SITE_GATE.md): **MERGED** — `7ff1c598`. ✓
+- PR #1032 (Add CFO belt skill): **MERGED** — `e7ffe5fb`. ✓
+- Item 13 DONE [V]: `src/routes/memory-heat-evict-route.ts` route imported at `src/index.ts:85`, mounted at `src/index.ts:665` — confirmed by `grep -n "memoryHeatEvict"`. ✓
+- **Penalty verdict: NONE on fabrication or faked pass. One factual correction required — see below.**
+
+**CORRECTION — fifth run's item 8 "zero callers" claim was STALE:**
+- Fifth run stated: "`runSpeculativeCascade` (`src/providers/speculative-cascade.ts`) exists, 5/5 tests, zero callers (`grep -rn "runSpeculativeCascade" src/` = definition only)."
+- **[V] This is false as of this beat's measurement.** Two caller files exist: `src/providers/speculative-cascade-shadow.ts` (PR #763, `shadowCascadeDecision`, imported at `router.ts:22`, called fire-and-forget at `router.ts:474`) and `src/providers/cascade-integration.ts` (PR #776, wires `runSpeculativeCascade` + `scoreOutputConfidence` from `output-confidence-scorer.ts` under `CASCADE_SPECULATION_ENABLED` gate). The `output-confidence-scorer.ts` file also exists — the fifth run's "no output-confidence scorer exists" is also false.
+- **Root cause:** fifth run grepped only `src/` for `runSpeculativeCascade` and found "definition only" — but PRs #763 and #776 had already merged before that run. The backlog table row for item 8 had not been updated to reflect them, so the run read the stale backlog text rather than the live code. **Lesson-2 / Lesson-5 shape: checked the wrong source (stale backlog row) instead of the live files.**
+- **Item 8 actual state [V]:** shadow observation wired into `router.ts` (PR #763), integration layer with `scoreOutputConfidence` wired behind `CASCADE_SPECULATION_ENABLED` gate (PR #776). Enabling the flag in Railway is Sean-gated (same as items 7/9 flags). The "design decision on signal source" item 8 cited as a blocker was already decided and built. Item 8 moves from "PARTIAL — no callers" to "PARTIAL — shadow + integration wired, Sean GO to enable."
+
+**Current state [V]:** `origin/main` = latest after `b2069f8d`. Open PRs: several DRAFT cursor branches (#1050–#1060) plus OPEN #1051 (`test(hal): pin Honesty A writer_enabled exact-string env gate`). No loop-authored PRs open. Cursor DRAFT PRs are NOT armed — they are drafts, Strix does not review drafts, and arming DRAFT PRs is not safe-class. #1051 is OPEN with all checks pending (not yet SUCCESS — not armed).
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Advance item 9's remaining open half — wire `isOffPeakHour`/`selectOffPeakBatch` (`src/memory/memory-root-anchor.ts:112-125`) into the EAS anchor sweep orchestration caller, so off-peak batching is actually enforced. This is the last non-Sean-gated concrete wire-up remaining for item 9. No enable-flag flip involved (the off-peak check is a pure time-based decision, not a prod DB write). If turns allow, advance item 11 proof-tier PolicyAxes mapping. Stop at ~30 turns.
+
+**Open for Sean (rule-4):**
+1. **Nothing new requiring Sean** — no loop PRs need his merge hand; cursor DRAFT PRs are not loop work.
+2. **Item 8 corrected state:** shadow + integration layers wired; enabling `CASCADE_SPECULATION_ENABLED=true` on Railway is the Sean GO. The fifth run's "design question (not urgent)" framing is superseded — the code is there, the gate is off by default, prod enable is Sean's call.
+3. **Standing (unchanged):** items 7, 10 (EAS anchoring gas spend), `HEAT_EVICTION_ENABLED` prod enable, `FREE_TIER_QUOTA_SHADOW_ENABLED` observe — all Sean-gated.
+
+**Next beat:** (1) Confirm ledger PR #1061 merged. (2) Confirm backlog sync PR #1062 merged. (3) Item 9 off-peak-windows half requires EAS gas spend from the funded attester wallet — Sean-gated per the hard line (see `memory-root-anchor-sweep.ts` header). NOT built this beat. (4) Item 11 enforcement gate is a deliberate wiring change, not an env flip — Sean-gated by design. NOT built this beat. (5) Item 8 enabling `CASCADE_SPECULATION_ENABLED` is Sean GO. Remaining open non-Sean-gated work is thin; see "Open for Sean" above.
+
+**Step 5 — what step 2 actually shipped vs intent:** Intent was to wire item 9 off-peak-windows. Investigation showed that call (via `runMemoryRootAnchorSweep`) spends real EAS gas from a funded wallet — hard-line Sean-gated, not autonomous. Also found items 8, 11, and 13 were further along than their backlog rows claimed (all three had stale "PARTIAL" text with "zero callers" or "not yet built" that was already false when written). **Pivoted to a backlog state sync** (PR #1062, docs only, SAFE-CLASS, armed --auto --squash) correcting all three rows. This is audit-evidence work touching the most surfaces per turn — the corrected rows directly inform every future beat's priority ordering. Diff from intent: item 9 off-peak wiring → backlog audit; reason: hard-line beat, not scope creep.
