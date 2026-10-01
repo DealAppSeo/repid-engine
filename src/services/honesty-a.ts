@@ -84,21 +84,17 @@ export function readPassVerdict(verdict: unknown): PassReading {
   return { verdict: null, status: 'NOT_CHECKED' };
 }
 
+function normalized(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function emptyPasses(): { first_pass: PassCounts; post_hal: PassCounts } {
   return {
     first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 0 },
     post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 0 },
   };
-}
-
-/**
- * Treat a string as blank when it is missing, empty, or contains only vertical tab (\v).
- * VT-only family/host strings must not become real buckets.
- */
-function blankToFallback(value: string | null | undefined, fallback: string): string {
-  if (!value || value.length === 0) return fallback;
-  if ([...value].every((c) => c === '\v')) return fallback;
-  return value;
 }
 
 function addPass(counts: PassCounts, verdict: unknown): void {
@@ -116,9 +112,8 @@ export function aggregateHonestyA(
 ): HonestyAReport {
   const buckets = new Map<string, HonestyARow>();
   for (const vote of votes) {
-    const family = blankToFallback(vote.family, 'NOT_CHECKED');
-    const namedHost = blankToFallback(vote.host, vote.provider ?? 'NOT_CHECKED');
-    const host = blankToFallback(namedHost, 'NOT_CHECKED');
+    const family = normalized(vote.family) ?? 'NOT_CHECKED';
+    const host = normalized(vote.host) ?? normalized(vote.provider) ?? 'NOT_CHECKED';
     const key = `${family}\n${host}`;
     let row = buckets.get(key);
     if (!row) {
