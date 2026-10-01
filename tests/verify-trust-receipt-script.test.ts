@@ -32,7 +32,7 @@ interface RepEvent {
   agent: string;
   event: string;
   delta: number;
-  from: number;
+  from?: number | null | string;
   to: number;
   decay?: number | null;
 }
@@ -225,6 +225,36 @@ describe('verify-trust-receipt: the delta-earned leg states what it cannot prove
   it('is absent when there are no events, rather than asserting about nothing', () => {
     const { out } = run(receipt([]));
     expect(out).not.toMatch(/reputation delta earned/);
+  });
+});
+
+describe('verify-trust-receipt: missing from is NOT_CHECKED, never FAILED or numeric 0', () => {
+  const assertNoPrivacyLeak = (out: string) => {
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  };
+
+  it.each<[string, Record<string, unknown>]>([
+    ['from key is absent', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, to: 1020 }],
+    ['from is null', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: null, to: 1020 }],
+    ['from is an empty string', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: '', to: 1020 }],
+    [
+      'from is null and to equals delta (would coerce to 0)',
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: null, to: 20 },
+    ],
+    [
+      'from is empty and to equals delta (would coerce to 0)',
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: '', to: 20 },
+    ],
+    ['from is absent and decay is published', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, decay: 10, to: 1010 }],
+  ])('NOT_CHECKED when %s', (_label, event) => {
+    const { code, out } = run(receipt([event as unknown as RepEvent]));
+    const line = ledgerLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).not.toMatch(/\b0\b/);
+    expect(code).not.toBe(0);
+    assertNoPrivacyLeak(out);
   });
 });
 
