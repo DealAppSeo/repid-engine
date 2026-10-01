@@ -13,12 +13,19 @@ function fail(message) {
   process.exit(1);
 }
 
+function presentRater(id) {
+  return id !== undefined && id !== null && id !== '' && id !== 0 && id !== '0';
+}
+
 function applyRatings(start, events) {
   let score = start;
   for (const event of events) {
     if (event.kind === 'first-pass') continue;
     if (event.kind !== 'rating' && event.kind !== 'nonprofit-help') continue;
     if (event.rater_id === event.subject_id) continue;
+    if (event.rater_role === 'owner') continue;
+    if (typeof event.rater_family === 'string' && event.rater_family === event.subject_family) continue;
+    if (!presentRater(event.rater_id)) continue;
     const delta = Number(event.delta);
     if (!Number.isFinite(delta) || delta <= 0) continue;
     score += delta;
@@ -77,6 +84,32 @@ for (const value of samples) {
   if (reading.verdict === 0) fail('first_pass missing was stored as 0');
 }
 
+if (presentRater(0) || presentRater('0')) fail('missing rater stored as 0');
+if (!Array.isArray(fixture.rater_gate)) fail('rater gate fixture missing');
+const dropLines = [];
+let appliedHelp = 0;
+for (const event of fixture.rater_gate) {
+  if (!presentRater(event.rater_id)) {
+    dropLines.push('missing_rater\tNOT_CHECKED');
+    continue;
+  }
+  if (event.rater_role === 'owner') {
+    dropLines.push(`dropped\t${event.rater_id}\towner-rater\t0`);
+    continue;
+  }
+  if (typeof event.rater_family === 'string' && event.rater_family === event.subject_family) {
+    dropLines.push(`dropped\t${event.rater_id}\tsame-family\t0`);
+    continue;
+  }
+  if (event.kind === 'nonprofit-help' && event.rater_id !== event.subject_id) {
+    appliedHelp += Number(event.delta);
+    dropLines.push(`applied\t${event.rater_id}\tcounterparty-help\t${event.delta}`);
+  }
+}
+if (appliedHelp !== 1) fail(`counterparty help applied ${appliedHelp}`);
+const gated = applyRatings(start, fixture.rater_gate);
+if (gated !== start + 1) fail(`rater gate moved the score by ${gated - start}`);
+
 process.stdout.write(
   `before\t${start}\n` +
     `after_false_first_pass\t${afterFalse}\n` +
@@ -87,5 +120,8 @@ process.stdout.write(
     `nonprofit_help_delta\t${helped - start}\n` +
     `self_rate_zero_score\t${zeroScore}\n` +
     `self_rate_zero_delta\t${zeroScore - start}\n` +
-    `first_pass\tNOT_CHECKED\n`,
+    `first_pass\tNOT_CHECKED\n` +
+    `${dropLines.join('\n')}\n` +
+    `rater_gate_score\t${gated}\n` +
+    `rater_gate_delta\t${gated - start}\n`,
 );

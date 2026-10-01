@@ -42,8 +42,15 @@ describe('sim-repid-delta', () => {
         `nonprofit_help_delta\t${helpDelta}\n` +
         `self_rate_zero_score\t${fixture.start_score}\n` +
         `self_rate_zero_delta\t0\n` +
-        `first_pass\tNOT_CHECKED\n`,
+        `first_pass\tNOT_CHECKED\n` +
+        `dropped\towner-1\towner-rater\t0\n` +
+        `dropped\tagent-c\tsame-family\t0\n` +
+        `applied\tagent-r\tcounterparty-help\t1\n` +
+        `missing_rater\tNOT_CHECKED\n` +
+        `rater_gate_score\t${fixture.start_score + 1}\n` +
+        `rater_gate_delta\t1\n`,
     );
+    expect(out).not.toContain('missing_rater\t0');
   });
 
   it('reads the fixture file and does not dial a database', () => {
@@ -58,5 +65,9 @@ describe('sim-repid-delta', () => {
     expect(src).toContain("event.kind === 'first-pass'");
     expect(src).toContain('FALSE first pass raised the score');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
+    expect(src).toContain("rater_role === 'owner'");
+    expect(src).toContain('same-family');
+    expect(src).toContain('missing_rater\\tNOT_CHECKED');
+    expect(src).toContain('counterparty-help');
   });
 });

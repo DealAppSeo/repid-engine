@@ -22,6 +22,36 @@
       "delta": 25
     }
   ],
+  "rater_gate": [
+    {
+      "kind": "rating",
+      "rater_id": "owner-1",
+      "subject_id": "agent-a",
+      "rater_role": "owner",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-c",
+      "subject_id": "agent-a",
+      "rater_family": "llama",
+      "subject_family": "llama",
+      "delta": 30
+    },
+    {
+      "kind": "nonprofit-help",
+      "rater_id": "agent-r",
+      "subject_id": "agent-a",
+      "rater_family": "mistral",
+      "subject_family": "llama",
+      "delta": 1
+    },
+    {
+      "kind": "rating",
+      "subject_id": "agent-a",
+      "delta": 15
+    }
+  ],
   "votes": [
     { "family": "llama", "host": "groq" },
     { "family": "llama", "host": "groq", "first_pass_verdict": null },
