@@ -1,0 +1,7 @@
+{
+  "arms": [
+    { "arm": "A", "prompt": "bare" },
+    { "arm": "B", "prompt": "check-this" },
+    { "arm": "C", "prompt": "later-rater" }
+  ]
+}
