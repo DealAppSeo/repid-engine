@@ -86,4 +86,25 @@ describe('sim-hal-traps', () => {
     const printed = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
     expect(printed).not.toContain('user_id');
   });
+
+  it('fails closed when a row uses 0 for a missing pass', () => {
+    const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
+      claims: { first_pass_verdict?: unknown; post_hal_verdict?: unknown }[];
+    };
+    expect(fixture.claims).toHaveLength(10);
+    for (const claim of fixture.claims) {
+      expect(claim.first_pass_verdict).not.toBe(0);
+      expect(claim.first_pass_verdict).not.toBe('0');
+      expect(claim.post_hal_verdict).not.toBe(0);
+      expect(claim.post_hal_verdict).not.toBe('0');
+    }
+    const row = JSON.stringify({
+      trap: 'surgeon',
+      first_pass_verdict: 0,
+      post_hal_verdict: '0',
+    });
+    const out = execFileSync(process.execPath, [script, row], { cwd: root, encoding: 'utf8' });
+    expect(out).toBe('surgeon\tNOT_CHECKED\tNOT_CHECKED\tNOT_CHECKED\n');
+    expect(out.trim().split('\t')).not.toContain('0');
+  });
 });

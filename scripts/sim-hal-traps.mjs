@@ -34,6 +34,27 @@ if (checkedZero !== 'NOT_CHECKED' || checkedZero === 0 || checkedZero === '0') {
   fail('missing pass printed 0');
 }
 
+const rowArg = process.argv[2];
+if (rowArg) {
+  let claim;
+  try {
+    claim = JSON.parse(rowArg);
+  } catch {
+    fail('row is not json');
+  }
+  const first = passCell(claim.first_pass_verdict);
+  const post = passCell(claim.post_hal_verdict);
+  for (const cell of [first, post]) {
+    if (cell === 0 || cell === '0') fail('missing pass printed 0');
+  }
+  const disagree =
+    first === 'NOT_CHECKED' || post === 'NOT_CHECKED' ? 'NOT_CHECKED' : first === post ? 'FALSE' : 'TRUE';
+  if (disagree === 0 || disagree === '0') fail('disagree printed 0');
+  const trap = typeof claim.trap === 'string' && claim.trap.length > 0 ? claim.trap : 'row';
+  process.stdout.write(`${[trap, first, post, disagree].join('\t')}\n`);
+  process.exit(0);
+}
+
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const claims = fixture.claims;
 if (!Array.isArray(claims) || claims.length !== 10) fail(`expected 10 claims, got ${claims?.length}`);
