@@ -99,6 +99,7 @@ import spendPreviewRouter from './routes/human-spend-preview';
 import afterCreateRouter from './routes/after-create';
 import joinKitRouter from './routes/join-kit';
 import trustmarketJoinRouter from './routes/trustmarket-join';
+import layaClassifyRouter from './routes/laya-classify';
 import onboardLayerRouter from './routes/onboard-layer';
 import beltsRouter from './routes/belts';
 import whyRouter from './routes/why';
@@ -570,6 +571,8 @@ app.use('/api/v1', afterCreateRouter);
 app.use('/api/v1', joinKitRouter);
 // TrustMarket join card. Read-only, before auth. can_list and can_stake stay false.
 app.use('/api/v1', trustmarketJoinRouter);
+// Local Laya classify. Before auth. route and latency_ms only.
+app.use('/api/v1', layaClassifyRouter);
 // Onboard layer. Read-only, before auth. A counted 0 is layer 0.
 app.use('/api/v1', onboardLayerRouter);
 // Public belt ids. Read-only, before auth.
