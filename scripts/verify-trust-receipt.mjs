@@ -93,7 +93,12 @@ function checkScore(r) {
   if (r.buyer_satisfaction_score === null || r.buyer_satisfaction_score === undefined) {
     return record('satisfaction score', 'NOT_CHECKED', 'no score recorded on the contract');
   }
-  const met = ratings.filter((x) => x.met === true).length;
+  const usable = ratings.filter((x) => typeof x?.met === 'boolean');
+  if (usable.length === 0) {
+    return record('satisfaction score', 'NOT_CHECKED',
+      'criterion ratings are present but none have a readable met flag');
+  }
+  const met = usable.filter((x) => x.met === true).length;
   const expected = (met / ratings.length).toFixed(4);
   const stored = Number(r.buyer_satisfaction_score).toFixed(4);
   if (expected !== stored) {

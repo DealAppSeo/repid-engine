@@ -74,6 +74,14 @@ function wsReceipt(
   return r;
 }
 
+/** A receipt with criterion ratings and a satisfaction score for the score leg. */
+function scoreReceipt(ratings: unknown[], score: unknown): Record<string, unknown> {
+  const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+  r.criterion_ratings = ratings;
+  r.buyer_satisfaction_score = score;
+  return r;
+}
+
 /** Run the real script against a receipt; never throws on a non-zero exit. */
 function run(r: Record<string, unknown>): { code: number; out: string } {
   const file = join(DIR, `r-${Math.random().toString(36).slice(2)}.json`);
@@ -300,6 +308,48 @@ describe('verify-trust-receipt: work statement binding when no hash is stored', 
     const { out } = run(r);
     expect(out).not.toContain('user_id');
     expect(out).not.toContain('claim');
+  });
+});
+
+describe('verify-trust-receipt: satisfaction score is NOT_CHECKED when no rating is readable', () => {
+  const CLAIM = 'XC2-SENSITIVE-CLAIM-TEXT';
+  const USER_ID = 'XC2-USER-ID-LEAK';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  it.each<[string, unknown[]]>([
+    ['met key is absent', [{ n: 1, note: 'no met key' }, { n: 2, note: 'also no met key' }]],
+    ['met is null', [{ n: 1, met: null }, { n: 2, met: null }]],
+    ['met is undefined', [{ n: 1, met: undefined }, { n: 2, met: undefined }]],
+    ['met is a non-boolean string', [{ n: 1, met: 'yes' }, { n: 2, met: 'true' }]],
+  ])(
+    'NOT_CHECKED when every rating lacks a usable boolean met (%s), even with a 0.0000 score present',
+    (_label, ratings) => {
+      const { out, code } = run({
+        ...scoreReceipt(ratings, 0.0000),
+        claim: CLAIM,
+        user_id: USER_ID,
+      });
+      const line = legLine(out, 'satisfaction score');
+      expect(outcomeOf(line)).toBe('NOT_CHECKED');
+      expect(line).toMatch(/\?\?/);
+      expect(line).not.toMatch(/FAIL/);
+      expect(line).toMatch(/none have a readable met flag/);
+      expect(code).not.toBe(1);
+      assertPrivacy(out);
+    },
+  );
+
+  it('still VERIFIED when at least one rating has a usable boolean met', () => {
+    const { out, code } = run(scoreReceipt([{ n: 1, met: true }, { n: 2, met: 'yes' }], 0.5000));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('VERIFIED');
+    expect(code).toBe(0);
   });
 });
 
