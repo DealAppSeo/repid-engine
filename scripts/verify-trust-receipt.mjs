@@ -47,6 +47,23 @@ async function loadReceipt() {
   return { receipt: await res.json(), source: url };
 }
 
+// ── LEG 0 — the receipt names the contract this settlement is about ─────────
+//
+// This is a presence check, not a forgery check. A receipt that cannot name
+// its contract has nothing to disagree with — the settlement simply has not
+// been bound to an exchange. It is recorded only when missing so a bare but
+// present id does not borrow a "VERIFIED" that would turn an otherwise empty
+// receipt into a pass.
+function checkContractBinding(r) {
+  if (typeof r.contract_id !== 'string' || r.contract_id.trim() === '') {
+    record(
+      'settlement / contract binding',
+      'NOT_CHECKED',
+      'receipt does not name a contract_id, so the settlement cannot be bound to a contract',
+    );
+  }
+}
+
 // ── LEG 1 — the work statement hashes to what the contract stored ────────────
 // Transcribed from public.work_statement_canonical_text(jsonb). Fixed field
 // order, no whitespace, criteria sorted by n.
@@ -297,6 +314,7 @@ console.log(`  settled  ${receipt.settled_at ?? '(not settled)'}  ${receipt.pric
 console.log(`  parties  ${receipt.buyer} -> ${receipt.provider}`);
 console.log('');
 
+checkContractBinding(receipt);
 checkWorkStatement(receipt);
 checkScore(receipt);
 checkRepIdLedger(receipt);
