@@ -150,6 +150,22 @@ describe('verify-trust-receipt: reputation ledger arithmetic', () => {
     expect(line).toMatch(/decay or the 10000 cap/);
   });
 
+  it('NOT_CHECKED when decay is explicitly null and the books do not close without it', () => {
+    // A null `decay` is the same as an absent `decay`: the receipt publishes no
+    // decomposition. The leg must not invent decay=0 to force a pass, and must
+    // not accuse the row of forgery because the missing value is itself
+    // published as missing.
+    const { out, code } = run(
+      receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 990, decay: null }]),
+    );
+    expect(outcomeOf(ledgerLine(out))).toBe('NOT_CHECKED');
+    expect(ledgerLine(out)).toMatch(/decay or the 10000 cap/);
+    expect(code).not.toBe(1); // no false FAILED forgery for missing decomposition
+    // Privacy: the verifier must never echo claim text or user_id.
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+
   it('FAILED when a recorded decay does NOT close the identity', () => {
     // Decay is stated, so there is nothing left to be undetermined about.
     const { out, code } = run(
