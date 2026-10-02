@@ -2,6 +2,7 @@ import express from 'express';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import request from 'supertest';
+import { scoreAfterStampRow } from '../src/orchestration/stamp-row';
 
 const calls: string[] = [];
 const state: {
@@ -144,5 +145,34 @@ describe('GET /api/v1/hal/stamp', () => {
     expect(`${missFirst}\t${missPost}`).toBe('NOT_CHECKED\tNOT_CHECKED');
     expect(missFirst).not.toBe(0);
     expect(missPost).not.toBe('0');
+  });
+
+  it('does not raise a score for a self-only row', async () => {
+    const start = 10;
+    state.throwRead = false;
+    state.error = null;
+    state.row = {
+      family: 'llama',
+      host: 'groq',
+      verdict: 'pass',
+      rater_id: 'same',
+      subject_id: 'same',
+      delta: 4,
+      score: start + 4,
+      user_id: 'same',
+    };
+    const res = await request(app).get('/api/v1/hal/stamp');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass' });
+    expect(res.body.score).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('14');
+    expect(JSON.stringify(res.body)).not.toContain('user_id');
+    const next = scoreAfterStampRow(start, { rater_id: 'same', subject_id: 'same', delta: 4 });
+    expect(next).toBe(start);
+    expect(next).not.toBe(start + 4);
+    expect(next).not.toBe(0);
+    const missing = scoreAfterStampRow(Number.NaN, { rater_id: 'same', subject_id: 'same', delta: 4 });
+    expect(missing).toBe('NOT_CHECKED');
+    expect(missing).not.toBe(0);
   });
 });
