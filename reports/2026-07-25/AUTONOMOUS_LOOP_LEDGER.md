@@ -8191,3 +8191,33 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 3. **No open PRs** — main is clean.
 
 **Next beat:** (1) Confirm this ledger PR merged. (2) Item 14: dedicated Rust apex beat — run `cargo check` in `zkp-vault/`, read the existing range-check AIR structure in `lib.rs`, write the non-membership AIR columns, compile, test. Needs a full beat with a Rust toolchain.
+
+---
+
+## Beat (2026-10-02, fifth run) — fourth run verified clean; #1136 armed; NOT_CHECKED stream continues
+
+**Prior beat verified [V] (2026-10-02, fourth run):**
+- PR #1133 (docs/loop ledger fourth run): **MERGED** — `git log --oneline` = `d0c15f4d`. ✓
+- Fourth run's DRAFT-wall dissolution claim: **CONFIRMED** — #1134 and #1135 merged after the fourth run (NOT_CHECKED fix stream continuing), and the new open PRs are exactly the pattern described. ✓
+- Fourth run's item 14 scope (non-membership AIR gap in `zkp-vault/src/lib.rs`): **CONFIRMED** — `lib.rs` still exports only the range-check circuit; no new AIR file landed since #1133. ✓
+- Fourth run's "no open PRs" at time of writing: was accurate at write time; new PRs (#1136–#1139) appeared after the beat. ✓
+- **Penalty verdict: NONE.** All stated findings accurate; no fabrication.
+
+**Current state [V]:** `origin/main` = `855a2849` (`fix(honesty-a): bucket HAIR-SPACE-only family/host as NOT_CHECKED (#1135)`). Two additional NOT_CHECKED fixes merged since fourth run: #1134 (`fix(verify-trust-receipt): number-shaped criterion_ratings must be NOT_CHECKED`) and #1135. Open PRs: **#1136** (OPEN, CLEAN, all checks SUCCESS including Strix), **#1137/#1138/#1139** (DRAFT). NOT_CHECKED fix stream: XC/Cursor continuing to land edge-case bucket fixes.
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Arm #1136 (OPEN, CLEAN, all CI checks SUCCESS including Strix — `XC2: treat lowercase 'good'/'bad' first_pass_verdict as NOT_CHECKED`). This is SAFE-CLASS: additive NOT_CHECKED fix, all checks green, not DRAFT, no enable-flag flip. Then assess if item 14 Rust apex work is feasible with remaining turns (it is not — no Rust toolchain in this runner).
+
+**STEP 2-4 — ARMED #1136 --auto --squash.** OPEN, CLEAN, all checks green (zkp-vault, HAL adversarial gate, crosscheck, gitleaks, test, Strix Security Review — all SUCCESS). Additive NOT_CHECKED correctness fix, XC-authored, no flag flips. SAFE-CLASS. #1137/#1138/#1139 are DRAFT — not armable.
+
+**Item 14 (Plonky3 non-membership AIR):** re-scoped as before — Rust apex work, no Rust toolchain in this runner. Not started. Still the sole remaining non-Sean-gated code item.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — needs Rust toolchain and ~full turn budget. No Sean input required to start.
+3. **3 open DRAFT PRs (#1137/#1138/#1139):** CI-green, DRAFT state is the only blocker. Mark ready → Strix reviews → auto-lands. Loop cannot mark them ready.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1136 and assess item 14. Executed: #1136 armed --auto --squash. Item 14 not started (no Rust toolchain; insufficient turns for a verifiable Rust AIR). No deviation from stated intent.
+
+**Next beat:** (1) Confirm this ledger PR and #1136 merged. (2) Check if DRAFTs #1137/#1138/#1139 have been marked ready — if so, arm the MERGEABLE+green ones. (3) Item 14: dedicated Rust apex beat if Rust toolchain available.
