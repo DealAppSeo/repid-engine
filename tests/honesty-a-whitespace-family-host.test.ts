@@ -30,6 +30,26 @@ describe('honesty A whitespace family and host', () => {
     expect(json).not.toContain('claim');
   });
 
+  it('buckets NEL-only (U+0085) family and host under NOT_CHECKED and stays counted', () => {
+    const report = aggregateHonestyA([
+      { family: '\u0085', host: '\u0085', verdict: 'TRUE' },
+      { family: '\u0085', host: '\u0085', verdict: 'FALSE' },
+    ]);
+
+    expect(report.status).toBe('counted');
+    expect(report.rows).toHaveLength(1);
+    const row = report.rows?.[0];
+    expect(row).toEqual({
+      family: 'NOT_CHECKED',
+      host: 'NOT_CHECKED',
+      TRUE: 1,
+      FALSE: 1,
+      NOT_CHECKED: 0,
+      first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 2 },
+      post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 2 },
+    });
+  });
+
   it('empty aggregate keeps first_pass as the string NOT_CHECKED, never the number 0', () => {
     const report = aggregateHonestyA([]);
     expect(report.status).toBe('counted');

@@ -84,10 +84,15 @@ export function readPassVerdict(verdict: unknown): PassReading {
   return { verdict: null, status: 'NOT_CHECKED' };
 }
 
+const NEL = '\u0085';
+
 function normalized(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  if (trimmed.length === 0) return undefined;
+  // NEL-only (U+0085) is invisible and is treated as blank, not as a real bucket.
+  if (trimmed.split('').every((c) => c === NEL)) return undefined;
+  return trimmed;
 }
 
 function emptyPasses(): { first_pass: PassCounts; post_hal: PassCounts } {
