@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { printT12TrapTable, readT12Stamp, writeT12Stamp } from '../src/orchestration/t12-stamp-write';
+import { printT12TrapTable, readT12Stamp, scoreAfterStampRow, writeT12Stamp } from '../src/orchestration/t12-stamp-write';
 
 describe('T12 stamp writer', () => {
   it('writes caught for a veto, pass for a pass, and NOT_CHECKED for a timeout', () => {
@@ -56,5 +56,16 @@ describe('T12 stamp writer', () => {
     const miss = printT12TrapTable([{ trap: 'miss', first_pass_verdict: 0, post_hal_verdict: '0' }]);
     expect(miss).toBe('trap\tfirst-pass\tpost-check\nmiss\tNOT_CHECKED\tNOT_CHECKED\n');
     expect(miss).not.toContain('\t0');
+  });
+
+  it('does not raise a score for a self-only row', () => {
+    const start = 10;
+    const next = scoreAfterStampRow(start, { rater_id: 'same', subject_id: 'same', delta: 4 });
+    expect(next).toBe(start);
+    expect(next).not.toBe(start + 4);
+    expect(next).not.toBe(0);
+    const missing = scoreAfterStampRow(Number.NaN, { rater_id: 'same', subject_id: 'same', delta: 4 });
+    expect(missing).toBe('NOT_CHECKED');
+    expect(missing).not.toBe(0);
   });
 });
