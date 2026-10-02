@@ -8135,3 +8135,32 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 3. **Nothing else requiring Sean** — no loop PRs need manual merge.
 
 **Next beat:** (1) Confirm this ledger PR merged. (2) Check whether XC's CONFLICTING PRs (#1085, #1093) resolved themselves or need rebase — if MERGEABLE and green, arm them. (3) Scope item 14 (Plonky3 non-membership AIR): read zkp-vault/src/lib.rs and the P1 LeanIMT+ acceptance tests to draft a circuit spec — this is the next apex work nobody else can do.
+
+---
+
+## Beat (2026-10-02, third run) — second run verified clean; DRAFT-wall confirmed unchanged; item 14 scoped
+
+**Prior beat verified [V] (2026-10-02, second run):**
+- PR #1117 (docs/loop ledger second run — first-run verified; NOT_CHECKED stream assessed): **MERGED** — confirmed in `git log --oneline`: `e28795bd`. ✓
+- Second run's finding "all open PRs DRAFT or CONFLICTING, none armable": **CONFIRMED** — 22 open PRs, all DRAFT or OPEN+CONFLICTING; same DRAFT-wall in place. ✓
+- Second run's finding "#1085/#1093 CONFLICTING" — not in open PR list; neither appears in `git log` = closed or merged via other mechanism. Not load-bearing to this beat. ✓
+- **Penalty verdict: NONE.** All stated findings accurate; no fabrication.
+
+**Current state [V]:** `origin/main` = `9b9bddac` (latest: `test(honesty-a): bucket ENSP-only family/host under NOT_CHECKED (#1107)`). 22 open PRs. Non-DRAFT open PRs: **#1101, #1092, #1091** — all CONFLICTING. DRAFT+MERGEABLE: #1125, #1123, #1121, #1120, #1115, #1112, #1111, #1108 (8 PRs). DRAFT+CONFLICTING: 11 others. **No armable PRs this beat** — same state as second run.
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Item 14 scope [V] (from zkp-vault/src/lib.rs + P1 LeanIMT+ test inventory):**
+Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership in one STARK, reusing the existing Poseidon2 Merkle AIR. The zkp-vault already has `zkp-vault/src/lib.rs`, `poseidon2_hash2.rs`, Cargo.toml, and an existing FRI parameter set; the README says the HTTP wrapper is NOT done and FRI params are not production soundness. P1 (`LeanIMTPlus`) provides the non-membership algorithm (`tests/leanimt-plus-*.test.ts`). **What item 14 needs as a circuit:** (a) the sorted-linked-list invariant encoded as AIR columns (current node, next node, gap-witness proving no honest value sits between them), (b) Poseidon2 leaf hashing inside the AIR (reuse the existing `poseidon2_hash2.rs`), (c) batch mode: N non-membership witnesses in one proof. **Gap:** no AIR file exists in `zkp-vault/src/` today; `lib.rs` exports a single `generate_proof` + `verify_proof` pair for the current Plonky3 range-check circuit, not a Merkle or non-membership circuit. Building the AIR is a Rust/Plonky3 task, full apex work — not a beat-scoped TypeScript add. **Honest bound:** this beat scopes, does not build. The scoping note is audit evidence (Patent #1/#2) — it narrows the next apex beat to exactly the Rust AIR columns needed rather than a blank page.
+
+**Intent for steps 2-4:** Given no armable PRs and item 14 being Rust apex work beyond this beat's remaining turns, the highest-value action is the item 14 scope note (above) as a filed report — audit evidence that the circuit gap is named and bounded. Then stop.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Scoping note produced inline (above); no separate report file opened — the ledger entry itself is the audit evidence. No PRs armed (nothing armable). Honest stop: DRAFT-wall unchanged, item 14 scoped, no further autonomous work available without Sean unblocking DRAFTs or flipping a Sean-gated flag.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change.
+2. **22 open Cursor DRAFT PRs still blocked on DRAFT state.** The 8 DRAFT+MERGEABLE PRs (#1108, #1111, #1112, #1115, #1120, #1121, #1123, #1125) are all CI-green and will land automatically once marked ready (Strix reviews within ~6s of marking ready per Beat 40's observation). Loop cannot mark them ready. **If you mark them ready, loop will detect and arm them next beat.**
+3. **Item 14 (Plonky3 non-membership AIR) is now scoped** — the gap is the AIR file in zkp-vault/src/. Next apex beat can open the Rust file and write the AIR columns. No decision needed from Sean to start; it is a code-only change with no flag flip.
+4. **No loop PRs need manual merge** — this ledger PR arms automatically.
+
+**Next beat:** (1) Confirm this ledger PR merged. (2) Check if any DRAFT PRs have been marked ready — if so, arm the MERGEABLE+green ones. (3) Item 14: open `zkp-vault/src/lib.rs`, read the existing circuit structure, and begin the non-membership AIR columns (Rust, apex work — full beat).
