@@ -69,6 +69,20 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string;
         delta: number;
       }[];
+      success_string_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
+      failure_string_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -168,6 +182,32 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(lowercaseNLaterPositive).toBeDefined();
+    const successStringThenTrue = fixture.success_string_then_true[0];
+    expect(successStringThenTrue?.kind).toBe('first-pass');
+    expect(successStringThenTrue?.first_pass_verdict).toBe('success');
+    expect(successStringThenTrue?.rater_id).not.toBe(successStringThenTrue?.subject_id);
+    expect(Number(successStringThenTrue?.delta)).toBeGreaterThan(0);
+    const successStringLaterPositive = fixture.success_string_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === successStringThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(successStringLaterPositive).toBeDefined();
+    const failureStringThenTrue = fixture.failure_string_then_true[0];
+    expect(failureStringThenTrue?.kind).toBe('first-pass');
+    expect(failureStringThenTrue?.first_pass_verdict).toBe('failure');
+    expect(failureStringThenTrue?.rater_id).not.toBe(failureStringThenTrue?.subject_id);
+    expect(Number(failureStringThenTrue?.delta)).toBeGreaterThan(0);
+    const failureStringLaterPositive = fixture.failure_string_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === failureStringThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(failureStringLaterPositive).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -191,6 +231,10 @@ describe('sim-repid-delta', () => {
         `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
         `after_lowercase_n_first_pass\t${fixture.start_score}\n` +
         `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
+        `after_success_string_first_pass\t${fixture.start_score}\n` +
+        `success_string_first_pass_status\tNOT_CHECKED\n` +
+        `after_failure_string_first_pass\t${fixture.start_score}\n` +
+        `failure_string_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -281,6 +325,30 @@ describe('sim-repid-delta', () => {
     expect(out).not.toContain('lowercase_n_first_pass_status\t0');
   });
 
+  it('treats a literal lowercase "success" first-pass verdict as NOT_CHECKED and never raises the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_success_string_first_pass\t(\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('success_string_first_pass_status\tNOT_CHECKED');
+    expect(out).not.toContain('success_string_first_pass_status\t0');
+  });
+
+  it('treats a literal lowercase "failure" first-pass verdict as NOT_CHECKED and never raises the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_failure_string_first_pass\t(\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('failure_string_first_pass_status\tNOT_CHECKED');
+    expect(out).not.toContain('failure_string_first_pass_status\t0');
+  });
+
   it('reads the fixture file and does not dial a database', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('repid-delta-events.json');
@@ -306,6 +374,10 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('literal "undefined" was stored as numeric 0');
     expect(src).toContain('literal "y" was stored as numeric 0');
     expect(src).toContain('literal "n" was stored as numeric 0');
+    expect(src).toContain('literal "success" was stored as numeric 0');
+    expect(src).toContain('literal "failure" was stored as numeric 0');
+    expect(src).toContain('success_string_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('failure_string_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
     expect(src).toContain('missing_rater\\tNOT_CHECKED');
