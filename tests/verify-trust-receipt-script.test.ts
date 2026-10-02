@@ -536,3 +536,69 @@ describe('verify-trust-receipt: satisfaction score when criterion_ratings are mi
     assertPrivacy(out);
   });
 });
+
+describe('verify-trust-receipt: satisfaction score when criterion_ratings is a serialized JSON string', () => {
+  const CLAIM = 'XC2-STRING-RATINGS-CLAIM-TEXT';
+  const USER_ID = 'XC2-STRING-RATINGS-USER-ID';
+  const RATING_NOTE = 'XC2-SECRET-RATING-NOTE-IN-STRING';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toContain(RATING_NOTE);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  /** A receipt whose `criterion_ratings` is a serialized string, not an array. */
+  function receiptWithStringRatings(score: number, ratingsString: string): Record<string, unknown> {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    r.buyer_satisfaction_score = score;
+    r.criterion_ratings = ratingsString;
+    r.claim = CLAIM;
+    r.user_id = USER_ID;
+    return r;
+  }
+
+  it.each<[string, string, number]>([
+    [
+      'a JSON array with boolean met=true',
+      JSON.stringify([{ n: 1, met: true, note: RATING_NOTE }]),
+      1.0,
+    ],
+    [
+      'a JSON array with boolean met=false',
+      JSON.stringify([{ n: 1, met: false, note: RATING_NOTE }]),
+      0.0,
+    ],
+    [
+      'unreadable non-JSON text',
+      '[{"n":1,"met":true,"note":"' + RATING_NOTE + '"}',
+      0.85,
+    ],
+  ])(
+    'is NOT_CHECKED when criterion_ratings is %s, never parsed into a derived pass',
+    (_label, ratingsString, score) => {
+      const { out, code } = run(receiptWithStringRatings(score, ratingsString));
+      const line = legLine(out, 'satisfaction score');
+      expect(outcomeOf(line)).toBe('NOT_CHECKED');
+      expect(line).toMatch(/\?\?/);
+      expect(line).not.toMatch(/FAIL/);
+      expect(line).toMatch(/no per-criterion ratings published/);
+      expect(line).not.toMatch(/round\(/);
+      expect(code).not.toBe(1); // no false FAILED forgery for string-shaped ratings
+      assertPrivacy(out);
+    },
+  );
+
+  it('does not falsely VERIFIED a forged 0.0000 score against a string of ratings', () => {
+    const ratingsString = JSON.stringify([{ n: 1, met: false, note: RATING_NOTE }]);
+    const { out, code } = run(receiptWithStringRatings(0.0, ratingsString));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/VERIFIED|ok/);
+    expect(line).not.toMatch(/0\.0000/);
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+});
