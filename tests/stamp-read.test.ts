@@ -175,4 +175,20 @@ describe('GET /api/v1/hal/stamp', () => {
     expect(missing).toBe('NOT_CHECKED');
     expect(missing).not.toBe(0);
   });
+
+  it('inserts nothing on GET', async () => {
+    calls.length = 0;
+    state.throwRead = false;
+    state.error = null;
+    state.row = { family: 'llama', host: 'groq', verdict: 'pass' };
+    const res = await request(app).get('/api/v1/hal/stamp');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass' });
+    expect(calls).toContain('from:hal_quorum_validator_votes');
+    expect(calls).toContain('select:family, host, verdict');
+    expect(calls.some((call) => call === 'insert' || call.startsWith('insert'))).toBe(false);
+    const route = readFileSync(path.join(__dirname, '..', 'src', 'routes', 'stamp-read.ts'), 'utf8');
+    expect(route).not.toContain('.insert(');
+    expect(route).toContain(".select('family, host, verdict')");
+  });
 });
