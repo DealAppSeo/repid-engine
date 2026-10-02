@@ -113,10 +113,12 @@ describe('reactivateLeaves', () => {
 
   it('returns correct reactivatedIds for multiple candidates', async () => {
     process.env['HEAT_EVICTION_ENABLED'] = 'true';
+    // One clock reading. A later Date.now() is warmer and sorts first.
+    const lastAccessedAt = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
     const rows = [1, 2].map((i) => ({
       id: `leaf-reactivate-${i}`,
       root_epoch: 1,
-      last_accessed_at: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
+      last_accessed_at: lastAccessedAt,
       access_count: 15,
     }));
     const fetchFn = makeFetchFn({ rows, anchoredEpochs: new Set() });
