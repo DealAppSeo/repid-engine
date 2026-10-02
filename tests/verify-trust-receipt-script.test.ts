@@ -537,6 +537,72 @@ describe('verify-trust-receipt: satisfaction score when criterion_ratings are mi
   });
 });
 
+describe('verify-trust-receipt: satisfaction score when criterion_ratings is an empty array but a score is present', () => {
+  const CLAIM = 'XC2-EMPTY-ARRAY-CLAIM-TEXT';
+  const USER_ID = 'XC2-EMPTY-ARRAY-USER-ID';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  /** A receipt whose `criterion_ratings` is the empty JSON array, but a numeric score is present. */
+  function receiptWithEmptyRatings(score: number): Record<string, unknown> {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    r.buyer_satisfaction_score = score;
+    r.criterion_ratings = [];
+    r.claim = CLAIM;
+    r.user_id = USER_ID;
+    return r;
+  }
+
+  it('is NOT_CHECKED, never a measured pass and never a false FAILED forgery', () => {
+    const { out, code } = run(receiptWithEmptyRatings(0.85));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).toMatch(/no per-criterion ratings published/);
+    // n=0 must not be silently reduced to 0/0, NaN, Infinity, or a round() call.
+    expect(line).not.toMatch(/round\(/);
+    expect(line).not.toMatch(/NaN/);
+    expect(line).not.toMatch(/Infinity/);
+    expect(line).not.toMatch(/0\.0000/);
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+
+  it('does not falsely VERIFIED a forged 0.0000 score against an empty array', () => {
+    const { out, code } = run(receiptWithEmptyRatings(0.0));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/VERIFIED|ok/);
+    expect(line).not.toMatch(/0\.0000/);
+    expect(line).not.toMatch(/NaN/);
+    expect(line).not.toMatch(/Infinity/);
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+
+  it('does not falsely VERIFIED a round 1.0 score against an empty array', () => {
+    const { out, code } = run(receiptWithEmptyRatings(1.0));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/VERIFIED|ok/);
+    expect(line).not.toMatch(/round\(/);
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+
+  it('never prints claim text or user_id from the empty-array receipt', () => {
+    const { out, code } = run(receiptWithEmptyRatings(0.5));
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+});
+
 describe('verify-trust-receipt: satisfaction score when criterion_ratings is a serialized JSON string', () => {
   const CLAIM = 'XC2-STRING-RATINGS-CLAIM-TEXT';
   const USER_ID = 'XC2-STRING-RATINGS-USER-ID';
