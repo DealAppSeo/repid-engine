@@ -447,3 +447,53 @@ describe('verify-trust-receipt: settlement / contract binding when settled_at is
     assertPrivacy(out);
   });
 });
+
+describe('verify-trust-receipt: satisfaction score when criterion_ratings are missing but the score is present', () => {
+  const CLAIM = 'XC2-SATISFACTION-CLAIM-TEXT';
+  const USER_ID = 'XC2-SATISFACTION-USER-ID';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  /** A receipt with a numeric `buyer_satisfaction_score` and optional `criterion_ratings`. */
+  function receiptWithSatisfaction(score: number, ratings?: unknown): Record<string, unknown> {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    r.buyer_satisfaction_score = score;
+    if (ratings !== undefined) r.criterion_ratings = ratings;
+    r.claim = CLAIM;
+    r.user_id = USER_ID;
+    return r;
+  }
+
+  it.each<[string, unknown | undefined]>([
+    ['the criterion_ratings key is absent', undefined],
+    ['criterion_ratings is null', null],
+    ['criterion_ratings is undefined (drops during JSON round-trip)', undefined],
+    ['criterion_ratings is an empty array', []],
+  ])(
+    'is NOT_CHECKED when %s, never a derived pass or a false FAILED forgery',
+    (_label, ratings) => {
+      const { out, code } = run(receiptWithSatisfaction(0.85, ratings));
+      const line = legLine(out, 'satisfaction score');
+      expect(outcomeOf(line)).toBe('NOT_CHECKED');
+      expect(line).toMatch(/\?\?/);
+      expect(line).not.toMatch(/FAIL/);
+      expect(line).toMatch(/no per-criterion ratings published/);
+      expect(code).not.toBe(1); // no false FAILED forgery for absence
+      assertPrivacy(out);
+    },
+  );
+
+  it('does not invent a derived score even when buyer_satisfaction_score is a round 1.0', () => {
+    const { out, code } = run(receiptWithSatisfaction(1.0, undefined));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/round\(/);
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+});
