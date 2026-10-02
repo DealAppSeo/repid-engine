@@ -8112,4 +8112,23 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 1. **Items 7/8/9/10/11: all Sean-gated** — no change in status. Enabling `CASCADE_SPECULATION_ENABLED`, `HEAT_EVICTION_ENABLED`, `FREE_TIER_QUOTA_SHADOW_ENABLED`, EAS gas, and ANFIS flips all remain your call.
 2. **Nothing else requiring Sean** — no loop PRs need manual merge.
 
+---
+
+## Beat (2026-10-02, second run) — first-run ledger verified; NOT_CHECKED fix stream assessed; open PRs surveyed
+
+**Prior beat verified [V] (2026-10-02, first run):**
+- PR #1094 (docs(loop): beat 2026-10-02 ledger — sixth run verified clean; backlog assessed): **MERGED** — `gh pr list --state all` confirms MERGED state. ✓
+- Prior beat's finding "no non-Sean-gated concrete backlog items remain" — still accurate as of this beat's backlog scan (items 7/8/9/10/11 all Sean-gated; item 14 Plonky3 non-membership AIR is next apex but requires zkp-vault Rust work).
+- **Penalty verdict: NONE.** Prior beat honest; ledger armed and landed correctly.
+
+**Current state [V]:** `origin/main` = `0cea6ec4` (2026-10-02). Active work stream is XC's NOT_CHECKED fix series: 12+ open PRs (#1101–#1116) covering whitespace/case/type variants of `first_pass_verdict`, `criterion_ratings`, `buyer_satisfaction_score`, and `family/host` bucket edge cases across `verify-trust-receipt`, `honesty-a`, and `sim-repid-delta`. 5 PRs merged since prior beat (#1099, #1100, #1102, #1103, #1104). All open PRs are XC-authored. CI status on open PRs: mixed — some UNKNOWN (GitHub recomputing), some with checks pending. None loop-armed this beat (see step 5).
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Survey open NOT_CHECKED fix PRs (#1101–#1116) for CI-green + non-conflicting ones that qualify as safe-class (additive-tested). If any qualify, arm them --auto --squash. If none qualify, document honestly. Do not touch Sean-gated items. Stop at ~30 turns total.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — unchanged.
+2. **Nothing new requiring Sean** — no loop PRs need manual merge.
+
 **Next beat:** (1) Confirm this ledger PR merged. (2) Check whether XC's CONFLICTING PRs (#1085, #1093) resolved themselves or need rebase — if MERGEABLE and green, arm them. (3) Scope item 14 (Plonky3 non-membership AIR): read zkp-vault/src/lib.rs and the P1 LeanIMT+ acceptance tests to draft a circuit spec — this is the next apex work nobody else can do.
