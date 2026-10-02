@@ -303,6 +303,45 @@ describe('verify-trust-receipt: work statement binding when no hash is stored', 
   });
 });
 
+describe('verify-trust-receipt: work statement binding when hash is stored but statement is missing', () => {
+  const assertNoPrivacyLeak = (out: string) => {
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  };
+
+  it('is NOT_CHECKED when the work_statement key is absent', () => {
+    const r = wsReceipt([], null, '0x' + 'a'.repeat(64));
+    (r as any).user_id = 'secret-user-123';
+    (r as any).claim = 'XC2-SENSITIVE-CLAIM-TEXT-LEAK';
+    const { out } = run(r);
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/the receipt publishes a hash but no statement/);
+    assertNoPrivacyLeak(out);
+  });
+
+  it('is NOT_CHECKED when work_statement is explicitly null', () => {
+    const r = wsReceipt([], sampleWorkStatement(), '0x' + 'a'.repeat(64));
+    r.work_statement = null;
+    (r as any).user_id = 'secret-user-123';
+    (r as any).claim = 'XC2-SENSITIVE-CLAIM-TEXT-LEAK';
+    const { out } = run(r);
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/the receipt publishes a hash but no statement/);
+    assertNoPrivacyLeak(out);
+  });
+
+  it('never reports the missing-statement case as VERIFIED or FAILED', () => {
+    const r = wsReceipt([], null, '0x' + 'a'.repeat(64));
+    const { out, code } = run(r);
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/FAIL/);
+    expect(code).not.toBe(1);
+  });
+});
+
 describe('verify-trust-receipt: the delta-earned leg states what it cannot prove', () => {
   it('is always NOT_CHECKED when there are events, however clean the arithmetic', () => {
     const { out } = run(receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]));
