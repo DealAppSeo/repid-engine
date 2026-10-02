@@ -46,3 +46,32 @@ export function writeStamp(input: StampInput = {}): StampRecord {
   if (pass(input.verdict)) return { stamp: 'pass', score };
   return { stamp: 'NOT_CHECKED', score };
 }
+
+export interface TrapClaim {
+  trap?: unknown;
+  first_pass_verdict?: unknown;
+  post_hal_verdict?: unknown;
+}
+
+export function writeTrapLine(claim: TrapClaim): {
+  trap: string;
+  firstPass: StampWord;
+  postCheck: StampWord;
+} {
+  const trap = typeof claim.trap === 'string' && claim.trap.length > 0 ? claim.trap : 'row';
+  return {
+    trap,
+    firstPass: writeStamp({ verdict: claim.first_pass_verdict }).stamp,
+    postCheck: writeStamp({ verdict: claim.post_hal_verdict }).stamp,
+  };
+}
+
+/** Ten fixture rows. Columns are first-pass and post-check. A miss is NOT_CHECKED. */
+export function printTrapTable(claims: readonly TrapClaim[]): string {
+  const lines = ['trap\tfirst-pass\tpost-check'];
+  for (const claim of claims) {
+    const row = writeTrapLine(claim);
+    lines.push(`${row.trap}\t${row.firstPass}\t${row.postCheck}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
