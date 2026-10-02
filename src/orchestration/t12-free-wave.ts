@@ -76,7 +76,8 @@ export function t12OneTask(input: {
   const env = input.env ?? {};
   if (!t12FreeWaveEnabled(env)) return { claimed: false, ran: false, order: [], row: null };
   const queued = input.queue;
-  const row = queued && queued.length > 0 ? queued[0] : t12LocalFixture();
+  const head = queued && queued.length > 0 ? queued[0] : undefined;
+  const row: T12TaskRow = head ?? t12LocalFixture();
   const now = typeof input.now === 'string' && input.now.length > 0 ? input.now : 'claimed';
   claimRow(row, now);
   let raw: unknown;
