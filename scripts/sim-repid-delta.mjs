@@ -20,8 +20,9 @@ function presentRater(id) {
 function firstPassVerdict(value) {
   if (value === 'TRUE') return { verdict: 'TRUE', status: 'counted' };
   if (value === 'FALSE') return { verdict: 'FALSE', status: 'counted' };
-  // Literal "y" / "n" and every other non-verdict shape are NOT_CHECKED —
-  // never treated as numeric 0 or as a measured pass. Only exact TRUE/FALSE count.
+  // Literal "enabled" / "disabled", "y" / "n", and every other non-verdict
+  // shape are NOT_CHECKED — never treated as numeric 0 or as a measured pass.
+  // Only exact TRUE/FALSE count.
   return { verdict: null, status: 'NOT_CHECKED' };
 }
 
@@ -253,6 +254,46 @@ const lowercaseNReading = readFirstPass(lowercaseNPass.first_pass_verdict);
 if (lowercaseNReading.status !== 'NOT_CHECKED') fail('literal "n" was not NOT_CHECKED');
 if (lowercaseNReading.verdict === 0) fail('literal "n" was stored as numeric 0');
 
+if (!Array.isArray(fixture.enabled_string_then_true)) fail('enabled-string first pass fixture missing');
+const enabledStringPass = fixture.enabled_string_then_true[0];
+if (!enabledStringPass || enabledStringPass.kind !== 'first-pass') fail('enabled-string fixture is not a first pass');
+if (enabledStringPass.first_pass_verdict !== 'enabled') fail('enabled-string fixture verdict is not the literal string "enabled"');
+if (enabledStringPass.rater_id === enabledStringPass.subject_id) fail('enabled-string first pass is a self rating');
+if (!(Number(enabledStringPass.delta) > 0)) fail('enabled-string first pass delta is not positive');
+const enabledStringLaterPositive = fixture.enabled_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === enabledStringPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!enabledStringLaterPositive) fail('enabled-string fixture has no later positive rating for the same subject');
+const afterEnabledStringThenTrue = applyRatings(start, fixture.enabled_string_then_true);
+if (afterEnabledStringThenTrue !== start) fail(`literal "enabled" first pass followed by TRUE raised the score from ${start} to ${afterEnabledStringThenTrue}`);
+const enabledStringReading = readFirstPass(enabledStringPass.first_pass_verdict);
+if (enabledStringReading.status !== 'NOT_CHECKED') fail('literal "enabled" was not NOT_CHECKED');
+if (enabledStringReading.verdict === 0) fail('literal "enabled" was stored as numeric 0');
+
+if (!Array.isArray(fixture.disabled_string_then_true)) fail('disabled-string first pass fixture missing');
+const disabledStringPass = fixture.disabled_string_then_true[0];
+if (!disabledStringPass || disabledStringPass.kind !== 'first-pass') fail('disabled-string fixture is not a first pass');
+if (disabledStringPass.first_pass_verdict !== 'disabled') fail('disabled-string fixture verdict is not the literal string "disabled"');
+if (disabledStringPass.rater_id === disabledStringPass.subject_id) fail('disabled-string first pass is a self rating');
+if (!(Number(disabledStringPass.delta) > 0)) fail('disabled-string first pass delta is not positive');
+const disabledStringLaterPositive = fixture.disabled_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === disabledStringPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!disabledStringLaterPositive) fail('disabled-string fixture has no later positive rating for the same subject');
+const afterDisabledStringThenTrue = applyRatings(start, fixture.disabled_string_then_true);
+if (afterDisabledStringThenTrue !== start) fail(`literal "disabled" first pass followed by TRUE raised the score from ${start} to ${afterDisabledStringThenTrue}`);
+const disabledStringReading = readFirstPass(disabledStringPass.first_pass_verdict);
+if (disabledStringReading.status !== 'NOT_CHECKED') fail('literal "disabled" was not NOT_CHECKED');
+if (disabledStringReading.verdict === 0) fail('literal "disabled" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -309,6 +350,10 @@ process.stdout.write(
     `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
     `after_lowercase_n_first_pass\t${afterLowercaseNThenTrue}\n` +
     `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
+    `after_enabled_string_first_pass\t${afterEnabledStringThenTrue}\n` +
+    `enabled_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_disabled_string_first_pass\t${afterDisabledStringThenTrue}\n` +
+    `disabled_string_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

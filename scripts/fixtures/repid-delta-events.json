@@ -142,6 +142,36 @@
       "delta": 25
     }
   ],
+  "enabled_string_then_true": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "enabled",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
+  "disabled_string_then_true": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "disabled",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
   "rater_gate": [
     {
       "kind": "rating",
