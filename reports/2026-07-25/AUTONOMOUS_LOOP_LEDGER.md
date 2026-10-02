@@ -8164,3 +8164,30 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 4. **No loop PRs need manual merge** — this ledger PR arms automatically.
 
 **Next beat:** (1) Confirm this ledger PR merged. (2) Check if any DRAFT PRs have been marked ready — if so, arm the MERGEABLE+green ones. (3) Item 14: open `zkp-vault/src/lib.rs`, read the existing circuit structure, and begin the non-membership AIR columns (Rust, apex work — full beat).
+
+---
+
+## Beat (2026-10-02, fourth run) — third run verified; DRAFT-wall dissolved; item 14 scope confirmed
+
+**Prior beat verified [V] (2026-10-02, third run):**
+- PR #1130 (docs/loop ledger third run): **MERGED 2026-10-02T08:34:05Z** — `gh pr list --state all` = MERGED. ✓
+- Third run's DRAFT-wall finding ("22 open PRs, all DRAFT or CONFLICTING; 8 DRAFT+MERGEABLE: #1108, #1111, #1112, #1115, #1120, #1121, #1123, #1125"): **WALL DISSOLVED since then**. The 8 named DRAFT+MERGEABLE PRs were resolved — #1123, #1124, #1125, #1126, #1128, #1129 MERGED; the remainder CLOSED. Third run's reading was accurate at write time; the DRAFTs have since landed or been abandoned. ✓
+- Third run's item 14 scope (non-membership AIR gap in `zkp-vault/src/`): **CONFIRMED** — no new AIR file landed since #1130; `lib.rs` still exports only the range-check circuit. ✓
+- **Penalty verdict: NONE.** All stated findings confirmed or correctly scoped forward.
+
+**Current state [V]:** `origin/main` = `72ea3b89` (`One first-pass allowlist. A spelling is a line, not a pull request. (#1132)`). **Zero open PRs** — `gh pr list --state open` returns empty. NOT_CHECKED fix stream: 6 cursor PRs merged since third run (#1123, #1124, #1125, #1126, #1128, #1129), 1 additional (#1132 "one first-pass allowlist" — whitespace normalization for `first_pass_verdict`); remainder CLOSED. DRAFT-wall: fully dissolved, nothing pending.
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Item 14 scope [V] (re-verified against live tree):** `zkp-vault/src/lib.rs` still exports only the Plonky3 range-check circuit (`generate_proof`/`verify_proof` for a BabyBear field range check); no membership or non-membership AIR exists. The third run's scope note stands verbatim: what needs writing is (a) sorted-linked-list invariant as AIR columns, (b) Poseidon2 leaf hashing inside the AIR, (c) batch mode for N non-membership witnesses. This is a multi-hundred-line Rust AIR — a full apex beat, not a TypeScript wire-up. **Not started this beat** (no Rust toolchain in this runner, and remaining turns after step 1 are insufficient for a verifiable circuit that compiles and tests).
+
+**Intent for steps 2-4:** No armable PRs; no non-Sean-gated concrete wiring remains in TypeScript land; item 14 is the only next work and requires a dedicated Rust apex beat with a Rust toolchain. Honest stop at step 1.
+
+**Step 5 — what steps 2-4 actually did vs intent:** No TypeScript/wiring work available to pick up. Re-verified item 14 scope against the live file (above). This beat's value is the honest, verified ledger record: the DRAFT-wall dissolved on its own (Sean or Cursor marked DRAFTs ready and they auto-merged), the NOT_CHECKED stream has landed, main is healthy and green, and item 14 is the sole remaining non-Sean-gated work requiring a full apex beat.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — needs a Rust toolchain and ~full turn budget. Circuit spec is bounded: sorted-linked-list AIR columns + Poseidon2 leaf hashing + batch mode. No Sean input required to start.
+3. **No open PRs** — main is clean.
+
+**Next beat:** (1) Confirm this ledger PR merged. (2) Item 14: dedicated Rust apex beat — run `cargo check` in `zkp-vault/`, read the existing range-check AIR structure in `lib.rs`, write the non-membership AIR columns, compile, test. Needs a full beat with a Rust toolchain.
