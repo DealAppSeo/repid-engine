@@ -86,7 +86,7 @@ export function readPassVerdict(verdict: unknown): PassReading {
 
 function normalized(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const cleaned = value.replace(/[\u2028\u3000]/g, '').trim();
+  const cleaned = value.replace(/[\u2007\u2028\u3000]/g, '').trim();
   return cleaned.length > 0 ? cleaned : undefined;
 }
 
