@@ -134,6 +134,21 @@ function checkRepIdLedger(r) {
     return record('reputation ledger arithmetic', 'NOT_CHECKED', 'no reputation events on this receipt');
   }
 
+  // An event with no 'to' score cannot be checked — we do not know where the
+  // score landed. Treat absence as NOT_CHECKED, never as numeric 0 and never
+  // as a forged FAILED.
+  const missingTo = events.findIndex((e) => {
+    const t = e?.to;
+    return t === undefined || t === null || t === '';
+  });
+  if (missingTo >= 0) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      `event ${missingTo + 1} has no 'to' score — the ledger cannot check where the score landed`,
+    );
+  }
+
   const last = {};
   const failed = [];
   const undetermined = [];
