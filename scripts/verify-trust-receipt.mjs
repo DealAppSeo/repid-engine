@@ -93,6 +93,16 @@ function checkScore(r) {
   if (r.buyer_satisfaction_score === null || r.buyer_satisfaction_score === undefined) {
     return record('satisfaction score', 'NOT_CHECKED', 'no score recorded on the contract');
   }
+  // A rating whose `met` is not a real boolean cannot be read as a measurement.
+  // If every rating is a string like "true" / "FALSE" / "YES", the derived
+  // `filter(met===true).length / n` is not a measured pass — it would falsely
+  // VERIFIED a 0.0000 score or falsely FAILED a non-zero one. Treat it as
+  // NOT_CHECKED instead.
+  const readable = ratings.filter((x) => typeof x.met === 'boolean').length;
+  if (readable === 0) {
+    return record('satisfaction score', 'NOT_CHECKED',
+      'criterion_ratings are present but none have a readable boolean met value');
+  }
   const met = ratings.filter((x) => x.met === true).length;
   const expected = (met / ratings.length).toFixed(4);
   const stored = Number(r.buyer_satisfaction_score).toFixed(4);

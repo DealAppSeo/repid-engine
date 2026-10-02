@@ -536,3 +536,52 @@ describe('verify-trust-receipt: satisfaction score when criterion_ratings are mi
     assertPrivacy(out);
   });
 });
+
+describe('verify-trust-receipt: satisfaction score when criterion_ratings are present but every met is a non-boolean string', () => {
+  const CLAIM = 'XC2-STRING-MET-CLAIM-TEXT';
+  const USER_ID = 'XC2-STRING-MET-USER-ID';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  /** A receipt with a numeric `buyer_satisfaction_score` and string-typed `met` ratings. */
+  function receiptWithStringMet(score: number, ratings: unknown): Record<string, unknown> {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    r.buyer_satisfaction_score = score;
+    r.criterion_ratings = ratings;
+    r.claim = CLAIM;
+    r.user_id = USER_ID;
+    return r;
+  }
+
+  it.each<[string, number, unknown]>([
+    ['"true" / "false" with a matching 0.0000 score', 0.0, [{ n: 1, met: 'true' }, { n: 2, met: 'false' }]],
+    ['"true" / "false" with a non-matching 0.5 score', 0.5, [{ n: 1, met: 'true' }, { n: 2, met: 'false' }]],
+    ['"TRUE" / "YES" with a 1.0 score', 1.0, [{ n: 1, met: 'TRUE' }, { n: 2, met: 'YES' }]],
+    ['"false" / "FALSE" with a 0.0 score', 0.0, [{ n: 1, met: 'false' }, { n: 2, met: 'FALSE' }]],
+    ['single "true" with a 1.0 score', 1.0, [{ n: 1, met: 'true' }]],
+  ])(
+    'is NOT_CHECKED when %s, never a forged VERIFIED or false FAILED',
+    (_label, score, ratings) => {
+      const { out, code } = run(receiptWithStringMet(score, ratings));
+      const line = legLine(out, 'satisfaction score');
+      expect(outcomeOf(line)).toBe('NOT_CHECKED');
+      expect(line).toMatch(/\?\?/);
+      expect(line).not.toMatch(/FAIL/);
+      expect(line).toMatch(/readable boolean met/);
+      expect(line).not.toMatch(/round\(/);
+      expect(code).not.toBe(1);
+      assertPrivacy(out);
+    },
+  );
+
+  it('does not leak claim text or user_id from stdout/stderr when ratings contain only string met values', () => {
+    const { out, code } = run(receiptWithStringMet(0.0, [{ n: 1, met: 'true' }, { n: 2, met: 'false' }]));
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+});
