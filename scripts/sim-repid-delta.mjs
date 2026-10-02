@@ -142,11 +142,31 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.yes_first_pass)) fail('yes first pass fixture missing');
+const yesPass = fixture.yes_first_pass[0];
+if (!yesPass || yesPass.kind !== 'first-pass') fail('yes first pass fixture is not a first pass');
+if (yesPass.first_pass_verdict !== 'YES') fail('yes first pass fixture is not YES');
+if (yesPass.rater_id === yesPass.subject_id) fail('yes first pass is a self rating');
+if (!(Number(yesPass.delta) > 0)) fail('yes first pass delta is not positive');
+const afterYes = applyRatings(start, fixture.yes_first_pass);
+if (afterYes !== start) fail(`YES first pass raised the score from ${start} to ${afterYes}`);
+
+if (!Array.isArray(fixture.no_first_pass)) fail('no first pass fixture missing');
+const noPass = fixture.no_first_pass[0];
+if (!noPass || noPass.kind !== 'first-pass') fail('no first pass fixture is not a first pass');
+if (noPass.first_pass_verdict !== 'NO') fail('no first pass fixture is not NO');
+if (noPass.rater_id === noPass.subject_id) fail('no first pass is a self rating');
+if (!(Number(noPass.delta) > 0)) fail('no first pass delta is not positive');
+const afterNo = applyRatings(start, fixture.no_first_pass);
+if (afterNo !== start) fail(`NO first pass raised the score from ${start} to ${afterNo}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
   0,
   'NOT_CHECKED',
+  'YES',
+  'NO',
 ];
 for (const value of samples) {
   const reading = readFirstPass(value);
@@ -188,6 +208,10 @@ process.stdout.write(
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_yes_first_pass\t${afterYes}\n` +
+    `after_no_first_pass\t${afterNo}\n` +
+    `yes_first_pass_status\tNOT_CHECKED\n` +
+    `no_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

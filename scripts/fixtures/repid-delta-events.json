@@ -67,6 +67,24 @@
       "delta": 25
     }
   ],
+  "yes_first_pass": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "YES",
+      "delta": 25
+    }
+  ],
+  "no_first_pass": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "NO",
+      "delta": 25
+    }
+  ],
   "rater_gate": [
     {
       "kind": "rating",

@@ -41,6 +41,20 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string | null | undefined;
         delta: number;
       }[];
+      yes_first_pass: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
+      no_first_pass: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -88,6 +102,16 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(laterPositive).toBeDefined();
+    const yesPass = fixture.yes_first_pass[0];
+    expect(yesPass?.kind).toBe('first-pass');
+    expect(yesPass?.first_pass_verdict).toBe('YES');
+    expect(yesPass?.rater_id).not.toBe(yesPass?.subject_id);
+    expect(Number(yesPass?.delta)).toBeGreaterThan(0);
+    const noPass = fixture.no_first_pass[0];
+    expect(noPass?.kind).toBe('first-pass');
+    expect(noPass?.first_pass_verdict).toBe('NO');
+    expect(noPass?.rater_id).not.toBe(noPass?.subject_id);
+    expect(Number(noPass?.delta)).toBeGreaterThan(0);
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -101,6 +125,10 @@ describe('sim-repid-delta', () => {
         `after_true_then_hal_veto\t${fixture.start_score - Number(halVeto?.delta)}\n` +
         `after_notchecked_first_pass\t${fixture.start_score}\n` +
         `notchecked_first_pass_status\tNOT_CHECKED\n` +
+        `after_yes_first_pass\t${fixture.start_score}\n` +
+        `after_no_first_pass\t${fixture.start_score}\n` +
+        `yes_first_pass_status\tNOT_CHECKED\n` +
+        `no_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -145,8 +173,12 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('TRUE first pass followed by HAL veto raised the score');
     expect(src).toContain('after_true_then_hal_veto');
     expect(src).toContain('NOT_CHECKED first pass followed by TRUE raised the score');
+    expect(src).toContain('YES first pass raised the score');
+    expect(src).toContain('NO first pass raised the score');
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain('notchecked_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('yes_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('no_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
     expect(src).toContain('missing_rater\\tNOT_CHECKED');
