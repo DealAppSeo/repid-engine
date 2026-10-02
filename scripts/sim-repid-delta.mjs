@@ -293,6 +293,46 @@ const failureReading = readFirstPass(failurePass.first_pass_verdict);
 if (failureReading.status !== 'NOT_CHECKED') fail('literal "failure" was not NOT_CHECKED');
 if (failureReading.verdict === 0) fail('literal "failure" was stored as numeric 0');
 
+if (!Array.isArray(fixture.approve_string_then_true)) fail('approve-string first pass fixture missing');
+const approvePass = fixture.approve_string_then_true[0];
+if (!approvePass || approvePass.kind !== 'first-pass') fail('approve-string fixture is not a first pass');
+if (approvePass.first_pass_verdict !== 'approve') fail('approve-string fixture verdict is not the literal string "approve"');
+if (approvePass.rater_id === approvePass.subject_id) fail('approve-string first pass is a self rating');
+if (!(Number(approvePass.delta) > 0)) fail('approve-string first pass delta is not positive');
+const approveLaterPositive = fixture.approve_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === approvePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!approveLaterPositive) fail('approve-string fixture has no later positive rating for the same subject');
+const afterApproveStringThenTrue = applyRatings(start, fixture.approve_string_then_true);
+if (afterApproveStringThenTrue !== start) fail(`literal "approve" first pass followed by TRUE raised the score from ${start} to ${afterApproveStringThenTrue}`);
+const approveReading = readFirstPass(approvePass.first_pass_verdict);
+if (approveReading.status !== 'NOT_CHECKED') fail('literal "approve" was not NOT_CHECKED');
+if (approveReading.verdict === 0) fail('literal "approve" was stored as numeric 0');
+
+if (!Array.isArray(fixture.deny_string_then_true)) fail('deny-string first pass fixture missing');
+const denyPass = fixture.deny_string_then_true[0];
+if (!denyPass || denyPass.kind !== 'first-pass') fail('deny-string fixture is not a first pass');
+if (denyPass.first_pass_verdict !== 'deny') fail('deny-string fixture verdict is not the literal string "deny"');
+if (denyPass.rater_id === denyPass.subject_id) fail('deny-string first pass is a self rating');
+if (!(Number(denyPass.delta) > 0)) fail('deny-string first pass delta is not positive');
+const denyLaterPositive = fixture.deny_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === denyPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!denyLaterPositive) fail('deny-string fixture has no later positive rating for the same subject');
+const afterDenyStringThenTrue = applyRatings(start, fixture.deny_string_then_true);
+if (afterDenyStringThenTrue !== start) fail(`literal "deny" first pass followed by TRUE raised the score from ${start} to ${afterDenyStringThenTrue}`);
+const denyReading = readFirstPass(denyPass.first_pass_verdict);
+if (denyReading.status !== 'NOT_CHECKED') fail('literal "deny" was not NOT_CHECKED');
+if (denyReading.verdict === 0) fail('literal "deny" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -353,6 +393,10 @@ process.stdout.write(
     `success_string_first_pass_status\tNOT_CHECKED\n` +
     `after_failure_string_first_pass\t${afterFailureStringThenTrue}\n` +
     `failure_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_approve_string_first_pass\t${afterApproveStringThenTrue}\n` +
+    `approve_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_deny_string_first_pass\t${afterDenyStringThenTrue}\n` +
+    `deny_string_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
