@@ -253,6 +253,46 @@ const lowercaseNReading = readFirstPass(lowercaseNPass.first_pass_verdict);
 if (lowercaseNReading.status !== 'NOT_CHECKED') fail('literal "n" was not NOT_CHECKED');
 if (lowercaseNReading.verdict === 0) fail('literal "n" was stored as numeric 0');
 
+if (!Array.isArray(fixture.ok_string_then_true)) fail('ok-string first pass fixture missing');
+const okStringPass = fixture.ok_string_then_true[0];
+if (!okStringPass || okStringPass.kind !== 'first-pass') fail('ok-string fixture is not a first pass');
+if (okStringPass.first_pass_verdict !== 'ok') fail('ok-string fixture verdict is not the literal string "ok"');
+if (okStringPass.rater_id === okStringPass.subject_id) fail('ok-string first pass is a self rating');
+if (!(Number(okStringPass.delta) > 0)) fail('ok-string first pass delta is not positive');
+const okStringLaterPositive = fixture.ok_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === okStringPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!okStringLaterPositive) fail('ok-string fixture has no later positive rating for the same subject');
+const afterOkStringThenTrue = applyRatings(start, fixture.ok_string_then_true);
+if (afterOkStringThenTrue !== start) fail(`literal "ok" first pass followed by TRUE raised the score from ${start} to ${afterOkStringThenTrue}`);
+const okStringReading = readFirstPass(okStringPass.first_pass_verdict);
+if (okStringReading.status !== 'NOT_CHECKED') fail('literal "ok" was not NOT_CHECKED');
+if (okStringReading.verdict === 0) fail('literal "ok" was stored as numeric 0');
+
+if (!Array.isArray(fixture.ng_string_then_true)) fail('ng-string first pass fixture missing');
+const ngStringPass = fixture.ng_string_then_true[0];
+if (!ngStringPass || ngStringPass.kind !== 'first-pass') fail('ng-string fixture is not a first pass');
+if (ngStringPass.first_pass_verdict !== 'ng') fail('ng-string fixture verdict is not the literal string "ng"');
+if (ngStringPass.rater_id === ngStringPass.subject_id) fail('ng-string first pass is a self rating');
+if (!(Number(ngStringPass.delta) > 0)) fail('ng-string first pass delta is not positive');
+const ngStringLaterPositive = fixture.ng_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === ngStringPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!ngStringLaterPositive) fail('ng-string fixture has no later positive rating for the same subject');
+const afterNgStringThenTrue = applyRatings(start, fixture.ng_string_then_true);
+if (afterNgStringThenTrue !== start) fail(`literal "ng" first pass followed by TRUE raised the score from ${start} to ${afterNgStringThenTrue}`);
+const ngStringReading = readFirstPass(ngStringPass.first_pass_verdict);
+if (ngStringReading.status !== 'NOT_CHECKED') fail('literal "ng" was not NOT_CHECKED');
+if (ngStringReading.verdict === 0) fail('literal "ng" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -309,6 +349,10 @@ process.stdout.write(
     `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
     `after_lowercase_n_first_pass\t${afterLowercaseNThenTrue}\n` +
     `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
+    `after_ok_string_first_pass\t${afterOkStringThenTrue}\n` +
+    `ok_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_ng_string_first_pass\t${afterNgStringThenTrue}\n` +
+    `ng_string_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

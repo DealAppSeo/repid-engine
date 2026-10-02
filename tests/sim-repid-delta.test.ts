@@ -69,6 +69,20 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string;
         delta: number;
       }[];
+      ok_string_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
+      ng_string_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -191,6 +205,10 @@ describe('sim-repid-delta', () => {
         `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
         `after_lowercase_n_first_pass\t${fixture.start_score}\n` +
         `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
+        `after_ok_string_first_pass\t${fixture.start_score}\n` +
+        `ok_string_first_pass_status\tNOT_CHECKED\n` +
+        `after_ng_string_first_pass\t${fixture.start_score}\n` +
+        `ng_string_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -281,6 +299,30 @@ describe('sim-repid-delta', () => {
     expect(out).not.toContain('lowercase_n_first_pass_status\t0');
   });
 
+  it('treats a literal lowercase "ok" first-pass verdict as NOT_CHECKED and never raises the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_ok_string_first_pass\t(\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('ok_string_first_pass_status\tNOT_CHECKED');
+    expect(out).not.toContain('ok_string_first_pass_status\t0');
+  });
+
+  it('treats a literal lowercase "ng" first-pass verdict as NOT_CHECKED and never raises the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_ng_string_first_pass\t(\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('ng_string_first_pass_status\tNOT_CHECKED');
+    expect(out).not.toContain('ng_string_first_pass_status\t0');
+  });
+
   it('reads the fixture file and does not dial a database', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('repid-delta-events.json');
@@ -302,10 +344,14 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('undefined_string_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain('lowercase_y_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain('lowercase_n_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('ok_string_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('ng_string_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain('literal "null" was stored as numeric 0');
     expect(src).toContain('literal "undefined" was stored as numeric 0');
     expect(src).toContain('literal "y" was stored as numeric 0');
     expect(src).toContain('literal "n" was stored as numeric 0');
+    expect(src).toContain('literal "ok" was stored as numeric 0');
+    expect(src).toContain('literal "ng" was stored as numeric 0');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
     expect(src).toContain('missing_rater\\tNOT_CHECKED');
