@@ -86,8 +86,8 @@ export function readPassVerdict(verdict: unknown): PassReading {
 
 function normalized(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  const cleaned = value.replace(/\u2028/g, '').trim();
+  return cleaned.length > 0 ? cleaned : undefined;
 }
 
 function emptyPasses(): { first_pass: PassCounts; post_hal: PassCounts } {
