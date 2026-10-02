@@ -137,11 +137,14 @@ function checkRepIdLedger(r) {
   const last = {};
   const failed = [];
   const undetermined = [];
+  const unreadable = [];
   let closed = 0; // identity decided from a published decay
   let assumed = 0; // balances only if no decay occurred, which nothing here states
 
   for (const e of events) {
     const where = `${e.agent}/${e.event}`;
+    const fromOk = typeof e.from === 'number' && Number.isFinite(e.from);
+    const toOk = typeof e.to === 'number' && Number.isFinite(e.to);
 
     // A missing or non-numeric delta makes the arithmetic for this event
     // uncheckable. It is NOT_CHECKED, never a false FAILED forgery, and never
@@ -152,11 +155,23 @@ function checkRepIdLedger(r) {
     }
 
     // Continuity: this agent's previous event must end where this one starts.
-    // Independent of decay, so it is checkable on every receipt.
-    if (last[e.agent] !== undefined && last[e.agent] !== e.from) {
+    // Only check when both sides are readable — a missing from/to is NOT_CHECKED,
+    // never a false FAILED forgery and never reported as numeric 0.
+    if (typeof last[e.agent] === 'number' && fromOk && last[e.agent] !== e.from) {
       failed.push(`${e.agent}: the previous event ended at ${last[e.agent]} but the next starts at ${e.from}`);
     }
-    last[e.agent] = e.to;
+    if (toOk) {
+      last[e.agent] = e.to;
+    } else {
+      delete last[e.agent];
+    }
+    if (!fromOk || !toOk) {
+      const missing = [];
+      if (!fromOk) missing.push('from');
+      if (!toOk) missing.push('to');
+      unreadable.push(`${where}: ${missing.join('/')} score missing or not a number`);
+      continue;
+    }
 
     // A recorded score outside the published range is wrong whatever the delta.
     if (e.to < REPID_FLOOR || e.to > REPID_CAP) {
@@ -204,6 +219,13 @@ function checkRepIdLedger(r) {
   }
 
   if (failed.length > 0) return record('reputation ledger arithmetic', 'FAILED', failed.join('; '));
+  if (unreadable.length > 0) {
+    return record(
+      'reputation ledger arithmetic',
+      'NOT_CHECKED',
+      `cannot read ${unreadable.length} event(s): ${unreadable.join('; ')}`,
+    );
+  }
   if (undetermined.length > 0) {
     return record(
       'reputation ledger arithmetic',

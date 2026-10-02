@@ -301,6 +301,29 @@ describe('verify-trust-receipt: the delta-earned leg states what it cannot prove
   });
 });
 
+describe('verify-trust-receipt: missing from/to is NOT_CHECKED, never FAILED or numeric 0', () => {
+  const assertNoPrivacyLeak = (out: string) => {
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  };
+
+  it.each<[string, Record<string, unknown>]>([
+    ['from is absent', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, to: 1020 }],
+    ['from is null', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: null, to: 1020 }],
+    ['to is absent', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000 }],
+    ['to is null', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: null }],
+    ['both from and to are absent', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20 }],
+    ['both from and to are null', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: null, to: null }],
+  ])('NOT_CHECKED when %s', (_label, event) => {
+    const { out } = run(receipt([event as unknown as RepEvent]));
+    const line = ledgerLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).not.toMatch(/\b0\b/);
+    assertNoPrivacyLeak(out);
+  });
+});
+
 describe('verify-trust-receipt: stdout privacy — claim text and user_id never leak', () => {
   it('does not print top-level claim or user_id fields from the receipt', () => {
     const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
