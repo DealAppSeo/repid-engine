@@ -55,6 +55,20 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string;
         delta: number;
       }[];
+      lowercase_y_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
+      lowercase_n_then_true: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       self_only: { rater_id: string; subject_id: string; delta: number }[];
     };
     const trap = fixture.false_first_pass[0];
@@ -128,6 +142,32 @@ describe('sim-repid-delta', () => {
         Number(event.delta) > 0,
     );
     expect(undefinedStringLaterPositive).toBeDefined();
+    const lowercaseYThenTrue = fixture.lowercase_y_then_true[0];
+    expect(lowercaseYThenTrue?.kind).toBe('first-pass');
+    expect(lowercaseYThenTrue?.first_pass_verdict).toBe('y');
+    expect(lowercaseYThenTrue?.rater_id).not.toBe(lowercaseYThenTrue?.subject_id);
+    expect(Number(lowercaseYThenTrue?.delta)).toBeGreaterThan(0);
+    const lowercaseYLaterPositive = fixture.lowercase_y_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === lowercaseYThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(lowercaseYLaterPositive).toBeDefined();
+    const lowercaseNThenTrue = fixture.lowercase_n_then_true[0];
+    expect(lowercaseNThenTrue?.kind).toBe('first-pass');
+    expect(lowercaseNThenTrue?.first_pass_verdict).toBe('n');
+    expect(lowercaseNThenTrue?.rater_id).not.toBe(lowercaseNThenTrue?.subject_id);
+    expect(Number(lowercaseNThenTrue?.delta)).toBeGreaterThan(0);
+    const lowercaseNLaterPositive = fixture.lowercase_n_then_true.find(
+      (event, index) =>
+        index > 0 &&
+        event.kind === 'rating' &&
+        event.subject_id === lowercaseNThenTrue?.subject_id &&
+        Number(event.delta) > 0,
+    );
+    expect(lowercaseNLaterPositive).toBeDefined();
     const self = fixture.self_only[0];
     expect(self?.rater_id).toBe(self?.subject_id);
     expect(Number(self?.delta)).toBeGreaterThan(0);
@@ -147,6 +187,10 @@ describe('sim-repid-delta', () => {
         `undefined_string_first_pass_status\tNOT_CHECKED\n` +
         `after_other_first_pass\t${fixture.start_score}\n` +
         `other_first_pass_status\tNOT_CHECKED\n` +
+        `after_lowercase_y_first_pass\t${fixture.start_score}\n` +
+        `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
+        `after_lowercase_n_first_pass\t${fixture.start_score}\n` +
+        `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -213,6 +257,30 @@ describe('sim-repid-delta', () => {
     expect(out).toContain('undefined_string_first_pass_status\tNOT_CHECKED');
   });
 
+  it('treats a literal lowercase "y" first-pass verdict as NOT_CHECKED and never raises the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_lowercase_y_first_pass\t(\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('lowercase_y_first_pass_status\tNOT_CHECKED');
+    expect(out).not.toContain('lowercase_y_first_pass_status\t0');
+  });
+
+  it('treats a literal lowercase "n" first-pass verdict as NOT_CHECKED and never raises the score', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number };
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_lowercase_n_first_pass\t(\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('lowercase_n_first_pass_status\tNOT_CHECKED');
+    expect(out).not.toContain('lowercase_n_first_pass_status\t0');
+  });
+
   it('reads the fixture file and does not dial a database', () => {
     const src = readFileSync(script, 'utf8');
     expect(src).toContain('repid-delta-events.json');
@@ -232,8 +300,12 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('notchecked_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain('null_string_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain('undefined_string_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('lowercase_y_first_pass_status\\tNOT_CHECKED');
+    expect(src).toContain('lowercase_n_first_pass_status\\tNOT_CHECKED');
     expect(src).toContain('literal "null" was stored as numeric 0');
     expect(src).toContain('literal "undefined" was stored as numeric 0');
+    expect(src).toContain('literal "y" was stored as numeric 0');
+    expect(src).toContain('literal "n" was stored as numeric 0');
     expect(src).toContain("rater_role === 'owner'");
     expect(src).toContain('same-family');
     expect(src).toContain('missing_rater\\tNOT_CHECKED');
