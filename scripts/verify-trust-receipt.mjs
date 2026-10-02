@@ -87,12 +87,17 @@ function checkWorkStatement(r) {
 // ── LEG 2 — the satisfaction score is derived, not asserted ──────────────────
 function checkScore(r) {
   const ratings = r.criterion_ratings;
-  // A bare boolean is a published value, but it is not an array of per-criterion
-  // rating rows and cannot be read as a measurement. Treating it as an array
-  // would either throw or forge a derived pass/fail from an unreadable shape.
+  // A bare boolean or number is a published value, but it is not an array of
+  // per-criterion rating rows and cannot be read as a measurement. Treating it
+  // as an array would either throw or forge a derived pass/fail from an unreadable
+  // shape — including a forged 0.0000 score against a numeric 0 rating field.
   if (typeof ratings === 'boolean') {
     return record('satisfaction score', 'NOT_CHECKED',
       'criterion_ratings is a boolean, not an array of per-criterion rating rows');
+  }
+  if (typeof ratings === 'number') {
+    return record('satisfaction score', 'NOT_CHECKED',
+      'criterion_ratings is a number, not an array of per-criterion rating rows');
   }
   if (!Array.isArray(ratings) || ratings.length === 0) {
     return record('satisfaction score', 'NOT_CHECKED', 'no per-criterion ratings published');
