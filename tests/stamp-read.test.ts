@@ -53,7 +53,7 @@ app.use('/api/v1/hal', stampReadRouter);
 const stampApp = express();
 stampApp.get('/api/v1/stamp', getStamp);
 
-const MISS = { family: 'NOT_CHECKED', host: 'NOT_CHECKED', verdict: 'NOT_CHECKED' };
+const MISS = { family: 'NOT_CHECKED', host: 'NOT_CHECKED', verdict: 'NOT_CHECKED', latency_ms: null };
 
 describe('GET /api/v1/hal/stamp', () => {
   it('reads a caught row, a pass row, and a failed read', async () => {
@@ -69,8 +69,8 @@ describe('GET /api/v1/hal/stamp', () => {
     };
     const caught = await request(app).get('/api/v1/hal/stamp');
     expect(caught.status).toBe(200);
-    expect(caught.body).toEqual({ family: 'llama', host: 'groq', verdict: 'caught' });
-    expect(Object.keys(caught.body)).toEqual(['family', 'host', 'verdict']);
+    expect(caught.body).toEqual({ family: 'llama', host: 'groq', verdict: 'caught', latency_ms: null });
+    expect(Object.keys(caught.body)).toEqual(['family', 'host', 'verdict', 'latency_ms']);
     expect(JSON.stringify(caught.body)).not.toContain('user_id');
     expect(JSON.stringify(caught.body)).not.toContain('surgeon');
     expect(JSON.stringify(caught.body)).not.toContain('0');
@@ -78,7 +78,7 @@ describe('GET /api/v1/hal/stamp', () => {
     state.row = { family: 'qwen', host: 'cerebras', verdict: 'pass', claim: 'One dollar is gone.', user_id: 'u2' };
     const passed = await request(app).get('/api/v1/hal/stamp');
     expect(passed.status).toBe(200);
-    expect(passed.body).toEqual({ family: 'qwen', host: 'cerebras', verdict: 'pass' });
+    expect(passed.body).toEqual({ family: 'qwen', host: 'cerebras', verdict: 'pass', latency_ms: null });
     expect(JSON.stringify(passed.body)).not.toContain('dollar');
     expect(JSON.stringify(passed.body)).not.toContain('user_id');
 
@@ -112,7 +112,8 @@ describe('GET /api/v1/hal/stamp', () => {
       state.row = { family: 'llama', host: 'groq', verdict, claim: claimText, user_id: 'u1' };
       const res = await request(app).get('/api/v1/hal/stamp');
       expect(res.status).toBe(200);
-      expect(Object.keys(res.body)).toEqual(['family', 'host', 'verdict']);
+      expect(Object.keys(res.body)).toEqual(['family', 'host', 'verdict', 'latency_ms']);
+      expect(res.body.latency_ms).toBeNull();
       const body = JSON.stringify(res.body);
       expect(body).not.toContain('user_id');
       expect(body).not.toContain(claimText);
@@ -167,7 +168,7 @@ describe('GET /api/v1/hal/stamp', () => {
     };
     const res = await request(app).get('/api/v1/hal/stamp');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass' });
+    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass', latency_ms: null });
     expect(res.body.score).toBeUndefined();
     expect(JSON.stringify(res.body)).not.toContain('14');
     expect(JSON.stringify(res.body)).not.toContain('user_id');
@@ -187,7 +188,7 @@ describe('GET /api/v1/hal/stamp', () => {
     state.row = { family: 'llama', host: 'groq', verdict: 'pass' };
     const res = await request(app).get('/api/v1/hal/stamp');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass' });
+    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass', latency_ms: null });
     expect(calls).toContain('from:hal_quorum_validator_votes');
     expect(calls).toContain('select:family, host, verdict');
     expect(calls.some((call) => call === 'insert' || call.startsWith('insert'))).toBe(false);
@@ -211,8 +212,8 @@ describe('GET /api/v1/stamp', () => {
     };
     const caught = await request(stampApp).get('/api/v1/stamp');
     expect(caught.status).toBe(200);
-    expect(caught.body).toEqual({ family: 'llama', host: 'groq', verdict: 'caught' });
-    expect(Object.keys(caught.body)).toEqual(['family', 'host', 'verdict']);
+    expect(caught.body).toEqual({ family: 'llama', host: 'groq', verdict: 'caught', latency_ms: null });
+    expect(Object.keys(caught.body)).toEqual(['family', 'host', 'verdict', 'latency_ms']);
     expect(JSON.stringify(caught.body)).not.toContain('user_id');
     expect(JSON.stringify(caught.body)).not.toContain('surgeon');
     expect(JSON.stringify(caught.body)).not.toContain('0');
@@ -220,7 +221,7 @@ describe('GET /api/v1/stamp', () => {
     state.row = { family: 'qwen', host: 'cerebras', verdict: 'pass', claim: 'One dollar is gone.', user_id: 'u2' };
     const passed = await request(stampApp).get('/api/v1/stamp');
     expect(passed.status).toBe(200);
-    expect(passed.body).toEqual({ family: 'qwen', host: 'cerebras', verdict: 'pass' });
+    expect(passed.body).toEqual({ family: 'qwen', host: 'cerebras', verdict: 'pass', latency_ms: null });
     expect(JSON.stringify(passed.body)).not.toContain('dollar');
     expect(JSON.stringify(passed.body)).not.toContain('user_id');
 
@@ -249,7 +250,7 @@ describe('GET /api/v1/stamp', () => {
     state.row = { family: 'llama', host: 'groq', verdict: 'pass' };
     const res = await request(stampApp).get('/api/v1/stamp');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass' });
+    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass', latency_ms: null });
     expect(calls).toContain('from:hal_quorum_validator_votes');
     expect(calls).toContain('select:family, host, verdict');
     expect(calls.some((call) => call === 'insert' || call.startsWith('insert'))).toBe(false);
@@ -279,7 +280,8 @@ describe('GET /api/v1/stamp', () => {
       state.row = { family: 'llama', host: 'groq', verdict, claim: claimText, user_id: 'u1' };
       const res = await request(stampApp).get('/api/v1/stamp');
       expect(res.status).toBe(200);
-      expect(Object.keys(res.body)).toEqual(['family', 'host', 'verdict']);
+      expect(Object.keys(res.body)).toEqual(['family', 'host', 'verdict', 'latency_ms']);
+      expect(res.body.latency_ms).toBeNull();
       const body = JSON.stringify(res.body);
       expect(body).not.toContain('user_id');
       expect(body).not.toContain(claimText);
@@ -334,7 +336,7 @@ describe('GET /api/v1/stamp', () => {
     };
     const res = await request(stampApp).get('/api/v1/stamp');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass' });
+    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass', latency_ms: null });
     expect(res.body.score).toBeUndefined();
     expect(JSON.stringify(res.body)).not.toContain('14');
     expect(JSON.stringify(res.body)).not.toContain('user_id');
@@ -345,5 +347,35 @@ describe('GET /api/v1/stamp', () => {
     const missing = scoreAfterStampRow(Number.NaN, { rater_id: 'same', subject_id: 'same', delta: 4 });
     expect(missing).toBe('NOT_CHECKED');
     expect(missing).not.toBe(0);
+  });
+
+  it('latency_ms is null when the call was not timed', async () => {
+    state.throwRead = false;
+    state.error = null;
+    state.row = { family: 'llama', host: 'groq', verdict: 'pass', latency_ms: 42 };
+    const timed = await request(stampApp).get('/api/v1/stamp');
+    expect(timed.status).toBe(200);
+    expect(timed.body.latency_ms).toBe(42);
+    expect(timed.body.latency_ms).not.toBe(0);
+    expect(Object.keys(timed.body)).toEqual(['family', 'host', 'verdict', 'latency_ms']);
+
+    for (const missingTime of [0, '0', null, undefined, '', Number.NaN]) {
+      state.row = { family: 'llama', host: 'groq', verdict: 'pass', latency_ms: missingTime };
+      const res = await request(stampApp).get('/api/v1/stamp');
+      expect(res.status).toBe(200);
+      expect(res.body.latency_ms).toBeNull();
+      expect(res.body.latency_ms).not.toBe(0);
+    }
+
+    state.row = { family: 'llama', host: 'groq', verdict: 'pass' };
+    const untimed = await request(stampApp).get('/api/v1/stamp');
+    expect(untimed.body.latency_ms).toBeNull();
+    expect(untimed.body.latency_ms).not.toBe(0);
+
+    state.error = { message: 'relation missing' };
+    const failed = await request(stampApp).get('/api/v1/stamp');
+    expect(failed.body).toEqual(MISS);
+    expect(failed.body.latency_ms).toBeNull();
+    expect(failed.body.latency_ms).not.toBe(0);
   });
 });
