@@ -145,6 +145,8 @@ describe('sim-repid-delta', () => {
         `null_string_first_pass_status\tNOT_CHECKED\n` +
         `after_undefined_string_first_pass\t${fixture.start_score}\n` +
         `undefined_string_first_pass_status\tNOT_CHECKED\n` +
+        `after_other_first_pass\t${fixture.start_score}\n` +
+        `other_first_pass_status\tNOT_CHECKED\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -183,6 +185,21 @@ describe('sim-repid-delta', () => {
     expect(match).toBeTruthy();
     expect(Number(match?.[1])).toBe(fixture.start_score);
     expect(out).toContain('null_string_first_pass_status\tNOT_CHECKED');
+  });
+
+  it('counts only exact TRUE or FALSE and does not raise the score for any other first_pass string', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(root, 'scripts', 'fixtures', 'repid-delta-events.json'), 'utf8'),
+    ) as { start_score: number; other_string_then_true: { first_pass_verdict: string }[] };
+    expect(fixture.other_string_then_true[0]?.first_pass_verdict).toBe('yes');
+    expect(fixture.other_string_then_true[0]?.first_pass_verdict).not.toBe('TRUE');
+    expect(fixture.other_string_then_true[0]?.first_pass_verdict).not.toBe('FALSE');
+    const out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const match = out.match(/after_other_first_pass\t(\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match?.[1])).toBe(fixture.start_score);
+    expect(out).toContain('other_first_pass_status\tNOT_CHECKED');
+    expect(out).not.toContain('other_first_pass_status\t0');
   });
 
   it('treats a literal "undefined" first-pass verdict as NOT_CHECKED and never raises the score', () => {
