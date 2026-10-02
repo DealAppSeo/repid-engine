@@ -20,7 +20,7 @@ function presentRater(id) {
 function firstPassVerdict(value) {
   if (value === 'TRUE') return { verdict: 'TRUE', status: 'counted' };
   if (value === 'FALSE') return { verdict: 'FALSE', status: 'counted' };
-  // Literal "y" / "n" and every other non-verdict shape are NOT_CHECKED —
+  // Literal "ON" / "OFF", "y" / "n", and every other non-verdict shape are NOT_CHECKED —
   // never treated as numeric 0 or as a measured pass. Only exact TRUE/FALSE count.
   return { verdict: null, status: 'NOT_CHECKED' };
 }
@@ -253,6 +253,46 @@ const lowercaseNReading = readFirstPass(lowercaseNPass.first_pass_verdict);
 if (lowercaseNReading.status !== 'NOT_CHECKED') fail('literal "n" was not NOT_CHECKED');
 if (lowercaseNReading.verdict === 0) fail('literal "n" was stored as numeric 0');
 
+if (!Array.isArray(fixture.uppercase_on_then_true)) fail('uppercase-on first pass fixture missing');
+const uppercaseONPass = fixture.uppercase_on_then_true[0];
+if (!uppercaseONPass || uppercaseONPass.kind !== 'first-pass') fail('uppercase-on fixture is not a first pass');
+if (uppercaseONPass.first_pass_verdict !== 'ON') fail('uppercase-on fixture verdict is not the literal string "ON"');
+if (uppercaseONPass.rater_id === uppercaseONPass.subject_id) fail('uppercase-on first pass is a self rating');
+if (!(Number(uppercaseONPass.delta) > 0)) fail('uppercase-on first pass delta is not positive');
+const uppercaseONLaterPositive = fixture.uppercase_on_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === uppercaseONPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!uppercaseONLaterPositive) fail('uppercase-on fixture has no later positive rating for the same subject');
+const afterUppercaseONThenTrue = applyRatings(start, fixture.uppercase_on_then_true);
+if (afterUppercaseONThenTrue !== start) fail(`literal "ON" first pass followed by TRUE raised the score from ${start} to ${afterUppercaseONThenTrue}`);
+const uppercaseONReading = readFirstPass(uppercaseONPass.first_pass_verdict);
+if (uppercaseONReading.status !== 'NOT_CHECKED') fail('literal "ON" was not NOT_CHECKED');
+if (uppercaseONReading.verdict === 0) fail('literal "ON" was stored as numeric 0');
+
+if (!Array.isArray(fixture.uppercase_off_then_true)) fail('uppercase-off first pass fixture missing');
+const uppercaseOFFPass = fixture.uppercase_off_then_true[0];
+if (!uppercaseOFFPass || uppercaseOFFPass.kind !== 'first-pass') fail('uppercase-off fixture is not a first pass');
+if (uppercaseOFFPass.first_pass_verdict !== 'OFF') fail('uppercase-off fixture verdict is not the literal string "OFF"');
+if (uppercaseOFFPass.rater_id === uppercaseOFFPass.subject_id) fail('uppercase-off first pass is a self rating');
+if (!(Number(uppercaseOFFPass.delta) > 0)) fail('uppercase-off first pass delta is not positive');
+const uppercaseOFFLaterPositive = fixture.uppercase_off_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === uppercaseOFFPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!uppercaseOFFLaterPositive) fail('uppercase-off fixture has no later positive rating for the same subject');
+const afterUppercaseOFFThenTrue = applyRatings(start, fixture.uppercase_off_then_true);
+if (afterUppercaseOFFThenTrue !== start) fail(`literal "OFF" first pass followed by TRUE raised the score from ${start} to ${afterUppercaseOFFThenTrue}`);
+const uppercaseOFFReading = readFirstPass(uppercaseOFFPass.first_pass_verdict);
+if (uppercaseOFFReading.status !== 'NOT_CHECKED') fail('literal "OFF" was not NOT_CHECKED');
+if (uppercaseOFFReading.verdict === 0) fail('literal "OFF" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -309,6 +349,10 @@ process.stdout.write(
     `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
     `after_lowercase_n_first_pass\t${afterLowercaseNThenTrue}\n` +
     `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
+    `after_uppercase_on_first_pass\t${afterUppercaseONThenTrue}\n` +
+    `uppercase_on_first_pass_status\tNOT_CHECKED\n` +
+    `after_uppercase_off_first_pass\t${afterUppercaseOFFThenTrue}\n` +
+    `uppercase_off_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
