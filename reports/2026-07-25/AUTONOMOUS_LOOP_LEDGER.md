@@ -8127,8 +8127,11 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 
 **Intent for steps 2-4:** Survey open NOT_CHECKED fix PRs (#1101–#1116) for CI-green + non-conflicting ones that qualify as safe-class (additive-tested). If any qualify, arm them --auto --squash. If none qualify, document honestly. Do not touch Sean-gated items. Stop at ~30 turns total.
 
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm MERGEABLE+ALL_GREEN NOT_CHECKED fix PRs. Checked #1107–#1116: all 10 are MERGEABLE + ALL_GREEN but **all 10 are DRAFTs** (Cursor-authored). DRAFT PRs cannot be armed (no --auto on drafts; Strix doesn't review drafts). #1105 and #1106 are CONFLICTING — also not armable. #1101, #1091, #1092 are UNKNOWN — not safe-class per established policy. **Result: no PRs armed this beat.** The NOT_CHECKED fix stream is entirely Cursor DRAFT work; loop cannot advance it without Sean marking PRs ready (or Cursor doing so). Honest finding: the DRAFT state is the blocker, not CI.
+
 **Open for Sean (rule-4):**
 1. **Items 7/8/9/10/11: all Sean-gated** — unchanged.
-2. **Nothing new requiring Sean** — no loop PRs need manual merge.
+2. **12 open Cursor DRAFT PRs (#1105–#1116) are MERGEABLE + ALL_GREEN** (except #1105/#1106 CONFLICTING). They cannot be armed while DRAFT. If you want these NOT_CHECKED fixes to land, mark them ready — Strix will review, then they can merge automatically. Loop cannot do this on your behalf.
+3. **Nothing else requiring Sean** — no loop PRs need manual merge.
 
 **Next beat:** (1) Confirm this ledger PR merged. (2) Check whether XC's CONFLICTING PRs (#1085, #1093) resolved themselves or need rebase — if MERGEABLE and green, arm them. (3) Scope item 14 (Plonky3 non-membership AIR): read zkp-vault/src/lib.rs and the P1 LeanIMT+ acceptance tests to draft a circuit spec — this is the next apex work nobody else can do.
