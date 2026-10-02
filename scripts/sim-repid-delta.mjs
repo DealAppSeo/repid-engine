@@ -191,6 +191,28 @@ const undefinedStringReading = readFirstPass(undefinedStringPass.first_pass_verd
 if (undefinedStringReading.status !== 'NOT_CHECKED') fail('literal "undefined" was not NOT_CHECKED');
 if (undefinedStringReading.verdict === 0) fail('literal "undefined" was stored as numeric 0');
 
+if (!Array.isArray(fixture.other_string_then_true)) fail('other first_pass string fixture missing');
+const otherPass = fixture.other_string_then_true[0];
+if (!otherPass || otherPass.kind !== 'first-pass') fail('other first_pass string fixture is not a first pass');
+if (otherPass.first_pass_verdict === 'TRUE' || otherPass.first_pass_verdict === 'FALSE') {
+  fail('other first_pass string fixture is an exact verdict');
+}
+if (otherPass.rater_id === otherPass.subject_id) fail('other first_pass string is a self rating');
+if (!(Number(otherPass.delta) > 0)) fail('other first_pass string delta is not positive');
+const otherLaterPositive = fixture.other_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === otherPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!otherLaterPositive) fail('other first_pass string fixture has no later positive rating');
+const afterOtherString = applyRatings(start, fixture.other_string_then_true);
+if (afterOtherString !== start) fail(`other first_pass string raised the score from ${start} to ${afterOtherString}`);
+const otherReading = readFirstPass(otherPass.first_pass_verdict);
+if (otherReading.status !== 'NOT_CHECKED') fail('other first_pass string was counted');
+if (otherReading.verdict !== null) fail('other first_pass string stored a verdict');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -241,6 +263,8 @@ process.stdout.write(
     `null_string_first_pass_status\tNOT_CHECKED\n` +
     `after_undefined_string_first_pass\t${afterUndefinedStringThenTrue}\n` +
     `undefined_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_other_first_pass\t${afterOtherString}\n` +
+    `other_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
