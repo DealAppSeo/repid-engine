@@ -20,8 +20,9 @@ function presentRater(id) {
 function firstPassVerdict(value) {
   if (value === 'TRUE') return { verdict: 'TRUE', status: 'counted' };
   if (value === 'FALSE') return { verdict: 'FALSE', status: 'counted' };
-  // Literal "y" / "n" and every other non-verdict shape are NOT_CHECKED —
-  // never treated as numeric 0 or as a measured pass. Only exact TRUE/FALSE count.
+  // Literal "enable" / "disable", "y" / "n", and every other non-verdict shape
+  // are NOT_CHECKED — never treated as numeric 0 or as a measured pass.
+  // Only exact TRUE/FALSE count.
   return { verdict: null, status: 'NOT_CHECKED' };
 }
 
@@ -253,6 +254,46 @@ const lowercaseNReading = readFirstPass(lowercaseNPass.first_pass_verdict);
 if (lowercaseNReading.status !== 'NOT_CHECKED') fail('literal "n" was not NOT_CHECKED');
 if (lowercaseNReading.verdict === 0) fail('literal "n" was stored as numeric 0');
 
+if (!Array.isArray(fixture.enable_then_true)) fail('enable first pass fixture missing');
+const enablePass = fixture.enable_then_true[0];
+if (!enablePass || enablePass.kind !== 'first-pass') fail('enable fixture is not a first pass');
+if (enablePass.first_pass_verdict !== 'enable') fail('enable fixture verdict is not the literal string "enable"');
+if (enablePass.rater_id === enablePass.subject_id) fail('enable first pass is a self rating');
+if (!(Number(enablePass.delta) > 0)) fail('enable first pass delta is not positive');
+const enableLaterPositive = fixture.enable_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === enablePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!enableLaterPositive) fail('enable fixture has no later positive rating for the same subject');
+const afterEnableThenTrue = applyRatings(start, fixture.enable_then_true);
+if (afterEnableThenTrue !== start) fail(`literal "enable" first pass followed by TRUE raised the score from ${start} to ${afterEnableThenTrue}`);
+const enableReading = readFirstPass(enablePass.first_pass_verdict);
+if (enableReading.status !== 'NOT_CHECKED') fail('literal "enable" was not NOT_CHECKED');
+if (enableReading.verdict === 0) fail('literal "enable" was stored as numeric 0');
+
+if (!Array.isArray(fixture.disable_then_true)) fail('disable first pass fixture missing');
+const disablePass = fixture.disable_then_true[0];
+if (!disablePass || disablePass.kind !== 'first-pass') fail('disable fixture is not a first pass');
+if (disablePass.first_pass_verdict !== 'disable') fail('disable fixture verdict is not the literal string "disable"');
+if (disablePass.rater_id === disablePass.subject_id) fail('disable first pass is a self rating');
+if (!(Number(disablePass.delta) > 0)) fail('disable first pass delta is not positive');
+const disableLaterPositive = fixture.disable_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === disablePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!disableLaterPositive) fail('disable fixture has no later positive rating for the same subject');
+const afterDisableThenTrue = applyRatings(start, fixture.disable_then_true);
+if (afterDisableThenTrue !== start) fail(`literal "disable" first pass followed by TRUE raised the score from ${start} to ${afterDisableThenTrue}`);
+const disableReading = readFirstPass(disablePass.first_pass_verdict);
+if (disableReading.status !== 'NOT_CHECKED') fail('literal "disable" was not NOT_CHECKED');
+if (disableReading.verdict === 0) fail('literal "disable" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -309,6 +350,10 @@ process.stdout.write(
     `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
     `after_lowercase_n_first_pass\t${afterLowercaseNThenTrue}\n` +
     `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
+    `after_enable_first_pass\t${afterEnableThenTrue}\n` +
+    `enable_first_pass_status\tNOT_CHECKED\n` +
+    `after_disable_first_pass\t${afterDisableThenTrue}\n` +
+    `disable_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
