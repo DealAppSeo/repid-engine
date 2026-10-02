@@ -96,6 +96,16 @@ function checkScore(r) {
   const met = ratings.filter((x) => x.met === true).length;
   const expected = (met / ratings.length).toFixed(4);
   const stored = Number(r.buyer_satisfaction_score).toFixed(4);
+
+  // Numeric `met` values (1, 0, 1.0, ...) are not booleans and cannot be read as measurements.
+  // If every rating is numeric, the derived fraction is not a measured pass: a stored score
+  // of 0.0000 would be forged as VERIFIED, and any other score would be falsely FAILED.
+  const allNumeric = ratings.every((x) => typeof x?.met === 'number' && Number.isFinite(x?.met));
+  if (allNumeric) {
+    return record('satisfaction score', 'NOT_CHECKED',
+      'criterion ratings are present but met is numeric, not a readable boolean');
+  }
+
   if (expected !== stored) {
     return record('satisfaction score', 'FAILED',
       `stored ${stored} is not round(${met}/${ratings.length}, 4) = ${expected} — the score was asserted, not derived`);
