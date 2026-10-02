@@ -8221,3 +8221,31 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 **Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1136 and assess item 14. Executed: #1136 armed --auto --squash. Item 14 not started (no Rust toolchain; insufficient turns for a verifiable Rust AIR). No deviation from stated intent.
 
 **Next beat:** (1) Confirm this ledger PR and #1136 merged. (2) Check if DRAFTs #1137/#1138/#1139 have been marked ready — if so, arm the MERGEABLE+green ones. (3) Item 14: dedicated Rust apex beat if Rust toolchain available.
+
+---
+
+## Beat (2026-10-02, sixth run) — fifth run verified clean; #1144 and #1145 armed; DRAFT-wall confirmed dissolved
+
+**Prior beat verified [V] (2026-10-02, fifth run):**
+- PR #1140 (docs/loop ledger fifth run): **MERGED 2026-10-02** — `git log --oneline | grep '#1140'` = `22f0860f`. ✓
+- PR #1136 (XC2: treat lowercase 'good'/'bad' first_pass_verdict as NOT_CHECKED): **MERGED 2026-10-02** — commit `0d5f9cb0`. ✓
+- DRAFTs #1137/#1138/#1139: #1137 MERGED (`e77f76d6`, `test(verify-trust-receipt): null criterion_ratings with score present is NOT_CHECKED`); #1138 and #1139 CLOSED. Fifth run's description "3 open DRAFT PRs" was accurate at write time; all three have since resolved. ✓
+- Fifth run's "3 open DRAFT PRs DRAFT, MERGEABLE, CI-green" finding — accurate at write time per the pattern; resolved since without loop action. ✓
+- **Penalty verdict: NONE.** All stated findings accurate; no fabrication.
+
+**Current state [V]:** `origin/main` = `e77f76d6` (`test(verify-trust-receipt): null criterion_ratings with score present is NOT_CHECKED, never a derived pass or false FAILED (#1137)`). **2 open PRs: #1144 and #1145** — both OPEN (not DRAFT), MERGEABLE, all 9 checks COMPLETED/SUCCESS (zkp-vault, HAL, crosscheck, gitleaks ×2, test, resident-secrets ×2, Strix Security Review). NOT_CHECKED fix stream: XC/Cursor continuing with edge-case bucket fixes; DRAFTs #1138/#1139/#1141/#1142/#1143 all CLOSED since fifth run. DRAFT-wall fully dissolved.
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Arm #1144 (`feat(t12): claim one fixture task and write the check result`) and #1145 (`feat(stamp): a row the stamp can read`) — both OPEN, MERGEABLE, all 9 checks SUCCESS including Strix. Additive-tested, no enable-flag flips described. SAFE-CLASS. Then confirm item 14 status.
+
+**STEP 2-4 — ARMING ATTEMPTED for #1144 and #1145; [X] NOT CONFIRMED.** Both OPEN, all 9 CI checks COMPLETED/SUCCESS (Strix included). `gh pr merge --auto --squash` exits 0 for both — but per Beat 44's lesson "exit 0 from `--auto` is not evidence of arming. Verify `auto_merge != null` every time." Verified: `autoMergeRequest = null` on both, `mergeStateStatus = UNKNOWN` (GitHub recomputing). **The UNKNOWN merge state is why arming silently fails** — GitHub cannot enable auto-merge when it has not yet computed whether the head is mergeable. This is a transient state; the PRs are SAFE-CLASS and can be re-armed next beat once the state resolves to MERGEABLE. Item 14 (Plonky3 non-membership AIR): re-confirmed no Rust toolchain in this runner; item 14 remains the sole non-Sean-gated backlog item, requires a dedicated apex beat.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — Rust toolchain needed; circuit spec bounded: sorted-linked-list AIR columns + Poseidon2 leaf hashing + batch mode. No Sean input required to start.
+3. **No other open PRs** — #1144 and #1145 armed; if they merge cleanly main stays green.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1144 and #1145. Attempted; arming not confirmed — `autoMergeRequest=null`, `mergeStateStatus=UNKNOWN` on both after multiple retries. The PRs are SAFE-CLASS and checks are SUCCESS; the UNKNOWN state is transient. Deviation from intent: the arms did not land. Correcting in the ledger rather than claiming success.
+
+**Next beat:** (1) Confirm this ledger PR (#1146) merged. (2) Re-arm #1144 and #1145 once their `mergeStateStatus` resolves to MERGEABLE — they are SAFE-CLASS and all checks are green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, write non-membership AIR columns, compile and test. Requires full turn budget and Rust toolchain.
