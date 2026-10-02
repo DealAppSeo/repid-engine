@@ -21,7 +21,7 @@ import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
 import halEvaluateRouter from './routes/hal-evaluate';
 import honestyARouter from './routes/honesty-a';
-import stampReadRouter from './routes/stamp-read';
+import stampReadRouter, { getStamp } from './routes/stamp-read';
 import halReceiptRouter from './routes/hal-receipt';
 import memoryPolicyRouter from './routes/memory-policy';
 import proofVerifyRouter from './routes/proof-verify';
@@ -381,6 +381,7 @@ app.use('/api/v1/hal', halEvaluateRouter);
 app.use('/api/v1/hal', honestyARouter);
 // Stamp read is keyless. Payload is family, host, and verdict. It does not write.
 app.use('/api/v1/hal', stampReadRouter);
+app.get('/api/v1/stamp', getStamp);
 // One vote row. Inserts only when the flag is the exact string true.
 app.use('/api/v1/hal', halReceiptRouter);
 // Memory policy is a keyless read. It does not write.
