@@ -253,6 +253,46 @@ const lowercaseNReading = readFirstPass(lowercaseNPass.first_pass_verdict);
 if (lowercaseNReading.status !== 'NOT_CHECKED') fail('literal "n" was not NOT_CHECKED');
 if (lowercaseNReading.verdict === 0) fail('literal "n" was stored as numeric 0');
 
+if (!Array.isArray(fixture.string_zero_first_pass)) fail('string-zero first pass fixture missing');
+const stringZeroPass = fixture.string_zero_first_pass[0];
+if (!stringZeroPass || stringZeroPass.kind !== 'first-pass') fail('string-zero first pass fixture is not a first pass');
+if (stringZeroPass.first_pass_verdict !== '0') fail('string-zero first pass fixture is not string "0"');
+if (stringZeroPass.rater_id === stringZeroPass.subject_id) fail('string-zero first pass is a self rating');
+if (!(Number(stringZeroPass.delta) > 0)) fail('string-zero first pass delta is not positive');
+const laterPositiveAfterStringZero = fixture.string_zero_first_pass.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === stringZeroPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositiveAfterStringZero) fail('string-zero first pass fixture has no later positive rating for the same subject');
+const afterStringZeroFirstPass = applyRatings(start, fixture.string_zero_first_pass);
+if (afterStringZeroFirstPass !== start) fail(`string-zero first pass raised the score from ${start} to ${afterStringZeroFirstPass}`);
+const stringZeroReading = readFirstPass(stringZeroPass.first_pass_verdict);
+if (stringZeroReading.status !== 'NOT_CHECKED') fail('literal "0" was not NOT_CHECKED');
+if (stringZeroReading.verdict === 0) fail('literal "0" was stored as numeric 0');
+
+if (!Array.isArray(fixture.string_one_first_pass)) fail('string-one first pass fixture missing');
+const stringOnePass = fixture.string_one_first_pass[0];
+if (!stringOnePass || stringOnePass.kind !== 'first-pass') fail('string-one first pass fixture is not a first pass');
+if (stringOnePass.first_pass_verdict !== '1') fail('string-one first pass fixture is not string "1"');
+if (stringOnePass.rater_id === stringOnePass.subject_id) fail('string-one first pass is a self rating');
+if (!(Number(stringOnePass.delta) > 0)) fail('string-one first pass delta is not positive');
+const laterPositiveAfterStringOne = fixture.string_one_first_pass.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === stringOnePass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositiveAfterStringOne) fail('string-one first pass fixture has no later positive rating for the same subject');
+const afterStringOneFirstPass = applyRatings(start, fixture.string_one_first_pass);
+if (afterStringOneFirstPass !== start) fail(`string-one first pass raised the score from ${start} to ${afterStringOneFirstPass}`);
+const stringOneReading = readFirstPass(stringOnePass.first_pass_verdict);
+if (stringOneReading.status !== 'NOT_CHECKED') fail('literal "1" was not NOT_CHECKED');
+if (stringOneReading.verdict === 0) fail('literal "1" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -309,6 +349,10 @@ process.stdout.write(
     `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
     `after_lowercase_n_first_pass\t${afterLowercaseNThenTrue}\n` +
     `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
+    `after_string_zero_first_pass\t${afterStringZeroFirstPass}\n` +
+    `string_zero_first_pass_status\tNOT_CHECKED\n` +
+    `after_string_one_first_pass\t${afterStringOneFirstPass}\n` +
+    `string_one_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

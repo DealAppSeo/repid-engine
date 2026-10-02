@@ -142,6 +142,36 @@
       "delta": 25
     }
   ],
+  "string_zero_first_pass": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "0",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
+  "string_one_first_pass": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "1",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
   "rater_gate": [
     {
       "kind": "rating",
@@ -176,6 +206,8 @@
     { "family": "llama", "host": "groq" },
     { "family": "llama", "host": "groq", "first_pass_verdict": null },
     { "family": "llama", "host": "groq", "first_pass_verdict": 0 },
+    { "family": "llama", "host": "groq", "first_pass_verdict": "0" },
+    { "family": "llama", "host": "groq", "first_pass_verdict": "1" },
     { "family": "llama", "host": "groq", "first_pass_verdict": "y" },
     { "family": "llama", "host": "groq", "first_pass_verdict": "n" }
   ]
