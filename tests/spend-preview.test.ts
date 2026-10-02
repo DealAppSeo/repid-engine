@@ -21,8 +21,14 @@ describe('spend preview fixture', () => {
         { usdc: 50, eth: 1, cbbtc: 1 },
         { usdc: 100, eth: 2, cbbtc: 2 },
       ],
+      wallet: 'NOT_CHECKED',
+      agent: 'NOT_CHECKED',
+      cap: 100,
+      spend: 'deny',
+      reason: 'unbound_agent',
       applied: false,
       persisted: false,
+      sends_eth: false,
     });
     expect(res.body.applied).toBe(false);
     for (const row of res.body.assets as { usdc: number; eth: number; cbbtc: number }[]) {

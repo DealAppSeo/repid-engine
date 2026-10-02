@@ -48,6 +48,32 @@ function receipt(events: RepEvent[]): Record<string, unknown> {
   };
 }
 
+/** A work statement whose fields are deliberately distinctive. */
+function sampleWorkStatement(): Record<string, unknown> {
+  return {
+    deliverable: 'A deliverable that contains the word claim and should never be printed',
+    deadline: '2026-09-11T00:00:00.000Z',
+    agreed_price: { currency: 'USDC', amount_usdc_raw: 50000 },
+    acceptance_criteria: [{ n: 1, text: 'Criterion one' }],
+  };
+}
+
+/** A receipt that also carries a work statement for the binding leg. */
+function wsReceipt(
+  events: RepEvent[],
+  workStatement: Record<string, unknown> | null,
+  workStatementHash?: string | null,
+): Record<string, unknown> {
+  const r = receipt(events);
+  if (workStatement !== null) {
+    r.work_statement = workStatement;
+  }
+  if (workStatementHash !== undefined) {
+    r.work_statement_hash = workStatementHash;
+  }
+  return r;
+}
+
 /** Run the real script against a receipt; never throws on a non-zero exit. */
 function run(r: Record<string, unknown>): { code: number; out: string } {
   const file = join(DIR, `r-${Math.random().toString(36).slice(2)}.json`);
@@ -61,10 +87,28 @@ function run(r: Record<string, unknown>): { code: number; out: string } {
   }
 }
 
+/** Run the script against an existing file path (used for missing-file cases). */
+function runFile(file: string): { code: number; out: string } {
+  try {
+    const out = execFileSync('node', [SCRIPT, '--file', file], { encoding: 'utf8' });
+    return { code: 0, out };
+  } catch (err) {
+    const e = err as { status?: number; stdout?: string; stderr?: string };
+    return { code: e.status ?? -1, out: `${e.stdout ?? ''}${e.stderr ?? ''}` };
+  }
+}
+
 /** The `reputation ledger arithmetic` line, as the script prints it. */
 function ledgerLine(out: string): string {
   const line = out.split('\n').find((l) => l.includes('reputation ledger arithmetic'));
   if (!line) throw new Error(`no ledger leg in output:\n${out}`);
+  return line;
+}
+
+/** The `work statement binding` line, as the script prints it. */
+function workStatementBindingLine(out: string): string {
+  const line = out.split('\n').find((l) => l.includes('work statement binding'));
+  if (!line) throw new Error(`no work-statement binding leg in output:\n${out}`);
   return line;
 }
 const outcomeOf = (line: string): 'VERIFIED' | 'NOT_CHECKED' | 'FAILED' =>
@@ -195,6 +239,46 @@ describe('verify-trust-receipt: reputation ledger arithmetic', () => {
   });
 });
 
+describe('verify-trust-receipt: work statement binding when no hash is stored', () => {
+  it('is NOT_CHECKED when work_statement_hash is absent', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement()));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+  });
+
+  it('is NOT_CHECKED when work_statement_hash is an empty string', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement(), ''));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+  });
+
+  it('is NOT_CHECKED when work_statement_hash is null', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement(), null));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+  });
+
+  it('is NOT_CHECKED when work_statement_hash is the number 0, and never prints it as a stored hash', () => {
+    const { out } = run(wsReceipt([], sampleWorkStatement(), 0 as unknown as string));
+    const line = workStatementBindingLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/no stored hash to compare against/);
+    expect(line).not.toMatch(/0x0+/);
+    expect(line).not.toMatch(/\b0\b/);
+  });
+
+  it('does not print claim text or user_id in stdout/stderr', () => {
+    const r = wsReceipt([], sampleWorkStatement(), null);
+    r.user_id = 'secret-user-123';
+    const { out } = run(r);
+    expect(out).not.toContain('user_id');
+    expect(out).not.toContain('claim');
+  });
+});
+
 describe('verify-trust-receipt: the delta-earned leg states what it cannot prove', () => {
   it('is always NOT_CHECKED when there are events, however clean the arithmetic', () => {
     const { out } = run(receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]));
@@ -214,5 +298,70 @@ describe('verify-trust-receipt: the delta-earned leg states what it cannot prove
   it('is absent when there are no events, rather than asserting about nothing', () => {
     const { out } = run(receipt([]));
     expect(out).not.toMatch(/reputation delta earned/);
+  });
+});
+
+describe('verify-trust-receipt: missing from/to is NOT_CHECKED, never FAILED or numeric 0', () => {
+  const assertNoPrivacyLeak = (out: string) => {
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  };
+
+  it.each<[string, Record<string, unknown>]>([
+    ['from is absent', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, to: 1020 }],
+    ['from is null', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: null, to: 1020 }],
+    ['to is absent', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000 }],
+    ['to is null', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: null }],
+    ['both from and to are absent', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20 }],
+    ['both from and to are null', { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: null, to: null }],
+  ])('NOT_CHECKED when %s', (_label, event) => {
+    const { out } = run(receipt([event as unknown as RepEvent]));
+    const line = ledgerLine(out);
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).not.toMatch(/\b0\b/);
+    assertNoPrivacyLeak(out);
+  });
+});
+
+describe('verify-trust-receipt: stdout privacy — claim text and user_id never leak', () => {
+  it('does not print top-level claim or user_id fields from the receipt', () => {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    (r as any).claim = 'XC2-SENSITIVE-CLAIM-TEXT-LEAK';
+    (r as any).user_id = 'XC2-USER-ID-LEAK';
+    const { code, out } = run(r);
+    expect(code).toBe(0);
+    expect(out).not.toContain('XC2-SENSITIVE-CLAIM-TEXT-LEAK');
+    expect(out).not.toContain('XC2-USER-ID-LEAK');
+    // The verifier prints only facts it checked; the field names themselves must not appear.
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  });
+
+  it('does not leak claim text nested in work_statement or criterion_ratings', () => {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    (r as any).work_statement = {
+      deliverable: 'do the thing',
+      deadline: '2026-10-01',
+      agreed_price: { amount_usdc_raw: 1000000, currency: 'USDC' },
+      acceptance_criteria: [{ n: 1, text: 'XC2-SECRET-WORK-STATEMENT-TEXT' }],
+    };
+    (r as any).criterion_ratings = [{ n: 1, met: true, note: 'XC2-SECRET-RATING-NOTE' }];
+    r.buyer_satisfaction_score = 1.0;
+    const { code, out } = run(r);
+    expect(code).toBe(0);
+    expect(out).not.toContain('XC2-SECRET-WORK-STATEMENT-TEXT');
+    expect(out).not.toContain('XC2-SECRET-RATING-NOTE');
+  });
+});
+
+describe('verify-trust-receipt: missing receipt file', () => {
+  it('returns NOT_CHECKED and exits 2, never 0', () => {
+    const { code, out } = runFile(join(DIR, 'this-file-does-not-exist.json'));
+    expect(code).toBe(2);
+    expect(out).toMatch(/NOT_CHECKED/);
+    expect(out).toMatch(/could not load a receipt/);
+    expect(out).not.toMatch(/VERIFIED/);
+    expect(out).not.toMatch(/FAILED/);
   });
 });

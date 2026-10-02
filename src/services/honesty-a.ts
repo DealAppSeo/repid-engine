@@ -84,6 +84,12 @@ export function readPassVerdict(verdict: unknown): PassReading {
   return { verdict: null, status: 'NOT_CHECKED' };
 }
 
+function normalized(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function emptyPasses(): { first_pass: PassCounts; post_hal: PassCounts } {
   return {
     first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 0 },
@@ -106,9 +112,8 @@ export function aggregateHonestyA(
 ): HonestyAReport {
   const buckets = new Map<string, HonestyARow>();
   for (const vote of votes) {
-    const family = vote.family && vote.family.length > 0 ? vote.family : 'NOT_CHECKED';
-    const namedHost = vote.host && vote.host.length > 0 ? vote.host : vote.provider;
-    const host = namedHost && namedHost.length > 0 ? namedHost : 'NOT_CHECKED';
+    const family = normalized(vote.family) ?? 'NOT_CHECKED';
+    const host = normalized(vote.host) ?? normalized(vote.provider) ?? 'NOT_CHECKED';
     const key = `${family}\n${host}`;
     let row = buckets.get(key);
     if (!row) {

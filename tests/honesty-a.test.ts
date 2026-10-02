@@ -70,6 +70,54 @@ describe('honesty A', () => {
     ]);
   });
 
+  it('all three families NOT_CHECKED keeps buckets separate and never collapses to FALSE or 0', () => {
+    const report = aggregateHonestyA([
+      { family: 'llama', host: 'groq', verdict: 'UNCERTAIN', first_pass_verdict: undefined, post_hal_verdict: 'ERROR' },
+      { family: 'qwen', host: 'fireworks', verdict: null, first_pass_verdict: 0, post_hal_verdict: '' },
+      { family: 'glm', host: 'zai', verdict: 'TIMEOUT', first_pass_verdict: 'UNCERTAIN', post_hal_verdict: null },
+    ]);
+    expect(report.status).toBe('counted');
+    expect(report.rows).toHaveLength(3);
+    for (const row of report.rows ?? []) {
+      expect(row.TRUE).toBe(0);
+      expect(row.FALSE).toBe(0);
+      expect(row.NOT_CHECKED).toBe(1);
+      expect(row.first_pass).toEqual({ TRUE: 0, FALSE: 0, NOT_CHECKED: 1 });
+      expect(row.post_hal).toEqual({ TRUE: 0, FALSE: 0, NOT_CHECKED: 1 });
+      expect(row.first_pass.NOT_CHECKED).not.toBe(0);
+      expect(row.post_hal.NOT_CHECKED).not.toBe(0);
+    }
+    expect(report.rows).toEqual([
+      {
+        family: 'glm',
+        host: 'zai',
+        TRUE: 0,
+        FALSE: 0,
+        NOT_CHECKED: 1,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+      },
+      {
+        family: 'llama',
+        host: 'groq',
+        TRUE: 0,
+        FALSE: 0,
+        NOT_CHECKED: 1,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+      },
+      {
+        family: 'qwen',
+        host: 'fireworks',
+        TRUE: 0,
+        FALSE: 0,
+        NOT_CHECKED: 1,
+        first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+        post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 1 },
+      },
+    ]);
+  });
+
   it('a missing first_pass is NOT_CHECKED, not 0', () => {
     const missing = readPassVerdict(undefined);
     expect(missing.status).toBe('NOT_CHECKED');
@@ -100,6 +148,60 @@ describe('honesty A', () => {
     expect(slow.rows?.[0]?.NOT_CHECKED).toBe(1);
     expect(fast).toEqual(slow);
     expect(bucketVerdict(undefined)).toBe('NOT_CHECKED');
+  });
+
+  it('early-stop: two agreeing families stay counted and the late family is NOT_CHECKED, never 0 or FALSE', () => {
+    const report = aggregateHonestyA([
+      { family: 'openai', host: 'groq', verdict: 'TRUE', first_pass_verdict: 'TRUE', post_hal_verdict: 'TRUE' },
+      { family: 'openai', host: 'groq', verdict: 'TRUE', first_pass_verdict: 'TRUE', post_hal_verdict: 'TRUE' },
+      { family: 'qwen', host: 'fireworks', verdict: 'TRUE', first_pass_verdict: 'TRUE', post_hal_verdict: 'TRUE' },
+      { family: 'qwen', host: 'fireworks', verdict: 'TRUE', first_pass_verdict: 'TRUE', post_hal_verdict: 'TRUE' },
+      { family: 'glm', host: 'zai', verdict: 'UNCERTAIN' },
+      { family: 'glm', host: 'zai', verdict: 'UNCERTAIN' },
+    ]);
+    expect(report.status).toBe('counted');
+    expect(report.rows).toHaveLength(3);
+
+    const byKey = new Map(report.rows!.map((r) => [`${r.family}:${r.host}`, r]));
+    const openai = byKey.get('openai:groq');
+    const qwen = byKey.get('qwen:fireworks');
+    const glm = byKey.get('glm:zai');
+
+    expect(openai).toEqual({
+      family: 'openai',
+      host: 'groq',
+      TRUE: 2,
+      FALSE: 0,
+      NOT_CHECKED: 0,
+      first_pass: { TRUE: 2, FALSE: 0, NOT_CHECKED: 0 },
+      post_hal: { TRUE: 2, FALSE: 0, NOT_CHECKED: 0 },
+    });
+    expect(qwen).toEqual({
+      family: 'qwen',
+      host: 'fireworks',
+      TRUE: 2,
+      FALSE: 0,
+      NOT_CHECKED: 0,
+      first_pass: { TRUE: 2, FALSE: 0, NOT_CHECKED: 0 },
+      post_hal: { TRUE: 2, FALSE: 0, NOT_CHECKED: 0 },
+    });
+    expect(glm).toEqual({
+      family: 'glm',
+      host: 'zai',
+      TRUE: 0,
+      FALSE: 0,
+      NOT_CHECKED: 2,
+      first_pass: { TRUE: 0, FALSE: 0, NOT_CHECKED: 2 },
+      post_hal: { TRUE: 0, FALSE: 0, NOT_CHECKED: 2 },
+    });
+
+    // NOT_CHECKED must stay a separate bucket; it must never collapse to FALSE or to the number 0.
+    expect(glm?.NOT_CHECKED).toBe(2);
+    expect(glm?.NOT_CHECKED).not.toBe(0);
+    expect(glm?.FALSE).toBe(0);
+    expect(glm?.TRUE).toBe(0);
+    expect(report.rows!.some((r) => r.FALSE > 0)).toBe(false);
+    expect(report.rows!.reduce((sum, r) => sum + r.NOT_CHECKED, 0)).toBe(2);
   });
 
   it('writer_enabled is false when the variable is unset, and only the exact string true sets it', () => {

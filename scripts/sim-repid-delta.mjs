@@ -17,12 +17,25 @@ function presentRater(id) {
   return id !== undefined && id !== null && id !== '' && id !== 0 && id !== '0';
 }
 
+function firstPassVerdict(value) {
+  if (value === 'TRUE') return { verdict: 'TRUE', status: 'counted' };
+  if (value === 'FALSE') return { verdict: 'FALSE', status: 'counted' };
+  // Literal "null" / "undefined" strings (and every other non-verdict shape)
+  // are NOT_CHECKED — never treated as numeric 0 or as a measured pass.
+  return { verdict: null, status: 'NOT_CHECKED' };
+}
+
 function applyRatings(start, events) {
   let score = start;
   const blockedSubjects = new Set();
+  const truePassedSubjects = new Set();
   for (const event of events) {
     if (event.kind === 'first-pass') {
-      if (event.first_pass_verdict === 'FALSE' && event.subject_id) {
+      const fp = firstPassVerdict(event.first_pass_verdict);
+      if (fp.verdict === 'TRUE' && event.subject_id) {
+        truePassedSubjects.add(event.subject_id);
+      } else if (event.subject_id) {
+        // FALSE or NOT_CHECKED (missing, null, "null", "undefined", etc.) blocks raises.
         blockedSubjects.add(event.subject_id);
       }
       continue;
@@ -35,15 +48,20 @@ function applyRatings(start, events) {
     if (!presentRater(event.rater_id)) continue;
     if (blockedSubjects.has(event.subject_id)) continue;
     const delta = Number(event.delta);
-    if (!Number.isFinite(delta) || delta <= 0) continue;
+    if (!Number.isFinite(delta)) continue;
+    if (event.hal_decision === 'vetoed' && truePassedSubjects.has(event.subject_id)) {
+      // HAL veto after a TRUE first pass is a tax or zero earn, never a raise.
+      score -= Math.abs(delta);
+      continue;
+    }
+    if (delta <= 0) continue;
     score += delta;
   }
   return score;
 }
 
 function readFirstPass(value) {
-  if (value === 'TRUE' || value === 'FALSE') return { verdict: value, status: 'counted' };
-  return { verdict: null, status: 'NOT_CHECKED' };
+  return firstPassVerdict(value);
 }
 
 const raw = readFileSync(fixturePath, 'utf8');
@@ -149,10 +167,88 @@ if (afterCleanHalSelf !== start) {
   fail(`clean HAL followed by self rating raised the score from ${start} to ${afterCleanHalSelf}`);
 }
 
+if (!Array.isArray(fixture.true_then_hal_veto)) fail('true-then-hal-veto fixture missing');
+const trueThenHalPass = fixture.true_then_hal_veto[0];
+if (!trueThenHalPass || trueThenHalPass.kind !== 'first-pass') fail('true-then-hal-veto fixture is not a first pass');
+if (trueThenHalPass.first_pass_verdict !== 'TRUE') fail('true-then-hal-veto fixture is not TRUE');
+if (trueThenHalPass.rater_id === trueThenHalPass.subject_id) fail('true-then-hal-veto first pass is a self rating');
+if (!(Number(trueThenHalPass.delta) > 0)) fail('true-then-hal-veto first pass delta is not positive');
+const halVeto = fixture.true_then_hal_veto.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === trueThenHalPass.subject_id &&
+    event.hal_decision === 'vetoed' &&
+    Number(event.delta) > 0,
+);
+if (!halVeto) fail('true-then-hal-veto fixture has no later HAL veto for the same subject');
+const afterTrueThenHalVeto = applyRatings(start, fixture.true_then_hal_veto);
+if (afterTrueThenHalVeto > start) fail(`TRUE first pass followed by HAL veto raised the score from ${start} to ${afterTrueThenHalVeto}`);
+
+if (!Array.isArray(fixture.notchecked_then_true)) fail('notchecked-then-true fixture missing');
+const notcheckedPass = fixture.notchecked_then_true[0];
+if (!notcheckedPass || notcheckedPass.kind !== 'first-pass') fail('notchecked-then-true fixture is not a first pass');
+if (notcheckedPass.first_pass_verdict !== undefined && notcheckedPass.first_pass_verdict !== null) {
+  fail('notchecked-then-true fixture has an explicit verdict');
+}
+if (notcheckedPass.rater_id === notcheckedPass.subject_id) fail('notchecked-then-true first pass is a self rating');
+if (!(Number(notcheckedPass.delta) > 0)) fail('notchecked-then-true first pass delta is not positive');
+const laterPositive = fixture.notchecked_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === notcheckedPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!laterPositive) fail('notchecked-then-true fixture has no later positive rating for the same subject');
+const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
+if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
+
+if (!Array.isArray(fixture.null_string_then_true)) fail('null-string first pass fixture missing');
+const nullStringPass = fixture.null_string_then_true[0];
+if (!nullStringPass || nullStringPass.kind !== 'first-pass') fail('null-string fixture is not a first pass');
+if (nullStringPass.first_pass_verdict !== 'null') fail('null-string fixture verdict is not the literal string "null"');
+if (nullStringPass.rater_id === nullStringPass.subject_id) fail('null-string first pass is a self rating');
+if (!(Number(nullStringPass.delta) > 0)) fail('null-string first pass delta is not positive');
+const nullStringLaterPositive = fixture.null_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === nullStringPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!nullStringLaterPositive) fail('null-string fixture has no later positive rating for the same subject');
+const afterNullStringThenTrue = applyRatings(start, fixture.null_string_then_true);
+if (afterNullStringThenTrue !== start) fail(`literal "null" first pass followed by TRUE raised the score from ${start} to ${afterNullStringThenTrue}`);
+const nullStringReading = readFirstPass(nullStringPass.first_pass_verdict);
+if (nullStringReading.status !== 'NOT_CHECKED') fail('literal "null" was not NOT_CHECKED');
+if (nullStringReading.verdict === 0) fail('literal "null" was stored as numeric 0');
+
+if (!Array.isArray(fixture.undefined_string_then_true)) fail('undefined-string first pass fixture missing');
+const undefinedStringPass = fixture.undefined_string_then_true[0];
+if (!undefinedStringPass || undefinedStringPass.kind !== 'first-pass') fail('undefined-string fixture is not a first pass');
+if (undefinedStringPass.first_pass_verdict !== 'undefined') fail('undefined-string fixture verdict is not the literal string "undefined"');
+if (undefinedStringPass.rater_id === undefinedStringPass.subject_id) fail('undefined-string first pass is a self rating');
+if (!(Number(undefinedStringPass.delta) > 0)) fail('undefined-string first pass delta is not positive');
+const undefinedStringLaterPositive = fixture.undefined_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === undefinedStringPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!undefinedStringLaterPositive) fail('undefined-string fixture has no later positive rating for the same subject');
+const afterUndefinedStringThenTrue = applyRatings(start, fixture.undefined_string_then_true);
+if (afterUndefinedStringThenTrue !== start) fail(`literal "undefined" first pass followed by TRUE raised the score from ${start} to ${afterUndefinedStringThenTrue}`);
+const undefinedStringReading = readFirstPass(undefinedStringPass.first_pass_verdict);
+if (undefinedStringReading.status !== 'NOT_CHECKED') fail('literal "undefined" was not NOT_CHECKED');
+if (undefinedStringReading.verdict === 0) fail('literal "undefined" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
   0,
+  'NOT_CHECKED',
 ];
 for (const value of samples) {
   const reading = readFirstPass(value);
@@ -195,6 +291,14 @@ process.stdout.write(
     `true_first_pass_self_delta\t${afterTrueFirstPassSelf - start}\n` +
     `after_clean_hal_self\t${afterCleanHalSelf}\n` +
     `clean_hal_self_delta\t${afterCleanHalSelf - start}\n` +
+
+    `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
+    `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
+    `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_null_string_first_pass\t${afterNullStringThenTrue}\n` +
+    `null_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_undefined_string_first_pass\t${afterUndefinedStringThenTrue}\n` +
+    `undefined_string_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
