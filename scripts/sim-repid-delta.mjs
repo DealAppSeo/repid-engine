@@ -20,8 +20,8 @@ function presentRater(id) {
 function firstPassVerdict(value) {
   if (value === 'TRUE') return { verdict: 'TRUE', status: 'counted' };
   if (value === 'FALSE') return { verdict: 'FALSE', status: 'counted' };
-  // Literal "null" / "undefined" strings (and every other non-verdict shape)
-  // are NOT_CHECKED — never treated as numeric 0 or as a measured pass.
+  // Literal "y" / "n" and every other non-verdict shape are NOT_CHECKED —
+  // never treated as numeric 0 or as a measured pass. Only exact TRUE/FALSE count.
   return { verdict: null, status: 'NOT_CHECKED' };
 }
 
@@ -213,6 +213,46 @@ const otherReading = readFirstPass(otherPass.first_pass_verdict);
 if (otherReading.status !== 'NOT_CHECKED') fail('other first_pass string was counted');
 if (otherReading.verdict !== null) fail('other first_pass string stored a verdict');
 
+if (!Array.isArray(fixture.lowercase_y_then_true)) fail('lowercase-y first pass fixture missing');
+const lowercaseYPass = fixture.lowercase_y_then_true[0];
+if (!lowercaseYPass || lowercaseYPass.kind !== 'first-pass') fail('lowercase-y fixture is not a first pass');
+if (lowercaseYPass.first_pass_verdict !== 'y') fail('lowercase-y fixture verdict is not the literal string "y"');
+if (lowercaseYPass.rater_id === lowercaseYPass.subject_id) fail('lowercase-y first pass is a self rating');
+if (!(Number(lowercaseYPass.delta) > 0)) fail('lowercase-y first pass delta is not positive');
+const lowercaseYLaterPositive = fixture.lowercase_y_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === lowercaseYPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!lowercaseYLaterPositive) fail('lowercase-y fixture has no later positive rating for the same subject');
+const afterLowercaseYThenTrue = applyRatings(start, fixture.lowercase_y_then_true);
+if (afterLowercaseYThenTrue !== start) fail(`literal "y" first pass followed by TRUE raised the score from ${start} to ${afterLowercaseYThenTrue}`);
+const lowercaseYReading = readFirstPass(lowercaseYPass.first_pass_verdict);
+if (lowercaseYReading.status !== 'NOT_CHECKED') fail('literal "y" was not NOT_CHECKED');
+if (lowercaseYReading.verdict === 0) fail('literal "y" was stored as numeric 0');
+
+if (!Array.isArray(fixture.lowercase_n_then_true)) fail('lowercase-n first pass fixture missing');
+const lowercaseNPass = fixture.lowercase_n_then_true[0];
+if (!lowercaseNPass || lowercaseNPass.kind !== 'first-pass') fail('lowercase-n fixture is not a first pass');
+if (lowercaseNPass.first_pass_verdict !== 'n') fail('lowercase-n fixture verdict is not the literal string "n"');
+if (lowercaseNPass.rater_id === lowercaseNPass.subject_id) fail('lowercase-n first pass is a self rating');
+if (!(Number(lowercaseNPass.delta) > 0)) fail('lowercase-n first pass delta is not positive');
+const lowercaseNLaterPositive = fixture.lowercase_n_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === lowercaseNPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!lowercaseNLaterPositive) fail('lowercase-n fixture has no later positive rating for the same subject');
+const afterLowercaseNThenTrue = applyRatings(start, fixture.lowercase_n_then_true);
+if (afterLowercaseNThenTrue !== start) fail(`literal "n" first pass followed by TRUE raised the score from ${start} to ${afterLowercaseNThenTrue}`);
+const lowercaseNReading = readFirstPass(lowercaseNPass.first_pass_verdict);
+if (lowercaseNReading.status !== 'NOT_CHECKED') fail('literal "n" was not NOT_CHECKED');
+if (lowercaseNReading.verdict === 0) fail('literal "n" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -265,6 +305,10 @@ process.stdout.write(
     `undefined_string_first_pass_status\tNOT_CHECKED\n` +
     `after_other_first_pass\t${afterOtherString}\n` +
     `other_first_pass_status\tNOT_CHECKED\n` +
+    `after_lowercase_y_first_pass\t${afterLowercaseYThenTrue}\n` +
+    `lowercase_y_first_pass_status\tNOT_CHECKED\n` +
+    `after_lowercase_n_first_pass\t${afterLowercaseNThenTrue}\n` +
+    `lowercase_n_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
