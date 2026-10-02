@@ -68,6 +68,16 @@ if (!(Number(emptyPass.delta) > 0)) fail('empty first pass delta is not positive
 const afterEmpty = applyRatings(start, fixture.empty_first_pass);
 if (afterEmpty !== start) fail(`empty first pass raised the score from ${start} to ${afterEmpty}`);
 
+if (!Array.isArray(fixture.whitespace_first_pass)) fail('whitespace first pass fixture missing');
+const whitespacePasses = fixture.whitespace_first_pass.filter(
+  (event) => event.kind === 'rating' && typeof event.first_pass_verdict === 'string' && event.first_pass_verdict.trim() === '' && event.first_pass_verdict !== '',
+);
+if (whitespacePasses.length < 2) fail('whitespace first pass fixture needs at least two distinct whitespace-only verdicts');
+if (whitespacePasses.some((event) => event.rater_id === event.subject_id)) fail('whitespace first pass fixture contains a self rating');
+if (whitespacePasses.some((event) => !(Number(event.delta) > 0))) fail('whitespace first pass fixture contains a non-positive delta');
+const afterWhitespace = applyRatings(start, fixture.whitespace_first_pass);
+if (afterWhitespace !== start) fail(`whitespace first pass raised the score from ${start} to ${afterWhitespace}`);
+
 if (!Array.isArray(fixture.nonprofit_help)) fail('nonprofit-help fixture missing');
 const helped = applyRatings(start, fixture.nonprofit_help);
 if (helped !== start + 1) fail(`nonprofit-help moved the score by ${helped - start}`);
@@ -149,6 +159,7 @@ process.stdout.write(
     `after_false_first_pass\t${afterFalse}\n` +
     `after_false_then_true\t${afterFalseThenTrue}\n` +
     `after_empty_first_pass\t${afterEmpty}\n` +
+    `after_whitespace_first_pass\t${afterWhitespace}\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +

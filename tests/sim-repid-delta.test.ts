@@ -25,6 +25,13 @@ describe('sim-repid-delta', () => {
         first_pass_verdict: string;
         delta: number;
       }[];
+      whitespace_first_pass: {
+        kind: string;
+        rater_id: string;
+        subject_id: string;
+        first_pass_verdict: string;
+        delta: number;
+      }[];
       nonprofit_help: { delta: number }[];
       false_first_pass: {
         kind: string;
@@ -52,6 +59,18 @@ describe('sim-repid-delta', () => {
     expect(emptyPass?.first_pass_verdict).toBe('');
     expect(emptyPass?.rater_id).not.toBe(emptyPass?.subject_id);
     expect(Number(emptyPass?.delta)).toBeGreaterThan(0);
+    const whitespacePasses = fixture.whitespace_first_pass.filter(
+      (event) =>
+        event.kind === 'rating' &&
+        typeof event.first_pass_verdict === 'string' &&
+        event.first_pass_verdict.trim() === '' &&
+        event.first_pass_verdict !== '',
+    );
+    expect(whitespacePasses.length).toBeGreaterThanOrEqual(2);
+    expect(whitespacePasses.some((event) => event.first_pass_verdict === ' ')).toBe(true);
+    expect(whitespacePasses.some((event) => event.first_pass_verdict === '\t')).toBe(true);
+    expect(whitespacePasses.every((event) => event.rater_id !== event.subject_id)).toBe(true);
+    expect(whitespacePasses.every((event) => Number(event.delta) > 0)).toBe(true);
     const trap = fixture.false_first_pass[0];
     expect(trap?.kind).toBe('first-pass');
     expect(trap?.first_pass_verdict).toBe('FALSE');
@@ -81,6 +100,7 @@ describe('sim-repid-delta', () => {
         `after_false_first_pass\t${fixture.start_score}\n` +
         `after_false_then_true\t${fixture.start_score}\n` +
         `after_empty_first_pass\t${fixture.start_score}\n` +
+        `after_whitespace_first_pass\t${fixture.start_score}\n` +
         `after_counterparty_help\t${fixture.start_score + Number(helpDelta)}\n` +
         `after_self_rating\t${fixture.start_score}\n` +
         `live_accuracy\tNOT_CHECKED\n` +
@@ -112,6 +132,7 @@ describe('sim-repid-delta', () => {
     expect(src).toContain('FALSE first pass raised the score');
     expect(src).toContain('FALSE first pass followed by TRUE raised the score');
     expect(src).toContain('empty first pass raised the score');
+    expect(src).toContain('whitespace first pass raised the score');
     expect(src).toContain("event.first_pass_verdict !== 'TRUE'");
     expect(src).toContain('live_accuracy\\tNOT_CHECKED');
     expect(src).toContain("rater_role === 'owner'");

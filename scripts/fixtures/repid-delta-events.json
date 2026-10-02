@@ -10,6 +10,10 @@
   "empty_first_pass": [
     { "kind": "rating", "rater_id": "agent-c", "subject_id": "agent-a", "first_pass_verdict": "", "delta": 25 }
   ],
+  "whitespace_first_pass": [
+    { "kind": "rating", "rater_id": "agent-d", "subject_id": "agent-a", "first_pass_verdict": " ", "delta": 25 },
+    { "kind": "rating", "rater_id": "agent-e", "subject_id": "agent-b", "first_pass_verdict": "\t", "delta": 30 }
+  ],
   "nonprofit_help": [
     { "kind": "nonprofit-help", "rater_id": "agent-b", "subject_id": "agent-a", "delta": 1 }
   ],
@@ -73,6 +77,8 @@
   "votes": [
     { "family": "llama", "host": "groq" },
     { "family": "llama", "host": "groq", "first_pass_verdict": null },
-    { "family": "llama", "host": "groq", "first_pass_verdict": 0 }
+    { "family": "llama", "host": "groq", "first_pass_verdict": 0 },
+    { "family": "llama", "host": "groq", "first_pass_verdict": " " },
+    { "family": "llama", "host": "groq", "first_pass_verdict": "\t" }
   ]
 }
