@@ -241,4 +241,19 @@ describe('GET /api/v1/stamp', () => {
     expect(thrown.body).toEqual(MISS);
     expect(thrown.body.verdict).not.toBe(0);
   });
+
+  it('inserts nothing on GET', async () => {
+    calls.length = 0;
+    state.throwRead = false;
+    state.error = null;
+    state.row = { family: 'llama', host: 'groq', verdict: 'pass' };
+    const res = await request(stampApp).get('/api/v1/stamp');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ family: 'llama', host: 'groq', verdict: 'pass' });
+    expect(calls).toContain('from:hal_quorum_validator_votes');
+    expect(calls).toContain('select:family, host, verdict');
+    expect(calls.some((call) => call === 'insert' || call.startsWith('insert'))).toBe(false);
+    const route = readFileSync(path.join(__dirname, '..', 'src', 'routes', 'stamp-read.ts'), 'utf8');
+    expect(route).not.toContain('.insert(');
+  });
 });
