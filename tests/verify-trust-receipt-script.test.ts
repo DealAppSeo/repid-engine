@@ -536,3 +536,43 @@ describe('verify-trust-receipt: satisfaction score when criterion_ratings are mi
     assertPrivacy(out);
   });
 });
+
+describe('verify-trust-receipt: satisfaction score when criterion_ratings are present but every met is an object', () => {
+  const CLAIM = 'XC2-OBJECT-MET-CLAIM-TEXT';
+  const USER_ID = 'XC2-OBJECT-MET-USER-ID';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  /** A receipt whose criterion ratings all carry object-typed `met` values. */
+  function receiptWithObjectRatings(score: number, ...metObjects: unknown[]): Record<string, unknown> {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    r.buyer_satisfaction_score = score;
+    r.criterion_ratings = metObjects.map((met, i) => ({ n: i + 1, met }));
+    r.claim = CLAIM;
+    r.user_id = USER_ID;
+    return r;
+  }
+
+  it.each<[string, number, unknown[]]>([
+    ['met is {} and the stored score is a forged 0.0000', 0.0000, [{}]],
+    ['met is {ok:true} and the stored score would otherwise fail', 1.0, [{ ok: true }]],
+    ['multiple ratings all carry object met values', 0.5, [{}, { ok: true }]],
+  ])(
+    'is NOT_CHECKED when %s',
+    (_label, score, metObjects) => {
+      const { out, code } = run(receiptWithObjectRatings(score, ...metObjects));
+      const line = legLine(out, 'satisfaction score');
+      expect(outcomeOf(line)).toBe('NOT_CHECKED');
+      expect(line).toMatch(/\?\?/);
+      expect(line).not.toMatch(/FAIL/);
+      expect(line).toMatch(/every met value is an object/);
+      expect(code).not.toBe(1);
+      assertPrivacy(out);
+    },
+  );
+});

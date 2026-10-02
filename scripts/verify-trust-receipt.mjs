@@ -93,6 +93,13 @@ function checkScore(r) {
   if (r.buyer_satisfaction_score === null || r.buyer_satisfaction_score === undefined) {
     return record('satisfaction score', 'NOT_CHECKED', 'no score recorded on the contract');
   }
+  // An object-typed `met` is not a boolean and cannot be counted as a pass or fail.
+  // Without this guard, a receipt whose ratings all carry `met: {}` or `met: {ok:true}`
+  // and a stored score of 0.0000 would be reported as VERIFIED — a forged measured pass.
+  if (ratings.every((x) => x && typeof x.met === 'object' && x.met !== null && !Array.isArray(x.met))) {
+    return record('satisfaction score', 'NOT_CHECKED',
+      'criterion ratings are present but every met value is an object, not a boolean');
+  }
   const met = ratings.filter((x) => x.met === true).length;
   const expected = (met / ratings.length).toFixed(4);
   const stored = Number(r.buyer_satisfaction_score).toFixed(4);
