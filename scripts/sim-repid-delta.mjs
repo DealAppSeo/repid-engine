@@ -213,6 +213,46 @@ const otherReading = readFirstPass(otherPass.first_pass_verdict);
 if (otherReading.status !== 'NOT_CHECKED') fail('other first_pass string was counted');
 if (otherReading.verdict !== null) fail('other first_pass string stored a verdict');
 
+if (!Array.isArray(fixture.on_string_then_true)) fail('on-string first pass fixture missing');
+const onPass = fixture.on_string_then_true[0];
+if (!onPass || onPass.kind !== 'first-pass') fail('on-string fixture is not a first pass');
+if (onPass.first_pass_verdict !== 'on') fail('on-string fixture verdict is not the literal string "on"');
+if (onPass.rater_id === onPass.subject_id) fail('on-string first pass is a self rating');
+if (!(Number(onPass.delta) > 0)) fail('on-string first pass delta is not positive');
+const onLaterPositive = fixture.on_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === onPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!onLaterPositive) fail('on-string fixture has no later positive rating');
+const afterOnString = applyRatings(start, fixture.on_string_then_true);
+if (afterOnString !== start) fail(`literal "on" first pass raised the score from ${start} to ${afterOnString}`);
+const onReading = readFirstPass(onPass.first_pass_verdict);
+if (onReading.status !== 'NOT_CHECKED') fail('literal "on" was not NOT_CHECKED');
+if (onReading.verdict === 0) fail('literal "on" was stored as numeric 0');
+
+if (!Array.isArray(fixture.off_string_then_true)) fail('off-string first pass fixture missing');
+const offPass = fixture.off_string_then_true[0];
+if (!offPass || offPass.kind !== 'first-pass') fail('off-string fixture is not a first pass');
+if (offPass.first_pass_verdict !== 'off') fail('off-string fixture verdict is not the literal string "off"');
+if (offPass.rater_id === offPass.subject_id) fail('off-string first pass is a self rating');
+if (!(Number(offPass.delta) > 0)) fail('off-string first pass delta is not positive');
+const offLaterPositive = fixture.off_string_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === offPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!offLaterPositive) fail('off-string fixture has no later positive rating');
+const afterOffString = applyRatings(start, fixture.off_string_then_true);
+if (afterOffString !== start) fail(`literal "off" first pass raised the score from ${start} to ${afterOffString}`);
+const offReading = readFirstPass(offPass.first_pass_verdict);
+if (offReading.status !== 'NOT_CHECKED') fail('literal "off" was not NOT_CHECKED');
+if (offReading.verdict === 0) fail('literal "off" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -265,6 +305,10 @@ process.stdout.write(
     `undefined_string_first_pass_status\tNOT_CHECKED\n` +
     `after_other_first_pass\t${afterOtherString}\n` +
     `other_first_pass_status\tNOT_CHECKED\n` +
+    `after_on_string_first_pass\t${afterOnString}\n` +
+    `on_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_off_string_first_pass\t${afterOffString}\n` +
+    `off_string_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
