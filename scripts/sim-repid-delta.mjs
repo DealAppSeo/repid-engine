@@ -17,15 +17,21 @@ function presentRater(id) {
   return id !== undefined && id !== null && id !== '' && id !== 0 && id !== '0';
 }
 
+function readFirstPass(value) {
+  if (value === 'TRUE' || value === 'FALSE') return { verdict: value, status: 'counted' };
+  return { verdict: null, status: 'NOT_CHECKED' };
+}
+
 function applyRatings(start, events) {
   let score = start;
   const blockedSubjects = new Set();
   const truePassedSubjects = new Set();
   for (const event of events) {
     if (event.kind === 'first-pass') {
-      if (event.subject_id && event.first_pass_verdict !== 'TRUE') {
+      const reading = readFirstPass(event.first_pass_verdict);
+      if (event.subject_id && reading.verdict !== 'TRUE') {
         blockedSubjects.add(event.subject_id);
-      } else if (event.first_pass_verdict === 'TRUE' && event.subject_id) {
+      } else if (event.subject_id && reading.verdict === 'TRUE') {
         truePassedSubjects.add(event.subject_id);
       }
       continue;
@@ -47,11 +53,6 @@ function applyRatings(start, events) {
     score += delta;
   }
   return score;
-}
-
-function readFirstPass(value) {
-  if (value === 'TRUE' || value === 'FALSE') return { verdict: value, status: 'counted' };
-  return { verdict: null, status: 'NOT_CHECKED' };
 }
 
 const raw = readFileSync(fixturePath, 'utf8');
@@ -142,6 +143,24 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.t_first_pass)) fail('T first pass fixture missing');
+const tPass = fixture.t_first_pass[0];
+if (!tPass || tPass.kind !== 'first-pass') fail('T first pass fixture is not a first pass');
+if (tPass.first_pass_verdict !== 'T') fail('T first pass fixture is not T');
+if (tPass.rater_id === tPass.subject_id) fail('T first pass is a self rating');
+if (!(Number(tPass.delta) > 0)) fail('T first pass delta is not positive');
+const afterT = applyRatings(start, fixture.t_first_pass);
+if (afterT !== start) fail(`T first pass raised the score from ${start} to ${afterT}`);
+
+if (!Array.isArray(fixture.f_first_pass)) fail('F first pass fixture missing');
+const fPass = fixture.f_first_pass[0];
+if (!fPass || fPass.kind !== 'first-pass') fail('F first pass fixture is not a first pass');
+if (fPass.first_pass_verdict !== 'F') fail('F first pass fixture is not F');
+if (fPass.rater_id === fPass.subject_id) fail('F first pass is a self rating');
+if (!(Number(fPass.delta) > 0)) fail('F first pass delta is not positive');
+const afterF = applyRatings(start, fixture.f_first_pass);
+if (afterF !== start) fail(`F first pass raised the score from ${start} to ${afterF}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -185,6 +204,8 @@ process.stdout.write(
   `before\t${start}\n` +
     `after_false_first_pass\t${afterFalse}\n` +
     `after_false_then_true\t${afterFalseThenTrue}\n` +
+    `after_t_first_pass\t${afterT}\n` +
+    `after_f_first_pass\t${afterF}\n` +
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +

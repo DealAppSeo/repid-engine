@@ -97,9 +97,41 @@
       "delta": 15
     }
   ],
+  "t_first_pass": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "T",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
+  "f_first_pass": [
+    {
+      "kind": "first-pass",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "first_pass_verdict": "F",
+      "delta": 25
+    },
+    {
+      "kind": "rating",
+      "rater_id": "agent-b",
+      "subject_id": "agent-a",
+      "delta": 25
+    }
+  ],
   "votes": [
     { "family": "llama", "host": "groq" },
     { "family": "llama", "host": "groq", "first_pass_verdict": null },
-    { "family": "llama", "host": "groq", "first_pass_verdict": 0 }
+    { "family": "llama", "host": "groq", "first_pass_verdict": 0 },
+    { "family": "llama", "host": "groq", "first_pass_verdict": "T" },
+    { "family": "llama", "host": "groq", "first_pass_verdict": "F" }
   ]
 }
