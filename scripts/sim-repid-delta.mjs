@@ -293,6 +293,46 @@ const failureReading = readFirstPass(failurePass.first_pass_verdict);
 if (failureReading.status !== 'NOT_CHECKED') fail('literal "failure" was not NOT_CHECKED');
 if (failureReading.verdict === 0) fail('literal "failure" was stored as numeric 0');
 
+if (!Array.isArray(fixture.lowercase_good_then_true)) fail('lowercase-good first pass fixture missing');
+const goodPass = fixture.lowercase_good_then_true[0];
+if (!goodPass || goodPass.kind !== 'first-pass') fail('lowercase-good fixture is not a first pass');
+if (goodPass.first_pass_verdict !== 'good') fail('lowercase-good fixture verdict is not the literal string "good"');
+if (goodPass.rater_id === goodPass.subject_id) fail('lowercase-good first pass is a self rating');
+if (!(Number(goodPass.delta) > 0)) fail('lowercase-good first pass delta is not positive');
+const goodLaterPositive = fixture.lowercase_good_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === goodPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!goodLaterPositive) fail('lowercase-good fixture has no later positive rating for the same subject');
+const afterLowercaseGoodThenTrue = applyRatings(start, fixture.lowercase_good_then_true);
+if (afterLowercaseGoodThenTrue !== start) fail(`literal "good" first pass followed by TRUE raised the score from ${start} to ${afterLowercaseGoodThenTrue}`);
+const goodReading = readFirstPass(goodPass.first_pass_verdict);
+if (goodReading.status !== 'NOT_CHECKED') fail('literal "good" was not NOT_CHECKED');
+if (goodReading.verdict === 0) fail('literal "good" was stored as numeric 0');
+
+if (!Array.isArray(fixture.lowercase_bad_then_true)) fail('lowercase-bad first pass fixture missing');
+const badPass = fixture.lowercase_bad_then_true[0];
+if (!badPass || badPass.kind !== 'first-pass') fail('lowercase-bad fixture is not a first pass');
+if (badPass.first_pass_verdict !== 'bad') fail('lowercase-bad fixture verdict is not the literal string "bad"');
+if (badPass.rater_id === badPass.subject_id) fail('lowercase-bad first pass is a self rating');
+if (!(Number(badPass.delta) > 0)) fail('lowercase-bad first pass delta is not positive');
+const badLaterPositive = fixture.lowercase_bad_then_true.find(
+  (event, index) =>
+    index > 0 &&
+    event.kind === 'rating' &&
+    event.subject_id === badPass.subject_id &&
+    Number(event.delta) > 0,
+);
+if (!badLaterPositive) fail('lowercase-bad fixture has no later positive rating for the same subject');
+const afterLowercaseBadThenTrue = applyRatings(start, fixture.lowercase_bad_then_true);
+if (afterLowercaseBadThenTrue !== start) fail(`literal "bad" first pass followed by TRUE raised the score from ${start} to ${afterLowercaseBadThenTrue}`);
+const badReading = readFirstPass(badPass.first_pass_verdict);
+if (badReading.status !== 'NOT_CHECKED') fail('literal "bad" was not NOT_CHECKED');
+if (badReading.verdict === 0) fail('literal "bad" was stored as numeric 0');
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
@@ -353,6 +393,10 @@ process.stdout.write(
     `success_string_first_pass_status\tNOT_CHECKED\n` +
     `after_failure_string_first_pass\t${afterFailureStringThenTrue}\n` +
     `failure_string_first_pass_status\tNOT_CHECKED\n` +
+    `after_lowercase_good_first_pass\t${afterLowercaseGoodThenTrue}\n` +
+    `lowercase_good_first_pass_status\tNOT_CHECKED\n` +
+    `after_lowercase_bad_first_pass\t${afterLowercaseBadThenTrue}\n` +
+    `lowercase_bad_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
