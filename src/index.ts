@@ -379,7 +379,7 @@ app.use('/api/v1/hal/evaluate', ipRateLimit(halPublicLimit, halPublicWindow));
 app.use('/api/v1/hal', halEvaluateRouter);
 // Honesty A is a keyless read. It does not score and it does not write.
 app.use('/api/v1/hal', honestyARouter);
-// Stamp read is keyless. Payload is family, host, and verdict. It does not write.
+// Stamp read is keyless. Payload is family, host, verdict, and latency_ms. It does not write.
 app.use('/api/v1/hal', stampReadRouter);
 app.get('/api/v1/stamp', getStamp);
 // One vote row. Inserts only when the flag is the exact string true.
