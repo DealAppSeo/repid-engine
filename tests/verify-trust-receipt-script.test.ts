@@ -536,3 +536,64 @@ describe('verify-trust-receipt: satisfaction score when criterion_ratings are mi
     assertPrivacy(out);
   });
 });
+
+describe('verify-trust-receipt: satisfaction score when criterion_ratings are present but met is an array', () => {
+  const CLAIM = 'XC2-ARRAY-MET-CLAIM-TEXT';
+  const USER_ID = 'XC2-ARRAY-MET-USER-ID';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  /** A receipt whose ratings all carry array `met` values. */
+  function receiptWithArrayMet(score: number, ratings: unknown[]): Record<string, unknown> {
+    const r = receipt([{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }]);
+    r.criterion_ratings = ratings;
+    r.buyer_satisfaction_score = score;
+    r.claim = CLAIM;
+    r.user_id = USER_ID;
+    return r;
+  }
+
+  it.each<[string, unknown[], number]>([
+    ['met is []', [{ n: 1, met: [] }], 0.0],
+    ['met is [true]', [{ n: 1, met: [true] }], 1.0],
+    ['met is [false]', [{ n: 1, met: [false] }], 0.0],
+    ['every met is an array but the stored score is non-zero', [{ n: 1, met: [] }, { n: 2, met: [true] }], 0.5],
+  ])(
+    'is NOT_CHECKED when %s, never a forged pass or a false FAILED forgery',
+    (_label, ratings, score) => {
+      const { out, code } = run(receiptWithArrayMet(score, ratings));
+      const line = legLine(out, 'satisfaction score');
+      expect(outcomeOf(line)).toBe('NOT_CHECKED');
+      expect(line).toMatch(/\?\?/);
+      expect(line).not.toMatch(/FAIL/);
+      expect(line).toMatch(/not a readable boolean/);
+      expect(code).not.toBe(1); // no false FAILED forgery for unreadable ratings
+      assertPrivacy(out);
+    },
+  );
+
+  it('does not forge a 0.0000 VERIFIED when every array-met is falsy', () => {
+    // `filter(met === true)` would count 0, matching a forged 0.0000 score.
+    const { out, code } = run(receiptWithArrayMet(0.0, [{ n: 1, met: [] }]));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/VERIFIED/);
+    expect(line).not.toMatch(/0\.0000/);
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+
+  it('does not falsely FAILED when an array-met would count as 0 against a 1.0 score', () => {
+    const { out, code } = run(receiptWithArrayMet(1.0, [{ n: 1, met: [true] }]));
+    const line = legLine(out, 'satisfaction score');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).not.toMatch(/FAIL/);
+    expect(code).not.toBe(1);
+    assertPrivacy(out);
+  });
+});

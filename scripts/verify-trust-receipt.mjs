@@ -93,6 +93,14 @@ function checkScore(r) {
   if (r.buyer_satisfaction_score === null || r.buyer_satisfaction_score === undefined) {
     return record('satisfaction score', 'NOT_CHECKED', 'no score recorded on the contract');
   }
+  // An array `met` value (`[]`, `[true]`, etc.) is not a readable boolean.
+  // Counting it with `filter(met === true)` would forge a 0.0000 pass or a
+  // false FAILED when the stored score disagrees with that invented count.
+  const arrayMet = ratings.filter((x) => Array.isArray(x.met));
+  if (arrayMet.length > 0) {
+    return record('satisfaction score', 'NOT_CHECKED',
+      `${arrayMet.length} of ${ratings.length} rating(s) have an array met value, which is not a readable boolean`);
+  }
   const met = ratings.filter((x) => x.met === true).length;
   const expected = (met / ratings.length).toFixed(4);
   const stored = Number(r.buyer_satisfaction_score).toFixed(4);
