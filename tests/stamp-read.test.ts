@@ -256,4 +256,14 @@ describe('GET /api/v1/stamp', () => {
     const route = readFileSync(path.join(__dirname, '..', 'src', 'routes', 'stamp-read.ts'), 'utf8');
     expect(route).not.toContain('.insert(');
   });
+
+  it('does not call Anthropic', () => {
+    const route = readFileSync(path.join(__dirname, '..', 'src', 'routes', 'stamp-read.ts'), 'utf8');
+    const handler = route.slice(route.indexOf('export async function getStamp'));
+    expect(handler.startsWith('export async function getStamp')).toBe(true);
+    expect(handler).not.toContain('anthropic');
+    expect(handler).not.toContain('api.anthropic.com');
+    expect(route).not.toContain('anthropic');
+    expect(route).not.toContain('api.anthropic.com');
+  });
 });
