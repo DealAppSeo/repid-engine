@@ -111,6 +111,14 @@ function workStatementBindingLine(out: string): string {
   if (!line) throw new Error(`no work-statement binding leg in output:\n${out}`);
   return line;
 }
+
+/** Any leg line by its human-readable name. */
+function legLine(out: string, label: string): string {
+  const line = out.split('\n').find((l) => l.includes(label));
+  if (!line) throw new Error(`no ${label} leg in output:\n${out}`);
+  return line;
+}
+
 const outcomeOf = (line: string): 'VERIFIED' | 'NOT_CHECKED' | 'FAILED' =>
   line.includes('FAIL') ? 'FAILED' : line.includes('??') ? 'NOT_CHECKED' : 'VERIFIED';
 
@@ -340,5 +348,63 @@ describe('verify-trust-receipt: missing receipt file', () => {
     expect(out).toMatch(/could not load a receipt/);
     expect(out).not.toMatch(/VERIFIED/);
     expect(out).not.toMatch(/FAILED/);
+  });
+});
+
+describe('verify-trust-receipt: settlement / contract binding when settled_at is missing', () => {
+  const CLAIM = 'XC2-SENSITIVE-CLAIM-TEXT';
+  const USER_ID = 'XC2-USER-ID-LEAK';
+
+  function assertPrivacy(out: string) {
+    expect(out).not.toContain(CLAIM);
+    expect(out).not.toContain(USER_ID);
+    expect(out).not.toMatch(/\bclaim\b/);
+    expect(out).not.toMatch(/\buser_id\b/);
+  }
+
+  function receiptWithSettledAt(events: RepEvent[], settledAt: unknown): Record<string, unknown> {
+    return { ...receipt(events), settled_at: settledAt, claim: CLAIM, user_id: USER_ID };
+  }
+
+  it('NOT_CHECKED when settled_at key is absent (contract_id present)', () => {
+    const { settled_at: _, ...withoutSettled } = receipt([
+      { agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 },
+    ]);
+    const { out, code } = run({ ...withoutSettled, claim: CLAIM, user_id: USER_ID });
+    const line = legLine(out, 'settlement / contract binding');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).toMatch(/cannot confirm this contract was settled/);
+    expect(code).toBe(0);
+    assertPrivacy(out);
+  });
+
+  it('NOT_CHECKED when settled_at is null (contract_id present)', () => {
+    const { out, code } = run(receiptWithSettledAt(
+      [{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }],
+      null,
+    ));
+    const line = legLine(out, 'settlement / contract binding');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).toMatch(/cannot confirm this contract was settled/);
+    expect(code).toBe(0);
+    assertPrivacy(out);
+  });
+
+  it('NOT_CHECKED when settled_at is an empty string (contract_id present)', () => {
+    const { out, code } = run(receiptWithSettledAt(
+      [{ agent: 'a', event: 'SERVICE_FULFILLED', delta: 20, from: 1000, to: 1020 }],
+      '',
+    ));
+    const line = legLine(out, 'settlement / contract binding');
+    expect(outcomeOf(line)).toBe('NOT_CHECKED');
+    expect(line).toMatch(/\?\?/);
+    expect(line).not.toMatch(/FAIL/);
+    expect(line).toMatch(/cannot confirm this contract was settled/);
+    expect(code).toBe(0);
+    assertPrivacy(out);
   });
 });
