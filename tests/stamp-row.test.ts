@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { printTrapTable, scoreAfterStampRow, writeStamp } from '../src/orchestration/stamp-row';
+import { printTrapTable, readStampRow, scoreAfterStampRow, writeStamp } from '../src/orchestration/stamp-row';
 
 describe('stamp writer', () => {
   it('writes caught for a veto', () => {
@@ -81,5 +81,32 @@ describe('self-only row', () => {
     const missing = scoreAfterStampRow(Number.NaN, { rater_id: 'same', subject_id: 'same', delta: 4 });
     expect(missing).toBe('NOT_CHECKED');
     expect(missing).not.toBe(0);
+  });
+});
+
+describe('stamp read row', () => {
+  it('is family, host, and verdict only', () => {
+    const row = readStampRow({
+      family: 'llama',
+      host: 'groq',
+      verdict: 'veto',
+      score: 0,
+      claim: 'The surgeon is the boy mother.',
+      user_id: 'u1',
+      provider: 'groq',
+    } as Parameters<typeof readStampRow>[0]);
+    expect(row).toEqual({ family: 'llama', host: 'groq', verdict: 'caught' });
+    expect(Object.keys(row)).toEqual(['family', 'host', 'verdict']);
+    const body = JSON.stringify(row);
+    expect(body).not.toContain('user_id');
+    expect(body).not.toContain('surgeon');
+    expect(body).not.toContain('0');
+    expect(readStampRow({ family: 'qwen', host: 'cerebras', verdict: 'pass', score: 2 }).verdict).toBe('pass');
+    expect(readStampRow({ family: 'llama', host: 'groq', verdict: 'pass', timeout: true }).verdict).toBe(
+      'NOT_CHECKED',
+    );
+    const missing = readStampRow({ score: undefined });
+    expect(missing).toEqual({ family: 'NOT_CHECKED', host: 'NOT_CHECKED', verdict: 'NOT_CHECKED' });
+    expect(missing.verdict).not.toBe(0);
   });
 });

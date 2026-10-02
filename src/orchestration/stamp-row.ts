@@ -95,3 +95,30 @@ export function scoreAfterStampRow(
   if (typeof delta !== 'number' || !Number.isFinite(delta) || delta === 0 || delta < 0) return start;
   return start + delta;
 }
+
+/** The only row the stamp can read. No claim text, no user id, no score. */
+export interface StampReadRow {
+  family: string;
+  host: string;
+  verdict: StampWord;
+}
+
+function label(value: unknown): string {
+  if (typeof value !== 'string') return 'NOT_CHECKED';
+  const text = value.trim();
+  return text.length > 0 ? text : 'NOT_CHECKED';
+}
+
+function writtenWord(value: unknown): StampWord | null {
+  if (value === 'caught' || value === 'pass' || value === 'NOT_CHECKED') return value;
+  return null;
+}
+
+export function readStampRow(input: StampInput & { family?: unknown; host?: unknown } = {}): StampReadRow {
+  const direct = input.timeout === true ? null : writtenWord(input.verdict);
+  return {
+    family: label(input.family),
+    host: label(input.host),
+    verdict: direct ?? writeStamp(input).stamp,
+  };
+}
