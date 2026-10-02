@@ -44,10 +44,14 @@ jest.mock('../src/db', () => ({
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const stampReadRouter = require('../src/routes/stamp-read').default;
+const stampRead = require('../src/routes/stamp-read');
+const stampReadRouter = stampRead.default;
+const getStamp = stampRead.getStamp as (req: unknown, res: unknown) => Promise<void>;
 
 const app = express();
 app.use('/api/v1/hal', stampReadRouter);
+const stampApp = express();
+stampApp.get('/api/v1/stamp', getStamp);
 
 const MISS = { family: 'NOT_CHECKED', host: 'NOT_CHECKED', verdict: 'NOT_CHECKED' };
 
@@ -190,5 +194,51 @@ describe('GET /api/v1/hal/stamp', () => {
     const route = readFileSync(path.join(__dirname, '..', 'src', 'routes', 'stamp-read.ts'), 'utf8');
     expect(route).not.toContain('.insert(');
     expect(route).toContain(".select('family, host, verdict')");
+  });
+});
+
+describe('GET /api/v1/stamp', () => {
+  it('reads a caught row, a pass row, and a failed read', async () => {
+    state.throwRead = false;
+    state.error = null;
+    state.row = {
+      family: 'llama',
+      host: 'groq',
+      verdict: 'caught',
+      claim: 'The surgeon is the boy mother.',
+      user_id: 'u1',
+      score: 0,
+    };
+    const caught = await request(stampApp).get('/api/v1/stamp');
+    expect(caught.status).toBe(200);
+    expect(caught.body).toEqual({ family: 'llama', host: 'groq', verdict: 'caught' });
+    expect(Object.keys(caught.body)).toEqual(['family', 'host', 'verdict']);
+    expect(JSON.stringify(caught.body)).not.toContain('user_id');
+    expect(JSON.stringify(caught.body)).not.toContain('surgeon');
+    expect(JSON.stringify(caught.body)).not.toContain('0');
+
+    state.row = { family: 'qwen', host: 'cerebras', verdict: 'pass', claim: 'One dollar is gone.', user_id: 'u2' };
+    const passed = await request(stampApp).get('/api/v1/stamp');
+    expect(passed.status).toBe(200);
+    expect(passed.body).toEqual({ family: 'qwen', host: 'cerebras', verdict: 'pass' });
+    expect(JSON.stringify(passed.body)).not.toContain('dollar');
+    expect(JSON.stringify(passed.body)).not.toContain('user_id');
+
+    state.row = { family: 'llama', host: 'groq', verdict: 'pass', claim: 'hidden', user_id: 'u3' };
+    state.error = { message: 'relation missing' };
+    const failed = await request(stampApp).get('/api/v1/stamp');
+    expect(failed.status).toBe(200);
+    expect(failed.body).toEqual(MISS);
+    expect(failed.body.verdict).not.toBe(0);
+    expect(JSON.stringify(failed.body)).not.toContain('relation');
+    expect(JSON.stringify(failed.body)).not.toContain('hidden');
+    expect(JSON.stringify(failed.body)).not.toContain('user_id');
+
+    state.error = null;
+    state.row = null;
+    state.throwRead = true;
+    const thrown = await request(stampApp).get('/api/v1/stamp');
+    expect(thrown.body).toEqual(MISS);
+    expect(thrown.body.verdict).not.toBe(0);
   });
 });
