@@ -75,3 +75,23 @@ export function printTrapTable(claims: readonly TrapClaim[]): string {
   }
   return `${lines.join('\n')}\n`;
 }
+
+/**
+ * A self-only row does not raise the score.
+ * A missing start is NOT_CHECKED, not 0.
+ * The ids are compared and not written onto the stamp.
+ */
+export function scoreAfterStampRow(
+  start: number,
+  row: { rater_id?: string | null; subject_id?: string | null; delta?: unknown },
+): number | 'NOT_CHECKED' {
+  if (typeof start !== 'number' || !Number.isFinite(start)) return 'NOT_CHECKED';
+  const self =
+    typeof row.rater_id === 'string' &&
+    row.rater_id.length > 0 &&
+    row.rater_id === row.subject_id;
+  if (self) return start;
+  const delta = row.delta;
+  if (typeof delta !== 'number' || !Number.isFinite(delta) || delta === 0 || delta < 0) return start;
+  return start + delta;
+}

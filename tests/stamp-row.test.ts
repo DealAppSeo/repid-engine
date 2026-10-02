@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { printTrapTable, writeStamp } from '../src/orchestration/stamp-row';
+import { printTrapTable, scoreAfterStampRow, writeStamp } from '../src/orchestration/stamp-row';
 
 describe('stamp writer', () => {
   it('writes caught for a veto', () => {
@@ -68,5 +68,18 @@ describe('ten fixture claims', () => {
     const miss = printTrapTable([{ trap: 'miss', first_pass_verdict: 0, post_hal_verdict: '0' }]);
     expect(miss).toBe('trap\tfirst-pass\tpost-check\nmiss\tNOT_CHECKED\tNOT_CHECKED\n');
     expect(miss).not.toContain('\t0');
+  });
+});
+
+describe('self-only row', () => {
+  it('does not raise a score', () => {
+    const start = 10;
+    const next = scoreAfterStampRow(start, { rater_id: 'same', subject_id: 'same', delta: 4 });
+    expect(next).toBe(start);
+    expect(next).not.toBe(start + 4);
+    expect(next).not.toBe(0);
+    const missing = scoreAfterStampRow(Number.NaN, { rater_id: 'same', subject_id: 'same', delta: 4 });
+    expect(missing).toBe('NOT_CHECKED');
+    expect(missing).not.toBe(0);
   });
 });
