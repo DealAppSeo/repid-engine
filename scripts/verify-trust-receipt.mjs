@@ -342,6 +342,20 @@ console.log(`  settled  ${receipt.settled_at ?? '(not settled)'}  ${receipt.pric
 console.log(`  parties  ${receipt.buyer} -> ${receipt.provider}`);
 console.log('');
 
+// ── LEG 0 — the receipt identifies the settled contract it claims to be about ─
+//
+// A receipt that names a contract_id but cannot say when it settled has not
+// been checked for settlement. It is not a forgery (we have no timestamp to
+// compare against) and must not be reported as a pass by inventing one.
+function checkContractSettlement(r) {
+  if (typeof r.contract_id !== 'string' || r.contract_id.trim() === '') return;
+  if (typeof r.settled_at !== 'string' || r.settled_at.trim() === '') {
+    record('settlement / contract binding', 'NOT_CHECKED',
+      'contract_id is present but settled_at is missing — the verifier cannot confirm this contract was settled');
+  }
+}
+
+checkContractSettlement(receipt);
 checkWorkStatement(receipt);
 checkScore(receipt);
 checkRepIdLedger(receipt);
