@@ -142,11 +142,29 @@ if (!laterPositive) fail('notchecked-then-true fixture has no later positive rat
 const afterNotcheckedThenTrue = applyRatings(start, fixture.notchecked_then_true);
 if (afterNotcheckedThenTrue !== start) fail(`NOT_CHECKED first pass followed by TRUE raised the score from ${start} to ${afterNotcheckedThenTrue}`);
 
+if (!Array.isArray(fixture.yn_first_pass)) fail('Y/N first pass fixture missing');
+const yFirstPass = fixture.yn_first_pass.find(
+  (event) => event.kind === 'first-pass' && event.first_pass_verdict === 'Y',
+);
+if (!yFirstPass) fail('Y first pass fixture is missing');
+if (yFirstPass.rater_id === yFirstPass.subject_id) fail('Y first pass is a self rating');
+if (!(Number(yFirstPass.delta) > 0)) fail('Y first pass delta is not positive');
+const nFirstPass = fixture.yn_first_pass.find(
+  (event) => event.kind === 'first-pass' && event.first_pass_verdict === 'N',
+);
+if (!nFirstPass) fail('N first pass fixture is missing');
+if (nFirstPass.rater_id === nFirstPass.subject_id) fail('N first pass is a self rating');
+if (!(Number(nFirstPass.delta) > 0)) fail('N first pass delta is not positive');
+const afterYNFirstPass = applyRatings(start, fixture.yn_first_pass);
+if (afterYNFirstPass !== start) fail(`Y/N first pass raised the score from ${start} to ${afterYNFirstPass}`);
+
 const samples = [
   ...fixture.votes.map((vote) => vote.first_pass_verdict),
   undefined,
   0,
   'NOT_CHECKED',
+  'Y',
+  'N',
 ];
 for (const value of samples) {
   const reading = readFirstPass(value);
@@ -188,6 +206,8 @@ process.stdout.write(
     `after_true_then_hal_veto\t${afterTrueThenHalVeto}\n` +
     `after_notchecked_first_pass\t${afterNotcheckedThenTrue}\n` +
     `notchecked_first_pass_status\tNOT_CHECKED\n` +
+    `after_yn_first_pass\t${afterYNFirstPass}\n` +
+    `yn_first_pass_status\tNOT_CHECKED\n` +
     `after_counterparty_help\t${helped}\n` +
     `after_self_rating\t${selfScore}\n` +
     `live_accuracy\tNOT_CHECKED\n` +
