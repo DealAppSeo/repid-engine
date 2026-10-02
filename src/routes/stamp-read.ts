@@ -1,8 +1,8 @@
 /**
- * GET /api/v1/hal/stamp — read one stamp row.
+ * GET /api/v1/stamp — read one stamp row.
  * Payload is family, host, and verdict only.
  * A failed read is NOT_CHECKED, not 0. No claim text. No user id.
- * This route does not write.
+ * This handler does not write.
  */
 import { Router, type Request, type Response } from 'express';
 import { db } from '../db';
@@ -28,7 +28,7 @@ export function stampReadPayload(row: unknown): StampReadRow {
   });
 }
 
-router.get('/stamp', async (_req: Request, res: Response): Promise<void> => {
+export async function getStamp(_req: Request, res: Response): Promise<void> {
   try {
     const { data, error } = await db
       .from('hal_quorum_validator_votes')
@@ -44,6 +44,8 @@ router.get('/stamp', async (_req: Request, res: Response): Promise<void> => {
   } catch {
     res.status(200).json(STAMP_READ_MISS);
   }
-});
+}
+
+router.get('/stamp', getStamp);
 
 export default router;
