@@ -21,3 +21,24 @@ trustshell status
 ```
 
 Do not call Anthropic from this belt.
+
+## The call (`src/orchestration/t12-attempt.ts`, unwired)
+
+`t12Ask(prompt)` runs the wave for real, one host at a time, through `providerFetch`:
+
+| step | URL | key |
+|---|---|---|
+| local | `<T12_LOCAL_BASE_URL>/chat/completions` (loopback only; model `T12_LOCAL_MODEL`, default `local`) | **none** |
+| groq | `PROVIDER_URLS.groqChatCompletions` | `GROQ_API_KEY`, only to groq |
+| cerebras | `PROVIDER_URLS.cerebrasChatCompletions` | `CEREBRAS_API_KEY`, only to cerebras |
+
+- The cloud steps use the registry URL directly, never `resolveProviderEndpoint`, so the
+  process-wide `LOCAL_LLM_BASE_URL` cannot redirect them (a test pins it).
+- `ONLY_ATTESTATIONS_LEAVE` is asserted before each call; under it a cloud step is refused
+  before any byte leaves and the wave moves on.
+- An answer is a 2xx with non-empty `choices[0].message.content`. An empty or unparseable 2xx
+  is treated as a failure, so the wave tries the next host.
+- The boundary is on if ANY source says so (the `boundaryOn` option, the env passed in, or the
+  process env); a caller can only tighten it, never switch a node's boundary off.
+- 20 s timeout per host, so a full wave can take up to ~60 s. `Retry-After` is capped at 1 h.
+- Nothing calls `t12Ask` yet, and it makes no call unless `T12_FREE_WAVE` is exactly `true`.
