@@ -89,7 +89,8 @@ export function retryAfterMs(raw: string | null | undefined, now: number = Date.
 
 /** True when any source engages ONLY_ATTESTATIONS_LEAVE. An explicit false cannot disengage it. */
 export function t12BoundaryOn(env: Env, explicit?: boolean): boolean {
-  const on = (v: string | undefined) => (v ?? '').toLowerCase() === 'true';
+  // Trimmed: 'TRUE ' (a copy-paste into a dashboard) must not read as off.
+  const on = (v: string | undefined) => (v ?? '').trim().toLowerCase() === 'true';
   return explicit === true || on(env.ONLY_ATTESTATIONS_LEAVE) || on(process.env.ONLY_ATTESTATIONS_LEAVE);
 }
 

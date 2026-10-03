@@ -143,6 +143,13 @@ describe('the boundary can only be tightened (CC2 review of #1171)', () => {
     expect(calls.map((c) => c.url)).toEqual(['http://127.0.0.1:11434/v1/chat/completions']);
     expect(t12BoundaryOn({}, false)).toBe(true);
   });
+
+  it('a stray space or capitals in the boundary value still read as on', () => {
+    delete process.env.ONLY_ATTESTATIONS_LEAVE;
+    expect(t12BoundaryOn({ ONLY_ATTESTATIONS_LEAVE: 'TRUE ' })).toBe(true);
+    expect(t12BoundaryOn({ ONLY_ATTESTATIONS_LEAVE: ' true\n' })).toBe(true);
+    expect(t12BoundaryOn({ ONLY_ATTESTATIONS_LEAVE: 'false' })).toBe(false);
+  });
 });
 
 describe('the real chokepoint (no fetchImpl): groq still reaches groq under LOCAL_LLM_BASE_URL', () => {
