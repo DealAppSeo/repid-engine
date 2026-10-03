@@ -58,4 +58,18 @@ describe('POST /api/v1/laya/classify', () => {
     expect(routeSrc).not.toContain('REAL_STAKING');
     expect(routeSrc).not.toContain('trinity-shofet');
   });
+
+  it('/route-hint is the same route under a name that says what it does; the old path still works', async () => {
+    for (const text of ['hello', 'what is this?', 'attest this claim', '']) {
+      const a = await request(app).post('/api/v1/route-hint').send({ text });
+      const b = await request(app).post('/api/v1/laya/classify').send({ text });
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.route).toBe(b.body.route);
+      expect(Object.keys(a.body).sort()).toEqual(['latency_ms', 'route']);
+    }
+    const get = await request(app).get('/api/v1/route-hint');
+    expect(get.status).toBe(200);
+    expect(get.body.route).toBe('ask');
+  });
 });
