@@ -48,6 +48,10 @@ on:
       ref_note:
         description: 'Why this manual run (recorded on the run itself)'
         required: false
+      trustshell_ref:
+        description: 'Branch, tag or SHA of DealAppSeo/trustshell to place at ./trustshell for the agent to read (READ-ONLY)'
+        required: false
+        default: 'main'
 
 permissions:
   contents: write
@@ -67,6 +71,41 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.LOOP_GH_PAT }}
+
+      # READ ACCESS TO TRUSTSHELL, AND NOTHING MORE (BUS B13, 2026-10-03).
+      #
+      # The agent's `repo_read` is scoped to the CWD workspace (measured, see the GA
+      # entry in run-agent.mjs's AGENTS table), so the only way it can read a second
+      # repo is for that repo to sit INSIDE this checkout. This places DealAppSeo/trustshell
+      # at ./trustshell so an inbox entry can say "review trustshell/extension/laya.js".
+      #
+      # Read-only by construction, three ways:
+      #   1. github.token, not LOOP_GH_PAT. trustshell is a public repo, so the run's own
+      #      token reads it; no credential that can push to trustshell enters this step.
+      #   2. persist-credentials: false, so no token is left in ./trustshell/.git/config.
+      #   3. Nothing below ever stages it: the PR step adds exactly one file under reports/.
+      #
+      # It is listed in .git/info/exclude so run-agent.mjs's clean-tree guard does not see
+      # an untracked directory and refuse ("uncommitted changes outside reports/"). That
+      # guard is unchanged; the exclude is local to this runner and never committed.
+      #
+      # If this step fails, the dispatch never runs, which is the honest outcome: an inbox
+      # asking about trustshell must not be answered by an agent that could not read it.
+      - name: Checkout DealAppSeo/trustshell at ./trustshell (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: DealAppSeo/trustshell
+          ref: ${{ inputs.trustshell_ref || 'main' }}
+          path: trustshell
+          fetch-depth: 1
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Keep ./trustshell out of this repo's working-tree state
+        run: |
+          echo "trustshell/" >> .git/info/exclude
+          test -z "$(git status --porcelain -- trustshell)" || { echo "::error::trustshell/ still shows in git status"; exit 1; }
+          echo "trustshell readable at ./trustshell @ $(git -C trustshell rev-parse --short HEAD)"
 
       - name: Git identity
         run: |

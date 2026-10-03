@@ -1,31 +1,51 @@
-# INBOX_XC — review the classify route CC2 actually wrote (repid-engine PR #1151)
+# INBOX_XC — red-team the public classify route before it ships
 
 ## Task
 
-**Lane:** L6 RED-TEAM — **no write scope.** Deliverable is text. You hold `reasoning` and
-`repo_read`, scoped to THIS workspace, which is CC2's branch `CC2/classify-route`.
-**Three outcomes: VERIFIED / NOT_CHECKED / FAILED.** Dispatched by CC1, no human paste.
+**Lane:** L6 RED-TEAM — **no write scope.** Deliverable is text. Do not claim to have
+created, edited or committed a file. You hold `reasoning` and `repo_read`, scoped to THIS
+workspace. No evidence commands were run for you. **Three outcomes: VERIFIED /
+NOT_CHECKED / FAILED.** Dispatched by CC1 (Claude) on 2026-10-02, without a human paste:
+this is the first run of the cross-family loop Sean asked for.
 
-Your last run (reports/2026-10-02/DISPATCH_XC_1790985467509.md) found the pre-auth
-sanitizer would 400 real replies. That was confirmed and CC2 fixed it by mounting the route
-before the sanitizer. One correction to that report: it ranked the sanitizer as a fake-pass
-risk; it only produced a wrong not-checked. Rank by failure direction this time.
+### What is being built (by CC2, in parallel, on a branch you cannot see yet)
 
-### Read
-- `src/routes/classify.ts` (new), `tests/classify-route.test.ts` (new), and the `src/index.ts`
-  hunk that mounts `classifyRouter` right after `helmet()`.
+`POST /api/v1/classify`, the one check that every TrustShell door calls (browser extension,
+Telegram bot, terminal). Contract, decided 2026-10-02 by Sean, CC1 and Grok:
+
+    in:   { text: string, labels: ["pass","veto","not-checked"] }
+    out:  { label }   label is exactly pass | veto | not-checked
+    - a missing/empty text, a timeout, an error, or any unsure result is "not-checked",
+      never 0 and never pass
+    - a reply ending in the word "veto" is not a veto unless the classifier decides so
+    - PUBLIC: mounted BEFORE authMiddleware (the extension holds no key), own per-IP
+      rate limit
+    - calls NO paid model, not HAL, not the quorum
+    - stores nothing: no claim text, no user id, no insert
+
+### What to read in this workspace
+
+- `src/index.ts`: how routes are mounted relative to `authMiddleware` and
+  `rateLimitMiddleware`, and the SQL-keyword body sanitizer that runs before auth.
+- `src/routes/laya-classify.ts` and `src/laya/classify.ts`: the existing public pre-auth
+  route this one will sit beside (a different contract: cheap|escalate|ask).
+- the auth and rate-limit middleware, wherever `src/index.ts` imports them from.
 
 ### Deliverable
-1. Can ANY input make the route return `pass` or `veto` for text it did not honestly
-   decide? CC2 says only a whole-text arithmetic equation can (true → pass, false → veto).
-   Try to break that: unicode digits, huge numbers, floats, division by zero, `0.1+0.2=0.3`,
-   whitespace and newline tricks, a prose sentence that contains an equation, an equation
-   followed by "veto". file:line for each.
-2. Mounting before the global CORS, parser, rate limiter and sanitizer: does anything the
-   global stack did for other routes now NOT happen for `/api/v1/classify` that should
-   (body size limit, helmet, trust proxy)? Does the router's any-origin CORS stay scoped to
-   `/classify`, or can it answer for other `/api/v1/*` paths?
-3. The per-IP limiter: is the key the real client behind one proxy hop? Can `X-Forwarded-For`
-   spoofing rotate the key?
-4. Does any code path store text, log the reply body, or call a network host?
-5. Up to five missing tests, one line each: input → expected.
+
+1. **Attack list**, ranked by failure direction. Rank first anything that can make the
+   route answer `pass` (or `veto`) for text it did not honestly classify. Rank lower
+   anything that only produces a wrong `not-checked`. For each: the input, the code path
+   (file:line you actually read), and the test that would catch it.
+2. **The sanitizer interaction.** The pre-auth body sanitizer rejects POST bodies that
+   contain `SELECT `, `DROP `, `--`, `;` and similar. Most real chat replies contain `;` or
+   `--`. Say exactly what that does to this route (status code? label?), whether the
+   extension would then paint not-checked, and whether that is acceptable or a defect.
+3. **Cost and abuse.** With no key and no paid call, what is left to abuse? Name the
+   cheapest denial-of-service and whether a per-IP limit stops it behind a proxy (Railway
+   edge: is `req.ip` the client or the proxy here?).
+4. **Five tests CC2 must have** before XC3 merges it. Each test is one line: input → expected.
+5. One closing lesson, if you have one.
+
+Mark every claim VERIFIED (you read the line), NOT_CHECKED (you could not see it), or
+FAILED.

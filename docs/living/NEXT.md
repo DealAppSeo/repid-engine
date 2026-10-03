@@ -1,6 +1,11 @@
-# NEXT — 2026-09-15
+# NEXT — moved to the one bus
 
-1. XC1: rebase #754 if dirty, fold #756 tests, merge under MERGE_POLICY if CI green.
-2. XC2: push local feat/xc2-2026-09-15-stack as ONE PR, close or point #156-161 at it.
-3. Both: take next OPEN BUS id. Do not stop for a recap.
-4. Sean: audit pack, publish, apply DDL, then e2e:mvp vs @latest.
+There is **one** bus now: `DealAppSeo/trustshell/docs/living/`.
+- `NORTH.md`: the board (mission, vision, milestones)
+- `WEEK.md`: this week's goals as sprints
+- `BUS.md`: the next ticket, granular (one Loop = one ticket until a PR or URL proves it)
+- `STANDING_ORDER.md`: the pull loop every agent runs
+
+The open items that used to be listed here (2026-09-15 to 09-19) are carried into that BUS,
+marked **UNVERIFIED**: re-check before working them. This copy is kept as a pointer so that
+a reader who lands here is not left with a stale list (one star, not a mesh).
