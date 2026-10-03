@@ -4,7 +4,9 @@ import { t12TaskClaimed } from '../src/orchestration/t12-run-gate';
 import {
   t12FreeWaveEnabled,
   t12FreeWaveOrder,
+  t12LocalBase,
   t12OneTask,
+  t12Wave,
   t12ResultFromCheck,
 } from '../src/orchestration/t12-free-wave';
 
@@ -115,5 +117,64 @@ describe('T12 free wave', () => {
     }
     expect(calls).toBe(0);
     expect(row).toEqual({ id: 'untouched' });
+  });
+});
+
+describe('T12 local first, then groq, then cerebras, stop on 429', () => {
+  const ON = { T12_FREE_WAVE: 'true', LOCAL_LLM_BASE_URL: 'http://127.0.0.1:11434/v1' };
+  const statuses = (map: Record<string, number | 'throw'>) => {
+    const calls: string[] = [];
+    const attempt = async (host: string) => {
+      calls.push(host);
+      const s = map[host];
+      if (s === 'throw' || s === undefined) throw new Error('down');
+      return { status: s };
+    };
+    return { calls, attempt };
+  };
+
+  it('local joins first only for a loopback base; a remote base is never local', () => {
+    expect(t12FreeWaveOrder(ON)).toEqual(['local', 'groq', 'cerebras']);
+    for (const base of ['https://api.groq.com/openai/v1', 'http://10.0.0.5:8080', 'http://user:pw@127.0.0.1:1', 'ftp://127.0.0.1', 'nonsense']) {
+      expect(t12LocalBase({ LOCAL_LLM_BASE_URL: base })).toBeNull();
+      expect(t12FreeWaveOrder({ T12_FREE_WAVE: 'true', LOCAL_LLM_BASE_URL: base })).toEqual(['groq', 'cerebras']);
+    }
+    expect(t12FreeWaveOrder({ LOCAL_LLM_BASE_URL: 'http://localhost:1' })).toEqual([]);
+  });
+
+  it('off is NOT_CHECKED and calls nothing', async () => {
+    const { calls, attempt } = statuses({ local: 200 });
+    expect(await t12Wave({ env: { LOCAL_LLM_BASE_URL: 'http://localhost:1' }, attempt })).toEqual({ outcome: 'NOT_CHECKED', host: null, tried: [] });
+    expect(calls).toEqual([]);
+  });
+
+  it('local answers first, and the cloud is never called', async () => {
+    const { calls, attempt } = statuses({ local: 200, groq: 200 });
+    expect(await t12Wave({ env: ON, attempt })).toEqual({ outcome: 'answered', host: 'local', tried: ['local'] });
+    expect(calls).toEqual(['local']);
+  });
+
+  it('local down falls through to groq', async () => {
+    const { calls, attempt } = statuses({ local: 'throw', groq: 200 });
+    expect((await t12Wave({ env: ON, attempt })).host).toBe('groq');
+    expect(calls).toEqual(['local', 'groq']);
+  });
+
+  it('a 429 stops the wave: cerebras is not tried after groq is rate-limited', async () => {
+    const { calls, attempt } = statuses({ local: 'throw', groq: 429, cerebras: 200 });
+    expect(await t12Wave({ env: ON, attempt })).toEqual({ outcome: 'rate_limited', host: 'groq', tried: ['local', 'groq'] });
+    expect(calls).toEqual(['local', 'groq']);
+  });
+
+  it('a 429 on local stops before any cloud host', async () => {
+    const { calls, attempt } = statuses({ local: 429, groq: 200 });
+    expect((await t12Wave({ env: ON, attempt })).outcome).toBe('rate_limited');
+    expect(calls).toEqual(['local']);
+  });
+
+  it('a non-429 failure moves on; every host failing is NOT_CHECKED, never a pass', async () => {
+    const { calls, attempt } = statuses({ local: 500, groq: 503, cerebras: 'throw' });
+    expect(await t12Wave({ env: ON, attempt })).toEqual({ outcome: 'NOT_CHECKED', host: null, tried: ['local', 'groq', 'cerebras'] });
+    expect(calls).toEqual(['local', 'groq', 'cerebras']);
   });
 });
