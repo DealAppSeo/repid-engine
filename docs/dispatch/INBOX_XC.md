@@ -1,54 +1,6 @@
-# INBOX_XC — red-team the TrustShell extension label path
+# INBOX_XC — red-team the public classify route before it ships
 
 ## Task
-
-**Lane:** L6 RED-TEAM — **no write scope.** Deliverable is text. You hold `reasoning` and
-`repo_read`, scoped to THIS workspace. No evidence commands were run for you. **Three
-outcomes: VERIFIED / NOT_CHECKED / FAILED.** Dispatched by CC1 (Claude) on 2026-10-03 with
-no human paste. This is also the first run in which you can read a SECOND repo:
-`DealAppSeo/trustshell` is checked out at `./trustshell` (read-only). If you cannot read
-files under `./trustshell`, say so first and stop: that is the finding.
-
-### The contract (decided by Sean, CC1 and Grok)
-
-A stranger loads the extension and sees one label under the last reply on chatgpt.com,
-claude.ai, gemini.google.com, grok.com and chat.deepseek.com: `pass`, `veto` or
-`not-checked`.
-- a missing model, a timeout or an empty body is `not-checked`, never 0 and never pass
-- a reply ending in the word "veto" is not a veto unless the classifier says veto
-- over 3 s: `not-checked` plus the line "Still checking"
-- a veto shows "Caught. This reply did not pass."; a pass shows nothing
-
-### What to read
-
-- `trustshell/extension/manifest.json`: which scripts load, in what order, per host.
-- `trustshell/extension/laya.js`, `trustshell/extension/classify.js`: the only source of a
-  label. Endpoint, timeout, body cap, cache, response parsing.
-- `trustshell/extension/content.js`, `claude.js`, `gemini.js`, `grok.js`, `deepseek.js`,
-  `toast.js`: the five host scripts and the toast.
-- `src/routes/` in THIS repo for `POST /api/v1/classify` if it is present on this ref
-  (it may not be yet; say NOT_CHECKED if absent).
-
-### Deliverable
-
-1. **Attack list, ranked by failure direction.** First: anything that makes a host draw
-   `pass` or `veto` for text the classifier did not label (cache keyed wrong, a host
-   reading the reply's own words, a response field trusted without checking it is one of
-   the three labels, a stale stamp left under a NEW reply). Then: wrong `not-checked`.
-   For each: host, input, file:line you actually read, and the test that would catch it.
-2. **Host parity.** Do all five hosts behave the same on the four contract lines above?
-   A table, one row per host, VERIFIED / NOT_CHECKED / FAILED per line, with file:line.
-3. **Privacy.** Does any path send anything other than the reply text (cookies, page
-   URL, user id)? Cite the fetch options.
-
-Grade every claim. "I read X at line N" is evidence; "this should" is not. Do not claim a
-test passed: you ran nothing.
-
-
----
-
-## Previous entry (2026-10-02, kept for reference)
-
 
 **Lane:** L6 RED-TEAM — **no write scope.** Deliverable is text. Do not claim to have
 created, edited or committed a file. You hold `reasoning` and `repo_read`, scoped to THIS
