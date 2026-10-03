@@ -17,14 +17,16 @@ This file maps that onto what already exists, so nothing is built twice.
 
 ## 1. Measured, not assumed [MEASURED 2026-10-03, `llm_call_log`, read-only]
 
-- **30 days: 10,659 LLM calls, $0.1623 in total.** 2,023 calls had a non-zero cost.
-- Since 2026-09-24 the volume is about 3 `pcp_validation` and 20–45 `hal_fact_check` calls a day,
-  and nearly all of them succeed.
-- The 30-day failure count is dominated by **one past burst**:
-  - 6,387 `pcp_validation` calls failed with HTTP 429, the last one on 2026-09-06.
-  - On 2026-09-23, 503 `hal_fact_check` calls failed: credits ran out on two providers, and a
-    third rate-limited.
-- HAL fact-check p50 latency is **1,088 ms**.
+- **30 days of model spend: well under $1, almost all on free tiers.** About one call in five
+  had any cost at all.
+- Since 2026-09-24 the volume has been a few dozen calls a day, and nearly all of them succeed.
+- The 30-day failures are dominated by **two past bursts**:
+  - provider rate limits, ending 2026-09-06;
+  - a day when credits ran out on two providers and a third rate-limited (2026-09-23).
+- HAL fact-check p50 latency is **about 1.1 s**.
+
+Exact counts are left out on purpose: this repo is public (CLAUDE.md, *findings, not
+inventories*). The query below reproduces them.
 
 **Consequence.** A cost cascade saves this system almost nothing: it already runs on free
 tiers for pennies a month. Inside our own stack, the possible gains are **latency** (skipping a
@@ -61,6 +63,10 @@ Both real Jev and the real Laya server (`laya-serve`) speak the **System One** s
 request:  { model, state, questions: { <key>: { type: "choice" | "score" | "noul", instructions, ... } } }
 response: one typed answer per key, e.g. { "<key>": { "type": "choice", "choice": "...", "confidence": 0.93 } }
 ```
+
+The answers may come back nested under an `answers` envelope rather than at the root. Laya's
+Python API returns `result["answers"][key]`, and the HTTP body is NOT CHECKED. `jev-prefilter`'s
+reader already accepts `answers`, `questions`, `results` or the root for this reason.
 
 So today, pointing the client at `laya-serve` on loopback could not work. Fixing that one
 contract makes local Laya and hosted Jev **the same call**, and the switch between them becomes a
@@ -102,19 +108,36 @@ today:
 - `not-checked` on a timeout, non-200 or bad body;
 - stores nothing.
 
-The question becomes one `choice` key with options `veto` / `not-checked`, so the model cannot
-even be *asked* for `pass`. Tests run against a fake loopback server. **Still unwired.** The
+The question is **one `noul`**: *"Does this reply contain a checkable factual or arithmetic
+error?"* The client vetoes only when the probability is at or above a threshold set from the
+labelled set. Every other outcome is `not-checked`.
+
+It is not a two-option `choice` such as `veto` / `not-checked`. Laya takes a softmax over a
+question's options, so a fine reply would have nowhere true to go, and that inflates the
+false-veto rate, which is the one number B9 gates on (CC2). The model is never offered `pass`, and
+the client still coerces `pass` to `not-checked`.
+
+The reader accepts both the root and the `answers` envelope, with a test for each. The first
+real `laya-serve` body gets logged and pinned. Tests run against a fake loopback server.
+**Still unwired.**
+
+**Loopback-only is a property of the client, not the server.** `laya-serve` binds `0.0.0.0` with
+no auth by default, so the evaluation's run steps must bind it to `127.0.0.1` explicitly, or put
+it behind a firewall. The
 B9 evaluation can then run real `laya-serve` on loopback, and hosted Jev later uses the same
 contract.
 
-Owner: CC2 owns B9, so CC2 builds it or hands it to CC1.
+Owner: **CC2** (owns B9; it also corrects the contract in `B9_LOCAL_MODEL.md`).
 
 ### P2 (eval; $0; runs on a laptop). Laya on the B9 veto task
 
 The B9 plan already sets the bar: an upper false-veto CI bound ≤ 2%, p95 ≤ 3 s, and an
 injection slice. **Expect zero-shot Laya to fail** (0.362). So the evaluation's real output is
 the **number of labelled rows Laya needs to pass the bar** after fine-tuning: run it at 100, 300
-and 1,000 labels. **Blocked on the labelled set, which does not exist yet.**
+and 1,000 labels. The English checkpoint collapses on non-Latin scripts at high confidence, so
+there are two options: run through Laya's multilingual `Router`, or mark non-Latin text
+`not-checked` before the call. Either way, the labelled set needs a non-English slice.
+**Blocked on the labelled set, which does not exist yet.**
 
 ### P3 (eval; about $0.01; needs Sean's GO because it is a paid call). Jev as a shadow prefilter
 
@@ -125,14 +148,16 @@ records "would skip" and HAL always runs. Report:
 - agreement with HAL's verdict;
 - the latency HAL would have saved.
 
-Note that live HAL inputs are not stored, so the corpus has to be built.
+Live HAL inputs are not stored, so the corpus has to be built, and it has to be built from
+**text that is fine to leave the box**: this call goes to OpenRouter, and `jev-prefilter` asserts
+the egress boundary.
 
 Cost: 300 items × ~500 input tokens = 150k tokens ≈ **$0.006**.
 
 ### P4 (now; $0). The sentence
 
 Extend `GET /api/v1/costs/summary` with one plain line built from the fields it already reads,
-for example: *"30 days: 10,659 model calls, 8,636 free, 2,023 paid, $0.16."* Deterministic
+for example: *"30 days: N model calls, M on free tiers, $X."* Deterministic
 answers (`/classify` arithmetic, Receipts) are not logged, so the line must **not** claim "handled
 without a model" until they are counted. A number with no counter behind it is the
 fake-measurement defect.
