@@ -136,6 +136,23 @@ describe('(4) no paid model, no Anthropic, and (5) nothing stored', () => {
     expect(localModelUrl('http://localhost:11434/jev')).not.toBeNull();
   });
 
+  it('pins the bypass inputs raised in cross-review: each is refused', () => {
+    for (const url of [
+      'http://127.0.0.1.nip.io/x',
+      'http://user:pw@127.0.0.1/x',
+      'http://127.0.0.1@evil.com/x',
+      'http://evil.com@127.0.0.1/x',
+      'http://[::ffff:127.0.0.1]/x',
+      'http://0.0.0.0/x',
+      'http://localhost./x',
+    ]) {
+      expect(localModelUrl(url)).toBeNull();
+    }
+    // Decimal and octal IPv4 are normalised by the URL parser to the real loopback address.
+    expect(localModelUrl('http://2130706433/x')).toBe('http://127.0.0.1/x');
+    expect(localModelUrl('http://0177.0.0.1/x')).toBe('http://127.0.0.1/x');
+  });
+
   it('sends only { state, labels } — no key, no user id, no auth header', async () => {
     const fetchImpl = reply(200, '{"label":"pass","score":0.5}');
     await jevClassify('  the claim  ', { modelUrl: LOCAL, fetchImpl });
