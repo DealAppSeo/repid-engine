@@ -103,6 +103,7 @@ import afterCreateRouter from './routes/after-create';
 import joinKitRouter from './routes/join-kit';
 import trustmarketJoinRouter from './routes/trustmarket-join';
 import layaClassifyRouter from './routes/laya-classify';
+import classifyRouter from './routes/classify';
 import onboardLayerRouter from './routes/onboard-layer';
 import beltsRouter from './routes/belts';
 import whyRouter from './routes/why';
@@ -221,6 +222,15 @@ const accountConnectLimiter = rateLimit({
   },
 });
 app.use(helmet());
+// POST /api/v1/classify — the public pass|veto|not-checked label every door calls
+// (extension, phone bot, terminal). Mounted HERE, ahead of the global CORS
+// allow-list, body parser, rate limiter and SQL-keyword sanitizer, on purpose:
+// the extension calls from a content script carrying the chat site's Origin,
+// which the allow-list rejects, and real replies contain ';' and '--', which the
+// sanitizer 400s. The handler builds no SQL and stores nothing, so neither guard
+// protects anything here. It brings its own any-origin no-credentials CORS, its
+// own 64kb parser and its own per-IP limit (429 on excess). See src/routes/classify.ts.
+app.use('/api/v1', classifyRouter);
 // CORS — allow-list + anchored trust*.dev pattern (src/utils/cors-origins.ts). The trustchat.dev
 // frontend + the rest of the Trust* ecosystem call repid-engine's public endpoints (rating, vote,
 // subscribe, track, session/share, leaderboard) cross-origin. NOTE (S-FRONTEND restore): this
