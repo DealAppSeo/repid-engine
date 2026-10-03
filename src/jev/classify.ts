@@ -55,6 +55,13 @@ export const QUESTION =
  * this number decides nothing today.
  */
 export const VETO_THRESHOLD = 0.9;
+/**
+ * The lowest threshold an override may set. Below it the override is ignored and
+ * VETO_THRESHOLD applies: { vetoThreshold: 0 } would otherwise veto every reply, since any
+ * probability is >= 0. Lowering the bar is what makes a false public accusation, so only
+ * raising it is free. (CC1 review of #1166.)
+ */
+export const VETO_FLOOR = 0.5;
 const STATE_CAP = 2000;
 const MAX_BODY_CHARS = 64 * 1024;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -126,7 +133,14 @@ export function readNoul(body: unknown): number | null {
 
 /** Probability → label. Only a probability at or above the threshold is a veto. */
 export function labelFor(p: number | null, threshold: number = VETO_THRESHOLD): { label: JevLabel; score: number | null } {
-  return p !== null && p >= threshold ? { label: 'veto', score: p } : { label: NOT_CHECKED, score: null };
+  const bar = vetoThresholdOf(threshold);
+  return p !== null && p >= bar ? { label: 'veto', score: p } : { label: NOT_CHECKED, score: null };
+}
+
+/** An override in [VETO_FLOOR, 1] stands; anything else (lower, NaN, out of range) is the default. */
+export function vetoThresholdOf(value: unknown): number {
+  const t = unit(value);
+  return t !== null && t >= VETO_FLOOR ? t : VETO_THRESHOLD;
 }
 
 export async function jevClassify(text: string, options: JevClassifyOptions = {}): Promise<JevClassifyResult> {
@@ -145,7 +159,7 @@ export async function jevClassify(text: string, options: JevClassifyOptions = {}
   const url = localModelUrl(options.modelUrl === undefined ? process.env['JEV_CLASSIFY_URL'] : options.modelUrl);
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined);
   if (!url || typeof fetchImpl !== 'function') return done(notChecked);
-  const threshold = unit(options.vetoThreshold) ?? VETO_THRESHOLD;
+  const threshold = vetoThresholdOf(options.vetoThreshold);
 
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : TIMEOUT_MS;
   const controller = new AbortController();
