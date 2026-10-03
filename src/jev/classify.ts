@@ -1,11 +1,14 @@
 /**
  * Jev label call: sends { state, labels } to a LOCAL model and returns label + score.
  *
- * The label is pass, veto or not-checked. Never `reject`, never 0 for "no answer".
+ * VETO-ONLY (B9, Sean 2026-10-03: "A model may not say pass"). The label is veto or
+ * not-checked. A model `pass` is read as not-checked: a pass comes only from a
+ * deterministic check (the route's arithmetic), never from a model's opinion.
+ * Never `reject`, never 0 for "no answer". See docs/plans/B9_LOCAL_MODEL.md.
  * - No model URL, a non-local URL, a timeout, a non-200, an empty or oversized body,
  *   unparseable JSON, or a label outside the three is not-checked with score null.
  * - A score with no label is not-checked, not 0. A score is returned only beside
- *   pass or veto, and only when it is a number in [0, 1].
+ *   veto, and only when it is a number in [0, 1].
  * - Over SLOW_MS the label is not-checked and line is 'Still checking' (the same
  *   line and threshold as the extension's laya.js).
  * - The label comes only from the model's `label` field. A reply whose text ends
@@ -74,12 +77,12 @@ function unitScore(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
 }
 
-/** Reads { label, score }. Anything outside the contract is not-checked with no score. */
+/** Reads { label, score }. Only `veto` survives; `pass` and anything else is not-checked with no score. */
 export function readJevAnswer(body: unknown): { label: JevLabel; score: number | null } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { label: NOT_CHECKED, score: null };
   const raw = (body as { label?: unknown }).label;
   const label = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-  if (label !== 'pass' && label !== 'veto') return { label: NOT_CHECKED, score: null };
+  if (label !== 'veto') return { label: NOT_CHECKED, score: null };
   return { label, score: unitScore((body as { score?: unknown }).score) };
 }
 

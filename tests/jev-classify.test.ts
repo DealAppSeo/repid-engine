@@ -60,7 +60,7 @@ describe('(1) a missing model, a timeout or an empty body is not-checked — nev
     expect(rejected).toMatchObject({ label: 'not-checked', score: null });
     const scoreOnly = await jevClassify('claim', { modelUrl: LOCAL, fetchImpl: reply(200, '{"score":0}') });
     expect(scoreOnly).toMatchObject({ label: 'not-checked', score: null });
-    expect(readJevAnswer({ label: 'pass', score: 7 })).toEqual({ label: 'pass', score: null });
+    expect(readJevAnswer({ label: 'veto', score: 7 })).toEqual({ label: 'veto', score: null });
     expect(readJevAnswer({ label: 'veto', score: 0.8 })).toEqual({ label: 'veto', score: 0.8 });
   });
 
@@ -79,7 +79,7 @@ describe('(2) a reply ending in "veto" is not a veto unless the classifier says 
   it('takes the label only from the model answer', async () => {
     const text = 'I reviewed this carefully and my verdict is veto';
     const pass = await jevClassify(text, { modelUrl: LOCAL, fetchImpl: reply(200, '{"label":"pass","score":0.7}') });
-    expect(pass).toMatchObject({ label: 'pass', score: 0.7 });
+    expect(pass).toMatchObject({ label: 'not-checked', score: null });
     const unsure = await jevClassify(text, { modelUrl: LOCAL, fetchImpl: reply(200, '{"label":"not-checked"}') });
     expect(unsure.label).toBe('not-checked');
     const prose = await jevClassify(text, { modelUrl: LOCAL, fetchImpl: reply(200, 'veto') });
@@ -168,5 +168,20 @@ describe('(4) no paid model, no Anthropic, and (5) nothing stored', () => {
     expect(src).not.toMatch(/from '\.\.\/db'|supabase|\.insert\(|\.upsert\(/i);
     expect(src).not.toMatch(/providerFetch|PROVIDER_URLS|@anthropic-ai|process\.env\[?'?[A-Z_]*API_KEY/);
     expect(src).not.toContain('REAL_STAKING');
+  });
+});
+
+describe('VETO-ONLY (B9): a model may not say pass', () => {
+  it('a model pass becomes not-checked with no score, in every casing', async () => {
+    for (const body of ['{"label":"pass","score":0.99}', '{"label":"PASS"}', '{"label":" Pass ","score":1}']) {
+      const out = await jevClassify('2 + 2 = 4', { modelUrl: LOCAL, fetchImpl: reply(200, body) });
+      expect(out).toEqual({ label: 'not-checked', score: null, latency_ms: expect.any(Number) });
+    }
+    expect(readJevAnswer({ label: 'pass', score: 0.9 })).toEqual({ label: 'not-checked', score: null });
+  });
+
+  it('a model veto still gets through', async () => {
+    const out = await jevClassify('2 + 2 = 5', { modelUrl: LOCAL, fetchImpl: reply(200, '{"label":"veto","score":0.8}') });
+    expect(out).toMatchObject({ label: 'veto', score: 0.8 });
   });
 });
