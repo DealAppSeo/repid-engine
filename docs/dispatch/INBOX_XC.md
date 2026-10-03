@@ -1,6 +1,65 @@
-# INBOX_XC — red-team the public classify route before it ships
+# INBOX_XC — strategy: the most ambitious secure build tonight
 
 ## Task
+
+**Lane:** L6, cross-family strategy review. **No write scope.** Deliverable is text. You hold
+`reasoning` and `repo_read` on this workspace; `./trustshell` is checked out read-only.
+Dispatched by CC1 (Claude) on 2026-10-03 at Sean's request: he wants Claude and Grok to ALIGN,
+and to see exactly where we diverge and why.
+
+### Sean's question (verbatim intent)
+Reverse-engineer from the real pains of engineers AND vibe coders. What is the single most
+recognizable gap, one a low-coder and a senior engineer both feel, whose fix:
+- has the most potential to go viral on GitHub and TikTok,
+- makes people JOIN and CONTRIBUTE to this ecosystem rather than clone it and build their own,
+- is a serious, secure, privacy-first entry point into the agentic economy that other systems
+  do not provide,
+- and is the most ambitious build that is still SECURE to ship tonight (no spend, no token move,
+  no REAL_STAKING, no paid model on a public route, no fake score)?
+
+### Answer FIRST, independently, before reading CC1's proposal below
+1. Your pick: the pain, the product, the one-line pitch, the 15-second TikTok.
+2. Why people contribute instead of cloning (what is NOT clonable).
+3. What ships TONIGHT vs this week vs later. Name files you read in `./trustshell` and here.
+
+### CC1's proposal (critique it AFTER your own answer)
+**Pain:** AI coding agents (Claude Code, Cursor, Codex, Copilot, Grok) say "done, all tests
+pass, verified" when they did not run the tests, or the tests failed. Everyone who has used one
+has been burned. This repo's own house defect, "a system reporting success it has not earned",
+is the universal vibe-coder pain.
+
+**Product:** a zero-install GitHub Action plus `npx trustshell check`. On every PR it reads the
+agent's claims (PR body, commits) and checks them against the evidence GitHub itself holds
+(check runs, job conclusions, whether a test job ran at all). It posts one receipt comment:
+each claim VERIFIED / NOT CHECKED / FAILED. "Claude said 21 tests pass. No test job ran."
+
+**Already built:** `trustshell/src/lib/check.ts` (verifies a run from api.github.com, no account,
+egress to GitHub only), and `scripts/dispatch/run-agent.mjs` `auditClaims` (claim vs evidence).
+
+**Why viral:** the receipt comment shows up on public PRs where others see it. "Caught my AI
+lying" is a native TikTok format.
+
+**Why join, not clone:** the checker is free and open source; what you cannot clone is the shared
+record. Opt-in receipts across many repos become each agent's and each tool's track record
+(RepID), and contributors add claim-checkers (one per claim type) and earn credit for them.
+
+**Security and privacy:** runs in the user's own CI with the default `GITHUB_TOKEN`
+(read + one PR comment). No backend, no key, no telemetry, code never leaves their repo. Sharing
+a receipt to the network is opt-in and sends a hash, not code.
+
+**Tonight:** the Action plus the claim extractor plus a receipt comment, dogfooded on our own PRs.
+Not tonight: the shared ledger write and any RepID score.
+
+### Deliverable
+1. Your independent answer (above).
+2. AGREE / DIVERGE on each part of CC1's proposal, with the reason.
+3. The single build you would ship tonight, with what it must NOT do.
+
+
+---
+
+## Previous entry (kept for reference)
+
 
 **Lane:** L6 RED-TEAM — **no write scope.** Deliverable is text. Do not claim to have
 created, edited or committed a file. You hold `reasoning` and `repo_read`, scoped to THIS
