@@ -23,6 +23,7 @@ import {
   SLOW_LINE,
   SLOW_MS,
   VETO_THRESHOLD,
+  VETO_THRESHOLD_FLOOR,
 } from '../src/jev/classify';
 
 const LOCAL = 'http://127.0.0.1:8000/v1/systemone';
@@ -101,6 +102,27 @@ describe('VETO-ONLY: the model is never asked for pass, and cannot produce one',
     expect(labelFor(VETO_THRESHOLD - 0.001)).toEqual({ label: 'not-checked', score: null });
     expect(labelFor(0)).toEqual({ label: 'not-checked', score: null });
     expect(labelFor(null)).toEqual({ label: 'not-checked', score: null });
+  });
+
+  it('an override below the floor (or outside [0, 1]) cannot lower the bar: it falls back to the default', async () => {
+    for (const vetoThreshold of [0, 0.1, VETO_THRESHOLD_FLOOR - 0.01, -1, 2, Number.NaN]) {
+      const out = await jevClassify('Paris is the capital of France.', {
+        modelUrl: LOCAL,
+        vetoThreshold,
+        fetchImpl: reply(200, answer(0.3)),
+      });
+      expect(out).toMatchObject({ label: 'not-checked', score: null });
+      const justUnder = await jevClassify('claim', { modelUrl: LOCAL, vetoThreshold, fetchImpl: reply(200, answer(VETO_THRESHOLD - 0.01)) });
+      expect(justUnder.label).toBe('not-checked');
+    }
+    expect(labelFor(0.1, 0)).toEqual({ label: 'not-checked', score: null });
+  });
+
+  it('an override at or above the floor is honoured', async () => {
+    const out = await jevClassify('2 + 2 = 5', { modelUrl: LOCAL, vetoThreshold: 0.7, fetchImpl: reply(200, answer(0.75)) });
+    expect(out).toMatchObject({ label: 'veto', score: 0.75 });
+    expect(labelFor(VETO_THRESHOLD_FLOOR, VETO_THRESHOLD_FLOOR)).toEqual({ label: 'veto', score: VETO_THRESHOLD_FLOOR });
+    expect(labelFor(0.6, 0.7)).toEqual({ label: 'not-checked', score: null });
   });
 
   it('a confident "no error" is not-checked, not pass', async () => {

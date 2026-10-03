@@ -55,6 +55,12 @@ export const QUESTION =
  * this number decides nothing today.
  */
 export const VETO_THRESHOLD = 0.9;
+/**
+ * No override may set the bar below this. A threshold of 0 would veto every reply (any p >= 0)
+ * and below one half the model is saying "more likely fine than wrong"; an override under the
+ * floor, or outside [0, 1], falls back to VETO_THRESHOLD rather than being clamped up to it.
+ */
+export const VETO_THRESHOLD_FLOOR = 0.5;
 const STATE_CAP = 2000;
 const MAX_BODY_CHARS = 64 * 1024;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -124,9 +130,15 @@ export function readNoul(body: unknown): number | null {
   return null;
 }
 
-/** Probability → label. Only a probability at or above the threshold is a veto. */
+/** The threshold actually used: an override in [VETO_THRESHOLD_FLOOR, 1], else VETO_THRESHOLD. */
+export function effectiveThreshold(override: unknown): number {
+  const t = unit(override);
+  return t !== null && t >= VETO_THRESHOLD_FLOOR ? t : VETO_THRESHOLD;
+}
+
+/** Probability → label. Only a probability at or above the (floored) threshold is a veto. */
 export function labelFor(p: number | null, threshold: number = VETO_THRESHOLD): { label: JevLabel; score: number | null } {
-  return p !== null && p >= threshold ? { label: 'veto', score: p } : { label: NOT_CHECKED, score: null };
+  return p !== null && p >= effectiveThreshold(threshold) ? { label: 'veto', score: p } : { label: NOT_CHECKED, score: null };
 }
 
 export async function jevClassify(text: string, options: JevClassifyOptions = {}): Promise<JevClassifyResult> {
@@ -145,7 +157,7 @@ export async function jevClassify(text: string, options: JevClassifyOptions = {}
   const url = localModelUrl(options.modelUrl === undefined ? process.env['JEV_CLASSIFY_URL'] : options.modelUrl);
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined);
   if (!url || typeof fetchImpl !== 'function') return done(notChecked);
-  const threshold = unit(options.vetoThreshold) ?? VETO_THRESHOLD;
+  const threshold = effectiveThreshold(options.vetoThreshold);
 
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : TIMEOUT_MS;
   const controller = new AbortController();
