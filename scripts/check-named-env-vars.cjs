@@ -203,6 +203,8 @@ const ALLOWLIST = {
     'GAP_SWEEP_R3 proposal; not a src/ read.',
   TASK_TYPES_ENABLED:
     'OPTIMIZATION_PLAN proposal; not a src/ read.',
+  CLASSIFY_LOCAL_MODEL_ENABLED:
+    'docs/plans/B9_LOCAL_MODEL.md names the future flag (default OFF); not built, not a src/ read.',
   ROUTER_FIRST_TIME_FRONTIER_N:
     'scripts/sim comment names a tunable; not a src/ read.',
   REPID_DECAY_APPLY:
