@@ -24,10 +24,12 @@ describe('the frozen corpus', () => {
     expect(rows.filter((r) => r.label === 'not_factual').length).toBeGreaterThanOrEqual(30);
     expect(new Set(rows.map((r) => r.id)).size).toBe(rows.length);
   });
-  it('has a mixed slice: claims hidden in text that looks non-factual, all labelled factual', () => {
-    const mixed = rows.filter((r) => r.slice === 'mixed');
-    expect(mixed.length).toBeGreaterThanOrEqual(15);
-    expect(mixed.every((r) => r.label === 'factual')).toBe(true);
+  it('has a mixed slice: claims hidden in casual text, each tagged asserted or embedded, plus casual non-claims', () => {
+    const mixedFactual = rows.filter((r) => r.slice === 'mixed' && r.label === 'factual');
+    expect(mixedFactual.length).toBeGreaterThanOrEqual(15);
+    expect(mixedFactual.every((r) => r.form === 'asserted' || r.form === 'embedded')).toBe(true);
+    expect(mixedFactual.filter((r) => r.form === 'asserted').length).toBeGreaterThanOrEqual(10);
+    expect(rows.filter((r) => r.slice === 'mixed' && r.label === 'not_factual').length).toBeGreaterThanOrEqual(5);
     expect(rows.every((r) => r.slice === 'plain' || r.slice === 'mixed')).toBe(true);
   });
   it('costs well under a cent to run once', () => {
@@ -114,5 +116,18 @@ describe('CC2 review of #1174: coverage, bounds, slices', () => {
     expect(s.false_skip.mixed.k).toBe(1);
     expect(s.false_skip.plain.k).toBe(0);
     expect(s.false_skip.all.k).toBe(1);
+    expect(s.false_skip.mixed_asserted.k).toBe(1);
+    expect(s.false_skip.mixed_embedded.k).toBe(0);
+  });
+
+  it('a skip on a claim inside a request lands in mixed_embedded, not the asserted headline', async () => {
+    const decide = async (t: string) => {
+      const row = rows.find((r) => r.text === t)!;
+      const skip = row.label === 'not_factual' || row.id === 'm11';
+      return { skipHal: skip, reason: skip ? 'skipped_not_factual' : 'factual' };
+    };
+    const s = summarizeShadow(await runShadow(rows, decide));
+    expect(s.false_skip.mixed_embedded.k).toBe(1);
+    expect(s.false_skip.mixed_asserted.k).toBe(0);
   });
 });

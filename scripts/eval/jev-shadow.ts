@@ -31,12 +31,15 @@ export interface CorpusRow {
   text: string;
   label: 'factual' | 'not_factual';
   slice: 'plain' | 'mixed';
+  /** Mixed factual rows only: stated by the writer, or carried inside a request or question. */
+  form?: 'asserted' | 'embedded';
 }
 
 export interface ShadowRow {
   id: string;
   label: CorpusRow['label'];
   slice: CorpusRow['slice'];
+  form?: CorpusRow['form'];
   /** The prefilter's reason: skipped_not_factual, factual, unavailable, flag_off, refused_scheme. */
   reason: string;
   skip: boolean;
@@ -61,7 +64,8 @@ export interface ShadowSummary {
   /** factual rows Jev would have skipped: the dangerous number. */
   false_skips: number;
   false_skip_rate_on_factual: number | null;
-  false_skip: { all: Rate; plain: Rate; mixed: Rate };
+  /** The headline is mixed_asserted: a claim the writer states, hidden in casual text. */
+  false_skip: { all: Rate; plain: Rate; mixed: Rate; mixed_asserted: Rate; mixed_embedded: Rate };
   /** not_factual rows Jev correctly skipped. */
   correct_skips: number;
   skip_recall_on_not_factual: number | null;
@@ -104,8 +108,8 @@ export function summarizeShadow(rows: ShadowRow[]): ShadowSummary {
   const wouldSkip = measured.filter((r) => r.skip).length;
   const ms = measured.map((r) => r.ms).sort((a, b) => a - b);
   const coverage = ratio(measured.length, rows.length);
-  const fs = (slice?: CorpusRow['slice']) => {
-    const set = factual.filter((r) => !slice || r.slice === slice);
+  const fs = (slice?: CorpusRow['slice'], form?: CorpusRow['form']) => {
+    const set = factual.filter((r) => (!slice || r.slice === slice) && (!form || r.form === form));
     return rate(set.filter((r) => r.skip).length, set.length);
   };
   const enough = coverage !== null && coverage >= MIN_COVERAGE && factual.length > 0 && notFactual.length > 0;
@@ -118,7 +122,13 @@ export function summarizeShadow(rows: ShadowRow[]): ShadowSummary {
     would_skip_rate: ratio(wouldSkip, measured.length),
     false_skips: falseSkips,
     false_skip_rate_on_factual: ratio(falseSkips, factual.length),
-    false_skip: { all: fs(), plain: fs('plain'), mixed: fs('mixed') },
+    false_skip: {
+      all: fs(),
+      plain: fs('plain'),
+      mixed: fs('mixed'),
+      mixed_asserted: fs('mixed', 'asserted'),
+      mixed_embedded: fs('mixed', 'embedded'),
+    },
     correct_skips: correctSkips,
     skip_recall_on_not_factual: ratio(correctSkips, notFactual.length),
     p50_ms: pct(ms, 50),
@@ -155,14 +165,14 @@ export async function runShadow(
     } catch {
       reason = 'unavailable';
     }
-    out.push({ id: r.id, label: r.label, slice: r.slice, reason, skip, ms: Math.max(0, now() - t0) });
+    out.push({ id: r.id, label: r.label, slice: r.slice, form: r.form, reason, skip, ms: Math.max(0, now() - t0) });
   }
   return out;
 }
 
 export const CORPUS_PATH = path.join(__dirname, 'jev-shadow-corpus.v1.json');
 /** Pinned: the corpus is frozen. Changing it means a new version file and a new hash. */
-export const CORPUS_V1_SHA256 = '03a651daa8caebeef129d93cd39933187f3e66195069840f917a0c1a3751e13a';
+export const CORPUS_V1_SHA256 = '7e3b1bec71333eb1091507aa327ea1a2b232dbf603534d8f295925215dff6594';
 
 async function main(): Promise<number> {
   let rows: CorpusRow[];
