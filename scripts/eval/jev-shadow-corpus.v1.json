@@ -1,0 +1,407 @@
+{
+ "name": "jev-shadow-corpus",
+ "version": 1,
+ "note": "Public, non-private text written for this eval (2026-10-03). Labels by the author (CC1, a model): WEAK ground truth; a person should spot-check before the result is quoted. factual = a checkable claim of fact, true OR false (8 of the 40 are deliberately false); not_factual = opinion, request, code, greeting, creative.",
+ "rows": [
+  {
+   "id": "f01",
+   "text": "The Eiffel Tower is in Paris.",
+   "label": "factual"
+  },
+  {
+   "id": "f02",
+   "text": "Water boils at 100 degrees Celsius at sea level.",
+   "label": "factual"
+  },
+  {
+   "id": "f03",
+   "text": "The Pacific is the largest ocean on Earth.",
+   "label": "factual"
+  },
+  {
+   "id": "f04",
+   "text": "Mount Everest is the highest mountain above sea level.",
+   "label": "factual"
+  },
+  {
+   "id": "f05",
+   "text": "The human heart has four chambers.",
+   "label": "factual"
+  },
+  {
+   "id": "f06",
+   "text": "Light travels faster than sound.",
+   "label": "factual"
+  },
+  {
+   "id": "f07",
+   "text": "The Great Wall of China is in Asia.",
+   "label": "factual"
+  },
+  {
+   "id": "f08",
+   "text": "Tokyo is the capital of Japan.",
+   "label": "factual"
+  },
+  {
+   "id": "f09",
+   "text": "There are seven continents.",
+   "label": "factual"
+  },
+  {
+   "id": "f10",
+   "text": "The Amazon River flows through Brazil.",
+   "label": "factual"
+  },
+  {
+   "id": "f11",
+   "text": "Python was first released in 1991.",
+   "label": "factual"
+  },
+  {
+   "id": "f12",
+   "text": "The Moon orbits the Earth.",
+   "label": "factual"
+  },
+  {
+   "id": "f13",
+   "text": "Ottawa is the capital of Canada.",
+   "label": "factual"
+  },
+  {
+   "id": "f14",
+   "text": "A week has seven days.",
+   "label": "factual"
+  },
+  {
+   "id": "f15",
+   "text": "Gold has the chemical symbol Au.",
+   "label": "factual"
+  },
+  {
+   "id": "f16",
+   "text": "The Sahara is a desert in Africa.",
+   "label": "factual"
+  },
+  {
+   "id": "f17",
+   "text": "The speed of light is about 300,000 kilometres per second.",
+   "label": "factual"
+  },
+  {
+   "id": "f18",
+   "text": "Shakespeare wrote Hamlet.",
+   "label": "factual"
+  },
+  {
+   "id": "f19",
+   "text": "Mars is the fourth planet from the Sun.",
+   "label": "factual"
+  },
+  {
+   "id": "f20",
+   "text": "The Nile is a river in Africa.",
+   "label": "factual"
+  },
+  {
+   "id": "f21",
+   "text": "17 times 3 is 51.",
+   "label": "factual"
+  },
+  {
+   "id": "f22",
+   "text": "The square root of 144 is 12.",
+   "label": "factual"
+  },
+  {
+   "id": "f23",
+   "text": "Canberra is the capital of Australia.",
+   "label": "factual"
+  },
+  {
+   "id": "f24",
+   "text": "DNA stands for deoxyribonucleic acid.",
+   "label": "factual"
+  },
+  {
+   "id": "f25",
+   "text": "The Atlantic Ocean lies between Europe and the Americas.",
+   "label": "factual"
+  },
+  {
+   "id": "f26",
+   "text": "Oxygen has atomic number 8.",
+   "label": "factual"
+  },
+  {
+   "id": "f27",
+   "text": "The Berlin Wall fell in 1989.",
+   "label": "factual"
+  },
+  {
+   "id": "f28",
+   "text": "A triangle's interior angles sum to 180 degrees.",
+   "label": "factual"
+  },
+  {
+   "id": "f29",
+   "text": "Venus is closer to the Sun than Earth is.",
+   "label": "factual"
+  },
+  {
+   "id": "f30",
+   "text": "The Mona Lisa was painted by Leonardo da Vinci.",
+   "label": "factual"
+  },
+  {
+   "id": "f31",
+   "text": "Sydney is the capital of Australia.",
+   "label": "factual"
+  },
+  {
+   "id": "f32",
+   "text": "The Earth is the largest planet in the solar system.",
+   "label": "factual"
+  },
+  {
+   "id": "f33",
+   "text": "Water boils at 50 degrees Celsius at sea level.",
+   "label": "factual"
+  },
+  {
+   "id": "f34",
+   "text": "Paris is the capital of Germany.",
+   "label": "factual"
+  },
+  {
+   "id": "f35",
+   "text": "12 times 12 is 140.",
+   "label": "factual"
+  },
+  {
+   "id": "f36",
+   "text": "The Moon is larger than the Earth.",
+   "label": "factual"
+  },
+  {
+   "id": "f37",
+   "text": "Spiders have six legs.",
+   "label": "factual"
+  },
+  {
+   "id": "f38",
+   "text": "Lima is the capital of Peru.",
+   "label": "factual"
+  },
+  {
+   "id": "f39",
+   "text": "Iron rusts when exposed to oxygen and water.",
+   "label": "factual"
+  },
+  {
+   "id": "f40",
+   "text": "Penguins live in the Southern Hemisphere.",
+   "label": "factual"
+  },
+  {
+   "id": "n01",
+   "text": "I think blue is the nicest colour.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n02",
+   "text": "Write me a poem about autumn leaves.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n03",
+   "text": "Can you help me plan a birthday party?",
+   "label": "not_factual"
+  },
+  {
+   "id": "n04",
+   "text": "def add(a, b):\n    return a + b",
+   "label": "not_factual"
+  },
+  {
+   "id": "n05",
+   "text": "Thanks, that was really helpful!",
+   "label": "not_factual"
+  },
+  {
+   "id": "n06",
+   "text": "Hello, how are you today?",
+   "label": "not_factual"
+  },
+  {
+   "id": "n07",
+   "text": "Please summarise this paragraph for me.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n08",
+   "text": "Once upon a time a dragon learned to sing.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n09",
+   "text": "What should I name my cat?",
+   "label": "not_factual"
+  },
+  {
+   "id": "n10",
+   "text": "I love the smell of rain.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n11",
+   "text": "Let's meet at 3pm tomorrow.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n12",
+   "text": "SELECT name FROM users WHERE id = 1",
+   "label": "not_factual"
+  },
+  {
+   "id": "n13",
+   "text": "Tell me a joke about programmers.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n14",
+   "text": "Honestly, I prefer tea over coffee.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n15",
+   "text": "Good morning team, quick update below.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n16",
+   "text": "Could you translate 'hello' into Spanish?",
+   "label": "not_factual"
+  },
+  {
+   "id": "n17",
+   "text": "This movie was the best I've seen all year.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n18",
+   "text": "Draft an email declining the meeting.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n19",
+   "text": "Roses are red, violets are blue.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n20",
+   "text": "lol that's hilarious",
+   "label": "not_factual"
+  },
+  {
+   "id": "n21",
+   "text": "Remind me to call mum later.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n22",
+   "text": "My favourite season is spring.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n23",
+   "text": "Can you make this sentence sound more formal?",
+   "label": "not_factual"
+  },
+  {
+   "id": "n24",
+   "text": "Here is my shopping list: eggs, milk, bread.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n25",
+   "text": "I feel tired today.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n26",
+   "text": "Imagine a city floating in the clouds.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n27",
+   "text": "Rewrite this in the style of a pirate.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n28",
+   "text": "Which do you like better, cats or dogs?",
+   "label": "not_factual"
+  },
+  {
+   "id": "n29",
+   "text": "console.log('done');",
+   "label": "not_factual"
+  },
+  {
+   "id": "n30",
+   "text": "Happy birthday! Hope you have a great day.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n31",
+   "text": "Brainstorm ten names for a coffee shop.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n32",
+   "text": "I'm not sure what to do this weekend.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n33",
+   "text": "Make the font bigger please.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n34",
+   "text": "Great job on the release, everyone.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n35",
+   "text": "Wow.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n36",
+   "text": "Explain it like I'm five.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n37",
+   "text": "Let's agree to disagree.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n38",
+   "text": "Sounds good to me.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n39",
+   "text": "Please fix the typo in line 3.",
+   "label": "not_factual"
+  },
+  {
+   "id": "n40",
+   "text": "Goodnight!",
+   "label": "not_factual"
+  }
+ ]
+}
