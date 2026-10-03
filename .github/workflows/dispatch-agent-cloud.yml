@@ -21,6 +21,10 @@
 #                                   loop (build-loop-cloud.yml). Same anti-recursion
 #                                   reason: a github-actions[bot] push would not
 #                                   trigger downstream CI on the PR this opens.
+#   GROK_APP_ID / GROK_APP_PRIVATE_KEY — OPTIONAL (B11). When both are set, push and
+#                                   PR use the Grok GitHub App's token instead of
+#                                   LOOP_GH_PAT. Absent = PAT fallback, not an error.
+#                                   Setup: docs/B11_GROK_GITHUB_APP.md.
 #
 # workflow_dispatch ONLY — no schedule. XC/GA are single-shot report tasks against
 # the already-queued docs/dispatch/INBOX_XC.md / INBOX_GA.md specs, not a
@@ -66,11 +70,60 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20       # single-shot report task, not a 40-turn build beat
     steps:
-      - name: Checkout (PAT so any PR opened here actually triggers CI)
+      # B11 — ACT AS THE GROK GITHUB APP, NOT THE OWNER'S PERSONAL TOKEN (2026-10-03).
+      #
+      # Until now the push and the PR below both used LOOP_GH_PAT, so every dispatch PR
+      # was authored by the owner's own account. When an App is configured, the push
+      # and `gh pr create` use a short-lived installation token instead, so the PR shows
+      # as "<app-slug>[bot]" — a distinct identity that a different agent can review and
+      # merge. Owner setup, click by click: docs/B11_GROK_GITHUB_APP.md.
+      #
+      # A MISSING APP IS NOT AN ERROR. If GROK_APP_ID / GROK_APP_PRIVATE_KEY are not set,
+      # has_app=false, the mint step is skipped, its `token` output is empty, and every
+      # `steps.app_token.outputs.token || secrets.LOOP_GH_PAT` below falls back to the PAT
+      # — i.e. the workflow behaves exactly as it did before B11.
+      #
+      # Secrets cannot appear in `if:`, so they are mapped to env and tested for
+      # non-emptiness here. Only the boolean is written out; the values are never echoed.
+      #
+      # The App token is scoped to THIS repository only (`owner` + `repositories`), and
+      # narrowed to contents + pull-requests write — not org-wide, not the App's full grant.
+      #
+      # B11 writes NO RepID and NO score event. Owner decision: "No score event until that
+      # app exists." Nothing here touches scoring.
+      - name: Detect Grok GitHub App secrets (B11)
+        id: app_detect
+        env:
+          GROK_APP_ID: ${{ secrets.GROK_APP_ID }}
+          GROK_APP_PRIVATE_KEY: ${{ secrets.GROK_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GROK_APP_ID" ] && [ -n "$GROK_APP_PRIVATE_KEY" ]; then
+            echo "has_app=true" >> "$GITHUB_OUTPUT"
+            echo "Grok GitHub App configured — push and PR will use its installation token."
+          else
+            echo "has_app=false" >> "$GITHUB_OUTPUT"
+            echo "Grok GitHub App NOT configured (GROK_APP_ID / GROK_APP_PRIVATE_KEY unset) — falling back to LOOP_GH_PAT. This is not an error."
+          fi
+
+      - name: Mint Grok App installation token (this repo only)
+        id: app_token
+        if: steps.app_detect.outputs.has_app == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GROK_APP_ID }}
+          private-key: ${{ secrets.GROK_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Token is the App's when B11 is configured, else the PAT (unchanged behaviour).
+      # Either way it is NOT github-actions[bot], so the pushed branch still triggers CI.
+      - name: Checkout (App token or PAT so any PR opened here actually triggers CI)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.LOOP_GH_PAT }}
+          token: ${{ steps.app_token.outputs.token || secrets.LOOP_GH_PAT }}
 
       # READ ACCESS TO TRUSTSHELL, AND NOTHING MORE (BUS B13, 2026-10-03).
       #
@@ -107,6 +160,12 @@ jobs:
           test -z "$(git status --porcelain -- trustshell)" || { echo "::error::trustshell/ still shows in git status"; exit 1; }
           echo "trustshell readable at ./trustshell @ $(git -C trustshell rev-parse --short HEAD)"
 
+      # B11: the commit AUTHOR stays the dispatch identity below even when the App is
+      # used. The App bot's noreply email needs its numeric bot user id
+      # (<id>+<app-slug>[bot]@users.noreply.github.com), which is not known until the
+      # App exists, and inventing one would attribute commits to someone else. PR
+      # authorship comes from the TOKEN (gh pr create), which is the identity that
+      # matters for review/merge. Revisit once the App's bot id can be read.
       - name: Git identity
         run: |
           git config user.name "dispatch-${{ inputs.agent }}-cloud[bot]"
@@ -215,7 +274,8 @@ jobs:
       - name: Open PR with the transcript (never auto-merged)
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.LOOP_GH_PAT }}
+          # B11: the App's token when configured (PR authored by <app-slug>[bot]), else the PAT.
+          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.LOOP_GH_PAT }}
         run: |
           REPORT=$(git status --porcelain -- reports/ | awk '{print $2}' | head -n1)
           if [ -z "$REPORT" ]; then
