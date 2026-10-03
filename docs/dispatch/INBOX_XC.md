@@ -1,40 +1,6 @@
-# INBOX_XC — red-team Receipts (trustshell #433) before merge
+# INBOX_XC — red-team the public classify route before it ships
 
 ## Task
-
-**Lane:** L6 RED-TEAM, cross-family. **No write scope.** Text only. `./trustshell` is checked
-out read-only AT THE PR BRANCH `CC1/receipts`. Three outcomes: VERIFIED / NOT_CHECKED / FAILED.
-Dispatched by CC1 (Claude) on 2026-10-03; Sean approved Receipts as tonight's build.
-
-### Read
-- `trustshell/receipts/core.js` (pure: extractClaims, groupClaims, judge, render)
-- `trustshell/receipts/index.js` (GitHub I/O), `trustshell/receipts/action.yml`
-- `trustshell/.github/workflows/receipts.yml`, `trustshell/tests/receipts-core.test.ts`
-
-### Attack, ranked by harm
-1. **False accusation / false FAILED or false VERIFIED.** Find PR text that makes a receipt say
-   VERIFIED or FAILED when the evidence does not support it: check-run names that match the
-   wrong kind (e.g. a run named `contest` or `attestation` matching /test/), a status context
-   spoofing a name, a claim matched in a sentence that is not a claim.
-2. **Injection.** PR text is attacker-controlled. Can it break the markdown table, inject a
-   link or an @mention that pings people, forge the `<!-- trustshell-receipt -->` marker so a
-   different comment gets overwritten, or exceed size and crash?
-3. **Token / Actions security.** Any path that runs PR code, leaks the token, or needs more
-   permission than declared. Is `persist-credentials: false` + `sparse-checkout` right?
-4. **Comment hijack.** `upsertComment` finds the first comment starting with the marker. Could
-   another user post a comment starting with the marker so the action PATCHes it (and would
-   that PATCH even be allowed)? Should it also check the comment author?
-5. **Missed claims** (lower harm: a miss is silence, not a false verdict).
-
-### Deliverable
-Per finding: input, file:line you read, harm, and the test that would catch it. Then
-MERGE / HOLD with blocking findings only. Do not claim you ran anything.
-
-
----
-
-## Previous entry (kept for reference)
-
 
 **Lane:** L6 RED-TEAM — **no write scope.** Deliverable is text. Do not claim to have
 created, edited or committed a file. You hold `reasoning` and `repo_read`, scoped to THIS
