@@ -14,7 +14,9 @@
  *
  * EGRESS: every call goes through providerFetch (the named chokepoint) and asserts the
  * ONLY_ATTESTATIONS_LEAVE boundary first. Under the boundary a cloud step is refused before
- * any byte leaves, and the wave moves on; the loopback step is allowed.
+ * any byte leaves, and the wave moves on; the loopback step is allowed. The boundary is ON if
+ * ANY source says so — the boundaryOn option, the env passed in, or the process env — so a
+ * caller can only TIGHTEN it, never switch a node's boundary off (CC2 review of #1171).
  *
  * WHAT COUNTS AS AN ANSWER: a 2xx whose body has non-empty choices[0].message.content. A 2xx
  * with an empty or unparseable body is NOT an answer: it is reported as a non-2xx so the wave
@@ -27,7 +29,10 @@ import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
 import { WORKING_FREE_PROVIDERS } from '../billing/free-providers';
 import { t12LocalBase, t12Wave, type T12WaveResult } from './t12-free-wave';
 
+/** Per host. A full three-host wave can therefore take up to ~60 s before NOT_CHECKED. */
 export const T12_TIMEOUT_MS = 20000;
+/** Longest wait a host's Retry-After may impose: a hostile or buggy header cannot park the loop. */
+export const T12_MAX_RETRY_AFTER_MS = 60 * 60 * 1000;
 /** Status reported for a 2xx whose body held no usable answer: outside 2xx and not 429, so the wave moves on. */
 export const T12_EMPTY_ANSWER = 0;
 const MAX_BODY_CHARS = 256 * 1024;
@@ -73,9 +78,19 @@ export function t12Target(host: string, env: Env = process.env): T12Target | nul
 export function retryAfterMs(raw: string | null | undefined, now: number = Date.now()): number | undefined {
   if (typeof raw !== 'string' || raw.trim() === '') return undefined;
   const v = raw.trim();
-  if (/^\d+$/.test(v)) return Number(v) * 1000;
-  const at = Date.parse(v);
-  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+  let ms: number | undefined;
+  if (/^\d+$/.test(v)) ms = Number(v) * 1000;
+  else {
+    const at = Date.parse(v);
+    ms = Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+  }
+  return ms === undefined || !Number.isFinite(ms) ? undefined : Math.min(ms, T12_MAX_RETRY_AFTER_MS);
+}
+
+/** True when any source engages ONLY_ATTESTATIONS_LEAVE. An explicit false cannot disengage it. */
+export function t12BoundaryOn(env: Env, explicit?: boolean): boolean {
+  const on = (v: string | undefined) => (v ?? '').toLowerCase() === 'true';
+  return explicit === true || on(env.ONLY_ATTESTATIONS_LEAVE) || on(process.env.ONLY_ATTESTATIONS_LEAVE);
 }
 
 /** choices[0].message.content when it is a non-empty string; otherwise null. */
@@ -107,12 +122,13 @@ export async function t12Ask(
   const fetchImpl = options.fetchImpl ?? (providerFetch as unknown as FetchLike);
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : T12_TIMEOUT_MS;
   const answers = new Map<string, string>();
+  const boundaryOn = t12BoundaryOn(env, options.boundaryOn);
 
   const attempt = async (host: string): Promise<{ status: number; retryAfterMs?: number }> => {
     const target = t12Target(host, env);
     if (!target) throw new Error(`t12: no endpoint or key for ${host}`);
     // Refused under ONLY_ATTESTATIONS_LEAVE for a cloud step; throws → next host.
-    assertPromptEgressAllowed(target.url, 'prompt', options.boundaryOn);
+    assertPromptEgressAllowed(target.url, 'prompt', boundaryOn);
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (target.key) headers.Authorization = `Bearer ${target.key}`;

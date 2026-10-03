@@ -38,4 +38,7 @@ Do not call Anthropic from this belt.
   before any byte leaves and the wave moves on.
 - An answer is a 2xx with non-empty `choices[0].message.content`. An empty or unparseable 2xx
   is treated as a failure, so the wave tries the next host.
+- The boundary is on if ANY source says so (the `boundaryOn` option, the env passed in, or the
+  process env); a caller can only tighten it, never switch a node's boundary off.
+- 20 s timeout per host, so a full wave can take up to ~60 s. `Retry-After` is capped at 1 h.
 - Nothing calls `t12Ask` yet, and it makes no call unless `T12_FREE_WAVE` is exactly `true`.
