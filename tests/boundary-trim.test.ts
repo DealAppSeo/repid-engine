@@ -33,9 +33,33 @@ describe('ONLY_ATTESTATIONS_LEAVE is trimmed before it is compared', () => {
     });
   });
 
-  it('every reader of the flag trims (no fourth copy left on the old comparison)', () => {
-    const { execSync } = require('node:child_process') as typeof import('node:child_process');
-    const hits = execSync("git grep -n \"ONLY_ATTESTATIONS_LEAVE || '').toLowerCase()\" -- src || true", { encoding: 'utf8' }).trim();
-    expect(hits).toBe('');
+  it('the shared reader takes an env and trims it', () => {
+    const { onlyAttestationsLeave } = require('../src/selfhost/egress-guard') as typeof import('../src/selfhost/egress-guard');
+    expect(onlyAttestationsLeave({ ONLY_ATTESTATIONS_LEAVE: 'TRUE ' })).toBe(true);
+    expect(onlyAttestationsLeave({ ONLY_ATTESTATIONS_LEAVE: 'false' })).toBe(false);
+    expect(onlyAttestationsLeave({})).toBe(false);
+  });
+
+  it('no file in src/ but egress-guard reads the flag itself (any spelling)', () => {
+    const { readdirSync, readFileSync, statSync } = require('node:fs') as typeof import('node:fs');
+    const path = require('node:path') as typeof import('node:path');
+    const root = path.join(__dirname, '..', 'src');
+    const files: string[] = [];
+    const walk = (d: string) => {
+      for (const n of readdirSync(d)) {
+        const f = path.join(d, n);
+        if (statSync(f).isDirectory()) walk(f);
+        else if (/\.(ts|js|mjs|cjs)$/.test(n)) files.push(f);
+      }
+    };
+    walk(root);
+    // A read is env.X, env?.X or env['X'] / env["X"] — the name inside a string or comment is fine.
+    const READ = /env\??\.ONLY_ATTESTATIONS_LEAVE|\[\s*['"`]ONLY_ATTESTATIONS_LEAVE['"`]\s*\]/;
+    const readers = files.filter((f) => READ.test(readFileSync(f, 'utf8'))).map((f) => path.relative(root, f).replace(/\\/g, '/'));
+    // Positive control: the walk found the tree, and the one allowed reader matches. A test
+    // that searched nothing must not pass.
+    expect(files.length).toBeGreaterThan(100);
+    expect(readers).toContain('selfhost/egress-guard.ts');
+    expect(readers).toEqual(['selfhost/egress-guard.ts']);
   });
 });
