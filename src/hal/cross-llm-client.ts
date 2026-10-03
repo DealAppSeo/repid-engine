@@ -100,7 +100,7 @@ function toEmbeddingsEndpoint(base: string): string {
 }
 
 function boundaryEngaged(): boolean {
-  return (process.env.ONLY_ATTESTATIONS_LEAVE || '').toLowerCase() === 'true';
+  return (process.env.ONLY_ATTESTATIONS_LEAVE || '').trim().toLowerCase() === 'true';
 }
 
 /**

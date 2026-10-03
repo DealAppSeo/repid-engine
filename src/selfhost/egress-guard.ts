@@ -127,7 +127,7 @@ export class EgressBoundaryError extends Error {
 
 function boundaryEngaged(explicit?: boolean): boolean {
   if (typeof explicit === 'boolean') return explicit;
-  return (process.env.ONLY_ATTESTATIONS_LEAVE || '').toLowerCase() === 'true';
+  return (process.env.ONLY_ATTESTATIONS_LEAVE || '').trim().toLowerCase() === 'true';
 }
 
 /**

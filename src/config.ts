@@ -18,7 +18,7 @@ export const LOCAL_MODE =
 // are still allowed to leave. Default-OFF and non-load-bearing here; it is read
 // by the guard, not by this module. Surfaced on config for one import point.
 export const ONLY_ATTESTATIONS_LEAVE =
-  (process.env.ONLY_ATTESTATIONS_LEAVE || '').toLowerCase() === 'true';
+  (process.env.ONLY_ATTESTATIONS_LEAVE || '').trim().toLowerCase() === 'true';
 
 // OpenAI-compatible base-URL override for the HAL quorum. When set, the core
 // openai-compat providers target THIS base instead of api.groq.com / api.*,
