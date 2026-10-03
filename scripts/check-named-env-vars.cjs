@@ -181,6 +181,7 @@ const ALLOWLIST = {
   GH_DEP_TOKEN: 'GitHub Actions Docker-build PAT; not an engine src/ read.',
   GH_TOKEN: 'Docker BuildKit secret id for GH packages; not an engine src/ read.',
   GITHUB_TOKEN: 'GitHub Actions default token, documented as insufficient for LOOP_GH_PAT; not an engine src/ read.',
+  GROK_APP_PRIVATE_KEY: 'Repo Actions secret for the Grok GitHub App (B11), read only by dispatch-agent-cloud.yml via secrets.*; not an engine src/ read.',
   RAILWAY_API_TOKEN: 'Railway platform token named in a recon doc; not an engine src/ read.',
 
   // ── other-repo / agent-runtime flags this engine does not read ───────────
