@@ -53,8 +53,10 @@ describe('ONLY_ATTESTATIONS_LEAVE is trimmed before it is compared', () => {
       }
     };
     walk(root);
-    // A read is env.X, env?.X or env['X'] / env["X"] — the name inside a string or comment is fine.
-    const READ = /env\??\.ONLY_ATTESTATIONS_LEAVE|\[\s*['"`]ONLY_ATTESTATIONS_LEAVE['"`]\s*\]/;
+    // A read is env.X, env?.X, env['X'] / env["X"], or destructuring { X } = process.env. The
+    // name inside a string or comment is fine. A computed key ('ONLY_' + 'X') is deliberate
+    // evasion no static check can catch, so it is out of scope.
+    const READ = /env\??\.ONLY_ATTESTATIONS_LEAVE|\[\s*['"`]ONLY_ATTESTATIONS_LEAVE['"`]\s*\]|\{[^}]*\bONLY_ATTESTATIONS_LEAVE\b[^}]*\}\s*=\s*(?:process\.)?env\b/;
     const readers = files.filter((f) => READ.test(readFileSync(f, 'utf8'))).map((f) => path.relative(root, f).replace(/\\/g, '/'));
     // Positive control: the walk found the tree, and the one allowed reader matches. A test
     // that searched nothing must not pass.
