@@ -8302,7 +8302,7 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 
 **Intent for steps 2-4:** Arm #1166 and #1164 (both OPEN, MERGEABLE, 8/9 checks SUCCESS including Strix, test still running — `--auto` will wait for final green). #1166 is an additive jev feature (P1, veto-only, no enable-flag flip). #1164 is docs-only. Both SAFE-CLASS. Item 14 (Plonky3 non-membership AIR): Rust toolchain not available; not started.
 
-**STEP 2-4 — ARMING #1166 and #1164 --auto --squash.** Both OPEN, MERGEABLE, Strix SUCCESS. Test check still running; `--auto` mode merges only on full green. No enable-flag flips. SAFE-CLASS.
+**STEP 2-4 — ARMING ATTEMPTED for #1166 and #1164; [X] NOT CONFIRMED.** Both OPEN, Strix SUCCESS. Test check still running; `gh pr merge --auto --squash` exits 0 for both but `autoMergeRequest=null`, `mergeStateStatus=UNKNOWN` on both after verification — same pattern as sixth run (Beat 44 lesson: exit 0 is not evidence of arming). UNKNOWN state is transient; once test check completes and GitHub resolves mergeability, re-arming next beat should succeed. Both are SAFE-CLASS.
 
 **Item 14 (Plonky3 non-membership AIR):** No Rust toolchain in this runner. Not started. Remains the sole non-Sean-gated code item. Scope unchanged: sorted-linked-list AIR columns + Poseidon2 leaf hashing + batch mode, in `zkp-vault/src/`.
 
@@ -8311,6 +8311,6 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — Rust toolchain needed; no Sean input required to start.
 3. **DRAFTs #1165/#1162/#1160:** mark ready → Strix → auto-lands. Loop cannot mark them ready.
 
-**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1166 and #1164. Both armed --auto --squash. No deviation. Item 14 not started (no Rust toolchain, insufficient turns for verifiable Rust AIR).
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1166 and #1164. Attempted; arming not confirmed — `autoMergeRequest=null`, `mergeStateStatus=UNKNOWN` on both (same pattern as sixth run). Correcting in ledger rather than claiming success. PRs are SAFE-CLASS and will be re-armed next beat once state resolves.
 
-**Next beat:** (1) Confirm this ledger PR and #1166/#1164 merged. (2) Check if DRAFT PRs #1165/#1162/#1160 have been marked ready — arm any OPEN+MERGEABLE+green ones. (3) Item 14: dedicated Rust apex beat if Rust toolchain available.
+**Next beat:** (1) Confirm this ledger PR (#1167) merged. (2) Re-arm #1164 and #1166 once their `mergeStateStatus` resolves to MERGEABLE. (3) Check if DRAFT PRs #1165/#1162/#1160 marked ready — arm any newly OPEN+green. (4) Item 14: dedicated Rust apex beat if Rust toolchain available.
