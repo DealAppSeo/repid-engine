@@ -8345,6 +8345,37 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 
 **Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1171, #1172, #1174, #1175. All four armed --auto --squash. Item 14 not started (no Rust toolchain). No deviation from stated intent. Note: applying the Beat 44 lesson — will not claim arms confirmed until next beat verifies `autoMergeRequest != null`; if UNKNOWN resolves they will have landed, if not they will be re-armed next beat.
 
+---
+
+## Beat (2026-10-03, fifth run) — fourth run verified partially; #1178 unblocked by rebase; no new PRs actionable
+
+**Prior beat verified [V] (2026-10-03, fourth run):**
+- PR #1176 (`docs/loop: beat 2026-10-03 third run`): **MERGED** as `8781ace6` — confirmed by `git log`. ✓
+- PR #1177 (`fix(t12): read ONLY_ATTESTATIONS_LEAVE through onlyAttestationsLeave`): **MERGED** as `2a3bd261` — confirmed by `git log`. The fourth run correctly armed it and it landed. ✓
+- Fourth run's ledger PR **#1178** (`docs/loop: beat 2026-10-03 fourth run — third run verified; #1177 armed`): **NOT MERGED** — `mergeStateStatus=BLOCKED`. Root cause identified: #1178 was branched from `8781ace6` (before #1177); `boundary-trim.test.ts` (added by #1175) was failing on that branch because it requires #1177's code fix to pass. The fourth run's content is accurate; the CI failure is a base-mismatch artifact, not a content error.
+  - **Remediation this beat:** rebased `docs/loop-beat-2026-10-03-fourth` onto current main (`2a3bd261`), force-pushed. PR #1178 will re-run CI with #1177 included; `boundary-trim.test.ts` will pass; auto-merge is already armed. ✓
+- Fourth run's "item 14 sole non-Sean-gated code item" — **CONFIRMED** — `zkp-vault/src/lib.rs` still exports only the range-check circuit; no non-membership AIR file added. ✓
+- **Penalty verdict: NONE.** Fourth run's content was honest; the blocked PR was a base-mismatch, not a fabrication. Verified the source of the failure rather than rubber-stamping.
+
+**Current state [V]:** `origin/main` = `2a3bd261` (6 commits since third run's `84a56162`). Open PRs: **#1178** (OPEN, auto-merge armed, CI re-running after rebase), **#1173** (DRAFT, CLEAN — skipped). No additional non-DRAFT actionable PRs.
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main (`2a3bd261`). PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** No additional non-DRAFT PRs are available to arm beyond #1178 (already handled in step 1). Item 14 (Plonky3 non-membership AIR): Rust toolchain not available in this runner; not started. This beat's deliverable is the #1178 rebase + this ledger entry.
+
+**STEP 2-4:** No new PRs to arm. #1178 rebased and CI re-triggered; it will land on green without further action. #1173 is DRAFT — loop cannot mark it ready.
+
+**Item 14 (Plonky3 non-membership AIR):** No Rust toolchain in this runner. Not started. Remains the sole non-Sean-gated code item requiring a dedicated apex beat. Scope unchanged: sorted-linked-list AIR columns + Poseidon2 leaf hashing + batch mode, in `zkp-vault/src/`.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — Rust toolchain needed; no Sean input required to start.
+3. **#1173 (DRAFT, CLEAN):** CI-green; mark ready → Strix → auto-lands. Loop cannot mark it ready.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm no new PRs (none available) and handle the #1178 rebase. Executed: rebased `docs/loop-beat-2026-10-03-fourth` onto main, force-pushed; CI re-running on #1178. This ledger entry opened as this beat's PR. No deviation.
+
+**Next beat:** (1) Confirm #1178 and this ledger PR merged. (2) Check if #1173 (DRAFT) marked ready — arm if OPEN+green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
+
 **Next beat:** (1) Confirm this ledger PR and #1171/#1172/#1174/#1175 merged. (2) Check if #1173 (DRAFT) marked ready — arm if OPEN+green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
 
 ---
