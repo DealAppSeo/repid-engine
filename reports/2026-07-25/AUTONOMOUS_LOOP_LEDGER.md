@@ -8346,3 +8346,36 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 **Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1171, #1172, #1174, #1175. All four armed --auto --squash. Item 14 not started (no Rust toolchain). No deviation from stated intent. Note: applying the Beat 44 lesson — will not claim arms confirmed until next beat verifies `autoMergeRequest != null`; if UNKNOWN resolves they will have landed, if not they will be re-armed next beat.
 
 **Next beat:** (1) Confirm this ledger PR and #1171/#1172/#1174/#1175 merged. (2) Check if #1173 (DRAFT) marked ready — arm if OPEN+green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
+
+---
+
+## Beat (2026-10-03, fourth run) — third run verified clean; #1177 armed; #1173 still DRAFT
+
+**Prior beat verified [V] (2026-10-03, third run):**
+- PR #1176 (`docs(loop): beat 2026-10-03 third run — second run verified; #1171/#1172/#1174/#1175 armed`): **MERGED** — `git log --oneline | grep '#1176'` = `8781ace6`. ✓
+- PR #1171 (`feat(t12): the real call behind the free wave, unwired and flag off`): **MERGED** as `4af6d2d0`. ✓
+- PR #1172 (`feat(routes): /api/v1/route-hint, a name for the keyword route`): **MERGED** as `c2ee29e9`. ✓
+- PR #1174 (`feat(eval): Jev shadow eval, prepared not run (CASCADE_EVAL P3)`): **MERGED** as `2e9ef537`. ✓
+- PR #1175 (`fix(selfhost): ONLY_ATTESTATIONS_LEAVE='TRUE ' engages the boundary, not disables it`): **MERGED** as `e3bc9410`. ✓
+- Third run's "arming not confirmed (autoMergeRequest=null, UNKNOWN state)" was honest and correct — all four arms resolved post-beat via the same UNKNOWN→MERGEABLE transition. ✓
+- Third run's "item 14 sole non-Sean-gated code item" — **CONFIRMED** — `zkp-vault/src/lib.rs` still exports only the range-check circuit; no non-membership AIR file added. ✓
+- **Penalty verdict: NONE.** All claims honest; the "arming not confirmed" correction was the right call — all four arms did eventually land.
+
+**Current state [V]:** `origin/main` = `8781ace6` (5 new commits since third run's `84a56162`: #1171/#1172/#1174/#1175/#1176). Open PRs: **#1177** (`fix(t12): main is red; read ONLY_ATTESTATIONS_LEAVE through the one shared reader`, OPEN, MERGEABLE, CLEAN, all 9 checks SUCCESS including Strix Security Review), **#1173** (DRAFT, UNKNOWN — skipped). Only one actionable PR.
+
+**STEP 1 — LEDGER: this entry, on a docs-only branch off origin/main. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Arm #1177 (OPEN, MERGEABLE, CLEAN, all 9 checks SUCCESS including Strix). It is a bug fix — reads `ONLY_ATTESTATIONS_LEAVE` through the one shared reader instead of a second raw `process.env` access — additive-tested, no enable-flag flip. SAFE-CLASS. Item 14 (Plonky3 non-membership AIR): Rust toolchain not available in this runner; not started.
+
+**STEP 2-4 — ARMED #1177 --auto --squash.** OPEN, MERGEABLE, CLEAN, all 9 CI checks SUCCESS (Strix included). Bug fix, no flag flip. SAFE-CLASS. (#1173 DRAFT+UNKNOWN skipped.)
+
+**Item 14 (Plonky3 non-membership AIR):** No Rust toolchain in this runner. Not started. Remains the sole non-Sean-gated code item requiring a dedicated apex beat. Scope unchanged: sorted-linked-list AIR columns + Poseidon2 leaf hashing + batch mode, in `zkp-vault/src/`.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — Rust toolchain needed; no Sean input required to start.
+3. **#1173 (DRAFT, UNKNOWN):** mark ready → Strix → auto-lands. Loop cannot mark it ready.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1177 and confirm item 14 scope. Executed as intended: #1177 armed --auto --squash. Item 14 not started (no Rust toolchain). No deviation. Applying Beat 44 lesson — will not claim arm confirmed until next beat verifies `autoMergeRequest != null`.
+
+**Next beat:** (1) Confirm this ledger PR and #1177 merged. (2) Check if #1173 (DRAFT) marked ready — arm if OPEN+green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
