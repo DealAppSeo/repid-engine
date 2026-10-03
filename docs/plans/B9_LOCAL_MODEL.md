@@ -10,27 +10,46 @@ local-model plan. Flag off. No deploy. No outside host. A model may not say pass
 | Piece | Where | What it does |
 |---|---|---|
 | The route | `src/routes/classify.ts` (#1151) | Public, unpaid. Returns `pass`/`veto` only for a whole-text arithmetic equation; everything else is `not-checked`. **Live, and stays the only source of `pass`.** |
-| The model client | `src/jev/classify.ts` (#1157) | Sends `{ state, labels }` to a **loopback** URL (`JEV_CLASSIFY_URL`) and returns `{ label, score }`. Not called by anything. |
-| Veto-only | `src/jev/classify.ts` (this PR) | A model `pass` is now read as `not-checked`. Only `veto` gets through. |
+| The model client | `src/jev/classify.ts` (#1157, System One since P1) | Sends one System One `noul` question to a **loopback** URL (`JEV_CLASSIFY_URL`) and returns `{ label, score }`: `veto` at or above a probability threshold, otherwise `not-checked`. Not called by anything. |
+| Veto-only | `src/jev/classify.ts` (#1163, then P1) | The model is never offered `pass`, and the client can only return `veto` or `not-checked`. |
+
+> **CORRECTED 2026-10-03 (P1, from CC1's `docs/plans/CASCADE_EVAL.md`).** The first version of this
+> plan had the client speak an invented `{ state, labels }` contract and assumed OpenAI-shaped
+> model runners. The real decision-model servers (`laya-serve`, and hosted Jev) speak **System
+> One**: `{ state, questions: { key: { type: "choice" | "score" | "noul", ... } } }`. As written,
+> the B9 evaluation could not have reached either. The client now speaks System One, and §1 and
+> §2 below are corrected. The generative candidates stay listed as the comparison, not the first pick.
 
 ## 1. Which model
 
 A model here does one narrow job: read one chat reply and answer `veto` (it contains a checkable
-error) or `not-checked`. It never vouches for a reply. That job favours a small instruction-tuned
-model that can be held to a fixed output format.
+error) or `not-checked`. It never vouches for a reply. That job favours a **typed decision model**,
+which returns a probability for a fixed question and generates no text, over a generative one.
+
+**First pick: `convaiinnovations/laya`** [VERIFIED against its model card, 2026-10-03]:
+- Apache-2.0, 421M parameters (ModernBERT-large plus a decision head), weights ~808 MB.
+- CPU latency 193–464 ms (with the checkpoints preloaded).
+- Served by `laya-serve` on Jev's `POST /v1/systemone` shape.
+- **Its zero-shot accuracy on typed decisions is 0.362, below that benchmark's majority-class
+  baseline.** 0.766 is only after fine-tuning. Expect zero-shot Laya to fail the §5 bar; the
+  evaluation's real output is how many labelled rows it needs to pass.
+- **Language:** the card reports the English checkpoint scoring 0.000 at 0.952 confidence on a
+  non-Latin script. So non-English replies go through its multilingual checkpoint (its `Router`
+  does this), or are `not-checked` before the call.
+
+**Comparison: generative models** (they would need a System One adapter, or a second request
+shape, to be reached by the client):
 
 | Candidate | Licence | Params | RAM at 4-bit | CPU-only latency, one reply |
 |---|---|---|---|---|
-| **Qwen/Qwen2.5-1.5B-Instruct** — recommended first | Apache-2.0 [VERIFIED: model card, 2026-10-03] | 1.54 B [VERIFIED: model card] | ~1–1.5 GB [UNVERIFIED] | ~1–3 s on 4 cores [UNVERIFIED] |
+| Qwen/Qwen2.5-1.5B-Instruct | Apache-2.0 [VERIFIED: model card, 2026-10-03] | 1.54 B [VERIFIED: model card] | ~1–1.5 GB [UNVERIFIED] | ~1–3 s on 4 cores [UNVERIFIED] |
 | HuggingFaceTB/SmolLM2-1.7B-Instruct | Apache-2.0 [VERIFIED: model card] | 1.71 B [VERIFIED: model card] | ~1–1.5 GB [UNVERIFIED] | ~1–3 s on 4 cores [UNVERIFIED] |
 | microsoft/Phi-3.5-mini-instruct — the accuracy comparison | MIT [VERIFIED: model card] | 3.82 B [VERIFIED: model card] | ~2.5–3 GB [UNVERIFIED] | ~3–8 s on 4 cores [UNVERIFIED] |
 
 **Excluded:** `meta-llama/Llama-Guard-3-1B`. Its licence is the Llama 3.2 community licence and it
 is gated. It is also a *safety* classifier (harmful content), not a check on whether a reply is wrong.
 
-**Why the first pick.** It has the smallest footprint, a permissive licence, and reliable
-instruction following for a fixed one-word answer. Phi-3.5-mini goes into the same evaluation, so the
-choice is made on a measured false-veto rate, not on size.
+**How the choice is made.** By the measured false-veto rate in §5, not by size or a model card.
 
 **What was not measured, and why.** Every RAM and latency figure above is a rule-of-thumb
 estimate. I tried to download a quantised build to time it on this session's 4-core, 15 GB
@@ -43,28 +62,35 @@ fails the evaluation on latency, whatever its accuracy.
 
 ## 2. How it runs: loopback only
 
-- The model runs in a local server (`llama.cpp`'s `llama-server`, or Ollama) bound to
-  **127.0.0.1**. `localModelUrl` in `src/jev/classify.ts` accepts only `localhost`, `127.0.0.1` and
-  `::1`, refuses anything else without a call, and sends no `Authorization` header.
-- **Contract mismatch, to be resolved when this is built.** Both servers speak an OpenAI-shaped
-  API. `jevClassify` speaks `{ state, labels } → { label, score }`. One small adapter is needed,
-  either a loopback shim beside the model or a second request shape inside `jevClassify`. The
-  adapter should use the server's **grammar / JSON-schema constrained output**, so the model can
-  only emit `{"label":"veto"|"not-checked","score":0..1}`. The model then cannot produce `pass`
-  at all, and the code-level coercion below is a second lock rather than the only one.
+- The model runs in `laya-serve` on the same machine. `localModelUrl` in `src/jev/classify.ts`
+  accepts only `localhost`, `127.0.0.1` and `::1`, refuses anything else without a call, and sends
+  no `Authorization` header.
+- **Loopback is a property of the client, not of the server.** `laya-serve` binds `0.0.0.0` with
+  no authentication unless `LAYA_API_KEY` is set (model card), and the client sends no key. So
+  whoever runs the evaluation binds the server to 127.0.0.1 or firewalls it. Otherwise the laptop
+  serves an open classifier to its network.
+- **The contract is System One** (corrected; see the note at the top). The request carries one
+  `noul` question, *"does this reply state something checkably wrong?"*. The response is read from
+  `answers.<key>.noul`, or a flat `<key>`, because the live HTTP body has not been logged yet.
+- **Why a `noul` and not a two-option `choice` of veto / not-checked.** A `choice` is softmaxed over
+  its own options. A reply with nothing wrong would have nowhere true to go, so its probability would
+  be pushed toward `veto`, and that pushes up the false-veto rate §5 gates on.
 - **A gateway on loopback can still forward traffic.** `jevClassify` cannot see past the socket,
   so the server must be a model runner, not a proxy (the CLAUDE.md note on `LOCAL_LLM_BASE_URL`
   explains why: a redirect carries every provider key with it).
 
 ## 3. VETO-ONLY
 
-- **The model may say `veto` or `not-checked`. Never `pass`.** `readJevAnswer` now maps a model
-  `pass` to `not-checked` with score `null`. A test pins it, and a mutation that lets `pass`
-  through turns the suite red.
+- **The model may say `veto` or `not-checked`. Never `pass`.** It is never offered `pass`. The
+  client vetoes only when the `noul` probability is at or above `VETO_THRESHOLD`, and returns
+  `not-checked` with score `null` for everything else, including a confident "no error". Tests pin
+  it, and mutations that let a low probability, or any other value, through turn the suite red.
+- **`VETO_THRESHOLD` is an uncalibrated placeholder (0.9).** §5 fits the real value on the labelled
+  set. Nothing is wired, so today it decides nothing.
 - **`pass` comes only from deterministic checks**, which today means the arithmetic evaluator in
   the route. A model is an opinion. A pass from an opinion is a fake pass with better grammar.
-- `reject`, a missing label, a score with no label, a timeout and any non-200 are all still
-  `not-checked`, never 0.
+- A missing answer, an answer outside [0, 1], a `choice` where a `noul` was asked, a timeout and any
+  non-200 (including `laya-serve`'s 422 for a malformed question) are all `not-checked`, never 0.
 
 ## 4. The flag
 

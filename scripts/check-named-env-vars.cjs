@@ -203,6 +203,8 @@ const ALLOWLIST = {
     'GAP_SWEEP_R3 proposal; not a src/ read.',
   TASK_TYPES_ENABLED:
     'OPTIMIZATION_PLAN proposal; not a src/ read.',
+  LAYA_API_KEY:
+    "Third-party laya-serve's own auth variable, named in docs/plans/B9_LOCAL_MODEL.md; not read by this repo.",
   CLASSIFY_LOCAL_MODEL_ENABLED:
     'docs/plans/B9_LOCAL_MODEL.md names the future flag (default OFF); not built, not a src/ read.',
   ROUTER_FIRST_TIME_FRONTIER_N:
