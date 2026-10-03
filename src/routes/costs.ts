@@ -84,6 +84,28 @@ export function summarize(rows: CallRow[]): CostSummary {
   };
 }
 
+const usd = (n: number) => (n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
+
+/**
+ * One sentence a non-engineer can read and check (CASCADE_EVAL P4). Built only from the
+ * numbers above, so it can never claim more than the ledger holds:
+ * - "saved" is an ESTIMATE of what a frontier model would have charged, and says so;
+ * - a capped read says "at least", because rows past the cap were not counted;
+ * - calls answered without any model (arithmetic /classify, Receipts) are not in this ledger,
+ *   so the line says nothing about them rather than implying zero.
+ */
+export function plainLine(s: CostSummary, capped = false): string {
+  const d = s.last_24h ?? {};
+  const calls = num(d.total_calls);
+  if (calls === 0) return capped ? 'No model calls were counted in the last 24 hours (the read was capped).' : 'No model calls were logged in the last 24 hours.';
+  const atLeast = capped ? 'at least ' : '';
+  let line = `Last 24 hours: ${atLeast}${calls} model call${calls === 1 ? '' : 's'}, ${num(d.free_tier_calls)} on free tiers (${num(d.free_tier_pct)}%), ${usd(num(d.total_cost_usd))} spent.`;
+  const saved = num(d.cost_saved_by_free_usd);
+  if (saved > 0) line += ` Sending the free-tier calls to a frontier model would have cost about ${usd(saved)} more (an estimate).`;
+  if (capped) line += ' The read was capped, so the real totals are higher.';
+  return line;
+}
+
 let cache: { at: number; payload: any } | null = null;
 const CACHE_TTL_MS = 60 * 1000;
 
@@ -92,8 +114,10 @@ router.get('/costs/summary', async (_req: Request, res: Response) => {
     if (cache && Date.now() - cache.at < CACHE_TTL_MS) return res.json(cache.payload);
     const { rows, capped } = await fetchLlmCalls24h<CallRow>(
       'provider, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, agent_id, task_hint, status');
+    const summary = summarize(rows);
     const payload = {
-      ...summarize(rows),
+      ...summary,
+      plain: plainLine(summary, capped),
       window: '24h',
       capped,
       last_updated: new Date().toISOString(),

@@ -1,7 +1,7 @@
 /**
  * S-OPTIMIZE — cost summary aggregation + free-provider classification (pure, main gate).
  */
-import { summarize } from '../src/routes/costs';
+import { summarize, plainLine } from '../src/routes/costs';
 import { isFreeProvider, frontierCostEstimate, WORKING_FREE_PROVIDERS } from '../src/billing/free-providers';
 
 const call = (over: any = {}) => ({
@@ -67,5 +67,29 @@ describe('summarize()', () => {
     const s = summarize([]);
     expect(s.last_24h.total_calls).toBe(0);
     expect(s.last_24h.free_tier_pct).toBe(0);
+  });
+});
+
+describe('plainLine() — one sentence a non-engineer can check (CASCADE_EVAL P4)', () => {
+  it('states calls, the free share and the spend', () => {
+    const line = plainLine(summarize([call(), call({ provider: 'anthropic', cost_usd: 0.02 })]));
+    expect(line).toMatch(/^Last 24 hours: 2 model calls, 1 on free tiers \(50%\), \$0\.02 spent\./);
+  });
+  it('calls the savings an estimate, never a measurement', () => {
+    const line = plainLine(summarize([call({ prompt_tokens: 100000, completion_tokens: 100000, total_tokens: 200000 })]));
+    expect(line).toMatch(/would have cost about \$[\d.]+ more \(an estimate\)\./);
+  });
+  it('a capped read says "at least" and that the real totals are higher', () => {
+    const line = plainLine(summarize([call()]), true);
+    expect(line).toMatch(/at least 1 model call,/);
+    expect(line).toMatch(/real totals are higher/);
+  });
+  it('an empty window says nothing was logged, and a capped empty one does not claim zero', () => {
+    expect(plainLine(summarize([]))).toBe('No model calls were logged in the last 24 hours.');
+    expect(plainLine(summarize([]), true)).toMatch(/capped/);
+  });
+  it('never claims work was handled without a model: that is not in this ledger', () => {
+    const line = plainLine(summarize([call(), call()]));
+    expect(line).not.toMatch(/without a model|locally|handled by rules/i);
   });
 });
