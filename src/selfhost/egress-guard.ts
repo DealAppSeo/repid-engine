@@ -125,9 +125,19 @@ export class EgressBoundaryError extends Error {
   }
 }
 
+/**
+ * THE one reader of ONLY_ATTESTATIONS_LEAVE. Every other module calls this rather than
+ * comparing the variable itself; tests/boundary-trim.test.ts fails if any other file in src/
+ * reads it. Trimmed and case-insensitive: 'TRUE ' from a dashboard copy-paste must read as ON,
+ * never as off (CC2 re-check of #1171).
+ */
+export function onlyAttestationsLeave(env: Record<string, string | undefined> = process.env): boolean {
+  return (env.ONLY_ATTESTATIONS_LEAVE || '').trim().toLowerCase() === 'true';
+}
+
 function boundaryEngaged(explicit?: boolean): boolean {
   if (typeof explicit === 'boolean') return explicit;
-  return (process.env.ONLY_ATTESTATIONS_LEAVE || '').toLowerCase() === 'true';
+  return onlyAttestationsLeave();
 }
 
 /**

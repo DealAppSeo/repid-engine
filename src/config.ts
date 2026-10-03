@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { onlyAttestationsLeave } from './selfhost/egress-guard';
 dotenv.config();
 
 // --- SELF-HOST / DATA-LOCAL boundary flags -------------------------------
@@ -17,8 +18,7 @@ export const LOCAL_MODE =
 // response TEXT to a non-loopback host — proofs / EAS anchors / chain writes
 // are still allowed to leave. Default-OFF and non-load-bearing here; it is read
 // by the guard, not by this module. Surfaced on config for one import point.
-export const ONLY_ATTESTATIONS_LEAVE =
-  (process.env.ONLY_ATTESTATIONS_LEAVE || '').toLowerCase() === 'true';
+export const ONLY_ATTESTATIONS_LEAVE = onlyAttestationsLeave();
 
 // OpenAI-compatible base-URL override for the HAL quorum. When set, the core
 // openai-compat providers target THIS base instead of api.groq.com / api.*,

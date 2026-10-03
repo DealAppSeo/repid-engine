@@ -44,7 +44,7 @@ import { calculateCost } from '../billing/pricing';
 import { pgQuery } from '../db/direct-pg';
 import { resolveProviderEndpoint } from './local-llm';
 import { isRetiredModel } from './retired-models';
-import { assertPromptEgressAllowed, isLocalHost } from '../selfhost/egress-guard';
+import { assertPromptEgressAllowed, isLocalHost, onlyAttestationsLeave } from '../selfhost/egress-guard';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 
 // BYO / local-model base-URL override for the openai-compat quorum. Read at call
@@ -100,7 +100,7 @@ function toEmbeddingsEndpoint(base: string): string {
 }
 
 function boundaryEngaged(): boolean {
-  return (process.env.ONLY_ATTESTATIONS_LEAVE || '').toLowerCase() === 'true';
+  return onlyAttestationsLeave();
 }
 
 /**
