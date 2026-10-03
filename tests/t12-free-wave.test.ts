@@ -121,7 +121,7 @@ describe('T12 free wave', () => {
 });
 
 describe('T12 local first, then groq, then cerebras, stop on 429', () => {
-  const ON = { T12_FREE_WAVE: 'true', LOCAL_LLM_BASE_URL: 'http://127.0.0.1:11434/v1' };
+  const ON = { T12_FREE_WAVE: 'true', T12_LOCAL_BASE_URL: 'http://127.0.0.1:11434/v1' };
   const statuses = (map: Record<string, number | 'throw'>) => {
     const calls: string[] = [];
     const attempt = async (host: string) => {
@@ -136,15 +136,20 @@ describe('T12 local first, then groq, then cerebras, stop on 429', () => {
   it('local joins first only for a loopback base; a remote base is never local', () => {
     expect(t12FreeWaveOrder(ON)).toEqual(['local', 'groq', 'cerebras']);
     for (const base of ['https://api.groq.com/openai/v1', 'http://10.0.0.5:8080', 'http://user:pw@127.0.0.1:1', 'ftp://127.0.0.1', 'nonsense']) {
-      expect(t12LocalBase({ LOCAL_LLM_BASE_URL: base })).toBeNull();
-      expect(t12FreeWaveOrder({ T12_FREE_WAVE: 'true', LOCAL_LLM_BASE_URL: base })).toEqual(['groq', 'cerebras']);
+      expect(t12LocalBase({ T12_LOCAL_BASE_URL: base })).toBeNull();
+      expect(t12FreeWaveOrder({ T12_FREE_WAVE: 'true', T12_LOCAL_BASE_URL: base })).toEqual(['groq', 'cerebras']);
     }
-    expect(t12FreeWaveOrder({ LOCAL_LLM_BASE_URL: 'http://localhost:1' })).toEqual([]);
+    expect(t12FreeWaveOrder({ T12_LOCAL_BASE_URL: 'http://localhost:1' })).toEqual([]);
+  });
+
+  it('the process-wide LOCAL_LLM_BASE_URL does NOT make a local step (it would redirect HAL too)', () => {
+    expect(t12LocalBase({ LOCAL_LLM_BASE_URL: 'http://127.0.0.1:11434/v1' })).toBeNull();
+    expect(t12FreeWaveOrder({ T12_FREE_WAVE: 'true', LOCAL_LLM_BASE_URL: 'http://127.0.0.1:11434/v1' })).toEqual(['groq', 'cerebras']);
   });
 
   it('off is NOT_CHECKED and calls nothing', async () => {
     const { calls, attempt } = statuses({ local: 200 });
-    expect(await t12Wave({ env: { LOCAL_LLM_BASE_URL: 'http://localhost:1' }, attempt })).toEqual({ outcome: 'NOT_CHECKED', host: null, tried: [] });
+    expect(await t12Wave({ env: { T12_LOCAL_BASE_URL: 'http://localhost:1' }, attempt })).toEqual({ outcome: 'NOT_CHECKED', host: null, tried: [] });
     expect(calls).toEqual([]);
   });
 
@@ -176,5 +181,24 @@ describe('T12 local first, then groq, then cerebras, stop on 429', () => {
     const { calls, attempt } = statuses({ local: 500, groq: 503, cerebras: 'throw' });
     expect(await t12Wave({ env: ON, attempt })).toEqual({ outcome: 'NOT_CHECKED', host: null, tried: ['local', 'groq', 'cerebras'] });
     expect(calls).toEqual(['local', 'groq', 'cerebras']);
+  });
+
+  it('a 429 passes the host Retry-After back, so the caller knows how long to wait', async () => {
+    const attempt = async (host: string) => (host === 'groq' ? { status: 429, retryAfterMs: 30000 } : Promise.reject(new Error('down')));
+    expect(await t12Wave({ env: ON, attempt })).toEqual({ outcome: 'rate_limited', host: 'groq', tried: ['local', 'groq'], retryAfterMs: 30000 });
+  });
+
+  it('with no env passed it reads the real environment, like its siblings', async () => {
+    const saved = { on: process.env.T12_FREE_WAVE, base: process.env.T12_LOCAL_BASE_URL };
+    process.env.T12_FREE_WAVE = 'true';
+    process.env.T12_LOCAL_BASE_URL = 'http://127.0.0.1:9/v1';
+    try {
+      const { calls, attempt } = statuses({ local: 200 });
+      expect((await t12Wave({ attempt })).host).toBe('local');
+      expect(calls).toEqual(['local']);
+    } finally {
+      if (saved.on === undefined) delete process.env.T12_FREE_WAVE; else process.env.T12_FREE_WAVE = saved.on;
+      if (saved.base === undefined) delete process.env.T12_LOCAL_BASE_URL; else process.env.T12_LOCAL_BASE_URL = saved.base;
+    }
   });
 });
