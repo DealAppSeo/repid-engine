@@ -173,7 +173,22 @@ Private mode, selective proofs, WASI capabilities, and x402 routed by RepID task
 RepID only routes once it carries task-class numbers (n, success rate, median cost, latency),
 not stars.
 
-## 5. Rules this plan keeps
+## 5. Red-team (XC/Grok, 2026-10-03, transcript in #1165, grade [R])
+
+- **Every repo claim in §2 checked out**, with file:line.
+- **Accepted risk, now named:** the loopback server is trusted for `veto`. A hostile process on
+  that machine could post a false veto. The veto-only rule stops a fake `pass`, not a fake
+  accusation. So the operator owns that machine, and the server binds `127.0.0.1` (§4, P1).
+- **Defer P2** until a labelled set exists. Agreed: it stays blocked, not dropped.
+- **Smallest proof to a user:** one visible line, such as *"skipped the HAL quorum, saved 1.1 s"*,
+  on the result. Adopted as the P3 report's headline.
+- **Rejected suggestion:** "run P3 on the existing `llm_call_log` HAL rows". That table stores
+  tokens, cost and status, **not input text**, so there is nothing to classify. The corpus still
+  has to be built (§4, P3).
+- **Not a source:** XC marked the P3 price as checked against a pricing page. XC has no web
+  access, so that is reasoning, not a read. The price stands on §3's primary page.
+
+## 6. Rules this plan keeps
 
 - No deploy, no Railway change, no new service.
 - No paid call without Sean's GO (P3 is the only paid item, ~$0.006).
