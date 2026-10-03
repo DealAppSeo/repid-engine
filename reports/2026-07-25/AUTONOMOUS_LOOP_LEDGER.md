@@ -8281,3 +8281,36 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 **Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1151, #1153, #1154 and confirm item 14 scope. Executed as intended: all three PRs armed --auto --squash. Item 14 not started (no Rust toolchain). No deviation.
 
 **Next beat:** (1) Confirm this ledger PR and #1151/#1153/#1154 merged. (2) Check if DRAFT PRs resolved — arm any newly MERGEABLE+green non-DRAFT PRs. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design the non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
+
+---
+
+## Beat (2026-10-03, second run) — first run verified clean; #1164 and #1166 armed; jev/belts stream progressing
+
+**Prior beat verified [V] (2026-10-03, first run):**
+- PR #1156 (docs/loop beat 2026-10-03 first run): **MERGED** — `git log --oneline | grep '#1156'` = `328badb0`. ✓
+- PR #1151 (`feat(classify): public unpaid POST /api/v1/classify`): **MERGED 2026-10-03T00:59:23Z** — commit `1a1d1cb1`. ✓
+- PR #1153 (`docs(living): BUS, NEXT and STANDING_ORDER`): **MERGED** — in git log. ✓
+- PR #1154 (`ci(dispatch): let XC read trustshell, read-only (BUS B13)`): **MERGED** — commit `6a40bf42`. ✓
+- Additional merges since first run: #1155 (trustshell read transcript), #1157 (`feat(jev): src/jev/classify.ts — label + score from a local model, never reject (B5)`), #1158 (`feat(belts): GET /api/v1/belts/cfo — read-only rows, cap cannot spend (B6)`), #1159 (dispatch cross-family review B5/B6), #1161 (`ci(dispatch): Grok runs as its own GitHub App (B11)`), #1163 (`docs(plans): B9 local-model plan; jevClassify is veto-only`). jev/belts work stream actively landing via XC/Cursor.
+- `origin/main` = `76617bfa` (many new commits since first run's `0d19bbce`). ✓
+- First run's "item 14 is sole non-Sean-gated code item" — **CONFIRMED** — `zkp-vault/src/lib.rs` still exports only range-check; no non-membership AIR added. ✓
+- **Penalty verdict: NONE.** All stated findings accurate.
+
+**Current state [V]:** `origin/main` = `76617bfa`. Open non-DRAFT PRs: **#1166** (`feat(jev): jevClassify speaks System One — one noul question, veto-only (P1)`, OPEN, MERGEABLE, 8/9 checks SUCCESS — test still running, Strix SUCCESS), **#1164** (`docs(plans): typed-decision cascade, what to evaluate and what to wire`, OPEN, MERGEABLE, 8/9 checks SUCCESS — test still running, Strix SUCCESS). DRAFTs: #1165 (MERGEABLE), #1162 (UNKNOWN), #1160 (UNKNOWN) — all skipped.
+
+**STEP 1 — LEDGER: this entry, on docs/loop-beat-2026-10-03-second off origin/main. PR opened, armed --auto --squash.**
+
+**Intent for steps 2-4:** Arm #1166 and #1164 (both OPEN, MERGEABLE, 8/9 checks SUCCESS including Strix, test still running — `--auto` will wait for final green). #1166 is an additive jev feature (P1, veto-only, no enable-flag flip). #1164 is docs-only. Both SAFE-CLASS. Item 14 (Plonky3 non-membership AIR): Rust toolchain not available; not started.
+
+**STEP 2-4 — ARMING #1166 and #1164 --auto --squash.** Both OPEN, MERGEABLE, Strix SUCCESS. Test check still running; `--auto` mode merges only on full green. No enable-flag flips. SAFE-CLASS.
+
+**Item 14 (Plonky3 non-membership AIR):** No Rust toolchain in this runner. Not started. Remains the sole non-Sean-gated code item. Scope unchanged: sorted-linked-list AIR columns + Poseidon2 leaf hashing + batch mode, in `zkp-vault/src/`.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — Rust toolchain needed; no Sean input required to start.
+3. **DRAFTs #1165/#1162/#1160:** mark ready → Strix → auto-lands. Loop cannot mark them ready.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was to arm #1166 and #1164. Both armed --auto --squash. No deviation. Item 14 not started (no Rust toolchain, insufficient turns for verifiable Rust AIR).
+
+**Next beat:** (1) Confirm this ledger PR and #1166/#1164 merged. (2) Check if DRAFT PRs #1165/#1162/#1160 have been marked ready — arm any OPEN+MERGEABLE+green ones. (3) Item 14: dedicated Rust apex beat if Rust toolchain available.
