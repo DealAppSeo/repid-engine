@@ -25,7 +25,7 @@
  */
 import { providerFetch } from '../egress/provider-fetch';
 import { PROVIDER_URLS } from '../egress/provider-hosts';
-import { assertPromptEgressAllowed } from '../selfhost/egress-guard';
+import { assertPromptEgressAllowed, onlyAttestationsLeave } from '../selfhost/egress-guard';
 import { WORKING_FREE_PROVIDERS } from '../billing/free-providers';
 import { t12LocalBase, t12Wave, type T12WaveResult } from './t12-free-wave';
 
@@ -89,9 +89,8 @@ export function retryAfterMs(raw: string | null | undefined, now: number = Date.
 
 /** True when any source engages ONLY_ATTESTATIONS_LEAVE. An explicit false cannot disengage it. */
 export function t12BoundaryOn(env: Env, explicit?: boolean): boolean {
-  // Trimmed: 'TRUE ' (a copy-paste into a dashboard) must not read as off.
-  const on = (v: string | undefined) => (v ?? '').trim().toLowerCase() === 'true';
-  return explicit === true || on(env.ONLY_ATTESTATIONS_LEAVE) || on(process.env.ONLY_ATTESTATIONS_LEAVE);
+  // One reader for the variable (onlyAttestationsLeave: trimmed, case-insensitive); either source on wins.
+  return explicit === true || onlyAttestationsLeave(env) || onlyAttestationsLeave(process.env);
 }
 
 /** choices[0].message.content when it is a non-empty string; otherwise null. */
