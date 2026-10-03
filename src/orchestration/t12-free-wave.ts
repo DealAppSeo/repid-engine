@@ -1,7 +1,19 @@
 /**
  * T12 free-wave selector. Default off. Does not start a swarm and does not call a host.
  * Heartbeat stays a SQL write. This module does not replace it.
- * On only when T12_FREE_WAVE is the exact string true. Order is groq then cerebras.
+ * On only when T12_FREE_WAVE is the exact string true. Order is local, then groq, then
+ * cerebras. Local joins only when T12_LOCAL_BASE_URL is a loopback host (127.0.0.1,
+ * localhost, ::1); a remote base is never "local" and is skipped.
+ *
+ * T12_LOCAL_BASE_URL, NOT LOCAL_LLM_BASE_URL. That one is process-wide:
+ * resolveProviderEndpoint rewrites EVERY openai-compat provider to it, which would move the
+ * HAL fact-check quorum and runPCP onto the local box and send the wave's "local down, try
+ * groq" step straight back to the same local server (CC2 review of #1170). So the cloud
+ * steps must call each provider's real endpoint, never through resolveProviderEndpoint. t12Wave walks that
+ * order through a caller-supplied attempt and STOPS THE WAVE ON A 429: a rate limit is
+ * a signal to back off, not to spray the next host (llm_call_log 2026-09-06 and 09-23 show
+ * the burst that cascading through providers produces). Any other failure tries the next
+ * host. Nothing answered is NOT_CHECKED.
  * One task claims one queue row, or one local fixture when the queue is empty,
  * runs scripts/sim-hal-traps.mjs, and writes pass, fail, or NOT_CHECKED.
  * The belt names trustshell status. This fixture runs the local script so the
@@ -10,8 +22,12 @@
  */
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { localModelUrl } from '../jev/classify';
 
 export const T12_FREE_WAVE_ORDER = ['groq', 'cerebras'] as const;
+/** The local host name in the order. Present only when a loopback base is configured. */
+export const T12_LOCAL_HOST = 'local';
+
 
 /** Local stand-in for the belt command `trustshell status`. */
 export const T12_HAL_TRAPS_SCRIPT = 'scripts/sim-hal-traps.mjs';
@@ -30,9 +46,65 @@ export function t12FreeWaveEnabled(env: Record<string, string | undefined> = pro
   return raw === 'true';
 }
 
+/**
+ * T12_LOCAL_BASE_URL when it is http(s) on a loopback host with no userinfo; else null.
+ * The loopback rule is the one jevClassify uses (one allow-list, not two hand-kept copies).
+ */
+export function t12LocalBase(env: Record<string, string | undefined> = process.env): string | null {
+  return localModelUrl(env === process.env ? process.env.T12_LOCAL_BASE_URL : env.T12_LOCAL_BASE_URL);
+}
+
 export function t12FreeWaveOrder(env: Record<string, string | undefined> = process.env): readonly string[] {
   if (!t12FreeWaveEnabled(env)) return [];
-  return T12_FREE_WAVE_ORDER;
+  return t12LocalBase(env) ? [T12_LOCAL_HOST, ...T12_FREE_WAVE_ORDER] : T12_FREE_WAVE_ORDER;
+}
+
+export type T12WaveOutcome = 'answered' | 'rate_limited' | 'NOT_CHECKED';
+
+export interface T12WaveResult {
+  outcome: T12WaveOutcome;
+  /** The host that answered, or the host whose 429 stopped the wave. */
+  host: string | null;
+  tried: string[];
+  /**
+   * On rate_limited: the host's Retry-After in ms, when the attempt reported one.
+   * rate_limited means the CALLER MUST WAIT before the next wave. Calling again at once
+   * re-creates the burst this stop exists to prevent.
+   */
+  retryAfterMs?: number;
+}
+
+/**
+ * "answered" means a host returned 2xx. It is NOT "checked": the caller must still validate
+ * the body and treat an empty or unparseable one as NOT_CHECKED.
+ *
+ * Try each host in order until one answers (2xx). A 429 stops the wave on that host: no
+ * further host is tried. A thrown attempt or any other status tries the next host. Off, an
+ * empty order, or every host failing is NOT_CHECKED. The attempt is the caller's: this
+ * module opens no connection and holds no key (a local host must get none).
+ */
+export async function t12Wave(input: {
+  env?: Record<string, string | undefined>;
+  attempt: (host: string) => Promise<{ status: number; retryAfterMs?: number }>;
+}): Promise<T12WaveResult> {
+  const order = t12FreeWaveOrder(input.env ?? process.env);
+  const tried: string[] = [];
+  for (const host of order) {
+    tried.push(host);
+    let status: number | null = null;
+    let retryAfterMs: number | undefined;
+    try {
+      const res = await input.attempt(host);
+      status = typeof res?.status === 'number' ? res.status : null;
+      const ra = res?.retryAfterMs;
+      if (typeof ra === 'number' && Number.isFinite(ra) && ra >= 0) retryAfterMs = ra;
+    } catch {
+      status = null;
+    }
+    if (status === 429) return retryAfterMs === undefined ? { outcome: 'rate_limited', host, tried } : { outcome: 'rate_limited', host, tried, retryAfterMs };
+    if (status !== null && status >= 200 && status < 300) return { outcome: 'answered', host, tried };
+  }
+  return { outcome: 'NOT_CHECKED', host: null, tried };
 }
 
 /** pass, fail, or NOT_CHECKED. The number 0 and the string "0" are a miss. */
