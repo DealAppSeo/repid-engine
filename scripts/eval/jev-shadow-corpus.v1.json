@@ -1,0 +1,657 @@
+{
+ "name": "jev-shadow-corpus",
+ "version": 1,
+ "note": "Public, non-private text written for this eval (2026-10-03). Labels by the author (CC1, a model): WEAK ground truth; a person should spot-check before the result is quoted, the 'mixed' slice above all. factual = contains at least one claim a third party can check, true OR false; not_factual = opinion, request, code, greeting, plan, self-report. Slices: 'plain' = one-line encyclopedia facts and obvious non-claims (7 of the 40 plain factual rows, f31-f37, are deliberately false); 'mixed' = a checkable claim embedded in text that looks non-factual (opinion, hedge, false-premise question, request, code comment, chatty reply) — the shape a prefilter wrongly skips, so its false_skips is the number to quote. f09 (seven continents) is convention-dependent: fine as factual, not a true/false fixture. Mixed factual rows carry form: 'asserted' (the writer states the claim) or 'embedded' (the claim sits inside a request or a question: m03, m04, m08, m11, m14, m15, m18). Jev's prefilter question excludes requests, so the headline false-skip rate is on mixed+asserted; embedded is reported beside it. Whether HAL should check claims inside requests is an open policy call for Sean. x01-x05 are casual not_factual rows in the same register, so skip recall compares like with like. This corpus can rule out a bad prefilter; it cannot certify a good one (a perfect run on 13 asserted rows still only bounds the false-skip rate at ~23%).",
+ "rows": [
+  {
+   "id": "f01",
+   "text": "The Eiffel Tower is in Paris.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f02",
+   "text": "Water boils at 100 degrees Celsius at sea level.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f03",
+   "text": "The Pacific is the largest ocean on Earth.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f04",
+   "text": "Mount Everest is the highest mountain above sea level.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f05",
+   "text": "The human heart has four chambers.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f06",
+   "text": "Light travels faster than sound.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f07",
+   "text": "The Great Wall of China is in Asia.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f08",
+   "text": "Tokyo is the capital of Japan.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f09",
+   "text": "There are seven continents.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f10",
+   "text": "The Amazon River flows through Brazil.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f11",
+   "text": "Python was first released in 1991.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f12",
+   "text": "The Moon orbits the Earth.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f13",
+   "text": "Ottawa is the capital of Canada.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f14",
+   "text": "A week has seven days.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f15",
+   "text": "Gold has the chemical symbol Au.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f16",
+   "text": "The Sahara is a desert in Africa.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f17",
+   "text": "The speed of light is about 300,000 kilometres per second.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f18",
+   "text": "Shakespeare wrote Hamlet.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f19",
+   "text": "Mars is the fourth planet from the Sun.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f20",
+   "text": "The Nile is a river in Africa.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f21",
+   "text": "17 times 3 is 51.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f22",
+   "text": "The square root of 144 is 12.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f23",
+   "text": "Canberra is the capital of Australia.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f24",
+   "text": "DNA stands for deoxyribonucleic acid.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f25",
+   "text": "The Atlantic Ocean lies between Europe and the Americas.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f26",
+   "text": "Oxygen has atomic number 8.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f27",
+   "text": "The Berlin Wall fell in 1989.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f28",
+   "text": "A triangle's interior angles sum to 180 degrees.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f29",
+   "text": "Venus is closer to the Sun than Earth is.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f30",
+   "text": "The Mona Lisa was painted by Leonardo da Vinci.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f31",
+   "text": "Sydney is the capital of Australia.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f32",
+   "text": "The Earth is the largest planet in the solar system.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f33",
+   "text": "Water boils at 50 degrees Celsius at sea level.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f34",
+   "text": "Paris is the capital of Germany.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f35",
+   "text": "12 times 12 is 140.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f36",
+   "text": "The Moon is larger than the Earth.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f37",
+   "text": "Spiders have six legs.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f38",
+   "text": "Lima is the capital of Peru.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f39",
+   "text": "Iron rusts when exposed to oxygen and water.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "f40",
+   "text": "Penguins live in the Southern Hemisphere.",
+   "label": "factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n01",
+   "text": "I think blue is the nicest colour.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n02",
+   "text": "Write me a poem about autumn leaves.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n03",
+   "text": "Can you help me plan a birthday party?",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n04",
+   "text": "def add(a, b):\n    return a + b",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n05",
+   "text": "Thanks, that was really helpful!",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n06",
+   "text": "Hello, how are you today?",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n07",
+   "text": "Please summarise this paragraph for me.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n08",
+   "text": "Once upon a time a dragon learned to sing.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n09",
+   "text": "What should I name my cat?",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n10",
+   "text": "I love the smell of rain.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n11",
+   "text": "Let's meet at 3pm tomorrow.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n12",
+   "text": "SELECT name FROM users WHERE id = 1",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n13",
+   "text": "Tell me a joke about programmers.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n14",
+   "text": "Honestly, I prefer tea over coffee.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n15",
+   "text": "Good morning team, quick update below.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n16",
+   "text": "Could you translate 'hello' into Spanish?",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n17",
+   "text": "This movie was the best I've seen all year.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n18",
+   "text": "Draft an email declining the meeting.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n19",
+   "text": "Roses are red, violets are blue.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n20",
+   "text": "lol that's hilarious",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n21",
+   "text": "Remind me to call mum later.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n22",
+   "text": "My favourite season is spring.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n23",
+   "text": "Can you make this sentence sound more formal?",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n24",
+   "text": "Here is my shopping list: eggs, milk, bread.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n25",
+   "text": "I feel tired today.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n26",
+   "text": "Imagine a city floating in the clouds.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n27",
+   "text": "Rewrite this in the style of a pirate.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n28",
+   "text": "Which do you like better, cats or dogs?",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n29",
+   "text": "console.log('done');",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n30",
+   "text": "Happy birthday! Hope you have a great day.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n31",
+   "text": "Brainstorm ten names for a coffee shop.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n32",
+   "text": "I'm not sure what to do this weekend.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n33",
+   "text": "Make the font bigger please.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n34",
+   "text": "Great job on the release, everyone.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n35",
+   "text": "Wow.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n36",
+   "text": "Explain it like I'm five.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n37",
+   "text": "Let's agree to disagree.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n38",
+   "text": "Sounds good to me.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n39",
+   "text": "Please fix the typo in line 3.",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "n40",
+   "text": "Goodnight!",
+   "label": "not_factual",
+   "slice": "plain"
+  },
+  {
+   "id": "m01",
+   "text": "I love Paris, the capital of Germany.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m02",
+   "text": "I think the Berlin Wall fell in 1991.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m03",
+   "text": "Why is Sydney the capital of Australia?",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "embedded"
+  },
+  {
+   "id": "m04",
+   "text": "Rewrite this formally: water boils at 50 degrees Celsius at sea level.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "embedded"
+  },
+  {
+   "id": "m05",
+   "text": "// gold's chemical symbol is Ag",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m06",
+   "text": "Thanks for the help yesterday! Quick note: the meeting moved to Tuesday, and by the way the Moon is about 38,000 km from Earth, so the launch window math is easy.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m07",
+   "text": "Honestly I'd guess Everest is the second-highest mountain, but who knows.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m08",
+   "text": "Can you make this sound friendlier: our app has 4 million users and Python was released in 2005.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "embedded"
+  },
+  {
+   "id": "m09",
+   "text": "Fun fact for the newsletter: spiders are insects.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m10",
+   "text": "lol obviously the Atlantic is the biggest ocean",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m11",
+   "text": "Draft a tweet saying Tokyo is the capital of China.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "embedded"
+  },
+  {
+   "id": "m12",
+   "text": "# TODO: per the spec, a triangle's angles sum to 200 degrees",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m13",
+   "text": "Love this team! Also reminder that 12 times 12 is 144, so we need 144 chairs.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m14",
+   "text": "Not sure, but isn't Mars the third planet from the Sun?",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "embedded"
+  },
+  {
+   "id": "m15",
+   "text": "Summarise: Shakespeare wrote Hamlet in 1950 and it flopped.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "embedded"
+  },
+  {
+   "id": "m16",
+   "text": "Happy Friday! The Nile is in South America, so the trip is off.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m17",
+   "text": "Pretty sure light is slower than sound, which is why you hear thunder first.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m18",
+   "text": "Translate into Spanish: Canberra is the capital of Australia.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "embedded"
+  },
+  {
+   "id": "m19",
+   "text": "My kid's homework says DNA stands for dynamic nucleic acid, is that right?",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "m20",
+   "text": "Great release, everyone. Note the Amazon River flows through Brazil, so ship the Brazil build first.",
+   "label": "factual",
+   "slice": "mixed",
+   "form": "asserted"
+  },
+  {
+   "id": "x01",
+   "text": "Honestly I'd guess the meeting runs long, but who knows.",
+   "label": "not_factual",
+   "slice": "mixed"
+  },
+  {
+   "id": "x02",
+   "text": "Love this team! Pizza on Friday?",
+   "label": "not_factual",
+   "slice": "mixed"
+  },
+  {
+   "id": "x03",
+   "text": "lol that demo was wild",
+   "label": "not_factual",
+   "slice": "mixed"
+  },
+  {
+   "id": "x04",
+   "text": "Not sure, but should we move standup to 10?",
+   "label": "not_factual",
+   "slice": "mixed"
+  },
+  {
+   "id": "x05",
+   "text": "Happy Friday! Let's keep the momentum going.",
+   "label": "not_factual",
+   "slice": "mixed"
+  }
+ ]
+}
