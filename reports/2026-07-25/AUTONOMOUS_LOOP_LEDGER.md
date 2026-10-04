@@ -8523,3 +8523,50 @@ PRs merged during this run's window (since 2026-10-04T10:14:20Z):
 - #1196 feat(zkp): inert scheduled proof refresh for idle agents + prover caller-score finding (merged 2026-10-04T10:16:50Z)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37194717498 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-04, third run) — second run verified clean; Item 14 step 14.0-b SHIPPED (Merkle-path AIR, 8/8 tests)
+
+**Prior beat verified [V] (2026-10-04, second run):**
+- PR #1189 (`feat(zkp): ordering-check AIR — prove low < target < high in BabyBear (Item 14 step 14.0-a)`): **MERGED** as `071b02f0` — confirmed via `git log`. ✓
+- PR auto-logged for cancelled run (1197): **MERGED** as `2aad15b5` — fallback entry. ✓
+- Second run's "8/8 tests, 35/35 total across all suites — zero failures" for ordering_check AIR — **CONFIRMED** — `zkp-vault/src/ordering_check.rs` is in the codebase, `pub mod ordering_check` in `lib.rs:104`. ✓
+- `origin/main` = `49c91766` (7 commits since second run's `2f1b4585`; the cancelled run + several unrelated PRs landed). ✓
+- Second run's "No Rust toolchain in this runner" claim was stale for this run (the second run itself said cargo IS available at 1.98.1). This run also confirms: `cargo 1.98.1`. ✓
+- **Penalty verdict: NONE.** Second run's code claims accurate; the Rust-toolchain correction was already in the second run itself.
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-04-merkle-path-air` off `origin/main` `49c91766`.**
+
+**Intent for steps 2-4:** Implement Item 14 step **14.0-b** — `zkp-vault/src/merkle_path.rs`, the Merkle path base case: prove `H_p2(left, right) = root` where `left`/`right` are derived from `(leaf, sibling, direction)` (all public inputs), using the Poseidon2Air gadget in-circuit. DEPTH=1 base case; composable to depth-D by chaining. Same pattern as ordering_check.rs (independent config, Poseidon2Air gadget reused).
+
+**STEP 2-4 — SHIPPED: `zkp-vault/src/merkle_path.rs` + `pub mod merkle_path` in `lib.rs` [V].**
+
+**Design (Merkle-path single-level AIR):**
+- Columns: W (the Poseidon2Air gadget's own columns — no extra columns, no debug_assert issue).
+- Public inputs: `[leaf, sibling, direction, root]` (4 scalars).
+- Constraints (uniform, all rows — identical to ordering_check.rs all-rows-same pattern):
+  1. Poseidon2Air round constraints (in-circuit H_p2 computation).
+  2. `direction * (1 − direction) = 0` (binary).
+  3. `inputs[0] = (1−dir) * leaf + dir * sibling` (left child).
+  4. `inputs[1] = dir * leaf + (1−dir) * sibling` (right child).
+  5. `inputs[2..P2_WIDTH] = 0` (zero-pad, same as ownership AIR).
+  6. `out0 = root` (output is the declared root).
+- HEIGHT = 8 rows (all identical, FRI minimum; same as ownership AIR and ordering_check).
+- The prover generates the trace using `generate_trace_rows` with the correct (left, right) as inputs; the Poseidon2Air gadget handles the rest.
+- DEPTH=1 (one hash level); depth-D paths chain D proofs or await proof composition.
+
+**Why DEPTH=1:** The Poseidon2Air gadget expects exactly W columns; extra sibling/direction columns trigger a `debug_assert` in `Borrow<P2Cols>` in debug mode. DEPTH=1 avoids extra columns — sibling/direction go in public inputs, not the trace. This is the honest scope, documented in the module header. The ordering_check.rs precedent (all rows identical, constraints uniform) applies here directly.
+
+**[V] 9/9 new tests + 44/44 total across all suites — zero failures (run locally in this runner).**
+Gates: (1) in_circuit_matches_off_circuit — verifies committed trace matches `merkle_parent` for both directions; (2) valid_path_dir0_proves_and_verifies; (3) valid_path_dir1_proves_and_verifies; (4) wrong_root_rejected; (5) wrong_sibling_rejected; (6) wrong_direction_rejected (flipped left/right → different root → verifier rejects); (7) tampered_proof_rejected; (8) distinct_inputs_give_distinct_roots (H_p2 non-symmetric on test values); (9) bench_prove_verify.
+
+**PR:** `feat/cc-2026-10-04-merkle-path-air`, 2 files (`zkp-vault/src/merkle_path.rs` new, `zkp-vault/src/lib.rs` +3). Off `origin/main` `49c91766`. SAFE-CLASS (zkp-vault only, additive, zero `src/` touch).
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order: `FREE_TIER_QUOTA_SHADOW_ENABLED`, `CASCADE_SPECULATION_ENABLED`, `HEAT_EVICTION_ENABLED`, EAS gas, ANFIS flips.
+2. **Item 14:** 14.0-b done. **14.0-c next**: Composite non-membership AIR — compose 14.0-a (ordering) + 14.0-b (membership) into one proof that proves `low < target < high` AND both `low`/`high` are in the Merkle tree.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Shipped exactly as stated. Two compile errors fixed during implementation (used `from_u64` instead of `from_canonical_u32` — same correction as in lib.rs / ordering_check.rs). Test count is 9 (not the pre-run estimate of 8); the bench test counts as a test in cargo. No deviation from design.
+
+**Next beat:** (1) Confirm this PR merged. (2) Item 14 step **14.0-c**: composite non-membership AIR or arm newly-opened PRs.

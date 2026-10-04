@@ -103,6 +103,10 @@ pub mod poseidon2_hash2;
 /// value falls strictly between two adjacent sorted-list entries, in-circuit.
 pub mod ordering_check;
 
+/// Merkle-path base case — prove one level of a Poseidon2 Merkle inclusion path
+/// (Item 14 step 14.0-b). Composable base case; depth-D paths chain D proofs.
+pub mod merkle_path;
+
 use poseidon2_hash2::h_p2_field;
 
 /// Public group size (number of registered commitments). Demo/gate value.
