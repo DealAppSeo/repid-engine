@@ -124,3 +124,22 @@ describe('enterpriseKeyMatches — an unset key exempts nobody', () => {
     expect(enterpriseKeyMatches(['k-123'], 'k-123')).toBe(false);
   });
 });
+
+describe('trustedClientIp — X-Real-IP first, malformed values ignored', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { trustedClientIp } = require('../src/middleware/client-ip') as typeof import('../src/middleware/client-ip');
+  const req = (headers: Record<string, unknown>, ip?: string) =>
+    ({ headers, ip, socket: { remoteAddress: '10.0.0.9' } }) as unknown as import('express').Request;
+
+  it('uses a well-formed X-Real-IP (v4 or v6) over req.ip', () => {
+    expect(trustedClientIp(req({ 'x-real-ip': '203.0.113.7' }, '198.51.100.1'))).toBe('203.0.113.7');
+    expect(trustedClientIp(req({ 'x-real-ip': ' 2001:db8::1 ' }, '198.51.100.1'))).toBe('2001:db8::1');
+  });
+
+  it('ignores a malformed, list or array X-Real-IP and falls back to req.ip, then the socket', () => {
+    expect(trustedClientIp(req({ 'x-real-ip': 'not-an-ip' }, '198.51.100.1'))).toBe('198.51.100.1');
+    expect(trustedClientIp(req({ 'x-real-ip': '203.0.113.7, 198.51.100.2' }, '198.51.100.1'))).toBe('198.51.100.1');
+    expect(trustedClientIp(req({ 'x-real-ip': ['203.0.113.7'] }, '198.51.100.1'))).toBe('198.51.100.1');
+    expect(trustedClientIp(req({}, undefined))).toBe('10.0.0.9');
+  });
+});

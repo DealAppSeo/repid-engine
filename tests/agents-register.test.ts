@@ -288,3 +288,46 @@ describe('POST /api/v1/agents/register — the 5-per-hour ceiling fires with no 
     }
   });
 });
+
+describe('POST /api/v1/agents/register — the caller is the edge-set X-Real-IP, not a rotatable X-Forwarded-For (Strix #1192)', () => {
+  beforeAll(() => {
+    delete process.env.ENTERPRISE_API_KEY;
+  });
+
+  it('rotating X-Forwarded-For under one X-Real-IP does not reset the ceiling', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const r = await request(app)
+        .post('/api/v1/agents/register')
+        .set('X-Real-IP', '203.0.113.50')
+        .set('X-Forwarded-For', `198.51.100.${i + 1}`)
+        .send({ name: `XffRotate${i}` });
+      statuses.push(r.status);
+    }
+    expect(statuses).toEqual([201, 201, 201, 201, 201, 429]);
+  });
+
+  it('a different X-Real-IP is a different caller', async () => {
+    const r = await request(app)
+      .post('/api/v1/agents/register')
+      .set('X-Real-IP', '203.0.113.51')
+      .send({ name: 'XffOtherCaller' });
+    expect(r.status).toBe(201);
+  });
+
+  it('the 24 h name dedup also ignores a rotated X-Forwarded-For', async () => {
+    const first = await request(app)
+      .post('/api/v1/agents/register')
+      .set('X-Real-IP', '203.0.113.52')
+      .set('X-Forwarded-For', '198.51.100.20')
+      .send({ name: 'XffDupe' });
+    expect(first.status).toBe(201);
+    const again = await request(app)
+      .post('/api/v1/agents/register')
+      .set('X-Real-IP', '203.0.113.52')
+      .set('X-Forwarded-For', '198.51.100.21')
+      .send({ name: 'XffDupe' });
+    expect(again.status).toBe(429);
+    expect(again.body.error).toMatch(/Duplicate registration/i);
+  });
+});

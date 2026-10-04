@@ -28,6 +28,7 @@ import { emitDeceptionShadow } from '../engine/deception-emitter';
 import { insertScoreEvent } from '../scoring/score-event-writer';
 import { publicIdentityFields } from '../identity/public-fields';
 import { checkAndRecordDedup, __resetLocalDedupForTests } from '../services/register-dedup';
+import { trustedClientIp } from '../middleware/client-ip';
 
 const router = Router();
 
@@ -167,7 +168,7 @@ router.post('/register', async (req: Request, res: Response) => {
   const cleanConstitutionText = typeof constitution_text === 'string' ? sanitizeFreeText(constitution_text) : null;
 
   // Sprint A5 anti-spam: same name from same IP within 24h → 429.
-  const ip = (req.ip || (req.headers['x-forwarded-for'] as string) || 'unknown').toString();
+  const ip = trustedClientIp(req);
   const dedup = await checkAndRecordDedup(ip, resolvedName);
   if (dedup.duplicate) {
     return res.status(429).json({
