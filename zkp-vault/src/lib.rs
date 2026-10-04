@@ -98,6 +98,11 @@ use rand::SeedableRng;
 /// circuit and off-circuit share one definition.
 pub mod poseidon2_hash2;
 
+/// Ordering-check AIR — proves `low < target < high` over BabyBear (Item 14 step 14.0-a).
+/// The foundational primitive for the non-membership STARK: establishes that a target
+/// value falls strictly between two adjacent sorted-list entries, in-circuit.
+pub mod ordering_check;
+
 use poseidon2_hash2::h_p2_field;
 
 /// Public group size (number of registered commitments). Demo/gate value.
