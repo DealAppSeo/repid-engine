@@ -105,6 +105,7 @@ import trustmarketJoinRouter from './routes/trustmarket-join';
 import layaClassifyRouter from './routes/laya-classify';
 import classifyRouter from './routes/classify';
 import { startClassifyCanary } from './classify/vote-health';
+import telegramPublicRouter, { registerPublicWebhook } from './routes/telegram-public';
 import onboardLayerRouter from './routes/onboard-layer';
 import beltsRouter from './routes/belts';
 import whyRouter from './routes/why';
@@ -232,6 +233,10 @@ app.use(helmet());
 // protects anything here. It brings its own any-origin no-credentials CORS, its
 // own 64kb parser and its own per-IP limit (429 on excess). See src/routes/classify.ts.
 app.use('/api/v1', classifyRouter);
+// B8: the PUBLIC phone door (a separate bot from the operator bot at /api/v1/telegram). Ahead of
+// the SQL sanitizer for the same reason as classify: a stranger's claim can contain ';' or '--'.
+// Inert (200, no call) until TELEGRAM_PUBLIC_BOT_TOKEN is set. See src/routes/telegram-public.ts.
+app.use('/api/v1/telegram-public', telegramPublicRouter);
 // CORS — allow-list + anchored trust*.dev pattern (src/utils/cors-origins.ts). The trustchat.dev
 // frontend + the rest of the Trust* ecosystem call repid-engine's public endpoints (rating, vote,
 // subscribe, track, session/share, leaderboard) cross-origin. NOTE (S-FRONTEND restore): this
@@ -888,6 +893,8 @@ if (!IS_TEST) {
     // B16: the classify voters' daily canary (a known-true and a known-false claim per voter),
     // reported at GET /api/v1/classify/stats. CLASSIFY_CANARY=off disables it. Never blocks boot.
     startClassifyCanary();
+    // B8: register the public bot's webhook once, only when its token is set.
+    void registerPublicWebhook().then((r) => console.log(`[telegram-public] webhook ${r}`));
 
     const redisUrl = process.env.REDIS_URL;
     if (redisUrl) {

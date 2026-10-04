@@ -90,6 +90,10 @@ const ALLOWLIST = {
     'B15 kill switch, read as env.CLASSIFY_FREE_VOTES in src/classify/free-votes.ts (env passed as a parameter for tests); generator misses it.',
   CLASSIFY_VOTERS:
     'B15 voter list, read as env.CLASSIFY_VOTERS in src/classify/free-votes.ts; generator misses parameter env reads.',
+  TELEGRAM_PUBLIC_BOT_TOKEN:
+    'B8 public phone bot token, read as env.TELEGRAM_PUBLIC_BOT_TOKEN in src/routes/telegram-public.ts (env passed as a parameter); generator misses it.',
+  TELEGRAM_PUBLIC_WEBHOOK_BASE:
+    'B8 staging override for the public bot webhook host, read via an env parameter in src/routes/telegram-public.ts.',
   CLASSIFY_CANARY:
     'B16 canary switch, read as env.CLASSIFY_CANARY in src/classify/vote-health.ts; generator misses parameter env reads.',
   CLASSIFY_MAX_PROSE_CHARS:
