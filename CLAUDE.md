@@ -632,6 +632,10 @@ Verify before touching: `SELECT pg_get_functiondef('compute_tier(integer)'::regp
   A Railway **cron** service renders differently from a web service — no domain, a next-run time —
   so "I don't see it in the list" and "it ran yesterday" are both consistent with it existing.
   The observation that settles it: the names of the services actually on the project canvas.
+  **SETTLED: FOUR [MEASURED 2026-10-04, Railway API `list-services` on project `repid-engine`]:**
+  `repid-engine`, `receipt-indexer`, `proof-drain-worker`, `attestation-minter`, one `production`
+  environment. The API service runs one replica (`numReplicas: 1`). The paragraph below is kept for
+  the lesson: a dashboard glance missed a cron service the API lists plainly.
   **The reusable part is the shape.** A dashboard glance and a database reading disagreed, and the
   tempting move was to trust the human looking at the screen and past-tense the whole section.
   That would have recorded a live daily job as dead — a false negative in the safe-looking
