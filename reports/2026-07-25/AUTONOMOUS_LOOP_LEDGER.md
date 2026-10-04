@@ -8617,3 +8617,50 @@ Gates: (0) valid_non_membership_proves_and_verifies (end-to-end); (1) target_equ
 **Step 5 — what steps 2-4 actually did vs intent:** Shipped exactly as stated. One compile error fixed during implementation (`Val::from_canonical_u32` → `Val::from_u64(u64::from(x))`, same correction pattern as prior beats). Arming #1199 done. No deviation.
 
 **Next beat:** (1) Confirm this PR and #1199 merged. (2) Check newly-opened PRs — arm if CLEAN. (3) Item 14 step **14.0-d**: depth-D non-membership paths, or a new backlog item.
+
+---
+
+## Beat (2026-10-04, fifth run) — fourth run verified clean; Item 14 step 14.0-d SHIPPED (depth-D non-membership, 10/10 new tests, 48/48 total)
+
+**Prior beat verified [V] (2026-10-04, fourth run):**
+- PR #1200 (`feat(zkp): non-membership proof bundle — target ∉ Merkle_tree(root) (Item 14 step 14.0-c)`): **MERGED** as `8467189a` — confirmed via `git log`. ✓
+- PR #1199 (`docs: X-Real-IP overwritten by edge`): **MERGED** as `3fcfac7d`. ✓
+- `origin/main` = `8467189a` — no new commits since fourth run's merge (0 open PRs). ✓
+- Fourth run's "9/9 new tests + 38/38 total" for non_membership — **CONFIRMED** — `zkp-vault/src/non_membership.rs` exists with all 9 test gates; `pub mod non_membership` in `lib.rs:110`. ✓
+- Fourth run's "cross-proof consistency by public-input binding" claim — **CONFIRMED** — `verify_non_membership` independently recomputes public inputs from the statement and feeds them to each sub-proof's verifier; a mismatched statement value fails the bound sub-proof. ✓
+- **Penalty verdict: NONE.** All fourth-run claims accurate.
+
+**Current state [V]:** `origin/main` = `8467189a`. No open PRs. Rust toolchain: cargo 1.98.1. ✓
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-04-non-membership-depth-d` off `origin/main` `8467189a`.**
+
+**Intent for steps 2-4:** Implement Item 14 step **14.0-d** — depth-D non-membership proof: extend the DEPTH=1 bundle (14.0-c) to arbitrary-depth Merkle trees by chaining D Merkle-path STARK proofs per neighbour (1 + 2D STARKs total). `non_membership_depth_d.rs` — new module; `lib.rs` — +6 lines mod declaration.
+
+**STEP 2-4 — SHIPPED: `zkp-vault/src/non_membership_depth_d.rs` + `pub mod non_membership_depth_d` in `lib.rs` [V, 48/48 tests].**
+
+**Design (chain binding, depth D):**
+- `PathStep { sibling: u32, direction: bool }` — one level of a Merkle path.
+- `MerklePathD { leaf: u32, steps: Vec<PathStep> }` — full leaf-to-root path. `intermediate_roots()` computes off-circuit parents at each level; `asserted_root()` returns the final one.
+- `NonMembershipWitnessD` holds target + two `MerklePathD` values (low/high neighbours).
+- `prove_non_membership_d` panics if depths < 1 or the two paths disagree on root; emits 1 ordering proof + 2D Merkle-path STARK proofs, each bound to its declared intermediate root.
+- `verify_non_membership_d` recomputes all intermediate roots off-circuit from the statement, verifies each sub-proof against those public inputs, and asserts the final root equals `stmt.root`.
+- Cross-consistency: a forger substituting any sub-proof fails that level's STARK; a forger altering an intermediate root in the statement makes the adjacent level fail (each is also a proved input to the next).
+
+**[V] 10/10 new tests + 48/48 total across all suites — zero failures (run locally in this runner, cargo 1.98.1).**
+Gates: valid D=2 end-to-end, ordering violated (low, high), mismatched roots at prover, wrong target/root/low_val/sibling at verifier, D=1 regression (depth-D API == depth-1 bundle), bench (5 STARKs: 1 ordering + 4 Merkle-path for D=2).
+
+**PR #1201:** `feat/cc-2026-10-04-non-membership-depth-d`, 2 files (`non_membership_depth_d.rs` +450, `lib.rs` +6). Off `origin/main` `8467189a`. SAFE-CLASS (zkp-vault only, additive, zero `src/` touch). Armed `--auto --squash`.
+
+**What differed from intent:** Executed exactly as stated. One import fix needed in the D=1 regression test — `merkle_parent` lives in `crate::merkle_path`, not re-exported by `crate::non_membership`; corrected before running tests. No deviation otherwise.
+
+**Item 14 status after this beat:**
+- ✅ 14.0-a: ordering-check AIR (PR #1189)
+- ✅ 14.0-b: Merkle-path base case AIR (PR #1198)
+- ✅ 14.0-c: DEPTH=1 non-membership bundle (PR #1200)
+- ✅ **14.0-d: depth-D non-membership (PR #1201, this beat)**
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order: `FREE_TIER_QUOTA_SHADOW_ENABLED`, `CASCADE_SPECULATION_ENABLED`, `HEAT_EVICTION_ENABLED`, EAS gas, ANFIS flips.
+2. **Item 14 complete (14.0-a through 14.0-d).** No further sub-steps identified in this backlog.
+
+**Next beat:** (1) Confirm #1201 merged. (2) Identify the next non-Sean-gated backlog item — likely Item 3's remaining open gap (authenticated per-agent retrieval HTTP endpoint: fetches `agent_memory_leaves` + `agent_memory_leaf_content`, calls `hydrateTree()`, returns `(content, inclusionProof, currentValidityProof, root)`) or another backlog item. (3) Arm any newly-opened clean PRs.
