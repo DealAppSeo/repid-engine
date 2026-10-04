@@ -8441,3 +8441,33 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 **Step 5 — what steps 2-4 actually did vs intent:** Intent was no-op beyond the ledger (no non-DRAFT PRs). Executed as stated. No deviation.
 
 **Next beat:** (1) Confirm this ledger PR merged. (2) Check if #1173 (DRAFT) marked ready — arm if OPEN+green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
+
+---
+
+## Beat (2026-10-04, first run) — sixth run verified clean; #1173 still DRAFT; no new PRs to arm
+
+**Prior beat verified [V] (2026-10-03, sixth run):**
+- PR #1180 (`docs(loop): beat 2026-10-03 sixth run — fifth run verified; #1173 still DRAFT`): **MERGED** as `3556ddde` — confirmed by `git log --oneline`. ✓
+- Sixth run's "only open PR is #1173 (DRAFT, UNKNOWN), no non-DRAFT PRs to arm" — **CONFIRMED** — `gh pr list --state open` returns only #1173 (`dispatch(xc): cloud beat transcript (ok)`, DRAFT, UNKNOWN). State unchanged from sixth run. ✓
+- Sixth run's "item 14 sole non-Sean-gated code item" — **CONFIRMED** — `zkp-vault/src/lib.rs` still exports only the range-check circuit; no non-membership AIR file added. ✓
+- `origin/main` = `3556ddde` — same as sixth run's merge commit (0 new commits). ✓
+- **Penalty verdict: NONE.** Sixth run's claims accurate; "no non-DRAFT PRs" correctly stated.
+
+**Current state [V]:** `origin/main` = `3556ddde`. **Only open PR: #1173** (DRAFT, UNKNOWN, 8/8 checks SUCCESS). No non-DRAFT PRs available to arm. Fleet is in the same hold state as sixth run.
+
+**STEP 1 — LEDGER: this entry, on `docs/loop-beat-2026-10-04-first` off origin/main. PR to be opened and armed --auto --squash.**
+
+**Intent for steps 2-4:** No non-DRAFT PRs exist to arm. #1173 is DRAFT — loop cannot mark it ready. Item 14 (Plonky3 non-membership AIR): Rust toolchain not available in this runner; not started. This beat's entire deliverable is the ledger entry itself.
+
+**STEP 2-4:** No new PRs available. #1173 remains DRAFT+UNKNOWN — skipped per standing rule.
+
+**Item 14 (Plonky3 non-membership AIR):** No Rust toolchain in this runner. Not started. Remains the sole non-Sean-gated code item. Scope unchanged: sorted-linked-list AIR columns + Poseidon2 leaf hashing + batch mode, in `zkp-vault/src/`.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Item 14 (Plonky3 non-membership AIR):** next apex beat — Rust toolchain needed; no Sean input required to start.
+3. **#1173 (DRAFT, UNKNOWN):** mark ready → Strix reviews → auto-lands. Loop cannot mark it ready.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Intent was no-op beyond the ledger (no non-DRAFT PRs). Executed as stated. No deviation.
+
+**Next beat:** (1) Confirm this ledger PR merged. (2) Check if #1173 (DRAFT) marked ready — arm if OPEN+green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
