@@ -38,6 +38,7 @@
 import { Router, json, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { safeEvalArithmetic } from '../hal/safe-arithmetic';
 import { activeVoters, classifyByFreeVotes, freeVotesEnabled, maxProseChars } from '../classify/free-votes';
 import { classifyStats, recordLabel, recordVotes } from '../classify/vote-health';
@@ -186,7 +187,7 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
     max: options.limit ?? positiveInt(process.env['CLASSIFY_RATE_LIMIT'], CLASSIFY_DEFAULT_LIMIT),
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+    keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
     message: { error: 'too_many_requests', label: NOT_CHECKED },
   });
   const corsAny = cors({
