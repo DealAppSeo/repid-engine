@@ -148,7 +148,7 @@ type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
-type MerkleConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+pub type MerkleConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config() -> MerkleConfig {
     let byte_hash = ByteHash {};
