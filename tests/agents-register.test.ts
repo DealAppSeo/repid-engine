@@ -67,6 +67,20 @@ import request from 'supertest';
 import app from '../src/index';
 import { __resetDedupForTests } from '../src/routes/agents-external';
 
+// These suites test the ROUTE, so they present a configured enterprise key and are exempt from
+// the 5-per-hour registration ceiling. The ceiling has its own suite at the bottom, run WITHOUT the
+// key configured — the state production is in. Until 2026-10-04 this file made 12 registrations
+// from one IP and never met the ceiling, because an unset key matched an absent header.
+const ENTERPRISE_KEY = 'test-enterprise-key';
+const savedEnterpriseKey = process.env.ENTERPRISE_API_KEY;
+beforeAll(() => {
+  process.env.ENTERPRISE_API_KEY = ENTERPRISE_KEY;
+});
+afterAll(() => {
+  if (savedEnterpriseKey === undefined) delete process.env.ENTERPRISE_API_KEY;
+  else process.env.ENTERPRISE_API_KEY = savedEnterpriseKey;
+});
+
 beforeEach(() => {
   __resetDedupForTests();
 });
@@ -74,7 +88,7 @@ beforeEach(() => {
 describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () => {
   it('accepts Maya-shape body (name + description + constitution_text) and returns full response', async () => {
     const res = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({
         name: 'MayaUnitTest1',
         description: 'tester',
@@ -98,7 +112,7 @@ describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () 
 
   it('agent_name wins when both agent_name and name are provided', async () => {
     const res = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({
         agent_name: 'CanonicalAgent',
         name: 'AliasName',
@@ -110,7 +124,7 @@ describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () 
 
   it('rejects description > 200 chars with 400', async () => {
     const res = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({
         name: 'TooLongDesc',
         description: 'x'.repeat(201),
@@ -121,7 +135,7 @@ describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () 
 
   it('rejects constitution_text > 5000 chars with 400', async () => {
     const res = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({
         name: 'TooLongConst',
         constitution_text: 'x'.repeat(5001),
@@ -131,14 +145,14 @@ describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () 
   });
 
   it('rejects when neither name nor agent_name provided with 400', async () => {
-    const res = await request(app).post('/api/v1/agents/register').send({});
+    const res = await request(app).post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY).send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/agent_name/);
   });
 
   it('strips <script> tags and javascript: URIs from description and constitution_text', async () => {
     const res = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({
         name: 'SanitizeMe',
         description: 'hi <script>alert(1)</script>',
@@ -159,7 +173,7 @@ describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () 
 describe('POST /api/v1/agents/register — legacy v11 contract (no regression)', () => {
   it('legacy body (agent_name + llm_provider) still returns 201 with original fields', async () => {
     const res = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({
         agent_name: 'LegacyAgentZ',
         llm_provider: 'groq',
@@ -184,7 +198,7 @@ describe('POST /api/v1/agents/register — legacy v11 contract (no regression)',
 describe('POST /api/v1/agents/register — sanitizer whitelist (Sprint A5)', () => {
   it('accepts body containing "select" / "delete" / ";" — sanitizer is bypassed', async () => {
     const res = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({
         name: 'KeywordsOK',
         constitution_text:
@@ -207,11 +221,11 @@ describe('POST /api/v1/agents/register — sanitizer whitelist (Sprint A5)', () 
 describe('POST /api/v1/agents/register — anti-spam dedup', () => {
   it('429s a duplicate name from same IP within 24h', async () => {
     const r1 = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({ name: 'DupeAgentAlpha' });
     expect(r1.status).toBe(201);
     const r2 = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({ name: 'DupeAgentAlpha' });
     expect(r2.status).toBe(429);
     expect(r2.body.error).toMatch(/Duplicate registration/i);
@@ -220,12 +234,100 @@ describe('POST /api/v1/agents/register — anti-spam dedup', () => {
 
   it('does NOT 429 a different name from the same IP', async () => {
     const r1 = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({ name: 'UniqueAgentX' });
     expect(r1.status).toBe(201);
     const r2 = await request(app)
-      .post('/api/v1/agents/register')
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
       .send({ name: 'UniqueAgentY' });
     expect(r2.status).toBe(201);
+  });
+});
+
+describe('POST /api/v1/agents/register — the 5-per-hour ceiling fires with no enterprise key configured', () => {
+  beforeAll(() => {
+    delete process.env.ENTERPRISE_API_KEY;
+  });
+
+  it('lets five through and refuses the sixth from the same IP, header or no header', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await request(app).post('/api/v1/agents/register').send({ name: `CeilingAgent${i}` });
+      statuses.push(r.status);
+    }
+    expect(statuses).toEqual([201, 201, 201, 201, 201]);
+
+    // An absent header must not match an unset key (the defect: undefined === undefined).
+    const sixth = await request(app).post('/api/v1/agents/register').send({ name: 'CeilingAgent5' });
+    expect(sixth.status).toBe(429);
+    expect(sixth.body.error).toBe('Too many registrations');
+
+    // Nor does any guessed header, with nothing configured to match it.
+    const guessed = await request(app)
+      .post('/api/v1/agents/register')
+      .set('x-enterprise-key', 'undefined')
+      .send({ name: 'CeilingAgent6' });
+    expect(guessed.status).toBe(429);
+  });
+
+  it('still exempts a caller presenting the CONFIGURED key', async () => {
+    process.env.ENTERPRISE_API_KEY = ENTERPRISE_KEY;
+    try {
+      const wrong = await request(app)
+        .post('/api/v1/agents/register')
+        .set('x-enterprise-key', 'not-the-key')
+        .send({ name: 'CeilingAgentWrong' });
+      expect(wrong.status).toBe(429);
+      const right = await request(app)
+        .post('/api/v1/agents/register')
+        .set('x-enterprise-key', ENTERPRISE_KEY)
+        .send({ name: 'CeilingAgentRight' });
+      expect(right.status).toBe(201);
+    } finally {
+      delete process.env.ENTERPRISE_API_KEY;
+    }
+  });
+});
+
+describe('POST /api/v1/agents/register — the caller is the edge-set X-Real-IP, not a rotatable X-Forwarded-For (Strix #1192)', () => {
+  beforeAll(() => {
+    delete process.env.ENTERPRISE_API_KEY;
+  });
+
+  it('rotating X-Forwarded-For under one X-Real-IP does not reset the ceiling', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const r = await request(app)
+        .post('/api/v1/agents/register')
+        .set('X-Real-IP', '203.0.113.50')
+        .set('X-Forwarded-For', `198.51.100.${i + 1}`)
+        .send({ name: `XffRotate${i}` });
+      statuses.push(r.status);
+    }
+    expect(statuses).toEqual([201, 201, 201, 201, 201, 429]);
+  });
+
+  it('a different X-Real-IP is a different caller', async () => {
+    const r = await request(app)
+      .post('/api/v1/agents/register')
+      .set('X-Real-IP', '203.0.113.51')
+      .send({ name: 'XffOtherCaller' });
+    expect(r.status).toBe(201);
+  });
+
+  it('the 24 h name dedup also ignores a rotated X-Forwarded-For', async () => {
+    const first = await request(app)
+      .post('/api/v1/agents/register')
+      .set('X-Real-IP', '203.0.113.52')
+      .set('X-Forwarded-For', '198.51.100.20')
+      .send({ name: 'XffDupe' });
+    expect(first.status).toBe(201);
+    const again = await request(app)
+      .post('/api/v1/agents/register')
+      .set('X-Real-IP', '203.0.113.52')
+      .set('X-Forwarded-For', '198.51.100.21')
+      .send({ name: 'XffDupe' });
+    expect(again.status).toBe(429);
+    expect(again.body.error).toMatch(/Duplicate registration/i);
   });
 });
