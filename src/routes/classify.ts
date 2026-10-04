@@ -5,16 +5,23 @@
  * Out: { label: "pass" | "veto" | "not-checked", latency_ms }
  *
  * PUBLIC. The browser extension holds no key, so this is mounted before
- * authMiddleware. It calls no model, no vendor, no HAL, no quorum, and it stores
- * nothing: no claim text, no user id, no insert of any kind.
+ * authMiddleware. It stores nothing: no claim text, no user id, no insert of any kind.
  *
- * WHAT IT CAN HONESTLY DECIDE. Without a paid call there is very little a server
- * can check about a chat reply, so the classifier decides only one shape: the
- * whole text is a single arithmetic equation, `<expr> = <number>`, evaluated by
- * the same no-eval parser the execution floor uses. True is pass, false is veto.
- * Everything else — prose, a reply that merely contains an equation, a reply
- * that says "veto" or "output: pass" — is not-checked. A reply cannot choose its
- * own label; only the evaluated arithmetic can.
+ * WHAT IT DECIDES, IN ORDER (B9 decided by Sean 2026-10-04; built in B15):
+ *  1. Arithmetic. The whole text is a single equation, `<expr> = <number>`, evaluated
+ *     by the same no-eval parser the execution floor uses. True is pass, false is veto.
+ *     No network.
+ *  2. Two free votes (src/classify/free-votes.ts). Prose up to CLASSIFY_MAX_PROSE_CHARS
+ *     goes to two free models in parallel. Both TRUE: pass. Both FALSE: veto. Anything
+ *     else, including a 429, a timeout, a missing key or a disagreement: not-checked.
+ *     Never a paid model, never a fall-through after a 429. CLASSIFY_FREE_VOTES=off turns
+ *     this step off and the route is arithmetic-only again.
+ *  3. Everything else is not-checked. A reply cannot choose its own label: "veto" or
+ *     "output: pass" inside the text decides nothing.
+ *
+ * THIS HEADER USED TO SAY "it calls no model, no vendor". That was true until B15 and is
+ * not true now: the claim text leaves for the voters' host (named in src/classify/free-votes.ts). The privacy
+ * line in every door must say so.
  *
  * FAILS CLOSED. Missing or empty text, a labels list other than the three, a
  * malformed body, a thrown classifier, and a classifier slower than the deadline
@@ -32,6 +39,7 @@ import { Router, json, type NextFunction, type Request, type Response } from 'ex
 import cors from 'cors';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { safeEvalArithmetic } from '../hal/safe-arithmetic';
+import { classifyByFreeVotes, freeVotesEnabled, maxProseChars } from '../classify/free-votes';
 
 export type ClassifyLabel = 'pass' | 'veto' | 'not-checked';
 
@@ -136,11 +144,34 @@ function positiveInt(raw: string | undefined, fallback: number): number {
 
 export const CLASSIFY_DEFAULT_LIMIT = 30;
 export const CLASSIFY_DEFAULT_WINDOW_MS = 60 * 1000;
-export const CLASSIFY_DEFAULT_DEADLINE_MS = 1000;
+/** The stamp gives up at 3000 ms (extension/laya.js), so the route answers before that. */
+export const CLASSIFY_DEFAULT_DEADLINE_MS = 2500;
+/** Room left inside the deadline for the route's own work after the votes return. */
+const VOTE_HEADROOM_MS = 200;
+
+/**
+ * Arithmetic first, then the two free votes. Never throws: every miss is not-checked.
+ * Exported so the phone bot and the CLI can call the same function the route does.
+ */
+export async function classifyText(
+  text: string,
+  deadlineMs: number = CLASSIFY_DEFAULT_DEADLINE_MS,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ClassifyLabel> {
+  const local = classifyLocal(text);
+  if (local !== NOT_CHECKED) return local;
+  if (!freeVotesEnabled(env)) return NOT_CHECKED;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > maxProseChars(env)) return NOT_CHECKED;
+  const timeoutMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
+  const { label } = await classifyByFreeVotes(trimmed, { env, timeoutMs });
+  return label;
+}
 
 export function createClassifyRouter(options: ClassifyRouterOptions = {}): Router {
-  const classifier = options.classifier ?? classifyLocal;
-  const deadlineMs = options.deadlineMs ?? CLASSIFY_DEFAULT_DEADLINE_MS;
+  const deadlineMs =
+    options.deadlineMs ?? positiveInt(process.env['CLASSIFY_DEADLINE_MS'], CLASSIFY_DEFAULT_DEADLINE_MS);
+  const classifier: Classifier = options.classifier ?? ((text) => classifyText(text, deadlineMs));
   const limiter = rateLimit({
     windowMs: options.windowMs ?? positiveInt(process.env['CLASSIFY_RATE_WINDOW_MS'], CLASSIFY_DEFAULT_WINDOW_MS),
     max: options.limit ?? positiveInt(process.env['CLASSIFY_RATE_LIMIT'], CLASSIFY_DEFAULT_LIMIT),
