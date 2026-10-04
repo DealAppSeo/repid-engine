@@ -11,7 +11,8 @@
  */
 
 import { Router, Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../../middleware/client-ip';
 import {
   createKeyChallenge,
   issueSelfServeKey,
@@ -26,6 +27,7 @@ export const agentKeysRouter = Router();
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 20,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   standardHeaders: true,
   legacyHeaders: false,
 });

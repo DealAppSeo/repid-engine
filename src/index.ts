@@ -188,13 +188,14 @@ const registrationLimiter = rateLimit({
 const cardLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   message: { error: 'Too many card requests' },
 });
 
 const scoreLimiter = rateLimit({
   windowMs: 60 * 1000,         // 1 minute
   max: 100,                    // 100 score events/min
-  keyGenerator: (req): string => String(req.params.id || ipKeyGenerator(req.ip ?? '')),
+  keyGenerator: (req): string => String(req.params.id || ipKeyGenerator(trustedClientIp(req))),
 });
 
 /**
@@ -223,6 +224,7 @@ const scoreLimiter = rateLimit({
 const accountConnectLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,   // 1 hour
   max: 5,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   message: {
     error: 'too_many_connects',
     message: 'Too many account connections from this network. Try again within the hour.',
@@ -551,7 +553,7 @@ const externalScoreLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
   message: { error: 'Too many score requests' },
-  keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
 });
 app.use('/api/v1/agents-external/:id/score-event', externalScoreLimiter);
 app.use('/api/v1/agents-external', agentsExternalScoreRouter);
@@ -569,7 +571,7 @@ const subscribeLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 5,
   message: { error: 'Too many subscribe requests' },
-  keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
 });
 app.use('/api/v1', statsRouter);
 app.use('/api/v1', verticalLeaderboardRouter);

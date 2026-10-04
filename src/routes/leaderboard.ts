@@ -12,6 +12,7 @@
  */
 import { Router, Request, Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
 import { verifyChainBreaks } from '../services/audit/verify-chain-db';
 import { getCachedLeaderboard, cacheLeaderboard } from '../cache/leaderboard-cache'; // S-CACHE — shared L2
@@ -32,7 +33,7 @@ const writeLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   message: { error: 'rate_limited', detail: 'too many rating/vote writes — slow down' },
 });
 

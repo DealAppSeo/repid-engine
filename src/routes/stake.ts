@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { createClient } from '@supabase/supabase-js';
 import { fractionForRepID } from '../repid-staking/repid-fraction';
 
@@ -14,6 +15,7 @@ const stakeLimiter = rateLimit({
   windowMs: 60 * 1000,
 
   max: 5,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   message: { error: 'Too many requests' }
 });
 

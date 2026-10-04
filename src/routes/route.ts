@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { routeRequest, RouteRequest, resolveTier1Key, keylessProviders, resolveAdapterKey} from '../providers/router';
 import { logToolCall } from '../utils/tool-call-logger';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
@@ -20,6 +21,7 @@ export const llmRouter = Router();
 const llmLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30, // 30 req/min for unauthenticated
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   message: { error: 'Too many requests' }
 });
 
@@ -150,7 +152,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     // with a paid-tier preference are not metered by the gate.
     const bringsOwnKeys = tier_preference === 'tier1_only' && user_paid_keys && Object.keys(user_paid_keys).length > 0;
     if (gateEnabled() && !bringsOwnKeys) {
-      const gateIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      const gateIp = trustedClientIp(req);
       const meter = meterRun(gateIp, req.headers['x-agent-gate-token']);
       res.setHeader('x-taste-remaining', String(meter.remaining));
       if (!meter.allowed) {
