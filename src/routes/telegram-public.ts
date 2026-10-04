@@ -16,7 +16,7 @@
  * with Telegram once, using a secret derived from the token (so there is no second variable to
  * forget), and Telegram must present that secret on every update.
  *
- * WHAT LEAVES. The claim goes to the classify voters (Groq) and the reply goes back through
+ * WHAT LEAVES. The claim goes to the classify voters (Groq, and Cerebras when keyed) and the reply goes back through
  * Telegram. Stored: nothing. The per-chat rate limit is in memory and holds chat ids for one
  * minute only.
  */
@@ -29,7 +29,10 @@ const PRODUCTION_BASE = 'https://repid-engine-production.up.railway.app';
 const PER_CHAT_PER_MINUTE = 10;
 const MAX_CLAIM_CHARS = 1500;
 
-export const PRIVACY_LINE = 'Your text is sent to our checker, Groq, and passes through Telegram. We store nothing.';
+// Names every host a claim can reach: the two voters are Groq and, when its key is set, Cerebras
+// (src/classify/free-votes.ts activeVoters). A line naming only one would be false.
+export const PRIVACY_LINE =
+  'Your text is sent to our checkers (Groq and Cerebras) and passes through Telegram. We store nothing.';
 
 export const WELCOME = [
   'Paste one claim and I will check it.',

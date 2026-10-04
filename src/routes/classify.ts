@@ -39,7 +39,7 @@ import { Router, json, type NextFunction, type Request, type Response } from 'ex
 import cors from 'cors';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { safeEvalArithmetic } from '../hal/safe-arithmetic';
-import { classifyByFreeVotes, freeVotesEnabled, maxProseChars, parseVoters } from '../classify/free-votes';
+import { activeVoters, classifyByFreeVotes, freeVotesEnabled, maxProseChars } from '../classify/free-votes';
 import { classifyStats, recordLabel, recordVotes } from '../classify/vote-health';
 
 export type ClassifyLabel = 'pass' | 'veto' | 'not-checked';
@@ -170,7 +170,7 @@ export async function classifyText(
     return NOT_CHECKED;
   }
   const timeoutMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
-  const voters = parseVoters(env.CLASSIFY_VOTERS);
+  const voters = activeVoters(env);
   const { label, outcomes } = await classifyByFreeVotes(trimmed, { env, timeoutMs, voters });
   recordVotes(voters, outcomes);
   recordLabel(label, 'votes');
