@@ -44,18 +44,37 @@ export type AbstainReason =
   | 'network'
   | 'budget';
 
-export type VoterProvider = 'groq' | 'cerebras' | 'nvidia-nim';
+export type VoterProvider = 'groq' | 'cerebras' | 'nvidia-nim' | 'workers-ai';
+
+const PROVIDERS: readonly VoterProvider[] = ['groq', 'cerebras', 'nvidia-nim', 'workers-ai'];
 
 export interface Voter {
   provider: VoterProvider;
   model: string;
 }
 
-const ENDPOINT: Record<VoterProvider, string> = {
-  groq: PROVIDER_URLS.groqChatCompletions,
-  cerebras: PROVIDER_URLS.cerebrasChatCompletions,
-  'nvidia-nim': PROVIDER_URLS.nvidiaNimChatCompletions,
-};
+/**
+ * V1-8 — Cloudflare Workers AI, a third family (Meta's llama next to gpt-oss and qwen). INERT
+ * TWICE: it is never chosen by default, only when CLASSIFY_VOTERS names `workers-ai:<model>`,
+ * and even then it abstains `no_key` until both CLOUDFLARE_WORKERS_AI_TOKEN and
+ * CLOUDFLARE_ACCOUNT_ID are set. Its own token, not CLOUDFLARE_API_TOKEN: a voter needs only
+ * "Workers AI Read", and the account-wide token can write KV.
+ *
+ * The URL is account-scoped, so it is assembled here from the registry origin. The account id
+ * must be 32 hex characters; anything else (a path, a host, a `?`) abstains rather than letting
+ * an env value steer where the key is sent. It does not honour LOCAL_LLM_BASE_URL (BUS V1-8).
+ */
+export const WORKERS_AI_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+const ACCOUNT_ID = /^[0-9a-f]{32}$/;
+
+function endpointFor(provider: VoterProvider, env: NodeJS.ProcessEnv): string | null {
+  if (provider === 'groq') return PROVIDER_URLS.groqChatCompletions;
+  if (provider === 'cerebras') return PROVIDER_URLS.cerebrasChatCompletions;
+  if (provider === 'nvidia-nim') return PROVIDER_URLS.nvidiaNimChatCompletions;
+  const account = (env.CLOUDFLARE_ACCOUNT_ID ?? '').trim().toLowerCase();
+  if (!ACCOUNT_ID.test(account)) return null;
+  return `${PROVIDER_URLS.cloudflareApiOrigin}/client/v4/accounts/${account}/ai/v1/chat/completions`;
+}
 
 function keyFor(provider: VoterProvider, env: NodeJS.ProcessEnv): string {
   const raw =
@@ -63,7 +82,9 @@ function keyFor(provider: VoterProvider, env: NodeJS.ProcessEnv): string {
       ? env.GROQ_API_KEY
       : provider === 'cerebras'
         ? env.CEREBRAS_API_KEY
-        : env.NVIDIA_NIM_API_KEY;
+        : provider === 'nvidia-nim'
+          ? env.NVIDIA_NIM_API_KEY
+          : env.CLOUDFLARE_WORKERS_AI_TOKEN;
   return (raw ?? '').trim();
 }
 
@@ -108,8 +129,8 @@ export function parseVoters(raw: string | undefined): readonly Voter[] {
     const provider = part.slice(0, i).trim();
     const model = part.slice(i + 1).trim();
     if (!model) continue;
-    if (provider === 'groq' || provider === 'cerebras' || provider === 'nvidia-nim') {
-      voters.push({ provider, model });
+    if ((PROVIDERS as readonly string[]).includes(provider)) {
+      voters.push({ provider: provider as VoterProvider, model });
     }
   }
   return voters.length === 2 ? voters : DEFAULT_VOTERS;
@@ -168,7 +189,14 @@ const coolingUntil = new Map<string, number>();
  * voter for everyone; spending stops below the vendor's line instead, and a request over budget
  * abstains without a call. The route's per-IP limit still applies on top.
  */
-export const BUDGET_PER_MIN: Record<VoterProvider, number> = { groq: 24, cerebras: 4, 'nvidia-nim': 32 };
+// Workers AI's free allowance is 10,000 neurons a DAY, not a per-minute count; 6 a minute keeps
+// one busy minute from spending the day. Its daily ceiling is enforced by Cloudflare (a 429).
+export const BUDGET_PER_MIN: Record<VoterProvider, number> = {
+  groq: 24,
+  cerebras: 4,
+  'nvidia-nim': 32,
+  'workers-ai': 6,
+};
 const spent = new Map<string, number[]>();
 
 function overBudget(v: Voter, now: number): boolean {
@@ -211,7 +239,8 @@ export async function castVote(voter: Voter, claim: string, opts: VoteOptions): 
   const now = opts.now ?? Date.now;
   if (RETIRED_MODELS.some((r) => r.id === voter.model)) return { kind: 'abstain', reason: 'retired_model' };
   const key = keyFor(voter.provider, env);
-  if (!key) return { kind: 'abstain', reason: 'no_key' };
+  const endpoint = endpointFor(voter.provider, env);
+  if (!key || !endpoint) return { kind: 'abstain', reason: 'no_key' };
   const until = coolingUntil.get(hostKey(voter));
   if (until !== undefined && until > now()) return { kind: 'abstain', reason: 'cooling' };
   if (overBudget(voter, now())) return { kind: 'abstain', reason: 'budget' };
@@ -230,7 +259,7 @@ export async function castVote(voter: Voter, claim: string, opts: VoteOptions): 
   // gpt-oss reasons before it answers; keep that short so the vote fits the deadline.
   if (voter.model.startsWith('openai/gpt-oss')) body.reasoning_effort = 'low';
   try {
-    const res = await (opts.fetchImpl ?? providerFetch)(ENDPOINT[voter.provider], {
+    const res = await (opts.fetchImpl ?? providerFetch)(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify(body),

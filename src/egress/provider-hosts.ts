@@ -37,6 +37,9 @@ export const PROVIDER_URLS = {
   mistralChatCompletions: 'https://api.mistral.ai/v1/chat/completions',
   zaiChatCompletions: 'https://api.z.ai/api/paas/v4/chat/completions',
   nvidiaNimChatCompletions: 'https://integrate.api.nvidia.com/v1/chat/completions',
+  // Workers AI (V1-8 classify voter). Origin only: the path carries the account id, so
+  // src/classify/free-votes.ts assembles it after validating that id.
+  cloudflareApiOrigin: 'https://api.cloudflare.com',
   // Together.ai — the `llama` family on its free tier. Added for the free wave: it is an
   // independent family from groq (whose live model is openai/gpt-oss-20b, family `openai`),
   // so a Together vote genuinely widens the quorum rather than duplicating one.

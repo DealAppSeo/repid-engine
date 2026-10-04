@@ -89,6 +89,8 @@ const PROVIDER_HOSTS = [
   // from this list simply is not looked for. A new provider host must be added here in the
   // same change that introduces it, or the ratchet silently does not cover it.
   'api.together.xyz',
+  // V1-8: Workers AI as a classify voter. Only the registry names it in src/.
+  'api.cloudflare.com',
 ] as const;
 
 /** Naming its own provider's host is the entire purpose of the file. Expected to stay. */

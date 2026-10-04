@@ -48,6 +48,9 @@ jobs:
           T12_LOCAL_BASE_URL: 'http://127.0.0.1:11434/v1'
           T12_LOCAL_MODEL: ${{ inputs.model }}
           T12_JOB_TIMEOUT_MS: '120000'
+        # `shell: bash` runs with -o pipefail. Without it the step's exit is tee's, so a
+        # NOT_CHECKED run (exit 2) went green: found on the first dispatch, 2026-10-04.
+        shell: bash
         run: node dist/orchestration/t12-runner-job.js | tee t12-receipt.json
       - name: Keep the receipt
         if: always()

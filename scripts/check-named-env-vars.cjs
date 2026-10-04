@@ -88,6 +88,10 @@ const ALLOWLIST = {
     'Read as env.ONLY_ATTESTATIONS_LEAVE inside the one shared reader (src/selfhost/egress-guard.ts, #1177), which takes env as a parameter; generator only captures literal process.env.NAME.',
   CLASSIFY_FREE_VOTES:
     'B15 kill switch, read as env.CLASSIFY_FREE_VOTES in src/classify/free-votes.ts (env passed as a parameter for tests); generator misses it.',
+  CLOUDFLARE_WORKERS_AI_TOKEN:
+    'V1-8 Workers AI voter token, read in src/classify/free-votes.ts keyFor(env); generator misses parameter env reads.',
+  CLOUDFLARE_ACCOUNT_ID:
+    'V1-8 Workers AI voter account id, read in src/classify/free-votes.ts endpointFor(env); also scripts/verify-infra.ts.',
   CLASSIFY_VOTERS:
     'B15 voter list, read as env.CLASSIFY_VOTERS in src/classify/free-votes.ts; generator misses parameter env reads.',
   TELEGRAM_PUBLIC_BOT_TOKEN:
