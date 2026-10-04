@@ -1,39 +1,37 @@
-# INBOX_XC: red-team PR #1185 (B21 T12 loopback job, B20 hardening, ?with=id)
+# INBOX_XC: red-team PR #1190 (V1-9 Stripe Checkout, inert)
 
 ## Task
 
 **Lane:** RED-TEAM. You have **no write scope**: the deliverable is text. Do not claim to have
 created, edited or committed a file. You hold `reasoning` and `repo_read`, scoped to THIS
-workspace, which is PR #1185's branch. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
-Dispatched by CC2 (Claude) on 2026-10-04 from the hourly heartbeat, during Sean's overnight sprint.
+workspace, which is PR #1190's branch. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
+Dispatched by CC2 (Claude) on 2026-10-04: this PR touches money, so it gets a red-team before merge.
 
-### What changed since your B20 FIX FIRST on #1182
+### What it is
 
-1. `src/classify/free-votes.ts`:
-   - `encodeClaim` (NFKC fold, strip `\p{Cf}` and control characters, JSON-string framing)
-     replaces the `<claim>` tag strip.
-   - `activeVoters`: Groq gpt-oss-120b plus Cerebras qwen-3.8-27b when a Cerebras key is
-     present, otherwise Groq x2.
-   - `BUDGET_PER_MIN` per voter (Groq 24, Cerebras 4, NVIDIA 32).
-2. `src/routes/repid.ts`: `GET /repid/:id?with=id` adds the resolved `agent_id`. The default
-   body stays `{score, tier}`.
-3. `.github/workflows/t12-loopback.yml` and `src/orchestration/t12-runner-job.ts`: Ollama inside
-   the runner, `T12_FREE_WAVE` on for one step, no secrets, a labelled claim set through `t12Ask`.
-4. `.github/workflows/build-loop-cloud.yml`: the loop no longer opens report-only PRs.
+`src/routes/pay-checkout.ts`, mounted before auth in `src/index.ts`:
+- `GET /api/v1/pay/tiers`: priced tiers from the `stripe_products` catalog, no Stripe ids.
+- `POST /api/v1/pay/checkout {tier_id}`: a `mode=subscription` Stripe Checkout Session for the
+  catalog price of that tier; returns only the `checkout.stripe.com` URL.
+- Inert (503 `NOT_CONFIGURED`, no call) unless `PAY_CHECKOUT_ENABLED=true` AND
+  `STRIPE_SECRET_KEY` AND an https `PAY_RETURN_ORIGIN`. Writes nothing.
+- Tests: `tests/pay-checkout.test.ts`.
 
 ### Deliverable
 
-Rank by failure direction, false pass first. For each finding give the input, the file:line you
-read, and the jest test that would catch it. At minimum, try:
-- Does anything still reach the model outside the JSON string? Look at the system prompt
-  assumptions, NFKC side effects (could folding turn a harmless claim into a different claim?),
-  and surrogate pairs.
-- Can the per-minute budget be gamed? The bucket is in memory and per process: what happens
-  across restarts or several instances?
-- `?with=id`: can it leak anything beyond an id `/proof` already exposes? Unknown names, the
-  NOT_CHECKED path, and timing.
-- The T12 workflow: input interpolation of `inputs.model` into shell (Strix ruled it out as
-  write-access-only; agree or disagree?), and anything that could make the receipt claim `local`
-  when a cloud host answered.
+Rank by failure direction: money moving wrongly first, then a leak, then availability. For each
+finding give the input, the file:line you read, and the jest test that would catch it. At minimum, try:
+- Can a caller make Stripe charge anything other than a catalog price at its catalog amount?
+  Body fields, type confusion on `tier_id` (string, float, huge, negative, array, object),
+  prototype pollution through `express.json`.
+- Can a caller steer the return URLs (open redirect, `{CHECKOUT_SESSION_ID}` abuse,
+  `PAY_RETURN_ORIGIN` edge cases such as IDNs, ports, trailing paths)?
+- Does any path echo Stripe's error body, the key, or the price id to the caller?
+- Is "inert" really inert: any configuration where one variable alone produces a Stripe call?
+- Rate limit before auth: can it be used to burn the Stripe account's API rate limit, or to
+  create sessions at scale (sessions are free but count)? Is 10/min/IP enough given
+  `ipKeyGenerator` behind Railway's proxy (trust proxy setting)?
+- Anything a reviewer should know before Sean sets the three variables (restricted-key scopes,
+  test vs live mode, what happens without a webhook).
 
 One verdict line: **MERGE / FIX FIRST / HOLD**, with the single most important reason.

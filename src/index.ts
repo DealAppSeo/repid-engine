@@ -108,6 +108,7 @@ import { startClassifyCanary } from './classify/vote-health';
 import telegramPublicRouter, { registerPublicWebhook } from './routes/telegram-public';
 import onboardLayerRouter from './routes/onboard-layer';
 import beltsRouter from './routes/belts';
+import payCheckoutRouter from './routes/pay-checkout';
 import whyRouter from './routes/why';
 import onboardUnlockRouter from './routes/onboard-unlock';
 import { agentGateRouter } from './routes/agent-gate'; // T0.5 email-OTP gate + run metering status
@@ -602,6 +603,10 @@ app.use('/api/v1', layaClassifyRouter);
 app.use('/api/v1', onboardLayerRouter);
 // Public belt ids. Read-only, before auth.
 app.use('/api/v1', beltsRouter);
+// V1-9: Stripe Checkout for a catalog tier. Before auth (a buyer has no key). INERT: 503
+// NOT_CONFIGURED until PAY_CHECKOUT_ENABLED=true AND STRIPE_SECRET_KEY AND PAY_RETURN_ORIGIN.
+// Writes nothing. See src/routes/pay-checkout.ts.
+app.use('/api/v1', payCheckoutRouter);
 // Why card. Read-only, before auth. Four sentences.
 app.use('/api/v1', whyRouter);
 // Onboard unlock. Read-only, before auth. One receipt unlocks layer 1.
