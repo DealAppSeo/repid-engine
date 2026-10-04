@@ -10,7 +10,8 @@
  */
 
 import { Router, Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { requestOtp, verifyOtp, peekRuns, gateEnabled } from '../services/email-otp';
 
 export const agentGateRouter = Router();
@@ -18,13 +19,16 @@ export const agentGateRouter = Router();
 const otpLimiter = rateLimit({
   windowMs: 60_000,
   max: 10,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'too_many_requests' },
 });
 
+// Keys the per-IP OTP and free-run meters. Was the LEFTMOST X-Forwarded-For entry, which the caller
+// writes, so rotating it reset both meters; client-ip.ts says why X-Real-IP is the one to trust.
 function callerIp(req: Request): string {
-  return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+  return trustedClientIp(req);
 }
 
 agentGateRouter.post('/v1/agent-gate/request-otp', otpLimiter, async (req: Request, res: Response): Promise<void> => {

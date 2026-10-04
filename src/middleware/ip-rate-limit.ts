@@ -98,12 +98,8 @@ import { Request, Response, NextFunction } from 'express';
 import { checkRateLimit } from '../cache/rate-limiter';
 import { hasValidEnvApiKey } from './env-api-key';
 import { resolveByokIdentity } from './rate-limit';
+import { trustedClientIp } from './client-ip';
 
-function clientIp(req: Request): string {
-  const xff = req.headers['x-forwarded-for'];
-  const fromXff = Array.isArray(xff) ? xff[0] : (typeof xff === 'string' ? xff.split(',')[0] : undefined);
-  return (fromXff || req.ip || req.socket?.remoteAddress || 'unknown').trim();
-}
 
 /** Free-tier calls per day across every anonymous caller. 0 disables the ceiling. */
 function globalDailyCeiling(): number {
@@ -219,7 +215,7 @@ export function ipRateLimit(limit = 10, windowSeconds = 86400) {
     }
 
     try {
-      const r = await checkRateLimit(`chat:${clientIp(req)}`, limit, windowSeconds);
+      const r = await checkRateLimit(`chat:${trustedClientIp(req)}`, limit, windowSeconds);
       res.setHeader('X-RateLimit-Limit', String(limit));
       res.setHeader('X-RateLimit-Remaining', String(r.remaining));
       res.setHeader('X-RateLimit-Reset', String(r.resetIn));

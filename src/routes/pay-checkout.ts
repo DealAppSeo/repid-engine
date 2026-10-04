@@ -24,6 +24,7 @@
  */
 import { Router, json, type Request, type Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 
 export const STRIPE_CHECKOUT_SESSIONS = 'https://api.stripe.com/v1/checkout/sessions';
 export const NOT_CONFIGURED = 'NOT_CONFIGURED' as const;
@@ -99,7 +100,7 @@ export function createPayRouter(options: PayRouterOptions = {}): Router {
     max: options.limit ?? 10,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req): string => ipKeyGenerator(req.ip ?? ''),
+    keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
     message: { error: 'too_many_requests' },
   });
   const router = Router();

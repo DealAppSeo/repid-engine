@@ -32,6 +32,7 @@ import { Request, Response, NextFunction } from 'express';
 import * as crypto from 'crypto';
 import { db } from '../db';
 import { getRedisClient } from '../clients/redis-client';
+import { trustedClientIp } from './client-ip';
 
 // ────────────────────────────────────────────────────────────────
 // Bucket math
@@ -309,11 +310,6 @@ export async function resolveByokIdentity(
   return { valid, keyId: key_id };
 }
 
-function getClientIp(req: Request): string {
-  // app.set('trust proxy', 1) is already configured in src/index.ts so req.ip
-  // reads the leftmost X-Forwarded-For. Fall back to socket if undefined.
-  return req.ip || req.socket?.remoteAddress || 'unknown';
-}
 
 /**
  * Normalize an IP for use as a rate-limit bucket key.
@@ -384,8 +380,11 @@ async function resolveIdentity(req: Request, routeOverride: number | null): Prom
   }
 
   // 3. IP fallback — key on the /64 prefix for IPv6 so a single subnet can't evade
-  // the limit by rotating addresses (see normalizeIpForKey).
-  const ip = normalizeIpForKey(getClientIp(req));
+  // the limit by rotating addresses (see normalizeIpForKey). The address is the
+  // edge-set X-Real-IP (client-ip.ts). This used to be `req.ip`, under a comment
+  // claiming `trust proxy: 1` made that the LEFTMOST X-Forwarded-For entry — it is
+  // the rightmost, and safe only if the edge appends, which Railway does not document.
+  const ip = normalizeIpForKey(trustedClientIp(req));
   const limit = routeOverride ?? TIER_LIMITS.IP_DEFAULT!;
   return { kind: 'ip', key: `ip:${ip}`, limit, bypass: false };
 }
