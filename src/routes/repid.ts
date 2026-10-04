@@ -127,7 +127,7 @@ repidPublicRouter.get('/repid/preview/project', (req: Request, res: Response) =>
   return res.json({ ok: true, ...previewRepId({ baseRepId, eventTypes }) });
 });
 
-// GET /api/v1/repid/:agentId — score and tier only.
+// GET /api/v1/repid/:agentId — score and tier only (plus agent_id with ?with=id).
 // A missing id is NOT_CHECKED, never 0. This handler does not insert.
 repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => {
   try {
@@ -143,7 +143,16 @@ repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => 
       return;
     }
     const lookup = await getRepIDForAgent(resolvedId);
-    res.status(200).json(repidScoreTier({ score: lookup.repid_score, tier: lookup.tier }));
+    const body = repidScoreTier({ score: lookup.repid_score, tier: lookup.tier });
+    // ?with=id adds the agent id this name resolved to, so a client can bind a proof to the
+    // agent it asked about (Strix on trustshell #437: the popup showed "verified" for any
+    // internally-consistent proof, without checking it belonged to the queried agent). Opt-in:
+    // the default body stays exactly { score, tier }. The id is already public on /proof.
+    if (req.query.with === 'id') {
+      res.status(200).json({ ...body, agent_id: resolvedId });
+      return;
+    }
+    res.status(200).json(body);
   } catch (e: any) {
     if (e?.code === 'AGENT_NOT_FOUND') {
       res.status(200).json(repidScoreTier(null));
