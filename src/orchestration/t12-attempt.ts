@@ -1,7 +1,9 @@
 /**
- * T12 attempt: the real call behind t12Wave, one host at a time. Flag off and unwired —
- * nothing calls t12Ask, and t12Wave itself returns NOT_CHECKED unless T12_FREE_WAVE is the
- * exact string true.
+ * T12 attempt: the real call behind t12Wave, one host at a time. Flag off by default: t12Wave
+ * returns NOT_CHECKED unless T12_FREE_WAVE is the exact string true. Its first caller is the
+ * B21 runner job (src/orchestration/t12-runner-job.ts), which sets the flag for one GitHub
+ * Actions job only. THIS LINE USED TO SAY "nothing calls t12Ask"; that stopped being true
+ * with B21.
  *
  * WHERE EACH STEP GOES, and why it is not resolveProviderEndpoint:
  * - local    → <T12_LOCAL_BASE_URL>/chat/completions, loopback only, NO Authorization header.
@@ -112,7 +114,7 @@ export interface T12AskResult extends T12WaveResult {
 
 /**
  * Ask the free wave one prompt. Off (T12_FREE_WAVE not exactly 'true') is NOT_CHECKED and
- * makes no call. Unwired: nothing in the service calls this yet.
+ * makes no call. The API service does not call this; the B21 runner job does.
  */
 export async function t12Ask(
   prompt: string,

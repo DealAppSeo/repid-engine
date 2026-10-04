@@ -1,0 +1,59 @@
+# B21 — the first real T12 job, on a loopback model inside this free runner.
+#
+# This repo is public, so Actions minutes are free. Ollama runs INSIDE the runner, so the model
+# answers on 127.0.0.1: a genuine loopback host under the T12 rule (#1170), with no PC and no VPS.
+# T12_FREE_WAVE is set for THIS JOB ONLY. No secret is passed, so the wave's cloud steps (groq,
+# cerebras) have no key and are skipped: every answer in the receipt came from the runner itself.
+# Nothing is written anywhere except the job summary and the receipt artifact.
+#
+# workflow_dispatch only. A schedule is a separate, reviewed change once a few runs are read.
+name: t12-loopback
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Ollama model tag to run on the runner'
+        required: false
+        default: 'qwen2.5:1.5b'
+
+permissions:
+  contents: read
+
+jobs:
+  t12-claims:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+      - name: Build
+        run: npm run build
+      - name: Start Ollama on loopback
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (OLLAMA_HOST=127.0.0.1:11434 ollama serve > ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done
+          ollama pull "${{ inputs.model }}"
+          # Warm the model so the first real call is not spent loading weights.
+          curl -sf http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' \
+            -d "{\"model\":\"${{ inputs.model }}\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}]}" >/dev/null || true
+      - name: Run one T12 job through t12Ask
+        env:
+          T12_FREE_WAVE: 'true'
+          T12_LOCAL_BASE_URL: 'http://127.0.0.1:11434/v1'
+          T12_LOCAL_MODEL: ${{ inputs.model }}
+          T12_JOB_TIMEOUT_MS: '120000'
+        run: node dist/orchestration/t12-runner-job.js | tee t12-receipt.json
+      - name: Keep the receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t12-receipt
+          path: |
+            t12-receipt.json
+            ollama.log
