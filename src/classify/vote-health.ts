@@ -18,7 +18,7 @@
  * without anyone deciding it. CLASSIFY_CANARY=off turns the canary off.
  */
 import type { VoteLabel, VoteOutcome, Voter } from './free-votes';
-import { castVote, parseVoters } from './free-votes';
+import { activeVoters, castVote } from './free-votes';
 
 interface VoterHealth {
   voter: string;
@@ -83,7 +83,7 @@ export async function runCanary(
   opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number; fetchImpl?: Parameters<typeof castVote>[2]['fetchImpl'] } = {},
 ): Promise<void> {
   const env = opts.env ?? process.env;
-  const vs = parseVoters(env.CLASSIFY_VOTERS);
+  const vs = activeVoters(env);
   const timeoutMs = opts.timeoutMs ?? 10_000;
   await Promise.all(
     vs.map(async (v) => {
@@ -118,7 +118,7 @@ export interface ClassifyStats {
 }
 
 export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifyStats {
-  for (const v of parseVoters(env.CLASSIFY_VOTERS)) healthOf(v);
+  for (const v of activeVoters(env)) healthOf(v);
   const total = labels.pass + labels.veto + labels['not-checked'];
   return {
     since,
