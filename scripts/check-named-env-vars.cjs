@@ -217,6 +217,8 @@ const ALLOWLIST = {
     'Agent-service enablement flip (Railway per-agent), not a src/ literal in this repo.',
   HAL_SCORE_V2:
     'Documented opt-in flag in CONTRIBUTING/TESTING; not a src/ literal in this repo.',
+  NEXT_PUBLIC_REPID_ENGINE_URL:
+    'trustshell Next.js build-time engine URL (inlined into its bundle); named in docs/dispatch/INBOX_XC.md red-team briefs, never read by this engine.',
 
   // ── proposed / unbuilt flags named in specs (not asserted as live) ───────
   ANFIS_POA_ROUTING:
