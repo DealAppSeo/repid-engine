@@ -403,7 +403,7 @@ false again.
 
 Two defects, and conflating them is how it survived. There were **two sources of truth that could disagree** — now one, `config.hashkeyChainId` (env `HSK_CHAIN_ID`), which every surface reads. And **nothing compared either against the chain** — unifying two wrong numbers into one wrong number is not a fix, so `chainIdAgreesWithRpc()` compares what we publish against what the RPC reports and `/health` surfaces `hashkeyChainIdAgrees` (`null` = RPC unreachable, which is NOT agreement).
 
-**The DEFAULT is still `133` and that is deliberate, not an oversight.** Whether 177 is HashKey's permanent testnet id or a temporary state of that endpoint is unverified, and silently changing a default that decides which chain a transaction is signed for is a decision, not a cleanup. Production already overrides it. Read `hashkeyChainIdAgrees` rather than trusting either number.
+**The DEFAULT is still `133` and that is deliberate, not an oversight.** Whether 177 is HashKey's permanent testnet id or a temporary state of that endpoint is unverified, and silently changing a default that decides which chain a transaction is signed for is a decision, not a cleanup. ~~Production already overrides it.~~ **It does not [MEASURED 2026-10-04]:** production `/health` reports `hashkeyChainIdConfigured: 133`, `hashkeyChainId: 177`, `hashkeyChainIdAgrees: false`, so `HSK_CHAIN_ID` is not set on the service and every surface publishes 133. Setting it is a Railway variable, so it is Sean's. Read `hashkeyChainIdAgrees` rather than trusting either number.
 
 ## Deploy
 
