@@ -8471,3 +8471,44 @@ Item 14 = **P4 Plonky3 non-membership AIR** — batch inclusion+non-membership i
 **Step 5 — what steps 2-4 actually did vs intent:** Intent was no-op beyond the ledger (no non-DRAFT PRs). Executed as stated. No deviation.
 
 **Next beat:** (1) Confirm this ledger PR merged. (2) Check if #1173 (DRAFT) marked ready — arm if OPEN+green. (3) Item 14: dedicated Rust apex beat — read `zkp-vault/src/lib.rs`, design non-membership AIR columns, compile, test. Requires full turn budget and Rust toolchain.
+
+---
+
+## Beat (2026-10-04, second run) — first run verified clean; Item 14 step 14.0-a SHIPPED (ordering-check AIR, 8/8 tests)
+
+**Prior beat verified [V] (2026-10-04, first run):**
+- PR #1181 (`docs(loop): beat 2026-10-04 first run — sixth run verified; #1173 still DRAFT`): **MERGED** as `09c33411` — confirmed via `git log`. ✓
+- #1173 (`dispatch(xc): cloud beat transcript (ok)`): **MERGED** as `4ed45cde` — first run correctly said "DRAFT, loop cannot mark it ready"; it landed afterward. ✓
+- `origin/main` = `2f1b4585` (`feat(belts): CMO and CTO rows #1188`) — 7 new commits since first run's `3556ddde`. ✓
+- First run's "item 14 sole non-Sean-gated code item" — **CONFIRMED** — `zkp-vault/src/lib.rs` had no ordering or non-membership module at run start. ✓
+- NEW: **Rust/cargo IS available** in this runner (cargo 1.98.1). Prior beats all said "No Rust toolchain"; that was accurate for those images. Item 14 is now actionable. ✓
+- **Penalty verdict: NONE.** All first-run claims accurate.
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-04-ordering-check-air` off `origin/main` `2f1b4585`.**
+
+**Intent for steps 2-4:** Implement Item 14 step **14.0-a** — `zkp-vault/src/ordering_check.rs`, the ordering primitive the full non-membership AIR needs. Bounded scope: prove `low_val < target < high_val` as BabyBear field elements with a STARK proof/verifier. No Merkle path, no leaf hash, no `src/` wiring. Same pattern as the 4.0-a KAT oracle: one atomic, correct, testable unit.
+
+**STEP 2-4 — SHIPPED: `zkp-vault/src/ordering_check.rs` + `pub mod ordering_check` in `lib.rs` [V].**
+
+**Design (how ordering is proved in BabyBear, `p = 2013265921`):**
+- `a < b` as integers iff `d = b − a` (field subtraction) satisfies `0 < d < HALF_P` where `HALF_P = ⌊p/2⌋ = 1006632960`.
+- Prove `d ∈ (0, HALF_P)` by: (1) witness `d_inv` s.t. `d · d_inv = 1` (nonzero); (2) witness `e = HALF_P − d` and constrain `d + e = HALF_P`; (3) 30-bit decomposition of `e` (since `HALF_P < 2^30`). Two ordering halves (d1 = target − low, d2 = high − target) → 66 columns total. All constraints degree ≤ 2.
+- Same STARK config as `lib.rs` (BabyBear + Keccak hiding MMCS + FRI, log_blowup=3, HEIGHT=8).
+
+**[V] 8/8 new tests + 35/35 total across all suites — zero failures.**
+Gates: valid ordering proves + verifies; target ≤ low panics; target ≥ high panics; difference ≥ HALF_P panics; wrong public inputs rejected; tampered bytes rejected. Profile-agnostic (catch_unwind).
+
+**Scope boundary — honest limits of 14.0-a:**
+- No Merkle path (14.0-b next).
+- No Poseidon2 leaf-hash computation (14.0-c).
+- HALF_P limit: differences ≥ HALF_P cannot be proven ordered. For sorted values spanning [0, p), pairs more than HALF_P apart need an intermediary. Documented in module header.
+
+**PR:** `feat/cc-2026-10-04-ordering-check-air`, 2 files (`zkp-vault/src/ordering_check.rs` +282, `zkp-vault/src/lib.rs` +6). Off `origin/main` `2f1b4585`. SAFE-CLASS (zkp-vault only, additive, zero `src/` touch).
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order when ready: `FREE_TIER_QUOTA_SHADOW_ENABLED`, `CASCADE_SPECULATION_ENABLED`, `HEAT_EVICTION_ENABLED`, EAS gas, ANFIS flips.
+2. **Item 14:** 14.0-a done. **14.0-b next**: Merkle-path in-AIR. No Sean input required.
+
+**Step 5 — what steps 2-4 actually did vs intent:** Executed exactly as stated. No deviation.
+
+**Next beat:** (1) Confirm this PR merged. (2) Item 14 step **14.0-b**: Merkle-path verification AIR — chain of `H_p2` calls from leaf to public root, in-circuit. Or arm any newly-opened non-DRAFT PRs.
