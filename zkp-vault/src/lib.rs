@@ -107,6 +107,11 @@ pub mod ordering_check;
 /// (Item 14 step 14.0-b). Composable base case; depth-D paths chain D proofs.
 pub mod merkle_path;
 
+/// Composite non-membership proof bundle — prove `target ∉ Merkle_tree(root)` by
+/// combining one ordering proof (14.0-a) + two Merkle-path proofs (14.0-b).
+/// (Item 14 step 14.0-c)
+pub mod non_membership;
+
 use poseidon2_hash2::h_p2_field;
 
 /// Public group size (number of registered commitments). Demo/gate value.

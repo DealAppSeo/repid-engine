@@ -112,7 +112,7 @@ type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
-type OrdConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+pub type OrdConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config() -> OrdConfig {
     let byte_hash = ByteHash {};
