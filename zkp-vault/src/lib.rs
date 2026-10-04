@@ -112,6 +112,11 @@ pub mod merkle_path;
 /// (Item 14 step 14.0-c)
 pub mod non_membership;
 
+/// Depth-D non-membership proof — extends the DEPTH=1 bundle to arbitrary-depth
+/// Merkle trees by chaining D path proofs per neighbour (1 + 2D STARKs total).
+/// (Item 14 step 14.0-d)
+pub mod non_membership_depth_d;
+
 use poseidon2_hash2::h_p2_field;
 
 /// Public group size (number of registered commitments). Demo/gate value.
