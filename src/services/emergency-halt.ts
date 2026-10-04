@@ -46,7 +46,7 @@
  *   feedback-loop-worker · cascade-settlement-worker · eas-anchor-worker ·
  *   x402-recovery-worker · repid-sync-aggregator · cosign-consumer ·
  *   receipt-indexer-service (both ticks) · hitl-expiration-job ·
- *   hitl-expiry-sweeper · hitl-reconciliation-job
+ *   hitl-expiry-sweeper · hitl-reconciliation-job · proof-refresh-worker
  *
  * DELIBERATELY EXEMPT, each for a stated reason (NOT an oversight):
  *   - `hitl-notification-dispatcher` — it TELLS HUMANS things. Silencing your

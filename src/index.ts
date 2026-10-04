@@ -121,6 +121,7 @@ import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { startReleaseRetryWorker } from './services/x402-release-retry-worker';
 import { startStatusDigest } from './services/status-digest';
 import { startHealthProbeWorker } from './workers/health-probe-worker';
+import { startProofRefreshWorker } from './workers/proof-refresh-worker';
 import { cascadeSettlementWorker } from './workers/cascade-settlement-worker';
 import { announcePagerStatus } from './services/operator-pager';
 import { easAnchorWorker } from './workers/eas-anchor-worker';
@@ -1239,6 +1240,16 @@ if (!IS_TEST) {
 // (HEALTH_PROBE_ENABLED); honours the L0 halt; re-entrancy guarded; can never break a request.
 if (!IS_TEST) {
   startHealthProbeWorker();
+}
+
+// zkRepID proof refresh (2026-10-04) — a proof is only minted on a score event, so an idle
+// agent's served proof ages past the 7-day freshness rule while still attesting its unchanged
+// score. This re-proves current_repid for agents whose latest real proof is older than
+// PROOF_REFRESH_MAX_AGE_DAYS (default 6), through the same queue-row + prover POST the score
+// routes use, at most PROOF_REFRESH_MAX_AGENTS (default 25) per tick. Default OFF
+// (PROOF_REFRESH_ENABLED); honours the L0 halt; re-entrancy guarded; never throws.
+if (!IS_TEST) {
+  startProofRefreshWorker();
 }
 
 // EAS Anchor Worker (2026-07-04) — anchors the 21,960 real, un-anchored Plonky3

@@ -678,8 +678,12 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
 
     // A5 (D-062): capture the prover's real scheme + statement so the canonical row is
     // independently WASM-verifiable. Only a real Plonky3 proof gets a statement; threshold
-    // parsed from the prover's public_statement ("RepID > N"). repid_score is the prover's
-    // server-side actual (it ignores client score).
+    // parsed from the prover's public_statement ("RepID > N"). repid_score prefers the prover's
+    // server-side actual (`repid_score_actual`) over the score we sent. Whether the prover
+    // IGNORES a caller-supplied score is NOT CHECKED: the one recorded probe (2026-07-27) shows
+    // `repid_score_supplied: null`, i.e. no score was in play, and
+    // `scripts/zkp/live-prover-crosscheck.ts` is built on the opposite assumption. See
+    // docs/dispatch/FINDING_2026-10-04_PROVER_CALLER_SCORE.md.
     //
     // CORPUS HYGIENE (2026-08-09): the statement MUST bind the agent, not just carry
     // {repid_score, threshold}. 7,958 of 22,239 "real" rows were persisted agent-less
