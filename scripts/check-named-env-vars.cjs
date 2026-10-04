@@ -92,6 +92,12 @@ const ALLOWLIST = {
     'V1-8 Workers AI voter token, read in src/classify/free-votes.ts keyFor(env); generator misses parameter env reads.',
   CLOUDFLARE_ACCOUNT_ID:
     'V1-8 Workers AI voter account id, read in src/classify/free-votes.ts endpointFor(env); also scripts/verify-infra.ts.',
+  PAY_CHECKOUT_ENABLED:
+    'V1-9 switch, read in src/routes/pay-checkout.ts payConfig(env); generator misses parameter env reads.',
+  STRIPE_SECRET_KEY:
+    'V1-9 Stripe key, read in src/routes/pay-checkout.ts payConfig(env); generator misses parameter env reads.',
+  PAY_RETURN_ORIGIN:
+    'V1-9 https origin for Checkout return URLs, read in src/routes/pay-checkout.ts payConfig(env).',
   CLASSIFY_VOTERS:
     'B15 voter list, read as env.CLASSIFY_VOTERS in src/classify/free-votes.ts; generator misses parameter env reads.',
   TELEGRAM_PUBLIC_BOT_TOKEN:
