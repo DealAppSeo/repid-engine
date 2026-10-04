@@ -90,6 +90,8 @@ const ALLOWLIST = {
     'B15 kill switch, read as env.CLASSIFY_FREE_VOTES in src/classify/free-votes.ts (env passed as a parameter for tests); generator misses it.',
   CLASSIFY_VOTERS:
     'B15 voter list, read as env.CLASSIFY_VOTERS in src/classify/free-votes.ts; generator misses parameter env reads.',
+  CLASSIFY_CANARY:
+    'B16 canary switch, read as env.CLASSIFY_CANARY in src/classify/vote-health.ts; generator misses parameter env reads.',
   CLASSIFY_MAX_PROSE_CHARS:
     'B15 prose cap, read as env.CLASSIFY_MAX_PROSE_CHARS in src/classify/free-votes.ts; generator misses parameter env reads.',
   GROK_API_KEY:

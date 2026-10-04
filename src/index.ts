@@ -104,6 +104,7 @@ import joinKitRouter from './routes/join-kit';
 import trustmarketJoinRouter from './routes/trustmarket-join';
 import layaClassifyRouter from './routes/laya-classify';
 import classifyRouter from './routes/classify';
+import { startClassifyCanary } from './classify/vote-health';
 import onboardLayerRouter from './routes/onboard-layer';
 import beltsRouter from './routes/belts';
 import whyRouter from './routes/why';
@@ -884,6 +885,9 @@ if (!IS_TEST) {
     announcePagerStatus();
     console.log(`[repid-engine] v${config.version} running on port ${port} (0.0.0.0)`);
     console.log(`[repid-engine] Environment: ${config.nodeEnv}`);
+    // B16: the classify voters' daily canary (a known-true and a known-false claim per voter),
+    // reported at GET /api/v1/classify/stats. CLASSIFY_CANARY=off disables it. Never blocks boot.
+    startClassifyCanary();
 
     const redisUrl = process.env.REDIS_URL;
     if (redisUrl) {
