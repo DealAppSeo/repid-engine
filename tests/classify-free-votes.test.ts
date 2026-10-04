@@ -22,6 +22,7 @@ import {
   parseVerdict,
   parseVoters,
   type VoteOutcome,
+  WORKERS_AI_MODEL,
 } from '../src/classify/free-votes';
 import { classifyText, createClassifyRouter } from '../src/routes/classify';
 
@@ -433,5 +434,66 @@ describe('B20 FIX FIRST on #1182: look-alikes, one family, one caller', () => {
     expect(BUDGET_PER_MIN.groq).toBeLessThan(30);
     expect(BUDGET_PER_MIN.cerebras).toBeLessThan(5);
     expect(BUDGET_PER_MIN['nvidia-nim']).toBeLessThan(40);
+  });
+});
+
+describe('V1-8: Workers AI voter is inert until named AND keyed', () => {
+  const ACCOUNT = '0123456789abcdef0123456789abcdef';
+  const CF = { provider: 'workers-ai' as const, model: WORKERS_AI_MODEL };
+
+  it('is never chosen by default, even with every Cloudflare variable set', () => {
+    const env = { CLOUDFLARE_WORKERS_AI_TOKEN: 't', CLOUDFLARE_ACCOUNT_ID: ACCOUNT, GROQ_API_KEY: 'g' } as NodeJS.ProcessEnv;
+    expect(activeVoters(env).some((v) => v.provider === 'workers-ai')).toBe(false);
+  });
+
+  it('is selectable by CLASSIFY_VOTERS (the @cf/ model id survives the provider split)', () => {
+    expect(parseVoters(`groq:openai/gpt-oss-120b,workers-ai:${WORKERS_AI_MODEL}`)).toEqual([
+      { provider: 'groq', model: 'openai/gpt-oss-120b' },
+      CF,
+    ]);
+  });
+
+  it('abstains no_key without a token, without an account id, or with a malformed one — and makes no call', async () => {
+    const bad = ['', 'not-hex-not-hex-not-hex-not-hex!', `${ACCOUNT}/../x`, `${ACCOUNT}?x=1`, 'evil.example.com', ACCOUNT.slice(1)];
+    const { impl } = stubHost([{ content: 'TRUE' }]);
+    expect(await castVote(CF, 'x', { env: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT }, fetchImpl: impl, timeoutMs: 500 })).toEqual({
+      kind: 'abstain',
+      reason: 'no_key',
+    });
+    for (const id of bad) {
+      const env = { CLOUDFLARE_WORKERS_AI_TOKEN: 't', CLOUDFLARE_ACCOUNT_ID: id } as NodeJS.ProcessEnv;
+      expect(await castVote(CF, 'x', { env, fetchImpl: impl, timeoutMs: 500 })).toEqual({ kind: 'abstain', reason: 'no_key' });
+    }
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it('dials only the account-scoped Workers AI URL, with its own token, never CLOUDFLARE_API_TOKEN', async () => {
+    let auth = '';
+    const { impl, calls } = stubHost([{ content: 'TRUE' }]);
+    const spy = jest.fn(async (url: unknown, init?: RequestInit) => {
+      auth = String((init?.headers as Record<string, string>).Authorization);
+      return impl(url, init);
+    });
+    const env = {
+      CLOUDFLARE_WORKERS_AI_TOKEN: 'voter-token',
+      CLOUDFLARE_API_TOKEN: 'account-wide-token',
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT.toUpperCase(),
+      LOCAL_LLM_BASE_URL: 'http://evil.example/v1',
+    } as NodeJS.ProcessEnv;
+    const out = await castVote(CF, 'x', { env, fetchImpl: spy, timeoutMs: 500 });
+    expect(out).toEqual({ kind: 'verdict', verdict: 'TRUE' });
+    expect(calls[0]!.url).toBe(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/ai/v1/chat/completions`);
+    expect(calls[0]!.model).toBe(WORKERS_AI_MODEL);
+    expect(auth).toBe('Bearer voter-token');
+  });
+
+  it('has a per-minute budget that spends at most 6 calls a minute', async () => {
+    expect(BUDGET_PER_MIN['workers-ai']).toBe(6);
+    const { impl } = stubHost(() => ({ content: 'TRUE' }));
+    const env = { CLOUDFLARE_WORKERS_AI_TOKEN: 't', CLOUDFLARE_ACCOUNT_ID: ACCOUNT } as NodeJS.ProcessEnv;
+    const outs = [];
+    for (let i = 0; i < 8; i++) outs.push(await castVote(CF, 'x', { env, fetchImpl: impl, timeoutMs: 500, now: () => 1000 }));
+    expect(impl).toHaveBeenCalledTimes(6);
+    expect(outs.slice(6)).toEqual([{ kind: 'abstain', reason: 'budget' }, { kind: 'abstain', reason: 'budget' }]);
   });
 });
