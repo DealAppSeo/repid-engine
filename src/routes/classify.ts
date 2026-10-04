@@ -39,7 +39,8 @@ import { Router, json, type NextFunction, type Request, type Response } from 'ex
 import cors from 'cors';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { safeEvalArithmetic } from '../hal/safe-arithmetic';
-import { classifyByFreeVotes, freeVotesEnabled, maxProseChars } from '../classify/free-votes';
+import { classifyByFreeVotes, freeVotesEnabled, maxProseChars, parseVoters } from '../classify/free-votes';
+import { classifyStats, recordLabel, recordVotes } from '../classify/vote-health';
 
 export type ClassifyLabel = 'pass' | 'veto' | 'not-checked';
 
@@ -159,12 +160,20 @@ export async function classifyText(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ClassifyLabel> {
   const local = classifyLocal(text);
-  if (local !== NOT_CHECKED) return local;
-  if (!freeVotesEnabled(env)) return NOT_CHECKED;
+  if (local !== NOT_CHECKED) {
+    recordLabel(local, 'arithmetic');
+    return local;
+  }
   const trimmed = text.trim();
-  if (!trimmed || trimmed.length > maxProseChars(env)) return NOT_CHECKED;
+  if (!freeVotesEnabled(env) || !trimmed || trimmed.length > maxProseChars(env)) {
+    recordLabel(NOT_CHECKED, 'skipped');
+    return NOT_CHECKED;
+  }
   const timeoutMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
-  const { label } = await classifyByFreeVotes(trimmed, { env, timeoutMs });
+  const voters = parseVoters(env.CLASSIFY_VOTERS);
+  const { label, outcomes } = await classifyByFreeVotes(trimmed, { env, timeoutMs, voters });
+  recordVotes(voters, outcomes);
+  recordLabel(label, 'votes');
   return label;
 }
 
@@ -187,7 +196,13 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
     allowedHeaders: ['Content-Type'],
   });
 
+  const corsGet = cors({ origin: '*', credentials: false, methods: ['GET'] });
+
   const router = Router();
+  // B16: keyless health of the check itself. Counts only, never text, per process.
+  router.get('/classify/stats', corsGet, (_req: Request, res: Response): void => {
+    res.set('Cache-Control', 'no-store').status(200).json(classifyStats());
+  });
   router.options('/classify', corsAny);
   router.post(
     '/classify',
