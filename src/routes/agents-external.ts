@@ -27,6 +27,7 @@ import { provisionWallet, persistProvisionedWallet } from '../services/agent-wal
 import { emitDeceptionShadow } from '../engine/deception-emitter';
 import { insertScoreEvent } from '../scoring/score-event-writer';
 import { publicIdentityFields } from '../identity/public-fields';
+import { checkAndRecordDedup, __resetLocalDedupForTests } from '../services/register-dedup';
 
 const router = Router();
 
@@ -112,32 +113,10 @@ function sanitizeFreeText(s: string): string {
     .replace(/\bdata:[^\s;,]+/gi, '');
 }
 
-// Sprint A5: in-memory IP+name dedup window. 24h. Resets on process restart;
-// production hardening sprint will move this to Redis.
-const ipNameDedup: Map<string, number> = new Map();
-const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
-function dedupKey(ip: string, name: string): string {
-  return `${ip}::${name.toLowerCase()}`;
-}
-function checkAndRecordDedup(ip: string, name: string): { duplicate: boolean } {
-  const now = Date.now();
-  // Lazy cleanup: every call sweeps a small slice.
-  if (ipNameDedup.size > 1000) {
-    for (const [k, ts] of ipNameDedup) {
-      if (now - ts > DEDUP_WINDOW_MS) ipNameDedup.delete(k);
-    }
-  }
-  const key = dedupKey(ip, name);
-  const last = ipNameDedup.get(key);
-  if (last !== undefined && now - last < DEDUP_WINDOW_MS) {
-    return { duplicate: true };
-  }
-  ipNameDedup.set(key, now);
-  return { duplicate: false };
-}
+// Sprint A5 anti-spam window, now shared across restarts (HYP-8): see src/services/register-dedup.ts.
 // Test-only reset hook so jest cases can start with an empty dedup window.
 export function __resetDedupForTests() {
-  ipNameDedup.clear();
+  __resetLocalDedupForTests();
 }
 
 // POST /register — public agent onboarding (v11 + Sprint A5 Maya-shape)
@@ -189,7 +168,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
   // Sprint A5 anti-spam: same name from same IP within 24h → 429.
   const ip = (req.ip || (req.headers['x-forwarded-for'] as string) || 'unknown').toString();
-  const dedup = checkAndRecordDedup(ip, resolvedName);
+  const dedup = await checkAndRecordDedup(ip, resolvedName);
   if (dedup.duplicate) {
     return res.status(429).json({
       error: 'Duplicate registration: same agent name from this IP within last 24h',

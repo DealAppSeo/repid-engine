@@ -114,6 +114,7 @@ import onboardUnlockRouter from './routes/onboard-unlock';
 import { agentGateRouter } from './routes/agent-gate'; // T0.5 email-OTP gate + run metering status
 import { getCache } from './cache/dragonfly';
 import { ipRateLimit } from './middleware/ip-rate-limit';
+import { enterpriseKeyMatches } from './middleware/enterprise-key';
 import { feedbackLoopWorker } from './workers/feedback-loop-worker';
 import { startRecoveryWorker } from './services/x402-recovery-worker';
 import { startReleaseRetryWorker } from './services/x402-release-retry-worker';
@@ -175,9 +176,9 @@ const registrationLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,  // 1 hour
   max: 5,                     // Sprint A5: tightened from 10 → 5 per public-alpha brief
   message: { error: 'Too many registrations' },
-  skip: (req) => {
-    return req.headers['x-enterprise-key'] === process.env.ENTERPRISE_API_KEY;
-  }
+  // Exempt only a request that presents a CONFIGURED key. The inline `===` this replaces matched
+  // undefined to undefined while ENTERPRISE_API_KEY was unset, so the ceiling never fired.
+  skip: (req) => enterpriseKeyMatches(req.headers['x-enterprise-key']),
 });
 
 // Sprint A5: public card route gets generous rate limit (60/min/IP)
