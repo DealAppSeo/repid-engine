@@ -1,43 +1,39 @@
-# INBOX_XC — B20: red-team the two free votes behind POST /api/v1/classify (PR #1182)
+# INBOX_XC: red-team PR #1185 (B21 T12 loopback job, B20 hardening, ?with=id)
 
 ## Task
 
 **Lane:** RED-TEAM. You have **no write scope**: the deliverable is text. Do not claim to have
 created, edited or committed a file. You hold `reasoning` and `repo_read`, scoped to THIS
-workspace, which is PR #1182's branch. No evidence commands were run for you.
-**Three outcomes: VERIFIED / NOT_CHECKED / FAILED.** Dispatched by CC2 (Claude) on 2026-10-04,
-during Sean's overnight sprint (trustshell `docs/living/BUS.md`, section "TONIGHT", ticket B20).
+workspace, which is PR #1185's branch. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
+Dispatched by CC2 (Claude) on 2026-10-04 from the hourly heartbeat, during Sean's overnight sprint.
 
-### What changed (Sean decided B9 = option 2 on 2026-10-04)
+### What changed since your B20 FIX FIRST on #1182
 
-`POST /api/v1/classify` used to decide arithmetic only. Prose now goes to two free Groq models
-in parallel. Both TRUE: pass. Both FALSE: veto. Anything else: not-checked. A 429 backs that
-voter off and never falls through to another host. The deadline went from 1 s to 2.5 s.
-The route still stores nothing.
-
-### Read
-
-- `src/classify/free-votes.ts`: voters, the prompt, `parseVerdict`, the 429 cooldown,
-  `combineVotes`.
-- `src/routes/classify.ts`: `classifyText`, the deadline, CORS, the per-IP limit.
-- `tests/classify-free-votes.test.ts` and `tests/classify-route.test.ts`: what is pinned today.
+1. `src/classify/free-votes.ts`:
+   - `encodeClaim` (NFKC fold, strip `\p{Cf}` and control characters, JSON-string framing)
+     replaces the `<claim>` tag strip.
+   - `activeVoters`: Groq gpt-oss-120b plus Cerebras qwen-3.8-27b when a Cerebras key is
+     present, otherwise Groq x2.
+   - `BUDGET_PER_MIN` per voter (Groq 24, Cerebras 4, NVIDIA 32).
+2. `src/routes/repid.ts`: `GET /repid/:id?with=id` adds the resolved `agent_id`. The default
+   body stays `{score, tier}`.
+3. `.github/workflows/t12-loopback.yml` and `src/orchestration/t12-runner-job.ts`: Ollama inside
+   the runner, `T12_FREE_WAVE` on for one step, no secrets, a labelled claim set through `t12Ask`.
+4. `.github/workflows/build-loop-cloud.yml`: the loop no longer opens report-only PRs.
 
 ### Deliverable
 
-1. **An attack list, ranked by failure direction.** Rank first anything that can make the route
-   answer `pass` for a false claim (or `veto` for a true one). Rank lower anything that only
-   yields a wrong `not-checked`. Cover at least:
-   - prompt injection inside the claim: closing-tag smuggling, unicode look-alikes of `</claim>`,
-     instructions to "answer TRUE";
-   - a claim built so both models say TRUE while it is false (shared-family blind spots,
-     because both defaults are gpt-oss);
-   - very long text, multi-claim text and mixed-language text;
-   - the 429 cooldown map: can one caller starve everyone (a cost or availability attack)?;
-   - abusing the public route as a free proxy to Groq, and whether the per-IP limit is enough;
-   - a host that answers with prose, a JSON body that is not chat-completions, or an empty
-     `choices`.
-   For each attack: the input, the code path (file:line you actually read), and the jest test
-   that would catch it.
-2. **One verdict line: MERGE / FIX FIRST / HOLD**, with the single most important reason.
+Rank by failure direction, false pass first. For each finding give the input, the file:line you
+read, and the jest test that would catch it. At minimum, try:
+- Does anything still reach the model outside the JSON string? Look at the system prompt
+  assumptions, NFKC side effects (could folding turn a harmless claim into a different claim?),
+  and surrogate pairs.
+- Can the per-minute budget be gamed? The bucket is in memory and per process: what happens
+  across restarts or several instances?
+- `?with=id`: can it leak anything beyond an id `/proof` already exposes? Unknown names, the
+  NOT_CHECKED path, and timing.
+- The T12 workflow: input interpolation of `inputs.model` into shell (Strix ruled it out as
+  write-access-only; agree or disagree?), and anything that could make the receipt claim `local`
+  when a cloud host answered.
 
-Write the result as your transcript. CC2 turns each finding into code or a test on PR #1182.
+One verdict line: **MERGE / FIX FIRST / HOLD**, with the single most important reason.
