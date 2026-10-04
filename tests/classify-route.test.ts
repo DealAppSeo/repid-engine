@@ -27,6 +27,18 @@ function appWith(options: ClassifyRouterOptions = {}) {
   return app;
 }
 
+// These suites pin the no-network paths. A developer shell with a real GROQ_API_KEY must not
+// turn them into live calls, so the voter keys are removed for this file (the free votes have
+// their own suite, tests/classify-free-votes.test.ts, with a stubbed host).
+const SAVED_KEYS: Record<string, string | undefined> = {};
+for (const k of ['GROQ_API_KEY', 'CEREBRAS_API_KEY', 'NVIDIA_NIM_API_KEY']) {
+  SAVED_KEYS[k] = process.env[k];
+  delete process.env[k];
+}
+afterAll(() => {
+  for (const [k, v] of Object.entries(SAVED_KEYS)) if (v !== undefined) process.env[k] = v;
+});
+
 const realFetch = globalThis.fetch;
 const fetchSpy = jest.fn(async (input: unknown, init?: unknown) => {
   const url = new URL(typeof input === 'string' ? input : String((input as { url?: string }).url ?? input));

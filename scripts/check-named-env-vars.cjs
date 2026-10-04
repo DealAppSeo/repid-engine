@@ -84,6 +84,14 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
  */
 const ALLOWLIST = {
   // ── composed / indirect src/ reads the generator cannot see ──────────────
+  ONLY_ATTESTATIONS_LEAVE:
+    'Read as env.ONLY_ATTESTATIONS_LEAVE inside the one shared reader (src/selfhost/egress-guard.ts, #1177), which takes env as a parameter; generator only captures literal process.env.NAME.',
+  CLASSIFY_FREE_VOTES:
+    'B15 kill switch, read as env.CLASSIFY_FREE_VOTES in src/classify/free-votes.ts (env passed as a parameter for tests); generator misses it.',
+  CLASSIFY_VOTERS:
+    'B15 voter list, read as env.CLASSIFY_VOTERS in src/classify/free-votes.ts; generator misses parameter env reads.',
+  CLASSIFY_MAX_PROSE_CHARS:
+    'B15 prose cap, read as env.CLASSIFY_MAX_PROSE_CHARS in src/classify/free-votes.ts; generator misses parameter env reads.',
   GROK_API_KEY:
     'Composed at runtime via XAI_KEY_VARS; generator only captures literal process.env.NAME under src/.',
   XAI_API_KEY:
