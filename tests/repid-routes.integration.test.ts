@@ -85,6 +85,20 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     expect(Object.keys(r.body).sort()).toEqual(['score', 'tier']);
   });
 
+  test('GET /api/v1/repid/:agentId?with=id — adds the resolved agent id, only when asked', async () => {
+    setMaybeSingle({
+      id: 'agent-int-1',
+      current_repid: 4500,
+      tier: 'ESTABLISHED',
+      updated_at: '2026-05-05T10:00:00.000Z',
+    });
+    const r = await request(buildApp()).get('/api/v1/repid/agent-int-1?with=id');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ score: 4500, tier: 'ESTABLISHED' });
+    expect(typeof r.body.agent_id).toBe('string');
+    expect(Object.keys(r.body).sort()).toEqual(['agent_id', 'score', 'tier']);
+  });
+
   test('GET /api/v1/repid/:agentId — missing id is NOT_CHECKED, not 0', async () => {
     setMaybeSingle(null);
     const r = await request(buildApp()).get('/api/v1/repid/ghost');

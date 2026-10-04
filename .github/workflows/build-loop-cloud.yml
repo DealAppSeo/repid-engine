@@ -104,24 +104,23 @@ jobs:
             a feature plus no record is not — it is the failure this loop keeps producing.
 
             THE BEAT:
-              (1) LEDGER FIRST — THIS IS THE ONE STEP THAT MUST SURVIVE.
+              (1) VERIFY THE PRIOR BEAT, BUT OPEN NO PR FOR IT.
                   Verify the prior beat INDEPENDENTLY (its diff + its CI conclusion via gh) — never
                   rubber-stamp, but keep it proportionate: confirm the claim, do not re-derive it.
-                  Then IMMEDIATELY append a Beat entry to
-                  reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md on its OWN small docs-only branch,
-                  open the PR, and `gh pr merge <n> --auto --squash` it. Record what you verified and
-                  what you INTEND to do in steps 2-4. Do not start step 2 until that PR is open.
-                  Main has branch protection, so there is no direct-push shortcut; a small early PR
-                  is the only thing that survives hitting the cap later.
+                  Write what you verified and what you INTEND for steps 2-4 as a Beat entry in
+                  reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md ON THE SAME BRANCH as step 2's work.
+                  NO REPORT-ONLY PRs (Sean + Grok, 2026-10-04; trustshell BUS B17): a PR is opened only
+                  when it ships a route, a wire, a test or a measured URL. Six of twelve recent
+                  repid-engine PRs were this loop reporting on itself. If the beat ships nothing, it
+                  opens nothing: the job log and summary are the record.
               (2) advance the highest-priority OPEN backlog item on a NEW branch cut from origin/main.
               (3) you are in the cloud runner — you MAY run `npm install --legacy-peer-deps` + `tsc`/`npm test`
                   here to sanity-check (it costs runner minutes, not Sean's box); the required CI is the authority.
               (4) push the branch, open a PR, and — ONLY if SAFE-CLASS (docs / shadow-inert / additive-tested) —
                   run `gh pr merge <n> --auto --squash` WHILE its checks are still pending, so GitHub lands it on green.
-              (5) IF TURNS REMAIN, append a short second entry saying what step 2 actually shipped and
-                  how it differed from the intent you logged in step 1. If turns do not remain, step 1
-                  already told the truth about this beat and nothing is lost — which is the whole point
-                  of the reorder. Never skip step 1 to make room for step 5.
+              (5) Before pushing, update that same Beat entry with what step 2 actually shipped and how it
+                  differed from the intent. If the turn cap is near, push what is tested with the entry
+                  saying what is unfinished; a half-done change stays on its branch, unmerged.
 
             HARD LINES: verify before asserting ([V] not [R]); SHADOW-FIRST — NEVER flip Sean-gated enable flags
             (ENGINE_LLM_PROXY, ROUTER_STRICT_COST_ORDER, HAL_GROUNDING_MODE=enforce, REPID_PURPOSE_GATE_V3,
