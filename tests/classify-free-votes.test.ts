@@ -5,6 +5,7 @@
  */
 import express from 'express';
 import request from 'supertest';
+import { PROVIDER_URLS } from '../src/egress/provider-hosts';
 
 const dbFrom = jest.fn();
 jest.mock('../src/db', () => ({ db: { from: dbFrom, rpc: jest.fn() } }));
@@ -24,7 +25,13 @@ import {
   type VoteOutcome,
   WORKERS_AI_MODEL,
 } from '../src/classify/free-votes';
-import { classifyText, createClassifyRouter } from '../src/routes/classify';
+import {
+  CLASSIFY_PATHS,
+  classifyText,
+  classifyTextWithPath,
+  createClassifyRouter,
+  type Classifier,
+} from '../src/routes/classify';
 
 const ENV = { GROQ_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
 
@@ -228,7 +235,9 @@ describe('classifyText and the route', () => {
       const res = await request(app).post('/api/v1/classify').send({ text: 'Water boils at 100 C at sea level.' });
       expect(res.status).toBe(200);
       expect(res.body.label).toBe('pass');
-      expect(Object.keys(res.body).sort()).toEqual(['label', 'latency_ms']);
+      expect(Object.keys(res.body).sort()).toEqual(['by', 'label', 'latency_ms', 'voters']);
+      expect(res.body.by).toBe('votes');
+      expect(res.body.voters).toEqual(activeVoters(process.env).map((v) => v.provider));
       expect(dbFrom).not.toHaveBeenCalled();
     } finally {
       if (saved === undefined) delete process.env.GROQ_API_KEY;
@@ -495,5 +504,317 @@ describe('V1-8: Workers AI voter is inert until named AND keyed', () => {
     for (let i = 0; i < 8; i++) outs.push(await castVote(CF, 'x', { env, fetchImpl: impl, timeoutMs: 500, now: () => 1000 }));
     expect(impl).toHaveBeenCalledTimes(6);
     expect(outs.slice(6)).toEqual([{ kind: 'abstain', reason: 'budget' }, { kind: 'abstain', reason: 'budget' }]);
+  });
+});
+
+
+/**
+ * Process env for one test, restored afterwards. `undefined` deletes the variable, so a developer
+ * shell with a real key or the boundary already set cannot change what a test measures.
+ */
+async function withProcessEnv<T>(vars: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const saved: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    saved[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+/** Every host the votes could dial. A call to any of them under the boundary is the leak. */
+const PROVIDER_HOSTS = ['api.groq.com', 'api.cerebras.ai', 'integrate.api.nvidia.com', 'api.cloudflare.com'];
+
+/** Records EVERY global fetch, whatever the host, and answers like a voter host. */
+function recordAllFetches(reply: (model: string) => Reply) {
+  const host = stubHost(reply);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = host.impl as unknown as typeof fetch;
+  return { calls: host.calls, restore: () => (globalThis.fetch = realFetch) };
+}
+
+function classifyApp(options: Parameters<typeof createClassifyRouter>[0] = {}) {
+  const app = express();
+  app.use('/api/v1', createClassifyRouter({ limit: 1000, ...options }));
+  return app;
+}
+
+describe('data-locality boundary (ONLY_ATTESTATIONS_LEAVE) on the free votes', () => {
+  // Both voters keyed, so with the boundary OFF the cross-family pair would really be dialled.
+  const KEYED = { GROQ_API_KEY: 'test-key-not-real', CEREBRAS_API_KEY: 'test-key-not-real' };
+  const ON = { ...KEYED, ONLY_ATTESTATIONS_LEAVE: 'true' };
+  const OFF = { ...KEYED, ONLY_ATTESTATIONS_LEAVE: undefined };
+
+  it('the registry hosts the test watches are the hosts the voters dial (positive control)', () => {
+    const urls = [PROVIDER_URLS.groqChatCompletions, PROVIDER_URLS.cerebrasChatCompletions,
+      PROVIDER_URLS.nvidiaNimChatCompletions, PROVIDER_URLS.cloudflareApiOrigin];
+    expect(urls.map((u) => new URL(u).hostname)).toEqual(PROVIDER_HOSTS);
+  });
+
+  it('castVote: engaged, a keyed cloud voter abstains `boundary` and makes no request', async () => {
+    await withProcessEnv({ ONLY_ATTESTATIONS_LEAVE: undefined }, async () => {
+      const { impl } = stubHost([{ content: 'TRUE' }]);
+      for (const v of [...CROSS_FAMILY_VOTERS, { provider: 'nvidia-nim' as const, model: 'm' }]) {
+        const env = { ...ENV, ...KEYED, NVIDIA_NIM_API_KEY: 'k', ONLY_ATTESTATIONS_LEAVE: 'true' } as NodeJS.ProcessEnv;
+        expect(await castVote(v, 'Paris is in France', { env, fetchImpl: impl, timeoutMs: 500 })).toEqual({
+          kind: 'abstain',
+          reason: 'boundary',
+        });
+      }
+      const cf = { provider: 'workers-ai' as const, model: WORKERS_AI_MODEL };
+      const cfEnv = { CLOUDFLARE_WORKERS_AI_TOKEN: 't', CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', ONLY_ATTESTATIONS_LEAVE: 'true' };
+      expect(await castVote(cf, 'x', { env: cfEnv, fetchImpl: impl, timeoutMs: 500 })).toEqual({ kind: 'abstain', reason: 'boundary' });
+      expect(impl).not.toHaveBeenCalled();
+    });
+  });
+
+  it("uses the guard's own reading of the flag: 'TRUE ' engages, 'yes' does not", async () => {
+    await withProcessEnv({ ONLY_ATTESTATIONS_LEAVE: undefined }, async () => {
+      const { impl } = stubHost(() => ({ content: 'TRUE' }));
+      const vote = (flag: string) =>
+        castVote(DEFAULT_VOTERS[0]!, 'x', { env: { ...ENV, ONLY_ATTESTATIONS_LEAVE: flag }, fetchImpl: impl, timeoutMs: 500 });
+      expect(await vote('TRUE ')).toEqual({ kind: 'abstain', reason: 'boundary' });
+      expect(impl).not.toHaveBeenCalled();
+      expect(await vote('yes')).toEqual({ kind: 'verdict', verdict: 'TRUE' });
+      expect(impl).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('engaged in the process env, an injected env cannot disengage it', async () => {
+    await withProcessEnv({ ONLY_ATTESTATIONS_LEAVE: 'true' }, async () => {
+      const { impl } = stubHost(() => ({ content: 'TRUE' }));
+      const env = { ...ENV, ONLY_ATTESTATIONS_LEAVE: 'false' };
+      expect(await castVote(DEFAULT_VOTERS[0]!, 'x', { env, fetchImpl: impl, timeoutMs: 500 })).toEqual({
+        kind: 'abstain',
+        reason: 'boundary',
+      });
+      expect(impl).not.toHaveBeenCalled();
+    });
+  });
+
+  it('a refused vote spends no budget: after many refusals the voter still answers once the boundary is off', async () => {
+    await withProcessEnv({ ONLY_ATTESTATIONS_LEAVE: undefined }, async () => {
+      const { impl } = stubHost(() => ({ content: 'TRUE' }));
+      const opts = (flag: string | undefined) => ({ env: { ...ENV, ONLY_ATTESTATIONS_LEAVE: flag }, fetchImpl: impl, timeoutMs: 500, now: () => 5 });
+      for (let i = 0; i < BUDGET_PER_MIN.groq * 2; i += 1) {
+        expect((await castVote(DEFAULT_VOTERS[0]!, 'x', opts('true'))).kind).toBe('abstain');
+      }
+      expect(await castVote(DEFAULT_VOTERS[0]!, 'x', opts(undefined))).toEqual({ kind: 'verdict', verdict: 'TRUE' });
+    });
+  });
+
+  it('the route, engaged: prose is not-checked by skipped, and ZERO requests reach any provider host', async () => {
+    await withProcessEnv(ON, async () => {
+      const rec = recordAllFetches(() => ({ content: 'TRUE' }));
+      try {
+        const res = await request(classifyApp()).post('/api/v1/classify').send({ text: 'Paris is the capital of France.' });
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ label: 'not-checked', by: 'skipped' });
+        expect(res.body).not.toHaveProperty('voters');
+        // Arithmetic needs no network, so it still answers under the boundary.
+        const sum = await request(classifyApp()).post('/api/v1/classify').send({ text: '2 + 2 = 4' });
+        expect(sum.body).toMatchObject({ label: 'pass', by: 'arithmetic' });
+        // The phone bot's entry point too.
+        expect(await classifyText('Water boils at 100 C at sea level.')).toBe('not-checked');
+        expect(rec.calls).toHaveLength(0);
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it('the route, off: unchanged — both voters are dialled and agreement decides', async () => {
+    await withProcessEnv(OFF, async () => {
+      const rec = recordAllFetches(() => ({ content: 'TRUE' }));
+      try {
+        const res = await request(classifyApp()).post('/api/v1/classify').send({ text: 'Paris is the capital of France.' });
+        expect(res.body).toMatchObject({ label: 'pass', by: 'votes', voters: ['groq', 'cerebras'] });
+        expect(rec.calls.map((c) => new URL(c.url).hostname)).toEqual(['api.groq.com', 'api.cerebras.ai']);
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it('the canary, engaged: not-checked with reason boundary (never degraded), and no request', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const health = require('../src/classify/vote-health') as typeof import('../src/classify/vote-health');
+    health.__resetClassifyStats();
+    await withProcessEnv({ ONLY_ATTESTATIONS_LEAVE: undefined }, async () => {
+      const { impl } = stubHost(() => ({ content: 'TRUE' }));
+      const env = { ...ENV, ...KEYED, ONLY_ATTESTATIONS_LEAVE: 'true' } as NodeJS.ProcessEnv;
+      await health.runCanary({ env, fetchImpl: impl, timeoutMs: 500 });
+      const vs = health.classifyStats(env).voters;
+      expect(vs.length).toBeGreaterThan(0);
+      for (const v of vs) expect(v.canary).toMatchObject({ status: 'not-checked', reason: 'boundary' });
+      expect(impl).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('the route says which path answered: by and voters', () => {
+  const NO_BOUNDARY = { ONLY_ATTESTATIONS_LEAVE: undefined, CLASSIFY_FREE_VOTES: undefined };
+
+  it('every by value is covered by a test below (the list is the type, not a guess)', () => {
+    expect([...CLASSIFY_PATHS].sort()).toEqual(['arithmetic', 'deadline', 'skipped', 'votes']);
+  });
+
+  it("by 'arithmetic': no model asked, no voters key, no request", async () => {
+    await withProcessEnv({ ...NO_BOUNDARY, GROQ_API_KEY: 'test-key-not-real' }, async () => {
+      const rec = recordAllFetches(() => ({ content: 'FALSE' }));
+      try {
+        for (const [text, label] of [['2 + 2 = 4', 'pass'], ['2 + 2 = 5', 'veto']]) {
+          const res = await request(classifyApp()).post('/api/v1/classify').send({ text });
+          expect(res.body).toMatchObject({ label, by: 'arithmetic' });
+          expect(res.body).not.toHaveProperty('voters');
+        }
+        expect(await classifyTextWithPath('12 * 12 = 144', 2500, ENV)).toEqual({ label: 'pass', by: 'arithmetic' });
+        expect(rec.calls).toHaveLength(0);
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it("by 'votes': pass, veto and a split each name the voters asked, in the configured order", async () => {
+    await withProcessEnv(NO_BOUNDARY, async () => {
+      const env = { ...ENV, CEREBRAS_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
+      const names = activeVoters(env).map((v) => v.provider);
+      expect(names).toEqual(['groq', 'cerebras']);
+      let rec = recordAllFetches(() => ({ content: 'TRUE' }));
+      expect(await classifyTextWithPath('Paris is in France.', 2500, env)).toEqual({ label: 'pass', by: 'votes', voters: names });
+      rec.restore();
+      rec = recordAllFetches(() => ({ content: 'FALSE' }));
+      expect(await classifyTextWithPath('Paris is in Spain.', 2500, env)).toEqual({ label: 'veto', by: 'votes', voters: names });
+      rec.restore();
+      rec = recordAllFetches((model) => ({ content: model.startsWith('openai/') ? 'TRUE' : 'FALSE' }));
+      expect(await classifyTextWithPath('Contested.', 2500, env)).toEqual({ label: 'not-checked', by: 'votes', voters: names });
+      rec.restore();
+      // A 429 is a request that was sent: still by votes, still both named.
+      rec = recordAllFetches(() => ({ status: 429 }));
+      expect(await classifyTextWithPath('Rate limited.', 2500, env)).toEqual({ label: 'not-checked', by: 'votes', voters: names });
+      rec.restore();
+    });
+  });
+
+  it('voters follows CLASSIFY_VOTERS, not a fixed list', async () => {
+    await withProcessEnv(NO_BOUNDARY, async () => {
+      const rec = recordAllFetches(() => ({ content: 'TRUE' }));
+      try {
+        const swapped = { ...ENV, CEREBRAS_API_KEY: 'k', CLASSIFY_VOTERS: 'cerebras:qwen-3.8-27b,groq:openai/gpt-oss-120b' } as NodeJS.ProcessEnv;
+        expect((await classifyTextWithPath('Paris is in France.', 2500, swapped))).toEqual({
+          label: 'pass',
+          by: 'votes',
+          voters: ['cerebras', 'groq'],
+        });
+        const sameHost = { ...ENV, CLASSIFY_VOTERS: 'groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b' } as NodeJS.ProcessEnv;
+        expect((await classifyTextWithPath('Paris is in France.', 2500, sameHost))).toMatchObject({ voters: ['groq', 'groq'] });
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it('voters lists only the voters actually sent the claim: one keyed voter is named alone, and is not a pass', async () => {
+    await withProcessEnv(NO_BOUNDARY, async () => {
+      const rec = recordAllFetches(() => ({ content: 'TRUE' }));
+      try {
+        const env = { ...ENV, CLASSIFY_VOTERS: 'groq:openai/gpt-oss-120b,cerebras:qwen-3.8-27b' } as NodeJS.ProcessEnv;
+        expect(await classifyTextWithPath('Paris is in France.', 2500, env)).toEqual({
+          label: 'not-checked',
+          by: 'votes',
+          voters: ['groq'],
+        });
+        expect(rec.calls).toHaveLength(1);
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it("by 'skipped': too long, votes off, empty, no voter keyed, a malformed body — never a voters key, never a request", async () => {
+    await withProcessEnv({ ...NO_BOUNDARY, GROQ_API_KEY: undefined, CEREBRAS_API_KEY: undefined }, async () => {
+      const rec = recordAllFetches(() => ({ content: 'TRUE' }));
+      try {
+        const skipped = { label: 'not-checked', by: 'skipped' };
+        expect(await classifyTextWithPath('a'.repeat(1501), 2500, ENV)).toEqual(skipped);
+        expect(await classifyTextWithPath('Paris is in France.', 2500, { ...ENV, CLASSIFY_FREE_VOTES: 'off' })).toEqual(skipped);
+        expect(await classifyTextWithPath('   ', 2500, ENV)).toEqual(skipped);
+        expect(await classifyTextWithPath('Paris is in France.', 2500, {})).toEqual(skipped);
+        const app = classifyApp();
+        for (const send of [
+          () => request(app).post('/api/v1/classify').send({ text: 'Paris is in France.' }),
+          () => request(app).post('/api/v1/classify').send({ text: '' }),
+          () => request(app).post('/api/v1/classify').send({ text: '2 + 2 = 4', labels: ['pass'] }),
+          () => request(app).post('/api/v1/classify').set('Content-Type', 'application/json').send('{"text": "2 + 2 = 4",'),
+        ]) {
+          const res = await send();
+          expect(res.status).toBe(200);
+          expect(res.body).toEqual(expect.objectContaining(skipped));
+          expect(res.body).not.toHaveProperty('voters');
+        }
+        expect(rec.calls).toHaveLength(0);
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it("by 'deadline': the route's own deadline cut the answer off — not-checked, no voters key", async () => {
+    await withProcessEnv({ ...NO_BOUNDARY, GROQ_API_KEY: 'test-key-not-real' }, async () => {
+      const rec = recordAllFetches(() => ({ content: 'TRUE', delayMs: 400 }));
+      try {
+        // Votes get at least 100 ms, so a 40 ms route deadline fires first.
+        const res = await request(classifyApp({ deadlineMs: 40 })).post('/api/v1/classify').send({ text: 'Water boils at 100 C.' });
+        expect(res.body).toMatchObject({ label: 'not-checked', by: 'deadline' });
+        expect(res.body).not.toHaveProperty('voters');
+        const hung = await request(classifyApp({ classifier: () => new Promise(() => undefined), deadlineMs: 20 }))
+          .post('/api/v1/classify')
+          .send({ text: 'x' });
+        expect(hung.body).toMatchObject({ label: 'not-checked', by: 'deadline' });
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it('an answer outside the contract is not-checked by skipped: a bare label, a skipped pass, votes with no voters', async () => {
+    const odd: unknown[] = [
+      'pass',
+      { label: 'pass', by: 'skipped' },
+      { label: 'pass', by: 'votes' },
+      { label: 'pass', by: 'votes', voters: [] },
+      { label: 'pass', by: 'deadline' },
+      { label: 'PASS', by: 'arithmetic' },
+    ];
+    for (const answer of odd) {
+      const res = await request(classifyApp({ classifier: (() => answer) as unknown as Classifier }))
+        .post('/api/v1/classify')
+        .send({ text: 'x' });
+      expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'skipped' });
+    }
+    const thrown = await request(classifyApp({ classifier: () => { throw new Error('x'); } }))
+      .post('/api/v1/classify')
+      .send({ text: 'x' });
+    expect(thrown.body).toMatchObject({ label: 'not-checked', by: 'skipped' });
+  });
+
+  it('classifyText (phone bot) still answers a bare label from the same decision', async () => {
+    await withProcessEnv(NO_BOUNDARY, async () => {
+      const rec = recordAllFetches(() => ({ content: 'FALSE' }));
+      try {
+        expect(await classifyText('2 + 2 = 4', 2500, ENV)).toBe('pass');
+        expect(await classifyText('Paris is in Spain.', 2500, ENV)).toBe('veto');
+      } finally {
+        rec.restore();
+      }
+    });
   });
 });

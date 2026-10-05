@@ -74,13 +74,15 @@ async function post(app: express.Express, body: unknown) {
 describe('POST /api/v1/classify — contract', () => {
   const app = appWith();
 
-  it('answers only { label, latency_ms } with a label from the contract', async () => {
-    for (const text of ['2 + 2 = 4', '2 + 2 = 5', 'The sky is green.']) {
+  it('answers only { label, latency_ms, by } (voters rides only with by votes) with a label from the contract', async () => {
+    // Voter keys are removed for this file, so prose reaches no voter: by 'skipped', no voters key.
+    for (const [text, by] of [['2 + 2 = 4', 'arithmetic'], ['2 + 2 = 5', 'arithmetic'], ['The sky is green.', 'skipped']]) {
       const res = await post(app, { text, labels: LABELS });
       expect(res.status).toBe(200);
-      expect(Object.keys(res.body).sort()).toEqual(['label', 'latency_ms']);
+      expect(Object.keys(res.body).sort()).toEqual(['by', 'label', 'latency_ms']);
       expect(LABELS).toContain(res.body.label);
       expect(res.body.latency_ms).toBeGreaterThanOrEqual(0);
+      expect(res.body.by).toBe(by);
     }
   });
 
@@ -101,7 +103,7 @@ describe('POST /api/v1/classify — fails closed', () => {
   const app = appWith();
 
   it('missing text is not-checked', async () => {
-    expect((await post(app, { labels: LABELS })).body).toEqual({ label: 'not-checked', latency_ms: 0 });
+    expect((await post(app, { labels: LABELS })).body).toEqual({ label: 'not-checked', latency_ms: 0, by: 'skipped' });
   });
 
   it('empty and whitespace text is not-checked', async () => {
@@ -168,9 +170,9 @@ describe('POST /api/v1/classify — fails closed', () => {
     let t = 0;
     const out = await classifyWithDeadline('2 + 2 = 4', () => {
       t += 50;
-      return 'pass';
+      return { label: 'pass', by: 'arithmetic' };
     }, 10, () => t);
-    expect(out).toEqual({ label: 'not-checked', latency_ms: 50 });
+    expect(out).toEqual({ label: 'not-checked', latency_ms: 50, by: 'deadline' });
   });
 });
 

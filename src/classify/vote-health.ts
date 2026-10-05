@@ -55,7 +55,12 @@ function healthOf(v: Voter): VoterHealth {
   return h;
 }
 
-/** Records one answered request. `decidedBy` says which step produced the label. */
+/**
+ * Records one answered request. `decidedBy` is the same `by` the route answers (src/routes/classify.ts
+ * ClassifyPath, minus 'deadline', which only the route can see). Only 'arithmetic' has its own
+ * counter; 'votes' and 'skipped' are counted by label alone. A deadline cut is NOT seen here: this
+ * records the classifier's label even when the route then answered not-checked for lateness.
+ */
 export function recordLabel(label: VoteLabel, decidedBy: 'arithmetic' | 'votes' | 'skipped'): void {
   labels[label] += 1;
   if (decidedBy === 'arithmetic') labels.arithmetic += 1;
@@ -94,7 +99,10 @@ export async function runCanary(
         const f = await castVote(v, CANARY_FALSE, { env, timeoutMs, fetchImpl: opts.fetchImpl });
         const miss = [t, f].find((o) => o.kind === 'abstain');
         if (miss && miss.kind === 'abstain') {
-          h.canary = { status: miss.reason === 'no_key' ? 'not-checked' : 'degraded', reason: miss.reason, at };
+          // No key, or the data-locality boundary refused the call: the voter was never asked, so
+          // its health is unknown (not-checked), not bad (degraded).
+          const unasked = miss.reason === 'no_key' || miss.reason === 'boundary';
+          h.canary = { status: unasked ? 'not-checked' : 'degraded', reason: miss.reason, at };
         } else if (t.kind === 'verdict' && f.kind === 'verdict' && t.verdict === 'TRUE' && f.verdict === 'FALSE') {
           h.canary = { status: 'ok', reason: null, at };
         } else {
