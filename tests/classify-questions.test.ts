@@ -312,11 +312,21 @@ describe('the reply is parsed strictly', () => {
     ['a lower-case verdict lead', 'false, unless: does the host know where the car is?'],
     ['a fullwidth verdict look-alike', '\uFF34\uFF32\uFF35\uFF25 if the host knows the car, does he?'],
     ['an invisible character', 'Does the host\u200B always open a goat door?'],
+    // Strix on #1205 (optional): an entity-encoded tag is markup a renderer could decode.
+    ['a named HTML character reference', 'Does the host &lt;b&gt;always&lt;/b&gt; open a goat door?'],
+    ['a decimal character reference', 'Does the host &#60;b&#62; open a goat door?'],
+    ['a hex character reference', 'Does the host &#x3c;b&#x3e; open a goat door?'],
+    ['a fullwidth ampersand reference', 'Does the host \uFF06lt;b\uFF06gt; open a goat door?'],
     ['not a string', 42],
     ['empty', ''],
   ];
   it.each(malformed)('%s: no question', (_name, raw) => {
     expect(parseQuestion(raw)).toBeNull();
+  });
+
+  it('a bare ampersand in plain words is still a question', () => {
+    const q = 'Do the host & the contestant both know where the car is?';
+    expect(parseQuestion(q)).toBe(q);
   });
 
   it(`the length bound is ${QUESTION_MAX_CHARS} characters, inclusive`, () => {
