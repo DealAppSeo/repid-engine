@@ -8663,4 +8663,43 @@ Gates: valid D=2 end-to-end, ordering violated (low, high), mismatched roots at 
 1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order: `FREE_TIER_QUOTA_SHADOW_ENABLED`, `CASCADE_SPECULATION_ENABLED`, `HEAT_EVICTION_ENABLED`, EAS gas, ANFIS flips.
 2. **Item 14 complete (14.0-a through 14.0-d).** No further sub-steps identified in this backlog.
 
+**What differed from intent:** Executed exactly as stated. One import fix needed in the D=1 regression test (noted in Step 2-4 above). No deviation otherwise. [Entry truncated by turn cap — completed in next beat.]
+
+**Next beat:** (1) Confirm PR #1201 merged. (2) All non-Sean-gated backlog items are now done. (3) Pending housekeeping: README.md says "MiMC" and "7/7 tests" (LESSONS rule 10); Item 14 in backlog still says "LATER (first crypto apex)". Fix both in next real code PR. (4) Sean-gated items (7/8/9/10/11) and LATER items (15-19) remain the only open work.
+
+---
+
+## Beat (2026-10-05, first run) — fifth run verified clean; Item 14 complete; all non-Sean-gated code items done
+
+**Prior beat verified [V] (2026-10-04, fifth run):**
+- PR #1201 (`feat(zkp): depth-D non-membership AIR — arbitrary-depth Merkle paths (Item 14 step 14.0-d)`): **MERGED** as `e7ff1103` — confirmed via `git log --oneline`. ✓
+- `zkp-vault/src/non_membership_depth_d.rs` exists; `pub mod non_membership_depth_d` in `lib.rs:115`. ✓
+- **[V] 48/48 lib tests pass — independently re-run this beat.** `cargo test --locked` in `zkp-vault/` = first binary reports "48 passed; 0 failed" (lib tests); external test binaries 6+3+6 also green. The fifth run claimed "10/10 new tests + 48/48 total across all suites" — the 48 refers to the lib test binary, confirmed. ✓
+- No open PRs at beat start (verified `gh pr list --state open` returns `[]`). ✓
+- Rust toolchain: cargo 1.98.1 (same as prior beats). ✓
+- **Penalty verdict: NONE.** All fifth-run code claims reproduced exactly under independent re-run.
+
+**TWO HOUSEKEEPING FINDINGS (no penalty — pre-existing, not introduced by fifth run):**
+1. **README.md still says "In-AIR MiMC" and "cargo test → 7/7"** — the hash changed to Poseidon2 in Beat 25 (PR #199, merged 2026-07-26), and the lib suite is now 48 tests. The README `Hash & config` section and the correctness-gate table are both stale. LESSONS rule 10. Not the fifth run's fault; not fixed this beat (docs-only change, no PR per 2026-10-04 rule). Fix paired with next real code change.
+2. **PATENT_ALIGNED_BUILD_BACKLOG.md Item 14 still says "LATER (first crypto apex)"** — it should say DONE. This beat updates it in the same docs commit.
+
+**STEP 1 — LEDGER: this entry + backlog Item 14 status update committed on `docs/loop-beat-2026-10-05-first`. No PR (docs-only — no route, wire, test, or measured URL shipped; per 2026-10-04 rule, job log is the record).**
+
+**Intent for steps 2-4:** All non-Sean-gated backlog items are done. No code item is actionable without Sean's decisions. Honest "nothing to build" beat.
+
+**STEP 2-4 — no code shipped.** All remaining open work is Sean-gated (items 7/8/9/10/11) or explicitly LATER/GATED (items 15-19). Item 14 is complete. No fabricated busywork.
+
+**Status of all backlog items [V]:**
+- Items 1-6, 12, 13, 14, 20: **DONE**
+- Items 7-11: **Sean-gated** (enable flags / gas / prod DB writes)
+- Items 15-19: **LATER/GATED** (WHIR aggregation, health vertical, committed vector index)
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order: `FREE_TIER_QUOTA_SHADOW_ENABLED` (observe), `CASCADE_SPECULATION_ENABLED` (enable cascade), `HEAT_EVICTION_ENABLED` (enable eviction), EAS gas (items 9/10), ANFIS flips (item 7).
+2. **Backlog is exhausted of non-Sean-gated code items.** Next actionable code work requires either Sean's go-signals on existing items or new backlog items.
+
+**What steps 2-4 actually did vs intent:** Exactly as stated — no code shipped. Docs update (ledger + backlog) committed without PR. No deviation.
+
+**Next beat:** (1) Confirm this docs branch commit. (2) Wait for Sean's go-signal on items 7-11, or a new backlog item. (3) When a real code item opens: include the README fix (MiMC→Poseidon2, 7/7→48 tests) on that same branch. (4) Items 15-19 remain LATER; if a new apex crypto item opens, Rust toolchain is available in this runner.
+
 **Next beat:** (1) Confirm #1201 merged. (2) Identify the next non-Sean-gated backlog item — likely Item 3's remaining open gap (authenticated per-agent retrieval HTTP endpoint: fetches `agent_memory_leaves` + `agent_memory_leaf_content`, calls `hydrateTree()`, returns `(content, inclusionProof, currentValidityProof, root)`) or another backlog item. (3) Arm any newly-opened clean PRs.
