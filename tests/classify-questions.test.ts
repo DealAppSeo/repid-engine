@@ -513,3 +513,13 @@ describe('classifyText (the phone bot) is unchanged', () => {
     });
   });
 });
+
+describe('a reasoning block is not the question', () => {
+  it('reads the question after a closed <think> block, and none from a cut-off one', () => {
+    expect(parseQuestion('<think>The host policy matters.</think>\nDoes the host always open a door with a goat?')).toBe(
+      'Does the host always open a door with a goat?',
+    );
+    expect(parseQuestion('<think>The host policy matters and')).toBeNull();
+    expect(parseQuestion('<think>Does the host always open a goat door?</think>')).toBeNull();
+  });
+});

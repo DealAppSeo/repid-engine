@@ -513,7 +513,11 @@ const VERDICT_LEAD = /^(?:true|false|unsure|none)\b/i;
  */
 export function parseQuestion(content: unknown): string | null {
   if (typeof content !== 'string') return null;
-  const q = content.normalize('NFKC').trim();
+  // A reasoning model's closed <think> block is not the question (stripReasoning, #1204); a
+  // cut-off one means there is no question.
+  const answer = stripReasoning(content);
+  if (answer === null) return null;
+  const q = answer.normalize('NFKC').trim();
   if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(q)) return null; // one line, nothing invisible
   if (q.length < QUESTION_MIN_CHARS || q.length > QUESTION_MAX_CHARS) return null;
   if (!q.endsWith('?')) return null;
