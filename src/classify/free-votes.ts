@@ -365,6 +365,19 @@ type Dialled = { kind: 'reply'; content: unknown } | { kind: 'abstain'; reason: 
  * both go through here, so the clarifying question can never reach a host, or spend a budget,
  * by a route the votes do not. Never throws.
  */
+const QWEN_REASONING = ['none', 'low', 'medium', 'high'] as const;
+export type QwenReasoning = (typeof QWEN_REASONING)[number];
+
+/**
+ * Set CLASSIFY_QWEN_REASONING=low (or none, medium, high) to tune it; unset means 'none'. Anything
+ * else is 'none', the value that keeps the answer inside the token cap. Read per call, so it can be
+ * tuned without a deploy.
+ */
+export function qwenReasoning(env: NodeJS.ProcessEnv = process.env): QwenReasoning {
+  const raw = (env.CLASSIFY_QWEN_REASONING ?? '').trim().toLowerCase();
+  return (QWEN_REASONING as readonly string[]).includes(raw) ? (raw as QwenReasoning) : 'none';
+}
+
 async function dialVoter(voter: Voter, system: string, claim: string, opts: VoteOptions): Promise<Dialled> {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
@@ -395,6 +408,11 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
   };
   // gpt-oss reasons before it answers; keep that short so the vote fits the deadline.
   if (voter.model.startsWith('openai/gpt-oss')) body.reasoning_effort = 'low';
+  // Cerebras serves qwen with reasoning ON at 'high' by default, and returns the reasoning in its
+  // own field. Under max_tokens 400 the reasoning used the whole budget and `content` came back
+  // EMPTY: 124 of 142 not-checked labels on 2026-10-05, measured by the unparseable_shapes counter
+  // (#1204) as 'empty'. Cerebras documents reasoning_effort 'none' for one-word answers.
+  if (voter.provider === 'cerebras' && voter.model.startsWith('qwen')) body.reasoning_effort = qwenReasoning(env);
   try {
     const res = await (opts.fetchImpl ?? providerFetch)(endpoint, {
       method: 'POST',
