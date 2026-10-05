@@ -316,10 +316,84 @@ function hostKey(v: Voter): string {
   return `${v.provider}:${v.model}`;
 }
 
+/**
+ * The vendor's own count of what is left TODAY, read from the response headers of each call.
+ *
+ * WHY. BUDGET_PER_MIN keeps one burst under the vendor's per-minute line, and nothing watched the
+ * day. On 2026-10-05 paced eval runs stayed under 30 a minute and still spent Groq's 1,000 requests
+ * a day for openai/gpt-oss-120b (console.groq.com/docs/rate-limits) by about 06:40Z. Every check
+ * after that was not-checked (skip_rate 0.948) and nothing said why: `cooling` is the symptom, not
+ * the cause. The vendor already reports the day's remainder on every reply, so /classify/stats
+ * shows it, and a runner can read it before it starts instead of finding out from the users.
+ *
+ * Header names, per provider, and which ones are documented:
+ * - groq: `x-ratelimit-{limit,remaining,reset}-requests`, which Groq's docs say "always refers to
+ *   Requests Per Day (RPD)".
+ * - cerebras: the `-day` names below. Cerebras' rate-limit page names no headers, so these are NOT
+ *   CHECKED against its docs. If they are absent the quota stays null (not seen), never zero.
+ * Nothing else is read, and nothing here changes a vote.
+ */
+const QUOTA_HEADERS: Partial<Record<VoterProvider, { limit: string; remaining: string; reset: string }>> = {
+  groq: {
+    limit: 'x-ratelimit-limit-requests',
+    remaining: 'x-ratelimit-remaining-requests',
+    reset: 'x-ratelimit-reset-requests',
+  },
+  cerebras: {
+    limit: 'x-ratelimit-limit-requests-day',
+    remaining: 'x-ratelimit-remaining-requests-day',
+    reset: 'x-ratelimit-reset-requests-day',
+  },
+};
+
+export interface VoterQuota {
+  /** Requests a day, as the vendor reports it. null when the header was absent or not a count. */
+  limit_requests_day: number | null;
+  remaining_requests_day: number | null;
+  /** The vendor's own reset string (e.g. "2m59.56s"), kept short and plain. */
+  reset_requests_day: string | null;
+  /** When those headers were read. A reading ages; this says how old it is. */
+  at: string;
+}
+
+const quotaSeen = new Map<string, VoterQuota>();
+
+function headerCount(h: Headers, name: string): number | null {
+  const raw = h.get(name);
+  if (raw === null || !/^\d{1,9}$/.test(raw.trim())) return null;
+  return Number(raw.trim());
+}
+
+function recordQuota(voter: Voter, res: Response, at: number): void {
+  const names = QUOTA_HEADERS[voter.provider];
+  const h = res.headers;
+  if (!names || !h || typeof h.get !== 'function') return;
+  const resetRaw = h.get(names.reset)?.trim() ?? '';
+  const q: VoterQuota = {
+    limit_requests_day: headerCount(h, names.limit),
+    remaining_requests_day: headerCount(h, names.remaining),
+    reset_requests_day: /^[0-9a-z.]{1,24}$/i.test(resetRaw) ? resetRaw : null,
+    at: new Date(at).toISOString(),
+  };
+  // A reply without the headers says nothing about the quota; keep the last reading.
+  if (q.limit_requests_day === null && q.remaining_requests_day === null && q.reset_requests_day === null) return;
+  quotaSeen.set(hostKey(voter), q);
+}
+
+/**
+ * The last quota reading for a voter, by its `provider:model` key (the key /classify/stats uses), or
+ * null when no reply has carried one: not seen, which is not the same as zero left.
+ */
+export function voterQuota(key: string): VoterQuota | null {
+  const q = quotaSeen.get(key);
+  return q ? { ...q } : null;
+}
+
 /** Test hook. */
 export function __resetVoteCooldowns(): void {
   coolingUntil.clear();
   spent.clear();
+  quotaSeen.clear();
 }
 
 function retryAfterMs(res: Response): number {
@@ -333,6 +407,12 @@ export interface VoteOptions {
   fetchImpl?: ProviderFetch;
   timeoutMs: number;
   now?: () => number;
+  /**
+   * Extra request fields for EVALUATING a candidate model (scripts/eval/candidate-voter.ts), e.g.
+   * `{ chat_template_kwargs: { thinking: false } }` for a model that reasons by default. No production
+   * path sets it. It cannot replace the model, the messages, the temperature or the token cap.
+   */
+  extraBody?: Record<string, unknown>;
 }
 
 /**
@@ -413,6 +493,10 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
   // EMPTY: 124 of 142 not-checked labels on 2026-10-05, measured by the unparseable_shapes counter
   // (#1204) as 'empty'. Cerebras documents reasoning_effort 'none' for one-word answers.
   if (voter.provider === 'cerebras' && voter.model.startsWith('qwen')) body.reasoning_effort = qwenReasoning(env);
+  if (opts.extraBody) {
+    const fixed = { model: body.model, messages: body.messages, temperature: body.temperature, max_tokens: body.max_tokens };
+    Object.assign(body, opts.extraBody, fixed);
+  }
   try {
     const res = await (opts.fetchImpl ?? providerFetch)(endpoint, {
       method: 'POST',
@@ -420,6 +504,7 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    recordQuota(voter, res, now());
     if (res.status === 429) {
       coolingUntil.set(hostKey(voter), now() + retryAfterMs(res));
       return { kind: 'abstain', reason: 'rate_limited' };

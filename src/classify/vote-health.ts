@@ -20,7 +20,8 @@
  * without anyone deciding it. CLASSIFY_CANARY=off turns the canary off.
  */
 import type { VoteLabel, VoteOutcome, Voter } from './free-votes';
-import { activeVoters, castVote, questionsEnabled } from './free-votes';
+import type { VoterQuota } from './free-votes';
+import { activeVoters, castVote, questionsEnabled, voterQuota } from './free-votes';
 
 interface VoterHealth {
   voter: string;
@@ -29,6 +30,15 @@ interface VoterHealth {
   /** Unparseable answers by shape (free-votes.ts unparseableShape). Counts only, never text. */
   unparseable_shapes: Record<string, number>;
   canary: { status: 'ok' | 'degraded' | 'not-checked'; reason: string | null; at: string | null };
+}
+
+/**
+ * What /classify/stats reports per voter: the counters above plus the vendor's own count of
+ * requests left today (free-votes.ts voterQuota). `quota: null` means no reply has carried one
+ * since this process started: not seen, never "none left". Read it before a paced run.
+ */
+export interface VoterStats extends VoterHealth {
+  quota: VoterQuota | null;
 }
 
 const since = new Date().toISOString();
@@ -147,7 +157,7 @@ export interface ClassifyStats {
   total: number;
   /** not-checked / total, or null when there were no requests (a 0 here would claim success). */
   skip_rate: number | null;
-  voters: VoterHealth[];
+  voters: VoterStats[];
   /**
    * Present only while CLASSIFY_QUESTIONS is on, so the off shape is today's byte for byte and an
    * absent key says "the feature is off" rather than a zero that reads as "asked none".
@@ -170,6 +180,7 @@ export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifySta
       abstains: { ...h.abstains },
       unparseable_shapes: { ...h.unparseable_shapes },
       canary: { ...h.canary },
+      quota: voterQuota(h.voter),
     })),
   };
   if (questionsEnabled(env)) stats.questions = { ...questions };

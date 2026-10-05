@@ -24,6 +24,7 @@
     "harness:down": "node scripts/adversarial-harness/down.mjs",
     "harness:probe": "node scripts/adversarial-harness/run.mjs --probes-only",
     "grounding:diff": "ts-node scripts/grounding/diff-report.ts",
+    "eval:candidate-voter": "ts-node scripts/eval/candidate-voter.ts",
     "decay:stop-diff": "ts-node scripts/identity/decay-stop-diff.ts",
     "test:regression": "jest --config jest.config.js tests/regression",
     "decay:sweep": "ts-node scripts/decay/run-decay-sweep.ts",
