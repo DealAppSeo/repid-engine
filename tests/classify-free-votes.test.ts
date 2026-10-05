@@ -22,6 +22,8 @@ import {
   DEFAULT_VOTERS,
   parseVerdict,
   parseVoters,
+  stripReasoning,
+  unparseableShape,
   type VoteOutcome,
   WORKERS_AI_MODEL,
 } from '../src/classify/free-votes';
@@ -80,6 +82,45 @@ describe('verdict parsing is strict', () => {
     'anything but one verdict word is unparseable: %j',
     (raw) => expect(parseVerdict(raw)).toBeNull(),
   );
+});
+
+describe('a reasoning block is not the answer (qwen <think>), and a cut-off reply is no answer', () => {
+  it.each([
+    ['<think>Water is H2O, so this holds.</think>\nTRUE', 'TRUE'],
+    ['<think>\n\n</think>\n\nFALSE.', 'FALSE'],
+    ['<think>a</think><think>b</think> UNSURE ', 'UNSURE'],
+    ['**TRUE**', 'TRUE'],
+    ['__false__.', 'FALSE'],
+    ['`UNSURE`', 'UNSURE'],
+  ])('%j → %s', (raw, want) => expect(parseVerdict(raw)).toBe(want));
+
+  it.each([
+    ['<think>The Eiffel Tower is in Paris, so the claim', 'cut off mid-thought'],
+    ['<think>done</think>TRUE because water is wet', 'padding after the thinking'],
+    ['**TRUE** because', 'padding after emphasis'],
+    ['**TRUE*', 'mismatched emphasis'],
+    ['<think>FALSE</think>', 'a verdict only inside the thinking'],
+  ])('%j is unparseable (%s)', (raw) => expect(parseVerdict(raw)).toBeNull());
+
+  it('stripReasoning returns null for an unclosed block, never the thinking', () => {
+    expect(stripReasoning('<think>half a thought')).toBeNull();
+    expect(stripReasoning('<think>x</think>TRUE')).toBe('TRUE');
+  });
+
+  it.each([
+    [undefined, 'empty'],
+    ['   ', 'empty'],
+    ['<think>no end', 'cut_off_reasoning'],
+    ['TRUE because water is wet', 'verdict_with_text'],
+    ['TRUE\nFALSE', 'several_verdicts'],
+    ['It depends on the year.', 'no_verdict'],
+  ])('unparseableShape(%j) = %s', (raw, want) => expect(unparseableShape(raw)).toBe(want));
+
+  it('castVote reports the shape of an unparseable answer and stores no text', async () => {
+    const { impl } = stubHost([{ content: '<think>The claim mentions a secret phrase and' }]);
+    const out = await castVote(DEFAULT_VOTERS[0]!, 'A secret phrase.', { env: ENV, fetchImpl: impl as never, timeoutMs: 1000 });
+    expect(out).toEqual({ kind: 'abstain', reason: 'unparseable', shape: 'cut_off_reasoning' });
+  });
 });
 
 describe('agreement rule', () => {
@@ -282,6 +323,15 @@ describe('B16: stats and canary', () => {
   beforeEach(() => health.__resetClassifyStats());
   afterEach(() => {
     globalThis.fetch = realFetch;
+  });
+
+  it('counts unparseable answers by shape, and the stats hold no voter text', async () => {
+    globalThis.fetch = stubHost(() => ({ content: 'TRUE, and here is a private detail' })).impl as unknown as typeof fetch;
+    await classifyText('The bridge opened in 1932.', 2500, ENV);
+    const s = health.classifyStats({});
+    const shapes = s.voters.map((v) => v.unparseable_shapes);
+    expect(shapes.some((m) => m.verdict_with_text === 1)).toBe(true);
+    expect(JSON.stringify(s)).not.toMatch(/private detail|bridge/);
   });
 
   it('skip_rate is null before any request, never a 0 that reads as success', () => {
