@@ -337,62 +337,58 @@ function looksLikeEnvVar(token, line) {
   return false;
 }
 
-/** Pull line comments and block comments; skip strings and template literals. */
-function extractComments(src) {
-  let i = 0;
-  const n = src.length;
-  let out = '';
-  while (i < n) {
-    const c = src[i];
-    const n1 = src[i + 1];
-    if (c === '/' && n1 === '/') {
-      const end = src.indexOf('\n', i);
-      const stop = end === -1 ? n : end;
-      out += src.slice(i, stop) + '\n';
-      i = stop;
-      continue;
+/**
+ * Every line and block comment, in source order, read with TypeScript's own parser.
+ *
+ * The hand-rolled lexer this replaces had no regex-literal state: a quote or backtick inside /…/
+ * opened a "string" that swallowed every comment up to the next matching quote, and the check still
+ * said VERIFIED. Measured 2026-10-05 against this parser: 149 comments in 8 src files were never
+ * scanned (exchange-red-team.ts alone 94), and 808 lines of code were scanned as if they were
+ * comments. A comment is leading trivia of some token, so tokens are visited too, not only nodes:
+ * a comment inside an empty `catch {}` hangs off the close brace. Template and JSX text are skipped,
+ * because a token's position there is inside literal text, not trivia.
+ */
+let tsModule;
+function loadTypeScript() {
+  if (tsModule === undefined) {
+    try {
+      tsModule = require('typescript');
+    } catch {
+      tsModule = null;
     }
-    if (c === '/' && n1 === '*') {
-      const end = src.indexOf('*/', i + 2);
-      const stop = end === -1 ? n : end + 2;
-      out += src.slice(i, stop) + '\n';
-      i = stop;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      const q = c;
-      i += 1;
-      while (i < n) {
-        if (src[i] === '\\') {
-          i += 2;
-          continue;
-        }
-        if (src[i] === q) {
-          i += 1;
-          break;
-        }
-        i += 1;
-      }
-      continue;
-    }
-    if (c === '`') {
-      i += 1;
-      while (i < n) {
-        if (src[i] === '\\') {
-          i += 2;
-          continue;
-        }
-        if (src[i] === '`') {
-          i += 1;
-          break;
-        }
-        i += 1;
-      }
-      continue;
-    }
-    i += 1;
   }
-  return out;
+  return tsModule;
+}
+
+function extractComments(src, fileName = 'source.ts') {
+  const ts = loadTypeScript();
+  if (!ts) throw new Error('typescript is not installed, so comments cannot be read');
+  const kind = fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sf = ts.createSourceFile(fileName, src, ts.ScriptTarget.Latest, true, kind);
+  const LITERAL_TEXT = new Set([ts.SyntaxKind.TemplateMiddle, ts.SyntaxKind.TemplateTail, ts.SyntaxKind.JsxText]);
+  const children = (node) =>
+    node.getChildren(sf).filter((c) => c.kind < ts.SyntaxKind.FirstJSDocNode || c.kind > ts.SyntaxKind.LastJSDocNode);
+  // Where template or JSX text begins, what follows is text, so no trivia scan may start there.
+  const textStarts = new Set();
+  const markText = (node) => {
+    if (LITERAL_TEXT.has(node.kind)) textStarts.add(node.pos);
+    children(node).forEach(markText);
+  };
+  markText(sf);
+  const found = new Map();
+  const visit = (node) => {
+    // A comment on its own line is leading trivia of the next token; one on the same line as
+    // code (`x = 1; // why`) is trailing trivia of the token before it. Read both.
+    if (!textStarts.has(node.pos)) {
+      for (const r of ts.getLeadingCommentRanges(src, node.pos) || []) found.set(r.pos, src.slice(r.pos, r.end));
+    }
+    if (!textStarts.has(node.end)) {
+      for (const r of ts.getTrailingCommentRanges(src, node.end) || []) found.set(r.pos, src.slice(r.pos, r.end));
+    }
+    children(node).forEach(visit);
+  };
+  visit(sf);
+  return [...found.keys()].sort((a, b) => a - b).map((k) => found.get(k)).join('\n') + '\n';
 }
 
 function loadRegistry(root = REPO_ROOT) {
@@ -501,6 +497,9 @@ function scanRepo(root = REPO_ROOT) {
   if (!registry.ok) {
     return { status: 'NOT_CHECKED', reason: registry.reason, hits: [], stats: null, unusedAllow: [] };
   }
+  if (!loadTypeScript()) {
+    return { status: 'NOT_CHECKED', reason: 'typescript is not installed, so TypeScript comments cannot be read', hits: [], stats: null, unusedAllow: [] };
+  }
   const targets = walkScanTargets(root);
   const generatedRel = REGISTRY_REL.replaceAll('\\', '/');
   const ts = targets.ts.filter((f) => relPosix(root, f) !== generatedRel);
@@ -533,7 +532,7 @@ function scanRepo(root = REPO_ROOT) {
   };
 
   for (const f of targets.md) scanFile(f, null);
-  for (const f of ts) scanFile(f, extractComments);
+  for (const f of ts) scanFile(f, (text) => extractComments(text, f));
 
   const unusedAllow = [...allow].filter((t) => !allowSeen.has(t)).sort();
   const stats = {
