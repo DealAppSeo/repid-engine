@@ -18,7 +18,7 @@ const SCRIPT = join(ROOT, 'scripts', 'check-named-env-vars.cjs');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const mod = require('../scripts/check-named-env-vars.cjs') as {
   looksLikeEnvVar: (token: string, line: string) => boolean;
-  extractComments: (src: string) => string;
+  extractComments: (src: string, fileName?: string) => string;
   scanText: (
     text: string,
     fileRel: string,
@@ -63,6 +63,43 @@ describe('extractComments', () => {
     expect(comments).toContain('PHANTOM_IN_LINE_COMMENT');
     expect(comments).toContain('PHANTOM_IN_BLOCK');
     expect(comments).not.toContain('NOT_A_HIT_IN_STRING');
+  });
+
+  // The hand-rolled lexer had no regex-literal state: a quote or backtick inside /…/ opened a
+  // "string" that swallowed every comment after it. Measured 2026-10-05: 149 comments in 8 src
+  // files were never scanned, free-votes.ts among them, and the check still said VERIFIED.
+  it('a regex literal holding a backtick or a quote does not hide the comments after it', () => {
+    const src = [
+      'const a = /^([*_`]{0,2})(TRUE|FALSE)\\1$/i;',
+      '// env var `AFTER_BACKTICK_REGEX`',
+      "const b = /it's/;",
+      '/* env var `AFTER_QUOTE_REGEX` */',
+      'const c = x / 2; // env var `AFTER_DIVISION`',
+    ].join('\n');
+    const comments = mod.extractComments(src);
+    expect(comments).toContain('AFTER_BACKTICK_REGEX');
+    expect(comments).toContain('AFTER_QUOTE_REGEX');
+    expect(comments).toContain('AFTER_DIVISION');
+  });
+
+  it('a comment inside an empty block is found', () => {
+    expect(mod.extractComments('try { f(); } catch { /* env var `IN_EMPTY_CATCH` */ }')).toContain('IN_EMPTY_CATCH');
+  });
+
+  it('// inside a template literal is not a comment', () => {
+    const src = 'const u = `${host}//NOT_A_COMMENT_IN_TEMPLATE`;\nconst v = `a ${b} /* NOR_THIS */ c`;';
+    const comments = mod.extractComments(src);
+    expect(comments).not.toContain('NOT_A_COMMENT_IN_TEMPLATE');
+    expect(comments).not.toContain('NOR_THIS');
+  });
+
+  it('JSX text is not a comment, a JSX expression comment is', () => {
+    const src = 'const el = <p>// NOT_A_COMMENT_IN_JSX {/* env var `IN_JSX_EXPR` */}</p>;';
+    const comments = mod.extractComments(src, 'x.tsx');
+    expect(comments).not.toContain('NOT_A_COMMENT_IN_JSX');
+    expect(comments).toContain('IN_JSX_EXPR');
+    const multiline = 'const el = (\n  <p>\n    // NOT_A_COMMENT_ON_ITS_OWN_LINE\n  </p>\n);';
+    expect(mod.extractComments(multiline, 'x.tsx')).not.toContain('NOT_A_COMMENT_ON_ITS_OWN_LINE');
   });
 });
 
