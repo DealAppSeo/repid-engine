@@ -24,6 +24,8 @@ interface VoterHealth {
   voter: string;
   verdicts: { TRUE: number; FALSE: number; UNSURE: number };
   abstains: Record<string, number>;
+  /** Unparseable answers by shape (free-votes.ts unparseableShape). Counts only, never text. */
+  unparseable_shapes: Record<string, number>;
   canary: { status: 'ok' | 'degraded' | 'not-checked'; reason: string | null; at: string | null };
 }
 
@@ -48,6 +50,7 @@ function healthOf(v: Voter): VoterHealth {
       voter: k,
       verdicts: { TRUE: 0, FALSE: 0, UNSURE: 0 },
       abstains: {},
+      unparseable_shapes: {},
       canary: { status: 'not-checked', reason: null, at: null },
     };
     voters.set(k, h);
@@ -72,7 +75,12 @@ export function recordVotes(vs: readonly Voter[], outcomes: readonly VoteOutcome
     if (!o) return;
     const h = healthOf(v);
     if (o.kind === 'verdict') h.verdicts[o.verdict] += 1;
-    else h.abstains[o.reason] = (h.abstains[o.reason] ?? 0) + 1;
+    else {
+      h.abstains[o.reason] = (h.abstains[o.reason] ?? 0) + 1;
+      if (o.reason === 'unparseable' && o.shape) {
+        h.unparseable_shapes[o.shape] = (h.unparseable_shapes[o.shape] ?? 0) + 1;
+      }
+    }
   });
 }
 
@@ -138,6 +146,7 @@ export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifySta
       ...h,
       verdicts: { ...h.verdicts },
       abstains: { ...h.abstains },
+      unparseable_shapes: { ...h.unparseable_shapes },
       canary: { ...h.canary },
     })),
   };

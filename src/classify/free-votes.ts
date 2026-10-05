@@ -38,7 +38,8 @@ import { assertPromptEgressAllowed, onlyAttestationsLeave } from '../selfhost/eg
 export type Verdict = 'TRUE' | 'FALSE' | 'UNSURE';
 export type VoteOutcome =
   | { kind: 'verdict'; verdict: Verdict }
-  | { kind: 'abstain'; reason: AbstainReason };
+  /** `shape` only with reason 'unparseable': what the answer looked like, never what it said. */
+  | { kind: 'abstain'; reason: AbstainReason; shape?: UnparseableShape };
 export type AbstainReason =
   | 'no_key'
   | 'cooling'
@@ -202,11 +203,46 @@ export function encodeClaim(claim: string): string {
   return `Claim: ${JSON.stringify(folded)}`;
 }
 
-/** Strict: the whole answer must be one verdict word, optionally followed by a period. */
+/**
+ * Reasoning models (the qwen voter) can put their thinking in `<think>…</think>` before the
+ * answer, as the HAL quorum already handles (src/hal/cross-llm-client.ts). The thinking is not the
+ * answer, so CLOSED blocks are removed. A block that opens and never closes means the reply was
+ * cut off mid-thought: there is no answer, and null says so. Nothing is guessed from the thinking.
+ */
+export function stripReasoning(content: string): string | null {
+  const stripped = content.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  return /<think>/i.test(stripped) ? null : stripped;
+}
+
+/**
+ * Strict: after closed reasoning blocks are removed, the whole answer must be one verdict word,
+ * optionally in markdown emphasis (`**TRUE**`) and followed by a period. "TRUE because…" is still
+ * unparseable (B20: a padded answer is where an injected claim steers the vote).
+ */
 export function parseVerdict(content: unknown): Verdict | null {
   if (typeof content !== 'string') return null;
-  const m = /^\s*(TRUE|FALSE|UNSURE)\.?\s*$/i.exec(content);
-  return m ? (m[1]!.toUpperCase() as Verdict) : null;
+  const answer = stripReasoning(content);
+  if (answer === null) return null;
+  const m = /^\s*([*_`]{0,2})(TRUE|FALSE|UNSURE)\1\.?\s*$/i.exec(answer);
+  return m ? (m[2]!.toUpperCase() as Verdict) : null;
+}
+
+/**
+ * Why an answer was unparseable, as a SHAPE, never as text: nothing a voter wrote is stored.
+ * 2026-10-05: 124 of 330 labelled claims went not-checked because the qwen voter's answer was
+ * unparseable, rising with claim length (72% of HaluEval Q/A statements, 6% of short canaries).
+ * These counters say which shape it was, so the fix is chosen from production, not from a guess.
+ */
+export type UnparseableShape = 'empty' | 'cut_off_reasoning' | 'verdict_with_text' | 'several_verdicts' | 'no_verdict';
+
+export function unparseableShape(content: unknown): UnparseableShape {
+  if (typeof content !== 'string') return 'empty';
+  const answer = stripReasoning(content);
+  if (answer === null) return 'cut_off_reasoning';
+  if (answer.trim() === '') return 'empty';
+  const words = new Set((answer.match(/\b(TRUE|FALSE|UNSURE)\b/gi) ?? []).map((w) => w.toUpperCase()));
+  if (words.size === 0) return 'no_verdict';
+  return words.size > 1 ? 'several_verdicts' : 'verdict_with_text';
 }
 
 /**
@@ -331,8 +367,11 @@ export async function castVote(voter: Voter, claim: string, opts: VoteOptions): 
     }
     if (!res.ok) return { kind: 'abstain', reason: 'http_error' };
     const json = (await res.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
-    const verdict = parseVerdict(json.choices?.[0]?.message?.content);
-    return verdict ? { kind: 'verdict', verdict } : { kind: 'abstain', reason: 'unparseable' };
+    const content = json.choices?.[0]?.message?.content;
+    const verdict = parseVerdict(content);
+    return verdict
+      ? { kind: 'verdict', verdict }
+      : { kind: 'abstain', reason: 'unparseable', shape: unparseableShape(content) };
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
     return { kind: 'abstain', reason: aborted ? 'timeout' : 'network' };
