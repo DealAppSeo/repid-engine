@@ -105,7 +105,7 @@ import {
   type Voter,
   type VoterProvider,
 } from '../classify/free-votes';
-import { classifyStats, recordLabel, recordQuestion, recordVotes } from '../classify/vote-health';
+import { canaryOk, classifyStats, recordLabel, recordQuestion, recordVotes } from '../classify/vote-health';
 
 export type ClassifyLabel = 'pass' | 'veto' | 'not-checked';
 
@@ -344,12 +344,19 @@ export async function classifyTextWithPath(
   }
   const timeoutMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
   const voters = activeVoters(env);
-  const { label, outcomes } = await classifyByFreeVotes(trimmed, { env, timeoutMs, voters });
-  recordVotes(voters, outcomes);
-  const asked = voters.filter((_, i) => {
-    const o = outcomes[i];
-    return o !== undefined && voteWasSent(o);
+  // A backup stands in only once the canary has seen it answer right (free-votes.ts THE FALLBACK).
+  const { label, outcomes, deciders, attempts } = await classifyByFreeVotes(trimmed, {
+    env,
+    timeoutMs,
+    voters,
+    backupReady: canaryOk,
   });
+  recordVotes(
+    attempts.map((t) => t.voter),
+    attempts.map((t) => t.outcome),
+  );
+  // A backup is tried only after a refusal that sent nothing, so this is at most one per slot.
+  const asked = attempts.filter((t) => voteWasSent(t.outcome)).map((t) => t.voter);
   if (asked.length === 0) {
     // No vote left the box, so there is no verdict either: combineVotes can only be not-checked.
     recordLabel(NOT_CHECKED, 'skipped');
@@ -360,7 +367,7 @@ export async function classifyTextWithPath(
   if (options.question === false || label !== NOT_CHECKED || !questionsEnabled(env) || !bothUnsure(outcomes)) {
     return answer;
   }
-  const question = await questionWithin(trimmed, voters, outcomes, deadlineMs - (performance.now() - started), env);
+  const question = await questionWithin(trimmed, deciders, outcomes, deadlineMs - (performance.now() - started), env);
   return question === undefined ? answer : { ...answer, question };
 }
 
