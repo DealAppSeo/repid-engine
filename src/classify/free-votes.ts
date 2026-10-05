@@ -519,6 +519,12 @@ export const QUESTION_MAX_CHARS = 160;
 const LINK_LIKE = /[a-z][a-z0-9+.-]*:\/\/|\bwww\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b|\b(?:javascript|data|vbscript|file|mailto|tel):/i;
 /** Markdown and markup: emphasis, code, headings, links, tables, html, escapes, or a list/quote lead. */
 const MARKUP = /[`*_#~|<>[\]\\]|^(?:[-+>]|\d+[.)])\s/;
+/**
+ * An HTML character reference (`&lt;`, `&#60;`, `&#x3c;`): markup written so MARKUP cannot see it,
+ * which a renderer that decodes entities would turn back into a tag (Strix on #1205). A bare `&` in
+ * plain words is fine.
+ */
+const CHAR_REFERENCE = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
 /** A verdict word, or NONE, written as one: upper case anywhere, or leading the reply in any case. */
 const VERDICT_UPPER = /\b(?:TRUE|FALSE|UNSURE|NONE)\b/;
 const VERDICT_LEAD = /^(?:true|false|unsure|none)\b/i;
@@ -540,7 +546,7 @@ export function parseQuestion(content: unknown): string | null {
   if (q.length < QUESTION_MIN_CHARS || q.length > QUESTION_MAX_CHARS) return null;
   if (!q.endsWith('?')) return null;
   if (q.includes('@') || LINK_LIKE.test(q)) return null;
-  if (MARKUP.test(q)) return null;
+  if (MARKUP.test(q) || CHAR_REFERENCE.test(q)) return null;
   if (VERDICT_UPPER.test(q) || VERDICT_LEAD.test(q)) return null;
   return q;
 }

@@ -22,8 +22,8 @@
  *            so two models on one host appear twice. Derived from the configuration in use, never
  *            a fixed list. A pass or veto means every voter listed gave that same verdict.
  *   question ONLY when label === 'not-checked' AND by === 'votes' AND a question parsed: one
- *            line of 10 to 160 characters ending in '?', with no link, address, markdown or
- *            verdict word (parseQuestion, src/classify/free-votes.ts). It is the one fact or
+ *            line of 10 to 160 characters ending in '?', with no link, address, markdown, HTML
+ *            character reference or verdict word (parseQuestion, src/classify/free-votes.ts). It is the one fact or
  *            assumption whose answer would let the voters decide ("Does the host always open a
  *            door with a goat behind it?"). It comes from this API or it does not appear: a door
  *            shows it verbatim or not at all, and never invents one. It never changes the label.
