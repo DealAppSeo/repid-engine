@@ -33,6 +33,10 @@
  *            cooling and egress path, and only if it fits in what is left of the deadline. With
  *            the flag off the response is byte for byte what it was, and the call is never made.
  *            classifyText (the phone bot) never asks: it has nowhere to show the answer.
+ *            CLASSIFY_ASSUMPTIONS=on (off by default) adds one sentence to the vote prompt asking
+ *            each voter for UNSURE when a claim is true only under an assumption it does not
+ *            state, so a famous-answer claim both voters would wrongly agree on reaches not-checked
+ *            (and, with CLASSIFY_QUESTIONS=on, a question) instead of a pass.
  *
  * `by` and `voters` were added 2026-10-05 so a door can name what answered truthfully instead of
  * calling an arithmetic answer a vote. They are additive: every TrustShell client on its main at
