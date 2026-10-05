@@ -8703,3 +8703,25 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 
 **Intent for steps 2-4:** Wire `runMemoryRootAnchorSweep` (`src/memory/memory-root-anchor-sweep.ts`) into `src/index.ts` behind `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED` (off|shadow|enforce, default=off). Shadow = dryRun:true (observes what would be anchored, zero gas). Enforce = real EAS anchoring (Sean GO). Also arm PR #1210 (SAFE-CLASS). This closes item 10's wiring gap per the same shadow-first pattern used for HEAT_EVICTION_ENABLED, CASCADE_SPECULATION_ENABLED, etc.
 
+
+**STEP 2-4 — SHIPPED: sweep wired into `src/index.ts` → PR #1211 [V].**
+- Import added (`src/index.ts:88`); gated setInterval block before `export default app`.
+- `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED`: off (default, no-op) | shadow (`dryRun:true`, zero gas) | enforce (real EAS, Sean GO).
+- `fetchPending`: Supabase `agent_memory_roots` where `eas_uid IS NULL`, `!inner(tier)` join on `repid_agents`, oldest first.
+- `writeback`: updates `eas_uid`/`anchored_at`/`tx_hash` on success.
+- `IS_TEST` guard: interval never starts in tests → zero test-runtime change.
+- **[V] tsc --noEmit exit 0; `npx jest memory-root-anchor --forceExit` → 13/13 green.**
+- PR #1211 OPEN, SAFE-CLASS (additive, zero scoring reach, default-off gate).
+- **Also armed:** PR #1210 (`--auto --squash`).
+
+**Item 10 status after this beat:** PARTIAL → **wired, shadow-inert** (same status as items 8/9/11). Enabling in prod is Sean GO (`MEMORY_ROOT_ANCHOR_SWEEP_ENABLED=shadow` first to observe, then `enforce` to spend gas).
+
+**Step 5 — what steps 2-4 actually did vs intent:** Executed exactly as stated. The `writeback` needed a column-existence check — verified `tx_hash` is an optional spread (no schema change, no migration). No deviation.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order: `FREE_TIER_QUOTA_SHADOW_ENABLED`, `CASCADE_SPECULATION_ENABLED`, `HEAT_EVICTION_ENABLED`, `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED`, EAS gas, ANFIS flips.
+2. **Item 10 specific:** set `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED=shadow` in Railway to observe which `agent_memory_roots` rows would be anchored each off-peak window; once the shadow log looks right, promote to `enforce` (gas spend begins then).
+3. **PR #1210** armed `--auto --squash` (all checks green, Strix clean); **PR #1211** (item 10 wiring) needs CI green + Strix before merge. Both SAFE-CLASS.
+
+**Next beat:** (1) Confirm #1210 and #1211 merged. (2) Items 14 (done), 13 (done) — next non-Sean-gated backlog item. Item 15 (WHIR aggregation PCS) is LATER pending PR#1919 verification. Consider: a verify-first check of whether any newly-opened PRs need arming, or check if `tx_hash` column exists on `agent_memory_roots` (if not, the writeback will fail silently — a migration may be needed). (3) The classify stream (PRs 1203-1210) is active; if there's a next piece there, check its state.
+
