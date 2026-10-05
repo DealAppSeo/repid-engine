@@ -407,6 +407,12 @@ export interface VoteOptions {
   fetchImpl?: ProviderFetch;
   timeoutMs: number;
   now?: () => number;
+  /**
+   * Extra request fields for EVALUATING a candidate model (scripts/eval/candidate-voter.ts), e.g.
+   * `{ chat_template_kwargs: { thinking: false } }` for a model that reasons by default. No production
+   * path sets it. It cannot replace the model, the messages, the temperature or the token cap.
+   */
+  extraBody?: Record<string, unknown>;
 }
 
 /**
@@ -487,6 +493,10 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
   // EMPTY: 124 of 142 not-checked labels on 2026-10-05, measured by the unparseable_shapes counter
   // (#1204) as 'empty'. Cerebras documents reasoning_effort 'none' for one-word answers.
   if (voter.provider === 'cerebras' && voter.model.startsWith('qwen')) body.reasoning_effort = qwenReasoning(env);
+  if (opts.extraBody) {
+    const fixed = { model: body.model, messages: body.messages, temperature: body.temperature, max_tokens: body.max_tokens };
+    Object.assign(body, opts.extraBody, fixed);
+  }
   try {
     const res = await (opts.fetchImpl ?? providerFetch)(endpoint, {
       method: 'POST',
