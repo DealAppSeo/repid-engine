@@ -2,7 +2,7 @@
  * POST /api/v1/classify — the one label contract every door calls.
  *
  * In:  { text: string, labels: ["pass", "veto", "not-checked"] }
- * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters? }
+ * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters?, question? }
  *
  *   by       which path produced the label (ClassifyPath below):
  *            'arithmetic'  the whole text is one equation, decided by exact calculation. No model
@@ -21,6 +21,22 @@
  *            names in the configured order (activeVoters / CLASSIFY_VOTERS), one entry per voter,
  *            so two models on one host appear twice. Derived from the configuration in use, never
  *            a fixed list. A pass or veto means every voter listed gave that same verdict.
+ *   question ONLY when label === 'not-checked' AND by === 'votes' AND a question parsed: one
+ *            line of 10 to 160 characters ending in '?', with no link, address, markdown or
+ *            verdict word (parseQuestion, src/classify/free-votes.ts). It is the one fact or
+ *            assumption whose answer would let the voters decide ("Does the host always open a
+ *            door with a goat behind it?"). It comes from this API or it does not appear: a door
+ *            shows it verbatim or not at all, and never invents one. It never changes the label.
+ *            INERT BY DEFAULT: asked only with CLASSIFY_QUESTIONS=on and when BOTH voters answered
+ *            UNSURE (not a disagreement, not an error, timeout, 429 or budget refusal), by at most
+ *            one extra call to the first of them, through the votes' own boundary, budget,
+ *            cooling and egress path, and only if it fits in what is left of the deadline. With
+ *            the flag off the response is byte for byte what it was, and the call is never made.
+ *            classifyText (the phone bot) never asks: it has nowhere to show the answer.
+ *            CLASSIFY_ASSUMPTIONS=on (off by default) adds one sentence to the vote prompt asking
+ *            each voter for UNSURE when a claim is true only under an assumption it does not
+ *            state, so a famous-answer claim both voters would wrongly agree on reaches not-checked
+ *            (and, with CLASSIFY_QUESTIONS=on, a question) instead of a pass.
  *
  * `by` and `voters` were added 2026-10-05 so a door can name what answered truthfully instead of
  * calling an arithmetic answer a vote. They are additive: every TrustShell client on its main at
@@ -72,13 +88,21 @@ import { trustedClientIp } from '../middleware/client-ip';
 import { safeEvalArithmetic } from '../hal/safe-arithmetic';
 import {
   activeVoters,
+  askQuestion,
+  bothUnsure,
   classifyByFreeVotes,
   freeVotesEnabled,
   maxProseChars,
+  parseQuestion,
+  questionsEnabled,
+  questionWasSent,
   voteWasSent,
+  type QuestionOutcome,
+  type VoteOutcome,
+  type Voter,
   type VoterProvider,
 } from '../classify/free-votes';
-import { classifyStats, recordLabel, recordVotes } from '../classify/vote-health';
+import { classifyStats, recordLabel, recordQuestion, recordVotes } from '../classify/vote-health';
 
 export type ClassifyLabel = 'pass' | 'veto' | 'not-checked';
 
@@ -118,7 +142,7 @@ export const CLASSIFY_PATHS: readonly ClassifyPath[] = ['arithmetic', 'votes', '
 /** The label and the path that produced it. 'deadline' is the route's to say, never a classifier's. */
 export type ClassifyOutcome =
   | { label: ClassifyLabel; by: 'arithmetic' | 'skipped' }
-  | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[] };
+  | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[]; question?: string };
 
 /** What the route runs. Anything that is not a well-formed ClassifyOutcome is not-checked. */
 export type Classifier = (text: string) => ClassifyOutcome | Promise<ClassifyOutcome>;
@@ -129,6 +153,8 @@ export interface ClassifyResult {
   by: ClassifyPath;
   /** Present only when by === 'votes'. */
   voters?: string[];
+  /** Present only when label === 'not-checked', by === 'votes' and a question parsed. */
+  question?: string;
 }
 
 type Answer = Omit<ClassifyResult, 'latency_ms'>;
@@ -147,17 +173,21 @@ function isLabel(value: unknown): value is ClassifyLabel {
 /**
  * A classifier's answer as the route will report it, or null when it is out of contract: a bare
  * label (it names no path), an unknown `by`, a 'skipped' that claims a pass or veto, or a 'votes'
- * with no list of voters.
+ * with no list of voters. A `question` survives only on not-checked by 'votes', and only if it
+ * passes parseQuestion again here; anywhere else, or malformed, it is dropped and the answer kept.
  */
 function answerOf(value: unknown): Answer | null {
   if (!value || typeof value !== 'object') return null;
-  const { label, by, voters } = value as { label?: unknown; by?: unknown; voters?: unknown };
+  const { label, by, voters, question } = value as { label?: unknown; by?: unknown; voters?: unknown; question?: unknown };
   if (!isLabel(label)) return null;
   if (by === 'arithmetic') return { label, by };
   if (by === 'skipped') return label === NOT_CHECKED ? { label, by } : null;
   if (by !== 'votes') return null;
   if (!Array.isArray(voters) || voters.length === 0 || !voters.every((v) => typeof v === 'string')) return null;
-  return { label, by, voters: [...(voters as string[])] };
+  const answer: Answer = { label, by, voters: [...(voters as string[])] };
+  const asked = label === NOT_CHECKED ? parseQuestion(question) : null;
+  if (asked !== null) answer.question = asked;
+  return answer;
 }
 
 /**
@@ -175,10 +205,11 @@ export async function classifyWithDeadline(
   const finish = (answer: Answer | typeof DEADLINE): ClassifyResult => {
     const latency_ms = Math.max(0, Math.round(now() - started));
     if (answer === DEADLINE || latency_ms > deadlineMs) return { label: NOT_CHECKED, latency_ms, by: 'deadline' };
-    // voters only ever rides with 'votes'.
-    return answer.by === 'votes'
-      ? { label: answer.label, latency_ms, by: 'votes', voters: answer.voters }
-      : { label: answer.label, latency_ms, by: answer.by };
+    // voters only ever rides with 'votes'; question only with 'votes' too (answerOf checked it).
+    if (answer.by !== 'votes') return { label: answer.label, latency_ms, by: answer.by };
+    const out: ClassifyResult = { label: answer.label, latency_ms, by: 'votes', voters: answer.voters };
+    if (answer.question !== undefined) out.question = answer.question;
+    return out;
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -227,8 +258,59 @@ export const CLASSIFY_DEFAULT_LIMIT = 30;
 export const CLASSIFY_DEFAULT_WINDOW_MS = 60 * 1000;
 /** The stamp gives up at 3000 ms (extension/laya.js), so the route answers before that. */
 export const CLASSIFY_DEFAULT_DEADLINE_MS = 2500;
-/** Room left inside the deadline for the route's own work after the votes return. */
+/**
+ * Room left inside the deadline for the route's own work after the votes return, and again after
+ * the clarifying question returns.
+ */
 const VOTE_HEADROOM_MS = 200;
+/** Least time worth giving the clarifying question. With less left, there is no question. */
+const MIN_QUESTION_MS = 300;
+
+/**
+ * The clarifying question, inside what is left of the deadline, or undefined. The caller has
+ * already established not-checked by votes with both voters UNSURE. Never throws, never outlives
+ * its time box (a host that ignores the abort is raced by a timer), never changes the label.
+ */
+async function questionWithin(
+  claim: string,
+  voters: readonly Voter[],
+  outcomes: readonly VoteOutcome[],
+  remainingMs: number,
+  env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const timeoutMs = Math.floor(remainingMs - VOTE_HEADROOM_MS);
+  if (!(timeoutMs >= MIN_QUESTION_MS)) return undefined;
+  // The first voter that answered UNSURE.
+  const voter = voters[outcomes.findIndex((o) => o.kind === 'verdict' && o.verdict === 'UNSURE')];
+  if (!voter) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const late = new Promise<'late'>((resolve) => {
+      timer = setTimeout(() => resolve('late'), timeoutMs);
+    });
+    const out: QuestionOutcome | 'late' = await Promise.race([askQuestion(voter, claim, { env, timeoutMs }), late]);
+    // 'late': the request was already out (a refusal resolves at once), so it was asked.
+    if (out === 'late') {
+      recordQuestion('none');
+      return undefined;
+    }
+    if (!questionWasSent(out)) return undefined;
+    recordQuestion(out.kind === 'question' ? 'given' : 'none');
+    return out.kind === 'question' ? out.question : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export interface ClassifyTextOptions {
+  /**
+   * false: never ask the clarifying question, whatever CLASSIFY_QUESTIONS says. For a caller
+   * that cannot show one (classifyText), so it spends no request on an answer it would drop.
+   */
+  question?: boolean;
+}
 
 /**
  * Arithmetic first, then the two free votes, and which of them answered. Never throws: every
@@ -237,13 +319,16 @@ const VOTE_HEADROOM_MS = 200;
  * `by` is 'votes' only when at least one voter was actually sent the claim (voteWasSent); when
  * every voter was refused before a request (boundary, no key, cooling, budget, retired id) the
  * text went nowhere and the answer is by 'skipped'. `voters` lists exactly the voters that were
- * sent the claim, in configured order.
+ * sent the claim, in configured order. `question` is added only with CLASSIFY_QUESTIONS on, a
+ * not-checked from BOTH voters answering UNSURE, and enough deadline left (see the contract).
  */
 export async function classifyTextWithPath(
   text: string,
   deadlineMs: number = CLASSIFY_DEFAULT_DEADLINE_MS,
   env: NodeJS.ProcessEnv = process.env,
+  options: ClassifyTextOptions = {},
 ): Promise<ClassifyOutcome> {
+  const started = performance.now();
   const local = classifyLocal(text);
   if (local !== NOT_CHECKED) {
     recordLabel(local, 'arithmetic');
@@ -268,19 +353,25 @@ export async function classifyTextWithPath(
     return { label: NOT_CHECKED, by: 'skipped' };
   }
   recordLabel(label, 'votes');
-  return { label, by: 'votes', voters: asked.map((v) => v.provider) };
+  const answer = { label, by: 'votes' as const, voters: asked.map((v) => v.provider) };
+  if (options.question === false || label !== NOT_CHECKED || !questionsEnabled(env) || !bothUnsure(outcomes)) {
+    return answer;
+  }
+  const question = await questionWithin(trimmed, voters, outcomes, deadlineMs - (performance.now() - started), env);
+  return question === undefined ? answer : { ...answer, question };
 }
 
 /**
  * The label alone, for callers that do not report the path (the phone bot,
- * src/routes/telegram-public.ts). Same decision, same counters, as classifyTextWithPath.
+ * src/routes/telegram-public.ts). Same decision, same label counters, as classifyTextWithPath. It
+ * never asks the clarifying question: the bot has nowhere to show it, so the request is not made.
  */
 export async function classifyText(
   text: string,
   deadlineMs: number = CLASSIFY_DEFAULT_DEADLINE_MS,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ClassifyLabel> {
-  return (await classifyTextWithPath(text, deadlineMs, env)).label;
+  return (await classifyTextWithPath(text, deadlineMs, env, { question: false })).label;
 }
 
 export function createClassifyRouter(options: ClassifyRouterOptions = {}): Router {

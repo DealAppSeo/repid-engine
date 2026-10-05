@@ -7,9 +7,11 @@
  * the shape of the 12-day Groq-retirement outage in repid-engine's CLAUDE.md. This module makes
  * the decay visible from outside, on a keyless URL, so a heartbeat or a person can see it.
  *
- * WHAT IT HOLDS. Counts only: labels, abstain reasons, per-voter verdicts, the canary result.
- * Never claim text, never a user id, never an IP. In memory, per process: a restart zeroes it,
- * and `since` says when that happened, so a zero is never mistaken for "nothing went wrong".
+ * WHAT IT HOLDS. Counts only: labels, abstain reasons, per-voter verdicts, the canary result,
+ * and (with CLASSIFY_QUESTIONS on) how many clarifying questions were asked, given or came back
+ * none. Never claim text, never question text, never a user id, never an IP. In memory, per
+ * process: a restart zeroes it, and `since` says when that happened, so a zero is never mistaken
+ * for "nothing went wrong".
  *
  * THE CANARY. Once a day (and once shortly after boot), each voter is asked one claim that is
  * true and one that is false. A voter that gets either wrong, or does not answer, is reported
@@ -18,7 +20,7 @@
  * without anyone deciding it. CLASSIFY_CANARY=off turns the canary off.
  */
 import type { VoteLabel, VoteOutcome, Voter } from './free-votes';
-import { activeVoters, castVote } from './free-votes';
+import { activeVoters, castVote, questionsEnabled } from './free-votes';
 
 interface VoterHealth {
   voter: string;
@@ -67,6 +69,21 @@ function healthOf(v: Voter): VoterHealth {
 export function recordLabel(label: VoteLabel, decidedBy: 'arithmetic' | 'votes' | 'skipped'): void {
   labels[label] += 1;
   if (decidedBy === 'arithmetic') labels.arithmetic += 1;
+}
+
+/**
+ * Clarifying questions (src/classify/free-votes.ts, THE CLARIFYING QUESTION). `asked` counts calls
+ * that put the claim on the wire; each ends `given` (a question parsed and went back with the
+ * label) or `none` (NONE, a reply that failed the parse, a timeout, a 429 or an HTTP error), so
+ * asked === given + none. A call refused before any request (boundary, cooling, budget, too little
+ * time left) is not asked and is not counted. Like recordLabel, a later deadline cut by the route
+ * is not seen here. No text: the counts are all this holds.
+ */
+const questions = { asked: 0, given: 0, none: 0 };
+
+export function recordQuestion(outcome: 'given' | 'none'): void {
+  questions.asked += 1;
+  questions[outcome] += 1;
 }
 
 export function recordVotes(vs: readonly Voter[], outcomes: readonly VoteOutcome[]): void {
@@ -131,12 +148,17 @@ export interface ClassifyStats {
   /** not-checked / total, or null when there were no requests (a 0 here would claim success). */
   skip_rate: number | null;
   voters: VoterHealth[];
+  /**
+   * Present only while CLASSIFY_QUESTIONS is on, so the off shape is today's byte for byte and an
+   * absent key says "the feature is off" rather than a zero that reads as "asked none".
+   */
+  questions?: { asked: number; given: number; none: number };
 }
 
 export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifyStats {
   for (const v of activeVoters(env)) healthOf(v);
   const total = labels.pass + labels.veto + labels['not-checked'];
-  return {
+  const stats: ClassifyStats = {
     since,
     per_process: true,
     labels: { ...labels },
@@ -150,6 +172,8 @@ export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifySta
       canary: { ...h.canary },
     })),
   };
+  if (questionsEnabled(env)) stats.questions = { ...questions };
+  return stats;
 }
 
 /** Test hook. */
@@ -158,6 +182,9 @@ export function __resetClassifyStats(): void {
   labels.veto = 0;
   labels['not-checked'] = 0;
   labels.arithmetic = 0;
+  questions.asked = 0;
+  questions.given = 0;
+  questions.none = 0;
   voters.clear();
 }
 
