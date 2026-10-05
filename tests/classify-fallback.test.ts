@@ -1,11 +1,12 @@
 /**
- * THE FALLBACK (src/classify/free-votes.ts, Sean 2026-10-05: "we need automated fallback for
- * graceful degradation"). A voter refused before any request hands its slot to a backup of the
- * same family, on a host the pair already uses, once the canary has seen that backup answer right.
+ * THE FALLBACK (src/classify/free-votes.ts). Sean, 2026-10-05: "we need automated fallback for
+ * graceful degradation", then the same evening: "we should never be choosing to say not checked
+ * ... when there are so many options".
  *
- * Measured the day it was built: five extension replies inside 8 seconds gave four stamps and one
- * Not checked, then five Not checked, all `abstains: {budget}` on Cerebras. These tests pin what
- * the fallback may and may not do. The hosts are stubbed: nothing here reaches a provider.
+ * A slot whose voter gave NO ANSWER passes to the next model in VOTER_POOL that the canary has
+ * seen answer right, of a different family from the other slot, free before paid, inside the
+ * route's deadline. A slot whose voter ANSWERED keeps its answer. These tests pin both halves.
+ * The hosts are stubbed: nothing here reaches a provider.
  */
 const dbFrom = jest.fn();
 jest.mock('../src/db', () => ({ db: { from: dbFrom, rpc: jest.fn() } }));
@@ -13,42 +14,66 @@ jest.mock('../src/db', () => ({ db: { from: dbFrom, rpc: jest.fn() } }));
 import {
   __resetVoteCooldowns,
   activeVoters,
-  backupsFor,
   BUDGET_PER_MIN,
   castVote,
   classifyByFreeVotes,
   CROSS_FAMILY_VOTERS,
   DEFAULT_VOTERS,
+  FAILURE_COOL_MS,
+  MIN_ATTEMPT_MS,
   modelFamily,
+  nextStandIn,
+  noAnswer,
+  parsePool,
+  poolFor,
   standbyVoters,
-  VOTER_BACKUPS,
+  VOTER_POOL,
+  type VoteOutcome,
   type Voter,
 } from '../src/classify/free-votes';
 import * as health from '../src/classify/vote-health';
+import { PROVIDER_URLS } from '../src/egress/provider-hosts';
 import { classifyTextWithPath } from '../src/routes/classify';
 
-const ENV = { GROQ_API_KEY: 'test-key-not-real', CEREBRAS_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
+const FAKE = 'test-key-not-real';
+const ENV = {
+  GROQ_API_KEY: FAKE,
+  CEREBRAS_API_KEY: FAKE,
+  OPENROUTER_API_KEY: FAKE,
+  MISTRAL_API_KEY: FAKE,
+  TOGETHER_API_KEY: FAKE,
+  FIREWORKS_API_KEY: FAKE,
+} as NodeJS.ProcessEnv;
+const PAID = { ...ENV, SEAN_PAID_LOOP: 'paid classify' } as NodeJS.ProcessEnv;
+
 const [GROQ_120B, CEREBRAS_QWEN] = CROSS_FAMILY_VOTERS as [Voter, Voter];
 const GROQ_20B: Voter = { provider: 'groq', model: 'openai/gpt-oss-20b' };
 const GROQ_QWEN: Voter = { provider: 'groq', model: 'qwen/qwen3.8-27b' };
+const OR_GEMMA: Voter = { provider: 'openrouter', model: 'google/gemma-4-31b-it:free' };
+const OR_NEMOTRON: Voter = { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' };
+const MISTRAL: Voter = { provider: 'mistral', model: 'mistral-small-latest' };
 const key = (v: Voter) => `${v.provider}:${v.model}`;
 
+const HOSTS: Record<string, string> = {
+  [PROVIDER_URLS.groqChatCompletions]: 'groq',
+  [PROVIDER_URLS.cerebrasChatCompletions]: 'cerebras',
+  [PROVIDER_URLS.openrouterChatCompletions]: 'openrouter',
+  [PROVIDER_URLS.mistralChatCompletions]: 'mistral',
+  [PROVIDER_URLS.togetherChatCompletions]: 'together',
+  [PROVIDER_URLS.fireworksChatCompletions]: 'fireworks',
+  [PROVIDER_URLS.zaiChatCompletions]: 'zai',
+};
+
 type Answer = { status?: number; content?: string; delayMs?: number };
-type Call = { host: 'groq' | 'cerebras' | 'other'; model: string; claim: string; body: Record<string, unknown> };
+type Call = { host: string; model: string; claim: string; body: Record<string, unknown> };
 
 /** One stub for every host. `answer` sees which host and model was asked, and the claim. */
 function hosts(answer: (c: Call) => Answer) {
   const calls: Call[] = [];
   const impl = jest.fn(async (url: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    const u = String(url);
     const messages = body.messages as Array<{ content: string }>;
-    const call: Call = {
-      host: u.includes('groq') ? 'groq' : u.includes('cerebras') ? 'cerebras' : 'other',
-      model: String(body.model),
-      claim: messages[1]?.content ?? '',
-      body,
-    };
+    const call: Call = { host: HOSTS[String(url)] ?? 'other', model: String(body.model), claim: messages[1]?.content ?? '', body };
     calls.push(call);
     const a = answer(call);
     if (a.delayMs) {
@@ -68,6 +93,8 @@ function hosts(answer: (c: Call) => Answer) {
   });
   return { impl, calls };
 }
+
+const ids = (calls: Call[]) => calls.map((c) => `${c.host}:${c.model}`);
 
 /** Right on both canary claims, and TRUE on anything else. */
 const truthful = (c: Call): Answer => ({ content: c.claim.includes(health.CANARY_FALSE) ? 'FALSE' : 'TRUE' });
@@ -94,124 +121,276 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe('the backup table keeps the pair what it was', () => {
-  it('every backup is the same family as the voter it replaces', () => {
-    for (const [primary, backups] of Object.entries(VOTER_BACKUPS)) {
-      const model = primary.slice(primary.indexOf(':') + 1);
-      for (const b of backups) expect(modelFamily(b.model)).toBe(modelFamily(model));
+describe('the pool', () => {
+  it('free before paid, and "free" means free', () => {
+    const firstPaid = VOTER_POOL.findIndex((v) => v.paid);
+    expect(firstPaid).toBeGreaterThan(0);
+    expect(VOTER_POOL.slice(firstPaid).every((v) => v.paid)).toBe(true);
+    for (const v of VOTER_POOL) {
+      // Hosts with no free tier on this account are paid; an OpenRouter model is free only as `:free`.
+      if (['mistral', 'together', 'fireworks'].includes(v.provider)) expect(v.paid).toBe(true);
+      if (v.provider === 'openrouter') expect(Boolean(v.paid)).toBe(!v.model.endsWith(':free'));
     }
   });
 
-  it('for the production pair: same family, a host the pair uses, never a voter of the pair', () => {
-    expect(backupsFor(GROQ_120B, CROSS_FAMILY_VOTERS)).toEqual([GROQ_20B]);
-    expect(backupsFor(CEREBRAS_QWEN, CROSS_FAMILY_VOTERS)).toEqual([GROQ_QWEN]);
-    const hostsUsed = new Set(CROSS_FAMILY_VOTERS.map((v) => v.provider));
-    for (const v of standbyVoters(ENV)) expect(hostsUsed.has(v.provider)).toBe(true);
+  it('never a host whose terms or contract keep it out', () => {
+    for (const v of VOTER_POOL) expect(['nvidia-nim', 'workers-ai', 'zai']).not.toContain(v.provider);
   });
 
-  it('Groq x2 (no Cerebras key) has no backup: gpt-oss-20b is already the second vote', () => {
-    const env = { GROQ_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
-    expect(activeVoters(env)).toBe(DEFAULT_VOTERS);
-    expect(standbyVoters(env)).toEqual(DEFAULT_VOTERS);
+  it('paid models only with the paid switch on (Sean, 2026-09-10: SEAN_PAID_LOOP)', () => {
+    expect(poolFor(ENV).some((v) => v.provider === 'mistral')).toBe(false);
+    expect(poolFor({ ...ENV, SEAN_PAID_LOOP: 'hold' }).some((v) => v.provider === 'mistral')).toBe(false);
+    expect(poolFor(PAID).some((v) => v.provider === 'mistral')).toBe(true);
+    expect(poolFor(PAID)).toHaveLength(VOTER_POOL.length);
   });
 
-  it('CLASSIFY_FALLBACK=off: the standby list is the pair alone', () => {
+  it('the standby list is the pair, then the pool; CLASSIFY_FALLBACK=off is the pair alone', () => {
+    const standby = standbyVoters(ENV);
+    expect(standby.slice(0, 2)).toEqual(CROSS_FAMILY_VOTERS);
+    expect(new Set(standby.map(key)).size).toBe(standby.length);
+    expect(standby.map(key)).toEqual(expect.arrayContaining(poolFor(ENV).map(key)));
     expect(standbyVoters({ ...ENV, CLASSIFY_FALLBACK: 'off' })).toEqual(CROSS_FAMILY_VOTERS);
     expect(standbyVoters({ ...ENV, CLASSIFY_FALLBACK: ' OFF ' })).toEqual(CROSS_FAMILY_VOTERS);
   });
 
+  it('Groq x2 (no Cerebras key) still has the pair it had', () => {
+    expect(activeVoters({ GROQ_API_KEY: FAKE } as NodeJS.ProcessEnv)).toBe(DEFAULT_VOTERS);
+  });
+
   it('families read from ids', () => {
     expect(modelFamily('openai/gpt-oss-120b')).toBe('gpt-oss');
+    expect(modelFamily('accounts/fireworks/models/gpt-oss-120b')).toBe('gpt-oss');
     expect(modelFamily('qwen-3.8-27b')).toBe('qwen');
     expect(modelFamily('qwen/qwen3.8-27b')).toBe('qwen');
+    expect(modelFamily('qwen/qwen-2.5-72b-instruct')).toBe('qwen');
+    expect(modelFamily('google/gemma-4-31b-it:free')).toBe('gemma');
+    expect(modelFamily('gemma-4-31b')).toBe('gemma');
+    expect(modelFamily('nvidia/nemotron-3-ultra-550b-a55b:free')).toBe('nemotron');
+    expect(modelFamily('glm-4.5-flash')).toBe('glm');
+    expect(modelFamily('mistral-small-latest')).toBe('mistral');
     expect(modelFamily('@cf/meta/llama-3.3-70b-instruct-fp8-fast')).toBe('llama');
   });
 });
 
-describe('Cerebras over its budget: the same qwen on Groq stands in', () => {
-  it('a both-TRUE claim passes, by two Groq models, instead of Not checked', async () => {
-    await canaryAllOk();
+describe('CLASSIFY_POOL: the pool without a deploy, under the same rules', () => {
+  it('replaces the order and the members', () => {
+    const env = { ...ENV, CLASSIFY_POOL: 'openrouter:google/gemma-4-31b-it:free, groq:openai/gpt-oss-20b' };
+    expect(poolFor(env)).toEqual([OR_GEMMA, GROQ_20B]);
+  });
+
+  it('anything not provably free is paid, and waits for the paid switch', () => {
+    const pool = parsePool('groq:openai/gpt-oss-120b,zai:glm-4.5-flash,zai:glm-5-turbo,openrouter:qwen/qwen-2.5-72b-instruct,mistral:mistral-small-latest,cerebras:qwen-3.8-27b,cerebras:gemma-4-31b')!;
+    const paid = Object.fromEntries(pool.map((v) => [key(v), Boolean(v.paid)]));
+    expect(paid).toEqual({
+      'groq:openai/gpt-oss-120b': false,
+      'zai:glm-4.5-flash': false,
+      'zai:glm-5-turbo': true,
+      'openrouter:qwen/qwen-2.5-72b-instruct': true,
+      'mistral:mistral-small-latest': true,
+      'cerebras:qwen-3.8-27b': false,
+      'cerebras:gemma-4-31b': true,
+    });
+    const listed = { ...ENV, CLASSIFY_POOL: 'mistral:mistral-small-latest,zai:glm-4.5-flash' };
+    expect(poolFor(listed)).toEqual([{ provider: 'zai', model: 'glm-4.5-flash' }]);
+    expect(poolFor({ ...listed, SEAN_PAID_LOOP: 'on' })).toHaveLength(2);
+  });
+
+  it('drops unknown providers, empty models and repeats; unset or blank is the default pool', () => {
+    expect(parsePool('nope:x,groq:,:y,groq:openai/gpt-oss-20b,groq:openai/gpt-oss-20b')).toEqual([GROQ_20B]);
+    expect(parsePool(undefined)).toBeNull();
+    expect(parsePool('  ')).toBeNull();
+    expect(poolFor({ ...ENV, CLASSIFY_POOL: ' ' })).toEqual(poolFor(ENV));
+  });
+
+  it('a listed stand-in is still used only after the canary has seen it answer right', async () => {
+    const env = { ...ENV, ZAI_API_KEY: FAKE, CLASSIFY_POOL: 'zai:glm-4.5-flash' };
     await exhaust(CEREBRAS_QWEN);
     const h = hosts(() => ({ content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
-    const out = await classifyTextWithPath('Paris is the capital of France.', 2500, ENV);
-    expect(out).toEqual({ label: 'pass', by: 'votes', voters: ['groq', 'groq'] });
-    expect(h.calls.map((c) => `${c.host}:${c.model}`).sort()).toEqual([key(GROQ_120B), key(GROQ_QWEN)].sort());
-    expect(h.calls.some((c) => c.host === 'cerebras')).toBe(false);
+    expect((await classifyTextWithPath('Paris is the capital of France.', 5000, env)).label).toBe('not-checked');
+    expect(h.calls.some((c) => c.host === 'zai')).toBe(false);
+    await canaryAllOk(env);
+    await exhaust(CEREBRAS_QWEN);
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    expect(await classifyTextWithPath('Paris is the capital of France.', 5000, env)).toMatchObject({
+      label: 'pass',
+      deciders: ['groq', 'zai'],
+    });
+  });
+});
+
+describe('no answer passes the slot on; an answer never does', () => {
+  const abstain = (reason: string, shape?: string) => ({ kind: 'abstain', reason, ...(shape ? { shape } : {}) }) as VoteOutcome;
+
+  it.each(['budget', 'cooling', 'no_key', 'retired_model', 'rate_limited', 'http_error', 'timeout', 'network'])(
+    '%s is no answer',
+    (reason) => expect(noAnswer(abstain(reason))).toBe(true),
+  );
+
+  it('an empty reply, or reasoning cut off before the answer, is no answer', () => {
+    expect(noAnswer(abstain('unparseable', 'empty'))).toBe(true);
+    expect(noAnswer(abstain('unparseable', 'cut_off_reasoning'))).toBe(true);
+  });
+
+  it('TRUE, FALSE, UNSURE, and a reply with words in it are answers', () => {
+    for (const verdict of ['TRUE', 'FALSE', 'UNSURE'] as const) expect(noAnswer({ kind: 'verdict', verdict })).toBe(false);
+    for (const shape of ['verdict_with_text', 'several_verdicts', 'no_verdict']) {
+      expect(noAnswer(abstain('unparseable', shape))).toBe(false);
+    }
+  });
+
+  it('the data-locality boundary is not "no answer": under it, nothing may be sent anywhere', () => {
+    expect(noAnswer(abstain('boundary'))).toBe(false);
+  });
+});
+
+describe('a voter with no answer hands its slot on', () => {
+  it.each([
+    ['over its budget', 'budget'],
+    ['answering 503', { status: 503 }],
+    ['answering 429', { status: 429 }],
+    ['answering empty', { content: '' }],
+  ])('Cerebras %s: the free qwen on Groq stands in, and the claim passes', async (_why, cerebras) => {
+    await canaryAllOk();
+    if (cerebras === 'budget') await exhaust(CEREBRAS_QWEN);
+    const h = hosts((c) => (c.host === 'cerebras' && cerebras !== 'budget' ? (cerebras as Answer) : { content: 'TRUE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    expect(out).toMatchObject({ label: 'pass', by: 'votes', deciders: ['groq', 'groq'] });
+    // `voters` is who received the text: Cerebras did, unless it was refused before any request.
+    expect((out as { voters: string[] }).voters).toEqual(cerebras === 'budget' ? ['groq', 'groq'] : ['groq', 'cerebras', 'groq']);
+    expect(ids(h.calls)).toContain(key(GROQ_QWEN));
   });
 
   it('a both-FALSE claim is vetoed the same way', async () => {
     await canaryAllOk();
     await exhaust(CEREBRAS_QWEN);
     globalThis.fetch = hosts(() => ({ content: 'FALSE' })).impl as unknown as typeof fetch;
-    expect((await classifyTextWithPath('The Sun orbits the Earth.', 2500, ENV)).label).toBe('veto');
+    expect((await classifyTextWithPath('The Sun orbits the Earth.', 5000, ENV)).label).toBe('veto');
   });
 
-  it('the backup carries the qwen reasoning switch, as the Cerebras call does', async () => {
+  it('a voter that times out hands its slot on, inside the time that is left', async () => {
     await canaryAllOk();
-    await exhaust(CEREBRAS_QWEN);
-    const h = hosts(() => ({ content: 'TRUE' }));
+    const h = hosts((c) => (c.host === 'cerebras' ? { delayMs: 2000 } : { content: 'TRUE' }));
+    const started = Date.now();
+    const r = await classifyByFreeVotes('Paris is the capital of France.', {
+      env: ENV,
+      fetchImpl: h.impl,
+      timeoutMs: 300,
+      budgetMs: 1500,
+      backupReady: health.canaryOk,
+    });
+    expect(r.label).toBe('pass');
+    expect(r.deciders.map(key)).toEqual([key(GROQ_120B), key(GROQ_QWEN)]);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it('when Groq and Cerebras are both down, two OpenRouter models of two families decide', async () => {
+    await canaryAllOk();
+    const h = hosts((c) => (c.host === 'groq' || c.host === 'cerebras' ? { status: 503 } : { content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
-    await classifyTextWithPath('Paris is the capital of France.', 2500, ENV);
-    expect(h.calls.find((c) => c.model === GROQ_QWEN.model)!.body.reasoning_effort).toBe('none');
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    expect(out).toMatchObject({ label: 'pass', by: 'votes', deciders: ['openrouter', 'openrouter'] });
+    const asked = ids(h.calls);
+    expect(asked).toContain(key(OR_GEMMA));
+    expect(asked).toContain(key(OR_NEMOTRON));
   });
 
-  it('the stats show the refused primary and the backup that answered', async () => {
+  it('every OpenRouter call asks for upstreams that neither store nor train on the claim', async () => {
     await canaryAllOk();
-    await exhaust(CEREBRAS_QWEN);
-    globalThis.fetch = hosts(() => ({ content: 'TRUE' })).impl as unknown as typeof fetch;
-    await classifyTextWithPath('Paris is the capital of France.', 2500, ENV);
-    const rows = health.classifyStats(ENV).voters;
-    expect(rows.find((r) => r.voter === key(CEREBRAS_QWEN))!.abstains.budget).toBe(1);
-    expect(rows.find((r) => r.voter === key(GROQ_QWEN))!.verdicts.TRUE).toBe(1);
+    const h = hosts((c) => (c.host === 'groq' || c.host === 'cerebras' ? { status: 503 } : { content: 'TRUE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    const or = h.calls.filter((c) => c.host === 'openrouter');
+    expect(or.length).toBeGreaterThan(0);
+    for (const c of or) expect(c.body.provider).toEqual({ data_collection: 'deny' });
   });
 });
 
-describe('Groq gpt-oss-120b refused: gpt-oss-20b stands in', () => {
-  it('after a 429 the 120b cools down, and the next claim is decided by 20b + qwen', async () => {
-    await canaryAllOk();
-    // The 429 itself was sent, so that claim stays not-checked; the next one falls back.
-    const first = hosts((c) => (c.model === GROQ_120B.model ? { status: 429 } : { content: 'TRUE' }));
-    globalThis.fetch = first.impl as unknown as typeof fetch;
-    expect((await classifyTextWithPath('Paris is the capital of France.', 2500, ENV)).label).toBe('not-checked');
-    expect(first.calls.some((c) => c.model === GROQ_20B.model)).toBe(false);
-
-    const second = hosts(() => ({ content: 'TRUE' }));
-    globalThis.fetch = second.impl as unknown as typeof fetch;
-    const out = await classifyTextWithPath('Water boils at 100 degrees Celsius at sea level.', 2500, ENV);
-    expect(out).toEqual({ label: 'pass', by: 'votes', voters: ['groq', 'cerebras'] });
-    expect(second.calls.map((c) => c.model).sort()).toEqual([GROQ_20B.model, CEREBRAS_QWEN.model].sort());
-  });
-});
-
-describe('never shopping for a verdict: a vote that was SENT is that slot’s answer', () => {
+describe('never shopping for a verdict: a voter that answered keeps its answer', () => {
   it.each([
     ['UNSURE', { content: 'UNSURE' }],
-    ['an unparseable answer', { content: 'TRUE, probably' }],
-    ['a 5xx', { status: 503 }],
-    ['a 429', { status: 429 }],
-    ['a timeout', { delayMs: 2000 }],
-  ])('Cerebras answering %s: no backup is dialled, and the label is not-checked', async (_why, cerebras) => {
+    ['FALSE (a disagreement)', { content: 'FALSE' }],
+    ['a reply with words in it', { content: 'TRUE, probably' }],
+  ])('Cerebras answering %s: no stand-in is dialled, and the label is not-checked', async (_why, cerebras) => {
     await canaryAllOk();
     const h = hosts((c) => (c.host === 'cerebras' ? cerebras : { content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
-    const out = await classifyTextWithPath('Paris is the capital of France.', 1500, ENV);
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
     expect(out.label).toBe('not-checked');
-    expect(h.calls.some((c) => c.model === GROQ_QWEN.model)).toBe(false);
+    expect(ids(h.calls).sort()).toEqual([key(GROQ_120B), key(CEREBRAS_QWEN)].sort());
   });
 });
 
-describe('a backup is used only once the canary has seen it answer right', () => {
-  it('no canary yet: Cerebras over budget is Not checked, and the backup is never dialled', async () => {
+describe('two families, always', () => {
+  it('a stand-in is never the other slot’s family', () => {
+    const pool = poolFor(PAID);
+    const all = () => true;
+    for (const other of pool) {
+      const asked = new Set([key(other)]);
+      let next = nextStandIn(pool, other, asked, all);
+      while (next) {
+        expect(modelFamily(next.model)).not.toBe(modelFamily(other.model));
+        asked.add(key(next));
+        next = nextStandIn(pool, other, asked, all);
+      }
+    }
+  });
+
+  it('with only one family left in reach, the claim is not-checked rather than one family twice', async () => {
+    await canaryAllOk();
+    // Only the gpt-oss models answer; every other family is down.
+    const h = hosts((c) => (modelFamily(c.model) === 'gpt-oss' ? { content: 'TRUE' } : { status: 503 }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    expect((await classifyTextWithPath('Paris is the capital of France.', 5000, ENV)).label).toBe('not-checked');
+  });
+
+  it('CLASSIFY_VOTERS naming the same voter twice cannot pass, even with both TRUE', async () => {
+    const r = await classifyByFreeVotes('Paris is the capital of France.', {
+      env: ENV,
+      fetchImpl: hosts(() => ({ content: 'TRUE' })).impl,
+      timeoutMs: 500,
+      voters: [GROQ_120B, GROQ_120B],
+    });
+    expect(r.label).toBe('not-checked');
+  });
+});
+
+describe('free first; paid only with the paid switch on', () => {
+  const freeDown = (c: Call): Answer => (c.host === 'mistral' ? truthful(c) : { status: 503 });
+
+  it('every free host down and the switch off: not-checked, and no paid host is dialled', async () => {
+    await canaryAllOk();
+    const h = hosts(freeDown);
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    expect((await classifyTextWithPath('Paris is the capital of France.', 5000, ENV)).label).toBe('not-checked');
+    expect(h.calls.some((c) => c.host === 'mistral' || c.host === 'together' || c.host === 'fireworks')).toBe(false);
+  });
+
+  it('the switch on: a paid model may stand in', async () => {
+    await canaryAllOk(PAID);
+    // Only Groq's gpt-oss and Mistral answer: every free stand-in for the qwen slot is down.
+    const h = hosts((c) =>
+      c.host === 'mistral' || (c.host === 'groq' && modelFamily(c.model) === 'gpt-oss') ? { content: 'TRUE' } : { status: 503 },
+    );
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, PAID);
+    expect(out).toMatchObject({ label: 'pass', deciders: ['groq', 'mistral'] });
+    expect(ids(h.calls)).toContain(key(MISTRAL));
+  });
+});
+
+describe('a stand-in is used only once the canary has seen it answer right', () => {
+  it('no canary yet: Cerebras over budget is Not checked, and no stand-in is dialled', async () => {
     await exhaust(CEREBRAS_QWEN);
     const h = hosts(() => ({ content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
-    const out = await classifyTextWithPath('Paris is the capital of France.', 2500, ENV);
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
     expect(out).toEqual({ label: 'not-checked', by: 'votes', voters: ['groq'] });
-    expect(h.calls.some((c) => c.model === GROQ_QWEN.model)).toBe(false);
+    expect(ids(h.calls)).toEqual([key(GROQ_120B)]);
   });
 
-  it('a backup whose canary was wrong stays out', async () => {
+  it('a stand-in whose canary was wrong stays out, and the next one in the pool is tried', async () => {
     await health.runCanary({
       env: ENV,
       fetchImpl: hosts((c) => (c.model === GROQ_QWEN.model ? { content: 'TRUE' } : truthful(c))).impl,
@@ -219,53 +398,137 @@ describe('a backup is used only once the canary has seen it answer right', () =>
     });
     __resetVoteCooldowns();
     expect(health.canaryOk(GROQ_QWEN)).toBe(false);
-    expect(health.canaryOk(CEREBRAS_QWEN)).toBe(true);
     await exhaust(CEREBRAS_QWEN);
     const h = hosts(() => ({ content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
-    expect((await classifyTextWithPath('Paris is the capital of France.', 2500, ENV)).label).toBe('not-checked');
-    expect(h.calls.some((c) => c.model === GROQ_QWEN.model)).toBe(false);
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    expect(out).toMatchObject({ label: 'pass', deciders: ['groq', 'openrouter'] });
+    expect(ids(h.calls)).not.toContain(key(GROQ_QWEN));
   });
 
-  it('the canary asks the backups too, and the stats list them', async () => {
+  it('the canary asks every stand-in, and the stats list them', async () => {
     const h = hosts(truthful);
     await health.runCanary({ env: ENV, fetchImpl: h.impl, timeoutMs: 500 });
-    expect(new Set(h.calls.map((c) => c.model))).toEqual(
-      new Set([GROQ_120B.model, CEREBRAS_QWEN.model, GROQ_20B.model, GROQ_QWEN.model]),
-    );
+    const standby = standbyVoters(ENV).map(key);
+    expect(new Set(ids(h.calls))).toEqual(new Set(standby));
     const rows = health.classifyStats(ENV).voters.map((r) => r.voter);
     expect(rows.slice(0, 2)).toEqual(CROSS_FAMILY_VOTERS.map(key));
-    expect(new Set(rows)).toEqual(new Set([GROQ_120B, CEREBRAS_QWEN, GROQ_20B, GROQ_QWEN].map(key)));
+    expect(new Set(rows)).toEqual(new Set(standby));
   });
 
-  it('CLASSIFY_FALLBACK=off: canary-ok backups are still never used', async () => {
+  it('CLASSIFY_FALLBACK=off: canary-ok stand-ins are still never used', async () => {
     const env = { ...ENV, CLASSIFY_FALLBACK: 'off' };
     await canaryAllOk(ENV);
     await exhaust(CEREBRAS_QWEN);
     const h = hosts(() => ({ content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
-    expect((await classifyTextWithPath('Paris is the capital of France.', 2500, env)).label).toBe('not-checked');
-    expect(h.calls.some((c) => c.model === GROQ_QWEN.model)).toBe(false);
-  });
-});
-
-describe('one model is never two votes', () => {
-  it('CLASSIFY_VOTERS naming the same voter twice cannot pass, even with both TRUE', async () => {
-    const same = [GROQ_120B, GROQ_120B];
-    const r = await classifyByFreeVotes('Paris is the capital of France.', {
-      env: ENV,
-      fetchImpl: hosts(() => ({ content: 'TRUE' })).impl,
-      timeoutMs: 500,
-      voters: same,
-    });
-    expect(r.label).toBe('not-checked');
+    expect((await classifyTextWithPath('Paris is the capital of France.', 5000, env)).label).toBe('not-checked');
+    expect(ids(h.calls)).toEqual([key(GROQ_120B)]);
   });
 
   it('without backupReady (every caller but the route) the pair is exactly the pair', async () => {
     await exhaust(CEREBRAS_QWEN);
-    const h = hosts(() => ({ content: 'TRUE' }));
-    const r = await classifyByFreeVotes('x', { env: ENV, fetchImpl: h.impl, timeoutMs: 500 });
+    const r = await classifyByFreeVotes('x', { env: ENV, fetchImpl: hosts(() => ({ content: 'TRUE' })).impl, timeoutMs: 500 });
     expect(r.label).toBe('not-checked');
     expect(r.attempts.map((t) => key(t.voter))).toEqual(CROSS_FAMILY_VOTERS.map(key));
   });
+});
+
+describe('learning who is down: the next claim skips straight past them', () => {
+  it('after a 5xx, the next claim does not dial that voter again until it has cooled', async () => {
+    await canaryAllOk();
+    const first = hosts((c) => (c.host === 'cerebras' ? { status: 503 } : { content: 'TRUE' }));
+    globalThis.fetch = first.impl as unknown as typeof fetch;
+    expect((await classifyTextWithPath('Paris is the capital of France.', 5000, ENV)).label).toBe('pass');
+
+    const second = hosts(() => ({ content: 'TRUE' }));
+    globalThis.fetch = second.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('Water boils at 100 degrees Celsius at sea level.', 5000, ENV);
+    expect(out).toMatchObject({ label: 'pass', voters: ['groq', 'groq'] });
+    expect(ids(second.calls)).not.toContain(key(CEREBRAS_QWEN));
+    expect(FAILURE_COOL_MS).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('a vendor header saying none are left today refuses the voter before any request', async () => {
+    const spent = jest.fn(async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: 'TRUE' } }] }), {
+        status: 200,
+        headers: { 'x-ratelimit-limit-requests': '1000', 'x-ratelimit-remaining-requests': '0' },
+      }),
+    );
+    expect(await castVote(GROQ_120B, 'x', { env: ENV, fetchImpl: spent, timeoutMs: 500 })).toEqual({ kind: 'verdict', verdict: 'TRUE' });
+    expect(await castVote(GROQ_120B, 'x', { env: ENV, fetchImpl: spent, timeoutMs: 500 })).toEqual({ kind: 'abstain', reason: 'budget' });
+    expect(spent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('inside the deadline', () => {
+  it('with less than MIN_ATTEMPT_MS left, a slot stops instead of starting a stand-in it cannot finish', async () => {
+    await canaryAllOk();
+    const h = hosts((c) => (c.host === 'cerebras' ? { delayMs: 2000 } : { content: 'TRUE' }));
+    const r = await classifyByFreeVotes('Paris is the capital of France.', {
+      env: ENV,
+      fetchImpl: h.impl,
+      timeoutMs: 300,
+      budgetMs: 300 + MIN_ATTEMPT_MS - 50,
+      backupReady: health.canaryOk,
+    });
+    expect(r.label).toBe('not-checked');
+    expect(ids(h.calls).sort()).toEqual([key(GROQ_120B), key(CEREBRAS_QWEN)].sort());
+  });
+
+  it('the route answers inside its deadline even when every voter is slow', async () => {
+    await canaryAllOk();
+    globalThis.fetch = hosts(() => ({ delayMs: 10_000 })).impl as unknown as typeof fetch;
+    const started = Date.now();
+    const out = await classifyTextWithPath('Paris is the capital of France.', 1200, ENV);
+    expect(out.label).toBe('not-checked');
+    expect(Date.now() - started).toBeLessThan(1200);
+  });
+});
+
+describe('host-specific request fields', () => {
+  it('Z.ai is told not to think before a one-word verdict', async () => {
+    const h = hosts(() => ({ content: 'TRUE' }));
+    await castVote({ provider: 'zai', model: 'glm-4.5-flash' }, 'x', { env: { ZAI_API_KEY: FAKE }, fetchImpl: h.impl, timeoutMs: 500 });
+    expect(h.calls[0]!.body.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('gpt-oss gets short reasoning on any host, by family', async () => {
+    const h = hosts(() => ({ content: 'TRUE' }));
+    await castVote({ provider: 'fireworks', model: 'accounts/fireworks/models/gpt-oss-120b' }, 'x', {
+      env: ENV,
+      fetchImpl: h.impl,
+      timeoutMs: 500,
+    });
+    expect(h.calls[0]!.body.reasoning_effort).toBe('low');
+  });
+
+  it('the stand-in qwen on Groq carries the qwen reasoning switch, as the Cerebras call does', async () => {
+    await canaryAllOk();
+    await exhaust(CEREBRAS_QWEN);
+    const h = hosts(() => ({ content: 'TRUE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    expect(h.calls.find((c) => c.model === GROQ_QWEN.model)!.body.reasoning_effort).toBe('none');
+  });
+});
+
+describe('the stats show who gave no answer and who stood in', () => {
+  it('Cerebras over budget, then the stand-in that answered', async () => {
+    await canaryAllOk();
+    await exhaust(CEREBRAS_QWEN);
+    globalThis.fetch = hosts(() => ({ content: 'TRUE' })).impl as unknown as typeof fetch;
+    await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    const rows = health.classifyStats(ENV).voters;
+    expect(rows.find((r) => r.voter === key(CEREBRAS_QWEN))!.abstains.budget).toBe(1);
+    expect(rows.find((r) => r.voter === key(GROQ_QWEN))!.verdicts.TRUE).toBe(1);
+  });
+});
+
+it('the Groq 20b is never a stand-in for the 120b’s slot partner of the same family', () => {
+  // The pair is gpt-oss + qwen; a gpt-oss stand-in for the qwen slot would make one family twice.
+  const pool = poolFor(ENV);
+  expect(nextStandIn(pool, GROQ_120B, new Set([key(GROQ_120B), key(CEREBRAS_QWEN)]), () => true)).toEqual(GROQ_QWEN);
+  expect(nextStandIn(pool, CEREBRAS_QWEN, new Set([key(GROQ_120B), key(CEREBRAS_QWEN)]), () => true)).toEqual(GROQ_20B);
 });

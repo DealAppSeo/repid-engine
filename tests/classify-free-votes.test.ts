@@ -276,7 +276,7 @@ describe('classifyText and the route', () => {
       const res = await request(app).post('/api/v1/classify').send({ text: 'Water boils at 100 C at sea level.' });
       expect(res.status).toBe(200);
       expect(res.body.label).toBe('pass');
-      expect(Object.keys(res.body).sort()).toEqual(['by', 'label', 'latency_ms', 'voters']);
+      expect(Object.keys(res.body).sort()).toEqual(['by', 'deciders', 'label', 'latency_ms', 'voters']);
       expect(res.body.by).toBe('votes');
       expect(res.body.voters).toEqual(activeVoters(process.env).map((v) => v.provider));
       expect(dbFrom).not.toHaveBeenCalled();
@@ -310,7 +310,11 @@ describe('free-votes source guard', () => {
   );
   it('writes nothing, names no paid vendor, and dials only through providerFetch', () => {
     expect(src).not.toMatch(/from '\.\.\/db'|supabase|\.insert\(|\.upsert\(/i);
-    expect(src).not.toMatch(/anthropicMessages|openaiChatCompletions|openrouter|fireworks|deepseek|x\.ai/i);
+    // Never Claude, OpenAI, DeepSeek or xAI. OpenRouter and the paid hosts appear only as pool
+    // entries (THE FALLBACK, tests/classify-fallback.test.ts pins free vs paid), and every
+    // OpenRouter call asks for providers that neither store nor train on the claim.
+    expect(src).not.toMatch(/anthropicMessages|openaiChatCompletions|deepseek|x\.ai/i);
+    expect(src).toContain("body.provider = { data_collection: 'deny' }");
     expect(src).not.toMatch(/[^.\w]fetch\(/);
     expect(src).not.toContain('REAL_STAKING');
   });
@@ -370,7 +374,12 @@ describe('B16: stats and canary', () => {
       return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
     });
     await health.runCanary({ env: ENV, fetchImpl: good.impl, timeoutMs: 500 });
-    expect(health.classifyStats(ENV).voters.every((v) => v.canary.status === 'ok')).toBe(true);
+    // ENV holds a Groq key only. Pool members on other hosts are never asked: not-checked, not ok.
+    const keyed = (vs: ReturnType<typeof health.classifyStats>['voters']) => vs.filter((v) => /^groq:/.test(v.voter));
+    expect(keyed(health.classifyStats(ENV).voters).every((v) => v.canary.status === 'ok')).toBe(true);
+    const unkeyed = health.classifyStats(ENV).voters.filter((v) => !/^groq:/.test(v.voter));
+    expect(unkeyed.length).toBeGreaterThan(0);
+    for (const v of unkeyed) expect(v.canary).toMatchObject({ status: 'not-checked', reason: 'no_key' });
 
     const fooled = stubHost(() => ({ content: 'TRUE' }));
     await health.runCanary({ env: ENV, fetchImpl: fooled.impl, timeoutMs: 500 });
@@ -402,7 +411,9 @@ describe('B20 probes requested in Grok\'s review of #1184', () => {
   it('1. a host answering prose: canary degraded, and a user claim of that shape stays not-checked', async () => {
     const prose = stubHost(() => ({ content: 'Yes, that is true' }));
     await health.runCanary({ env: ENV, fetchImpl: prose.impl, timeoutMs: 500 });
-    for (const v of health.classifyStats(ENV).voters) expect(v.canary.status).toBe('degraded');
+    for (const v of health.classifyStats(ENV).voters.filter((x) => /^groq:/.test(x.voter))) {
+      expect(v.canary.status).toBe('degraded');
+    }
     globalThis.fetch = prose.impl as unknown as typeof fetch;
     expect(await classifyText('Paris is the capital of France.', 2500, ENV)).toBe('not-checked');
   });
@@ -410,7 +421,7 @@ describe('B20 probes requested in Grok\'s review of #1184', () => {
   it('2. a 429: canary degraded rate_limited, the route not-checked, and only the two voters were dialled', async () => {
     const limited = stubHost(() => ({ status: 429 }));
     await health.runCanary({ env: ENV, fetchImpl: limited.impl, timeoutMs: 500 });
-    for (const v of health.classifyStats(ENV).voters) {
+    for (const v of health.classifyStats(ENV).voters.filter((x) => /^groq:/.test(x.voter))) {
       expect(v.canary).toMatchObject({ status: 'degraded', reason: 'rate_limited' });
     }
     __resetVoteCooldowns();
@@ -703,7 +714,10 @@ describe('data-locality boundary (ONLY_ATTESTATIONS_LEAVE) on the free votes', (
       await health.runCanary({ env, fetchImpl: impl, timeoutMs: 500 });
       const vs = health.classifyStats(env).voters;
       expect(vs.length).toBeGreaterThan(0);
-      for (const v of vs) expect(v.canary).toMatchObject({ status: 'not-checked', reason: 'boundary' });
+      // Keyed voters are refused by the boundary; pool members with no key here never get that far.
+      for (const v of vs) {
+        expect(v.canary).toMatchObject({ status: 'not-checked', reason: /^(groq|cerebras):/.test(v.voter) ? 'boundary' : 'no_key' });
+      }
       expect(impl).not.toHaveBeenCalled();
     });
   });
@@ -739,17 +753,23 @@ describe('the route says which path answered: by and voters', () => {
       const names = activeVoters(env).map((v) => v.provider);
       expect(names).toEqual(['groq', 'cerebras']);
       let rec = recordAllFetches(() => ({ content: 'TRUE' }));
-      expect(await classifyTextWithPath('Paris is in France.', 2500, env)).toEqual({ label: 'pass', by: 'votes', voters: names });
+      expect(await classifyTextWithPath('Paris is in France.', 2500, env)).toEqual({ label: 'pass', by: 'votes', voters: names, deciders: names });
       rec.restore();
       rec = recordAllFetches(() => ({ content: 'FALSE' }));
-      expect(await classifyTextWithPath('Paris is in Spain.', 2500, env)).toEqual({ label: 'veto', by: 'votes', voters: names });
+      expect(await classifyTextWithPath('Paris is in Spain.', 2500, env)).toEqual({ label: 'veto', by: 'votes', voters: names, deciders: names });
       rec.restore();
       rec = recordAllFetches((model) => ({ content: model.startsWith('openai/') ? 'TRUE' : 'FALSE' }));
-      expect(await classifyTextWithPath('Contested.', 2500, env)).toEqual({ label: 'not-checked', by: 'votes', voters: names });
+      expect(await classifyTextWithPath('Contested.', 2500, env)).toEqual({ label: 'not-checked', by: 'votes', voters: names, deciders: names });
       rec.restore();
-      // A 429 is a request that was sent: still by votes, still both named.
+      // A 429 is a request that was sent: still by votes, still both named. No canary has run here,
+      // so no stand-in may take the slots (THE FALLBACK rule 3), and both stay the deciders.
       rec = recordAllFetches(() => ({ status: 429 }));
-      expect(await classifyTextWithPath('Rate limited.', 2500, env)).toEqual({ label: 'not-checked', by: 'votes', voters: names });
+      expect(await classifyTextWithPath('Rate limited.', 2500, env)).toEqual({
+        label: 'not-checked',
+        by: 'votes',
+        voters: names,
+        deciders: names,
+      });
       rec.restore();
     });
   });
@@ -763,6 +783,7 @@ describe('the route says which path answered: by and voters', () => {
           label: 'pass',
           by: 'votes',
           voters: ['cerebras', 'groq'],
+          deciders: ['cerebras', 'groq'],
         });
         const sameHost = { ...ENV, CLASSIFY_VOTERS: 'groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b' } as NodeJS.ProcessEnv;
         expect((await classifyTextWithPath('Paris is in France.', 2500, sameHost))).toMatchObject({ voters: ['groq', 'groq'] });
