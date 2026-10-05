@@ -24,10 +24,16 @@
  * WHAT LEAVES. The claim text goes to the voters' host (Groq by default). Nothing is stored
  * here: no text, no user id, no database write. The extension and the phone bot say so in
  * their privacy line (BUS N-PRIVACY-LINE / B18).
+ *
+ * UNLESS THE DATA-LOCALITY BOUNDARY IS ENGAGED (ONLY_ATTESTATIONS_LEAVE). Then every vote is
+ * refused before any request and abstains `boundary`, so the label is not-checked. See
+ * voteBoundaryOn below. Until 2026-10-05 the votes did not consult the guard at all: a probe
+ * with the boundary engaged still reached the Groq host.
  */
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 import { providerFetch, type ProviderFetch } from '../egress/provider-fetch';
 import { RETIRED_MODELS } from '../hal/retired-models';
+import { assertPromptEgressAllowed, onlyAttestationsLeave } from '../selfhost/egress-guard';
 
 export type Verdict = 'TRUE' | 'FALSE' | 'UNSURE';
 export type VoteOutcome =
@@ -42,7 +48,34 @@ export type AbstainReason =
   | 'unparseable'
   | 'retired_model'
   | 'network'
-  | 'budget';
+  | 'budget'
+  | 'boundary';
+
+/**
+ * Did the claim text leave for the voter's host? EXHAUSTIVE ON PURPOSE: a new AbstainReason does
+ * not compile until someone decides this for it. The direction that matters is "sent": the route
+ * reports `by: 'skipped'` (the text went to no voter) only when every vote is `false` here, so a
+ * post-request failure filed as not-sent would make the route deny an egress that happened.
+ * `timeout` and `network` count as sent: a request was attempted, and whether it was delivered is
+ * not knowable from here.
+ */
+const SENT: Record<AbstainReason, boolean> = {
+  retired_model: false,
+  no_key: false,
+  boundary: false,
+  cooling: false,
+  budget: false,
+  rate_limited: true,
+  http_error: true,
+  timeout: true,
+  unparseable: true,
+  network: true,
+};
+
+/** True when this vote put the claim on the wire (a verdict, or an abstain after a request). */
+export function voteWasSent(outcome: VoteOutcome): boolean {
+  return outcome.kind === 'verdict' || SENT[outcome.reason];
+}
 
 export type VoterProvider = 'groq' | 'cerebras' | 'nvidia-nim' | 'workers-ai';
 
@@ -234,6 +267,27 @@ export interface VoteOptions {
   now?: () => number;
 }
 
+/**
+ * DATA-LOCALITY BOUNDARY (ONLY_ATTESTATIONS_LEAVE, src/selfhost/egress-guard.ts). The claim is
+ * content, so castVote asks the same guard the HAL quorum, the cross-LLM client, embeddings, Jev
+ * and T12 ask, with kind 'prompt', before any request. Under the boundary a non-local voter host
+ * is refused and the vote abstains `boundary`: no request, no budget spent. Every voter host is
+ * a cloud host, so under the boundary the label is always not-checked. Default OFF: the guard
+ * is a no-op and behaviour is unchanged.
+ *
+ * Engaged when the env handed to this vote OR the process env says so, through the guard's one
+ * reader (trimmed, case-insensitive): the same rule as t12BoundaryOn in
+ * src/orchestration/t12-attempt.ts. An injected env can engage the boundary, never disengage it.
+ *
+ * NO LOCAL REDIRECT, ON PURPOSE. The quorum honours LOCAL_LLM_BASE_URL by rewriting every
+ * openai-compat endpoint to one local gateway. The votes do not: two voters sent to one gateway
+ * are no longer two independent families, and the agreement rule would turn one opinion into a
+ * pass. Under the boundary the votes abstain instead; not-checked is always allowed.
+ */
+export function voteBoundaryOn(env: NodeJS.ProcessEnv): boolean {
+  return onlyAttestationsLeave(env) || onlyAttestationsLeave(process.env);
+}
+
 export async function castVote(voter: Voter, claim: string, opts: VoteOptions): Promise<VoteOutcome> {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
@@ -241,6 +295,12 @@ export async function castVote(voter: Voter, claim: string, opts: VoteOptions): 
   const key = keyFor(voter.provider, env);
   const endpoint = endpointFor(voter.provider, env);
   if (!key || !endpoint) return { kind: 'abstain', reason: 'no_key' };
+  // Before cooling and budget, so a refused vote neither sends nor spends anything.
+  try {
+    assertPromptEgressAllowed(endpoint, 'prompt', voteBoundaryOn(env));
+  } catch {
+    return { kind: 'abstain', reason: 'boundary' };
+  }
   const until = coolingUntil.get(hostKey(voter));
   if (until !== undefined && until > now()) return { kind: 'abstain', reason: 'cooling' };
   if (overBudget(voter, now())) return { kind: 'abstain', reason: 'budget' };

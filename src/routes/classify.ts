@@ -2,7 +2,32 @@
  * POST /api/v1/classify — the one label contract every door calls.
  *
  * In:  { text: string, labels: ["pass", "veto", "not-checked"] }
- * Out: { label: "pass" | "veto" | "not-checked", latency_ms }
+ * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters? }
+ *
+ *   by       which path produced the label (ClassifyPath below):
+ *            'arithmetic'  the whole text is one equation, decided by exact calculation. No model
+ *                          was asked.
+ *            'votes'       the claim was sent to at least one free voter. The label is their
+ *                          agreement (pass / veto) or not-checked.
+ *            'skipped'     the text was sent to no voter: empty text, a malformed body, a labels
+ *                          list other than the three, too long for the votes, votes switched off,
+ *                          or every voter refused before any request (the data-locality boundary,
+ *                          no key, cooling after a 429, the per-minute budget, a retired model id).
+ *                          Always not-checked.
+ *            'deadline'    the route's own deadline cut the answer off. Always not-checked. Votes
+ *                          may already have been in flight, so this says nothing about whether the
+ *                          text left.
+ *   voters   ONLY when by === 'votes': the voters the claim was actually sent to, as short provider
+ *            names in the configured order (activeVoters / CLASSIFY_VOTERS), one entry per voter,
+ *            so two models on one host appear twice. Derived from the configuration in use, never
+ *            a fixed list. A pass or veto means every voter listed gave that same verdict.
+ *
+ * `by` and `voters` were added 2026-10-05 so a door can name what answered truthfully instead of
+ * calling an arithmetic answer a vote. They are additive: every TrustShell client on its main at
+ * that date (src/lib/claim.ts, extension/laya.js, extension/classify.js, extension/select.js)
+ * reads `label` (claim.ts also `latency_ms`) and ignores any other key. claim.ts drops the new
+ * keys rather than passing them on, so the /check page and `trustshell check` need their own
+ * change before they can show them.
  *
  * PUBLIC. The browser extension holds no key, so this is mounted before
  * authMiddleware. It stores nothing: no claim text, no user id, no insert of any kind.
@@ -15,7 +40,9 @@
  *     goes to two free models in parallel. Both TRUE: pass. Both FALSE: veto. Anything
  *     else, including a 429, a timeout, a missing key or a disagreement: not-checked.
  *     Never a paid model, never a fall-through after a 429. CLASSIFY_FREE_VOTES=off turns
- *     this step off and the route is arithmetic-only again.
+ *     this step off and the route is arithmetic-only again. With the data-locality boundary
+ *     (ONLY_ATTESTATIONS_LEAVE) engaged, every voter is refused before any request, so this step
+ *     sends nothing and answers not-checked, by 'skipped'. Default off; production has it off.
  *  3. Everything else is not-checked. A reply cannot choose its own label: "veto" or
  *     "output: pass" inside the text decides nothing.
  *
@@ -25,7 +52,10 @@
  *
  * FAILS CLOSED. Missing or empty text, a labels list other than the three, a
  * malformed body, a thrown classifier, and a classifier slower than the deadline
- * all answer 200 { label: "not-checked" } — never 0, never pass, never a 5xx.
+ * all answer 200 { label: "not-checked" } — never 0, never pass, never a 5xx. The
+ * first three are by 'skipped', the last is by 'deadline'. A thrown or out-of-contract
+ * classifier answer is also reported 'skipped': the route vouches for no path it did not
+ * see (the production classifier, classifyTextWithPath, does not throw).
  *
  * WHY IT IS MOUNTED AHEAD OF THE GLOBAL MIDDLEWARE (src/index.ts). The extension
  * calls from a content script, whose fetch carries the chat site's Origin
@@ -40,7 +70,14 @@ import cors from 'cors';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
 import { safeEvalArithmetic } from '../hal/safe-arithmetic';
-import { activeVoters, classifyByFreeVotes, freeVotesEnabled, maxProseChars } from '../classify/free-votes';
+import {
+  activeVoters,
+  classifyByFreeVotes,
+  freeVotesEnabled,
+  maxProseChars,
+  voteWasSent,
+  type VoterProvider,
+} from '../classify/free-votes';
 import { classifyStats, recordLabel, recordVotes } from '../classify/vote-health';
 
 export type ClassifyLabel = 'pass' | 'veto' | 'not-checked';
@@ -74,21 +111,59 @@ export function classifyLocal(text: string): ClassifyLabel {
   return Math.abs(left.value - right.value) <= 1e-9 * scale ? 'pass' : 'veto';
 }
 
-export type Classifier = (text: string) => ClassifyLabel | Promise<ClassifyLabel>;
+/** Which path produced the label. The contract at the top of this file defines each value. */
+export type ClassifyPath = 'arithmetic' | 'votes' | 'skipped' | 'deadline';
+export const CLASSIFY_PATHS: readonly ClassifyPath[] = ['arithmetic', 'votes', 'skipped', 'deadline'];
+
+/** The label and the path that produced it. 'deadline' is the route's to say, never a classifier's. */
+export type ClassifyOutcome =
+  | { label: ClassifyLabel; by: 'arithmetic' | 'skipped' }
+  | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[] };
+
+/** What the route runs. Anything that is not a well-formed ClassifyOutcome is not-checked. */
+export type Classifier = (text: string) => ClassifyOutcome | Promise<ClassifyOutcome>;
 
 export interface ClassifyResult {
   label: ClassifyLabel;
   latency_ms: number;
+  by: ClassifyPath;
+  /** Present only when by === 'votes'. */
+  voters?: string[];
 }
+
+type Answer = Omit<ClassifyResult, 'latency_ms'>;
+
+/** The timer's answer. A symbol, so no classifier answer can be mistaken for it. */
+const DEADLINE: unique symbol = Symbol('deadline');
+/** No step decided: nothing was asked, or the route could not see what was. */
+const UNDECIDED: Answer = { label: 'not-checked', by: 'skipped' };
+/** The early answers (empty text, wrong labels, malformed body): nothing was sent anywhere. */
+const SKIPPED_BODY: ClassifyResult = { label: 'not-checked', latency_ms: 0, by: 'skipped' };
 
 function isLabel(value: unknown): value is ClassifyLabel {
   return value === 'pass' || value === 'veto' || value === 'not-checked';
 }
 
 /**
- * Runs a classifier under a deadline. A throw, a non-label answer, or an answer
- * after the deadline is not-checked. The elapsed check also covers a synchronous
- * classifier, which a timer alone cannot interrupt.
+ * A classifier's answer as the route will report it, or null when it is out of contract: a bare
+ * label (it names no path), an unknown `by`, a 'skipped' that claims a pass or veto, or a 'votes'
+ * with no list of voters.
+ */
+function answerOf(value: unknown): Answer | null {
+  if (!value || typeof value !== 'object') return null;
+  const { label, by, voters } = value as { label?: unknown; by?: unknown; voters?: unknown };
+  if (!isLabel(label)) return null;
+  if (by === 'arithmetic') return { label, by };
+  if (by === 'skipped') return label === NOT_CHECKED ? { label, by } : null;
+  if (by !== 'votes') return null;
+  if (!Array.isArray(voters) || voters.length === 0 || !voters.every((v) => typeof v === 'string')) return null;
+  return { label, by, voters: [...(voters as string[])] };
+}
+
+/**
+ * Runs a classifier under a deadline. A throw or an out-of-contract answer is not-checked by
+ * 'skipped'; an answer after the deadline is not-checked by 'deadline'. The elapsed check also
+ * covers a synchronous classifier, which a timer alone cannot interrupt.
  */
 export async function classifyWithDeadline(
   text: string,
@@ -97,20 +172,24 @@ export async function classifyWithDeadline(
   now: () => number = () => performance.now(),
 ): Promise<ClassifyResult> {
   const started = now();
-  const finish = (label: ClassifyLabel): ClassifyResult => {
+  const finish = (answer: Answer | typeof DEADLINE): ClassifyResult => {
     const latency_ms = Math.max(0, Math.round(now() - started));
-    return { label: latency_ms > deadlineMs ? NOT_CHECKED : label, latency_ms };
+    if (answer === DEADLINE || latency_ms > deadlineMs) return { label: NOT_CHECKED, latency_ms, by: 'deadline' };
+    // voters only ever rides with 'votes'.
+    return answer.by === 'votes'
+      ? { label: answer.label, latency_ms, by: 'votes', voters: answer.voters }
+      : { label: answer.label, latency_ms, by: answer.by };
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const timeout = new Promise<ClassifyLabel>((resolve) => {
-      timer = setTimeout(() => resolve(NOT_CHECKED), deadlineMs);
+    const timeout = new Promise<typeof DEADLINE>((resolve) => {
+      timer = setTimeout(() => resolve(DEADLINE), deadlineMs);
     });
     const answer = Promise.resolve().then(() => classifier(text));
-    const label = await Promise.race([answer, timeout]);
-    return finish(isLabel(label) ? label : NOT_CHECKED);
+    const out: unknown = await Promise.race([answer, timeout]);
+    return finish(out === DEADLINE ? DEADLINE : answerOf(out) ?? UNDECIDED);
   } catch {
-    return finish(NOT_CHECKED);
+    return finish(UNDECIDED);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -152,36 +231,62 @@ export const CLASSIFY_DEFAULT_DEADLINE_MS = 2500;
 const VOTE_HEADROOM_MS = 200;
 
 /**
- * Arithmetic first, then the two free votes. Never throws: every miss is not-checked.
- * Exported so the phone bot and the CLI can call the same function the route does.
+ * Arithmetic first, then the two free votes, and which of them answered. Never throws: every
+ * miss is not-checked. This is what the route runs.
+ *
+ * `by` is 'votes' only when at least one voter was actually sent the claim (voteWasSent); when
+ * every voter was refused before a request (boundary, no key, cooling, budget, retired id) the
+ * text went nowhere and the answer is by 'skipped'. `voters` lists exactly the voters that were
+ * sent the claim, in configured order.
+ */
+export async function classifyTextWithPath(
+  text: string,
+  deadlineMs: number = CLASSIFY_DEFAULT_DEADLINE_MS,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ClassifyOutcome> {
+  const local = classifyLocal(text);
+  if (local !== NOT_CHECKED) {
+    recordLabel(local, 'arithmetic');
+    return { label: local, by: 'arithmetic' };
+  }
+  const trimmed = text.trim();
+  if (!freeVotesEnabled(env) || !trimmed || trimmed.length > maxProseChars(env)) {
+    recordLabel(NOT_CHECKED, 'skipped');
+    return { label: NOT_CHECKED, by: 'skipped' };
+  }
+  const timeoutMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
+  const voters = activeVoters(env);
+  const { label, outcomes } = await classifyByFreeVotes(trimmed, { env, timeoutMs, voters });
+  recordVotes(voters, outcomes);
+  const asked = voters.filter((_, i) => {
+    const o = outcomes[i];
+    return o !== undefined && voteWasSent(o);
+  });
+  if (asked.length === 0) {
+    // No vote left the box, so there is no verdict either: combineVotes can only be not-checked.
+    recordLabel(NOT_CHECKED, 'skipped');
+    return { label: NOT_CHECKED, by: 'skipped' };
+  }
+  recordLabel(label, 'votes');
+  return { label, by: 'votes', voters: asked.map((v) => v.provider) };
+}
+
+/**
+ * The label alone, for callers that do not report the path (the phone bot,
+ * src/routes/telegram-public.ts). Same decision, same counters, as classifyTextWithPath.
  */
 export async function classifyText(
   text: string,
   deadlineMs: number = CLASSIFY_DEFAULT_DEADLINE_MS,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ClassifyLabel> {
-  const local = classifyLocal(text);
-  if (local !== NOT_CHECKED) {
-    recordLabel(local, 'arithmetic');
-    return local;
-  }
-  const trimmed = text.trim();
-  if (!freeVotesEnabled(env) || !trimmed || trimmed.length > maxProseChars(env)) {
-    recordLabel(NOT_CHECKED, 'skipped');
-    return NOT_CHECKED;
-  }
-  const timeoutMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
-  const voters = activeVoters(env);
-  const { label, outcomes } = await classifyByFreeVotes(trimmed, { env, timeoutMs, voters });
-  recordVotes(voters, outcomes);
-  recordLabel(label, 'votes');
-  return label;
+  return (await classifyTextWithPath(text, deadlineMs, env)).label;
 }
 
 export function createClassifyRouter(options: ClassifyRouterOptions = {}): Router {
   const deadlineMs =
     options.deadlineMs ?? positiveInt(process.env['CLASSIFY_DEADLINE_MS'], CLASSIFY_DEFAULT_DEADLINE_MS);
-  const classifier: Classifier = options.classifier ?? ((text) => classifyText(text, deadlineMs));
+  const classifier: Classifier = options.classifier ?? ((text) => classifyTextWithPath(text, deadlineMs));
   const limiter = rateLimit({
     windowMs: options.windowMs ?? positiveInt(process.env['CLASSIFY_RATE_WINDOW_MS'], CLASSIFY_DEFAULT_WINDOW_MS),
     max: options.limit ?? positiveInt(process.env['CLASSIFY_RATE_LIMIT'], CLASSIFY_DEFAULT_LIMIT),
@@ -214,7 +319,7 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
       const body: unknown = req.body;
       const text = textOf(body);
       if (!labelsOk(body) || text.trim().length === 0) {
-        res.status(200).json({ label: NOT_CHECKED, latency_ms: 0 });
+        res.status(200).json(SKIPPED_BODY);
         return;
       }
       res.status(200).json(await classifyWithDeadline(text, classifier, deadlineMs));
@@ -223,7 +328,7 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
   // A malformed or oversized body is not-checked, not a 4xx/5xx the caller has to interpret.
   router.use('/classify', (err: unknown, _req: Request, res: Response, next: NextFunction): void => {
     if (res.headersSent) return next(err);
-    res.status(200).json({ label: NOT_CHECKED, latency_ms: 0 });
+    res.status(200).json(SKIPPED_BODY);
   });
   return router;
 }
