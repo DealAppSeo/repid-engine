@@ -1458,6 +1458,8 @@ if (!IS_TEST) {
     const isDryRun = anchorSweepMode === 'shadow';
     const runAnchorSweep = async () => {
       try {
+        // L0 emergency halt: in enforce mode this spends EAS gas, so a halted process must not run it.
+        if (await shouldParkForHalt(db, 'memoryRootAnchorSweep')) return;
         const fetchPending = async () => {
           const { data, error } = await db
             .from('agent_memory_roots')
