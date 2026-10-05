@@ -2,7 +2,7 @@
  * POST /api/v1/classify — the one label contract every door calls.
  *
  * In:  { text: string, labels: ["pass", "veto", "not-checked"] }
- * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters?, question? }
+ * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters?, deciders?, question? }
  *
  *   by       which path produced the label (ClassifyPath below):
  *            'arithmetic'  the whole text is one equation, decided by exact calculation. No model
@@ -17,10 +17,14 @@
  *            'deadline'    the route's own deadline cut the answer off. Always not-checked. Votes
  *                          may already have been in flight, so this says nothing about whether the
  *                          text left.
- *   voters   ONLY when by === 'votes': the voters the claim was actually sent to, as short provider
- *            names in the configured order (activeVoters / CLASSIFY_VOTERS), one entry per voter,
- *            so two models on one host appear twice. Derived from the configuration in use, never
- *            a fixed list. A pass or veto means every voter listed gave that same verdict.
+ *   voters   ONLY when by === 'votes': every voter the claim was actually sent to, as short provider
+ *            names, the pair first and then any stand-in (free-votes.ts THE FALLBACK), one entry
+ *            per voter, so two models on one host appear twice. This is who RECEIVED the text; a
+ *            voter here may have given no answer (a 5xx, a timeout) before a stand-in did.
+ *   deciders ONLY when by === 'votes': the two voters whose answers made the label, one per slot,
+ *            as short provider names. A pass or veto means both deciders gave that verdict; this,
+ *            not `voters`, is what a door names when it says who said true or false. Added
+ *            2026-10-05 with the pool; a door that does not read it still gets `voters`.
  *   question ONLY when label === 'not-checked' AND by === 'votes' AND a question parsed: one
  *            line of 10 to 160 characters ending in '?', with no link, address, markdown, HTML
  *            character reference or verdict word (parseQuestion, src/classify/free-votes.ts). It is the one fact or
@@ -55,10 +59,11 @@
  *  1. Arithmetic. The whole text is a single equation, `<expr> = <number>`, evaluated
  *     by the same no-eval parser the execution floor uses. True is pass, false is veto.
  *     No network.
- *  2. Two free votes (src/classify/free-votes.ts). Prose up to CLASSIFY_MAX_PROSE_CHARS
- *     goes to two free models in parallel. Both TRUE: pass. Both FALSE: veto. Anything
- *     else, including a 429, a timeout, a missing key or a disagreement: not-checked.
- *     Never a paid model, never a fall-through after a 429. CLASSIFY_FREE_VOTES=off turns
+ *  2. Two votes (src/classify/free-votes.ts). Prose up to CLASSIFY_MAX_PROSE_CHARS goes to two
+ *     models of different families in parallel. Both TRUE: pass. Both FALSE: veto. A disagreement
+ *     or an UNSURE: not-checked. A voter that gives no answer (a 429, a 5xx, a timeout, no key,
+ *     over budget) hands its slot to the next model in the pool, free first, paid only with the
+ *     operator's paid switch on, inside this route's deadline (free-votes.ts THE FALLBACK). CLASSIFY_FREE_VOTES=off turns
  *     this step off and the route is arithmetic-only again. With the data-locality boundary
  *     (ONLY_ATTESTATIONS_LEAVE) engaged, every voter is refused before any request, so this step
  *     sends nothing and answers not-checked, by 'skipped'. Default off; production has it off.
@@ -145,7 +150,7 @@ export const CLASSIFY_PATHS: readonly ClassifyPath[] = ['arithmetic', 'votes', '
 /** The label and the path that produced it. 'deadline' is the route's to say, never a classifier's. */
 export type ClassifyOutcome =
   | { label: ClassifyLabel; by: 'arithmetic' | 'skipped' }
-  | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[]; question?: string };
+  | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[]; deciders?: VoterProvider[]; question?: string };
 
 /** What the route runs. Anything that is not a well-formed ClassifyOutcome is not-checked. */
 export type Classifier = (text: string) => ClassifyOutcome | Promise<ClassifyOutcome>;
@@ -156,6 +161,8 @@ export interface ClassifyResult {
   by: ClassifyPath;
   /** Present only when by === 'votes'. */
   voters?: string[];
+  /** Present only when by === 'votes': the two voters whose answers made the label. */
+  deciders?: string[];
   /** Present only when label === 'not-checked', by === 'votes' and a question parsed. */
   question?: string;
 }
@@ -181,13 +188,23 @@ function isLabel(value: unknown): value is ClassifyLabel {
  */
 function answerOf(value: unknown): Answer | null {
   if (!value || typeof value !== 'object') return null;
-  const { label, by, voters, question } = value as { label?: unknown; by?: unknown; voters?: unknown; question?: unknown };
+  const { label, by, voters, deciders, question } = value as {
+    label?: unknown;
+    by?: unknown;
+    voters?: unknown;
+    deciders?: unknown;
+    question?: unknown;
+  };
   if (!isLabel(label)) return null;
   if (by === 'arithmetic') return { label, by };
   if (by === 'skipped') return label === NOT_CHECKED ? { label, by } : null;
   if (by !== 'votes') return null;
   if (!Array.isArray(voters) || voters.length === 0 || !voters.every((v) => typeof v === 'string')) return null;
   const answer: Answer = { label, by, voters: [...(voters as string[])] };
+  // Exactly two names, or it is dropped: a pass names its two deciders or none.
+  if (Array.isArray(deciders) && deciders.length === 2 && deciders.every((d) => typeof d === 'string')) {
+    answer.deciders = [...(deciders as string[])];
+  }
   const asked = label === NOT_CHECKED ? parseQuestion(question) : null;
   if (asked !== null) answer.question = asked;
   return answer;
@@ -211,6 +228,7 @@ export async function classifyWithDeadline(
     // voters only ever rides with 'votes'; question only with 'votes' too (answerOf checked it).
     if (answer.by !== 'votes') return { label: answer.label, latency_ms, by: answer.by };
     const out: ClassifyResult = { label: answer.label, latency_ms, by: 'votes', voters: answer.voters };
+    if (answer.deciders !== undefined) out.deciders = answer.deciders;
     if (answer.question !== undefined) out.question = answer.question;
     return out;
   };
@@ -250,6 +268,72 @@ export interface ClassifyRouterOptions {
   /** Requests per IP per window. */
   limit?: number;
   windowMs?: number;
+  /** Checks per visitor per UTC day; 0 is off. Defaults to CLASSIFY_DAILY_LIMIT, else 100. */
+  dailyLimit?: number;
+  /** Clock for the daily cap (tests). */
+  now?: () => number;
+}
+
+/**
+ * THE DAILY CAP (Sean said GO, 2026-10-05). The per-minute limit above stops a burst. It does not
+ * stop one visitor, or one script, sending 30 a minute all day: at that rate a single IP spends a
+ * voter's free allowance of 1,000 requests a day in about half an hour, and every other user's
+ * stamp goes to Not checked. So each visitor (the same IP key the minute limit uses) gets
+ * CLASSIFY_DAILY_LIMIT checks per UTC day, default 100. Past that the route answers 429 with
+ * label not-checked and when it resets, exactly like the minute limit: a miss is never a pass,
+ * and the extension already reads any non-200 as Not checked.
+ *
+ * WHY 100. The extension checks every reply on its own, so a busy day of chatting can be 100
+ * replies; a lower cap would hit the users who like it most. At about $0.0003 a check on paid
+ * tiers, 100 a day is at most about $0.03 per visitor. CLASSIFY_DAILY_LIMIT=0 (or off) turns the
+ * cap off. Counts are per process and reset at 00:00 UTC or on restart; production runs one
+ * replica, so one count per visitor. Only the count is held: an IP key and a number, never text.
+ */
+export const CLASSIFY_DEFAULT_DAILY_LIMIT = 100;
+
+export function dailyLimitFrom(raw: string | undefined): number {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === 'off' || v === '0') return 0;
+  return positiveInt(v, CLASSIFY_DEFAULT_DAILY_LIMIT);
+}
+
+function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function nextUtcMidnight(ms: number): number {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+}
+
+function dailyCap(limit: number, now: () => number) {
+  let day = '';
+  const counts = new Map<string, number>();
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (limit <= 0) return next();
+    const t = now();
+    const today = utcDay(t);
+    if (today !== day) {
+      // A new day: yesterday's counts go, all at once, so the map never outgrows one day.
+      day = today;
+      counts.clear();
+    }
+    const key = ipKeyGenerator(trustedClientIp(req));
+    const used = counts.get(key) ?? 0;
+    if (used >= limit) {
+      const resetsAt = nextUtcMidnight(t);
+      res.set('Retry-After', String(Math.max(1, Math.ceil((resetsAt - t) / 1000))));
+      res.status(429).json({
+        error: 'daily_limit',
+        label: NOT_CHECKED,
+        limit,
+        resets_at: new Date(resetsAt).toISOString(),
+      });
+      return;
+    }
+    counts.set(key, used + 1);
+    next();
+  };
 }
 
 function positiveInt(raw: string | undefined, fallback: number): number {
@@ -259,8 +343,15 @@ function positiveInt(raw: string | undefined, fallback: number): number {
 
 export const CLASSIFY_DEFAULT_LIMIT = 30;
 export const CLASSIFY_DEFAULT_WINDOW_MS = 60 * 1000;
-/** The stamp gives up at 3000 ms (extension/laya.js), so the route answers before that. */
-export const CLASSIFY_DEFAULT_DEADLINE_MS = 2500;
+/**
+ * Time for the whole answer, stand-ins included (free-votes.ts THE FALLBACK). The website and the
+ * CLI wait 6000 ms (TrustShell src/lib/claim.ts), so the route answers well before that. The
+ * extension waited only 3000 ms when this was 2500; it waits 6000 ms from the release that reads
+ * `deciders`. An older extension still shows Not checked past its own 3 seconds, as it did before.
+ */
+export const CLASSIFY_DEFAULT_DEADLINE_MS = 5000;
+/** One voter's own time. A voter that has not answered by then hands its slot on. */
+export const CLASSIFY_VOTE_TIMEOUT_MS = 2500;
 /**
  * Room left inside the deadline for the route's own work after the votes return, and again after
  * the clarifying question returns.
@@ -322,7 +413,8 @@ export interface ClassifyTextOptions {
  * `by` is 'votes' only when at least one voter was actually sent the claim (voteWasSent); when
  * every voter was refused before a request (boundary, no key, cooling, budget, retired id) the
  * text went nowhere and the answer is by 'skipped'. `voters` lists exactly the voters that were
- * sent the claim, in configured order. `question` is added only with CLASSIFY_QUESTIONS on, a
+ * sent the claim, the pair first and then any stand-in; `deciders` names the two whose answers
+ * made the label, when both were sent it. `question` is added only with CLASSIFY_QUESTIONS on, a
  * not-checked from BOTH voters answering UNSURE, and enough deadline left (see the contract).
  */
 export async function classifyTextWithPath(
@@ -342,12 +434,14 @@ export async function classifyTextWithPath(
     recordLabel(NOT_CHECKED, 'skipped');
     return { label: NOT_CHECKED, by: 'skipped' };
   }
-  const timeoutMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
+  const budgetMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
+  const timeoutMs = Math.min(CLASSIFY_VOTE_TIMEOUT_MS, budgetMs);
   const voters = activeVoters(env);
-  // A backup stands in only once the canary has seen it answer right (free-votes.ts THE FALLBACK).
+  // A stand-in is used only once the canary has seen it answer right (free-votes.ts THE FALLBACK).
   const { label, outcomes, deciders, attempts } = await classifyByFreeVotes(trimmed, {
     env,
     timeoutMs,
+    budgetMs,
     voters,
     backupReady: canaryOk,
   });
@@ -355,7 +449,7 @@ export async function classifyTextWithPath(
     attempts.map((t) => t.voter),
     attempts.map((t) => t.outcome),
   );
-  // A backup is tried only after a refusal that sent nothing, so this is at most one per slot.
+  // Everyone the text reached, stand-ins included: the privacy answer to "who received it".
   const asked = attempts.filter((t) => voteWasSent(t.outcome)).map((t) => t.voter);
   if (asked.length === 0) {
     // No vote left the box, so there is no verdict either: combineVotes can only be not-checked.
@@ -363,7 +457,15 @@ export async function classifyTextWithPath(
     return { label: NOT_CHECKED, by: 'skipped' };
   }
   recordLabel(label, 'votes');
-  const answer = { label, by: 'votes' as const, voters: asked.map((v) => v.provider) };
+  // The deciders are named only when both were sent the claim. A slot that ran out of stand-ins may
+  // end on a voter refused before any request, and a door must never say it "asked" that one.
+  const answered = deciders.filter((_, i) => voteWasSent(outcomes[i]!)).map((v) => v.provider);
+  const answer = {
+    label,
+    by: 'votes' as const,
+    voters: asked.map((v) => v.provider),
+    ...(answered.length === 2 ? { deciders: answered } : {}),
+  };
   if (options.question === false || label !== NOT_CHECKED || !questionsEnabled(env) || !bothUnsure(outcomes)) {
     return answer;
   }
@@ -396,6 +498,10 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
     keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
     message: { error: 'too_many_requests', label: NOT_CHECKED },
   });
+  const capPerDay = dailyCap(
+    options.dailyLimit ?? dailyLimitFrom(process.env['CLASSIFY_DAILY_LIMIT']),
+    options.now ?? Date.now,
+  );
   const corsAny = cors({
     origin: '*',
     credentials: false,
@@ -415,6 +521,7 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
     '/classify',
     corsAny,
     limiter,
+    capPerDay,
     json({ limit: '64kb' }),
     async (req: Request, res: Response): Promise<void> => {
       const body: unknown = req.body;

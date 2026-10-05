@@ -157,6 +157,11 @@ const KEY_VAR: Record<Voter['provider'], string> = {
   cerebras: 'CEREBRAS_API_KEY',
   'nvidia-nim': 'NVIDIA_NIM_API_KEY',
   'workers-ai': 'CLOUDFLARE_WORKERS_AI_TOKEN',
+  openrouter: 'OPENROUTER_API_KEY',
+  zai: 'ZAI_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  together: 'TOGETHER_API_KEY',
+  fireworks: 'FIREWORKS_API_KEY',
 };
 
 async function main(): Promise<number> {
@@ -164,7 +169,7 @@ async function main(): Promise<number> {
   // parseVoters wants a pair; give it the candidate twice and take one.
   const voter = spec ? parseVoters(`${spec},${spec}`)[0] : undefined;
   if (!spec || !voter || `${voter.provider}:${voter.model}` !== spec.trim()) {
-    console.error('usage: --voter <groq|cerebras|nvidia-nim|workers-ai>:<model id> [--extra-body <json>] [--limit N] [--out file]');
+    console.error('usage: --voter <groq|cerebras|nvidia-nim|workers-ai|openrouter|zai|mistral|together|fireworks>:<model id> [--extra-body <json>] [--limit N] [--out file]');
     return 1;
   }
   if ((voter.provider === 'groq' || voter.provider === 'cerebras') && !process.argv.includes('--allow-shared-quota')) {

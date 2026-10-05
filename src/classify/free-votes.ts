@@ -4,7 +4,8 @@
  * Sean decided B9 on 2026-10-04: option 2, a free hosted model, as TWO votes. Both say true:
  * pass. Both say false: veto. Anything else is not-checked: a disagreement, an UNSURE, a 429,
  * a timeout, a missing key, a reply that is not exactly one verdict word. A miss is never a
- * pass, and a 429 never falls through to a paid model, Claude or Grok.
+ * pass. A voter that gives no answer hands its slot on (THE FALLBACK); a paid model stands in only
+ * with the operator's paid switch on, and Claude and Grok never.
  *
  * WHY TWO VOTES AND NOT ONE. A single free model judging an arbitrary sentence is wrong often
  * enough that its "TRUE" cannot be a pass on its own. Requiring agreement trades coverage for
@@ -21,17 +22,20 @@
  * KILL SWITCH. CLASSIFY_FREE_VOTES=off returns the route to arithmetic-only with no redeploy of
  * code. With no key for a voter's provider, that voter abstains and the answer is not-checked.
  *
- * WHAT LEAVES. The claim text goes to the voters' host (Groq by default). Nothing is stored
- * here: no text, no user id, no database write. The extension and the phone bot say so in
+ * WHAT LEAVES. The claim text goes to the voters' hosts: Groq and Cerebras by default, and a host
+ * in VOTER_POOL only when it stands in for a voter that gave no answer. Nothing is stored here: no
+ * text, no user id, no database write. The extension and the phone bot say so in
  * their privacy line (BUS N-PRIVACY-LINE / B18). With CLASSIFY_QUESTIONS on, a claim both voters
  * answered UNSURE may go ONCE more to the first of those hosts, for a clarifying question (THE
  * CLARIFYING QUESTION, at the end of this file): one more request, never a new destination.
  *
- * FALLBACK (Sean, 2026-10-05: "we need automated fallback for graceful degradation"). A voter that
- * was refused BEFORE any request (over its per-minute budget, cooling after a 429, no key, a
- * retired id) hands its slot to a backup of the SAME family, on a host the pair already uses, that
- * the canary has seen answer correctly. See VOTER_BACKUPS below. A vote that was sent is never
- * re-asked elsewhere, so an UNSURE, a timeout or an odd answer cannot be shopped for a verdict.
+ * FALLBACK (Sean, 2026-10-05: "we need automated fallback for graceful degradation", then the same
+ * evening: "we should never be choosing to say not checked ... when there are so many options").
+ * A slot whose voter gave NO ANSWER (refused before any request, or a 429, a 5xx, a timeout, a
+ * dropped connection, an empty or cut-off reply) passes to the next model in VOTER_POOL that the
+ * canary has seen answer right, of a different family from the other slot. A slot whose voter
+ * ANSWERED (TRUE, FALSE, UNSURE, or a reply with words in it) keeps that answer: re-asking would
+ * shop for a verdict. See THE FALLBACK below.
  *
  * UNLESS THE DATA-LOCALITY BOUNDARY IS ENGAGED (ONLY_ATTESTATIONS_LEAVE). Then every vote is
  * refused before any request and abstains `boundary`, so the label is not-checked. See
@@ -40,6 +44,7 @@
  */
 import { PROVIDER_URLS } from '../egress/provider-hosts';
 import { providerFetch, type ProviderFetch } from '../egress/provider-fetch';
+import { halAllowPaid, isFreeZaiModel } from '../hal/hal-free-gate';
 import { RETIRED_MODELS } from '../hal/retired-models';
 import { assertPromptEgressAllowed, onlyAttestationsLeave } from '../selfhost/egress-guard';
 
@@ -86,9 +91,28 @@ export function voteWasSent(outcome: VoteOutcome): boolean {
   return outcome.kind === 'verdict' || SENT[outcome.reason];
 }
 
-export type VoterProvider = 'groq' | 'cerebras' | 'nvidia-nim' | 'workers-ai';
+export type VoterProvider =
+  | 'groq'
+  | 'cerebras'
+  | 'nvidia-nim'
+  | 'workers-ai'
+  | 'openrouter'
+  | 'zai'
+  | 'mistral'
+  | 'together'
+  | 'fireworks';
 
-const PROVIDERS: readonly VoterProvider[] = ['groq', 'cerebras', 'nvidia-nim', 'workers-ai'];
+const PROVIDERS: readonly VoterProvider[] = [
+  'groq',
+  'cerebras',
+  'nvidia-nim',
+  'workers-ai',
+  'openrouter',
+  'zai',
+  'mistral',
+  'together',
+  'fireworks',
+];
 
 export interface Voter {
   provider: VoterProvider;
@@ -113,21 +137,31 @@ function endpointFor(provider: VoterProvider, env: NodeJS.ProcessEnv): string | 
   if (provider === 'groq') return PROVIDER_URLS.groqChatCompletions;
   if (provider === 'cerebras') return PROVIDER_URLS.cerebrasChatCompletions;
   if (provider === 'nvidia-nim') return PROVIDER_URLS.nvidiaNimChatCompletions;
+  if (provider === 'openrouter') return PROVIDER_URLS.openrouterChatCompletions;
+  if (provider === 'zai') return PROVIDER_URLS.zaiChatCompletions;
+  if (provider === 'mistral') return PROVIDER_URLS.mistralChatCompletions;
+  if (provider === 'together') return PROVIDER_URLS.togetherChatCompletions;
+  if (provider === 'fireworks') return PROVIDER_URLS.fireworksChatCompletions;
   const account = (env.CLOUDFLARE_ACCOUNT_ID ?? '').trim().toLowerCase();
   if (!ACCOUNT_ID.test(account)) return null;
   return `${PROVIDER_URLS.cloudflareApiOrigin}/client/v4/accounts/${account}/ai/v1/chat/completions`;
 }
 
+/** Each provider's key, by the same variable names the HAL quorum reads. */
+const KEY_VARS: Record<VoterProvider, string> = {
+  groq: 'GROQ_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  'nvidia-nim': 'NVIDIA_NIM_API_KEY',
+  'workers-ai': 'CLOUDFLARE_WORKERS_AI_TOKEN',
+  openrouter: 'OPENROUTER_API_KEY',
+  zai: 'ZAI_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  together: 'TOGETHER_API_KEY',
+  fireworks: 'FIREWORKS_API_KEY',
+};
+
 function keyFor(provider: VoterProvider, env: NodeJS.ProcessEnv): string {
-  const raw =
-    provider === 'groq'
-      ? env.GROQ_API_KEY
-      : provider === 'cerebras'
-        ? env.CEREBRAS_API_KEY
-        : provider === 'nvidia-nim'
-          ? env.NVIDIA_NIM_API_KEY
-          : env.CLOUDFLARE_WORKERS_AI_TOKEN;
-  return (raw ?? '').trim();
+  return (env[KEY_VARS[provider]] ?? '').trim();
 }
 
 export const DEFAULT_VOTERS: readonly Voter[] = [
@@ -291,8 +325,8 @@ export function unparseableShape(content: unknown): UnparseableShape {
 const coolingUntil = new Map<string, number>();
 
 /**
- * Per-voter budget a minute, under each free tier's own limit (Groq 30, Cerebras 5, NVIDIA 40
- * requests a minute). B20 found one caller could drive the shared key into a 429 and park the
+ * Per-voter budget a minute, under each host's own limit for this account (Groq free tier 30,
+ * Cerebras Developer tier 300, NVIDIA 40 requests a minute). B20 found one caller could drive the shared key into a 429 and park the
  * voter for everyone; spending stops below the vendor's line instead, and a request over budget
  * abstains without a call. The route's per-IP limit still applies on top.
  */
@@ -300,9 +334,21 @@ const coolingUntil = new Map<string, number>();
 // one busy minute from spending the day. Its daily ceiling is enforced by Cloudflare (a 429).
 export const BUDGET_PER_MIN: Record<VoterProvider, number> = {
   groq: 24,
-  cerebras: 4,
+  // 24, not 4 (S26, Sean said GO 2026-10-05): the key is on Cerebras' paid Developer tier, which
+  // gives qwen-3.8-27b 300 a minute (inference-docs.cerebras.ai/support/rate-limits); its own
+  // header reports 648,000 requests a day, not the Free Trial's 5 a minute. 4 a minute capped
+  // every user at once: five replies inside 8 seconds gave a Not checked, measured 2026-10-05.
+  cerebras: 24,
   'nvidia-nim': 32,
   'workers-ai': 6,
+  // Pool members (THE FALLBACK). Each is asked only when a voter ahead of it gave no answer, so
+  // these are ceilings for a bad minute, set below each host's own line for its cheapest plan.
+  // OpenRouter's free models allow 20 a minute.
+  openrouter: 10,
+  zai: 10,
+  mistral: 20,
+  together: 30,
+  fireworks: 30,
 };
 const spent = new Map<string, number[]>();
 
@@ -402,6 +448,27 @@ export function __resetVoteCooldowns(): void {
   quotaSeen.clear();
 }
 
+/**
+ * After a 5xx, a timeout or a dropped connection, the next requests skip that voter for this long,
+ * so a host that is down costs one user one wait, not every user the same wait. A 429 cools for
+ * the host's own Retry-After instead. Kept in memory; a restart forgets it.
+ */
+export const FAILURE_COOL_MS = 60_000;
+
+/**
+ * True when the vendor's own header said none are left today, read within the last ten minutes.
+ * The voter is then refused before any request, as a budget refusal, and THE FALLBACK moves on.
+ * Ten minutes, because the reset time is a vendor string this module does not parse: one request
+ * every ten minutes reads the header again, and finds out when the day has rolled over.
+ */
+const SPENT_RECHECK_MS = 10 * 60_000;
+
+function dayIsSpent(voter: Voter, now: number): boolean {
+  const q = quotaSeen.get(hostKey(voter));
+  if (!q || q.remaining_requests_day !== 0) return false;
+  return now - Date.parse(q.at) < SPENT_RECHECK_MS;
+}
+
 function retryAfterMs(res: Response): number {
   const raw = res.headers.get('retry-after');
   const s = Number(raw);
@@ -479,6 +546,7 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
   }
   const until = coolingUntil.get(hostKey(voter));
   if (until !== undefined && until > now()) return { kind: 'abstain', reason: 'cooling' };
+  if (dayIsSpent(voter, now())) return { kind: 'abstain', reason: 'budget' };
   if (overBudget(voter, now())) return { kind: 'abstain', reason: 'budget' };
 
   const controller = new AbortController();
@@ -492,8 +560,15 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
       { role: 'user', content: encodeClaim(claim) },
     ],
   };
-  // gpt-oss reasons before it answers; keep that short so the vote fits the deadline.
-  if (voter.model.startsWith('openai/gpt-oss')) body.reasoning_effort = 'low';
+  // gpt-oss reasons before it answers; keep that short so the vote fits the deadline. By family,
+  // so the same model on another host (THE FALLBACK) gets the same setting.
+  if (modelFamily(voter.model) === 'gpt-oss') body.reasoning_effort = 'low';
+  // GLM thinks before it answers unless told not to, and a one-word verdict needs no thinking.
+  if (voter.provider === 'zai') body.thinking = { type: 'disabled' };
+  // OpenRouter routes a model to one of several upstream providers. This restricts it to the ones
+  // that neither store nor train on what they are sent: the claim is a user's chat text. When no
+  // such provider serves the model, the call fails, and the slot passes on rather than leak.
+  if (voter.provider === 'openrouter') body.provider = { data_collection: 'deny' };
   // Cerebras serves qwen with reasoning ON at 'high' by default, and returns the reasoning in its
   // own field. Under max_tokens 400 the reasoning used the whole budget and `content` came back
   // EMPTY: 124 of 142 not-checked labels on 2026-10-05, measured by the unparseable_shapes counter
@@ -522,11 +597,15 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
       coolingUntil.set(hostKey(voter), now() + retryAfterMs(res));
       return { kind: 'abstain', reason: 'rate_limited' };
     }
-    if (!res.ok) return { kind: 'abstain', reason: 'http_error' };
+    if (!res.ok) {
+      coolingUntil.set(hostKey(voter), now() + FAILURE_COOL_MS);
+      return { kind: 'abstain', reason: 'http_error' };
+    }
     const json = (await res.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
     return { kind: 'reply', content: json.choices?.[0]?.message?.content };
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
+    coolingUntil.set(hostKey(voter), now() + FAILURE_COOL_MS);
     return { kind: 'abstain', reason: aborted ? 'timeout' : 'network' };
   } finally {
     clearTimeout(timer);
@@ -553,71 +632,178 @@ export function combineVotes(a: VoteOutcome, b: VoteOutcome): VoteLabel {
 }
 
 /**
- * THE FALLBACK. Each slot of the pair may hand over to a backup, in order. WHY: on 2026-10-05 the
- * real extension, five replies inside 8 seconds, got four stamps and one Not checked, and a second
- * burst got five Not checked, all `abstains: {budget}` on Cerebras. Its budget is 4 a minute for
- * every user at once; Groq's free tier is 1,000 requests a day per model. A capped voter turned
- * every check into Not checked until the minute or the day rolled over.
+ * THE FALLBACK. A slot whose voter gave no answer passes to the next model in VOTER_POOL.
+ *
+ * WHY. 2026-10-05, twice. First a capped voter: five extension replies inside 8 seconds gave four
+ * stamps and one Not checked, then five Not checked, all `abstains: {budget}` on Cerebras. The
+ * first fallback (one same-family backup per slot, on a host the pair already used) fixed that
+ * case and no other: a host that was down, slow or answering 5xx still turned the stamp into Not
+ * checked while other hosts with keys sat unused. Sean, the same evening: "we should never be
+ * choosing to say not checked ... when there are so many options".
  *
  * THE RULES, each pinned by tests/classify-fallback.test.ts:
- * 1. ONLY AFTER A REFUSAL THAT SENT NOTHING (FALLBACK_ON). A vote that reached its host and came
- *    back UNSURE, late, garbled or 5xx is that slot's answer. Re-asking would shop for a verdict,
- *    and would put the claim on the wire twice for one slot.
- * 2. SAME FAMILY as the primary it replaces (modelFamily), so the pair's independence never drops:
- *    gpt-oss stands in for gpt-oss, qwen for qwen. Never one family twice where two were promised.
- * 3. A HOST THE PAIR ALREADY USES, and never a voter already in the pair. The claim reaches no new
- *    destination, and one model cannot be counted as two votes.
- * 4. ONLY ONCE THE CANARY HAS SEEN IT ANSWER RIGHT (the route passes vote-health's canaryOk). An id
- *    from a docs page is not evidence it answers on this account (src/hal/retired-models.ts); the
- *    canary's authenticated call is. Until then, or with CLASSIFY_CANARY=off, a backup is never used.
- * CLASSIFY_FALLBACK=off turns it all off.
+ * 1. ONLY AFTER NO ANSWER (noAnswer). Refused before any request (budget, cooling, no key, a
+ *    retired id), or sent and nothing came back that a person could read as a verdict: a 429, a
+ *    5xx, a timeout, a dropped connection, an empty reply, reasoning cut off before the answer.
+ *    A slot that ANSWERED keeps its answer: TRUE, FALSE, UNSURE, or a reply with words in it that
+ *    is not exactly one verdict. Re-asking those would shop for a verdict.
+ * 2. TWO FAMILIES, ALWAYS. A stand-in is never the other slot's family, so a pass still means two
+ *    model families agreed. One model is never two votes, and no model is asked twice for one claim.
+ * 3. ONLY ONCE THE CANARY HAS SEEN IT ANSWER RIGHT (the route passes vote-health's canaryOk). An
+ *    id from a docs page is not evidence it answers on this account (src/hal/retired-models.ts);
+ *    the canary's authenticated call is. With CLASSIFY_CANARY=off, no stand-in is ever used.
+ * 4. FREE FIRST. VOTER_POOL is in price order, free before paid. A paid model is used only while
+ *    the operator's paid switch is on (halAllowPaid, src/hal/hal-free-gate.ts: Sean, 2026-09-10,
+ *    allow_paid stays false until he sets SEAN_PAID_LOOP). Cerebras is the exception already
+ *    decided: it is the second voter of the pair (S26, Sean's GO 2026-10-05).
+ * 5. INSIDE THE DEADLINE. Stand-ins run one at a time after the pair returns, each with the time
+ *    that is left; with under MIN_ATTEMPT_MS left, the slot stops and the label is not-checked.
+ * 6. LEARN WHO IS DOWN. A 429 cools a voter for the host's Retry-After, a 5xx, timeout or dropped
+ *    connection for FAILURE_COOL_MS, and a vendor header saying none are left today refuses it
+ *    for ten minutes. A cooling voter is refused before any request, so the next claim skips
+ *    straight to one that can answer instead of making a user wait for the same failure.
+ * CLASSIFY_FALLBACK=off turns it all off. CLASSIFY_POOL replaces the pool's order and members without
+ * a deploy (parsePool), under the same rules.
  *
- * THE BACKUPS. Groq's free tier gives each model its own allowance (30 a minute, 1,000 a day,
- * console.groq.com/docs/rate-limits):
- * - gpt-oss-120b -> gpt-oss-20b on Groq. Live on this account: 608 successful calls in llm_call_log
- *   in the 21 days to 2026-10-05 [MEASURED].
- * - qwen-3.8-27b on Cerebras -> the SAME model on Groq, `qwen/qwen3.8-27b`. Listed by Groq as a
- *   PREVIEW model (may be withdrawn at short notice), and NOT yet seen answering on this account,
- *   which is what rule 4 is for: withdrawn or never live, it simply stays unused.
+ * WHO RECEIVES THE TEXT. Every model below is one the claim may be sent to, and every door's
+ * privacy line has to name its host (BUS N-PRIVACY-LINE). OpenRouter calls carry
+ * data_collection 'deny', so only upstream providers that neither store nor train on prompts
+ * may serve them. Not in the pool, on purpose: NVIDIA (its keys are for trials by NVIDIA's own
+ * terms), Gemini's free tier (its terms let the vendor use what is sent), Anthropic and xAI
+ * (paid, and the pair's contract has always kept them out), and Z.ai (its terms for API data are
+ * not checked; Sean decides).
+ *
+ * THE POOL. Ids are ones this account has called successfully in llm_call_log, 30 days to
+ * 2026-10-05 [MEASURED], except Groq's preview qwen and the Together and Fireworks ids, which rule
+ * 3 keeps out until the canary has seen them answer.
  */
-export const VOTER_BACKUPS: Readonly<Record<string, readonly Voter[]>> = {
-  'groq:openai/gpt-oss-120b': [{ provider: 'groq', model: 'openai/gpt-oss-20b' }],
-  'cerebras:qwen-3.8-27b': [{ provider: 'groq', model: 'qwen/qwen3.8-27b' }],
-};
+export interface PoolVoter extends Voter {
+  /** True for a model that bills this account. Used only while halAllowPaid(env) is true. */
+  paid?: boolean;
+}
 
-/** Refusals that put nothing on the wire (SENT is false) and say nothing about the claim. */
-const FALLBACK_ON: ReadonlySet<AbstainReason> = new Set<AbstainReason>(['budget', 'cooling', 'no_key', 'retired_model']);
+export const VOTER_POOL: readonly PoolVoter[] = [
+  // Free.
+  { provider: 'groq', model: 'openai/gpt-oss-120b' },
+  { provider: 'groq', model: 'openai/gpt-oss-20b' },
+  { provider: 'groq', model: 'qwen/qwen3.8-27b' },
+  { provider: 'openrouter', model: 'google/gemma-4-31b-it:free' },
+  { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
+  // The pair's own second voter (decided, S26).
+  { provider: 'cerebras', model: 'qwen-3.8-27b' },
+  // Paid, cheapest first. Off until the operator's paid switch is on.
+  { provider: 'cerebras', model: 'gemma-4-31b', paid: true },
+  { provider: 'mistral', model: 'mistral-small-latest', paid: true },
+  { provider: 'together', model: 'openai/gpt-oss-120b', paid: true },
+  { provider: 'fireworks', model: 'accounts/fireworks/models/gpt-oss-120b', paid: true },
+  { provider: 'openrouter', model: 'qwen/qwen-2.5-72b-instruct', paid: true },
+];
+
+/**
+ * CLASSIFY_POOL replaces VOTER_POOL without a deploy: the same `provider:model` entries as
+ * CLASSIFY_VOTERS, comma-separated, in the order to try them ("groq:openai/gpt-oss-120b,
+ * zai:glm-4.5-flash"). The rules do not move with it: an entry is a stand-in only once the canary
+ * has seen it answer right, never the other slot's family, and PAID unless it is provably free, so
+ * a paid model listed here still waits for the paid switch. An entry with an unknown provider or
+ * no model is dropped. Unset or empty, VOTER_POOL is the pool. It is how a host is added, dropped
+ * or moved up without code: Z.ai, for one, is a line here once its terms are settled.
+ */
+export function parsePool(raw: string | undefined): readonly PoolVoter[] | null {
+  if (!raw || !raw.trim()) return null;
+  const out: PoolVoter[] = [];
+  for (const part of raw.split(',')) {
+    const i = part.indexOf(':');
+    if (i <= 0) continue;
+    const provider = part.slice(0, i).trim();
+    const model = part.slice(i + 1).trim();
+    if (!model || !(PROVIDERS as readonly string[]).includes(provider)) continue;
+    const v: Voter = { provider: provider as VoterProvider, model };
+    if (!out.some((o) => hostKey(o) === hostKey(v))) out.push(provablyFree(v) ? v : { ...v, paid: true });
+  }
+  return out;
+}
+
+/**
+ * Free on this account by the vendor's own terms, or already decided: Groq's free tier, an
+ * OpenRouter `:free` model, a Z.ai flash model (src/hal/hal-free-gate.ts isFreeZaiModel), and the
+ * pair's own voters. Anything else bills, as far as this module can tell, and so counts as paid.
+ */
+function provablyFree(v: Voter): boolean {
+  if (v.provider === 'groq') return true;
+  if (v.provider === 'openrouter') return v.model.endsWith(':free');
+  if (v.provider === 'zai') return isFreeZaiModel(v.model);
+  return VOTER_POOL.some((p) => !p.paid && hostKey(p) === hostKey(v));
+}
+
+/** The pool this env may use: everything free, and the paid models only with the paid switch on. */
+export function poolFor(env: NodeJS.ProcessEnv = process.env): readonly Voter[] {
+  const paidOk = halAllowPaid(env);
+  const pool = parsePool(env.CLASSIFY_POOL) ?? VOTER_POOL;
+  return pool.filter((v) => !v.paid || paidOk).map(({ provider, model }) => ({ provider, model }));
+}
+
+/** Refusals before any request, and sent calls that came back with nothing readable as a verdict. */
+const NO_ANSWER: ReadonlySet<AbstainReason> = new Set<AbstainReason>([
+  'budget',
+  'cooling',
+  'no_key',
+  'retired_model',
+  'rate_limited',
+  'http_error',
+  'timeout',
+  'network',
+]);
+
+/** Rule 1. A reply with words in it is an answer, even an odd one; an empty or cut-off one is not. */
+export function noAnswer(outcome: VoteOutcome): boolean {
+  if (outcome.kind === 'verdict') return false;
+  if (NO_ANSWER.has(outcome.reason)) return true;
+  return outcome.reason === 'unparseable' && (outcome.shape === 'empty' || outcome.shape === 'cut_off_reasoning');
+}
+
+/** Least time worth giving a stand-in. With less left, the slot stops. */
+export const MIN_ATTEMPT_MS = 400;
 
 export function fallbackEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.CLASSIFY_FALLBACK ?? '').trim().toLowerCase() !== 'off';
 }
 
-/** A model's family, from its id: 'gpt-oss', 'qwen', 'llama', or the bare id when unknown. */
+/**
+ * A model's family, from its id. Two ids of one family share training and so share blind spots
+ * (the agreement rule counts on them not to). An unknown id is its own family.
+ */
 export function modelFamily(model: string): string {
   const id = (model.toLowerCase().split('/').pop() ?? '').trim();
   if (id.startsWith('gpt-oss')) return 'gpt-oss';
   if (id.startsWith('qwen')) return 'qwen';
+  if (id.startsWith('gemma') || id.startsWith('gemini')) return 'gemma';
+  if (id.startsWith('nemotron')) return 'nemotron';
+  if (id.startsWith('glm')) return 'glm';
+  if (id.startsWith('mistral') || id.startsWith('mixtral') || id.startsWith('ministral')) return 'mistral';
   if (id.includes('llama')) return 'llama';
   return id;
 }
 
-/** The backups `primary` may hand its slot to, in order, under rules 2 and 3. */
-export function backupsFor(primary: Voter, pair: readonly Voter[]): readonly Voter[] {
-  const inPair = new Set(pair.map(hostKey));
-  const hosts = new Set(pair.map((v) => v.provider));
-  return (VOTER_BACKUPS[hostKey(primary)] ?? []).filter(
-    (b) => modelFamily(b.model) === modelFamily(primary.model) && hosts.has(b.provider) && !inPair.has(hostKey(b)),
-  );
+/**
+ * The next stand-in for a slot (rules 2 and 3), in pool order: not yet asked for this claim, not
+ * the other slot's model or family, and seen answering right by the canary.
+ */
+export function nextStandIn(
+  pool: readonly Voter[],
+  other: Voter,
+  asked: ReadonlySet<string>,
+  ready: (v: Voter) => boolean,
+): Voter | undefined {
+  const otherFamily = modelFamily(other.model);
+  return pool.find((c) => !asked.has(hostKey(c)) && modelFamily(c.model) !== otherFamily && ready(c));
 }
 
-/** The pair plus every backup it could use: what the canary asks and the stats list. */
+/** The pair plus every stand-in it could use: what the canary asks and the stats list. */
 export function standbyVoters(env: NodeJS.ProcessEnv = process.env): readonly Voter[] {
   const pair = activeVoters(env);
   if (!fallbackEnabled(env)) return pair;
   const out = [...pair];
-  for (const v of pair) {
-    for (const b of backupsFor(v, pair)) if (!out.some((o) => hostKey(o) === hostKey(b))) out.push(b);
-  }
+  for (const v of poolFor(env)) if (!out.some((o) => hostKey(o) === hostKey(v))) out.push(v);
   return out;
 }
 
@@ -626,47 +812,56 @@ export interface VoteAttempt {
   outcome: VoteOutcome;
 }
 
-async function castSlot(
-  primary: Voter,
-  pair: readonly Voter[],
-  claim: string,
-  opts: VoteOptions & { backupReady?: (v: Voter) => boolean },
-): Promise<VoteAttempt[]> {
-  const tried: VoteAttempt[] = [{ voter: primary, outcome: await castVote(primary, claim, opts) }];
-  if (!opts.backupReady || !fallbackEnabled(opts.env ?? process.env)) return tried;
-  for (const b of backupsFor(primary, pair)) {
-    const last = tried[tried.length - 1]!.outcome;
-    if (last.kind !== 'abstain' || !FALLBACK_ON.has(last.reason)) break;
-    if (!opts.backupReady(b)) continue;
-    tried.push({ voter: b, outcome: await castVote(b, claim, opts) });
-  }
-  return tried;
-}
-
 export interface FreeVoteResult {
   label: VoteLabel;
-  /** One per slot: the outcome that decided it (the primary's, or the backup's that stood in). */
+  /** One per slot: the outcome that decided it (the primary's, or the stand-in's). */
   outcomes: VoteOutcome[];
   /** One per slot: the voter whose outcome that is. */
   deciders: Voter[];
-  /** Every vote cast, in slot order, including a primary refused before a backup stood in. */
+  /** Every vote cast, in order, including voters that gave no answer before a stand-in did. */
   attempts: VoteAttempt[];
 }
 
 /**
- * Runs both slots in parallel. Never throws. Backups are used only when `backupReady` is given
- * (the route passes the canary's verdict); every other caller gets exactly the pair.
+ * Runs the pair in parallel, then THE FALLBACK for any slot that got no answer. Never throws.
+ * Stand-ins are used only when `backupReady` is given (the route passes the canary's verdict);
+ * every other caller gets exactly the pair. `budgetMs` is the time for the whole claim, stand-ins
+ * included; unset, it is one vote's `timeoutMs`, which leaves no room for a stand-in that waited.
  */
 export async function classifyByFreeVotes(
   claim: string,
-  opts: VoteOptions & { voters?: readonly Voter[]; backupReady?: (v: Voter) => boolean },
+  opts: VoteOptions & { voters?: readonly Voter[]; backupReady?: (v: Voter) => boolean; budgetMs?: number },
 ): Promise<FreeVoteResult> {
   const env = opts.env ?? process.env;
+  const now = opts.now ?? Date.now;
+  const started = now();
+  const budgetMs = opts.budgetMs ?? opts.timeoutMs;
   const voters = opts.voters ?? activeVoters(env);
-  const [a, b] = await Promise.all([castSlot(voters[0]!, voters, claim, opts), castSlot(voters[1]!, voters, claim, opts)]);
+  const pair = [voters[0]!, voters[1]!];
+  const first = await Promise.all(pair.map((v) => castVote(v, claim, opts)));
+  const slots: VoteAttempt[][] = pair.map((voter, i) => [{ voter, outcome: first[i]! }]);
+
+  if (opts.backupReady && fallbackEnabled(env)) {
+    const pool = poolFor(env);
+    const asked = new Set(pair.map(hostKey));
+    for (const [i, mine] of slots.entries()) {
+      const theirs = slots[1 - i]!;
+      while (noAnswer(mine[mine.length - 1]!.outcome)) {
+        const standIn = nextStandIn(pool, theirs[theirs.length - 1]!.voter, asked, opts.backupReady);
+        if (!standIn) break;
+        const left = Math.floor(budgetMs - (now() - started));
+        if (!(left >= MIN_ATTEMPT_MS)) break;
+        const timeoutMs = Math.min(opts.timeoutMs, left);
+        asked.add(hostKey(standIn));
+        mine.push({ voter: standIn, outcome: await castVote(standIn, claim, { ...opts, timeoutMs }) });
+      }
+    }
+  }
+
+  const [a, b] = slots as [VoteAttempt[], VoteAttempt[]];
   const lastA = a[a.length - 1]!;
   const lastB = b[b.length - 1]!;
-  // Belt and braces for rule 3: one model is never two votes.
+  // Belt and braces for rule 2: one model is never two votes.
   const label = hostKey(lastA.voter) === hostKey(lastB.voter) ? 'not-checked' : combineVotes(lastA.outcome, lastB.outcome);
   return {
     label,

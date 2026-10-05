@@ -13,17 +13,18 @@
  * process: a restart zeroes it, and `since` says when that happened, so a zero is never mistaken
  * for "nothing went wrong".
  *
- * THE CANARY. Once a day (and once shortly after boot), each voter is asked one claim that is
+ * THE CANARY. Every six hours (and once shortly after boot), each voter is asked one claim that is
  * true and one that is false. A voter that gets either wrong, or does not answer, is reported
  * `degraded` with the reason. It is NOT removed from the vote: the agreement rule already turns
  * a bad voter into not-checked, and silently swapping voters would change what a pass means
  * without anyone deciding it. CLASSIFY_CANARY=off turns the canary off.
  *
- * THE CANARY ALSO GATES THE BACKUPS (free-votes.ts THE FALLBACK, decided by Sean 2026-10-05). It
- * asks every backup the pair could use as well, and a backup stands in for a refused voter only
- * while its own canary reads `ok` (canaryOk). That is the swap being decided, not done silently:
- * same family, a host the pair already uses, and an authenticated right answer first. With the
- * canary off, no backup is ever `ok`, so none is used.
+ * THE CANARY ALSO GATES THE STAND-INS (free-votes.ts THE FALLBACK, decided by Sean 2026-10-05). It
+ * asks every model in the pool as well, and a model stands in for a voter that gave no answer only
+ * while its own canary reads `ok` (canaryOk): an authenticated right answer first, never an id from
+ * a docs page. Every six hours, not once a day, so a host that comes back is back within hours,
+ * and one that went wrong is out within hours. With the canary off, no stand-in is ever `ok`, so
+ * none is used.
  */
 import type { VoteLabel, VoteOutcome, Voter } from './free-votes';
 import type { VoterQuota } from './free-votes';
@@ -212,8 +213,14 @@ export function __resetClassifyStats(): void {
 
 let canaryTimer: ReturnType<typeof setInterval> | undefined;
 
-/** Starts the daily canary (first run after `firstDelayMs`). Idempotent; timers are unref'd. */
-export function startClassifyCanary(firstDelayMs = 60_000, everyMs = 24 * 60 * 60 * 1000): void {
+/**
+ * Two claims per model per run. With the default pool that is about twenty requests every six
+ * hours, each to a free tier or a model the pair already uses: small next to any day's quota.
+ */
+export const CANARY_EVERY_MS = 6 * 60 * 60 * 1000;
+
+/** Starts the canary (first run after `firstDelayMs`, then every `everyMs`). Idempotent; timers are unref'd. */
+export function startClassifyCanary(firstDelayMs = 60_000, everyMs = CANARY_EVERY_MS): void {
   if (canaryTimer || !canaryEnabled()) return;
   // L0 emergency halt: a halted process makes no outbound calls, the canary included.
   // Loaded lazily so importing the route never pulls in the database client.
