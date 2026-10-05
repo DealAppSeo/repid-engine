@@ -868,3 +868,28 @@ describe('the route says which path answered: by and voters', () => {
     });
   });
 });
+
+describe('the Cerebras qwen voter answers without reasoning (2026-10-05: empty content under the token cap)', () => {
+  const { qwenReasoning } = require('../src/classify/free-votes') as typeof import('../src/classify/free-votes');
+  const CEREBRAS_ENV = { CEREBRAS_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
+  const qwen = CROSS_FAMILY_VOTERS.find((v) => v.provider === 'cerebras')!;
+
+  it('sends reasoning_effort none by default', async () => {
+    const { impl, calls } = stubHost([{ content: 'TRUE' }]);
+    await castVote(qwen, 'Water boils at 100 C at sea level.', { env: CEREBRAS_ENV, fetchImpl: impl as never, timeoutMs: 1000 });
+    expect(calls[0]!.body.reasoning_effort).toBe('none');
+  });
+
+  it('CLASSIFY_QWEN_REASONING tunes it, and anything unknown stays none', () => {
+    expect(qwenReasoning({ CLASSIFY_QWEN_REASONING: 'low' } as NodeJS.ProcessEnv)).toBe('low');
+    expect(qwenReasoning({ CLASSIFY_QWEN_REASONING: ' HIGH ' } as NodeJS.ProcessEnv)).toBe('high');
+    expect(qwenReasoning({ CLASSIFY_QWEN_REASONING: 'max' } as NodeJS.ProcessEnv)).toBe('none');
+    expect(qwenReasoning({} as NodeJS.ProcessEnv)).toBe('none');
+  });
+
+  it('leaves the groq gpt-oss voter at low', async () => {
+    const { impl, calls } = stubHost([{ content: 'TRUE' }]);
+    await castVote(DEFAULT_VOTERS[0]!, 'Water boils at 100 C at sea level.', { env: ENV, fetchImpl: impl as never, timeoutMs: 1000 });
+    expect(calls[0]!.body.reasoning_effort).toBe('low');
+  });
+});

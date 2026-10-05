@@ -37,6 +37,9 @@
  *            each voter for UNSURE when a claim is true only under an assumption it does not
  *            state, so a famous-answer claim both voters would wrongly agree on reaches not-checked
  *            (and, with CLASSIFY_QUESTIONS=on, a question) instead of a pass.
+ *            The qwen voter sends reasoning_effort 'none' unless CLASSIFY_QWEN_REASONING=low (or
+ *            medium, high) says otherwise: with its host's default of high, the reasoning used the
+ *            whole token cap and the answer came back empty (free-votes.ts qwenReasoning).
  *
  * `by` and `voters` were added 2026-10-05 so a door can name what answered truthfully instead of
  * calling an arithmetic answer a vote. They are additive: every TrustShell client on its main at
