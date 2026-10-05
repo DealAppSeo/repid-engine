@@ -291,8 +291,8 @@ export function unparseableShape(content: unknown): UnparseableShape {
 const coolingUntil = new Map<string, number>();
 
 /**
- * Per-voter budget a minute, under each free tier's own limit (Groq 30, Cerebras 5, NVIDIA 40
- * requests a minute). B20 found one caller could drive the shared key into a 429 and park the
+ * Per-voter budget a minute, under each host's own limit for this account (Groq free tier 30,
+ * Cerebras Developer tier 300, NVIDIA 40 requests a minute). B20 found one caller could drive the shared key into a 429 and park the
  * voter for everyone; spending stops below the vendor's line instead, and a request over budget
  * abstains without a call. The route's per-IP limit still applies on top.
  */
@@ -300,7 +300,11 @@ const coolingUntil = new Map<string, number>();
 // one busy minute from spending the day. Its daily ceiling is enforced by Cloudflare (a 429).
 export const BUDGET_PER_MIN: Record<VoterProvider, number> = {
   groq: 24,
-  cerebras: 4,
+  // 24, not 4 (S26, Sean said GO 2026-10-05): the key is on Cerebras' paid Developer tier, which
+  // gives qwen-3.8-27b 300 a minute (inference-docs.cerebras.ai/support/rate-limits); its own
+  // header reports 648,000 requests a day, not the Free Trial's 5 a minute. 4 a minute capped
+  // every user at once: five replies inside 8 seconds gave a Not checked, measured 2026-10-05.
+  cerebras: 24,
   'nvidia-nim': 32,
   'workers-ai': 6,
 };

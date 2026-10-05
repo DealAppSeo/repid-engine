@@ -489,9 +489,9 @@ describe('B20 FIX FIRST on #1182: look-alikes, one family, one caller', () => {
     expect((await castVote(v, 'x', opts)).kind).toBe('verdict');
   });
 
-  it('every budget sits under its free tier (Groq 30, Cerebras 5, NVIDIA 40 a minute)', () => {
+  it("every budget sits under the host's limit for this account (Groq free 30, Cerebras Developer 300, NVIDIA 40 a minute)", () => {
     expect(BUDGET_PER_MIN.groq).toBeLessThan(30);
-    expect(BUDGET_PER_MIN.cerebras).toBeLessThan(5);
+    expect(BUDGET_PER_MIN.cerebras).toBeLessThan(300);
     expect(BUDGET_PER_MIN['nvidia-nim']).toBeLessThan(40);
   });
 });

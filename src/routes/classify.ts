@@ -250,6 +250,72 @@ export interface ClassifyRouterOptions {
   /** Requests per IP per window. */
   limit?: number;
   windowMs?: number;
+  /** Checks per visitor per UTC day; 0 is off. Defaults to CLASSIFY_DAILY_LIMIT, else 100. */
+  dailyLimit?: number;
+  /** Clock for the daily cap (tests). */
+  now?: () => number;
+}
+
+/**
+ * THE DAILY CAP (Sean said GO, 2026-10-05). The per-minute limit above stops a burst. It does not
+ * stop one visitor, or one script, sending 30 a minute all day: at that rate a single IP spends a
+ * voter's free allowance of 1,000 requests a day in about half an hour, and every other user's
+ * stamp goes to Not checked. So each visitor (the same IP key the minute limit uses) gets
+ * CLASSIFY_DAILY_LIMIT checks per UTC day, default 100. Past that the route answers 429 with
+ * label not-checked and when it resets, exactly like the minute limit: a miss is never a pass,
+ * and the extension already reads any non-200 as Not checked.
+ *
+ * WHY 100. The extension checks every reply on its own, so a busy day of chatting can be 100
+ * replies; a lower cap would hit the users who like it most. At about $0.0003 a check on paid
+ * tiers, 100 a day is at most about $0.03 per visitor. CLASSIFY_DAILY_LIMIT=0 (or off) turns the
+ * cap off. Counts are per process and reset at 00:00 UTC or on restart; production runs one
+ * replica, so one count per visitor. Only the count is held: an IP key and a number, never text.
+ */
+export const CLASSIFY_DEFAULT_DAILY_LIMIT = 100;
+
+export function dailyLimitFrom(raw: string | undefined): number {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === 'off' || v === '0') return 0;
+  return positiveInt(v, CLASSIFY_DEFAULT_DAILY_LIMIT);
+}
+
+function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function nextUtcMidnight(ms: number): number {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+}
+
+function dailyCap(limit: number, now: () => number) {
+  let day = '';
+  const counts = new Map<string, number>();
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (limit <= 0) return next();
+    const t = now();
+    const today = utcDay(t);
+    if (today !== day) {
+      // A new day: yesterday's counts go, all at once, so the map never outgrows one day.
+      day = today;
+      counts.clear();
+    }
+    const key = ipKeyGenerator(trustedClientIp(req));
+    const used = counts.get(key) ?? 0;
+    if (used >= limit) {
+      const resetsAt = nextUtcMidnight(t);
+      res.set('Retry-After', String(Math.max(1, Math.ceil((resetsAt - t) / 1000))));
+      res.status(429).json({
+        error: 'daily_limit',
+        label: NOT_CHECKED,
+        limit,
+        resets_at: new Date(resetsAt).toISOString(),
+      });
+      return;
+    }
+    counts.set(key, used + 1);
+    next();
+  };
 }
 
 function positiveInt(raw: string | undefined, fallback: number): number {
@@ -396,6 +462,10 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
     keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
     message: { error: 'too_many_requests', label: NOT_CHECKED },
   });
+  const capPerDay = dailyCap(
+    options.dailyLimit ?? dailyLimitFrom(process.env['CLASSIFY_DAILY_LIMIT']),
+    options.now ?? Date.now,
+  );
   const corsAny = cors({
     origin: '*',
     credentials: false,
@@ -415,6 +485,7 @@ export function createClassifyRouter(options: ClassifyRouterOptions = {}): Route
     '/classify',
     corsAny,
     limiter,
+    capPerDay,
     json({ limit: '64kb' }),
     async (req: Request, res: Response): Promise<void> => {
       const body: unknown = req.body;

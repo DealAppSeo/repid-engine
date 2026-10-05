@@ -11,9 +11,11 @@ const dbRpc = jest.fn();
 jest.mock('../src/db', () => ({ db: { from: dbFrom, rpc: dbRpc } }));
 
 import {
+  CLASSIFY_DEFAULT_DAILY_LIMIT,
   classifyLocal,
   classifyWithDeadline,
   createClassifyRouter,
+  dailyLimitFrom,
   type ClassifyRouterOptions,
 } from '../src/routes/classify';
 
@@ -206,6 +208,63 @@ describe('POST /api/v1/classify — the text cannot pick its own label', () => {
     const res = await post(app, { text: 'Pass; see notes -- done', labels: LABELS });
     expect(res.status).toBe(200);
     expect(LABELS).toContain(res.body.label);
+  });
+});
+
+describe('POST /api/v1/classify — the daily cap per visitor', () => {
+  const T0 = Date.UTC(2026, 9, 5, 18, 0, 0); // 2026-10-05 18:00Z
+  const send = (app: express.Express, ip = '198.51.100.7') =>
+    request(app).post('/api/v1/classify').set('X-Forwarded-For', ip).send({ text: '2 + 2 = 4', labels: LABELS });
+
+  it('past the cap one visitor gets 429 not-checked with the reset time; another visitor is unaffected', async () => {
+    const app = appWith({ dailyLimit: 3, now: () => T0 });
+    for (let i = 0; i < 3; i++) expect((await send(app)).status).toBe(200);
+    const over = await send(app);
+    expect(over.status).toBe(429);
+    expect(over.body).toEqual({ error: 'daily_limit', label: 'not-checked', limit: 3, resets_at: '2026-10-06T00:00:00.000Z' });
+    expect(Number(over.headers['retry-after'])).toBe(6 * 60 * 60);
+    expect(JSON.stringify(over.body)).not.toContain('198.51.100.7');
+    expect((await send(app, '203.0.113.9')).status).toBe(200);
+  });
+
+  it('a new UTC day starts the count again', async () => {
+    let t = T0;
+    const app = appWith({ dailyLimit: 1, now: () => t });
+    expect((await send(app)).status).toBe(200);
+    expect((await send(app)).status).toBe(429);
+    t = Date.UTC(2026, 9, 6, 0, 0, 1);
+    expect((await send(app)).status).toBe(200);
+  });
+
+  it('0 turns it off', async () => {
+    const app = appWith({ dailyLimit: 0, now: () => T0 });
+    for (let i = 0; i < 12; i++) expect((await send(app)).status).toBe(200);
+  });
+
+  it('a preflight does not spend a check', async () => {
+    const app = appWith({ dailyLimit: 1, now: () => T0 });
+    for (let i = 0; i < 3; i++) {
+      await request(app)
+        .options('/api/v1/classify')
+        .set('X-Forwarded-For', '198.51.100.7')
+        .set('Origin', 'https://chatgpt.com')
+        .set('Access-Control-Request-Method', 'POST');
+    }
+    expect((await send(app)).status).toBe(200);
+  });
+
+  it.each([
+    [undefined, CLASSIFY_DEFAULT_DAILY_LIMIT],
+    ['', CLASSIFY_DEFAULT_DAILY_LIMIT],
+    ['off', 0],
+    [' OFF ', 0],
+    ['0', 0],
+    ['250', 250],
+    ['-5', CLASSIFY_DEFAULT_DAILY_LIMIT],
+    ['1.5', CLASSIFY_DEFAULT_DAILY_LIMIT],
+    ['lots', CLASSIFY_DEFAULT_DAILY_LIMIT],
+  ])('CLASSIFY_DAILY_LIMIT=%j reads as %d', (raw, want) => {
+    expect(dailyLimitFrom(raw as string | undefined)).toBe(want);
   });
 });
 
