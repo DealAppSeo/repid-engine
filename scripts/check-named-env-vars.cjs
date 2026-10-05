@@ -108,6 +108,8 @@ const ALLOWLIST = {
     'B16 canary switch, read as env.CLASSIFY_CANARY in src/classify/vote-health.ts; generator misses parameter env reads.',
   CLASSIFY_MAX_PROSE_CHARS:
     'B15 prose cap, read as env.CLASSIFY_MAX_PROSE_CHARS in src/classify/free-votes.ts; generator misses parameter env reads.',
+  CLASSIFY_QUESTIONS:
+    'Clarifying-question switch (default off), read as env.CLASSIFY_QUESTIONS in src/classify/free-votes.ts questionsEnabled(env); generator misses parameter env reads.',
   GROK_API_KEY:
     'Composed at runtime via XAI_KEY_VARS; generator only captures literal process.env.NAME under src/.',
   XAI_API_KEY:
