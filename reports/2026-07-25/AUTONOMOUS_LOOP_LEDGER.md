@@ -8682,3 +8682,24 @@ PRs merged during this run's window (since 2026-10-05T04:33:25Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37264037531 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-05) — fifth run verified clean; Item 10 sweep wired into index.ts behind MEMORY_ROOT_ANCHOR_SWEEP_ENABLED (default off)
+
+**Prior beat verified [V] (2026-10-04, fifth run):**
+- PR #1201 (`feat(zkp): depth-D non-membership AIR — arbitrary-depth Merkle paths (Item 14 step 14.0-d)`): **MERGED** as `e7ff1103` — confirmed via `git log --grep="#1201"`. ✓
+- `zkp-vault/src/non_membership_depth_d.rs` exists; `pub mod non_membership_depth_d` in `lib.rs`. ✓
+- Fifth run's "10/10 new tests + 48/48 total" claim: **[R]** (not re-run from pre-fifth-run tree; `cargo test` confirms module exists and compiles). Directional claim holds.
+- Fifth run's design claim (1 ordering + 2D Merkle-path STARKs per depth D; chain-binding via public-input binding): **[V]** — read `non_membership_depth_d.rs`; `prove_non_membership_d` emits 1 `Proof<OrdConfig>` + 2D `Proof<MerkleConfig>` values; `verify_non_membership_d` recomputes all intermediate roots off-circuit and feeds them as public inputs to each sub-verifier. Cross-consistency enforced structurally. ✓
+- **Item 14 status [V]:** 14.0-a (ordering), 14.0-b (Merkle-path base), 14.0-c (DEPTH=1 bundle), 14.0-d (depth-D) all merged. Item 14 COMPLETE. ✓
+- **PR #1210** (`feat(classify): /classify/stats shows each voter's requests left today`): OPEN, MERGEABLE, all 10 checks SUCCESS including Strix Security Review. Not in fifth run scope; arming this beat. ✓
+- **Two auto-logged beats (runs 37250037738 + 37264037531):** both died before step 1; no PRs merged in those windows.
+- **Penalty verdict: NONE.** All fifth-run claims accurate; the [R] on test count is the run's own assertion, honestly flagged.
+
+**Current state [V]:** `origin/main` = `e5ae9dad`. Open PRs: **#1210** only (CLEAN, all checks green). Rust toolchain: confirmed present (cargo 1.98.1 from prior beats).
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-05-memory-anchor-sweep-wire` off `origin/main` `e5ae9dad`.**
+
+**Intent for steps 2-4:** Wire `runMemoryRootAnchorSweep` (`src/memory/memory-root-anchor-sweep.ts`) into `src/index.ts` behind `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED` (off|shadow|enforce, default=off). Shadow = dryRun:true (observes what would be anchored, zero gas). Enforce = real EAS anchoring (Sean GO). Also arm PR #1210 (SAFE-CLASS). This closes item 10's wiring gap per the same shadow-first pattern used for HEAT_EVICTION_ENABLED, CASCADE_SPECULATION_ENABLED, etc.
+
