@@ -1457,6 +1457,7 @@ if (!IS_TEST) {
   if (anchorSweepMode === 'shadow' || anchorSweepMode === 'enforce') {
     const isDryRun = anchorSweepMode === 'shadow';
     const runAnchorSweep = async () => {
+      if (await shouldParkForHalt(db, 'memoryRootAnchorSweep')) return;
       try {
         // L0 emergency halt: in enforce mode this spends EAS gas, so a halted process must not run it.
         if (await shouldParkForHalt(db, 'memoryRootAnchorSweep')) return;

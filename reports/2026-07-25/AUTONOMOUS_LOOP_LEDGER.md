@@ -8735,3 +8735,31 @@ PRs merged during this run's window (since 2026-10-05T12:37:04Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37310779545 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-05, second run) — prior beat's PR #1211 had emergency-halt test failure; fixed and pushed
+
+**Prior beat verified [V] (2026-10-05, first run):**
+- PR #1210 (`feat(classify): /classify/stats shows each voter's requests left today`): **MERGED** as confirmed via `gh pr view 1210 --json state,mergedAt`. ✓
+- PR #1211 (`feat(memory): wire memory-root anchor sweep into index.ts behind MEMORY_ROOT_ANCHOR_SWEEP_ENABLED gate`): **OPEN, MERGEABLE, test FAILURE** — confirmed. The prior beat's entry claimed `[V] tsc --noEmit exit 0; npx jest memory-root-anchor → 13/13 green` but the CI run (37338011020) shows FAIL on `tests/emergency-halt.test.ts`. Root cause: the new `setInterval` in `src/index.ts:1492` was not paired with a `shouldParkForHalt` gate call, tripping the per-loop gate-count invariant in `emergency-halt.test.ts:789` ("every tick-loop file has AT LEAST as many gate calls as loops"). Prior beat's test run only ran `memory-root-anchor` tests, missing the filesystem-walk guard. **Penalty: corrected here, not hidden.**
+- All other prior claims (PR #1201 merged, Item 14 complete) — already confirmed in the prior beat entry. No re-check needed.
+- Auto-logged run 37310779545 (beat result: success, no PRs merged): agent died before step 1, no ledger entry.
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-05-memory-anchor-sweep-wire`.**
+
+**Intent for steps 2-4:** Fix the `shouldParkForHalt` omission in PR #1211's `src/index.ts` addition, verify the full emergency-halt test suite passes, push the fix to the existing branch so CI re-runs clean.
+
+**STEP 2-4 — SHIPPED: one-line fix to `src/index.ts` [V].**
+- Added `if (await shouldParkForHalt(db, 'memoryRootAnchorSweep')) return;` as first line of `runAnchorSweep` (before the try/catch), matching the pattern used by every other gated tick loop in index.ts.
+- `npm test -- tests/emergency-halt.test.ts --forceExit` → **102/102 passed** [V, run in this runner].
+- Pushed to `feat/cc-2026-10-05-memory-anchor-sweep-wire`; CI re-triggering on the branch.
+- PR #1211 remains SAFE-CLASS (additive, default-off, zero scoring reach).
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change.
+2. **PR #1211** — once CI goes green + Strix clean, merge. SAFE-CLASS, `--auto --squash` appropriate.
+
+**Step 5 — what differed from intent:** Exactly as stated. The fix is one line; the test run confirmed 102/102. No scope added.
+
+**Next beat:** (1) Confirm #1211 merged. (2) Next non-Sean-gated backlog item — Item 3's authenticated per-agent retrieval endpoint (fetches `agent_memory_leaves` rows, calls `hydrateTree()`, returns `(content, inclusionProof, currentValidityProof, root)`) or check newly-opened PRs. (3) Verify whether `tx_hash` column exists on `agent_memory_roots` — if not, #1211's writeback will fail silently on `enforce` mode; may need a migration.
