@@ -108,6 +108,8 @@ const ALLOWLIST = {
     'B16 canary switch, read as env.CLASSIFY_CANARY in src/classify/vote-health.ts; generator misses parameter env reads.',
   CLASSIFY_MAX_PROSE_CHARS:
     'B15 prose cap, read as env.CLASSIFY_MAX_PROSE_CHARS in src/classify/free-votes.ts; generator misses parameter env reads.',
+  CLASSIFY_FALLBACK:
+    'Voter fallback kill switch (default on; "off" disables), read as env.CLASSIFY_FALLBACK in src/classify/free-votes.ts fallbackEnabled(env); generator misses parameter env reads.',
   CLASSIFY_QWEN_REASONING:
     'Cerebras qwen voter reasoning_effort (default none), read as env.CLASSIFY_QWEN_REASONING in src/classify/free-votes.ts qwenReasoning(env); generator misses parameter env reads.',
   CLASSIFY_QUESTIONS:

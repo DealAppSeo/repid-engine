@@ -18,10 +18,16 @@
  * `degraded` with the reason. It is NOT removed from the vote: the agreement rule already turns
  * a bad voter into not-checked, and silently swapping voters would change what a pass means
  * without anyone deciding it. CLASSIFY_CANARY=off turns the canary off.
+ *
+ * THE CANARY ALSO GATES THE BACKUPS (free-votes.ts THE FALLBACK, decided by Sean 2026-10-05). It
+ * asks every backup the pair could use as well, and a backup stands in for a refused voter only
+ * while its own canary reads `ok` (canaryOk). That is the swap being decided, not done silently:
+ * same family, a host the pair already uses, and an authenticated right answer first. With the
+ * canary off, no backup is ever `ok`, so none is used.
  */
 import type { VoteLabel, VoteOutcome, Voter } from './free-votes';
 import type { VoterQuota } from './free-votes';
-import { activeVoters, castVote, questionsEnabled, voterQuota } from './free-votes';
+import { castVote, questionsEnabled, standbyVoters, voterQuota } from './free-votes';
 
 interface VoterHealth {
   voter: string;
@@ -111,6 +117,11 @@ export function recordVotes(vs: readonly Voter[], outcomes: readonly VoteOutcome
   });
 }
 
+/** True only while this voter's latest canary answered both claims right in this process. */
+export function canaryOk(v: Voter): boolean {
+  return voters.get(keyOf(v))?.canary.status === 'ok';
+}
+
 export const CANARY_TRUE = 'Water is made of hydrogen and oxygen.';
 export const CANARY_FALSE = 'The Sun orbits the Earth.';
 
@@ -123,7 +134,7 @@ export async function runCanary(
   opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number; fetchImpl?: Parameters<typeof castVote>[2]['fetchImpl'] } = {},
 ): Promise<void> {
   const env = opts.env ?? process.env;
-  const vs = activeVoters(env);
+  const vs = standbyVoters(env);
   const timeoutMs = opts.timeoutMs ?? 10_000;
   await Promise.all(
     vs.map(async (v) => {
@@ -166,7 +177,7 @@ export interface ClassifyStats {
 }
 
 export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifyStats {
-  for (const v of activeVoters(env)) healthOf(v);
+  for (const v of standbyVoters(env)) healthOf(v);
   const total = labels.pass + labels.veto + labels['not-checked'];
   const stats: ClassifyStats = {
     since,

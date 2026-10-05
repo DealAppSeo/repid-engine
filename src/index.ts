@@ -85,6 +85,7 @@ import memoryRetrieveRouter from './routes/memory-retrieve';
 import memoryWalkVerifyRouter from './routes/memory-walk-verify';
 import memoryHeatStatusRouter from './routes/memory-heat-status';
 import memoryHeatEvictRouter from './routes/memory-heat-evict-route';
+import { runMemoryRootAnchorSweep } from './memory/memory-root-anchor-sweep';
 import proofCarryingEmitRouter from './routes/proof-carrying-emit';
 import subscribeRouter from './routes/subscribe';
 import { publicRouter as referralTrackRouter, statsRouter as referralStatsRouter } from './routes/referrals';
@@ -1446,6 +1447,54 @@ if (!IS_TEST && process.env.ENGINE_WORKERS_ENABLED !== 'false') {
 // Phase 2.11 — Dispute Resolution Worker
 const disputeWorker = new DisputeResolutionWorker();
 disputeWorker.start();
+
+// Item 10 — memory-root EAS anchor sweep (SCHEDULE-axis off-peak batching).
+// MEMORY_ROOT_ANCHOR_SWEEP_ENABLED: off (default) | shadow (dryRun, no gas) | enforce (real anchoring, Sean GO).
+// Shadow logs what *would* be anchored each off-peak hour; enforce spends real EAS gas.
+// Gate mirrors HEAT_EVICTION_ENABLED, CASCADE_SPECULATION_ENABLED, etc. — enable in Railway, not here.
+if (!IS_TEST) {
+  const anchorSweepMode = process.env['MEMORY_ROOT_ANCHOR_SWEEP_ENABLED'] ?? 'off';
+  if (anchorSweepMode === 'shadow' || anchorSweepMode === 'enforce') {
+    const isDryRun = anchorSweepMode === 'shadow';
+    const runAnchorSweep = async () => {
+      if (await shouldParkForHalt(db, 'memoryRootAnchorSweep')) return;
+      try {
+        // L0 emergency halt: in enforce mode this spends EAS gas, so a halted process must not run it.
+        if (await shouldParkForHalt(db, 'memoryRootAnchorSweep')) return;
+        const fetchPending = async () => {
+          const { data, error } = await db
+            .from('agent_memory_roots')
+            .select('id, agent_id, root, epoch, repid_snapshot, repid_agents!inner(tier)')
+            .is('eas_uid', null)
+            .order('created_at', { ascending: true });
+          if (error) throw error;
+          return ((data ?? []) as any[]).map((r: any) => ({
+            id: r.id as number,
+            agentId: r.agent_id as string,
+            tier: (r.repid_agents as any)?.tier as string,
+            root: r.root as string,
+            epoch: r.epoch as number,
+            repidSnapshot: r.repid_snapshot as number | null,
+          }));
+        };
+        const writeback = async (id: number, uid: string, _txHash: string | null) => {
+          const { error } = await db
+            .from('agent_memory_roots')
+            .update({ eas_uid: uid, anchored_at: new Date().toISOString() })
+            .eq('id', id);
+          if (error) throw error;
+        };
+        const result = await runMemoryRootAnchorSweep({ fetchPending, writeback, dryRun: isDryRun });
+        if (result.chosenCount > 0) {
+          console.log(`[memory-anchor-sweep] mode=${anchorSweepMode} off_peak=${result.isOffPeak} considered=${result.consideredCount} chosen=${result.chosenCount}`);
+        }
+      } catch (e: any) {
+        console.error('[memory-anchor-sweep] failed:', e?.message ?? e);
+      }
+    };
+    setInterval(() => { void runAnchorSweep(); }, 60 * 60 * 1000);
+  }
+}
 
 export { processCascadeQueue };
 export default app;

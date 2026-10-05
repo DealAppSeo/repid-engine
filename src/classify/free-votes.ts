@@ -27,6 +27,12 @@
  * answered UNSURE may go ONCE more to the first of those hosts, for a clarifying question (THE
  * CLARIFYING QUESTION, at the end of this file): one more request, never a new destination.
  *
+ * FALLBACK (Sean, 2026-10-05: "we need automated fallback for graceful degradation"). A voter that
+ * was refused BEFORE any request (over its per-minute budget, cooling after a 429, no key, a
+ * retired id) hands its slot to a backup of the SAME family, on a host the pair already uses, that
+ * the canary has seen answer correctly. See VOTER_BACKUPS below. A vote that was sent is never
+ * re-asked elsewhere, so an UNSURE, a timeout or an odd answer cannot be shopped for a verdict.
+ *
  * UNLESS THE DATA-LOCALITY BOUNDARY IS ENGAGED (ONLY_ATTESTATIONS_LEAVE). Then every vote is
  * refused before any request and abstains `boundary`, so the label is not-checked. See
  * voteBoundaryOn below. Until 2026-10-05 the votes did not consult the guard at all: a probe
@@ -492,7 +498,14 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
   // own field. Under max_tokens 400 the reasoning used the whole budget and `content` came back
   // EMPTY: 124 of 142 not-checked labels on 2026-10-05, measured by the unparseable_shapes counter
   // (#1204) as 'empty'. Cerebras documents reasoning_effort 'none' for one-word answers.
-  if (voter.provider === 'cerebras' && voter.model.startsWith('qwen')) body.reasoning_effort = qwenReasoning(env);
+  // Groq serves the same qwen with the same switch (console.groq.com/docs/model/qwen/qwen3.8-27b:
+  // reasoning_effort "none" is its instruct mode), so the backup gets the same setting.
+  if (
+    (voter.provider === 'cerebras' || voter.provider === 'groq') &&
+    modelFamily(voter.model) === 'qwen'
+  ) {
+    body.reasoning_effort = qwenReasoning(env);
+  }
   if (opts.extraBody) {
     const fixed = { model: body.model, messages: body.messages, temperature: body.temperature, max_tokens: body.max_tokens };
     Object.assign(body, opts.extraBody, fixed);
@@ -539,20 +552,128 @@ export function combineVotes(a: VoteOutcome, b: VoteOutcome): VoteLabel {
   return 'not-checked';
 }
 
-export interface FreeVoteResult {
-  label: VoteLabel;
-  outcomes: VoteOutcome[];
+/**
+ * THE FALLBACK. Each slot of the pair may hand over to a backup, in order. WHY: on 2026-10-05 the
+ * real extension, five replies inside 8 seconds, got four stamps and one Not checked, and a second
+ * burst got five Not checked, all `abstains: {budget}` on Cerebras. Its budget is 4 a minute for
+ * every user at once; Groq's free tier is 1,000 requests a day per model. A capped voter turned
+ * every check into Not checked until the minute or the day rolled over.
+ *
+ * THE RULES, each pinned by tests/classify-fallback.test.ts:
+ * 1. ONLY AFTER A REFUSAL THAT SENT NOTHING (FALLBACK_ON). A vote that reached its host and came
+ *    back UNSURE, late, garbled or 5xx is that slot's answer. Re-asking would shop for a verdict,
+ *    and would put the claim on the wire twice for one slot.
+ * 2. SAME FAMILY as the primary it replaces (modelFamily), so the pair's independence never drops:
+ *    gpt-oss stands in for gpt-oss, qwen for qwen. Never one family twice where two were promised.
+ * 3. A HOST THE PAIR ALREADY USES, and never a voter already in the pair. The claim reaches no new
+ *    destination, and one model cannot be counted as two votes.
+ * 4. ONLY ONCE THE CANARY HAS SEEN IT ANSWER RIGHT (the route passes vote-health's canaryOk). An id
+ *    from a docs page is not evidence it answers on this account (src/hal/retired-models.ts); the
+ *    canary's authenticated call is. Until then, or with CLASSIFY_CANARY=off, a backup is never used.
+ * CLASSIFY_FALLBACK=off turns it all off.
+ *
+ * THE BACKUPS. Groq's free tier gives each model its own allowance (30 a minute, 1,000 a day,
+ * console.groq.com/docs/rate-limits):
+ * - gpt-oss-120b -> gpt-oss-20b on Groq. Live on this account: 608 successful calls in llm_call_log
+ *   in the 21 days to 2026-10-05 [MEASURED].
+ * - qwen-3.8-27b on Cerebras -> the SAME model on Groq, `qwen/qwen3.8-27b`. Listed by Groq as a
+ *   PREVIEW model (may be withdrawn at short notice), and NOT yet seen answering on this account,
+ *   which is what rule 4 is for: withdrawn or never live, it simply stays unused.
+ */
+export const VOTER_BACKUPS: Readonly<Record<string, readonly Voter[]>> = {
+  'groq:openai/gpt-oss-120b': [{ provider: 'groq', model: 'openai/gpt-oss-20b' }],
+  'cerebras:qwen-3.8-27b': [{ provider: 'groq', model: 'qwen/qwen3.8-27b' }],
+};
+
+/** Refusals that put nothing on the wire (SENT is false) and say nothing about the claim. */
+const FALLBACK_ON: ReadonlySet<AbstainReason> = new Set<AbstainReason>(['budget', 'cooling', 'no_key', 'retired_model']);
+
+export function fallbackEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.CLASSIFY_FALLBACK ?? '').trim().toLowerCase() !== 'off';
 }
 
-/** Runs both votes in parallel. Never throws. */
+/** A model's family, from its id: 'gpt-oss', 'qwen', 'llama', or the bare id when unknown. */
+export function modelFamily(model: string): string {
+  const id = (model.toLowerCase().split('/').pop() ?? '').trim();
+  if (id.startsWith('gpt-oss')) return 'gpt-oss';
+  if (id.startsWith('qwen')) return 'qwen';
+  if (id.includes('llama')) return 'llama';
+  return id;
+}
+
+/** The backups `primary` may hand its slot to, in order, under rules 2 and 3. */
+export function backupsFor(primary: Voter, pair: readonly Voter[]): readonly Voter[] {
+  const inPair = new Set(pair.map(hostKey));
+  const hosts = new Set(pair.map((v) => v.provider));
+  return (VOTER_BACKUPS[hostKey(primary)] ?? []).filter(
+    (b) => modelFamily(b.model) === modelFamily(primary.model) && hosts.has(b.provider) && !inPair.has(hostKey(b)),
+  );
+}
+
+/** The pair plus every backup it could use: what the canary asks and the stats list. */
+export function standbyVoters(env: NodeJS.ProcessEnv = process.env): readonly Voter[] {
+  const pair = activeVoters(env);
+  if (!fallbackEnabled(env)) return pair;
+  const out = [...pair];
+  for (const v of pair) {
+    for (const b of backupsFor(v, pair)) if (!out.some((o) => hostKey(o) === hostKey(b))) out.push(b);
+  }
+  return out;
+}
+
+export interface VoteAttempt {
+  voter: Voter;
+  outcome: VoteOutcome;
+}
+
+async function castSlot(
+  primary: Voter,
+  pair: readonly Voter[],
+  claim: string,
+  opts: VoteOptions & { backupReady?: (v: Voter) => boolean },
+): Promise<VoteAttempt[]> {
+  const tried: VoteAttempt[] = [{ voter: primary, outcome: await castVote(primary, claim, opts) }];
+  if (!opts.backupReady || !fallbackEnabled(opts.env ?? process.env)) return tried;
+  for (const b of backupsFor(primary, pair)) {
+    const last = tried[tried.length - 1]!.outcome;
+    if (last.kind !== 'abstain' || !FALLBACK_ON.has(last.reason)) break;
+    if (!opts.backupReady(b)) continue;
+    tried.push({ voter: b, outcome: await castVote(b, claim, opts) });
+  }
+  return tried;
+}
+
+export interface FreeVoteResult {
+  label: VoteLabel;
+  /** One per slot: the outcome that decided it (the primary's, or the backup's that stood in). */
+  outcomes: VoteOutcome[];
+  /** One per slot: the voter whose outcome that is. */
+  deciders: Voter[];
+  /** Every vote cast, in slot order, including a primary refused before a backup stood in. */
+  attempts: VoteAttempt[];
+}
+
+/**
+ * Runs both slots in parallel. Never throws. Backups are used only when `backupReady` is given
+ * (the route passes the canary's verdict); every other caller gets exactly the pair.
+ */
 export async function classifyByFreeVotes(
   claim: string,
-  opts: VoteOptions & { voters?: readonly Voter[] },
+  opts: VoteOptions & { voters?: readonly Voter[]; backupReady?: (v: Voter) => boolean },
 ): Promise<FreeVoteResult> {
   const env = opts.env ?? process.env;
   const voters = opts.voters ?? activeVoters(env);
-  const [a, b] = await Promise.all([castVote(voters[0]!, claim, opts), castVote(voters[1]!, claim, opts)]);
-  return { label: combineVotes(a, b), outcomes: [a, b] };
+  const [a, b] = await Promise.all([castSlot(voters[0]!, voters, claim, opts), castSlot(voters[1]!, voters, claim, opts)]);
+  const lastA = a[a.length - 1]!;
+  const lastB = b[b.length - 1]!;
+  // Belt and braces for rule 3: one model is never two votes.
+  const label = hostKey(lastA.voter) === hostKey(lastB.voter) ? 'not-checked' : combineVotes(lastA.outcome, lastB.outcome);
+  return {
+    label,
+    outcomes: [lastA.outcome, lastB.outcome],
+    deciders: [lastA.voter, lastB.voter],
+    attempts: [...a, ...b],
+  };
 }
 
 /**
