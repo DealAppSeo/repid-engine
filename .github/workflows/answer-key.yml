@@ -1,0 +1,39 @@
+# Re-run the answer key's checks against the live public records (S46).
+#
+# workflow_dispatch only: it reads npm, PyPI and Wikidata, so it must never run on every push.
+# A GitHub runner reaches wikidata.org directly, so nothing is relayed here. No secrets are needed
+# unless GOOGLE_FACT_CHECK_API_KEY is set as a repository secret; without it the published
+# fact-check row stays NOT CHECKED, which is the honest answer.
+name: answer-key
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: seed file to check
+        default: eval/answer-key/seed-2026-10-06.jsonl
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --legacy-peer-deps
+      - name: check every claim against its record
+        env:
+          SEED: ${{ inputs.seed }}
+          GOOGLE_FACT_CHECK_API_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
+        run: npm run answer-key -- check "$SEED" --run-id "run-$(date -u +%Y-%m-%d)-gh${{ github.run_id }}" --out answer-key-run.jsonl --sql answer-key-run.sql
+      - uses: actions/upload-artifact@v4
+        with:
+          name: answer-key-run
+          path: |
+            answer-key-run.jsonl
+            answer-key-run.sql
