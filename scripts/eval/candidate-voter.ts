@@ -37,8 +37,12 @@ import {
   BUDGET_PER_MIN,
   castVote,
   combineVotes,
+  encodeClaim,
   FAILURE_COOL_MS,
+  parseVerdict,
   parseVoters,
+  unparseableShape,
+  votePrompt,
   voteWasSent,
   type Verdict,
   type VoteLabel,
@@ -139,6 +143,8 @@ export function modelsUrl(voter: Voter, env: NodeJS.ProcessEnv = process.env): s
   if (voter.provider === 'groq') return PROVIDER_URLS.groqChatCompletions.replace(/\/chat\/completions$/, '/models');
   if (voter.provider === 'cerebras') return PROVIDER_URLS.cerebrasChatCompletions.replace(/\/chat\/completions$/, '/models');
   if (voter.provider === 'openrouter') return PROVIDER_URLS.openrouterChatCompletions.replace(/\/chat\/completions$/, '/models');
+  if (voter.provider === 'together') return PROVIDER_URLS.togetherChatCompletions.replace(/\/chat\/completions$/, '/models');
+  if (voter.provider === 'mistral') return PROVIDER_URLS.mistralChatCompletions.replace(/\/chat\/completions$/, '/models');
   if (voter.provider === 'workers-ai') {
     const account = (env.CLOUDFLARE_ACCOUNT_ID ?? '').trim().toLowerCase();
     if (!/^[0-9a-f]{32}$/.test(account)) return null;
@@ -154,17 +160,220 @@ export async function listedModels(
   fetchImpl: typeof fetch = fetch,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Set<string> | null> {
-  const url = modelsUrl(voter, env);
+  return readModelList(modelsUrl(voter, env), { Authorization: `Bearer ${key}` }, fetchImpl);
+}
+
+/** A host's model ids from its list URL, or null when it could not be read (NOT_CHECKED). */
+export async function readModelList(
+  url: string | null,
+  headers: Record<string, string>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Set<string> | null> {
   if (!url) return null;
   try {
-    const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${key}` } });
+    const res = await fetchImpl(url, { headers });
     if (!res.ok) return null;
-    // OpenAI shape: { data: [{ id }] }. Cloudflare: { result: [{ name }] }.
-    const json = (await res.json()) as { data?: Array<{ id?: unknown }>; result?: Array<{ name?: unknown }> };
-    const ids = [...(json.data ?? []).map((m) => m.id), ...(json.result ?? []).map((m) => m.name)];
-    return new Set(ids.filter((id): id is string => typeof id === 'string'));
+    return idsFromModelList(await res.json());
   } catch {
     return null;
+  }
+}
+
+/**
+ * Model ids from a host's list, whatever its shape: OpenAI `{ data: [{ id }] }`, Cloudflare
+ * `{ result: [{ name }] }`, Cohere `{ models: [{ name }] }`, Together's bare `[{ id }]`.
+ */
+export function idsFromModelList(json: unknown): Set<string> {
+  const j = json as { data?: unknown[]; result?: unknown[]; models?: unknown[] } | unknown[];
+  const rows: unknown[] = Array.isArray(j) ? j : [...(j.data ?? []), ...(j.result ?? []), ...(j.models ?? [])];
+  const ids = rows.map((m) => {
+    const r = (m ?? {}) as { id?: unknown; name?: unknown };
+    return typeof r.id === 'string' ? r.id : r.name;
+  });
+  return new Set(ids.filter((id): id is string => typeof id === 'string'));
+}
+
+/**
+ * EVAL-ONLY HOSTS (Sean, 2026-10-06: "we should test them all"). Hosts the production voting code
+ * does not know. They live here, not in src/, so adding one to a trial cannot route a user's text
+ * anywhere: a winner reaches production only through src/classify, the privacy page and Sean's GO,
+ * like every checker before it. Each call uses the production prompt, claim encoding, token cap and
+ * parser (votePrompt, encodeClaim, parseVerdict), so the answers are comparable with the baseline.
+ *
+ * Endpoints and quirks are from each vendor's own docs, read 2026-10-06; none was called from the
+ * agent sandbox (its network policy refuses them), so the first run is the first measurement.
+ */
+export interface EvalHost {
+  chatUrl: (env: NodeJS.ProcessEnv) => string | null;
+  /** null: the host publishes no model list; the id is taken as given. */
+  modelsUrl: (env: NodeJS.ProcessEnv) => string | null;
+  keyVar: string;
+  perMin: number;
+  listHeaders?: (key: string) => Record<string, string>;
+  /** Some models reject a non-default temperature outright (400 on every call). */
+  sendsTemperature?: (model: string) => boolean;
+  note: string;
+}
+
+const fixedUrl = (u: string) => () => u;
+function litellmBase(env: NodeJS.ProcessEnv): string | null {
+  const raw = (env.LITELLM_URL ?? '').trim();
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+export const EVAL_HOSTS: Record<string, EvalHost> = {
+  deepseek: {
+    chatUrl: fixedUrl('https://api.deepseek.com/chat/completions'),
+    modelsUrl: fixedUrl('https://api.deepseek.com/models'),
+    keyVar: 'DEEPSEEK_API_KEY',
+    perMin: 60,
+    note: 'thinking is ON by default and temperature is ignored while it is; send {"thinking":{"type":"disabled"}}',
+  },
+  xai: {
+    chatUrl: fixedUrl('https://api.x.ai/v1/chat/completions'),
+    modelsUrl: fixedUrl('https://api.x.ai/v1/models'),
+    keyVar: 'XAI_API_KEY',
+    perMin: 60,
+    note: 'use a non-reasoning model id (e.g. grok-4.20-0309-non-reasoning)',
+  },
+  gemini: {
+    chatUrl: fixedUrl('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'),
+    modelsUrl: fixedUrl('https://generativelanguage.googleapis.com/v1beta/openai/models'),
+    keyVar: 'GEMINI_API_KEY',
+    perMin: 10,
+    note: 'free-tier prompts may be used by Google; the labelled corpus is public, a user\'s text is not. {"reasoning_effort":"none"} on 2.5 Flash / Flash-Lite',
+  },
+  anthropic: {
+    chatUrl: fixedUrl('https://api.anthropic.com/v1/chat/completions'),
+    modelsUrl: fixedUrl('https://api.anthropic.com/v1/models'),
+    listHeaders: (key) => ({ 'x-api-key': key, 'anthropic-version': '2023-06-01' }),
+    keyVar: 'ANTHROPIC_API_KEY',
+    perMin: 40,
+    // Claude 5-family and Opus 4.7/4.8 answer 400 to any non-default temperature; Haiku 4.5 accepts 0.
+    sendsTemperature: (model) => /haiku/i.test(model),
+    note: 'OpenAI-compatibility layer; temperature is sent only to Haiku',
+  },
+  cohere: {
+    chatUrl: fixedUrl('https://api.cohere.ai/compatibility/v1/chat/completions'),
+    modelsUrl: fixedUrl('https://api.cohere.com/v1/models?endpoint=chat'),
+    keyVar: 'COHERE_API_KEY',
+    perMin: 15,
+    note: 'a trial key allows 20 a minute and 1,000 calls a month, and is not for production',
+  },
+  perplexity: {
+    chatUrl: fixedUrl('https://api.perplexity.ai/router/v1/chat/completions'),
+    modelsUrl: fixedUrl('https://api.perplexity.ai/router/v1/models'),
+    keyVar: 'PERPLEXITY_API_KEY',
+    perMin: 40,
+    note: 'the Router endpoint; Sonar chat completions ended 2026-09-27',
+  },
+  asi1: {
+    chatUrl: fixedUrl('https://api.asi1.ai/v1/chat/completions'),
+    modelsUrl: () => null,
+    keyVar: 'ASI1_API_KEY',
+    perMin: 20,
+    note: 'no model list; {"enable_thinking":false} for asi1-mini',
+  },
+  huggingface: {
+    chatUrl: fixedUrl('https://router.huggingface.co/v1/chat/completions'),
+    modelsUrl: fixedUrl('https://router.huggingface.co/v1/models'),
+    keyVar: 'HUGGINGFACE_API_TOKEN',
+    perMin: 20,
+    note: 'Inference Providers router; free accounts get $0.10 a month of credit',
+  },
+  litellm: {
+    chatUrl: (env) => {
+      const b = litellmBase(env);
+      return b ? `${b}/v1/chat/completions` : null;
+    },
+    modelsUrl: (env) => {
+      const b = litellmBase(env);
+      return b ? `${b}/v1/models` : null;
+    },
+    keyVar: 'LITELLM_MASTER_KEY',
+    perMin: 30,
+    note: 'our own gateway (LITELLM_URL); it reaches whatever it is configured with',
+  },
+};
+
+/** Production voters' own ids: trialling them would spend production's quota. */
+const SHARED_QUOTA = new Set(['groq:openai/gpt-oss-120b', 'groq:openai/gpt-oss-20b', 'groq:qwen/qwen3.8-27b']);
+export function sharesProductionQuota(provider: string, model: string): boolean {
+  return provider === 'cerebras' || SHARED_QUOTA.has(`${provider}:${model}`);
+}
+
+/**
+ * One vote from an eval-only host, asked exactly as production asks (system prompt, encoded
+ * claim, 400-token cap, temperature 0 where the model accepts it) and parsed by the production
+ * parser. A 429 waits for Retry-After (20 s if absent) and asks again, up to 3 times: the host's
+ * pacing, not the model's answer.
+ */
+export async function castEvalVote(
+  cfg: EvalHost,
+  model: string,
+  claim: string,
+  opts: {
+    key: string;
+    timeoutMs: number;
+    env?: NodeJS.ProcessEnv;
+    extraBody?: Record<string, unknown>;
+    fetchImpl?: ProviderFetch;
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<VoteOutcome> {
+  const env = opts.env ?? process.env;
+  const url = cfg.chatUrl(env);
+  if (!url) return { kind: 'abstain', reason: 'no_key' };
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: 400,
+    messages: [
+      { role: 'system', content: votePrompt(env) },
+      { role: 'user', content: encodeClaim(claim) },
+    ],
+  };
+  if (cfg.sendsTemperature?.(model) ?? true) body.temperature = 0;
+  if (opts.extraBody) {
+    const fixed: Record<string, unknown> = { model: body.model, messages: body.messages, max_tokens: body.max_tokens };
+    if ('temperature' in body) fixed.temperature = body.temperature;
+    Object.assign(body, opts.extraBody, fixed);
+  }
+  const doFetch = opts.fetchImpl ?? providerFetch;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 0; ; attempt += 1) {
+    let res: Response;
+    try {
+      res = await doFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.key}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(opts.timeoutMs),
+      });
+    } catch (e) {
+      const name = e instanceof Error ? e.name : '';
+      return { kind: 'abstain', reason: name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'network' };
+    }
+    if (res.status === 429 && attempt < 3) {
+      const after = Number(res.headers.get('retry-after'));
+      await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 120) * 1000 : 20_000);
+      continue;
+    }
+    if (res.status === 429) return { kind: 'abstain', reason: 'rate_limited' };
+    if (!res.ok) return { kind: 'abstain', reason: 'http_error' };
+    let content: unknown;
+    try {
+      content = ((await res.json()) as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
+    } catch {
+      content = undefined;
+    }
+    const verdict = parseVerdict(content);
+    return verdict ? { kind: 'verdict', verdict } : { kind: 'abstain', reason: 'unparseable', shape: unparseableShape(content) };
   }
 }
 
@@ -332,32 +541,70 @@ const KEY_VAR: Record<Voter['provider'], string> = {
   fireworks: 'FIREWORKS_API_KEY',
 };
 
-async function main(): Promise<number> {
-  const spec = arg('voter');
+/** What a --voter spec names: a production voter host, or an eval-only host (EVAL_HOSTS). */
+export type Candidate =
+  | { kind: 'voter'; spec: string; provider: string; model: string; voter: Voter }
+  | { kind: 'eval'; spec: string; provider: string; model: string; host: EvalHost };
+
+export function parseCandidate(raw: string | undefined): Candidate | null {
+  const spec = (raw ?? '').trim();
+  const i = spec.indexOf(':');
+  if (i <= 0 || i === spec.length - 1) return null;
+  const provider = spec.slice(0, i);
+  const model = spec.slice(i + 1);
+  const host = EVAL_HOSTS[provider];
+  if (host) return { kind: 'eval', spec, provider, model, host };
   // parseVoters wants a pair; give it the candidate twice and take one.
-  const voter = spec ? parseVoters(`${spec},${spec}`)[0] : undefined;
-  if (!spec || !voter || `${voter.provider}:${voter.model}` !== spec.trim()) {
-    console.error('usage: --voter <groq|cerebras|nvidia-nim|workers-ai|openrouter|zai|mistral|together|fireworks>:<model id> [--extra-body <json>] [--limit N] [--out file]');
+  const voter = parseVoters(`${spec},${spec}`)[0];
+  if (!voter || `${voter.provider}:${voter.model}` !== spec) return null;
+  return { kind: 'voter', spec, provider, model, voter };
+}
+
+async function main(): Promise<number> {
+  const cand = parseCandidate(arg('voter'));
+  if (!cand) {
+    console.error(
+      `usage: --voter <host>:<model id>, host one of groq|cerebras|nvidia-nim|workers-ai|openrouter|zai|mistral|together|fireworks|${Object.keys(EVAL_HOSTS).join('|')} [--extra-body <json>] [--limit N] [--out file]`,
+    );
     return 1;
   }
-  if ((voter.provider === 'groq' || voter.provider === 'cerebras') && !process.argv.includes('--allow-shared-quota')) {
-    console.error(`REFUSED: ${voter.provider} shares its quota with production. Pass --allow-shared-quota only with headroom on /api/v1/classify/stats.`);
+  const spec = cand.spec;
+  if (sharesProductionQuota(cand.provider, cand.model) && !process.argv.includes('--allow-shared-quota')) {
+    console.error(`REFUSED: ${spec} is a production voter and shares its quota. Pass --allow-shared-quota only with headroom on /api/v1/classify/stats.`);
     return 1;
   }
-  const key = (process.env[KEY_VAR[voter.provider]] ?? '').trim();
+  const keyVar = cand.kind === 'eval' ? cand.host.keyVar : KEY_VAR[cand.voter.provider];
+  const key = (process.env[keyVar] ?? '').trim();
   if (!key) {
-    console.log(`NOT_CHECKED: ${KEY_VAR[voter.provider]} is not set in this session`);
+    console.log(`NOT_CHECKED: ${keyVar} is not set in this session`);
     return 2;
   }
-  const listed = await listedModels(voter, key, fetch, process.env);
-  if (!listed) {
-    console.log(`NOT_CHECKED: could not read the model list from the ${voter.provider} host (network policy or key)`);
+  if (cand.kind === 'eval' && !cand.host.chatUrl(process.env)) {
+    console.log(`NOT_CHECKED: ${cand.provider} has no usable endpoint in this session (for litellm, set LITELLM_URL)`);
     return 2;
   }
-  if (!listed.has(voter.model)) {
-    const near = [...listed].filter((id) => id.split('/').pop()!.slice(0, 6) === voter.model.split('/').pop()!.slice(0, 6));
-    console.log(`NOT_CHECKED: ${voter.model} is not listed by the host${near.length ? `; listed near it: ${near.join(', ')}` : ''}`);
-    return 2;
+  if (cand.kind === 'eval') console.log(`${cand.provider}: ${cand.host.note}`);
+
+  // The id must be on the host's own list. A host that publishes none is said so, and the id is
+  // taken as given: a wrong one stops the run at STREAK_LIMIT with the host's own error.
+  const listUrl = cand.kind === 'eval' ? cand.host.modelsUrl(process.env) : modelsUrl(cand.voter, process.env);
+  const noList = cand.kind === 'eval' ? listUrl === null : cand.provider === 'fireworks';
+  if (noList) {
+    console.log(`${cand.provider} publishes no model list this harness reads; ${cand.model} is taken as given`);
+  } else {
+    const listed =
+      cand.kind === 'eval'
+        ? await readModelList(listUrl, cand.host.listHeaders?.(key) ?? { Authorization: `Bearer ${key}` })
+        : await listedModels(cand.voter, key, fetch, process.env);
+    if (!listed) {
+      console.log(`NOT_CHECKED: could not read the model list from the ${cand.provider} host (network policy or key)`);
+      return 2;
+    }
+    if (!listed.has(cand.model)) {
+      const near = [...listed].filter((id) => id.split('/').pop()!.slice(0, 6) === cand.model.split('/').pop()!.slice(0, 6));
+      console.log(`NOT_CHECKED: ${cand.model} is not listed by the host${near.length ? `; listed near it: ${near.join(', ')}` : ''}`);
+      return 2;
+    }
   }
 
   let extraBody: Record<string, unknown> | undefined;
@@ -373,20 +620,24 @@ async function main(): Promise<number> {
 
   const corpus = readJsonl<{ row_id: string; claim: string }>('eval/rigorous/rigorous-corpus-v1.jsonl');
   const baseline = readJsonl<BaselineRow>('eval/rigorous/baseline-classify-2026-10-05.jsonl');
-  const safe = voter.model.replace(/[^a-z0-9.-]+/gi, '_');
-  const out = arg('out') ?? `eval/rigorous/candidate-${voter.provider}-${safe}.jsonl`;
+  const safe = cand.model.replace(/[^a-z0-9.-]+/gi, '_');
+  const out = arg('out') ?? `eval/rigorous/candidate-${cand.provider}-${safe}.jsonl`;
   const done = new Set(existsSync(out) ? readJsonl<CandidateRow>(out).map((r) => r.row_id) : []);
   const limit = Number(arg('limit') ?? corpus.length);
   const todo = corpus.filter((c) => !done.has(c.row_id)).slice(0, Math.max(0, limit));
   // Stay under the voter's per-minute budget, so a run never trips the host's limit.
-  const pauseMs = Math.ceil(60_000 / BUDGET_PER_MIN[voter.provider]) + 50;
-  console.log(`${voter.provider}:${voter.model} — ${done.size} done, ${todo.length} to run, one every ${pauseMs} ms`);
+  const perMin = cand.kind === 'eval' ? cand.host.perMin : BUDGET_PER_MIN[cand.voter.provider];
+  const pauseMs = Math.ceil(60_000 / perMin) + 50;
+  console.log(`${spec} — ${done.size} done, ${todo.length} to run, one every ${pauseMs} ms`);
 
   const hostSaid = new Map<number, string>();
   const fetchImpl = recordingFetch(hostSaid);
   let n = 0;
   const run = await askAll(todo, {
-    cast: (claim) => castVote(voter, claim, { timeoutMs: 15_000, extraBody, fetchImpl }),
+    cast: (claim) =>
+      cand.kind === 'eval'
+        ? castEvalVote(cand.host, cand.model, claim, { key, timeoutMs: 15_000, extraBody, fetchImpl })
+        : castVote(cand.voter, claim, { timeoutMs: 15_000, extraBody, fetchImpl }),
     record: (row) => {
       appendFileSync(out, `${JSON.stringify(row)}\n`);
       n += 1;
@@ -405,23 +656,23 @@ async function main(): Promise<number> {
   const failed = run.stopped !== null && run.stopped !== 'budget';
   if (profile.TRUE + profile.FALSE + profile.UNSURE === 0 || failed) {
     const msg =
-      `NOT_CHECKED: ${spec.trim()} gave ${profile.TRUE + profile.FALSE + profile.UNSURE} verdicts in ${rows.length} calls` +
+      `NOT_CHECKED: ${spec} gave ${profile.TRUE + profile.FALSE + profile.UNSURE} verdicts in ${rows.length} calls` +
       `${profile.abstain ? ` (abstains: ${abstainNote(profile.abstainWhy)})` : ''}${failed ? `; stopped: ${run.stopped}` : ''}. No findings row.`;
     console.log(msg);
     if (process.env.GITHUB_STEP_SUMMARY) {
       const said = [...hostSaid].map(([st, t]) => `- HTTP ${st}: ${t || '(empty body)'}`).join('\n');
-      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Candidate voter: \`${spec.trim()}\`\n\n${msg}\n${said ? `\nWhat the host said:\n${said}\n` : ''}`);
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Candidate voter: \`${spec}\`\n\n${msg}\n${said ? `\nWhat the host said:\n${said}\n` : ''}`);
     }
     return 2;
   }
   const summary = pairSummary(baseline, rows);
   console.log(JSON.stringify(summary, null, 2));
-  const row = findingsRow(new Date().toISOString().slice(0, 10), spec.trim(), summary, profile);
+  const row = findingsRow(new Date().toISOString().slice(0, 10), spec, summary, profile);
   console.log(`\nfindings row for eval/candidates/README.md:\n${row}`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
-      `### Candidate voter: \`${spec.trim()}\`\n\n${FINDINGS_HEADER}\n${row}\n\n<details><summary>pairing detail</summary>\n\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\`\n</details>\n`,
+      `### Candidate voter: \`${spec}\`\n\n${FINDINGS_HEADER}\n${row}\n\n<details><summary>pairing detail</summary>\n\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\`\n</details>\n`,
     );
   }
   return 0;

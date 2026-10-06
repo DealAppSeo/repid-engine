@@ -38,10 +38,20 @@ claim asked again. Eight failed calls in a row stop the run, and the log prints 
 model gave no verdict, or that stopped on failures, prints **NOT_CHECKED and no row**, and the job
 goes red (exit 2).
 
-Each host needs its key as a repository secret (Settings → Secrets and variables → Actions):
-`NVIDIA_NIM_API_KEY` (free at build.nvidia.com, evaluation use only), or
-`CLOUDFLARE_WORKERS_AI_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`, or `OPENROUTER_API_KEY`. Without the key
-the run exits 2 (NOT_CHECKED) and says which variable is missing.
+Each host needs its key as a repository secret (Settings → Secrets and variables → Actions), under
+the same name production uses. Production voter hosts: `NVIDIA_NIM_API_KEY` (evaluation use only),
+`CLOUDFLARE_WORKERS_AI_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
+`MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`. **Eval-only hosts** (2026-10-06,
+`EVAL_HOSTS` in the script; no production path calls them): `DEEPSEEK_API_KEY`, `XAI_API_KEY`,
+`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `COHERE_API_KEY`, `PERPLEXITY_API_KEY`, `ASI1_API_KEY`,
+`HUGGINGFACE_API_TOKEN`, and `LITELLM_URL` + `LITELLM_MASTER_KEY` for our own gateway. Without the
+key the run exits 2 (NOT_CHECKED) and says which variable is missing. A production voter's own
+model id (Groq gpt-oss-120b/20b, Groq qwen3.8-27b, anything on Cerebras) is refused: it would spend
+production's quota.
+
+Spending: Sean approved up to **$5 in total** for paid trials (2026-10-06). One full trial is 337
+short calls (about 300 tokens in, a few out): cents on the near-free hosts. Each paid row records
+its host so the running total can be checked against the cap.
 
 **How to read a row.** Fewer wrong stamps first: a wrong stamp is the failure a user cannot see.
 Coverage second. Then: can it be served in production from a host whose terms allow that (NVIDIA's
@@ -57,6 +67,31 @@ free keys cannot: "research, development, and test use only"), its median time a
 | 2026-10-06 | `nvidia-nim:moonshotai/kimi-k2.6` | **NOT CHECKED** | — | — | 0/0/0/337 | — | Run 37434186754. The job printed "172 → 0 decided", and that is not a measurement: the model was asked about ten times (11 minutes of 60-second pauses), every call failed (the reason was not recorded), and the 60-second pause after each failure was recorded as roughly 30 more answers. Harness fixed to wait out pauses and print the host's error; Kimi to be re-run. |
 | 2026-10-06 | `nvidia-nim:moonshotai/kimi-k2.6` (re-run, fixed harness) | **NOT CHECKED** | — | — | 0 verdicts in 8 calls | — | Run 37437063265. NVIDIA answered HTTP 404 "Function … Not found for account" to every call: the id is on NVIDIA's model list but not served to this key. Unavailable, not measured. Kimi can still be tried on Workers AI or OpenRouter (no key for either in CI yet). |
 | 2026-10-06 | `nvidia-nim:nvidia/nemotron-3-super-120b-a12b`, `enable_thinking: false` | 328 | 172 → **226** (52.4% → 68.9%) | 5 → **24** (false shown pass 3 → 1, true shown veto 2 → 23) | 79/253/5/0 | 271 ms | Run 37439860103. **Does not beat qwen**: more coverage, but nearly five times the wrong stamps. It answered FALSE on 253 of 337 claims, so 23 true claims would have been vetoed. 81 not-checked rows became vetoes. Not tried with thinking on (slower, and not the production setting). |
+
+## What to measure next (research, 2026-10-06; vendor docs cited in the session, not yet measured here)
+
+The constraint is not quality alone: a user's text goes to these hosts, so production use must be
+allowed and prompts should not be trained on or kept.
+
+- **Cerebras has no free tier any more**, and qwen-3.8-27b costs about $3 per 10,000 checks. Groq's
+  free gpt-oss-120b runs out on tokens before requests (about 300 to 600 checks a day).
+- **Pairs worth measuring first** (two independent families each, near-free, production-allowed):
+  1. gpt-oss (OpenAI family) + **Gemini 2.5 Flash-Lite, paid tier** (Google): about $0.34 per 10k
+     checks. Google's *free* tier may use prompts and have them human-reviewed, so it cannot carry a
+     user's text; the paid tier does not.
+  2. **Gemma 4 26B-A4B on Workers AI** (Google family) + qwen (Alibaba). Not together with pair 1:
+     Gemma and Gemini are one family.
+  3. gpt-oss + **Ministral 3 8B/14B** (Mistral family), paid tier with training opted out.
+- **Cascade worth measuring:** two small models of different families first (e.g. Gemma 4 26B-A4B and
+  Llama 3.2 3B or Granite micro on Workers AI); escalate to the full pair whenever either is UNSURE or
+  they disagree. Logged, never trusted, until its agreement with the full pair is measured on these
+  claims: two weak models confidently agreeing on a wrong answer is the failure to catch.
+- **Routing:** self-hosted LiteLLM with one model group per family, each falling back only within its
+  family (gpt-oss: Groq → Workers AI → Cerebras). A fallback that crosses families makes both votes
+  one family's and nothing reports it.
+- Not candidates: GitHub Models (retired 2026-07-30); Cohere trial keys and NVIDIA free keys (not for
+  production); xAI's large free credit (only with data sharing on); You.com (no chat API: search
+  only, a possible evidence source for the "established records" idea below).
 
 ## Queue (NOT CHECKED: nothing below has been run yet)
 

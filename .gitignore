@@ -117,3 +117,6 @@ pvq_results.json
 /railway_vars.txt
 /railway_env.json
 .sprint-state/
+
+# scripts/demo/human-backed-validation.ts writes its request/response here
+/out/
