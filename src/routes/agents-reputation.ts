@@ -187,9 +187,11 @@ export function createAgentsReputationRouter(
     '/agents/:id/reputation/feedback/:eventId.json',
     async (req: Request, res: Response) => {
       const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      // repid_events.id is a BIGINT, not a UUID (measured 2026-10-06 on the first real write, 1630).
+      const EVENT_ID = /^[1-9][0-9]{0,18}$/;
       const agentId = String(req.params.id);
       const eventId = String(req.params.eventId);
-      if (!UUID.test(agentId) || !UUID.test(eventId)) {
+      if (!UUID.test(agentId) || !EVENT_ID.test(eventId)) {
         res.status(404).json({ error: 'not_found' });
         return;
       }

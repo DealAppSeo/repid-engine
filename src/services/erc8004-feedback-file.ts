@@ -78,7 +78,7 @@ export function feedbackHashOf(file: string): string {
 }
 
 /** Where the engine serves the stored file. One file per repid_events row, so one per write. */
-export function feedbackFileUrl(baseUrl: string, agentId: string, eventId: string): string {
+export function feedbackFileUrl(baseUrl: string, agentId: string, eventId: string | number): string {
   return `${baseUrl.replace(/\/+$/, '')}/api/v1/agents/${agentId}/reputation/feedback/${eventId}.json`;
 }
 
