@@ -20,3 +20,16 @@ call. It needs the candidate's key in the session environment (`NVIDIA_NIM_API_K
 `nvidia-nim`) and the host allowed by the session's network policy. It refuses an id the host does
 not list. NVIDIA's free API keys are for development and test use only, so a model that wins is
 served in production from a host whose terms allow it, never from that key.
+
+## Re-runs
+
+`rerun-assumptions-on-2026-10-06.jsonl`: 75 of the 337 claims (stratified by source and by the
+2026-10-05 label, seed 20261006), sent once each to production on 2026-10-06 06:50-07:03Z with
+`CLASSIFY_ASSUMPTIONS=on` and `CLASSIFY_QUESTIONS=on`. Same row ids, truth and per-voter
+`/classify/stats` deltas as the baseline; no claim text.
+
+    npm run eval:backtest-classify -- --compare eval/rigorous/rerun-assumptions-on-2026-10-06.jsonl
+
+Same 75 rows: decided 41 -> 30, wrong stamps 1 -> 1. Twelve correct stamps became not-checked and
+one not-checked became a correct pass; in 11 of the 12 the qwen voter moved from the right verdict
+to UNSURE. The assumption sentence cost coverage on ordinary claims and removed no wrong stamp here.

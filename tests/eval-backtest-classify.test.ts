@@ -175,3 +175,20 @@ describe('the stored baseline', () => {
     expect(text).toContain('SIMULATED third voter breaking ties (a model, not a measurement)');
   });
 });
+
+describe('the 2026-10-06 re-run with CLASSIFY_ASSUMPTIONS on', () => {
+  // The finding the README records, pinned so it is reproduced from the stored file, not retold.
+  it('same 75 rows: decided 41 -> 30, wrong stamps 1 -> 1', () => {
+    const { readFileSync } = jest.requireActual('node:fs') as typeof import('node:fs');
+    const root = join(__dirname, '../eval/rigorous');
+    const stored = loadBaseline(root);
+    const sources = new Map(stored.map((r) => [r.row_id, r.source]));
+    const rerun = rowsFromLive(readFileSync(join(root, 'rerun-assumptions-on-2026-10-06.jsonl'), 'utf8'), sources);
+    expect(rerun).toHaveLength(75);
+    const ids = new Set(rerun.map((r) => r.row_id));
+    const before = metrics(stored.filter((r) => ids.has(r.row_id)));
+    const after = metrics(rerun);
+    expect([before.decided, before.falsePass + before.trueVeto]).toEqual([41, 1]);
+    expect([after.decided, after.falsePass + after.trueVeto]).toEqual([30, 1]);
+  });
+});
