@@ -1,0 +1,88 @@
+# Evaluate a candidate second voter for POST /api/v1/classify (scripts/eval/candidate-voter.ts).
+#
+# WHY A WORKFLOW. Sean, 2026-10-06: try replacements for the qwen voter and write each result
+# down. The agent sandbox's network policy refuses every model host (NVIDIA, Cloudflare,
+# OpenRouter, Groq: CONNECT 403), so the harness cannot run there; a GitHub runner can.
+#
+# WHAT IT SPENDS. The candidate answers the 337 labelled claims once. Groq is never called: the
+# harness pairs the candidate with Groq's stored readings (eval/rigorous/baseline-classify-*).
+# Only hosts that do not share production's quota are offered below. Workers AI shares the
+# account's daily allocation with production's Llama checker; the harness stops at its own
+# 200-a-day cap and the next run resumes, so keep Workers AI runs to finalists.
+#
+# KEYS. Repository secrets, read only by the one step that needs them, never echoed. A missing
+# key exits 2 (NOT_CHECKED) with the variable's name; it never runs on a guess.
+#   NVIDIA_NIM_API_KEY                                  for nvidia-nim (evaluation use only, by NVIDIA's terms)
+#   CLOUDFLARE_WORKERS_AI_TOKEN + CLOUDFLARE_ACCOUNT_ID for workers-ai
+#   OPENROUTER_API_KEY                                  for openrouter
+#
+# OUTPUT. The job summary carries one ready-to-paste row for eval/candidates/README.md, and the
+# per-claim answers are uploaded as an artifact (outcomes only: no claim text, no key).
+
+name: eval-candidate-voter
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Host to evaluate on (none of these share production's Groq quota)
+        type: choice
+        options: [nvidia-nim, workers-ai, openrouter]
+        required: true
+      model:
+        description: Model id exactly as the host lists it (e.g. nvidia/nemotron-3-super-120b-a12b)
+        type: string
+        required: true
+      limit:
+        description: Claims to run (337 = the whole labelled set)
+        type: string
+        default: '337'
+      extra_body:
+        description: Optional JSON merged into the request (evaluation only), e.g. {"reasoning_effort":"low"}
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install (legacy peer deps per nixpacks.toml)
+        run: npm install --legacy-peer-deps
+
+      - name: Run the candidate on the labelled claims
+        env:
+          # Inputs go through env, never into the script text, so a value cannot become shell.
+          PROVIDER: ${{ inputs.provider }}
+          MODEL: ${{ inputs.model }}
+          LIMIT: ${{ inputs.limit }}
+          EXTRA_BODY: ${{ inputs.extra_body }}
+          # config.ts needs these to import; the harness never touches the database.
+          SUPABASE_URL: http://localhost:54321
+          SUPABASE_SERVICE_KEY: unused-by-the-harness
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          CLOUDFLARE_WORKERS_AI_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_AI_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          case "$LIMIT" in ''|*[!0-9]*) echo "limit must be a whole number"; exit 1;; esac
+          set -- --voter "$PROVIDER:$MODEL" --limit "$LIMIT" --out candidate.jsonl
+          if [ -n "$EXTRA_BODY" ]; then set -- "$@" --extra-body "$EXTRA_BODY"; fi
+          npx ts-node scripts/eval/candidate-voter.ts "$@"
+
+      - name: Upload the per-claim answers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ inputs.provider }}
+          path: candidate.jsonl
+          if-no-files-found: ignore
