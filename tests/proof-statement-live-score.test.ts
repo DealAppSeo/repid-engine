@@ -139,6 +139,7 @@ describe('proof-statement carries the LIVE score, never a hard-coded constant', 
     // unchanged: repid_score tracks the live value (222), never a hard-coded 1000.
     expect(row.statement).toEqual({
       agent_id: '00000000-0000-0000-0000-000000000222',
+      commitment_scheme: 'sha256-v1',
       tier: 'PROBATIONARY',
       repid_score: 222,
       threshold: 200,
@@ -161,6 +162,7 @@ describe('proof-statement carries the LIVE score, never a hard-coded constant', 
     // unchanged: repid_score tracks the live value (222), never a hard-coded 1000.
     expect(row.statement).toEqual({
       agent_id: '00000000-0000-0000-0000-000000000222',
+      commitment_scheme: 'sha256-v1',
       tier: 'PROBATIONARY',
       repid_score: 222,
       threshold: 200,
