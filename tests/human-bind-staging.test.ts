@@ -61,12 +61,15 @@ describe('POST /api/v1/human/bind staging row', () => {
     else process.env.HUMAN_AGENT_BIND_ENABLED = saved;
   });
 
-  it('requires wallet and agent and inserts nothing when one is missing', async () => {
+  it('a wallet without an agent is rejected; an agent without a wallet is not this route\'s', async () => {
     const walletOnly = await request(app()).post('/api/v1/human/bind').send({ wallet: '0xabc' });
     const agentOnly = await request(app()).post('/api/v1/human/bind').send({ agent_id: AGENT });
     expect(walletOnly.status).toBe(400);
-    expect(agentOnly.status).toBe(400);
     expect(walletOnly.body).toEqual({ error: 'rejected' });
+    // { agent_id } with no wallet is the signed bind's body (routes/v1/byok.ts). It used to get
+    // 400 here, so the signed bind never ran; now it falls through to the next route (this app's
+    // stand-in for it answers 401). See tests/human-bind-staging-passthrough.test.ts.
+    expect(agentOnly.status).toBe(401);
     expect(state.rows).toHaveLength(0);
   });
 
