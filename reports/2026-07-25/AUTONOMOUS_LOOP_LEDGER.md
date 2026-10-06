@@ -8837,3 +8837,30 @@ PRs merged during this run's window (since 2026-10-06T08:32:01Z):
 **Next beat:** (1) Confirm #1226 and #1227 merged. (2) With items 3-6, 12-14, 20 done and items 7-11 Sean-gated, the non-Sean-gated backlog is thin. Next candidates: item 15 (WHIR aggregation PCS, LATER — first verify PR#1919 numbers), or a verify-first diagnostic on the live fleet/scoring state. (3) Check if `commitment_scheme` tag in `statement` jsonb (4.0-e cutover prerequisite — `src/zkp/commitment.ts` header §2) is worth closing now: no DDL needed, just wiring the shadow-mode value into the `statement` object when writing a proof.
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37436738340 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-06, second run) — commitment_scheme tag wired into proof statement
+
+**Prior beat verified [V] (2026-10-06, first run):**
+- PR #1226 (security: verifier SSRF fix): **MERGED** — confirmed via `git log origin/main` showing `c6b9011e security: verifier SSRF fix (Strix on #1225) + the signed human bind is no longer swallowed by the staging route (#1226)`. ✓
+- PR #1227 (feat(memory): add tx_hash column to agent_memory_roots + wire into sweep writeback): **MERGED** — confirmed via `git log origin/main` showing `85b392d4 feat(memory): add tx_hash column to agent_memory_roots + wire into sweep writeback (#1227)`. ✓
+- PR #1231 (feat(classify): votes + two families or not-checked, S47): **OPEN, all checks SUCCESS + Strix clean** — armed `--auto --squash` this beat.
+- Auto-logged runs (37340952401, 37396828066, 37413894593, 37436738340): died before step 1; #1222 merged in that window (not this loop's work). No penalty.
+
+**Current state [V]:** `origin/main` = `42348b45`. Open PR: **#1231** (armed `--auto --squash`).
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-06-commitment-scheme-tag` off `origin/main` `42348b45`.**
+
+**Intent for steps 2-4:** Wire `commitment_scheme: SHA256_COMMITMENT_TAG` into the statement object assembled in `proof-drain-service.ts:699-706` — the 4.0-e cutover prerequisite described in `src/zkp/commitment.ts` header §2. No DDL needed (jsonb column already exists). Tag is always `sha256-v1` (the only stored family today); future Poseidon2 cutover needs no DDL once rows carry the discriminator. Update `tests/proof-drain-service.test.ts` to expect the new field. SAFE-CLASS (additive, no gate flip, no scoring reach).
+
+**STEP 2-4 — SHIPPED: commitment_scheme tag wired → PR #1232 [V].**
+
+(Pending — see step 5 below for actuals)
+
+**Open for Sean (rule-4):**
+1. Items 7/8/9/10/11: all Sean-gated — no change.
+2. PR #1231 armed `--auto --squash` (all checks SUCCESS, Strix clean).
+3. PR #1232 (this beat): SAFE-CLASS, `--auto --squash` appropriate once CI green + Strix.
+
+**Step 5 — actuals (updated after step 2-4):**
