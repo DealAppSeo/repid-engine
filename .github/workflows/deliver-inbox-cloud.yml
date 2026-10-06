@@ -106,8 +106,10 @@ jobs:
 
       - name: Git identity
         run: |
+          # The repo owner's own noreply, the account whose LOOP_GH_PAT pushes. Not a bare
+          # <name>@users.noreply address: GitHub credits that to the user named <name>.
           git config user.name "deliver-inbox[bot]"
-          git config user.email "dispatch@users.noreply.github.com"
+          git config user.email "11688996+DealAppSeo@users.noreply.github.com"
 
       - uses: actions/setup-node@v4
         with:

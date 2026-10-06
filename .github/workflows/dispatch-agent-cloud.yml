@@ -166,10 +166,15 @@ jobs:
       # App exists, and inventing one would attribute commits to someone else. PR
       # authorship comes from the TOKEN (gh pr create), which is the identity that
       # matters for review/merge. Revisit once the App's bot id can be read.
+      #
+      # The address is the repo owner's own noreply (11688996 is DealAppSeo's user id). It used to be
+      # dispatch@users.noreply.github.com, which did exactly what the paragraph above warns about:
+      # GitHub reads <name>@users.noreply.github.com as "the user named <name>", so an unrelated
+      # real account (github.com/dispatch) was credited on every dispatch commit.
       - name: Git identity
         run: |
           git config user.name "dispatch-${{ inputs.agent }}-cloud[bot]"
-          git config user.email "dispatch@users.noreply.github.com"
+          git config user.email "11688996+DealAppSeo@users.noreply.github.com"
 
       - uses: actions/setup-node@v4
         with:
