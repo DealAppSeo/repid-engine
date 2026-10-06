@@ -1338,11 +1338,17 @@ export async function factCheck(
       hal_score >= vetoThreshold ? 'vetoed' : hal_score >= flagThreshold ? 'flagged' : 'clean';
     decision = baseDecision;
 
-    // RESILIENCE GATE (CC1 2026-05-23): a veto/flag requires >= MIN_QUORUM_FOR_VETO successful
-    // providers; a lone provider downgrades to 'clean'. hal_score preserved; only decision changes.
+    // RESILIENCE GATE (CC1 2026-05-23): a veto requires >= MIN_QUORUM_FOR_VETO successful
+    // providers, so a lone provider's would-be veto or flag is held at 'flagged' (held for review,
+    // delta 0, never a penalty). hal_score preserved; only decision changes.
+    //
+    // It used to be cleared to 'clean', and every caller read that as a pass: a claim the ONLY
+    // responding checker judged FALSE came back PASS from the SDK (verdictFromHal) and was queued
+    // as "Verified by the HAL quorum" (social-publish-gate). Too few checkers can neither veto nor
+    // clear. Verdict mode above already treats a single-family FALSE exactly this way.
     if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision !== 'clean') {
-      decision = 'clean';
-      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) downgraded to 'clean' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'}.`;
+      decision = 'flagged';
+      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) held at 'flagged' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'} to veto or to clear.`;
     }
 
     // CC1 verdict-driven gate (HAL_VERDICT_DRIVEN_VETO, default OFF): a 'vetoed' baseDecision with

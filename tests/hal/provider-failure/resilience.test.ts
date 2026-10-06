@@ -1,9 +1,11 @@
 /**
  * HAL provider-failure resilience (CC1 2026-05-23).
  *
- * Verifies the minimum-quorum gate added to factCheck: a veto/flag requires
- * >= 2 successful providers; a single surviving provider defaults to 'clean'
- * (degraded) so a lone verdict cannot fire a false veto. hal_score/agreement
+ * Verifies the minimum-quorum gate added to factCheck: a veto requires >= 2
+ * successful providers, so a single surviving provider's would-be veto is held
+ * at 'flagged' (degraded): a lone verdict can neither fire a false veto nor clear
+ * a claim it judged FALSE. (Until 2026-10-06 it was cleared to 'clean', which
+ * callers read as a pass.) hal_score/agreement
  * math is unchanged at quorum >= 2. fact-check.ts imports nothing heavy, so we
  * mock global.fetch directly (no db/config/env needed).
  */
@@ -70,15 +72,16 @@ describe('HAL provider-failure resilience — minimum quorum gate', () => {
     expect(r.quorum_note).toBeUndefined(); // gate untouched at quorum 2 — decision governed by score
   });
 
-  test('1/3 surviving says FALSE: low quorum → GATE downgrades would-be veto to clean', async () => {
+  test('1/3 surviving says FALSE: low quorum → GATE holds the would-be veto at flagged, never clean', async () => {
     mockFetch({ groq: { kind: 'ok', verdict: 'FALSE', confidence: 95 }, cerebras: { kind: '429' }, fireworks: { kind: '429' } });
     const r = await factCheck('The chemical symbol for gold is Pb.', PROVIDERS);
     expect(r.providers_used).toBe(1);
     expect(r.quorum).toBe('low');
     expect(r.degraded).toBe(true);
-    expect(r.decision).toBe('clean'); // lone FALSE cannot veto
+    expect(r.decision).toBe('flagged'); // lone FALSE cannot veto, and is not a pass either
     expect(r.hal_score).toBeGreaterThanOrEqual(0.9); // raw score preserved for observability
     expect(r.quorum_note).toContain('Low quorum');
+    expect(r.quorum_note).toContain("held at 'flagged'");
     expect(r.provider_health?.succeeded).toBe(1);
     expect(r.provider_health?.failed).toHaveLength(2);
   });
@@ -103,10 +106,12 @@ describe('HAL provider-failure resilience — minimum quorum gate', () => {
     // (caller falls back to extractor when providers_used===0)
   });
 
-  test('FALSE content with only 1 provider via network throws: default clean (acceptable false-negative tradeoff)', async () => {
+  test('FALSE content with only 1 provider via network throws: flagged, neither a veto nor a pass', async () => {
     mockFetch({ groq: { kind: 'ok', verdict: 'FALSE', confidence: 99 }, cerebras: { kind: 'throw' }, fireworks: { kind: 'throw' } });
     const r = await factCheck('A blatantly false statement.', PROVIDERS);
-    expect(r.decision).toBe('clean'); // better false-clean (caught downstream) than false-veto when degraded
+    // This used to assert 'clean' as "better false-clean (caught downstream) than false-veto". Downstream
+    // read 'clean' as verified: the SDK printed PASS and the publish gate queued it as ready.
+    expect(r.decision).toBe('flagged');
     expect(r.quorum).toBe('low');
     expect(r.provider_health?.failed.map((f) => f.name).sort()).toEqual(['cerebras', 'fireworks']);
   });
