@@ -9,6 +9,10 @@
  *               note is not a reference). Read at a pinned revision. A quantity is compared in its unit. Best rank only (preferred if
  *               any, else normal; deprecated never). A matching value with no reference is unchecked.
  *               A differing value contradicts only when the spec says the property holds one value.
+ *   arXiv       The paper's own entry, read from arXiv's API. "First posted" is the entry's <published>,
+ *               which arXiv defines as the submission time of version 1; the author list is the latest
+ *               version's, and the record pins that version. The entry must carry the title our claim
+ *               names, or the spec points at another paper and nothing is decided. No entry: unchecked.
  *   ClaimReview Published fact-checks are RELATED records, never a verdict: whether a review is about
  *               this exact claim, and what its free-text rating means, is a person's call. Always
  *               unchecked, with the reviews attached so a person can decide. No key: unchecked.
@@ -17,13 +21,14 @@
  */
 import { createHash } from 'node:crypto';
 import { onlyAttestationsLeave } from '../selfhost/egress-guard';
-import type { ClaimSpec, FetchLike, Finding, RecordRef, WikidataExpected } from './types';
+import type { ArxivExpected, ClaimSpec, FetchLike, Finding, RecordRef, WikidataExpected } from './types';
 
 export const CHECKERS = {
   npm: 'npm-registry@1',
   pypi: 'pypi-json@1',
   wikidata: 'wikidata-entity@1',
   claimreview: 'claimreview-search@1',
+  arxiv: 'arxiv-entry@1',
 } as const;
 
 /** Wikidata's policy asks every client to say who it is. */
@@ -37,6 +42,8 @@ const PYPI_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const PYPI_VERSION = /^[0-9A-Za-z.!+_-]{1,64}$/;
 const WD_ENTITY = /^Q[1-9]\d{0,11}$/;
 const WD_PROPERTY = /^P[1-9]\d{0,7}$/;
+/** New-style (1706.03762) or old-style (hep-th/9901001, math.GT/0309136) ids, never with a version. */
+const ARXIV_ID = /^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})$/;
 
 export interface CheckDeps {
   fetch: FetchLike;
@@ -260,6 +267,99 @@ async function checkWikidata(spec: Extract<ClaimSpec, { kind: 'wikidata' }>, dep
   return unchecked(checker, `Wikidata ${id} ${spec.property} does not hold this value among ${best.length}; the list may be incomplete.`, record);
 }
 
+const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+/** Element text as plain text: entities decoded, runs of whitespace (arXiv wraps long titles) collapsed. */
+function xmlText(raw: string): string {
+  return raw
+    .replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (_, e: string) =>
+      e[0] === '#' ? String.fromCodePoint(e[1] === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : XML_ENTITIES[e]!,
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export interface ArxivEntry {
+  id: string;
+  version: number;
+  title: string;
+  published: string;
+  authors: string[];
+}
+
+/**
+ * The entries of an arXiv API Atom feed, or null when the body is not one. arXiv's feed is machine
+ * written and flat, so each field is read from its own element inside <entry>: no element named here
+ * nests inside another. An entry without a versioned abs id (arXiv's error entries carry an
+ * api/errors id) or without a <published> time is dropped, never guessed at.
+ */
+export function parseArxivFeed(body: string): ArxivEntry[] | null {
+  if (!/<feed\b[^>]*xmlns="http:\/\/www\.w3\.org\/2005\/Atom"/.test(body)) return null;
+  const entries: ArxivEntry[] = [];
+  for (const [, e] of body.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const id = /<id>\s*https?:\/\/arxiv\.org\/abs\/([^<\s]+?)v(\d+)\s*<\/id>/.exec(e!);
+    const published = /<published>\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*<\/published>/.exec(e!);
+    const title = /<title>([\s\S]*?)<\/title>/.exec(e!);
+    if (!id || !published || !title) continue;
+    const authors = [...e!.matchAll(/<author>\s*<name>([\s\S]*?)<\/name>[\s\S]*?<\/author>/g)].map((a) => xmlText(a[1]!));
+    entries.push({ id: id[1]!, version: Number(id[2]), title: xmlText(title[1]!), published: published[1]!, authors });
+  }
+  return entries;
+}
+
+const sameTitle = (a: string, b: string) => xmlText(a).toLowerCase() === xmlText(b).toLowerCase();
+
+function arxivVerdict(entry: ArxivEntry, expected: ArxivExpected): { holds: boolean; found: string } {
+  switch (expected.type) {
+    case 'first-posted':
+      return { holds: entry.published.slice(0, 10) === expected.date, found: `was first posted on ${entry.published.slice(0, 10)} (UTC)` };
+    case 'first-posted-year':
+      return { holds: Number(entry.published.slice(0, 4)) === expected.year, found: `was first posted in ${entry.published.slice(0, 4)}` };
+    case 'author-count':
+      return { holds: entry.authors.length === expected.count, found: `lists ${entry.authors.length} authors at v${entry.version}` };
+  }
+}
+
+async function checkArxiv(spec: Extract<ClaimSpec, { kind: 'arxiv' }>, deps: CheckDeps): Promise<Finding> {
+  const checker = CHECKERS.arxiv;
+  if (!ARXIV_ID.test(spec.id)) return unchecked(checker, 'not a valid arXiv id (give it without a version)');
+  const e = spec.expected;
+  const valid =
+    e.type === 'first-posted' ? /^\d{4}-\d{2}-\d{2}$/.test(e.date) : e.type === 'first-posted-year' ? Number.isInteger(e.year) : Number.isInteger(e.count) && e.count > 0;
+  if (!valid || typeof spec.title !== 'string' || !spec.title.trim()) return unchecked(checker, 'the spec is not a title and one expected value');
+  const got = await get(deps, `https://export.arxiv.org/api/query?id_list=${spec.id}`);
+  if (got.kind === 'failed') return unchecked(checker, `arXiv: ${got.why}`);
+  if (got.status !== 200) return unchecked(checker, `arXiv answered HTTP ${got.status}`);
+  const entries = parseArxivFeed(got.body);
+  if (!entries) return unchecked(checker, 'arXiv: the body was not an Atom feed');
+  const fetchedAt = (deps.now ?? (() => new Date()))().toISOString();
+  if (entries.length > 1) return unchecked(checker, `arXiv returned ${entries.length} entries for one id, so none is taken.`);
+  const entry = entries.find((x) => x.id === spec.id);
+  if (!entry) {
+    return unchecked(checker, `arXiv has no paper with id ${spec.id}.`, {
+      kind: 'arxiv',
+      locator: `arxiv:${spec.id}`,
+      url: `https://arxiv.org/abs/${spec.id}`,
+      fetchedAt,
+      sha256: sha256(got.body),
+      snapshot: { id: spec.id, found: false, entries: entries.length },
+    });
+  }
+  const record: RecordRef = {
+    kind: 'arxiv',
+    locator: `arxiv:${entry.id}v${entry.version}`,
+    url: `https://arxiv.org/abs/${entry.id}v${entry.version}`,
+    fetchedAt,
+    sha256: sha256(got.body),
+    snapshot: { id: entry.id, version: entry.version, title: entry.title.slice(0, 300), published: entry.published, authors: entry.authors.length, names: entry.authors.slice(0, 12) },
+  };
+  if (!sameTitle(entry.title, spec.title)) {
+    return unchecked(checker, `arXiv ${entry.id} is "${entry.title.slice(0, 120)}", not the paper the claim names, so it decides nothing.`, record);
+  }
+  const { holds, found } = arxivVerdict(entry, e);
+  return { outcome: holds ? 'supports' : 'contradicts', reason: `arXiv ${entry.id} ${found}.`, checker, record };
+}
+
 async function checkClaimReview(spec: Extract<ClaimSpec, { kind: 'claimreview' }>, deps: CheckDeps, key: string): Promise<Finding> {
   const checker = CHECKERS.claimreview;
   const query = spec.query.trim();
@@ -311,6 +411,8 @@ export async function checkSpec(spec: ClaimSpec, deps: CheckDeps): Promise<Findi
         return await checkPypi(spec, deps);
       case 'wikidata':
         return await checkWikidata(spec, deps);
+      case 'arxiv':
+        return await checkArxiv(spec, deps);
       case 'claimreview':
         return await checkClaimReview(spec, deps, (env === process.env ? process.env.GOOGLE_FACT_CHECK_API_KEY : env.GOOGLE_FACT_CHECK_API_KEY) ?? '');
     }

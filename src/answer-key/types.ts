@@ -2,8 +2,9 @@
  * THE ANSWER KEY, FIRST SLICE (S46, Sean's GO 2026-10-06).
  *
  * An index beside the checker ledger, OFF the stamp path. Nothing in a route or in the classify
- * pipeline reads it (tests/answer-key-off-stamp.test.ts pins that). It answers one question about a
- * claim WE put in it: which re-checkable public record supports it or contradicts it.
+ * pipeline reads it (the 'off the stamp path' test in tests/answer-key-run.test.ts pins that). It
+ * answers one question about a claim WE put in it: which re-checkable public record supports it or
+ * contradicts it.
  *
  * WHAT IT IS NOT. Two models agreeing is not a record, so no model is asked anything here. A claim is
  * never matched by pattern against free text: every claim carries a structured spec (a package and a
@@ -19,7 +20,7 @@
 
 export type AnswerOutcome = 'supports' | 'contradicts' | 'unchecked';
 
-export type RecordKind = 'npm' | 'pypi' | 'wikidata' | 'claimreview';
+export type RecordKind = 'npm' | 'pypi' | 'wikidata' | 'claimreview' | 'arxiv';
 
 /** Wikidata values the first slice can compare exactly. */
 export type WikidataExpected =
@@ -44,7 +45,28 @@ export type ClaimSpec =
        */
       single: boolean;
     }
-  | { kind: 'claimreview'; query: string };
+  | { kind: 'claimreview'; query: string }
+  | {
+      kind: 'arxiv';
+      /** A bare arXiv id, with no version: the latest version is read, and the record pins which. */
+      id: string;
+      /**
+       * The paper's title as our claim names it. The record must carry this title, or the spec points
+       * at another paper and nothing is decided: a wrong id must not borrow another paper's dates.
+       */
+      title: string;
+      expected: ArxivExpected;
+    };
+
+/**
+ * What an arXiv entry can decide. arXiv's `<published>` is when VERSION 1 was submitted (UTC), so
+ * "first posted" is a property of the paper, not of the version read. The author list is read from
+ * the latest version, and the record says which version that was.
+ */
+export type ArxivExpected =
+  | { type: 'first-posted'; date: string }
+  | { type: 'first-posted-year'; year: number }
+  | { type: 'author-count'; count: number };
 
 /** A public record anyone can fetch again: the locator pins the exact version that was read. */
 export interface RecordRef {
