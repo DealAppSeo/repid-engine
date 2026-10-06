@@ -146,7 +146,7 @@ describe('flag off: byte-for-byte today, and the extra call is never made', () =
       try {
         const res = await request(classifyApp()).post('/api/v1/classify').send({ text: CLAIM });
         expect(res.body).toMatchObject({ label: 'not-checked', by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
-        expect(Object.keys(res.body)).toEqual(['label', 'latency_ms', 'by', 'voters', 'deciders']);
+        expect(Object.keys(res.body)).toEqual(['label', 'latency_ms', 'by', 'voters', 'deciders', 'votes']);
         expect(rec.calls.map((c) => c.model)).toEqual(DEFAULT_VOTERS.map((v) => v.model));
         expect(rec.questionCalls()).toHaveLength(0);
       } finally {
@@ -181,6 +181,10 @@ describe('flag on, both UNSURE: one extra call, and a parsed question comes back
           by: 'votes',
           voters: ['groq', 'groq'],
           deciders: ['groq', 'groq'],
+          votes: [
+            { voter: 'groq', family: 'gpt-oss', verdict: 'UNSURE' },
+            { voter: 'groq', family: 'gpt-oss', verdict: 'UNSURE' },
+          ],
           question: GOAT,
         });
         expect(rec.calls).toHaveLength(3);
@@ -198,7 +202,7 @@ describe('flag on, both UNSURE: one extra call, and a parsed question comes back
       const rec = recordHost(unsure);
       try {
         const out = await classifyTextWithPath(CLAIM, 2500, env);
-        expect(out).toEqual({ label: 'not-checked', by: 'votes', voters: ['groq', 'cerebras'], deciders: ['groq', 'cerebras'], question: GOAT });
+        expect(out).toEqual({ label: 'not-checked', by: 'votes', voters: ['groq', 'cerebras'], deciders: ['groq', 'cerebras'], votes: expect.any(Array), question: GOAT });
         const [q] = rec.questionCalls();
         expect(q!.model).toBe('openai/gpt-oss-120b');
         expect(new URL(q!.url).hostname).toBe('api.groq.com');
@@ -235,8 +239,10 @@ describe('flag on, anything but both UNSURE: no extra call', () => {
     ['one UNSURE, one 429', (m) => (m.endsWith('120b') ? { content: 'UNSURE' } : { status: 429 }), 'not-checked'],
     ['one UNSURE, one 5xx', (m) => (m.endsWith('120b') ? { content: 'UNSURE' } : { status: 503 }), 'not-checked'],
     ['one UNSURE, one unparseable', (m) => ({ content: m.endsWith('120b') ? 'UNSURE' : 'UNSURE, because' }), 'not-checked'],
-    ['both TRUE (pass)', () => ({ content: 'TRUE' }), 'pass'],
-    ['both FALSE (veto)', () => ({ content: 'FALSE' }), 'veto'],
+    // ON is the Groq x2 default, one family: since S47 its agreement is not-checked, and still asks
+    // nothing (neither said UNSURE). A two-family pass and veto are pinned through the route below.
+    ['both TRUE (one family: not-checked)', () => ({ content: 'TRUE' }), 'not-checked'],
+    ['both FALSE (one family: not-checked)', () => ({ content: 'FALSE' }), 'not-checked'],
   ];
   it.each(cases)('%s', async (_name, vote, label) => {
     await withProcessEnv(CLEAN, async () => {
@@ -358,7 +364,7 @@ describe('the reply is parsed strictly', () => {
         const rec = recordHost(unsure, () => ({ content: raw as string }));
         try {
           const res = await request(classifyApp()).post('/api/v1/classify').send({ text: CLAIM });
-          expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
+          expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'], votes: expect.any(Array) });
           expect(rec.questionCalls()).toHaveLength(1);
           expect(classifyStats(ON).questions).toEqual({ asked: 1, given: 0, none: 1, none_why: { [miss]: 1 } });
         } finally {
@@ -413,7 +419,7 @@ describe('time: the question fits inside the deadline or does not happen', () =>
       const rec = recordHost(unsure, () => reply);
       try {
         const res = await request(classifyApp({ deadlineMs: DEADLINE })).post('/api/v1/classify').send({ text: CLAIM });
-        expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
+        expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'], votes: expect.any(Array) });
         expect(res.body.latency_ms).toBeLessThan(DEADLINE);
         expect(rec.questionCalls()).toHaveLength(1);
         const q = classifyStats(ON).questions!;
@@ -432,7 +438,7 @@ describe('time: the question fits inside the deadline or does not happen', () =>
       const rec = recordHost(() => ({ content: 'UNSURE', delayMs: 450 }));
       try {
         const res = await request(classifyApp({ deadlineMs: DEADLINE })).post('/api/v1/classify').send({ text: CLAIM });
-        expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
+        expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'], votes: expect.any(Array) });
         expect(rec.questionCalls()).toHaveLength(0);
         expect(classifyStats(ON).questions).toEqual({ asked: 0, given: 0, none: 0, none_why: {} });
       } finally {
@@ -450,7 +456,7 @@ describe('time: the question fits inside the deadline or does not happen', () =>
       const rec = recordHost(unsure);
       try {
         const out = await classifyTextWithPath(CLAIM, 2500, ON);
-        expect(out).toEqual({ label: 'not-checked', by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
+        expect(out).toEqual({ label: 'not-checked', by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'], votes: expect.any(Array) });
         expect(rec.questionCalls()).toHaveLength(0);
         // Refused before any request: not asked.
         expect(classifyStats(ON).questions).toEqual({ asked: 0, given: 0, none: 0, none_why: {} });
@@ -504,12 +510,13 @@ describe('the data-locality boundary refuses the extra call exactly as it refuse
 
 describe('the question never rides on anything but not-checked by votes', () => {
   it('a pass, a veto, arithmetic and skipped from the real classifier carry no question', async () => {
-    await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on' }, async () => {
+    // Two families (Groq + Cerebras): only such a pair can pass or veto (S47).
+    await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on', CEREBRAS_API_KEY: KEY }, async () => {
       for (const [content, label] of [['TRUE', 'pass'], ['FALSE', 'veto']]) {
         const rec = recordHost(() => ({ content }));
         try {
           const res = await request(classifyApp()).post('/api/v1/classify').send({ text: CLAIM });
-          expect(res.body).toEqual({ label, latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
+          expect(res.body).toEqual({ label, latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'cerebras'], deciders: ['groq', 'cerebras'], votes: expect.any(Array) });
         } finally {
           rec.restore();
         }

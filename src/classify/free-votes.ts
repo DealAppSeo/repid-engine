@@ -833,6 +833,18 @@ export function modelFamily(model: string): string {
 }
 
 /**
+ * TWO FAMILIES OR NOT CHECKED (S47, Sean's GO 2026-10-06). A stamp means two model families agreed.
+ * The stand-in rule already kept a backup out of the other slot's family, but the pair itself could
+ * be one family: with no Cerebras key the default pair is gpt-oss-120b and gpt-oss-20b, and
+ * CLASSIFY_VOTERS can name any two. Two ids of one family share training and blind spots, so their
+ * agreement is one opinion said twice. Such a pair still runs and its words are still reported
+ * (`votes`), but it can only ever answer not-checked. One model on one host is the same case.
+ */
+export function oneFamily(a: Voter, b: Voter): boolean {
+  return hostKey(a) === hostKey(b) || modelFamily(a.model) === modelFamily(b.model);
+}
+
+/**
  * The next stand-in for a slot (rules 2 and 3), in pool order: not yet asked for this claim, not
  * the other slot's model or family, and seen answering right by the canary.
  */
@@ -909,8 +921,8 @@ export async function classifyByFreeVotes(
   const [a, b] = slots as [VoteAttempt[], VoteAttempt[]];
   const lastA = a[a.length - 1]!;
   const lastB = b[b.length - 1]!;
-  // Belt and braces for rule 2: one model is never two votes.
-  const label = hostKey(lastA.voter) === hostKey(lastB.voter) ? 'not-checked' : combineVotes(lastA.outcome, lastB.outcome);
+  // Belt and braces for rule 2: one model is never two votes, and one family is never two opinions.
+  const label = oneFamily(lastA.voter, lastB.voter) ? 'not-checked' : combineVotes(lastA.outcome, lastB.outcome);
   return {
     label,
     outcomes: [lastA.outcome, lastB.outcome],

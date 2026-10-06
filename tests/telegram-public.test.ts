@@ -41,7 +41,7 @@ async function waitForSends(n: number) {
 
 const saved: Record<string, string | undefined> = {};
 beforeAll(() => {
-  for (const k of ['TELEGRAM_PUBLIC_BOT_TOKEN', 'TELEGRAM_BOT_TOKEN', 'GROQ_API_KEY']) saved[k] = process.env[k];
+  for (const k of ['TELEGRAM_PUBLIC_BOT_TOKEN', 'TELEGRAM_BOT_TOKEN', 'GROQ_API_KEY', 'CEREBRAS_API_KEY']) saved[k] = process.env[k];
 });
 afterAll(() => {
   for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k];
@@ -58,6 +58,8 @@ beforeEach(() => {
   process.env.TELEGRAM_PUBLIC_BOT_TOKEN = TOKEN;
   process.env.TELEGRAM_BOT_TOKEN = 'operator-token-must-never-be-used';
   process.env.GROQ_API_KEY = 'groq-test-key-not-real';
+  // Two families (Groq gpt-oss + Cerebras qwen): since S47 a one-family pair can only say NOT CHECKED.
+  process.env.CEREBRAS_API_KEY = 'cerebras-test-key-not-real';
   globalThis.fetch = jest.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
