@@ -12,6 +12,7 @@ It is **off the stamp path**. Nothing in `/api/v1/classify` reads it (`tests/ans
 |---|---|---|
 | npm, PyPI | The registry's own answer. A 200 that lists the version means it exists; a 404 means it is absent. | A 5xx, a proxy refusal, a timeout, a body that is not JSON |
 | Wikidata | A **referenced** value of the best rank, read at a pinned revision. A differing value contradicts only for a property that holds one value. | No reference; a reference that only says where a value was imported from (P143, P4656); a value in another unit; a property that may hold many values |
+| arXiv (second slice) | The paper's own entry. "First posted" is its `<published>` time, which arXiv defines as when version 1 was submitted. The author count is read from the latest version, and the record pins that version. | An entry whose title is not the one our claim names (the id points at another paper); no entry; a 5xx; a body that is not an Atom feed; more than one entry for one id |
 | Published fact-checks (Google Fact Check Tools) | Never. The reviews are attached for a person to judge. | Everything. Whether a review is about this exact claim, and what its free-text rating means, is a person's call. |
 
 There are three outcomes, never two: `supports`, `contradicts` and `unchecked`. An unchecked check is kept, and it stays unchecked.
@@ -61,13 +62,48 @@ Each Wikidata row's record pins the entity revision it was read at. For example,
 | `run-2026-10-06.jsonl` | every result: outcome, reason, checker, and the record with its URL, sha256 and a small extract |
 | `run-2026-10-06.sql` | idempotent SQL that loads the run into the `ak_*` tables once the migration is applied |
 
+## Second slice: arXiv (2026-10-06)
+
+This slice has 7 more claims of our own (`seed-arxiv-2026-10-06.jsonl`).
+
+| claim | outcome | why |
+|---|---|---|
+| *Attention Is All You Need* was first posted to arXiv on 12 June 2017 | supports | arXiv 1706.03762 `<published>` is 2017-06-12T17:57:34Z |
+| *Attention Is All You Need* lists eight authors on arXiv | supports | v7 lists 8 |
+| *Attention Is All You Need* was first posted to arXiv in 2016 | **contradicts** | first posted in 2017 |
+| BERT was first posted to arXiv in 2018 | supports | arXiv 1810.04805 `<published>` is 2018-10-11T00:50:01Z |
+| The BERT paper lists five authors on arXiv | **contradicts** | v2 lists 4 |
+| *Attention Is All You Need* is arXiv 1810.04805, first posted in 2018 | unchecked | That id is BERT. The record's title is not the one the claim names, so it must not lend BERT's date to another paper. |
+| arXiv 2401.99999 was first posted in 2024 | unchecked | arXiv returned no entry |
+
+The totals are 3 supports, 2 contradicts and 2 unchecked. These are hand-picked again: they show the mechanism, not a rate.
+
+**This does not change the first slice's Attention row.** That claim says the paper was *published* in 2017, and it stays unchecked. Being posted to arXiv is a narrower claim, so it is a separate claim here, decided by its own record. One record is not stretched to cover a claim it does not state.
+
+**How it was read.** This machine's proxy refuses arXiv too, so the 3 feeds came through Supabase `pg_net` in the same way as the Wikidata bodies:
+- Postgres computed each sha256 as received.
+- The copies are in `relay-arxiv-2026-10-06.json`.
+- All 3 match their sha256 and length.
+
+The three requests were spaced a few seconds apart, as arXiv's API asks.
+
+**Database.** `ak_records.kind` listed four kinds, so `20261006170000_answer_key_arxiv.sql` widens that one check and changes nothing else. Apply it after `20261006160000`. On a scratch Postgres 16:
+- loading this run without it fails on the check;
+- with it, the run loads twice with no duplicates;
+- the result is 7 checks and 3 arXiv records.
+
+The BERT record is shared by the two claims that read it.
+
 ## Run it again
 
 ```bash
 # Everything live (on a machine that can reach wikidata.org):
 npm run answer-key -- check eval/answer-key/seed-2026-10-06.jsonl --out run.jsonl --sql run.sql
 
-# The Wikidata half offline, from the exact bytes read on 2026-10-06:
+# The arXiv slice (a GitHub runner reaches export.arxiv.org directly):
+npm run answer-key -- check eval/answer-key/seed-arxiv-2026-10-06.jsonl --out run.jsonl --sql run.sql
+
+# The relayed halves offline, from the exact bytes read on 2026-10-06:
 npx jest --config jest.config.js tests/answer-key-run
 ```
 

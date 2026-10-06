@@ -40,6 +40,30 @@ describe('the 2026-10-06 run', () => {
   });
 });
 
+describe('the 2026-10-06 arXiv run (second slice)', () => {
+  const axSeed = parseSeed(readFileSync(join(DIR, 'seed-arxiv-2026-10-06.jsonl'), 'utf8'));
+  const axRelay = JSON.parse(readFileSync(join(DIR, 'relay-arxiv-2026-10-06.json'), 'utf8'));
+  const axRun = readFileSync(join(DIR, 'run-arxiv-2026-10-06.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l) as { seed: string; outcome: string; reason: string });
+
+  it('every row reproduces offline from the committed feeds, outcome and reason', async () => {
+    const rows = await runSeed(axSeed, offline, axRelay, {});
+    for (const r of rows) {
+      const c = axRun.find((x) => x.seed === r.seed)!;
+      expect([r.outcome, r.reason]).toEqual([c.outcome, c.reason]);
+    }
+    expect(rows.every((r) => r.relayed.length === 1)).toBe(true);
+  });
+
+  it('its counts are what the records say: 3 supports, 2 contradicts, 2 unchecked', () => {
+    const count = (o: string) => axRun.filter((c) => c.outcome === o).length;
+    expect([count('supports'), count('contradicts'), count('unchecked')]).toEqual([3, 2, 2]);
+    expect(axRun).toHaveLength(axSeed.length);
+  });
+});
+
 describe('parseSeed', () => {
   it('refuses a row without id, claim or spec', () => {
     expect(() => parseSeed('{"id":"x","claim":"y"}')).toThrow(/seed line 1/);

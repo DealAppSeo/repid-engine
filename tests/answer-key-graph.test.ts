@@ -97,3 +97,24 @@ describe('the migration enforces the same rules in the database', () => {
     expect(sql).toContain("source         text        not null check (source in ('curated', 'ledger'))");
   });
 });
+
+describe('the arXiv migration widens the record kinds and nothing else', () => {
+  const sql = readFileSync(join(__dirname, '../supabase/migrations/20261006170000_answer_key_arxiv.sql'), 'utf8');
+  const statements = sql
+    .split('\n')
+    .filter((l) => !l.startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  it('two statements, both on the one kind check', () => {
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toBe('alter table public.ak_records drop constraint ak_records_kind_check');
+    expect(statements[1]).toMatch(/^alter table public\.ak_records\s+add constraint ak_records_kind_check check \(kind in \('npm', 'pypi', 'wikidata', 'claimreview', 'arxiv'\)\)$/);
+  });
+
+  it('sorts after the migration that creates ak_records', () => {
+    expect('20261006170000_answer_key_arxiv.sql' > '20261006160000_answer_key_graph.sql').toBe(true);
+  });
+});
