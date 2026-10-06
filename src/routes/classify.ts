@@ -385,12 +385,16 @@ async function questionWithin(
     const out: QuestionOutcome | 'late' = await Promise.race([askQuestion(voter, claim, { env, timeoutMs }), late]);
     // 'late': the request was already out (a refusal resolves at once), so it was asked.
     if (out === 'late') {
-      recordQuestion('none');
+      recordQuestion('none', 'late');
       return undefined;
     }
     if (!questionWasSent(out)) return undefined;
-    recordQuestion(out.kind === 'question' ? 'given' : 'none');
-    return out.kind === 'question' ? out.question : undefined;
+    if (out.kind === 'question') {
+      recordQuestion('given');
+      return out.question;
+    }
+    recordQuestion('none', out.kind === 'none' ? out.miss : out.reason);
+    return undefined;
   } catch {
     return undefined;
   } finally {

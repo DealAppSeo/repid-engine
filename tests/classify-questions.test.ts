@@ -24,7 +24,9 @@ import {
   DEFAULT_VOTERS,
   encodeClaim,
   parseQuestion,
+  questionMiss,
   questionsEnabled,
+  type QuestionMiss,
   QUESTION_MAX_CHARS,
 } from '../src/classify/free-votes';
 import { __resetClassifyStats, classifyStats } from '../src/classify/vote-health';
@@ -218,7 +220,7 @@ describe('flag on, both UNSURE: one extra call, and a parsed question comes back
       await classifyTextWithPath('Another underspecified claim.', 2500, ON);
       rec.restore();
       const s = classifyStats(ON);
-      expect(s.questions).toEqual({ asked: 2, given: 1, none: 1 });
+      expect(s.questions).toEqual({ asked: 2, given: 1, none: 1, none_why: { declined: 1 } });
       expect(JSON.stringify(s)).not.toContain('zq7');
       expect(JSON.stringify(s)).not.toContain('goat');
     });
@@ -290,39 +292,52 @@ describe('the reply is parsed strictly', () => {
     expect(parseQuestion(raw)).toBe(raw.trim());
   });
 
-  const malformed: Array<[string, unknown]> = [
-    ['no question mark', 'Does the host always open a goat door'],
-    ['too long', `Does the host ${'always '.repeat(30)}open a goat door?`],
-    ['too short', 'Which one?'.slice(1)],
-    ['two lines', 'Does the host know?\nDoes the host always open a goat door?'],
-    ['NONE', 'NONE'],
-    ['None.', 'None.'],
-    ['NONE plus a question', 'NONE. Does the host always open a goat door?'],
-    ['an http URL', 'Is it the version at https://example.com/monty?'],
-    ['a www host', 'Is it the version on www.example.org?'],
-    ['a bare domain', 'Is it the version described on example.com?'],
-    ['a script scheme', 'Is it javascript:alert(1) or not?'],
-    ['an email', 'Should I ask host@example.com about the doors?'],
-    ['markdown bold', 'Does the host **always** open a goat door?'],
-    ['markdown code', 'Does `host.open()` always pick a goat?'],
-    ['markdown link', 'Is it the [classic](x) version of the game?'],
-    ['a heading', '# Does the host always open a goat door?'],
-    ['a list item', '- Does the host always open a goat door?'],
-    ['a verdict word', 'UNSURE: does the host always open a goat door?'],
-    ['a verdict word mid-line', 'Is it TRUE that the host always opens a goat door?'],
-    ['a lower-case verdict lead', 'false, unless: does the host know where the car is?'],
-    ['a fullwidth verdict look-alike', '\uFF34\uFF32\uFF35\uFF25 if the host knows the car, does he?'],
-    ['an invisible character', 'Does the host\u200B always open a goat door?'],
+  // The third column is questionMiss: why the reply was not used, which /classify/stats counts.
+  const malformed: Array<[string, unknown, QuestionMiss]> = [
+    ['no question mark', 'Does the host always open a goat door', 'no_question_mark'],
+    ['too long', `Does the host ${'always '.repeat(30)}open a goat door?`, 'length'],
+    ['too short', 'Which one?'.slice(1), 'length'],
+    ['two lines', 'Does the host know?\nDoes the host always open a goat door?', 'control_char'],
+    ['NONE', 'NONE', 'declined'],
+    ['None.', 'None.', 'declined'],
+    ['NONE plus a question', 'NONE. Does the host always open a goat door?', 'verdict_word'],
+    ['an http URL', 'Is it the version at https://example.com/monty?', 'link'],
+    ['a www host', 'Is it the version on www.example.org?', 'link'],
+    ['a bare domain', 'Is it the version described on example.com?', 'link'],
+    ['a script scheme', 'Is it javascript:alert(1) or not?', 'link'],
+    ['an email', 'Should I ask host@example.com about the doors?', 'link'],
+    ['markdown bold', 'Does the host **always** open a goat door?', 'markup'],
+    ['markdown code', 'Does `host.open()` always pick a goat?', 'link'],
+    ['markdown link', 'Is it the [classic](x) version of the game?', 'markup'],
+    ['a heading', '# Does the host always open a goat door?', 'markup'],
+    ['a list item', '- Does the host always open a goat door?', 'markup'],
+    ['a verdict word', 'UNSURE: does the host always open a goat door?', 'verdict_word'],
+    ['a verdict word mid-line', 'Is it TRUE that the host always opens a goat door?', 'verdict_word'],
+    ['a lower-case verdict lead', 'false, unless: does the host know where the car is?', 'verdict_word'],
+    ['a fullwidth verdict look-alike', '\uFF34\uFF32\uFF35\uFF25 if the host knows the car, does he?', 'verdict_word'],
+    ['an invisible character', 'Does the host\u200B always open a goat door?', 'control_char'],
     // Strix on #1205 (optional): an entity-encoded tag is markup a renderer could decode.
-    ['a named HTML character reference', 'Does the host &lt;b&gt;always&lt;/b&gt; open a goat door?'],
-    ['a decimal character reference', 'Does the host &#60;b&#62; open a goat door?'],
-    ['a hex character reference', 'Does the host &#x3c;b&#x3e; open a goat door?'],
-    ['a fullwidth ampersand reference', 'Does the host \uFF06lt;b\uFF06gt; open a goat door?'],
-    ['not a string', 42],
-    ['empty', ''],
+    ['a named HTML character reference', 'Does the host &lt;b&gt;always&lt;/b&gt; open a goat door?', 'markup'],
+    ['a decimal character reference', 'Does the host &#60;b&#62; open a goat door?', 'markup'],
+    ['a hex character reference', 'Does the host &#x3c;b&#x3e; open a goat door?', 'markup'],
+    ['a fullwidth ampersand reference', 'Does the host \uFF06lt;b\uFF06gt; open a goat door?', 'markup'],
+    ['not a string', 42, 'empty'],
+    ['empty', '', 'empty'],
   ];
   it.each(malformed)('%s: no question', (_name, raw) => {
     expect(parseQuestion(raw)).toBeNull();
+  });
+
+  it.each(malformed)('%s: questionMiss names it as %s', (_name, raw, miss) => {
+    expect(questionMiss(raw)).toBe(miss);
+  });
+
+  it('questionMiss is null exactly when parseQuestion returns a question', () => {
+    for (const ok of [GOAT, 'Which year is meant?', 'Do the host & the contestant both know where the car is?']) {
+      expect(questionMiss(ok)).toBeNull();
+      expect(parseQuestion(ok)).not.toBeNull();
+    }
+    for (const [, raw] of malformed) expect(questionMiss(raw) === null).toBe(parseQuestion(raw) !== null);
   });
 
   it('a bare ampersand in plain words is still a question', () => {
@@ -338,14 +353,14 @@ describe('the reply is parsed strictly', () => {
 
   it.each(malformed.filter(([, raw]) => typeof raw === 'string' && raw !== ''))(
     'through the route, %s: not-checked by votes, no question key, and the call still counts as asked',
-    async (_name, raw) => {
+    async (_name, raw, miss) => {
       await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on' }, async () => {
         const rec = recordHost(unsure, () => ({ content: raw as string }));
         try {
           const res = await request(classifyApp()).post('/api/v1/classify').send({ text: CLAIM });
           expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
           expect(rec.questionCalls()).toHaveLength(1);
-          expect(classifyStats(ON).questions).toEqual({ asked: 1, given: 0, none: 1 });
+          expect(classifyStats(ON).questions).toEqual({ asked: 1, given: 0, none: 1, none_why: { [miss]: 1 } });
         } finally {
           rec.restore();
         }
@@ -354,15 +369,46 @@ describe('the reply is parsed strictly', () => {
   );
 });
 
+describe('none_why: why a question came back unusable, as counts', () => {
+  // 2026-10-06 (BUS S37): production asked 5 questions and got 5 unusable replies, and nothing said
+  // whether the model declined, ran out of tokens, or wrote something the parser rejects.
+  it.each([
+    ['an empty reply (the tokens went to reasoning)', '', 'empty'],
+    ['reasoning cut off before the answer', '<think>The host policy matters and', 'cut_off_reasoning'],
+    ['NONE', 'NONE', 'declined'],
+  ])('%s is counted as %s, and the sum matches none', async (_name, content, why) => {
+    await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on' }, async () => {
+      const rec = recordHost(unsure, () => ({ content }));
+      try {
+        await classifyTextWithPath(CLAIM, 2500, ON);
+        await classifyTextWithPath(CLAIM, 2500, ON);
+        const q = classifyStats(ON).questions!;
+        expect(q).toEqual({ asked: 2, given: 0, none: 2, none_why: { [why]: 2 } });
+        expect(JSON.stringify(q)).not.toContain('host policy');
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it('is absent with the flag off, like the rest of the questions block', async () => {
+    await withProcessEnv(CLEAN, async () => {
+      expect(classifyStats(ENV).questions).toBeUndefined();
+    });
+  });
+});
+
 describe('time: the question fits inside the deadline or does not happen', () => {
   const DEADLINE = 800;
 
+  // The last column is the none_why the stats must show. A slow reply races the route's deadline
+  // against the call's own abort, which fire at the same moment, so either name is the right one.
   it.each([
-    ['slower than the time left', { content: GOAT, delayMs: 5000 }],
-    ['hung, ignoring the abort signal', { content: GOAT, hang: true }],
-    ['a 429', { status: 429 }],
-    ['a 5xx', { status: 500 }],
-  ] as Array<[string, Reply]>)('a question call %s: no question, label unchanged, inside the deadline', async (_name, reply) => {
+    ['slower than the time left', { content: GOAT, delayMs: 5000 }, ['late', 'timeout']],
+    ['hung, ignoring the abort signal', { content: GOAT, hang: true }, ['late']],
+    ['a 429', { status: 429 }, ['rate_limited']],
+    ['a 5xx', { status: 500 }, ['http_error']],
+  ] as Array<[string, Reply, string[]]>)('a question call %s: no question, label unchanged, inside the deadline', async (_name, reply, why) => {
     await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on' }, async () => {
       const rec = recordHost(unsure, () => reply);
       try {
@@ -370,7 +416,10 @@ describe('time: the question fits inside the deadline or does not happen', () =>
         expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
         expect(res.body.latency_ms).toBeLessThan(DEADLINE);
         expect(rec.questionCalls()).toHaveLength(1);
-        expect(classifyStats(ON).questions).toEqual({ asked: 1, given: 0, none: 1 });
+        const q = classifyStats(ON).questions!;
+        expect({ asked: q.asked, given: q.given, none: q.none }).toEqual({ asked: 1, given: 0, none: 1 });
+        expect(Object.values(q.none_why)).toEqual([1]);
+        expect(why).toContain(Object.keys(q.none_why)[0]);
       } finally {
         rec.restore();
       }
@@ -385,7 +434,7 @@ describe('time: the question fits inside the deadline or does not happen', () =>
         const res = await request(classifyApp({ deadlineMs: DEADLINE })).post('/api/v1/classify').send({ text: CLAIM });
         expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
         expect(rec.questionCalls()).toHaveLength(0);
-        expect(classifyStats(ON).questions).toEqual({ asked: 0, given: 0, none: 0 });
+        expect(classifyStats(ON).questions).toEqual({ asked: 0, given: 0, none: 0, none_why: {} });
       } finally {
         rec.restore();
       }
@@ -404,7 +453,7 @@ describe('time: the question fits inside the deadline or does not happen', () =>
         expect(out).toEqual({ label: 'not-checked', by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'] });
         expect(rec.questionCalls()).toHaveLength(0);
         // Refused before any request: not asked.
-        expect(classifyStats(ON).questions).toEqual({ asked: 0, given: 0, none: 0 });
+        expect(classifyStats(ON).questions).toEqual({ asked: 0, given: 0, none: 0, none_why: {} });
       } finally {
         rec.restore();
       }
