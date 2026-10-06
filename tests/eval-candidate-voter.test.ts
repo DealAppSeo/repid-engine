@@ -9,7 +9,11 @@ jest.mock('../src/db', () => ({ db: { from: jest.fn(), rpc: jest.fn() } }));
 
 import { __resetVoteCooldowns, castVote, type Voter } from '../src/classify/free-votes';
 import {
+  candidateProfile,
+  FINDINGS_HEADER,
+  findingsRow,
   listedModels,
+  modelsUrl,
   outcomeOf,
   pairSummary,
   type BaselineRow,
@@ -38,19 +42,20 @@ describe('outcomeOf reads a stored reading back as a vote', () => {
   it('an ambiguous reading is null, never a guess', () => expect(outcomeOf(null)).toBeNull());
 });
 
+const base = (row_id: string, truth: 'TRUE' | 'FALSE', groq: string | null, prod: BaselineRow['production_label']): BaselineRow => ({
+  row_id,
+  label_truth: truth,
+  groq_gpt_oss_120b: groq,
+  cerebras_qwen_3_8_27b: 'UNSURE',
+  production_label: prod,
+});
+const cand = (row_id: string, verdict: 'TRUE' | 'FALSE' | 'UNSURE'): CandidateRow => ({
+  row_id,
+  outcome: { kind: 'verdict', verdict },
+  ms: 1,
+});
+
 describe('pairSummary: Groq as stored, paired with the candidate', () => {
-  const base = (row_id: string, truth: 'TRUE' | 'FALSE', groq: string | null, prod: BaselineRow['production_label']): BaselineRow => ({
-    row_id,
-    label_truth: truth,
-    groq_gpt_oss_120b: groq,
-    cerebras_qwen_3_8_27b: 'UNSURE',
-    production_label: prod,
-  });
-  const cand = (row_id: string, verdict: 'TRUE' | 'FALSE' | 'UNSURE'): CandidateRow => ({
-    row_id,
-    outcome: { kind: 'verdict', verdict },
-    ms: 1,
-  });
 
   it('applies the agreement rule and counts both kinds of error', () => {
     const baseline = [
@@ -102,6 +107,52 @@ describe('listedModels: the id must be on the host’s own list', () => {
     ['a network error', async () => { throw new Error('CONNECT tunnel failed'); }],
   ])('%s is null (NOT_CHECKED), never an empty list', async (_why, impl) => {
     expect(await listedModels(NIM, 'k', jest.fn(impl) as unknown as typeof fetch)).toBeNull();
+  });
+});
+
+describe('the hosts Sean named on 2026-10-06 (Workers AI, OpenRouter)', () => {
+  const ACCOUNT = 'a'.repeat(32);
+  const CF: Voter = { provider: 'workers-ai', model: '@cf/moonshotai/kimi-k2.6' };
+  const OR: Voter = { provider: 'openrouter', model: 'meta/muse-spark-1.3' };
+
+  it('Workers AI lists per account through the Cloudflare API, and needs the account id', () => {
+    expect(modelsUrl(CF, { CLOUDFLARE_ACCOUNT_ID: ACCOUNT })).toBe(
+      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/ai/models/search?per_page=1000`,
+    );
+    expect(modelsUrl(CF, {})).toBeNull();
+    expect(modelsUrl(CF, { CLOUDFLARE_ACCOUNT_ID: '../other' })).toBeNull();
+  });
+
+  it('reads Cloudflare\'s { result: [{ name }] } as well as the OpenAI { data: [{ id }] }', async () => {
+    const f = jest.fn(async () => new Response(JSON.stringify({ result: [{ name: '@cf/moonshotai/kimi-k2.6' }, { name: null }] }), { status: 200 }));
+    expect(await listedModels(CF, 'k', f as unknown as typeof fetch, { CLOUDFLARE_ACCOUNT_ID: ACCOUNT })).toEqual(
+      new Set(['@cf/moonshotai/kimi-k2.6']),
+    );
+  });
+
+  it('OpenRouter lists at /api/v1/models', () => {
+    expect(modelsUrl(OR)).toBe('https://openrouter.ai/api/v1/models');
+  });
+});
+
+describe('every trial is written down the same way', () => {
+  it('profiles what the candidate answered, with its median time', () => {
+    const rows = [cand('a', 'TRUE'), cand('b', 'UNSURE'), cand('c', 'FALSE'), { row_id: 'd', outcome: { kind: 'abstain', reason: 'timeout' }, ms: 9 }] as CandidateRow[];
+    rows[0]!.ms = 100;
+    rows[1]!.ms = 300;
+    rows[2]!.ms = 200;
+    expect(candidateProfile(rows)).toEqual({ n: 4, TRUE: 1, FALSE: 1, UNSURE: 1, abstain: 1, medianMs: 100 });
+  });
+
+  it('a findings row has one cell per header column, and names both pairs', () => {
+    const baseline = [base('a', 'TRUE', 'TRUE', 'not-checked'), base('b', 'FALSE', 'FALSE', 'veto')];
+    const rows = [cand('a', 'TRUE'), cand('b', 'FALSE')];
+    const row = findingsRow('2026-10-06', 'nvidia-nim:example/model-a', pairSummary(baseline, rows), candidateProfile(rows));
+    const cells = (line: string) => line.split('|').length;
+    expect(cells(row)).toBe(cells(FINDINGS_HEADER.split('\n')[0]!));
+    expect(row).toContain('`nvidia-nim:example/model-a`');
+    expect(row).toContain('1 → **2**');
+    expect(row).toContain('0 → **0**');
   });
 });
 

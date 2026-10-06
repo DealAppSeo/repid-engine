@@ -117,28 +117,83 @@ export function pairSummary(baseline: BaselineRow[], candidate: CandidateRow[]) 
   };
 }
 
+/**
+ * Where a host lists the model ids a key can call. OpenAI-shaped hosts answer `/models` beside
+ * `/chat/completions`; Workers AI lists per account through Cloudflare's own API, and its ids are
+ * the `@cf/...` names. Null when there is no list to read, which the caller reports as NOT_CHECKED.
+ */
+export function modelsUrl(voter: Voter, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (voter.provider === 'nvidia-nim') return PROVIDER_URLS.nvidiaNimChatCompletions.replace(/\/chat\/completions$/, '/models');
+  if (voter.provider === 'groq') return PROVIDER_URLS.groqChatCompletions.replace(/\/chat\/completions$/, '/models');
+  if (voter.provider === 'cerebras') return PROVIDER_URLS.cerebrasChatCompletions.replace(/\/chat\/completions$/, '/models');
+  if (voter.provider === 'openrouter') return PROVIDER_URLS.openrouterChatCompletions.replace(/\/chat\/completions$/, '/models');
+  if (voter.provider === 'workers-ai') {
+    const account = (env.CLOUDFLARE_ACCOUNT_ID ?? '').trim().toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(account)) return null;
+    return `${PROVIDER_URLS.cloudflareApiOrigin}/client/v4/accounts/${account}/ai/models/search?per_page=1000`;
+  }
+  return null;
+}
+
 /** The host's own list of model ids, or null when it could not be read (NOT_CHECKED, never "absent"). */
-export async function listedModels(voter: Voter, key: string, fetchImpl: typeof fetch = fetch): Promise<Set<string> | null> {
-  const chat =
-    voter.provider === 'nvidia-nim'
-      ? PROVIDER_URLS.nvidiaNimChatCompletions
-      : voter.provider === 'groq'
-        ? PROVIDER_URLS.groqChatCompletions
-        : voter.provider === 'cerebras'
-          ? PROVIDER_URLS.cerebrasChatCompletions
-          : null;
-  if (!chat) return null;
+export async function listedModels(
+  voter: Voter,
+  key: string,
+  fetchImpl: typeof fetch = fetch,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Set<string> | null> {
+  const url = modelsUrl(voter, env);
+  if (!url) return null;
   try {
-    const res = await fetchImpl(chat.replace(/\/chat\/completions$/, '/models'), {
-      headers: { Authorization: `Bearer ${key}` },
-    });
+    const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${key}` } });
     if (!res.ok) return null;
-    const json = (await res.json()) as { data?: Array<{ id?: unknown }> };
-    return new Set((json.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string'));
+    // OpenAI shape: { data: [{ id }] }. Cloudflare: { result: [{ name }] }.
+    const json = (await res.json()) as { data?: Array<{ id?: unknown }>; result?: Array<{ name?: unknown }> };
+    const ids = [...(json.data ?? []).map((m) => m.id), ...(json.result ?? []).map((m) => m.name)];
+    return new Set(ids.filter((id): id is string => typeof id === 'string'));
   } catch {
     return null;
   }
 }
+
+/** What the candidate itself answered, apart from any pairing: verdict counts, abstains, median time. */
+export function candidateProfile(rows: readonly CandidateRow[]) {
+  const counts = { TRUE: 0, FALSE: 0, UNSURE: 0, abstain: 0 };
+  for (const r of rows) {
+    if (r.outcome.kind === 'verdict') counts[r.outcome.verdict] += 1;
+    else counts.abstain += 1;
+  }
+  const ms = rows.map((r) => r.ms).sort((a, b) => a - b);
+  return { n: rows.length, ...counts, medianMs: ms.length ? ms[Math.floor((ms.length - 1) / 2)]! : null };
+}
+
+/**
+ * One row for eval/candidates/README.md, so every trial is written down the same way. The
+ * comparison is production as measured (Groq gpt-oss + Cerebras qwen) against Groq gpt-oss + the
+ * candidate on the same rows. Fewer wrong stamps matters more than more coverage: a wrong stamp is
+ * the failure a user cannot see.
+ */
+export function findingsRow(
+  date: string,
+  spec: string,
+  summary: ReturnType<typeof pairSummary>,
+  profile: ReturnType<typeof candidateProfile>,
+): string {
+  const p = summary.production;
+  const c = summary.groqPlusCandidate;
+  const wrong = (t: Tally) => t.falseShownPass + t.trueShownVeto;
+  const pct = (a: number, b: number) => (b ? `${((a / b) * 100).toFixed(1)}%` : 'n/a');
+  return (
+    `| ${date} | \`${spec}\` | ${c.n} | ${p.decided} → **${c.decided}** (${pct(p.decided, p.n)} → ${pct(c.decided, c.n)}) ` +
+    `| ${wrong(p)} → **${wrong(c)}** | ${profile.TRUE}/${profile.FALSE}/${profile.UNSURE}/${profile.abstain} ` +
+    `| ${profile.medianMs ?? 'n/a'} ms | |`
+  );
+}
+
+export const FINDINGS_HEADER = [
+  '| date | candidate | rows paired | decided: production → with candidate | wrong stamps: production → with candidate | candidate TRUE/FALSE/UNSURE/abstain | median time | notes |',
+  '|---|---|---|---|---|---|---|---|',
+].join('\n');
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -181,7 +236,7 @@ async function main(): Promise<number> {
     console.log(`NOT_CHECKED: ${KEY_VAR[voter.provider]} is not set in this session`);
     return 2;
   }
-  const listed = await listedModels(voter, key);
+  const listed = await listedModels(voter, key, fetch, process.env);
   if (!listed) {
     console.log(`NOT_CHECKED: could not read the model list from the ${voter.provider} host (network policy or key)`);
     return 2;
@@ -217,14 +272,31 @@ async function main(): Promise<number> {
   for (const c of todo) {
     const started = Date.now();
     const outcome = await castVote(voter, c.claim, { timeoutMs: 15_000, extraBody });
+    // A budget refusal is this harness's own limit (per minute, or Workers AI's 200 a UTC day),
+    // not the candidate's answer. Recording it would score a refusal as the model's reply and a
+    // resumed run would skip the row; stop instead, and the next run picks up here.
+    if (outcome.kind === 'abstain' && outcome.reason === 'budget') {
+      console.log(`stopped at the budget after ${done.size} rows; run again (tomorrow for a daily cap) to continue`);
+      break;
+    }
+    done.add(c.row_id);
     const row: CandidateRow = { row_id: c.row_id, outcome, ms: Date.now() - started };
     appendFileSync(out, `${JSON.stringify(row)}\n`);
     const wait = pauseMs - (Date.now() - started);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
 
-  const summary = pairSummary(baseline, readJsonl<CandidateRow>(out));
+  const rows = readJsonl<CandidateRow>(out);
+  const summary = pairSummary(baseline, rows);
   console.log(JSON.stringify(summary, null, 2));
+  const row = findingsRow(new Date().toISOString().slice(0, 10), spec.trim(), summary, candidateProfile(rows));
+  console.log(`\nfindings row for eval/candidates/README.md:\n${row}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### Candidate voter: \`${spec.trim()}\`\n\n${FINDINGS_HEADER}\n${row}\n\n<details><summary>pairing detail</summary>\n\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\`\n</details>\n`,
+    );
+  }
   return 0;
 }
 
