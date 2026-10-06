@@ -218,6 +218,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   // Wave 6: ERC-8004 spec — public registration file + reputation reads
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/registration\.json$/.test(req.path)) return next();
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/reputation\/(payload\.json|onchain)$/.test(req.path)) return next();
+  // 2026-10-06: the stored ERC-8004 feedback file one on-chain write committed to (its keccak256 is
+  // the write's feedbackHash). Public by design: a verifier with no key must be able to fetch it.
+  if (req.method === 'GET' && /^\/api\/v1\/agents\/[0-9a-f-]{36}\/reputation\/feedback\/[0-9a-f-]{36}\.json$/i.test(req.path)) return next();
   if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
   // Sprint 1: x402 inbound demo bypass
   if (req.method === 'POST' && /^\/api\/v1\/agents\/[^/]+\/trade-analysis$/.test(req.path)) return next();

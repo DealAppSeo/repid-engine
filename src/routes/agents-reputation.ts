@@ -176,6 +176,46 @@ export function createAgentsReputationRouter(
   );
 
   // ---------------------------------------------------------------
+  // GET /agents/:id/reputation/feedback/:eventId.json  (public)
+  //
+  // The ERC-8004 feedback file ONE on-chain write committed to, served as the exact stored string
+  // (FeedbackLoopWorker builds it once; src/services/erc8004-feedback-file.ts). keccak256 of this
+  // response body is the write's feedbackHash. It is never rebuilt: a file recomputed per request
+  // (as payload.json below is) cannot match a hash written before it.
+  // ---------------------------------------------------------------
+  router.get(
+    '/agents/:id/reputation/feedback/:eventId.json',
+    async (req: Request, res: Response) => {
+      const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const agentId = String(req.params.id);
+      const eventId = String(req.params.eventId);
+      if (!UUID.test(agentId) || !UUID.test(eventId)) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      try {
+        const { data, error } = await supabase
+          .from('repid_events')
+          .select('subject_id, event_data')
+          .eq('id', eventId)
+          .maybeSingle();
+        const file = (data?.event_data as { feedback_file?: unknown } | null)?.feedback_file;
+        if (error || !data || data.subject_id !== agentId || typeof file !== 'string') {
+          res.status(404).json({ error: 'not_found' });
+          return;
+        }
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.status(200).send(Buffer.from(file, 'utf8'));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error('[agents-reputation] feedback file read failed:', msg);
+        res.status(503).json({ error: 'unavailable' });
+      }
+    }
+  );
+
+  // ---------------------------------------------------------------
   // GET /agents/:id/reputation/payload.json  (public)
   // ---------------------------------------------------------------
   router.get(

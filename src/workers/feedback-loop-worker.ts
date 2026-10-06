@@ -1,7 +1,9 @@
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { isEligibleForOnChainWrite, POLL_EVENT_FILTER_SQL, ONCHAIN_ELIGIBLE_EVENT_TYPES } from './feedback-loop-filters';
-import { getReputationWriter, persistReputationWrite, type WriteRepIDResult } from '../services/erc8004-reputation';
+import { Erc8004ReputationWriter, getReputationWriter, persistReputationWrite, type WriteRepIDResult } from '../services/erc8004-reputation';
+import { buildFeedbackFile, feedbackFileUrl, feedbackHashOf, proofOfPaymentFrom, type SettlementRow } from '../services/erc8004-feedback-file';
+import { getActiveNetwork } from '../config/network';
 import { shouldParkForHalt } from '../services/emergency-halt';
 
 // Phase 8 — drain-mode rate limit. For the first 24h after worker boot, cap
@@ -42,6 +44,72 @@ function withRpcTimeout<T>(label: string, call: PromiseLike<T>, ms: number = RPC
       err => { clearTimeout(handle); reject(err); }
     );
   });
+}
+
+const PUBLIC_ENGINE_BASE_URL_DEFAULT = 'https://repid-engine-production.up.railway.app';
+
+/**
+ * The feedback file for one repid_events row, persisted BEFORE the on-chain write so the URI never
+ * 404s for a write that landed. A row that already carries a file (an earlier attempt that may or
+ * may not have reached the chain) reuses it, value and tier included, so a retried write commits to
+ * the same bytes and both verify. Returns null, loudly, when the file cannot be stored: no write is
+ * made against a URI that would not resolve.
+ */
+export async function prepareFeedbackFile(
+  event: { id: string; event_data: unknown },
+  agent: { id: string; agent_name: string; current_repid: number; tier: string; erc8004_token_id: string },
+  writer: { getOperatorAddress: () => Promise<string>; chainId?: number },
+): Promise<{ file: string; uri: string; hash: string; value: number; tier: string } | null> {
+  const data = (event.event_data ?? {}) as Record<string, unknown>;
+  const baseUrl = process.env.PUBLIC_ENGINE_BASE_URL || PUBLIC_ENGINE_BASE_URL_DEFAULT;
+  const uri = feedbackFileUrl(baseUrl, agent.id, event.id);
+
+  if (typeof data.feedback_file === 'string') {
+    const stored = JSON.parse(data.feedback_file) as { value: number; tag2: string };
+    const tier = stored.tag2.startsWith(Erc8004ReputationWriter.DEFAULTS.TAG_TIER_PREFIX)
+      ? stored.tag2.slice(Erc8004ReputationWriter.DEFAULTS.TAG_TIER_PREFIX.length)
+      : agent.tier;
+    return { file: data.feedback_file, uri, hash: feedbackHashOf(data.feedback_file), value: stored.value, tier };
+  }
+
+  const network = getActiveNetwork();
+  const chainId = writer.chainId ?? network.chainId;
+  const paymentId = (data.metadata as { x402_payment_id?: unknown } | undefined)?.x402_payment_id;
+  let settlement: SettlementRow | null = null;
+  if (typeof paymentId === 'string' && paymentId) {
+    const { data: row, error } = await db
+      .from('x402_settlements')
+      .select('tx_hash, payer_address, x_payment_header, is_simulated')
+      .eq('id', paymentId)
+      .maybeSingle();
+    if (error) console.error(`[FeedbackLoopWorker] settlement ${paymentId} unreadable; proofOfPayment omitted:`, error.message ?? error);
+    settlement = (row as SettlementRow | null) ?? null;
+  }
+
+  const value = Math.round(agent.current_repid);
+  const file = buildFeedbackFile({
+    chainId,
+    identityRegistry: network.contracts.identityRegistry,
+    agentTokenId: String(agent.erc8004_token_id),
+    clientAddress: await writer.getOperatorAddress(),
+    createdAt: new Date().toISOString(),
+    value,
+    valueDecimals: 0,
+    tag1: Erc8004ReputationWriter.DEFAULTS.TAG_HYPERDAG_REPID,
+    tag2: `${Erc8004ReputationWriter.DEFAULTS.TAG_TIER_PREFIX}${agent.tier}`,
+    endpoint: uri,
+    proofOfPayment: proofOfPaymentFrom(settlement, chainId),
+  });
+
+  const { error: storeErr } = await db
+    .from('repid_events')
+    .update({ event_data: { ...data, feedback_file: file } })
+    .eq('id', event.id);
+  if (storeErr) {
+    console.error(`[FeedbackLoopWorker] could not store the feedback file for event ${event.id}; not writing on chain this tick:`, storeErr.message ?? storeErr);
+    return null;
+  }
+  return { file, uri, hash: feedbackHashOf(file), value, tier: agent.tier };
 }
 
 export class FeedbackLoopWorker {
@@ -169,19 +237,26 @@ export class FeedbackLoopWorker {
           }
         }
 
-        // 2. Perform on-chain write — bounded by withRpcTimeout per CLAUDE-RULE-8
-        const feedbackHash = (event_data as any)?.tx_hash || (event_data as any)?.reputation_tx_hash || '0x0000000000000000000000000000000000000000000000000000000000000000';
+        // 2. The feedback file this write commits to: built once, stored verbatim on the event row,
+        //    hashed into feedbackHash, served unchanged at feedbackURI
+        //    (src/services/erc8004-feedback-file.ts). Until 2026-10-06 the hash was bytes32(0) and the
+        //    URI pointed at a host that answered 404, so no write could be verified end to end.
+        const prepared = await prepareFeedbackFile(event, agent, writer);
+        if (!prepared) continue; // logged inside; the row stays unprocessed and is retried next tick
+        const { file: feedbackFile, uri: feedbackURI, hash: feedbackHash, value: writeValue, tier: writeTier } = prepared;
+        const eventData = { ...(event_data as Record<string, unknown>), feedback_file: feedbackFile };
 
-        console.log(`[FeedbackLoopWorker] Writing RepID ${agent.current_repid} to chain for ${agent.agent_name} (token ${agent.erc8004_token_id})...`);
+        // 3. Perform on-chain write — bounded by withRpcTimeout per CLAUDE-RULE-8
+        console.log(`[FeedbackLoopWorker] Writing RepID ${writeValue} to chain for ${agent.agent_name} (token ${agent.erc8004_token_id})...`);
 
         const result: WriteRepIDResult = await withRpcTimeout<WriteRepIDResult>(
           `writeRepIDFeedback(${agent.agent_name},token=${agent.erc8004_token_id})`,
           writer.writeRepIDFeedback({
             agentTokenId: agent.erc8004_token_id,
-            repid: Math.round(agent.current_repid),
-            tier: agent.tier,
-            endpoint: `https://trustrepid.dev/api/v1/agents/${agent.id}/reputation/payload.json`,
-            feedbackURI: `https://trustrepid.dev/api/v1/agents/${agent.id}/reputation/payload.json`,
+            repid: writeValue,
+            tier: writeTier,
+            endpoint: feedbackURI,
+            feedbackURI,
             feedbackHash
           })
         );
@@ -197,23 +272,24 @@ export class FeedbackLoopWorker {
 
         console.log(`[FeedbackLoopWorker] RepID update confirmed for ${agent.agent_name}: ${result.txHash}`);
 
-        // 3. Mark event as processed
-        await db.from('repid_events').update({ 
+        // 4. Mark event as processed. eventData carries feedback_file: dropping it here would make
+        //    the served URI 404 for a write that is already on chain.
+        await db.from('repid_events').update({
           processed_at: new Date().toISOString(),
-          event_data: { ...(event_data as any), reputation_tx_hash: result.txHash }
+          event_data: { ...eventData, reputation_tx_hash: result.txHash }
         }).eq('id', event.id);
 
-        // 4. Update agent's last_reputation_tx_hash for fast-lookup
+        // 5. Update agent's last_reputation_tx_hash for fast-lookup
         await db.from('repid_agents').update({
           last_reputation_tx_hash: result.txHash
         }).eq('id', agent.id);
 
-        // 5. Persist write record for audit trail
+        // 6. Persist write record for audit trail
         await persistReputationWrite(db, {
           agent_id: agent.id,
           agent_token_id: agent.erc8004_token_id,
-          repid_value: Math.round(agent.current_repid),
-          tier: agent.tier,
+          repid_value: writeValue,
+          tier: writeTier,
           tx_hash: result.txHash,
           block_number: result.blockNumber,
           gas_used: result.gasUsed,
