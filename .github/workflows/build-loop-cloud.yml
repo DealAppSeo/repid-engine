@@ -62,8 +62,13 @@ jobs:
 
       - name: Git identity
         run: |
+          # This address is the repo owner's own GitHub noreply (11688996 is DealAppSeo's user id), the
+          # account whose LOOP_GH_PAT does the push. It used to be loop@users.noreply.github.com, and
+          # GitHub reads <name>@users.noreply.github.com as "the user named <name>": an unrelated real
+          # account (github.com/loop) was credited on every loop commit and named as co-author on the
+          # squash merges. Never use a bare <name>@users.noreply address for a bot.
           git config user.name "hyperdag-loop[bot]"
-          git config user.email "loop@users.noreply.github.com"
+          git config user.email "11688996+DealAppSeo@users.noreply.github.com"
 
       - name: Run one autonomous beat
         uses: anthropics/claude-code-action@v1
@@ -226,7 +231,7 @@ jobs:
           BRANCH="docs/loop-ledger-fallback-${RUN_ID}"
           git checkout -b "$BRANCH"
           git config user.name "hyperdag-loop[bot]"
-          git config user.email "loop@users.noreply.github.com"
+          git config user.email "11688996+DealAppSeo@users.noreply.github.com"   # see "Git identity" above
 
           {
             echo ""
