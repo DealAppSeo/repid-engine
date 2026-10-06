@@ -18,6 +18,7 @@ import {
   castVote,
   classifyByFreeVotes,
   CROSS_FAMILY_VOTERS,
+  DAILY_CALLS,
   DEFAULT_VOTERS,
   FAILURE_COOL_MS,
   MIN_ATTEMPT_MS,
@@ -27,7 +28,9 @@ import {
   parsePool,
   poolFor,
   standbyVoters,
+  VOTE_MAX_TOKENS,
   VOTER_POOL,
+  WORKERS_AI_MODEL,
   type VoteOutcome,
   type Voter,
 } from '../src/classify/free-votes';
@@ -36,6 +39,7 @@ import { PROVIDER_URLS } from '../src/egress/provider-hosts';
 import { classifyTextWithPath } from '../src/routes/classify';
 
 const FAKE = 'test-key-not-real';
+const CF_ACCOUNT = '0123456789abcdef0123456789abcdef';
 const ENV = {
   GROQ_API_KEY: FAKE,
   CEREBRAS_API_KEY: FAKE,
@@ -43,6 +47,8 @@ const ENV = {
   MISTRAL_API_KEY: FAKE,
   TOGETHER_API_KEY: FAKE,
   FIREWORKS_API_KEY: FAKE,
+  CLOUDFLARE_WORKERS_AI_TOKEN: FAKE,
+  CLOUDFLARE_ACCOUNT_ID: CF_ACCOUNT,
 } as NodeJS.ProcessEnv;
 const PAID = { ...ENV, SEAN_PAID_LOOP: 'paid classify' } as NodeJS.ProcessEnv;
 
@@ -52,6 +58,7 @@ const GROQ_QWEN: Voter = { provider: 'groq', model: 'qwen/qwen3.8-27b' };
 const OR_GEMMA: Voter = { provider: 'openrouter', model: 'google/gemma-4-31b-it:free' };
 const OR_NEMOTRON: Voter = { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' };
 const MISTRAL: Voter = { provider: 'mistral', model: 'mistral-small-latest' };
+const CF_LLAMA: Voter = { provider: 'workers-ai', model: WORKERS_AI_MODEL };
 const key = (v: Voter) => `${v.provider}:${v.model}`;
 
 const HOSTS: Record<string, string> = {
@@ -62,6 +69,7 @@ const HOSTS: Record<string, string> = {
   [PROVIDER_URLS.togetherChatCompletions]: 'together',
   [PROVIDER_URLS.fireworksChatCompletions]: 'fireworks',
   [PROVIDER_URLS.zaiChatCompletions]: 'zai',
+  [`${PROVIDER_URLS.cloudflareApiOrigin}/client/v4/accounts/${CF_ACCOUNT}/ai/v1/chat/completions`]: 'workers-ai',
 };
 
 type Answer = { status?: number; content?: string; delayMs?: number };
@@ -134,7 +142,16 @@ describe('the pool', () => {
   });
 
   it('never a host whose terms or contract keep it out', () => {
-    for (const v of VOTER_POOL) expect(['nvidia-nim', 'workers-ai', 'zai']).not.toContain(v.provider);
+    for (const v of VOTER_POOL) expect(['nvidia-nim', 'zai']).not.toContain(v.provider);
+  });
+
+  it('Cloudflare Workers AI is the third family: free, and the only Llama (Sean and Grok, 2026-10-06)', () => {
+    const cf = VOTER_POOL.filter((v) => v.provider === 'workers-ai');
+    expect(cf).toEqual([CF_LLAMA]);
+    expect(VOTER_POOL.filter((v) => modelFamily(v.model) === 'llama')).toEqual([CF_LLAMA]);
+    // A third family: neither of the pair's.
+    for (const v of CROSS_FAMILY_VOTERS) expect(modelFamily(v.model)).not.toBe('llama');
+    expect(poolFor(ENV).map(key)).toContain(key(CF_LLAMA));
   });
 
   it('paid models only with the paid switch on (Sean, 2026-09-10: SEAN_PAID_LOOP)', () => {
@@ -285,9 +302,21 @@ describe('a voter with no answer hands its slot on', () => {
     expect(Date.now() - started).toBeLessThan(1500);
   });
 
-  it('when Groq and Cerebras are both down, two OpenRouter models of two families decide', async () => {
+  it('when Groq and Cerebras are both down, Cloudflare’s Llama and an OpenRouter model decide', async () => {
     await canaryAllOk();
     const h = hosts((c) => (c.host === 'groq' || c.host === 'cerebras' ? { status: 503 } : { content: 'TRUE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    expect(out).toMatchObject({ label: 'pass', by: 'votes', deciders: ['workers-ai', 'openrouter'] });
+    const asked = ids(h.calls);
+    expect(asked).toContain(key(CF_LLAMA));
+    expect(asked).toContain(key(OR_GEMMA));
+  });
+
+  it('with Cloudflare down too, two OpenRouter models of two families decide', async () => {
+    await canaryAllOk();
+    const down = new Set(['groq', 'cerebras', 'workers-ai']);
+    const h = hosts((c) => (down.has(c.host) ? { status: 503 } : { content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
     const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
     expect(out).toMatchObject({ label: 'pass', by: 'votes', deciders: ['openrouter', 'openrouter'] });
@@ -402,7 +431,8 @@ describe('a stand-in is used only once the canary has seen it answer right', () 
     const h = hosts(() => ({ content: 'TRUE' }));
     globalThis.fetch = h.impl as unknown as typeof fetch;
     const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
-    expect(out).toMatchObject({ label: 'pass', deciders: ['groq', 'openrouter'] });
+    // The next in the pool after Groq's qwen is Cloudflare's Llama.
+    expect(out).toMatchObject({ label: 'pass', deciders: ['groq', 'workers-ai'] });
     expect(ids(h.calls)).not.toContain(key(GROQ_QWEN));
   });
 
@@ -523,6 +553,74 @@ describe('the stats show who gave no answer and who stood in', () => {
     const rows = health.classifyStats(ENV).voters;
     expect(rows.find((r) => r.voter === key(CEREBRAS_QWEN))!.abstains.budget).toBe(1);
     expect(rows.find((r) => r.voter === key(GROQ_QWEN))!.verdicts.TRUE).toBe(1);
+  });
+});
+
+describe('Cloudflare Workers AI: a backup only once keyed and canaried, and free by the day', () => {
+  const NO_CF = { ...ENV, CLOUDFLARE_WORKERS_AI_TOKEN: undefined, CLOUDFLARE_ACCOUNT_ID: undefined } as NodeJS.ProcessEnv;
+
+  it('without its two variables the canary reads not-checked, and it is never dialled', async () => {
+    await health.runCanary({ env: NO_CF, fetchImpl: hosts(truthful).impl, timeoutMs: 500 });
+    __resetVoteCooldowns();
+    expect(health.canaryOk(CF_LLAMA)).toBe(false);
+    const row = health.classifyStats(NO_CF).voters.find((r) => r.voter === key(CF_LLAMA));
+    expect(row?.canary.status).toBe('not-checked');
+    // All of Groq down: with Cloudflare unkeyed, the gpt-oss slot has no Llama to hand to.
+    const h = hosts((c) => (c.host === 'groq' ? { status: 503 } : { content: 'TRUE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    await classifyTextWithPath('Paris is the capital of France.', 5000, NO_CF);
+    expect(h.calls.some((c) => c.host === 'workers-ai')).toBe(false);
+  });
+
+  it('keyed and canaried: all of Groq down, the Llama stands in for the gpt-oss slot', async () => {
+    await canaryAllOk();
+    expect(health.canaryOk(CF_LLAMA)).toBe(true);
+    const h = hosts((c) => (c.host === 'groq' ? { status: 503 } : { content: 'TRUE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    expect(out).toMatchObject({ label: 'pass', deciders: ['workers-ai', 'cerebras'] });
+  });
+
+  it('a Llama never stands in against a Llama, however the pool is written', () => {
+    const groqLlama: Voter = { provider: 'groq', model: 'llama-3.3-70b-versatile' };
+    const pool = parsePool(`groq:${groqLlama.model},workers-ai:${WORKERS_AI_MODEL},cerebras:qwen-3.8-27b`)!;
+    // The other slot is a Llama, so both Llamas are skipped and the qwen is next.
+    expect(nextStandIn(pool, CF_LLAMA, new Set([key(CF_LLAMA)]), () => true)).toEqual(CEREBRAS_QWEN);
+    expect(nextStandIn(pool, groqLlama, new Set([key(groqLlama)]), () => true)).toEqual(CEREBRAS_QWEN);
+  });
+
+  it(`stops at ${DAILY_CALLS['workers-ai']} calls a UTC day, counted across its models, and starts again the next day`, async () => {
+    const cap = DAILY_CALLS['workers-ai']!;
+    expect(cap * 49).toBeLessThan(10_000); // worst-case neurons a vote, under the free day
+    const day1 = Date.parse('2026-10-06T00:00:00Z');
+    const other: Voter = { provider: 'workers-ai', model: '@cf/meta/llama-3.1-8b-instruct' };
+    const h = hosts(() => ({ content: 'TRUE' }));
+    for (let i = 0; i < cap; i += 1) {
+      // Spread a minute apart so only the daily count can refuse.
+      const v = i % 2 ? other : CF_LLAMA;
+      expect(await castVote(v, 'x', { env: ENV, fetchImpl: h.impl, timeoutMs: 500, now: () => day1 + i * 60_000 })).toEqual({
+        kind: 'verdict',
+        verdict: 'TRUE',
+      });
+    }
+    const late = day1 + cap * 60_000;
+    expect(await castVote(CF_LLAMA, 'x', { env: ENV, fetchImpl: h.impl, timeoutMs: 500, now: () => late })).toEqual({
+      kind: 'abstain',
+      reason: 'budget',
+    });
+    expect(h.calls).toHaveLength(cap);
+    const day2 = Date.parse('2026-10-07T00:00:05Z');
+    expect((await castVote(CF_LLAMA, 'x', { env: ENV, fetchImpl: h.impl, timeoutMs: 500, now: () => day2 })).kind).toBe('verdict');
+    // Groq has no daily count here: its vendor header does that job.
+    expect(DAILY_CALLS.groq).toBeUndefined();
+  });
+
+  it('a vote asks for at most 16 tokens back; every other host keeps 400', async () => {
+    expect(VOTE_MAX_TOKENS['workers-ai']).toBe(16);
+    const h = hosts(() => ({ content: 'TRUE' }));
+    await castVote(CF_LLAMA, 'x', { env: ENV, fetchImpl: h.impl, timeoutMs: 500 });
+    await castVote(GROQ_120B, 'x', { env: ENV, fetchImpl: h.impl, timeoutMs: 500 });
+    expect(h.calls.map((c) => c.body.max_tokens)).toEqual([16, 400]);
   });
 });
 
