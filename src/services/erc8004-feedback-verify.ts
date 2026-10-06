@@ -127,6 +127,73 @@ export function assessPayment(
   return { leg: 'payment', outcome: 'VERIFIED', detail: `Transfer ${proof.fromAddress} → ${proof.toAddress} on token ${hit.address}` };
 }
 
+/**
+ * FETCH POLICY for feedbackURI. Anyone can call giveFeedback, so the URI in an event is
+ * attacker-chosen: a verifier that fetched it blindly could be pointed at loopback, a private
+ * network or a cloud metadata endpoint (SSRF, CWE-918; Strix on #1225). Only a public https URL is
+ * fetched; every address the host resolves to must be public, and each redirect hop is re-checked
+ * by the caller. A refused URL is NOT_CHECKED, never fetched.
+ */
+export const FETCH_TIMEOUT_MS = 10_000;
+export const MAX_FILE_BYTES = 1_000_000;
+export const MAX_REDIRECTS = 3;
+const BLOCKED_HOSTS = new Set(['localhost', 'localhost.localdomain', 'metadata.google.internal', 'metadata.azure.com', 'metadata']);
+
+/** Why this URL may not be fetched, or null when it may (before DNS: see isPublicAddress). */
+export function fetchTargetProblem(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return 'not a URL';
+  }
+  if (url.protocol !== 'https:') return `scheme ${url.protocol} is not fetched (https only)`;
+  if (url.username || url.password) return 'credentials in the URL';
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (BLOCKED_HOSTS.has(host) || host.endsWith('.localhost') || host.endsWith('.internal')) return `host ${host} is not public`;
+  if (isIpLiteral(host) && !isPublicAddress(host)) return `address ${host} is not public`;
+  return null;
+}
+
+function isIpLiteral(host: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
+}
+
+/** True only for a globally routable unicast address (IPv4 or IPv6). */
+export function isPublicAddress(ip: string): boolean {
+  const v4 = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if ([a, b, Number(v4[3]), Number(v4[4])].some((n) => n > 255)) return false;
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false; // carrier-grade NAT
+    if (a === 169 && b === 254) return false; // link-local, cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && (b === 168 || b === 0)) return false;
+    if (a === 198 && (b === 18 || b === 19)) return false; // benchmarking
+    return true;
+  }
+  const v6 = ip.toLowerCase();
+  if (!v6.includes(':')) return false;
+  // IPv4-mapped, in dotted form or the hex form URL() normalises it to (::ffff:7f00:1).
+  const mapped = v6.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) return isPublicAddress(mapped[1]!);
+  const mappedHex = v6.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1]!, 16);
+    const lo = parseInt(mappedHex[2]!, 16);
+    return isPublicAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
+  // IPv4-compatible (::a.b.c.d, ::7f00:1) and NAT64 (64:ff9b::/96) can reach an IPv4 address
+  // this check cannot see: refused rather than guessed.
+  if (/^::[0-9a-f.:]+$/.test(v6) || v6.startsWith('64:ff9b:')) return false;
+  if (v6 === '::' || v6 === '::1') return false;
+  if (/^f[cd]/.test(v6)) return false; // unique local fc00::/7
+  if (/^fe[89ab]/.test(v6)) return false; // link-local fe80::/10
+  if (/^ff/.test(v6)) return false; // multicast
+  return true;
+}
+
 /** VERIFIED only when every leg is; any FAILED is FAILED; otherwise NOT_CHECKED. */
 export function overall(legs: readonly Leg[]): Outcome {
   if (legs.some((l) => l.outcome === 'FAILED')) return 'FAILED';

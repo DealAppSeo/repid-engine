@@ -14,6 +14,7 @@
  * Exit 0 VERIFIED, 2 NOT_CHECKED, 1 FAILED. Base Sepolia by default; --rpc or BASE_SEPOLIA_RPC_URL
  * picks the endpoint.
  */
+import { lookup } from 'node:dns/promises';
 import { ethers } from 'ethers';
 import { NETWORKS } from '../src/config/network';
 import {
@@ -23,6 +24,11 @@ import {
   assessPayment,
   assessWrite,
   exitCodeOf,
+  FETCH_TIMEOUT_MS,
+  fetchTargetProblem,
+  isPublicAddress,
+  MAX_FILE_BYTES,
+  MAX_REDIRECTS,
   overall,
   type DecodedFeedback,
   type Leg,
@@ -37,6 +43,60 @@ const IDENTITY_ABI = (identityAbiRaw as { abi?: unknown }).abi ?? identityAbiRaw
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+/**
+ * Fetch an attacker-chosen feedbackURI safely (Strix on #1225, CWE-918): public https only, every
+ * resolved address public, redirects followed by hand and each hop re-checked, a timeout, and a
+ * size cap. Anything refused comes back as an error, which the file leg reports as NOT_CHECKED.
+ */
+async function fetchFeedbackFile(start: string): Promise<{ status: number; body: Uint8Array } | { error: string }> {
+  let url = start;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    const problem = fetchTargetProblem(url);
+    if (problem) return { error: `not fetched: ${problem}` };
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    try {
+      const addrs = await lookup(host, { all: true });
+      const bad = addrs.find((a) => !isPublicAddress(a.address));
+      if (addrs.length === 0 || bad) return { error: `not fetched: ${host} resolves to a non-public address` };
+    } catch (e) {
+      return { error: `could not resolve ${host}: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    let res: Response;
+    try {
+      res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+    if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
+      url = new URL(res.headers.get('location')!, url).toString();
+      continue;
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    if (res.body) {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_FILE_BYTES) {
+          await reader.cancel();
+          return { error: `not fetched: the file is over ${MAX_FILE_BYTES} bytes` };
+        }
+        chunks.push(value);
+      }
+    }
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      body.set(c, offset);
+      offset += c.byteLength;
+    }
+    return { status: res.status, body };
+  }
+  return { error: `not fetched: more than ${MAX_REDIRECTS} redirects` };
 }
 
 async function main(): Promise<number> {
@@ -89,13 +149,7 @@ async function main(): Promise<number> {
       legs.push(/revert|nonexistent/i.test(msg) ? assessIdentity(null, null) : assessIdentity(null, msg));
     }
 
-    let fetched: { status: number; body: Uint8Array } | { error: string };
-    try {
-      const res = await fetch(decoded.feedbackURI, { redirect: 'follow' });
-      fetched = { status: res.status, body: new Uint8Array(await res.arrayBuffer()) };
-    } catch (e) {
-      fetched = { error: e instanceof Error ? e.message : String(e) };
-    }
+    const fetched = await fetchFeedbackFile(decoded.feedbackURI);
     const fileLeg = assessFile(decoded.feedbackHash, fetched);
     legs.push(fileLeg);
 
