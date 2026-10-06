@@ -53,7 +53,11 @@
  * change before they can show them.
  *
  * PUBLIC. The browser extension holds no key, so this is mounted before
- * authMiddleware. It stores nothing: no claim text, no user id, no insert of any kind.
+ * authMiddleware. It stores no claim text, no user id and no IP. The one thing it keeps is
+ * COUNTS: per UTC day, how many TRUE / FALSE / UNSURE answers each checker gave and how often the
+ * two deciders agreed or contradicted each other (src/ledger/daily-totals.ts, the checker ledger,
+ * Sean 2026-10-06). Until 2026-10-06 this line said "no insert of any kind"; the privacy line in
+ * every door says the same as this one.
  *
  * WHAT IT DECIDES, IN ORDER (B9 decided by Sean 2026-10-04; built in B15):
  *  1. Arithmetic. The whole text is a single equation, `<expr> = <number>`, evaluated
@@ -104,6 +108,7 @@ import {
   parseQuestion,
   questionsEnabled,
   questionWasSent,
+  votePrompt,
   voteWasSent,
   type QuestionOutcome,
   type VoteOutcome,
@@ -111,6 +116,7 @@ import {
   type VoterProvider,
 } from '../classify/free-votes';
 import { canaryOk, classifyStats, recordLabel, recordQuestion, recordVotes } from '../classify/vote-health';
+import { note as noteLedger } from '../ledger/daily-totals';
 
 export type ClassifyLabel = 'pass' | 'veto' | 'not-checked';
 
@@ -453,6 +459,8 @@ export async function classifyTextWithPath(
     attempts.map((t) => t.voter),
     attempts.map((t) => t.outcome),
   );
+  // Counts only (src/ledger/daily-totals.ts): names and verdict words, never the claim.
+  noteLedger({ attempts, deciders, outcomes, prompt: votePrompt(env), env });
   // Everyone the text reached, stand-ins included: the privacy answer to "who received it".
   const asked = attempts.filter((t) => voteWasSent(t.outcome)).map((t) => t.voter);
   if (asked.length === 0) {

@@ -26,6 +26,7 @@
     "grounding:diff": "ts-node scripts/grounding/diff-report.ts",
     "eval:backtest-classify": "ts-node scripts/eval/backtest-classify.ts",
     "eval:candidate-voter": "ts-node scripts/eval/candidate-voter.ts",
+    "eval:ledger": "ts-node scripts/eval/ledger.ts",
     "verify:feedback-write": "ts-node scripts/verify-feedback-write.ts",
     "demo:human-backed": "ts-node scripts/demo/human-backed-validation.ts",
     "decay:stop-diff": "ts-node scripts/identity/decay-stop-diff.ts",
