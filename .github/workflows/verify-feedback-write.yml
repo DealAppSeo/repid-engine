@@ -1,0 +1,52 @@
+# Verify one ERC-8004 reputation write from the public record alone (scripts/verify-feedback-write.ts).
+#
+# WHY A WORKFLOW. Anyone can run the script locally; this is the no-install path, and the one an
+# agent session can use (its network policy refuses the Base RPC hosts). It reads the chain and the
+# feedback file, nothing else: no secret, no database, contents: read.
+#
+# The job summary shows each leg (write, identity, file, fields, payment) as VERIFIED, NOT_CHECKED
+# or FAILED. The job is red unless every leg is VERIFIED: exit 2 (NOT_CHECKED) is not a pass.
+
+name: verify-feedback-write
+
+on:
+  workflow_dispatch:
+    inputs:
+      tx_hash:
+        description: Base Sepolia transaction hash of a giveFeedback write (0x + 64 hex)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install (legacy peer deps per nixpacks.toml)
+        run: npm install --legacy-peer-deps
+
+      - name: Verify the write
+        env:
+          # Input goes through env, never into the script text, so a value cannot become shell.
+          TX_HASH: ${{ inputs.tx_hash }}
+        run: |
+          case "$TX_HASH" in 0x*) ;; *) echo "tx_hash must start with 0x"; exit 1;; esac
+          set +e
+          npx ts-node scripts/verify-feedback-write.ts "$TX_HASH" | tee verify.txt
+          code=${PIPESTATUS[0]}
+          {
+            echo "### ERC-8004 write \`$TX_HASH\`"
+            echo '```'
+            cat verify.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
