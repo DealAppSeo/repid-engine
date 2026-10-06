@@ -164,6 +164,8 @@ const ALLOWLIST = {
   CANARY_DELAY_MS: 'scripts/eval/canary-f1.ts only; generator scans src/.',
   CANARY_LIMIT: 'scripts/eval/canary-f1.ts only; generator scans src/.',
   CANARY_RAW: 'scripts/eval/canary-f1.ts only; generator scans src/.',
+  LITELLM_URL: 'scripts/eval/candidate-voter.ts only (eval-only gateway host); generator scans src/.',
+  LITELLM_MASTER_KEY: 'scripts/eval/candidate-voter.ts only (key for that gateway); generator scans src/.',
   RIG_CORPUS: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
   RIG_DELAY_MS: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
   RIG_LIMIT: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
