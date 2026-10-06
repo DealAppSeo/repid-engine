@@ -11,6 +11,11 @@ import { __resetVoteCooldowns, castVote, type VoteOutcome, type Voter } from '..
 import {
   askAll,
   candidateProfile,
+  castEvalVote,
+  EVAL_HOSTS,
+  idsFromModelList,
+  parseCandidate,
+  sharesProductionQuota,
   FINDINGS_HEADER,
   findingsRow,
   listedModels,
@@ -264,5 +269,102 @@ describe('what the host said, without a credential', () => {
     expect(res.status).toBe(404);
     expect(await res.text()).toContain('Function not found');
     expect(seen.get(404)).toContain('Function not found');
+  });
+});
+
+describe('eval-only hosts (Sean, 2026-10-06: "we should test them all")', () => {
+  it('a spec names an eval host or a production voter host, nothing else', () => {
+    expect(parseCandidate('deepseek:deepseek-flash')).toMatchObject({ kind: 'eval', provider: 'deepseek', model: 'deepseek-flash' });
+    expect(parseCandidate('anthropic:claude-haiku-4-5-20251001')).toMatchObject({ kind: 'eval', provider: 'anthropic' });
+    expect(parseCandidate('nvidia-nim:nvidia/nemotron-3-super-120b-a12b')).toMatchObject({ kind: 'voter', provider: 'nvidia-nim' });
+    expect(parseCandidate('together:meta-llama/Llama-3.3-70B-Instruct-Turbo')).toMatchObject({ kind: 'voter', provider: 'together' });
+    expect(parseCandidate('nosuchhost:model')).toBeNull();
+    expect(parseCandidate('deepseek:')).toBeNull();
+    expect(parseCandidate(undefined)).toBeNull();
+  });
+
+  it('only production voters\' own ids are refused for sharing quota', () => {
+    expect(sharesProductionQuota('groq', 'openai/gpt-oss-120b')).toBe(true);
+    expect(sharesProductionQuota('groq', 'qwen/qwen3.8-27b')).toBe(true);
+    expect(sharesProductionQuota('cerebras', 'anything')).toBe(true);
+    expect(sharesProductionQuota('groq', 'moonshotai/kimi-k2-instruct')).toBe(false);
+    expect(sharesProductionQuota('deepseek', 'deepseek-flash')).toBe(false);
+  });
+
+  it.each([
+    ['OpenAI', { data: [{ id: 'a' }, { id: 1 }] }],
+    ['Cloudflare', { result: [{ name: 'a' }] }],
+    ['Cohere', { models: [{ name: 'a' }] }],
+    ['Together (bare array)', [{ id: 'a' }]],
+  ])('reads a %s model list', (_shape, json) => {
+    expect(idsFromModelList(json)).toEqual(new Set(['a']));
+  });
+
+  function stub(responses: Array<{ status: number; body?: unknown; headers?: Record<string, string> }>) {
+    const sent: Array<{ url: string; body: Record<string, unknown>; auth: string }> = [];
+    const impl = jest.fn(async (url: unknown, init?: RequestInit) => {
+      sent.push({ url: String(url), body: JSON.parse(String(init?.body)), auth: (init?.headers as Record<string, string>).Authorization! });
+      const r = responses.shift()!;
+      return new Response(JSON.stringify(r.body ?? {}), { status: r.status, headers: r.headers });
+    });
+    return { impl, sent };
+  }
+  const ok = (content: unknown) => ({ status: 200, body: { choices: [{ message: { content } }] } });
+  const noSleep = async () => undefined;
+
+  it('asks exactly as production asks: system prompt, encoded claim, 400 tokens, temperature 0, Bearer key', async () => {
+    const { impl, sent } = stub([ok('TRUE')]);
+    const out = await castEvalVote(EVAL_HOSTS.deepseek!, 'deepseek-flash', 'Paris is in France.', { key: 'k', timeoutMs: 500, fetchImpl: impl as never, sleep: noSleep });
+    expect(out).toEqual({ kind: 'verdict', verdict: 'TRUE' });
+    expect(sent[0]!.url).toBe('https://api.deepseek.com/chat/completions');
+    expect(sent[0]!.auth).toBe('Bearer k');
+    expect(sent[0]!.body).toMatchObject({ model: 'deepseek-flash', max_tokens: 400, temperature: 0 });
+    expect((sent[0]!.body.messages as unknown[]).length).toBe(2);
+  });
+
+  it('extra fields are added but cannot replace the model, messages, cap or temperature', async () => {
+    const { impl, sent } = stub([ok('FALSE')]);
+    await castEvalVote(EVAL_HOSTS.deepseek!, 'deepseek-flash', 'x', {
+      key: 'k', timeoutMs: 500, fetchImpl: impl as never, sleep: noSleep,
+      extraBody: { thinking: { type: 'disabled' }, model: 'other', max_tokens: 9999, temperature: 1 },
+    });
+    expect(sent[0]!.body).toMatchObject({ thinking: { type: 'disabled' }, model: 'deepseek-flash', max_tokens: 400, temperature: 0 });
+  });
+
+  it('Claude 5-family gets no temperature (it answers 400 to any non-default value); Haiku gets 0', async () => {
+    const a = stub([ok('TRUE')]);
+    await castEvalVote(EVAL_HOSTS.anthropic!, 'claude-sonnet-5', 'x', { key: 'k', timeoutMs: 500, fetchImpl: a.impl as never, sleep: noSleep });
+    expect('temperature' in a.sent[0]!.body).toBe(false);
+    const b = stub([ok('TRUE')]);
+    await castEvalVote(EVAL_HOSTS.anthropic!, 'claude-haiku-4-5-20251001', 'x', { key: 'k', timeoutMs: 500, fetchImpl: b.impl as never, sleep: noSleep });
+    expect(b.sent[0]!.body.temperature).toBe(0);
+  });
+
+  it('a 429 waits and asks again (the host\'s pacing, not the model\'s answer); four in a row is rate_limited', async () => {
+    const waits: number[] = [];
+    const { impl } = stub([{ status: 429, headers: { 'retry-after': '2' } }, ok('UNSURE')]);
+    const out = await castEvalVote(EVAL_HOSTS.xai!, 'grok', 'x', { key: 'k', timeoutMs: 500, fetchImpl: impl as never, sleep: async (ms) => void waits.push(ms) });
+    expect(out).toEqual({ kind: 'verdict', verdict: 'UNSURE' });
+    expect(waits).toEqual([2000]);
+    const four = stub([{ status: 429 }, { status: 429 }, { status: 429 }, { status: 429 }]);
+    expect(await castEvalVote(EVAL_HOSTS.xai!, 'grok', 'x', { key: 'k', timeoutMs: 500, fetchImpl: four.impl as never, sleep: noSleep })).toEqual({ kind: 'abstain', reason: 'rate_limited' });
+  });
+
+  it('an HTTP error, an unparseable reply and a network failure are failures after a request', async () => {
+    expect(await castEvalVote(EVAL_HOSTS.xai!, 'g', 'x', { key: 'k', timeoutMs: 500, fetchImpl: stub([{ status: 404 }]).impl as never, sleep: noSleep })).toEqual({ kind: 'abstain', reason: 'http_error' });
+    const un = await castEvalVote(EVAL_HOSTS.xai!, 'g', 'x', { key: 'k', timeoutMs: 500, fetchImpl: stub([ok('maybe so')]).impl as never, sleep: noSleep });
+    expect(un).toMatchObject({ kind: 'abstain', reason: 'unparseable' });
+    const boom = jest.fn(async () => { throw new Error('ECONNRESET'); });
+    expect(await castEvalVote(EVAL_HOSTS.xai!, 'g', 'x', { key: 'k', timeoutMs: 500, fetchImpl: boom as never, sleep: noSleep })).toEqual({ kind: 'abstain', reason: 'network' });
+  });
+
+  it('litellm needs LITELLM_URL; without it there is no endpoint and nothing is sent', async () => {
+    expect(EVAL_HOSTS.litellm!.chatUrl({})).toBeNull();
+    expect(EVAL_HOSTS.litellm!.chatUrl({ LITELLM_URL: 'https://gw.example/' })).toBe('https://gw.example/v1/chat/completions');
+    expect(EVAL_HOSTS.litellm!.chatUrl({ LITELLM_URL: 'file:///etc/passwd' })).toBeNull();
+    const { impl } = stub([]);
+    const out = await castEvalVote(EVAL_HOSTS.litellm!, 'm', 'x', { key: 'k', timeoutMs: 500, env: {}, fetchImpl: impl as never, sleep: noSleep });
+    expect(out).toEqual({ kind: 'abstain', reason: 'no_key' });
+    expect(impl).not.toHaveBeenCalled();
   });
 });

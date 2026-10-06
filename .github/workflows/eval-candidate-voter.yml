@@ -11,10 +11,14 @@
 # 200-a-day cap and the next run resumes, so keep Workers AI runs to finalists.
 #
 # KEYS. Repository secrets, read only by the one step that needs them, never echoed. A missing
-# key exits 2 (NOT_CHECKED) with the variable's name; it never runs on a guess.
-#   NVIDIA_NIM_API_KEY                                  for nvidia-nim (evaluation use only, by NVIDIA's terms)
-#   CLOUDFLARE_WORKERS_AI_TOKEN + CLOUDFLARE_ACCOUNT_ID for workers-ai
-#   OPENROUTER_API_KEY                                  for openrouter
+# key exits 2 (NOT_CHECKED) with the variable's name; it never runs on a guess. Each host reads
+# the variable of the same name as production (KEY_VAR / EVAL_HOSTS in the script):
+#   NVIDIA_NIM_API_KEY (evaluation use only, by NVIDIA's terms), CLOUDFLARE_WORKERS_AI_TOKEN +
+#   CLOUDFLARE_ACCOUNT_ID, OPENROUTER_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, TOGETHER_API_KEY,
+#   FIREWORKS_API_KEY, DEEPSEEK_API_KEY, XAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY,
+#   COHERE_API_KEY, PERPLEXITY_API_KEY, ASI1_API_KEY, HUGGINGFACE_API_TOKEN, LITELLM_URL +
+#   LITELLM_MASTER_KEY.
+# The hosts below nvidia-nim..fireworks are EVAL-ONLY (EVAL_HOSTS): no production path calls them.
 #
 # OUTPUT. The job summary carries one ready-to-paste row for eval/candidates/README.md, and the
 # per-claim answers are uploaded as an artifact (outcomes only: no claim text, no key).
@@ -25,9 +29,9 @@ on:
   workflow_dispatch:
     inputs:
       provider:
-        description: Host to evaluate on (none of these share production's Groq quota)
+        description: Host to evaluate on (a production voter's own model id is refused; see sharesProductionQuota)
         type: choice
-        options: [nvidia-nim, workers-ai, openrouter]
+        options: [nvidia-nim, workers-ai, openrouter, groq, mistral, together, fireworks, deepseek, xai, gemini, anthropic, cohere, perplexity, asi1, huggingface, litellm]
         required: true
       model:
         description: Model id exactly as the host lists it (e.g. nvidia/nemotron-3-super-120b-a12b)
@@ -73,6 +77,20 @@ jobs:
           CLOUDFLARE_WORKERS_AI_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_AI_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          ASI1_API_KEY: ${{ secrets.ASI1_API_KEY }}
+          HUGGINGFACE_API_TOKEN: ${{ secrets.HUGGINGFACE_API_TOKEN }}
+          LITELLM_URL: ${{ secrets.LITELLM_URL }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
         run: |
           case "$LIMIT" in ''|*[!0-9]*) echo "limit must be a whole number"; exit 1;; esac
           set -- --voter "$PROVIDER:$MODEL" --limit "$LIMIT" --out candidate.jsonl
