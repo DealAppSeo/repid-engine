@@ -1,0 +1,14 @@
+{"id":"npm-express-4.18.2","claim":"Version 4.18.2 of the npm package express is published.","spec":{"kind":"npm-package","name":"express","version":"4.18.2","asserts":"exists"}}
+{"id":"npm-lodash-5.0.0","claim":"Version 5.0.0 of the npm package lodash is published.","spec":{"kind":"npm-package","name":"lodash","version":"5.0.0","asserts":"exists"}}
+{"id":"npm-hyperdag-trustshell-1.6.0","claim":"Version 1.6.0 of @hyperdag/trustshell is published on npm.","spec":{"kind":"npm-package","name":"@hyperdag/trustshell","version":"1.6.0","asserts":"exists"}}
+{"id":"npm-hyperdag-protocol","claim":"The npm package @hyperdag/protocol is published.","spec":{"kind":"npm-package","name":"@hyperdag/protocol","asserts":"exists"}}
+{"id":"npm-invented-package","claim":"The npm package trustshell-nonexistent-demo-package-2026 is published (a stand-in for a package name an AI made up).","spec":{"kind":"npm-package","name":"trustshell-nonexistent-demo-package-2026","asserts":"exists"}}
+{"id":"pypi-requests-2.31.0","claim":"Version 2.31.0 of the Python package requests is published on PyPI.","spec":{"kind":"pypi-package","name":"requests","version":"2.31.0","asserts":"exists"}}
+{"id":"pypi-numpy-3.0.0","claim":"Version 3.0.0 of numpy is published on PyPI.","spec":{"kind":"pypi-package","name":"numpy","version":"3.0.0","asserts":"exists"}}
+{"id":"wd-python-1991","claim":"Python was first released in 1991.","spec":{"kind":"wikidata","entity":"Q28865","property":"P571","expected":{"type":"year","year":1991},"single":true}}
+{"id":"wd-australia-capital-sydney","claim":"The capital of Australia is Sydney.","spec":{"kind":"wikidata","entity":"Q408","property":"P36","expected":{"type":"item","id":"Q3130"},"single":true}}
+{"id":"wd-attention-2017","claim":"Attention Is All You Need was published in 2017.","spec":{"kind":"wikidata","entity":"Q30249683","property":"P577","expected":{"type":"year","year":2017},"single":true}}
+{"id":"wd-origin-of-species-1859","claim":"On the Origin of Species was published in 1859.","spec":{"kind":"wikidata","entity":"Q20124","property":"P577","expected":{"type":"year","year":1859},"single":true}}
+{"id":"wd-everest-8849","claim":"Mount Everest is 8,849 metres tall.","spec":{"kind":"wikidata","entity":"Q513","property":"P2044","expected":{"type":"quantity","amount":8848.86,"tolerance":0.5,"unit":"Q11573"},"single":false}}
+{"id":"wd-microsoft-1976","claim":"Microsoft was founded in 1976.","spec":{"kind":"wikidata","entity":"Q2283","property":"P571","expected":{"type":"year","year":1976},"single":true}}
+{"id":"cr-einstein-insanity","claim":"Albert Einstein said that insanity is doing the same thing over and over and expecting different results.","spec":{"kind":"claimreview","query":"Einstein insanity doing the same thing over and over expecting different results"}}
