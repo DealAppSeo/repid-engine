@@ -2,8 +2,13 @@
  * POST /api/v1/human/bind when the body names a wallet and an agent.
  * Inserts one human_agent_binds row when HUMAN_AGENT_BIND_ENABLED is the exact string true.
  * A repeated pair is 409. Unset or any other value is 410 and inserts nothing.
- * A body with neither field falls through to the existing bind route.
+ * A body that names no wallet falls through to the signed bind route (routes/v1/byok.ts).
  * This route does not score.
+ *
+ * Until 2026-10-06 only a body with NEITHER field fell through. The signed bind's body is
+ * { agent_id, signature, scope } with the wallet taken from the authenticated principal, so
+ * every real bind met this handler first and got 400 'rejected': the signed route never ran.
+ * Pinned by tests/human-bind-staging-passthrough.test.ts.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { db } from '../db';
@@ -25,7 +30,7 @@ router.post('/human/bind', async (req: Request, res: Response, next: NextFunctio
   const record = body as Record<string, unknown>;
   const wallet = text(record, 'wallet');
   const agent = text(record, 'agent_id') || text(record, 'agent');
-  if (!wallet && !agent) {
+  if (!wallet) {
     next();
     return;
   }

@@ -42,7 +42,7 @@ jest.mock('../src/db', () => ({ db: { from: (t: string) => from(t) } }));
 jest.mock('../src/db/direct-pg', () => ({ pgQuery: jest.fn() }));
 
 import { buildFeedbackFile, feedbackHashOf, feedbackFileUrl, payeeFromPaymentHeader, proofOfPaymentFrom } from '../src/services/erc8004-feedback-file';
-import { assessFields, assessFile, assessIdentity, assessPayment, assessWrite, exitCodeOf, overall, type DecodedFeedback } from '../src/services/erc8004-feedback-verify';
+import { assessFields, assessFile, assessIdentity, assessPayment, assessWrite, exitCodeOf, fetchTargetProblem, isPublicAddress, overall, type DecodedFeedback } from '../src/services/erc8004-feedback-verify';
 import { prepareFeedbackFile } from '../src/workers/feedback-loop-worker';
 import { createAgentsReputationRouter } from '../src/routes/agents-reputation';
 import reputationAbiRaw from '../src/contracts/ReputationRegistry.abi.json';
@@ -289,5 +289,43 @@ describe('the verifier, leg by leg', () => {
     expect(overall([v, { ...v, outcome: 'NOT_CHECKED' }])).toBe('NOT_CHECKED');
     expect(overall([v, { ...v, outcome: 'NOT_CHECKED' }, { ...v, outcome: 'FAILED' }])).toBe('FAILED');
     expect([exitCodeOf('VERIFIED'), exitCodeOf('NOT_CHECKED'), exitCodeOf('FAILED')]).toEqual([0, 2, 1]);
+  });
+});
+
+describe('the verifier never fetches an attacker-chosen destination (Strix on #1225, CWE-918)', () => {
+  it('fetches our own feedback URL', () => {
+    expect(fetchTargetProblem(`https://repid-engine-production.up.railway.app/api/v1/agents/${AGENT}/reputation/feedback/${EVENT}.json`)).toBeNull();
+  });
+  it.each([
+    'http://example.com/f.json',
+    'ipfs://bafy/f.json',
+    'file:///etc/passwd',
+    'https://user:pw@example.com/f.json',
+    'https://localhost/f.json',
+    'https://api.localhost/f.json',
+    'https://metadata.google.internal/computeMetadata/v1/',
+    'https://169.254.169.254/latest/meta-data/',
+    'https://127.0.0.1/f.json',
+    'https://10.0.0.5/f.json',
+    'https://172.16.1.1/f.json',
+    'https://192.168.1.1/f.json',
+    'https://100.64.0.1/f.json',
+    'https://[::1]/f.json',
+    'https://[fd00::1]/f.json',
+    'https://[fe80::1]/f.json',
+    'https://[::ffff:127.0.0.1]/f.json',
+    'https://[::ffff:a9fe:a9fe]/f.json',
+    'https://[64:ff9b::a9fe:a9fe]/f.json',
+    'not a url',
+  ])('refuses %s', (url) => {
+    expect(fetchTargetProblem(url)).not.toBeNull();
+  });
+  it('classifies resolved addresses: only globally routable ones are public', () => {
+    expect(isPublicAddress('104.18.1.1')).toBe(true);
+    expect(isPublicAddress('2606:4700::1111')).toBe(true);
+    expect(isPublicAddress('::ffff:6812:101')).toBe(true); // 104.18.1.1, hex-mapped
+    for (const a of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '192.168.0.1', '0.0.0.0', '::1', 'fd12::1', 'fe80::1', '::ffff:10.0.0.1', '224.0.0.1']) {
+      expect(isPublicAddress(a)).toBe(false);
+    }
   });
 });
