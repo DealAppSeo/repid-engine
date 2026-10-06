@@ -1477,10 +1477,10 @@ if (!IS_TEST) {
             repidSnapshot: r.repid_snapshot as number | null,
           }));
         };
-        const writeback = async (id: number, uid: string, _txHash: string | null) => {
+        const writeback = async (id: number, uid: string, txHash: string | null) => {
           const { error } = await db
             .from('agent_memory_roots')
-            .update({ eas_uid: uid, anchored_at: new Date().toISOString() })
+            .update({ eas_uid: uid, anchored_at: new Date().toISOString(), tx_hash: txHash })
             .eq('id', id);
           if (error) throw error;
         };
