@@ -258,7 +258,9 @@ export function votesOf(value: unknown, deciders: readonly string[], label: Clas
     out.push({ voter: deciders[i]!, family, verdict: verdict as VoteReading['verdict'] });
   }
   const [a, b] = [out[0]!.verdict, out[1]!.verdict];
-  const agreed = a === b && (a === 'TRUE' || a === 'FALSE') ? (a === 'TRUE' ? 'pass' : 'veto') : NOT_CHECKED;
+  // S47: one family agreeing is one opinion, so it can only ever be not-checked (free-votes oneFamily).
+  const sameFamily = out[0]!.family === out[1]!.family;
+  const agreed = !sameFamily && a === b && (a === 'TRUE' || a === 'FALSE') ? (a === 'TRUE' ? 'pass' : 'veto') : NOT_CHECKED;
   return agreed === label ? out : null;
 }
 

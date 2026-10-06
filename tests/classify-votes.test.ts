@@ -26,6 +26,17 @@ describe('votesOf', () => {
     expect(votesOf([v('FALSE'), v('FALSE', 'cerebras', 'qwen')], D, 'pass')).toBeNull();
   });
 
+  it('S47: one family agreeing is one opinion: not-checked, never a pass or a veto', () => {
+    const G = ['groq', 'groq'];
+    expect(votesOf([v('TRUE'), v('TRUE')], G, 'not-checked')).toHaveLength(2);
+    expect(votesOf([v('FALSE'), v('FALSE')], G, 'not-checked')).toHaveLength(2);
+    expect(votesOf([v('TRUE'), v('TRUE')], G, 'pass')).toBeNull();
+    expect(votesOf([v('FALSE'), v('FALSE')], G, 'veto')).toBeNull();
+    // Two hosts, one family: still one opinion.
+    expect(votesOf([v('TRUE'), v('TRUE', 'cerebras', 'gpt-oss')], D, 'pass')).toBeNull();
+    expect(votesOf([v('TRUE'), v('TRUE', 'cerebras', 'gpt-oss')], D, 'not-checked')).toHaveLength(2);
+  });
+
   it('exactly the two deciders, in order, with a plain family and a known verdict word', () => {
     expect(votesOf([v('TRUE', 'cerebras', 'qwen'), v('TRUE')], D, 'pass')).toBeNull(); // order
     expect(votesOf([v('TRUE')], D, 'pass')).toBeNull(); // one

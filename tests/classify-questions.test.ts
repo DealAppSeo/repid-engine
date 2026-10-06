@@ -239,8 +239,10 @@ describe('flag on, anything but both UNSURE: no extra call', () => {
     ['one UNSURE, one 429', (m) => (m.endsWith('120b') ? { content: 'UNSURE' } : { status: 429 }), 'not-checked'],
     ['one UNSURE, one 5xx', (m) => (m.endsWith('120b') ? { content: 'UNSURE' } : { status: 503 }), 'not-checked'],
     ['one UNSURE, one unparseable', (m) => ({ content: m.endsWith('120b') ? 'UNSURE' : 'UNSURE, because' }), 'not-checked'],
-    ['both TRUE (pass)', () => ({ content: 'TRUE' }), 'pass'],
-    ['both FALSE (veto)', () => ({ content: 'FALSE' }), 'veto'],
+    // ON is the Groq x2 default, one family: since S47 its agreement is not-checked, and still asks
+    // nothing (neither said UNSURE). A two-family pass and veto are pinned through the route below.
+    ['both TRUE (one family: not-checked)', () => ({ content: 'TRUE' }), 'not-checked'],
+    ['both FALSE (one family: not-checked)', () => ({ content: 'FALSE' }), 'not-checked'],
   ];
   it.each(cases)('%s', async (_name, vote, label) => {
     await withProcessEnv(CLEAN, async () => {
@@ -508,12 +510,13 @@ describe('the data-locality boundary refuses the extra call exactly as it refuse
 
 describe('the question never rides on anything but not-checked by votes', () => {
   it('a pass, a veto, arithmetic and skipped from the real classifier carry no question', async () => {
-    await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on' }, async () => {
+    // Two families (Groq + Cerebras): only such a pair can pass or veto (S47).
+    await withProcessEnv({ ...CLEAN, CLASSIFY_QUESTIONS: 'on', CEREBRAS_API_KEY: KEY }, async () => {
       for (const [content, label] of [['TRUE', 'pass'], ['FALSE', 'veto']]) {
         const rec = recordHost(() => ({ content }));
         try {
           const res = await request(classifyApp()).post('/api/v1/classify').send({ text: CLAIM });
-          expect(res.body).toEqual({ label, latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'], votes: expect.any(Array) });
+          expect(res.body).toEqual({ label, latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'cerebras'], deciders: ['groq', 'cerebras'], votes: expect.any(Array) });
         } finally {
           rec.restore();
         }

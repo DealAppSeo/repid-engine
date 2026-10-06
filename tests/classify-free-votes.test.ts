@@ -20,6 +20,8 @@ import {
   classifyByFreeVotes,
   combineVotes,
   DEFAULT_VOTERS,
+  modelFamily,
+  oneFamily,
   parseVerdict,
   parseVoters,
   stripReasoning,
@@ -36,6 +38,9 @@ import {
 } from '../src/routes/classify';
 
 const ENV = { GROQ_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
+// Two families (Groq gpt-oss + Cerebras qwen). Since S47 (Sean, 2026-10-06) only a pair like this can
+// decide: ENV alone is the Groq x2 default, one family, and always answers not-checked.
+const XENV = { ...ENV, CEREBRAS_API_KEY: 'test-key-not-real' } as NodeJS.ProcessEnv;
 
 type Reply = { status?: number; content?: string; delayMs?: number; headers?: Record<string, string> };
 
@@ -247,11 +252,33 @@ describe('classifyText and the route', () => {
 
   it('prose: both TRUE is pass, both FALSE is veto, a split is not-checked', async () => {
     withGlobalHost(() => ({ content: 'TRUE' }));
-    expect(await classifyText('Paris is the capital of France.', 2500, ENV)).toBe('pass');
+    expect(await classifyText('Paris is the capital of France.', 2500, XENV)).toBe('pass');
     withGlobalHost(() => ({ content: 'FALSE' }));
-    expect(await classifyText('Paris is the capital of Spain.', 2500, ENV)).toBe('veto');
+    expect(await classifyText('Paris is the capital of Spain.', 2500, XENV)).toBe('veto');
     withGlobalHost((model) => ({ content: model.endsWith('120b') ? 'TRUE' : 'FALSE' }));
-    expect(await classifyText('Contested claim.', 2500, ENV)).toBe('not-checked');
+    expect(await classifyText('Contested claim.', 2500, XENV)).toBe('not-checked');
+  });
+
+  it('S47: oneFamily is a family rule, not a host rule', () => {
+    const v = (provider: string, model: string) => ({ provider, model }) as (typeof DEFAULT_VOTERS)[number];
+    expect(oneFamily(DEFAULT_VOTERS[0]!, DEFAULT_VOTERS[1]!)).toBe(true); // gpt-oss-120b + gpt-oss-20b
+    expect(oneFamily(CROSS_FAMILY_VOTERS[0]!, CROSS_FAMILY_VOTERS[1]!)).toBe(false); // gpt-oss + qwen
+    expect(oneFamily(v('groq', 'openai/gpt-oss-120b'), v('cerebras', 'gpt-oss-120b'))).toBe(true); // two hosts, one family
+    expect(oneFamily(v('groq', 'qwen/qwen3-32b'), v('groq', 'openai/gpt-oss-20b'))).toBe(false); // one host, two families
+  });
+
+  it('S47: two families or not-checked. One family agreeing is one opinion, never a pass or a veto', async () => {
+    // ENV is the Groq x2 default: gpt-oss-120b and gpt-oss-20b, one family.
+    expect(activeVoters(ENV).map((v) => modelFamily(v.model))).toEqual(['gpt-oss', 'gpt-oss']);
+    const both = withGlobalHost(() => ({ content: 'TRUE' }));
+    expect(await classifyText('Paris is the capital of France.', 2500, ENV)).toBe('not-checked');
+    expect(both).toHaveLength(2); // both were still asked: their words are reported, they just cannot decide
+    withGlobalHost(() => ({ content: 'FALSE' }));
+    expect(await classifyText('Paris is the capital of Spain.', 2500, ENV)).toBe('not-checked');
+    // CLASSIFY_VOTERS naming two of one family is the same case, on any host.
+    const named = { ...ENV, CLASSIFY_VOTERS: 'groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b' } as NodeJS.ProcessEnv;
+    withGlobalHost(() => ({ content: 'TRUE' }));
+    expect(await classifyText('Water boils at 100 C at sea level.', 2500, named)).toBe('not-checked');
   });
 
   it('CLASSIFY_FREE_VOTES=off is arithmetic-only again', async () => {
@@ -268,7 +295,9 @@ describe('classifyText and the route', () => {
 
   it('through the route: a prose pass, stores nothing, answers inside the deadline', async () => {
     const saved = process.env.GROQ_API_KEY;
+    const savedCerebras = process.env.CEREBRAS_API_KEY;
     process.env.GROQ_API_KEY = 'test-key-not-real';
+    process.env.CEREBRAS_API_KEY = 'test-key-not-real'; // two families, so agreement can decide (S47)
     try {
       withGlobalHost(() => ({ content: 'TRUE' }));
       const app = express();
@@ -283,6 +312,8 @@ describe('classifyText and the route', () => {
     } finally {
       if (saved === undefined) delete process.env.GROQ_API_KEY;
       else process.env.GROQ_API_KEY = saved;
+      if (savedCerebras === undefined) delete process.env.CEREBRAS_API_KEY;
+      else process.env.CEREBRAS_API_KEY = savedCerebras;
     }
   });
 
@@ -347,9 +378,9 @@ describe('B16: stats and canary', () => {
 
   it('counts labels and per-voter verdicts, and holds no text', async () => {
     globalThis.fetch = stubHost(() => ({ content: 'TRUE' })).impl as unknown as typeof fetch;
-    await classifyText('2 + 2 = 4', 2500, ENV);
-    await classifyText('A secret sentence nobody should see.', 2500, ENV);
-    await classifyText('a'.repeat(5000), 2500, ENV);
+    await classifyText('2 + 2 = 4', 2500, XENV);
+    await classifyText('A secret sentence nobody should see.', 2500, XENV);
+    await classifyText('a'.repeat(5000), 2500, XENV);
     const s = health.classifyStats({});
     expect(s.labels).toEqual({ pass: 2, veto: 0, 'not-checked': 1, arithmetic: 1 });
     expect(s.skip_rate).toBe(0.333);
@@ -890,8 +921,8 @@ describe('the route says which path answered: by and voters', () => {
     await withProcessEnv(NO_BOUNDARY, async () => {
       const rec = recordAllFetches(() => ({ content: 'FALSE' }));
       try {
-        expect(await classifyText('2 + 2 = 4', 2500, ENV)).toBe('pass');
-        expect(await classifyText('Paris is in Spain.', 2500, ENV)).toBe('veto');
+        expect(await classifyText('2 + 2 = 4', 2500, XENV)).toBe('pass');
+        expect(await classifyText('Paris is in Spain.', 2500, XENV)).toBe('veto');
       } finally {
         rec.restore();
       }
