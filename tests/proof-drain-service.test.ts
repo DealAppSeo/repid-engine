@@ -170,12 +170,13 @@ describe('proof-drain-service', () => {
       // Corpus hygiene (2026-08-09): the statement is now agent-BOUND — 4 keys, not the
       // old agent-less { repid_score, threshold } shape that produced 7,958 unbound rows.
       // agent_id is the queue row's agent (a9); tier is derived from the proven score
-      // (2280 -> ESTABLISHED).
+      // (2280 -> ESTABLISHED). 4.0-e: commitment_scheme discriminates pre/post-cutover rows.
       expect(row.statement).toEqual({
         agent_id: 'a9',
         tier: 'ESTABLISHED',
         repid_score: 2280,
         threshold: 999,
+        commitment_scheme: 'sha256-v1',
       });
       // B-2 (Inv-1): aggregation-ready leaf + lineage tag recorded under the same flag.
       expect(row.poseidon2_leaf).toBe('0x32ed1341');

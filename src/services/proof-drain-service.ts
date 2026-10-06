@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { pgQuery } from '../db/direct-pg';
-import { buildPostcardCommitment, generateNonce } from '../zkp/commitment';
+import { buildPostcardCommitment, generateNonce, SHA256_COMMITMENT_TAG } from '../zkp/commitment';
 import { buildBoundStatement } from '../zkp/proof-statement-guard'; // corpus hygiene: fail-closed agent binding on every real-proof statement
 import { resolveLeafDualWrite } from '../zkp/leaf-dual-write'; // backlog 4.2 (Inv-1): Poseidon2 leaf dual-write
 import { easService } from './eas-attestation-service'; // S-ONCHAIN: EAS wiring for honest presentProof() (owned by XC)
@@ -704,6 +704,10 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
             threshold: Number(thrMatch[1]),
           })
         : null;
+    // 4.0-e: tag which hash family produced zk_commitment so pre/post-cutover rows are
+    // distinguishable without probability-based canonicality checks (see commitment.ts §2).
+    // Always sha256-v1 today — zk_commitment is sha256 in both sha256 and shadow modes.
+    if (statement !== null) statement.commitment_scheme = SHA256_COMMITMENT_TAG;
 
     // Bind the per-proof nonce into the stored canonical commitment so every
     // proof's zk_commitment is unique (root-cause fix: was deterministic per
