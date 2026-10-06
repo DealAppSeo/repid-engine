@@ -8855,12 +8855,17 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 **Intent for steps 2-4:** Wire `commitment_scheme: SHA256_COMMITMENT_TAG` into the statement object assembled in `proof-drain-service.ts:699-706` — the 4.0-e cutover prerequisite described in `src/zkp/commitment.ts` header §2. No DDL needed (jsonb column already exists). Tag is always `sha256-v1` (the only stored family today); future Poseidon2 cutover needs no DDL once rows carry the discriminator. Update `tests/proof-drain-service.test.ts` to expect the new field. SAFE-CLASS (additive, no gate flip, no scoring reach).
 
 **STEP 2-4 — SHIPPED: commitment_scheme tag wired → PR #1232 [V].**
-
-(Pending — see step 5 below for actuals)
+- `src/services/proof-drain-service.ts`: added `SHA256_COMMITMENT_TAG` to import from `../zkp/commitment`; after `buildBoundStatement(...)` returns, sets `statement.commitment_scheme = SHA256_COMMITMENT_TAG` when statement is non-null. Three lines of change.
+- `tests/proof-drain-service.test.ts`: updated the A5-flag-ON test's `expect(row.statement).toEqual(...)` to include `commitment_scheme: 'sha256-v1'`.
+- **[V] `npx tsc --noEmit` exit 0** (no src/ errors).
+- **[V] `npx jest tests/proof-drain-service.test.ts --forceExit` → 9/9 passed.**
+- PR #1232 OPEN, armed `--auto --squash`. SAFE-CLASS (additive, no gate flip, no DDL, no scoring reach).
+- Also armed: PR #1231 (`--auto --squash`).
 
 **Open for Sean (rule-4):**
 1. Items 7/8/9/10/11: all Sean-gated — no change.
-2. PR #1231 armed `--auto --squash` (all checks SUCCESS, Strix clean).
-3. PR #1232 (this beat): SAFE-CLASS, `--auto --squash` appropriate once CI green + Strix.
+2. PRs #1231 and #1232 both armed `--auto --squash` — merge on CI green + Strix clean.
 
-**Step 5 — actuals (updated after step 2-4):**
+**Step 5 — what differed from intent:** Executed exactly as stated. The 4.0-e tag ships with no DDL and no breaking change to any existing test except the one asserting exact statement shape (updated). `buildBoundStatement` is left pure (4-key), per the proof-statement-guard test that asserts `Object.keys(s).sort() === REQUIRED_STATEMENT_KEYS` — adding the tag in the caller keeps that invariant intact.
+
+**Next beat:** (1) Confirm #1231 and #1232 merged. (2) Non-Sean-gated backlog is very thin. Item 15 (WHIR aggregation PCS) is LATER pending PR#1919 number verification. Consider: a live fleet/scoring diagnostic read, or verifying item 9's off-peak-window wiring is truly complete now that item 10 is merged (the backlog row says "still open" but PR #1211 merged the caller).
