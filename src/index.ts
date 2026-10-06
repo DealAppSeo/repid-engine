@@ -106,6 +106,7 @@ import trustmarketJoinRouter from './routes/trustmarket-join';
 import layaClassifyRouter from './routes/laya-classify';
 import classifyRouter from './routes/classify';
 import { startClassifyCanary } from './classify/vote-health';
+import { startLedgerFlush } from './ledger/daily-totals';
 import telegramPublicRouter, { registerPublicWebhook } from './routes/telegram-public';
 import onboardLayerRouter from './routes/onboard-layer';
 import beltsRouter from './routes/belts';
@@ -906,6 +907,9 @@ if (!IS_TEST) {
     // B16: the classify voters' daily canary (a known-true and a known-false claim per voter),
     // reported at GET /api/v1/classify/stats. CLASSIFY_CANARY=off disables it. Never blocks boot.
     startClassifyCanary();
+    // Checker ledger: flushes the classify route's daily counts (never text) every 10 minutes.
+    // Inert until the ledger migration is applied; parks on the emergency halt.
+    startLedgerFlush();
     // B8: register the public bot's webhook once, only when its token is set.
     void registerPublicWebhook().then((r) => console.log(`[telegram-public] webhook ${r}`));
 
