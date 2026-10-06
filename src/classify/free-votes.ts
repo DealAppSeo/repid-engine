@@ -120,10 +120,11 @@ export interface Voter {
 }
 
 /**
- * V1-8 — Cloudflare Workers AI, a third family (Meta's llama next to gpt-oss and qwen). INERT
- * TWICE: it is never chosen by default, only when CLASSIFY_VOTERS names `workers-ai:<model>`,
- * and even then it abstains `no_key` until both CLOUDFLARE_WORKERS_AI_TOKEN and
- * CLOUDFLARE_ACCOUNT_ID are set. Its own token, not CLOUDFLARE_API_TOKEN: a voter needs only
+ * V1-8 — Cloudflare Workers AI, a third family (Meta's Llama next to gpt-oss and qwen). It is
+ * never one of the pair. It is a pool member (THE FALLBACK, below), so it stands in for a slot
+ * that got no answer, and only once the canary has seen it answer right. It abstains `no_key`
+ * until both CLOUDFLARE_WORKERS_AI_TOKEN and CLOUDFLARE_ACCOUNT_ID are set, and the canary reads
+ * no_key as not-checked, never ok. Its own token, not CLOUDFLARE_API_TOKEN: a voter needs only
  * "Workers AI Read", and the account-wide token can write KV.
  *
  * The URL is account-scoped, so it is assembled here from the registry origin. The account id
@@ -352,6 +353,39 @@ export const BUDGET_PER_MIN: Record<VoterProvider, number> = {
 };
 const spent = new Map<string, number[]>();
 
+/**
+ * Calls a UTC day, for a host whose free allowance is counted by the day. Workers AI's is 10,000
+ * neurons a day, reset at 00:00 UTC, and Llama 3.3 70B costs 26,668 neurons per million input
+ * tokens and 204,805 per million output tokens (developers.cloudflare.com/workers-ai/platform/
+ * pricing, 2026-10-01). A vote is at most about 1,700 input tokens (the prompt plus a claim at the
+ * default 1,500-character limit) and VOTE_MAX_TOKENS output, about 49 neurons, so 200 calls stay
+ * under 10,000 even then. On Workers Free, Cloudflare stops at the allowance itself; on Workers
+ * Paid, use over it bills, and this keeps it free whatever the plan (Sean, 2026-09-10: nothing
+ * paid until SEAN_PAID_LOOP). Counted per host, since the allowance is the account's, not a
+ * model's. Kept in memory like the per-minute budget, so a restart forgets the count. Over the
+ * cap the voter is refused before any request, as a budget refusal, and THE FALLBACK moves on.
+ */
+export const DAILY_CALLS: Partial<Record<VoterProvider, number>> = { 'workers-ai': 200 };
+const spentToday = new Map<VoterProvider, { day: string; calls: number }>();
+
+function overDailyCap(v: Voter, now: number): boolean {
+  const cap = DAILY_CALLS[v.provider];
+  if (cap === undefined) return false;
+  const day = new Date(now).toISOString().slice(0, 10);
+  const seen = spentToday.get(v.provider);
+  const calls = seen && seen.day === day ? seen.calls : 0;
+  if (calls >= cap) return true;
+  spentToday.set(v.provider, { day, calls: calls + 1 });
+  return false;
+}
+
+/**
+ * A vote's output cap, where it is not the default 400. Llama does not reason before it answers,
+ * so a verdict fits in a few tokens, and a reply that is more than a verdict is unparseable at any
+ * length: the cap changes no outcome, and it bounds what one vote spends of a daily allowance.
+ */
+export const VOTE_MAX_TOKENS: Partial<Record<VoterProvider, number>> = { 'workers-ai': 16 };
+
 function overBudget(v: Voter, now: number): boolean {
   const k = hostKey(v);
   const recent = (spent.get(k) ?? []).filter((t) => now - t < 60_000);
@@ -445,6 +479,7 @@ export function voterQuota(key: string): VoterQuota | null {
 export function __resetVoteCooldowns(): void {
   coolingUntil.clear();
   spent.clear();
+  spentToday.clear();
   quotaSeen.clear();
 }
 
@@ -531,7 +566,13 @@ export function qwenReasoning(env: NodeJS.ProcessEnv = process.env): QwenReasoni
   return (QWEN_REASONING as readonly string[]).includes(raw) ? (raw as QwenReasoning) : 'none';
 }
 
-async function dialVoter(voter: Voter, system: string, claim: string, opts: VoteOptions): Promise<Dialled> {
+async function dialVoter(
+  voter: Voter,
+  system: string,
+  claim: string,
+  opts: VoteOptions,
+  maxTokens = 400,
+): Promise<Dialled> {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
   if (RETIRED_MODELS.some((r) => r.id === voter.model)) return { kind: 'abstain', reason: 'retired_model' };
@@ -548,13 +589,14 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
   if (until !== undefined && until > now()) return { kind: 'abstain', reason: 'cooling' };
   if (dayIsSpent(voter, now())) return { kind: 'abstain', reason: 'budget' };
   if (overBudget(voter, now())) return { kind: 'abstain', reason: 'budget' };
+  if (overDailyCap(voter, now())) return { kind: 'abstain', reason: 'budget' };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
   const body: Record<string, unknown> = {
     model: voter.model,
     temperature: 0,
-    max_tokens: 400,
+    max_tokens: maxTokens,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: encodeClaim(claim) },
@@ -613,7 +655,7 @@ async function dialVoter(voter: Voter, system: string, claim: string, opts: Vote
 }
 
 export async function castVote(voter: Voter, claim: string, opts: VoteOptions): Promise<VoteOutcome> {
-  const out = await dialVoter(voter, votePrompt(opts.env ?? process.env), claim, opts);
+  const out = await dialVoter(voter, votePrompt(opts.env ?? process.env), claim, opts, VOTE_MAX_TOKENS[voter.provider]);
   if (out.kind === 'abstain') return out;
   const verdict = parseVerdict(out.content);
   return verdict
@@ -668,14 +710,17 @@ export function combineVotes(a: VoteOutcome, b: VoteOutcome): VoteLabel {
  * WHO RECEIVES THE TEXT. Every model below is one the claim may be sent to, and every door's
  * privacy line has to name its host (BUS N-PRIVACY-LINE). OpenRouter calls carry
  * data_collection 'deny', so only upstream providers that neither store nor train on prompts
- * may serve them. Not in the pool, on purpose: NVIDIA (its keys are for trials by NVIDIA's own
- * terms), Gemini's free tier (its terms let the vendor use what is sent), Anthropic and xAI
- * (paid, and the pair's contract has always kept them out), and Z.ai (its terms for API data are
- * not checked; Sean decides).
+ * may serve them. Cloudflare Workers AI (Llama) is the third family (Sean and Grok, 2026-10-06),
+ * and the privacy page, /check, the extension and the Store listing name it in the change that
+ * lists it here: trustshell merges first. It is the pool's only Llama, so it is never "another
+ * family" for a Llama on the other slot (rule 2). Not in the pool, on purpose: NVIDIA (its keys
+ * are for trials by NVIDIA's own terms), Gemini's free tier (its terms let the vendor use what is
+ * sent), Anthropic and xAI (paid, and the pair's contract has always kept them out), and Z.ai
+ * (its terms for API data are not checked; Sean decides).
  *
  * THE POOL. Ids are ones this account has called successfully in llm_call_log, 30 days to
- * 2026-10-05 [MEASURED], except Groq's preview qwen and the Together and Fireworks ids, which rule
- * 3 keeps out until the canary has seen them answer.
+ * 2026-10-05 [MEASURED], except Groq's preview qwen, Workers AI's Llama and the Together and
+ * Fireworks ids, which rule 3 keeps out until the canary has seen them answer.
  */
 export interface PoolVoter extends Voter {
   /** True for a model that bills this account. Used only while halAllowPaid(env) is true. */
@@ -687,6 +732,9 @@ export const VOTER_POOL: readonly PoolVoter[] = [
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
   { provider: 'groq', model: 'openai/gpt-oss-20b' },
   { provider: 'groq', model: 'qwen/qwen3.8-27b' },
+  // Free within DAILY_CALLS. A host and a family the pair does not use, so it can stand in when
+  // all of Groq is down; after Groq's own, because its allowance is a day's, not a minute's.
+  { provider: 'workers-ai', model: WORKERS_AI_MODEL },
   { provider: 'openrouter', model: 'google/gemma-4-31b-it:free' },
   { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
   // The pair's own second voter (decided, S26).

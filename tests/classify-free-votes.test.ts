@@ -507,7 +507,7 @@ describe('B20 FIX FIRST on #1182: look-alikes, one family, one caller', () => {
   });
 });
 
-describe('V1-8: Workers AI voter is inert until named AND keyed', () => {
+describe('V1-8: Workers AI is never one of the pair, and abstains until keyed', () => {
   const ACCOUNT = '0123456789abcdef0123456789abcdef';
   const CF = { provider: 'workers-ai' as const, model: WORKERS_AI_MODEL };
 
