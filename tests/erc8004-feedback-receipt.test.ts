@@ -24,7 +24,8 @@ function from(table: string) {
       filters.push([col, val]);
       return q;
     },
-    maybeSingle: async () => ({ data: (tables[table] ?? []).find((r) => filters.every(([c, v]) => r[c] === v)) ?? null, error: null }),
+    // PostgREST sends every filter as text, so a BIGINT id matches the string '1630' from a URL.
+    maybeSingle: async () => ({ data: (tables[table] ?? []).find((r) => filters.every(([c, v]) => String(r[c]) === String(v))) ?? null, error: null }),
     update: (patch: Row) => ({
       eq: async (_col: string, id: string) => {
         if (failUpdate) return { error: { message: 'simulated write failure' } };
@@ -53,7 +54,9 @@ const OPERATOR = '0xb24268884472e7613aa58d38c8813f7af1667382';
 const PAYER = '0x1111111111111111111111111111111111111111';
 const PAYEE = '0x2222222222222222222222222222222222222222';
 const AGENT = 'f3ef0bf8-5cdc-4fad-bce8-5144f01dc271';
-const EVENT = '0b6a1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3';
+// repid_events.id is a BIGINT. A UUID here is what let the route and the auth bypass both demand a
+// UUID and pass every test, while the first real write's URI (.../feedback/1630.json) answered 401.
+const EVENT = 1630;
 const PAY_TX = '0x' + 'ab'.repeat(32);
 const header = (to: string) =>
   Buffer.from(JSON.stringify({ x402Version: 1, payload: { authorization: { from: PAYER, to, value: '10000', validAfter: '0', validBefore: '9999999999' } } })).toString('base64');
@@ -223,8 +226,12 @@ describe('GET /api/v1/agents/:id/reputation/feedback/:eventId.json', () => {
     expect(res.status).toBe(404);
   });
 
-  it('404 for ids that are not UUIDs, without a query', async () => {
-    const res = await request(app).get(`/api/v1/agents/${AGENT}/reputation/feedback/not-a-uuid.json`);
+  it.each([
+    ['an event id that is not a number', `/api/v1/agents/${AGENT}/reputation/feedback/not-a-number.json`],
+    ['an event id that is a UUID', `/api/v1/agents/${AGENT}/reputation/feedback/0b6a1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3.json`],
+    ['an agent id that is not a UUID', `/api/v1/agents/not-a-uuid/reputation/feedback/${EVENT}.json`],
+  ])('404 for %s, without a query', async (_why, path) => {
+    const res = await request(app).get(path);
     expect(res.status).toBe(404);
   });
 });

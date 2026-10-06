@@ -220,7 +220,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && /^\/api\/v1\/agents\/[^/]+\/reputation\/(payload\.json|onchain)$/.test(req.path)) return next();
   // 2026-10-06: the stored ERC-8004 feedback file one on-chain write committed to (its keccak256 is
   // the write's feedbackHash). Public by design: a verifier with no key must be able to fetch it.
-  if (req.method === 'GET' && /^\/api\/v1\/agents\/[0-9a-f-]{36}\/reputation\/feedback\/[0-9a-f-]{36}\.json$/i.test(req.path)) return next();
+  // The event id is repid_events.id, a BIGINT. This first matched a UUID there, so the first real
+  // write's URI (.../feedback/1630.json) answered 401 to every keyless verifier.
+  if (req.method === 'GET' && /^\/api\/v1\/agents\/[0-9a-f-]{36}\/reputation\/feedback\/[1-9][0-9]{0,18}\.json$/i.test(req.path)) return next();
   if (req.method === 'GET' && req.path === '/api/v1/llm-trust') return next();
   // Sprint 1: x402 inbound demo bypass
   if (req.method === 'POST' && /^\/api\/v1\/agents\/[^/]+\/trade-analysis$/.test(req.path)) return next();

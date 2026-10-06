@@ -56,7 +56,7 @@ const PUBLIC_ENGINE_BASE_URL_DEFAULT = 'https://repid-engine-production.up.railw
  * made against a URI that would not resolve.
  */
 export async function prepareFeedbackFile(
-  event: { id: string; event_data: unknown },
+  event: { id: string | number; event_data: unknown },
   agent: { id: string; agent_name: string; current_repid: number; tier: string; erc8004_token_id: string },
   writer: { getOperatorAddress: () => Promise<string>; chainId?: number },
 ): Promise<{ file: string; uri: string; hash: string; value: number; tier: string } | null> {
