@@ -630,3 +630,47 @@ it('the Groq 20b is never a stand-in for the 120b’s slot partner of the same f
   expect(nextStandIn(pool, GROQ_120B, new Set([key(GROQ_120B), key(CEREBRAS_QWEN)]), () => true)).toEqual(GROQ_QWEN);
   expect(nextStandIn(pool, CEREBRAS_QWEN, new Set([key(GROQ_120B), key(CEREBRAS_QWEN)]), () => true)).toEqual(GROQ_20B);
 });
+
+describe('votes: who said what (2026-10-06)', () => {
+  it('two flat answers that disagree: not-checked, and each decider\'s word in slot order', async () => {
+    const h = hosts((c) => ({ content: c.host === 'groq' ? 'TRUE' : 'FALSE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('Honeymoon is the third major-label record by Lana Del Rey.', 5000, ENV);
+    expect(out).toMatchObject({
+      label: 'not-checked',
+      by: 'votes',
+      deciders: ['groq', 'cerebras'],
+      votes: [
+        { voter: 'groq', family: 'gpt-oss', verdict: 'TRUE' },
+        { voter: 'cerebras', family: 'qwen', verdict: 'FALSE' },
+      ],
+    });
+  });
+
+  it('a stand-in on the same host is told apart by its family', async () => {
+    await canaryAllOk();
+    await exhaust(CEREBRAS_QWEN);
+    const h = hosts(() => ({ content: 'TRUE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('Paris is the capital of France.', 5000, ENV);
+    expect(out).toMatchObject({
+      label: 'pass',
+      deciders: ['groq', 'groq'],
+      votes: [
+        { voter: 'groq', family: 'gpt-oss', verdict: 'TRUE' },
+        { voter: 'groq', family: 'qwen', verdict: 'TRUE' },
+      ],
+    });
+  });
+
+  it('no claim text and no model prose ever rides in votes', async () => {
+    const h = hosts(() => ({ content: 'FALSE' }));
+    globalThis.fetch = h.impl as unknown as typeof fetch;
+    const out = await classifyTextWithPath('The Sun orbits the Earth.', 5000, ENV);
+    const dump = JSON.stringify((out as { votes?: unknown }).votes);
+    expect(dump).not.toContain('Sun');
+    for (const v of (out as { votes: Array<Record<string, unknown>> }).votes) {
+      expect(Object.keys(v).sort()).toEqual(['family', 'verdict', 'voter']);
+    }
+  });
+});

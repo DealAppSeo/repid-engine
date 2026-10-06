@@ -2,7 +2,7 @@
  * POST /api/v1/classify — the one label contract every door calls.
  *
  * In:  { text: string, labels: ["pass", "veto", "not-checked"] }
- * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters?, deciders?, question? }
+ * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters?, deciders?, votes?, question? }
  *
  *   by       which path produced the label (ClassifyPath below):
  *            'arithmetic'  the whole text is one equation, decided by exact calculation. No model
@@ -25,6 +25,15 @@
  *            as short provider names. A pass or veto means both deciders gave that verdict; this,
  *            not `voters`, is what a door names when it says who said true or false. Added
  *            2026-10-05 with the pool; a door that does not read it still gets `voters`.
+ *   votes    ONLY with `deciders`: what each decider said, in the same order, as
+ *            { voter, family, verdict }. voter is the short provider name (as in `deciders`),
+ *            family the model family (gpt-oss, qwen, llama, ...: two models on one host are told
+ *            apart by it), verdict one of TRUE, FALSE, UNSURE, or NONE for a decider that was sent
+ *            the claim and gave no verdict. Names and verdict words only: never the claim, never
+ *            the model's prose. Always consistent with the label (a pass is two TRUE, a veto two
+ *            FALSE); an answer where it is not loses `votes` rather than its label. Added
+ *            2026-10-06 so a door can show "who said what", most of all when the two flatly
+ *            disagree and the label is not-checked (Sean and Grok: "both cannot be right").
  *   question ONLY when label === 'not-checked' AND by === 'votes' AND a question parsed: one
  *            line of 10 to 160 characters ending in '?', with no link, address, markdown, HTML
  *            character reference or verdict word (parseQuestion, src/classify/free-votes.ts). It is the one fact or
@@ -105,6 +114,7 @@ import {
   classifyByFreeVotes,
   freeVotesEnabled,
   maxProseChars,
+  modelFamily,
   parseQuestion,
   questionsEnabled,
   questionWasSent,
@@ -156,7 +166,14 @@ export const CLASSIFY_PATHS: readonly ClassifyPath[] = ['arithmetic', 'votes', '
 /** The label and the path that produced it. 'deadline' is the route's to say, never a classifier's. */
 export type ClassifyOutcome =
   | { label: ClassifyLabel; by: 'arithmetic' | 'skipped' }
-  | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[]; deciders?: VoterProvider[]; question?: string };
+  | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[]; deciders?: VoterProvider[]; votes?: VoteReading[]; question?: string };
+
+/** One decider's answer (the contract's `votes`). Names and verdict words only. */
+export interface VoteReading {
+  voter: string;
+  family: string;
+  verdict: 'TRUE' | 'FALSE' | 'UNSURE' | 'NONE';
+}
 
 /** What the route runs. Anything that is not a well-formed ClassifyOutcome is not-checked. */
 export type Classifier = (text: string) => ClassifyOutcome | Promise<ClassifyOutcome>;
@@ -169,6 +186,8 @@ export interface ClassifyResult {
   voters?: string[];
   /** Present only when by === 'votes': the two voters whose answers made the label. */
   deciders?: string[];
+  /** Present only with `deciders`: what each of them said, in the same order. */
+  votes?: VoteReading[];
   /** Present only when label === 'not-checked', by === 'votes' and a question parsed. */
   question?: string;
 }
@@ -194,11 +213,12 @@ function isLabel(value: unknown): value is ClassifyLabel {
  */
 function answerOf(value: unknown): Answer | null {
   if (!value || typeof value !== 'object') return null;
-  const { label, by, voters, deciders, question } = value as {
+  const { label, by, voters, deciders, votes, question } = value as {
     label?: unknown;
     by?: unknown;
     voters?: unknown;
     deciders?: unknown;
+    votes?: unknown;
     question?: unknown;
   };
   if (!isLabel(label)) return null;
@@ -210,10 +230,36 @@ function answerOf(value: unknown): Answer | null {
   // Exactly two names, or it is dropped: a pass names its two deciders or none.
   if (Array.isArray(deciders) && deciders.length === 2 && deciders.every((d) => typeof d === 'string')) {
     answer.deciders = [...(deciders as string[])];
+    const read = votesOf(votes, answer.deciders, label);
+    if (read) answer.votes = read;
   }
   const asked = label === NOT_CHECKED ? parseQuestion(question) : null;
   if (asked !== null) answer.question = asked;
   return answer;
+}
+
+const VERDICTS: ReadonlySet<string> = new Set(['TRUE', 'FALSE', 'UNSURE', 'NONE']);
+const FAMILY = /^[a-z0-9][a-z0-9.-]{0,31}$/;
+
+/**
+ * The `votes` a classifier returned, or null when they are missing or out of contract: exactly the
+ * two deciders in order, a plain family id, a verdict word, and agreement with the label (pass is
+ * TRUE and TRUE, veto is FALSE and FALSE, and not-checked is neither). Out of contract drops the
+ * votes, never the label: the label was already checked on its own.
+ */
+export function votesOf(value: unknown, deciders: readonly string[], label: ClassifyLabel): VoteReading[] | null {
+  if (!Array.isArray(value) || value.length !== 2 || deciders.length !== 2) return null;
+  const out: VoteReading[] = [];
+  for (const [i, v] of value.entries()) {
+    if (!v || typeof v !== 'object') return null;
+    const { voter, family, verdict } = v as { voter?: unknown; family?: unknown; verdict?: unknown };
+    if (voter !== deciders[i] || typeof family !== 'string' || !FAMILY.test(family)) return null;
+    if (typeof verdict !== 'string' || !VERDICTS.has(verdict)) return null;
+    out.push({ voter: deciders[i]!, family, verdict: verdict as VoteReading['verdict'] });
+  }
+  const [a, b] = [out[0]!.verdict, out[1]!.verdict];
+  const agreed = a === b && (a === 'TRUE' || a === 'FALSE') ? (a === 'TRUE' ? 'pass' : 'veto') : NOT_CHECKED;
+  return agreed === label ? out : null;
 }
 
 /**
@@ -235,6 +281,7 @@ export async function classifyWithDeadline(
     if (answer.by !== 'votes') return { label: answer.label, latency_ms, by: answer.by };
     const out: ClassifyResult = { label: answer.label, latency_ms, by: 'votes', voters: answer.voters };
     if (answer.deciders !== undefined) out.deciders = answer.deciders;
+    if (answer.votes !== undefined) out.votes = answer.votes;
     if (answer.question !== undefined) out.question = answer.question;
     return out;
   };
@@ -472,11 +519,16 @@ export async function classifyTextWithPath(
   // The deciders are named only when both were sent the claim. A slot that ran out of stand-ins may
   // end on a voter refused before any request, and a door must never say it "asked" that one.
   const answered = deciders.filter((_, i) => voteWasSent(outcomes[i]!)).map((v) => v.provider);
+  // What each decider said, beside who they were. Names and verdict words only, never the claim.
+  const votes: VoteReading[] = deciders.map((v, i) => {
+    const o = outcomes[i]!;
+    return { voter: v.provider, family: modelFamily(v.model), verdict: o.kind === 'verdict' ? o.verdict : 'NONE' };
+  });
   const answer = {
     label,
     by: 'votes' as const,
     voters: asked.map((v) => v.provider),
-    ...(answered.length === 2 ? { deciders: answered } : {}),
+    ...(answered.length === 2 ? { deciders: answered, votes } : {}),
   };
   if (options.question === false || label !== NOT_CHECKED || !questionsEnabled(env) || !bothUnsure(outcomes)) {
     return answer;

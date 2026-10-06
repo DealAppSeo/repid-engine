@@ -276,7 +276,7 @@ describe('classifyText and the route', () => {
       const res = await request(app).post('/api/v1/classify').send({ text: 'Water boils at 100 C at sea level.' });
       expect(res.status).toBe(200);
       expect(res.body.label).toBe('pass');
-      expect(Object.keys(res.body).sort()).toEqual(['by', 'deciders', 'label', 'latency_ms', 'voters']);
+      expect(Object.keys(res.body).sort()).toEqual(['by', 'deciders', 'label', 'latency_ms', 'voters', 'votes']);
       expect(res.body.by).toBe('votes');
       expect(res.body.voters).toEqual(activeVoters(process.env).map((v) => v.provider));
       expect(dbFrom).not.toHaveBeenCalled();
@@ -753,13 +753,13 @@ describe('the route says which path answered: by and voters', () => {
       const names = activeVoters(env).map((v) => v.provider);
       expect(names).toEqual(['groq', 'cerebras']);
       let rec = recordAllFetches(() => ({ content: 'TRUE' }));
-      expect(await classifyTextWithPath('Paris is in France.', 2500, env)).toEqual({ label: 'pass', by: 'votes', voters: names, deciders: names });
+      expect(await classifyTextWithPath('Paris is in France.', 2500, env)).toEqual({ label: 'pass', by: 'votes', voters: names, deciders: names, votes: expect.any(Array) });
       rec.restore();
       rec = recordAllFetches(() => ({ content: 'FALSE' }));
-      expect(await classifyTextWithPath('Paris is in Spain.', 2500, env)).toEqual({ label: 'veto', by: 'votes', voters: names, deciders: names });
+      expect(await classifyTextWithPath('Paris is in Spain.', 2500, env)).toEqual({ label: 'veto', by: 'votes', voters: names, deciders: names, votes: expect.any(Array) });
       rec.restore();
       rec = recordAllFetches((model) => ({ content: model.startsWith('openai/') ? 'TRUE' : 'FALSE' }));
-      expect(await classifyTextWithPath('Contested.', 2500, env)).toEqual({ label: 'not-checked', by: 'votes', voters: names, deciders: names });
+      expect(await classifyTextWithPath('Contested.', 2500, env)).toEqual({ label: 'not-checked', by: 'votes', voters: names, deciders: names, votes: expect.any(Array) });
       rec.restore();
       // A 429 is a request that was sent: still by votes, still both named. No canary has run here,
       // so no stand-in may take the slots (THE FALLBACK rule 3), and both stay the deciders.
@@ -769,6 +769,11 @@ describe('the route says which path answered: by and voters', () => {
         by: 'votes',
         voters: names,
         deciders: names,
+        // Both were sent the claim and neither gave a verdict: NONE, never a guess.
+        votes: [
+          { voter: 'groq', family: 'gpt-oss', verdict: 'NONE' },
+          { voter: 'cerebras', family: 'qwen', verdict: 'NONE' },
+        ],
       });
       rec.restore();
     });
@@ -784,6 +789,10 @@ describe('the route says which path answered: by and voters', () => {
           by: 'votes',
           voters: ['cerebras', 'groq'],
           deciders: ['cerebras', 'groq'],
+          votes: [
+            { voter: 'cerebras', family: 'qwen', verdict: 'TRUE' },
+            { voter: 'groq', family: 'gpt-oss', verdict: 'TRUE' },
+          ],
         });
         const sameHost = { ...ENV, CLASSIFY_VOTERS: 'groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b' } as NodeJS.ProcessEnv;
         expect((await classifyTextWithPath('Paris is in France.', 2500, sameHost))).toMatchObject({ voters: ['groq', 'groq'] });
