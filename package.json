@@ -27,6 +27,7 @@
     "eval:backtest-classify": "ts-node scripts/eval/backtest-classify.ts",
     "eval:candidate-voter": "ts-node scripts/eval/candidate-voter.ts",
     "verify:feedback-write": "ts-node scripts/verify-feedback-write.ts",
+    "demo:human-backed": "ts-node scripts/demo/human-backed-validation.ts",
     "decay:stop-diff": "ts-node scripts/identity/decay-stop-diff.ts",
     "test:regression": "jest --config jest.config.js tests/regression",
     "decay:sweep": "ts-node scripts/decay/run-decay-sweep.ts",

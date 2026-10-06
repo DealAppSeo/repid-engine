@@ -38,15 +38,19 @@ Semaphore-style proof. **No reputation values appear in the circuit.**
 | `double_action_detectable_in_context` | same `(human, context)` → identical nullifier |
 | `bench_prove_verify` | timing/size |
 
-## Benchmark (release; BabyBear, R=12, group=4, height=8)
+## Benchmark
 
 ```
-prove = 8.2 ms   verify = 1.0 ms   proof = 8854 bytes
+MiMC era (release; R=12, group=4, height=8):  prove = 8.2 ms   verify = 1.0 ms   proof = 8854 bytes
+Poseidon2, measured 2026-10-06 via zkpv:      prove (whole process) ≈ 6 ms        proof = 19,735 bytes
 ```
+The first line predates the move to Poseidon2 and is kept as history, not as the current figure.
 
 ## Hash & config
-- In-AIR **MiMC** with S-box `x^7` — the minimal permutation exponent for BabyBear
-  (`p−1 = 2^27·3·5`, so `x^5` is NOT a permutation). `H(a,b) = perm(a,b) + a + b`.
+- In-AIR **Poseidon2** over BabyBear (width 16, S-box `x^7`, 4+4 full and 13 partial rounds,
+  Horizen-Labs constants), from the audited `p3-poseidon2-air` 0.3.0 gadget; the off-circuit
+  `poseidon2_hash2::h_p2_field` and its KAT are gated against it. This replaced an earlier
+  hand-written MiMC (this line said MiMC until 2026-10-06, after the code had moved on).
 - **Zero-knowledge** via the hiding FRI PCS (`HidingFriPcs` + `MerkleTreeHidingMmcs`),
   reused from PR #95. `log_blowup=3` so the LDE covers the degree-7 quotient domain.
 
@@ -58,12 +62,29 @@ verify_ownership(&proof, context, nullifier(secret, context), &group).unwrap();
 let bytes = proof_to_bytes(&proof);   // -> the bridge's `proof_bytes`
 ```
 
+## Command line: `zkpv` (2026-10-06)
+
+`cargo build --release` builds `target/release/zkpv`, a JSON front end over the API above, so a
+script can produce and check the evidence an ERC-8004 Validation Registry request carries:
+
+```
+zkpv commit <secret> <agent_id>                        -> {"commitment":N}
+zkpv nullifier <secret> <context>                      -> {"nullifier":N}
+zkpv prove <secret> <agent_id> <context> <c0,c1,c2,c3> -> {"context","nullifier","group","proof"}
+zkpv verify < request.json                             -> {"ok":true|false}   exit 0 / 1 / 2
+```
+
+`npm run demo:human-backed` (repo root) runs it end to end: a validationRequest / validationResponse
+pair with keccak256 hashes, plus reuse, unlinkability, tamper and non-member checks. CI runs the
+demo on every PR (`zkp-vault` job). `tests/zkpv_cli.rs` pins the binary.
+
 ## Honest scope / next steps (NOT done here)
 1. **Group membership** uses a vanishing-polynomial product over a small public set
    (degree = group size). Production should use a **Merkle tree** (log-depth path) for
    large groups.
-2. **Hash** — MiMC over BabyBear is ~field-size security. Production: **Poseidon2** over a
-   larger field, audited round count/constants.
+2. **Field size** — the hash is Poseidon2 now, but inputs and the nullifier are single BabyBear
+   elements (~31 bits), so a nullifier's preimage is brute-forceable. Production needs a larger
+   field or multi-element encodings.
 3. **FRI** uses small test-grade params (`log_blowup=3`, `num_queries=2`): right for the
    gate/benchmark, **not** production soundness.
 4. **HTTP wrapper** — `POST /prove/ownership` returning `{ proof_bytes }` so the TS bridge

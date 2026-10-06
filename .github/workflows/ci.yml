@@ -120,6 +120,19 @@ jobs:
           RUSTFLAGS: -D warnings
         run: cargo test --locked --release
 
+      # The ERC-8004 Validation Registry demo, run end to end on every PR so "it works" is CI's
+      # word, not ours: a member proves membership for an agent without revealing which member,
+      # the validator answers 100, a reused nullifier and a changed byte get 0, another context
+      # is unlinkable, a non-member cannot prove. Exit 1 if any of those stops holding. The stake
+      # leg is NOT_CHECKED by design (staking is preview-only); see the script's header.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Human-backed agent validation demo (zkpv + ERC-8004 request/response)
+        run: |
+          npm install --legacy-peer-deps
+          npx ts-node scripts/demo/human-backed-validation.ts --out out/human-backed-validation
+
   test:
     runs-on: ubuntu-latest
     steps:
