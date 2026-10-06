@@ -8800,4 +8800,40 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 PRs merged during this run's window (since 2026-10-06T08:32:01Z):
 - #1222 fix(eval): a paused or refused call is never recorded as the candidate's answer (merged 2026-10-06T08:35:40Z)
 
+---
+
+## Beat (2026-10-06) — prior beat's PR #1211 MERGED; tx_hash wired; PR #1226 armed
+
+**Prior beat verified [V] (2026-10-05, second run):**
+- PR #1211 (`feat(memory): wire memory-root anchor sweep into index.ts behind MEMORY_ROOT_ANCHOR_SWEEP_ENABLED`): **MERGED** as confirmed via `gh pr view 1211 --json state,mergedAt` → `state=MERGED mergedAt=2026-10-05T16:36:47Z`. ✓
+- Prior beat's fix — `shouldParkForHalt` added to the sweep's tick loop — resolved the `emergency-halt.test.ts` failure that had blocked PR #1211. The 102/102 test count (re-verified this beat: `npx jest tests/emergency-halt --forceExit` → **102/102**). ✓
+- `origin/main` = `6c890dbb` (feat(erc8004): every reputation write commits to a stored feedback file). Item 10 (memory root anchor sweep) is now wired and shadow-inert. ✓
+- **tx_hash concern from prior beat resolved:** the `writeback` in `src/index.ts` had `_txHash` (intentionally unused, underscore prefix) because `agent_memory_roots` has no `tx_hash` column. The `enforce` path doesn't "fail silently" — `eas_uid` and `anchored_at` write correctly — but the audit-trail column was missing. This beat closes it (see Step 2-4).
+- **Item 9 off-peak-windows wiring — NOW COMPLETE [V]:** `memory-root-anchor-sweep.ts:15,62-64` imports and calls `isOffPeakHour`/`selectOffPeakBatch`; `index.ts` (PR #1211) calls `runMemoryRootAnchorSweep`. Chain: `index.ts → runMemoryRootAnchorSweep → isOffPeakHour/selectOffPeakBatch`. The "zero callers" gap the backlog recorded was closed by PR #1211. Shadow-inert (same as items 8/10/11).
+- **Penalty verdict: NONE.** All prior-beat claims accurate.
+
+**Three auto-logged beats (runs 37340952401, 37396828066, 37413894593, 37436738340):** died before step 1; no PRs merged in those windows except #1222 (not this loop's work).
+
+**Current state [V]:** `origin/main` = `6c890dbb`. Open PR: **#1226** (security: verifier SSRF fix + signed feedback hash, all 9 checks SUCCESS including Strix "No security issues found" at 09:50Z). SAFE-CLASS.
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-06-memory-roots-tx-hash` off `origin/main` `6c890dbb`.**
+
+**Intent for steps 2-4:** Add `tx_hash TEXT` to `agent_memory_roots` (additive migration) and wire it into the `writeback` in `src/index.ts` (remove the `_` prefix, include `tx_hash: txHash` in the update payload). This closes the audit-trail gap the prior beat flagged. Also arm PR #1226 (SAFE-CLASS, all checks green).
+
+**STEP 2-4 — SHIPPED: migration + writeback wiring → PR #1227 [V].**
+- `supabase/migrations/20261006000000_agent_memory_roots_add_tx_hash.sql` — additive `ALTER TABLE … ADD COLUMN IF NOT EXISTS tx_hash text` with a descriptive comment. No breaking changes; existing rows stay `NULL`.
+- `src/index.ts:1480` — `_txHash` → `txHash`; `update` payload gains `tx_hash: txHash`. The sweep already passed `r.txHash` here (line 78 of sweep); the writeback simply stored it now.
+- **[V] tsc --noEmit exit 0 (no src/ errors).**
+- **[V] `npx jest tests/memory-root-anchor --forceExit` → 13/13** (covers anchor primitive + sweep).
+- **[V] `npx jest tests/emergency-halt --forceExit` → 102/102** (the gate-count guard for tick-loops in index.ts — no new loop added this beat).
+- **Also armed:** PR #1226 (`gh pr merge 1226 --auto --squash`). All 9 checks SUCCESS, Strix clean.
+
+**What differed from intent:** Executed exactly as stated. The `tsc --noEmit` needed `npm install --legacy-peer-deps` first (fresh runner). No scope added.
+
+**Open for Sean (rule-4):**
+1. **Items 7/8/9/10/11: all Sean-gated** — no change. Enable order: `FREE_TIER_QUOTA_SHADOW_ENABLED`, `CASCADE_SPECULATION_ENABLED`, `HEAT_EVICTION_ENABLED`, `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED`, EAS gas, ANFIS flips.
+2. PRs #1226 (armed `--auto --squash`) and #1227 (this beat, SAFE-CLASS) — both need green CI + Strix before landing.
+
+**Next beat:** (1) Confirm #1226 and #1227 merged. (2) With items 3-6, 12-14, 20 done and items 7-11 Sean-gated, the non-Sean-gated backlog is thin. Next candidates: item 15 (WHIR aggregation PCS, LATER — first verify PR#1919 numbers), or a verify-first diagnostic on the live fleet/scoring state. (3) Check if `commitment_scheme` tag in `statement` jsonb (4.0-e cutover prerequisite — `src/zkp/commitment.ts` header §2) is worth closing now: no DDL needed, just wiring the shadow-mode value into the `statement` object when writing a proof.
+
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37436738340 --log`) if the reason matters.
