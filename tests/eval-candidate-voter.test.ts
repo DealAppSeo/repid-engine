@@ -7,8 +7,9 @@ import { join } from 'node:path';
 
 jest.mock('../src/db', () => ({ db: { from: jest.fn(), rpc: jest.fn() } }));
 
-import { __resetVoteCooldowns, castVote, type Voter } from '../src/classify/free-votes';
+import { __resetVoteCooldowns, castVote, type VoteOutcome, type Voter } from '../src/classify/free-votes';
 import {
+  askAll,
   candidateProfile,
   FINDINGS_HEADER,
   findingsRow,
@@ -16,6 +17,9 @@ import {
   modelsUrl,
   outcomeOf,
   pairSummary,
+  recordingFetch,
+  redactHostText,
+  STREAK_LIMIT,
   type BaselineRow,
   type CandidateRow,
 } from '../scripts/eval/candidate-voter';
@@ -136,12 +140,19 @@ describe('the hosts Sean named on 2026-10-06 (Workers AI, OpenRouter)', () => {
 });
 
 describe('every trial is written down the same way', () => {
-  it('profiles what the candidate answered, with its median time', () => {
-    const rows = [cand('a', 'TRUE'), cand('b', 'UNSURE'), cand('c', 'FALSE'), { row_id: 'd', outcome: { kind: 'abstain', reason: 'timeout' }, ms: 9 }] as CandidateRow[];
+  it('profiles what the candidate answered, why it abstained, and its median time over answers only', () => {
+    const rows = [cand('a', 'TRUE'), cand('b', 'UNSURE'), cand('c', 'FALSE'), { row_id: 'd', outcome: { kind: 'abstain', reason: 'timeout' }, ms: 15000 }] as CandidateRow[];
     rows[0]!.ms = 100;
     rows[1]!.ms = 300;
     rows[2]!.ms = 200;
-    expect(candidateProfile(rows)).toEqual({ n: 4, TRUE: 1, FALSE: 1, UNSURE: 1, abstain: 1, medianMs: 100 });
+    expect(candidateProfile(rows)).toEqual({ n: 4, TRUE: 1, FALSE: 1, UNSURE: 1, abstain: 1, abstainWhy: { timeout: 1 }, medianMs: 200 });
+  });
+
+  it('a row with abstains says why in its notes', () => {
+    const baseline = [base('a', 'TRUE', 'TRUE', 'not-checked'), base('b', 'FALSE', 'FALSE', 'veto')];
+    const rows = [cand('a', 'TRUE'), { row_id: 'b', outcome: { kind: 'abstain', reason: 'timeout' }, ms: 15000 }] as CandidateRow[];
+    const row = findingsRow('2026-10-06', 'nvidia-nim:example/model-a', pairSummary(baseline, rows), candidateProfile(rows));
+    expect(row).toMatch(/abstains: timeout 1 \|$/);
   });
 
   it('a findings row has one cell per header column, and names both pairs', () => {
@@ -187,5 +198,71 @@ describe('extraBody, for evaluation only', () => {
     const { impl, bodies } = capture();
     await castVote(NIM, 'Paris is in France.', { env, fetchImpl: impl as never, timeoutMs: 500 });
     expect(Object.keys(bodies[0]!).sort()).toEqual(['max_tokens', 'messages', 'model', 'temperature']);
+  });
+});
+
+describe('askAll: a refusal that never reached the host is not the candidate\'s answer', () => {
+  const claims = ['a', 'b', 'c'].map((row_id) => ({ row_id, claim: `claim ${row_id}` }));
+  const verdict = (v: 'TRUE' | 'FALSE' | 'UNSURE'): VoteOutcome => ({ kind: 'verdict', verdict: v });
+  const abstain = (reason: string) => ({ kind: 'abstain', reason }) as VoteOutcome;
+  function harness(outcomes: VoteOutcome[]) {
+    const recorded: CandidateRow[] = [];
+    const slept: number[] = [];
+    const cast = jest.fn(async () => outcomes.shift() ?? verdict('TRUE'));
+    return {
+      recorded,
+      slept,
+      cast,
+      deps: { cast, record: (r: CandidateRow) => recorded.push(r), sleep: async (ms: number) => void slept.push(ms), clock: () => 0, paceMs: 0, coolMs: 60_000 },
+    };
+  }
+
+  it('the 2026-10-06 Kimi run: a pause after a failure is waited out and the claim asked again, never recorded', async () => {
+    const h = harness([abstain('timeout'), abstain('cooling'), verdict('FALSE'), verdict('TRUE')]);
+    const out = await askAll(claims, h.deps);
+    expect(out).toEqual({ asked: 3, stopped: null });
+    expect(h.recorded.map((r) => (r.outcome.kind === 'verdict' ? r.outcome.verdict : r.outcome.reason))).toEqual(['timeout', 'FALSE', 'TRUE']);
+    expect(h.slept).toEqual([61_000]);
+    expect(h.cast).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(['budget', 'no_key', 'boundary', 'retired_model'])('%s stops the run and records nothing for that claim', async (reason) => {
+    const h = harness([verdict('TRUE'), abstain(reason)]);
+    const out = await askAll(claims, h.deps);
+    expect(out.asked).toBe(1);
+    expect(out.stopped).toContain(reason);
+    expect(h.recorded).toHaveLength(1);
+  });
+
+  it(`stops after ${STREAK_LIMIT} failed calls in a row and says why; a verdict resets the count`, async () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ row_id: `r${i}`, claim: 'x' }));
+    const seq = [abstain('http_error'), verdict('UNSURE'), ...Array.from({ length: STREAK_LIMIT }, () => abstain('timeout'))];
+    const h = harness(seq);
+    const out = await askAll(many, h.deps);
+    expect(out.asked).toBe(STREAK_LIMIT + 2);
+    expect(out.stopped).toBe(`${STREAK_LIMIT} failed calls in a row (timeout ${STREAK_LIMIT})`);
+  });
+
+  it('an unparseable reply is the model\'s answer and is recorded', async () => {
+    const h = harness([abstain('unparseable')]);
+    await askAll(claims.slice(0, 1), h.deps);
+    expect(h.recorded[0]!.outcome).toEqual(abstain('unparseable'));
+  });
+});
+
+describe('what the host said, without a credential', () => {
+  it('redacts bearer tokens and key-shaped strings, and caps the length', () => {
+    const out = redactHostText(`{"detail":"bad key nvapi-${'x'.repeat(40)}", "h":"Bearer abc.def"}\n${'y'.repeat(500)}`);
+    expect(out).not.toMatch(/nvapi-x|abc\.def/);
+    expect(out.length).toBeLessThanOrEqual(300);
+  });
+
+  it('remembers the first error body per status and passes the response through unread', async () => {
+    const seen = new Map<number, string>();
+    const inner = jest.fn(async () => new Response('{"detail":"Function not found for account"}', { status: 404 }));
+    const res = await recordingFetch(seen, inner as never)('https://example.invalid', {});
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain('Function not found');
+    expect(seen.get(404)).toContain('Function not found');
   });
 });

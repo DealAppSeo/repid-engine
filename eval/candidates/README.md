@@ -30,6 +30,14 @@ Run workflow → pick the host, paste the model id exactly as the host lists it,
 summary prints one row for the table below; paste it here with a note. The agent sandbox cannot
 run it: its network policy refuses every model host.
 
+**What the run refuses to count.** After a failed call the production voting code pauses that
+model for 60 seconds. A claim refused during that pause, or over the per-minute budget, never
+reached the model, so it is never recorded as the model's answer: the pause is waited out and the
+claim asked again. Eight failed calls in a row stop the run, and the log prints what the host said
+(HTTP status and the first 300 characters of its error, credentials redacted). A run in which the
+model gave no verdict, or that stopped on failures, prints **NOT_CHECKED and no row**, and the job
+goes red (exit 2).
+
 Each host needs its key as a repository secret (Settings → Secrets and variables → Actions):
 `NVIDIA_NIM_API_KEY` (free at build.nvidia.com, evaluation use only), or
 `CLOUDFLARE_WORKERS_AI_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`, or `OPENROUTER_API_KEY`. Without the key
@@ -46,6 +54,7 @@ free keys cannot: "research, development, and test use only"), its median time a
 |---|---|---|---|---|---|---|---|
 | 2026-10-05 | `cerebras:qwen-3.8-27b` (production, the bar) | 337 | 180 (53.4%) | 6 | — | — | Stored run, flags off. 112 not-checked rows had one voter unsure, 108 of them qwen. |
 | 2026-10-06 | `cerebras:qwen-3.8-27b` + `CLASSIFY_ASSUMPTIONS=on` | 75 | 41 → **30** | 1 → **1** | — | 350 ms (whole check) | Live re-run of 75 stratified rows. 12 correct stamps lost, all to qwen going unsure. Recommendation: turn the flag off. |
+| 2026-10-06 | `nvidia-nim:moonshotai/kimi-k2.6` | **NOT CHECKED** | — | — | 0/0/0/337 | — | Run 37434186754. The job printed "172 → 0 decided", and that is not a measurement: the model was asked about ten times (11 minutes of 60-second pauses), every call failed (the reason was not recorded), and the 60-second pause after each failure was recorded as roughly 30 more answers. Harness fixed to wait out pauses and print the host's error; Kimi to be re-run. |
 
 ## Queue (NOT CHECKED: nothing below has been run yet)
 
