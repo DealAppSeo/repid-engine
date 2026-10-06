@@ -26,7 +26,7 @@
  * and one that went wrong is out within hours. With the canary off, no stand-in is ever `ok`, so
  * none is used.
  */
-import type { VoteLabel, VoteOutcome, Voter } from './free-votes';
+import type { AbstainReason, QuestionMiss, VoteLabel, VoteOutcome, Voter } from './free-votes';
 import type { VoterQuota } from './free-votes';
 import { castVote, questionsEnabled, standbyVoters, voterQuota } from './free-votes';
 
@@ -92,15 +92,22 @@ export function recordLabel(label: VoteLabel, decidedBy: 'arithmetic' | 'votes' 
  * Clarifying questions (src/classify/free-votes.ts, THE CLARIFYING QUESTION). `asked` counts calls
  * that put the claim on the wire; each ends `given` (a question parsed and went back with the
  * label) or `none` (NONE, a reply that failed the parse, a timeout, a 429 or an HTTP error), so
- * asked === given + none. A call refused before any request (boundary, cooling, budget, too little
- * time left) is not asked and is not counted. Like recordLabel, a later deadline cut by the route
- * is not seen here. No text: the counts are all this holds.
+ * asked === given + none. `none_why` splits `none` by cause, so its values sum to `none`: a
+ * questionMiss shape (free-votes.ts), the abstain reason, or `late` when the route's deadline
+ * came first (2026-10-06, BUS S37: 5 asked, 5 none, and no way to tell which). A call refused
+ * before any request (boundary, cooling, budget, too little time left) is not asked and is not
+ * counted. Like recordLabel, a later deadline cut by the route is not seen here. No text: the
+ * counts are all this holds.
  */
 const questions = { asked: 0, given: 0, none: 0 };
+const noneWhy = new Map<string, number>();
 
-export function recordQuestion(outcome: 'given' | 'none'): void {
+export function recordQuestion(outcome: 'given'): void;
+export function recordQuestion(outcome: 'none', why: QuestionMiss | AbstainReason | 'late'): void;
+export function recordQuestion(outcome: 'given' | 'none', why?: string): void {
   questions.asked += 1;
   questions[outcome] += 1;
+  if (outcome === 'none' && why) noneWhy.set(why, (noneWhy.get(why) ?? 0) + 1);
 }
 
 export function recordVotes(vs: readonly Voter[], outcomes: readonly VoteOutcome[]): void {
@@ -174,7 +181,7 @@ export interface ClassifyStats {
    * Present only while CLASSIFY_QUESTIONS is on, so the off shape is today's byte for byte and an
    * absent key says "the feature is off" rather than a zero that reads as "asked none".
    */
-  questions?: { asked: number; given: number; none: number };
+  questions?: { asked: number; given: number; none: number; none_why: Record<string, number> };
 }
 
 export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifyStats {
@@ -195,7 +202,7 @@ export function classifyStats(env: NodeJS.ProcessEnv = process.env): ClassifySta
       quota: voterQuota(h.voter),
     })),
   };
-  if (questionsEnabled(env)) stats.questions = { ...questions };
+  if (questionsEnabled(env)) stats.questions = { ...questions, none_why: Object.fromEntries(noneWhy) };
   return stats;
 }
 
@@ -208,6 +215,7 @@ export function __resetClassifyStats(): void {
   questions.asked = 0;
   questions.given = 0;
   questions.none = 0;
+  noneWhy.clear();
   voters.clear();
 }
 

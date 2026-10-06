@@ -979,30 +979,55 @@ const VERDICT_UPPER = /\b(?:TRUE|FALSE|UNSURE|NONE)\b/;
 const VERDICT_LEAD = /^(?:true|false|unsure|none)\b/i;
 
 /**
- * The question, or null. Strict on purpose: a rejected question costs nothing (the answer was
- * not-checked either way), while an accepted bad one puts a link, an address, markup or a
- * smuggled verdict in front of a user under this API's name. Checked on the NFKC fold, so a
- * fullwidth look-alike cannot spell a verdict word or a host, and returned folded.
+ * Why a question reply was not used, as a SHAPE, never as text (like unparseableShape above).
+ * Production 2026-10-06 (BUS S37): five questions were asked and all five came back unusable,
+ * and the counters could not say whether the model declined, ran out of tokens, or wrote a
+ * question this parser rejects. Each of those has a different fix, so this names which one.
  */
-export function parseQuestion(content: unknown): string | null {
-  if (typeof content !== 'string') return null;
+export type QuestionMiss =
+  | 'declined' // the reply was NONE: no single missing fact would decide the claim
+  | 'empty'
+  | 'cut_off_reasoning'
+  | 'control_char' // a line break or an invisible character
+  | 'length'
+  | 'no_question_mark'
+  | 'link'
+  | 'markup'
+  | 'verdict_word';
+
+/**
+ * null when the reply is a usable question, otherwise why not. Strict on purpose: a rejected
+ * question costs nothing (the answer was not-checked either way), while an accepted bad one puts
+ * a link, an address, markup or a smuggled verdict in front of a user under this API's name.
+ * Checked on the NFKC fold, so a fullwidth look-alike cannot spell a verdict word or a host.
+ */
+export function questionMiss(content: unknown): QuestionMiss | null {
+  if (typeof content !== 'string') return 'empty';
   // A reasoning model's closed <think> block is not the question (stripReasoning, #1204); a
   // cut-off one means there is no question.
   const answer = stripReasoning(content);
-  if (answer === null) return null;
+  if (answer === null) return 'cut_off_reasoning';
   const q = answer.normalize('NFKC').trim();
-  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(q)) return null; // one line, nothing invisible
-  if (q.length < QUESTION_MIN_CHARS || q.length > QUESTION_MAX_CHARS) return null;
-  if (!q.endsWith('?')) return null;
-  if (q.includes('@') || LINK_LIKE.test(q)) return null;
-  if (MARKUP.test(q) || CHAR_REFERENCE.test(q)) return null;
-  if (VERDICT_UPPER.test(q) || VERDICT_LEAD.test(q)) return null;
-  return q;
+  if (q === '') return 'empty';
+  if (/^none\.?$/i.test(q)) return 'declined';
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(q)) return 'control_char'; // one line, nothing invisible
+  if (q.length < QUESTION_MIN_CHARS || q.length > QUESTION_MAX_CHARS) return 'length';
+  if (!q.endsWith('?')) return 'no_question_mark';
+  if (q.includes('@') || LINK_LIKE.test(q)) return 'link';
+  if (MARKUP.test(q) || CHAR_REFERENCE.test(q)) return 'markup';
+  if (VERDICT_UPPER.test(q) || VERDICT_LEAD.test(q)) return 'verdict_word';
+  return null;
+}
+
+/** The question, folded, or null: exactly the replies questionMiss accepts. */
+export function parseQuestion(content: unknown): string | null {
+  if (questionMiss(content) !== null) return null;
+  return (stripReasoning(content as string) as string).normalize('NFKC').trim();
 }
 
 export type QuestionOutcome =
   | { kind: 'question'; question: string }
-  | { kind: 'none' }
+  | { kind: 'none'; miss: QuestionMiss }
   | { kind: 'abstain'; reason: AbstainReason };
 
 /** True when the question call put the claim on the wire. Same rule as voteWasSent. */
@@ -1012,11 +1037,13 @@ export function questionWasSent(outcome: QuestionOutcome): boolean {
 
 /**
  * One clarifying-question call to one voter (the caller picks the first that answered UNSURE and
- * the timeout). A reply that fails parseQuestion, NONE included, is `none`. Never throws.
+ * the timeout). A reply that fails parseQuestion, NONE included, is `none`, with why (questionMiss).
+ * Never throws.
  */
 export async function askQuestion(voter: Voter, claim: string, opts: VoteOptions): Promise<QuestionOutcome> {
   const out = await dialVoter(voter, QUESTION_PROMPT, claim, opts);
   if (out.kind === 'abstain') return out;
-  const question = parseQuestion(out.content);
-  return question ? { kind: 'question', question } : { kind: 'none' };
+  const miss = questionMiss(out.content);
+  if (miss !== null) return { kind: 'none', miss };
+  return { kind: 'question', question: parseQuestion(out.content)! };
 }
