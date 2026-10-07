@@ -231,24 +231,44 @@ export function verifyInclusionAIR(
 /**
  * Verify a non-membership AIR:
  *   1. Verify the low-leaf's inclusion AIR (all Merkle constraints hold).
+ *   1b. Re-commit the prover-supplied ordering fields against the committed leaf_digest to
+ *       prevent forged non-membership proofs: without this check a prover can supply a valid
+ *       inclusion proof for leaf X but fake (low_leaf_value, low_leaf_next, low_leaf_tombstoned)
+ *       to falsely claim non-membership of a value that IS in the tree.
  *   2. Check the ordering constraint: low_leaf_value < target < low_leaf_next
  *      (or low_leaf_next === 0n, meaning the tail — target > low_leaf_value suffices).
  *   3. Reject if the low-leaf is tombstoned (a tombstoned leaf can't serve as a low-leaf).
  */
 export function verifyNonMembershipAIR(
   air: NonMembershipAIR,
-  opts: { hash2?: Hash2 } = {},
+  opts: { leafHash?: (s: string) => string; hash2?: Hash2 } = {},
 ): AIRVerifyResult {
+  const leafHash = opts.leafHash ?? DEFAULT_LEAF_HASH;
+
   // Step 1: low-leaf inclusion must be sound
   const inc = verifyInclusionAIR(air.low_leaf_inclusion, opts);
   if (!inc.ok) return { ok: false, failure: `low-leaf inclusion: ${inc.failure}` };
 
-  // Step 2: tombstone check
+  // Step 1b: bind ordering fields to the committed leaf digest.
+  // The inclusion AIR authenticates leaf_digest against the Merkle root, but it does NOT
+  // constrain what (value, next, tombstoned) that digest encodes — those come from the
+  // prover. Re-derive the digest and require it to match before trusting the fields.
+  const expectedDigest = leafHash(
+    encodeLeaf({ value: air.low_leaf_value, next: air.low_leaf_next, tombstoned: air.low_leaf_tombstoned }),
+  );
+  if (expectedDigest !== air.low_leaf_inclusion.leaf_digest) {
+    return {
+      ok: false,
+      failure: `low-leaf fields do not match committed digest: recomputed ${expectedDigest} ≠ ${air.low_leaf_inclusion.leaf_digest}`,
+    };
+  }
+
+  // Step 2: tombstone check (authenticated by the digest check above)
   if (air.low_leaf_tombstoned) {
     return { ok: false, failure: 'low-leaf is tombstoned — cannot prove non-membership' };
   }
 
-  // Step 3: ordering constraint
+  // Step 3: ordering constraint (authenticated by the digest check above)
   const { target_value, low_leaf_value, low_leaf_next } = air;
   if (target_value <= low_leaf_value) {
     return {

@@ -8946,6 +8946,45 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 
 ---
 
+## Beat (2026-10-07, second run) — prior PR #1237 Strix security finding fixed; item 14 Merkle AIR secured
+
+**Prior beat verified [V] (2026-10-07, first run):**
+- PR #1231 (feat(classify): votes, S47): **MERGED** 2026-10-06T16:28:42Z [V `gh pr view 1231`]. ✓
+- PR #1232 (feat(zkp): commitment_scheme tag): **MERGED** 2026-10-06T20:34:46Z [V `gh pr view 1232`]. ✓
+- PR #1237 (feat(zkp): P4 Merkle AIR): **OPEN** — all CI checks SUCCESS but **Strix FAILED** (HIGH finding: unsound non-membership proof). [V `gh pr checks 1237`]
+- `origin/main` = `2bb73c1e` (feat: tool-belt grants a new user can mint). ✓
+- **Strix finding independently read** [V]: `src/zkp/merkle-air.ts:238-267` `verifyNonMembershipAIR` accepted prover-supplied `low_leaf_value`/`low_leaf_next`/`low_leaf_tombstoned` without re-committing them against the authenticated `leaf_digest`. A prover could supply a valid inclusion proof for leaf X but forge ordering fields to falsely prove non-membership of a value that IS in the tree (the Strix-named attack: `low_leaf_next=15` with target=10 which is committed, so ordering 5<10<15 passes incorrectly).
+- **Penalty verdict: NONE** for the prior beat's crypto work — the module and constraints were sound; the gap was a missing binding between the prover-supplied ordering metadata and the committed digest, a subtle soundness property that Strix correctly flagged. The beat that opened the PR did not self-validate, and the independent Strix review caught the real defect.
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-07-merkle-air` (same branch as PR #1237).**
+
+**Intent for steps 2-4:** Fix the Strix HIGH finding in `verifyNonMembershipAIR`: bind `low_leaf_value`/`low_leaf_next`/`low_leaf_tombstoned` to the committed `leaf_digest` before trusting them for the ordering and tombstone checks. Update the tombstone test (digest check now fires first). Add a new test proving the forged-ordering attack is rejected. Tag `@strix-security` to re-trigger the review.
+
+**STEP 2-4 — SHIPPED: Strix security fix → pushed to `feat/cc-2026-10-07-merkle-air` [V].**
+
+- `src/zkp/merkle-air.ts` — `verifyNonMembershipAIR` hardened:
+  - Added `leafHash` option (defaults to `DEFAULT_LEAF_HASH = poseidon2LeafHash`, matching the generator).
+  - New step 1b (before tombstone and ordering checks): re-derives `encodeLeaf({value: air.low_leaf_value, next: air.low_leaf_next, tombstoned: air.low_leaf_tombstoned})` → `leafHash(...)` and compares to `air.low_leaf_inclusion.leaf_digest`. Mismatch → `ok: false, failure: 'low-leaf fields do not match committed digest: …'`.
+  - Tombstone and ordering checks now note "(authenticated by the digest check above)" — both properties are provably tied to the committed Merkle position.
+- `tests/merkle-air.test.ts` — 24 tests (+1):
+  - Updated `'tombstoned low-leaf rejected'` test: renamed to clarify it now catches the tampered flag at the digest-binding step (`toMatch(/do not match/)`). Behavioral assertion (`ok: false`) unchanged.
+  - **New test: `'forged ordering fields with valid inclusion proof rejected (Strix finding)'`** — constructs the exact attack: valid inclusion proof for low-leaf 5 (next=10), forges `low_leaf_next=15` and sets `target_value=10` (which IS in the tree). Before fix: ordering check passes (5<10<15), non-membership accepted despite 10 being present. After fix: digest binding catches `next=15 ≠ committed next=10`, `ok: false, failure: /do not match/`.
+- **[V] `npx tsc --noEmit` exit 0** (no src/ errors).
+- **[V] `npx jest tests/merkle-air.test.ts --forceExit` → 24/24 passed.**
+- Commented `@strix-security` on PR #1237 to trigger fresh review.
+
+**What differed from intent:** Executed exactly as stated. The `leafHash` option was added to `verifyNonMembershipAIR` (not `verifyBatchedMerkleAIR`) because the batch verifier already delegates to the individual verifiers; passing `opts` through the existing `opts` parameter propagates it correctly.
+
+**Item 9 off-peak-windows gap — CONFIRMED CLOSED [V]:** Prior beats recorded "`isOffPeakHour`/`selectOffPeakBatch` still has zero callers". Checked this beat: `src/memory/memory-root-anchor-sweep.ts:15,62-64` imports and calls both; `src/index.ts` (PR #1211, merged 2026-10-05) calls `runMemoryRootAnchorSweep`. Chain is complete: `index.ts → runMemoryRootAnchorSweep → isOffPeakHour/selectOffPeakBatch`. Item 9's off-peak-windows half is NOW DONE. Updating the backlog row.
+
+**Open for Sean (rule-4):**
+1. Items 7/8/9/10/11: all Sean-gated — no change.
+2. **PR #1237** — Strix re-review triggered. Once Strix shows clean, all CI already SUCCESS → SAFE-CLASS (`--auto --squash` appropriate). This closes item 14.
+
+**Next beat:** (1) Confirm #1237 merged (Strix re-review must come back clean). (2) Non-Sean-gated backlog is now very thin — items 3-6, 12-14, 20 done; items 7-11 Sean-gated; 15 LATER. Consider: Item 15 (WHIR PCS, verify PR#1919 numbers first as the row says) or a fleet/scoring diagnostic to surface any live issues.
+
+---
+
 ## Beat (auto-logged, run 37526315488) — agent did not reach step 1 (ledger)
 
 **Auto-generated by the ledger-fallback job** — the `beat` job (result: `success`) did not open its own ledger entry before this job ran. Run: https://github.com/DealAppSeo/repid-engine/actions/runs/37526315488

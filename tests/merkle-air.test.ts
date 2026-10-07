@@ -221,15 +221,37 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
     expect(result.failure).toMatch(/ordering/);
   });
 
-  test('tombstoned low-leaf rejected', () => {
+  test('tombstoned low-leaf rejected — forged flag caught by digest binding', () => {
     const tree = buildTree(5n, 10n, 20n);
     const w = tree.nonMembershipProof(7n);
     const air = generateNonMembershipTrace(7n, w);
-    // Force tombstoned flag
+    // Force tombstoned flag without updating the committed digest — now caught at the
+    // digest-binding step (step 1b) before the tombstone check.
     const tampered = { ...air, low_leaf_tombstoned: true };
     const result = verifyNonMembershipAIR(tampered);
     expect(result.ok).toBe(false);
-    expect(result.failure).toMatch(/tombstoned/);
+    // Digest binding catches the tampered field; "do not match" is the expected error.
+    expect(result.failure).toMatch(/do not match/);
+  });
+
+  test('forged ordering fields with valid inclusion proof rejected (Strix finding)', () => {
+    // Tree has 5, 10, 20. Target = 10, which IS in the tree.
+    // Attack: get a valid inclusion proof for the low-leaf (value=5, next=10), then
+    // forge low_leaf_next=15 so the ordering check (5 < 10 < 15) would pass — falsely
+    // claiming non-membership of 10.
+    const tree = buildTree(5n, 10n, 20n);
+    const w = tree.nonMembershipProof(7n); // low-leaf is 5 (next=10)
+    const air = generateNonMembershipTrace(7n, w);
+    // Forge: swap target to 10 (which is in the tree) and fake low_leaf_next to 15
+    const forged: typeof air = {
+      ...air,
+      target_value: 10n,
+      low_leaf_next: 15n, // would make ordering 5 < 10 < 15 pass
+    };
+    const result = verifyNonMembershipAIR(forged);
+    expect(result.ok).toBe(false);
+    // Must be caught by digest binding (step 1b), not by the ordering check
+    expect(result.failure).toMatch(/do not match/);
   });
 
   test('tampered low-leaf inclusion fails non-membership', () => {
