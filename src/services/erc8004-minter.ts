@@ -6,14 +6,21 @@
 //
 // Key contract semantics:
 //   * Mint function is `register(string agentURI) returns (uint256 agentId)`.
-//     Permissionless — anyone can call. `msg.sender` becomes token owner.
+//     Permissionless — anyone can call. `msg.sender` becomes the token owner AND the
+//     token's `agentWallet` (the address the agent officially acts from).
 //   * AgentId is auto-incremented `_lastId++`. Returned as uint256.
 //   * Events emitted: Registered(agentId, agentURI, owner) + standard ERC-721
 //     Transfer(0x0, owner, tokenId).
 //
-// This service runs on Sean's Trinity Deployer wallet (0xdf6b8215...) as
-// the signer. The deployer becomes the token owner. Each agent's UUID is
-// associated server-side (Supabase `repid_agents.id` ↔ uint256 agentId).
+// EACH AGENT REGISTERS ITSELF (Sean, 2026-10-06: "each agent has their own id and Rep").
+// This used to sign `register` with the minter key, so the minter owned every token and
+// was every token's agentWallet: measured on-chain 2026-10-06, 8 of the 12 house agents
+// sit on the deployer address and 3 more on one other address. Now the agent's OWN
+// custodied wallet (agent_secrets) signs `register`, so owner = agentWallet = the agent.
+// The minter key only pays for it: when the agent's wallet cannot cover the gas, the
+// minter sends it at most MAX_GAS_TOPUP_WEI of testnet ETH first. An agent with no wallet
+// of its own is REFUSED; its identity never lands on a shared address.
+// Each agent's UUID is associated server-side (`repid_agents.id` ↔ uint256 agentId).
 import { ethers } from 'ethers';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import IDENTITY_REGISTRY_ABI from '../contracts/IdentityRegistry.abi.json';
@@ -25,6 +32,28 @@ export interface MinterConfig {
   chainId: number;
   supabase: SupabaseClient;
   agentMetadataBaseUrl?: string; // defaults to https://repid.dev/agents
+  /**
+   * Loads the agent's own custodied private key, or null when it has none. Defaults to
+   * agent_secrets (agent-wallet-manager), loaded lazily so a read-only caller of this
+   * module needs no database settings.
+   */
+  loadAgentKey?: (agentId: string) => Promise<string | null>;
+}
+
+/** The most testnet ETH the minter sends an agent's wallet to pay for its own registration. */
+export const MAX_GAS_TOPUP_WEI = ethers.parseEther('0.0005');
+/** Gas top-ups happen only on Base Sepolia: the minter never sends real ETH. */
+export const GAS_TOPUP_CHAIN_ID = 84532;
+
+/**
+ * Was the new token read back as owned by, and acting from, the agent's own wallet?
+ * Three outcomes, never two: an RPC that cannot be reached is NOT_CHECKED, not a pass.
+ */
+export type SelfOwnedCheck = 'VERIFIED' | 'FAILED' | 'NOT_CHECKED';
+
+async function defaultLoadAgentKey(agentId: string): Promise<string | null> {
+  const { getDecryptedPrivateKey } = require('./agent-wallet-manager') as typeof import('./agent-wallet-manager');
+  return getDecryptedPrivateKey(agentId);
 }
 
 export interface MintRequest {
@@ -40,8 +69,14 @@ export interface MintResult {
   chainId: number;
   contractAddress: string;
   gasUsed: string;
+  /** The agent's own wallet: the token's owner and its agentWallet. */
   ownerAddress: string;
   agentURI: string;
+  /** The minter address that paid the gas top-up, if one was needed. Never the owner. */
+  gasFunderAddress: string;
+  gasTopUpTxHash: string | null;
+  /** ownerOf and getAgentWallet read back after the mint, compared with ownerAddress. */
+  selfOwned: SelfOwnedCheck;
 }
 
 export interface MintStatus {
@@ -126,11 +161,11 @@ export class Erc8004Minter {
     return `${this.metadataBaseUrl}/${agentId}/metadata`;
   }
 
-  /** Throws if the agent row already has a token_id recorded. */
-  async ensureNotAlreadyMinted(agentId: string): Promise<void> {
+  /** Throws if the agent row already has a token_id recorded. Returns its wallet_address. */
+  async ensureNotAlreadyMinted(agentId: string): Promise<{ walletAddress: string | null }> {
     const { data, error } = await this.config.supabase
       .from('repid_agents')
-      .select('agent_name, erc8004_token_id, mint_tx_hash')
+      .select('agent_name, erc8004_token_id, mint_tx_hash, wallet_address')
       .eq('id', agentId)
       .single();
     if (error) throw new Error(`agent lookup failed: ${error.message}`);
@@ -148,25 +183,99 @@ export class Erc8004Minter {
         `[Erc8004Minter] agent ${data.agent_name} has legacy erc8004_token_id=${data.erc8004_token_id} without mint_tx_hash. Proceeding with fresh mint — caller should reconcile manually.`
       );
     }
-  }
-
-  /** Gas estimate for register(string). */
-  async estimateGas(req: MintRequest): Promise<bigint> {
-    const agentURI = this.buildAgentURI(req.agentId, req.agentURI);
-    return (this.contract as any)['register(string)'].estimateGas(agentURI);
+    return { walletAddress: (data as { wallet_address?: string | null } | null)?.wallet_address ?? null };
   }
 
   /**
-   * Mints a fresh ERC-8004 agent identity. The configured signer wallet
-   * (msg.sender) becomes the token owner. The returned agentId (uint256)
-   * is stored on repid_agents.erc8004_token_id as a string.
+   * The agent's own wallet, as a signer. Refuses when the agent has no custodied key, when
+   * the key does not match the wallet_address on record, or when it is the minter's own
+   * address: in every one of those cases the identity would not be the agent's alone.
+   */
+  async agentSigner(agentId: string, walletAddress: string | null): Promise<ethers.Wallet> {
+    const pk = await (this.config.loadAgentKey ?? defaultLoadAgentKey)(agentId);
+    if (!pk) {
+      throw new Error(`agent ${agentId} has no wallet of its own, so it cannot own its identity; nothing was minted`);
+    }
+    const wallet = new ethers.Wallet(pk, this.provider);
+    if (walletAddress && walletAddress.toLowerCase() !== wallet.address.toLowerCase()) {
+      throw new Error(`agent ${agentId}'s custodied key is not for its recorded wallet ${walletAddress}; nothing was minted`);
+    }
+    if (wallet.address.toLowerCase() === this.signer.address.toLowerCase()) {
+      throw new Error('the agent wallet is the minter wallet; refusing to mint to a shared address');
+    }
+    return wallet;
+  }
+
+  /**
+   * Make sure the agent's wallet can pay for `gasLimit`. Sends the shortfall from the minter
+   * on Base Sepolia only, never more than MAX_GAS_TOPUP_WEI. Returns the top-up tx hash, or
+   * null when none was needed.
+   */
+  async ensureGas(agentAddress: string, gasLimit: bigint): Promise<string | null> {
+    const fee = await this.provider.getFeeData();
+    const price = fee.maxFeePerGas ?? fee.gasPrice;
+    if (price === null || price === undefined) throw new Error('the RPC gave no gas price; nothing was minted');
+    const need = gasLimit * price * 2n; // twice the estimate, so a fee bump between calls still fits
+    const balance = await this.provider.getBalance(agentAddress);
+    if (balance >= need) return null;
+    const topUp = need - balance;
+    if (this.config.chainId !== GAS_TOPUP_CHAIN_ID) {
+      throw new Error(`the agent wallet needs gas and top-ups run only on chain ${GAS_TOPUP_CHAIN_ID}; nothing was minted`);
+    }
+    if (topUp > MAX_GAS_TOPUP_WEI) {
+      throw new Error(`registration gas would need a ${ethers.formatEther(topUp)} ETH top-up, over the ${ethers.formatEther(MAX_GAS_TOPUP_WEI)} ETH cap; nothing was minted`);
+    }
+    const tx = await this.signer.sendTransaction({ to: agentAddress, value: topUp });
+    const receipt = await tx.wait(1);
+    if (!receipt || receipt.status !== 1) throw new Error(`gas top-up failed: ${tx.hash}; nothing was minted`);
+    return tx.hash;
+  }
+
+  /** Read back ownerOf and getAgentWallet for a new token; both must be the agent's wallet. */
+  async checkSelfOwned(tokenId: string, agentAddress: string): Promise<SelfOwnedCheck> {
+    try {
+      const owner: string = await (this.contract as any).ownerOf(tokenId);
+      const acting: string = await (this.contract as any).getAgentWallet(tokenId);
+      const mine = (a: string) => a.toLowerCase() === agentAddress.toLowerCase();
+      return mine(owner) && mine(acting) ? 'VERIFIED' : 'FAILED';
+    } catch (e: unknown) {
+      return classifyOwnerOfError(e) === 'REVERTED' ? 'FAILED' : 'NOT_CHECKED';
+    }
+  }
+
+  /** What a mint would do, without sending anything: who registers, who pays, and the gas. */
+  async previewMint(req: MintRequest): Promise<{ estimatedGas: bigint; registrantAddress: string; gasFunderAddress: string }> {
+    const { walletAddress } = await this.ensureNotAlreadyMinted(req.agentId);
+    const agent = await this.agentSigner(req.agentId, walletAddress);
+    const agentURI = this.buildAgentURI(req.agentId, req.agentURI);
+    const estimatedGas: bigint = await (this.contract.connect(agent) as any)['register(string)'].estimateGas(agentURI);
+    return { estimatedGas, registrantAddress: agent.address, gasFunderAddress: this.signer.address };
+  }
+
+  /** Gas estimate for register(string), as the agent's own wallet would send it. */
+  async estimateGas(req: MintRequest): Promise<bigint> {
+    const agentURI = this.buildAgentURI(req.agentId, req.agentURI);
+    const { walletAddress } = await this.ensureNotAlreadyMinted(req.agentId);
+    const agent = await this.agentSigner(req.agentId, walletAddress);
+    return (this.contract.connect(agent) as any)['register(string)'].estimateGas(agentURI);
+  }
+
+  /**
+   * Mints a fresh ERC-8004 agent identity, registered BY THE AGENT'S OWN WALLET, so that
+   * wallet is the token's owner and its agentWallet. The minter only funds the gas. The
+   * returned agentId (uint256) is stored on repid_agents.erc8004_token_id as a string.
    */
   async mint(req: MintRequest): Promise<MintResult> {
-    await this.ensureNotAlreadyMinted(req.agentId);
+    const { walletAddress } = await this.ensureNotAlreadyMinted(req.agentId);
+    const agent = await this.agentSigner(req.agentId, walletAddress);
 
     const agentURI = this.buildAgentURI(req.agentId, req.agentURI);
+    const registry = this.contract.connect(agent) as any;
 
-    const tx = await (this.contract as any)['register(string)'](agentURI);
+    const gasLimit: bigint = await registry['register(string)'].estimateGas(agentURI);
+    const gasTopUpTxHash = await this.ensureGas(agent.address, gasLimit);
+
+    const tx = await registry['register(string)'](agentURI);
     console.log(`[Erc8004Minter] register tx submitted: ${tx.hash}`);
 
     const receipt = await tx.wait(1);
@@ -182,7 +291,8 @@ export class Erc8004Minter {
       );
     }
 
-    const ownerAddress = this.signer.address;
+    const ownerAddress = agent.address;
+    const selfOwned = await this.checkSelfOwned(tokenId, ownerAddress);
 
     const { error } = await this.config.supabase
       .from('repid_agents')
@@ -208,6 +318,9 @@ export class Erc8004Minter {
       gasUsed: receipt.gasUsed.toString(),
       ownerAddress,
       agentURI,
+      gasFunderAddress: this.signer.address,
+      gasTopUpTxHash,
+      selfOwned,
     };
   }
 
