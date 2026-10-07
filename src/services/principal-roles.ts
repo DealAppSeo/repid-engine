@@ -48,6 +48,16 @@
  * That is enforceable right now, against the real namespace, and it is the constraint most
  * worth having: the agent writing your code cannot move your money, whatever it asks for and
  * whatever its grantor holds.
+ *
+ * ONE ADDITION, 2026-10-07: `read:tool:*`, the tool belts. A belt grant names each read-only tool
+ * an agent may use for its role, as `read:tool:<id>` (the ids live in trustshell's
+ * `lib/belts.ts`, where every tool says how it is kept to reads). Every role may carry it, because
+ * reading is not spending: CTO and CMO still hold no `pay:` capability at any denomination.
+ *
+ * What answers for it, and what does not yet: `POST /grants/:id/authorize` returns a real
+ * decision for a `read:tool:<id>` capability (capability, chain liveness, expiry, revocation).
+ * Nothing calls it before a tool runs yet — the client that does is the next build. Until then a
+ * belt grant is a record a caller CAN check, and the UI that mints one has to say so.
  * ─────────────────────────────────────────────────────────────────────────────────────────
  */
 
@@ -62,8 +72,7 @@ export interface RoleDefinition {
   /** Human-facing name. Display only — never matched against. */
   label: string;
   /**
-   * The MOST this role may ever hold. An empty array means "this role may hold nothing" and is
-   * never used; a role whose ceiling is empty could hold no capability and would be useless.
+   * The MOST this role may ever hold. An empty array would mean "this role may hold nothing".
    * Every entry must be a capability the algebra can match segment-wise.
    */
   ceiling: readonly string[];
@@ -83,30 +92,33 @@ const DEFINITIONS: Readonly<Record<RoleName, RoleDefinition>> = {
   ceo: {
     name: 'ceo',
     label: 'PAI (CEO)',
-    ceiling: ['pay:*'],
+    ceiling: ['pay:*', 'read:tool:*'],
     rationale:
-      'delegating budget is this role\'s actual function; bounded to pay so a capability verb ' +
-      'added later is not retroactively pre-authorised',
+      'delegating budget is this role\'s actual function; bounded to pay and read-only tools so a ' +
+      'capability verb added later is not retroactively pre-authorised',
   },
   cfo: {
     name: 'cfo',
     label: 'CFO',
-    ceiling: ['pay:*'],
-    rationale: 'the money role; same spend ceiling as CEO, distinguished by who may mint it',
+    ceiling: ['pay:*', 'read:tool:*'],
+    rationale: 'the money role; same spend ceiling as CEO, distinguished by who may mint it, plus read-only tools',
   },
   cto: {
     name: 'cto',
     label: 'CTO',
-    ceiling: [],
+    ceiling: ['read:tool:*'],
     rationale:
       'NO SPEND, EVER. The engineering role holds no pay capability at any denomination — the ' +
-      'agent writing the code cannot move the money, whatever it asks for or its grantor holds',
+      'agent writing the code cannot move the money, whatever it asks for or its grantor holds. ' +
+      'It may carry read-only tools',
   },
   cmo: {
     name: 'cmo',
     label: 'CMO',
-    ceiling: [],
-    rationale: 'NO SPEND, EVER. Same reasoning as CTO: publishing authority is not spending authority',
+    ceiling: ['read:tool:*'],
+    rationale:
+      'NO SPEND, EVER. Same reasoning as CTO: publishing authority is not spending authority. ' +
+      'It may carry read-only tools',
   },
 };
 
@@ -160,9 +172,9 @@ export interface RoleCeilingOutcome {
  * not passed through. `intersect` and `permits` come from the mutation-tested algebra rather
  * than being re-derived here.
  *
- * A recognized role with an EMPTY ceiling refuses everything — that is the point of CTO and CMO,
- * not an edge case. The caller sees `allowed: []` and a `refused` list naming exactly what the
- * role would not carry.
+ * CTO and CMO carry only `read:tool:*`, so any spend they are asked to carry is refused — that is
+ * the point of those roles, not an edge case. The caller sees a `refused` list naming exactly what
+ * the role would not carry.
  */
 export function applyRoleCeiling(
   requested: readonly string[],
