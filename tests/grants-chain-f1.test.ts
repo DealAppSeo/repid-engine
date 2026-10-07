@@ -21,9 +21,10 @@ const mockDb: {
   grants: Record<string, Row>;
   bound: Record<string, string>; // agent id -> owner wallet
   custodians: Record<string, string>;
+  wallets: Record<string, string>; // agent id -> its own wallet
   failGrantReads: boolean;
   inserts: Row[];
-} = { grants: {}, bound: {}, custodians: {}, failGrantReads: false, inserts: [] };
+} = { grants: {}, bound: {}, custodians: {}, wallets: {}, failGrantReads: false, inserts: [] };
 
 jest.mock('../src/db', () => {
   const chain = (table: string) => {
@@ -46,7 +47,7 @@ jest.mock('../src/db', () => {
           return { data: w ? { human_wallet: w, owner_kind: 'builder' } : null, error: null };
         }
         if (table === 'repid_agents') {
-          return { data: { wallet_address: null, conservator_address: mockDb.custodians[String(filters.id)] ?? null }, error: null };
+          return { data: { wallet_address: mockDb.wallets[String(filters.id)] ?? null, conservator_address: mockDb.custodians[String(filters.id)] ?? null }, error: null };
         }
         return { data: null, error: null };
       },
@@ -82,6 +83,7 @@ beforeEach(() => {
   };
   mockDb.bound = { [PAI]: '0x00000000000000000000000000000000000000a1' };
   mockDb.custodians = {};
+  mockDb.wallets = {};
   mockDb.failGrantReads = false;
   mockDb.inserts = [];
 });
@@ -156,6 +158,16 @@ describe('using a widening grant: the unbind cut', () => {
     delete mockDb.bound[PAI];
     mockDb.custodians[PAI] = '0x00000000000000000000000000000000000000c1';
     expect((await checkAuthorization('w1', 'write:tool:github', {})).authorized).toBe(true);
+  });
+
+  it("a 'custodian' that is the agent's own wallet is not a root: an agent cannot answer for itself", async () => {
+    // The self-owned ERC-8004 mint writes the agent's own wallet into conservator_address.
+    delete mockDb.bound[PAI];
+    mockDb.custodians[PAI] = '0x00000000000000000000000000000000000000c1';
+    mockDb.wallets[PAI] = '0x00000000000000000000000000000000000000C1';
+    const d = await checkAuthorization('w1', 'write:tool:github', {});
+    expect(d).toMatchObject({ authorized: false, outcome: 'FAILED' });
+    expect(d.reason).toMatch(/no accountable root/);
   });
 
   it('a read-only grant is not cut: reading carries no power', async () => {

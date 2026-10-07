@@ -204,10 +204,20 @@ export const dbRootReader: RootReader = {
     return { wallet: row.human_wallet ?? null, kind: row.owner_kind === 'builder' ? 'builder' : 'human_sbt' };
   },
   async custodianOf(agentId) {
-    const { data, error } = await db.from('repid_agents').select('conservator_address').eq('id', agentId).maybeSingle();
+    const { data, error } = await db
+      .from('repid_agents')
+      .select('conservator_address, wallet_address')
+      .eq('id', agentId)
+      .maybeSingle();
     if (error) throw new Error(error.message);
-    const addr = (data as { conservator_address?: string | null } | null)?.conservator_address ?? null;
-    return addr && /^0x[0-9a-fA-F]{40}$/.test(addr) ? addr : null;
+    const row = data as { conservator_address?: string | null; wallet_address?: string | null } | null;
+    const addr = row?.conservator_address ?? null;
+    if (!addr || !/^0x[0-9a-fA-F]{40}$/.test(addr)) return null;
+    // An agent cannot answer for itself. The self-owned ERC-8004 mint (src/services/erc8004-minter.ts)
+    // writes the agent's OWN wallet into conservator_address, and any key can call that mint, so
+    // a custodian equal to the agent's wallet is the agent vouching for itself: no root.
+    if (row?.wallet_address && addr.toLowerCase() === row.wallet_address.toLowerCase()) return null;
+    return addr;
   },
   grant: readGrantRow,
 };

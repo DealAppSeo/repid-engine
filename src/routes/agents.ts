@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
+import { matchEnvOperatorKey } from '../auth/api-keys';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
 import { computeDefensibilitySpec } from '../services/reliability';
 import { todayPT } from '../lib/time';
@@ -14,6 +15,16 @@ router.post('/agents', async (req: Request, res: Response) => {
   const { erc8004Address, agentName, conservatorAddress, constitution } = req.body;
   if (!erc8004Address || !agentName)
     return res.status(400).json({ error: 'erc8004Address and agentName are required' });
+  // [F1] conservator_address is the operator's custodian, and it is one of the three things that
+  // make an agent answerable (src/services/accountable-root.ts). Any agent key passes the global
+  // auth, and the public register hands one out — so without this, anyone could name their own
+  // wallet as custodian of a fresh agent and buy, sell and widen as if the operator had vouched.
+  if (conservatorAddress != null && !matchEnvOperatorKey(String((req as any).apiKey?.key ?? ''))) {
+    return res.status(403).json({
+      error: 'custodian_is_operator_only',
+      message: 'Only the operator can name a custodian. To answer for an agent yourself, bind it as its owner.',
+    });
+  }
   try {
     return res.status(201).json(
       await registerAgent({ erc8004Address, agentName, conservatorAddress, constitution })
