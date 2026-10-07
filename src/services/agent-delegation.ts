@@ -19,6 +19,7 @@
  */
 import { verifyTypedData, getAddress } from 'ethers';
 import { db } from '../db';
+import { agentRefColumn } from './human-agent-binding';
 
 // --- EIP-712 domain + types ------------------------------------------------
 
@@ -224,7 +225,7 @@ export async function resolveAgentOwner(agent: string): Promise<OwnerInfo | null
   const { data: agentRow } = await db
     .from('repid_agents')
     .select('builder_id')
-    .eq('agent_name', agent)
+    .eq(agentRefColumn(agent), agent)
     .maybeSingle();
   const builderId = (agentRow as any)?.builder_id;
   if (!builderId) return null;

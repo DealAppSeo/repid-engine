@@ -19,8 +19,8 @@
  * finished-and-inert per CLAUDE_RULES 23.
  */
 import { Router, Request, Response } from 'express';
-import { verifyMessage } from 'ethers';
 import { db } from '../../db';
+import { verifyWalletMessage } from '../../services/wallet-signature';
 import {
   storeProviderKey, listKeys, revokeKey, ownerFamilyWidth,
   BYOK_CUSTODY_ENABLED, type KeyOwner,
@@ -31,6 +31,7 @@ import {
   HUMAN_AGENT_BIND_ENABLED, SCOPE_OWNERSHIP, type OwnerRef,
 } from '../../services/human-agent-binding';
 import { supportedProviders } from '../../services/provider-key-probe';
+import { MAX_LIFETIME_S, OWNER_ACTIONS, OWNER_AUTH_DOMAIN, OWNER_AUTH_TYPES } from '../../services/owner-authorization';
 import {
   mintForOwner, mintClaimable, reclaim, revokeToken, listTokens,
   IDENTITY_TOKENS_ENABLED,
@@ -40,6 +41,13 @@ const router = Router();
 
 /** How stale a signed request may be. Long enough for a human, short enough to bound replay. */
 const MAX_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * The agent's own API key — the second side of a bind (see human-agent-binding.ts). A browser may
+ * send it only because src/config/cors-headers.ts allows it; that file also explains why every
+ * /bind from trustshell.dev died in preflight until 2026-10-07.
+ */
+export const AGENT_KEY_HEADER = 'x-agent-key';
 
 /**
  * The statement a caller signs. Binding it to METHOD and PATH is what stops a
@@ -84,14 +92,14 @@ async function provenWallet(req: Request, res: Response): Promise<string | null>
     return null;
   }
 
-  let recovered: string;
-  try {
-    recovered = verifyMessage(authMessage(req.method, req.baseUrl + req.path, wallet, timestamp), signature);
-  } catch {
-    res.status(401).json({ error: 'bad_signature', message: 'Signature could not be verified.' });
-    return null;
-  }
-  if (recovered.toLowerCase() !== wallet.toLowerCase()) {
+  const checked = await verifyWalletMessage(wallet, authMessage(req.method, req.baseUrl + req.path, wallet, timestamp), signature);
+  if (!checked.ok) {
+    if (checked.reason === 'not_checked') {
+      // We could not look. Saying "bad signature" would send someone to re-sign something
+      // that may have been fine; saying nothing would let an unverified wallet through.
+      res.status(503).json({ error: 'signature_not_checked', message: checked.detail });
+      return null;
+    }
     res.status(401).json({ error: 'bad_signature', message: 'Signature did not recover to the wallet it claims.' });
     return null;
   }
@@ -355,6 +363,25 @@ router.delete('/byok/identity/:id', async (req: Request, res: Response) => {
   return res.json(await revokeToken({ id: String(req.params.id), owner: ownerFor(p), reason }));
 });
 
+// ── Owner authorization ─────────────────────────────────────────────────────
+
+/**
+ * What an owner signs to widen what their agent may do, served by the code that verifies it so a
+ * client never has to rebuild the shape (services/owner-authorization.ts). Public: it authorizes
+ * nothing by itself.
+ */
+router.get('/owner-authorization', (_req: Request, res: Response) => {
+  res.json({
+    domain: OWNER_AUTH_DOMAIN,
+    types: OWNER_AUTH_TYPES,
+    primary_type: 'OwnerAuthorization',
+    actions: OWNER_ACTIONS,
+    max_lifetime_seconds: MAX_LIFETIME_S,
+    params: 'keccak256 of canonical JSON (keys sorted at every depth, no whitespace) of the exact settings',
+    send_as: 'owner_authorization: { signature, nonce, expires_at } in the request body',
+  });
+});
+
 // ── Human ↔ agent binding ───────────────────────────────────────────────────
 
 /** The exact text to sign to claim an agent. Public — it proves nothing by itself. */
@@ -377,14 +404,25 @@ router.post('/human/bind', async (req: Request, res: Response) => {
   }
 
   // The human is taken from the proven principal, never from the body — a caller
-  // may not bind an agent on somebody else's behalf.
+  // may not bind an agent on somebody else's behalf. The agent's key comes in a
+  // header, never the body, so it is not echoed by anything that logs bodies.
+  const agentKeyHeader = req.headers[AGENT_KEY_HEADER];
+  const agentKey = Array.isArray(agentKeyHeader) ? agentKeyHeader[0] : agentKeyHeader;
   const result = await bindOwnerToAgent({
     owner: p.owner,
     agentId: agent_id,
     signature: typeof signature === 'string' ? signature : undefined,
     scope: typeof scope === 'string' ? scope : undefined,
+    agentKey: typeof agentKey === 'string' && agentKey.trim() ? agentKey.trim() : undefined,
   });
-  return res.status(result.ok ? 201 : result.reason === 'disabled' ? 503 : 400).json(result);
+  const status = result.ok
+    ? 201
+    : result.reason === 'disabled' || result.reason === 'signature_not_checked'
+      ? 503
+      : result.reason === 'agent_key_mismatch'
+        ? 403
+        : 400;
+  return res.status(status).json(result);
 });
 
 router.delete('/human/bind/:agentId', async (req: Request, res: Response) => {

@@ -26,11 +26,28 @@
  * `nullifier` is null today. When the anonymous proof lands it fills in, and no
  * live row has to be reshaped. This is keeping the door open, NOT building it.
  *
+ * TWO SIDES, NOT ONE [2026-10-07]. Until this date a bind proved only the WALLET:
+ * the agent check was "does this agent id exist". So the first wallet to claim an
+ * unclaimed agent became its owner — anyone's agent, a house agent, an agent
+ * created a minute ago in someone else's browser — and the partial unique index
+ * then locked the real creator out. Production had the flag on with zero bindings,
+ * so the hole was open and unused. Now a bind also needs the agent's OWN key (the
+ * one handed to whoever created it, held in their browser or `.trustshell/`), so a
+ * binding says both "this wallet is mine" and "this agent is mine".
+ *
+ * SMART WALLETS. The wallet signature is checked by wallet-signature.ts, which
+ * accepts passkey/contract wallets (ERC-1271, and ERC-6492 before their first
+ * transaction) as well as plain key-pair wallets. If the chain cannot be reached to
+ * check a contract wallet, the answer is `signature_not_checked`, never
+ * `bad_signature`.
+ *
  * FLAG: HUMAN_AGENT_BIND_ENABLED (default OFF) — original work touching live
  * state, so it lands finished-and-inert per CLAUDE_RULES 23.
  */
 import { verifyMessage } from 'ethers';
 import { db } from '../db';
+import { validateAgentApiKey } from '../auth/api-keys';
+import { verifyWalletMessage } from './wallet-signature';
 
 export const HUMAN_AGENT_BIND_ENABLED = process.env.HUMAN_AGENT_BIND_ENABLED === 'true';
 
@@ -91,6 +108,9 @@ export interface BindResult {
     | 'agent_not_found'
     | 'already_bound'
     | 'bad_signature'
+    | 'signature_not_checked'
+    | 'agent_key_required'
+    | 'agent_key_mismatch'
     | 'write_failed';
   detail: string;
   binding?: {
@@ -123,7 +143,11 @@ export function bindingMessage(params: { wallet: string; agentId: string; scope:
   ].join('\n');
 }
 
-/** Recover the signer and compare. Returns false on any malformed input. */
+/**
+ * Recover the signer and compare. Returns false on any malformed input.
+ * Plain key-pair wallets only; the bind path uses verifyWalletMessage, which also
+ * accepts smart wallets. Kept for its existing callers.
+ */
 export function signatureMatches(wallet: string, message: string, signature: string): boolean {
   try {
     return verifyMessage(message, signature).toLowerCase() === wallet.toLowerCase();
@@ -137,7 +161,12 @@ export async function bindOwnerToAgent(params: {
   agentId: string;
   signature?: string;
   scope?: string;
-  /** Skips signature checking. ONLY for tests and operator backfill. */
+  /**
+   * The agent's own API key — the second side of the bind. Whoever created the
+   * agent was handed it once; a wallet alone proves nothing about the agent.
+   */
+  agentKey?: string;
+  /** Skips both proofs. ONLY for tests and operator backfill. */
   trustedCaller?: boolean;
 }): Promise<BindResult> {
   const scope = params.scope ?? SCOPE_OWNERSHIP;
@@ -174,9 +203,33 @@ export async function bindOwnerToAgent(params: {
     .maybeSingle();
   if (!agent) return { ok: false, reason: 'agent_not_found', detail: 'No such agent.' };
 
-  // Proof of control. Skipped only for a trusted caller, and the skip is a
-  // parameter rather than an env flag so it can never be on by accident in prod.
+  // Proof of control, BOTH sides. Skipped only for a trusted caller, and the skip is
+  // a parameter rather than an env flag so it can never be on by accident in prod.
   if (!params.trustedCaller) {
+    // Side one: the agent. Checked first, so a caller who does not hold the agent
+    // learns nothing about whether their wallet signature would have passed.
+    if (!params.agentKey) {
+      return {
+        ok: false,
+        reason: 'agent_key_required',
+        detail: "Binding needs the agent's own key as well as your wallet signature. The key proves the agent is yours; the signature proves the wallet is.",
+      };
+    }
+    let keyAgentId: string | null = null;
+    try {
+      keyAgentId = (await validateAgentApiKey(params.agentKey))?.agent_id ?? null;
+    } catch {
+      keyAgentId = null;
+    }
+    if (!keyAgentId || keyAgentId !== params.agentId) {
+      return {
+        ok: false,
+        reason: 'agent_key_mismatch',
+        detail: "That key does not belong to this agent, or has been revoked. Use the key you were given when the agent was created.",
+      };
+    }
+
+    // Side two: the wallet.
     if (!wallet) {
       return {
         ok: false,
@@ -185,12 +238,21 @@ export async function bindOwnerToAgent(params: {
       };
     }
     const msg = bindingMessage({ wallet, agentId: params.agentId, scope });
-    if (!params.signature || !signatureMatches(wallet, msg, params.signature)) {
-      return {
-        ok: false,
-        reason: 'bad_signature',
-        detail: 'Signature did not recover to the wallet on record for this exact agent and scope.',
-      };
+    const checked = params.signature
+      ? await verifyWalletMessage(wallet, msg, params.signature)
+      : ({ ok: false, reason: 'invalid', detail: 'No signature.' } as const);
+    if (!checked.ok) {
+      return checked.reason === 'not_checked'
+        ? {
+            ok: false,
+            reason: 'signature_not_checked',
+            detail: `${checked.detail} Nothing was bound; try again in a moment.`,
+          }
+        : {
+            ok: false,
+            reason: 'bad_signature',
+            detail: 'Signature did not recover to the wallet on record for this exact agent and scope.',
+          };
     }
   }
 
@@ -258,6 +320,39 @@ export async function ownerOfAgent(agentId: string, scope = SCOPE_OWNERSHIP) {
     owner_id: kind === 'builder' ? data.builder_id : data.human_token_id,
     assurance: assuranceOf(kind),
   };
+}
+
+const AGENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Callers name agents by id (what an agent-bound key must send) or by name (older callers). */
+export function agentRefColumn(ref: string): 'id' | 'agent_name' {
+  return AGENT_UUID.test(ref) ? 'id' : 'agent_name';
+}
+
+/**
+ * The bound owner of an agent named by id or by name, for routes that must ask the owner before
+ * widening what the agent may do. Names are NOT unique (13 case-collisions measured 2026-10-07), so
+ * a name that matches more than one agent, any of them owned, is `ambiguous`: the caller must use
+ * the id rather than have us guess whose owner to ask.
+ */
+export async function boundOwnerOfRef(
+  ref: string,
+): Promise<{ agentId: string; wallet: string } | null | 'ambiguous'> {
+  let ids: string[];
+  if (agentRefColumn(ref) === 'id') {
+    ids = [ref];
+  } else {
+    const { data } = await db.from('repid_agents').select('id').eq('agent_name', ref);
+    ids = ((data as Array<{ id: string }> | null) ?? []).map((r) => r.id);
+  }
+  const owned: Array<{ agentId: string; wallet: string }> = [];
+  for (const id of ids) {
+    const o = await ownerOfAgent(id);
+    if (o?.human_wallet) owned.push({ agentId: id, wallet: o.human_wallet as string });
+  }
+  if (owned.length === 0) return null;
+  if (ids.length > 1) return 'ambiguous';
+  return owned[0]!;
 }
 
 /** Every agent this owner owns — the "my team of experts" list. */

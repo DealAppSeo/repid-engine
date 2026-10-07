@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
+import { ownerOfAgent } from '../services/human-agent-binding';
+import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 
 const router = Router();
 
@@ -63,6 +65,27 @@ router.get('/:id/keys', requireAdminAuth, async (req: Request, res: Response) =>
 router.post('/:id/keys', requireAdminAuth, async (req: Request, res: Response) => {
   const agentId = String(req.params.id);
   const { name = 'new_key', scopes = [] } = req.body;
+
+  // OWNER [2026-10-07]. A new key is a new way to act as this agent, so once a person owns the
+  // agent, a key alone cannot mint another key: that would let a leaked key make itself permanent.
+  // Only the owner's wallet can (services/owner-authorization.ts). Revoking a key never needs it.
+  try {
+    const owner = await ownerOfAgent(agentId);
+    if (owner?.human_wallet) {
+      const check = await checkOwnerAuthorization({
+        subject: agentId,
+        action: 'keys.create',
+        params: { agent_id: agentId, name: String(name), scopes: Array.isArray(scopes) ? [...scopes].map(String).sort() : [] },
+        auth: readOwnerAuthorization(req.body),
+        expectedSigner: owner.human_wallet as string,
+      });
+      if (!check.ok) {
+        return res.status(check.code === 'not_checked' ? 503 : 403).json({ error: check.code, message: check.message });
+      }
+    }
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'owner check failed' });
+  }
 
   try {
     const { key, key_prefix } = await issueAgentApiKey(agentId, name, scopes);
