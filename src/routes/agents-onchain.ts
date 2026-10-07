@@ -46,7 +46,8 @@ export function createAgentsOnchainRouter(supabase: SupabaseClient): Router {
 
   /**
    * POST /:id/mint
-   * Mints an ERC-8004 token for the agent via IdentityRegistry.register(string).
+   * Mints an ERC-8004 token for the agent via IdentityRegistry.register(string), sent BY
+   * THE AGENT'S OWN WALLET so it owns the identity; the minter key only funds gas.
    * Bearer auth required (global authMiddleware).
    * Query: ?dry_run=true → returns gas estimate without sending tx.
    * Body (optional): { agent_uri?: string }
@@ -57,15 +58,18 @@ export function createAgentsOnchainRouter(supabase: SupabaseClient): Router {
     try {
       const minter = getMinter();
       if (isDryRun) {
-        const estimate = await minter.estimateGas({
+        const preview = await minter.previewMint({
           agentId: id,
           agentURI: req.body?.agent_uri,
         });
         res.status(200).json({
           dry_run: true,
-          estimated_gas: estimate.toString(),
+          estimated_gas: preview.estimatedGas.toString(),
           agent_id: id,
-          signer_address: minter.getSignerAddress(),
+          // The agent's own wallet registers, so it owns the identity and acts as it.
+          registrant_address: preview.registrantAddress,
+          // The minter only pays gas, and never owns the token.
+          gas_funder_address: preview.gasFunderAddress,
         });
         return;
       }
@@ -78,6 +82,16 @@ export function createAgentsOnchainRouter(supabase: SupabaseClient): Router {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('already minted')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      // Refused so that the identity never lands on a shared address: the agent has no
+      // wallet of its own, its key does not match its recorded wallet, or it IS the minter.
+      if (
+        msg.includes('has no wallet of its own') ||
+        msg.includes('is not for its recorded wallet') ||
+        msg.includes('refusing to mint to a shared address')
+      ) {
         res.status(409).json({ error: msg });
         return;
       }
