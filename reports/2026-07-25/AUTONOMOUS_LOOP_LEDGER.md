@@ -9087,4 +9087,34 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 PRs merged during this run's window (since 2026-10-07T16:27:49Z):
 - #1244 fix(zkp): Merkle AIR verifiers check the trace against a trusted root (Strix finding left open by #1237) (merged 2026-10-07T16:30:36Z)
 
+---
+
+## Beat (2026-10-07, fourth run) — prior beat verified; item 10 stale row corrected; backlog genuinely exhausted of non-Sean-gated work
+
+**Prior beat (third run) verified [V]:**
+- PR #1237 (feat(zkp): P4 Merkle AIR): **MERGED** at 2026-10-07T15:48:45Z [V `gh pr view 1237`] ✓ — item 14 DONE.
+- PR #1244 (fix(zkp): Strix HIGH soundness fix): **MERGED** at 2026-10-07T16:30:36Z [V `gh pr view 1244`] ✓ — the `leaf_digest` binding that prevented forged non-membership proofs is on main.
+- PR #1238 (feat(identity): ERC-8004 self-owned mint): **MERGED** at 2026-10-07T04:30:59Z [V `gh pr view 1238`] ✓ (noted by prior beat, confirmed here).
+- Prior beat's rebase + `--auto --squash` on #1237: executed correctly; tests 39/39 per the prior entry, CI went green and GitHub merged.
+
+**[V] Item 10 stale backlog row corrected — code is complete:**
+- `src/index.ts:1466-1506` (read directly) supplies real `fetchPending` and `writeback` closures and calls `runMemoryRootAnchorSweep` on a 1-hour interval, gated by `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED` (`shadow`=dry-run / `enforce`=live EAS spend). The item 10 backlog row said "ZERO callers" — that was stale as of PR #1211 (merged 2026-10-05). Corrected in the backlog file (same commit as this ledger entry; no PR — docs-only, report-only-PR prohibition applies).
+- Item 10 status: code-complete, Sean GO to set `MEMORY_ROOT_ANCHOR_SWEEP_ENABLED=enforce` in Railway (spends EAS gas from the funded attester wallet on an unattended trigger — same class as `HEAT_EVICTION_ENABLED` for item 13).
+
+**Step 2 — Non-Sean-gated backlog is genuinely exhausted:**
+- Items 1–6, 9, 10 (code-complete), 12, 13, 14, 20: DONE or code-complete.
+- Items 7, 8, 11: Sean-gated env flips (ANFIS enablement, cascade, proof-tier enforce).
+- Item 10: Sean-gated gas spend.
+- Items 15–19: LATER / GATED.
+- One open PR from Sean (#1248 — practice lane endpoint, prover pin, repid.dev CORS, README edges): all-green, Strix-approved. Surfaced below (rule-4). Not armed — it's Sean's PR, not this loop's.
+- **This is an honest empty-queue beat, not a turn-cap death.** No feature branch opened; no PR. The ledger + backlog correction committed directly to main (same pattern as the fallback job, minus the stub text).
+
+**Mistakes / corrections:** None new. Corrected the item 10 backlog row (stale "ZERO callers" text).
+
+**Open for Sean (rule-4):**
+1. **PR #1248** (Sean's PR — P1 practice lane endpoint, prover pin, repid.dev CORS origins, README edges): all-green, Strix-approved, mergeable. Bot note in the PR says best after `hyperdag-protocol#36` but harmless to merge first. Sean's call.
+2. Items 7/8/10/11: env flips / gas spend — unchanged.
+
+**Next beat:** Non-Sean-gated backlog is empty. Options: (a) verify item 15 (WHIR PCS) — requires reading PR#1919 in hyperdag-protocol to confirm the −13%/−22% numbers cited in the verify-before-depend list; (b) read the run logs for the two auto-logged fallback beats (37622238825, 37652221856) to understand why those beats died before reaching step 1; (c) if Sean merges #1248, there may be follow-up work on the practice lane gates (payee/stop/acknowledgement are NOT CHECKED today per the PR body). Surface (c) to Sean: once #1248 lands, the loop can build the missing gates.
+
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37652221856 --log`) if the reason matters.
