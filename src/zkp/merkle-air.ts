@@ -26,6 +26,9 @@
  *   Boundary:
  *     B0: trace[0].current_in = leafDigest
  *     B1: trace[n-1].current_out = claimedRoot
+ *     B2: claimedRoot = the TRUSTED root, which the verifier supplies (`opts.root`) and the prover
+ *         never does. Without B2 any self-consistent trace passes: a prover hashes an honest path
+ *         through a tree of its own choosing and names that tree's root as `claimed_root`.
  *   Continuity (transition between rows):
  *     C0: for i < n-1: trace[i].current_out = trace[i+1].current_in
  *
@@ -170,7 +173,7 @@ export function generateNonMembershipTrace(
  */
 export function verifyInclusionAIR(
   air: InclusionAIR,
-  opts: { hash2?: Hash2 } = {},
+  opts: { hash2?: Hash2; root: string },
 ): AIRVerifyResult {
   const hash2 = opts.hash2 ?? DEFAULT_HASH2;
   const { rows, leaf_digest, claimed_root } = air;
@@ -225,12 +228,19 @@ export function verifyInclusionAIR(
     return { ok: false, failure: `B1: trace[-1].current_out ${last_out} ≠ claimed_root ${claimed_root}` };
   }
 
+  // B2: the root the trace ends at must be the TRUSTED one. claimed_root is prover-supplied, so B1
+  // alone only shows the trace is consistent with itself. Same contract as the per-witness
+  // reference verifiers in src/memory/leanimt-plus.ts, which take the committed root as an argument.
+  if (claimed_root !== opts.root) {
+    return { ok: false, failure: `B2: claimed_root ${claimed_root} ≠ trusted root ${opts.root}` };
+  }
+
   return { ok: true };
 }
 
 /**
  * Verify a non-membership AIR:
- *   1. Verify the low-leaf's inclusion AIR (all Merkle constraints hold).
+ *   1. Verify the low-leaf's inclusion AIR (all Merkle constraints hold, ending at the trusted root).
  *   1b. Re-commit the prover-supplied ordering fields against the committed leaf_digest to
  *       prevent forged non-membership proofs: without this check a prover can supply a valid
  *       inclusion proof for leaf X but fake (low_leaf_value, low_leaf_next, low_leaf_tombstoned)
@@ -246,11 +256,11 @@ export function verifyInclusionAIR(
  */
 export function verifyNonMembershipAIR(
   air: NonMembershipAIR,
-  opts: { leafHash?: (s: string) => string; hash2?: Hash2 } = {},
+  opts: { leafHash?: (s: string) => string; hash2?: Hash2; root: string },
 ): AIRVerifyResult {
   const leafHash = opts.leafHash ?? DEFAULT_LEAF_HASH;
 
-  // Step 1: low-leaf inclusion must be sound
+  // Step 1: low-leaf inclusion must be sound, against the trusted root (B2)
   const inc = verifyInclusionAIR(air.low_leaf_inclusion, opts);
   if (!inc.ok) return { ok: false, failure: `low-leaf inclusion: ${inc.failure}` };
 
@@ -297,12 +307,13 @@ export function verifyNonMembershipAIR(
 }
 
 /**
- * Verify a batched AIR — each proof is verified independently.
+ * Verify a batched AIR — each proof is verified independently, every one against the same
+ * trusted root (a batch is over one committed tree).
  * Returns ok=true only if every proof in the batch is valid.
  */
 export function verifyBatchedMerkleAIR(
   batch: BatchedMerkleAIR,
-  opts: { hash2?: Hash2 } = {},
+  opts: { hash2?: Hash2; root: string },
 ): AIRVerifyResult {
   for (let i = 0; i < batch.proofs.length; i++) {
     const proof = batch.proofs[i]!;
