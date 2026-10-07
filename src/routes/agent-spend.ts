@@ -78,7 +78,8 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
         chain_id: Number(checked.reads.chainId),
       };
       if (!checked.ok) {
-        return res.status(isDryRun ? 200 : checked.status).json({ ok: false, dry_run: isDryRun, would_send: false, code: checked.code, error: checked.message, reads: readsOut });
+        // agent_wallet is returned on a refusal too: the owner needs it to set the cap at all.
+        return res.status(isDryRun ? 200 : checked.status).json({ ok: false, dry_run: isDryRun, would_send: false, code: checked.code, error: checked.message, agent_wallet: checked.agentAddress ?? null, reads: readsOut });
       }
       if (isDryRun) {
         return res.json({ ok: true, dry_run: true, would_send: true, agent_wallet: checked.agentAddress, reads: readsOut });

@@ -112,7 +112,7 @@ describe('POST /api/v1/agents/:id/spend', () => {
     const { a } = app({ enabled: false });
     const res = await request(a).post('/api/v1/agents/agent-1/spend').send({ ...body, amount_usdc: '11', dry_run: true });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: false, would_send: false, code: 'over_cap' });
+    expect(res.body).toMatchObject({ ok: false, would_send: false, code: 'over_cap', agent_wallet: AGENT });
   });
 
   it('a real send is refused while AGENT_SPEND_ENABLED is off', async () => {

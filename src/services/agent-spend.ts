@@ -140,7 +140,7 @@ export interface SpendResult {
 
 export type CheckOutcome =
   | { ok: true; agentAddress: string; agentKey: string; reads: SpendReads; gasCostWei: bigint }
-  | { ok: false; status: number; code: string; message: string; reads?: SpendReads };
+  | { ok: false; status: number; code: string; message: string; reads?: SpendReads; agentAddress?: string };
 
 /**
  * Everything short of signing: load the agent's own key, read the chain, decide, estimate gas.
@@ -166,14 +166,14 @@ export async function checkSpend(
   ]);
   const reads: SpendReads = { chainId, allowance, ownerBalance, agentEth };
   const decision = decideSpend(req, address, reads);
-  if (!decision.ok) return { ...decision, reads };
+  if (!decision.ok) return { ...decision, reads, agentAddress: address };
 
   let gasCostWei: bigint;
   try {
     gasCostWei = await chain.gasCost(key, req.owner, req.to, req.amount);
   } catch (e) {
     const why = e instanceof Error ? e.message.split('\n')[0] : String(e);
-    return { ok: false, status: 409, code: 'would_revert', message: `the chain would refuse this transfer (${why}). Nothing was sent.`, reads };
+    return { ok: false, status: 409, code: 'would_revert', message: `the chain would refuse this transfer (${why}). Nothing was sent.`, reads, agentAddress: address };
   }
   if (agentEth < gasCostWei) {
     return {
@@ -182,6 +182,7 @@ export async function checkSpend(
       code: 'no_gas',
       message: `the agent's wallet needs Base Sepolia ETH for gas: it holds ${ethers.formatEther(agentEth)}, needs about ${ethers.formatEther(gasCostWei)}. Nothing was sent.`,
       reads,
+      agentAddress: address,
     };
   }
   return { ok: true, agentAddress: address, agentKey: key, reads, gasCostWei };
