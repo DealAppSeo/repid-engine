@@ -165,11 +165,19 @@ export function decideMint(req: MintRequest, grantorAuthority: EffectiveAuthorit
   }
 
   // G7 — cold/auditor grants: auditor must differ from the principal being audited.
+  //
+  // auditFor is required when the grant AUDITS (any `audit:` capability). A cold grant that only
+  // READS — a tool belt, `read:tool:<id>` — audits nobody, so there is no checker and no doer to
+  // keep apart, and theta_cold = 0 is the read-only class in grants-authority.v0.md. Requiring an
+  // auditFor there made every read-only grant unmintable for a new user (warm/hot need A_eff a new
+  // agent does not have), or forced a false auditFor onto the record. The read-only check below
+  // still applies to every cold grant.
   if (req.grantClass === 'cold') {
-    if (!req.auditFor) {
-      return { allowed: false, reason: 'grantClass "cold" requires auditFor (the principal being audited)' };
+    const audits = req.capabilities.some((c) => c.startsWith('audit:'));
+    if (audits && !req.auditFor) {
+      return { allowed: false, reason: 'a cold grant carrying audit: capabilities requires auditFor (the principal being audited)' };
     }
-    if (req.auditFor === req.granteeAgentId) {
+    if (req.auditFor && req.auditFor === req.granteeAgentId) {
       return { allowed: false, reason: 'auditor (grantee) must differ from auditFor — checker_must_not_be_doer' };
     }
     const nonReadCaps = req.capabilities.filter((c) => !c.startsWith('audit:') && !c.startsWith('read:'));

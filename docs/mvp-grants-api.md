@@ -77,7 +77,17 @@ A grantor **with** a wallet_address on record whose signature is missing or inva
 | `spend` | A_eff >= the `maxValue` caveat's amount | none flat — budget-relative |
 | `hot` | A_eff >= 2000 | theta_hot |
 | `warm` | A_eff >= 500 | theta_warm |
-| `cold` | none (auditor use) — but `audit_for` must differ from `grantee_agent_id` | theta_cold = 0 |
+| `cold` | none. Read-only (`read:` / `audit:` capabilities only). `audit_for` is required only when an `audit:` capability is asked for, and must differ from `grantee_agent_id` | theta_cold = 0 |
+
+**Who may mint (2026-10-07).** With an agent-bound API key (the kind `/agents/register` issues),
+`grantor_agent_id` must be **that key's own agent id** (the UUID, not the name: `agent_name` is not
+unique). Anything else is a 403 naming the field. An operator key is unbound, as before.
+
+**Tool belts.** A belt grant is a `cold` grant whose capabilities are `read:tool:<id>`, one per
+read-only tool (ids from trustshell's `lib/belts.ts`), with `role` set to `cto`, `cmo`, `cfo` or
+`ceo`. Every role's ceiling admits `read:tool:*`; `cto` and `cmo` still admit no `pay:`. A new
+agent with no collateral can mint one, because theta_cold = 0. `POST /grants/:id/authorize`
+answers for each tool; nothing calls it before a tool runs yet.
 
 A_eff here is computed by `src/services/effective-authority.ts` — the same locked formula
 (`min(R_route, 100*sqrt(S_real)) * 1[builder >= 500]`), with one **named, load-bearing
@@ -108,7 +118,8 @@ revoking a root grant leaves its child's row unchanged but the child is no longe
 ```
 
 **G6: only the direct grantor of that specific link may revoke it — always, and the grantee
-cannot block it.** Idempotent: revoking an already-revoked grant is refused, not a silent no-op.
+cannot block it.** With an agent-bound key, `requested_by` must be that key's own agent id (and it must equal the
+grant's `grantor_agent_id` exactly). Idempotent: revoking an already-revoked grant is refused, not a silent no-op.
 
 ### `POST /api/v1/grants/:id/authorize` (read-only)
 

@@ -383,6 +383,35 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       }
     }
 
+    // GRANTS: the grantor, and whoever asks to revoke, must be THIS key's agent, named by its ID.
+    //
+    // Until 2026-10-07 neither field was checked against the key, so any agent-bound key —
+    // including one from the public /agents/register — could mint a grant in another agent's name,
+    // or ask to revoke one. Nothing consumed grants yet (principal_grants held 0 rows), so this
+    // closes a door before anything stood behind it.
+    //
+    // ID ONLY, NOT NAME, unlike the fields above: repid_agents.agent_name has no unique index and
+    // 13 names collide case-insensitively [MEASURED 2026-10-07], so a name does not pick out one
+    // principal. An operator (env) key carries no binding and is unaffected.
+    if (/^(?:\/api\/v1)?\/grants(?:\/|$)/.test(req.path)) {
+      for (const field of ['grantor_agent_id', 'requested_by'] as const) {
+        const value = (req.body as Record<string, unknown> | undefined)?.[field];
+        if (value !== undefined && (typeof value !== 'string' || value.trim().toLowerCase() !== boundId)) {
+          return res.status(403).json({
+            error: `Forbidden: ${field} must be this API key's own agent id`,
+            field: `body.${field}`,
+          });
+        }
+      }
+      // /grants/<grant-id>/(revoke|authorize) carries a GRANT id, not an agent id; the generic
+      // path-UUID check below would 403 every bound key, so a grantor could never revoke its own
+      // grant (G6). Revoke authorization is the requested_by check above plus decideRevoke's
+      // "only the grantor"; authorize is a read-only decision.
+      if (/^(?:\/api\/v1)?\/grants\/[0-9a-f-]{36}\/(?:revoke|authorize)$/i.test(req.path)) {
+        return next();
+      }
+    }
+
     if (targetAgentName && boundAgentName && String(targetAgentName).trim().toLowerCase() !== boundAgentName.toLowerCase()) {
       if (String(targetAgentName).trim().toLowerCase() !== boundId) {
         return res.status(403).json({ error: 'Forbidden: agent_name mismatch (API key is bound to a different agent identity)' });
