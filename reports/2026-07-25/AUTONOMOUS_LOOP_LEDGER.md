@@ -9041,3 +9041,32 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 3. **PR #1238** (ERC-8004 self-owned mint) — armed `--auto --squash`, already all-green.
 
 **Next beat:** (1) Confirm #1237 and #1238 merged. (2) Non-Sean-gated backlog is very thin: item 14 now complete (pending #1237 merge), item 15 (WHIR PCS) is LATER/PR#1919-gated. Next candidate: item 15 number verification or a live fleet diagnostic. (3) The Strix FAILURE on #1237 — on this repo Strix is advisory (not in branch ruleset), so the `--auto --squash` fires on CI green regardless; however the next beat should read the Strix report if #1237 is still open.
+
+---
+
+## Beat (2026-10-07, third run) — verified prior PRs; fixed rebase conflict on PR #1237; armed --auto --squash
+
+**Prior beat verified [V] (2026-10-07, second run):**
+- PR #1232 (feat(zkp): commitment_scheme tag): **MERGED** at 2026-10-06T20:34:46Z [V `gh pr view 1232`] ✓
+- PR #1233 (feat(answer-key): S46 first slice): **MERGED** at 2026-10-06T20:28:52Z [V `gh pr view 1233`] ✓
+- PR #1238 (feat(identity): ERC-8004 self-owned mint): **MERGED** at 2026-10-07T04:30:59Z [V `gh pr view 1238`] ✓
+- PR #1237 (feat(zkp): P4 Merkle AIR): **OPEN, CONFLICTING** — mergeable blocked by rebase conflict in ledger file (auto-logged beats on main landed after the branch was pushed). Prior beat's boundary classification fix (NOT_ZKREPID entry + docs/ZKREPID.md) was already committed but the branch was not rebased when main advanced. Strix now shows **SUCCESS** (not FAILURE as the prior beat entry recorded — the report updated after the boundary fix). CI `test` job: gitleaks + resident-secrets SUCCESS; no `test` workflow result visible, likely hasn't re-run since conflict state.
+- `origin/main` = `2c1f26d4` (docs: auto-logged fallback for run 37594635944). ✓
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-07-merkle-air` (same branch as PR #1237).**
+
+**Intent for steps 2-4:** Rebase PR #1237 onto current `origin/main` to clear the merge conflict (the only change needed), verify tests still pass, push. No code change. SAFE-CLASS.
+
+**STEP 2-4 — SHIPPED: rebase + push [V].**
+- Resolved single conflict in `reports/2026-07-25/AUTONOMOUS_LOOP_LEDGER.md`: kept all content (two auto-logged beats from main + the prior beat's real entry from the PR branch), ordered chronologically.
+- **[V] `npx jest tests/merkle-air.test.ts tests/zkrepid-boundary.test.ts --forceExit` → 39/39 passed** (23 merkle-air + 16 zkrepid-boundary).
+- Pushed rebased branch to `origin/feat/cc-2026-10-07-merkle-air`; CI re-triggers on PR #1237.
+- Armed PR #1237: `gh pr merge 1237 --auto --squash`. SAFE-CLASS (new pure ZKP module + tests + boundary classification, zero `src/index.ts` reach, no scoring reach, no DDL, no gate flip).
+
+**What differed from intent:** The only scope beyond "rebase" was adding this beat's ledger entry to the same commit (step 1 and step 2-4 combined on one push, which is the expected pattern for a rebase-only beat). No code change needed.
+
+**Open for Sean (rule-4):**
+1. Items 7/8/9/10/11: all Sean-gated — no change.
+2. **PR #1237** — armed `--auto --squash`. Will merge on CI green + Strix clean. Strix already SUCCESS.
+
+**Next beat:** (1) Confirm #1237 merged (item 14 complete). (2) Non-Sean-gated backlog: items 3-6, 12-14, 20 all DONE; items 7-11 Sean-gated; item 15 (WHIR PCS) LATER pending PR#1919 number verification. Thin queue — next candidate is item 15 verification or a live fleet/scoring diagnostic.
