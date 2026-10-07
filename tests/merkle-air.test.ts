@@ -254,6 +254,28 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
     expect(result.failure).toMatch(/do not match/);
   });
 
+  test('a planted value-0 leaf outside the leftmost slot cannot prove absence (Strix MEDIUM)', () => {
+    // Only the sentinel at index 0 may have value 0. A value-0, next-0 leaf anywhere else reads as
+    // "the tail of an empty list", so it would "prove" that every value is absent — including 5
+    // and 10, which are in this tree. The root binds the leaf's POSITION through its path, so the
+    // verifier must derive the slot from the path, as the per-witness reference verifier does.
+    const tree = LeanIMTPlus.fromLeaves([
+      { value: 0n, next: 5n, tombstoned: false }, // sentinel, index 0
+      { value: 5n, next: 10n, tombstoned: false },
+      { value: 0n, next: 0n, tombstoned: false }, // planted, index 2
+      { value: 10n, next: 0n, tombstoned: false },
+    ]);
+    const planted = { lowLeaf: (tree as unknown as { witnessAt(i: number): any }).witnessAt(2) };
+    for (const present of [5n, 10n]) {
+      const result = verifyNonMembershipAIR(generateNonMembershipTrace(present, planted));
+      expect(result.ok).toBe(false);
+      expect(result.failure).toMatch(/leftmost/);
+    }
+    // The real sentinel, in the leftmost slot, still proves a genuinely absent value.
+    const honest = verifyNonMembershipAIR(generateNonMembershipTrace(3n, tree.nonMembershipProof(3n)));
+    expect(honest).toEqual({ ok: true });
+  });
+
   test('tampered low-leaf inclusion fails non-membership', () => {
     const tree = buildTree(5n, 10n, 20n);
     const w = tree.nonMembershipProof(7n);

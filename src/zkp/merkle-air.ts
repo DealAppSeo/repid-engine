@@ -235,6 +235,11 @@ export function verifyInclusionAIR(
  *       prevent forged non-membership proofs: without this check a prover can supply a valid
  *       inclusion proof for leaf X but fake (low_leaf_value, low_leaf_next, low_leaf_tombstoned)
  *       to falsely claim non-membership of a value that IS in the tree.
+ *   1c. A value-0 low leaf must sit in the LEFTMOST slot. Only the sentinel at index 0 may have
+ *       value 0; a planted value-0 leaf anywhere else, with next 0, reads as the tail of an empty
+ *       list and would "prove" every value absent. The slot is derived from the rows (sibling on
+ *       the right at every level), which the root binds — the same rule as `pathIsLeftmost` in
+ *       the per-witness reference verifier (src/memory/leanimt-plus.ts).
  *   2. Check the ordering constraint: low_leaf_value < target < low_leaf_next
  *      (or low_leaf_next === 0n, meaning the tail — target > low_leaf_value suffices).
  *   3. Reject if the low-leaf is tombstoned (a tombstoned leaf can't serve as a low-leaf).
@@ -261,6 +266,11 @@ export function verifyNonMembershipAIR(
       ok: false,
       failure: `low-leaf fields do not match committed digest: recomputed ${expectedDigest} ≠ ${air.low_leaf_inclusion.leaf_digest}`,
     };
+  }
+
+  // Step 1c: a value-0 low leaf is legal only as the sentinel, in the leftmost slot.
+  if (air.low_leaf_value === 0n && !air.low_leaf_inclusion.rows.every((r) => r.sibling_left === 0)) {
+    return { ok: false, failure: 'low-leaf has value 0 but is not in the leftmost slot — only the sentinel may be value 0' };
   }
 
   // Step 2: tombstone check (authenticated by the digest check above)
