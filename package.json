@@ -111,7 +111,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "type": "commonjs",
   "dependencies": {
     "@hyperdag/proof-verifier": "github:DealAppSeo/hyperdag-proof-verifier#ec3930a4cc5700185e850150a51d2f5c34efcec1",
