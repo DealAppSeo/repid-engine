@@ -137,6 +137,10 @@ export const NOT_ZKREPID: readonly { readonly path: string; readonly why: string
     why: 'a served-proof age label (ageDays>7 FAILED); not a RepID statement, circuit, or identity binding',
   },
   { path: 'zk-proof/prover', why: 'a generic prover request/response wrapper' },
+  {
+    path: 'zkp/merkle-air',
+    why: 'a general Merkle AIR constraint verifier; the constraint system is not RepID-specific — it verifies any LeanIMT+ witness tree, not only RepID delta proofs',
+  },
 ];
 
 /** The modules the barrel re-exports: the pure surface, in declaration order. */

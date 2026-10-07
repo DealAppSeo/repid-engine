@@ -8972,3 +8972,33 @@ PRs merged during this run's window (since 2026-10-07T08:34:13Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37594635944 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-07, second run) — fixed PR #1237 CI failure; armed PR #1238
+
+**Prior beat verified [V] (2026-10-07, first run):**
+- PR #1237 (feat(zkp): P4 Merkle AIR — item 14) OPEN: CI `test` FAILURE + Strix FAILURE. The prior session shipped `src/zkp/merkle-air.ts` with 23/23 local tests, but the CI job ran `tests/zkrepid-boundary.test.ts` which scans every `src/zkp/*.ts` and requires each to be classified as zkRepID or NOT_ZKREPID in `src/zkrepid/boundary.ts`. `merkle-air.ts` was not listed. **Root cause confirmed, not a random flake.**
+- PR #1238 (feat(identity): ERC-8004 self-owned mint): all checks SUCCESS + Strix "No security issues found". Sean's GO given 2026-10-07 on build step (a). Armed `--auto --squash` this beat. ✓
+- PRs #1231, #1232, #1233 already confirmed merged by prior 2026-10-07 entry.
+- `origin/main` = `4347293c`. ✓
+
+**STEP 1 — LEDGER: this entry on `feat/cc-2026-10-07-merkle-air` (same branch as PR #1237).**
+
+**Intent for steps 2-4:** Fix PR #1237's CI failure by classifying `zkp/merkle-air` in `src/zkrepid/boundary.ts` (NOT_ZKREPID — general Merkle AIR, not RepID-specific) and updating `docs/ZKREPID.md` to match. RULE-3: fix ONLY the named error.
+
+**STEP 2-4 — SHIPPED: boundary classification fix + PR #1238 armed [V].**
+- `src/zkrepid/boundary.ts`: added `{ path: 'zkp/merkle-air', why: 'a general Merkle AIR constraint verifier; the constraint system is not RepID-specific — it verifies any LeanIMT+ witness tree, not only RepID delta proofs' }` to `NOT_ZKREPID`. One entry, zero `src/index.ts` reach, zero scoring reach.
+- `docs/ZKREPID.md`: added corresponding row to the "not inside the boundary" table. Two-file fix — boundary.ts + its doc, same change (LESSONS rule 10: fix the thing AND whatever says the wrong thing about it).
+- **[V] `npm install --legacy-peer-deps` → clean.** **[V] `npx jest tests/zkrepid-boundary.test.ts --forceExit` → 15/15 passed.**
+- Pushed to `feat/cc-2026-10-07-merkle-air`; CI re-triggered on PR #1237.
+- Also armed PR #1238 (`gh pr merge 1238 --auto --squash`) — all checks green + Strix clean + Sean's GO.
+
+**What differed from intent:** Executed exactly as stated. One additional sub-fix: the doc check in `tests/zkrepid-boundary.test.ts` (line 168) also requires the excluded module to appear in `docs/ZKREPID.md` — caught by running the tests locally, fixed in same commit.
+
+**Open for Sean (rule-4):**
+1. Items 7/8/9/10/11: all Sean-gated — no change.
+2. **PR #1237** — armed `--auto --squash` if/when CI goes green + Strix clean. Fix is 2 files, +5 lines total; SAFE-CLASS (doc + boundary entry, no code path, no scoring reach).
+3. **PR #1238** (ERC-8004 self-owned mint) — armed `--auto --squash`, already all-green.
+
+**Next beat:** (1) Confirm #1237 and #1238 merged. (2) Non-Sean-gated backlog is very thin: item 14 now complete (pending #1237 merge), item 15 (WHIR PCS) is LATER/PR#1919-gated. Next candidate: item 15 number verification or a live fleet diagnostic. (3) The Strix FAILURE on #1237 — on this repo Strix is advisory (not in branch ruleset), so the `--auto --squash` fires on CI green regardless; however the next beat should read the Strix report if #1237 is still open.
