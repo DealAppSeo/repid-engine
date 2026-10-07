@@ -11,9 +11,12 @@
 import { Router, type Request, type Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { Erc8004Minter } from '../services/erc8004-minter';
+import { matchEnvOperatorKey } from '../auth/api-keys';
+import { agentRefColumn } from '../services/human-agent-binding';
 
-// Default ERC-8004 IdentityRegistry on Base Sepolia (vanity address, multi-chain).
-// Source: hyperdag-protocol/packages/contracts (deployed via vanity-deploy 2026-04).
+// Default ERC-8004 IdentityRegistry on Base Sepolia: the ERC-8004 team's canonical deployment
+// (vanity address, multi-chain). We use it; we do not operate it. See BUILDERS.md in
+// DealAppSeo/hyperdag-protocol.
 const DEFAULT_IDENTITY_REGISTRY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const DEFAULT_CHAIN_ID = 84532; // Base Sepolia
 const DEFAULT_RPC_URL = 'https://sepolia.base.org';
@@ -55,6 +58,31 @@ export function createAgentsOnchainRouter(supabase: SupabaseClient): Router {
   router.post('/:id/mint', async (req: Request, res: Response) => {
     const id = String(req.params.id);
     const isDryRun = req.query.dry_run === 'true';
+    // [F-6, 2026-10-07] WHO MAY MINT. Any valid key could mint for any agent: the minter pays the
+    // gas, and the auth middleware binds an agent key only to a UUID in the path, so a key for one
+    // agent could mint another by NAME. Now: the operator's key, or the agent's OWN key. A dry run
+    // spends nothing and stays open to any key.
+    if (!isDryRun) {
+      const presented = String(req.headers['x-api-key'] ?? '').trim() ||
+        String(req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '').trim();
+      if (!matchEnvOperatorKey(presented)) {
+        const callerAgentId = (req as any).agent_id as string | undefined;
+        if (!callerAgentId) {
+          res.status(403).json({ error: 'mint_not_yours', message: 'Only the operator, or the agent itself with its own key, may mint its identity.' });
+          return;
+        }
+        const { data, error } = await supabase.from('repid_agents').select('id').eq(agentRefColumn(id), id);
+        if (error) {
+          res.status(503).json({ error: 'not_checked', message: `Could not check which agent ${id} is, so nothing was minted: ${error.message}` });
+          return;
+        }
+        const rows = (data ?? []) as Array<{ id: string }>;
+        if (rows.length !== 1 || rows[0]!.id.toLowerCase() !== callerAgentId.toLowerCase()) {
+          res.status(403).json({ error: 'mint_not_yours', message: 'This key belongs to a different agent. An agent may mint only its own identity.' });
+          return;
+        }
+      }
+    }
     try {
       const minter = getMinter();
       if (isDryRun) {

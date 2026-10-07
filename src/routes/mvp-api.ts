@@ -518,6 +518,42 @@ router.post('/staking/sponsor', async (req: Request, res: Response): Promise<voi
     fail(res, 400, 'invalid_collateral', 'collateral_usdc must be positive');
     return;
   }
+  // [F-6, 2026-10-07] WHO MAY SPONSOR. F2 stopped the payment gate counting sponsorship rows,
+  // but any key could still write one, naming any sponsor. Same rule as /staking/deposit: the
+  // operator's key, or the signature of the wallet that answers for the SPONSOR (the agent whose
+  // collateral is pledged) over these exact settings.
+  const presented = String(req.headers['x-api-key'] ?? '').trim() ||
+    String(req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '').trim();
+  if (!matchEnvOperatorKey(presented)) {
+    try {
+      const root = await resolveAccountableRoot(sponsor_agent);
+      if (!root.ok) {
+        res.status(rootRefusalStatus(root)).json({
+          ok: false,
+          error: root.code === 'not_checked' ? 'root_not_checked' : 'no_accountable_root',
+          code: root.code,
+          message: root.code === 'not_checked'
+            ? `Could not check who answers for the sponsor, so nothing was pledged. ${root.message}`
+            : `Nobody answers for the sponsor, so it cannot pledge collateral. Claim it on /bind first. ${root.message}`,
+        });
+        return;
+      }
+      const check = await checkOwnerAuthorization({
+        subject: root.root.subjectId,
+        action: 'stake.sponsor',
+        params: { sponsor_agent: root.root.subjectId, sponsored_agent, collateral_usdc: String(collateral_usdc) },
+        auth: readOwnerAuthorization(req.body),
+        expectedSigner: root.root.wallet,
+      });
+      if (!check.ok) {
+        res.status(check.code === 'not_checked' ? 503 : 403).json({ ok: false, error: check.code, message: check.message, owner_wallet: root.root.wallet });
+        return;
+      }
+    } catch (e: any) {
+      fail(res, 500, 'sponsorship_owner_check_failed', e?.message);
+      return;
+    }
+  }
   try {
     const sponsorShort = sponsor_agent.replace(/^trinity-/i, '').toUpperCase();
     const sponsoredShort = sponsored_agent.replace(/^trinity-/i, '').toUpperCase();
