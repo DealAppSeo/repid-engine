@@ -86,13 +86,17 @@ describe('HAL provider-failure resilience — minimum quorum gate', () => {
     expect(r.provider_health?.failed).toHaveLength(2);
   });
 
-  test('1/3 surviving says TRUE: low quorum, clean (naturally), degraded', async () => {
+  // [F2, 2026-10-07] This test used to pin 'clean' here — "naturally" — which is the contradiction
+  // F2 removes: one family saying TRUE paid the producer +1 to +3. Too few checkers can neither
+  // veto NOR clear; a lone TRUE is not checked.
+  test('1/3 surviving says TRUE: low quorum, NOT CHECKED (abstain), never clean', async () => {
     mockFetch({ groq: { kind: 'ok', verdict: 'TRUE' }, cerebras: { kind: 'throw' }, fireworks: { kind: '429' } });
     const r = await factCheck('The Earth orbits the Sun.', PROVIDERS);
     expect(r.providers_used).toBe(1);
     expect(r.quorum).toBe('low');
     expect(r.degraded).toBe(true);
-    expect(r.decision).toBe('clean');
+    expect(r.decision).toBe('abstain');
+    expect(r.quorum_note).toMatch(/NOT CHECKED, not a pass/);
   });
 
   test('0/3 respond (total outage): outage quorum, default neutral/flagged, degraded, no provider count', async () => {

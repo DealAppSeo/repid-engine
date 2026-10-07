@@ -2,6 +2,18 @@ import request from 'supertest';
 import app from '../../../src/index';
 import { db } from '../../../src/db';
 
+// [F1] Escrow now asks who answers for the buyer and the provider (services/accountable-root.ts).
+// This suite tests other rules, so both parties have one here; tests/escrow-accountable-root.test.ts
+// covers the refusal itself.
+jest.mock('../../../src/services/accountable-root', () => ({
+  ...jest.requireActual('../../../src/services/accountable-root'),
+  resolveAccountableRoot: jest.fn(async (ref: string) => ({
+    ok: true,
+    root: { kind: 'custodian', agentId: ref, subjectId: ref, wallet: '0x00000000000000000000000000000000000000c1', assurance: 'operator-assigned', via: 'own-custodian', grantPath: [] },
+  })),
+}));
+
+
 jest.mock('../../../src/db', () => ({
   db: {
     from: jest.fn().mockReturnThis(),

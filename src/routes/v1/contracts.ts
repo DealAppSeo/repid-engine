@@ -20,6 +20,7 @@ import { x402Metrics } from '../../observability/x402-metrics';
 import { getActiveNetwork } from '../../config/network';
 import { todayPT } from '../../lib/time';
 import { checkTransactionAuthority } from '../../services/x402-gate';
+import { resolveAccountableRoot, rootRefusalStatus } from '../../services/accountable-root';
 
 const router = Router();
 
@@ -286,6 +287,26 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   if (escrowRefusal) {
     x402Metrics.increment('escrow.error.403');
     return res.status(403).json(escrowRefusal);
+  }
+
+  // [F1] BUY AND SELL ONLY WITH SOMEONE WHO ANSWERS. Escrow is where money commits, so both
+  // parties need an accountable root: a bound owner, or the operator's custodian (the house
+  // fleet). Before the enforcement toggle for the same reason as the party check above: the
+  // legacy branch is the live one. Checked every time, so an unbind stops the next escrow.
+  for (const [party, partyId] of [['buyer', contract.buyer_agent_id], ['provider', contract.provider_agent_id]] as const) {
+    const root = await resolveAccountableRoot(String(partyId ?? ''));
+    if (!root.ok) {
+      x402Metrics.increment(`escrow.error.${rootRefusalStatus(root)}`);
+      return res.status(rootRefusalStatus(root)).json({
+        error: root.code === 'not_checked' ? 'root_not_checked' : 'no_accountable_root',
+        party,
+        code: root.code,
+        message:
+          root.code === 'not_checked'
+            ? `Could not check who answers for the ${party}, so nothing was escrowed. ${root.message}`
+            : `The ${party} has nobody who answers for it, so it cannot ${party === 'buyer' ? 'buy' : 'sell'}. Claim it on /bind first. ${root.message}`,
+      });
+    }
   }
 
   // ── x402 AUTHORITY GATE — SHADOW ────────────────────────────────────────────

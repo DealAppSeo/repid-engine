@@ -120,6 +120,12 @@ const sumUsdc = (rows: any[] | null) => (rows ?? []).reduce((s, r) => s + Number
 export interface FullContext extends AuthorityContext {
   current_repid: number | null;
   conservator_address: string | null;
+  /**
+   * [F2] Stake rows found for this agent that back nothing and so count for nothing: prediction-
+   * market wagers (agent_stakes) and sponsorship rows (sponsorship_records). Reported so a
+   * reader can see why stake_available is lower than these, never added to it.
+   */
+  unbacked_stake_ignored_usdc: number;
 }
 
 /** Load live authority context for an agent: tier/repid/custodian + active stake + today's authorized spend + open disputes. */
@@ -148,14 +154,26 @@ export async function loadAuthorityContext(agent: string): Promise<FullContext> 
   const sponsorStakes = (sponsorStakesRes.data ?? []) as any[];
   const sponsorStakeUSD = sponsorStakes.reduce((sum, row) => sum + Number(row.collateral_usdc ?? 0), 0);
 
+  // [F2, 2026-10-07] NEITHER OF THOSE IS COLLATERAL, AND NEITHER COUNTS ANY MORE.
+  // `agent_stakes` is a prediction market (this file's header), and its rows are written by
+  // POST /staking/deposit with no transfer behind them. `sponsorship_records` rows are written by
+  // POST /staking/sponsor the same way. Both raised the ceiling an agent may spend under: a spend
+  // hole, measured in production as 12 active rows and 0 backed deposits. Real collateral
+  // (`stake_deposits`, keyed by builder) is still not read here — see the header for why a naive
+  // repoint fails open — so a tier that requires stake has none until it is wired. That fails
+  // closed, which is the safe direction.
+  const unbackedStakeUSD = ownStakeUSD + sponsorStakeUSD;
+  const backedOwnStakeUSD = 0;
+  const backedSponsorStakeUSD = 0;
+
   // Compute effective backing: S_effective = S_own + S_sponsor / 3
-  const effectiveStakeUSD = ownStakeUSD + (sponsorStakeUSD / 3);
+  const effectiveStakeUSD = backedOwnStakeUSD + (backedSponsorStakeUSD / 3);
 
   // A = min(R, 100 * sqrt(S_effective))
   const mathAuthority = Math.min(repid, 100 * Math.sqrt(effectiveStakeUSD));
 
-  // Enforce 4x own-exposure cap: A = min(A, 4 * ownStakeUSD)
-  const finalAuthority = Math.min(mathAuthority, 4 * ownStakeUSD);
+  // Enforce 4x own-exposure cap: A = min(A, 4 * own backed stake)
+  const finalAuthority = Math.min(mathAuthority, 4 * backedOwnStakeUSD);
 
   // If requires_stake is false, default to repid
   const stakeAvailable = limit.requires_stake ? finalAuthority : repid;
@@ -167,6 +185,7 @@ export async function loadAuthorityContext(agent: string): Promise<FullContext> 
     stake_available: stakeAvailable,
     daily_used: sumUsdc(gateRes.data as any[]),
     open_disputes: (dispRes.data ?? []).length,
+    unbacked_stake_ignored_usdc: unbackedStakeUSD,
   };
 }
 

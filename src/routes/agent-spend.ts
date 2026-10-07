@@ -85,8 +85,18 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
 
     try {
       // Whose money: only the bound owner's. Checked before the chain is read, so an unbound
-      // agent costs no RPC calls, and the refusal says what to do next.
-      const ownerWallet = await loadOwnerWallet(agentId);
+      // agent costs no RPC calls, and the refusal says what to do next. Checked on EVERY spend, so
+      // an unbind stops the next one. [F1] A failed read is "not checked" (503), never "unbound"
+      // and never a chain error: we did not look, and nothing was sent.
+      let ownerWallet: string | null;
+      try {
+        ownerWallet = await loadOwnerWallet(agentId);
+      } catch (e: unknown) {
+        return res.status(503).json({
+          ok: false, dry_run: isDryRun, would_send: false, code: 'owner_not_checked',
+          error: `Could not read who owns this agent, so nothing was sent. ${e instanceof Error ? e.message : String(e)}`.trim(),
+        });
+      }
       if (!ownerWallet) {
         return res.status(isDryRun ? 200 : 403).json({
           ok: false, dry_run: isDryRun, would_send: false, code: 'not_bound',

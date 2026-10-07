@@ -74,6 +74,25 @@ export class DisputeResolutionWorker {
       };
 
       const pcpResult = await runPCP(syntheticTask);
+
+      // NO ANSWER IS NOT A FAULT [F2, 2026-10-07]. With every validator silent, PCP's confidence is
+      // 0, which the gate below read as "< 0.3" and resolved provider_at_fault — a -100 for work
+      // nobody assessed. The same defect cost the attestation cascade 12 days in August
+      // (pcp-validator.ts, #529), and #529 added `checked` for exactly this; this worker never read
+      // it. Not checked is no verdict yet: release the claim so the next cycle retries, and touch
+      // neither the contract nor anyone's RepID.
+      if (!pcpResult.checked) {
+        await db.from('dispute_validation_queue').update({
+          status: 'pending',
+          metadata: {
+            ...(candidate.metadata ?? {}),
+            not_checked_count: Number(candidate.metadata?.not_checked_count ?? 0) + 1,
+            last_not_checked_at: new Date().toISOString(),
+          },
+        }).eq('id', candidate.id);
+        console.warn(`[DisputeWorker] contract ${contract.id}: no validator answered — NOT CHECKED, left pending for retry, no verdict`);
+        return false;
+      }
       // Phase 5 (Bug A) — judge accepts the SAME taskData shape as PCP (title /
       // description / result / optional metadata). Previously this passed
       // { content, claimer_provider, pcp_result } — none of those fields are

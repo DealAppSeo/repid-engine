@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
-import { ownerOfAgent } from '../services/human-agent-binding';
+import { resolveAccountableRoot, rootRefusalStatus } from '../services/accountable-root';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 
 const router = Router();
@@ -66,18 +66,33 @@ router.post('/:id/keys', requireAdminAuth, async (req: Request, res: Response) =
   const agentId = String(req.params.id);
   const { name = 'new_key', scopes = [] } = req.body;
 
-  // OWNER [2026-10-07]. A new key is a new way to act as this agent, so once a person owns the
-  // agent, a key alone cannot mint another key: that would let a leaked key make itself permanent.
-  // Only the owner's wallet can (services/owner-authorization.ts). Revoking a key never needs it.
+  // OWNER [2026-10-07] + ACCOUNTABLE ROOT [F1]. A new key is a new way to act as this agent.
+  //  - Owned by a person: a key alone cannot mint another key (a leaked key would make itself
+  //    permanent); only the owner's wallet can (services/owner-authorization.ts).
+  //  - Held by the operator's custodian (the house fleet): the admin credential this route already
+  //    requires is the operator's, so it stands.
+  //  - Nobody answers for it: refused. Before F1 an unclaimed agent's key could mint more keys for
+  //    itself with no one behind any of them; claiming the agent is now the way to get a second key.
+  // Revoking a key never needs any of this.
   try {
-    const owner = await ownerOfAgent(agentId);
-    if (owner?.human_wallet) {
+    const root = await resolveAccountableRoot(agentId);
+    if (!root.ok) {
+      return res.status(rootRefusalStatus(root)).json({
+        error: root.code === 'not_checked' ? 'root_not_checked' : 'no_accountable_root',
+        code: root.code,
+        message:
+          root.code === 'not_checked'
+            ? `Could not check who answers for this agent, so no key was made. ${root.message}`
+            : `Nobody answers for this agent yet, so it cannot be given another key. Claim it on /bind first. ${root.message}`,
+      });
+    }
+    if (root.root.kind === 'owner') {
       const check = await checkOwnerAuthorization({
         subject: agentId,
         action: 'keys.create',
         params: { agent_id: agentId, name: String(name), scopes: Array.isArray(scopes) ? [...scopes].map(String).sort() : [] },
         auth: readOwnerAuthorization(req.body),
-        expectedSigner: owner.human_wallet as string,
+        expectedSigner: root.root.wallet,
       });
       if (!check.ok) {
         return res.status(check.code === 'not_checked' ? 503 : 403).json({ error: check.code, message: check.message });
