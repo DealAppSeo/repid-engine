@@ -197,6 +197,15 @@ describe('walkAncestors fails closed', () => {
     expect(await walkAncestors(g2, read({}))).toMatchObject({ ok: false, code: 'chain_dead' });
   });
 
+  it('a row that claims depth 0 but points at a parent that is gone is still chain_dead', async () => {
+    // The depth checks cannot catch this one: the row's own depth is what a top should have.
+    // Only the missing-ancestor check stands between it and "live".
+    const orphan = grant({ id: 'o', grantor_agent_id: CMO, grantee_agent_id: SUB, depth: 0, parent_grant_id: 'gone' });
+    const r = await walkAncestors(orphan, read({}));
+    expect(r).toMatchObject({ ok: false, code: 'chain_dead' });
+    if (!r.ok) expect(r.reason).toMatch(/does not exist/);
+  });
+
   it('an ancestor that cannot be read is not_checked', async () => {
     expect(await walkAncestors(g2, read({ g1 }, true))).toMatchObject({ ok: false, code: 'not_checked' });
   });
