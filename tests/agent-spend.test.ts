@@ -91,11 +91,12 @@ describe('checkSpend', () => {
 });
 
 describe('POST /api/v1/agents/:id/spend', () => {
-  function app(opts: { enabled: boolean; chain?: Parameters<typeof fakeChain>[0] }) {
+  function app(opts: { enabled: boolean; chain?: Parameters<typeof fakeChain>[0]; boundOwner?: string | null }) {
     const { chain, sent } = fakeChain(opts.chain);
     const a = express();
     a.use(express.json());
-    a.use('/api/v1/agents', createAgentSpendRouter({ chain, loadAgent: ownAgent, enabled: () => opts.enabled }));
+    const boundOwner = opts.boundOwner === undefined ? OWNER : opts.boundOwner;
+    a.use('/api/v1/agents', createAgentSpendRouter({ chain, loadAgent: ownAgent, loadOwnerWallet: async () => boundOwner, enabled: () => opts.enabled }));
     return { a, sent };
   }
   const body = { owner_address: OWNER, to_address: PAYEE, amount_usdc: '2' };
@@ -113,6 +114,34 @@ describe('POST /api/v1/agents/:id/spend', () => {
     const res = await request(a).post('/api/v1/agents/agent-1/spend').send({ ...body, amount_usdc: '11', dry_run: true });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: false, would_send: false, code: 'over_cap', agent_wallet: AGENT });
+  });
+
+  // An agent spends only from the wallet bound as its owner. Before 2026-10-07 any wallet that had
+  // approved it would do, so the binding — the record of whose agent this is — decided nothing.
+  it('an agent nobody has bound cannot spend, and a dry run says to bind it', async () => {
+    const { a, sent } = app({ enabled: true, boundOwner: null });
+    const dry = await request(a).post('/api/v1/agents/agent-1/spend').send({ ...body, dry_run: true });
+    expect(dry.status).toBe(200);
+    expect(dry.body).toMatchObject({ ok: false, would_send: false, code: 'not_bound' });
+    const real = await request(a).post('/api/v1/agents/agent-1/spend').send(body);
+    expect(real.status).toBe(403);
+    expect(real.body.code).toBe('not_bound');
+    expect(sent).toEqual([]);
+  });
+
+  it("a wallet that approved the agent but is not its bound owner cannot be spent from", async () => {
+    const someoneElse = '0x9999999999999999999999999999999999999999';
+    const { a, sent } = app({ enabled: true, boundOwner: someoneElse });
+    const res = await request(a).post('/api/v1/agents/agent-1/spend').send(body);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'not_owner', bound_owner: someoneElse });
+    expect(sent).toEqual([]);
+  });
+
+  it('the owner check is case-insensitive on the address', async () => {
+    const { a } = app({ enabled: false, boundOwner: OWNER.toUpperCase().replace('0X', '0x') });
+    const res = await request(a).post('/api/v1/agents/agent-1/spend').send({ ...body, dry_run: true });
+    expect(res.body).toMatchObject({ ok: true, would_send: true });
   });
 
   it('a real send is refused while AGENT_SPEND_ENABLED is off', async () => {

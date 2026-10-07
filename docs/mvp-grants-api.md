@@ -104,6 +104,30 @@ Child grants (`parent_grant_id` set) must attenuate: capabilities ⊆ parent's, 
 tighten (dropping one counts as loosening), spend cap ≤ parent's stated cap, `expires_at` ≤
 parent's, chain depth ≤ 4.
 
+### Owned grantors: widening needs the owner's wallet [2026-10-07]
+
+Once a person has claimed the grantor (`human_agent_bindings`), any grant that goes beyond
+read-only — a capability not starting with `read:`, or a class above `cold` — must carry
+`owner_authorization`, signed by that owner:
+
+```json
+"owner_authorization": { "signature": "0x…", "nonce": "0x<32 bytes>", "expires_at": 1800000300 }
+```
+
+The signature is EIP-712 over `{subject, action: "grant.mint", params, nonce, expiresAt}`, where
+`params` is keccak256 of the canonical JSON of the exact settings (`grantApprovalParams` in
+`src/routes/mvp-api.ts`). `GET /api/v1/owner-authorization` serves the domain and types. An
+approval lasts at most ten minutes and is accepted once. A read-only cold grant (every starter
+belt) needs nothing more. An agent nobody has claimed keeps the rules above. Errors:
+`owner_authorization_required`, `bad_signature`, `expired`, `replayed`, `use_agent_id` (a name
+shared by several agents, one owned), and `not_checked` (503: a smart-wallet owner whose chain
+could not be reached — nothing was minted).
+
+The same check guards `POST /api/v1/agents/:id/keys` (action `keys.create`, once the agent is
+owned) and `POST /api/v1/stake/withdraw` (action `stake.withdraw`, signed by the account's
+wallet). `POST /api/v1/agents/:id/spend` now spends only from the wallet bound as the agent's
+owner (`not_bound`, `not_owner`).
+
 ### `GET /api/v1/grants?principal=<agent_id>`
 
 Every grant where `principal` is grantor or grantee, with `live`/`liveReason` computed against

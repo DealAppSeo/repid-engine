@@ -11,6 +11,12 @@
  *
  * Auth: the global authMiddleware binds an agent-bound key to its own /agents/<id>/ path, so only
  * the agent's own key (held by its owner) or an operator key reaches this.
+ *
+ * OWNER [2026-10-07]. `owner_address` must be the wallet BOUND as this agent's owner
+ * (human-agent-binding.ts). Before, it could be any wallet that had approved the agent, so the
+ * binding — the one record that says whose agent this is — played no part in spending. An unbound
+ * agent cannot spend at all; a dry run says why. The on-chain approval is still the cap; this adds
+ * "and only from its owner".
  */
 import { Router, type Request, type Response } from 'express';
 import { db } from '../db';
@@ -30,7 +36,14 @@ const DEFAULT_RPC_URL = 'https://sepolia.base.org';
 export interface AgentSpendDeps {
   chain?: SpendChain;
   loadAgent?: (agentId: string) => Promise<{ key: string | null; walletAddress: string | null }>;
+  /** The wallet bound as this agent's owner, or null if nobody has bound it. */
+  loadOwnerWallet?: (agentId: string) => Promise<string | null>;
   enabled?: () => boolean;
+}
+
+async function defaultLoadOwnerWallet(agentId: string): Promise<string | null> {
+  const { ownerOfAgent } = require('../services/human-agent-binding') as typeof import('../services/human-agent-binding');
+  return ((await ownerOfAgent(agentId))?.human_wallet ?? null) as string | null;
 }
 
 async function defaultLoadAgent(agentId: string) {
@@ -46,6 +59,7 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
   let chain: SpendChain | null = deps.chain ?? null;
   const getChain = () => (chain ??= rpcSpendChain(process.env.BASE_SEPOLIA_RPC_URL || DEFAULT_RPC_URL));
   const loadAgent = deps.loadAgent ?? defaultLoadAgent;
+  const loadOwnerWallet = deps.loadOwnerWallet ?? defaultLoadOwnerWallet;
   const enabled = deps.enabled ?? (() => process.env.AGENT_SPEND_ENABLED === 'true');
 
   router.post('/:id/spend', async (req: Request, res: Response) => {
@@ -70,6 +84,23 @@ export function createAgentSpendRouter(deps: AgentSpendDeps = {}): Router {
     }
 
     try {
+      // Whose money: only the bound owner's. Checked before the chain is read, so an unbound
+      // agent costs no RPC calls, and the refusal says what to do next.
+      const ownerWallet = await loadOwnerWallet(agentId);
+      if (!ownerWallet) {
+        return res.status(isDryRun ? 200 : 403).json({
+          ok: false, dry_run: isDryRun, would_send: false, code: 'not_bound',
+          error: 'Nobody has bound this agent yet, so there is no owner whose wallet it may spend from. Bind it first.',
+        });
+      }
+      if (ownerWallet.toLowerCase() !== spend.owner.toLowerCase()) {
+        return res.status(isDryRun ? 200 : 403).json({
+          ok: false, dry_run: isDryRun, would_send: false, code: 'not_owner',
+          error: "owner_address is not this agent's bound owner. An agent spends only from its owner's wallet.",
+          bound_owner: ownerWallet,
+        });
+      }
+
       const checked = await checkSpend(getChain(), () => loadAgent(agentId), spend);
       const readsOut = checked.reads && {
         cap_usdc: formatUsdc(checked.reads.allowance),

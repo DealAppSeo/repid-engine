@@ -37,6 +37,7 @@
  *     why this deliberately does NOT touch the custodied-wallet-decryption path.
  */
 import { db } from '../db';
+import { agentRefColumn } from './human-agent-binding';
 import { logAgentEvent } from '../engine/agent-log';
 import { permits, isAttenuationOf, excess } from './principal-capability';
 import {
@@ -359,7 +360,7 @@ export async function mintGrant(
   const { data: grantorRow } = await db
     .from('repid_agents')
     .select('wallet_address')
-    .eq('agent_name', req.grantorAgentId)
+    .eq(agentRefColumn(req.grantorAgentId), req.grantorAgentId)
     .maybeSingle();
   const grantorWalletAddress = ((grantorRow as any)?.wallet_address ?? null) as string | null;
   const intentMessage = buildGrantIntentMessage({

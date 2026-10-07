@@ -8,6 +8,8 @@ module.exports = {
   // several parallel-lane baselines — quietly untrustworthy.
   // Fails open: any error logs and continues. See the script header.
   globalSetup: '<rootDir>/scripts/ci/reap-orphan-jest.js',
+  // No unit test reaches a real chain to check a wallet signature (see the file's header).
+  setupFiles: ['<rootDir>/tests/helpers/offline-signature-chain.ts'],
   preset: 'ts-jest',
   testEnvironment: 'node',
   // DISCOVERY, NOT A LIST [2026-09-03]. This was

@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
+import { matchEnvOperatorKey } from '../auth/api-keys';
+import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 import { buildAgentLogRow } from '../engine/agent-log-row';
 import { generateProofReal, logProofGeneration } from '../zkp/plonky3-real';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
@@ -531,9 +533,43 @@ router.post('/stake/deposit', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Withdraw stake. OWNER-ONLY [2026-10-07]: this route used to accept any valid API key with any
+ * builder_id in the body, so any agent key could withdraw anyone's stake. Now it takes an operator
+ * key (harness, scripts) or an approval signed by the wallet on that account
+ * (services/owner-authorization.ts, action `stake.withdraw`, over { builder_id, amount }). An
+ * agent key alone is not enough: stake belongs to the person, not to any agent they run. No page
+ * calls this today; email-only accounts have no wallet to sign with and must ask an operator.
+ */
 router.post('/stake/withdraw', async (req: Request, res: Response) => {
   const { builder_id, amount } = req.body ?? {};
   if (!builder_id || !amount) return res.status(400).json({ error: 'builder_id and amount required' });
+
+  const presented = String(req.headers['x-api-key'] ?? '').trim() ||
+    String(req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '').trim();
+  if (!matchEnvOperatorKey(presented)) {
+    const { data: builder } = await db.from('builders').select('id, address').eq('id', String(builder_id)).maybeSingle();
+    if (!builder) return res.status(404).json({ ok: false, error: 'account_not_found' });
+    const wallet = (builder as { address?: string | null }).address ?? '';
+    if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'no_wallet_to_sign',
+        message: 'Withdrawing needs a signature from the wallet on this account, and this account has none.',
+      });
+    }
+    const check = await checkOwnerAuthorization({
+      subject: String(builder_id),
+      action: 'stake.withdraw',
+      params: { builder_id: String(builder_id), amount: String(amount) },
+      auth: readOwnerAuthorization(req.body),
+      expectedSigner: wallet,
+    });
+    if (!check.ok) {
+      return res.status(check.code === 'not_checked' ? 503 : 403).json({ ok: false, error: check.code, message: check.message });
+    }
+  }
+
   try {
     const r = await withdrawStake(String(builder_id), BigInt(String(amount)));
     if (!r.ok) return res.status(400).json(r);

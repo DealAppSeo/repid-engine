@@ -51,6 +51,18 @@ process.env.AGENT_KEY_MASTER = 'test-master-key-for-byok-custody-suite-012345678
 process.env.BYOK_CUSTODY_ENABLED = 'true';
 process.env.HUMAN_AGENT_BIND_ENABLED = 'true';
 
+// The agent's own key — the second side of a bind. Keys are hashed in agent_api_keys; here a key
+// is valid for exactly the agent named after 'key-for-'.
+jest.mock('../src/auth/api-keys', () => {
+  const actual = jest.requireActual('../src/auth/api-keys');
+  return {
+    ...actual,
+    validateAgentApiKey: jest.fn(async (key: string) =>
+      key.startsWith('key-for-') ? { agent_id: key.slice('key-for-'.length), scopes: [] } : null,
+    ),
+  };
+});
+
 // Probe is network I/O — stubbed so the suite is deterministic and offline.
 jest.mock('../src/services/provider-key-probe', () => {
   const actual = jest.requireActual('../src/services/provider-key-probe');
@@ -232,7 +244,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.human_sbt_registry = { token_id: 'h1', wallet_address: '0x000000000000000000000000000000000000dEaD' };
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     const wrong = await Wallet.createRandom().signMessage('something else entirely');
-    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: wrong });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: wrong, agentKey: 'key-for-agent-1' });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('bad_signature');
   });
@@ -242,7 +254,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.human_sbt_registry = { token_id: 'h1', wallet_address: w.address };
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
-    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig, agentKey: 'key-for-agent-1' });
     expect(r.ok).toBe(true);
   });
 
@@ -252,7 +264,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     mockRows.__insertError = { message: 'duplicate key value violates unique constraint (23505)' };
     const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
-    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig, agentKey: 'key-for-agent-1' });
     expect(r.reason).toBe('already_bound');
     expect(r.detail).toMatch(/already has a live owner/i);
     delete mockRows.__insertError;
@@ -270,7 +282,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.builders = { id: 'b1', address: w.address };
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
-    const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: sig });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: sig, agentKey: 'key-for-agent-1' });
     expect(r.ok).toBe(true);
     const row = mockInserted.find((i) => i.table === 'human_agent_bindings')!.row;
     expect(row.owner_kind).toBe('builder');
@@ -288,9 +300,113 @@ describe('binding proves ownership rather than asserting it', () => {
     const sig = await attacker.signMessage(
       bind.bindingMessage({ wallet: attacker.address, agentId: 'agent-1', scope: 'ownership' }),
     );
-    const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: sig });
+    const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: sig, agentKey: 'key-for-agent-1' });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('bad_signature');
+  });
+
+  /**
+   * THE HOLE THIS CLOSES [2026-10-07]. A bind used to prove only the wallet: the agent check was
+   * "does it exist". So any account could claim anyone's unclaimed agent with its own wallet, and
+   * the one-live-owner index then locked the creator out. A valid wallet signature must no longer
+   * be enough on its own.
+   */
+  describe('two sides: the wallet AND the agent', () => {
+    function setup() {
+      const w = Wallet.createRandom();
+      mockRows.builders = { id: 'b1', address: w.address };
+      mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
+      return w;
+    }
+    const sign = (w: Wallet) => w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
+
+    it('a perfect wallet signature without the agent key binds nothing', async () => {
+      const w = setup();
+      const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: await sign(w) });
+      expect(r).toMatchObject({ ok: false, reason: 'agent_key_required' });
+      expect(mockInserted.some((i) => i.table === 'human_agent_bindings')).toBe(false);
+    });
+
+    it("another agent's key binds nothing — holding A does not prove you hold B", async () => {
+      const w = setup();
+      const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: await sign(w), agentKey: 'key-for-agent-2' });
+      expect(r).toMatchObject({ ok: false, reason: 'agent_key_mismatch' });
+      expect(mockInserted.some((i) => i.table === 'human_agent_bindings')).toBe(false);
+    });
+
+    it('an unknown or revoked key binds nothing', async () => {
+      const w = setup();
+      const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: await sign(w), agentKey: 'made-up' });
+      expect(r).toMatchObject({ ok: false, reason: 'agent_key_mismatch' });
+    });
+
+    it('the agent key alone binds nothing either — the wallet must still sign', async () => {
+      setup();
+      const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', agentKey: 'key-for-agent-1' });
+      expect(r).toMatchObject({ ok: false, reason: 'bad_signature' });
+    });
+
+    it('both together bind', async () => {
+      const w = setup();
+      const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: await sign(w), agentKey: 'key-for-agent-1' });
+      expect(r.ok).toBe(true);
+    });
+
+    it('the route takes the key from the x-agent-key header and never echoes it', async () => {
+      const w = setup();
+      const app = express();
+      app.use(express.json());
+      app.use('/api/v1', byokRouter);
+      const ts = new Date().toISOString();
+      const headers = (agentKey?: string) => {
+        const h: Record<string, string> = { 'x-hd-wallet': w.address, 'x-hd-timestamp': ts };
+        if (agentKey) h['x-agent-key'] = agentKey;
+        return h;
+      };
+      const authSig = await w.signMessage(authMessage('POST', '/api/v1/human/bind', w.address, ts));
+      const body = { agent_id: 'agent-1', signature: await sign(w) };
+
+      const without = await request(app).post('/api/v1/human/bind').set(headers()).set('x-hd-signature', authSig).send(body);
+      expect(without.status).toBe(400);
+      expect(without.body.reason).toBe('agent_key_required');
+
+      const wrong = await request(app).post('/api/v1/human/bind').set(headers('key-for-agent-2')).set('x-hd-signature', authSig).send(body);
+      expect(wrong.status).toBe(403);
+      expect(JSON.stringify(wrong.body)).not.toContain('key-for-agent-2');
+
+      const right = await request(app).post('/api/v1/human/bind').set(headers('key-for-agent-1')).set('x-hd-signature', authSig).send(body);
+      expect(right.status).toBe(201);
+      expect(JSON.stringify(right.body)).not.toContain('key-for-agent-1');
+    });
+  });
+
+  describe('smart wallets', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const sig = require('../src/services/wallet-signature');
+    afterEach(() => sig.__setDefaultSignatureChain({ getCode: async () => '0x', call: async () => { throw new Error('offline'); } }));
+
+    it('a smart-wallet signature the chain accepts binds (ERC-1271)', async () => {
+      const contractWallet = '0x00000000000000000000000000000000000000aa';
+      mockRows.builders = { id: 'b1', address: contractWallet };
+      mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
+      const { Interface } = jest.requireActual('ethers');
+      const iface = new Interface(['function isValidSignature(bytes32,bytes) view returns (bytes4)']);
+      sig.__setDefaultSignatureChain({
+        getCode: async () => '0x6080',
+        call: async () => iface.encodeFunctionResult('isValidSignature', ['0x1626ba7e']),
+      });
+      const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: '0x' + '11'.repeat(65), agentKey: 'key-for-agent-1' });
+      expect(r.ok).toBe(true);
+    });
+
+    it('when the chain cannot be reached the answer is NOT CHECKED, not a bad signature', async () => {
+      mockRows.builders = { id: 'b1', address: '0x00000000000000000000000000000000000000aa' };
+      mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
+      sig.__setDefaultSignatureChain({ getCode: async () => { throw new Error('ECONNREFUSED'); }, call: async () => '0x' });
+      const r = await bind.bindOwnerToAgent({ owner: { kind: 'builder', id: 'b1' }, agentId: 'agent-1', signature: '0x' + '11'.repeat(65), agentKey: 'key-for-agent-1' });
+      expect(r).toMatchObject({ ok: false, reason: 'signature_not_checked' });
+      expect(mockInserted.some((i) => i.table === 'human_agent_bindings')).toBe(false);
+    });
   });
 
   it('never dresses a wallet proof up as proof of humanity', () => {
@@ -309,7 +425,7 @@ describe('binding proves ownership rather than asserting it', () => {
     mockRows.human_sbt_registry = { token_id: 'h1', wallet_address: w.address };
     mockRows.repid_agents = { id: 'agent-1', agent_name: 'test' };
     const sig = await w.signMessage(bind.bindingMessage({ wallet: w.address, agentId: 'agent-1', scope: 'ownership' }));
-    await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig });
+    await bind.bindOwnerToAgent({ owner: { kind: 'human_sbt', id: 'h1' }, agentId: 'agent-1', signature: sig, agentKey: 'key-for-agent-1' });
     const row = mockInserted.find((i) => i.table === 'human_agent_bindings')!.row;
     // ZKP invariants 2/3/6 — scope is a parameter, domain is namespaced.
     expect(row.scope).toBe('ownership');

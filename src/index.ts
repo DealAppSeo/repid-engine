@@ -42,6 +42,7 @@ import halLatestRouter from './routes/hal-latest';
 import receiptVerifyRouter from './routes/receipt-verify';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
+import { CORS_ALLOWED_HEADERS, CORS_EXPOSED_HEADERS } from './config/cors-headers';
 import humanBindStagingRouter from './routes/human-bind-staging';
 import negotiationRouter from './routes/v1/negotiation';
 import marketDiscoverRouter from './routes/v1/market-discover';
@@ -265,7 +266,8 @@ app.use(cors({
   // cross-origin; without PATCH here the preflight's Access-Control-Allow-Methods omits it and
   // the browser blocks the request ("Failed to fetch").
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'X-RepID-Version'],
+  allowedHeaders: CORS_ALLOWED_HEADERS,
+  exposedHeaders: CORS_EXPOSED_HEADERS,
 }));
 app.use(express.json({ limit: "1mb" }));
 

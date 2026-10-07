@@ -6,6 +6,7 @@
  * `agent-delegation.ts` (pure `decideCoverage` vs DB-touching `recordDelegation`).
  */
 import { db } from '../db';
+import { agentRefColumn } from './human-agent-binding';
 import { resolveAgentOwner } from './agent-delegation';
 import type { AuthorityInputs } from './effective-authority';
 
@@ -28,7 +29,7 @@ export async function resolveAuthorityInputs(agentId: string): Promise<Authority
   const { data: agentRow } = await db
     .from('repid_agents')
     .select('current_repid')
-    .eq('agent_name', agentId)
+    .eq(agentRefColumn(agentId), agentId)
     .maybeSingle();
 
   if (!agentRow) {

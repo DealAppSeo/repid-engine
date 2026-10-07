@@ -38,6 +38,8 @@ import {
   type GrantClass,
 } from '../services/principal-grants';
 import { roleCatalog, ROLE_NAMES } from '../services/principal-roles';
+import { boundOwnerOfRef } from '../services/human-agent-binding';
+import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 import type { Caveat, ActionContext } from '../services/principal-caveat';
 
 const router = Router();
@@ -178,6 +180,29 @@ router.post('/delegations/revoke', async (req: Request, res: Response) => {
   } catch (e: any) { return fail(res, 500, 'delegation_revoke_failed', e?.message); }
 });
 
+/**
+ * The exact settings an owner approves for a grant, in the shape that is hashed and signed
+ * (owner-authorization.ts). Capabilities are sorted so their order cannot change the approval;
+ * absent optional fields are null so "not sent" and "sent as null" approve the same thing.
+ * trustshell's lib/owner-auth.ts builds the same object — the shared test vector pins it.
+ */
+export function grantApprovalParams(g: {
+  grantor_agent_id: string; grantee_agent_id: string; grant_class: string; capabilities: string[];
+  caveats?: unknown; ttl_seconds: number; role?: unknown; audit_for?: unknown; parent_grant_id?: unknown;
+}) {
+  return {
+    grantor_agent_id: g.grantor_agent_id,
+    grantee_agent_id: g.grantee_agent_id,
+    grant_class: g.grant_class,
+    capabilities: [...g.capabilities].sort(),
+    caveats: g.caveats ?? [],
+    ttl_seconds: g.ttl_seconds,
+    role: g.role ?? null,
+    audit_for: g.audit_for ?? null,
+    parent_grant_id: g.parent_grant_id ?? null,
+  };
+}
+
 // ---------------------------------------------------------------- Grants: principal -> principal
 // The MVP-critical-path piece neither existing delegation primitive covered: an agent (e.g. a
 // PAI) granting scoped, budgeted, time-limited authority to ANOTHER agent (e.g. a CTO/CFO/CMO
@@ -196,6 +221,34 @@ router.post('/grants', async (req: Request, res: Response) => {
   if (!Number.isFinite(ttl)) return fail(res, 400, 'invalid_ttl', 'ttl_seconds is required and must be a number');
   if (idempotency_key !== undefined && idempotency_key !== null && typeof idempotency_key !== 'string') return fail(res, 400, 'invalid_idempotency_key', 'idempotency_key must be a string');
   if (signature !== undefined && signature !== null && typeof signature !== 'string') return fail(res, 400, 'invalid_signature', 'signature must be a string');
+
+  // OWNER [2026-10-07]. Once a person has bound the grantor, only that person's wallet may widen
+  // what it hands on: anything beyond read-only, or any class above cold, needs their signed
+  // approval over these exact settings (services/owner-authorization.ts). A read-only cold grant —
+  // every starter belt — needs nothing more than today. An agent nobody has bound keeps today's
+  // rules; binding it is what puts its widening behind a wallet.
+  const widens = grant_class !== 'cold' || (capabilities as string[]).some((c) => !c.startsWith('read:'));
+  if (widens) {
+    try {
+      const owner = await boundOwnerOfRef(grantor_agent_id);
+      if (owner === 'ambiguous') {
+        return fail(res, 403, 'use_agent_id', 'More than one agent has that name and at least one has an owner. Name the grantor by its id.');
+      }
+      if (owner) {
+        const check = await checkOwnerAuthorization({
+          subject: owner.agentId,
+          action: 'grant.mint',
+          params: grantApprovalParams({ grantor_agent_id: owner.agentId, grantee_agent_id, grant_class, capabilities, caveats, ttl_seconds: ttl, role, audit_for, parent_grant_id }),
+          auth: readOwnerAuthorization(req.body),
+          expectedSigner: owner.wallet,
+        });
+        if (!check.ok) {
+          return res.status(check.code === 'not_checked' ? 503 : 403).json({ ok: false, error: check.code, message: check.message, owner_wallet: owner.wallet });
+        }
+      }
+    } catch (e: any) { return fail(res, 500, 'grant_owner_check_failed', e?.message); }
+  }
+
   try {
     const result = await mintGrant({
       grantorAgentId: grantor_agent_id,
