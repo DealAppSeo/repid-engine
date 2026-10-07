@@ -91,6 +91,7 @@ asks "why isn't Poseidon2 in there?" and either adds it or renames the directory
 | `src/zkp/proof-statement-guard.ts` | a general fail-closed statement builder/validator |
 | `src/zkp/proof-freshness.ts` | a served-proof age label (ageDays>7 FAILED); not a RepID statement, circuit, or identity binding |
 | `src/zk-proof/prover.ts` | a generic prover request/response wrapper |
+| `src/zkp/merkle-air.ts` | a general Merkle AIR constraint verifier; the constraint system is not RepID-specific — it verifies any LeanIMT+ witness tree |
 
 Also outside the boundary, and not renameable from here: the `zkp-vault/` Rust crate, and
 the `zkp_*` database columns named above.
