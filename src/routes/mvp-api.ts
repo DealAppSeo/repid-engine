@@ -35,10 +35,12 @@ import {
   listGrants,
   revokeGrant,
   checkAuthorization,
+  isWidening,
   type GrantClass,
 } from '../services/principal-grants';
 import { roleCatalog, ROLE_NAMES } from '../services/principal-roles';
-import { boundOwnerOfRef } from '../services/human-agent-binding';
+import { resolveAccountableRoot, rootRefusalStatus } from '../services/accountable-root';
+import { matchEnvOperatorKey } from '../auth/api-keys';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 import type { Caveat, ActionContext } from '../services/principal-caveat';
 
@@ -131,6 +133,17 @@ router.post('/x402-gate/authorize', async (req: Request, res: Response) => {
   const amt = Number(amount);
   if (!Number.isFinite(amt)) return fail(res, 400, 'invalid_amount', 'amount must be a number');
   try {
+    // [F1] Nobody pays without someone who answers for them. Checked first: a refusal here is
+    // about who stands behind the agent, not about its tier or stake, and should say so.
+    const root = await resolveAccountableRoot(agent);
+    if (!root.ok) {
+      return res.status(rootRefusalStatus(root)).json({
+        authorized: false,
+        denial_reason: root.code === 'not_checked' ? 'root_not_checked' : 'no_accountable_root',
+        root_code: root.code,
+        message: root.message,
+      });
+    }
     // Explicit human→agent authorization gate (DELEGATION_REQUIRED; default OFF = no-op).
     // When enabled, a valid unexpired unrevoked delegation must cover the amount before the
     // tier/stake authority check runs.
@@ -222,29 +235,38 @@ router.post('/grants', async (req: Request, res: Response) => {
   if (idempotency_key !== undefined && idempotency_key !== null && typeof idempotency_key !== 'string') return fail(res, 400, 'invalid_idempotency_key', 'idempotency_key must be a string');
   if (signature !== undefined && signature !== null && typeof signature !== 'string') return fail(res, 400, 'invalid_signature', 'signature must be a string');
 
-  // OWNER [2026-10-07]. Once a person has bound the grantor, only that person's wallet may widen
-  // what it hands on: anything beyond read-only, or any class above cold, needs their signed
-  // approval over these exact settings (services/owner-authorization.ts). A read-only cold grant —
-  // every starter belt — needs nothing more than today. An agent nobody has bound keeps today's
-  // rules; binding it is what puts its widening behind a wallet.
-  const widens = grant_class !== 'cold' || (capabilities as string[]).some((c) => !c.startsWith('read:'));
-  if (widens) {
+  // OWNER [2026-10-07] + ACCOUNTABLE ROOT [F1, 2026-10-07]. A grant that widens — anything beyond
+  // read-only, or any class above cold — hands on power, so someone must answer for it: the
+  // grantor's bound owner, the operator's custodian, or (for a grantor acting under its own grant)
+  // whoever answers for the top of that chain (services/accountable-root.ts). That wallet signs the
+  // exact settings (services/owner-authorization.ts). A grantor nobody answers for can no longer
+  // widen anything; before F1 it could, because "no owner" meant "today's rules". A read-only cold
+  // grant — every starter belt — needs neither, as before.
+  if (isWidening({ grant_class, capabilities })) {
     try {
-      const owner = await boundOwnerOfRef(grantor_agent_id);
-      if (owner === 'ambiguous') {
-        return fail(res, 403, 'use_agent_id', 'More than one agent has that name and at least one has an owner. Name the grantor by its id.');
-      }
-      if (owner) {
-        const check = await checkOwnerAuthorization({
-          subject: owner.agentId,
-          action: 'grant.mint',
-          params: grantApprovalParams({ grantor_agent_id: owner.agentId, grantee_agent_id, grant_class, capabilities, caveats, ttl_seconds: ttl, role, audit_for, parent_grant_id }),
-          auth: readOwnerAuthorization(req.body),
-          expectedSigner: owner.wallet,
+      const root = await resolveAccountableRoot(grantor_agent_id, { viaGrantId: parent_grant_id ?? null });
+      if (!root.ok) {
+        return res.status(rootRefusalStatus(root)).json({
+          ok: false,
+          error: root.code === 'not_checked' ? 'root_not_checked' : 'no_accountable_root',
+          code: root.code,
+          message:
+            root.code === 'not_checked'
+              ? `Could not check who answers for this grantor, so nothing was granted. ${root.message}`
+              : `A grant beyond read-only needs someone who answers for the grantor: claim it on /bind, or grant under a chain that ends at an owner. ${root.message}`,
         });
-        if (!check.ok) {
-          return res.status(check.code === 'not_checked' ? 503 : 403).json({ ok: false, error: check.code, message: check.message, owner_wallet: owner.wallet });
-        }
+      }
+      const check = await checkOwnerAuthorization({
+        subject: root.root.subjectId,
+        action: 'grant.mint',
+        params: grantApprovalParams({ grantor_agent_id: root.root.subjectId, grantee_agent_id, grant_class, capabilities, caveats, ttl_seconds: ttl, role, audit_for, parent_grant_id }),
+        auth: readOwnerAuthorization(req.body),
+        expectedSigner: root.root.wallet,
+      });
+      if (!check.ok) {
+        return res.status(check.code === 'not_checked' ? 503 : 403).json({
+          ok: false, error: check.code, message: check.message, owner_wallet: root.root.wallet, root_via: root.root.via,
+        });
       }
     } catch (e: any) { return fail(res, 500, 'grant_owner_check_failed', e?.message); }
   }
@@ -341,6 +363,8 @@ router.get('/x402-gate/limits/:agent', async (req: Request, res: Response) => {
       daily_used: ctx.daily_used,
       daily_remaining: Math.max(0, limit.daily - ctx.daily_used),
       stake_available: ctx.stake_available,
+      // [F2] Wagers and sponsorship rows with no transfer behind them: shown, never counted.
+      unbacked_stake_ignored_usdc: ctx.unbacked_stake_ignored_usdc,
       open_disputes: ctx.open_disputes,
     });
   } catch (e: any) { return fail(res, 500, 'x402_limits_failed', e?.message); }
@@ -421,6 +445,43 @@ router.post('/staking/deposit', async (req: Request, res: Response): Promise<voi
   if (!Number.isFinite(amt) || amt <= 0) {
     fail(res, 400, 'invalid_amount', 'amount must be positive');
     return;
+  }
+  // [F2, 2026-10-07] WHO MAY PLACE A STAKE. Before this, any agent key could write itself an
+  // active stake row with no money behind it, and the payment gate counted that row toward the
+  // ceiling the agent may spend under. The gate no longer counts these rows (x402-gate.ts), and
+  // placing one now needs either the operator's key (house operations) or the signature of the
+  // wallet that answers for the agent (services/accountable-root.ts) over these exact settings.
+  const presented = String(req.headers['x-api-key'] ?? '').trim() ||
+    String(req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '').trim();
+  if (!matchEnvOperatorKey(presented)) {
+    try {
+      const root = await resolveAccountableRoot(agent);
+      if (!root.ok) {
+        res.status(rootRefusalStatus(root)).json({
+          ok: false,
+          error: root.code === 'not_checked' ? 'root_not_checked' : 'no_accountable_root',
+          code: root.code,
+          message: root.code === 'not_checked'
+            ? `Could not check who answers for this agent, so no stake was placed. ${root.message}`
+            : `Nobody answers for this agent, so it cannot place a stake. Claim it on /bind first. ${root.message}`,
+        });
+        return;
+      }
+      const check = await checkOwnerAuthorization({
+        subject: root.root.subjectId,
+        action: 'stake.deposit',
+        params: { agent: root.root.subjectId, amount: String(amount), target_model: target_model ?? null, dimension: dimension ?? null },
+        auth: readOwnerAuthorization(req.body),
+        expectedSigner: root.root.wallet,
+      });
+      if (!check.ok) {
+        res.status(check.code === 'not_checked' ? 503 : 403).json({ ok: false, error: check.code, message: check.message, owner_wallet: root.root.wallet });
+        return;
+      }
+    } catch (e: any) {
+      fail(res, 500, 'staking_deposit_owner_check_failed', e?.message);
+      return;
+    }
   }
   try {
     const shortId = agent.replace(/^trinity-/i, '').toUpperCase();

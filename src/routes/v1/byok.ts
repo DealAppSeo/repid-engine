@@ -430,7 +430,12 @@ router.delete('/human/bind/:agentId', async (req: Request, res: Response) => {
   if (!p) return;
 
   // Only the current owner may revoke.
-  const owner = await ownerOfAgent(String(req.params.agentId));
+  let owner: Awaited<ReturnType<typeof ownerOfAgent>>;
+  try {
+    owner = await ownerOfAgent(String(req.params.agentId));
+  } catch (e: any) {
+    return res.status(503).json({ error: 'owner_not_checked', message: `Could not read who owns this agent, so nothing was changed. ${e?.message ?? ''}`.trim() });
+  }
   if (!owner || owner.owner_id !== p.owner.id) {
     return res.status(403).json({ error: 'not_owner', message: 'You do not currently own this agent.' });
   }
@@ -461,8 +466,16 @@ router.get('/human/agents', async (req: Request, res: Response) => {
  */
 router.get('/agents/:agentId/owner', async (req: Request, res: Response) => {
   const agentId = String(req.params.agentId);
-  const owner = await ownerOfAgent(agentId);
-  const link = await linkedButUnbound(agentId);
+  let owner: Awaited<ReturnType<typeof ownerOfAgent>>;
+  let link: Awaited<ReturnType<typeof linkedButUnbound>>;
+  try {
+    owner = await ownerOfAgent(agentId);
+    link = await linkedButUnbound(agentId);
+  } catch (e: any) {
+    // Not "unowned": we could not look. Saying "No owner" here would be the overclaim this route
+    // exists to avoid.
+    return res.status(503).json({ error: 'owner_not_checked', message: `Could not read who owns this agent. ${e?.message ?? ''}`.trim() });
+  }
 
   if (!owner) {
     return res.json({

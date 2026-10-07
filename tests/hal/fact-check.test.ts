@@ -81,12 +81,14 @@ describe('factCheck — resilience (3/2/1/0)', () => {
     expect(r.decision).toBe('vetoed');
   });
 
-  test('1 provider up (two fail) → degraded, still scored', async () => {
+  // [F2] Still scored (hal_score is kept), but one checker cannot clear: the decision is abstain.
+  test('1 provider up (two fail) → degraded, scored, but NOT CHECKED rather than clean', async () => {
     byModel = { m1: { verdict: 'TRUE', confidence: 100 }, m2: 'REJECT', m3: 'EMPTY' };
     const r = await factCheck('x', P);
     expect(r.providers_used).toBe(1);
     expect(r.degraded).toBe(true);
-    expect(r.decision).toBe('clean');
+    expect(Number.isFinite(r.hal_score)).toBe(true);
+    expect(r.decision).toBe('abstain');
   });
 
   test('0 providers up → providers_used 0, neutral 0.5, degraded', async () => {

@@ -306,13 +306,16 @@ export async function revokeBinding(agentId: string, scope = SCOPE_OWNERSHIP, re
  * and so a wallet-proven owner is never rendered as "verified human".
  */
 export async function ownerOfAgent(agentId: string, scope = SCOPE_OWNERSHIP) {
-  const { data } = await db
+  const { data, error } = await db
     .from('human_agent_bindings')
     .select('owner_kind, human_token_id, builder_id, human_wallet, scope, bound_at')
     .eq('agent_id', agentId)
     .eq('scope', scope)
     .is('revoked_at', null)
     .maybeSingle();
+  // [F1] A failed read is not "nobody owns it". Callers that widen on "no owner" would otherwise
+  // fail open on a database blip, so the error propagates and each route answers 503.
+  if (error) throw new Error(`owner lookup failed: ${error.message}`);
   if (!data) return null;
   const kind = (data.owner_kind ?? 'human_sbt') as OwnerKind;
   return {

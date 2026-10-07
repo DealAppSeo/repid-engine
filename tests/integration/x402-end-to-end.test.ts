@@ -17,6 +17,17 @@ jest.mock('../../src/middleware/auth', () => ({
   }
 }));
 
+// [F1] Escrow now asks who answers for the buyer and the provider (services/accountable-root.ts).
+// This suite tests the payment flow, so both parties have one here, as the house agents do in
+// production (the operator's custodian); tests/escrow-accountable-root.test.ts covers the refusal.
+jest.mock('../../src/services/accountable-root', () => ({
+  ...jest.requireActual('../../src/services/accountable-root'),
+  resolveAccountableRoot: jest.fn(async (ref: string) => ({
+    ok: true,
+    root: { kind: 'custodian', agentId: ref, subjectId: ref, wallet: '0x00000000000000000000000000000000000000c1', assurance: 'operator-assigned', via: 'own-custodian', grantPath: [] },
+  })),
+}));
+
 jest.mock('../../src/db', () => ({
   db: {
     from: jest.fn().mockReturnThis(),

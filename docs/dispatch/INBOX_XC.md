@@ -1,60 +1,91 @@
-# INBOX_XC: red-team the MVP phone door and the E2E gate (trustshell PR #441)
+# INBOX_XC: red-team F1 + F2: one accountable root, unbacked stake stops counting
 
 ## Task
 
 **Lane:** RED-TEAM. You have **no write scope**: the deliverable is text. Do not claim to have
-created, edited or committed a file. You hold `reasoning` and `repo_read`. The trustshell tree is
-placed at `./trustshell` at commit `2571858` (branch `claude/bold-turing-icz50x`, PR #441).
-**Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
-Dispatched by CC2 (Claude) on 2026-10-04: this PR is the last piece of NORTH milestone 1
-("a stranger gets a real label on the phone"), and it decides what the daily E2E gate certifies.
+created, edited or committed a file. You hold `reasoning` and `repo_read`, on this repository at
+branch `claude/bold-turing-icz50x`. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
+Dispatched by CC (Claude) on 2026-10-07. Sean said GO on F1 and F2 with your rules from the
+foundation review. This is the code that enforces them; tell us where it does not.
 
-### What it is (paths under `./trustshell`)
+### The rules it claims to enforce
 
-- `app/check/page.tsx` + `app/check/CheckForm.tsx`: **trustshell.dev/check**, the phone door.
-  - One sentence goes to `POST /api/v1/classify` through the same `classifyClaim()`
-    (`src/lib/claim.ts`) the CLI and MCP use.
-  - The page shows pass / veto / not-checked.
-  - Merging deploys it publicly on trustshell.dev.
-- `tests/e2e/check-walk.mjs`: the phone-door suite at a 390px viewport.
-  - Stubbed mode (13 checks) and `--live` mode (real Groq/Cerebras votes).
-  - With `HTTPS_PROXY` set, `--live` intercepts the page's classify call and replays the exact
-    body to production with curl (`transport: relayed-by-runner`). The browser's own hop through
-    the sandbox relay took 7.9 s, against the product's 6 s timeout.
-- `tests/e2e/harness-acceptance.mjs`: the cold-install gate.
-  - Now defaults to npm `latest`; it was pinned to 1.3.0.
-  - Records the installed version.
-  - New leg `claim.check`: the published CLI's `check "<sentence>"` must give pass/0 and veto/1.
-    A classifier abstention is NOT_CHECKED.
-  - Writes a JSON receipt when `RECEIPT_DIR` is set.
-- `.github/workflows/e2e-honesty.yml`: runs the phone door stubbed and live daily and uploads
-  every receipt as an artifact.
+1. **Accountable root.** An agent may escrow, pay, widen a grant, add a key or place a stake only
+   while someone answers for it. That someone is one of:
+   - a bound owner;
+   - the operator's custodian (house agents only);
+   - the top of a live, connected grant chain that ends at one of those.
+2. **Child grants.**
+   - The parent must be live and must be held by the grantor.
+   - The root of the chain must be the same person as the grantor's own root.
+   - Depth is capped. A cycle is refused.
+3. **A failed read is not "still live"** and not "nobody owns it". It is NOT CHECKED (503).
+4. **Unbacked stake does not raise a spending ceiling.** Prediction-market wagers and sponsorship
+   rows are reported and ignored. Placing a stake needs the operator key or the root owner's
+   signature over that exact deposit.
+5. **One checker family is not two opinions.**
+   - HAL low quorum + would-be clean → `abstain`.
+   - Ledger same-family pair → `incomplete`.
+   - Dispute validator that checked nothing → back to pending, no verdict.
+
+### Where to read
+
+- `src/services/accountable-root.ts`: `anchorOf`, `resolveAccountableRoot`, `dbRootReader`.
+- `src/services/principal-grants.ts`:
+  - `walkAncestors`, `isChainLive`, `rootCut`;
+  - the parent block in `mintGrant` (`parent_not_held_by_grantor`, `root_mismatch`);
+  - `checkAuthorization`.
+- Routes:
+  - `src/routes/mvp-api.ts`: `POST /grants`, `/x402-gate/authorize`, `/staking/deposit`;
+  - `src/routes/v1/contracts.ts`: escrow;
+  - `src/routes/key-management.ts`;
+  - `src/routes/agent-spend.ts`;
+  - `src/routes/v1/byok.ts`.
+- `src/services/x402-gate.ts`: `loadAuthorityContext`, backed vs unbacked.
+- `src/hal/fact-check.ts` (the `abstain` block), `src/workers/dispute-resolution-worker.ts`,
+  `src/ledger/daily-totals.ts`.
+- Tests:
+  - `tests/accountable-root.test.ts`, `tests/grants-chain-f1.test.ts`;
+  - `tests/escrow-accountable-root.test.ts`, `tests/stake-unbacked-not-counted.test.ts`;
+  - `tests/owner-lookup-fail-closed.test.ts`.
 
 ### Deliverable
 
-Rank by failure direction. Worst first: anything that shows **pass** when production did not say
-pass. Then a leak (text, a secret, an identifier). Then a test that cannot fail. For each finding
-give the input, the file:line you read, and the test that would catch it. At minimum, try:
+Rank by failure direction, worst first:
 
-- **Can the page show pass, or veto, without the endpoint saying so?**
-  - The response body: an extra field, a label with odd case or whitespace, a 200 with HTML,
-    a redirect.
-  - `NEXT_PUBLIC_REPID_ENGINE_URL` set to something odd at build time.
-  - A race between two submits; a slow first answer arriving after a fast second one.
-- **Does anything private leave the phone?** Read `src/memory/redact.ts`: what does it miss that a
-  person might paste (an email, a phone number, an `sk-ant-…` key, a GitHub token)? Is the privacy
-  line on the page true about where text goes and whether it is stored?
-- **Is the live mode's relay honest?**
-  - Could `relayToProduction` turn a failure into a pass?
-  - Could it make the suite green while the real browser door is broken in a way only the browser
-    hop would show (CORS, CSP, mixed content)?
-  - Is the `transport` field enough for a reader of the receipt to know?
-- **Can each new or changed check fail?** Which assertion in `check-walk.mjs` or the `claim.check`
-  leg would stay green with the product broken? The one known mutation (not-checked shown as pass)
-  turns 4 stubbed checks red.
-- **`claim.check` exit-code contract:** pass 0, veto 1, not-checked 2. Is an abstention ever scored
-  FAILED, or a wrong-way label ever scored NOT_CHECKED?
-- **The gate now tests `latest`, not a pin.** What does that change about reproducibility of a past
-  receipt, and is the installed version recorded well enough to compensate?
+1. a path that commits money or widens power **with no root**;
+2. a read failure scored as a pass;
+3. a test that cannot fail.
+
+For each finding give the input, the `file:line` you read, and the test that would catch it.
+At minimum, try:
+
+- **Identity confusion.** `resolveAccountableRoot` takes a ref that may be a name or a uuid.
+  - Can a name that collides with another agent's id, or a case variant of a wallet, resolve to
+    the wrong agent?
+  - Can a `viaGrantId` whose grantee matches by name but not by id borrow someone else's root?
+- **Chain walk.**
+  - Can a chain look connected while a link's grantor is not the parent's grantee?
+  - Look for case, whitespace, and name vs uuid mismatches.
+  - Is depth checked on what the row *says* or on the steps actually walked?
+  - What happens at exactly `MAX_GRANT_DEPTH`?
+- **Same-person rule.** In `mintGrant`, the rule is skipped when the grantor's own anchor is
+  `no_root`.
+  - Is that safe? An unowned grantor holding a grant from someone else may hang a child.
+  - Does `rootCut` / the escrow check stop that child from doing anything that matters?
+- **Custodian.** `conservator_address` is the house fallback.
+  - Is there any route, migration or register path by which a caller can set that column for
+    their own agent?
+  - If so, F1 is bypassed for everyone.
+- **Stake.**
+  - Can `stake.deposit` be replayed? Look at the nonce and the params hash.
+  - Can the params be shifted (amount as number vs string, `null` vs missing)?
+  - Can a signature for agent A be used for agent B?
+  - Does anything else still add unbacked stake into a ceiling?
+- **Fail-closed.** Find any `catch` or `error` branch in the files above that returns
+  allow / live / owner-absent instead of NOT CHECKED.
+- **Head-of-line.** A dispute whose validators never answer returns to pending each cycle.
+  - Can it starve the queue (ordering, batch size)?
+  - Is there any path where it is retried forever with no visible signal?
 
 One verdict line: **MERGE / FIX FIRST / HOLD**, with the single most important reason.

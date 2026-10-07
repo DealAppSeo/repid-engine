@@ -138,6 +138,23 @@ describe('POST /api/v1/agents/:id/spend', () => {
     expect(sent).toEqual([]);
   });
 
+  // [F1] A failed owner read used to fall through to the catch-all and come back as a 502
+  // "chain_error"; worse, an owner lookup that swallowed its error read as "unbound". Now: 503,
+  // NOT CHECKED, and the chain is never touched.
+  it('when who owns the agent cannot be read, it is 503 NOT CHECKED and nothing is sent', async () => {
+    const { chain, sent } = fakeChain();
+    const a = express();
+    a.use(express.json());
+    a.use('/api/v1/agents', createAgentSpendRouter({
+      chain, loadAgent: ownAgent, enabled: () => true,
+      loadOwnerWallet: async () => { throw new Error('owner lookup failed: db down'); },
+    }));
+    const res = await request(a).post('/api/v1/agents/agent-1/spend').send(body);
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ ok: false, would_send: false, code: 'owner_not_checked' });
+    expect(sent).toEqual([]);
+  });
+
   it('the owner check is case-insensitive on the address', async () => {
     const { a } = app({ enabled: false, boundOwner: OWNER.toUpperCase().replace('0X', '0x') });
     const res = await request(a).post('/api/v1/agents/agent-1/spend').send({ ...body, dry_run: true });

@@ -18,7 +18,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { VoteOutcome, Voter } from '../classify/free-votes';
-import { voteWasSent } from '../classify/free-votes';
+import { oneFamily, voteWasSent } from '../classify/free-votes';
 
 export const FLUSH_MS = 10 * 60 * 1000;
 /** Bounds memory if the database is unreachable for a long time. Beyond it, new keys are dropped. */
@@ -87,8 +87,16 @@ function zeroPair(): PairCounts {
   return { agreed_true: 0, agreed_false: 0, contradicted: 0, one_unsure: 0, both_unsure: 0, incomplete: 0 };
 }
 
-/** Which pair bucket two final outcomes fall in. */
-export function pairBucket(a: VoteOutcome, b: VoteOutcome): keyof PairCounts {
+/**
+ * Which pair bucket two final outcomes fall in.
+ *
+ * `sameFamily` [F2, 2026-10-07]: two deciders of one model family cannot AGREE — that is one
+ * opinion said twice, and the stamp already answers not-checked for it (free-votes.ts, oneFamily).
+ * Counting such a pair as agreed_true / agreed_false made the ledger report agreement the stamp
+ * refused to. It is 'incomplete': the check did not get two independent answers.
+ */
+export function pairBucket(a: VoteOutcome, b: VoteOutcome, sameFamily = false): keyof PairCounts {
+  if (sameFamily) return 'incomplete';
   if (a.kind !== 'verdict' || b.kind !== 'verdict') return 'incomplete';
   const x = a.verdict;
   const y = b.verdict;
@@ -144,7 +152,7 @@ export function note(input: NoteInput): void {
         row = { key, counts: zeroPair() };
         pairs.set(id, row);
       }
-      if (row) row.counts[pairBucket(oa, ob)] += 1;
+      if (row) row.counts[pairBucket(oa, ob, oneFamily(da, db))] += 1;
     }
   } catch {
     // Counting is advisory; a check never fails because of it.

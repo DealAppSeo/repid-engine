@@ -116,9 +116,22 @@ describe('checkOwnerAuthorization', () => {
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 
-const mockState: { owner: { agentId: string; wallet: string } | null | 'ambiguous'; ownerRow: any; builder: any } = {
-  owner: null,
-  ownerRow: null,
+// The routes ask services/accountable-root.ts who answers for an agent [F1]. These tests set the
+// answer directly; tests/accountable-root.test.ts covers how it is worked out.
+type MockRoot =
+  | { ok: true; root: { kind: 'owner' | 'custodian'; agentId: string; subjectId: string; wallet: string; assurance: string; via: string; grantPath: string[] } }
+  | { ok: false; code: string; message: string };
+const ownerRoot = (wallet: string): MockRoot => ({
+  ok: true,
+  root: { kind: 'owner', agentId: AGENT, subjectId: AGENT, wallet, assurance: 'wallet-proven', via: 'own-binding', grantPath: [] },
+});
+const custodianRoot = (wallet: string): MockRoot => ({
+  ok: true,
+  root: { kind: 'custodian', agentId: AGENT, subjectId: AGENT, wallet, assurance: 'operator-assigned', via: 'own-custodian', grantPath: [] },
+});
+const noRoot: MockRoot = { ok: false, code: 'no_root', message: 'nobody has claimed it' };
+const mockState: { root: MockRoot; builder: any } = {
+  root: noRoot,
   builder: null,
 };
 const mockMinted: unknown[] = [];
@@ -137,10 +150,9 @@ jest.mock('../src/db', () => {
   };
   return { db: { from: (t: string) => chain(t), rpc: () => Promise.resolve({ data: null, error: null }) } };
 });
-jest.mock('../src/services/human-agent-binding', () => ({
-  ...jest.requireActual('../src/services/human-agent-binding'),
-  boundOwnerOfRef: jest.fn(async () => mockState.owner),
-  ownerOfAgent: jest.fn(async () => mockState.ownerRow),
+jest.mock('../src/services/accountable-root', () => ({
+  ...jest.requireActual('../src/services/accountable-root'),
+  resolveAccountableRoot: jest.fn(async () => mockState.root),
 }));
 jest.mock('../src/services/principal-grants', () => ({
   ...jest.requireActual('../src/services/principal-grants'),
@@ -175,7 +187,7 @@ function app(router: any, mount = '/api/v1') {
 describe('POST /grants', () => {
   const owner = Wallet.createRandom();
   const base = { grantor_agent_id: AGENT, grantee_agent_id: OTHER, grant_class: 'cold', ttl_seconds: 3600 };
-  beforeEach(() => { mockMinted.length = 0; mockState.owner = { agentId: AGENT, wallet: owner.address }; });
+  beforeEach(() => { mockMinted.length = 0; mockState.root = ownerRoot(owner.address); });
 
   it('a read-only cold grant — every starter belt — needs nothing more than today', async () => {
     const res = await request(app(mvpRouter)).post('/api/v1/grants').send({ ...base, capabilities: ['read:tool:github'] });
@@ -215,18 +227,47 @@ describe('POST /grants', () => {
     expect(mockMinted).toHaveLength(0);
   });
 
-  it('an agent nobody has bound keeps today\'s rules', async () => {
-    mockState.owner = null;
+  it('[F1] an agent nobody answers for can no longer widen anything (before F1 it kept "today\'s rules")', async () => {
+    mockState.root = noRoot;
     const res = await request(app(mvpRouter)).post('/api/v1/grants').send({ ...base, capabilities: ['write:tool:github'] });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ ok: false, error: 'no_accountable_root', code: 'no_root' });
+    expect(mockMinted).toHaveLength(0);
+  });
+
+  it('[F1] ...but a read-only belt from it still mints: reading carries no power', async () => {
+    mockState.root = noRoot;
+    const res = await request(app(mvpRouter)).post('/api/v1/grants').send({ ...base, capabilities: ['read:tool:github'] });
     expect(res.status).toBe(201);
   });
 
-  it('a name shared by several agents, one of them owned, must be given as an id', async () => {
-    mockState.owner = 'ambiguous';
+  it('[F1] when who answers could not be read, it is 503 NOT CHECKED and nothing is minted', async () => {
+    mockState.root = { ok: false, code: 'not_checked', message: 'db down' };
+    const res = await request(app(mvpRouter)).post('/api/v1/grants').send({ ...base, capabilities: ['write:tool:github'] });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('root_not_checked');
+    expect(mockMinted).toHaveLength(0);
+  });
+
+  it('a name shared by several agents must be given as an id', async () => {
+    mockState.root = { ok: false, code: 'ambiguous', message: 'more than one agent is named my-pai' };
     const res = await request(app(mvpRouter)).post('/api/v1/grants').send({ ...base, grantor_agent_id: 'my-pai', capabilities: ['write:tool:github'] });
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe('use_agent_id');
+    expect(res.body.code).toBe('ambiguous');
     expect(mockMinted).toHaveLength(0);
+  });
+
+  it("[F1] a house agent held by the operator's custodian widens only with the custodian's approval", async () => {
+    const custodian = Wallet.createRandom();
+    mockState.root = custodianRoot(custodian.address);
+    const body = { ...base, capabilities: ['write:tool:github'] };
+    const denied = await request(app(mvpRouter)).post('/api/v1/grants').send(body);
+    expect(denied.status).toBe(403);
+    expect(denied.body.owner_wallet).toBe(custodian.address);
+    const now = Math.floor(Date.now() / 1000);
+    const owner_authorization = await approve(custodian, AGENT, 'grant.mint', grantApprovalParams({ ...body, ttl_seconds: 3600 }), { expires_at: now + 300 });
+    const ok = await request(app(mvpRouter)).post('/api/v1/grants').send({ ...body, owner_authorization });
+    expect(ok.status).toBe(201);
   });
 });
 
@@ -236,14 +277,28 @@ describe('POST /agents/:id/keys', () => {
     request(app(keysRouter, '/api/v1/agents')).post(`/api/v1/agents/${AGENT}/keys`).set('authorization', 'Bearer admin-key').send(body);
   beforeEach(() => { mockIssued.length = 0; });
 
-  it('an agent nobody owns: the admin key alone still issues a key', async () => {
-    mockState.ownerRow = null;
+  it('[F1] an agent nobody answers for: no second key until it is claimed (before F1 the admin key alone issued one)', async () => {
+    mockState.root = noRoot;
+    const res = await post({ name: 'k' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('no_accountable_root');
+    expect(mockIssued).toHaveLength(0);
+  });
+
+  it("[F1] a house agent held by the operator's custodian: the operator's admin credential issues", async () => {
+    mockState.root = custodianRoot(Wallet.createRandom().address);
     expect((await post({ name: 'k' })).status).toBe(201);
     expect(mockIssued).toHaveLength(1);
   });
 
+  it('[F1] who answers could not be read: 503, no key', async () => {
+    mockState.root = { ok: false, code: 'not_checked', message: 'db down' };
+    expect((await post({ name: 'k' })).status).toBe(503);
+    expect(mockIssued).toHaveLength(0);
+  });
+
   it('an OWNED agent: a key cannot mint another key without the owner', async () => {
-    mockState.ownerRow = { human_wallet: owner.address };
+    mockState.root = ownerRoot(owner.address);
     const res = await post({ name: 'k' });
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('owner_authorization_required');
@@ -251,7 +306,7 @@ describe('POST /agents/:id/keys', () => {
   });
 
   it("an OWNED agent: with the owner's approval it issues", async () => {
-    mockState.ownerRow = { human_wallet: owner.address };
+    mockState.root = ownerRoot(owner.address);
     const now = Math.floor(Date.now() / 1000);
     const owner_authorization = await approve(owner, AGENT, 'keys.create', { agent_id: AGENT, name: 'k', scopes: ['admin'] }, { expires_at: now + 300 });
     const res = await post({ name: 'k', scopes: ['admin'], owner_authorization });

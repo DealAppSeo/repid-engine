@@ -100,6 +100,25 @@ describe('note: what is counted', () => {
     expect(pairBucket(U, T)).toBe('one_unsure');
     expect(pairBucket(U, U)).toBe('both_unsure');
     expect(pairBucket(NO_KEY, T)).toBe('incomplete');
+    // [F2] a same-family pair cannot agree: one opinion said twice, which the stamp calls not checked
+    expect(pairBucket(T, T, true)).toBe('incomplete');
+    expect(pairBucket(F, F, true)).toBe('incomplete');
+  });
+});
+
+describe('[F2] two deciders of one family', () => {
+  it('agreeing gpt-oss models are counted incomplete, never agreed_true', () => {
+    const GPT20: Voter = { provider: 'groq', model: 'openai/gpt-oss-20b' };
+    check([GROQ, T], [GPT20, T]);
+    const pairs = [...__ledgerState().pairs.values()];
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.counts).toMatchObject({ agreed_true: 0, incomplete: 1 });
+  });
+
+  it('two families agreeing still count as agreed_true', () => {
+    check([GROQ, T], [CEREBRAS, T]);
+    const pairs = [...__ledgerState().pairs.values()];
+    expect(pairs[0]!.counts).toMatchObject({ agreed_true: 1, incomplete: 0 });
   });
 });
 

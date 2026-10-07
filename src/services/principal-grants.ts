@@ -302,6 +302,104 @@ function permits_any(held: string[], requested: string): boolean {
   return held.some((h) => permits(h, requested));
 }
 
+/**
+ * A grant WIDENS when it hands on more than read access: any class above cold, or any capability
+ * that is not `read:`. One predicate, used by the mint route (owner approval), the accountable-root
+ * check and the unbind cut, so the three can never disagree about which grants carry power.
+ */
+export function isWidening(g: { grant_class: string; capabilities: string[] }): boolean {
+  return g.grant_class !== 'cold' || g.capabilities.some((c) => !c.startsWith('read:'));
+}
+
+/** Two grant ends name the same principal. Exact, case-insensitive: no lookup, no guessing. */
+export function sameEnd(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
+}
+
+// --- Chain walk: fail closed -------------------------------------------------
+
+export type ChainWalk =
+  | { ok: true; ancestors: GrantRow[] }
+  | { ok: false; code: 'not_checked' | 'chain_dead' | 'cycle' | 'too_deep'; reason: string };
+
+/**
+ * Walk a grant's ancestors to the root grant (depth 0), nearest first.
+ *
+ * FAILS CLOSED [F1, 2026-10-07]. The walk this replaces stopped quietly when a read came back
+ * empty (`if (!data) break`), so a missing or unreadable ancestor made the chain look complete and
+ * LIVE. Now every way the walk can go wrong is a refusal, never a shorter chain:
+ *   - a read that errors              -> not_checked (we did not look; that is not a pass)
+ *   - a parent id with no row         -> chain_dead
+ *   - a link that does not connect    -> chain_dead (each grant's grantor must be its parent's
+ *                                        grantee: a child cannot hang under someone else's grant)
+ *   - depths that do not step by one  -> chain_dead (the stored depth is what the cap reads)
+ *   - a grant seen twice              -> cycle
+ *   - more than MAX_GRANT_DEPTH links -> too_deep
+ */
+export async function walkAncestors(grant: GrantRow, readGrant: (id: string) => Promise<GrantRow | null>): Promise<ChainWalk> {
+  const ancestors: GrantRow[] = [];
+  const seen = new Set<string>([grant.id]);
+  let child = grant;
+  while (child.parent_grant_id) {
+    if (ancestors.length >= MAX_GRANT_DEPTH) {
+      return { ok: false, code: 'too_deep', reason: `chain is longer than MAX_GRANT_DEPTH (${MAX_GRANT_DEPTH})` };
+    }
+    const pid = child.parent_grant_id;
+    if (seen.has(pid)) return { ok: false, code: 'cycle', reason: `grant ${pid} appears twice in its own chain` };
+    seen.add(pid);
+    let parent: GrantRow | null;
+    try {
+      parent = await readGrant(pid);
+    } catch (e: unknown) {
+      return { ok: false, code: 'not_checked', reason: `could not read ancestor ${pid}: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (!parent) return { ok: false, code: 'chain_dead', reason: `ancestor ${pid} does not exist` };
+    if (!sameEnd(child.grantor_agent_id, parent.grantee_agent_id)) {
+      return {
+        ok: false,
+        code: 'chain_dead',
+        reason: `grant ${child.id} is granted by ${child.grantor_agent_id}, but its parent ${pid} was granted to ${parent.grantee_agent_id}`,
+      };
+    }
+    if (parent.depth !== child.depth - 1) {
+      return { ok: false, code: 'chain_dead', reason: `depth does not step by one between ${pid} (${parent.depth}) and ${child.id} (${child.depth})` };
+    }
+    ancestors.push(parent);
+    child = parent;
+  }
+  if (child.depth !== 0) {
+    return { ok: false, code: 'chain_dead', reason: `the top of the chain (${child.id}) claims depth ${child.depth}, not 0` };
+  }
+  return { ok: true, ancestors };
+}
+
+/** Read one grant, throwing on a read error rather than returning "not found". */
+export async function readGrantRow(id: string): Promise<GrantRow | null> {
+  const { data, error } = await db.from('principal_grants').select('*').eq('id', id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as unknown as GrantRow) ?? null;
+}
+
+/**
+ * The UNBIND CUT [F1]. A grant that widens is live only while the agent at the top of its chain
+ * still has someone who answers for it (a bound owner, or the operator's custodian). Computed on
+ * every read, so an unbind takes every widening grant under that person down in the same step,
+ * with no cascade write to forget. Read-only grants carry no power and are not cut.
+ */
+async function rootCut(grant: GrantRow, ancestors: GrantRow[]): Promise<{ live: boolean; outcome?: 'FAILED' | 'NOT_CHECKED'; reason: string }> {
+  if (!isWidening(grant)) return { live: true, reason: 'read-only grant: no accountable root needed' };
+  const top = ancestors.length ? ancestors[ancestors.length - 1]! : grant;
+  // Lazy: accountable-root imports this module.
+  const { anchorOfRef } = require('./accountable-root') as typeof import('./accountable-root');
+  const anchor = await anchorOfRef(top.grantor_agent_id);
+  if (anchor.ok) return { live: true, reason: `answers to ${anchor.anchor.wallet}` };
+  return {
+    live: false,
+    outcome: anchor.code === 'not_checked' ? 'NOT_CHECKED' : 'FAILED',
+    reason: `the agent at the top of this chain (${top.grantor_agent_id}) has no accountable root: ${anchor.message}`,
+  };
+}
+
 // --- Revoke: pure --------------------------------------------------------------
 
 export type RevokeDecision = { allowed: true } | { allowed: false; reason: string };
@@ -344,9 +442,40 @@ export async function mintGrant(
 
   let parent: GrantRow | null = null;
   if (req.parentGrantId) {
-    const { data } = await db.from('principal_grants').select('*').eq('id', req.parentGrantId).maybeSingle();
-    if (!data) return { ok: false, error: 'parent_grant_not_found' };
-    parent = data as unknown as GrantRow;
+    try {
+      parent = await readGrantRow(req.parentGrantId);
+    } catch (e: unknown) {
+      return { ok: false, error: `parent_grant_not_checked: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (!parent) return { ok: false, error: 'parent_grant_not_found' };
+    // [F1] A child grant hangs only under a grant its grantor actually HOLDS. Before this, any
+    // caller could attach a child under anyone's grant, and the chain no longer ended at the
+    // person who issued the parent.
+    if (!sameEnd(parent.grantee_agent_id, req.grantorAgentId)) {
+      return { ok: false, error: `parent_not_held_by_grantor: grant ${parent.id} was granted to ${parent.grantee_agent_id}, not to ${req.grantorAgentId}` };
+    }
+    // [F1] ...and only while that parent's whole chain is live: unrevoked, unexpired, connected.
+    const walk = await walkAncestors(parent, readGrantRow);
+    if (!walk.ok) return { ok: false, error: `parent_chain_${walk.code}: ${walk.reason}` };
+    const parentLive = isChainLive(parent, walk.ancestors);
+    if (!parentLive.live) return { ok: false, error: `parent_chain_dead: ${parentLive.reason}` };
+    // [F1] ...and only under the SAME PERSON. A grantor someone answers for directly may not hang
+    // its child under a chain that ends at someone else: the child would then name one person at
+    // the top while the agent granting it answers to another, and neither could be asked to answer
+    // for the whole. A grantor nobody answers for directly is answered for BY that chain, so there
+    // is nothing to compare. Lazy: accountable-root imports this module.
+    const { anchorOfRef } = require('./accountable-root') as typeof import('./accountable-root');
+    const top = walk.ancestors.length ? walk.ancestors[walk.ancestors.length - 1]! : parent;
+    const [mine, chainTop] = await Promise.all([anchorOfRef(req.grantorAgentId), anchorOfRef(top.grantor_agent_id)]);
+    if ((!mine.ok && mine.code === 'not_checked') || (!chainTop.ok && chainTop.code === 'not_checked')) {
+      return { ok: false, error: `parent_root_not_checked: ${!mine.ok ? mine.message : !chainTop.ok ? chainTop.message : ''}` };
+    }
+    if (mine.ok && (!chainTop.ok || mine.anchor.wallet.toLowerCase() !== chainTop.anchor.wallet.toLowerCase())) {
+      return {
+        ok: false,
+        error: `root_mismatch: ${req.grantorAgentId} answers to ${mine.anchor.wallet}, but grant ${parent.id}'s chain ends at ${chainTop.ok ? chainTop.anchor.wallet : 'nobody'}`,
+      };
+    }
   }
 
   const authorityResolution = await resolveAuthorityInputs(req.grantorAgentId);
@@ -456,25 +585,20 @@ export async function listGrants(principalId: string): Promise<ListedGrant[]> {
   const rows = ((data as any[]) ?? []) as GrantRow[];
   const out: ListedGrant[] = [];
   for (const g of rows) {
-    const ancestors = await loadAncestors(g);
-    const liveness = isChainLive(g, ancestors);
-    out.push({ ...g, live: liveness.live, liveReason: liveness.reason });
+    const walk = await walkAncestors(g, readGrantRow);
+    if (!walk.ok) {
+      out.push({ ...g, live: false, liveReason: `${walk.code}: ${walk.reason}` });
+      continue;
+    }
+    const liveness = isChainLive(g, walk.ancestors);
+    if (!liveness.live) {
+      out.push({ ...g, live: false, liveReason: liveness.reason });
+      continue;
+    }
+    const cut = await rootCut(g, walk.ancestors);
+    out.push({ ...g, live: cut.live, liveReason: cut.live ? liveness.reason : cut.reason });
   }
   return out;
-}
-
-async function loadAncestors(grant: GrantRow): Promise<GrantRow[]> {
-  const ancestors: GrantRow[] = [];
-  let currentParentId = grant.parent_grant_id;
-  // MAX_GRANT_DEPTH bounds the walk — a chain cannot be longer than that by construction.
-  for (let i = 0; i < MAX_GRANT_DEPTH + 1 && currentParentId; i++) {
-    const { data } = await db.from('principal_grants').select('*').eq('id', currentParentId).maybeSingle();
-    if (!data) break;
-    const row = data as unknown as GrantRow;
-    ancestors.push(row);
-    currentParentId = row.parent_grant_id;
-  }
-  return ancestors;
 }
 
 export interface RevokeResult {
@@ -517,9 +641,23 @@ export async function checkAuthorization(
   requestedCapability: string,
   ctx: ActionContext,
 ): Promise<AuthorizationDecision | { authorized: false; outcome: 'FAILED'; reason: 'grant_not_found' }> {
-  const { data } = await db.from('principal_grants').select('*').eq('id', grantId).maybeSingle();
-  if (!data) return { authorized: false, outcome: 'FAILED', reason: 'grant_not_found' };
-  const grant = data as unknown as GrantRow;
-  const ancestors = await loadAncestors(grant);
-  return decideAuthorization(grant, ancestors, requestedCapability, ctx);
+  const grant = await readGrantRow(grantId);
+  if (!grant) return { authorized: false, outcome: 'FAILED', reason: 'grant_not_found' };
+  const walk = await walkAncestors(grant, readGrantRow);
+  if (!walk.ok) {
+    return {
+      authorized: false,
+      outcome: walk.code === 'not_checked' ? 'NOT_CHECKED' : 'FAILED',
+      reason: `${walk.code}: ${walk.reason}`,
+      capabilityChecked: requestedCapability,
+      caveatResults: [],
+    } as AuthorizationDecision;
+  }
+  const decision = decideAuthorization(grant, walk.ancestors, requestedCapability, ctx);
+  if (!decision.authorized) return decision;
+  const cut = await rootCut(grant, walk.ancestors);
+  if (!cut.live) {
+    return { authorized: false, outcome: cut.outcome ?? 'FAILED', reason: cut.reason, capabilityChecked: requestedCapability, caveatResults: [] };
+  }
+  return decision;
 }

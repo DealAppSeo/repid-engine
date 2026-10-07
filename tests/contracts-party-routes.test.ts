@@ -30,6 +30,18 @@ import app from '../src/index';
 import { db } from '../src/db';
 import { contractPartyRefusal } from '../src/routes/v1/contracts';
 
+// [F1] Escrow now asks who answers for the buyer and the provider (services/accountable-root.ts).
+// This suite tests other rules, so both parties have one here; tests/escrow-accountable-root.test.ts
+// covers the refusal itself.
+jest.mock('../src/services/accountable-root', () => ({
+  ...jest.requireActual('../src/services/accountable-root'),
+  resolveAccountableRoot: jest.fn(async (ref: string) => ({
+    ok: true,
+    root: { kind: 'custodian', agentId: ref, subjectId: ref, wallet: '0x00000000000000000000000000000000000000c1', assurance: 'operator-assigned', via: 'own-custodian', grantPath: [] },
+  })),
+}));
+
+
 // `rpc` is needed by versioningMiddleware, which runs before every route and
 // lazily ensures the api_key_versions table exists — without it the request 500s
 // long before reaching the handler under test.

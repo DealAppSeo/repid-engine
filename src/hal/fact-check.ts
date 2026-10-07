@@ -1350,6 +1350,17 @@ export async function factCheck(
       decision = 'flagged';
       quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be '${baseDecision}' (score ${hal_score.toFixed(3)}) held at 'flagged' — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'} to veto or to clear.`;
     }
+    // ...AND TOO FEW CHECKERS CANNOT CLEAR EITHER [F2, 2026-10-07]. The comment above has always
+    // said so; the code only held back vetoes. A 'clean' from one family — or from none, when every
+    // checker errored and the score fell back — stayed 'clean' and paid the producer +1 to +3
+    // (scoring/repid-delta.ts). Two families, or it is not checked: 'abstain' is the decision that
+    // already means "HAL did not judge it" everywhere downstream (no delta, 'unscored' on the
+    // public API, never 'ready' for publishing), exactly as verdict mode above treats a missing
+    // TRUE quorum.
+    if (quorumCount < MIN_QUORUM_FOR_VETO && baseDecision === 'clean') {
+      decision = 'abstain';
+      quorum_note = `Low quorum (${familyAware ? families_used + ' famil' + (families_used === 1 ? 'y' : 'ies') + ' [' + families.join(',') + ']' : providers_used + ' providers'}/${attemptedForSummary} attempted): would-be 'clean' (score ${hal_score.toFixed(3)}) is NOT CHECKED, not a pass — need >= ${MIN_QUORUM_FOR_VETO} independent ${familyAware ? 'families' : 'providers'} to clear.`;
+    }
 
     // CC1 verdict-driven gate (HAL_VERDICT_DRIVEN_VETO, default OFF): a 'vetoed' baseDecision with
     // no FALSE quorum downgrades to 'flagged' (the all-UNCERTAIN @0.5 over-veto W6 found).
