@@ -47,6 +47,7 @@ export const OWNER_ACTIONS = {
   'keys.create': 'Issue a new API key for an agent you own',
   'stake.withdraw': 'Withdraw stake from your account',
   'stake.deposit': 'Place a stake for an agent you answer for (a prediction-market stake: it backs no spending)',
+  'stake.sponsor': 'Sponsor another agent, putting up collateral from an agent you answer for',
 } as const;
 export type OwnerAction = keyof typeof OWNER_ACTIONS;
 

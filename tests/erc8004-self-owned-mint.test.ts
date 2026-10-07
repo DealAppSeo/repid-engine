@@ -186,19 +186,24 @@ describe('the route answers a refusal with 409, not 500', () => {
     const app = express();
     app.use(express.json());
     const before = process.env.ERC8004_MINTER_PRIVATE_KEY;
+    const beforeKeys = process.env.REPID_API_KEYS;
     process.env.ERC8004_MINTER_PRIVATE_KEY = MINTER_KEY;
+    // Since F-6 only the operator or the agent's own key may mint; this test is about the 409.
+    process.env.REPID_API_KEYS = 'operator-key:pro';
     try {
       const router = createAgentsOnchainRouter({} as any);
       // Swap in the fake minter the router would otherwise build from env.
       const spy = jestSpyMint(minter);
       app.use('/api/v1/agents', router);
-      const res = await request(app).post('/api/v1/agents/agent-1/mint').send({});
+      const res = await request(app).post('/api/v1/agents/agent-1/mint').set('x-api-key', 'operator-key').send({});
       spy.restore();
       expect(res.status).toBe(409);
       expect(res.body.error).toMatch(/has no wallet of its own/);
     } finally {
       if (before === undefined) delete process.env.ERC8004_MINTER_PRIVATE_KEY;
       else process.env.ERC8004_MINTER_PRIVATE_KEY = before;
+      if (beforeKeys === undefined) delete process.env.REPID_API_KEYS;
+      else process.env.REPID_API_KEYS = beforeKeys;
     }
   });
 });
