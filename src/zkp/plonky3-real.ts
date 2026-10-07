@@ -9,6 +9,7 @@
  * to consumers.
  */
 
+import { proverAuthHeaders } from '../config/prover';
 import { createHmac } from 'crypto';
 import { markDegraded } from '../lib/degraded';
 import { buildAgentLogRow } from '../engine/agent-log-row';
@@ -92,7 +93,7 @@ export async function generateProofReal(
   const url = PROVER_URL.replace(/\/$/, '') + '/prove/trade_auth';
   const init: RequestInit = {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...proverAuthHeaders() },
     body: JSON.stringify(body),
   };
 

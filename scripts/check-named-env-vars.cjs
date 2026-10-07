@@ -86,6 +86,8 @@ const ALLOWLIST = {
   // ── composed / indirect src/ reads the generator cannot see ──────────────
   ONLY_ATTESTATIONS_LEAVE:
     'Read as env.ONLY_ATTESTATIONS_LEAVE inside the one shared reader (src/selfhost/egress-guard.ts, #1177), which takes env as a parameter; generator only captures literal process.env.NAME.',
+  PROVER_AUTH_TOKEN:
+    'The prover\'s own variable (DealAppSeo/HyperDAG-core services/zkp-postcard). Named in src/config/prover.ts only to say it must hold the same value as ZKP_SERVICE_TOKEN.',
   CLASSIFY_FREE_VOTES:
     'B15 kill switch, read as env.CLASSIFY_FREE_VOTES in src/classify/free-votes.ts (env passed as a parameter for tests); generator misses it.',
   CLOUDFLARE_WORKERS_AI_TOKEN:
