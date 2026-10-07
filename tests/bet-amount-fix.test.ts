@@ -29,6 +29,12 @@ describe('Bet Amount Fix + Authority Scale', () => {
   });
 
   describe('Bug 1: POST /demo/run-round-anonymous reads bet_amount from body', () => {
+    // Since F-13 the route needs the operator key and has a daily cap; this block tests what is behind them.
+    beforeEach(() => {
+      process.env.REPID_API_KEYS = 'operator-key:pro';
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      require('../src/routes/v1').__resetDemoRoundCap();
+    });
     it('Sends { bet_amount: "999" } and expects success', async () => {
       (runRoundAnonymous as jest.Mock).mockResolvedValue({
         ok: true,
@@ -37,6 +43,7 @@ describe('Bet Amount Fix + Authority Scale', () => {
 
       const res = await request(app)
         .post('/api/v1/demo/run-round-anonymous')
+        .set('x-api-key', 'operator-key')
         .send({ bet_amount: '999', token: 'testToken' });
 
       expect(res.status).toBe(200);
@@ -59,6 +66,7 @@ describe('Bet Amount Fix + Authority Scale', () => {
 
       const res = await request(app)
         .post('/api/v1/demo/run-round-anonymous')
+        .set('x-api-key', 'operator-key')
         .send({ bet_amount: '100000000', token: 'testToken' });
 
       expect(res.status).toBe(400);

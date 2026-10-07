@@ -17,7 +17,7 @@
  * scores update on resolve.
  */
 
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { snapshotAuthority } from './stake-vault';
@@ -26,7 +26,18 @@ import { generateTradeAuthProof } from './plonky3-bridge';
 import { updateWisdomScore } from './wisdom-score';
 import { recordCharacterEvent, getCurrentCharacter } from './character-score';
 
-const ORACLE_HMAC_SECRET = process.env.ORACLE_HMAC_SECRET || 'reponomics-default-oracle-secret';
+// [F-13, 2026-10-07] NO DEFAULT. This used to fall back to a fixed string, and this repo is public:
+// anyone could sign any outcome for any bet and settle it through the keyless POST /bet/resolve,
+// which writes RepID. A secret with a published default is no secret. Unset now means nothing is
+// signed and every signature is refused; it never means "use the public string".
+function oracleSecret(): string {
+  return process.env.ORACLE_HMAC_SECRET || '';
+}
+export function oracleSecretConfigured(): boolean {
+  return oracleSecret().length > 0;
+}
+export const ORACLE_SECRET_MISSING =
+  'ORACLE_HMAC_SECRET is not set, so no bet outcome can be signed or settled';
 
 export interface PlaceBetInput {
   agentId: string;                       // UUID
@@ -139,11 +150,16 @@ export async function placeBet(input: PlaceBetInput): Promise<PlaceBetResult> {
 // ---------------------------------------------------------------------------
 
 export function signOracleOutcome(betId: string, outcome: boolean): string {
-  return createHmac('sha256', ORACLE_HMAC_SECRET).update(`${betId}|${outcome ? '1' : '0'}`).digest('hex');
+  const secret = oracleSecret();
+  if (!secret) throw new Error(ORACLE_SECRET_MISSING);
+  return createHmac('sha256', secret).update(`${betId}|${outcome ? '1' : '0'}`).digest('hex');
 }
 
 export function verifyOracleSignature(betId: string, outcome: boolean, signature: string): boolean {
-  return signOracleOutcome(betId, outcome) === signature;
+  if (!oracleSecretConfigured()) return false;
+  const expected = Buffer.from(signOracleOutcome(betId, outcome), 'hex');
+  const given = Buffer.from(String(signature ?? ''), 'hex');
+  return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
 /**
@@ -189,7 +205,8 @@ export async function deriveAndSignOracleOutcome(betId: string): Promise<{
     // Last-line catch — deriveOutcomeFromChain itself never throws,
     // but if a future change made it throw we still keep the resolver
     // alive with a deterministic HMAC fallback on the betId.
-    const seed = createHmac('sha256', ORACLE_HMAC_SECRET).update(betId).digest('hex');
+    if (!oracleSecretConfigured()) throw new Error(ORACLE_SECRET_MISSING);
+    const seed = createHmac('sha256', oracleSecret()).update(betId).digest('hex');
     const outcome = parseInt(seed.slice(-2), 16) % 2 === 1;
     return {
       outcome,

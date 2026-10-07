@@ -96,7 +96,11 @@ describe('Guided Tour Endpoints', () => {
       error: errorJson
     });
 
-    const res = await request(app).post('/api/v1/demo/run-round-anonymous').send({});
+    // Since F-13 the route needs the operator key and has a daily cap; this tests what is behind them.
+    process.env.REPID_API_KEYS = 'operator-key:pro';
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('../src/routes/v1').__resetDemoRoundCap();
+    const res = await request(app).post('/api/v1/demo/run-round-anonymous').set('x-api-key', 'operator-key').send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('BET_EXCEEDS_AUTHORITY');
     expect(res.body.details.attempted_bet_raw).toBe(1650000);

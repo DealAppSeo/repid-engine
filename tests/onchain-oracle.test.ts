@@ -27,6 +27,8 @@ beforeEach(() => {
   mockGetBlock = jest.fn();
   mockDestroy = jest.fn();
   process.env.BASE_SEPOLIA_RPC_URL = 'https://sepolia.base.org';
+  // F-13: the oracle secret has no public default any more; these tests need one configured.
+  process.env.ORACLE_HMAC_SECRET = 'test-only-oracle-secret';
   jest.doMock('ethers', () => {
     const actual = jest.requireActual('ethers');
     class MockProvider {

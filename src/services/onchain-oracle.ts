@@ -18,7 +18,8 @@ import { ethers } from 'ethers';
 import { createHmac } from 'crypto';
 
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
-const HMAC_SECRET = process.env.ORACLE_HMAC_SECRET || 'reponomics-default-oracle-secret';
+// [F-13, 2026-10-07] No default: a published fallback secret let anyone predict and sign the
+// fallback outcome. Unset means the HMAC fallback is unavailable (it throws), never the public string.
 const RPC_TIMEOUT_MS = 5000;
 
 export type OracleSource = 'onchain_blockhash' | 'fallback_hmac';
@@ -40,7 +41,9 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 function hmacFallback(seed: string): OracleResult {
-  const h = createHmac('sha256', HMAC_SECRET).update(seed).digest('hex');
+  const secret = process.env.ORACLE_HMAC_SECRET || '';
+  if (!secret) throw new Error('ORACLE_HMAC_SECRET is not set, so no fallback oracle outcome can be derived');
+  const h = createHmac('sha256', secret).update(seed).digest('hex');
   const lastByte = parseInt(h.slice(-2), 16);
   return {
     outcome: (lastByte % 2) as 0 | 1,

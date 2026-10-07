@@ -156,7 +156,8 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return next();
   }
   if (req.method === 'POST' && req.path === '/api/v1/demo/two-builder/bootstrap') return next();
-  if (req.method === 'POST' && req.path === '/api/v1/demo/run-round-anonymous') return next();
+  // [F-13] /demo/run-round-anonymous is NOT bypassed any more: it settles bets and writes RepID on-chain,
+  // so it needs a key here and the operator key in the route.
   if (req.method === 'POST' && req.path === '/api/v1/builder/token-signup') return next();
   // /stake/deposit serves BOTH signed-out demo traffic and wallet-bearing real
   // deposits, which a single API-key check cannot tell apart — so it is bypassed
@@ -182,7 +183,8 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'GET' && /^\/api\/v1\/negotiation\/rfqs\/[^/]+$/.test(req.path)) return next();
   if (req.method === 'POST' && req.path === '/api/v1/tip/request') return next();
   if (req.method === 'POST' && /^\/api\/v1\/tip\/deliver\/[^/]+$/.test(req.path)) return next();
-  if (req.method === 'POST' && req.path === '/api/v1/bet/place') return next();
+  // [F-13] /bet/place is NOT bypassed any more: it placed a bet in ANY agent's name with no key, and the
+  // bet later settles against that agent's RepID. A bound agent key can now bet only as its own agent.
   if (req.method === 'POST' && req.path === '/api/v1/bet/resolve') return next();
   // /trader/round/start is gated by Sean-signature (not API key) â€” handled in the route.
   if (req.method === 'POST' && req.path === '/api/v1/trader/round/start') return next();
