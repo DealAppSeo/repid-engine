@@ -28,6 +28,18 @@ describe('isAllowedOrigin', () => {
     ]) expect(isAllowedOrigin(o)).toBe(false);
   });
 
+  it('repid.dev: exactly its two origins, never a pattern (Sean, 2026-10-07: "add that domain only")', () => {
+    expect(isAllowedOrigin('https://www.repid.dev')).toBe(true);
+    expect(isAllowedOrigin('https://repid.dev')).toBe(true);
+    for (const o of [
+      'http://www.repid.dev',            // not https
+      'https://app.repid.dev',           // another subdomain is not listed
+      'https://repid.dev.evil.com',
+      'https://evilrepid.dev',
+      'https://repid.com',
+    ]) expect(isAllowedOrigin(o)).toBe(false);
+  });
+
   it('the pattern is anchored at both ends', () => {
     expect(TRUST_DEV_ORIGIN.test('https://trustchat.dev')).toBe(true);
     expect(TRUST_DEV_ORIGIN.test('xhttps://trustchat.devx')).toBe(false);

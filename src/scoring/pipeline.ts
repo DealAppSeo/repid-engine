@@ -56,6 +56,7 @@ import {
 } from '../services/proof-enqueue-filter';
 import { resolveIssuerIdentity } from './issuer-identity';
 import { shadowProofTier } from './proof-tier-shadow'; // item 11 shadow — inert unless PROOF_TIER_SHADOW_ENABLED=true
+import { proverBaseUrl } from '../config/prover';
 
 /**
  * HAL scoring path selector for the live score-event pipeline.
@@ -745,11 +746,11 @@ export async function runScoreEvent(
         agent_id: input.agent_id,
         event_id: score_event_id,
         status: 'pending',
-        zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app',
+        zkp_service_url: proverBaseUrl(),
       })
       .then(
         () => {
-          fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
+          fetch(`${proverBaseUrl()}/zkp/repid-proof`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
@@ -987,10 +988,10 @@ export async function applyValidationEvent(
         agent_id,
         event_id: (eventRow as any).id,
         status: 'pending',
-        zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app',
+        zkp_service_url: proverBaseUrl(),
       })
       .then(() => {
-        fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
+        fetch(`${proverBaseUrl()}/zkp/repid-proof`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 

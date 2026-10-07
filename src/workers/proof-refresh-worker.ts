@@ -38,6 +38,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { shouldParkForHalt } from '../services/emergency-halt';
+import { PINNED_PROVER_URL } from '../config/prover';
 
 const WORKER = 'proof-refresh';
 
@@ -48,7 +49,7 @@ export const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** First tick lands a few minutes after boot, not at boot (crash-loop safety). */
 const FIRST_TICK_DELAY_MS = 5 * 60 * 1000;
 const PROVER_TIMEOUT_MS = 30_000;
-const DEFAULT_PROVER_URL = 'https://zkp-postcard-production.up.railway.app';
+const DEFAULT_PROVER_URL = PINNED_PROVER_URL;
 
 export interface RefreshCandidate {
   agent_id: string;
