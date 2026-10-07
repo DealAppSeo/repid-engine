@@ -29,6 +29,7 @@ import { insertScoreEvent } from '../scoring/score-event-writer';
 import { publicIdentityFields } from '../identity/public-fields';
 import { checkAndRecordDedup, __resetLocalDedupForTests } from '../services/register-dedup';
 import { trustedClientIp } from '../middleware/client-ip';
+import { proverBaseUrl } from '../config/prover';
 
 const router = Router();
 
@@ -320,7 +321,7 @@ router.post('/register', async (req: Request, res: Response) => {
       }
 
       const jobId = crypto.randomUUID();
-      const zkpUrl = process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app';
+      const zkpUrl = proverBaseUrl();
       const { error: queueErr } = await db.from('repid_proof_queue').insert({
         job_id: jobId,
         agent_id: agentId,
@@ -934,10 +935,10 @@ router.post('/:id/score-event', requireApiKey(['score_event']), async (req: Requ
       agent_id: agentId,
       event_id: eventRow?.id,
       status: 'pending',
-      zkp_service_url: process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'
+      zkp_service_url: proverBaseUrl()
     });
     
-    fetch(`${process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app'}/zkp/repid-proof`, {
+    fetch(`${proverBaseUrl()}/zkp/repid-proof`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 

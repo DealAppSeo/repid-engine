@@ -3,6 +3,7 @@ import express, { type Request, type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { createProofDrainService } from '../services/proof-drain-service';
 import { pgPing } from '../db/direct-pg';
+import { proverBaseUrl } from '../config/prover';
 
 dotenv.config();
 
@@ -27,7 +28,7 @@ async function main(): Promise<void> {
     process.env.SUPABASE_SECRET_KEY ||
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     requireEnv('SUPABASE_SERVICE_KEY');
-  const zkpServiceUrl = process.env.ZKP_SERVICE_URL || 'https://zkp-postcard-production.up.railway.app';
+  const zkpServiceUrl = proverBaseUrl();
 
   const pollIntervalMs = process.env.PROOF_DRAIN_POLL_INTERVAL_MS ? parseInt(process.env.PROOF_DRAIN_POLL_INTERVAL_MS, 10) : 2000;
   const idleSleepMs = process.env.PROOF_DRAIN_IDLE_SLEEP_MS ? parseInt(process.env.PROOF_DRAIN_IDLE_SLEEP_MS, 10) : 10000;

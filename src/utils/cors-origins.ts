@@ -14,6 +14,12 @@ export const allowedOrigins = [
   'https://www.trustshell.dev',
   'https://hyperdag.org',
   'https://www.hyperdag.org',
+  // repid.dev calls the engine from the browser (its /trade, /start and onboarding pages). Measured
+  // 2026-10-07: Chromium refused that call from https://www.repid.dev ("No 'Access-Control-Allow-
+  // Origin' header"). Exact origins only, by Sean's decision: this domain, not a pattern. The apex
+  // redirects to www today; it is listed so a change to that redirect does not break the site.
+  'https://repid.dev',
+  'https://www.repid.dev',
   'http://localhost:3000',
   'http://localhost:3001',
 ];

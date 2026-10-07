@@ -73,6 +73,7 @@ import discoveryRouter from './routes/discovery';
 import agentCardRouter from './routes/agent-card';
 import { createAgentsOnchainRouter } from './routes/agents-onchain';
 import { createAgentSpendRouter } from './routes/agent-spend';
+import { createLaneRouter } from './routes/lane';
 import { createAgentRecallRouter } from './routes/agent-recall';
 import { createAgentRegistrationRouter } from './routes/agents-registration';
 import { createAgentsReputationRouter } from './routes/agents-reputation';
@@ -226,6 +227,13 @@ const scoreLimiter = rateLimit({
  * registers ACCOUNTS in bulk, and a bypass on the exact surface this bounds would
  * hand the hole back to anyone holding the key.
  */
+const laneLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+  message: { error: 'too_many_requests', message: 'Too many lane checks from this network. Try again in a minute.' },
+});
+
 const accountConnectLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,   // 1 hour
   max: 5,
@@ -496,6 +504,10 @@ app.use('/api/v1', receiptPublicRouter);
 app.use('/api/v1/account/connect', accountConnectLimiter);
 app.use('/api/v1', humanBindStagingRouter);
 app.use('/api/v1', byokRouter);
+// Practice lane, slice P1 (2026-10-07): public and read-only, like the owner route above. One chain
+// read per request (the allowance), so it has its own limiter, mounted immediately before it.
+app.use('/api/v1/lane', laneLimiter);
+app.use('/api/v1', createLaneRouter());
 // Live-numbers (2026-07-07): PUBLIC read-only observability surface the
 // TrustShell.dev landing reads for its minted-agent leaderboard + on-chain
 // stats block. Two GETs: /api/v1/agents/minted and
