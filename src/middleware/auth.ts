@@ -489,7 +489,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       // If lastPart is not a UUID, check if it matches the bound agent name
       if (boundAgentName && lastPart.toLowerCase() !== boundAgentName.toLowerCase() &&
           // filter out generic route paths
-          !['verify', 'complete', 'status', 'receipts', 'register', 'score-event', 'card', 'mint-status', 'onchain', 'recall', 'recent', 'registration.json', 'payload.json', 'keys'].includes(lastPart.toLowerCase())) {
+          !['verify', 'complete', 'status', 'receipts', 'register', 'score-event', 'card', 'mint-status', 'onchain', 'recall', 'recent', 'registration.json', 'payload.json', 'keys', 'spend'].includes(lastPart.toLowerCase())) {
         return res.status(403).json({ error: 'Forbidden: agent identity in path mismatch (API key is bound to a different agent identity)' });
       }
     }
