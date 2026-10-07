@@ -36,7 +36,7 @@ describe('Inclusion AIR — valid witnesses pass', () => {
     const tree = buildTree(10n);
     const w = tree.membershipProof(10n);
     const air = generateInclusionTrace(w);
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root: tree.root() });
     expect(result.ok).toBe(true);
   });
 
@@ -44,7 +44,7 @@ describe('Inclusion AIR — valid witnesses pass', () => {
     const tree = buildTree(5n, 10n, 20n, 30n, 50n);
     const w = tree.membershipProof(20n);
     const air = generateInclusionTrace(w);
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root: tree.root() });
     expect(result.ok).toBe(true);
     // Sanity: claimed root matches the tree root
     expect(air.claimed_root).toBe(tree.root());
@@ -55,14 +55,14 @@ describe('Inclusion AIR — valid witnesses pass', () => {
     const w = tree.membershipProof(2n);
     const air = generateInclusionTrace(w);
     expect(air.claimed_root).toBe(tree.root());
-    expect(verifyInclusionAIR(air).ok).toBe(true);
+    expect(verifyInclusionAIR(air, { root: tree.root() }).ok).toBe(true);
   });
 
   test('boundary values — very large value', () => {
     const tree = buildTree(BigInt(2 ** 53) - 1n, BigInt(2 ** 53));
     const w = tree.membershipProof(BigInt(2 ** 53));
     const air = generateInclusionTrace(w);
-    expect(verifyInclusionAIR(air).ok).toBe(true);
+    expect(verifyInclusionAIR(air, { root: tree.root() }).ok).toBe(true);
   });
 });
 
@@ -71,18 +71,17 @@ describe('Inclusion AIR — valid witnesses pass', () => {
 // ---------------------------------------------------------------------------
 
 describe('Inclusion AIR — tampered traces fail', () => {
+  const tree = buildTree(5n, 10n, 20n);
+  const root = tree.root();
   function tracePair() {
-    const tree = buildTree(5n, 10n, 20n);
-    const w = tree.membershipProof(10n);
-    const air = generateInclusionTrace(w);
-    return air;
+    return generateInclusionTrace(tree.membershipProof(10n));
   }
 
   test('tampered current_out (R0 constraint)', () => {
     const air = tracePair();
     // Flip one bit in the first row's output hash (hex string swap)
     air.rows[0] = { ...air.rows[0]!, current_out: '0x' + 'ff'.repeat(32) };
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root });
     expect(result.ok).toBe(false);
     expect(result.failure).toMatch(/R0|C0|B1/);
   });
@@ -95,7 +94,7 @@ describe('Inclusion AIR — tampered traces fail', () => {
     const fakeSibling = '0x' + '70000000'.repeat(8);
     air.rows[0] = { ...row, sibling: fakeSibling };
     // current_out was computed with the old sibling — now R0 will fail
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root });
     expect(result.ok).toBe(false);
     expect(result.failure).toContain('R0');
   });
@@ -106,7 +105,7 @@ describe('Inclusion AIR — tampered traces fail', () => {
     // Flip the direction
     air.rows[0] = { ...row, sibling_left: row.sibling_left === 0 ? 1 : 0 };
     // current_out no longer matches the hash with swapped order
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root });
     // If the direction was already the one that produces the same result (same sibling
     // on both sides is impossible for distinct hashes), must fail
     if (!result.ok) {
@@ -119,7 +118,7 @@ describe('Inclusion AIR — tampered traces fail', () => {
   test('wrong claimed root (B1 constraint)', () => {
     const air = tracePair();
     air.claimed_root = '0x' + 'cc'.repeat(32);
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root });
     expect(result.ok).toBe(false);
     expect(result.failure).toContain('B1');
   });
@@ -127,7 +126,7 @@ describe('Inclusion AIR — tampered traces fail', () => {
   test('wrong leaf_digest (B0 constraint)', () => {
     const air = tracePair();
     air.leaf_digest = '0x' + 'dd'.repeat(32);
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root });
     expect(result.ok).toBe(false);
     expect(result.failure).toContain('B0');
   });
@@ -138,7 +137,7 @@ describe('Inclusion AIR — tampered traces fail', () => {
     // Break row[0].current_out ≠ row[1].current_in by patching row[1]
     const r1 = air.rows[1]!;
     air.rows[1] = { ...r1, current_in: '0x' + 'ee'.repeat(32) };
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root });
     expect(result.ok).toBe(false);
     expect(result.failure).toMatch(/C0|R0/);
   });
@@ -147,7 +146,7 @@ describe('Inclusion AIR — tampered traces fail', () => {
     const air = tracePair();
     // Force a non-binary sibling_left (2 is not in {0,1})
     (air.rows[0] as MerkleAIRRow & { sibling_left: number }).sibling_left = 2;
-    const result = verifyInclusionAIR(air);
+    const result = verifyInclusionAIR(air, { root });
     expect(result.ok).toBe(false);
     expect(result.failure).toContain('R1');
   });
@@ -162,7 +161,7 @@ describe('Non-membership AIR — valid absent values pass', () => {
     const tree = buildTree(5n, 20n);
     const w = tree.nonMembershipProof(10n); // 5 < 10 < 20
     const air = generateNonMembershipTrace(10n, w);
-    const result = verifyNonMembershipAIR(air);
+    const result = verifyNonMembershipAIR(air, { root: tree.root() });
     expect(result.ok).toBe(true);
   });
 
@@ -171,7 +170,7 @@ describe('Non-membership AIR — valid absent values pass', () => {
     // 1n is absent; sentinel (value=0) is the low-leaf
     const w = tree.nonMembershipProof(1n);
     const air = generateNonMembershipTrace(1n, w);
-    const result = verifyNonMembershipAIR(air);
+    const result = verifyNonMembershipAIR(air, { root: tree.root() });
     expect(result.ok).toBe(true);
   });
 
@@ -180,7 +179,7 @@ describe('Non-membership AIR — valid absent values pass', () => {
     const w = tree.nonMembershipProof(9999n); // past the last active
     const air = generateNonMembershipTrace(9999n, w);
     expect(air.low_leaf_next).toBe(0n); // confirms tail
-    const result = verifyNonMembershipAIR(air);
+    const result = verifyNonMembershipAIR(air, { root: tree.root() });
     expect(result.ok).toBe(true);
   });
 
@@ -189,7 +188,7 @@ describe('Non-membership AIR — valid absent values pass', () => {
     tree.revoke(10n);
     const w = tree.nonMembershipProof(10n);
     const air = generateNonMembershipTrace(10n, w);
-    const result = verifyNonMembershipAIR(air);
+    const result = verifyNonMembershipAIR(air, { root: tree.root() });
     expect(result.ok).toBe(true);
   });
 });
@@ -205,7 +204,7 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
     const air = generateNonMembershipTrace(7n, w);
     // Forge: claim target = 4 (which is ≤ low_leaf.value 5)
     const tampered = { ...air, target_value: 4n };
-    const result = verifyNonMembershipAIR(tampered);
+    const result = verifyNonMembershipAIR(tampered, { root: tree.root() });
     expect(result.ok).toBe(false);
     expect(result.failure).toMatch(/ordering/);
   });
@@ -216,7 +215,7 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
     const air = generateNonMembershipTrace(7n, w);
     // Forge: claim target = 15 (which is ≥ low_leaf.next 10)
     const tampered = { ...air, target_value: 15n };
-    const result = verifyNonMembershipAIR(tampered);
+    const result = verifyNonMembershipAIR(tampered, { root: tree.root() });
     expect(result.ok).toBe(false);
     expect(result.failure).toMatch(/ordering/);
   });
@@ -228,7 +227,7 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
     // Force tombstoned flag without updating the committed digest — now caught at the
     // digest-binding step (step 1b) before the tombstone check.
     const tampered = { ...air, low_leaf_tombstoned: true };
-    const result = verifyNonMembershipAIR(tampered);
+    const result = verifyNonMembershipAIR(tampered, { root: tree.root() });
     expect(result.ok).toBe(false);
     // Digest binding catches the tampered field; "do not match" is the expected error.
     expect(result.failure).toMatch(/do not match/);
@@ -248,7 +247,7 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
       target_value: 10n,
       low_leaf_next: 15n, // would make ordering 5 < 10 < 15 pass
     };
-    const result = verifyNonMembershipAIR(forged);
+    const result = verifyNonMembershipAIR(forged, { root: tree.root() });
     expect(result.ok).toBe(false);
     // Must be caught by digest binding (step 1b), not by the ordering check
     expect(result.failure).toMatch(/do not match/);
@@ -267,12 +266,14 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
     ]);
     const planted = { lowLeaf: (tree as unknown as { witnessAt(i: number): any }).witnessAt(2) };
     for (const present of [5n, 10n]) {
-      const result = verifyNonMembershipAIR(generateNonMembershipTrace(present, planted));
+      const result = verifyNonMembershipAIR(generateNonMembershipTrace(present, planted), { root: tree.root() });
       expect(result.ok).toBe(false);
       expect(result.failure).toMatch(/leftmost/);
     }
     // The real sentinel, in the leftmost slot, still proves a genuinely absent value.
-    const honest = verifyNonMembershipAIR(generateNonMembershipTrace(3n, tree.nonMembershipProof(3n)));
+    const honest = verifyNonMembershipAIR(generateNonMembershipTrace(3n, tree.nonMembershipProof(3n)), {
+      root: tree.root(),
+    });
     expect(honest).toEqual({ ok: true });
   });
 
@@ -288,7 +289,7 @@ describe('Non-membership AIR — invalid witnesses fail', () => {
       };
     }
     air.low_leaf_inclusion.claimed_root = '0x' + 'ff'.repeat(32);
-    const result = verifyNonMembershipAIR(air);
+    const result = verifyNonMembershipAIR(air, { root: tree.root() });
     expect(result.ok).toBe(false);
   });
 });
@@ -307,7 +308,7 @@ describe('Batched AIR', () => {
         generateInclusionTrace(tree.membershipProof(3n)),
       ],
     };
-    expect(verifyBatchedMerkleAIR(batch).ok).toBe(true);
+    expect(verifyBatchedMerkleAIR(batch, { root: tree.root() }).ok).toBe(true);
   });
 
   test('batch with one non-membership passes', () => {
@@ -319,7 +320,7 @@ describe('Batched AIR', () => {
         generateInclusionTrace(tree.membershipProof(10n)),
       ],
     };
-    expect(verifyBatchedMerkleAIR(batch).ok).toBe(true);
+    expect(verifyBatchedMerkleAIR(batch, { root: tree.root() }).ok).toBe(true);
   });
 
   test('batch fails if one inclusion is tampered', () => {
@@ -332,12 +333,56 @@ describe('Batched AIR', () => {
         badAir,
       ],
     };
-    const result = verifyBatchedMerkleAIR(batch);
+    const result = verifyBatchedMerkleAIR(batch, { root: tree.root() });
     expect(result.ok).toBe(false);
     expect(result.failure).toContain('proof[1]');
   });
 
   test('empty batch is ok', () => {
-    expect(verifyBatchedMerkleAIR({ proofs: [] }).ok).toBe(true);
+    expect(verifyBatchedMerkleAIR({ proofs: [] }, { root: buildTree(1n).root() }).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trusted root (B2) — Strix MEDIUM: a self-consistent trace from ANOTHER tree must fail
+// ---------------------------------------------------------------------------
+
+describe('Trusted root (B2): claimed_root must be the root the verifier trusts', () => {
+  // The committed tree holds 5, 10 and 20. A forger builds its own tree, takes an honest trace
+  // from it, and names that tree's root as claimed_root. Every per-row, continuity and B0/B1
+  // constraint holds, because the trace really is consistent. Only the trusted root catches it.
+  const committed = buildTree(5n, 10n, 20n);
+  const root = committed.root();
+
+  test('inclusion of a value the committed tree does not hold is refused', () => {
+    const forgerTree = buildTree(5n, 99n, 20n);
+    const forged = generateInclusionTrace(forgerTree.membershipProof(99n));
+    const result = verifyInclusionAIR(forged, { root });
+    expect(result.ok).toBe(false);
+    expect(result.failure).toMatch(/^B2/);
+    // The same trace against its own tree's root passes: the forgery is internally consistent,
+    // which is why B0, R0, R1, C0 and B1 cannot catch it.
+    expect(verifyInclusionAIR(forged, { root: forgerTree.root() })).toEqual({ ok: true });
+  });
+
+  test('non-membership of a value the committed tree DOES hold is refused', () => {
+    const forgerTree = buildTree(5n, 20n); // no 10
+    const forged = generateNonMembershipTrace(10n, forgerTree.nonMembershipProof(10n));
+    const result = verifyNonMembershipAIR(forged, { root });
+    expect(result.ok).toBe(false);
+    expect(result.failure).toMatch(/B2/);
+  });
+
+  test('one forged proof fails the whole batch', () => {
+    const forgerTree = buildTree(5n, 99n, 20n);
+    const batch = {
+      proofs: [
+        generateInclusionTrace(committed.membershipProof(5n)),
+        generateInclusionTrace(forgerTree.membershipProof(99n)),
+      ],
+    };
+    const result = verifyBatchedMerkleAIR(batch, { root });
+    expect(result.ok).toBe(false);
+    expect(result.failure).toMatch(/^proof\[1\]: B2/);
   });
 });
