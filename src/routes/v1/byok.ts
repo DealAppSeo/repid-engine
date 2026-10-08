@@ -394,6 +394,139 @@ router.get('/human/bind/message', (req: Request, res: Response) => {
   return res.json({ message: bindingMessage({ wallet, agentId, scope: SCOPE_OWNERSHIP }), scope: SCOPE_OWNERSHIP });
 });
 
+/**
+ * Public preflight: what claiming THIS agent will take, and what state it is in —
+ * answered BEFORE the first wallet prompt, so a person decides with the facts in
+ * front of them instead of discovering them one popup at a time.
+ *
+ * It mints no credential and takes none: every field here is already public
+ * (the owner wallet via GET /agents/:id/owner, the RepID via GET /repid/*), so this
+ * only aggregates them into one honest "here is what happens next". `wallet` is
+ * optional and used ONLY to tell the caller "you already own this" — it is not a
+ * proof and grants nothing.
+ *
+ * THREE OUTCOMES, never two. If the database cannot be read, this answers 503
+ * `not_checked` rather than guessing a state — saying "unclaimed" on a failed read
+ * would be the fail-open overclaim the /owner route exists to avoid. And it never
+ * softens the cost: the two deliberate signatures and the agent's own key are named
+ * as requirements, because an unexplained second popup reads as a bug and a claim
+ * that silently needs a key the person does not have is a dead end.
+ */
+router.get('/human/bind/preflight', async (req: Request, res: Response) => {
+  const agentId = String(req.query.agent_id ?? '').trim();
+  if (!agentId) {
+    return res.status(400).json({ error: 'bad_request', message: 'agent_id is required.' });
+  }
+  const walletQ = String(req.query.wallet ?? '').trim().toLowerCase();
+
+  // Public, honest about the two prompts and the agent key — the same cost the
+  // bind path will charge. Never advertised as cheaper than it is.
+  const requires = {
+    agent_key: true,
+    wallet_signatures: 2,
+    wallet_signature_steps: ['auth', 'binding'] as const,
+    asks_for_email_or_name: false,
+    instant: true, // no cooldown on testnet — the binding is live the moment it is written
+  };
+
+  // Does the agent exist, and what is its PUBLIC standing (what you are claiming)?
+  let agentRow: { id: string; agent_name: string | null; current_repid: number | null; tier: string | null } | null;
+  try {
+    const { data, error } = await db
+      .from('repid_agents')
+      .select('id, agent_name, current_repid, tier')
+      .eq('id', agentId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    agentRow = (data as typeof agentRow) ?? null;
+  } catch (e: any) {
+    return res.status(503).json({
+      error: 'not_checked',
+      message: `Could not read this agent, so nothing is claimed about its state. ${e?.message ?? ''}`.trim(),
+    });
+  }
+
+  if (!agentRow) {
+    return res.json({
+      agent_id: agentId,
+      bind_enabled: HUMAN_AGENT_BIND_ENABLED,
+      exists: false,
+      agent: null,
+      ownership: { state: 'UNKNOWN' as const },
+      claimable: false,
+      reason: 'agent_not_found' as const,
+      requires,
+      next: 'No agent with that ID exists. Check the ID, or create an agent first.',
+    });
+  }
+
+  // Ownership: PROVEN (signed) vs LINKED (administrative, nobody signed) — kept apart
+  // exactly as GET /agents/:id/owner does. A failed read is a 503, not "unowned".
+  let owner: Awaited<ReturnType<typeof ownerOfAgent>>;
+  let link: Awaited<ReturnType<typeof linkedButUnbound>>;
+  try {
+    owner = await ownerOfAgent(agentId);
+    link = await linkedButUnbound(agentId);
+  } catch (e: any) {
+    return res.status(503).json({
+      error: 'not_checked',
+      message: `Could not read who owns this agent, so nothing is claimed about it. ${e?.message ?? ''}`.trim(),
+    });
+  }
+
+  const agent = {
+    name: agentRow.agent_name,
+    repid: agentRow.current_repid,
+    tier: agentRow.tier,
+  };
+
+  if (owner) {
+    const ownerWallet = String(owner.human_wallet ?? '').toLowerCase();
+    const ownedByYou = !!walletQ && ownerWallet === walletQ;
+    return res.json({
+      agent_id: agentId,
+      bind_enabled: HUMAN_AGENT_BIND_ENABLED,
+      exists: true,
+      agent,
+      ownership: {
+        state: 'OWNED' as const,
+        owner_wallet: owner.human_wallet ?? null, // public — the /owner route returns it too
+        owner_kind: owner.owner_kind ?? null,
+        bound_at: owner.bound_at ?? null,
+        owned_by_you: ownedByYou,
+      },
+      claimable: false,
+      reason: 'already_owned' as const,
+      requires,
+      next: ownedByYou
+        ? 'You already own this agent — nothing to claim. You can manage or revoke it from your agents.'
+        : 'This agent already has an owner. Its current owner has to revoke before it can be claimed again.',
+    });
+  }
+
+  // Unowned. It may still be LINKED to an account administratively — that is not
+  // ownership, and a viewer must see the difference.
+  const linkedNotOwned = !!link.builder_id;
+  const claimable = HUMAN_AGENT_BIND_ENABLED;
+  return res.json({
+    agent_id: agentId,
+    bind_enabled: HUMAN_AGENT_BIND_ENABLED,
+    exists: true,
+    agent,
+    ownership: {
+      state: linkedNotOwned ? ('LINKED_NOT_OWNED' as const) : ('UNOWNED' as const),
+      linked_account: link.builder_id,
+      owned_by_you: false,
+    },
+    claimable,
+    reason: claimable ? ('claimable' as const) : ('binding_disabled' as const),
+    requires,
+    next: claimable
+      ? 'Unclaimed. Claiming takes two wallet signatures (one to prove you hold the key, one to claim the agent) and the agent’s own key — which this browser supplies automatically for agents made here, or you paste it for one made elsewhere. No email, no name. The binding is live instantly.'
+      : 'Claiming is switched off on this deployment, so there is no way to finish claiming yet. Nothing you did is wrong — this is a server setting.',
+  });
+});
+
 router.post('/human/bind', async (req: Request, res: Response) => {
   const p = await principalOf(req, res);
   if (!p) return;
