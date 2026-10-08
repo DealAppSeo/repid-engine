@@ -55,6 +55,7 @@ import {
   buildRoutingCorpus,
   type JoinedRoutingRow,
 } from '../../src/decisioning/routing-corpus';
+import { retiredLine } from './retired-holdout';
 
 // ---------------------------------------------------------------------------
 // Types describing the canary-f1 raw JSON we consume (only the fields we use).
@@ -326,6 +327,7 @@ function loadCanaryCorpus(repoRoot: string, argPath: string | undefined): Loaded
       `- Claims: ${raw.results.length} · verdict rows (training examples): **${n}**`,
       `- Positive class (correct verdicts): ${positives} (${n ? ((positives / n) * 100).toFixed(1) : '0.0'}%)`,
       `- Corpus F1 (context, from raw): ${raw.overall?.f1 ?? 'n/a'} · accuracy ${raw.overall?.accuracy ?? 'n/a'}`,
+      `- ${retiredLine('the canary corpus (from raw)')}`,
       `- Verdicts per provider: ${Object.entries(providerCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`,
     ],
     honestyLines: [

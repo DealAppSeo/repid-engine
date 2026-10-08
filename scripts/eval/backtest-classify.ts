@@ -24,11 +24,15 @@
  *
  * HaluEval rows are reported apart: its FALSE means "a bad answer to a question", not always a
  * false statement (eval/rigorous/README.md).
+ *
+ * The 337 claims are public (retired as a holdout, S60, 2026-10-07): the report's first line says
+ * these are not holdout scores (scripts/eval/retired-holdout.ts).
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { VoteLabel, VoteOutcome } from '../../src/classify/free-votes';
 import { outcomeOf, type BaselineRow } from './candidate-voter';
+import { retiredLine } from './retired-holdout';
 
 export type Truth = 'TRUE' | 'FALSE';
 
@@ -285,7 +289,7 @@ function block(title: string, rows: Row[]): string[] {
 }
 
 export function report(rows: Row[], compare?: Row[]): string {
-  const out: string[] = [];
+  const out: string[] = [retiredLine('eval/rigorous/rigorous-corpus-v1.jsonl (stored readings)')];
   const noHalu = rows.filter((r) => r.source !== 'halueval');
   out.push('## 1. The rule as it runs (stored readings, 95% bootstrap intervals)');
   out.push(...block('all', rows), ...block('without HaluEval', noHalu));

@@ -1,8 +1,15 @@
 # HAL Corpus (v1)
 
-This directory contains the RACK (container format) for the hallucination-detection ground-truth corpus.
-The corpus itself is EMPTY and stays empty until Sean defines truth and labelling policy.
-It cannot be synthesised — a generated corpus measures the generator, not HAL.
+This directory contains the RACK (container format) for the hallucination-detection ground-truth corpus,
+and two corpora in it: `rigorous-v1` and `canary-v1` (`MANIFEST.json`). This README used to say the corpus
+was EMPTY; both have been here since 2026-08-06. A corpus cannot be synthesised: a generated corpus
+measures the generator, not HAL.
+
+**Their `holdout` splits are RETIRED as a holdout (S60, 2026-10-07).** The sentences have been public in
+git since July, so these are training, regression and practice sets. `MANIFEST.json` records the
+retirement (`retired_as_holdout`, `retired_reason`, `retired_copies`). Every score on them carries
+`holdout: "retired-public"` and says it is not a holdout score. The old split is `--split retired-holdout`.
+The measurement holdout is private: `eval/holdout/README.md`.
 
 To validate format and compute the deterministic content hash:
 ```bash

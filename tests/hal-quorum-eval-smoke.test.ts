@@ -16,8 +16,11 @@
  *   F1 ≈ 0.90, AUC ≈ 0.975 on rigorous-v1@596f10de18d0 [holdout], strictness 2,
  *   in-process ≥3-disjoint-family quorum. Contrast the extractor-only AUC 0.558
  *   (PR #393): the real cross-LLM quorum is far more discriminative than the
- *   style-extractor fallback. Reproduce with:
- *     npx ts-node scripts/hal-eval/run-frozen-corpus-local.ts --split holdout
+ *   style-extractor fallback. That split has been public since July and was retired
+ *   as a holdout on 2026-10-07 (S60), so this is no longer a holdout number.
+ *   Reproduce it with:
+ *     npx ts-node scripts/hal-eval/run-frozen-corpus-local.ts --split retired-holdout
+ *   (`--split holdout` now reads the private holdout: eval/holdout/README.md.)
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';

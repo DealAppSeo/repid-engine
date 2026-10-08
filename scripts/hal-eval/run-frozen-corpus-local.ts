@@ -22,9 +22,18 @@
  *   COVERAGE refuses to print an F1 below 80% scored — a transport or provider
  *            failure must never be reportable as a quality result
  *
+ * THE HOLDOUT IS PRIVATE (S60, 2026-10-07). `--split holdout` (the default) reads the private
+ * rotating holdout (scripts/eval/holdout.ts) and exits 2 NOT_CHECKED when no private source is
+ * reachable, never falling back to a public set. `--corpus` names a public set and applies only to
+ * `--split retired-holdout|train|all`; those have been public since July, and every number on
+ * them carries `holdout: "retired-public"` plus a printed line saying it is not a holdout score.
+ * A private run writes counts only (per-item ids and truth stay out of git), records the checker
+ * families that answered each item in eval/holdout/manifest.jsonl, and is `incomplete` when any
+ * item was answered by fewer than two families.
+ *
  * Usage:
- *   npx ts-node scripts/hal-eval/run-frozen-corpus-local.ts [--corpus rigorous-v1]
- *        [--split holdout|train|all] [--limit N] [--concurrency 4]
+ *   npx ts-node scripts/hal-eval/run-frozen-corpus-local.ts [--split holdout|retired-holdout|train|all]
+ *        [--corpus rigorous-v1] [--limit N] [--concurrency 4]
  */
 import 'dotenv/config';
 import * as dotenv from 'dotenv';
@@ -32,6 +41,15 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { isHallucination, confusionMatrix, prf1, rocAuc } from './metrics';
+import {
+  exitCodeFor,
+  familiesRecord,
+  HoldoutNotCheckedError,
+  holdoutRuler,
+  loadPrivateHoldout,
+  recordCheckerPairs,
+} from '../eval/holdout';
+import { retiredLine, retiredStamp } from '../eval/retired-holdout';
 
 // Load the key inventory in-process. Values are never printed, never exported,
 // never placed on a command line.
@@ -51,6 +69,12 @@ const split = flag('split', 'holdout');
 const limit = Number(flag('limit', '0'));
 const concurrency = Math.max(1, Number(flag('concurrency', '4')));
 const MIN_COVERAGE = Number(process.env.HAL_EVAL_MIN_COVERAGE ?? '0.8');
+const PUBLIC_SPLITS = ['retired-holdout', 'train', 'all'];
+const isPrivate = split === 'holdout';
+if (!isPrivate && !PUBLIC_SPLITS.includes(split)) {
+  console.error(`--split must be holdout (private) or one of ${PUBLIC_SPLITS.join(', ')}`);
+  process.exit(1);
+}
 
 interface CorpusEntry {
   name: string;
@@ -58,33 +82,6 @@ interface CorpusEntry {
   sha256: string;
   answer_mode: string;
 }
-const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8')) as { corpora: CorpusEntry[] };
-const entry = manifest.corpora.find((c) => c.name === corpusName);
-if (!entry) {
-  console.error(`No corpus "${corpusName}" in MANIFEST.json`);
-  process.exit(2);
-}
-
-// ── HASH GATE ───────────────────────────────────────────────────────────────
-const hashed = execFileSync(
-  'node',
-  [path.join(ROOT, 'scripts', 'corpus', 'hash-corpus.mjs'), path.join(ROOT, entry!.path)],
-  { encoding: 'utf8' },
-)
-  .trim()
-  .split('\n')
-  .pop()!
-  .trim();
-
-if (hashed !== entry!.sha256) {
-  console.error('REFUSING TO MEASURE — corpus hash mismatch.');
-  console.error(`  manifest: ${entry!.sha256}`);
-  console.error(`  on disk : ${hashed}`);
-  console.error('  Any F1 taken now would be unattributable to a known ruler.');
-  process.exit(1);
-}
-const RULER = `${entry!.name}@${hashed.slice(0, 12)}`;
-
 interface Row {
   id: string;
   prompt: string;
@@ -92,13 +89,51 @@ interface Row {
   label: string;
   split: string;
 }
-let rows: Row[] = fs
-  .readFileSync(path.join(ROOT, entry!.path), 'utf8')
-  .split('\n')
-  .filter((l) => l.trim())
-  .map((l) => JSON.parse(l) as Row);
-if (split !== 'all') rows = rows.filter((r) => r.split === split);
-if (limit > 0) rows = rows.slice(0, limit);
+let entry: CorpusEntry | undefined;
+let hashed = '';
+let RULER = '';
+let rows: Row[] = [];
+// The output file stem: the public corpus name, or 'private-holdout'.
+let stem = 'private-holdout';
+
+if (!isPrivate) {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8')) as { corpora: CorpusEntry[] };
+  entry = manifest.corpora.find((c) => c.name === corpusName);
+  if (!entry) {
+    console.error(`No corpus "${corpusName}" in MANIFEST.json`);
+    process.exit(2);
+  }
+
+  // ── HASH GATE ─────────────────────────────────────────────────────────────
+  hashed = execFileSync(
+    'node',
+    [path.join(ROOT, 'scripts', 'corpus', 'hash-corpus.mjs'), path.join(ROOT, entry!.path)],
+    { encoding: 'utf8' },
+  )
+    .trim()
+    .split('\n')
+    .pop()!
+    .trim();
+
+  if (hashed !== entry!.sha256) {
+    console.error('REFUSING TO MEASURE — corpus hash mismatch.');
+    console.error(`  manifest: ${entry!.sha256}`);
+    console.error(`  on disk : ${hashed}`);
+    console.error('  Any F1 taken now would be unattributable to a known ruler.');
+    process.exit(1);
+  }
+  RULER = `${entry!.name}@${hashed.slice(0, 12)}`;
+  stem = entry!.name;
+
+  rows = fs
+    .readFileSync(path.join(ROOT, entry!.path), 'utf8')
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((l) => JSON.parse(l) as Row);
+  // 'retired-holdout' is the old public holdout split, kept for regression; it is not a holdout.
+  if (split === 'retired-holdout') rows = rows.filter((r) => r.split === 'holdout');
+  else if (split !== 'all') rows = rows.filter((r) => r.split === split);
+}
 
 interface Scored {
   id: string;
@@ -112,11 +147,29 @@ interface Scored {
 }
 
 (async () => {
+  if (isPrivate) {
+    // The private holdout, verified against eval/holdout/manifest.jsonl. No source: exit 2.
+    try {
+      const h = await loadPrivateHoldout();
+      rows = h.items.map((it) => ({ id: it.item_id, prompt: '', candidate_answer: it.claim, label: it.label, split: 'holdout' }));
+      hashed = h.set_sha256;
+      RULER = holdoutRuler(h);
+    } catch (e) {
+      console.log(e instanceof Error ? e.message : String(e));
+      if (e instanceof HoldoutNotCheckedError) console.log(`  missing: ${e.missing.join('; ')}`);
+      process.exit(exitCodeFor(e));
+    }
+  }
+  if (limit > 0) rows = rows.slice(0, limit);
+  const measuredAt = new Date().toISOString();
+  const runId = `local-${measuredAt}`;
+
   console.log(`ruler      : ${RULER}`);
   console.log(`split      : ${split}${split === 'all' ? '  ** INCLUDES TRAIN — not a holdout number **' : ''}`);
+  if (!isPrivate) console.log(`             ${retiredLine(`${stem} [${split}]`)}`);
   console.log(`rows       : ${rows.length}`);
   console.log(`transport  : IN-PROCESS halService (no HTTP, no public rate cap)`);
-  console.log(`answer_mode: ${entry!.answer_mode}`);
+  console.log(`answer_mode: ${entry ? entry.answer_mode : 'claim-as-answer'}`);
   console.log('');
 
   // Required (not `await import`) AFTER dotenv, for two reasons:
@@ -183,12 +236,20 @@ interface Scored {
   const quorumWidthHist: Record<string, number> = {};
   let factCheckRows = 0;
   let fallbackRows = 0;
+  // CHECKER FAMILIES PER ITEM (S60). An item answered by fewer than two distinct families is one
+  // opinion, not a check: the run is 'incomplete' if any scored item was (F2 ledger rule).
+  const perItemFamilies = new Map<string, string[]>();
+  let incompleteItems = 0;
   for (const r of scored) {
     if (r.mode === 'fact-check') factCheckRows++;
     else fallbackRows++;
     if (typeof r.familiesUsed === 'number') quorumWidthHist[String(r.familiesUsed)] = (quorumWidthHist[String(r.familiesUsed)] ?? 0) + 1;
     for (const fam of r.families ?? []) familyParticipation[fam] = (familyParticipation[fam] ?? 0) + 1;
+    perItemFamilies.set(r.id, r.families ?? []);
+    if (familiesRecord(r.families ?? [], runId, measuredAt).status === 'incomplete') incompleteItems++;
   }
+  const checkerPair = familiesRecord(Object.keys(familyParticipation), runId, measuredAt);
+  if (incompleteItems > 0) checkerPair.status = 'incomplete';
 
   console.log('=== confusion matrix (positive = hallucination) ===');
   console.log(`  TP ${tp}   FP ${fp}`);
@@ -209,6 +270,7 @@ interface Scored {
   console.log(`  fact-check rows ${factCheckRows}/${scored.length}   extractor-fallback rows ${fallbackRows}/${scored.length}`);
   console.log(`  quorum-width histogram (families that voted per row): ${JSON.stringify(quorumWidthHist)}`);
   console.log(`  family participation (scored rows each family voted in): ${JSON.stringify(familyParticipation)}`);
+  console.log(`  checker families: ${checkerPair.status}${incompleteItems ? ` — ${incompleteItems} item(s) answered by fewer than two families` : ''}`);
   console.log('');
 
   const outDir = path.join(ROOT, 'reports', 'hal-eval');
@@ -222,26 +284,32 @@ interface Scored {
     console.log('  This is NOT a HAL quality measurement and must not be quoted as one.');
     console.log('======================================================================');
     fs.writeFileSync(
-      path.join(outDir, `${entry!.name}-${split}-${hashed.slice(0, 12)}.LOCAL.INCOMPLETE.json`),
-      JSON.stringify({ ruler: RULER, split, coverage, scored: scored.length, rows: rows.length, errors: errors.length, error_kinds: kinds, f1: null }, null, 2),
+      path.join(outDir, `${isPrivate ? stem : `${stem}-${split}`}-${hashed.slice(0, 12)}.LOCAL.INCOMPLETE.json`),
+      JSON.stringify({ ruler: RULER, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, errors: errors.length, error_kinds: kinds, f1: null }, null, 2),
     );
     process.exit(3);
   }
 
   console.log(`  F1 = ${f1.toFixed(4)} on ${RULER} [${split}] — in-process, strictness 2`);
+  if (!isPrivate) console.log(`  ${retiredLine(`${stem} [${split}]`)}`);
+  else console.log(`  PRIVATE HOLDOUT. checker families [${checkerPair.families.join(', ')}]: ${checkerPair.status}`);
   console.log(`  precision ${precision.toFixed(4)}  recall ${recall.toFixed(4)}  AUC ${auc == null ? 'n/a' : auc.toFixed(4)}`);
   console.log(`  coverage ${(coverage * 100).toFixed(1)}% (${scored.length}/${rows.length})`);
   console.log(`  families that answered: [${Object.keys(familyParticipation).join(', ')}]`);
   console.log('======================================================================');
 
+  const outName = `${isPrivate ? stem : `${stem}-${split}`}-${hashed.slice(0, 12)}.LOCAL.json`;
   fs.writeFileSync(
-    path.join(outDir, `${entry!.name}-${split}-${hashed.slice(0, 12)}.LOCAL.json`),
+    path.join(outDir, outName),
     JSON.stringify(
       {
         ruler: RULER,
         corpus_sha256: hashed,
         split,
-        answer_mode: entry!.answer_mode,
+        ...(isPrivate ? { holdout: 'private' } : retiredStamp()),
+        checker_pair: checkerPair,
+        incomplete_items: incompleteItems,
+        answer_mode: entry ? entry.answer_mode : 'claim-as-answer',
         transport: 'in-process halService',
         strictness: 2,
         concurrency,
@@ -261,11 +329,16 @@ interface Scored {
           quorum_width_histogram: quorumWidthHist,
           family_participation: familyParticipation,
         },
-        results,
+        // A private run writes counts only: an item id beside its truth is the label, in git.
+        ...(isPrivate ? { results: [], results_withheld: 'private holdout: per-item ids and truth stay out of git' } : { results }),
       },
       null,
       2,
     ),
   );
-  console.log(`\n  written: reports/hal-eval/${entry!.name}-${split}-${hashed.slice(0, 12)}.LOCAL.json`);
+  console.log(`\n  written: reports/hal-eval/${outName}`);
+  if (isPrivate) {
+    const n = recordCheckerPairs(perItemFamilies, runId, measuredAt);
+    console.log(`  checker families recorded for ${n} item(s) in eval/holdout/manifest.jsonl`);
+  }
 })();

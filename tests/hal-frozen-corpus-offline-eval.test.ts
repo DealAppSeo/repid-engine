@@ -7,10 +7,13 @@
  *   2. The corpus HASH GATE actually gates — it accepts the real frozen corpus at
  *      its manifest hash and REFUSES a wrong hash. A measurement of a corpus you
  *      cannot name is the failure this whole rack exists to end.
- *   3. A REAL end-to-end offline measurement over the frozen canary holdout runs
- *      keyless, scores every row, and carries its ruler — with providers=NONE and
- *      quorum=NOT-EXERCISED so the extractor floor can never be quoted as the
+ *   3. A REAL end-to-end offline measurement over the frozen canary set's old holdout
+ *      split runs keyless, scores every row, and carries its ruler — with providers=NONE
+ *      and quorum=NOT-EXERCISED so the extractor floor can never be quoted as the
  *      fact-check quorum's number.
+ *   4. That split is PUBLIC and retired as a holdout (S60, 2026-10-07): the result says
+ *      `holdout: "retired-public"` and the printed headline says it is not a holdout
+ *      score. The private holdout's own path is tested in tests/holdout-private.test.ts.
  *
  * This is a HARNESS test. It asserts the measurement machinery is correct and the
  * ruler is attached; it does NOT pin a specific headline F1 (that would ossify a
@@ -25,6 +28,7 @@ import {
   scoreConfusion,
   verifyCorpusHash,
   evaluateRowsOffline,
+  formatHeadline,
   runOfflineEval,
   type CorpusRow,
 } from '../scripts/hal-eval/run-frozen-corpus-offline';
@@ -97,19 +101,19 @@ describe('verifyCorpusHash — the hash gate', () => {
   });
 });
 
-describe('runOfflineEval — real keyless measurement over the frozen canary holdout', () => {
+describe('runOfflineEval — real keyless measurement over the retired canary holdout split', () => {
   let res: Awaited<ReturnType<typeof runOfflineEval>>;
 
   beforeAll(async () => {
     res = await runOfflineEval({
       corpusName: 'canary-v1',
-      split: 'holdout',
+      split: 'retired-holdout',
       strictness: 1,
       write: false, // tests never write reports into the repo
     });
   }, 60_000);
 
-  it('scores every holdout row (100% coverage, keyless)', () => {
+  it('scores every row of the old holdout split (100% coverage, keyless)', () => {
     expect(res.rows).toBe(canary.splits.holdout);
     expect(res.scored).toBe(res.rows);
     const total = res.confusion.tp + res.confusion.fp + res.confusion.tn + res.confusion.fn;
@@ -127,6 +131,17 @@ describe('runOfflineEval — real keyless measurement over the frozen canary hol
     expect(res.quorum).toBe('NOT-EXERCISED');
   });
 
+  it('says the set is public and the score is NOT a holdout score (S60)', () => {
+    expect(res.holdout).toBe('retired-public');
+    expect(res.retired_as_holdout).toBe(MANIFEST.retired_as_holdout);
+    const headline = formatHeadline(res).join('\n');
+    expect(headline).toContain(`F1 = ${res.f1.toFixed(4)}`);
+    expect(headline).toMatch(/RETIRED PUBLIC SET: canary-v1 \[retired-holdout\] is public in git .* This is NOT a holdout score\./);
+    // No checker family runs in the offline path, so it can never claim a complete pair.
+    expect(res.checker_pair.status).toBe('incomplete');
+    expect(res.checker_pair.families).toEqual([]);
+  });
+
   it('produces a finite F1 in [0,1] with a consistent confusion matrix', () => {
     expect(Number.isFinite(res.f1)).toBe(true);
     expect(res.f1).toBeGreaterThanOrEqual(0);
@@ -139,7 +154,7 @@ describe('runOfflineEval — real keyless measurement over the frozen canary hol
   it('is deterministic — a second run yields the identical matrix', async () => {
     const again = await runOfflineEval({
       corpusName: 'canary-v1',
-      split: 'holdout',
+      split: 'retired-holdout',
       strictness: 1,
       write: false,
     });
@@ -151,7 +166,7 @@ describe('runOfflineEval — real keyless measurement over the frozen canary hol
   it('strictness 2 == strictness 1 without providers (quorum machinery is inert keyless)', async () => {
     const s2 = await runOfflineEval({
       corpusName: 'canary-v1',
-      split: 'holdout',
+      split: 'retired-holdout',
       strictness: 2,
       write: false,
     });

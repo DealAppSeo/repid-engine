@@ -120,3 +120,10 @@ pvq_results.json
 
 # scripts/demo/human-backed-validation.ts writes its request/response here
 /out/
+
+# PRIVATE HOLDOUT TEXT (S60, 2026-10-07). The measurement holdout's sentences and labels never
+# enter git: eval/holdout/manifest.jsonl holds hashes and edges only. Keep the private file outside
+# the repo, or under one of these names; scripts/eval/holdout.ts refuses an in-repo path git does
+# not ignore, and tests/holdout-leak-guard.test.ts fails if a registered sentence appears anywhere.
+*.holdout.private.jsonl
+eval/holdout/private/

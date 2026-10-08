@@ -109,7 +109,7 @@ npm run demo:harness            # add --agent <name> --claim "<statement>" to va
 
 Each run reports, per leg, whether it hit a `REAL` system:
 
-1. **HAL** — scores the action via a live cross-provider quorum; a hallucinated claim is vetoed with a *calibrated* confidence (temperature-scaled on a frozen holdout, not a raw score).
+1. **HAL** — scores the action via a live cross-provider quorum; a hallucinated claim is vetoed with a *calibrated* confidence (temperature-scaled, not a raw score). The calibration was fitted on the frozen rigorous-v1 holdout split, which has been public since July and was retired as a holdout on 2026-10-07 (`eval/holdout/README.md`).
 2. **RepID** — the actor's live reputation and tier (keyless read).
 3. **ZK range proof** — fetched, then **verified locally** with `@hyperdag/proof-verifier`. The proof shows the score clears a threshold. It does not hide the score: the proof's public statement includes it (see *Selective disclosure* above).
 4. **Poseidon2** — a scoped nullifier from the Rust primitive: same secret, different scope → different nullifier (one identity, many domains).

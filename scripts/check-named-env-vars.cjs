@@ -172,6 +172,8 @@ const ALLOWLIST = {
   RIG_DELAY_MS: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
   RIG_LIMIT: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
   RIG_OUT: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
+  HOLDOUT_FILE:
+    'S60 private holdout path, read in scripts/eval/holdout.ts and holdout-rotate.ts (eval only, never the engine); generator scans src/.',
   RESKIN_CERTAINTY: 'scripts/hal-eval/reskin-invariance.ts only; generator scans src/.',
   RESKIN_CORPUS: 'scripts/hal-eval/reskin-invariance.ts only; generator scans src/.',
   RESKIN_JSON: 'scripts/hal-eval/reskin-invariance.ts only; generator scans src/.',
