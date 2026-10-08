@@ -18,6 +18,7 @@ import { emitAuditEvent } from './audit-emit';
 import { BUILDER_FLOOR, computeAuthority, babylonianSqrt, type FloorCheck } from './authority-math';
 import { recordSponsorship } from './sponsorship'; // R3 exercise + GA handoff
 import { verifyDeposit } from './deposit-verifier';
+import { escrowRefund } from './escrow-refunder';
 
 export { BUILDER_FLOOR, computeAuthority };
 
@@ -194,6 +195,7 @@ export interface RefundInitiation {
   amount: string;
   to?: string;                 // builder payout address
   note?: string;
+  txHash?: string;             // the real escrow->builder refund tx, only on a broadcast send
 }
 
 export async function withdrawStake(builderId: string, amount: bigint): Promise<WithdrawResult> {
@@ -278,6 +280,7 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
         is_simulated: false,
         refund_stub: refund.stub,
         refund_to: refund.to,
+        refund_tx_hash: refund.txHash ?? null,
       },
     });
     return { ok: true, total_active_stake: newTotal.toString(), authority_after: auth.authority.toString(), refund };
@@ -342,7 +345,11 @@ type RefundInitiator = (
   to?: string,
 ) => Promise<RefundInitiation>;
 
-let refundInitiator: RefundInitiator = initiateEscrowRefund;
+// DEFAULT: the real escrow->builder refunder (escrow-refunder.ts). It is FAIL-CLOSED —
+// with STAKE_ESCROW_SIGNER_KEY unset it returns a stub and withdrawal refuses, exactly as
+// the bare stub did, so production is unchanged until the key is set. Tests override via
+// __setRefundInitiator; initiateEscrowRefund above remains the explicit stub.
+let refundInitiator: RefundInitiator = escrowRefund;
 
 export function __setRefundInitiator(f?: RefundInitiator): void {
   refundInitiator = f ?? initiateEscrowRefund;
