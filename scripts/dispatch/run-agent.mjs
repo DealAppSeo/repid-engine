@@ -704,19 +704,15 @@ function newestInboxEntry(path) {
   const lines = readFileSync(path, 'utf8').split(/\r?\n/);
   const start = lines.findIndex((l) => l.startsWith('## '));
   if (start === -1) return null;
+  // A `## ` INBOX is a QUEUE of entries, newest-on-top, and this returns the newest
+  // ONE — bounded at the next `## ` so older entries below are not included. The
+  // earlier "refuse on >1 `## ` heading" guard was reverted: it conflated a queue of
+  // several entries (the documented convention, exercised by tests/dispatch-runner-
+  // seams.test.ts) with a single brief misusing `## ` for subsections, and threw on
+  // the normal case. A brief that needs sections must use `### ` subsections under a
+  // single `## `; nothing here truncates a correctly-formed brief.
   const next = lines.findIndex((l, i) => i > start && l.startsWith('## '));
-  // REFUSE rather than silently truncate: a brief with >1 `## ` heading has only its
-  // opening section sent, discarding facts/deliverables/fences — the defect measured
-  // 2026-08-21 (briefs sent at 5-8% of their intended size). Fix the brief to use a
-  // single `## ` heading with `###` subsections; the queue convention is preserved.
-  if (next !== -1) {
-    throw new Error(
-      `INBOX brief at ${path} has multiple ## headings — truncation refused.\n` +
-      `Use a single ## heading with ### subsections so the full brief is sent.\n` +
-      `(This brief would have been sent at roughly ${Math.round(100 * (next - start) / (lines.length - start))}% of its size.)`,
-    );
-  }
-  return lines.slice(start).join('\n').trim();
+  return lines.slice(start, next === -1 ? undefined : next).join('\n').trim();
 }
 
 /**
