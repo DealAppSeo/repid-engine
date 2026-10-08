@@ -9,9 +9,11 @@
  * an agent can honestly offer today; the assertions lock the honest behaviour in.
  *
  * WHY IT MATTERS: every edge an attacker would push on a multi-token settlement is closed
- * here — a token outside the human's policy is refused, an unverified-address token
- * (cbBTC) is refused even if a human lists it, and a cross-token value with no verified
- * price reads NOT_CHECKED (never a made-up rate). No env, no DB, no chain.
+ * here — a token outside the human's policy is refused, an UNKNOWN token (a look-alike
+ * symbol not in the registry) is refused even if a human lists it, and a cross-token value
+ * with no verified price reads NOT_CHECKED (never a made-up rate). No env, no DB, no chain.
+ * (cbBTC was promoted to VERIFIED on 2026-10-08 after a direct on-chain read, so it is now
+ * an acceptable settlement token — EXCHANGE 5 shows both the refusal and the acceptance.)
  */
 
 import { commonSettlementTokens, convertAmount, rankByTransferCost } from '../../src/services/token-equivalence';
@@ -70,15 +72,23 @@ describe('agent token exchange — advisory negotiation between two agents', () 
     expect(ranking.absoluteCostVerified).toBe(false); // gas PRICE not read → relative heuristic only
   });
 
-  it('EXCHANGE 5: an agent proposes cbBTC → refused, because its contract is not verified yet', () => {
-    log(`\n[${NEXUS.name}] Can we settle in cbBTC? (my human even added it to my list)`);
-    // Even with cbBTC in the human's policy, the registry refuses it: its Base Sepolia
-    // contract is NOT_CHECKED (no issuer-published source), so it can never be a settlement
-    // leg until confirmed on-chain. Fail-closed over money.
-    const check = checkAcceptedToken('cbBTC', { accept: ['USDC', 'cbBTC'] });
-    log(`  → cbBTC policy check: ${check.decision} (${check.reason})`);
-    expect(check.decision).toBe('REFUSED');
-    expect(check.reason).toBe('address_not_verified');
-    log(`  → PROPOSE instead: USDC. cbBTC stays off the wire until its contract is verified.`);
+  it('EXCHANGE 5: an UNKNOWN token is refused even if listed; a VERIFIED cbBTC is accepted', () => {
+    // The fail-closed edge: a human cannot opt into a token the registry does not know.
+    // Even listed in policy, an unknown symbol is refused — an attacker cannot smuggle a
+    // look-alike token onto the wire by naming it in a settings field.
+    log(`\n[${NEXUS.name}] Can we settle in DOGE? (my human even added it to my list)`);
+    const unknown = checkAcceptedToken('DOGE', { accept: ['USDC', 'DOGE'] });
+    log(`  → DOGE policy check: ${unknown.decision} (${unknown.reason})`);
+    expect(unknown.decision).toBe('REFUSED');
+    expect(unknown.reason).toBe('unknown_token');
+
+    // cbBTC, by contrast, was promoted to VERIFIED on 2026-10-08 after a direct on-chain
+    // read (symbol/decimals/chainId). A human who lists it CAN now accept it — the gate
+    // opened only because the address was proven, not because it looked plausible.
+    const cb = checkAcceptedToken('cbBTC', { accept: ['USDC', 'cbBTC'] });
+    log(`  → cbBTC policy check: ${cb.decision} (${cb.reason})`);
+    expect(cb.decision).toBe('ACCEPTED');
+    expect(cb.reason).toBe('in_policy');
+    log(`  → PROPOSE: cbBTC is now a valid settlement leg; DOGE stays off the wire (unknown contract).`);
   });
 });

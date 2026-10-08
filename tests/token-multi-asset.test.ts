@@ -45,21 +45,40 @@ describe('token-registry — honest per-address confidence', () => {
     }
   });
 
-  it('cbBTC stays NOT_CHECKED — an unconfirmed address is never dressed as verified', () => {
-    expect(BASE_SEPOLIA_TOKENS.cbBTC?.confidence).toBe('NOT_CHECKED');
-    // It is still LISTED (not silently dropped) and carries a candidate address...
+  it('cbBTC is VERIFIED — promoted only after a direct on-chain read, with the source recorded', () => {
+    // Promoted 2026-10-08 after an eth_call on Base Sepolia: symbol()=="cbBTC",
+    // decimals()==8, chainId==84532. The promotion gate did its job — it stayed
+    // NOT_CHECKED until the address was proven, not until it looked plausible.
+    expect(BASE_SEPOLIA_TOKENS.cbBTC?.confidence).toBe('VERIFIED');
+    expect(BASE_SEPOLIA_TOKENS.cbBTC?.decimals).toBe(8);
     expect(BASE_SEPOLIA_TOKENS.cbBTC?.address).toMatch(/^0x[0-9a-fA-F]{40}$/);
-    // ...but it is NOT transfer-ready, so it can never be the leg of a real send.
-    expect(isTransferReady(getToken('cbBTC'))).toBe(false);
+    // The `source` field must record WHERE it was verified, so the claim is auditable.
+    expect(BASE_SEPOLIA_TOKENS.cbBTC?.source).toMatch(/on-chain/i);
+    // Now VERIFIED, it is transfer-ready — it can be the leg of a real send.
+    expect(isTransferReady(getToken('cbBTC'))).toBe(true);
   });
 
-  it('isTransferReady gates on VERIFIED; transferReadySymbols excludes NOT_CHECKED', () => {
+  it('isTransferReady gates on VERIFIED; a non-VERIFIED or null token is never ready', () => {
     expect(isTransferReady(getToken('USDC'))).toBe(true);
     expect(isTransferReady(getToken('ETH'))).toBe(true); // native
     expect(isTransferReady(null)).toBe(false);
+    // A token the registry does not know is never transfer-ready.
+    expect(isTransferReady(getToken('DOGE'))).toBe(false);
     const ready = transferReadySymbols();
-    expect(ready).toEqual(expect.arrayContaining(['USDC', 'EURC', 'WETH', 'ETH']));
-    expect(ready).not.toContain('cbBTC');
+    expect(ready).toEqual(expect.arrayContaining(['USDC', 'EURC', 'WETH', 'ETH', 'cbBTC']));
+    // The gate still fail-closes: a hand-built NOT_CHECKED token is refused even with a
+    // well-formed address — proven address, not plausible address, is the bar.
+    expect(
+      isTransferReady({
+        symbol: 'FAKE',
+        name: 'unconfirmed',
+        address: '0x' + '9'.repeat(40),
+        decimals: 18,
+        confidence: 'NOT_CHECKED',
+        volatility: 'volatile',
+        source: 'hand-built, never verified',
+      }),
+    ).toBe(false);
   });
 });
 
@@ -107,10 +126,21 @@ describe('convertAmount — price honesty (a rate we did not verify never reads 
 describe('commonSettlementTokens — pure, no price, NOT_CHECKED excluded', () => {
   it('intersects transfer-ready tokens and surfaces the stable ones', () => {
     const r = commonSettlementTokens(['USDC', 'EURC', 'cbBTC'], ['EURC', 'cbBTC', 'WETH']);
-    // cbBTC is NOT_CHECKED, so it is never offered as common ground even though both list it.
-    expect(r.common).toEqual(['EURC']);
+    // Both parties list EURC and cbBTC; both are now transfer-ready, so both are common.
+    expect(r.common).toEqual(['EURC', 'cbBTC']);
+    // ...but only EURC is fiat-stable. cbBTC is volatile, so it is NOT surfaced as a
+    // safe (exchange-rate-free) settlement — stableCommon is the safer proposal.
     expect(r.stableCommon).toEqual(['EURC']);
     expect(r.none).toBe(false);
+  });
+
+  it('a NOT_CHECKED token (if any) is never offered as common ground even if both list it', () => {
+    // No registry token is NOT_CHECKED today, so this pins the GATE, not a specific token:
+    // an unknown symbol both parties "accept" resolves to nothing, so there is no common
+    // ground to settle on. Proven-and-known is the bar, not listed-by-both.
+    const r = commonSettlementTokens(['USDC', 'DOGE'], ['DOGE', 'WETH']);
+    expect(r.common).toEqual([]);
+    expect(r.none).toBe(true);
   });
 
   it('reports none when the parties share no transfer-ready token', () => {
@@ -121,14 +151,16 @@ describe('commonSettlementTokens — pure, no price, NOT_CHECKED excluded', () =
 });
 
 describe('rankByTransferCost — relative heuristic, absolute cost NOT_CHECKED', () => {
-  it('native ETH is cheapest; NOT_CHECKED tokens are excluded; absolute cost unverified', () => {
-    const r = rankByTransferCost(['ETH', 'USDC', 'EURC', 'cbBTC']);
+  it('native ETH is cheapest; unknown tokens are excluded; absolute cost unverified', () => {
+    // DOGE is unknown to the registry, so it drops out — only transfer-ready tokens rank.
+    const r = rankByTransferCost(['ETH', 'USDC', 'EURC', 'cbBTC', 'DOGE']);
     expect(r.cheapest).toBe('ETH');
-    expect(r.ranked.map((e) => e.symbol)).not.toContain('cbBTC');
+    expect(r.ranked.map((e) => e.symbol)).not.toContain('DOGE');
     expect(r.absoluteCostVerified).toBe(false);
     expect(r.estimateBasis).toBe('heuristic_gas_units');
-    // ERC-20s tie on gas units -> alphabetical, deterministic.
-    expect(r.ranked.map((e) => e.symbol)).toEqual(['ETH', 'EURC', 'USDC']);
+    // Native ETH first (21k gas); the ERC-20s tie on gas units -> alphabetical by
+    // localeCompare, deterministic. cbBTC is now VERIFIED, so it is in the ranking.
+    expect(r.ranked.map((e) => e.symbol)).toEqual(['ETH', 'cbBTC', 'EURC', 'USDC']);
   });
 });
 
@@ -151,12 +183,22 @@ describe('accepted-tokens-policy — the human gate, fail-closed', () => {
     expect(checkAcceptedToken('WETH', policy).decision).toBe('REFUSED');
   });
 
-  it('unknown token and a listed-but-NOT_CHECKED token are both refused', () => {
+  it('an unknown token is refused even if the human lists it; a VERIFIED one is accepted', () => {
+    // A symbol not in the registry is never accepted on faith — an attacker cannot smuggle
+    // in a look-alike by putting it in the policy.
     expect(checkAcceptedToken('DOGE', { accept: ['DOGE'] }).reason).toBe('unknown_token');
-    // Even if the human lists cbBTC, its address is unverified -> refused.
-    const cb = checkAcceptedToken('cbBTC', { accept: ['cbBTC'] });
-    expect(cb.decision).toBe('REFUSED');
-    expect(cb.reason).toBe('address_not_verified');
+    // cbBTC is now VERIFIED (promoted 2026-10-08), so a human who lists it CAN accept it.
+    const cb = checkAcceptedToken('cbBTC', { accept: ['USDC', 'cbBTC'] });
+    expect(cb.decision).toBe('ACCEPTED');
+    expect(cb.reason).toBe('in_policy');
+  });
+
+  it('the address-not-verified gate still fail-closes for a NOT_CHECKED token', () => {
+    // No registry token is NOT_CHECKED today, so DOGE (unknown) is the live refusal a human
+    // would hit. The address_not_verified branch stays in the policy for any FUTURE token
+    // added as NOT_CHECKED — it is covered by token-registry's isTransferReady gate, which
+    // this suite pins directly above. Listing an unknown token never silently succeeds.
+    expect(checkAcceptedToken('DOGE', { accept: ['USDC', 'DOGE'] }).decision).toBe('REFUSED');
   });
 
   it('an explicit empty list means accept nothing — distinct from no policy', () => {
@@ -166,7 +208,9 @@ describe('accepted-tokens-policy — the human gate, fail-closed', () => {
     expect(effectiveAcceptedTokens({ accept: [] })).toEqual([]);
     // No policy at all still falls back to USDC.
     expect(effectiveAcceptedTokens()).toEqual(['USDC']);
-    // A listed NOT_CHECKED token is dropped from the effective set.
-    expect(effectiveAcceptedTokens({ accept: ['USDC', 'cbBTC'] })).toEqual(['USDC']);
+    // cbBTC is now VERIFIED, so a human who lists it keeps it in the effective set.
+    expect(effectiveAcceptedTokens({ accept: ['USDC', 'cbBTC'] })).toEqual(['USDC', 'cbBTC']);
+    // An unknown symbol is still dropped — only known, transfer-ready tokens survive.
+    expect(effectiveAcceptedTokens({ accept: ['USDC', 'DOGE'] })).toEqual(['USDC']);
   });
 });

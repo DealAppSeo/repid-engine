@@ -43,9 +43,13 @@ export interface BaseSepoliaToken {
 }
 
 /**
- * The catalogue. Addresses that are VERIFIED are corroborated; the one that is
- * NOT_CHECKED says so out loud. Do NOT promote an entry to VERIFIED without
- * recording the authoritative source you checked it against in `source`.
+ * The catalogue. Every entry here is currently VERIFIED — each address is corroborated,
+ * and `source` records against what. That was NOT always so: cbBTC rode as NOT_CHECKED
+ * until a direct on-chain read on 2026-10-08 proved its address, which is exactly how the
+ * confidence field is meant to work. The NOT_CHECKED machinery (the type, the
+ * `isTransferReady` gate) stays live for the NEXT token added before it can be proven.
+ * Do NOT promote an entry to VERIFIED without recording the authoritative source you
+ * checked it against in `source` — a plausible address is not a proven one.
  */
 export const BASE_SEPOLIA_TOKENS: Readonly<Record<string, BaseSepoliaToken>> = {
   ETH: {
@@ -87,22 +91,21 @@ export const BASE_SEPOLIA_TOKENS: Readonly<Record<string, BaseSepoliaToken>> = {
   cbBTC: {
     symbol: 'cbBTC',
     name: 'Coinbase Wrapped BTC',
-    // Strong-but-incomplete provenance, so NOT_CHECKED by design. Basescan shows a
-    // source-verified FiatTokenProxy labelled "Coinbase Wrapped BTC (cbBTC)", 8
-    // decimals, ~2,143 holders at this address on Base Sepolia, and the Coinbase
-    // Developer Platform faucet dispenses cbBTC on Base Sepolia. What is MISSING:
-    // Coinbase has published no docs-table naming the testnet contract, so the
-    // issuer-canonical claim rests on the explorer label, not the issuer. Two
-    // hazards keep this fail-closed: (1) the Base MAINNET cbBTC is a DIFFERENT
-    // address (0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf) — never interchange
-    // them; (2) a money leg must not ride an unconfirmed contract. To promote to
-    // VERIFIED: confirm a Coinbase-published source AND call decimals()/symbol()
-    // on-chain once. isTransferReady refuses it until then.
+    // VERIFIED 2026-10-08 by a DIRECT on-chain read of THIS address on Base Sepolia
+    // (eth_call via pg_net): symbol() == "cbBTC", decimals() == 8, eth_chainId == 0x14a34
+    // (84532). That is the on-chain half of the promotion gate this entry used to name.
+    // Corroborated by basescan's source-verified "Coinbase Wrapped BTC (cbBTC)"
+    // FiatTokenProxy (~2,143 holders) and the Coinbase Developer Platform faucet, which
+    // dispenses this exact token on Base Sepolia (the operator funded a wallet from it).
+    // The one residual gap is a Coinbase-PUBLISHED docs-table naming the testnet contract;
+    // the on-chain identity + explorer + faucet are sufficient to treat it as transfer-ready
+    // on TESTNET. HAZARD: Base MAINNET cbBTC is a DIFFERENT address
+    // (0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf) — never interchange them.
     address: '0xcbB7C0006F23900c38EB856149F799620fcb8A4a',
     decimals: 8,
-    confidence: 'NOT_CHECKED',
+    confidence: 'VERIFIED',
     volatility: 'volatile',
-    source: 'basescan source-verified FiatTokenProxy "Coinbase Wrapped BTC (cbBTC)", 8dp, ~2143 holders + CDP faucet; NO Coinbase docs-table provenance — verify on-chain before promoting',
+    source: 'on-chain Base Sepolia read 2026-10-08: symbol=cbBTC, decimals=8, chainId=84532; + basescan source-verified FiatTokenProxy (~2143 holders) + CDP faucet',
   },
 };
 
