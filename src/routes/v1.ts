@@ -8,6 +8,7 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { fireWebhook } from '../services/webhook';
 import { getBuilderProfile, registerBuilder } from '../services/builder-registry';
 import { depositStake, withdrawStake, snapshotAuthority, getCurrentStake } from '../services/stake-vault';
+import { escrowHealth } from '../services/escrow-refunder';
 import {
   authorizeStakeDeposit,
   stakeDepositMessage,
@@ -583,6 +584,22 @@ router.post('/stake/withdraw', async (req: Request, res: Response) => {
     return res.json(r);
   } catch (e: any) {
     return res.status(400).json({ error: e?.message ?? 'withdraw failed' });
+  }
+});
+
+/**
+ * GET /stake/escrow/health — read-only escrow configuration + funding check.
+ * Public and keyless: it reveals only public facts (the escrow ADDRESS, its on-chain
+ * balances) and booleans — never the signer key. It builds no transaction and moves
+ * nothing. Purpose: confirm STAKE_ESCROW_ADDRESS + STAKE_ESCROW_SIGNER_KEY were set
+ * correctly (signer derives that address, chain is Base Sepolia, escrow is funded)
+ * WITHOUT spending. `ready:true` means a real escrow→builder refund can broadcast now.
+ */
+router.get('/stake/escrow/health', async (_req: Request, res: Response) => {
+  try {
+    return res.json(await escrowHealth());
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? 'escrow health check failed' });
   }
 });
 
