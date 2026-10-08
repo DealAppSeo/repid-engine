@@ -21,7 +21,6 @@ const SRC = join(ROOT, 'src');
 
 /** file → the literal it falls back to. Each still needs a fix; none is acceptable. */
 const KNOWN: Record<string, { literal: string; why: string }> = {
-  'src/middleware/controller-auth.ts': { literal: 'controller-secret-key-1337-abc', why: 'CONTROLLER_QR_SECRET: signs controller QR tokens' },
   'src/services/trading-creds-crypto.ts': { literal: 'reponomics-default-32-byte-encryption-key-please-rotate', why: 'TRADING_CREDS_ENCRYPTION_KEY: encrypts stored trading credentials' },
   'src/zkp/plonky3-real.ts': { literal: 'repid-default-secret', why: 'PROOF_SECRET: the HMAC fallback proof (labelled is_real:false)' },
   // Placeholder service keys: an unset Supabase key falls back to a string that authenticates as

@@ -209,7 +209,13 @@ router.post('/token', requireRole('operator'), (req, res) => {
     duration = durationMs;
   }
 
-  const token = mintQrToken(targetRole, duration);
+  let token: string;
+  try {
+    token = mintQrToken(targetRole, duration);
+  } catch (e: any) {
+    // No CONTROLLER_QR_SECRET: no token, rather than one signed with a public string (F-15).
+    return res.status(503).json({ error: 'controller_token_not_configured', message: e?.message ?? 'not configured' });
+  }
   const baseUrl = process.env.CONTROLLER_URL || 'https://controller.trustshell.dev';
   res.json({
     ok: true,
