@@ -200,6 +200,12 @@ router.post('/token', requireRole('operator'), (req, res) => {
     return res.status(400).json({ error: 'Invalid role specified' });
   }
   const targetRole = role || 'viewer';
+  // F-17: cap minted token to caller's own role — operator cannot self-escalate to admin.
+  const callerRole = (req as any).controllerRole as 'viewer' | 'operator' | 'admin';
+  const roleRank: Record<string, number> = { viewer: 1, operator: 2, admin: 3 };
+  if ((roleRank[targetRole] ?? 0) > (roleRank[callerRole] ?? 0)) {
+    return res.status(403).json({ error: 'Cannot mint a token with higher privileges than your own role' });
+  }
 
   let duration = 3600 * 1000; // default 1 hour
   if (durationMs !== undefined) {

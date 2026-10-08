@@ -291,6 +291,29 @@ describe('[F-15] the controller accepts no credential anyone can construct', () 
     expect(r.body.token).toBeUndefined();
   });
 
+  test('POST /token: operator cannot mint admin-scoped token (F-17 privilege escalation fix)', async () => {
+    process.env.CONTROLLER_QR_SECRET = TEST_QR_SECRET;
+    const operator = mintQrToken('operator');
+    setMock({ human_sbt_registry: { await: { data: [] } } });
+    const r = await request(app).post('/api/v1/controller/token')
+      .set('x-controller-token', operator)
+      .send({ role: 'admin' });
+    expect(r.status).toBe(403);
+    expect(r.body.token).toBeUndefined();
+  });
+
+  test('POST /token: operator can mint operator-scoped token', async () => {
+    process.env.CONTROLLER_QR_SECRET = TEST_QR_SECRET;
+    const operator = mintQrToken('operator');
+    setMock({ human_sbt_registry: { await: { data: [] } } });
+    const r = await request(app).post('/api/v1/controller/token')
+      .set('x-controller-token', operator)
+      .send({ role: 'operator' });
+    expect(r.status).toBe(200);
+    expect(r.body.role).toBe('operator');
+    expect(typeof r.body.token).toBe('string');
+  });
+
   test('an SBT named in a header reads but never writes, even the master or an institutional tier', async () => {
     process.env.CONTROLLER_MASTER_SBT = 't1';
     setMock({ human_sbt_registry: { await: { data: [{ ...SBT_ROW, qualification_tier: 'institutional' }] } } });
