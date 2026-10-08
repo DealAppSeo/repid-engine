@@ -342,6 +342,8 @@ router.post('/challenge', async (req: Request, res: Response) => {
       gnnsr: true,
       anfis: true,
       pcv: true,
+      // NOT_CHECKED when disabled (false = audit did not run); LESSONS §5 observability label
+      constitutional_audit: auditActive,
     },
     pcvVetoed: verdict === 'EPISTEMIC_VIOLATION',
     totalLatencyMs: Date.now() - startTime,

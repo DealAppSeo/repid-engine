@@ -705,7 +705,18 @@ function newestInboxEntry(path) {
   const start = lines.findIndex((l) => l.startsWith('## '));
   if (start === -1) return null;
   const next = lines.findIndex((l, i) => i > start && l.startsWith('## '));
-  return lines.slice(start, next === -1 ? undefined : next).join('\n').trim();
+  // REFUSE rather than silently truncate: a brief with >1 `## ` heading has only its
+  // opening section sent, discarding facts/deliverables/fences — the defect measured
+  // 2026-08-21 (briefs sent at 5-8% of their intended size). Fix the brief to use a
+  // single `## ` heading with `###` subsections; the queue convention is preserved.
+  if (next !== -1) {
+    throw new Error(
+      `INBOX brief at ${path} has multiple ## headings — truncation refused.\n` +
+      `Use a single ## heading with ### subsections so the full brief is sent.\n` +
+      `(This brief would have been sent at roughly ${Math.round(100 * (next - start) / (lines.length - start))}% of its size.)`,
+    );
+  }
+  return lines.slice(start).join('\n').trim();
 }
 
 /**

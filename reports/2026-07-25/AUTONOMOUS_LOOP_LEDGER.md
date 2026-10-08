@@ -9280,3 +9280,38 @@ XC (Grok, reasoning-only, no shell — grade [R] at best) returned a ranked menu
 4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — both flag-gated, Sean GO needed.
 
 **Next beat:** (1) Verify #1258 merged. (2) Finding #3 (production-logger `auditEnabled` field) — small, safe, pure observability; next candidate. (3) Finding #4 (challenge.ts NOT_CHECKED label) — same class. (4) F-18 if Sean decides.
+
+---
+
+## Beat (2026-10-08, fifth run) — fourth run verified; XC findings #3+#4 shipped; dispatch refusal guard added
+
+**Prior beat (fourth run, 2026-10-08) verified [V]:**
+- PR #1258 (`fix(hal): constitutional audit disabled stub returns NOT_CHECKED sentinel`): **MERGED** at 2026-10-08T12:51:34Z, commit `3c6cf2ea` [V `gh pr view 1258 --json state,mergedAt`] ✓
+- PR #1259 (`fix(hal): a disabled audit never fabricates a mirror-test trigger`): **MERGED** at 2026-10-08T15:42:20Z, commit `056c1f8e` [V `git log --oneline -8`] ✓
+  - #1259 repaired #1258: changing `mirrorTestPassed` to `false` in the NOT_CHECKED stub left one unguarded reader (`repid-update.ts:608`). The derivation `!audit.mirrorTestPassed` fired as `!false === true` when the audit was disabled, fabricating a mirror-test violation for a test that never ran. Fixed by gating on `audit.enabled`. Measured: zero rows polluted (0 events since #1258 merged before the repair landed).
+- Constitutional audit current state [V code read `src/layers/constitutional-audit.ts:95-110`]: `passed: false`, `mirrorTestPassed: false` when disabled — instrument can return the other answer (LESSONS §5) ✓
+- `src/engine/repid-update.ts:608`: `mirror_test_triggered: input.mirrorTestTriggered ?? (audit.enabled ? !audit.mirrorTestPassed : false)` [V `Read` tool] ✓
+- **Penalty verdict: NONE.** Every claim reproduced by independent read.
+
+**Step 2 — XC findings #3+#4 shipped (branch `feat/xc-findings-3-4-audit-observability`):**
+
+Finding #3 ("Add `auditEnabled` to production-logger payload") + Finding #4 ("Challenge.ts explicit NOT_CHECKED log when `!auditActive`") are two facets of the same gap: the HAL production event log writes `hal_compliance_score: undefined` when the audit is disabled, but nothing labels the row as NOT_CHECKED — a reader sees a null and cannot distinguish "audit ran, found nothing" from "audit never ran." Fix: add `constitutional_audit: auditActive` to the `layersActive` JSONB field in `challenge.ts:345` (maps into the existing `layers_active` JSONB column, no schema migration needed).
+
+**`src/routes/challenge.ts:345`:** `constitutional_audit: auditActive` added to `layersActive` object. When `auditActive === false` (the production default), `layers_active.constitutional_audit = false` in the `hal_production_events` row — explicit NOT_CHECKED label visible to any log reader. One line, no score change, no flag flip.
+
+**Dispatch refusal guard (`scripts/dispatch/run-agent.mjs:708-714`):** Changed `newestInboxEntry` from silently truncating a brief with >1 `## ` heading to throwing with a clear message (including the % that would have been discarded). The existing `tests/dispatch-inbox-dispatchable.test.ts` already enforces the one-heading rule on all real INBOX files, so no real brief would trigger this refusal — it is a last-line-of-defence for a future malformed brief. Referenced in PR #1259 as an open follow-up.
+
+**[V] Tests:**
+- `./node_modules/.bin/jest tests/constitutional-audit-hal-log.test.ts --forceExit` → **3/3 passed**
+- `npx tsc --noEmit` → **clean (no output)**
+- `gitleaks` pre-push: no secrets
+
+**PR #1260 opened; `gh pr merge 1260 --auto --squash` armed (SAFE-CLASS: observability label + dispatch guard, no score change, no flag flip, tested).**
+
+**Open for Sean (rule-4):**
+1. **F-18** — `/leads` endpoint role decision (viewer vs operator) — unchanged.
+2. **Practice lane P2** — payee/stop/acknowledgement gate design — unchanged.
+3. Items 7/8/10/11: env flips / gas spend — unchanged.
+4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO needed.
+
+**Next beat:** XC had no further SAFE findings. Backlog is thin on non-Sean-gated work. (1) Item 15 (WHIR PCS — verify PR#1919 numbers first before any build). (2) If Sean decides F-18, build the one-liner immediately. (3) If #1260 CI fails, diagnose and fix.
