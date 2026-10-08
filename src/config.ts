@@ -75,6 +75,13 @@ export const config = {
     '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
   // Minimum confirmations before a deposit tx is accepted.
   stakeMinConfirmations: parseInt(process.env.STAKE_MIN_CONFIRMATIONS || '1'),
+  // Escrow signer for the WITHDRAWAL leg (escrow -> builder USDC refund). Default
+  // NULL: the refund stays a stub and withdrawal FAILS CLOSED (unchanged). When set,
+  // src/services/escrow-refunder.ts broadcasts a real Base Sepolia transfer — and
+  // refuses unless this key's address equals stakeEscrowAddress (a refund must debit
+  // the escrow that holds the funds) and the chain is 84532 (testnet only). Testnet
+  // key only; never a mainnet-funded key. FLAGGED for human review (Sean's call).
+  stakeEscrowSignerKey: process.env.STAKE_ESCROW_SIGNER_KEY || null,
 };
 
 if (!config.supabaseUrl || !config.supabaseKey) {
