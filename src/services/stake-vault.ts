@@ -22,6 +22,25 @@ import { escrowRefund } from './escrow-refunder';
 
 export { BUILDER_FLOOR, computeAuthority };
 
+// Per-builder withdrawal serialization (in-process). The engine runs a single
+// replica, so this closes the concurrent-withdrawal TOCTOU Strix flagged on #1261:
+// two parallel withdrawStake calls for one builder would otherwise both read the
+// same realTotal before either debits, both pass the amount check, and both
+// broadcast a refund out of the pooled escrow. A DURABLE guard for a multi-replica
+// deployment or a cross-request retry after a failed debit (a DB reservation /
+// unique constraint written BEFORE the broadcast) is a follow-up migration — a
+// shared-DB DDL decision. Until the real-staking signer key is provisioned the
+// whole path is fail-closed and Base-Sepolia-only, so no real value is exposed.
+const withdrawChains = new Map<string, Promise<unknown>>();
+export function serializeWithdraw<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = withdrawChains.get(key) ?? Promise.resolve();
+  const run = prev.then(fn, fn); // run after the prior holder settles, either way
+  const tail = run.then(() => undefined, () => undefined);
+  withdrawChains.set(key, tail);
+  void tail.then(() => { if (withdrawChains.get(key) === tail) withdrawChains.delete(key); });
+  return run;
+}
+
 // ---------------------------------------------------------------------------
 // DB-backed operations
 // ---------------------------------------------------------------------------
@@ -223,6 +242,9 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
   // Custody / withdrawal-authorization model is FLAGGED for human review.
   // -------------------------------------------------------------------------
   if (config.realStakingEnabled) {
+    // Serialize per builder: read realTotal -> broadcast refund -> debit happens as
+    // one critical section, so two concurrent withdrawals cannot both pass the check.
+    return serializeWithdraw(builderId, async (): Promise<WithdrawResult> => {
     const realTotal = await getRealStake(builderId);
     if (amount > realTotal) {
       return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: 'amount exceeds real (verified) active stake' };
@@ -260,7 +282,9 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
       status: 'withdrawn',
       is_simulated: false,
       token_address: config.usdcTokenAddress,
-      deposit_tx_hash: `pending-refund:${Date.now()}`,
+      // Tie the ledger debit to the real on-chain refund tx (not a sentinel), so the
+      // row is auditable and a later idempotency/dedupe guard has a key to match on.
+      deposit_tx_hash: refund.txHash ?? `pending-refund:${Date.now()}`,
     });
     if (wErr) {
       return { ok: false, total_active_stake: total.toString(), authority_after: '0', error: wErr.message };
@@ -284,6 +308,7 @@ export async function withdrawStake(builderId: string, amount: bigint): Promise<
       },
     });
     return { ok: true, total_active_stake: newTotal.toString(), authority_after: auth.authority.toString(), refund };
+    });
   }
 
   // -------------------------------------------------------------------------
