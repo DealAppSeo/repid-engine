@@ -19,6 +19,10 @@ import { authMiddleware } from '../src/middleware/auth';
 
 const mockRunRound = jest.fn(async () => ({ ok: true, round_id: 'r1', apm: null, veritas: null, audit_entries: [], is_simulated: true, notes: '' }));
 const mockDbUpdates: unknown[] = [];
+// The demo-round cap lives in hal_audit_chain: each attempt is appended, then today's attempts are
+// counted. mockAttempts stands in for those rows, and survives anything the route module does, the
+// way a database survives a restart.
+const mockCap = { attempts: 0, appendFails: false, countFails: false };
 
 jest.mock('../src/db', () => {
   const chain: any = {
@@ -27,8 +31,21 @@ jest.mock('../src/db', () => {
     update: (row: unknown) => { mockDbUpdates.push(row); return chain; },
     then: (r: any) => r({ data: [{ id: 'round-1', apm_bet_id: 'a', veritas_bet_id: 'v' }], error: null }),
   };
-  return { db: { from: () => chain } };
+  const audit: any = {
+    select: () => audit, eq: () => audit, gte: () => audit,
+    then: (r: any) => r(mockCap.countFails
+      ? { count: null, error: { message: 'count failed' } }
+      : { count: mockCap.attempts, error: null }),
+  };
+  return { db: { from: (t: string) => (t === 'hal_audit_chain' ? audit : chain) } };
 });
+jest.mock('../src/services/audit-emit', () => ({
+  emitAuditEvent: jest.fn(async () => {
+    if (mockCap.appendFails) return { ok: false, audit_chain_id: null, error: 'append failed' };
+    mockCap.attempts += 1;
+    return { ok: true, audit_chain_id: mockCap.attempts };
+  }),
+}));
 jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn() }));
 jest.mock('../src/services/anonymous-round-runner', () => ({ runRoundAnonymous: (...a: unknown[]) => (mockRunRound as any)(...a) }));
 
@@ -82,7 +99,7 @@ describe('POST /demo/run-round-anonymous: the operator key and a daily cap', () 
     a.use('/api/v1', v1.default ?? v1.router ?? v1);
     return a;
   };
-  beforeEach(() => v1.__resetDemoRoundCap());
+  beforeEach(() => { mockCap.attempts = 0; mockCap.appendFails = false; mockCap.countFails = false; });
 
   it('any key that is not the operator key: 403, nothing runs', async () => {
     const res = await request(app()).post('/api/v1/demo/run-round-anonymous').set('x-api-key', 'some-agent-key').send({});
@@ -106,6 +123,37 @@ describe('POST /demo/run-round-anonymous: the operator key and a daily cap', () 
     expect(third.status).toBe(429);
     expect(third.body.error).toBe('demo_round_daily_cap');
     expect(mockRunRound).toHaveBeenCalledTimes(2);
+  });
+
+  it('the cap is counted in the database: attempts already recorded today still count after a restart', async () => {
+    // Strix on #1251: an in-process counter reset on restart and was not shared across replicas.
+    process.env.DEMO_ROUND_DAILY_CAP = '2';
+    mockCap.attempts = 2; // two rounds already ran today, recorded before this process started
+    // A freshly loaded route module is a restart: any counter held in process memory starts at zero.
+    let fresh: any;
+    jest.isolateModules(() => { fresh = require('../src/routes/v1'); });
+    const restarted = express();
+    restarted.use(express.json());
+    restarted.use('/api/v1', fresh.default ?? fresh.router ?? fresh);
+    const res = await request(restarted).post('/api/v1/demo/run-round-anonymous').set('x-api-key', 'operator-key').send({});
+    expect(res.status).toBe(429);
+    expect(res.body.error).toBe('demo_round_daily_cap');
+    expect(mockRunRound).not.toHaveBeenCalled();
+  });
+
+  it('an attempt that cannot be recorded does not run: 503, NOT CHECKED', async () => {
+    mockCap.appendFails = true;
+    const res = await request(app()).post('/api/v1/demo/run-round-anonymous').set('x-api-key', 'operator-key').send({});
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('demo_round_cap_not_checked');
+    expect(mockRunRound).not.toHaveBeenCalled();
+  });
+
+  it('a count that fails does not run either: 503, NOT CHECKED', async () => {
+    mockCap.countFails = true;
+    const res = await request(app()).post('/api/v1/demo/run-round-anonymous').set('x-api-key', 'operator-key').send({});
+    expect(res.status).toBe(503);
+    expect(mockRunRound).not.toHaveBeenCalled();
   });
 
   it('a cap of 0 means no demo writes at all', async () => {
