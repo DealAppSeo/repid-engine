@@ -1,62 +1,52 @@
-# INBOX_XC: review + red-team the Jev/Laya Chrome extension path and its Chrome Web Store readiness
+# INBOX_XC: propose SAFE improvements to HAL and RepID — ranked, no scoring changes
 
 ## Task
 
-**Lane:** REVIEW + RED-TEAM. You have **no write scope**: the deliverable is text. Do not claim to
-have created, edited, run, built or committed anything. You hold `reasoning` and `repo_read`, on this
-repository (`repid-engine`, branch `claude/bold-turing-icz50x`) and on **`DealAppSeo/trustshell`
-read-only at `./trustshell`**. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED** — and since you
-cannot run anything, "the code reads as if it works" is NOT_CHECKED, never VERIFIED. Dispatched by CC
-(Claude) on 2026-10-08.
+**Lane:** REVIEW + PROPOSE. You have **no write scope**: the deliverable is text. Do not claim to
+have created, edited, run, built or committed anything. You hold `reasoning` and `repo_read` on
+`repid-engine` (branch `claude/bold-turing-icz50x`) and read-only `./trustshell`. **Three outcomes:
+VERIFIED / NOT_CHECKED / FAILED** — "reads as if it works" is NOT_CHECKED. Dispatched by CC (Claude)
+2026-10-08. Sean asked to "improve HAL and RepID functionality." He is asleep; this is analysis for
+when he wakes, plus a menu CC can act on the SAFE items from.
 
-## Why this matters
+## Hard constraints (these are fences, not suggestions)
 
-We are about to invite outside users. The headline flow is: a person on their **normal** LLM site
-(ChatGPT, Claude.ai, Grok, Gemini) uses our **Chrome extension** to run the trust harness inline, with
-**Jev and Laya** — fast single-pass classifiers ("LLMs without the language", good at multiple-choice)
-— doing the cheap first-pass check. Sean needs to know, from a second model family that only reads:
-does this actually hang together, what leaks, and what is left before it can go in the Chrome Web Store.
+Per `CLAUDE.md` and `LESSONS.md`:
+- **Do NOT propose changing tuned scoring constants** (the RepID formula `T=floor(2000×log10…)`, ANFIS
+  parameters, `src/config/scoring-params.ts`, `src/scoring/repid-constants.ts` values). Those are
+  hard-stops; naming them in a proposal is fine, changing them is forbidden.
+- **A change that moves every future score is a DECISION, not a cleanup** — flag it as "needs Sean",
+  never as "safe to do". The ecosystem-need multiplier (computed in the pipeline but never applied to
+  the delta — `src/engine/repid-update.ts`, `getEcosystemNeedWeight`) and `FIXED_DELTAS.STAKE` being
+  forced to 0 are examples: say what they are, mark them DECISION.
+- **Three outcomes everywhere.** HAL's whole job is that NOT_CHECKED never reads as a pass.
 
-## Part 1 — Trace the extension path (read it; name every break)
+## What to produce — a ranked menu, each item tagged SAFE or DECISION
 
-In `trustshell/extension/` read `manifest.json`, `content.js`, `select.js`, `scrub.js`, `classify.js`,
-`laya.js`, `grok-host.js`, `background.js`, `badge.js`, `toast.js`, `settings.js`. Follow one claim from
-the user selecting text on an LLM page to a stamp appearing:
-`content/select -> scrub -> classify -> (Laya / the engine) -> badge/toast`. For each hop state
-VERIFIED / NOT_CHECKED / FAILED and the `file:line`. Call out any hop that is wired to nothing, a
-`TODO`, a stub, or a function that is defined but never called.
+Read the real code (cite `file:line`), do not trust comments. Cover both layers:
 
-## Part 2 — What ARE Jev and Laya, in code (no guessing)
+**HAL (honesty / verification):** `src/layers/constitutional-audit.ts`, `src/services/pcp-validator.ts`,
+`src/engine/repid-update.ts` (the audit gate), `src/routes/hal-evaluate.ts`, `src/services/cascade-settlement-worker.ts`,
+the family-quorum / drain-gate logic, and `src/classify/free-votes.ts`. Look for: a place a miss can
+still read as a pass; a NOT_CHECKED collapsed into a verdict; a one-family result treated as agreement;
+a validator that scores 0 on a thrown call rather than dropping it; an honesty gap between what a
+response claims and what it measured.
 
-Read `repid-engine/src/jev/classify.ts`, `src/routes/laya-classify.ts`, `src/classify/free-votes.ts`,
-`src/routes/classify.ts`, and the eval harness `scripts/eval/jev-shadow.ts` + corpus. Answer:
-1. Is Jev/Laya a local heuristic, a small model, or a remote call? Quote the code that decides.
-2. Is the "fast, single-pass, no heavy LLM" claim TRUE as implemented, or does it fall back to a full
-   provider call? Name the fallback path if any.
-3. Does the extension's `laya.js` call the engine's Laya route, or a local copy? Do they agree?
+**RepID (reputation):** `src/engine/repid-update.ts`, `src/scoring/*`, the tier trigger / counterparty
+gate (DB), `src/routes/repid.ts`, `repid_score_events`. Look for: an audit-trail field that records a
+value that moved no score (the ledger lying by omission), a decay/redemption path that can't be read
+back, a missing `repid_score_events` row on a path that writes `current_repid`, a tier that can lag its
+inputs without being observable.
 
-## Part 3 — RED-TEAM the privacy/security surface (this is the important part)
+For EACH finding give: `file:line`, what it is, the failure direction (which way it is wrong), whether
+fixing it is **SAFE** (adds observability, a test, a NOT_CHECKED guard, an honest label — changes no
+score) or a **DECISION** (moves scores / changes behavior Sean must approve), and the smallest change
+that fixes it. Rank SAFE-and-high-value first.
 
-A content script that reads a user's LLM conversation is a serious trust surface. Rank worst-first:
-1. **What leaves the browser, and to where?** Trace every `fetch`/`sendMessage` out of the extension.
-   Does `scrub.js` actually remove PII/secrets BEFORE anything leaves the page, or can raw selected
-   text (which may contain the user's private prompt, an API key, a wallet address) reach our server
-   or a third party? Give the `file:line` where scrubbed vs raw text crosses the boundary.
-2. `manifest.json` host permissions — are they minimal, or broad (`<all_urls>`)? Any `content_security_policy`
-   weakness, remote-code (`eval`, remote script) that Chrome Web Store review will reject?
-3. Can a malicious page spoof a "verified" stamp, or suppress a "veto" stamp, by controlling the DOM the
-   content script reads/writes?
-4. Does the extension hold or touch any key, token, or secret? (It must not — keys are TrustKeys.)
-
-## Part 4 — Chrome Web Store readiness
-
-Read `trustshell/store/LISTING.md` and `.github/workflows/extension-e2e.yml`. What is present and what is
-MISSING for a submission (listing copy, screenshots, privacy-policy URL, permissions justification,
-single-purpose description, data-use disclosures)? List the gaps as a checklist. Do NOT claim it is
-submitted or live — you cannot check that; say NOT_CHECKED.
+Also: name anything already CLOSED so CC does not rebuild it — grep `reports/` and `LESSONS.md`.
 
 ## Deliverable
 
-A ranked report, worst failure-direction first. For every claim: `file:line` and one of VERIFIED /
-NOT_CHECKED / FAILED. Where a category is clean, say NOT FOUND and list what you read, so a reader can
-tell "none" from "did not look". End with the single most important thing to fix before inviting users.
+A ranked list, SAFE items first, each with `file:line`, failure direction, SAFE/DECISION tag, and the
+minimal fix. End with the ONE improvement you would make first and why. If a category is clean, say
+NOT FOUND and list what you read. Remember: you cannot run anything, so every "it works" is NOT_CHECKED.
