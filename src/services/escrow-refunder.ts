@@ -27,6 +27,7 @@ import { BASE_SEPOLIA_CHAIN_ID } from './testnet-only';
 import type { RefundInitiation } from './stake-vault';
 
 const ERC20_ABI = ['function transfer(address to, uint256 value) returns (bool)'];
+const ERC20_BALANCE_ABI = ['function balanceOf(address owner) view returns (uint256)'];
 
 /** The chain write, abstracted so tests exercise the guard logic without a live chain. */
 export type EscrowSender = (to: string, amount: bigint) => Promise<{ txHash: string }>;
@@ -83,6 +84,139 @@ async function realSender(to: string, amount: bigint): Promise<{ txHash: string 
   const receipt = await tx.wait(Math.max(1, config.stakeMinConfirmations));
   if (!receipt || receipt.status !== 1) throw new Error('refund tx not confirmed');
   return { txHash: tx.hash };
+}
+
+// --- Read-only escrow health (verify config WITHOUT spending or exposing the key) ---
+//
+// Answers the one question an operator has right after setting STAKE_ESCROW_ADDRESS +
+// STAKE_ESCROW_SIGNER_KEY in Railway: "did I set it right?" — without broadcasting a
+// transaction and without the private key ever leaving the process. It reports only
+// public facts (the escrow ADDRESS, on-chain balances) and booleans; never the key.
+
+/** What the chain reader fetches. Injected so this is unit-testable without an RPC. */
+export interface EscrowChainReading {
+  chainId: number | null; // null = RPC unreachable (NOT_CHECKED, never asserted as agreeing)
+  usdc: bigint | null; // escrow USDC balance (6dp raw), null = not read
+  eth: bigint | null; // escrow native ETH balance (wei), null = not read
+}
+export type EscrowChainReader = (escrowAddress: string) => Promise<EscrowChainReading>;
+
+let chainReader: EscrowChainReader | null = null;
+
+/** Test seam: inject a fake chain reader. Call with undefined to reset to the real one. */
+export function __setEscrowChainReader(r?: EscrowChainReader | null): void {
+  chainReader = r ?? null;
+}
+
+async function realChainReader(escrowAddress: string): Promise<EscrowChainReading> {
+  const out: EscrowChainReading = { chainId: null, usdc: null, eth: null };
+  const provider = new ethers.JsonRpcProvider(config.baseSepoliaRpc);
+  try {
+    const net = await provider.getNetwork();
+    out.chainId = Number(net.chainId);
+  } catch {
+    return out; // RPC unreachable → leave everything NOT_CHECKED
+  }
+  try {
+    out.eth = await provider.getBalance(escrowAddress);
+  } catch {
+    /* leave null */
+  }
+  try {
+    const usdc = new ethers.Contract(config.usdcTokenAddress, ERC20_BALANCE_ABI, provider);
+    out.usdc = (await usdc.getFunction('balanceOf')(escrowAddress)) as bigint;
+  } catch {
+    /* leave null */
+  }
+  return out;
+}
+
+export interface EscrowHealth {
+  configured: boolean; // both key + address present
+  escrowAddress: string | null; // public; never the key
+  // Derived from the key in-process and compared to STAKE_ESCROW_ADDRESS. A refund
+  // REFUSES unless this is VERIFIED, so FAILED means "withdrawals cannot send".
+  signerMatchesAddress: 'VERIFIED' | 'FAILED' | 'NOT_CHECKED';
+  chain: { expected: number; reported: number | null; agrees: boolean | null };
+  balances: { usdc: string | null; eth: string | null }; // human units; null = NOT_CHECKED
+  realStakingEnabled: boolean;
+  // ready = a real withdrawal could actually send right now: configured, signer matches,
+  // chain agrees, AND the escrow holds USDC (to pay out) and ETH (for gas).
+  ready: boolean;
+  notes: string[];
+}
+
+/**
+ * Read-only escrow configuration + funding health. No transaction, no key in the output.
+ * `reader` is injectable for tests; the default reads Base Sepolia live.
+ */
+export async function escrowHealth(reader?: EscrowChainReader): Promise<EscrowHealth> {
+  // Precedence: explicit arg → injected test seam → real RPC reader.
+  const read: EscrowChainReader = reader ?? chainReader ?? realChainReader;
+  const notes: string[] = [];
+  const escrowAddress = config.stakeEscrowAddress ?? null;
+  const configured = !!(config.stakeEscrowSignerKey && config.stakeEscrowAddress);
+
+  let signerMatchesAddress: EscrowHealth['signerMatchesAddress'] = 'NOT_CHECKED';
+  if (!configured) {
+    notes.push('STAKE_ESCROW_SIGNER_KEY and/or STAKE_ESCROW_ADDRESS not set — withdrawal is a stub and fails closed.');
+  } else {
+    try {
+      const derived = new ethers.Wallet(config.stakeEscrowSignerKey as string).address;
+      signerMatchesAddress = eqAddr(derived, config.stakeEscrowAddress as string) ? 'VERIFIED' : 'FAILED';
+      if (signerMatchesAddress === 'FAILED') {
+        notes.push('The signer key derives a DIFFERENT address than STAKE_ESCROW_ADDRESS — every refund will refuse. The two values must come from the same wallet account.');
+      }
+    } catch {
+      signerMatchesAddress = 'FAILED';
+      notes.push('STAKE_ESCROW_SIGNER_KEY is not a valid private key — refunds will refuse. Expect 64 hex chars (with or without 0x).');
+    }
+  }
+
+  let reported: number | null = null;
+  let usdcRaw: bigint | null = null;
+  let ethRaw: bigint | null = null;
+  if (escrowAddress && isAddress(escrowAddress)) {
+    try {
+      const r = await read(escrowAddress);
+      reported = r.chainId;
+      usdcRaw = r.usdc;
+      ethRaw = r.eth;
+    } catch {
+      notes.push('Could not read the chain — balances and chain id NOT_CHECKED.');
+    }
+  } else if (configured) {
+    notes.push('STAKE_ESCROW_ADDRESS is not a valid address.');
+  }
+  const agrees = reported === null ? null : reported === BASE_SEPOLIA_CHAIN_ID;
+  if (agrees === false) {
+    notes.push(`RPC reports chain ${reported}, not Base Sepolia (${BASE_SEPOLIA_CHAIN_ID}) — refunds will refuse.`);
+  }
+
+  // Format balances honestly: null stays null (NOT_CHECKED), never a stand-in zero.
+  const usdcHuman = usdcRaw === null ? null : ethers.formatUnits(usdcRaw, 6);
+  const ethHuman = ethRaw === null ? null : ethers.formatUnits(ethRaw, 18);
+  if (usdcRaw !== null && usdcRaw === 0n) notes.push('Escrow holds 0 USDC — fund it before a withdrawal can pay out.');
+  if (ethRaw !== null && ethRaw === 0n) notes.push('Escrow holds 0 ETH — fund a little Base Sepolia ETH for refund gas.');
+
+  const ready =
+    configured &&
+    signerMatchesAddress === 'VERIFIED' &&
+    agrees === true &&
+    usdcRaw !== null && usdcRaw > 0n &&
+    ethRaw !== null && ethRaw > 0n;
+  if (ready) notes.push('READY: a real escrow→builder refund can be broadcast.');
+
+  return {
+    configured,
+    escrowAddress,
+    signerMatchesAddress,
+    chain: { expected: BASE_SEPOLIA_CHAIN_ID, reported, agrees },
+    balances: { usdc: usdcHuman, eth: ethHuman },
+    realStakingEnabled: config.realStakingEnabled,
+    ready,
+    notes,
+  };
 }
 
 /**

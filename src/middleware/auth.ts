@@ -168,6 +168,11 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   if (req.method === 'POST' && req.path === '/api/v1/stake/deposit') return next();
   // Read-only: returns the exact text to sign. Reveals nothing, authorizes nothing.
   if (req.method === 'GET' && req.path === '/api/v1/stake/deposit/message') return next();
+  // Read-only escrow config/funding health. Reveals only the escrow ADDRESS, its
+  // on-chain balances and booleans (never the signer key); builds no tx. Lets an
+  // operator confirm the escrow vars without a key. Must be BEFORE the /stake/authority
+  // bypass does not cover it (different path), so it gets its own line.
+  if (req.method === 'GET' && req.path === '/api/v1/stake/escrow/health') return next();
 
   // PUBLIC MARKET BOARD. An agent that finds the ecosystem cannot decide whether
   // to join a market it is not allowed to look at. These two reads are already

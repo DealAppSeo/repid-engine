@@ -25,14 +25,28 @@ const mockConfig = {
 };
 jest.mock('../src/config', () => ({ config: mockConfig }));
 
-import { escrowRefund, __setEscrowSender } from '../src/services/escrow-refunder';
+import { ethers } from 'ethers';
+import {
+  escrowRefund,
+  __setEscrowSender,
+  escrowHealth,
+  __setEscrowChainReader,
+} from '../src/services/escrow-refunder';
 
 const BUILDER = 'builder-1';
 const PAYEE = '0x2222222222222222222222222222222222222222';
 
+// A real, deterministic test keypair. The key is CONSTRUCTED (not a literal 64-hex
+// string) so no secret-shaped token lands in the test corpus; the address is derived
+// from it so there is no address literal to drift from the key either.
+const TEST_KEY = '0x' + '0'.repeat(63) + '1'; // private key = 1
+const TEST_ADDR = new ethers.Wallet(TEST_KEY).address;
+
 afterEach(() => {
   __setEscrowSender(undefined);
+  __setEscrowChainReader(undefined);
   mockConfig.stakeEscrowSignerKey = null;
+  mockConfig.stakeEscrowAddress = '0x1111111111111111111111111111111111111111';
 });
 
 describe('escrowRefund — fail-closed escrow -> builder refund', () => {
@@ -84,5 +98,76 @@ describe('escrowRefund — fail-closed escrow -> builder refund', () => {
     mockConfig.stakeEscrowSignerKey = 'present';
     const r = await escrowRefund(BUILDER, 0n, PAYEE);
     expect(r.initiated).toBe(false);
+  });
+});
+
+describe('escrowHealth — read-only "did I set it right" check (no tx, no key in output)', () => {
+  // A funded, correct chain reading. 100 USDC (6dp) + 0.05 ETH (wei), chain 84532.
+  const fundedBaseSepolia = async () => ({ chainId: 84532, usdc: 100_000_000n, eth: 50_000_000_000_000_000n });
+
+  it('unconfigured => NOT_CHECKED signer, not ready, says so', async () => {
+    mockConfig.stakeEscrowSignerKey = null;
+    __setEscrowChainReader(fundedBaseSepolia);
+    const h = await escrowHealth();
+    expect(h.configured).toBe(false);
+    expect(h.signerMatchesAddress).toBe('NOT_CHECKED');
+    expect(h.ready).toBe(false);
+    expect(h.notes.join(' ')).toMatch(/not set/i);
+  });
+
+  it('key matches address + chain agrees + funded => VERIFIED and ready, key never in output', async () => {
+    mockConfig.stakeEscrowSignerKey = TEST_KEY;
+    mockConfig.stakeEscrowAddress = TEST_ADDR;
+    __setEscrowChainReader(fundedBaseSepolia);
+    const h = await escrowHealth();
+    expect(h.signerMatchesAddress).toBe('VERIFIED');
+    expect(h.chain.agrees).toBe(true);
+    expect(h.balances.usdc).toBe('100.0');
+    expect(h.ready).toBe(true);
+    expect(h.escrowAddress).toBe(TEST_ADDR);
+    // The private key must never appear anywhere in the output.
+    expect(JSON.stringify(h)).not.toContain(TEST_KEY);
+    expect(JSON.stringify(h)).not.toContain(TEST_KEY.slice(2));
+  });
+
+  it('key derives a DIFFERENT address => FAILED, not ready', async () => {
+    mockConfig.stakeEscrowSignerKey = TEST_KEY;
+    mockConfig.stakeEscrowAddress = '0x2222222222222222222222222222222222222222'; // not TEST_ADDR
+    __setEscrowChainReader(fundedBaseSepolia);
+    const h = await escrowHealth();
+    expect(h.signerMatchesAddress).toBe('FAILED');
+    expect(h.ready).toBe(false);
+    expect(h.notes.join(' ')).toMatch(/DIFFERENT address|same wallet/i);
+  });
+
+  it('wrong chain => agrees:false, not ready', async () => {
+    mockConfig.stakeEscrowSignerKey = TEST_KEY;
+    mockConfig.stakeEscrowAddress = TEST_ADDR;
+    __setEscrowChainReader(async () => ({ chainId: 1, usdc: 100_000_000n, eth: 1n }));
+    const h = await escrowHealth();
+    expect(h.chain.agrees).toBe(false);
+    expect(h.ready).toBe(false);
+    expect(h.notes.join(' ')).toMatch(/not Base Sepolia/i);
+  });
+
+  it('zero balances => not ready, tells operator to fund', async () => {
+    mockConfig.stakeEscrowSignerKey = TEST_KEY;
+    mockConfig.stakeEscrowAddress = TEST_ADDR;
+    __setEscrowChainReader(async () => ({ chainId: 84532, usdc: 0n, eth: 0n }));
+    const h = await escrowHealth();
+    expect(h.ready).toBe(false);
+    expect(h.notes.join(' ')).toMatch(/0 USDC/);
+    expect(h.notes.join(' ')).toMatch(/0 ETH/);
+  });
+
+  it('RPC unreachable => chain + balances NOT_CHECKED (null), never a stand-in zero', async () => {
+    mockConfig.stakeEscrowSignerKey = TEST_KEY;
+    mockConfig.stakeEscrowAddress = TEST_ADDR;
+    __setEscrowChainReader(async () => ({ chainId: null, usdc: null, eth: null }));
+    const h = await escrowHealth();
+    expect(h.chain.agrees).toBeNull();
+    expect(h.balances.usdc).toBeNull();
+    expect(h.balances.eth).toBeNull();
+    expect(h.ready).toBe(false);
   });
 });
