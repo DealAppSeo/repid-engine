@@ -5,7 +5,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
-import { PINNED_PROVER_URL, proverBaseUrl } from '../src/config/prover';
+import { PINNED_PROVER_URL, proverBaseUrl, proverAuthHeaders } from '../src/config/prover';
 
 const ROOT = join(__dirname, '..');
 const PROVER_HOST = /https?:\/\/[a-z0-9.-]*(?:zkp|prover|plonky|postcard|hyperdag-core)[a-z0-9.-]*/gi;
@@ -49,5 +49,43 @@ describe('the engine calls one prover', () => {
   it('ZKP_SERVICE_URL still overrides per service; unset falls back to the pin', () => {
     expect(proverBaseUrl({} as NodeJS.ProcessEnv)).toBe(PINNED_PROVER_URL);
     expect(proverBaseUrl({ ZKP_SERVICE_URL: 'https://example.test' } as NodeJS.ProcessEnv)).toBe('https://example.test');
+  });
+});
+
+describe('every prover call carries the bearer token (F-10, Sean 2026-10-07)', () => {
+  const files = sourceFiles(join(ROOT, 'src'));
+  // A request to the prover is a URL ending in one of its POST routes, built as a template
+  // (`${base}/zkp/repid-proof`) or by concatenation (+ '/prove/trade_auth'). Comments are stripped
+  // first: a route named in prose is not a call.
+  const PROVER_CALL = /\/(?:zkp\/repid-proof|prove\/trade_auth)(?:`\s*[,)]|'\s*;)/;
+  const code = (f: string) =>
+    readFileSync(f, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+
+  it('the scan finds the call sites it is meant to guard', () => {
+    const callers = files.filter((f) => PROVER_CALL.test(code(f)));
+    expect(callers.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('every source file that calls the prover sends proverAuthHeaders()', () => {
+    const missing = files
+      .filter((f) => PROVER_CALL.test(code(f)))
+      .filter((f) => {
+        const src = code(f);
+        const calls = (src.match(new RegExp(PROVER_CALL.source, 'g')) ?? []).length;
+        const headers = (src.match(/\.\.\.proverAuthHeaders\(\)/g) ?? []).length;
+        return headers < calls;
+      })
+      .map((f) => relative(ROOT, f));
+    expect(missing).toEqual([]);
+  });
+
+  it('the header is a bearer token when ZKP_SERVICE_TOKEN is set, and absent when it is not', () => {
+    expect(proverAuthHeaders({ ZKP_SERVICE_TOKEN: 'tok' } as NodeJS.ProcessEnv)).toEqual({ Authorization: 'Bearer tok' });
+    expect(proverAuthHeaders({} as NodeJS.ProcessEnv)).toEqual({});
+    expect(proverAuthHeaders({ ZKP_SERVICE_TOKEN: '   ' } as NodeJS.ProcessEnv)).toEqual({});
   });
 });

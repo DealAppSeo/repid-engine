@@ -19,7 +19,7 @@
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { todayPT } from '../lib/time';
-import { placeBet, resolveBet, signOracleOutcome } from './linked-bet-resolver';
+import { placeBet, resolveBet, signOracleOutcome, oracleSecretConfigured, ORACLE_SECRET_MISSING } from './linked-bet-resolver';
 
 export const APM_AGENT_NAME = 'APM';
 export const VERITAS_AGENT_NAME = 'VERITAS';
@@ -216,9 +216,13 @@ export async function startTradingRound(opts: { betAmountOverride?: bigint, demo
 export interface ResolveRoundsResult {
   resolved: number;
   details: Array<{ round_id: string; apm_outcome: any; veritas_outcome: any }>;
+  /** Set when nothing could be resolved because the oracle secret is missing. NOT CHECKED, not zero work. */
+  not_checked?: string;
 }
 
 export async function resolveOpenRounds(opts: { force?: boolean } = {}): Promise<ResolveRoundsResult> {
+  // [F-13] Without the oracle secret no outcome can be signed, so no round is settled.
+  if (!oracleSecretConfigured()) return { resolved: 0, details: [], not_checked: ORACLE_SECRET_MISSING };
   const cutoff = opts.force ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString() : new Date().toISOString();
   const { data: open } = await db
     .from('trading_rounds')

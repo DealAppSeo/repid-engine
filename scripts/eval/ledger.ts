@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import type { VoteOutcome } from '../../src/classify/free-votes';
 import { comparePaired, contradicted, readSlice, type Answer, type PairedItem, type SliceCounts } from '../../src/ledger/score';
 import { outcomeOf, type BaselineRow } from './candidate-voter';
+import { retiredLine } from './retired-holdout';
 
 export type Truth = 'TRUE' | 'FALSE';
 
@@ -150,7 +151,8 @@ function pct(x: number | null): string {
 export function report(root: string): string {
   const corpus = loadCorpus(root);
   const results = loadResults(root);
-  const lines: string[] = ['# Checker ledger (offline, k = 3)', ''];
+  // These runs are on the public corpus (S60): a checker's score here is not a holdout score.
+  const lines: string[] = ['# Checker ledger (offline, k = 3)', '', retiredLine('eval/rigorous/rigorous-corpus-v1.jsonl'), ''];
   const groups = new Map<string, Result[]>();
   for (const r of results) {
     const g = `${r.run_id}\t${r.checker}`;

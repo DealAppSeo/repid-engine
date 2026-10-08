@@ -38,7 +38,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { pgQuery } from '../db/direct-pg';
 import { shouldParkForHalt } from '../services/emergency-halt';
-import { PINNED_PROVER_URL } from '../config/prover';
+import { PINNED_PROVER_URL, proverAuthHeaders } from '../config/prover';
 
 const WORKER = 'proof-refresh';
 
@@ -239,7 +239,7 @@ export async function runOnce(cfg: RefreshConfig = readConfig(), deps: RefreshDe
       try {
         const res = await deps.fetchImpl(`${base}/zkp/repid-proof`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
           body: JSON.stringify({ agent_id: d.agentId, score: d.score, metadata: { job_id: jobId, refresh: true } }),
           signal: controller.signal,
         });

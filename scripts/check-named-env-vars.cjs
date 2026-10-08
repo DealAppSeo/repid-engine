@@ -86,6 +86,8 @@ const ALLOWLIST = {
   // ── composed / indirect src/ reads the generator cannot see ──────────────
   ONLY_ATTESTATIONS_LEAVE:
     'Read as env.ONLY_ATTESTATIONS_LEAVE inside the one shared reader (src/selfhost/egress-guard.ts, #1177), which takes env as a parameter; generator only captures literal process.env.NAME.',
+  PROVER_AUTH_TOKEN:
+    'The prover\'s own variable (DealAppSeo/HyperDAG-core services/zkp-postcard). Named in src/config/prover.ts only to say it must hold the same value as ZKP_SERVICE_TOKEN.',
   CLASSIFY_FREE_VOTES:
     'B15 kill switch, read as env.CLASSIFY_FREE_VOTES in src/classify/free-votes.ts (env passed as a parameter for tests); generator misses it.',
   CLOUDFLARE_WORKERS_AI_TOKEN:
@@ -170,6 +172,8 @@ const ALLOWLIST = {
   RIG_DELAY_MS: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
   RIG_LIMIT: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
   RIG_OUT: 'scripts/eval/rigorous-hal-eval.ts only; generator scans src/.',
+  HOLDOUT_FILE:
+    'S60 private holdout path, read in scripts/eval/holdout.ts and holdout-rotate.ts (eval only, never the engine); generator scans src/.',
   RESKIN_CERTAINTY: 'scripts/hal-eval/reskin-invariance.ts only; generator scans src/.',
   RESKIN_CORPUS: 'scripts/hal-eval/reskin-invariance.ts only; generator scans src/.',
   RESKIN_JSON: 'scripts/hal-eval/reskin-invariance.ts only; generator scans src/.',

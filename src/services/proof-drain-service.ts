@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { proverAuthHeaders } from '../config/prover';
 import { pgQuery } from '../db/direct-pg';
 import { buildPostcardCommitment, generateNonce, SHA256_COMMITMENT_TAG } from '../zkp/commitment';
 import { buildBoundStatement } from '../zkp/proof-statement-guard'; // corpus hygiene: fail-closed agent binding on every real-proof statement
@@ -618,7 +619,7 @@ export function createProofDrainService(config: ProofDrainServiceConfig): ProofD
       try {
         const r = await httpFetch(`${config.zkpServiceUrl}/zkp/repid-proof`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...proverAuthHeaders() },
           body: JSON.stringify({
             agent_id: job.agent_id,
             score,

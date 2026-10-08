@@ -2,6 +2,17 @@
   "_comment": "The ruler ids. Every HAL accuracy number must be stated as 'F1 = x on <corpus>@<hash> at N families'. tests/corpus-files.test.ts re-derives these hashes from the files and fails if they move, so a corpus edit cannot land silently — change a label, this file must change in the same commit.",
   "_schema": "data/hal_corpus_v1/SCHEMA.md",
   "_frozen_at": "2026-08-06",
+  "retired_as_holdout": "2026-10-07",
+  "retired_reason": "BUS S60: the holdout splits (rigorous-v1 99, canary-v1 15) and their copies have been public in git since July 2026, and a source_id field gives the label away on 190 of 337 rigorous rows, so they are training, regression and practice sets now, never a holdout. Every score on them carries holdout: retired-public. The measurement holdout is private: eval/holdout/README.md.",
+  "retired_copies": [
+    "data/hal_corpus_v1/rigorous-v1.jsonl",
+    "data/hal_corpus_v1/canary-v1.jsonl",
+    "eval/rigorous/rigorous-corpus-v1.jsonl",
+    "eval/canary/canary-corpus-v1.jsonl",
+    "eval/canary/canary-corpus-v1.1.jsonl",
+    "reports/2026-07-09/rigorous-raw.json",
+    "reports/2026-07-07/canary-f1-raw-2026-07-08T02-17-06-804Z.json"
+  ],
   "corpora": [
     {
       "name": "rigorous-v1",

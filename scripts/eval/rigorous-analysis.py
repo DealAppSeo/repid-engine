@@ -19,8 +19,19 @@ computes the full statistical picture the skeptic asked for:
 Positive class = "catch a FALSE claim" (label FALSE). Pure stdlib.
 Usage: python scripts/eval/rigorous-analysis.py --raw reports/2026-07-09/rigorous-raw.json
 """
-import argparse, json, math, random, statistics as st
+import argparse, json, math, os, random, statistics as st
 from collections import defaultdict, Counter
+
+# RETIRED AS A HOLDOUT (S60, 2026-10-07). The rigorous corpus is public; every number this prints
+# is a regression number on a public set. Recorded once in data/hal_corpus_v1/MANIFEST.json and
+# read from there (scripts/eval/retired-holdout.ts prints the same line). No record, no score.
+def retired():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "hal_corpus_v1", "MANIFEST.json")
+    date = json.load(open(p, encoding="utf-8")).get("retired_as_holdout")
+    if not date:
+        raise SystemExit("MANIFEST.json does not record retired_as_holdout; refusing to print a score that could read as a holdout score")
+    line = f"RETIRED PUBLIC SET: eval/rigorous/rigorous-corpus-v1.jsonl is public in git (retired as a holdout {date}). This is NOT a holdout score."
+    return {"holdout": "retired-public", "retired_as_holdout": date}, line
 
 random.seed(1234)
 B_BOOT = 10000
@@ -251,7 +262,9 @@ def main():
         ece+=abs(conf-acc)*len(cell)/len(scored)
         reliab.append(dict(bin=bi/10, n=len(cell), conf=round(conf,3), acc=round(acc,3)))
 
+    stamp, retired_line = retired()
     out=dict(
+        **stamp,
         raw=a.raw, n_claims=N, quorum=run["quorum"], providers=providers, families=families,
         providers_that_voted=run.get("providers_that_voted"),
         label_balance=dict(Counter(r["label"] for r in results)),
@@ -268,6 +281,7 @@ def main():
     # ---- console summary ----
     def f(x): return "—" if x is None else f"{x:.3f}"
     print(f"\n=== RIGOROUS HAL ANALYSIS (N={N}, {out['label_balance']}) ===")
+    print(retired_line)
     print(f"providers voted: {out['providers_that_voted']}  provider_err_rate={out['provider_error_rate']:.3f}")
     print(f"\nHEADLINE (flag/veto=positive):")
     print(f"  F1       {f(headline['f1'])}  CI[{f(ci['f1'][1])},{f(ci['f1'][2])}]")

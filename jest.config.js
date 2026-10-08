@@ -9,7 +9,8 @@ module.exports = {
   // Fails open: any error logs and continues. See the script header.
   globalSetup: '<rootDir>/scripts/ci/reap-orphan-jest.js',
   // No unit test reaches a real chain to check a wallet signature (see the file's header).
-  setupFiles: ['<rootDir>/tests/helpers/offline-signature-chain.ts'],
+  // No unit test calls the live prover either (BUS F-7; see the file's header).
+  setupFiles: ['<rootDir>/tests/helpers/offline-signature-chain.ts', '<rootDir>/tests/helpers/offline-prover.ts'],
   preset: 'ts-jest',
   testEnvironment: 'node',
   // DISCOVERY, NOT A LIST [2026-09-03]. This was

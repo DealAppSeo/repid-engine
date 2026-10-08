@@ -3,7 +3,14 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { validateAgentApiKey } from '../auth/api-keys';
 
-const SECRET: string = process.env.CONTROLLER_QR_SECRET || 'controller-secret-key-1337-abc';
+// [F-15, 2026-10-08] No public default. This read `CONTROLLER_QR_SECRET || '<a string in this public
+// repo>'`, so wherever the variable was unset anyone could sign an admin token for /wake, /sleep,
+// /sprint, /directives and the HITL /requests/:id/decide. Unset now means no QR token can be minted
+// or verified; API keys still work.
+export const QR_SECRET_MISSING = 'CONTROLLER_QR_SECRET is not set, so no controller token can be minted or verified';
+function qrSecret(): string {
+  return (process.env.CONTROLLER_QR_SECRET || '').trim();
+}
 
 export interface SbtContext {
   tokenId?: string;
@@ -13,10 +20,12 @@ export interface SbtContext {
 }
 
 export function mintQrToken(role: 'viewer' | 'operator' | 'admin', durationMs: number = 3600 * 1000): string {
+  const secret = qrSecret();
+  if (!secret) throw new Error(QR_SECRET_MISSING);
   const expiresAt = Date.now() + durationMs;
   const payload = JSON.stringify({ role, expiresAt });
   const base64Payload = Buffer.from(payload).toString('base64url');
-  const hmac = crypto.createHmac('sha256', SECRET);
+  const hmac = crypto.createHmac('sha256', secret);
   hmac.update(base64Payload);
   const sig = hmac.digest('hex');
   return `${base64Payload}.${sig}`;
@@ -24,16 +33,19 @@ export function mintQrToken(role: 'viewer' | 'operator' | 'admin', durationMs: n
 
 export function verifyQrToken(tokenStr: string): { role: 'viewer' | 'operator' | 'admin'; expiresAt: number } | null {
   try {
+    const secret = qrSecret();
+    if (!secret) return null;
     const parts = tokenStr.split('.');
     if (parts.length !== 2) return null;
     const base64Payload = parts[0];
     const sig = parts[1];
     if (!base64Payload || !sig) return null;
 
-    const hmac = crypto.createHmac('sha256', SECRET);
+    const hmac = crypto.createHmac('sha256', secret);
     hmac.update(base64Payload);
-    const expectedSig = hmac.digest('hex');
-    if (sig !== expectedSig) return null;
+    const expected = Buffer.from(hmac.digest('hex'), 'utf8');
+    const given = Buffer.from(sig, 'utf8');
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
 
     const payloadStr = Buffer.from(base64Payload, 'base64url').toString('utf8');
     const payload = JSON.parse(payloadStr);
@@ -115,16 +127,14 @@ export async function resolveControllerRole(req: Request): Promise<'viewer' | 'o
     }
   }
 
-  // 3. Check for SBT (x-sbt-token or x-sbt-wallet)
+  // 3. Check for SBT (x-sbt-token or x-sbt-wallet). [F-15, 2026-10-08] A header that names a token
+  // id or a wallet is a claim, not a proof: both are public on chain, and nothing here checks a
+  // signature. So an SBT named in a header reads (viewer) and never writes. It used to grant
+  // operator or admin by tier or by matching CONTROLLER_MASTER_SBT. Operator and admin now need an
+  // API key with that scope, or a QR token signed with CONTROLLER_QR_SECRET.
   try {
     const sbt = await resolveSbt(req);
     if (sbt) {
-      if (sbt.isMaster || sbt.tier === 'institutional') {
-        return 'admin';
-      }
-      if (sbt.tier === 'qualified_investor') {
-        return 'operator';
-      }
       return 'viewer';
     }
   } catch (e) {

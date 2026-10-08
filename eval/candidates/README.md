@@ -60,6 +60,9 @@ free keys cannot: "research, development, and test use only"), its median time a
 
 ## Findings
 
+Every row below is measured on the 337 public claims (retired as a holdout, S60, 2026-10-07): a
+comparison between voters, not a holdout score. The harness prints that line with each row.
+
 | date | candidate | rows paired | decided: production → with candidate | wrong stamps: production → with candidate | candidate TRUE/FALSE/UNSURE/abstain | median time | notes |
 |---|---|---|---|---|---|---|---|
 | 2026-10-05 | `cerebras:qwen-3.8-27b` (production, the bar) | 337 | 180 (53.4%) | 6 | — | — | Stored run, flags off. 112 not-checked rows had one voter unsure, 108 of them qwen. |

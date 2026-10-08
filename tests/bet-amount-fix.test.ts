@@ -6,6 +6,12 @@ jest.mock('../src/services/anonymous-round-runner', () => ({
   runRoundAnonymous: jest.fn(),
 }));
 
+// The daily cap is counted in the database (src/services/demo-round-cap.ts, tested in
+// tests/f13-no-keyless-writes.test.ts); here a slot is always free so the test reaches the route body.
+jest.mock('../src/services/demo-round-cap', () => ({
+  claimDemoRoundSlot: jest.fn(async () => ({ ok: true, used: 1, cap: 10 })),
+}));
+
 import { runRoundAnonymous } from '../src/services/anonymous-round-runner';
 import { db } from '../src/db';
 import { computeAuthority } from '../src/services/authority-math';
@@ -29,6 +35,10 @@ describe('Bet Amount Fix + Authority Scale', () => {
   });
 
   describe('Bug 1: POST /demo/run-round-anonymous reads bet_amount from body', () => {
+    // Since F-13 the route needs the operator key and has a daily cap; this block tests what is behind them.
+    beforeEach(() => {
+      process.env.REPID_API_KEYS = 'operator-key:pro';
+    });
     it('Sends { bet_amount: "999" } and expects success', async () => {
       (runRoundAnonymous as jest.Mock).mockResolvedValue({
         ok: true,
@@ -37,6 +47,7 @@ describe('Bet Amount Fix + Authority Scale', () => {
 
       const res = await request(app)
         .post('/api/v1/demo/run-round-anonymous')
+        .set('x-api-key', 'operator-key')
         .send({ bet_amount: '999', token: 'testToken' });
 
       expect(res.status).toBe(200);
@@ -59,6 +70,7 @@ describe('Bet Amount Fix + Authority Scale', () => {
 
       const res = await request(app)
         .post('/api/v1/demo/run-round-anonymous')
+        .set('x-api-key', 'operator-key')
         .send({ bet_amount: '100000000', token: 'testToken' });
 
       expect(res.status).toBe(400);

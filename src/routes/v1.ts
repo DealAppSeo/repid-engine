@@ -19,6 +19,7 @@ import { startTradingRound, resolveOpenRounds, getTraderState } from '../service
 import { getTwoBuilderSnapshot, getTimeseries, bootstrapDemoSnapshots } from '../services/two-builder-demo';
 import { createAnonymousBuilder, tokenSignupEnabled } from '../services/anonymous-signup';
 import { runRoundAnonymous } from '../services/anonymous-round-runner';
+import { claimDemoRoundSlot } from '../services/demo-round-cap';
 import { generateCard } from '../services/zkp-card-generator';
 import { buildAgentPassport, PassportQueryError } from '../services/agent-passport';
 import { proofFreshnessVerdict } from '../zkp/proof-freshness';
@@ -409,12 +410,18 @@ router.get('/cards/:card_id/json', async (req: Request, res: Response) => {
 // Reponomics demo endpoints — public per sprint Phase 8 (auth bypass added).
 // ===========================================================================
 
-const SEAN_SIG_SECRET = process.env.SEAN_SIG_SECRET || 'reponomics-default-sean-secret';
+// [F-13, 2026-10-07] NO DEFAULT. The fallback was a fixed string in a public repo, so anyone could
+// compute the header and start or force-resolve trading rounds (settlement and RepID writes). Unset
+// now means every Sean-signed route refuses; it never means "accept the public string".
+function seanSigSecret(): string {
+  return process.env.SEAN_SIG_SECRET || '';
+}
 
 function checkSeanSignature(req: Request): boolean {
   const sig = (req.headers['x-sean-signature'] as string) || '';
-  if (!sig) return false;
-  const expected = createHmac('sha256', SEAN_SIG_SECRET).update('start-trading-round').digest('hex');
+  const secret = seanSigSecret();
+  if (!sig || !secret) return false;
+  const expected = createHmac('sha256', secret).update('start-trading-round').digest('hex');
   if (sig.length !== expected.length) return false;
   try {
     return timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
@@ -780,11 +787,44 @@ router.post('/demo/two-builder/bootstrap', async (_req: Request, res: Response) 
   return res.json({ ok: true, ...r });
 });
 
-// Live demo — anonymous round runner. Wraps startTradingRound + force-resolve
-// so a visitor can press one button and see APM/VERITAS RepID move. The
-// Sean-signature gate on /trader/round/start is preserved at the route layer
-// for direct callers; this wrapper is a server-side composition.
+// Demo round runner. Wraps startTradingRound + force-resolve so APM/VERITAS RepID moves in one call.
+//
+// [F-13, Sean 2026-10-07] "No keyless on-chain write. A daily cap still lets a stranger write. The demo
+// route may check. It may not mint, settle, or write reputation. If a demo write must exist, it takes
+// the operator key and a cap, and it is not keyless." This route settles bets, moves two agents' RepID
+// and fires two on-chain reputation writes, so it was keyless and now is not: the operator key only
+// (authMiddleware no longer bypasses it), and at most DEMO_ROUND_DAILY_CAP runs per UTC day, counted in
+// the database (src/services/demo-round-cap.ts) so a restart or a second replica cannot reset it. The
+// path keeps its old name so a stale caller gets a clear refusal instead of a 404. A visitor without
+// the key can read the same state at GET /api/v1/demo/two-builder/snapshot, which writes nothing.
+const DEMO_ROUND_DAILY_CAP_DEFAULT = 10;
+function demoRoundDailyCap(): number {
+  const raw = Number(process.env.DEMO_ROUND_DAILY_CAP ?? DEMO_ROUND_DAILY_CAP_DEFAULT);
+  return Number.isInteger(raw) && raw >= 0 ? raw : DEMO_ROUND_DAILY_CAP_DEFAULT;
+}
+
 router.post('/demo/run-round-anonymous', async (req: Request, res: Response) => {
+  const presented = String(req.headers['x-api-key'] ?? '').trim() ||
+    String(req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '').trim();
+  if (!matchEnvOperatorKey(presented)) {
+    return res.status(403).json({
+      ok: false,
+      error: 'demo_round_needs_operator',
+      message: 'A demo round settles bets, moves RepID and writes on-chain, so it needs the operator key. ' +
+        'Read the current state at GET /api/v1/demo/two-builder/snapshot.',
+    });
+  }
+  const claim = await claimDemoRoundSlot(demoRoundDailyCap());
+  if (!claim.ok && claim.reason === 'not_checked') {
+    return res.status(503).json({
+      ok: false,
+      error: 'demo_round_cap_not_checked',
+      message: 'The daily cap could not be counted, so the round did not run.',
+    });
+  }
+  if (!claim.ok) {
+    return res.status(429).json({ ok: false, error: 'demo_round_daily_cap', cap: claim.cap, message: `At most ${claim.cap} demo rounds run per UTC day.` });
+  }
   const waitMsRaw = Number(req.body?.wait_ms);
   const waitMs = Number.isFinite(waitMsRaw) ? Math.max(0, Math.min(10000, Math.floor(waitMsRaw))) : undefined;
 

@@ -168,9 +168,10 @@ describe('the stored baseline', () => {
     expect(unread).toBeLessThanOrEqual(9);
   });
 
-  it('the report states the measured rule first and labels the third voter as a simulation', () => {
+  it('the report says the set is public, then states the measured rule, and labels the third voter as a simulation', () => {
     const text = report(rows);
-    expect(text).toMatch(/^## 1\. The rule as it runs/);
+    // S60: the 337 claims are public, so the first line says these are not holdout scores.
+    expect(text).toMatch(/^RETIRED PUBLIC SET: .* This is NOT a holdout score\.\n## 1\. The rule as it runs/);
     expect(text).toContain('all: n=337');
     expect(text).toContain('SIMULATED third voter breaking ties (a model, not a measurement)');
   });

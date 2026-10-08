@@ -33,7 +33,7 @@ async function processQueue() {
       // Generate proof
       const res = await fetch(`http://127.0.0.1:8081/zkp/repid-proof`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(process.env.ZKP_SERVICE_TOKEN ? { Authorization: `Bearer ${process.env.ZKP_SERVICE_TOKEN}` } : {}) },
         body: JSON.stringify({
           agent_id: '3747',
           repid_score: 1000,

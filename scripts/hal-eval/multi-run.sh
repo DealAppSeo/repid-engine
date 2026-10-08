@@ -2,6 +2,9 @@
 # multi-run.sh — run the frozen-corpus eval N times for a fixed config and collect the F1s, so a
 # lever's effect can be read as mean±range ABOVE the run-to-run noise (free-tier models vary even at
 # temperature 0). Usage: multi-run.sh <label> <N> [extra env, e.g. HAL_ESCALATE_GROK=true]
+# `--split holdout` is the PRIVATE holdout since S60 (2026-10-07): it needs HOLDOUT_FILE or the
+# ledger, and each run exits 2 NOT_CHECKED without one (--corpus is then ignored). For the retired
+# public split use --split retired-holdout; its F1 is not a holdout score.
 set -u
 LABEL="${1:?label}"; N="${2:?count}"; shift 2
 EXTRA="$*"

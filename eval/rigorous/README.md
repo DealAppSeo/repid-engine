@@ -1,5 +1,10 @@
 # eval/rigorous
 
+**Public, and retired as a holdout (S60, 2026-10-07).** These 337 claims, their 99-row holdout split
+among them, have been in git since July. Every score on them is a regression number on a public set:
+it carries `holdout: "retired-public"` and says it is not a holdout score. The measurement holdout is
+private (`eval/holdout/README.md`).
+
 `rigorous-corpus-v1.jsonl`: 337 labelled claims (canaries, FEVER, TruthfulQA, HaluEval), each with
 its source URL. HaluEval's "FALSE" means a bad answer to a question, not always a false statement,
 so report it separately.

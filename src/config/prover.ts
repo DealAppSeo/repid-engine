@@ -16,3 +16,14 @@ export const PINNED_PROVER_URL = 'https://zkp-postcard-production.up.railway.app
 export function proverBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return env.ZKP_SERVICE_URL || PINNED_PROVER_URL;
 }
+
+/**
+ * The bearer token every prover call carries (Sean's decision F-10, 2026-10-07: "Add authentication
+ * on the prover"). The prover reads the same value as `PROVER_AUTH_TOKEN` and, once it requires it,
+ * refuses calls without it. Sending it before the prover requires it is harmless, which is why the
+ * engine ships this first. Unset sends no header; the call then fails at the prover, loudly.
+ */
+export function proverAuthHeaders(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const token = (env.ZKP_SERVICE_TOKEN || '').trim();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}

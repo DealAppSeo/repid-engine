@@ -24,6 +24,10 @@
  * pure, deterministic re-scoring of already-verified verdicts. Small N (the
  * canary corpus is ~47-50 claims): stated on every artifact.
  *
+ * RETIRED AS A HOLDOUT (S60, 2026-10-07). The canary corpus these ratings are scored on has been
+ * public since July. The JSON carries `holdout: "retired-public"`, and the console and markdown say
+ * the ratings are not holdout scores (scripts/eval/retired-holdout.ts).
+ *
  * Run (from repo root):
  *   npx ts-node scripts/eval/model-leaderboard.ts
  * Optional env:
@@ -33,6 +37,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { RETIRED_PUBLIC, retiredLine, retiredStamp } from './retired-holdout';
 
 // ---------------------------------------------------------------------------
 // Types mirroring the canary-f1 raw JSON (scripts/eval/canary-f1.ts writer).
@@ -132,6 +137,10 @@ interface UnratedRow {
 interface LeaderboardOut {
   title: string;
   generated_at: string;
+  /** S60: the canary corpus is public; these are not holdout scores. */
+  holdout: typeof RETIRED_PUBLIC;
+  retired_as_holdout: string;
+  retired_note: string;
   laws: Record<string, string>;
   receipt: Receipt;
   quorum_manifest: Array<{ name: string; model: string; family: string }>;
@@ -465,6 +474,8 @@ function main() {
   const out: LeaderboardOut = {
     title: 'EARNED MODEL LEADERBOARD — provider ratings from verified canary fact-checks',
     generated_at: new Date().toISOString(),
+    ...retiredStamp(),
+    retired_note: retiredLine(receiptBase.corpus ?? 'the canary corpus'),
     laws: {
       law1: 'a rating exists only from a verified engagement (a provider must actually vote)',
       law2: 'anchored to ground truth (scored against the corpus known TRUE/FALSE labels)',
@@ -503,6 +514,7 @@ function main() {
     ).padStart(5)}ms | conf.wrong ${x.calibration.mean_confidence_when_wrong ?? '—'}`;
   };
   console.log('\n=== EARNED MODEL LEADERBOARD ===');
+  console.log(out.retired_note);
   console.log(`scored on: ${receiptBase.corpus_scope}  N=${nClaims} claims  (raw run ${filterProvenance.raw_run_size} - ${filterProvenance.dropped_count} dropped)`);
   console.log(`run: ${receiptBase.canary_run}  (${receiptBase.canary_run_generated_at})`);
   console.log(`\nMAIN (coverage >= ${COVERAGE_FLOOR_PCT}% committed):`);
@@ -566,6 +578,8 @@ function renderMarkdown(out: LeaderboardOut): string {
     : '  - (none — scored on the full raw run)';
 
   return `# ${out.title}
+
+> **${out.retired_note}**
 
 > **These ratings are EARNED from ${out.n_claims} verified fact-checks, each carrying its receipt** — the honest
 > alternative to "which LLM is best" listicles. No vibes, no vendor benchmarks: every number below comes

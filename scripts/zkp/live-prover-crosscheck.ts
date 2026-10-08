@@ -135,7 +135,7 @@ async function requestLiveProof(url: string): Promise<{ proofB64: string } | { n
   try {
     const res = await fetch(`${url.replace(/\/+$/, '')}/zkp/repid-proof`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(process.env.ZKP_SERVICE_TOKEN ? { Authorization: `Bearer ${process.env.ZKP_SERVICE_TOKEN}` } : {}) },
       body: JSON.stringify({
         agent_id: SYNTHETIC_AGENT_ID,
         score: SCORE,

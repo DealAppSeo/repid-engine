@@ -1,91 +1,57 @@
-# INBOX_XC: red-team F1 + F2: one accountable root, unbacked stake stops counting
+# INBOX_XC: red-team F-13: find every keyless write that mints, settles or writes reputation
 
 ## Task
 
 **Lane:** RED-TEAM. You have **no write scope**: the deliverable is text. Do not claim to have
 created, edited or committed a file. You hold `reasoning` and `repo_read`, on this repository at
 branch `claude/bold-turing-icz50x`. **Three outcomes: VERIFIED / NOT_CHECKED / FAILED.**
-Dispatched by CC (Claude) on 2026-10-07. Sean said GO on F1 and F2 with your rules from the
-foundation review. This is the code that enforces them; tell us where it does not.
+Dispatched by CC (Claude) on 2026-10-07.
 
-### The rules it claims to enforce
+### Sean's rule (verbatim, 2026-10-07)
 
-1. **Accountable root.** An agent may escrow, pay, widen a grant, add a key or place a stake only
-   while someone answers for it. That someone is one of:
-   - a bound owner;
-   - the operator's custodian (house agents only);
-   - the top of a live, connected grant chain that ends at one of those.
-2. **Child grants.**
-   - The parent must be live and must be held by the grantor.
-   - The root of the chain must be the same person as the grantor's own root.
-   - Depth is capped. A cycle is refused.
-3. **A failed read is not "still live"** and not "nobody owns it". It is NOT CHECKED (503).
-4. **Unbacked stake does not raise a spending ceiling.** Prediction-market wagers and sponsorship
-   rows are reported and ignored. Placing a stake needs the operator key or the root owner's
-   signature over that exact deposit.
-5. **One checker family is not two opinions.**
-   - HAL low quorum + would-be clean → `abstain`.
-   - Ledger same-family pair → `incomplete`.
-   - Dispute validator that checked nothing → back to pending, no verdict.
+"F-13: no keyless on-chain write. A daily cap still lets a stranger write. The demo route may check.
+It may not mint, settle, or write reputation. If a demo write must exist, it takes the operator key
+and a cap, and it is not keyless."
+"F-14: ... A service that writes with no key is the same hole as F-13."
 
-### Where to read
+### What this branch changes (verify it, do not trust it)
 
-- `src/services/accountable-root.ts`: `anchorOf`, `resolveAccountableRoot`, `dbRootReader`.
-- `src/services/principal-grants.ts`:
-  - `walkAncestors`, `isChainLive`, `rootCut`;
-  - the parent block in `mintGrant` (`parent_not_held_by_grantor`, `root_mismatch`);
-  - `checkAuthorization`.
-- Routes:
-  - `src/routes/mvp-api.ts`: `POST /grants`, `/x402-gate/authorize`, `/staking/deposit`;
-  - `src/routes/v1/contracts.ts`: escrow;
-  - `src/routes/key-management.ts`;
-  - `src/routes/agent-spend.ts`;
-  - `src/routes/v1/byok.ts`.
-- `src/services/x402-gate.ts`: `loadAuthorityContext`, backed vs unbacked.
-- `src/hal/fact-check.ts` (the `abstain` block), `src/workers/dispute-resolution-worker.ts`,
-  `src/ledger/daily-totals.ts`.
-- Tests:
-  - `tests/accountable-root.test.ts`, `tests/grants-chain-f1.test.ts`;
-  - `tests/escrow-accountable-root.test.ts`, `tests/stake-unbacked-not-counted.test.ts`;
-  - `tests/owner-lookup-fail-closed.test.ts`.
+1. `POST /api/v1/demo/run-round-anonymous` is no longer bypassed in `src/middleware/auth.ts`; the route
+   (`src/routes/v1.ts`) now needs the operator key and has a daily cap (`DEMO_ROUND_DAILY_CAP`).
+2. `POST /api/v1/bet/place` is no longer bypassed.
+3. `SEAN_SIG_SECRET` (`src/routes/v1.ts`) and `ORACLE_HMAC_SECRET` (`src/services/linked-bet-resolver.ts`,
+   `src/services/onchain-oracle.ts`) no longer fall back to strings published in this repo. Unset
+   means refuse.
+4. `tests/no-default-secrets.test.ts` lists the remaining secret fallbacks; the list may only shrink.
+
+### Your job: find what this branch MISSED
+
+Start from `src/middleware/auth.ts`: every early `return next()` is a door that skips the API key.
+Also read every router mounted BEFORE `authMiddleware` in `src/index.ts`. For each door that accepts
+a POST, PUT, PATCH or DELETE (or a GET with side effects), follow the handler to the database and the
+chain and answer: can a caller with NO key, or with only a value printed in this public repo, cause
+any of these?
+
+- a mint (ERC-8004 identity, token, NFT);
+- a settlement (escrow release, bet resolution, contract settle, x402 settle);
+- a reputation write (anything that changes `repid_agents.current_repid`, `repid_score_events`,
+  wisdom/character scores, or an on-chain ReputationRegistry write);
+- money moving (stake, payment, allowance, spend).
+
+A route that authorizes itself with a real per-request credential (a wallet signature checked against
+the right address, a server-held HMAC secret with NO public default) counts as keyed. A route that
+takes only a body field, a session token anyone can mint, or a secret with a public default does not.
 
 ### Deliverable
 
 Rank by failure direction, worst first:
 
-1. a path that commits money or widens power **with no root**;
-2. a read failure scored as a pass;
-3. a test that cannot fail.
+1. a keyless path that writes on-chain or settles money;
+2. a keyless path that writes reputation in the database;
+3. a self-authorizing route whose credential is weaker than it looks (a default, a guessable value,
+   a token anyone can obtain);
+4. a test in `tests/f13-no-keyless-writes.test.ts` or `tests/no-default-secrets.test.ts` that cannot fail.
 
-For each finding give the input, the `file:line` you read, and the test that would catch it.
-At minimum, try:
-
-- **Identity confusion.** `resolveAccountableRoot` takes a ref that may be a name or a uuid.
-  - Can a name that collides with another agent's id, or a case variant of a wallet, resolve to
-    the wrong agent?
-  - Can a `viaGrantId` whose grantee matches by name but not by id borrow someone else's root?
-- **Chain walk.**
-  - Can a chain look connected while a link's grantor is not the parent's grantee?
-  - Look for case, whitespace, and name vs uuid mismatches.
-  - Is depth checked on what the row *says* or on the steps actually walked?
-  - What happens at exactly `MAX_GRANT_DEPTH`?
-- **Same-person rule.** In `mintGrant`, the rule is skipped when the grantor's own anchor is
-  `no_root`.
-  - Is that safe? An unowned grantor holding a grant from someone else may hang a child.
-  - Does `rootCut` / the escrow check stop that child from doing anything that matters?
-- **Custodian.** `conservator_address` is the house fallback.
-  - Is there any route, migration or register path by which a caller can set that column for
-    their own agent?
-  - If so, F1 is bypassed for everyone.
-- **Stake.**
-  - Can `stake.deposit` be replayed? Look at the nonce and the params hash.
-  - Can the params be shifted (amount as number vs string, `null` vs missing)?
-  - Can a signature for agent A be used for agent B?
-  - Does anything else still add unbacked stake into a ceiling?
-- **Fail-closed.** Find any `catch` or `error` branch in the files above that returns
-  allow / live / owner-absent instead of NOT CHECKED.
-- **Head-of-line.** A dispute whose validators never answer returns to pending each cycle.
-  - Can it starve the queue (ordering, batch size)?
-  - Is there any path where it is retried forever with no visible signal?
-
-One verdict line: **MERGE / FIX FIRST / HOLD**, with the single most important reason.
+For each finding give the HTTP request (method, path, body shape), the `file:line` you read, what it
+writes, and the test that would catch it. If you find nothing in a category, say NOT FOUND and list
+which doors you read, so a reader can tell "none" from "not looked".

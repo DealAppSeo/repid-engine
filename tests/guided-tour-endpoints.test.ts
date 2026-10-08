@@ -10,6 +10,12 @@ jest.mock('../src/services/anonymous-round-runner', () => ({
   runRoundAnonymous: jest.fn(),
 }));
 
+// The daily cap is counted in the database (src/services/demo-round-cap.ts, tested in
+// tests/f13-no-keyless-writes.test.ts); here a slot is always free so the test reaches the route body.
+jest.mock('../src/services/demo-round-cap', () => ({
+  claimDemoRoundSlot: jest.fn(async () => ({ ok: true, used: 1, cap: 10 })),
+}));
+
 import { snapshotAuthority } from '../src/services/stake-vault';
 import { runRoundAnonymous } from '../src/services/anonymous-round-runner';
 import { db } from '../src/db';
@@ -96,7 +102,9 @@ describe('Guided Tour Endpoints', () => {
       error: errorJson
     });
 
-    const res = await request(app).post('/api/v1/demo/run-round-anonymous').send({});
+    // Since F-13 the route needs the operator key and has a daily cap; this tests what is behind them.
+    process.env.REPID_API_KEYS = 'operator-key:pro';
+    const res = await request(app).post('/api/v1/demo/run-round-anonymous').set('x-api-key', 'operator-key').send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('BET_EXCEEDS_AUTHORITY');
     expect(res.body.details.attempted_bet_raw).toBe(1650000);

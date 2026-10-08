@@ -20,17 +20,25 @@
  *   it cannot look up whether "Australia's population > Canada's". Its F1 on a
  *   factual TRUE/FALSE corpus is therefore a FLOOR that isolates how much the
  *   quorum adds, not a measure of "is HAL's veto good". The quorum number
- *   requires keys or the live fleet — see run-frozen-corpus.mjs. The ruler string
+ *   requires keys or the live fleet — see run-frozen-corpus-local.ts (in-process)
+ *   or run-frozen-corpus.mjs (HTTP, retired public sets only). The ruler string
  *   this script prints says `quorum=NOT-EXERCISED` so the two can never be
  *   confused.
  *
- * HOLDOUT BY DEFAULT. `--split holdout` is the default. The default-veto F1 is
- * the headline. A best-threshold sweep is printed too, labelled `oracle
- * threshold (tuned on THIS split — upper bound, NOT a holdout number)`.
+ * HOLDOUT BY DEFAULT, AND THE HOLDOUT IS PRIVATE (S60, 2026-10-07). `--split holdout` (the
+ * default) reads the private rotating holdout through scripts/eval/holdout.ts and exits 2
+ * NOT_CHECKED when no private source is reachable. It never falls back to the public sets. Those
+ * (`--split retired-holdout|train|all` with `--corpus`) have been public since July; every number
+ * on them carries `holdout: "retired-public"` and a printed line saying it is not a holdout score.
+ * A best-threshold sweep is printed too, labelled `oracle threshold (tuned on THIS split — upper
+ * bound, NOT a holdout number)`.
+ *
+ * A private run writes counts only: per-item ids and truth stay out of git. With no checker
+ * family in this path, its checker pair is always `incomplete`.
  *
  * Usage:
  *   ts-node scripts/hal-eval/run-frozen-corpus-offline.ts \
- *     [--corpus rigorous-v1|canary-v1] [--split holdout|train|all] \
+ *     [--split holdout|retired-holdout|train|all] [--corpus rigorous-v1|canary-v1] \
  *     [--strictness 1|2] [--limit N] [--no-write]
  */
 import fs from 'fs';
@@ -38,6 +46,16 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import { evaluate } from '../../src/hal/lib/evaluate';
 import type { StrictnessLevel } from '../../src/hal/lib/types';
+import {
+  exitCodeFor,
+  familiesRecord,
+  holdoutRuler,
+  loadPrivateHoldout,
+  VERIFY_PROMPT,
+  type CheckerPairRecord,
+  type LoadOptions,
+} from '../eval/holdout';
+import { RETIRED_PUBLIC, retiredLine, retiredStamp } from '../eval/retired-holdout';
 
 const ROOT = path.resolve(path.join(__dirname, '..', '..'));
 const MANIFEST = path.join(ROOT, 'data', 'hal_corpus_v1', 'MANIFEST.json');
@@ -56,6 +74,11 @@ export interface OfflineEvalResult {
   corpus: string;
   corpus_sha256: string;
   split: string;
+  /** 'private': the S60 rotating holdout. 'retired-public': a public set, NOT a holdout score. */
+  holdout: 'private' | typeof RETIRED_PUBLIC;
+  retired_as_holdout?: string;
+  /** No checker family runs here, so this is always 'incomplete'. */
+  checker_pair: CheckerPairRecord;
   strictness: number;
   providers: 'NONE';
   quorum: 'NOT-EXERCISED';
@@ -169,7 +192,11 @@ export interface RunOptions {
   strictness?: StrictnessLevel;
   limit?: number;
   write?: boolean;
+  /** Where the private holdout is read from (tests inject a temp HOLDOUT_FILE). */
+  holdout?: LoadOptions;
 }
+
+const PUBLIC_SPLITS = ['retired-holdout', 'train', 'all'];
 
 export async function runOfflineEval(opts: RunOptions = {}): Promise<OfflineEvalResult> {
   const corpusName = opts.corpusName ?? 'rigorous-v1';
@@ -178,20 +205,43 @@ export async function runOfflineEval(opts: RunOptions = {}): Promise<OfflineEval
   const limit = opts.limit ?? 0;
   const write = opts.write ?? true;
 
-  const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
-  const entry = manifest.corpora.find((c: any) => c.name === corpusName);
-  if (!entry) throw new Error(`No corpus "${corpusName}" in MANIFEST.json`);
+  const measuredAt = new Date().toISOString();
+  const tag = `[offline-extractor s=${strictness} providers=NONE quorum=NOT-EXERCISED]`;
+  let rows: CorpusRow[];
+  let ruler: string;
+  let corpus: string;
+  let hash: string;
+  let stamp: Pick<OfflineEvalResult, 'holdout' | 'retired_as_holdout'>;
+  if (split === 'holdout') {
+    // The private holdout. Throws HoldoutNotCheckedError (exit 2) when no source is reachable;
+    // never falls back to a public set.
+    const h = await loadPrivateHoldout(opts.holdout);
+    rows = h.items.map((it) => ({ id: it.item_id, prompt: VERIFY_PROMPT, candidate_answer: it.claim, label: it.label, split: 'holdout' }));
+    ruler = `${holdoutRuler(h)} ${tag}`;
+    corpus = 'private-holdout';
+    hash = h.set_sha256;
+    stamp = { holdout: 'private' };
+  } else {
+    if (!PUBLIC_SPLITS.includes(split)) throw new Error(`--split must be holdout (private) or one of ${PUBLIC_SPLITS.join(', ')}`);
+    const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
+    const entry = manifest.corpora.find((c: any) => c.name === corpusName);
+    if (!entry) throw new Error(`No corpus "${corpusName}" in MANIFEST.json`);
 
-  const corpusPath = path.join(ROOT, entry.path);
-  const hash = verifyCorpusHash(corpusPath, entry.sha256);
-  const ruler = `${entry.name}@${hash.slice(0, 12)} [offline-extractor s=${strictness} providers=NONE quorum=NOT-EXERCISED]`;
+    const corpusPath = path.join(ROOT, entry.path);
+    hash = verifyCorpusHash(corpusPath, entry.sha256);
+    ruler = `${entry.name}@${hash.slice(0, 12)} ${tag}`;
+    corpus = entry.name;
+    stamp = retiredStamp();
 
-  let rows: CorpusRow[] = fs
-    .readFileSync(corpusPath, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l));
-  if (split !== 'all') rows = rows.filter((r) => r.split === split);
+    rows = fs
+      .readFileSync(corpusPath, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+    // 'retired-holdout' is the old public holdout split, kept for regression; it is not a holdout.
+    if (split === 'retired-holdout') rows = rows.filter((r) => r.split === 'holdout');
+    else if (split !== 'all') rows = rows.filter((r) => r.split === split);
+  }
   // ABSTAIN rows are not part of the binary veto decision — exclude them.
   rows = rows.filter((r) => String(r.label).toUpperCase() !== 'ABSTAIN');
   if (limit > 0) rows = rows.slice(0, limit);
@@ -201,9 +251,11 @@ export async function runOfflineEval(opts: RunOptions = {}): Promise<OfflineEval
 
   const result: OfflineEvalResult = {
     ruler,
-    corpus: entry.name,
+    corpus,
     corpus_sha256: hash,
     split,
+    ...stamp,
+    checker_pair: familiesRecord([], `offline-${measuredAt}`, measuredAt),
     strictness,
     providers: 'NONE',
     quorum: 'NOT-EXERCISED',
@@ -217,13 +269,37 @@ export async function runOfflineEval(opts: RunOptions = {}): Promise<OfflineEval
   if (write) {
     const outDir = path.join(ROOT, 'reports', 'hal-eval');
     fs.mkdirSync(outDir, { recursive: true });
-    const outPath = path.join(outDir, `${entry.name}-${split}-${hash.slice(0, 12)}.OFFLINE.json`);
-    fs.writeFileSync(outPath, JSON.stringify(result, null, 2));
-    result.results = result.results; // keep
+    const stem = result.holdout === 'private' ? corpus : `${corpus}-${split}`;
+    const outPath = path.join(outDir, `${stem}-${hash.slice(0, 12)}.OFFLINE.json`);
+    fs.writeFileSync(outPath, JSON.stringify(diskForm(result), null, 2));
     (result as any)._written = path.relative(ROOT, outPath);
   }
 
   return result;
+}
+
+/**
+ * What a run writes to reports/. A private run writes counts only: an item id beside its truth is
+ * the label, in git.
+ */
+export function diskForm(result: OfflineEvalResult): OfflineEvalResult & { results_withheld?: string } {
+  if (result.holdout !== 'private') return result;
+  return { ...result, results: [], results_withheld: 'private holdout: per-item ids and truth stay out of git' };
+}
+
+/**
+ * The headline block. A public-set F1 is never printed without the retired line beside it, and a
+ * private F1 never without its checker pair status.
+ */
+export function formatHeadline(res: OfflineEvalResult): string[] {
+  const out = [
+    '======================================================================',
+    `  F1 = ${res.f1.toFixed(4)} on ${res.ruler} [${res.split}]`,
+  ];
+  if (res.holdout === RETIRED_PUBLIC) out.push(`  ${retiredLine(`${res.corpus} [${res.split}]`)}`);
+  else out.push(`  PRIVATE HOLDOUT. checker pair: ${res.checker_pair.status} (offline extractor, no checker family ran)`);
+  out.push('======================================================================');
+  return out;
 }
 
 // ---- CLI --------------------------------------------------------------------
@@ -254,9 +330,7 @@ async function main() {
   console.log(`  accuracy  ${res.accuracy.toFixed(4)}`);
   console.log(`  AUC(FALSE>TRUE) ${res.auc.toFixed(4)}  (0.5 = no separation)`);
   console.log('');
-  console.log('======================================================================');
-  console.log(`  F1 = ${res.f1.toFixed(4)} on ${res.ruler} [${res.split}]`);
-  console.log('======================================================================');
+  for (const line of formatHeadline(res)) console.log(line);
   console.log(
     `  oracle threshold (tuned on THIS split — UPPER BOUND, not a holdout number):\n` +
       `    t=${res.oracle_threshold.t}  F1=${res.oracle_threshold.f1}  ` +
@@ -266,7 +340,8 @@ async function main() {
   console.log(
     `  NOTE: providers=NONE → the disjoint-family cross-LLM QUORUM did not run.\n` +
       `  This is the extractor FLOOR, not "is HAL's veto good". For the quorum number\n` +
-      `  use scripts/hal-eval/run-frozen-corpus.mjs against the live keyed endpoint.`,
+      `  use scripts/hal-eval/run-frozen-corpus-local.ts (in-process, keyed; it reads the\n` +
+      `  private holdout too). run-frozen-corpus.mjs reads only the retired public sets.`,
   );
   if ((res as any)._written) console.log(`\n  written: ${(res as any)._written}`);
 }
@@ -274,6 +349,7 @@ async function main() {
 if (require.main === module) {
   main().then(() => process.exit(0)).catch((e) => {
     console.error(e instanceof Error ? e.message : String(e));
-    process.exit(1);
+    // 2 = NOT_CHECKED (no private holdout reachable), 1 = FAILED. Never 0.
+    process.exit(exitCodeFor(e));
   });
 }

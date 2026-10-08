@@ -14,10 +14,13 @@
  * That refusal is the entire point. A measurement tool that will happily measure
  * a corpus it cannot identify reproduces the problem it was built to end.
  *
- * HOLDOUT BY DEFAULT. Reporting accuracy on rows used for tuning measures recall
- * of the training set. `--split holdout` is the default; `--split all` is
- * available and is labelled as such in the output so it can never be quoted as
- * a holdout number by accident.
+ * HOLDOUT BY DEFAULT, AND THE HOLDOUT IS PRIVATE (S60, 2026-10-07). `--split holdout` (the
+ * default) is the private rotating holdout, which only the in-process TS runners read
+ * (scripts/eval/holdout.ts): this HTTP runner exits 2 NOT_CHECKED for it rather than send private
+ * text through a public endpoint capped at 10 requests a day, and it never falls back to a public
+ * set. `--split retired-holdout|train|all` measure the public corpora, public since July; every
+ * number on them carries `holdout: "retired-public"` and a printed line saying it is not a holdout
+ * score.
  *
  * KEYLESS, VIA THE DEPLOYED ENGINE. Uses POST /api/v1/hal/evaluate — the same
  * public path `trustshell verify` uses and any integrator gets. So this measures
@@ -27,7 +30,7 @@
  *
  * Usage:
  *   node scripts/hal-eval/run-frozen-corpus.mjs [--corpus rigorous-v1]
- *        [--split holdout|train|all] [--limit N] [--concurrency 3]
+ *        [--split retired-holdout|train|all] [--limit N] [--concurrency 3]
  */
 import fs from 'fs';
 import path from 'path';
@@ -44,9 +47,29 @@ const split = flag('split', 'holdout');
 const limit = Number(flag('limit', '0'));
 const concurrency = Math.max(1, Number(flag('concurrency', '3')));
 
+if (split === 'holdout') {
+  console.log('NOT_CHECKED: the holdout is private (S60). This HTTP runner does not read it and will not');
+  console.log('  fall back to a public set. Measure it in-process:');
+  console.log('    npx ts-node scripts/hal-eval/run-frozen-corpus-local.ts --split holdout');
+  console.log('  For the retired public split: --split retired-holdout (not a holdout score).');
+  process.exit(2);
+}
+if (!['retired-holdout', 'train', 'all'].includes(split)) {
+  console.error('--split must be holdout (private; read by the TS runners), retired-holdout, train or all');
+  process.exit(1);
+}
+
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 const entry = manifest.corpora.find((c) => c.name === corpusName);
 if (!entry) { console.error(`No corpus "${corpusName}" in MANIFEST.json`); process.exit(2); }
+// Recorded once, as data (scripts/eval/retired-holdout.ts reads the same fields). No record, no score.
+if (!/^\d{4}-\d{2}-\d{2}$/.test(String(manifest.retired_as_holdout ?? ''))) {
+  console.error('MANIFEST.json does not record retired_as_holdout; refusing to print a score that could read as a holdout score.');
+  process.exit(1);
+}
+const RETIRED = { holdout: 'retired-public', retired_as_holdout: manifest.retired_as_holdout };
+const retiredLine = (set) =>
+  `RETIRED PUBLIC SET: ${set} is public in git (retired as a holdout ${manifest.retired_as_holdout}). This is NOT a holdout score.`;
 
 // ---- THE HASH GATE -------------------------------------------------------
 // Re-derive the hash with the same validator+hasher CI uses. If the file has
@@ -65,11 +88,14 @@ if (hashed !== entry.sha256) {
 const RULER = `${entry.name}@${hashed.slice(0, 12)}`;
 
 let rows = fs.readFileSync(path.join(ROOT, entry.path), 'utf8').split('\n').filter((l) => l.trim()).map(JSON.parse);
-if (split !== 'all') rows = rows.filter((r) => r.split === split);
+// 'retired-holdout' is the old public holdout split, kept for regression; it is not a holdout.
+if (split === 'retired-holdout') rows = rows.filter((r) => r.split === 'holdout');
+else if (split !== 'all') rows = rows.filter((r) => r.split === split);
 if (limit > 0) rows = rows.slice(0, limit);
 
 console.log(`ruler      : ${RULER}`);
 console.log(`split      : ${split}${split === 'all' ? '  ** INCLUDES TRAIN — not a holdout number **' : ''}`);
+console.log(`             ${retiredLine(`${entry.name} [${split}]`)}`);
 console.log(`rows       : ${rows.length}`);
 console.log(`engine     : ${ENGINE}`);
 console.log(`answer_mode: ${entry.answer_mode}`);
@@ -197,11 +223,12 @@ if (coverage < MIN_COVERAGE) {
   fs.mkdirSync(path.join(ROOT, 'reports', 'hal-eval'), { recursive: true });
   fs.writeFileSync(
     path.join(ROOT, 'reports', 'hal-eval', `${entry.name}-${split}-${hashed.slice(0, 12)}.INCOMPLETE.json`),
-    JSON.stringify({ ruler: RULER, split, coverage, scored: scored.length, rows: rows.length, errors: errors.length, error_kinds: kinds, f1: null, reason: 'coverage below floor — transport failure, not a quality result' }, null, 2),
+    JSON.stringify({ ruler: RULER, split, ...RETIRED, coverage, scored: scored.length, rows: rows.length, errors: errors.length, error_kinds: kinds, f1: null, reason: 'coverage below floor — transport failure, not a quality result' }, null, 2),
   );
   process.exit(3);
 }
 console.log(`  F1 = ${f1.toFixed(4)} on ${RULER} [${split}] at ${familyQual}`);
+console.log(`  ${retiredLine(`${entry.name} [${split}]`)}`);
 console.log(`  coverage ${(coverage * 100).toFixed(1)}% (${scored.length}/${rows.length})`);
 console.log('======================================================================');
 if (errors.length) console.log(`  NOTE: ${errors.length} row(s) errored (transport/rate-limit), EXCLUDED from the matrix — not counted as wrong answers.`);
@@ -209,7 +236,7 @@ if (errors.length) console.log(`  NOTE: ${errors.length} row(s) errored (transpo
 const outPath = path.join(ROOT, 'reports', 'hal-eval', `${entry.name}-${split}-${hashed.slice(0, 12)}.json`);
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, JSON.stringify({
-  ruler: RULER, corpus: entry.name, corpus_sha256: hashed, split, answer_mode: entry.answer_mode,
+  ruler: RULER, corpus: entry.name, corpus_sha256: hashed, split, ...RETIRED, answer_mode: entry.answer_mode,
   engine: ENGINE, rows: rows.length, scored: scored.length, errors: errors.length,
   confusion: { tp, fp, tn, fn }, precision, recall, f1, accuracy, verdicts,
   results,

@@ -9,6 +9,9 @@
  * time and tested by the migration's example, not here.
  */
 
+// F-13: the oracle secret has no public default any more; the round-trip tests need one configured.
+process.env.ORACLE_HMAC_SECRET = 'test-only-oracle-secret';
+
 // Mock db before importing — keeps the existing test pattern.
 jest.mock('../src/db', () => {
   const builder: any = {

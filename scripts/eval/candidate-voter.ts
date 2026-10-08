@@ -29,6 +29,10 @@
  * the host (paused, over budget, no key) is this harness's own state, so it is never recorded: a
  * pause is waited out and the claim asked again; anything else stops the run.
  *
+ * RETIRED AS A HOLDOUT (S60, 2026-10-07). The 337 claims are public, so a trial row is a
+ * comparison on a public set, never a holdout score: the summary carries `holdout: "retired-public"`
+ * and the printed line says so (scripts/eval/retired-holdout.ts).
+ *
  * Exit codes: 0 finished, 2 NOT_CHECKED (no key, host unreachable, id not listed, the candidate
  * failed STREAK_LIMIT calls in a row, or answered nothing), 1 bad arguments.
  */
@@ -51,6 +55,7 @@ import {
 } from '../../src/classify/free-votes';
 import { providerFetch, type ProviderFetch } from '../../src/egress/provider-fetch';
 import { PROVIDER_URLS } from '../../src/egress/provider-hosts';
+import { retiredLine, retiredStamp } from './retired-holdout';
 
 export interface BaselineRow {
   row_id: string;
@@ -665,14 +670,16 @@ async function main(): Promise<number> {
     }
     return 2;
   }
-  const summary = pairSummary(baseline, rows);
+  const summary = { ...retiredStamp(), ...pairSummary(baseline, rows) };
+  const retired = retiredLine('eval/rigorous/rigorous-corpus-v1.jsonl');
   console.log(JSON.stringify(summary, null, 2));
   const row = findingsRow(new Date().toISOString().slice(0, 10), spec, summary, profile);
-  console.log(`\nfindings row for eval/candidates/README.md:\n${row}`);
+  console.log(`\n${retired}`);
+  console.log(`findings row for eval/candidates/README.md:\n${row}`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
-      `### Candidate voter: \`${spec}\`\n\n${FINDINGS_HEADER}\n${row}\n\n<details><summary>pairing detail</summary>\n\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\`\n</details>\n`,
+      `### Candidate voter: \`${spec}\`\n\n${retired}\n\n${FINDINGS_HEADER}\n${row}\n\n<details><summary>pairing detail</summary>\n\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\`\n</details>\n`,
     );
   }
   return 0;

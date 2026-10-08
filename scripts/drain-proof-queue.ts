@@ -54,7 +54,7 @@ async function drain() {
         // 3. POST to ZKP service
         const res = await fetch(`${ZKP_SERVICE_URL}/zkp/repid-proof`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(process.env.ZKP_SERVICE_TOKEN ? { Authorization: `Bearer ${process.env.ZKP_SERVICE_TOKEN}` } : {}) },
           body: JSON.stringify({
             agent_id: job.agent_id,
             score: score,

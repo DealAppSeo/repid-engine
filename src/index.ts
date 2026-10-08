@@ -1,4 +1,5 @@
 import express from 'express';
+import { assertRequiredSecrets } from './config/required-secrets';
 import { startValidationWorker } from './services/validation-queue-worker';
 import { startTrinityTaskBridge } from './services/trinity-task-bridge';
 import { startHitlNotificationDispatcher } from './services/hitl-notification-dispatcher';
@@ -915,6 +916,10 @@ const port = parseInt(process.env.PORT || '3000', 10);
 const IS_TEST = process.env.NODE_ENV === 'test';
 
 if (!IS_TEST) {
+  // [Sean 2026-10-08] Refuse to start if a boot-required secret is unset. This throws before the
+  // socket binds, so there is never a window where the controller or bet-resolve routes answer
+  // while CONTROLLER_QR_SECRET / ORACLE_HMAC_SECRET is missing. See config/required-secrets.ts.
+  assertRequiredSecrets();
   app.listen(port, '0.0.0.0', () => {
     // Say ONCE, at boot, whether failures will actually reach a person. If this line says NOT
     // ARMED then every guarantee downstream of it is void and the process will fail as silently

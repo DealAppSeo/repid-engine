@@ -37,6 +37,7 @@ import {
   VerificationStrength,
 } from '../../src/engine/participant-rating';
 import { recordRatingEdges } from '../../src/engine/participant-rating-ledger';
+import { retiredLine } from './retired-holdout';
 
 interface RawVerdict {
   provider: string;
@@ -184,6 +185,8 @@ async function main() {
   const { edges, unrated } = edgesFromCanaryRun(run, receiptRef);
 
   console.log(`\n=== PARTICIPANT-RATING SEED (from canary verdicts) ===`);
+  // S60: these ratings are scored on the public canary set, never a holdout.
+  console.log(retiredLine('the canary corpus'));
   console.log(`receipt (L1): ${receiptRef}`);
   console.log(`run generated_at: ${run.generated_at}`);
   console.log(`rated providers (earned): ${edges.length}`);

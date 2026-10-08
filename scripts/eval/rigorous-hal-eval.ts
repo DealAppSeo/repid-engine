@@ -17,6 +17,10 @@
  * is recorded as ERROR, never fabricated; if ZERO real verdicts across the run it
  * exits non-zero. No tuning to pass.
  *
+ * RETIRED AS A HOLDOUT (S60, 2026-10-07). The rigorous corpus has been public since July; a run on
+ * it is a regression run on a public set. The raw JSON carries `holdout: "retired-public"` and the
+ * last printed line says it is not a holdout score (scripts/eval/retired-holdout.ts).
+ *
  * Run (from repo root; keys auto-loaded from ../.env.master):
  *   npx ts-node scripts/eval/rigorous-hal-eval.ts
  * Env:
@@ -34,6 +38,7 @@ if (fs.existsSync(envMaster)) dotenv.config({ path: envMaster });
 else dotenv.config();
 
 import { factCheck, familyOf, type FactCheckProviderCfg, type ProviderVerdict, type HalDecision } from '../../src/hal/fact-check';
+import { retiredLine, retiredStamp } from './retired-holdout';
 
 // --- WIDE quorum. Each entry key-gated; only key-present providers included. ---
 // GROUP A: 6 distinct families.  GROUP B: 2 extra Llama-3.1-8B hosts (SAME weights
@@ -139,6 +144,7 @@ async function main() {
   const out = {
     harness: 'rigorous-hal-eval-v1',
     generated_at: new Date().toISOString(),
+    ...retiredStamp(),
     elapsed_sec: Math.round((Date.now() - t0) / 1000),
     corpus_path: process.env.RIG_CORPUS || 'eval/rigorous/rigorous-corpus-v1.jsonl',
     corpus_size: rows.length,
@@ -157,6 +163,7 @@ async function main() {
   console.log(`\nscored ${rows.length} claims in ${out.elapsed_sec}s; providers that voted: [${out.providers_that_voted.join(', ')}]`);
   console.log(`provider error rate: ${(totalErr / (totalCalls || 1)).toFixed(3)} (${totalErr}/${totalCalls})`);
   console.log(`wrote raw -> ${outPath}`);
+  console.log(retiredLine(out.corpus_path));
 }
 
 main().then(() => process.exit(0)).catch((e) => { console.error('[rigorous] uncaught:', e); process.exit(1); });
