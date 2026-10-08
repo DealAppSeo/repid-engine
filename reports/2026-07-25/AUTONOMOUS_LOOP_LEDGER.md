@@ -9118,3 +9118,38 @@ PRs merged during this run's window (since 2026-10-07T16:27:49Z):
 **Next beat:** Non-Sean-gated backlog is empty. Options: (a) verify item 15 (WHIR PCS) — requires reading PR#1919 in hyperdag-protocol to confirm the −13%/−22% numbers cited in the verify-before-depend list; (b) read the run logs for the two auto-logged fallback beats (37622238825, 37652221856) to understand why those beats died before reaching step 1; (c) if Sean merges #1248, there may be follow-up work on the practice lane gates (payee/stop/acknowledgement are NOT CHECKED today per the PR body). Surface (c) to Sean: once #1248 lands, the loop can build the missing gates.
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37652221856 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-08) — fourth-run beat verified; queue genuinely thin; #1251 awaiting Grok
+
+**Prior beat (fourth run, 2026-10-07) verified [V]:**
+- PR #1237 (feat(zkp): P4 Merkle AIR — item 14): **MERGED** [V `git log` shows `41aefe3a`] ✓
+- PR #1244 (fix(zkp): Strix HIGH soundness fix): **MERGED** [V `git log` shows `4bf0e5d2`] ✓
+- PR #1238 (feat(identity): ERC-8004 self-owned mint): **MERGED** at 2026-10-07T04:30:59Z [V `gh pr view 1238` → `mergedAt`] ✓
+- Item 10 backlog row corrected: [V PR #1249 `e5b7834a docs(loop): beat 2026-10-07 fourth run — item 10 stale row corrected; queue exhausted` on main] ✓
+- Non-Sean-gated backlog declared exhausted: [V reviewed backlog — items 1–6, 9, 12–14, 20 DONE; 7–11 Sean-gated; 15–19 LATER/GATED] ✓
+- **Penalty verdict: NONE.** Every claim reproduced by independent read.
+
+**What landed since the fourth run [V `git log --oneline -5 origin/main`]:**
+- PR #1250 (F-6: sponsoring needs the sponsor's owner; minting needs the operator or the agent itself): MERGED `879e7f9f`.
+- PR #1248 (P1: practice lane endpoint, prover pin, repid.dev origins, README): MERGED `172aadf0`.
+- PR #1246 (F1+F2: one accountable root on every money or power action; unbacked stake stops counting): MERGED `b3eebbfc`.
+- PR #1243 (Owner controls: two-sided bind, smart-wallet signatures, owner approval for widening, CORS): MERGED `2818ebbc`.
+
+**Step 2 — Backlog state [V]:**
+- Patent backlog (items 1–14, 20): still exhausted — all either DONE or Sean-gated or LATER.
+- **PR #1251** (F-13: no keyless write that settles or moves reputation; F-10: prover bearer token): OPEN on branch `claude/bold-turing-icz50x`. CI: all 9 checks SUCCESS [V `gh pr checks 1251`]. Strix: SUCCESS. Awaiting Grok red-team (dispatched via `docs/dispatch/INBOX_XC.md` on the same branch). PR body says DO NOT MERGE until Grok reports. **NOT armed.**
+- Practice lane P2 (payee, stop, acknowledgement gates): migration-blocked on S6 (Sean's design decision — the data source is undefined: on-chain events vs DB records). Both payee/stop and the acknowledgement table say in code "They come with the one migration Sean approves." NOT started — no design, no migration.
+- Items 7/8/10/11: Sean-gated env flips and gas spend — unchanged.
+
+**This beat ships:** ledger entry only. No code. Per the NO-REPORT-ONLY-PRs rule, this PR exists solely to persist the ledger record onto `main`; it carries no independent code, route, wire, or test.
+
+**Mistakes / corrections:** None. The stray auto-fallback fragment (last line before this entry) was appended by the fallback job on top of the fourth-run's `---` marker — not a file error, just the fallback running while the commit was in flight. Left intact per append-only discipline.
+
+**Open for Sean (rule-4):**
+1. **PR #1251** — once Grok's red-team reports and Sean says GO (or reports come back clean), arm `--auto --squash`. All CI green, Strix clean; Grok is the single remaining gate.
+2. **Practice lane P2 decision:** what does "payee" mean in the practice lane context? An on-chain approval to a specific address, or a DB record? Same question for "stopped one" (on-chain event vs DB). The loop can build the migration and service layer once the data model is decided.
+3. Items 7/8/10/11: env flips / gas spend — unchanged.
+
+**Next beat:** (1) Independently verify this beat (ledger only; verify fourth-run claims still hold on main). (2) Once Grok reports on #1251: if clean, arm `--auto --squash` and note merge. (3) If Sean answers the practice-lane-P2 design question, build the migration + service layer. (4) Item 15 (WHIR PCS) remains an option — read PR#1919 in hyperdag-protocol to verify the −13%/−22% numbers before building.
