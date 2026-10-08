@@ -603,7 +603,15 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     hal_score: 0.0, // (S-HONEST-HAL Phase 2: wire HAL fact-check verdicts here)
     hal_decision: 'clean', // (S-HONEST-HAL Phase 2: map HAL veto/flag/clean)
     ecosystem_need_weight: ecosystemNeedWeight,
-    mirror_test_triggered: input.mirrorTestTriggered ?? !audit.mirrorTestPassed,
+    // Only derive a trigger from the audit when it ACTUALLY RAN. While
+    // CONSTITUTIONAL_AUDIT_ENABLED is off (the production default) the audit is
+    // NOT_CHECKED and returns mirrorTestPassed:false (#1258's honest sentinel) —
+    // and since no caller sets input.mirrorTestTriggered, a bare `!mirrorTestPassed`
+    // would fabricate `true` on EVERY score event, polluting the append-only ledger
+    // and depressing computeEthics()'s mirrorTestPassRate (badges.ts) with a mirror
+    // test that never happened. A not-checked audit triggers nothing: gate on enabled.
+    mirror_test_triggered:
+      input.mirrorTestTriggered ?? (audit.enabled ? !audit.mirrorTestPassed : false),
     eas_attestation_id: audit.easAttestationId,
     // ENFORCE-ONLY column: repid_delta_applied = the REAL movement, which also makes
     // the DB trigger apply_repid_score_event back off so there is exactly one applier.
