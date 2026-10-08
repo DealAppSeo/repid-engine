@@ -90,22 +90,22 @@ export async function auditConstitutionalCompliance(
 ): Promise<ConstitutionalAuditResult> {
   const startMs = Date.now();
 
-  // GATE (RULE-4): while CONSTITUTIONAL_AUDIT_ENABLED is false, return a
-  // transparent non-authoritative result. `passed: true` keeps the pipeline a
-  // clean no-op (nothing is newly vetoed), but `enabled: false` tells every
-  // caller NOT to treat complianceScore as a real measurement. The 1.0 here is
-  // a neutral identity placeholder, kept only so downstream shapes stay valid —
-  // callers are responsible for not multiplying/branching on it when disabled.
+  // GATE (RULE-4 / LESSONS §5): NOT_CHECKED sentinel. `enabled: false` tells
+  // every caller this is not a measurement. `passed: false` ensures the
+  // instrument CAN return the other answer — a stub that always returns true is
+  // an instrument that has measured nothing (LESSONS §5). All callers guard on
+  // `audit.enabled` (or `auditActive`) before trusting `passed`; this sentinel
+  // is a belt-and-suspenders fence for future callers that might forget.
   if (!CONSTITUTIONAL_AUDIT_ENABLED) {
     return {
       enabled: false,
-      passed: true,
-      complianceScore: 1.0, // placeholder ONLY — not a measurement (enabled=false)
+      passed: false, // NOT_CHECKED — not a veto, callers must gate on `enabled`
+      complianceScore: 1.0, // neutral identity placeholder; not a measurement (enabled=false)
       rulesChecked: [],
       halMode: 1,
       easAttestationId: '',
       easSchema: '',
-      mirrorTestPassed: true,
+      mirrorTestPassed: false, // NOT_CHECKED
       processingMs: Date.now() - startMs,
     };
   }

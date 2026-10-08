@@ -9227,3 +9227,56 @@ The prior beat surfaced F-17 as rule-4 and awaited Sean's GO. On reflection, a c
 3. Items 7/8/10/11: env flips / gas spend — unchanged.
 
 **Next beat:** (1) If Sean sets the Railway secrets for PR #1251, arm `--auto --squash` immediately. (2) If Sean says GO on F-17, build the one-line cap + test. (3) If #1251 merges, follow up on F-18 and any post-merge findings from the new boot-refusal guard. (4) Item 15 (WHIR PCS, verify PR#1919 numbers) remains available if the queue stays thin.
+
+---
+
+## Beat (2026-10-08, fourth run) — third run verified; XC dispatch read; constitutional audit NOT_CHECKED sentinel fixed
+
+**Prior beat (third run, 2026-10-08) verified [V]:**
+- PR #1256 (F-17: cap minted QR token to caller's own role): **MERGED** at 2026-10-08T08:43:20Z [V `gh pr view 1256 --json state,mergedAt`], commit `e27e759c` on origin/main [V git log from session start] ✓
+- F-17 fix code verified at `src/routes/v1/controller.ts:202-208`: `roleRank` map + `(roleRank[targetRole] ?? 0) > (roleRank[callerRole] ?? 0)` → 403. Exact code read [V `Read` tool], matches prior beat's description ✓
+- Controller tests **22/22 passed** [V `./node_modules/.bin/jest tests/controller.test.ts --forceExit`] ✓
+- PR #1251 merged as `4fdd5cb5`, PR #1254 merged as `7dee6f86` [V git log] ✓
+- **Penalty verdict: NONE.** Every claim reproduced by independent read.
+
+**XC dispatch (PR #1257) read and evaluated [R]:**
+XC (Grok, reasoning-only, no shell — grade [R] at best) returned a ranked menu of SAFE HAL/RepID findings. Read the full diff. Four SAFE items, three DECISION items. Key finding (XC's #1): `src/layers/constitutional-audit.ts:99-111` stub returns `passed: true` when disabled — LESSONS §5 gap: an instrument that cannot return the other answer has measured nothing.
+
+**Verified independently [V] before building:**
+- Callers already guard with `auditActive = audit.enabled` and `if (auditActive && !audit.passed)` — confirmed by grep of `repid-update.ts:638`, `mcp.ts:201`, `challenge.ts:124`. Changing `passed: true` → `passed: false` does NOT break any existing caller.
+- `tsc --noEmit` showed no existing typing issue (both values satisfy `boolean`).
+- No `tests/constitutional-audit-stub.test.ts` existed — the stub had no dedicated non-vacuity check (LESSONS §5).
+
+**Step 2-4 — SHIPPED: constitutional audit NOT_CHECKED sentinel + non-vacuity test:**
+
+**Fix (`src/layers/constitutional-audit.ts:99-111`):** Changed disabled stub from `passed: true` → `passed: false`, `mirrorTestPassed: true` → `mirrorTestPassed: false`. Updated comment: "NOT_CHECKED sentinel — instrument CAN return the other answer (LESSONS §5)." No type changes needed (both are `boolean`). `complianceScore: 1.0` retained as neutral identity placeholder (unchanged).
+
+**New test (`tests/constitutional-audit-stub.test.ts`):** 5 tests:
+1. `CONSTITUTIONAL_AUDIT_ENABLED` is false by default (instruments the flag state)
+2. Disabled stub returns `enabled: false` (NOT_CHECKED, not a measurement)
+3. Disabled stub returns `passed: false` — instrument CAN return the other answer (LESSONS §5 non-vacuity)
+4. Caller gating pattern (`auditActive = result.enabled; wouldBlock = auditActive && !result.passed`) returns `false` — disabled audit never blocks
+5. `complianceScore: 1.0` is neutral placeholder, not a measurement (reads alongside `enabled: false`)
+
+**[V] `./node_modules/.bin/jest tests/constitutional-audit-stub.test.ts --forceExit` → 5/5 passed.**
+**[V] Related suite** `tests/stake-delta-gate.test.ts tests/verdict-reachability-audit.test.ts tests/self-report-evidence.test.ts` → 22 passed, 1 todo. No breakage.
+**[V] `npx tsc --noEmit` → clean (no output).**
+
+- Branch: `fix/xc-constitutional-audit-not-checked`
+- PR #1258 opened → main
+- `gh pr merge 1258 --auto --squash` armed (SAFE-CLASS: guard + additive test, no score change, no flag flip, no DDL)
+
+**XC findings NOT built this beat (3 remain):**
+- Finding #2: Surface `injectionBoost`/`jailbreak_risk` in `agents-external.ts:194` metadata — SAFE, but requires reading `hal-signals.ts`/`extract.ts` more deeply; not started.
+- Finding #3: Add `auditEnabled: boolean` to production-logger payload — SAFE; `enabled` already in `repid-update.ts:637` event shape, gap is `production-logger.ts`. Next beat candidate.
+- Finding #4: Challenge.ts explicit NOT_CHECKED log when `!auditActive` — SAFE; current code already guards and omits score; gap is observability label. Next beat candidate.
+
+**Mistakes / corrections:** None. XC's report is grade [R] (no shell, no execution) — treated as analysis input, not as a verified finding. All claims independently read before building.
+
+**Open for Sean (rule-4):**
+1. **F-18** — `/leads` endpoint: "viewer is correct for public email capture" or "raise to operator"? Loop builds the one-line change once decided.
+2. **Practice lane P2** — payee/stop/acknowledgement gate design: on-chain approval vs DB record? Loop builds once decided.
+3. Items 7/8/10/11: env flips / gas spend — unchanged.
+4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — both flag-gated, Sean GO needed.
+
+**Next beat:** (1) Verify #1258 merged. (2) Finding #3 (production-logger `auditEnabled` field) — small, safe, pure observability; next candidate. (3) Finding #4 (challenge.ts NOT_CHECKED label) — same class. (4) F-18 if Sean decides.
