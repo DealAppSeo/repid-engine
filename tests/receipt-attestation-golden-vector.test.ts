@@ -42,7 +42,7 @@ import { verifyReceiptAttestation, type ReceiptFields } from '../src/services/re
 
 // --- The Hardhat #0 engine fixture ----------------------------------------------------------------
 // Private key 0xac09…ff80: zero-value, world-published test fixture, never a real key.
-const ENGINE_KEY  = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+const ENGINE_KEY  = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'; // gitleaks:allow — Hardhat #0 world-published zero-value fixture, not a real key
 const ENGINE_ADDR = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'; // checksummed
 
 // --- The fixed receipt fields --------------------------------------------------------------------
