@@ -179,7 +179,12 @@ describe('receipt-attestation service', () => {
     setKey();
     const fields = sampleFields();
     const att = await signReceipt(fields);
-    const flipped = att!.signature.slice(0, -2) + (att!.signature.endsWith('00') ? '11' : '00');
+    // Tamper a byte in r (first 32 bytes), NOT the trailing v/recovery byte: flipping v between
+    // equivalent encodings (0x1b/27 and 0x00/0 are both yParity 0) recovers the SAME signer, so a
+    // v-flip is not a real tamper. A changed r recovers a different address or fails recovery —
+    // both → verified:false, deterministically, for any key.
+    const sig = att!.signature;
+    const flipped = '0x' + (sig.slice(2, 4) === '00' ? '11' : '00') + sig.slice(4);
     const v = verifyReceiptAttestation(fields, flipped);
     expect(v.verified).toBe(false);
   });
