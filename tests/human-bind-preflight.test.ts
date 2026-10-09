@@ -91,7 +91,15 @@ type Store = Record<string, any[]>;
 const store = (): Store => (globalThis as any).__PF_STORE__;
 
 let app: express.Express;
-const AGENT = 'agent-1';
+// Real agents are uuids. The old fixture used "agent-1", which is exactly the
+// unrealistic shape that HID the slug-vs-uuid bug this suite now pins: a non-uuid id
+// never exercised the uuid column the route casts into, so a slug (which the public
+// surface accepts) crashed on .eq('id', slug) and leaked a 503 in production.
+const AGENT = '11111111-1111-4111-8111-111111111111';
+// An agent addressed by slug — the way GET /repid/:id and GET /agents/:id/owner also
+// allow. Its real id is the uuid below; the slug must resolve TO that uuid.
+const SLUG_AGENT_ID = '22222222-2222-4222-8222-222222222222';
+const SLUG = 'trinity-shofet';
 const OWNER_WALLET = '0x' + 'a'.repeat(40);
 
 function reset() {
@@ -104,6 +112,15 @@ function seedAgent(builderId: string | null = null) {
 function seedBinding(wallet = OWNER_WALLET) {
   store().human_agent_bindings.push({
     id: 'bind-1', agent_id: AGENT, owner_kind: 'builder', builder_id: 'builder-1',
+    human_token_id: null, human_wallet: wallet, scope: 'ownership', bound_at: '2026-10-08T00:00:00Z', revoked_at: null,
+  });
+}
+function seedSlugAgent(builderId: string | null = null) {
+  store().repid_agents.push({ id: SLUG_AGENT_ID, agent_name: SLUG, current_repid: 777, tier: 'EARNING', builder_id: builderId });
+}
+function seedSlugBinding(wallet = OWNER_WALLET) {
+  store().human_agent_bindings.push({
+    id: 'bind-slug', agent_id: SLUG_AGENT_ID, owner_kind: 'builder', builder_id: 'builder-9',
     human_token_id: null, human_wallet: wallet, scope: 'ownership', bound_at: '2026-10-08T00:00:00Z', revoked_at: null,
   });
 }
@@ -185,8 +202,9 @@ describe('GET /human/bind/preflight — expectations set before the first signat
     expect(r.body.next).toMatch(/already own/i);
   });
 
-  it('a failed DB read is 503 NOT_CHECKED, never a guessed "unclaimed"', async () => {
-    // Force the agent read to throw by making `.eq` blow up for this one call.
+  it('a GENUINE DB read failure (not a malformed id) is 503 NOT_CHECKED, and leaks no raw error', async () => {
+    // A well-formed uuid whose read returns a real DB error — the one case that is
+    // honestly "could not check". Distinct from a bad id, which is agent_not_found below.
     const s = store();
     const orig = (s.repid_agents as any);
     // Replace the array with a proxy whose filter throws — the route reads via db.from().
@@ -205,9 +223,59 @@ describe('GET /human/bind/preflight — expectations set before the first signat
       const r = await preflight({ agent_id: AGENT });
       expect(r.status).toBe(503);
       expect(r.body.error).toBe('not_checked');
+      // The raw DB error string is logged server-side, never returned to the client.
+      expect(JSON.stringify(r.body)).not.toContain('boom');
     } finally {
       dbMod.db.from = realFrom;
       void orig;
     }
+  });
+
+  // ── slug resolution — the bug this change fixes (prod commit 62fb06a) ──────────
+  // repid_agents.id is a uuid. The public surface addresses agents by slug too
+  // (GET /repid/trinity-sophia works), so preflight must resolve a slug instead of
+  // casting it into the uuid id column and 503-ing with a leaked postgres error.
+
+  it('resolves a human-readable slug to the agent, instead of crashing on the uuid cast', async () => {
+    seedSlugAgent(null);
+    const r = await preflight({ agent_id: SLUG });
+    expect(r.status).toBe(200);
+    expect(r.body.exists).toBe(true);
+    // resolved to the real row — not bounced as a 503 uuid-cast error
+    expect(r.body.agent).toEqual({ name: SLUG, repid: 777, tier: 'EARNING' });
+    expect(r.body.claimable).toBe(true);
+    expect(r.body.reason).toBe('claimable');
+  });
+
+  it('slug lookup is case-insensitive (mirrors the .ilike in GET /agents/by-name)', async () => {
+    seedSlugAgent(null);
+    const r = await preflight({ agent_id: SLUG.toUpperCase() });
+    expect(r.status).toBe(200);
+    expect(r.body.exists).toBe(true);
+    expect(r.body.agent.name).toBe(SLUG);
+  });
+
+  it('reads ownership against the RESOLVED uuid, not the slug (OWNED survives a slug lookup)', async () => {
+    seedSlugAgent('builder-9');
+    seedSlugBinding(OWNER_WALLET);
+    const r = await preflight({ agent_id: SLUG });
+    // If ownerOfAgent/linkedButUnbound had been handed the slug, the binding — keyed by
+    // the uuid — would have been missed and this would read UNOWNED. OWNED proves the
+    // resolved uuid was passed through.
+    expect(r.body.ownership.state).toBe('OWNED');
+    expect(String(r.body.ownership.owner_wallet).toLowerCase()).toBe(OWNER_WALLET);
+    expect(r.body.claimable).toBe(false);
+    expect(r.body.reason).toBe('already_owned');
+  });
+
+  it('an unknown slug is agent_not_found (200), NOT 503 not_checked — bad input is not "could not check"', async () => {
+    const r = await preflight({ agent_id: 'trinity-nobody-home' });
+    expect(r.status).toBe(200);
+    expect(r.status).not.toBe(503);
+    expect(r.body.exists).toBe(false);
+    expect(r.body.reason).toBe('agent_not_found');
+    expect(r.body.agent).toBeNull();
+    // and it never echoes a raw postgres uuid-cast error
+    expect(JSON.stringify(r.body)).not.toMatch(/invalid input syntax|type uuid/i);
   });
 });
