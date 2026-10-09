@@ -3,8 +3,11 @@
  *
  * These pin the honest contract of src/routes/v1/receipts.ts:
  *   - a stored receipt → 200 with EXACTLY the non-secret fields (action, cap, payee_hash, chain_id,
- *     signature_status, created_at) and nothing else — even when the underlying row carries extra
- *     secret-shaped columns, the route's explicit projection must not leak them;
+ *     signature_status, created_at) plus the engine attestation (receipt_signature, engine_signer,
+ *     attested) and nothing else — even when the underlying row carries extra secret-shaped columns,
+ *     the route's explicit projection must not leak them;
+ *   - the engine attestation surfaces honestly: a row WITH a stored signature → attested:true with the
+ *     signature + signer; a row WITHOUT one → attested:false with both null (never "attestation failed");
  *   - an absent receipt → 404;
  *   - flag OFF → 404 with NO database read (the gate returns before any db.from());
  *   - a DB error → not_checked (503), and the raw error text never appears in the response;
@@ -75,6 +78,8 @@ const NONCE = '0x' + '00'.repeat(15) + '01';
 const PAYEE_HASH = '0xee441ddf4990cb02d0fd89b94e7db060430759c5d4a9202b9f4614e678b91515';
 const RAW_PAYEE = '0x' + 'b'.repeat(40); // a raw address that must NEVER appear in a response
 const SECRET = 'super-secret-never-leak';
+const RECEIPT_SIG = '0x' + 'c'.repeat(130); // engine attestation signature (public)
+const ENGINE_SIGNER = '0x' + 'E'.repeat(40); // engine attestation signer address (public)
 
 function reset() {
   const s = store();
@@ -98,6 +103,8 @@ function seedReceipt(over: Record<string, any> = {}) {
     chain_id: 84532,
     signature_status: 'verified',
     created_at: '2026-10-09T00:00:00.000Z',
+    receipt_signature: RECEIPT_SIG, // engine attestation (public) — surfaced as attested:true
+    receipt_signer: ENGINE_SIGNER,
     // secret-shaped decoys — must never be returned:
     secret_key: SECRET,
     prompt: SECRET,
@@ -110,7 +117,7 @@ function seedReceipt(over: Record<string, any> = {}) {
 
 const get = (owner: string, nonce: string) => request(app).get(`/api/v1/receipts/${owner}/${nonce}`);
 
-const NON_SECRET_KEYS = ['action', 'cap', 'payee_hash', 'chain_id', 'signature_status', 'created_at'];
+const NON_SECRET_KEYS = ['action', 'cap', 'payee_hash', 'chain_id', 'signature_status', 'created_at', 'receipt_signature', 'engine_signer', 'attested'];
 
 beforeAll(() => {
   /* eslint-disable @typescript-eslint/no-var-requires */
@@ -123,7 +130,7 @@ beforeAll(() => {
 beforeEach(() => reset());
 
 describe('GET /receipts/:owner/:nonce — the public receipt lookup', () => {
-  it('stored receipt → 200 with EXACTLY the non-secret fields and nothing else', async () => {
+  it('stored receipt → 200 with EXACTLY the non-secret fields (incl. engine attestation) and nothing else', async () => {
     seedReceipt();
     const r = await get(OWNER, NONCE);
     expect(r.status).toBe(200);
@@ -135,7 +142,30 @@ describe('GET /receipts/:owner/:nonce — the public receipt lookup', () => {
       chain_id: 84532,
       signature_status: 'verified',
       created_at: '2026-10-09T00:00:00.000Z',
+      receipt_signature: RECEIPT_SIG,
+      engine_signer: ENGINE_SIGNER,
+      attested: true,
     });
+  });
+
+  it('a receipt WITH a stored engine signature → attested:true, signature + signer present', async () => {
+    seedReceipt();
+    const r = await get(OWNER, NONCE);
+    expect(r.status).toBe(200);
+    expect(r.body.attested).toBe(true);
+    expect(r.body.receipt_signature).toBe(RECEIPT_SIG);
+    expect(r.body.engine_signer).toBe(ENGINE_SIGNER);
+  });
+
+  it('a receipt WITHOUT a stored engine signature → attested:false, both null (never "attestation failed")', async () => {
+    seedReceipt({ receipt_signature: null, receipt_signer: null }); // written unsigned (key was unset at verify time)
+    const r = await get(OWNER, NONCE);
+    expect(r.status).toBe(200);
+    expect(r.body.attested).toBe(false);
+    expect(r.body.receipt_signature).toBeNull();
+    expect(r.body.engine_signer).toBeNull();
+    // the receipt itself is still a verified job — the engine attestation is ADDITIONAL, not the verdict
+    expect(r.body.signature_status).toBe('verified');
   });
 
   it('NO key / prompt / sentence / RAW PAYEE ADDRESS / signature ever appears — only the payee HASH', async () => {

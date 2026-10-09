@@ -23,6 +23,7 @@
  */
 import { getAddress, id as keccakUtf8, isAddress } from 'ethers';
 import { db } from '../db';
+import { signReceipt } from './receipt-attestation';
 import { verifyWalletMessage, type SignatureChain } from './wallet-signature';
 
 /** Read per-request so the flag can be flipped (and tested) without a module reload. */
@@ -300,8 +301,45 @@ export async function verifySignedJob(input: VerifyInput, chain?: SignatureChain
   }
 
   const time = (insert.data as { created_at?: string } | null)?.created_at ?? new Date().toISOString();
+
+  // 6b. ENGINE ATTESTATION (ADDITIONAL, never load-bearing). If RECEIPT_SIGNING_KEY is set, the engine
+  // signs this receipt with its OWN key and stores the signature + signer so the row is independently
+  // verifiable (recover the engine address from the bytes, confirm it equals the published signer) —
+  // NOT just "our DB row". The receipt is signed over the EXACT stored `time`, so a later verify
+  // recomputes identical bytes. When the key is unset the columns stay NULL and the receipt is
+  // `attested:false`, never presented as attested. A signing OR store failure must NOT fail this
+  // verify (the job IS verified; signature_status is unchanged) — it is logged server-side and the
+  // columns are left NULL. The key never appears in a return, a log, or an error.
+  try {
+    const attestation = await signReceipt({
+      owner: ownerLower,
+      nonce: job.nonce,
+      action: job.action,
+      cap: job.cap,
+      payee_hash: job.payee_hash,
+      chain_id: job.chain_id,
+      time,
+    });
+    if (attestation) {
+      const stored = await db
+        .from('signed_job_receipts')
+        .update({ receipt_signature: attestation.signature, receipt_signer: attestation.signer })
+        .eq('owner', ownerLower)
+        .eq('nonce', job.nonce);
+      if (stored.error) {
+        // Could not persist the attestation. The job stays verified; the row is simply unsigned.
+        console.error('[signed-job] receipt attestation store failed', stored.error);
+      }
+    }
+  } catch (e) {
+    // signReceipt never throws, but defend the verify regardless — an attestation problem is never a
+    // verify failure. Fixed context only; no signature/key material is logged.
+    console.error('[signed-job] receipt attestation step failed', e instanceof Error ? e.message : 'unknown');
+  }
+
   // 7. Success. The response carries ONLY receipt fields — no key, prompt, sentence, or raw
-  // payee address (none of which this verifier ever receives), only the payee HASH.
+  // payee address (none of which this verifier ever receives), only the payee HASH. The engine
+  // attestation is stored on the row and surfaced by GET /receipts/:owner/:nonce, not here.
   return {
     status: 200,
     body: {
