@@ -45,6 +45,7 @@ import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import jobsRouter from './routes/v1/jobs';
 import policiesRouter from './routes/v1/policies';
+import receiptLookupRouter from './routes/v1/receipts';
 import { CORS_ALLOWED_HEADERS, CORS_EXPOSED_HEADERS } from './config/cors-headers';
 import humanBindStagingRouter from './routes/human-bind-staging';
 import negotiationRouter from './routes/v1/negotiation';
@@ -520,6 +521,13 @@ app.use('/api/v1', jobsRouter);
 // 404 before any DB read until the operator applies the policy migration and sets it. See
 // routes/v1/policies.ts + services/signed-policy.ts.
 app.use('/api/v1', policiesRouter);
+// TrustKeys receipt lookup (2026-10-09, stacks on jobs/policies): GET /api/v1/receipts/:owner/:nonce.
+// Mounted here with jobsRouter/policiesRouter, ahead of authMiddleware, because it is a PUBLIC read of
+// NON-SECRET receipt fields — the same posture as GET /api/v1/policies/:hash. Shares the SAME flag
+// (SIGNED_JOB_VERIFY_ENABLED) → 404 before any DB read until the operator applies the receipt migration
+// and sets it. Its two-segment path does not collide with the one-segment /receipts/:id router mounted
+// later. See routes/v1/receipts.ts.
+app.use('/api/v1', receiptLookupRouter);
 // Practice lane, slice P1 (2026-10-07): public and read-only, like the owner route above. One chain
 // read per request (the allowance), so it has its own limiter, mounted immediately before it.
 app.use('/api/v1/lane', laneLimiter);
