@@ -143,3 +143,21 @@ restatement.
 
 **Re-issuance is not designed here.** Whether affected statements are re-issued, or simply
 verify with a NOT_CHECKED recompute forever, is a product decision, not a proof-system one.
+
+## 5. Tuning review log — any behaviour change needs a version bump here
+
+A scoring **tuning** change is a behaviour change by the same definition §4 pins: it alters the
+`(inputs) → delta` function the ZK statement attests to. So a tuned-parameter flip (a `REPID_*`
+env change on the Railway service) OR a code-constant change to the SERVICE_* touchpoint / dispute
+deltas is exactly what §4's golden vector is built to catch — and it must get its own `version`
+entry (and a `BEHAVIOUR_DIGESTS` bump) the same way the 2026-08-17 orientation fix did, or old
+proofs present as forged deltas (the §0 failure). Record each one here as a dated row.
+
+| date | change | version | notes |
+| :-- | :-- | :-- | :-- |
+| 2026-08-17 | clean branch consumes quality, not risk | `repid-delta-a8-quality-oriented` | §1 |
+| 2026-10-09 | **review only — nothing tuned.** RepID/HAL behaviour & anti-gaming audit; recommendations delivered to Sean out-of-band. `tests/anti-gaming-invariants.test.ts` added (touchpoint invariants + documented P3 gaps). No delta function changed; no version bump. | *(unchanged)* | `reports/2026-10-09/REPID-TUNING-ANALYSIS.md` |
+
+**When Sean applies a recommended tuning** (challenge-asymmetry env, proportional `provider_at_fault`,
+STARTING_REPID): add a row above, bump `CURRENT_FORMULA_PARAMS.version`, and update the golden
+vector — the tuning is not "done" until the bump is a checked invariant, not a remembered one.

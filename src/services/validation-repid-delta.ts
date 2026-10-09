@@ -162,7 +162,11 @@ export async function applyValidationDeltas(
 //
 // This rewards both throughput (do work) and quality (do work well).
 
-const SERVICE_FULFILLED_DELTAS = {
+// Exported (behaviour-neutral) so the anti-gaming invariant guard
+// (tests/anti-gaming-invariants.test.ts) reasons over the SAME constants the
+// live writer applies — one source, no drift. Same rationale as the existing
+// `export` on SERVICE_SATISFIED_DELTA_BASE below.
+export const SERVICE_FULFILLED_DELTAS = {
   provider: 10,
   buyer: 5,
 } as const;
@@ -175,7 +179,7 @@ export const SERVICE_SATISFIED_DELTA_BASE = {
   buyer: 15,     // also multiplied by satisfaction_score (see applyServiceSatisfiedDeltas)
 } as const;
 
-const SERVICE_DISPUTE_DELTAS = {
+export const SERVICE_DISPUTE_DELTAS = {
   provider_at_fault: { provider: -100, buyer: 20 },   // BFT verdict caught provider failure
   buyer_at_fault:    { provider: 20, buyer: -50 },    // BFT verdict caught false dispute
   no_fault:          { provider: 0, buyer: 0 },
@@ -593,7 +597,7 @@ export async function applyServiceSatisfiedDeltas(
 //
 // ── TUNING BLOCK (change these + log an audit line; Grok cross-validate for
 //    audit-surface impact per the file header rules) ─────────────────────
-const SERVICE_OUTCOME_BASE = {
+export const SERVICE_OUTCOME_BASE = {
   good: 60,   // full positive — largest of the three touchpoints' base magnitude
   ok:   0,    // honest middle — no move by default (small nudge possible via _OK_NUDGE)
   bad: -80,   // negative — outweighs the earlier positive touchpoints combined
@@ -605,7 +609,7 @@ const SERVICE_OUTCOME_OK_NUDGE = 0;
 
 // Rater-weight: multiplier = clamp(rater_repid / PIVOT, MIN, MAX).
 // PIVOT is the ESTABLISHED-tier floor (1000) so a baseline agent rates at ~1.0×.
-const RATER_WEIGHT = {
+export const RATER_WEIGHT = {
   pivot: 1000,   // rater_repid at which weight == 1.0
   min:   0.25,   // floor — a brand-new rater still counts a quarter
   max:   2.0,    // ceiling — a maxed rater counts at most double
