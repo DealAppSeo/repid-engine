@@ -43,6 +43,15 @@ const router = Router();
 const MAX_SKEW_MS = 5 * 60 * 1000;
 
 /**
+ * repid_agents.id is a uuid column. A value of exactly this shape is safe to hand to
+ * .eq('id', …); anything else (a slug like "trinity-sophia", a bare name) must be
+ * resolved against agent_name instead, or Postgres raises 22P02 "invalid input syntax
+ * for type uuid" on the cast. Same shape the public read routes use to accept a slug OR
+ * a uuid (src/routes/repid.ts resolveAgentUuid, services/human-agent-binding.ts).
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * The agent's own API key — the second side of a bind (see human-agent-binding.ts). A browser may
  * send it only because src/config/cors-headers.ts allows it; that file also explains why every
  * /bind from trustshell.dev died in preflight until 2026-10-07.
@@ -142,7 +151,7 @@ async function principalOf(req: Request, res: Response): Promise<Principal | nul
 // owner column lie about who holds the key.
 const ownerFor = (p: Principal): KeyOwner => ({ kind: p.owner.kind, id: p.owner.id });
 
-// ── Getting an account at all ───────────────────────────────────────────────
+// ── Getting an account at all ────────────────────────────────────────────────
 
 const SELF_SERVE_ACCOUNTS_ENABLED = process.env.SELF_SERVE_ACCOUNTS_ENABLED === 'true';
 
@@ -195,7 +204,7 @@ router.post('/account/connect', async (req: Request, res: Response) => {
   });
 });
 
-// ── BYOK custody ────────────────────────────────────────────────────────────
+// ── BYOK custody ───────────────────────────────────────────────────────────────────
 
 router.get('/byok/providers', (_req: Request, res: Response) => {
   res.json({ enabled: BYOK_CUSTODY_ENABLED, providers: supportedProviders() });
@@ -243,7 +252,7 @@ router.delete('/byok/keys/:provider', async (req: Request, res: Response) => {
   return res.json(await revokeKey(ownerFor(p), String(req.params.provider), label));
 });
 
-// ── HyperDAG identity tokens (hdg_byok_*) ───────────────────────────────────
+// ── HyperDAG identity tokens (hdg_byok_*) ────────────────────────────────────
 //
 // The missing issuance path. The rate limiter has always been able to VALIDATE
 // one of these and grant bypass; nothing could mint one. That is why external
@@ -363,7 +372,7 @@ router.delete('/byok/identity/:id', async (req: Request, res: Response) => {
   return res.json(await revokeToken({ id: String(req.params.id), owner: ownerFor(p), reason }));
 });
 
-// ── Owner authorization ─────────────────────────────────────────────────────
+// ── Owner authorization ──────────────────────────────────────────────────────────
 
 /**
  * What an owner signs to widen what their agent may do, served by the code that verifies it so a
@@ -382,7 +391,7 @@ router.get('/owner-authorization', (_req: Request, res: Response) => {
   });
 });
 
-// ── Human ↔ agent binding ───────────────────────────────────────────────────
+// ── Human ↔ agent binding ──────────────────────────────────────────────────────
 
 /** The exact text to sign to claim an agent. Public — it proves nothing by itself. */
 router.get('/human/bind/message', (req: Request, res: Response) => {
@@ -430,19 +439,32 @@ router.get('/human/bind/preflight', async (req: Request, res: Response) => {
   };
 
   // Does the agent exist, and what is its PUBLIC standing (what you are claiming)?
+  //
+  // Resolve by UUID or by slug, exactly as the public read routes already do
+  // (GET /repid/:id resolves either; GET /agents/by-name/:name is the .ilike lookup).
+  // repid_agents.id is a uuid column, so passing a slug like "trinity-sophia" into
+  // .eq('id', …) makes Postgres raise 22P02 "invalid input syntax for type uuid". That
+  // is a MALFORMED-INPUT error, not a failed read: routing it to 503 not_checked would
+  // conflate "bad input" with "we could not check" (the three-outcomes rule) and leak
+  // the raw DB error. So a non-UUID is matched against agent_name and, if nothing
+  // matches, falls through to the honest exists:false / agent_not_found below.
   let agentRow: { id: string; agent_name: string | null; current_repid: number | null; tier: string | null } | null;
   try {
-    const { data, error } = await db
-      .from('repid_agents')
-      .select('id, agent_name, current_repid, tier')
-      .eq('id', agentId)
-      .maybeSingle();
+    const base = db.from('repid_agents').select('id, agent_name, current_repid, tier');
+    const scoped = UUID_RE.test(agentId)
+      ? base.eq('id', agentId)
+      : base.ilike('agent_name', agentId).limit(1);
+    const { data, error } = await scoped.maybeSingle();
     if (error) throw new Error(error.message);
     agentRow = (data as typeof agentRow) ?? null;
   } catch (e: any) {
+    // A genuine failed read (a real DB error), never a malformed id — those resolve to
+    // agent_not_found above. The raw error is logged server-side, never returned to the
+    // client: this is a public surface.
+    console.error(`[preflight] agent read failed for "${agentId}": ${e?.message ?? e}`);
     return res.status(503).json({
       error: 'not_checked',
-      message: `Could not read this agent, so nothing is claimed about its state. ${e?.message ?? ''}`.trim(),
+      message: 'Could not read this agent, so nothing is claimed about its state.',
     });
   }
 
@@ -465,12 +487,16 @@ router.get('/human/bind/preflight', async (req: Request, res: Response) => {
   let owner: Awaited<ReturnType<typeof ownerOfAgent>>;
   let link: Awaited<ReturnType<typeof linkedButUnbound>>;
   try {
-    owner = await ownerOfAgent(agentId);
-    link = await linkedButUnbound(agentId);
+    // Pass the RESOLVED uuid, never the raw slug: both helpers query by uuid
+    // (human_agent_bindings.agent_id, repid_agents.id), so a slug would miss the
+    // binding (wrongly reporting "unowned") or hit the same 22P02 uuid-cast error.
+    owner = await ownerOfAgent(agentRow.id);
+    link = await linkedButUnbound(agentRow.id);
   } catch (e: any) {
+    console.error(`[preflight] owner read failed for "${agentRow.id}": ${e?.message ?? e}`);
     return res.status(503).json({
       error: 'not_checked',
-      message: `Could not read who owns this agent, so nothing is claimed about it. ${e?.message ?? ''}`.trim(),
+      message: 'Could not read who owns this agent, so nothing is claimed about it.',
     });
   }
 
