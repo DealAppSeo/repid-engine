@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 first**, and it is injected verbatim into every XC/GA dispatch. If you are working in
 any sibling repo, that is still the file — come back here for it.
 
+**Operating contract:** read [`HARNESS.md`](HARNESS.md) — the rails (bounded contracts · blast-radius lanes · dual-encoding · loops & graphs) — before planning or cutting work.
+
 **This file deliberately does NOT list the other repos.** It did until 2026-09-08, as a
 five-row table of sibling entry points, and that table was already wrong when it merged:
 `DealAppSeo/trustrails-dev` is live and was not in it. **The shape was the defect, not
