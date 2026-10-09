@@ -9341,4 +9341,47 @@ The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died befo
 PRs merged during this run's window (since 2026-10-09T04:30:42Z):
 - (none detected)
 
+---
+
+## Beat (2026-10-09, first run) — #1276 verified green; auto-merge armed; backlog assessed
+
+**Prior beat verified [V]:**
+
+The prior meaningful beat opened PR #1276 (`feat(receipts): engine-signed receipt attestations (reference tier)`). Verified independently:
+
+- State: MERGED candidate — all CI checks SUCCESS [V `gh pr view 1276 --json state,mergeable,statusCheckRollup`]:
+  - `test` ✓ `crosscheck` ✓ `gitleaks` ✓ `zkp-vault` ✓ `HAL prompt-injection / jailbreak probes` ✓ `Strix Security Review` ✓
+- MERGEABLE = `MERGEABLE`, CLEAN [V]
+- Three auto-logged fallback entries (runs 37839379671, 37867917421, 37884217340) confirm earlier beats in this session did not write their own ledger entries — the active reference-tier track continued producing work but skipped step 1. PRs #1267, #1269, #1271, #1273, #1274, #1275 all merged today before #1276 was opened. This beat is the first to write a ledger entry since the fifth run (2026-10-08).
+- **Penalty verdict: NONE.** #1276 is additive, operator-gated, all checks pass, Strix clean.
+
+**Step 4 — `gh pr merge 1276 --auto --squash` armed (SAFE-CLASS: operator-gated, additive, no flag flips, all checks green, Strix ✓).**
+
+**Backlog assessment — non-Sean-gated items remaining:**
+
+- Item 11 (proof-tier enforcement): enforcement wiring is a deliberate code change, Sean-gated by design (file header states this).
+- Item 15 (WHIR PCS): LATER — "verify PR#1919 numbers first." PR#1919 is in hyperdag-protocol, not accessible from this runner without explicit dispatch.
+- Items 7/8/9/10: all env flips or gas spend — Sean GO.
+- XC finding #2 (surface `injectionBoost`/`jailbreak_risk` in agents-external.ts:194): rated [R] — XC had no shell, the line is in the agent-registration path where HAL signals are not yet computed. Not clearly actionable without re-reading the finding with a shell.
+- Reference tier track (the active track): #1276 is the current tip. Next natural step is a golden-vector attestation pin test — but `src/services/receipt-attestation.ts` does not yet exist on main (#1276 is still open), so building it now would conflict with #1276's merge.
+
+**#1276 merged at 2026-10-09T08:39:36Z while this beat was running** — enabling the golden-vector test to be built immediately.
+
+**Step 2 — SHIPPED: receipt-attestation golden-vector pin → PR #1277** (`test(receipts): receipt-attestation golden-vector pin (canonical-bytes contract)`, branch `feat/receipt-attestation-golden-vector`).
+
+The existing `receipt-attestation.test.ts` uses `Wallet.createRandom()` — it catches logic bugs but NOT byte drift. This file pins the exact canonical JSON string produced by `receiptSigningObject` and a pre-computed signature by the zero-value Hardhat #0 fixture key. Any future drift in `canonicalJson` (a stray space, a reordered key) or the `receiptSigningObject` field set now goes red in CI before reaching production. 5 tests: (1) canonical bytes reproduced byte-for-byte; (2) pre-computed signature recovers to Hardhat #0 address; (3) `verifyReceiptAttestation` accepts the signature; (4) domain isolation: receipt sig does NOT verify under policy/job strings; (5) tampered field → `verified:false`.
+
+**[V] `./node_modules/.bin/jest tests/receipt-attestation-golden-vector.test.ts --forceExit` → 5/5 passed.** Related suites (receipt-attestation + signed-job-golden-vector) → 34/34. `tsc --noEmit` clean.
+`gh pr merge 1277 --auto --squash` armed; `autoMergeRequest.mergeMethod=SQUASH` confirmed [V].
+
+**Mistakes / corrections:** None. Three prior beats died before writing ledger entries — documented here, not hidden. The initial ledger intent said "close after arming #1276" — #1276 merged mid-beat so the golden-vector test was built within the same beat.
+
+**Open for Sean (rule-4 only):**
+1. Items 7/8/9/10/11: env flips / gas spend / enforcement wiring — unchanged.
+2. F-18: `/leads` endpoint role (viewer vs operator) — unchanged.
+3. Practice lane P2: payee/stop/acknowledgement gate design — unchanged.
+4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO.
+
+**Next beat:** (1) Verify #1277 merged. (2) Non-Sean-gated backlog is thin — XC finding #2 (surface `injectionBoost`/`jailbreak_risk` in agents-external metadata) is the next candidate; rated [R] so re-read the finding with a shell before building. (3) Item 15 (WHIR PCS) remains LATER pending PR#1919 number verification.
+
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37884217340 --log`) if the reason matters.
