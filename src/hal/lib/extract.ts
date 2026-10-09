@@ -110,5 +110,6 @@ export function extractHALSignals(input: ExtractInput): HALSignals {
     evidence_quality,
     scope_appropriateness,
     certainty_at_claim: certainty,
+    injection_risk: injectionBoost,
   };
 }
