@@ -20,6 +20,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
+import { likeLiteral } from '../../utils/like-literal';
 import { verifyWalletMessage } from '../../services/wallet-signature';
 import {
   storeProviderKey, listKeys, revokeKey, ownerFamilyWidth,
@@ -453,7 +454,7 @@ router.get('/human/bind/preflight', async (req: Request, res: Response) => {
     const base = db.from('repid_agents').select('id, agent_name, current_repid, tier');
     const scoped = UUID_RE.test(agentId)
       ? base.eq('id', agentId)
-      : base.ilike('agent_name', agentId).limit(1);
+      : base.ilike('agent_name', likeLiteral(agentId)).limit(1);
     const { data, error } = await scoped.maybeSingle();
     if (error) throw new Error(error.message);
     agentRow = (data as typeof agentRow) ?? null;
