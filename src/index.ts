@@ -45,6 +45,7 @@ import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import jobsRouter from './routes/v1/jobs';
 import policiesRouter from './routes/v1/policies';
+import devCodegenRouter from './routes/v1/dev-codegen';
 import receiptLookupRouter from './routes/v1/receipts';
 import { CORS_ALLOWED_HEADERS, CORS_EXPOSED_HEADERS } from './config/cors-headers';
 import humanBindStagingRouter from './routes/human-bind-staging';
@@ -695,6 +696,16 @@ app.use('/api/v1', repidConfessRouter);
 // `social_content_queue_verified_before_publish` CHECK in Postgres, not this router — see
 // src/services/social-publish-gate.ts for why enforcement cannot live in application code.
 app.use('/api/v1/social', socialQueueRouter);
+
+// DEV CODEGEN RELAY (2026-10-09) — POST /api/v1/dev/codegen hands a base64-encoded code spec to ONE
+// free LLM provider (groq, else cerebras) and returns the text. Dev-only infrastructure for a cost
+// pilot. Mounted AFTER authMiddleware and absent from its bypass list: no key is a 401, and the
+// handler additionally refuses agent-bound keys (operator keys only). Default OFF
+// (DEV_CODEGEN_ENABLED) -> 404 as the handler's first statement. Mounted here, ahead of
+// rateLimitMiddleware/versioningMiddleware, so a disabled deployment does none of their work (the
+// global /api/v1 limiter above still applies). The spec is base64 so the SQL-keyword sanitizer
+// above is left exactly as it is. See src/routes/v1/dev-codegen.ts.
+app.use('/api/v1', devCodegenRouter);
 
 app.use('/api', llmRouter);
 
