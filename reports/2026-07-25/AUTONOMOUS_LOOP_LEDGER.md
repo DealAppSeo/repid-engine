@@ -9384,4 +9384,33 @@ The existing `receipt-attestation.test.ts` uses `Wallet.createRandom()` — it c
 
 **Next beat:** (1) Verify #1277 merged. (2) Non-Sean-gated backlog is thin — XC finding #2 (surface `injectionBoost`/`jailbreak_risk` in agents-external metadata) is the next candidate; rated [R] so re-read the finding with a shell before building. (3) Item 15 (WHIR PCS) remains LATER pending PR#1919 number verification.
 
+---
+
+## Beat (2026-10-09, second run) — #1277 verified MERGED with a real gitleaks finding; false-positive exempted
+
+**Prior beat (2026-10-09, first run) verified [V]:**
+- PR #1277 (`test(receipts): receipt-attestation golden-vector pin (canonical-bytes contract)`): **MERGED** at 2026-10-09T08:50:30Z, commit `9f02076d` on origin/main [V `git log --oneline -8`] ✓
+- CI checks on #1277: `test` SUCCESS · `crosscheck` SUCCESS · `zkp-vault` SUCCESS · `HAL prompt-injection` SUCCESS · `Strix Security Review` SUCCESS ✓
+- **FINDING: `gitleaks` FAILURE + `resident-secrets` FAILURE on run `37906786637`** [V `gh pr view 1277 --json statusCheckRollup`]. The failure message: "🛑 Leaks detected". Root cause verified by reading `tests/receipt-attestation-golden-vector.test.ts:45` directly: the file commits the Hardhat #0 private key as a literal string (`0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`) with no gitleaks exemption annotation. Gitleaks detects it as a real Ethereum private key — it cannot distinguish the value's source from its shape alone.
+- The key is the well-known Hardhat/Anvil fixture, zero-value, shipped with every Hardhat install and published in thousands of public test suites — not a real production key. The file's own header (lines 15-18) states this clearly in prose, but gitleaks scans values, not comments. The PR merged despite the advisory failure because branch protection only requires `test`.
+- **Penalty verdict: NONE.** #1277's core claim (5/5 golden-vector tests pass, byte-exact canonical string pinned, domain isolation confirmed) holds under independent read. The gitleaks finding is a false-positive for the key itself; the fix is an exemption annotation, not a key rotation.
+
+**Step 2 — SHIPPED: gitleaks false-positive exemption on the Hardhat #0 fixture key**
+
+Added `// gitleaks:allow — Hardhat #0 world-published zero-value fixture, not a real key` to `tests/receipt-attestation-golden-vector.test.ts:45` (the ENGINE_KEY constant). This is the established repo pattern — identical to `tests/security-audit.test.ts:26,54` which use the same inline annotation for fake `sk-` fixtures. No logic change, no test change, additive annotation only.
+
+**[V] Intent confirmed via grep before building:** `grep -rn "gitleaks:allow" tests/` showed exactly the two existing instances in `security-audit.test.ts` — this is the third, same class.
+
+**PR #1278 opened; `gh pr merge 1278 --auto --squash` armed (SAFE-CLASS: test-file annotation, zero behavior change, no flag flips).**
+
+**Mistakes / corrections:** None. The gitleaks failure was present on the prior beat's PR at merge time; this beat is the first to catch and document it rather than leave it as a silent advisory failure.
+
+**Open for Sean (rule-4 only):**
+1. Items 7/8/9/10/11: env flips / gas spend / enforcement wiring — unchanged.
+2. F-18: `/leads` endpoint role (viewer vs operator) — unchanged.
+3. Practice lane P2: payee/stop/acknowledgement gate design — unchanged.
+4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO.
+
+**Next beat:** (1) Verify #1278 merged with gitleaks green. (2) XC finding #2 (surface `injectionBoost`/`jailbreak_risk` in `agents-external.ts:194` metadata) — re-read with shell before building; rated [R] by XC (no shell). (3) Item 15 (WHIR PCS) remains LATER.
+
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37884217340 --log`) if the reason matters.
