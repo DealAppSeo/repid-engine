@@ -521,12 +521,18 @@ app.use('/api/v1', jobsRouter);
 // 404 before any DB read until the operator applies the policy migration and sets it. See
 // routes/v1/policies.ts + services/signed-policy.ts.
 app.use('/api/v1', policiesRouter);
-// TrustKeys receipt lookup (2026-10-09, stacks on jobs/policies): GET /api/v1/receipts/:owner/:nonce.
-// Mounted here with jobsRouter/policiesRouter, ahead of authMiddleware, because it is a PUBLIC read of
-// NON-SECRET receipt fields — the same posture as GET /api/v1/policies/:hash. Shares the SAME flag
-// (SIGNED_JOB_VERIFY_ENABLED) → 404 before any DB read until the operator applies the receipt migration
-// and sets it. Its two-segment path does not collide with the one-segment /receipts/:id router mounted
-// later. See routes/v1/receipts.ts.
+// TrustKeys receipt surfaces (2026-10-09, stacks on jobs/policies): GET /api/v1/receipts/:owner/:nonce
+// (read one stored receipt back), plus the ENGINE-ATTESTATION pair GET /api/v1/receipts/signer (the
+// engine's published signer address, or null when RECEIPT_SIGNING_KEY is unset) and POST
+// /api/v1/receipts/verify (pure-crypto recovery of the engine signer from a receipt's bytes +
+// signature — no DB). Mounted here with jobsRouter/policiesRouter, ahead of authMiddleware, because all
+// three are PUBLIC (non-secret fields, a public address, and a crypto check over bytes the caller
+// already holds). Shares the SAME flag (SIGNED_JOB_VERIFY_ENABLED) → every route 404s before any work
+// until the operator applies the receipt migration and sets it. The one-segment /receipts/signer and
+// POST /receipts/verify do not collide with the two-segment /receipts/:owner/:nonce here, nor with the
+// one-segment /receipts/:id router mounted later (this router is mounted first, so it answers first).
+// The engine attestation is the ENGINE's own key, like the EAS/BASE_SEPOLIA attestor keys — never a
+// user/custody key. See routes/v1/receipts.ts + services/receipt-attestation.ts.
 app.use('/api/v1', receiptLookupRouter);
 // Practice lane, slice P1 (2026-10-07): public and read-only, like the owner route above. One chain
 // read per request (the allowance), so it has its own limiter, mounted immediately before it.
