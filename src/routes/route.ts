@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import { validateAgentApiKey } from '../auth/api-keys';
 import { db } from '../db';
 import { gateEnabled, meterRun } from '../services/email-otp';
+import { resolveOwnerStoredKeys, mergeEffectiveKeys } from '../services/byok-key-resolution';
 
 export const llmRouter = Router();
 
@@ -248,16 +249,32 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       }
     }
 
+    // BYOK custody consumption. Fold the AUTHENTICATED agent's owner's custodied
+    // provider keys into the effective key map. `resolveOwnerStoredKeys` is the
+    // trust boundary: it returns `{}` unless custody is ON (default OFF → inert),
+    // the owner is PROVEN by signature, and that owner maps to a custody namespace
+    // — so a stored key is only ever spent on a call by an agent its owner proved
+    // they own. `resolvedAgentId` here is the id this request was authenticated as
+    // (the auth block above rejects any key not bound to this exact agent).
+    //
+    // PRECEDENCE (default, easily flipped in mergeEffectiveKeys): the request-body
+    // `user_paid_keys` WINS; stored keys only fill providers the body did not supply.
+    const storedKeys = await resolveOwnerStoredKeys(resolvedAgentId);
+    const effectiveKeys = mergeEffectiveKeys(storedKeys, user_paid_keys);
+
     const routeReq: RouteRequest = {
       prompt,
       tier_preference,
       task_hint,
-      user_paid_keys,
+      user_paid_keys: effectiveKeys,
       maxTokens: max_tokens,
       temperature
     };
 
-    // Redact from req.body immediately to ensure downstream error loggers never see it
+    // Redact from req.body immediately to ensure downstream error loggers never see it.
+    // `effectiveKeys` (which may hold DECRYPTED stored keys) is a request-local that is
+    // never attached to req.body, so it cannot reach a body logger; the body copy is
+    // still redacted here so a caller-supplied key is scrubbed exactly as before.
     if (req.body.user_paid_keys) {
       req.body.user_paid_keys = '[REDACTED]';
     }
@@ -269,7 +286,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     // one of three attempts — a live smoke call 503'd having made exactly ONE
     // real provider call. Seeding the exclusion list makes maxAttempts mean
     // that many genuine attempts.
-    let excludeProviders: string[] = keylessProviders(user_paid_keys as Record<string, string> | undefined);
+    let excludeProviders: string[] = keylessProviders(effectiveKeys);
     if (excludeProviders.length) {
       console.warn(
         `[llm/complete] ${excludeProviders.length} provider(s) have NO key and were excluded before selection: ` +
@@ -329,7 +346,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       }
 
       // Same resolver the pre-filter uses — one definition, so they cannot drift.
-      const apiKey = resolveAdapterKey(adapter.name, adapter.tier, user_paid_keys as Record<string, string> | undefined);
+      const apiKey = resolveAdapterKey(adapter.name, adapter.tier, effectiveKeys);
 
       if (!apiKey) {
         markFailure(adapter.name, new AuthError(`No key found for ${adapter.name}`));
