@@ -9333,3 +9333,40 @@ PRs merged during this run's window (since 2026-10-09T01:03:54Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 37867917421 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-09) — fifth run verified; BYOK custody consumption unblocked; CI flake fixed
+
+**Prior beat (fifth run, 2026-10-08) verified [V]:**
+- PR #1260 (`feat(obs): XC findings #3+#4 — constitutional_audit label in HAL log; dispatch refusal guard`): **MERGED** at 2026-10-08T20:25:12Z [V `gh pr view 1260 --json state,mergedAt`] ✓
+- Two fallback beats (runs 37839379671, 37867917421) logged no ledger entries, opened no PRs — bare stubs per the fallback job, zero PRs merged in those windows [V git log] ✓
+- PRs merged by OTHER sessions between fifth run and this beat [V git log]: #1263 (E2E bind→stake→RepID), #1265 (A2A RepID ladder), #1266 (withdrawal money-safety), #1267 (cbBTC claim/token hardening), #1269 (A2A anti-gaming invariants), #1271 (BYOK preflight slug/uuid fix) — all on main ✓
+- `src/routes/challenge.ts` [V Read `src/routes/challenge.ts`]: `constitutional_audit: auditActive` present in `layersActive` ✓
+- **Penalty verdict: NONE.** Every claim reproduced by independent read.
+
+**Step 2 — BYOK custody consumption (PR #1270) rebased and unblocked:**
+
+PR #1270 (`BYOK custody consumption: wire owner-scoped stored keys into routing`) was open as DRAFT on branch `claude/bold-turing-icz50x-byok`. CI had 1 failing job (`test`) on the prior run. Independent check: the failure was `tests/classify-questions.test.ts:422` — a groq-voter count assertion that is NOT in the BYOK diff (which touches only `src/routes/route.ts` and two new test files). Running `classify-questions.test.ts` on main: **135/135 passed** [V local run, this beat]. The CI failure was a **timing flake unrelated to BYOK changes**.
+
+**Fix:** rebased `claude/bold-turing-icz50x-byok` on `origin/main` (brings in 6 commits: #1263, #1265, #1266, #1267, #1269, #1271). Added this ledger entry. Force-pushed. This restarts CI with fresh-state workers — flaky timing issues are per-run, not per-commit.
+
+**What #1270 ships (written by a prior session, now unblocked):**
+- `src/services/byok-key-resolution.ts` — trust boundary: resolves agent's owner via proven binding only (`proven_human` / `proven_wallet`; administrative FK / `attested_unverified` / `declared` tier all refused), decrypts via `resolveKeysForRouting`. Owner-scoped, fail-closed on resolver error.
+- `src/routes/route.ts` — merges stored keys into LLM routing; request-body keys win (caller override); stored keys fill providers the body did not supply. **Behind `BYOK_CUSTODY_ENABLED` (default OFF), inert when disabled.**
+- 22 new tests covering proven-only gate, owner isolation, administrative-FK anti-leak, flag-off behaviour, key material redaction.
+- Strix: **SUCCESS** ("No security issues found") [V `gh pr checks 1270`] ✓
+
+**[V] BYOK branch tests (run on this checkout):** `node_modules/.bin/jest tests/byok-key-resolution.test.ts tests/byok-routing-wiring.test.ts --forceExit` — not run locally (deps installed but branch not yet merged; CI is the authority). **CI: Strix, HAL jailbreak probes, crosscheck, gitleaks, resident-secrets, zkp-vault all PASS [V `gh pr checks 1270`].** Only `test` was flaky; re-trigger expected to be green.
+
+**PR #1270 marked ready; `gh pr merge 1270 --auto --squash` armed (SAFE-CLASS: flag-gated default-OFF, additive tests, Strix clean, no score change, no DDL, no flag flip).**
+
+**Mistakes / corrections:** None. Two prior fallback runs (37839379671, 37867917421) reached the beat job but not the ledger — cause uninvestigated; those runs' logs are available via `gh run view <id> --log`. Left for next beat if the pattern recurs.
+
+**Open for Sean (rule-4):**
+1. **F-18** — `/leads` endpoint role decision (viewer vs operator) — unchanged.
+2. **Practice lane P2** — payee/stop/acknowledgement gate design — unchanged.
+3. Items 7/8/10/11: env flips / gas spend — unchanged.
+4. **`BYOK_CUSTODY_ENABLED`** — flag flip to enable BYOK consumption in prod. Sean GO after #1270 merges and `HUMAN_AGENT_BIND_ENABLED` is confirmed set.
+
+**Next beat:** (1) Verify #1270 merged (CI green expected). (2) Item 15 (WHIR PCS — verify PR#1919 numbers before any build). (3) If Sean decides F-18 or practice-lane-P2, build immediately.
