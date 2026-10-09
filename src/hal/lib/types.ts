@@ -45,6 +45,7 @@ export interface HALSignals {
   evidence_quality: number;       // [0, 1] — higher = better quality (caller inverts to risk)
   scope_appropriateness: number;  // [0, 1] — higher = better fit (caller inverts to risk)
   certainty_at_claim: number;     // [0, 1] — pass-through of caller-supplied certainty
+  injection_risk: number;                   // [0, 0.8] — raw injectionBoost before it folds into harm_probability; 0 when no markers detected
   agreement_score?: number | null;          // Layer 1 — null when not factual/time-sensitive
   prompt_category?: string | null;          // Layer 0 classifier output
   comma_veto?: boolean | null;              // Pythagorean Comma BFT — true iff severity='critical'
