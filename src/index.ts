@@ -44,6 +44,7 @@ import receiptVerifyRouter from './routes/receipt-verify';
 import receiptPublicRouter from './routes/v1/receipt-public';
 import byokRouter from './routes/v1/byok';
 import jobsRouter from './routes/v1/jobs';
+import policiesRouter from './routes/v1/policies';
 import { CORS_ALLOWED_HEADERS, CORS_EXPOSED_HEADERS } from './config/cors-headers';
 import humanBindStagingRouter from './routes/human-bind-staging';
 import negotiationRouter from './routes/v1/negotiation';
@@ -512,6 +513,13 @@ app.use('/api/v1', byokRouter);
 // token symbol + action word). Flag-gated OFF → 404, so it is inert until the operator applies the
 // receipt migration and sets SIGNED_JOB_VERIFY_ENABLED. See routes/v1/jobs.ts + services/signed-job.ts.
 app.use('/api/v1', jobsRouter);
+// TrustKeys policy lifecycle (2026-10-09, stacks on jobs): POST /api/v1/policies (register),
+// POST /api/v1/policies/revoke, GET /api/v1/policies/:hash. Mounted here with jobsRouter, ahead of
+// authMiddleware, for the same reason — the OWNER's signature is the authorization, not an API key —
+// and the GET is public (non-secret fields only). Shares the SAME flag (SIGNED_JOB_VERIFY_ENABLED) →
+// 404 before any DB read until the operator applies the policy migration and sets it. See
+// routes/v1/policies.ts + services/signed-policy.ts.
+app.use('/api/v1', policiesRouter);
 // Practice lane, slice P1 (2026-10-07): public and read-only, like the owner route above. One chain
 // read per request (the allowance), so it has its own limiter, mounted immediately before it.
 app.use('/api/v1/lane', laneLimiter);
