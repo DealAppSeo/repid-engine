@@ -56,7 +56,7 @@ Corroborated 2026-10-08 against Circle docs / basescan / the canonical predeploy
 | WETH | `0x4200…0006` | 18 | VERIFIED | OP-Stack/Base predeploy, basescan source-verified |
 | USDC | `0x036C…cF7e` | 6 | VERIFIED | Circle docs; already in `config.ts` |
 | EURC | `0x8084…359F` | 6 | VERIFIED | Circle docs; basescan name/symbol/6dp |
-| cbBTC | `0xcbB7…A4a` | 8 | **NOT_CHECKED** | basescan source-verified + CDP faucet, but **no Coinbase docs-table**; confirm on-chain `decimals()`/`symbol()` + an issuer source before promoting. Note: **mainnet cbBTC is a different address** — never interchange. |
+| cbBTC | `0xcbB7…A4a` | 8 | **VERIFIED** | Promoted 2026-10-08 by a DIRECT on-chain read (`eth_call` via `pg_net`): `symbol()`=="cbBTC", `decimals()`==8, `eth_chainId`==0x14a34 (84532); + basescan source-verified FiatTokenProxy (~2,143 holders) + CDP faucet. Note: **Base MAINNET cbBTC is a DIFFERENT address** (`0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf`) — never interchange. |
 
 Faucets: ETH via the Coinbase Developer Platform faucet; USDC + EURC via `faucet.circle.com`
 (no account, ~10/req, 1/24h). cbBTC via the CDP faucet (Circle's faucet dispenses *cirBTC*,
