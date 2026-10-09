@@ -151,7 +151,7 @@ async function principalOf(req: Request, res: Response): Promise<Principal | nul
 // owner column lie about who holds the key.
 const ownerFor = (p: Principal): KeyOwner => ({ kind: p.owner.kind, id: p.owner.id });
 
-// ── Getting an account at all ────────────────────────────────────────────────
+// ── Getting an account at all ───────────────────────────────────────────────
 
 const SELF_SERVE_ACCOUNTS_ENABLED = process.env.SELF_SERVE_ACCOUNTS_ENABLED === 'true';
 
@@ -204,7 +204,7 @@ router.post('/account/connect', async (req: Request, res: Response) => {
   });
 });
 
-// ── BYOK custody ───────────────────────────────────────────────────────────────────
+// ── BYOK custody ────────────────────────────────────────────────────────────
 
 router.get('/byok/providers', (_req: Request, res: Response) => {
   res.json({ enabled: BYOK_CUSTODY_ENABLED, providers: supportedProviders() });
@@ -252,7 +252,7 @@ router.delete('/byok/keys/:provider', async (req: Request, res: Response) => {
   return res.json(await revokeKey(ownerFor(p), String(req.params.provider), label));
 });
 
-// ── HyperDAG identity tokens (hdg_byok_*) ────────────────────────────────────
+// ── HyperDAG identity tokens (hdg_byok_*) ───────────────────────────────────
 //
 // The missing issuance path. The rate limiter has always been able to VALIDATE
 // one of these and grant bypass; nothing could mint one. That is why external
@@ -372,7 +372,7 @@ router.delete('/byok/identity/:id', async (req: Request, res: Response) => {
   return res.json(await revokeToken({ id: String(req.params.id), owner: ownerFor(p), reason }));
 });
 
-// ── Owner authorization ──────────────────────────────────────────────────────────
+// ── Owner authorization ─────────────────────────────────────────────────────
 
 /**
  * What an owner signs to widen what their agent may do, served by the code that verifies it so a
@@ -391,7 +391,7 @@ router.get('/owner-authorization', (_req: Request, res: Response) => {
   });
 });
 
-// ── Human ↔ agent binding ──────────────────────────────────────────────────────
+// ── Human ↔ agent binding ───────────────────────────────────────────────────
 
 /** The exact text to sign to claim an agent. Public — it proves nothing by itself. */
 router.get('/human/bind/message', (req: Request, res: Response) => {
