@@ -245,6 +245,33 @@ async function shouldTriggerProof(agentId: string, deltaMagnitude: number): Prom
   return typeof count === 'number' && count > 0 && (count + 1) % 10 === 0;
 }
 
+/**
+ * Fetch the agent's latest committed memory root from `agent_memory_roots`.
+ * Returns null when the agent has no committed root yet, or on any DB error
+ * (fail-open: a missing root degrades currency to null, never breaks scoring).
+ * Used to supply `current_memory_root` to `computeGroundingSignal` so root
+ * currency is checked rather than assumed — closes the item-5/6 zero-callers gap.
+ */
+async function fetchLatestMemoryRoot(agentId: string): Promise<string | null> {
+  try {
+    const { data, error } = await db
+      .from('agent_memory_roots')
+      .select('root')
+      .eq('agent_id', agentId)
+      .order('epoch', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn(`[scoring/pipeline] fetchLatestMemoryRoot failed for agent=${agentId}: ${error.message}`);
+      return null;
+    }
+    return (data as any)?.root ?? null;
+  } catch (e: unknown) {
+    console.warn(`[scoring/pipeline] fetchLatestMemoryRoot threw for agent=${agentId}:`, e);
+    return null;
+  }
+}
+
 export async function runScoreEvent(
   input: ScoreEventInput
 ): Promise<ScoreEventResult> {
@@ -454,10 +481,18 @@ export async function runScoreEvent(
   // 'enforce' (Sean GO, after measurement) neutralizes a POSITIVE delta when an answer CLAIMED
   // grounding but can't prove it (no proof ⇒ no reward). No current traffic carries a PCA →
   // applicable:false → byte-identical to today. Runs BEFORE new_repid so enforce can zero the delta.
+  // `current_memory_root` — fetch the agent's latest committed root so currency is checked (item 5/6
+  // zero-callers gap). Fail-open: null degrades to "not checked" rather than breaking scoring.
   const gMode = groundingMode();
+  const currentMemoryRoot = gMode !== 'off'
+    ? await fetchLatestMemoryRoot(String(input.agent_id))
+    : null;
   const grounding = gMode === 'off'
     ? null
-    : computeGroundingSignal({ proof_carrying_answer: input.proof_carrying_answer ?? null }, gMode);
+    : computeGroundingSignal(
+        { proof_carrying_answer: input.proof_carrying_answer ?? null, current_memory_root: currentMemoryRoot },
+        gMode
+      );
   let groundingAbstained = false;
   if (grounding && grounding.mode === 'enforce' && grounding.applicable && grounding.would_abstain && effectiveDeltaApplied > 0) {
     effectiveDeltaApplied = 0; // claimed grounding, unprovable → earns nothing
