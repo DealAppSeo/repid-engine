@@ -116,7 +116,7 @@
   "dependencies": {
     "@hyperdag/proof-verifier": "github:DealAppSeo/hyperdag-proof-verifier#ec3930a4cc5700185e850150a51d2f5c34efcec1",
     "@supabase/supabase-js": "^2.103.0",
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcryptjs": "^3.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
