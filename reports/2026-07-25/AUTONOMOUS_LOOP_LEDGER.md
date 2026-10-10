@@ -9517,3 +9517,47 @@ Both tests use real Poseidon2 (module defaults), no network, no live DB — same
 5. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO.
 
 **Next beat:** (1) Verify this PR merged. (2) Backlog exhausted for non-Sean-gated buildable items — if Sean acts on any of the above, the loop advances; otherwise the next beat documents the gap and stops.
+
+---
+
+## Beat (2026-10-10, second run) — #1283 verified MERGED; grounding root-currency wiring shipped
+
+**Prior beat (2026-10-10, first run) verified [V]:**
+- PR #1283 (`test(memory): HTTP-level tombstoned-entry coverage for retrieval + emit routes`): **MERGED** at 2026-10-10T01:14:54Z, commit `dd28435b` [V `git log --oneline -5`] ✓
+- All CI checks: `test` SUCCESS · `crosscheck` SUCCESS · `gitleaks` SUCCESS · `resident-secrets` SUCCESS · `zkp-vault` SUCCESS · `HAL prompt-injection` SUCCESS · `Strix Security Review` SUCCESS [V `gh pr view 1283 --json statusCheckRollup`] ✓
+- **Penalty verdict: NONE.** Every claim reproduced.
+
+**Prior beat said "Backlog exhausted for non-Sean-gated buildable items" — GAP FOUND [V code read]:**
+
+Fresh grep: `grep -n "current_memory_root" src/scoring/pipeline.ts` → zero hits (only the import of `computeGroundingSignal` exists). The pipeline at `pipeline.ts:460` calls `computeGroundingSignal({ proof_carrying_answer: input.proof_carrying_answer ?? null }, gMode)` — `current_memory_root` is NEVER passed. This means `root_current` in every grounding signal row is `null` (currency never checked) even when `agent_memory_roots` already has a committed root for that agent. Backlog item 5 noted this gap: "NOT yet wired into scoring (item 3/6's currency read still has zero callers)."
+
+This is buildable without Sean GO: shadow mode (default) only logs, never affects scoring. Wiring the fetch is a read-only DB call added before the grounding signal computation, wrapped in try/catch so it cannot break scoring. Additive, no flag flip, no schema change.
+
+**INTENT:** Add `fetchLatestMemoryRoot(agentId)` helper in pipeline.ts; call it before grounding signal; pass `root_hex` as `current_memory_root`. Add tests exercising the pipeline-level currency path.
+
+**Step 2 — SHIPPED: grounding root-currency wired in scoring pipeline (branch `feat/grounding-root-currency-wiring`)**
+
+`src/scoring/pipeline.ts`: Added private `fetchLatestMemoryRoot(agentId)` function and wired its result into `computeGroundingSignal`. A try/catch wraps the fetch — DB failure returns `null` and logs a warning rather than breaking scoring. The fetch runs only when `gMode !== 'off'` (same condition as the existing grounding block). `current_memory_root` is now populated from the DB for every agent that has a committed root row.
+
+New test file `tests/scoring/pipeline-grounding-root-currency.test.ts` — 4 tests exercising the pipeline integration specifically (not just the pure function already tested in `hal-grounding-root-currency.test.ts`):
+1. Root currency fetched and passed — stale-root answer sets `root_current:false` and `reason:'ungrounded:stale_root'` in shadow mode (no delta change).
+2. No committed root row (new agent) — fetch returns null, `root_current:null` (honest "not checked"), scoring unaffected.
+3. DB error on root fetch — graceful null, warning logged, scoring unaffected.
+4. Matching root — `root_current:true`, `grounded` determined by proof verification.
+
+**[V] `npx jest tests/scoring/pipeline-grounding-root-currency.test.ts --forceExit` → 4/4 passed.**
+**[V] `npx jest tests/hal-grounding.test.ts tests/hal-grounding-root-currency.test.ts --forceExit` → no regressions.**
+**[V] `npx tsc --noEmit` → clean.**
+
+**PR opened; `gh pr merge --auto --squash` armed (SAFE-CLASS: additive read-only DB fetch wrapped in try/catch, shadow-inert, no flag flip, no schema change, no DDL).**
+
+**Mistakes / corrections:** Prior beat assessed backlog as exhausted; this beat found the `current_memory_root` zero-callers gap by fresh code read. The gap was documented in the backlog but not identified as buildable — it is, because shadow mode means the wiring cannot change any existing behavior.
+
+**Open for Sean (rule-4 only):**
+1. Items 7/8/9/10/11: env flips / gas spend / enforcement wiring — unchanged.
+2. F-18: `/leads` endpoint role (viewer vs operator) — unchanged.
+3. Practice lane P2: payee/stop/acknowledgement gate design — unchanged.
+4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO.
+5. **Items 5/6 grounding currency — shadow wired (this beat). To close the "measured hallucination drop" acceptance criterion, `HAL_GROUNDING_MODE=shadow` must run with live proof-carrying answers. That needs real agents using `GET /api/v1/memory/retrieve` + `POST /api/v1/proof-carrying/emit`. The primitives are done; live measurement awaits real traffic.**
+
+**Next beat:** (1) Verify this PR merged. (2) Non-Sean-gated backlog is now genuinely exhausted. (3) Item 15 (WHIR PCS) remains LATER pending hyperdag-protocol access.
