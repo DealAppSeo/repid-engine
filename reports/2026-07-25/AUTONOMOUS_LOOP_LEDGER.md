@@ -9473,3 +9473,47 @@ The API response at `agents-external.ts:782` (`hal_signals: halSignals`) now inc
 4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO.
 
 **Next beat:** (1) Verify this PR merged. (2) Non-Sean-gated backlog is thin — Item 15 (WHIR PCS, verify PR#1919 numbers) remains LATER pending hyperdag-protocol access. (3) PR #1279 (`docs: add HARNESS.md`) is DRAFT and doc-only — per NO-REPORT-ONLY-PRs rule, do not merge unless it ships something alongside it.
+
+---
+
+## Beat (2026-10-10) — #1282 verified MERGED; tombstoned-entry HTTP coverage shipped
+
+**Prior beat (2026-10-09, third run) verified [V]:**
+- PR #1282 (`feat(hal): surface injection_risk as first-class HALSignals field (XC finding #2)`): **MERGED** at 2026-10-09T20:36:24Z, commit `cd3a472d` [V `git log --oneline -10`] ✓
+- PR #1279 (`docs: add HARNESS.md operating contract + CLAUDE.md pointer`): **MERGED** at 2026-10-09T21:20:05Z, commit `ff7c9665` [V git log] — was flagged in prior beat as DRAFT/doc-only, but it shipped a real operating contract (`HARNESS.md`) plus a CLAUDE.md pointer, not a self-report. Merged by a different actor.
+- No other open PRs [V `gh pr list --state open`] ✓
+- **Penalty verdict: NONE.** Every prior claim reproduced by independent read.
+
+**Backlog assessment [V code read]:**
+- Items 3 (retrieval API) and 4 (answer-binding) are FULLY DONE — both routes built, mounted, and tested. The backlog's "⚠ partial" line is stale.
+  - `src/routes/memory-retrieve.ts`: `GET /api/v1/memory/retrieve` [V mounted at `src/index.ts:756`], 4 tests in `tests/memory-retrieve-route.test.ts` [V 4/4 pass]
+  - `src/routes/proof-carrying-emit.ts`: `POST /api/v1/proof-carrying/emit` [V mounted at `src/index.ts:760`], 6 tests in `tests/proof-carrying-emit-route.test.ts` [V 6/6 pass]
+  - **Patent #1 reduction-to-practice appears complete:** P0 ✓ P1 ✓ P2/Item3 ✓ P3/Item5 ✓ answer-binding/Item4 ✓
+- **Gap found [V grep + read]:** the acceptance criterion for Item 3 says "revoked entry → non-membership." The existing HTTP-level tests only test unknown values causing abstain — not tombstoned (revoked) values that ARE in the leaf table with `tombstoned: true` but whose `membershipProof` throws. These are different code paths (unknown → content row not found → entry dropped; tombstoned → content row found, `membershipProof` throws → entry dropped). The pure-function layer tests this (`answer-binding-retrieval.test.ts:58-68`); the HTTP layer did not.
+- All other non-Sean-gated items exhausted. Items 7/8/9/10/11 remain Sean GO (env flips, gas spend, enforcement wiring). Item 15 (WHIR PCS) remains LATER.
+
+**Step 2 — SHIPPED: tombstoned-entry HTTP coverage (branch `test/tombstoned-entry-http-coverage`):**
+
+Two tests added, one to each existing HTTP-level test file:
+
+1. `tests/memory-retrieve-route.test.ts`: `'silently drops tombstoned (revoked) entries from the retrieval result'` — builds a tree with two entries, revokes B, seeds the mock DB with the post-revocation root and leaf rows (B tombstoned), confirms that `GET /memory/retrieve` returns only A (1 entry), and B's content row is silently dropped.
+
+2. `tests/proof-carrying-emit-route.test.ts`: `'abstains with 409 when a cited value has been tombstoned (revoked leaf, content row still present)'` — same setup; confirms that `POST /proof-carrying/emit` citing only B returns 409 (abstain), even though B's content row is present in the content table.
+
+Both tests use real Poseidon2 (module defaults), no network, no live DB — same contract as the existing suite. Both go through the HTTP route → mock DB → `retrieveVerifiedMemory` → `hydrateTree` → `membershipProof throws` → drop → `bindAnswerFromRetrieval throws` → 409 path end to end.
+
+**[V] `npx jest tests/memory-retrieve-route.test.ts tests/proof-carrying-emit-route.test.ts --forceExit` → 12/12 passed (5+7 and 6+1 resp, before and after).**
+**[V] `npx tsc --noEmit` → clean (no output).**
+
+**PR opened; `gh pr merge --auto --squash` armed (SAFE-CLASS: additive tests, zero logic change, no flag flip, no DDL, no new dependency).**
+
+**Mistakes / corrections:** None. Backlog status for Items 3/4 is stale ("partial") — NOT updated in this PR (would be docs-only addition; the ledger is the record).
+
+**Open for Sean (rule-4 only):**
+1. **Patent #1 decision:** Items 3 and 4 are done. The full reduction-to-practice chain (P0–P3 + answer-binding) is on main. If patent filing is pending, the filing can now cite these PRs as reduction-to-practice.
+2. Items 7/8/9/10/11: env flips / gas spend / enforcement wiring — unchanged.
+3. F-18: `/leads` endpoint role (viewer vs operator) — unchanged.
+4. Practice lane P2: payee/stop/acknowledgement gate design — unchanged.
+5. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO.
+
+**Next beat:** (1) Verify this PR merged. (2) Backlog exhausted for non-Sean-gated buildable items — if Sean acts on any of the above, the loop advances; otherwise the next beat documents the gap and stops.
