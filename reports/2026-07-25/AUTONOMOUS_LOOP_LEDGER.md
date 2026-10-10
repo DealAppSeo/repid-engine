@@ -9570,3 +9570,39 @@ PRs merged during this run's window (since 2026-10-10T08:28:38Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 38038004936 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-10, third run) — #1284 verified MERGED; non-Sean-gated backlog confirmed exhausted
+
+**Prior beats verified [V]:**
+- PR #1284 (`feat(scoring): wire grounding root-currency into scoring pipeline (items 5/6 zero-callers gap)`): **MERGED** at 2026-10-10T04:40:35Z, commit `31e526af` [V `git log --oneline -5`] ✓
+- All CI checks: `test` SUCCESS · `crosscheck` SUCCESS · `gitleaks` SUCCESS · `resident-secrets` SUCCESS · `zkp-vault` SUCCESS · `HAL prompt-injection` SUCCESS · `Strix Security Review` SUCCESS [V `gh pr view 1284 --json statusCheckRollup`] ✓
+- Auto-logged fallback entry for run 38038004936: documented (no PRs in that window) [V `gh pr list --state open` = `[]`] ✓
+- **Penalty verdict: NONE.** Every prior claim reproduced.
+
+**Backlog assessment [V code read + grep]:**
+
+Fresh scan for non-Sean-gated zero-caller gaps:
+- `shadowProofTier` (item 11): IS called from `pipeline.ts:806` — not zero callers. Prior "zero callers" text in the file header was stale relative to the wiring.
+- `shadowFreeTierQuota` (item 9): IS called from `router.ts:490` — wired. Off-peak windows closed Oct 7. Item 9 fully done.
+- `shadowCascadeDecision` (item 8): IS called from `router.ts:478` — wired. Sean GO to enable `CASCADE_SPECULATION_ENABLED`.
+- `current_memory_root` in pipeline.ts: NOW wired via #1284 — gap closed.
+- Sprint-3 stubs (constitutional-audit, EAS, ZKP): do-not-touch per CLAUDE.md hard stop.
+- TODOs in `feedback-loop-worker.ts` (Phase 8.1 drain-mode): context-insufficient to touch safely.
+- Items 7/8/9/10/11: all Sean GO (env flips, gas spend, enforcement wiring).
+- Item 15 (WHIR PCS): LATER, hyperdag-protocol access needed.
+
+**No non-Sean-gated buildable items found. No PR opened this beat — per NO-REPORT-ONLY-PRs rule, a ledger-only entry is the correct output when nothing ships.**
+
+**Open for Sean (rule-4 only):**
+1. Items 7/8/9/10/11: env flips / gas spend / enforcement wiring — unchanged.
+2. F-18: `/leads` endpoint role (viewer vs operator) — unchanged.
+3. Practice lane P2: payee/stop/acknowledgement gate design — unchanged.
+4. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — flag-gated, Sean GO.
+5. **Patent #1 decision:** full reduction-to-practice chain (P0–P3 + answer-binding + root-currency) is on main. If patent filing is pending, the filing can now cite PRs #195–#198, #203, #207, #208, #490, #533, #575, #589, #592, #595, #1284 as reduction-to-practice evidence.
+6. **Measured hallucination drop** (item 6 acceptance criterion): awaits real agents using `GET /api/v1/memory/retrieve` + `POST /api/v1/proof-carrying/emit` so live proof-carrying answers flow through `HAL_GROUNDING_MODE=shadow`.
+
+**Mistakes / corrections:** None. The auto-fallback for run 38038004936 fired because the prior run completed without reaching the ledger step — consistent with the "success with no ledger entry" pattern documented since 2026-08-29.
+
+**Next beat:** (1) If Sean acts on any of the above, the loop advances. (2) If no action taken, the next beat repeats this verification + exhausted-backlog record honestly. (3) Item 15 unblocks if hyperdag-protocol access is granted.
