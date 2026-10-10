@@ -104,6 +104,29 @@ describe('GET /api/v1/memory/retrieve', () => {
     expect(typeof res.body.entries[0].inclusionProof.leaf.value).toBe('string');
   });
 
+  it('silently drops tombstoned (revoked) entries from the retrieval result', async () => {
+    const tree = new LeanIMTPlus();
+    const entryA = entry('active fact');
+    const entryB = entry('revoked fact');
+    const valueA = poseidon2LeafHash(encodeEntry(entryA));
+    const valueB = poseidon2LeafHash(encodeEntry(entryB));
+    tree.insert(BigInt(valueA));
+    tree.insert(BigInt(valueB));
+    tree.revoke(BigInt(valueB));
+
+    state.roots.push({ agent_id: AGENT_ID, epoch: 1, root: tree.root() });
+    tree.leafSet().forEach((l, i) => {
+      state.leaves.push({ agent_id: AGENT_ID, root_epoch: 1, leaf_index: i, value: l.value.toString(), next: l.next.toString(), tombstoned: l.tombstoned });
+    });
+    state.content.push({ agent_id: AGENT_ID, value: valueA, ...entryA });
+    state.content.push({ agent_id: AGENT_ID, value: valueB, ...entryB }); // content row still present, but leaf is tombstoned
+
+    const res = await request(makeApp(AGENT_ID)).get('/api/v1/memory/retrieve');
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toHaveLength(1);
+    expect(res.body.entries[0].entry.content).toBe('active fact'); // only A surfaced; revoked B silently dropped
+  });
+
   it('never reads an agent id off the request itself — only the auth-attached identity is used', async () => {
     const tree = new LeanIMTPlus();
     const entryA = entry('victim secret');

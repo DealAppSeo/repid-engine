@@ -127,6 +127,29 @@ describe('POST /api/v1/proof-carrying/emit', () => {
     expect(res.status).toBe(409);
   });
 
+  it('abstains with 409 when a cited value has been tombstoned (revoked leaf, content row still present)', async () => {
+    const tree = new LeanIMTPlus();
+    const entA = entry('active fact');
+    const entB = entry('revoked fact');
+    const valA = poseidon2LeafHash(encodeEntry(entA));
+    const valB = poseidon2LeafHash(encodeEntry(entB));
+    tree.insert(BigInt(valA));
+    tree.insert(BigInt(valB));
+    tree.revoke(BigInt(valB)); // B tombstoned; content row still exists in the content table
+
+    state.roots.push({ agent_id: AGENT_ID, epoch: 1, root: tree.root() });
+    tree.leafSet().forEach((l, i) => {
+      state.leaves.push({ agent_id: AGENT_ID, root_epoch: 1, leaf_index: i, value: l.value.toString(), next: l.next.toString(), tombstoned: l.tombstoned });
+    });
+    state.content.push({ agent_id: AGENT_ID, value: valA, ...entA });
+    state.content.push({ agent_id: AGENT_ID, value: valB, ...entB });
+
+    const res = await request(makeApp(AGENT_ID))
+      .post('/api/v1/proof-carrying/emit')
+      .send({ answer: 'citing revoked fact', cited_values: [valB] });
+    expect(res.status).toBe(409); // abstain: revoked entry dropped from retrieval → not bindable
+  });
+
   it('never binds against another agent\'s committed memory, even if that root is cited', async () => {
     const { values } = seedCommittedEntries('victim-agent', [entry('victim secret')]);
     const res = await request(makeApp(AGENT_ID))
