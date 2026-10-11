@@ -31,7 +31,7 @@ jobs:
           SEED: ${{ inputs.seed }}
           GOOGLE_FACT_CHECK_API_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
         run: npm run answer-key -- check "$SEED" --run-id "run-$(date -u +%Y-%m-%d)-gh${{ github.run_id }}" --out answer-key-run.jsonl --sql answer-key-run.sql
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: answer-key-run
           path: |
