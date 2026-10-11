@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload promptfoo results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hal-adversarial-results
           path: security/promptfoo/.results/
