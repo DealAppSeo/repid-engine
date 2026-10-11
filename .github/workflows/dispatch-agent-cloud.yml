@@ -176,7 +176,7 @@ jobs:
           git config user.name "dispatch-${{ inputs.agent }}-cloud[bot]"
           git config user.email "11688996+DealAppSeo@users.noreply.github.com"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
 

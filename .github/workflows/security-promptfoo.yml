@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # 22, NOT 20, AND THIS IS THE WHOLE REASON THE GATE NEVER RAN.
           # promptfoo declares engines >=22.22.0 and refuses to start below it:
