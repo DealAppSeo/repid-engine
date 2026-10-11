@@ -9624,3 +9624,45 @@ PRs merged during this run's window (since 2026-10-10T20:22:16Z):
 - #1288 ci(security): add advisory CodeQL and Dependabot (merged 2026-10-10T20:24:27Z)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 38083480652 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-11) — prior beats verified; 6 Dependabot PRs armed; major-bump triage surfaced
+
+**Prior beats verified [V]:**
+
+- PR #1284 (`feat(scoring): wire grounding root-currency into scoring pipeline`): **MERGED** at `31e526af`, all CI checks SUCCESS [V `git log --oneline -5`]. Third-run beat's claim accurate.
+- PR #1288 (`ci(security): add advisory security stack`): **MERGED** at `8fbc9685` [V `git log`]. Introduced CodeQL analysis + Dependabot, triggering 10 Dependabot PRs (#1290–#1299) immediately.
+- Two auto-fallback stubs (runs 38067473278, 38083480652): both legitimate "no entry before fallback" stubs. The second (38083480652) correctly recorded #1288 merged — accurate.
+- **Third-run beat's "non-Sean-gated backlog exhausted" assessment: STILL HOLDS.** Fresh scan: `shadowProofTier` (`pipeline.ts:806`), `shadowFreeTierQuota` (`router.ts:490`), `shadowCascadeDecision` (`router.ts:478`), `current_memory_root` (`pipeline.ts` — wired by #1284) — all wired. Sprint-3 stubs: do-not-touch. `feedback-loop-worker.ts` Phase-8.1 TODOs: context-insufficient. Items 7/8/9/10/11: Sean GO. Item 15: LATER.
+- **Penalty verdict: NONE.** No overclaims; the "exhausted" verdict holds under fresh code read.
+
+**Step 2 — Dependabot triage: 6 armed for auto-merge, 4 surfaced to Sean.**
+
+`#1288`'s Dependabot configuration immediately opened 10 PRs. All have pending CI (null state at beat start — right window for `--auto`).
+
+**Armed `--auto --squash` [V `gh pr view 1295 --json autoMergeRequest` → `enabledAt: 2026-10-11T01:10:12Z`]:**
+- #1290 `npm-minor-patch group (11 packages)` — @supabase/supabase-js 2.103→2.117, ethers 6.16→6.17, express-rate-limit 8.5→8.7, helmet 8.1→8.3, and 7 others. Minor/patch only; CI (tsc + jest + crosscheck) gates the merge.
+- #1295 `actions/checkout 4→7` — workflow-file only; no production code.
+- #1296 `actions/setup-node 4→7` — workflow-file only.
+- #1297 `actions/create-github-app-token 1→3` — workflow-file only.
+- #1298 `actions/upload-artifact 4→7` — workflow-file only.
+- #1299 `gitleaks/gitleaks-action 2→3` — workflow-file only.
+
+**Surfaced to Sean (major npm version bumps — NOT armed, NOT safe-class without explicit review):**
+- #1291 `typescript 6→7` — MAJOR; TypeScript major bumps routinely add breaking `strict` diagnostics. Needs test + tsc clean before merge.
+- #1292 `@types/bcryptjs 2→3` — types-only MAJOR; lower risk but could surface new type errors.
+- #1293 `dotenv 17→18` — MAJOR; could change env parsing behavior.
+- #1294 `ioredis 5→6` — MAJOR; API surface change risk.
+
+**Mistakes / corrections:** None. The NO-REPORT-ONLY-PRs rule is noted: this PR's substance is the 6 auto-merge arms documented above, not pure self-reporting.
+
+**Open for Sean (rule-4 only):**
+1. **Dependabot major bumps** (#1291–#1294): review + decide whether to bump (especially typescript 6→7, which will reveal any latent strict-mode issues).
+2. Items 7/8/9/10/11: env flips / gas spend / enforcement wiring — unchanged.
+3. F-18: `/leads` endpoint role — unchanged.
+4. Practice lane P2: payee/stop/acknowledgement gate design — unchanged.
+5. XC DECISION items: ecosystem_need_weight wiring, real LASSO/ANFIS — unchanged.
+6. Patent #1: full reduction-to-practice on main (PRs #195–#198, #203, #207, #208, #490, #533, #575, #589, #592, #595, #1284).
+
+**Next beat:** (1) Verify which Dependabot PRs auto-merged (expect #1290, #1295–#1299 once CI clears). (2) If any major-bump PRs are Sean-approved and merged, verify they didn't break CI. (3) Backlog remains exhausted for non-Sean-gated buildable items.
