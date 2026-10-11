@@ -19,6 +19,7 @@
  */
 import { createHash } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import { PLACEHOLDER_CREDS_MARKER } from '../helpers/run-integration';
 
 // ── Mirror of the trigger's construction ────────────────────────────────────
 const GENESIS = 'GENESIS';
@@ -92,7 +93,13 @@ describe('audit hash-chain — algorithm integrity (offline)', () => {
 // ── (B) Live verification — env-gated ───────────────────────────────────────
 const URL = process.env.SUPABASE_URL;
 const KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-const liveDescribe = URL && KEY ? describe : describe.skip;
+// A secretless run (Dependabot, forks) gets PLACEHOLDER creds so src/config.ts can boot
+// (jest.integration.config.js -> tests/helpers/run-integration.ts). This gate reads credential
+// PRESENCE, which a placeholder satisfies — so without the marker check it would arm against
+// localhost, hit an RPC error, take the early `return` below and report a vacuous PASS for a
+// chain nobody verified. Real credentials leave the marker unset: behaviour with them is unchanged.
+const liveDescribe =
+  URL && KEY && process.env[PLACEHOLDER_CREDS_MARKER] !== '1' ? describe : describe.skip;
 
 liveDescribe('audit hash-chain — live verification (server-side recompute)', () => {
   const verifySql = (table: string) => {
