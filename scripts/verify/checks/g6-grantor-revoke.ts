@@ -19,7 +19,7 @@
  * override on a grandchild's row. Same end state for A, different, more auditable mechanism.
  * G6b here tests the as-implemented strict rule and records the divergence in `detail`.
  */
-import { CheckResult, pass, fail } from '../lib/types';
+import { CheckResult, pass, fail, skip } from '../lib/types';
 
 const ID = 'g6-grantor-revoke';
 const TITLE = 'G6 — grantor revoke denies subsequent use [trinity-ecosystem PR #117, F-G6]';
@@ -34,7 +34,15 @@ export async function g6GrantorRevokeCheck(): Promise<CheckResult> {
       throw new Error('decideRevoke/decideAuthorization export missing');
     }
   } catch (e: any) {
-    return fail(ID, TITLE, `could not load principal-grants: ${e?.message ?? e}`, true);
+    const msg: string = e?.message ?? String(e);
+    // The check exercises pure logic (no DB calls). If the module tree fails to
+    // boot because Supabase credentials are absent (config.ts throws), that is an
+    // ENV/CONFIG gap, not a logic failure. Return a non-blocking SKIP so Dependabot
+    // runs (which have no repository secrets) don't block merge on an un-runnable env.
+    if (/SUPABASE/i.test(msg) && /required/i.test(msg)) {
+      return skip(ID, TITLE, `module boot requires Supabase credentials (absent in this env) — ${msg}`, false);
+    }
+    return fail(ID, TITLE, `could not load principal-grants: ${msg}`, true);
   }
   const { decideRevoke, decideAuthorization } = mod;
 

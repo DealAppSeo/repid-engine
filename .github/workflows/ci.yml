@@ -140,7 +140,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # Production-extract fixture fence (the permanent #376 fence). Pure Node, so it
       # runs BEFORE install — a real proof / real agent UUID / prod table dump committed
