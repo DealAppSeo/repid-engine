@@ -133,7 +133,7 @@
     "ioredis": "^5.11.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.11.0",
-    "solc": "^0.8.34",
+    "solc": "^0.8.37",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",
     "validator": "^13.15.35"
