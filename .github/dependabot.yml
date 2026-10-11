@@ -18,6 +18,22 @@ updates:
         update-types:
           - minor
           - patch
+    # Majors deliberately CLOSED unmerged on 2026-10-11 (PR numbers in brackets). Ignoring only
+    # semver-major keeps minor/patch flowing through the group above; remove an entry here when
+    # the migration is actually planned, so the major PR is raised again.
+    ignore:
+      - dependency-name: "typescript"             # 6.0.2 -> 7.0.2  [#1291]
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/bcryptjs"        # 2.4.6 -> 3.0.0  [#1292]
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "dotenv"                 # 17.4.2 -> 18.0.6 [#1293]
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "ioredis"                # 5.11.0 -> 6.0.0 [#1294]
+        update-types:
+          - version-update:semver-major
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
