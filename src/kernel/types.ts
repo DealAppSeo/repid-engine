@@ -24,7 +24,7 @@
  * client. If a field here changes, `schemas/kernel-receipt.v1.json` in trustshell changes with it
  * and both repos' shared-vector tests go red until they agree.
  *
- * NO BEHAVIOUR LIVES HERE, so this file imports nothing.
+ * NO BEHAVIOUR LIVES HERE: every import is a type, erased at compile time.
  */
 
 // ── schema constants ────────────────────────────────────────────────────────────────────────────
