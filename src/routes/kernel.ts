@@ -9,6 +9,11 @@
  *                       else — however valid — is refused.
  *   GET  /receipt/:id   the ledger entries for one call.
  *
+ * A KEY BOUND TO ONE AGENT (req.agent_id, set by authMiddleware for a DB-issued agent key) may act
+ * only on that agent: /decide, /policy and /receipt refuse with 403 when the agent they name is
+ * another, before reading anything about it. Operator keys (env allowlist) are not bound and are
+ * not restricted. See boundAgentOf.
+ *
  * Mounted AFTER authMiddleware. The global SQL-keyword sanitizer in index.ts runs first on POST
  * bodies and rejects `;` and `--`; a tool name containing either never reaches this file.
  *
@@ -52,6 +57,38 @@ function defaultDeps(): KernelRouteDeps {
 
 const CALL_ID = /^[0-9a-zA-Z-]{8,64}$/;
 
+/**
+ * THE AGENT THIS REQUEST'S API KEY IS BOUND TO, or null when the key is not bound to one.
+ *
+ * authMiddleware sets `req.agent_id` ONLY for a DB-issued key tied to a registered agent
+ * (auth.ts: `dbAgentId`). An env-allowlist key (REPID_API_KEYS: operator / shared tier) leaves it
+ * unset, proves nothing about who is asking, and is deliberately not restricted here: this mirrors
+ * how contracts.ts and dev-codegen.ts tell the two apart.
+ *
+ * WHY THIS IS NOT ALREADY DONE FOR US. authMiddleware's f2-authz check compares every STRING-valued
+ * identity field in the body to the bound agent. The kernel names its subject in an OBJECT
+ * (`agent: { agent_id, agent_name }`) and in `policy.subject`, which that check does not look at,
+ * so a key bound to one agent could ask the kernel about another and read its limits, remaining
+ * budget, accountable-owner wallet and receipts (CWE-862, found by Strix on #1317). The binding is
+ * therefore re-checked here, route-locally, on every route that takes an agent from the caller.
+ *
+ * Lower-cased and trimmed, the way authMiddleware compares ids. ID ONLY, not the agent's name:
+ * names are not unique (see the grants check in auth.ts).
+ */
+function boundAgentOf(req: Request): string | null {
+  const bound = (req as unknown as { agent_id?: unknown }).agent_id;
+  return typeof bound === 'string' && bound.trim() !== '' ? bound.trim().toLowerCase() : null;
+}
+
+/**
+ * Does a bound key name some OTHER agent? Only a STRING that differs counts. A missing or non-string
+ * agent is left to the strict parser, which refuses it with a 400 before anything is decided or read,
+ * so there is nothing to leak.
+ */
+function namesOtherAgent(bound: string | null, claimed: unknown): boolean {
+  return bound !== null && typeof claimed === 'string' && claimed.trim().toLowerCase() !== bound;
+}
+
 export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Router {
   const router = Router();
 
@@ -79,6 +116,17 @@ export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Route
   router.use(kernelLimiter);
 
   router.post('/decide', async (req: Request, res: Response): Promise<void> => {
+    // A key bound to one agent may only ask about that agent. Refused BEFORE any lookup, so the
+    // answer carries nothing about the agent that was asked about, and its owner is never read.
+    if (namesOtherAgent(boundAgentOf(req), (req.body as { agent?: { agent_id?: unknown } } | null)?.agent?.agent_id)) {
+      res.status(403).json({
+        verdict: 'DENY',
+        blocking: true,
+        persisted: false,
+        reasons: [{ code: 'agent_not_bound_to_key', detail: 'this API key is bound to a different agent' }],
+      });
+      return;
+    }
     try {
       const out = await dryDecision(req.body, deps);
       if ('malformed' in out) {
@@ -104,6 +152,11 @@ export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Route
       return;
     }
     const { signed, defaulted } = parsed;
+    // Same binding as /decide: a key bound to one agent may not set, or probe the owner of, another's.
+    if (namesOtherAgent(boundAgentOf(req), signed.policy.subject)) {
+      res.status(403).json({ error: 'agent_not_bound_to_key', detail: 'this API key is bound to a different agent' });
+      return;
+    }
     const now = (deps.now ?? Date.now)();
 
     if (signed.policy.expires_at * 1000 <= now) {
@@ -175,6 +228,13 @@ export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Route
       const entries = await deps.ledger.findReceipts(id);
       if (entries.length === 0) {
         res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      // A key bound to one agent may only read that agent's receipts. EVERY entry for the call is
+      // checked, and nothing from a refused one is returned.
+      const bound = boundAgentOf(req);
+      if (bound !== null && entries.some((e) => e.subject.agent.agent_id.trim().toLowerCase() !== bound)) {
+        res.status(403).json({ error: 'agent_not_bound_to_key', detail: 'this API key is bound to a different agent' });
         return;
       }
       res.status(200).json({

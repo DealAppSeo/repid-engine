@@ -21,6 +21,23 @@ function appWith(deps: GateDeps) {
   return app;
 }
 
+/**
+ * An app where the key is bound to `bound`, the way authMiddleware leaves req.agent_id for a DB-issued
+ * agent key; `undefined` is an operator (env-allowlist) key, which authMiddleware leaves unbound.
+ */
+function appBoundTo(deps: GateDeps, bound: string | undefined) {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    if (bound !== undefined) (req as unknown as { agent_id: string }).agent_id = bound;
+    next();
+  });
+  app.use('/api/v1/kernel', createKernelRouter(deps));
+  return app;
+}
+
+const OTHER_AGENT = '22222222-2222-4222-8222-222222222222';
+
 const receiptCount = (h: ReturnType<typeof harness>) => h.sink.records.filter((r) => r.kind === 'receipt').length;
 const policyCount = (h: ReturnType<typeof harness>) => h.sink.records.filter((r) => r.kind === 'policy').length;
 
@@ -201,6 +218,109 @@ describe('GET /api/v1/kernel/receipt/:id', () => {
     };
     const res = await request(appWith({ ...h.deps, ledger: broken })).get(`/api/v1/kernel/receipt/${AGENT_ID}`);
     expect(res.status).toBe(503);
+  });
+});
+
+describe('an agent-bound key may act only on its own agent (CWE-862 / IDOR)', () => {
+  /** A harness whose owner lookup is a spy, so a refusal can be shown to have read nothing. */
+  function spied() {
+    const h = harness();
+    const resolveOwner = jest.fn(async () => ({ status: 'resolved' as const, wallet: h.owner.address, assurance: 'wallet-proven' }));
+    return { h, resolveOwner, deps: { ...h.deps, resolveOwner } as GateDeps };
+  }
+
+  it('/decide: a key bound to another agent asking about this one is 403 DENY, with nothing about the subject, and the owner is never read', async () => {
+    const { h, resolveOwner, deps } = spied();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso); // AGENT_ID has a policy, an owner, limits
+    const res = await request(appBoundTo(deps, OTHER_AGENT)).post('/api/v1/kernel/decide').send(spendRequest());
+
+    expect(res.status).toBe(403);
+    expect(res.body.verdict).toBe('DENY');
+    expect(res.body.blocking).toBe(true);
+    expect(res.body.persisted).toBe(false);
+    expect(res.body.reasons.map((r: { code: string }) => r.code)).toEqual(['agent_not_bound_to_key']);
+    // No leak: none of what the unrefused answer carries is in this one.
+    const text = JSON.stringify(res.body);
+    for (const secret of [h.owner.address, h.owner.address.toLowerCase(), '"limits"', 'effective_per_tx_raw', 'policy_hash', 'receipt_preview', 'wallet']) {
+      expect(text).not.toContain(secret);
+    }
+    expect(resolveOwner).not.toHaveBeenCalled(); // refused before any lookup
+    expect(receiptCount(h)).toBe(0);
+  });
+
+  it('/decide: the same agent works, and a mixed-case, padded id is still the same agent', async () => {
+    const { h, deps } = spied();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const own = await request(appBoundTo(deps, AGENT_ID)).post('/api/v1/kernel/decide').send(spendRequest());
+    expect(own.status).toBe(200);
+    expect(own.body.verdict).toBe('ALLOW');
+    // The binding is compared the way authMiddleware compares ids (trimmed, case-insensitive); it is
+    // not 403. (What the kernel then does with a padded id is the kernel's business, not this guard's.)
+    const padded = await request(appBoundTo(deps, AGENT_ID.toUpperCase())).post('/api/v1/kernel/decide').send(spendRequest({ agent: { agent_id: `  ${AGENT_ID}  `, agent_name: 'x' } }));
+    expect(padded.status).not.toBe(403);
+  });
+
+  it('/decide: a key that is NOT bound to an agent (operator key) is not restricted, as before', async () => {
+    const { h, deps } = spied();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const res = await request(appBoundTo(deps, undefined)).post('/api/v1/kernel/decide').send(spendRequest());
+    expect(res.status).toBe(200);
+    expect(res.body.verdict).toBe('ALLOW');
+  });
+
+  it('/decide: a bound key that names no agent at all gets the parser\'s 400, not a decision and not a 403', async () => {
+    const { deps } = spied();
+    const { agent: _drop, ...noAgent } = spendRequest();
+    const res = await request(appBoundTo(deps, AGENT_ID)).post('/api/v1/kernel/decide').send(noAgent);
+    expect(res.status).toBe(400);
+    expect(res.body.persisted).toBe(false);
+  });
+
+  it('/policy: a bound key cannot set (or probe the owner of) another agent\'s policy; its own is fine', async () => {
+    const { h, resolveOwner, deps } = spied();
+    const signed = await signedPolicy(h.owner); // subject: AGENT_ID
+    const refused = await request(appBoundTo(deps, OTHER_AGENT)).post('/api/v1/kernel/policy').send(signed);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('agent_not_bound_to_key');
+    expect(resolveOwner).not.toHaveBeenCalled();
+    expect(policyCount(h)).toBe(0);
+    const own = await request(appBoundTo(deps, AGENT_ID)).post('/api/v1/kernel/policy').send(signed);
+    expect(own.status).toBe(201);
+    expect(policyCount(h)).toBe(1);
+  });
+
+  it('/receipt: another agent\'s receipt is 403 and returns none of it; its own is readable; an operator key reads either; an unknown id is 404', async () => {
+    const { h, deps } = spied();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const out = await runUnderKernel(spendRequest(), async () => 'ok', h.deps);
+    const id = out.decision_receipt!.header.receipt_id;
+
+    const other = await request(appBoundTo(deps, OTHER_AGENT)).get(`/api/v1/kernel/receipt/${id}`);
+    expect(other.status).toBe(403);
+    expect(other.body.error).toBe('agent_not_bound_to_key');
+    const text = JSON.stringify(other.body);
+    for (const secret of [AGENT_ID, h.owner.address, 'receipt_hash', 'decision', 'payee', 'amount_raw']) expect(text).not.toContain(secret);
+
+    const own = await request(appBoundTo(deps, AGENT_ID)).get(`/api/v1/kernel/receipt/${id}`);
+    expect(own.status).toBe(200);
+    expect(own.body.entries).toHaveLength(2);
+    expect((await request(appBoundTo(deps, undefined)).get(`/api/v1/kernel/receipt/${id}`)).status).toBe(200);
+    expect((await request(appBoundTo(deps, OTHER_AGENT)).get('/api/v1/kernel/receipt/00000000-0000-4000-8000-0000000000ff')).status).toBe(404);
+  });
+
+  it('/receipt: every entry for the call is checked, not just the last', async () => {
+    const { h, deps } = spied();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const out = await runUnderKernel(spendRequest(), async () => 'ok', h.deps);
+    const id = out.decision_receipt!.header.receipt_id;
+    const real = h.ledger.findReceipts.bind(h.ledger);
+    // A ledger whose FIRST entry for the call belongs to someone else (the last one is the caller's).
+    const mixed = { ...deps, ledger: { ...h.ledger, appendReceipt: (b: never) => h.ledger.appendReceipt(b), appendPolicy: (p: never, t: string) => h.ledger.appendPolicy(p, t), latestPolicy: (s: string) => h.ledger.latestPolicy(s), spentTotals: (q: never) => h.ledger.spentTotals(q), findReceipts: async (callId: string) => {
+      const [first, ...rest] = await real(callId);
+      return [{ ...first!, subject: { ...first!.subject, agent: { ...first!.subject.agent, agent_id: OTHER_AGENT } } }, ...rest];
+    } } } as GateDeps;
+    const res = await request(appBoundTo(mixed, AGENT_ID)).get(`/api/v1/kernel/receipt/${id}`);
+    expect(res.status).toBe(403);
   });
 });
 
