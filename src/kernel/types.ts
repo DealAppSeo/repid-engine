@@ -333,9 +333,10 @@ export interface VerificationLeg {
   /** Mirrors env.is_simulated. Derived, never supplied. */
   is_simulated: boolean;
   /**
-   * DERIVED = grounded && same_domain && !is_simulated. Never supplied by a caller; a receipt whose
-   * stored value disagrees with the derivation is invalid. Consumers should ALSO require
-   * `status === 'VERIFIED'` before restoring a band.
+   * DERIVED = grounded && same_domain && !is_simulated && verdict_label === 'SETTLED'. Never supplied
+   * by a caller; a receipt whose stored value disagrees with the derivation is invalid. A vote alone
+   * is PROVISIONAL and never counts (RT-8). Consumers should ALSO require `status === 'VERIFIED'`
+   * before restoring a band: this flag does not look at it.
    */
   counts_toward_band_restore: boolean;
 }
