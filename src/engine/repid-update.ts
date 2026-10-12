@@ -843,9 +843,10 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *                        absent/unreadable → null, and a null FAILS the same-family
  *                        independence check CLOSED (rule 4), which is the honest default.
  *                        The column DDL lives in `migrations/2026-10-12-repid-agents-model-family.sql`
- *                        and is PROMOTION-GATED (NOT applied to prod). Until it is applied
- *                        AND both agents carry distinct families, the counterparty settler
- *                        stays REFUSED — a missing column read fails closed, never open.
+ *                        and was APPLIED to prod 2026-10-12 (additive/nullable; every existing
+ *                        row is NULL). Until a family is recorded on both agents AND they differ,
+ *                        the counterparty settler stays REFUSED — a NULL read fails closed, never
+ *                        open. (The flag is unchanged/OFF; the column armed nothing.)
  *  - domainTrackRecord → from the actor's `repid_agents.domain_accuracy` jsonb.
  *  - domainNeedWeight  → getEcosystemNeedWeight(domain) — the computed-but-never-applied
  *                        ecosystem weight, now applied ONLY here, per-domain, gains-only.
