@@ -5,8 +5,18 @@
  * Out: { label: "pass" | "veto" | "not-checked", latency_ms, by, voters?, deciders?, votes?, question? }
  *
  *   by       which path produced the label (ClassifyPath below):
- *            'arithmetic'  the whole text is one equation, decided by exact calculation. No model
- *                          was asked.
+ *            'arithmetic'  the whole text is one equation, decided EXACTLY over BigInt rationals
+ *                          (src/hal/safe-arithmetic.ts safeEvalExact). No model was asked, and the
+ *                          verdict carries no float residue. This value is the one that may be read
+ *                          as "exact calculation".
+ *            'arithmetic-approx'
+ *                          the whole text is one equation, but exact arithmetic could not hold it (a
+ *                          fractional power like `2 ^ 0.5`, or a result too large for the exact
+ *                          evaluator), so it was decided NUMERICALLY by the double evaluator within a
+ *                          tolerance (#1324 THE FALLBACK). Still no model, but APPROXIMATE, not exact:
+ *                          a door must not report it as "exact calculation". Added 2026-10-12 (E-2):
+ *                          before it, this case answered 'arithmetic' and so claimed an exact
+ *                          calculation that was never made.
  *            'votes'       the claim was sent to at least one free voter. The label is their
  *                          agreement (pass / veto) or not-checked.
  *            'skipped'     the text was sent to no voter: empty text, a malformed body, a labels
@@ -74,8 +84,9 @@
  *     sides are BigInt rationals, so an integer equation is true or false at any size and
  *     `1000000000 + 1 = 1000000000` is a veto. (Until 2026-10-12 both sides were doubles compared
  *     within 1e-9 relative, which passed any false equation past ~10^9.) True is pass, false is
- *     veto. Only what exact arithmetic cannot hold (a fractional power) falls back to doubles.
- *     No network.
+ *     veto. Only what exact arithmetic cannot hold (a fractional power) falls back to doubles, and
+ *     that result is reported `by: 'arithmetic-approx'`, never `'arithmetic'` — approximate, not
+ *     exact (E-2). No network either way.
  *  2. Two votes (src/classify/free-votes.ts). Prose up to CLASSIFY_MAX_PROSE_CHARS goes to two
  *     models of different families in parallel. Both TRUE: pass. Both FALSE: veto. A disagreement
  *     or an UNSURE: not-checked. A voter that gives no answer (a 429, a 5xx, a timeout, no key,
@@ -142,20 +153,37 @@ const MAX_EQUATION_CHARS = 200;
 const RHS_NUMBER = /^-?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$/;
 
 /**
- * The free local classifier. Pure, synchronous, no I/O.
- * Returns pass or veto only for a verified whole-text equation; otherwise not-checked.
+ * A local-arithmetic verdict and WHICH path reached it. `exact` is the honesty bit: true only when
+ * the BigInt-rational evaluator decided it, so only then may the route answer `by: 'arithmetic'`
+ * (contractually "exact calculation"). A fallback double result is `exact: false`, and `NOT_CHECKED`
+ * is `exact: false` too (nothing was decided to be exact about). See classifyLocalVerdict.
  */
-export function classifyLocal(text: string): ClassifyLabel {
-  if (typeof text !== 'string') return NOT_CHECKED;
+interface LocalVerdict {
+  label: ClassifyLabel;
+  exact: boolean;
+}
+
+/** not-checked, which is never an exact decision. */
+const NOT_DECIDED_LOCALLY: LocalVerdict = { label: NOT_CHECKED, exact: false };
+
+/**
+ * The free local classifier, with the path it took. Pure, synchronous, no I/O. Returns pass or veto
+ * only for a verified whole-text equation; otherwise not-checked. `exact` says whether the exact
+ * BigInt-rational path decided it (true) or the fallback double evaluator did (false) — the route
+ * reports the two under different `by` values so a fallback is never called an exact calculation
+ * (E-2). classifyLocal below is the label-only wrapper the rest of the codebase and the tests use.
+ */
+function classifyLocalVerdict(text: string): LocalVerdict {
+  if (typeof text !== 'string') return NOT_DECIDED_LOCALLY;
   const trimmed = text.trim().replace(/\.$/, '').trim();
-  if (trimmed.length === 0 || trimmed.length > MAX_EQUATION_CHARS) return NOT_CHECKED;
+  if (trimmed.length === 0 || trimmed.length > MAX_EQUATION_CHARS) return NOT_DECIDED_LOCALLY;
   const parts = trimmed.split('=');
-  if (parts.length !== 2) return NOT_CHECKED;
+  if (parts.length !== 2) return NOT_DECIDED_LOCALLY;
   const lhs = (parts[0] ?? '').trim();
   const rhs = (parts[1] ?? '').trim();
-  if (!lhs || !RHS_NUMBER.test(rhs)) return NOT_CHECKED;
+  if (!lhs || !RHS_NUMBER.test(rhs)) return NOT_DECIDED_LOCALLY;
   // An expression with no operator is a restatement ("4 = 4"), not a claim worth a pass.
-  if (!/[-+*/^%×÷]/.test(lhs.replace(/^-/, ''))) return NOT_CHECKED;
+  if (!/[-+*/^%×÷]/.test(lhs.replace(/^-/, ''))) return NOT_DECIDED_LOCALLY;
   // EXACT FIRST. This used to evaluate both sides as doubles and call them equal within 1e-9
   // RELATIVE, which grows with the numbers: from ~10^9 up the allowance is >= 1, so
   // `1000000000 + 1 = 1000000000` read `pass` (XC1 red team), and past 2^53 the two sides are the
@@ -163,15 +191,25 @@ export function classifyLocal(text: string): ClassifyLabel {
   const exactLeft = safeEvalExact(lhs);
   const exactRight = safeEvalExact(rhs);
   if (exactLeft.ok && exactRight.ok && exactLeft.value && exactRight.value) {
-    return decideExact(exactLeft.value, exactRight.value);
+    return { label: decideExact(exactLeft.value, exactRight.value), exact: true };
   }
   // What exact arithmetic cannot say (a fractional power, a result too large to hold) keeps the
-  // double evaluator and its tolerance, exactly as before; a division by zero fails in both.
+  // double evaluator and its tolerance, exactly as before; a division by zero fails in both. This
+  // is APPROXIMATE: `exact: false`, so the route answers by 'arithmetic-approx', not 'arithmetic'.
   const left = safeEvalArithmetic(lhs);
   const right = safeEvalArithmetic(rhs);
-  if (!left.ok || !right.ok || left.value === undefined || right.value === undefined) return NOT_CHECKED;
+  if (!left.ok || !right.ok || left.value === undefined || right.value === undefined) return NOT_DECIDED_LOCALLY;
   const scale = Math.max(1, Math.abs(left.value), Math.abs(right.value));
-  return Math.abs(left.value - right.value) <= 1e-9 * scale ? 'pass' : 'veto';
+  return { label: Math.abs(left.value - right.value) <= 1e-9 * scale ? 'pass' : 'veto', exact: false };
+}
+
+/**
+ * The free local classifier. Pure, synchronous, no I/O.
+ * Returns pass or veto only for a verified whole-text equation; otherwise not-checked.
+ * The label only; classifyLocalVerdict carries which path decided it.
+ */
+export function classifyLocal(text: string): ClassifyLabel {
+  return classifyLocalVerdict(text).label;
 }
 
 /**
@@ -195,13 +233,16 @@ function decideExact(l: ExactRational, r: ExactRational): ClassifyLabel {
   return abs * 1_000_000_000n <= l.den * r.den ? 'pass' : 'veto';
 }
 
-/** Which path produced the label. The contract at the top of this file defines each value. */
-export type ClassifyPath = 'arithmetic' | 'votes' | 'skipped' | 'deadline';
-export const CLASSIFY_PATHS: readonly ClassifyPath[] = ['arithmetic', 'votes', 'skipped', 'deadline'];
+/**
+ * Which path produced the label. The contract at the top of this file defines each value.
+ * 'arithmetic' is the EXACT path; 'arithmetic-approx' is #1324's double fallback (approximate, E-2).
+ */
+export type ClassifyPath = 'arithmetic' | 'arithmetic-approx' | 'votes' | 'skipped' | 'deadline';
+export const CLASSIFY_PATHS: readonly ClassifyPath[] = ['arithmetic', 'arithmetic-approx', 'votes', 'skipped', 'deadline'];
 
 /** The label and the path that produced it. 'deadline' is the route's to say, never a classifier's. */
 export type ClassifyOutcome =
-  | { label: ClassifyLabel; by: 'arithmetic' | 'skipped' }
+  | { label: ClassifyLabel; by: 'arithmetic' | 'arithmetic-approx' | 'skipped' }
   | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[]; deciders?: VoterProvider[]; votes?: VoteReading[]; question?: string };
 
 /** One decider's answer (the contract's `votes`). Names and verdict words only. */
@@ -258,7 +299,7 @@ function answerOf(value: unknown): Answer | null {
     question?: unknown;
   };
   if (!isLabel(label)) return null;
-  if (by === 'arithmetic') return { label, by };
+  if (by === 'arithmetic' || by === 'arithmetic-approx') return { label, by };
   if (by === 'skipped') return label === NOT_CHECKED ? { label, by } : null;
   if (by !== 'votes') return null;
   if (!Array.isArray(voters) || voters.length === 0 || !voters.every((v) => typeof v === 'string')) return null;
@@ -519,10 +560,13 @@ export async function classifyTextWithPath(
   options: ClassifyTextOptions = {},
 ): Promise<ClassifyOutcome> {
   const started = performance.now();
-  const local = classifyLocal(text);
-  if (local !== NOT_CHECKED) {
-    recordLabel(local, 'arithmetic');
-    return { label: local, by: 'arithmetic' };
+  const local = classifyLocalVerdict(text);
+  if (local.label !== NOT_CHECKED) {
+    // EXACT path → 'arithmetic' (may be read as "exact calculation"); the double fallback →
+    // 'arithmetic-approx', so a fractional power or an over-large result is never called exact (E-2).
+    const by = local.exact ? 'arithmetic' : 'arithmetic-approx';
+    recordLabel(local.label, by);
+    return { label: local.label, by };
   }
   const trimmed = text.trim();
   if (!freeVotesEnabled(env) || !trimmed || trimmed.length > maxProseChars(env)) {

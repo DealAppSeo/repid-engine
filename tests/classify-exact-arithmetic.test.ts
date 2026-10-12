@@ -22,7 +22,7 @@
  */
 import express from 'express';
 import request from 'supertest';
-import { classifyLocal, createClassifyRouter } from '../src/routes/classify';
+import { classifyLocal, classifyTextWithPath, createClassifyRouter } from '../src/routes/classify';
 import { safeEvalExact, safeEvalArithmetic } from '../src/hal/safe-arithmetic';
 
 describe('integer equations are decided exactly (the finding)', () => {
@@ -161,6 +161,62 @@ describe('through the real route', () => {
     const res = await request(app).post('/api/v1/classify').send({ text, labels: ['pass', 'veto', 'not-checked'] });
     expect(res.status).toBe(200);
     expect(res.body.label).toBe(label);
+    expect(res.body.by).toBe('arithmetic');
+  });
+});
+
+/**
+ * E-2 (red-team ledger). #1324 decides an equation EXACTLY over BigInt rationals, but a fractional
+ * power (`2 ^ 0.5`) or an over-large result cannot be held exactly, so it FALLS BACK to the old
+ * double evaluator. The route answered `by: 'arithmetic'` either way, and that value is the one a
+ * door reads as "decided by exact calculation, no model asked". So a result the exact path never
+ * touched was reported as exact — the house defect: claiming a measurement that was not made.
+ *
+ * The honest label is the fix: the exact path keeps `by: 'arithmetic'`; the fallback answers
+ * `by: 'arithmetic-approx'` and so is never read as an exact calculation. The arithmetic itself,
+ * and every label above, is unchanged — only which path is NAMED.
+ */
+describe('E-2: a fallback (double) arithmetic result is named approximate, not exact', () => {
+  const app = express();
+  app.set('trust proxy', 1);
+  app.use('/api/v1', createClassifyRouter({ limit: 1000, dailyLimit: 0 }));
+
+  // Each takes the exact-arithmetic FALLBACK: safeEvalExact refuses the LHS ("non-integer exponent
+  // is not exact"), so the double evaluator decides. The label is still correct; the point is `by`.
+  const FALLBACK: Array<[string, 'pass' | 'veto']> = [
+    ['2 ^ 0.5 = 1.4142135624', 'pass'], // sqrt(2) is irrational: a genuinely APPROXIMATE equality
+    ['4 ^ 0.5 = 2', 'pass'],
+    ['2 ^ 0.5 = 1.5', 'veto'],
+  ];
+
+  test('the LHS of each fallback case is in fact refused by the exact evaluator', () => {
+    for (const [text] of FALLBACK) {
+      const lhs = text.split('=')[0]!.trim();
+      expect(`${lhs} exact.ok=${safeEvalExact(lhs).ok}`).toBe(`${lhs} exact.ok=false`);
+    }
+  });
+
+  test.each(FALLBACK)('POST /classify %s -> %s, by arithmetic-approx (NOT arithmetic)', async (text, label) => {
+    const res = await request(app).post('/api/v1/classify').send({ text, labels: ['pass', 'veto', 'not-checked'] });
+    expect(res.status).toBe(200);
+    expect(res.body.label).toBe(label); // the verdict is unchanged
+    expect(res.body.by).toBe('arithmetic-approx'); // ...but it is named approximate
+    expect(res.body.by).not.toBe('arithmetic'); // never reported as an exact calculation (the defect)
+  });
+
+  test.each(FALLBACK)('classifyTextWithPath %s is by arithmetic-approx', async (text) => {
+    const out = await classifyTextWithPath(text, 5000, { CLASSIFY_FREE_VOTES: 'off' } as NodeJS.ProcessEnv);
+    expect(out.by).toBe('arithmetic-approx');
+  });
+
+  // The exact path is untouched: an equation exact arithmetic CAN hold stays `by: 'arithmetic'`.
+  test.each([
+    '2 + 2 = 4',
+    '1000000000 + 1 = 1000000001',
+    '0.1 + 0.2 = 0.3', // decided exactly over rationals, so still exact
+    '2 ^ -1 = 0.5', // integer exponent: exact
+  ])('%s stays by arithmetic (the exact path is unchanged)', async (text) => {
+    const res = await request(app).post('/api/v1/classify').send({ text, labels: ['pass', 'veto', 'not-checked'] });
     expect(res.body.by).toBe('arithmetic');
   });
 });

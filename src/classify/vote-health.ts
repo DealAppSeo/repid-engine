@@ -79,13 +79,15 @@ function healthOf(v: Voter): VoterHealth {
 
 /**
  * Records one answered request. `decidedBy` is the same `by` the route answers (src/routes/classify.ts
- * ClassifyPath, minus 'deadline', which only the route can see). Only 'arithmetic' has its own
- * counter; 'votes' and 'skipped' are counted by label alone. A deadline cut is NOT seen here: this
- * records the classifier's label even when the route then answered not-checked for lateness.
+ * ClassifyPath, minus 'deadline', which only the route can see). The local math path has its own
+ * counter — BOTH the exact path ('arithmetic') and #1324's double fallback ('arithmetic-approx', E-2)
+ * count there, since the counter means "decided locally, no model asked"; 'votes' and 'skipped' are
+ * counted by label alone. A deadline cut is NOT seen here: this records the classifier's label even
+ * when the route then answered not-checked for lateness.
  */
-export function recordLabel(label: VoteLabel, decidedBy: 'arithmetic' | 'votes' | 'skipped'): void {
+export function recordLabel(label: VoteLabel, decidedBy: 'arithmetic' | 'arithmetic-approx' | 'votes' | 'skipped'): void {
   labels[label] += 1;
-  if (decidedBy === 'arithmetic') labels.arithmetic += 1;
+  if (decidedBy === 'arithmetic' || decidedBy === 'arithmetic-approx') labels.arithmetic += 1;
 }
 
 /**
