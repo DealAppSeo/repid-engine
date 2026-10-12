@@ -70,7 +70,9 @@ describe('Audit Trail Integration', () => {
       settlements: {},
       agents: {
         'buyer-123': { id: 'buyer-123', current_repid: 200, wallet_address: '0xBuyerWallet' },
-        'provider-123': { id: 'provider-123', current_repid: 150, wallet_address: '0xProviderWallet' }
+        // E-4: escrow fails closed on an unset/invalid payee, so the provider must
+        // carry a real, non-zero EVM address (was the non-address "0xProviderWallet").
+        'provider-123': { id: 'provider-123', current_repid: 150, wallet_address: '0x2222222222222222222222222222222222222222' }
       },
       services: {
         'service-123': { id: 'service-123', active: true, min_repid_to_purchase: 100, base_price_usdc_raw: 10000, provider_agent_id: 'provider-123' }
@@ -179,7 +181,7 @@ describe('Audit Trail Integration', () => {
       payload: {
         authorization: {
           from: '0xBuyerWallet',
-          to: '0xProviderWallet',
+          to: '0x2222222222222222222222222222222222222222',
           value: '10000'
         }
       }
