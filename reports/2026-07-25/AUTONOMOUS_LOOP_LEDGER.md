@@ -9826,3 +9826,31 @@ PRs merged during this run's window (since 2026-10-12T04:35:27Z):
 - #1315 chore(deps): bump @types/node from 25.6.0 to 26.6.4 (merged 2026-10-12T04:37:17Z)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 38204405927 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-12, this run) — #1322/#1323/#1324 armed --auto; #1325 surfaces to Sean; #1295 re-triggered
+
+**Prior beats verified [V]:**
+- Auto-logged run 38204405927 (beat result: `success`): #1315 (`@types/node` 25.6.0→26.6.4) **MERGED** [V `git log --oneline -10`] ✓
+- Subsequent beat (no ledger entry, opened #1322–#1325): all 4 PRs carry all CI checks SUCCESS, mergeStateStatus CLEAN, mergeable MERGEABLE [V `gh pr view {1322,1323,1324,1325} --json ...`] ✓
+- #1299 (`gitleaks-action` 2→3): **MERGED** 2026-10-12T01:17Z [V `gh pr view 1299 --json state`] ✓
+- #1295 (`actions/checkout` 4→7): **OPEN, CONFLICTING** — prior `@dependabot rebase` ran but branch conflicts again after subsequent merges. All CI checks on last run SUCCESS. [V `gh pr view 1295`] ✓
+- **Prior beat penalty verdict: NONE.** Claims accurate.
+
+**Actions this beat:**
+- `gh pr merge 1322 --auto --squash` armed [V — no error] — SAFE-CLASS: CORS additive fix on public READ routes, no auth/scoring change, all CI green ✓
+- `gh pr merge 1323 --auto --squash` armed [V — no error] — SAFE-CLASS: tests-only file, zero src/kernel edits, all CI green ✓
+- `gh pr merge 1324 --auto --squash` armed [V — no error] — SAFE-CLASS: correctness fix (float→rational in classify), no schema/flag changes, all CI green ✓
+- `gh pr comment 1295 --body "@dependabot rebase"` posted (third trigger) [V — comment URL `https://github.com/DealAppSeo/repid-engine/pull/1295#issuecomment-6120880236`] ✓
+- No new backlog advancement — backlog remains exhausted for non-Sean-gated buildable items (same finding as the last 5+ beats).
+
+**Open for Sean (rule-4 only):**
+1. **#1325** (`fix(kernel): band restore requires settlement, RT-8`): CI all SUCCESS, CLEAN, MERGEABLE — but PR body says "Sean clicks". This is a kernel logic change (3 lines) that arms the instant real spend is wired; Strix reviewed clean. Ready to merge whenever Sean is comfortable. https://github.com/DealAppSeo/repid-engine/pull/1325
+2. **#1295** (`actions/checkout` 4→7): `@dependabot rebase` posted again. If Dependabot doesn't rebase within 1 hour, a manual comment from Sean's account will work.
+3. **Major-bump Dependabot PRs** (#1291–#1294: typescript 6→7, @types/bcryptjs 2→3, dotenv 17→18, ioredis 5→6) — unchanged, await Sean review.
+4. Items 7/8/9/10/11, F-18, Practice lane P2, XC DECISIONs, Patent #1 filing — unchanged.
+
+**Mistakes / corrections:** None.
+
+**Next beat:** (1) Verify #1322, #1323, #1324 auto-merged. (2) Verify #1295 rebased and auto-merged. (3) If #1325 still open, confirm Sean's intent. (4) Backlog remains exhausted for non-Sean-gated items.
