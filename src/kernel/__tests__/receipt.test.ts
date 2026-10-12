@@ -146,7 +146,7 @@ describe('the eight invariants', () => {
     expect(codesOf(reseal(r))).toEqual(['unverified_leg_carries_evidence']);
   });
 
-  it('(6) counts_toward_band_restore is derived: grounded && same_domain && !is_simulated', async () => {
+  it("(6) counts_toward_band_restore is derived: grounded && same_domain && !is_simulated && verdict_label === 'SETTLED'", async () => {
     // simulated run, grounded and same-domain: must be false
     const sim = await allowPost();
     expect(sim.verification.grounded && sim.verification.same_domain).toBe(true);
@@ -155,22 +155,44 @@ describe('the eight invariants', () => {
     sim.verification.counts_toward_band_restore = true; // someone "supplies" it
     expect(codesOf(reseal(sim))).toEqual(['band_restore_not_derived']);
 
-    // each missing ingredient independently blocks it
-    const h = harness({ env: { network: 'base-sepolia', chain_id: 84532, is_simulated: false }, halCheck: async () => ({ ...HAL_PASS, grounded: false }) });
-    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
-    const ungrounded = (await runUnderKernel(postRequest(), async () => 'ok', h.deps)).decision_receipt!;
+    // Each ingredient is isolated against a SETTLED base. Isolating against HAL_PASS (a PROVISIONAL
+    // 2-1 vote) would be vacuous since the fix: that is false for want of a settler alone, so
+    // "ungrounded is false" would hold whether or not grounding were checked.
+    const REAL = { network: 'base-sepolia', chain_id: 84532, is_simulated: false };
+    const SETTLED_PASS: HalEvidence = { ...HAL_PASS, settled_by: 'holdout' };
+    const realRun = async (evidence: HalEvidence) => {
+      const h = harness({ env: REAL, halCheck: async () => evidence });
+      await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+      return (await runUnderKernel(postRequest(), async () => 'ok', h.deps)).decision_receipt!;
+    };
+
+    const ungrounded = await realRun({ ...SETTLED_PASS, grounded: false });
+    expect(ungrounded.verification.verdict_label).toBe('SETTLED');
     expect(ungrounded.verification.counts_toward_band_restore).toBe(false);
-    const h2 = harness({ env: { network: 'base-sepolia', chain_id: 84532, is_simulated: false }, halCheck: async () => ({ ...HAL_PASS, same_domain: false }) });
-    await h2.ledger.appendPolicy(await signedPolicy(h2.owner), iso);
-    const otherDomain = (await runUnderKernel(postRequest(), async () => 'ok', h2.deps)).decision_receipt!;
+    const otherDomain = await realRun({ ...SETTLED_PASS, same_domain: false });
+    expect(otherDomain.verification.verdict_label).toBe('SETTLED');
     expect(otherDomain.verification.counts_toward_band_restore).toBe(false);
 
-    // and all three present: it counts
-    const h3 = harness({ env: { network: 'base-sepolia', chain_id: 84532, is_simulated: false }, halCheck: async () => HAL_PASS });
-    await h3.ledger.appendPolicy(await signedPolicy(h3.owner), iso);
-    const real = (await runUnderKernel(postRequest(), async () => 'ok', h3.deps)).decision_receipt!;
+    // and all four present: it counts
+    const real = await realRun(SETTLED_PASS);
     expect(real.verification.counts_toward_band_restore).toBe(true);
     expect(codesOf(real)).toEqual([]);
+  });
+
+  it('(6) RT-8: a PROVISIONAL vote never counts toward band restore, grounded, same-domain and real', async () => {
+    // HAL_PASS is a 2-1 vote with no settler. Until RT-8 this counted, and the receipt validated.
+    const h = harness({ env: { network: 'base-sepolia', chain_id: 84532, is_simulated: false }, halCheck: async () => HAL_PASS });
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const out = (await runUnderKernel(postRequest(), async () => 'ok', h.deps)).decision_receipt!;
+    const v = out.verification;
+    expect(v.verdict_label).toBe('PROVISIONAL');
+    expect(v.grounded && v.same_domain && !v.is_simulated).toBe(true); // every OTHER ingredient is present
+    expect(v.counts_toward_band_restore).toBe(false);
+    expect(codesOf(out)).toEqual([]); // the honest receipt is valid
+
+    // and the validator refuses the receipt that claims otherwise (it used to accept it)
+    out.verification.counts_toward_band_restore = true;
+    expect(codesOf(reseal(out))).toEqual(['band_restore_not_derived']);
   });
 
   it('(6) a supplied counts_toward_band_restore is refused at the request, not ignored', () => {

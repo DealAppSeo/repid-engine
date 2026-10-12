@@ -66,7 +66,12 @@ const SETTLERS = ['holdout', 'known_answer', 'person'] as const;
  *   status        PASS → VERIFIED; FLAG / VETO → FAILED; ABSTAIN or no answer → NOT_CHECKED.
  *   verdict_label PROVISIONAL unless `settled_by` is a holdout, a known answer or a person. A vote
  *                 — 3-0 or 2-1 — never settles anything, because the voters are correlated.
- *   counts_toward_band_restore = grounded && same_domain && !is_simulated, computed here.
+ *   counts_toward_band_restore = grounded && same_domain && !is_simulated && verdict_label === 'SETTLED',
+ *                 computed here. SETTLED is in it because "the score moves on a holdout, a known
+ *                 answer or a person" (Sean): a vote, however unanimous, is PROVISIONAL, and a
+ *                 PROVISIONAL verdict restoring a band would move a score on a vote. It was missing
+ *                 until XC1's red team (RT-8): a grounded, same-domain 2-1 vote counted and the
+ *                 receipt validated. Dormant while every env is simulated; armed by real spend.
  */
 export function buildVerificationLeg(cls: ToolClass, hal: HalState, isSimulated: boolean): VerificationLeg {
   const none = (status: 'NOT_APPLICABLE' | 'NOT_CHECKED'): VerificationLeg => ({
@@ -87,16 +92,17 @@ export function buildVerificationLeg(cls: ToolClass, hal: HalState, isSimulated:
   const settledBy = (SETTLERS as readonly unknown[]).includes(ev.settled_by) ? ev.settled_by : null;
   const grounded = ev.grounded === true;
   const sameDomain = ev.same_domain === true;
+  const verdictLabel = settledBy ? 'SETTLED' : 'PROVISIONAL';
   return {
     status: ev.verdict === 'PASS' ? 'VERIFIED' : 'FAILED',
     method: typeof ev.method === 'string' ? ev.method.slice(0, 64) : null,
     votes: (Array.isArray(ev.votes) ? ev.votes : []).map((v) => ({ family: String(v.family).slice(0, 64), verdict: v.verdict })),
-    verdict_label: settledBy ? 'SETTLED' : 'PROVISIONAL',
+    verdict_label: verdictLabel,
     settled_by: settledBy,
     grounded,
     same_domain: sameDomain,
     is_simulated: isSimulated,
-    counts_toward_band_restore: grounded && sameDomain && !isSimulated,
+    counts_toward_band_restore: grounded && sameDomain && !isSimulated && verdictLabel === 'SETTLED',
   };
 }
 
@@ -445,8 +451,8 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
   }
 
   // (6) derived, never supplied
-  if (v.counts_toward_band_restore !== (v.grounded && v.same_domain && !v.is_simulated)) {
-    add('band_restore_not_derived', 'verification.counts_toward_band_restore', 'must equal grounded && same_domain && !is_simulated');
+  if (v.counts_toward_band_restore !== (v.grounded && v.same_domain && !v.is_simulated && v.verdict_label === 'SETTLED')) {
+    add('band_restore_not_derived', 'verification.counts_toward_band_restore', "must equal grounded && same_domain && !is_simulated && verdict_label === 'SETTLED'");
   }
 
   // (7) an executed record needs the decision row to exist first
