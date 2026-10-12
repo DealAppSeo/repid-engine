@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { trustedClientIp } from '../middleware/client-ip';
 import { resolveAccountableRoot } from '../services/accountable-root';
 import { dryDecision } from '../kernel/gate';
+import { makeKernelHalCheck } from '../kernel/hal-adapter';
 import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy } from '../kernel/policy';
 import { PolicyNonceError, StoreLedger, createJsonlStore } from '../kernel/store';
 import type { GateDeps, OwnerResolver } from '../kernel/types';
@@ -37,11 +38,28 @@ export type KernelRouteDeps = Pick<GateDeps, 'ledger' | 'resolveOwner'> & Partia
 const accountableRootOwner: OwnerResolver = async (agent) => ownerEvidenceFromRoot(await resolveAccountableRoot(agent.agent_id));
 
 /**
+ * KERNEL_HAL_ENABLED — the switch that joins the real HAL quorum to the kernel post-gate.
+ *
+ * DEFAULT OFF, and off must be byte-identical to today: `halCheck` is simply NOT set, so the gate
+ * reads `hal_not_checked` for a post exactly as it did before this adapter existed. Flipping it to
+ * `true` is a decision for whoever owns production (Sean), not this code. Read as a literal
+ * `process.env['NAME']` so the env-registry scan (known-env-vars.generated.ts) picks it up.
+ *
+ * NOTE on the HTTP surface: the kernel request carries only `args_hash`, never content, so even
+ * with the flag ON the HTTP /decide path has no deliverable to check and HAL abstains → the post
+ * stays NOT_CHECKED. The adapter produces a live PASS/FLAG/VETO only where a caller wraps a real
+ * post tool with the deliverable in hand (see makeKernelHalCheck's resolveDeliverable).
+ */
+function kernelHalEnabled(): boolean {
+  return (process.env['KERNEL_HAL_ENABLED'] ?? '').trim().toLowerCase() === 'true';
+}
+
+/**
  * The MVP ledger lives in the OS temp directory: outside the repository (nothing to commit by
  * accident) and, on Railway, EPHEMERAL — it does not survive a redeploy. That is the cost of "no
  * DDL"; a durable sink is the follow-up. Built on first use, never at import.
  */
-function defaultDeps(): KernelRouteDeps {
+export function defaultDeps(): KernelRouteDeps {
   let built: KernelRouteDeps | null = null;
   const get = (): KernelRouteDeps =>
     (built ??= { ledger: new StoreLedger(createJsonlStore(join(tmpdir(), 'hyperdag-kernel', 'ledger.jsonl'))), resolveOwner: accountableRootOwner });
@@ -52,6 +70,9 @@ function defaultDeps(): KernelRouteDeps {
     get resolveOwner() {
       return get().resolveOwner;
     },
+    // Flag OFF ⇒ key absent ⇒ gate reads `hal_not_checked` (today's behavior, unchanged).
+    // Flag ON ⇒ the real HAL adapter is consulted for a post. See kernelHalEnabled() above.
+    ...(kernelHalEnabled() ? { halCheck: makeKernelHalCheck() } : {}),
   };
 }
 
