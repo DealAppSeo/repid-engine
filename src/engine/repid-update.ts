@@ -22,6 +22,15 @@ import {
   type ProtocolLookup,
 } from '../scoring/grounding';
 import { scoreLaneFromGrounding } from '../scoring/score-lane';
+import {
+  confirmedOutcomeScoringEnabled,
+  resolveConfirmedOutcome,
+  type ConfirmedOutcomeInput,
+  type ConfirmedOutcomeDeps,
+  type ConfirmedOutcomeResult,
+  type VerifiedConfirmation,
+} from '../scoring/confirmed-outcome';
+import { resolveOwner as resolveAgentOwner } from '../services/agent-owner-resolver';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -92,6 +101,22 @@ export interface RepIdUpdateInput {
     validationLookup?: ValidationLookup;
     protocolLookup?: ProtocolLookup;
   };
+  /**
+   * CONFIRMED-OUTCOME SCORING (flag-gated behind CONFIRMED_OUTCOME_SCORING_ENABLED,
+   * default OFF). When the flag is ON and this payload is present, the official score
+   * moves ONLY on a CONFIRMED outcome (a holdout / known answer / person / independent
+   * counterparty); a 2-1 vote is PROVISIONAL and does not move it. `actorAgentId` is
+   * filled from `agentId` by the pipeline, so callers omit it. With the flag OFF this
+   * payload is ignored and scoring is exactly as today.
+   *
+   * CWE-345: a caller can NEVER supply a `verifiedConfirmation` — it is omitted from this
+   * type, and the pipeline builds it only from a server-side verifier. So this payload is
+   * CALLER-ASSERTED and, on its own, moves NOTHING: it is recorded for audit and held inert
+   * until a server-derived confirmation backs it. No such verifier is wired yet.
+   */
+  confirmedOutcome?: Omit<ConfirmedOutcomeInput, 'actorAgentId' | 'verifiedConfirmation'>;
+  /** Test seam. Production builds the deps from the db-backed owner resolver + domain readers. */
+  confirmedOutcomeDeps?: ConfirmedOutcomeDeps;
 }
 
 export interface RepIdUpdateResult {
@@ -117,6 +142,11 @@ export interface RepIdUpdateResult {
   newBadges?: BadgeAward[];
   /** C8 shadow label. Never changes current_repid by itself. */
   gVerified?: GroundingResult['g_verified'];
+  /**
+   * Present only when CONFIRMED_OUTCOME_SCORING_ENABLED is ON and the event carried a
+   * confirmedOutcome payload. Null/absent otherwise (including with the flag OFF).
+   */
+  confirmedOutcome?: ConfirmedOutcomeResult | null;
 }
 
 export function computeTier(repId: number): string {
@@ -418,7 +448,36 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     'CHALLENGE_WIN','CHALLENGE_LOSS','CHALLENGE_DRAW',
     'EPISTEMIC_VIOLATION','CONSTITUTIONAL_VIOLATION'
   ]);
-  if (challengeTypes.has(input.eventType)) {
+  // --- CONFIRMED-OUTCOME SCORING (flag-gated, default OFF) ---------------------
+  // When CONFIRMED_OUTCOME_SCORING_ENABLED is ON and this event carries a
+  // confirmedOutcome payload, the official score moves ONLY on a CONFIRMED outcome.
+  // A NOT-CONFIRMED outcome (a 2-1 vote, an abstain, a counterparty that cannot be
+  // shown independent) is held INERT — exactly like a shadow-deception event: no
+  // delta, no decay, no activity bump, no operational side-effects. With the flag
+  // OFF this branch is never entered, so scoring is EXACTLY as today.
+  let confirmedOutcomeResult: ConfirmedOutcomeResult | null = null;
+  let isUnconfirmedHold = false;
+  if (confirmedOutcomeScoringEnabled() && input.confirmedOutcome) {
+    // CWE-345 — the confirmedOutcome payload is CALLER-ASSERTED. It must never move the
+    // official score on its own. A confirmation may settle ONLY from a SERVER-DERIVED
+    // verified source (a kernel receipt / signed attestation / known-answer record). That
+    // verifier is NOT wired yet, so `resolveServerConfirmation` returns undefined, the
+    // resolver fails closed, and every caller-asserted outcome is RECORDED (for audit)
+    // but held INERT. The explicit `serverVerified && scoreMoves` guard below is a second,
+    // independent barrier: even a future resolver regression cannot move the score from a
+    // caller payload unless a server verification is present.
+    const serverVerified: VerifiedConfirmation | undefined = resolveServerConfirmation();
+    confirmedOutcomeResult = await resolveConfirmedOutcome(
+      { ...input.confirmedOutcome, actorAgentId: input.agentId, ...(serverVerified ? { verifiedConfirmation: serverVerified } : {}) },
+      input.confirmedOutcomeDeps ?? confirmedOutcomeDepsFor(agent),
+    );
+    if (serverVerified && confirmedOutcomeResult.scoreMoves) {
+      rawDelta = confirmedOutcomeResult.appliedDelta;
+    } else {
+      rawDelta = 0;
+      isUnconfirmedHold = true; // caller-asserted / PROVISIONAL / abstain / unconfirmed → no move
+    }
+  } else if (challengeTypes.has(input.eventType)) {
     const outcomeMap: Record<string, any> = {
       CHALLENGE_WIN:'WIN', CHALLENGE_LOSS:'LOSS', CHALLENGE_DRAW:'DRAW',
       EPISTEMIC_VIOLATION:'EPISTEMIC_VIOLATION',
@@ -516,12 +575,18 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // repid_after === repid_before, mode 'shadow-deception'. (Enforce mode and all
   // non-deception events keep the normal decay + delta behavior.)
   const isShadowDeception = isDeception && decMode === 'shadow';
-  let finalDelta = isShadowDeception ? 0 : computedDelta;
+  // An UNCONFIRMED confirmed-outcome event (flag ON) is held with the SAME inertness
+  // as a shadow-deception event: the official score does not move AT ALL — not via the
+  // delta and not via decay — and no operational side-effects run. `isInertHold` is the
+  // union; with the flag OFF `isUnconfirmedHold` is always false, so it equals
+  // `isShadowDeception` and OFF-behaviour is byte-for-byte unchanged.
+  const isInertHold = isShadowDeception || isUnconfirmedHold;
+  let finalDelta = isInertHold ? 0 : computedDelta;
 
-  // 7 — New RepID and tier (uses the APPLIED delta; shadow deception => no move).
-  // On the shadow-deception path the score is left UNCHANGED (no decay applied),
-  // so repid_after === repid_before and the event is a pure measurement.
-  let newRepId = isShadowDeception
+  // 7 — New RepID and tier (uses the APPLIED delta; an inert hold => no move).
+  // On an inert-hold path the score is left UNCHANGED (no decay applied), so
+  // repid_after === repid_before and the event is a pure measurement.
+  let newRepId = isInertHold
     ? agent.current_repid
     : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
   const newTier = computeTier(newRepId);
@@ -558,7 +623,7 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     const gated = enforceGroundedDelta(finalDelta, groundingMeta.g_verified, groundingMode());
     if (gated !== finalDelta) {
       finalDelta = gated;
-      newRepId = isShadowDeception
+      newRepId = isInertHold
         ? agent.current_repid
         : Math.max(10, Math.min(10000, decayedRepId + finalDelta));
     }
@@ -566,10 +631,10 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
 
   const ledger = assessLedger({
     before: agent.current_repid,
-    decayedTo: isShadowDeception ? agent.current_repid : decayedRepId,
+    decayedTo: isInertHold ? agent.current_repid : decayedRepId,
     delta: finalDelta,
     after: newRepId,
-    scoreMutated: WRITER_DIRECT_APPLY && !isShadowDeception,
+    scoreMutated: WRITER_DIRECT_APPLY && !isInertHold,
   });
   logLedger(ledger, { agentId: input.agentId, eventType: input.eventType });
 
@@ -635,8 +700,9 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // measurement can distinguish real grounded hits from advisory ones.
       deceptionConfirmed: isDeception ? gatedDeceptionDelta(input).confirmed : null,
       deceptionGateReason: isDeception ? gatedDeceptionDelta(input).reason : null,
-      // Shadow-deception is inert: NO decay is applied on that path, so record 0.
-      decayApplied: isShadowDeception ? 0 : agent.current_repid - decayedRepId,
+      // An inert hold (shadow-deception OR an unconfirmed confirmed-outcome event)
+      // applies NO decay, so record 0.
+      decayApplied: isInertHold ? 0 : agent.current_repid - decayedRepId,
       redemptionModifier: redemptionMod,
       redemptionModifierApplied: redemptionApplied,
       constitutionalAudit: {
@@ -662,6 +728,25 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // In shadow (default) the top-level `delta` is UNCHANGED — would_gate only
       // flags what enforce WOULD have zeroed.
       self_report_evidence: selfReportEvidenceMeta,
+      // CONFIRMED-OUTCOME SCORING (flag CONFIRMED_OUTCOME_SCORING_ENABLED). Present only
+      // when the flag is ON and the event carried a confirmedOutcome payload: records the
+      // settler, the PROVISIONAL/SETTLED label (reusing the kernel's vocabulary), whether
+      // the score was allowed to move, the independence check, and the band/need detail.
+      // Null for every other event (and for all events while the flag is OFF).
+      confirmed_outcome: confirmedOutcomeResult
+        ? {
+            enabled: true,
+            confirmed: confirmedOutcomeResult.confirmed,
+            verdict_label: confirmedOutcomeResult.verdictLabel,
+            settled_by: confirmedOutcomeResult.settledBy,
+            score_moves: confirmedOutcomeResult.scoreMoves,
+            applied_delta: confirmedOutcomeResult.appliedDelta,
+            band_tightened: confirmedOutcomeResult.bandTightened,
+            need_multiplier_applied: confirmedOutcomeResult.needMultiplierApplied,
+            reason: confirmedOutcomeResult.reason,
+            detail: confirmedOutcomeResult.detail,
+          }
+        : null,
       ...(groundingMeta
         ? {
             g_verified: groundingMeta.g_verified,
@@ -693,13 +778,13 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // by WRITER_DIRECT_APPLY for single-applier cutover). The ledger row already exists, so even if
   // this update fails the state stays reconcilable via replay — never a silent score-without-row drift.
   //
-  // SHADOW-DECEPTION INERTNESS (finding 2): on the shadow-deception path we skip
-  // the repid_agents write ENTIRELY. Writing it would (a) re-persist current_repid
-  // (still risky if decay were ever reintroduced) and (b) increment activity_30d
-  // — a side effect that is NOT inert. A shadow measurement must leave both
-  // current_repid AND activity_30d untouched, so we do not write at all.
-  // (WRITER_DIRECT_APPLY resolved at step 7b — the ledger assessment needs it too.)
-  if (WRITER_DIRECT_APPLY && !isShadowDeception) {
+  // INERT-HOLD (finding 2, generalised): on the shadow-deception path AND on an
+  // unconfirmed confirmed-outcome hold we skip the repid_agents write ENTIRELY.
+  // Writing it would (a) re-persist current_repid (still risky if decay were ever
+  // reintroduced) and (b) increment activity_30d — a side effect that is NOT inert.
+  // An inert measurement must leave both current_repid AND activity_30d untouched,
+  // so we do not write at all. (WRITER_DIRECT_APPLY resolved at step 7b.)
+  if (WRITER_DIRECT_APPLY && !isInertHold) {
     await db.from('repid_agents').update({
       current_repid: newRepId, tier: newTier,
       last_updated: new Date().toISOString(),
@@ -707,20 +792,19 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     }).eq('id', input.agentId);
   }
 
-  // 10 — Update supply rate. SHADOW-DECEPTION INERTNESS (finding 1): a shadow
-  // deception measurement must produce ZERO operational DB side-effects beyond
-  // the single audit row. updateSupplyRate() mutates repid_ecosystem_supply
-  // counters — an operational side-effect — so it is skipped on the shadow path.
-  if (!isShadowDeception) {
+  // 10 — Update supply rate. INERT-HOLD (finding 1): an inert measurement must
+  // produce ZERO operational DB side-effects beyond the single audit row.
+  // updateSupplyRate() mutates repid_ecosystem_supply counters — an operational
+  // side-effect — so it is skipped on any inert-hold path.
+  if (!isInertHold) {
     await updateSupplyRate(input.eventType);
   }
 
   // 11 — Badge milestone check (non-blocking — never fails score flow).
-  // SHADOW-DECEPTION INERTNESS (finding 1): checkAndAwardBadges() can WRITE to
-  // repid_badges (another operational side-effect), so it is skipped on the
-  // shadow path too. A shadow event leaves badges untouched.
+  // INERT-HOLD (finding 1): checkAndAwardBadges() can WRITE to repid_badges
+  // (another operational side-effect), so it is skipped on any inert-hold path.
   let newBadges: BadgeAward[] = [];
-  if (!isShadowDeception) {
+  if (!isInertHold) {
     try {
       newBadges = await checkAndAwardBadges(input.agentId, agent.current_repid, newRepId);
     } catch {
@@ -744,7 +828,83 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     },
     newBadges,
     gVerified: groundingMeta?.g_verified ?? 0,
+    confirmedOutcome: confirmedOutcomeResult,
   };
+}
+
+/**
+ * Build the production dependencies for confirmed-outcome scoring from the live DB.
+ * Only ever constructed on the flag-ON confirmed-outcome path; tests inject their own.
+ *
+ *  - resolveOwner      → the existing fail-closed owner resolver (agent-owner-resolver).
+ *  - readModelFamily   → best-effort from `repid_agents.capabilities` jsonb. There is NO
+ *                        model_family COLUMN today, so this returns null unless a family
+ *                        was recorded under capabilities — and a null FAILS the same-family
+ *                        independence check CLOSED (rule 4), which is the honest default.
+ *  - domainTrackRecord → from the actor's `repid_agents.domain_accuracy` jsonb.
+ *  - domainNeedWeight  → getEcosystemNeedWeight(domain) — the computed-but-never-applied
+ *                        ecosystem weight, now applied ONLY here, per-domain, gains-only.
+ */
+/**
+ * The server-side confirmation verifier seam (CWE-345). Returns a VerifiedConfirmation
+ * ONLY when the server has independently established the confirmation from a verified
+ * source (a kernel receipt, a signed attestation, a known-answer record). It deliberately
+ * reads NOTHING caller-controllable — a confirmation a caller could influence is not a
+ * confirmation.
+ *
+ * NOT WIRED YET. There is no such verifier today, so this returns undefined and every
+ * caller-asserted confirmedOutcome is held inert. Arming the feature requires BOTH this
+ * verifier (so a confirmation is server-derived) AND the repid_agents.model_family column
+ * (so the counterparty settler can establish independence). Until then, flipping
+ * CONFIRMED_OUTCOME_SCORING_ENABLED moves no score.
+ */
+function resolveServerConfirmation(): VerifiedConfirmation | undefined {
+  return undefined;
+}
+
+function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {
+  return {
+    resolveOwner: async (agentId: string) => {
+      const r = await resolveAgentOwner({ id: agentId });
+      return { status: r.status, ownerKey: r.owner?.ownerKey ?? null };
+    },
+    readModelFamily: async (agentId: string) => {
+      try {
+        if (agentId === actor.id) return modelFamilyFromCapabilities(actor.capabilities);
+        const { data } = await db.from('repid_agents').select('capabilities').eq('id', agentId).maybeSingle();
+        return modelFamilyFromCapabilities((data as { capabilities?: unknown } | null)?.capabilities);
+      } catch {
+        return null; // unreadable → fail closed (same-family cannot be excluded)
+      }
+    },
+    domainTrackRecord: async (agentId: string, domain: string) => {
+      try {
+        let da: unknown = actor.domain_accuracy;
+        if (agentId !== actor.id) {
+          const { data } = await db.from('repid_agents').select('domain_accuracy').eq('id', agentId).maybeSingle();
+          da = (data as { domain_accuracy?: unknown } | null)?.domain_accuracy;
+        }
+        // NULL domain_accuracy = no per-domain record anywhere = genuinely a new domain.
+        if (da === null || da === undefined) return { checked: true, hasRecord: false };
+        if (typeof da === 'object') {
+          return { checked: true, hasRecord: Object.prototype.hasOwnProperty.call(da, domain) };
+        }
+        return { checked: false, hasRecord: false }; // corrupt shape → not readable
+      } catch {
+        return { checked: false, hasRecord: false };
+      }
+    },
+    domainNeedWeight: async (domain: string) => getEcosystemNeedWeight(domain),
+  };
+}
+
+function modelFamilyFromCapabilities(cap: unknown): string | null {
+  if (cap && typeof cap === 'object') {
+    const rec = cap as Record<string, unknown>;
+    const v = rec['model_family'] ?? rec['modelFamily'];
+    if (typeof v === 'string' && v.trim() !== '') return v.trim();
+  }
+  return null;
 }
 
 function dbGroundingStore(): GroundingStore {
