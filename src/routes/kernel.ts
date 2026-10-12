@@ -17,8 +17,10 @@
  * route. trustshell's kernel-client refuses on anything but a clean ALLOW, which is the client half.
  */
 import { Router, type Request, type Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { trustedClientIp } from '../middleware/client-ip';
 import { resolveAccountableRoot } from '../services/accountable-root';
 import { dryDecision } from '../kernel/gate';
 import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy } from '../kernel/policy';
@@ -52,6 +54,29 @@ const CALL_ID = /^[0-9a-zA-Z-]{8,64}$/;
 
 export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Router {
   const router = Router();
+
+  /**
+   * AN EXPLICIT CEILING ON THE KERNEL, ON TOP OF THE GLOBAL ONE.
+   *
+   * `/api/v1/*` already runs the tiered limiter in middleware/rate-limit.ts (60/min per IP with no
+   * identity). This one is neither a replacement for it nor a no-op beside it:
+   *   - it is stricter where the global one is looser. A BYOK identity gets 600/min globally, and an
+   *     agent-attested one up to 1200/min; neither should be able to hammer a route that verifies a
+   *     signature (POST /policy can reach the chain for a smart-wallet owner) at that rate;
+   *   - it lives on the router, so it still applies if the router is ever mounted somewhere else.
+   * The bucket is per network address, taken from the edge-set X-Real-IP rather than a header the
+   * caller writes (middleware/client-ip.ts). A 429 is a non-200, which trustshell's kernel client
+   * already reads as a refusal (NOT_CHECKED), never as a pass.
+   *
+   * Created per router, so each router (and each test app) counts on its own.
+   */
+  const kernelLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+    message: { error: 'too_many_requests', message: 'Too many kernel requests from this network. Try again in a minute.' },
+  });
+  router.use(kernelLimiter);
 
   router.post('/decide', async (req: Request, res: Response): Promise<void> => {
     try {

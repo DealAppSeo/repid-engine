@@ -178,6 +178,39 @@ describe('GET /api/v1/kernel/receipt/:id', () => {
   });
 });
 
+describe('the explicit rate limit on the kernel routes', () => {
+  it('60 a minute per network address, then 429 on every route; another address is unaffected, and a 429 writes nothing', async () => {
+    const h = harness();
+    const app = appWith(h.deps);
+    const from = (ip: string) => ({ get: (u: string) => request(app).get(u).set('X-Real-IP', ip), post: (u: string) => request(app).post(u).set('X-Real-IP', ip) });
+    const a = from('203.0.113.7');
+
+    // Sixty cheap, refused requests spend the budget (a bad receipt id is a 400 before any I/O).
+    for (let i = 0; i < 60; i++) expect((await a.get('/api/v1/kernel/receipt/..%2Fx')).status).toBe(400);
+
+    // The sixty-first, on each of the three routes, is a 429 with the limiter's own body.
+    const dec = await a.post('/api/v1/kernel/decide').send(spendRequest());
+    expect(dec.status).toBe(429);
+    expect(dec.body.error).toBe('too_many_requests');
+    expect((await a.post('/api/v1/kernel/policy').send(await signedPolicy(h.owner))).status).toBe(429);
+    expect((await a.get('/api/v1/kernel/receipt/00000000-0000-4000-8000-0000000000ff')).status).toBe(429);
+    expect(policyCount(h)).toBe(0); // the limited policy was never read, let alone recorded
+    expect(receiptCount(h)).toBe(0);
+
+    // A different address has its own bucket.
+    expect((await from('203.0.113.8').post('/api/v1/kernel/decide').send(spendRequest())).status).toBe(200);
+  }, 60_000);
+
+  it('the limit is on the router: a router built elsewhere carries it too, and two routers do not share a bucket', async () => {
+    const one = harness();
+    const two = harness();
+    const appOne = appWith(one.deps);
+    for (let i = 0; i < 60; i++) await request(appOne).get('/api/v1/kernel/receipt/..%2Fx').set('X-Real-IP', '203.0.113.9');
+    expect((await request(appOne).get('/api/v1/kernel/receipt/..%2Fx').set('X-Real-IP', '203.0.113.9')).status).toBe(429);
+    expect((await request(appWith(two.deps)).get('/api/v1/kernel/receipt/..%2Fx').set('X-Real-IP', '203.0.113.9')).status).toBe(400);
+  }, 60_000);
+});
+
 describe('ownerEvidenceFromRoot flattens accountable-root\'s tri-state', () => {
   it('resolved / none / unknown', () => {
     expect(ownerEvidenceFromRoot({ ok: true, root: { kind: 'owner', agentId: 'a', wallet: '0x000000000000000000000000000000000000dEaD', assurance: 'wallet-proven', subjectId: 'a', via: 'own-binding', grantPath: [] } })).toMatchObject({ status: 'resolved', assurance: 'wallet-proven' });
