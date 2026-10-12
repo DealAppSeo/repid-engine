@@ -52,10 +52,11 @@ hash · canaries wired to the table · rate limits. Spec and tests first. No Gra
 ## STATUS (2026-10-12, re-date each line when it changes)
 | leg | state |
 |---|---|
-| CC1 kernel — repid-engine **#1317** | CI-GREEN (CI, crosscheck, gitleaks, CodeQL, HAL-adversarial-gate all success); refusal demo 133 tests; non-vacuity proven by source mutation. DRAFT — Sean merges. |
-| CC1 kernel client — trustshell **#515** | CI-GREEN (required `check`, CodeQL, secret-scan success). DRAFT — Sean merges. |
-| XC1 known-answer table + red team | IN FLIGHT (its own worktree + branch) |
-| MVP acceptance — a refused tool call → DENY receipt | the refusal demo is green in CI; a receipt on the live engine path is the V1 gate |
+| CC1 kernel — repid-engine **#1317** | **MERGED 2026-10-12T05:02Z** (`feat(kernel): default-deny policy kernel`) — all CI green [V `gh pr view 1317`]. Sean merged. |
+| CC1 kernel client — trustshell **#515** | CI-GREEN DRAFT — Sean merges. Status NOT_CHECKED from here (different repo). |
+| XC1 known-answer table + red team — **#1323** | **MERGED 2026-10-12T08:48Z** (`test(kernel): red-team suite, 142 mutation-verified tests`) — all CI green [V `gh pr view 1323`]. |
+| RT-8 band-restore fix — **#1325** | **MERGED 2026-10-12T14:22Z** (`fix(kernel): band restore requires settlement`) — Sean merged [V `gh pr view 1325`]. |
+| MVP acceptance — a refused tool call → DENY receipt | **SHIPPED**: kernel on main (#1317), refusal demo 133 tests, red-team 142 tests — all MERGED. Live engine path needs a real kernel receipt; `DEFAULT_ENV` is simulated. V1 gate: real receipt on CI. |
 | x402 BUY dogfood (V1) | DEFERRED to Sean (irreversible; funded wallet + key-custody decision) |
 
 **Verification rule:** a leg is VERIFIED only on CI, never on a worker's local report. CI green + the refusal demo
