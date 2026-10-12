@@ -37,13 +37,27 @@
  * lane sets it ON nowhere.
  *
  * ════════════════════════════════════════════════════════════════════════════════
+ * THE CONFIRMATION MUST BE SERVER-DERIVED (CWE-345 — do not trust the request body)
+ * ════════════════════════════════════════════════════════════════════════════════
+ * The `settledBy` / `result` / `confidence` / `rubberStampKnownWrong` /
+ * `passUnsupportedByReceipt` fields are CALLER-ASSERTED. On their own they move NOTHING.
+ * The resolver settles — and the official score moves — ONLY when a `verifiedConfirmation`
+ * is present, and that is assembled SERVER-SIDE from a verified source (a kernel receipt,
+ * a known-answer record, a signed attestation), NEVER from a request body. Without it the
+ * outcome is caller-asserted and FAILS CLOSED (PROVISIONAL, no move) whatever `settledBy`
+ * claims. This is the fix for the rubber-stamp the model exists to prevent: a caller
+ * could otherwise fake a confirmed-right for gain, or a known-answer rubber-stamp for the
+ * heaviest penalty against a victim. NO server-side verifier is wired yet, so the pipeline
+ * supplies no `verifiedConfirmation` and every caller-asserted confirmation is held inert.
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
  * THREE OUTCOMES, FAIL CLOSED
  * ════════════════════════════════════════════════════════════════════════════════
  * NOT CONFIRMED is its own verdict and it NEVER moves the official score — it is not
  * a pass, and it is not a fail. The resolver never throws into the score path: any
- * dependency that cannot answer (owner unresolvable, model family unreadable, domain
- * history unreadable) FAILS CLOSED to "unconfirmed, no move". That is the safe
- * direction for a trust product — a false score move is the worst outcome.
+ * dependency that cannot answer (confirmation not server-verified, owner unresolvable,
+ * model family unreadable, domain history unreadable) FAILS CLOSED to "unconfirmed, no
+ * move". That is the safe direction for a trust product — a false score move is the worst outcome.
  *
  * ════════════════════════════════════════════════════════════════════════════════
  * MAGNITUDES LIVE IN THE ENVIRONMENT, NOT IN THIS PUBLIC REPO
@@ -74,6 +88,30 @@ export type AssertedSettler = ConfirmedSettler | 'vote' | null;
 
 export type ConfirmedResultKind = 'right' | 'wrong' | 'abstain';
 
+/** The server-side source that established a confirmation. Never a caller string. */
+export type ConfirmedVerifiedSource =
+  | 'kernel_receipt'
+  | 'known_answer_record'
+  | 'signed_attestation'
+  | 'independent_counterparty';
+
+/**
+ * SERVER-DERIVED proof that THIS outcome was actually confirmed (CWE-345 fix).
+ *
+ * A caller CANNOT produce one. The resolver trusts this field as its contract: it is
+ * assembled ONLY by a server-side verifier (a kernel receipt, a known-answer record, a
+ * signed attestation) and NEVER from a request body. Its absence means the confirmation
+ * is caller-asserted, and the resolver then FAILS CLOSED — a caller-asserted settledBy
+ * string never settles, never moves the official score. See the pipeline wiring note:
+ * no server-side verifier is wired yet, so the pipeline never supplies one and every
+ * caller-asserted confirmation is held inert.
+ */
+export interface VerifiedConfirmation {
+  source: ConfirmedVerifiedSource;
+  /** The settler the server source establishes (never 'vote'). Authoritative over `settledBy`. */
+  settledBy: ConfirmedSettler;
+}
+
 // ── the input ────────────────────────────────────────────────────────────────────────
 
 export interface ConfirmedOutcomeInput {
@@ -87,14 +125,17 @@ export interface ConfirmedOutcomeInput {
   confidence?: number;
   /**
    * The agent asserted PASS against a KNOWN answer that is actually WRONG — a
-   * rubber-stamp. The known answer is itself the confirmation (settler = known_answer).
-   * This is the heaviest penalty (rule 2) and bypasses the honest-miss softening.
+   * rubber-stamp. This is the heaviest penalty (rule 2) and bypasses the honest-miss
+   * softening — but ONLY once a server-verified known-answer confirmation backs it
+   * (`verifiedConfirmation.settledBy === 'known_answer'`). A caller-asserted flag alone
+   * never moves the score (CWE-345): the known-answer RECORD is the authority, not this boolean.
    */
   rubberStampKnownWrong?: boolean;
   /**
-   * The agent claimed PASS but the receipt does not support it. The receipt is an
-   * objective held-out artifact, so this self-confirms (settler = holdout) and is
-   * priced as a CONFIDENT wrong (rule 3), bypassing the honest-miss softening.
+   * The agent claimed PASS but the receipt does not support it — priced as a CONFIDENT
+   * wrong (rule 3), bypassing the honest-miss softening — but ONLY once a server-verified
+   * receipt confirmation backs it (`verifiedConfirmation.settledBy === 'holdout'`). A
+   * caller-asserted flag alone never moves the score (CWE-345): the RECEIPT is the authority.
    */
   passUnsupportedByReceipt?: boolean;
   /** For settledBy === 'counterparty': the confirming party's agent id (rule 4 independence). */
@@ -105,6 +146,13 @@ export interface ConfirmedOutcomeInput {
   selfReportedMiss?: boolean;
   /** Abstention shortcut; equivalent to result==='abstain'. Abstain is free (rule 3). */
   abstained?: boolean;
+  /**
+   * SERVER-DERIVED confirmation proof (CWE-345 fix). Present ONLY when a server-side
+   * verifier established the confirmation. Absent ⇒ the outcome is caller-asserted and
+   * the resolver fails closed (PROVISIONAL, no move) regardless of `settledBy`. The
+   * pipeline strips this from any caller payload and never forges one.
+   */
+  verifiedConfirmation?: VerifiedConfirmation;
 }
 
 // ── injected dependencies (all DB-touching work is injected so the resolver is pure) ──
@@ -162,6 +210,8 @@ export interface ConfirmedOutcomeResult {
   reason: string;
   detail: {
     outcome: ConfirmedResultKind | 'unconfirmed';
+    /** CWE-345: was the confirmation established SERVER-SIDE? A caller-asserted one is false. */
+    serverVerified: boolean;
     independence: IndependenceCheck | null;
     domain: string | null;
     newDomain: boolean | null;
@@ -339,6 +389,7 @@ function unconfirmed(
   reason: string,
   independence: IndependenceCheck | null,
   input: ConfirmedOutcomeInput,
+  serverVerified = false,
 ): ConfirmedOutcomeResult {
   return {
     confirmed: false,
@@ -351,6 +402,7 @@ function unconfirmed(
     reason,
     detail: {
       outcome: 'unconfirmed',
+      serverVerified,
       independence,
       domain: input.domain ?? null,
       newDomain: null,
@@ -450,6 +502,7 @@ async function resolveInner(
       reason: 'abstain_free',
       detail: {
         outcome: 'abstain',
+        serverVerified: false,
         independence: null,
         domain: input.domain ?? null,
         newDomain: null,
@@ -460,9 +513,31 @@ async function resolveInner(
     };
   }
 
-  // RULE 2 (heaviest) — a rubber-stamp of a KNOWN-WRONG answer. The known answer is the
-  // confirmation; this bypasses the honest-miss softening entirely.
+  // RULE 1 — a 'vote' (incl. a 2-1) never settles, verified or not. Kept as a distinct,
+  // legible outcome so the rule reads clearly in the audit trail.
+  if (input.settledBy === 'vote') {
+    return unconfirmed('vote_is_provisional', null, input, false);
+  }
+
+  // SECURITY GATE (CWE-345) — the official score moves ONLY on a SERVER-DERIVED verified
+  // confirmation. The caller-asserted settledBy / rubberStampKnownWrong /
+  // passUnsupportedByReceipt fields are NEVER trusted on their own. Without a
+  // verifiedConfirmation (assembled server-side from a kernel receipt / known-answer
+  // record / signed attestation — never from a request body) the outcome is
+  // caller-asserted and FAILS CLOSED. No server-side verifier is wired yet, so the
+  // pipeline supplies none and every caller-asserted confirmation is held inert.
+  const vc = input.verifiedConfirmation;
+  if (!vc) {
+    return unconfirmed('confirmation_not_server_verified', null, input, false);
+  }
+  const serverSettler = vc.settledBy;
+
+  // RULE 2 (heaviest) — a rubber-stamp of a KNOWN-WRONG answer, established by the
+  // known-answer record (the server source), not a caller flag alone.
   if (input.rubberStampKnownWrong === true) {
+    if (serverSettler !== 'known_answer') {
+      return unconfirmed('rubber_stamp_requires_known_answer_source', null, input, true);
+    }
     return settled('known_answer', p.rubberStampPenalty, 'rubber_stamp_known_wrong', {
       outcome: 'wrong',
       independence: null,
@@ -475,9 +550,11 @@ async function resolveInner(
   }
 
   // RULE 3 (second half) — a PASS the receipt does not support is a confident wrong,
-  // confirmed by the receipt (an objective held-out artifact). Full confident-wrong
-  // penalty; no honest-miss softening.
+  // confirmed by the receipt (the server source). Full confident-wrong penalty.
   if (input.passUnsupportedByReceipt === true) {
+    if (serverSettler !== 'holdout') {
+      return unconfirmed('unsupported_pass_requires_receipt_source', null, input, true);
+    }
     const loss = p.lossBase - Math.round(1 * p.confidenceLossWeight);
     return settled('holdout', loss, 'pass_unsupported_by_receipt', {
       outcome: 'wrong',
@@ -490,26 +567,23 @@ async function resolveInner(
     });
   }
 
-  // RULE 1 + RULE 4 — determine the settler. A 'vote' (incl. a 2-1) never settles.
+  // RULE 1 + RULE 4 — the SERVER source establishes the settler. A caller-asserted
+  // `settledBy` must AGREE with it (a mismatch is a forgery attempt → fail closed).
   let settler: ConfirmedSettler | null = null;
   let independence: IndependenceCheck | null = null;
-  if (input.settledBy === 'holdout' || input.settledBy === 'known_answer' || input.settledBy === 'person') {
-    settler = input.settledBy;
-  } else if (input.settledBy === 'counterparty') {
+  if (serverSettler === 'holdout' || serverSettler === 'known_answer' || serverSettler === 'person') {
+    if (input.settledBy !== serverSettler) return unconfirmed('settler_mismatch', null, input, true);
+    settler = serverSettler;
+  } else {
+    // serverSettler === 'counterparty' — ALSO requires the independence check to pass
+    // (server-side owner + model-family), on top of the server-verified confirmation.
+    if (input.settledBy !== 'counterparty') return unconfirmed('settler_mismatch', null, input, true);
     independence = await establishIndependence(input, deps);
     settler = independence.independent ? 'counterparty' : null;
-  } else {
-    settler = null; // 'vote' or null — PROVISIONAL, never settles.
   }
 
   if (settler === null) {
-    const why =
-      input.settledBy === 'counterparty'
-        ? `counterparty_not_independent:${independence?.reason ?? 'unknown'}`
-        : input.settledBy === 'vote'
-          ? 'vote_is_provisional'
-          : 'unsettled';
-    return unconfirmed(why, independence, input);
+    return unconfirmed(`counterparty_not_independent:${independence?.reason ?? 'unknown'}`, independence, input, true);
   }
 
   // Confirmed. Compute the delta (rules 2, 5, 6).
@@ -582,7 +656,9 @@ function settled(
   settledBy: ConfirmedSettler,
   delta: number,
   reason: string,
-  detail: ConfirmedOutcomeResult['detail'],
+  // serverVerified is NOT accepted here: a settle only ever happens after the server
+  // verification gate, so this helper stamps it true. The caller cannot set it.
+  detail: Omit<ConfirmedOutcomeResult['detail'], 'serverVerified'>,
   needMultiplierApplied = 1,
 ): ConfirmedOutcomeResult {
   return {
@@ -594,6 +670,6 @@ function settled(
     bandTightened: reason === 'confirmed_miss_new_domain_band_tighten',
     needMultiplierApplied,
     reason,
-    detail,
+    detail: { ...detail, serverVerified: true },
   };
 }

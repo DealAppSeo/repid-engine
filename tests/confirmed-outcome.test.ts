@@ -7,9 +7,14 @@
  * faith and never production tuning. This is the discipline
  * `scoring-tuning-not-in-repo.test.ts` requires of any exact assertion on a tuned scorer.
  *
- * Two assertions are marked NON-VACUITY GUARD: they are the ones that go RED if the code
- * is mutated to let a 2-1 vote move the score, or to let a same-family counterparty
- * confirm. They are the proof the rules have teeth.
+ * CWE-345: the policy settles ONLY on a SERVER-DERIVED `verifiedConfirmation`. The rule
+ * blocks below supply one (via `base()` / `vc()`) because they describe "what happens once
+ * a verifier has confirmed the outcome". The SERVER-VERIFICATION GATE block proves the
+ * other half: a caller-asserted confirmation with NO `verifiedConfirmation` settles NOTHING.
+ *
+ * Three assertions are marked NON-VACUITY GUARD: they go RED if the code is mutated to let
+ * a 2-1 vote settle, to let a same-family counterparty confirm, or to trust a caller-asserted
+ * confirmation with no server verification.
  */
 import {
   resolveConfirmedOutcome,
@@ -17,9 +22,11 @@ import {
   loadConfirmedParams,
   type ConfirmedOutcomeDeps,
   type ConfirmedOutcomeInput,
+  type ConfirmedSettler,
+  type ConfirmedVerifiedSource,
+  type VerifiedConfirmation,
 } from '../src/scoring/confirmed-outcome';
 
-// Pinned test magnitudes. They satisfy every structural invariant the loader enforces.
 const PINNED: Record<string, string> = {
   REPID_CONFIRMED_GAIN_BASE: '5',
   REPID_CONFIRMED_LOSS_BASE: '-15',
@@ -32,29 +39,41 @@ const PINNED: Record<string, string> = {
 const SAVED: Record<string, string | undefined> = {};
 
 beforeEach(() => {
-  for (const k of Object.keys(PINNED)) {
-    SAVED[k] = process.env[k];
-    process.env[k] = PINNED[k];
-  }
+  for (const k of Object.keys(PINNED)) { SAVED[k] = process.env[k]; process.env[k] = PINNED[k]; }
   __resetConfirmedParamsCache();
 });
 afterEach(() => {
-  for (const k of Object.keys(PINNED)) {
-    if (SAVED[k] === undefined) delete process.env[k];
-    else process.env[k] = SAVED[k];
-  }
+  for (const k of Object.keys(PINNED)) { if (SAVED[k] === undefined) delete process.env[k]; else process.env[k] = SAVED[k]; }
   __resetConfirmedParamsCache();
 });
 
 const ACTOR = 'actor-1';
-const base = (over: Partial<ConfirmedOutcomeInput>): ConfirmedOutcomeInput => ({
-  actorAgentId: ACTOR,
-  settledBy: 'holdout',
-  result: 'right',
-  ...over,
-});
+const SOURCE: Record<ConfirmedSettler, ConfirmedVerifiedSource> = {
+  holdout: 'kernel_receipt',
+  known_answer: 'known_answer_record',
+  person: 'signed_attestation',
+  counterparty: 'independent_counterparty',
+};
+/** A SERVER-DERIVED confirmation, as a verifier would produce (tests stand in for the verifier). */
+const vc = (s: ConfirmedSettler): VerifiedConfirmation => ({ source: SOURCE[s], settledBy: s });
 
-// An independence-establishing dep set: distinct owner + distinct family.
+/**
+ * base() attaches a server-verified confirmation matching `settledBy` — the "a verifier has
+ * already confirmed this" world the rule blocks describe. Gate tests override with
+ * `verifiedConfirmation: undefined` to simulate a raw caller-asserted payload.
+ */
+const base = (over: Partial<ConfirmedOutcomeInput>): ConfirmedOutcomeInput => {
+  const settledBy = over.settledBy ?? 'holdout';
+  const realSettler = settledBy === 'holdout' || settledBy === 'known_answer' || settledBy === 'person' || settledBy === 'counterparty';
+  return {
+    actorAgentId: ACTOR,
+    settledBy,
+    result: 'right',
+    ...(realSettler ? { verifiedConfirmation: vc(settledBy as ConfirmedSettler) } : {}),
+    ...over,
+  };
+};
+
 const independentDeps = (): ConfirmedOutcomeDeps => ({
   resolveOwner: async (id) => ({ status: 'resolved', ownerKey: id === ACTOR ? 'owner-A' : 'owner-B' }),
   readModelFamily: async (id) => (id === ACTOR ? 'llama' : 'gemini'),
@@ -62,7 +81,6 @@ const independentDeps = (): ConfirmedOutcomeDeps => ({
 
 describe('loader invariants (rules 2 & 5 encoded as machine-checked structure)', () => {
   it('rejects a rubber-stamp lighter than ten maximally need-boosted rights', () => {
-    // 10 * gain(5) * needCap(2) = 100; a -60 penalty would be lighter and must be refused.
     const env = { ...PINNED, REPID_CONFIRMED_RUBBER_STAMP_PENALTY: '-60' } as NodeJS.ProcessEnv;
     expect(() => loadConfirmedParams(env)).toThrow(/ten confirmed rights/);
   });
@@ -80,9 +98,59 @@ describe('loader invariants (rules 2 & 5 encoded as machine-checked structure)',
   });
 });
 
+describe('CWE-345 SERVER-VERIFICATION GATE — a caller-asserted confirmation settles nothing', () => {
+  it.each(['holdout', 'known_answer', 'person'] as const)(
+    'a caller-asserted %s (no verifiedConfirmation) does NOT move the score',
+    async (settler) => {
+      const r = await resolveConfirmedOutcome(base({ settledBy: settler, result: 'right', verifiedConfirmation: undefined }));
+      expect(r.confirmed).toBe(false);
+      expect(r.scoreMoves).toBe(false);
+      expect(r.appliedDelta).toBe(0);
+      expect(r.detail.serverVerified).toBe(false);
+      expect(r.reason).toBe('confirmation_not_server_verified');
+    },
+  );
+
+  it('NON-VACUITY GUARD: a caller-asserted confirmed-RIGHT does not earn a gain', async () => {
+    // If the gate were removed (trusting the caller settledBy), this would be +5 and go red.
+    const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'right', verifiedConfirmation: undefined }));
+    expect(r.scoreMoves).toBe(false);
+    expect(r.appliedDelta).toBe(0);
+  });
+
+  it('a caller-asserted rubber-stamp cannot inflict the heavy penalty', async () => {
+    const r = await resolveConfirmedOutcome(base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: undefined }));
+    expect(r.scoreMoves).toBe(false);
+    expect(r.appliedDelta).toBe(0);
+  });
+
+  it('a caller-asserted unsupported-PASS cannot inflict the confident-wrong penalty', async () => {
+    const r = await resolveConfirmedOutcome(base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: undefined }));
+    expect(r.scoreMoves).toBe(false);
+    expect(r.appliedDelta).toBe(0);
+  });
+
+  it('a caller-asserted counterparty (even with independent deps) does not move the score', async () => {
+    const r = await resolveConfirmedOutcome(
+      base({ settledBy: 'counterparty', result: 'right', counterpartyAgentId: 'cp-1', verifiedConfirmation: undefined }),
+      independentDeps(),
+    );
+    expect(r.scoreMoves).toBe(false);
+    expect(r.reason).toBe('confirmation_not_server_verified');
+  });
+
+  it('a server source that disagrees with the caller settledBy fails closed (settler_mismatch)', async () => {
+    const r = await resolveConfirmedOutcome(
+      base({ settledBy: 'holdout', result: 'right', verifiedConfirmation: vc('person') }),
+    );
+    expect(r.confirmed).toBe(false);
+    expect(r.reason).toBe('settler_mismatch');
+  });
+});
+
 describe('RULE 1 — the official score moves ONLY on a confirmed outcome', () => {
   it.each(['holdout', 'known_answer', 'person'] as const)(
-    'a %s settler confirms → SETTLED, score moves',
+    'a server-verified %s settler confirms → SETTLED, score moves',
     async (settler) => {
       const r = await resolveConfirmedOutcome(base({ settledBy: settler, result: 'right' }));
       expect(r.confirmed).toBe(true);
@@ -90,11 +158,12 @@ describe('RULE 1 — the official score moves ONLY on a confirmed outcome', () =
       expect(r.settledBy).toBe(settler);
       expect(r.scoreMoves).toBe(true);
       expect(r.appliedDelta).toBe(5);
+      expect(r.detail.serverVerified).toBe(true);
     },
   );
 
   it('NON-VACUITY GUARD: a 2-1 vote is PROVISIONAL and does NOT move the score', async () => {
-    // If the code were mutated to let a vote settle, this goes red.
+    // Even if a verifiedConfirmation were present, a vote is never a server settler.
     const r = await resolveConfirmedOutcome(base({ settledBy: 'vote', result: 'right' }));
     expect(r.confirmed).toBe(false);
     expect(r.verdictLabel).toBe('PROVISIONAL');
@@ -104,7 +173,7 @@ describe('RULE 1 — the official score moves ONLY on a confirmed outcome', () =
   });
 
   it('a null settler does not confirm', async () => {
-    const r = await resolveConfirmedOutcome(base({ settledBy: null, result: 'right' }));
+    const r = await resolveConfirmedOutcome(base({ settledBy: null, result: 'right', verifiedConfirmation: undefined }));
     expect(r.confirmed).toBe(false);
     expect(r.scoreMoves).toBe(false);
   });
@@ -126,20 +195,20 @@ describe('RULE 2 — asymmetric gain/loss, confidence-weighted, rubber-stamp hea
     const hedged = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 0 }));
     const mid = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 0.5 }));
     const confident = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 1 }));
-    expect(confident.appliedDelta).toBe(-55); // -15 - round(1 * 40)
-    expect(mid.appliedDelta).toBe(-35); // -15 - round(0.5 * 40)
+    expect(confident.appliedDelta).toBe(-55);
+    expect(mid.appliedDelta).toBe(-35);
     expect(confident.appliedDelta).toBeLessThan(mid.appliedDelta);
     expect(mid.appliedDelta).toBeLessThan(hedged.appliedDelta);
   });
 
   it('a rubber-stamp of a known-wrong costs MORE than the last ten confirmed rights combined', async () => {
     const right = await resolveConfirmedOutcome(base({ result: 'right' }));
-    const rubber = await resolveConfirmedOutcome(base({ result: 'wrong', rubberStampKnownWrong: true }));
+    const rubber = await resolveConfirmedOutcome(
+      base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('known_answer') }),
+    );
     expect(rubber.appliedDelta).toBe(-120);
     expect(rubber.settledBy).toBe('known_answer');
-    // The core rule-2 claim, measured: heavier than ten confirmed rights.
     expect(Math.abs(rubber.appliedDelta)).toBeGreaterThan(Math.abs(right.appliedDelta) * 10);
-    // And heavier than the most confident ordinary wrong.
     const confidentWrong = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 1 }));
     expect(Math.abs(rubber.appliedDelta)).toBeGreaterThan(Math.abs(confidentWrong.appliedDelta));
   });
@@ -153,19 +222,20 @@ describe('RULE 3 — abstain is free; an unsupported PASS pays the confident-wro
     expect(r.reason).toBe('abstain_free');
   });
 
-  it('a PASS the receipt does not support is a confident wrong (full penalty), confirmed by the receipt', async () => {
-    const r = await resolveConfirmedOutcome(base({ result: 'right', passUnsupportedByReceipt: true }));
-    // Priced as a maximally-confident wrong: -15 - 40 = -55.
+  it('a server-verified unsupported PASS is a confident wrong (full penalty), confirmed by the receipt', async () => {
+    const r = await resolveConfirmedOutcome(
+      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout') }),
+    );
     expect(r.appliedDelta).toBe(-55);
     expect(r.confirmed).toBe(true);
-    expect(r.settledBy).toBe('holdout'); // the receipt is the held-out ground truth
+    expect(r.settledBy).toBe('holdout');
     expect(r.scoreMoves).toBe(true);
     expect(r.reason).toBe('pass_unsupported_by_receipt');
   });
 });
 
 describe('RULE 4 — counterparty independence / no self-deal (fail closed)', () => {
-  it('an independent counterparty (distinct owner AND family) confirms', async () => {
+  it('a server-verified independent counterparty (distinct owner AND family) confirms', async () => {
     const r = await resolveConfirmedOutcome(
       base({ settledBy: 'counterparty', result: 'right', counterpartyAgentId: 'cp-1' }),
       independentDeps(),
@@ -198,10 +268,9 @@ describe('RULE 4 — counterparty independence / no self-deal (fail closed)', ()
   });
 
   it('NON-VACUITY GUARD: a SAME-FAMILY counterparty does NOT confirm', async () => {
-    // If the code were mutated to skip the family check, this goes red.
     const sameFamily: ConfirmedOutcomeDeps = {
       resolveOwner: async (id) => ({ status: 'resolved', ownerKey: id === ACTOR ? 'owner-A' : 'owner-B' }),
-      readModelFamily: async () => 'llama', // both the same family
+      readModelFamily: async () => 'llama',
     };
     const r = await resolveConfirmedOutcome(
       base({ settledBy: 'counterparty', result: 'right', counterpartyAgentId: 'cp-1' }),
@@ -229,7 +298,7 @@ describe('RULE 4 — counterparty independence / no self-deal (fail closed)', ()
   it('FAIL CLOSED: model family unreadable (field absent) → not confirmed', async () => {
     const noFamily: ConfirmedOutcomeDeps = {
       resolveOwner: async (id) => ({ status: 'resolved', ownerKey: id === ACTOR ? 'owner-A' : 'owner-B' }),
-      readModelFamily: async () => null, // absent — the repid_agents reality today
+      readModelFamily: async () => null,
     };
     const r = await resolveConfirmedOutcome(
       base({ settledBy: 'counterparty', result: 'right', counterpartyAgentId: 'cp-1' }),
@@ -263,12 +332,8 @@ describe('RULE 4 — counterparty independence / no self-deal (fail closed)', ()
 });
 
 describe('RULE 5 — first miss in a NEW domain tightens the band, does not wipe', () => {
-  const newDomainDeps: ConfirmedOutcomeDeps = {
-    domainTrackRecord: async () => ({ checked: true, hasRecord: false }),
-  };
-  const establishedDeps: ConfirmedOutcomeDeps = {
-    domainTrackRecord: async () => ({ checked: true, hasRecord: true }),
-  };
+  const newDomainDeps: ConfirmedOutcomeDeps = { domainTrackRecord: async () => ({ checked: true, hasRecord: false }) };
+  const establishedDeps: ConfirmedOutcomeDeps = { domainTrackRecord: async () => ({ checked: true, hasRecord: true }) };
 
   it('a first confirmed miss in a NEW domain band-tightens (bounded), not a full wipe', async () => {
     const r = await resolveConfirmedOutcome(
@@ -276,7 +341,7 @@ describe('RULE 5 — first miss in a NEW domain tightens the band, does not wipe
       newDomainDeps,
     );
     expect(r.bandTightened).toBe(true);
-    expect(r.appliedDelta).toBe(-8); // the bounded band-tighten, NOT -55
+    expect(r.appliedDelta).toBe(-8);
     expect(Math.abs(r.appliedDelta)).toBeLessThan(55);
   });
 
@@ -302,10 +367,7 @@ describe('RULE 5 — first miss in a NEW domain tightens the band, does not wipe
   });
 
   it('restoration: a confirmed RIGHT in the tightened domain is a positive delta', async () => {
-    const r = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'right', domain: 'law' }),
-      newDomainDeps,
-    );
+    const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'right', domain: 'law' }), newDomainDeps);
     expect(r.appliedDelta).toBeGreaterThan(0);
   });
 
@@ -324,21 +386,21 @@ describe('RULE 6 — per-domain need multiplier raises gains, capped, never a lo
   it('unmet demand RAISES the gain for a confirmed right', async () => {
     const deps: ConfirmedOutcomeDeps = { domainNeedWeight: async () => 2 };
     const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'right', domain: 'law' }), deps);
-    expect(r.appliedDelta).toBe(10); // 5 * 2
+    expect(r.appliedDelta).toBe(10);
     expect(r.needMultiplierApplied).toBe(2);
   });
 
   it('as supply arrives the multiplier FALLS toward 1 (never shrinks a gain below base)', async () => {
     const deps: ConfirmedOutcomeDeps = { domainNeedWeight: async () => 0.5 };
     const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'right', domain: 'law' }), deps);
-    expect(r.appliedDelta).toBe(5); // clamped up to 1x — need never penalizes a gain
+    expect(r.appliedDelta).toBe(5);
     expect(r.needMultiplierApplied).toBe(1);
   });
 
   it('need CANNOT raise the ceiling: the multiplier is capped', async () => {
     const deps: ConfirmedOutcomeDeps = { domainNeedWeight: async () => 1000 };
     const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'right', domain: 'law' }), deps);
-    expect(r.appliedDelta).toBe(10); // 5 * cap(2), not 5 * 1000
+    expect(r.appliedDelta).toBe(10);
     expect(r.needMultiplierApplied).toBe(2);
   });
 
@@ -348,6 +410,6 @@ describe('RULE 6 — per-domain need multiplier raises gains, capped, never a lo
       base({ settledBy: 'holdout', result: 'wrong', confidence: 0, domain: 'law' }),
       deps,
     );
-    expect(r.appliedDelta).toBe(-15); // unchanged by need
+    expect(r.appliedDelta).toBe(-15);
   });
 });

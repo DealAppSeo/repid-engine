@@ -28,6 +28,7 @@ import {
   type ConfirmedOutcomeInput,
   type ConfirmedOutcomeDeps,
   type ConfirmedOutcomeResult,
+  type VerifiedConfirmation,
 } from '../scoring/confirmed-outcome';
 import { resolveOwner as resolveAgentOwner } from '../services/agent-owner-resolver';
 
@@ -107,8 +108,13 @@ export interface RepIdUpdateInput {
    * counterparty); a 2-1 vote is PROVISIONAL and does not move it. `actorAgentId` is
    * filled from `agentId` by the pipeline, so callers omit it. With the flag OFF this
    * payload is ignored and scoring is exactly as today.
+   *
+   * CWE-345: a caller can NEVER supply a `verifiedConfirmation` — it is omitted from this
+   * type, and the pipeline builds it only from a server-side verifier. So this payload is
+   * CALLER-ASSERTED and, on its own, moves NOTHING: it is recorded for audit and held inert
+   * until a server-derived confirmation backs it. No such verifier is wired yet.
    */
-  confirmedOutcome?: Omit<ConfirmedOutcomeInput, 'actorAgentId'>;
+  confirmedOutcome?: Omit<ConfirmedOutcomeInput, 'actorAgentId' | 'verifiedConfirmation'>;
   /** Test seam. Production builds the deps from the db-backed owner resolver + domain readers. */
   confirmedOutcomeDeps?: ConfirmedOutcomeDeps;
 }
@@ -452,15 +458,24 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   let confirmedOutcomeResult: ConfirmedOutcomeResult | null = null;
   let isUnconfirmedHold = false;
   if (confirmedOutcomeScoringEnabled() && input.confirmedOutcome) {
+    // CWE-345 — the confirmedOutcome payload is CALLER-ASSERTED. It must never move the
+    // official score on its own. A confirmation may settle ONLY from a SERVER-DERIVED
+    // verified source (a kernel receipt / signed attestation / known-answer record). That
+    // verifier is NOT wired yet, so `resolveServerConfirmation` returns undefined, the
+    // resolver fails closed, and every caller-asserted outcome is RECORDED (for audit)
+    // but held INERT. The explicit `serverVerified && scoreMoves` guard below is a second,
+    // independent barrier: even a future resolver regression cannot move the score from a
+    // caller payload unless a server verification is present.
+    const serverVerified: VerifiedConfirmation | undefined = resolveServerConfirmation();
     confirmedOutcomeResult = await resolveConfirmedOutcome(
-      { ...input.confirmedOutcome, actorAgentId: input.agentId },
+      { ...input.confirmedOutcome, actorAgentId: input.agentId, ...(serverVerified ? { verifiedConfirmation: serverVerified } : {}) },
       input.confirmedOutcomeDeps ?? confirmedOutcomeDepsFor(agent),
     );
-    if (confirmedOutcomeResult.scoreMoves) {
+    if (serverVerified && confirmedOutcomeResult.scoreMoves) {
       rawDelta = confirmedOutcomeResult.appliedDelta;
     } else {
       rawDelta = 0;
-      isUnconfirmedHold = true; // PROVISIONAL / abstain / unconfirmed → no move
+      isUnconfirmedHold = true; // caller-asserted / PROVISIONAL / abstain / unconfirmed → no move
     }
   } else if (challengeTypes.has(input.eventType)) {
     const outcomeMap: Record<string, any> = {
@@ -830,6 +845,23 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *  - domainNeedWeight  → getEcosystemNeedWeight(domain) — the computed-but-never-applied
  *                        ecosystem weight, now applied ONLY here, per-domain, gains-only.
  */
+/**
+ * The server-side confirmation verifier seam (CWE-345). Returns a VerifiedConfirmation
+ * ONLY when the server has independently established the confirmation from a verified
+ * source (a kernel receipt, a signed attestation, a known-answer record). It deliberately
+ * reads NOTHING caller-controllable — a confirmation a caller could influence is not a
+ * confirmation.
+ *
+ * NOT WIRED YET. There is no such verifier today, so this returns undefined and every
+ * caller-asserted confirmedOutcome is held inert. Arming the feature requires BOTH this
+ * verifier (so a confirmation is server-derived) AND the repid_agents.model_family column
+ * (so the counterparty settler can establish independence). Until then, flipping
+ * CONFIRMED_OUTCOME_SCORING_ENABLED moves no score.
+ */
+function resolveServerConfirmation(): VerifiedConfirmation | undefined {
+  return undefined;
+}
+
 function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {
   return {
     resolveOwner: async (agentId: string) => {

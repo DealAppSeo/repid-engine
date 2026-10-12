@@ -1,20 +1,24 @@
 /**
- * confirmed-outcome-pipeline.test.ts — the flag wiring inside the REAL updateRepId().
+ * confirmed-outcome-pipeline.test.ts — the flag wiring inside the REAL updateRepId(),
+ * after the CWE-345 fail-closed fix.
  *
- * Proves the three things the lane must guarantee:
+ * Proves:
  *   (1) OFF == TODAY. With CONFIRMED_OUTCOME_SCORING_ENABLED unset, an event that
- *       carries a confirmedOutcome payload scores EXACTLY as the same event without it
- *       — the payload is ignored and nothing new is recorded.
- *   (2) ON GOVERNS. With the flag ON, the confirmed-outcome delta moves current_repid.
- *   (3) UNCONFIRMED IS INERT. A 2-1 vote / abstain / fail-closed counterparty leaves
- *       current_repid AND activity_30d untouched and runs NO operational side-effects,
- *       exactly like a shadow-deception hold.
+ *       carries a confirmedOutcome payload scores EXACTLY as the same event without it.
+ *   (2) CALLER-ASSERTED NEVER MOVES (CWE-345). With the flag ON, a confirmedOutcome from
+ *       the request body moves NOTHING — for every settler kind — because the pipeline
+ *       supplies no server-derived verifiedConfirmation (none is wired yet). The outcome
+ *       is RECORDED for audit and held INERT (no delta, no activity bump, no side-effects).
+ *   (3) The inert-hold is SPECIFIC: a normal event still scores with the flag ON.
  *
- * Mirrors tests/trust-keystone-deception.test.ts's mock topology so only the
- * confirmed-outcome branch varies.
+ * The positive policy (a server-verified confirmation DOES move the score by the rule
+ * deltas) is proven at the unit level in confirmed-outcome.test.ts; it cannot be driven
+ * from this pipeline because the server verifier is deliberately not reachable from a
+ * caller. Non-vacuity for the boundary is a mutation check (see the report).
+ *
+ * Mirrors tests/trust-keystone-deception.test.ts's mock topology.
  */
 
-// Neutralize the other scoring layers.
 jest.mock('../src/layers/ecosystem-need', () => ({
   getEcosystemNeedWeight: jest.fn().mockResolvedValue(1.0),
   updateSupplyRate: jest.fn().mockResolvedValue(undefined),
@@ -22,8 +26,8 @@ jest.mock('../src/layers/ecosystem-need', () => ({
 jest.mock('../src/layers/challenge-scoring', () => ({ scoreChallengeOutcome: jest.fn() }));
 jest.mock('../src/layers/prediction-scoring', () => ({ scorePrediction: jest.fn() }));
 jest.mock('../src/layers/decay', () => ({
-  applyDecay: (repid: number) => repid, // no decay
-  computeRedemptionModifier: jest.fn().mockResolvedValue(1.0), // no redemption damping
+  applyDecay: (repid: number) => repid,
+  computeRedemptionModifier: jest.fn().mockResolvedValue(1.0),
 }));
 jest.mock('../src/layers/constitutional-audit', () => ({
   auditConstitutionalCompliance: jest.fn().mockResolvedValue({
@@ -69,7 +73,6 @@ const PINNED: Record<string, string> = {
 };
 const SAVED: Record<string, string | undefined> = {};
 const SAVED_FLAG = process.env.CONFIRMED_OUTCOME_SCORING_ENABLED;
-const SAVED_SR = process.env.SELF_REPORT_EVIDENCE_MODE;
 
 beforeEach(() => {
   for (const k of Object.keys(PINNED)) { SAVED[k] = process.env[k]; process.env[k] = PINNED[k]; }
@@ -83,33 +86,27 @@ afterEach(() => {
   updated.length = 0;
   for (const k of Object.keys(PINNED)) { if (SAVED[k] === undefined) delete process.env[k]; else process.env[k] = SAVED[k]; }
   if (SAVED_FLAG === undefined) delete process.env.CONFIRMED_OUTCOME_SCORING_ENABLED; else process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = SAVED_FLAG;
-  if (SAVED_SR === undefined) delete process.env.SELF_REPORT_EVIDENCE_MODE; else process.env.SELF_REPORT_EVIDENCE_MODE = SAVED_SR;
   __resetConfirmedParamsCache();
 });
 
-// A confirmed-wrong payload that WOULD score -55 if the flag were ON.
+// A confirmed-wrong payload that WOULD score -55 if a SERVER verifier confirmed it.
 const confirmedWrongPayload = { settledBy: 'holdout' as const, result: 'wrong' as const, confidence: 1 };
 
 describe('(1) OFF == TODAY', () => {
   it('flag OFF: an UNSUPPORTED_CLAIM scores -8 whether or not it carries a confirmedOutcome payload', async () => {
-    delete process.env.CONFIRMED_OUTCOME_SCORING_ENABLED; // OFF
-
+    delete process.env.CONFIRMED_OUTCOME_SCORING_ENABLED;
     const withoutPayload = await updateRepId({ agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM' });
     expect(withoutPayload.delta).toBe(-8);
     expect(withoutPayload.repIdAfter).toBe(992);
     expect(withoutPayload.confirmedOutcome ?? null).toBeNull();
 
     const withPayload = await updateRepId({
-      agentId: 'agent-1',
-      eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: confirmedWrongPayload, // ignored while OFF
+      agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM', confirmedOutcome: confirmedWrongPayload,
     });
-    // Byte-for-byte the same movement: the payload changed nothing.
     expect(withPayload.delta).toBe(withoutPayload.delta);
     expect(withPayload.repIdAfter).toBe(withoutPayload.repIdAfter);
     expect(withPayload.confirmedOutcome ?? null).toBeNull();
 
-    // And the audit row records no confirmed_outcome block while OFF.
     const row = inserted.find((i) => i.metadata?.confirmed_outcome !== undefined);
     expect(row?.metadata.confirmed_outcome ?? null).toBeNull();
   });
@@ -122,54 +119,19 @@ describe('(1) OFF == TODAY', () => {
   });
 });
 
-describe('(2) ON governs the official score', () => {
+describe('(2) CWE-345 — a CALLER-ASSERTED confirmedOutcome NEVER moves the score (flag ON)', () => {
   beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
 
-  it('a confirmed RIGHT moves the score up by the small gain', async () => {
-    const r = await updateRepId({
-      agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: { settledBy: 'known_answer', result: 'right' },
-    });
-    expect(r.delta).toBe(5);
-    expect(r.repIdAfter).toBe(1005);
-    expect(r.confirmedOutcome?.verdictLabel).toBe('SETTLED');
-    expect(updated.length).toBe(1); // the score was written
-    expect(updateSupplyRateMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('a confirmed CONFIDENT WRONG moves the score down by the larger loss', async () => {
-    const r = await updateRepId({
-      agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: confirmedWrongPayload,
-    });
-    expect(r.delta).toBe(-55);
-    expect(r.repIdAfter).toBe(945);
-    const row = inserted.find((i) => i.metadata?.confirmed_outcome);
-    expect(row.metadata.confirmed_outcome.score_moves).toBe(true);
-    expect(row.metadata.confirmed_outcome.settled_by).toBe('holdout');
-  });
-
-  it('need CANNOT raise the ceiling: a confirmed right near the cap still clamps to 10000', async () => {
-    agentState.current_repid = 9999;
-    const r = await updateRepId({
-      agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: { settledBy: 'holdout', result: 'right', domain: 'law' },
-      confirmedOutcomeDeps: { domainNeedWeight: async () => 1000 }, // enormous need
-    });
-    // The need multiplier is capped and the score is clamped — it never exceeds 10000.
-    expect(r.repIdAfter).toBe(10000);
-    expect(r.confirmedOutcome?.needMultiplierApplied).toBe(2);
-  });
-});
-
-describe('(3) UNCONFIRMED is INERT (no move, no side-effects)', () => {
-  beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
-
-  it('a 2-1 vote is PROVISIONAL: current_repid AND activity_30d untouched, no supply/badge writes', async () => {
-    const r = await updateRepId({
-      agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: { settledBy: 'vote', result: 'wrong', confidence: 1 },
-    });
+  it.each([
+    ['holdout right', { settledBy: 'holdout' as const, result: 'right' as const }],
+    ['known_answer right', { settledBy: 'known_answer' as const, result: 'right' as const }],
+    ['person right', { settledBy: 'person' as const, result: 'right' as const }],
+    ['vote wrong', { settledBy: 'vote' as const, result: 'wrong' as const, confidence: 1 }],
+    ['rubber-stamp known-wrong', { settledBy: 'known_answer' as const, result: 'wrong' as const, rubberStampKnownWrong: true }],
+    ['unsupported pass', { settledBy: 'holdout' as const, result: 'right' as const, passUnsupportedByReceipt: true }],
+    ['abstain', { settledBy: 'holdout' as const, result: 'abstain' as const }],
+  ])('%s → inert: no delta, no write, no side-effects', async (_name, payload) => {
+    const r = await updateRepId({ agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM', confirmedOutcome: payload });
     expect(r.delta).toBe(0);
     expect(r.repIdAfter).toBe(1000); // unchanged
     expect(updated.length).toBe(0); // no repid_agents write → activity_30d untouched
@@ -179,38 +141,11 @@ describe('(3) UNCONFIRMED is INERT (no move, no side-effects)', () => {
     expect(row.delta).toBe(0);
     expect(row.repid_before).toBe(1000);
     expect(row.repid_after).toBe(1000);
-    expect(row.metadata.confirmed_outcome.verdict_label).toBe('PROVISIONAL');
+    expect(row.metadata.confirmed_outcome.confirmed).toBe(false);
     expect(row.metadata.confirmed_outcome.score_moves).toBe(false);
   });
 
-  it('abstain is free (inert)', async () => {
-    const r = await updateRepId({
-      agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: { settledBy: 'holdout', result: 'abstain' },
-    });
-    expect(r.delta).toBe(0);
-    expect(r.repIdAfter).toBe(1000);
-    expect(updated.length).toBe(0);
-  });
-
-  it('a counterparty that cannot be shown independent fails closed to no move', async () => {
-    const r = await updateRepId({
-      agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: { settledBy: 'counterparty', result: 'wrong', confidence: 1, counterpartyAgentId: 'cp-1' },
-      // model family unreadable → independence cannot be established → fail closed
-      confirmedOutcomeDeps: {
-        resolveOwner: async (id: string) => ({ status: 'resolved' as const, ownerKey: id === 'agent-1' ? 'A' : 'B' }),
-        readModelFamily: async () => null,
-      },
-    });
-    expect(r.delta).toBe(0);
-    expect(r.repIdAfter).toBe(1000);
-    expect(updated.length).toBe(0);
-    const row = inserted.find((i) => i.metadata?.confirmed_outcome);
-    expect(row.metadata.confirmed_outcome.confirmed).toBe(false);
-  });
-
-  it('CONTROL: an independent counterparty DOES move the score (proving the inertness is specific)', async () => {
+  it('an INDEPENDENT counterparty from the request body is STILL inert (no server verification)', async () => {
     const r = await updateRepId({
       agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'counterparty', result: 'wrong', confidence: 1, counterpartyAgentId: 'cp-1' },
@@ -219,8 +154,24 @@ describe('(3) UNCONFIRMED is INERT (no move, no side-effects)', () => {
         readModelFamily: async (id: string) => (id === 'agent-1' ? 'llama' : 'gemini'),
       },
     });
-    expect(r.delta).toBe(-55);
-    expect(r.repIdAfter).toBe(945);
+    expect(r.delta).toBe(0);
+    expect(r.repIdAfter).toBe(1000);
+    expect(updated.length).toBe(0);
+    const row = inserted.find((i) => i.metadata?.confirmed_outcome);
+    expect(row.metadata.confirmed_outcome.reason).toBe('confirmation_not_server_verified');
+    expect(row.metadata.confirmed_outcome.detail.serverVerified).toBe(false);
+  });
+});
+
+describe('(3) the inert-hold is SPECIFIC, not a global freeze', () => {
+  beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
+
+  it('flag ON but NO confirmedOutcome payload → a normal event still scores (-8) and writes', async () => {
+    const r = await updateRepId({ agentId: 'agent-1', eventType: 'UNSUPPORTED_CLAIM' });
+    expect(r.delta).toBe(-8);
+    expect(r.repIdAfter).toBe(992);
     expect(updated.length).toBe(1);
+    expect(updateSupplyRateMock).toHaveBeenCalledTimes(1);
+    expect(r.confirmedOutcome ?? null).toBeNull();
   });
 });
