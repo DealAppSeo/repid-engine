@@ -110,6 +110,17 @@ export interface OnChainVerification {
   drift: boolean;
   reason: string | null;
   check: OnChainCheck;
+  /**
+   * The block `ownerOf` was read as-of. Non-null only when the chain was reached (OWNER_FOUND /
+   * REVERTED); null when there was no token to look up (NO_TOKEN) or the chain was never reached
+   * (NOT_CHECKED). It is captured from the same read, so a caller never has to guess which block
+   * an owner belongs to. Added so the passport can timestamp a verified field honestly.
+   */
+  block: number | null;
+  /** The chain the read was bound to (this minter's configured chainId). */
+  chainId: number;
+  /** The registry contract the read was bound to (this minter's configured contractAddress). */
+  registry: string;
 }
 
 /**
@@ -375,6 +386,8 @@ export class Erc8004Minter {
    */
   async verifyOnChain(agentId: string): Promise<OnChainVerification> {
     const status = await this.getMintStatus(agentId);
+    const chainId = this.config.chainId;
+    const registry = this.config.contractAddress;
     if (!status.tokenId) {
       return {
         dbTokenId: null,
@@ -383,10 +396,19 @@ export class Erc8004Minter {
         drift: false,
         reason: 'not minted',
         check: 'NO_TOKEN',
+        block: null,
+        chainId,
+        registry,
       };
     }
+    // Capture the block first and pin ownerOf to it, so `owner` and `block` are one consistent
+    // read rather than two that can straddle a new block. Both are free eth_calls (no gas). A
+    // getBlockNumber failure is a transport failure, so it falls into the NOT_CHECKED branch
+    // below, never a false REVERTED.
+    let block: number | null = null;
     try {
-      const owner: string = await (this.contract as any).ownerOf(status.tokenId);
+      block = await this.provider.getBlockNumber();
+      const owner: string = await (this.contract as any).ownerOf(status.tokenId, { blockTag: block });
       const driftFromConservator =
         status.conservatorAddress !== null &&
         owner.toLowerCase() !== status.conservatorAddress.toLowerCase();
@@ -399,6 +421,9 @@ export class Erc8004Minter {
           ? `on-chain owner ${owner} != db conservator ${status.conservatorAddress}`
           : null,
         check: 'OWNER_FOUND',
+        block,
+        chainId,
+        registry,
       };
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -413,6 +438,9 @@ export class Erc8004Minter {
           drift: true,
           reason: `ownerOf reverted: ${msg}`,
           check: 'REVERTED',
+          block,
+          chainId,
+          registry,
         };
       }
       // We never reached the chain. `drift: false` is deliberate and is the fix: asserting
@@ -426,6 +454,9 @@ export class Erc8004Minter {
         drift: false,
         reason: `chain not reached (${code ?? 'no code'}): ${msg}`,
         check: 'NOT_CHECKED',
+        block: null,
+        chainId,
+        registry,
       };
     }
   }
