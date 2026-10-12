@@ -48,6 +48,14 @@
 import { db } from '../db';
 import { observeOwnerCeiling } from './owner-ceiling-shadow';
 import { observeStakeAuthority } from './stake-authority-shadow';
+import {
+  durableCapsEnabled,
+  resolveEffectiveCap,
+  supabaseCapDataSource,
+  applyDurableCapToDecision,
+  canonicalTierForRepid,
+  domainForTransactionType,
+} from './durable-caps';
 
 export type Tier = 'PROBATIONARY' | 'EARNING' | 'ESTABLISHED' | 'AUTONOMOUS' | 'VETERAN';
 
@@ -199,6 +207,33 @@ export async function checkTransactionAuthority(
   const agent_exists = ctx.tier !== null;
   const decision = decideAuthority(input.amount, ctx);
   if (!agent_exists) { decision.authorized = false; decision.denial_reason = 'agent_not_found'; }
+
+  // DURABLE PER-DOMAIN SPEND CAP (Lane 1). Flag-gated, default OFF: with DURABLE_CAPS_ENABLED unset
+  // this block does nothing and `decision` is returned exactly as `decideAuthority` produced it.
+  // When ON, it narrows `decision` by the effective cap = min(owner signed ceiling, posted stake,
+  // RepID tier IN THIS DOMAIN, hard ethics floor). It can only TIGHTEN — a refusal or an amount over
+  // the cap flips authorized → false, never the reverse. A missing caps row / table / any unreadable
+  // input fails CLOSED (refuse), so this is safe to ship BEFORE the durable_spend_caps migration is
+  // applied. The RepID is looked up by (agent, domain), so a coding score cannot authorize a trade.
+  // `ctx.stake_available` is the same stake this gate already computed — no second stake read, and no
+  // bind/stake/limit route is touched. Runs before the audit insert so the logged decision is final.
+  if (durableCapsEnabled()) {
+    try {
+      const cap = await resolveEffectiveCap(
+        { agentId: input.agent, domain: domainForTransactionType(input.transaction_type) },
+        supabaseCapDataSource(db),
+        {
+          tierLimitUsdc: (repid) => limitForTier(canonicalTierForRepid(repid)).per_tx,
+          stakeUsdc: ctx.stake_available,
+        },
+      );
+      applyDurableCapToDecision(decision, input.amount, cap);
+    } catch (err) {
+      // Enabled and the durable-cap path itself threw → fail closed: deny if it was authorized.
+      if (decision.authorized) { decision.authorized = false; decision.denial_reason = 'durable_cap_error'; }
+      console.error('[durable-caps] resolve failed, failing closed:', err instanceof Error ? err.message : String(err));
+    }
+  }
 
   // Audit the gate decision. A logging failure must never fail the authorization response.
   void db
