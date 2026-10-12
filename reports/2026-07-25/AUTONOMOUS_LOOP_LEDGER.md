@@ -9863,3 +9863,48 @@ PRs merged during this run's window (since 2026-10-12T12:50:59Z):
 - (none detected)
 
 The ledger is step 1 as of 2026-08-29, so a run reaching THIS fallback died before it could verify the prior beat and open a one-file docs PR — much earlier than the turn-cap deaths this fallback was built for. Check the run's own log for the real cause before assuming budget. This is a bare factual stub, not analysis — the next beat should read this run's own log (`gh run view 38251638968 --log`) if the reason matters.
+
+---
+
+## Beat (2026-10-12, second run) — kernel sprint VERIFIED shipped; #1295 re-triggered; backlog exhausted
+
+**Prior beat verified [V]:**
+- "Beat (2026-10-12)" ledger entry (PR #1326, MERGED `99147c82`) [V `git log --oneline -10`] ✓
+- Auto-logged stub for run 38251638968 (result: `failure`): legitimate fallback, no PRs in that window [V `git log`] ✓
+- **#1322** (`fix(stranger-path): CORS + mint status + passport guard`): **MERGED** 2026-10-12T08:48Z [V `gh pr view 1322 --json state,mergedAt`] ✓
+- **#1323** (`test(kernel): red-team suite, 142 mutation-verified tests`): **MERGED** 2026-10-12T08:48Z [V `gh pr view 1323`] ✓
+- **#1324** (`fix(classify): exact rational arithmetic`): **MERGED** 2026-10-12T08:49Z [V `gh pr view 1324`] ✓
+- **#1325** (`fix(kernel): band restore requires settlement, RT-8`): **MERGED** 2026-10-12T14:22Z — prior beat surfaced to Sean; Sean merged [V `gh pr view 1325`] ✓
+- **#1328** (`fix(classify): name double fallback 'arithmetic-approx', E-2`): **MERGED** 2026-10-12T15:37Z — appeared after prior beat, all CI green [V `gh pr view 1328`] ✓
+- **#1317** (`feat(kernel): default-deny policy kernel`): **MERGED** 2026-10-12T05:02Z — was DRAFT/CI-GREEN per KERNEL-SPRINT.md; Sean merged [V `gh pr view 1317 --json mergedAt`] ✓ — KERNEL-SPRINT.md status updated this beat.
+- **#1295** (`build(deps): bump actions/checkout 4→7`): **OPEN, CONFLICTING** — fourth `@dependabot rebase` posted this beat [V comment URL `https://github.com/DealAppSeo/repid-engine/pull/1295#issuecomment-6128363740`] ✓
+- **Prior beat penalty verdict: NONE.** All 6 armed PRs (except #1295) merged as claimed.
+
+**Kernel sprint status as of this beat [V all via `gh pr view`]:**
+- CC1 kernel (#1317): MERGED ✓ — kernel on main; `DEFAULT_ENV=simulated`, dormant until Sean arms real spend.
+- XC1 red-team (#1323): MERGED ✓ — 142 mutation-verified tests.
+- RT-8 fix (#1325): MERGED ✓ — band restore now requires SETTLED verdict.
+- E-2 classify label (#1328): MERGED ✓ — double fallback correctly labelled 'arithmetic-approx'.
+- MVP acceptance criterion: refusal demo 133 tests + red-team 142 tests on main; real receipt on the live engine path is the V1 gate (simulated env today).
+
+**Action this beat:**
+- `@dependabot rebase` posted on #1295 (fourth trigger; branch CONFLICTING after subsequent merges) [V comment URL above].
+- KERNEL-SPRINT.md updated to reflect all three merged PRs (#1317, #1323, #1325) and the RT-8/E-2 corrections [committed with this entry].
+
+**No new code shipped; no PR opened** — per NO-REPORT-ONLY-PRs rule. Ledger committed directly to main.
+
+**Backlog assessment:** unchanged — no non-Sean-gated buildable items.
+- All shadow callers wired. Sprint-3 stubs: do-not-touch. Items 7/8/9/10/11: Sean GO.
+- Issue #635 (PCP validator quorum independence): real defect, NOT safe-class — behavioural change gating settlement of real funds; design decisions on quorum semantics at width < 3 still unresolved; not built autonomously.
+- V1 kernel items (commit-then-reveal, 24h widen wait, tool pin by hash, canaries): "Spec and tests first" per KERNEL-SPRINT.md; no spec written; not attempted this beat.
+
+**Open for Sean (rule-4 only):**
+1. **#1295** (`actions/checkout` 4→7): `@dependabot rebase` posted (fourth). If Dependabot still does not respond, a manual comment from Sean's account (`@dependabot rebase`) will work.
+2. **Major-bump Dependabot PRs** (#1291–#1294: typescript 6→7, @types/bcryptjs 2→3, dotenv 17→18, ioredis 5→6) — unchanged, await Sean review.
+3. **V1 kernel items**: kernel is on main; V1 work (commit-then-reveal, 24h widen wait, tool pin by hash, canaries wired) is unblocked but needs Sean's GO on design — "spec and tests first."
+4. **Issue #635** (PCP validator quorum): three independent provider families available [MEASURED in issue comment]; design decision on quorum semantics at width < 3 needed before building. Still the owner's call.
+5. Items 7/8/9/10/11, F-18, Practice lane P2, XC DECISIONs, Patent #1 filing — unchanged.
+
+**Mistakes / corrections:** None. KERNEL-SPRINT.md was stale (said #1317 DRAFT; it was MERGED at 05:02Z). Corrected this beat.
+
+**Next beat:** (1) Verify #1295 rebased and auto-merged. (2) If V1 kernel spec/design arrives from Sean, advance that. (3) Backlog remains exhausted for non-Sean-gated items beyond dependency maintenance.
