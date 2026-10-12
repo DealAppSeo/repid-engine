@@ -70,7 +70,11 @@
  *
  * WHAT IT DECIDES, IN ORDER (B9 decided by Sean 2026-10-04; built in B15):
  *  1. Arithmetic. The whole text is a single equation, `<expr> = <number>`, evaluated
- *     by the same no-eval parser the execution floor uses. True is pass, false is veto.
+ *     by the no-eval parser the execution floor uses (src/hal/safe-arithmetic.ts), EXACTLY: both
+ *     sides are BigInt rationals, so an integer equation is true or false at any size and
+ *     `1000000000 + 1 = 1000000000` is a veto. (Until 2026-10-12 both sides were doubles compared
+ *     within 1e-9 relative, which passed any false equation past ~10^9.) True is pass, false is
+ *     veto. Only what exact arithmetic cannot hold (a fractional power) falls back to doubles.
  *     No network.
  *  2. Two votes (src/classify/free-votes.ts). Prose up to CLASSIFY_MAX_PROSE_CHARS goes to two
  *     models of different families in parallel. Both TRUE: pass. Both FALSE: veto. A disagreement
@@ -106,7 +110,7 @@ import { Router, json, type NextFunction, type Request, type Response } from 'ex
 import cors from 'cors';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
-import { safeEvalArithmetic } from '../hal/safe-arithmetic';
+import { safeEvalArithmetic, safeEvalExact, type ExactRational } from '../hal/safe-arithmetic';
 import {
   activeVoters,
   askQuestion,
@@ -152,11 +156,43 @@ export function classifyLocal(text: string): ClassifyLabel {
   if (!lhs || !RHS_NUMBER.test(rhs)) return NOT_CHECKED;
   // An expression with no operator is a restatement ("4 = 4"), not a claim worth a pass.
   if (!/[-+*/^%×÷]/.test(lhs.replace(/^-/, ''))) return NOT_CHECKED;
+  // EXACT FIRST. This used to evaluate both sides as doubles and call them equal within 1e-9
+  // RELATIVE, which grows with the numbers: from ~10^9 up the allowance is >= 1, so
+  // `1000000000 + 1 = 1000000000` read `pass` (XC1 red team), and past 2^53 the two sides are the
+  // same double however small the tolerance. A rational over BigInt has neither problem.
+  const exactLeft = safeEvalExact(lhs);
+  const exactRight = safeEvalExact(rhs);
+  if (exactLeft.ok && exactRight.ok && exactLeft.value && exactRight.value) {
+    return decideExact(exactLeft.value, exactRight.value);
+  }
+  // What exact arithmetic cannot say (a fractional power, a result too large to hold) keeps the
+  // double evaluator and its tolerance, exactly as before; a division by zero fails in both.
   const left = safeEvalArithmetic(lhs);
   const right = safeEvalArithmetic(rhs);
   if (!left.ok || !right.ok || left.value === undefined || right.value === undefined) return NOT_CHECKED;
   const scale = Math.max(1, Math.abs(left.value), Math.abs(right.value));
   return Math.abs(left.value - right.value) <= 1e-9 * scale ? 'pass' : 'veto';
+}
+
+/**
+ * Pass or veto for two exactly-known values.
+ *
+ *   equal                         pass. No tolerance, so `0.1 + 0.2 = 0.3` is simply true.
+ *   both integers, not equal      veto. An integer equation is true or false; there is no "close".
+ *   a decimal or quotient involved, not equal
+ *                                 pass only within 1e-9 ABSOLUTE. That keeps the one old allowance
+ *                                 that was a real approximation claim (a repeating decimal written
+ *                                 out: `1 / 3 = 0.3333333333`) and drops the part that was the hole:
+ *                                 the old tolerance was 1e-9 times the magnitude, which at 10^9 is 1.
+ *                                 `22 / 7 = 3.14` and `1 / 3 = 0.333` are vetoes, as they always were.
+ */
+function decideExact(l: ExactRational, r: ExactRational): ClassifyLabel {
+  const diff = l.num * r.den - r.num * l.den; // (l - r) * l.den * r.den, denominators positive
+  if (diff === 0n) return 'pass';
+  if (l.den === 1n && r.den === 1n) return 'veto';
+  const abs = diff < 0n ? -diff : diff;
+  // |l - r| <= 1/10^9  <=>  |diff| * 10^9 <= l.den * r.den
+  return abs * 1_000_000_000n <= l.den * r.den ? 'pass' : 'veto';
 }
 
 /** Which path produced the label. The contract at the top of this file defines each value. */
