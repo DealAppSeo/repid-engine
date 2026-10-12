@@ -758,7 +758,7 @@ describe('the route says which path answered: by and voters', () => {
   const NO_BOUNDARY = { ONLY_ATTESTATIONS_LEAVE: undefined, CLASSIFY_FREE_VOTES: undefined };
 
   it('every by value is covered by a test below (the list is the type, not a guess)', () => {
-    expect([...CLASSIFY_PATHS].sort()).toEqual(['arithmetic', 'deadline', 'skipped', 'votes']);
+    expect([...CLASSIFY_PATHS].sort()).toEqual(['arithmetic', 'arithmetic-approx', 'deadline', 'skipped', 'votes']);
   });
 
   it("by 'arithmetic': no model asked, no voters key, no request", async () => {
@@ -772,6 +772,27 @@ describe('the route says which path answered: by and voters', () => {
         }
         expect(await classifyTextWithPath('12 * 12 = 144', 2500, ENV)).toEqual({ label: 'pass', by: 'arithmetic' });
         expect(rec.calls).toHaveLength(0);
+      } finally {
+        rec.restore();
+      }
+    });
+  });
+
+  it("by 'arithmetic-approx': the double fallback (fractional power) is NOT reported as exact (E-2)", async () => {
+    // A fractional power is refused by the exact evaluator, so #1324's double fallback decides it.
+    // It is still local (no model, no request), but APPROXIMATE: by must be 'arithmetic-approx',
+    // never 'arithmetic', so a door never reports a fallback result as an exact calculation.
+    await withProcessEnv({ ...NO_BOUNDARY, GROQ_API_KEY: 'test-key-not-real' }, async () => {
+      const rec = recordAllFetches(() => ({ content: 'FALSE' }));
+      try {
+        for (const [text, label] of [['2 ^ 0.5 = 1.4142135624', 'pass'], ['2 ^ 0.5 = 1.5', 'veto']]) {
+          const res = await request(classifyApp()).post('/api/v1/classify').send({ text });
+          expect(res.body).toMatchObject({ label, by: 'arithmetic-approx' });
+          expect(res.body.by).not.toBe('arithmetic');
+          expect(res.body).not.toHaveProperty('voters');
+        }
+        expect(await classifyTextWithPath('4 ^ 0.5 = 2', 2500, ENV)).toEqual({ label: 'pass', by: 'arithmetic-approx' });
+        expect(rec.calls).toHaveLength(0); // still no model asked
       } finally {
         rec.restore();
       }
