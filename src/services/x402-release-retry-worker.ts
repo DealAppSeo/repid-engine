@@ -48,6 +48,7 @@ import { shouldParkForHalt } from './emergency-halt';
 import { releaseHeldPayment, SETTLEMENT_STATUS } from './x402-deferred-settlement';
 import { finalizeSettledContract } from './contract-settlement-finalize';
 import { x402Facilitator } from './x402-facilitator';
+import { isPayableAddress } from './payee-guard';
 import { sendTelegramMessage } from '../routes/telegram';
 
 export type RetryMode = 'off' | 'shadow' | 'enforce';
@@ -265,16 +266,28 @@ async function findStranded(): Promise<StrandedContract[]> {
   return out;
 }
 
-async function releaseFor(s: StrandedContract) {
+export async function releaseFor(s: StrandedContract) {
   const { data: provider } = await db
     .from('repid_agents')
     .select('wallet_address')
     .eq('id', s.providerAgentId)
     .maybeSingle();
 
+  // Fail closed: a stranded contract whose provider has no payout wallet must
+  // not be released to the zero address. Return a non-paid status so the sweep
+  // records the attempt and moves on — never burn the payment, and never abort
+  // the whole sweep for one bad row.
+  const payTo = (provider as any)?.wallet_address;
+  if (!isPayableAddress(payTo)) {
+    return {
+      status: 'PAYEE_UNSET',
+      reason: `provider ${s.providerAgentId} has no payout wallet address`,
+    };
+  }
+
   const requirements = x402Facilitator.buildPaymentRequirements({
     resource: `/api/v1/contracts/${s.contractId}/escrow`,
-    payTo: (provider as any)?.wallet_address || '0x0000000000000000000000000000000000000000',
+    payTo,
     priceUsdc: String(s.agreedPriceRaw),
     description: `Service Contract ${s.contractId} Escrow payment`,
   });

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../../db';
 import { applyServiceFulfilledDeltas, applyServiceOutcomeDeltas, type ServiceOutcomeRating } from '../../services/validation-repid-delta';
 import { x402Facilitator, X402_VERSION } from '../../services/x402-facilitator';
+import { isPayableAddress } from '../../services/payee-guard';
 import {
   isSettleOnDeliveryEnabled,
   recordAuthorization,
@@ -503,9 +504,20 @@ router.post('/:id/escrow', async (req: Request, res: Response) => {
   const priceUsdc = String(contract.agreed_price_usdc_raw);
   const resource = `/api/v1/contracts/${contract.id}/escrow`;
 
+  // Fail closed: never escrow to the zero address. A provider with no payout
+  // wallet cannot be paid, so refuse before advertising a 402 — nothing escrowed.
+  const payTo = provider?.wallet_address;
+  if (!isPayableAddress(payTo)) {
+    x402Metrics.increment('escrow.error.409');
+    return res.status(409).json({
+      error: 'payee_unset',
+      message: 'provider has no payout wallet address; refusing to escrow to the zero address',
+    });
+  }
+
   const requirements = x402Facilitator.buildPaymentRequirements({
     resource,
-    payTo: provider?.wallet_address || '0x0000000000000000000000000000000000000000',
+    payTo,
     priceUsdc,
     description: `Service Contract ${contract.id} Escrow payment`
   });
@@ -949,9 +961,21 @@ router.post('/:id/satisfy', async (req: Request, res: Response) => {
       .eq('id', pre.provider_agent_id)
       .maybeSingle();
 
+    // Fail closed: the deliverable passed, but a provider with no payout wallet
+    // cannot be paid. Refuse rather than release the held payment to the zero
+    // address — no funds move, the authorization stays intact for a retry once a
+    // real wallet is on file.
+    const payTo = provider?.wallet_address;
+    if (!isPayableAddress(payTo)) {
+      return res.status(409).json({
+        error: 'payee_unset',
+        message: 'provider has no payout wallet address; refusing to release payment to the zero address',
+      });
+    }
+
     const requirements = x402Facilitator.buildPaymentRequirements({
       resource: `/api/v1/contracts/${pre.id}/escrow`,
-      payTo: provider?.wallet_address || '0x0000000000000000000000000000000000000000',
+      payTo,
       priceUsdc: String(pre.agreed_price_usdc_raw),
       description: `Service Contract ${pre.id} Escrow payment`,
     });

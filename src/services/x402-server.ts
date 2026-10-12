@@ -14,9 +14,16 @@
 import { db } from '../db';
 import { emitAuditEvent } from './audit-emit';
 import { x402Facilitator, PaymentRequirements, X402_VERSION } from './x402-facilitator';
+import { isPayableAddress, requirePayableAddress } from './payee-guard';
 
 const USDC_BASE_SEPOLIA = process.env.USDC_BASE_SEPOLIA_ADDRESS ?? '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-const PROVIDER_WALLET = process.env.PROVIDER_AGENT_WALLET ?? '0x0000000000000000000000000000000000000000';
+
+// Fail closed: resolve the provider payout wallet at the point of use, with no
+// zero-address fallback. An unset PROVIDER_AGENT_WALLET is a refusal, never a
+// burn advertised as a valid payee.
+function providerWallet(): string {
+  return process.env.PROVIDER_AGENT_WALLET ?? '';
+}
 
 export interface TipRequestInput {
   requestor_agent_id: string;
@@ -48,6 +55,11 @@ function newTipId(): string {
 }
 
 export async function createTipRequest(input: TipRequestInput): Promise<TipRequestResult> {
+  // Fail closed: a tip request must advertise a real payee. Refuse before any
+  // side effect (no linked_bets row, no audit event) when the provider wallet
+  // is unset — never advertise a 402 that pays the zero address.
+  const payTo = requirePayableAddress(providerWallet(), 'tip provider wallet (PROVIDER_AGENT_WALLET)');
+
   // Provider price = 1 USDC base + premium scaled by their RepID (every 1000
   // RepID adds 0.1 USDC).
   const { data: provider } = await db
@@ -107,7 +119,7 @@ export async function createTipRequest(input: TipRequestInput): Promise<TipReque
           network: 'base-sepolia',
           asset: USDC_BASE_SEPOLIA,
           amount: priceTotal.toString(),
-          payTo: PROVIDER_WALLET,
+          payTo,
           resource: `/api/v1/tip/deliver/${tipId}`,
           description: `Prediction tip on: ${input.prediction_topic}`,
         },
@@ -166,6 +178,20 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
     return { ok: false, tip_id: input.tipId, is_simulated: false, audit_chain_id: null, error: 'X-PAYMENT header required' };
   }
 
+  // Fail closed: the settlement target the client paid against must be a real
+  // payee. Refuse rather than reconstruct requirements that point at the zero
+  // address.
+  const payTo = providerWallet();
+  if (!isPayableAddress(payTo)) {
+    return {
+      ok: false,
+      tip_id: input.tipId,
+      is_simulated: false,
+      audit_chain_id: null,
+      error: 'payee_unset: provider wallet (PROVIDER_AGENT_WALLET) is not set',
+    };
+  }
+
   const { data: tip } = await db.from('linked_bets').select('*').eq('id', input.tipId).maybeSingle();
   if (!tip || tip.status !== 'awaiting_payment') {
     return { ok: false, tip_id: input.tipId, is_simulated: false, audit_chain_id: null, error: 'tip not found or already delivered' };
@@ -176,7 +202,7 @@ export async function deliverTip(input: TipDeliveryInput): Promise<TipDeliveryRe
   // facilitator can verify the signed authorization matches amount/payee.
   const requirements = x402Facilitator.buildPaymentRequirements({
     resource: `/api/v1/tip/deliver/${input.tipId}`,
-    payTo: PROVIDER_WALLET,
+    payTo,
     priceUsdc: String(tip.bet_amount),
     network: 'base-sepolia',
     description: `Prediction tip: ${(tip.prediction_payload as any)?.topic ?? ''}`,

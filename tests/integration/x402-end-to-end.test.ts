@@ -71,7 +71,9 @@ describe('x402 End-to-End Contract Economic Loop', () => {
       settlements: {},
       agents: {
         'buyer-123': { id: 'buyer-123', current_repid: 200, wallet_address: '0xBuyerWallet' },
-        'provider-123': { id: 'provider-123', current_repid: 150, wallet_address: '0xProviderWallet' }
+        // E-4: escrow fails closed on an unset/invalid payee, so the provider must
+        // carry a real, non-zero EVM address (was the non-address "0xProviderWallet").
+        'provider-123': { id: 'provider-123', current_repid: 150, wallet_address: '0x2222222222222222222222222222222222222222' }
       },
       services: {
         'service-123': { id: 'service-123', active: true, min_repid_to_purchase: 100, base_price_usdc_raw: 10000, provider_agent_id: 'provider-123' }
@@ -186,7 +188,7 @@ describe('x402 End-to-End Contract Economic Loop', () => {
     expect(challengeRes.body.error).toBe('Payment required');
     expect(challengeRes.body.accepts).toBeDefined();
     expect(challengeRes.body.accepts[0].resource).toBe(`/api/v1/contracts/${contractId}/escrow`);
-    expect(challengeRes.body.accepts[0].payTo).toBe('0xProviderWallet');
+    expect(challengeRes.body.accepts[0].payTo).toBe('0x2222222222222222222222222222222222222222');
     expect(challengeRes.body.accepts[0].maxAmountRequired).toBe('10000');
 
     // 3. Escrow attempt WITH valid payment header (simulated mode) -> 200 OK
@@ -194,7 +196,7 @@ describe('x402 End-to-End Contract Economic Loop', () => {
       payload: {
         authorization: {
           from: '0xBuyerWallet',
-          to: '0xProviderWallet',
+          to: '0x2222222222222222222222222222222222222222',
           value: '10000'
         }
       }

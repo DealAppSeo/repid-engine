@@ -129,7 +129,9 @@ describe('Contracts Routes', () => {
                 // the bound caller in the auth mock is the buyer.
                 buyer_agent_id: 'buyer-123',
                 provider_agent_id: 'provider-123',
-                wallet_address: '0xProviderWallet'
+                // E-4: escrow fails closed on an unset/invalid payee, so this must
+                // be a real, non-zero EVM address (was the non-address '0xProviderWallet').
+                wallet_address: '0x2222222222222222222222222222222222222222'
               },
               error: null
             }),
@@ -146,7 +148,7 @@ describe('Contracts Routes', () => {
           return {
             select: jest.fn().mockReturnThis(),
             eq: jest.fn().mockReturnThis(),
-            maybeSingle: jest.fn().mockResolvedValue({ data: { wallet_address: '0xProviderWallet' }, error: null }),
+            maybeSingle: jest.fn().mockResolvedValue({ data: { wallet_address: '0x2222222222222222222222222222222222222222' }, error: null }),
           } as any;
         } else if (table === 'x402_settlements') {
           return {

@@ -111,7 +111,9 @@ describe('Mainnet Value Caps Enforcement', () => {
           select: jest.fn().mockReturnThis(),
           eq: jest.fn().mockReturnThis(),
           maybeSingle: jest.fn().mockResolvedValue({
-            data: { wallet_address: '0xProviderWallet' },
+            // E-4: escrow fails closed on an unset/invalid payee, so this must be a
+            // real, non-zero EVM address (was the non-address '0xProviderWallet').
+            data: { wallet_address: '0x2222222222222222222222222222222222222222' },
             error: null,
           }),
         } as any;
