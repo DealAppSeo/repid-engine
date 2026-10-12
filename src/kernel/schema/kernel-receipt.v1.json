@@ -1,0 +1,187 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hyperdag.org/schemas/kernel-receipt.v1.json",
+  "title": "Policy-kernel receipt (kernel-receipt/1)",
+  "description": "One record per call, three legs always present: the DECISION (was it permitted, and on what), the PAYMENT (did value move, and was it observed) and the VERIFICATION (was the content checked, and by what). A leg that did not happen says NOT_APPLICABLE or NOT_CHECKED; none is omitted. Integrity is a hash and a chain (header.receipt_hash, header.prev_hash); header.signer is null in kernel-receipt/1. THIS SCHEMA CANNOT EXPRESS THE RULES THAT MATTER, which are cross-field and live in code (repid-engine src/kernel/receipt.ts validateReceipt): (1) payment is not NOT_APPLICABLE unless the verdict is ALLOW; (2) a DENY or NOT_CHECKED has executed:false; (3) an ALLOW spend is at most effective_per_tx_raw; (4) an ALLOW rests only on PASS checks, and on every check its class requires; (5) a vote alone is PROVISIONAL, SETTLED needs settled_by of holdout, known_answer or person; (6) counts_toward_band_restore = grounded && same_domain && !is_simulated, derived and never supplied; (7) executed:true needs a persisted decision row for the same receipt_id first; (8) no raw arguments, no claim / prompt / user_id, nothing key- or secret-shaped. A receipt that passes this schema is well-formed, NOT valid. The kernel's own copy of this file lives at src/kernel/schema/kernel-receipt.v1.json; trustshell carries a byte-identical copy at schemas/kernel-receipt.v1.json and both test suites pin its hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["header", "subject", "request", "decision", "payment", "verification"],
+  "definitions": {
+    "hex32": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+    "address": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "uint": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+    "nullableString": { "type": ["string", "null"] },
+    "outcome": { "type": "string", "enum": ["PASS", "FAIL", "NOT_CHECKED"] },
+    "vote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "verdict"],
+      "properties": {
+        "family": { "type": "string" },
+        "verdict": { "type": "string", "enum": ["PASS", "FAIL", "ABSTAIN"] }
+      }
+    }
+  },
+  "properties": {
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "version", "receipt_id", "prev_receipt_id", "prev_hash", "created_at", "receipt_hash", "env", "signer"],
+      "properties": {
+        "schema": { "const": "kernel-receipt/1" },
+        "version": { "const": 1 },
+        "receipt_id": { "type": "string", "minLength": 1, "description": "The call's id, minted before the tool runs. An executed call has two entries with this id: the decision row (executed:false), then the outcome row (executed:true)." },
+        "prev_receipt_id": { "type": ["string", "null"] },
+        "prev_hash": { "oneOf": [{ "$ref": "#/definitions/hex32" }, { "type": "null" }] },
+        "created_at": { "type": "string" },
+        "receipt_hash": { "$ref": "#/definitions/hex32" },
+        "env": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["network", "chain_id", "is_simulated"],
+          "properties": {
+            "network": { "type": "string" },
+            "chain_id": { "type": "integer" },
+            "is_simulated": { "type": "boolean" }
+          }
+        },
+        "signer": { "type": "null" }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "owner"],
+      "properties": {
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent_id", "agent_name"],
+          "properties": { "agent_id": { "type": "string" }, "agent_name": { "type": "string" } }
+        },
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wallet", "assurance", "status"],
+          "properties": {
+            "wallet": { "type": ["string", "null"] },
+            "assurance": { "type": ["string", "null"] },
+            "status": { "type": "string", "enum": ["resolved", "none", "unknown"] }
+          }
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "origin", "args_hash", "amount_raw", "payee", "asset", "chain_id"],
+      "properties": {
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "class"],
+          "properties": { "name": { "type": "string" }, "class": { "type": "string", "enum": ["read", "spend", "post", "other"] } }
+        },
+        "origin": { "type": "string" },
+        "args_hash": { "$ref": "#/definitions/hex32" },
+        "amount_raw": { "oneOf": [{ "$ref": "#/definitions/uint" }, { "type": "null" }] },
+        "payee": { "type": ["string", "null"] },
+        "asset": { "type": ["string", "null"] },
+        "chain_id": { "type": ["integer", "null"] }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "blocking", "executed", "reasons", "checks", "does_not_attest", "policy", "limits", "laya"],
+      "properties": {
+        "verdict": { "type": "string", "enum": ["ALLOW", "DENY", "NOT_CHECKED"] },
+        "blocking": { "type": "boolean" },
+        "executed": { "type": "boolean" },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "detail"],
+            "properties": { "code": { "type": "string" }, "detail": { "type": "string" } }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "outcome", "source"],
+            "properties": { "name": { "type": "string" }, "outcome": { "$ref": "#/definitions/outcome" }, "source": { "type": "string" } }
+          }
+        },
+        "does_not_attest": { "type": "array", "items": { "type": "string" } },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy_hash", "signer", "signature", "expires_at", "revocation"],
+          "properties": {
+            "policy_hash": { "oneOf": [{ "$ref": "#/definitions/hex32" }, { "type": "null" }] },
+            "signer": { "type": ["string", "null"] },
+            "signature": { "type": "string", "enum": ["VERIFIED", "FAILED", "NOT_CHECKED"] },
+            "expires_at": { "type": ["integer", "null"] },
+            "revocation": { "type": "string", "enum": ["VERIFIED", "NOT_CHECKED"] }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["per_tx_raw", "daily_raw", "total_raw", "effective_per_tx_raw", "binding_term"],
+          "properties": {
+            "per_tx_raw": { "$ref": "#/definitions/uint" },
+            "daily_raw": { "$ref": "#/definitions/uint" },
+            "total_raw": { "$ref": "#/definitions/uint" },
+            "effective_per_tx_raw": { "$ref": "#/definitions/uint", "description": "Defaults to \"0\". A spend above it is refused." },
+            "binding_term": { "type": "string", "enum": ["per_tx", "daily", "total", "default_zero", "not_computed"] }
+          }
+        },
+        "laya": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane", "mode", "consulted"],
+          "properties": { "lane": { "type": ["string", "null"] }, "mode": { "const": "shadow" }, "consulted": { "const": false } }
+        }
+      }
+    },
+    "payment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "scheme", "amount_raw", "payer", "payee", "authorization_nonce", "tx_hash", "block", "observed_amount_raw", "settlement_evidence", "is_simulated"],
+      "properties": {
+        "status": { "type": "string", "enum": ["NOT_APPLICABLE", "AUTHORIZED", "SUBMITTED", "SETTLED", "FAILED"] },
+        "scheme": { "type": ["string", "null"] },
+        "amount_raw": { "oneOf": [{ "$ref": "#/definitions/uint" }, { "type": "null" }] },
+        "payer": { "oneOf": [{ "$ref": "#/definitions/address" }, { "type": "null" }] },
+        "payee": { "type": ["string", "null"] },
+        "authorization_nonce": { "type": ["string", "null"] },
+        "tx_hash": { "oneOf": [{ "$ref": "#/definitions/hex32" }, { "type": "null" }] },
+        "block": { "type": ["integer", "null"] },
+        "observed_amount_raw": { "type": ["string", "null"] },
+        "settlement_evidence": { "type": "string", "enum": ["MEASURED", "NOT_CHECKED"], "description": "MEASURED only when something was read back from the chain. A payment that was authorised is not one that was observed." },
+        "is_simulated": { "type": "boolean" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "method", "votes", "verdict_label", "settled_by", "grounded", "same_domain", "is_simulated", "counts_toward_band_restore"],
+      "properties": {
+        "status": { "type": "string", "enum": ["VERIFIED", "FAILED", "NOT_CHECKED", "NOT_APPLICABLE"] },
+        "method": { "type": ["string", "null"] },
+        "votes": { "type": "array", "items": { "$ref": "#/definitions/vote" } },
+        "verdict_label": { "type": "string", "enum": ["PROVISIONAL", "SETTLED"] },
+        "settled_by": { "oneOf": [{ "type": "string", "enum": ["holdout", "known_answer", "person"] }, { "type": "null" }] },
+        "grounded": { "type": "boolean" },
+        "same_domain": { "type": "boolean" },
+        "is_simulated": { "type": "boolean" },
+        "counts_toward_band_restore": { "type": "boolean", "description": "DERIVED: grounded && same_domain && !is_simulated. Never supplied; a receipt whose value disagrees is invalid." }
+      }
+    }
+  }
+}
