@@ -19,6 +19,12 @@
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { db } from '../db';
 import type { HALSignals } from './hal-signals';
+import {
+  receiptSigningEnabled,
+  signReceipt,
+  ReceiptSigningRequiredError,
+  RECEIPT_SIGNATURE_FIELD,
+} from './receipt-signer';
 
 export type Hex32 = `0x${string}`;
 
@@ -293,7 +299,22 @@ export async function issueReceipt(input: IssueReceiptInput): Promise<IssueRecei
 
   const receiptContentHash = keccakOfCanonicalJson(receiptJsonNoId);
   const receiptId = receiptContentHash; // off-chain content-address; on-chain receiptId is assigned at reveal and stored separately
-  const receiptJson = { ...receiptJsonNoId, receiptId };
+  const receiptJson: Record<string, unknown> = { ...receiptJsonNoId, receiptId };
+
+  // LANE 2 — SERVICE-KEY RECEIPT SIGNATURE (fail-closed, behind RECEIPT_SIGNING_ENABLED, default OFF).
+  // OFF: this block is skipped entirely and the issued receipt is byte-for-byte identical to before.
+  // ON: the engine signs the receipt with its RECEIPT-ONLY service key and attaches a DETACHED
+  // signature so anyone can confirm THIS backend produced THIS receipt. If the key is absent/unusable
+  // the signer REFUSES and we throw BEFORE any DB write — a receipt that would look issued-but-unsigned
+  // is never persisted. A signed receipt is also reachable to a reader via GET /api/v1/receipts/:id.
+  // (Three outcomes, never two: signed / refused / off — never a forged "signed".)
+  if (receiptSigningEnabled()) {
+    const signed = await signReceipt(receiptJson);
+    if (!signed.ok) {
+      throw new ReceiptSigningRequiredError(signed.reason, signed.message);
+    }
+    receiptJson[RECEIPT_SIGNATURE_FIELD] = signed.signature;
+  }
 
   const persistResult = await persistReceipt({
     receiptId,
