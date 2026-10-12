@@ -168,8 +168,11 @@ export interface ConfirmedOutcomeDeps {
   resolveOwner?: (agentId: string) => Promise<{ status: OwnerLookupStatus; ownerKey: string | null }>;
   /**
    * Read an agent's model family. `null` means absent/unreadable → independence via
-   * family cannot be established → fail closed. (`repid_agents` has no model_family
-   * column today; see the pipeline wiring note.)
+   * family cannot be established → fail closed. The production wiring sources this
+   * COLUMN-FIRST from `repid_agents.model_family` (the first-class column), falling back
+   * to the `capabilities.model_family` jsonb; see `confirmedOutcomeDepsFor`. That column's
+   * DDL is a PROMOTION-GATED migration (NOT applied to prod), so until it is applied this
+   * reader returns null for every agent and the counterparty settler stays refused.
    */
   readModelFamily?: (agentId: string) => Promise<string | null>;
   /**

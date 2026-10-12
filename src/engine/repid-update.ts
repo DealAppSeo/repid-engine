@@ -837,10 +837,15 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  * Only ever constructed on the flag-ON confirmed-outcome path; tests inject their own.
  *
  *  - resolveOwner      → the existing fail-closed owner resolver (agent-owner-resolver).
- *  - readModelFamily   → best-effort from `repid_agents.capabilities` jsonb. There is NO
- *                        model_family COLUMN today, so this returns null unless a family
- *                        was recorded under capabilities — and a null FAILS the same-family
+ *  - readModelFamily   → the first-class `repid_agents.model_family` COLUMN (PRIMARY),
+ *                        falling back to the `capabilities.model_family` jsonb (for agents
+ *                        that recorded a family there before the column existed). Both
+ *                        absent/unreadable → null, and a null FAILS the same-family
  *                        independence check CLOSED (rule 4), which is the honest default.
+ *                        The column DDL lives in `migrations/2026-10-12-repid-agents-model-family.sql`
+ *                        and is PROMOTION-GATED (NOT applied to prod). Until it is applied
+ *                        AND both agents carry distinct families, the counterparty settler
+ *                        stays REFUSED — a missing column read fails closed, never open.
  *  - domainTrackRecord → from the actor's `repid_agents.domain_accuracy` jsonb.
  *  - domainNeedWeight  → getEcosystemNeedWeight(domain) — the computed-but-never-applied
  *                        ecosystem weight, now applied ONLY here, per-domain, gains-only.
@@ -862,7 +867,7 @@ function resolveServerConfirmation(): VerifiedConfirmation | undefined {
   return undefined;
 }
 
-function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {
+export function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {
   return {
     resolveOwner: async (agentId: string) => {
       const r = await resolveAgentOwner({ id: agentId });
@@ -870,11 +875,18 @@ function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {
     },
     readModelFamily: async (agentId: string) => {
       try {
-        if (agentId === actor.id) return modelFamilyFromCapabilities(actor.capabilities);
-        const { data } = await db.from('repid_agents').select('capabilities').eq('id', agentId).maybeSingle();
-        return modelFamilyFromCapabilities((data as { capabilities?: unknown } | null)?.capabilities);
+        // PRIMARY: the first-class repid_agents.model_family column. FALLBACK: the
+        // capabilities.model_family jsonb. Both absent → null → fail closed (rule 4).
+        if (agentId === actor.id) return modelFamilyOf(actor.model_family, actor.capabilities);
+        const { data } = await db
+          .from('repid_agents')
+          .select('model_family, capabilities')
+          .eq('id', agentId)
+          .maybeSingle();
+        const row = data as { model_family?: unknown; capabilities?: unknown } | null;
+        return modelFamilyOf(row?.model_family, row?.capabilities);
       } catch {
-        return null; // unreadable → fail closed (same-family cannot be excluded)
+        return null; // unreadable (incl. column absent in a stale schema) → fail closed
       }
     },
     domainTrackRecord: async (agentId: string, domain: string) => {
@@ -905,6 +917,20 @@ function modelFamilyFromCapabilities(cap: unknown): string | null {
     if (typeof v === 'string' && v.trim() !== '') return v.trim();
   }
   return null;
+}
+
+/**
+ * Resolve an agent's model family, COLUMN-FIRST. The first-class `repid_agents.model_family`
+ * column (`column`) is the PRIMARY source; the `capabilities.model_family` jsonb is the
+ * FALLBACK, kept so an agent that recorded a family there before the column existed still
+ * resolves. A blank/missing column falls through to the jsonb; when BOTH are absent or
+ * unreadable this returns null — which the rule-4 independence check reads as "same-family
+ * cannot be excluded" and FAILS CLOSED (no confirmation). It never invents a family on
+ * absence; that is what keeps the counterparty path refused until the column is populated.
+ */
+export function modelFamilyOf(column: unknown, capabilities: unknown): string | null {
+  if (typeof column === 'string' && column.trim() !== '') return column.trim();
+  return modelFamilyFromCapabilities(capabilities);
 }
 
 function dbGroundingStore(): GroundingStore {
