@@ -137,6 +137,8 @@ Numbers in the examples below are placeholders. Call the endpoint for the curren
 
 **Agent Trust Passport** — the one-call composite for "should I authorize this agent?": RepID + tier, ERC-8004 identity metadata with a link to a live on-chain ownership check, x402 real-vs-simulated settlement history, on-chain reputation write count, and the latest ZKP proof labeled honestly (a range proof over the score; it does not attest agent behavior). `:agentId` accepts a UUID, an ERC-8004 token id, or an agent name.
 
+`identity_erc8004.contract_address` is the canonical ERC-8004 IdentityRegistry, or `null`. It is `null` whenever the stored value is not recognisably that registry (a placeholder, a transaction hash, a different address) or the mint is not evidenced; `contract_address_check` then reads `NOT_CHECKED` and `contract_address_reason` says why. It is never the raw stored column.
+
 ```bash
 curl https://repid-engine-production.up.railway.app/api/v1/passport/trinity-shofet
 ```
@@ -211,18 +213,23 @@ curl https://repid-engine-production.up.railway.app/api/v1/hal/stats
 
 ### `GET /api/v1/repid/:agentId`
 
-Per-agent RepID lookup: score and tier only (`src/routes/repid.ts`). `:agentId` accepts an agent name or UUID.
+Per-agent RepID lookup: score, tier and ERC-8004 mint status (`src/routes/repid.ts`). `:agentId` accepts an agent name or UUID.
 
 ```bash
 curl https://repid-engine-production.up.railway.app/api/v1/repid/trinity-sophia
 ```
 
 ```text
-{ "score": <integer from 10 to 10000>, "tier": "<tier name>" }
+{ "score": <integer from 10 to 10000>, "tier": "<tier name>",
+  "erc8004_token_id": "<token id>" | null,
+  "registered_onchain": "MINTED" | "UNVERIFIED" | "NOT_MINTED",
+  "minted": true | null | false }
 ```
 
-- An unknown agent returns `{ "score": "NOT_CHECKED", "tier": "NOT_CHECKED" }` with status 200. It never returns 0 for an agent it did not find.
+- An unknown agent returns `{ "score": "NOT_CHECKED", "tier": "NOT_CHECKED" }` with status 200, and no mint fields. It never returns 0 for an agent it did not find.
+- `registered_onchain` is the same three-state value `/passport/:agentId` reports. `MINTED` means the engine holds the mint transaction. `UNVERIFIED` means a token id exists with no mint transaction recorded here: it is not a claim that there is no identity, and `minted` is `null`, never `false`. `NOT_MINTED` means no token id at all. None of these is a live chain read; the passport links the live check.
 - `?with=id` adds `"agent_id"`, the UUID the name resolved to, so a client can bind a proof to the agent it asked about.
+- Any origin may read this route, `/repid/:agentId/proof`, `/passport/:agentId` and `/faucet/info` + `/faucet/balance` from a browser (`Access-Control-Allow-Origin: *`, no credentials). Writes keep the origin allow-list.
 
 Tier scale: `PROBATIONARY` (0–499) → `EARNING` (500–999) → `ESTABLISHED` (1,000–4,999) → `AUTONOMOUS` (5,000–7,999) → `VETERAN` (8,000–10,000). The stored tier is set by a database trigger, not by the engine. That trigger also requires at least two distinct counterparties for `AUTONOMOUS` and `VETERAN` (`supabase/migrations/20260523140000_repid_inflation_counterparty_gate.sql`), so a high score can sit in `ESTABLISHED`. See [BUILDERS.md section 4](https://github.com/DealAppSeo/hyperdag-protocol/blob/main/BUILDERS.md#4-anti-sybil-why-a-high-score-may-not-get-the-tier-you-expect).
 

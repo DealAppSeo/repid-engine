@@ -72,7 +72,11 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     _testHelpers().resetCache();
   });
 
-  test('GET /api/v1/repid/:agentId — score and tier only', async () => {
+  test('GET /api/v1/repid/:agentId — score, tier and ERC-8004 mint status', async () => {
+    // This row carries no token id and no mint tx, so the mint block reads NOT_MINTED. The block
+    // itself (every state, UNVERIFIED kept distinct) is pinned in tests/repid-mint-status.test.ts.
+    // This test used to pin the keys to exactly ['score', 'tier']; the mint status was added on
+    // purpose so a reader no longer has to report it as unknown.
     setMaybeSingle({
       id: 'agent-int-1',
       current_repid: 4500,
@@ -81,8 +85,14 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     });
     const r = await request(buildApp()).get('/api/v1/repid/agent-int-1');
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ score: 4500, tier: 'ESTABLISHED' });
-    expect(Object.keys(r.body).sort()).toEqual(['score', 'tier']);
+    expect(r.body).toEqual({
+      score: 4500,
+      tier: 'ESTABLISHED',
+      erc8004_token_id: null,
+      registered_onchain: 'NOT_MINTED',
+      minted: false,
+    });
+    expect(Object.keys(r.body).sort()).toEqual(['erc8004_token_id', 'minted', 'registered_onchain', 'score', 'tier']);
   });
 
   test('GET /api/v1/repid/:agentId?with=id — adds the resolved agent id, only when asked', async () => {
@@ -96,7 +106,9 @@ describe('RepID HTTP routes (Sprint R-C Phase B3 integration)', () => {
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ score: 4500, tier: 'ESTABLISHED' });
     expect(typeof r.body.agent_id).toBe('string');
-    expect(Object.keys(r.body).sort()).toEqual(['agent_id', 'score', 'tier']);
+    expect(Object.keys(r.body).sort()).toEqual([
+      'agent_id', 'erc8004_token_id', 'minted', 'registered_onchain', 'score', 'tier',
+    ]);
   });
 
   test('GET /api/v1/repid/:agentId — missing id is NOT_CHECKED, not 0', async () => {

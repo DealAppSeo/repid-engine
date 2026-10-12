@@ -40,6 +40,9 @@ export interface RepIDLookup {
   tier: string | null;
   last_updated: string | null;
   source: RepIDSource;
+  /** ERC-8004 identity columns off the same row, for the public mint-status block. */
+  erc8004_token_id: string | null;
+  mint_tx_hash: string | null;
 }
 
 export interface RepIDHistoryEntry {
@@ -75,7 +78,7 @@ export async function getRepIDForAgent(agentId: string): Promise<RepIDLookup> {
 
   const { data, error } = await db
     .from('repid_agents')
-    .select('id, current_repid, tier, last_updated, created_at')
+    .select('id, current_repid, tier, last_updated, created_at, erc8004_token_id, mint_tx_hash')
     .eq('id', agentId)
     .maybeSingle();
 
@@ -101,6 +104,8 @@ export async function getRepIDForAgent(agentId: string): Promise<RepIDLookup> {
     tier: (data as any).tier ?? null,
     last_updated: lastUpdated,
     source,
+    erc8004_token_id: (data as any).erc8004_token_id != null ? String((data as any).erc8004_token_id) : null,
+    mint_tx_hash: (data as any).mint_tx_hash ?? null,
   };
 }
 

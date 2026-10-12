@@ -1,6 +1,9 @@
 /**
  * Public score card. Two fields. A missing id is NOT_CHECKED, never 0.
  * This module does not query or insert.
+ *
+ * It stays two fields on purpose. For a FOUND agent, GET /repid/:id spreads the ERC-8004 mint
+ * block (repid-mint-status.ts) beside it; an unknown id gets exactly this card and nothing else.
  */
 
 export interface RepidScoreTier {
