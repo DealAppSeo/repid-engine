@@ -39,6 +39,60 @@ export const PUBLISHABLE_STATUSES = ['ready', 'approved', 'scheduled', 'posted']
 /** The one verdict that blocks. Kept separate from the list above so each reads as one idea. */
 export const BLOCKING_DECISION = 'vetoed';
 
+/**
+ * The platforms wired to a reviewed publish path. LinkedIn and X are the first pair; TikTok,
+ * YouTube, and every unlisted or unknown platform are DELIBERATELY held until each earns its own
+ * reviewed path. This is an allowlist on purpose: a platform's absence from this set means "held",
+ * never "allowed".
+ *
+ * This is NOT a feature flag and takes NO env var. The tier gate is the capability that was asked
+ * for, so it is a hardcoded constant rather than a toggle that could silently open the door. Widen
+ * this list only by adding a platform AND a test — never by reading it from the environment.
+ */
+export const PUBLISHABLE_PLATFORMS = ['linkedin', 'x'] as const;
+
+/**
+ * Where a draft-only platform is parked. `needs_review` is chosen deliberately: it is the held
+ * state the HAL path already produces, it is NOT in PUBLISHABLE_STATUSES, and — verified against
+ * the live schema 2026-10-12 — the `status` column is free `text` with no enum/whitelist CHECK, so
+ * any non-publishable string inserts safely. `needs_review` carries the HAL verdict honestly and
+ * reads as "a human must look before this goes out", which a bare `draft` would not.
+ */
+const PLATFORM_HELD_STATUS = 'needs_review';
+
+export interface PlatformTier {
+  tier: 'publishable' | 'draft_only';
+  reason: string;
+}
+
+/**
+ * Pure. Resolve a platform string to its publishability tier, fail-closed.
+ *
+ * Normalises case and surrounding whitespace, and treats `twitter` as an alias of `x`. ONLY the
+ * members of PUBLISHABLE_PLATFORMS resolve to 'publishable'; EVERYTHING else — an unlisted or
+ * unknown string, an empty string, `undefined`, and any error thrown while resolving — resolves to
+ * 'draft_only'. The safe-looking direction is the restrictive one: absence is never publishable.
+ */
+export function resolvePlatformTier(platform: string | undefined): PlatformTier {
+  try {
+    const normalizedRaw = (platform ?? '').toLowerCase().trim();
+    if (normalizedRaw.length === 0) {
+      return { tier: 'draft_only', reason: 'no platform given — an absent platform is never publishable' };
+    }
+    const normalized = normalizedRaw === 'twitter' ? 'x' : normalizedRaw;
+    if ((PUBLISHABLE_PLATFORMS as readonly string[]).includes(normalized)) {
+      return { tier: 'publishable', reason: `${normalized} is in the publishable tier (LinkedIn, X)` };
+    }
+    return {
+      tier: 'draft_only',
+      reason: `${normalized} is not in the publishable tier (LinkedIn, X); stays a draft pending a reviewed publish path`,
+    };
+  } catch {
+    // Fail-closed: a thrown error must land on the restrictive outcome, never slip through as publishable.
+    return { tier: 'draft_only', reason: 'platform tier could not be resolved; held fail-closed' };
+  }
+}
+
 export interface SocialDraftInput {
   platform: string;
   content: string;
@@ -58,6 +112,8 @@ export interface SocialDraftResult {
   /** True when strictness 2 was asked for and the real quorum was NOT available. */
   degraded: boolean;
   degraded_reason?: string;
+  /** Which publishability tier the target platform resolved to. 'draft_only' can only hold, never publish. */
+  platform_tier: 'publishable' | 'draft_only';
   /** Why this landed where it did, in one line a human can act on. */
   note: string;
 }
@@ -81,7 +137,18 @@ export async function verifyAndQueueDraft(input: SocialDraftInput): Promise<Soci
   });
 
   const degraded = hal.degraded_mode === true || hal.mode === 'extractor-fallback';
-  const status = resolveStatus(hal.decision, degraded);
+  const halStatus = resolveStatus(hal.decision, degraded);
+
+  // Platform publishability tier, applied DEMOTE-ONLY, after the HAL verdict. LinkedIn and X are
+  // the only platforms wired to a reviewed publish path; everything else — and an absent or
+  // unknown platform — is held, so a clean verdict cannot carry a TikTok/YouTube draft into a
+  // publishable state before that path exists. This can only move a status DOWN: a vetoed stays
+  // vetoed, a needs_review stays needs_review, and a clean verdict on LinkedIn/X still reaches ready.
+  const platformTier = resolvePlatformTier(input.platform);
+  const demotedForPlatform =
+    platformTier.tier === 'draft_only' &&
+    (PUBLISHABLE_STATUSES as readonly string[]).includes(halStatus);
+  const status = demotedForPlatform ? PLATFORM_HELD_STATUS : halStatus;
 
   const row = {
     platform: input.platform,
@@ -122,7 +189,10 @@ export async function verifyAndQueueDraft(input: SocialDraftInput): Promise<Soci
     hal_mode: hal.mode,
     degraded,
     ...(hal.degraded_reason ? { degraded_reason: hal.degraded_reason } : {}),
-    note: noteFor(hal.decision, degraded),
+    platform_tier: platformTier.tier,
+    note: demotedForPlatform
+      ? `held — ${platformTier.reason} (HAL verdict '${hal.decision}' was otherwise publishable)`
+      : noteFor(hal.decision, degraded),
   };
 }
 
