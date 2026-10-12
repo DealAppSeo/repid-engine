@@ -373,28 +373,10 @@ describe('INV-3 a split vote is PROVISIONAL', () => {
     expect(v.ok).toBe(false);
   });
 
-  // ── RT-8 ── counts_toward_band_restore ignores settlement. ───────────────────────────────────
-  // Derived as grounded && same_domain && !is_simulated. A 2-1 vote that is grounded and same-domain
-  // is PROVISIONAL by label yet COUNTS toward restoring a band as soon as the environment is not
-  // simulated. The validator enforces the derivation, so the receipt is VALID. Unreachable today
-  // (DEFAULT_ENV is simulated and nothing builds a non-simulated env); it arms the instant real
-  // spend is wired. Whether band restore should additionally require SETTLED is Sean's call.
-  it.failing('RT-8 a PROVISIONAL (unsettled) vote must not count toward band restore, even in a real environment', async () => {
-    const real = { ...DEFAULT_ENV, is_simulated: false };
-    const h = await armed({ env: real, halCheck: async () => twoOne({ grounded: true, same_domain: true }) });
-    const out = await runUnderKernel(postRequest(), jest.fn(async () => 1), h.deps);
-    const v = out.decision_receipt!.verification;
-    expect(v.verdict_label).toBe('PROVISIONAL');
-    expect(v.counts_toward_band_restore).toBe(false);
-  });
-  it('CHARACTERISE RT-8: today a PROVISIONAL grounded same-domain vote in a real env DOES count, and the receipt validates', async () => {
-    const real = { ...DEFAULT_ENV, is_simulated: false };
-    const h = await armed({ env: real, halCheck: async () => twoOne({ grounded: true, same_domain: true }) });
-    const out = await runUnderKernel(postRequest(), jest.fn(async () => 1), h.deps);
-    expect(out.decision_receipt!.verification.counts_toward_band_restore).toBe(true);
-    expect(validateReceipt(out.decision_receipt).ok).toBe(true);
-  });
-
+  // RT-8 (band restore ignored settlement) is NOT asserted here: it is owned and fixed by #1325, whose
+  // regression test (src/kernel/__tests__/rt8-band-restore.test.ts) covers the fixed behaviour. Keeping
+  // an it.failing or a CHARACTERISE of the old behaviour in this file would turn main red whichever of
+  // the two PRs merged second. The test below holds before AND after that fix.
   it('a SIMULATED run never counts toward band restore, whatever the vote says', async () => {
     const h = await armed({ halCheck: async () => twoOne({ settled_by: 'person', grounded: true, same_domain: true }) });
     const out = await runUnderKernel(postRequest(), jest.fn(async () => 1), h.deps);
