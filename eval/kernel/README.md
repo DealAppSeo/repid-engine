@@ -7,9 +7,12 @@ kernel's verification leg, in one hash-only file. Sean's spec, verbatim:
 > benchmarks only. No sentence. It is the seed, the canary, and the holdout."
 
 **No sentence is a hard rule.** The plaintext question/claim text NEVER appears in
-this repo. Each row carries the *hash* of a question, never the question. The table
-can therefore be read by anyone — it is in a PUBLIC repo — and still reveal nothing
-that lets a checker (or a model trained on this repo) memorise or game the answers.
+this repo. Each row carries a *keyed* digest of a question, never the question. The
+digest is an HMAC under an off-repo pepper (see "The hash is KEYED" below), so — and
+**only** so — the table can be read by anyone in this PUBLIC repo and still reveal
+nothing that lets a checker (or a model trained on this repo) memorise or game the
+answers. A plain unkeyed SHA-256 of these low-entropy claims would NOT give that
+guarantee: it is dictionary-reversible. The guarantee is the pepper, not the hashing.
 
 Authored by XC1, `2026-10-12`, for the policy-kernel sprint (branch
 `claude/bold-turing-icz50x-kernel`). It is the red-team / known-answer lane's
@@ -22,7 +25,7 @@ One JSON object per line. EXACTLY these five fields, no more, no fewer:
 
 | field | type | meaning |
 |---|---|---|
-| `hash` | string, 64 lowercase hex | sha256 of the *canonicalized* plaintext question/claim. The only representation of the question that lives in the repo. |
+| `hash` | string, 64 lowercase hex | **keyed** HMAC-SHA256 of the *canonicalized* plaintext question/claim, under an off-repo pepper (see below). The only representation of the question that lives in the repo, and irreversible without the pepper. |
 | `label` | enum (below) | the ground-truth verdict the verification leg should reach for this claim. |
 | `checker_pair` | 2-element array of distinct family ids | the two checker FAMILIES that must agree on this row ("two families on the claim"). |
 | `date` | `YYYY-MM-DD` | the date this row was authored / last re-pinned. All rows here: `2026-10-12`. |
@@ -32,11 +35,23 @@ No field holds anything sentence-like: every string value is free of whitespace 
 at most 64 characters. That is a mechanical invariant the integrity test proves (it
 is how "no sentence" is enforced, not merely promised).
 
-## Canonicalization used for `hash`
+## The hash is KEYED (HMAC) — and why plain SHA-256 would not do
 
-The plaintext question is reduced to a canonical form before hashing, so that
-trivial formatting differences (trailing space, double spaces, case, Unicode
-composition) do not change the hash:
+**This matters, and the first version of this file got it wrong.** The plaintext
+questions are low-entropy, well-known claims, and the canonicalization below is
+public. A plain `sha256(canonical)` over that space is **dictionary-reversible**: an
+attacker enumerates likely claims, canonicalizes and hashes each, and matches the
+digest — recovering the question and, with it, the row's `label` and `checker_pair`.
+That defeats the whole point of a hash-only holdout. (Flagged as CWE-759 — a one-way
+hash without a salt — by Strix on PR #1318; the finding was correct.)
+
+So the digest is **keyed** with a high-entropy secret pepper that lives off-repo.
+Without the pepper, enumerating candidate plaintexts tells you nothing: you cannot
+compute a row's digest, so you cannot match it.
+
+The plaintext question is first reduced to a canonical form, so that trivial
+formatting differences (trailing space, double spaces, case, Unicode composition) do
+not change the hash:
 
 ```
 canonical = plaintext
@@ -44,11 +59,19 @@ canonical = plaintext
   .trim()                 // strip leading/trailing whitespace
   .replace(/\s+/g, ' ')   // collapse internal whitespace runs to one ASCII space
   .toLowerCase()          // case-fold
-hash = sha256_hex(utf8(canonical))   // lowercase hex
+hash = HMAC_SHA256_hex(key = OFF_REPO_PEPPER, message = utf8(canonical))   // lowercase hex
 ```
 
-An eval harness that is given the off-repo plaintext (below) must apply this exact
-canonicalization before looking a row up, or the hash will not match.
+`OFF_REPO_PEPPER` is a high-entropy secret (>= 32 bytes) held **off-repo** — in the
+generator's environment, with the operator, or as a CI secret — and is **NEVER
+committed** to this (public) repository: not in `known-answers.jsonl`, not here, not
+in the test, not anywhere. The irreversibility of this table rests entirely on the
+pepper staying off-repo. An eval harness must be given BOTH the off-repo plaintext
+AND the pepper, apply the exact canonicalization, then HMAC under the pepper, or the
+digest will not match.
+
+HMAC-SHA256's hex digest is still 64 lowercase hex, so the row shape and the
+integrity test are unchanged by the switch from plain SHA-256 to the keyed hash.
 
 ## `label` enum — and how it maps to the kernel's own vocabulary
 
@@ -121,23 +144,30 @@ Per spec, the table holds only two kinds of row:
 - **Pinned benchmarks** — claims with a settled, stable ground truth that should
   never change (used mostly as canaries).
 
-## WHERE THE PLAINTEXT LIVES — and what running the full eval requires
+## WHERE THE PLAINTEXT AND THE PEPPER LIVE — and what running the full eval requires
 
-The plaintext questions behind these hashes are **OFF-REPO**. They are held by XC1
-/ the operator and are supplied to the eval harness at eval time; they are never
-committed anywhere in this repository or any sibling repo.
+TWO off-repo secrets back this table, and **neither is ever committed** anywhere in
+this repository or any sibling repo:
 
-- This repo stores only `hash + label + checker_pair + date + role`.
-- The generator that holds the plaintext and emits this file is kept off-repo (XC1's
-  session scratchpad at authoring time, then by the operator).
-- **Running the full known-answer eval requires that off-repo plaintext.** Without
-  it, a harness can verify the table's integrity (shape, uniqueness, enums, "no
-  sentence") but cannot score a checker against it, because it has no questions to
-  ask. That is by design: the table is the seed, the canary and the holdout, and a
-  holdout you can read is not a holdout.
+1. **The plaintext questions** behind the digests.
+2. **The pepper** (`OFF_REPO_PEPPER`), the HMAC key. It is a high-entropy secret and
+   is what makes the digests irreversible; committing it to this PUBLIC repo would
+   undo the entire fix. It lives in the generator's environment / with the operator /
+   as a CI secret, and is supplied to the eval harness at eval time.
 
-If the plaintext is lost, the hashes cannot be reversed; the table is then only a
-record of labels/roles and must be re-pinned from a fresh plaintext set (new `date`).
+- This repo stores only `hash + label + checker_pair + date + role`. No plaintext, no
+  pepper.
+- The generator that holds the plaintext and reads the pepper is kept off-repo (XC1's
+  session scratchpad at authoring time, then the operator / CI).
+- **Running the full known-answer eval requires BOTH the off-repo plaintext AND the
+  pepper.** Without them, a harness can verify the table's integrity (shape,
+  uniqueness, enums, "no sentence") but cannot score a checker against it, because it
+  can neither ask the questions nor recompute a digest. That is by design: the table
+  is the seed, the canary and the holdout, and a holdout you can read is not a holdout.
+
+If the pepper (or the plaintext) is lost, the digests cannot be reversed or
+recomputed; the table is then only a record of labels/roles and must be re-pinned
+from a fresh plaintext set under a fresh pepper (new `date`).
 
 ## Integrity test
 

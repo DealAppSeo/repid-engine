@@ -184,8 +184,10 @@ describe('policy-kernel known-answer table', () => {
 
     const MUTANTS: Array<{ why: string; row: Row }> = [
       // the canary that matters most: a smuggled plaintext SENTENCE (has spaces, is long)
-      { why: 'plaintext sentence smuggled into a field', row: { ...GOOD, label: 'The capital of Australia is Sydney.' } },
-      { why: 'plaintext sentence smuggled as an extra field', row: { ...GOOD, question: 'Is the Great Wall visible from the Moon?' } as Row },
+      // Synthetic sentences only — never a real row's plaintext; the point is that ANY string
+      // with whitespace (or over 64 chars) is rejected, which is how "no sentence" is enforced.
+      { why: 'plaintext sentence smuggled into a field', row: { ...GOOD, label: 'this label field holds a whole sentence with spaces' } },
+      { why: 'plaintext sentence smuggled as an extra field', row: { ...GOOD, question: 'a smuggled plaintext field containing spaces and words' } as Row },
       { why: 'non-hex hash', row: { ...GOOD, hash: 'not-a-sha256-hash' } },
       { why: 'uppercase-hex hash (not lowercase)', row: { ...GOOD, hash: 'A'.repeat(64) } },
       { why: 'short hash', row: { ...GOOD, hash: 'a'.repeat(63) } },
