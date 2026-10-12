@@ -321,7 +321,10 @@ describe('POST /api/v1/classify — wiring', () => {
   it('is mounted before global CORS, the SQL sanitizer and authMiddleware', () => {
     const mountAt = indexSrc.indexOf("app.use('/api/v1', classifyRouter)");
     expect(mountAt).toBeGreaterThan(-1);
-    expect(indexSrc.indexOf('app.use(cors(')).toBeGreaterThan(mountAt);
+    // The global allow-list is mounted either bare or wrapped by withOpenReadCors (the public-read
+    // routes' open policy, src/middleware/open-read-cors.ts). Both are THE global CORS; a missing
+    // one is -1 and fails the comparison, exactly as the bare literal did.
+    expect(indexSrc.search(/app\.use\((?:withOpenReadCors\()?cors\(/)).toBeGreaterThan(mountAt);
     expect(indexSrc.indexOf('// Sanitize POST validator')).toBeGreaterThan(mountAt);
     expect(indexSrc.indexOf('app.use(authMiddleware)')).toBeGreaterThan(mountAt);
   });

@@ -7,6 +7,7 @@ import { startPeerVerificationReader } from './services/peer-verification-reader
 import { startHitlExpirySweeper } from './services/hitl-expiry-sweeper';
 import cors from 'cors';
 import { isAllowedOrigin } from './utils/cors-origins';
+import { withOpenReadCors } from './middleware/open-read-cors';
 import helmet from 'helmet';
 import { config } from './config';
 import healthRouter from './routes/health';
@@ -268,7 +269,11 @@ app.use('/api/v1/telegram-public', telegramPublicRouter);
 // subscribe, track, session/share, leaderboard) cross-origin. NOTE (S-FRONTEND restore): this
 // trust*.dev allowance shipped in #82 but was dropped by a later merge — restored here so the live
 // frontend buttons stop CORS-failing.
-app.use(cors({
+//
+// The short list of PUBLIC READ routes in src/middleware/open-read-cors.ts (RepID lookup, proof,
+// passport, faucet info/balance) gets any-origin no-credentials CORS instead, so the extension and
+// any site can read them; everything else — every write, spend, mint, stake — keeps this allow-list.
+app.use(withOpenReadCors(cors({
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     // Allow no-origin requests (server-to-server, curl, mobile apps).
     if (!origin) return callback(null, true);
@@ -282,7 +287,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: CORS_ALLOWED_HEADERS,
   exposedHeaders: CORS_EXPOSED_HEADERS,
-}));
+})));
 app.use(express.json({ limit: "1mb" }));
 
 // CC Sprint 2: global rate limiter on /api/v1/*. Order matters — must run

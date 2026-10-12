@@ -13,6 +13,8 @@ process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'test-key
 
 // Controls the mocked native ETH balance (wei) for a given test.
 let mockEthWei: bigint = 0n;
+// When true the mocked RPC is unreachable (the sandbox's own situation: the proxy refuses it).
+let mockRpcDown = false;
 
 jest.mock('ethers', () => {
   const actual = jest.requireActual('ethers');
@@ -21,7 +23,10 @@ jest.mock('ethers', () => {
     ethers: {
       ...actual.ethers,
       JsonRpcProvider: jest.fn().mockImplementation(() => ({
-        getBalance: jest.fn().mockImplementation(async () => mockEthWei),
+        getBalance: jest.fn().mockImplementation(async () => {
+          if (mockRpcDown) throw new Error('RPC unreachable (test)');
+          return mockEthWei;
+        }),
       })),
       Contract: jest.fn().mockImplementation(() => ({
         balanceOf: jest.fn().mockResolvedValue(1_000_000n), // 1 USDC (6 decimals)
@@ -104,6 +109,31 @@ describe('E2E faucet routes', () => {
       expect(res.body.enough_for_gas).toBe(true);
       expect(res.body.next_step).toBe('Ready to stake.');
       expect(res.body.usdc_balance).toBe('1.0'); // from the mocked ERC-20 read
+    });
+
+    it('an unreachable RPC is a 502 RPC_ERROR with NO balance — never a fabricated 0', async () => {
+      // NOT_CHECKED, not zero: "0 ETH, go fund your wallet" about a wallet we could not read would
+      // send a funded user to a faucet. The response must carry no balance and no enough_* verdict.
+      mockRpcDown = true;
+      try {
+        const res = await request(makeApp()).get(`/api/v1/faucet/balance?address=${ADDR}`);
+        expect(res.status).toBe(502);
+        expect(res.body.error).toBe('RPC_ERROR');
+        expect(res.body).not.toHaveProperty('eth_balance');
+        expect(res.body).not.toHaveProperty('enough_to_stake');
+      } finally {
+        mockRpcDown = false;
+      }
+    });
+
+    it('is a read: it dispenses nothing and carries no transaction', async () => {
+      mockEthWei = 0n;
+      const res = await request(makeApp()).get(`/api/v1/faucet/balance?address=${ADDR}`);
+      expect(res.body).not.toHaveProperty('tx_hash');
+      expect(res.body).not.toHaveProperty('dispensed');
+      // And there is no write verb on this surface at all.
+      expect((await request(makeApp()).post(`/api/v1/faucet/balance?address=${ADDR}`)).status).toBe(404);
+      expect((await request(makeApp()).post('/api/v1/faucet/dispense')).status).toBe(404);
     });
   });
 });

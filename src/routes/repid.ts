@@ -25,6 +25,7 @@ import { fireWebhook } from '../services/webhook';
 import { publicError } from './public-error';
 import { previewCatalog, previewRepId } from '../engine/repid-preview';
 import { repidScoreTier } from '../services/repid-score-tier';
+import { repidMintStatus } from '../services/repid-mint-status';
 import { REPID_MAX, REPID_MIN } from '../scoring/repid-deltas';
 import { easBlock } from '../services/anchor-status';
 
@@ -127,7 +128,7 @@ repidPublicRouter.get('/repid/preview/project', (req: Request, res: Response) =>
   return res.json({ ok: true, ...previewRepId({ baseRepId, eventTypes }) });
 });
 
-// GET /api/v1/repid/:agentId — score and tier only (plus agent_id with ?with=id).
+// GET /api/v1/repid/:agentId — score, tier and ERC-8004 mint status (plus agent_id with ?with=id).
 // A missing id is NOT_CHECKED, never 0. This handler does not insert.
 repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => {
   try {
@@ -143,11 +144,19 @@ repidPublicRouter.get('/repid/:agentId', async (req: Request, res: Response) => 
       return;
     }
     const lookup = await getRepIDForAgent(resolvedId);
-    const body = repidScoreTier({ score: lookup.repid_score, tier: lookup.tier });
+    // The score card plus the ERC-8004 second factor (token id + 3-state mint status), from the
+    // same row and the same ladder /passport/:id uses. Added to a FOUND agent only: an unknown
+    // id stays exactly { score, tier } NOT_CHECKED and carries no mint fields at all — an agent
+    // that does not exist has no mint status to report, and "not minted" would be a claim.
+    // Before this, `GET /repid/:id` returned no mint state and every reader showed it as unknown.
+    const body = {
+      ...repidScoreTier({ score: lookup.repid_score, tier: lookup.tier }),
+      ...repidMintStatus({ mint_tx_hash: lookup.mint_tx_hash, erc8004_token_id: lookup.erc8004_token_id }),
+    };
     // ?with=id adds the agent id this name resolved to, so a client can bind a proof to the
     // agent it asked about (Strix on trustshell #437: the popup showed "verified" for any
     // internally-consistent proof, without checking it belonged to the queried agent). Opt-in:
-    // the default body stays exactly { score, tier }. The id is already public on /proof.
+    // the default body carries no agent_id. The id is already public on /proof.
     if (req.query.with === 'id') {
       res.status(200).json({ ...body, agent_id: resolvedId });
       return;

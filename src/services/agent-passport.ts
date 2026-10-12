@@ -28,6 +28,7 @@ const REPUTATION_REGISTRY_BASE_SEPOLIA =
   '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 
 import { deriveIdentityState } from './identity-state';
+import { guardRegistryAddress, type RegistryRejection } from '../identity/registry-address';
 import { deriveAnchorStatus, ANCHOR_NOTES, type AnchorStatus } from './anchor-status';
 import { vestingBlock, type VestingBlock } from './vesting-status';
 import { proofClaim, type ProofClaim } from './proof-claim';
@@ -98,7 +99,16 @@ export interface AgentPassport {
      */
     registered_onchain: 'MINTED' | 'UNVERIFIED' | 'NOT_MINTED';
     token_id: string | null;
+    /**
+     * The ERC-8004 IdentityRegistry the token lives in — the canonical registry, or null. Never the
+     * raw stored column: that holds placeholders and transaction hashes for most agents, so it is
+     * published only when it equals the canonical registry (identity/registry-address.ts).
+     */
     contract_address: string | null;
+    /** CANONICAL when `contract_address` is set; NOT_CHECKED when we will not vouch for a value. */
+    contract_address_check: 'CANONICAL' | 'NOT_CHECKED';
+    /** Why `contract_address` is null; null when it is set. */
+    contract_address_reason: RegistryRejection | null;
     chain_id: number | null;
     network: string | null;
     mint_tx_hash: string | null;
@@ -282,16 +292,20 @@ export async function buildAgentPassport(
    * The absence of a transaction hash in our table is not evidence about the blockchain. It is
    * evidence about our table. Those are different claims and only one of them was ours to make.
    */
-  // `minted` stays local because `contract_address` below is gated on it. The ladder itself now
-  // lives in ONE place — see identity-state.ts. It was extracted, unchanged, the moment a second
-  // consumer needed it, rather than copied: an open-coded second copy of a ladder is the defect
-  // this repo has already paid for repeatedly with tiers, and it never fails loudly when it drifts.
-  const minted = !!agent.mint_tx_hash;
+  // The ladder lives in ONE place — see identity-state.ts. It was extracted, unchanged, the moment
+  // a second consumer needed it, rather than copied: an open-coded second copy of a ladder is the
+  // defect this repo has already paid for repeatedly with tiers, and it never fails loudly when it
+  // drifts. (A local `minted` boolean used to gate `contract_address` here; the registry guard below
+  // takes the state itself, so that second reading of the same column is gone.)
   const identityState = deriveIdentityState({
     mint_tx_hash: agent.mint_tx_hash ?? null,
     erc8004_token_id: agent.erc8004_token_id ?? null,
   });
   const mintChainId: number | null = agent.mint_chain_id ?? null;
+  // `erc8004_address` is bookkeeping and was published verbatim; for most rows it is not a registry
+  // address at all. Publish the canonical registry only when the stored value IS it, else null +
+  // a reason. Never repeat a value we cannot recognise. See identity/registry-address.ts.
+  const registry = guardRegistryAddress(agent.erc8004_address, { state: identityState, chainId: mintChainId });
 
   return {
     passport_version: '1',
@@ -320,7 +334,9 @@ export async function buildAgentPassport(
     identity_erc8004: {
       registered_onchain: identityState,
       token_id: agent.erc8004_token_id ?? null,
-      contract_address: minted ? agent.erc8004_address ?? null : null,
+      contract_address: registry.address,
+      contract_address_check: registry.status,
+      contract_address_reason: registry.reason,
       chain_id: mintChainId,
       network: chainName(mintChainId),
       mint_tx_hash: agent.mint_tx_hash ?? null,
