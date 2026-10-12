@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { x402Facilitator, X402_VERSION } from '../services/x402-facilitator';
 import { repIdAttestationService } from '../services/repid-attestation';
+import { isPayableAddress } from '../services/payee-guard';
 import { db } from '../db';
 
 const router = Router();
@@ -24,9 +25,21 @@ router.post('/:uuid/trade-analysis', async (req: Request, res: Response) => {
 
   const priceUsdc = "10000"; // 0.01 USDC
   const resource = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+
+  // Fail closed: never advertise a 402 whose payee is the zero address. An agent
+  // with no real payout wallet cannot be paid, so refuse rather than tell the
+  // caller to sign an authorization to a burn.
+  const payTo = agent.wallet_address;
+  if (!isPayableAddress(payTo)) {
+    return res.status(409).json({
+      error: 'payee_unset',
+      message: `agent ${agent.agent_name} has no payout wallet address; refusing to advertise payment to the zero address`,
+    });
+  }
+
   const requirements = x402Facilitator.buildPaymentRequirements({
     resource,
-    payTo: agent.wallet_address || '0x0000000000000000000000000000000000000000',
+    payTo,
     priceUsdc,
     network: 'base-sepolia',
     description: `${agent.agent_name} trade analysis — verified by HyperDAG ZKP RepID`

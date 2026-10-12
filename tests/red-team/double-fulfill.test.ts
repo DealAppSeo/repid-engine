@@ -123,7 +123,7 @@ describe('Red Team Security Hardening Tests (H1-H4 & P-B)', () => {
             return Promise.resolve({ data: opts.agentService || null, error: null });
           }
           if (table === 'repid_agents') {
-            return Promise.resolve({ data: opts.repidAgent || { current_repid: 200, wallet_address: '0xmock' }, error: null });
+            return Promise.resolve({ data: opts.repidAgent || { current_repid: 200, wallet_address: '0x2222222222222222222222222222222222222222' }, error: null });
           }
           if (table === 'x402_settlements') {
             if (lastEqField === 'idempotency_key') {
@@ -143,7 +143,7 @@ describe('Red Team Security Hardening Tests (H1-H4 & P-B)', () => {
             });
           }
           if (table === 'repid_agents') {
-            return Promise.resolve({ data: opts.repidAgent || { current_repid: 200, wallet_address: '0xmock' }, error: null });
+            return Promise.resolve({ data: opts.repidAgent || { current_repid: 200, wallet_address: '0x2222222222222222222222222222222222222222' }, error: null });
           }
           if (table === 'x402_settlements') {
             return Promise.resolve({ data: { id: 'settlement-uuid' }, error: null });

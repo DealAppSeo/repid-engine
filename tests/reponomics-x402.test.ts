@@ -38,6 +38,12 @@ jest.mock('../src/db', () => {
 
 import { createTipRequest, deliverTip } from '../src/services/x402-server';
 
+// A real, non-zero payout wallet so the E-4 fail-closed payee guard admits the
+// happy path. An unset PROVIDER_AGENT_WALLET now refuses rather than falling
+// back to the zero address — that refusal is proven in
+// tests/payee-fail-closed.test.ts.
+process.env.PROVIDER_AGENT_WALLET = '0x' + '2'.repeat(40);
+
 describe('x402-server — createTipRequest', () => {
   beforeAll(() => { delete process.env.X402_REAL_RPC; });
 
