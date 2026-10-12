@@ -13,7 +13,7 @@
  */
 import { Wallet } from 'ethers';
 import * as decideModule from '../decide';
-import { REQUIRED_CHECKS, decide, parseAmountRaw } from '../decide';
+import { CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, decide, parseAmountRaw } from '../decide';
 import { runUnderKernel } from '../gate';
 import { POLICY_DOMAIN, POLICY_TYPES, parsePolicy, policyHash, policyTypedValue } from '../policy';
 import { hashArgs, validateReceipt, verifyReceiptChain } from '../receipt';
@@ -280,7 +280,7 @@ describe('(b) NOT_CHECKED is blocking', () => {
     const h = harness();
     // Build it through the strict parser, the way POST /policy does, with the limits left out.
     const parsed = parsePolicy({ subject: AGENT_ID, owner: h.owner.address, actions: ['spend'], expires_at: NOW_S + 3600, nonce: '1' });
-    expect(parsed.ok && parsed.defaulted).toEqual(['per_tx_raw', 'daily_raw', 'total_raw']);
+    expect(parsed.ok && parsed.defaulted).toEqual(['payees', 'per_tx_raw', 'daily_raw', 'total_raw']);
     if (!parsed.ok) throw new Error('unreachable');
     const signature = await h.owner.signTypedData(POLICY_DOMAIN, POLICY_TYPES, policyTypedValue(parsed.policy));
     await h.ledger.appendPolicy({ policy: parsed.policy, signature }, iso);
@@ -299,6 +299,141 @@ describe('(b) NOT_CHECKED is blocking', () => {
     const out = await runUnderKernel(spendRequest(), jest.fn(), h.deps);
     expect(out.verdict).toBe('DENY');
     expect(codes(out)).toContain('spend_limit_zero');
+  });
+});
+
+// ── the payee allow-list: a spend to a payee not on the owner's list is refused ────────────────
+
+describe('(e) the payee allow-list: default deny, like the limits', () => {
+  const OTHER = '0x00000000000000000000000000000000000beef1';
+
+  it('a payee NOT on the list → DENY(payee_not_allowed), a receipt with executed:false, the tool called 0 times', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { payees: [PAYEE] }), iso); // limits are generous: only the payee is wrong
+    const tool = jest.fn(async () => 'money moved');
+    const out = await runUnderKernel(spendRequest({ payee: OTHER }), tool, h.deps);
+
+    expect(tool).toHaveBeenCalledTimes(0);
+    expect(out.verdict).toBe('DENY');
+    expect(out.executed).toBe(false);
+    expect(codes(out)).toEqual(['payee_not_allowed']); // nothing else is wrong with it
+    const r = out.decision_receipt!;
+    expect(r.decision.executed).toBe(false);
+    expect(check(r, 'payee_allowed')).toBe('FAIL');
+    expect(check(r, 'spend_limit')).toBe('PASS'); // the amount was fine; the payee is what refused it
+    expect(r.request.payee).toBe(OTHER);
+    expect(r.payment.status).toBe('NOT_APPLICABLE');
+    expect(validateReceipt(r)).toEqual({ ok: true });
+    expect(h.sink.records.filter((x) => x.kind === 'receipt')).toHaveLength(1);
+  });
+
+  it('a policy that lists NO payees refuses every spend: an omitted list is an empty list, never "anyone"', async () => {
+    for (const payees of [undefined, [] as string[]]) {
+      const h = harness();
+      const signed = await signedPolicy(h.owner, payees === undefined ? {} : { payees });
+      if (payees === undefined) {
+        // Built the way an owner who simply left the field out would: through the strict parser.
+        const { payees: _drop, ...rest } = signed.policy;
+        const parsed = parsePolicy(rest);
+        if (!parsed.ok) throw new Error('unreachable');
+        expect(parsed.policy.payees).toEqual([]);
+        expect(parsed.defaulted).toContain('payees');
+        await h.ledger.appendPolicy({ policy: parsed.policy, signature: await h.owner.signTypedData(POLICY_DOMAIN, POLICY_TYPES, policyTypedValue(parsed.policy)) }, iso);
+      } else {
+        await h.ledger.appendPolicy(signed, iso);
+      }
+      const tool = jest.fn();
+      const out = await runUnderKernel(spendRequest({ amount_raw: 1 }), tool, h.deps);
+      expect(out.verdict).toBe('DENY');
+      expect(codes(out)).toEqual(['payee_not_allowed']);
+      expect(out.decision_receipt!.decision.reasons[0]!.detail).toMatch(/lists no payees/);
+      expect(tool).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a spend that names no payee is refused', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const tool = jest.fn();
+    const out = await runUnderKernel(spendRequest({ payee: null }), tool, h.deps);
+    expect(out.verdict).toBe('DENY');
+    expect(codes(out)).toContain('payee_not_allowed');
+    expect(tool).not.toHaveBeenCalled();
+  });
+
+  it('(e2) positive control: a payee ON the list passes the gate and the spend is allowed', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { payees: [OTHER, PAYEE] }), iso);
+    const tool = jest.fn(async () => 'paid');
+    const out = await runUnderKernel(spendRequest({ payee: PAYEE }), tool, h.deps);
+    expect(out.verdict).toBe('ALLOW');
+    expect(tool).toHaveBeenCalledTimes(1);
+    expect(check(out.decision_receipt!, 'payee_allowed')).toBe('PASS');
+  });
+
+  it('the match ignores letter case (a checksummed list, a lower-case request)', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { payees: [PAYEE] }), iso);
+    const out = await runUnderKernel(spendRequest({ payee: PAYEE.toLowerCase() }), jest.fn(async () => 'paid'), h.deps);
+    expect(out.verdict).toBe('ALLOW');
+  });
+
+  it('widening the list after the owner signed it voids the policy: DENY(policy_signature_invalid)', async () => {
+    const h = harness();
+    const signed = await signedPolicy(h.owner, { payees: [PAYEE] });
+    signed.policy.payees = [PAYEE, OTHER]; // an attacker adds themselves
+    await h.ledger.appendPolicy(signed, iso);
+    const tool = jest.fn();
+    const out = await runUnderKernel(spendRequest({ payee: OTHER }), tool, h.deps);
+    expect(out.verdict).toBe('DENY');
+    expect(codes(out)).toContain('policy_signature_invalid');
+    expect(tool).not.toHaveBeenCalled();
+  });
+
+  it('is a spend gate only: a post or a read is not asked for a payee', async () => {
+    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'm', votes: [], settled_by: null, grounded: true, same_domain: true }) });
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { payees: [] }), iso);
+    expect((await runUnderKernel(postRequest(), jest.fn(async () => 'ok'), h.deps)).verdict).toBe('ALLOW');
+    expect((await runUnderKernel({ ...postRequest(), tool: { name: 'fs.read', class: 'read' } }, jest.fn(async () => 1), h.deps)).verdict).toBe('ALLOW');
+  });
+
+  it('the payee gate is one of the checks an ALLOW spend needs: dropping it from a receipt invalidates the receipt', () => {
+    expect(REQUIRED_CHECKS.spend).toContain('payee_allowed');
+  });
+});
+
+describe('(f) the receipt does not let a resetting cap read as a lifetime one', () => {
+  it('every kind of call says the total cap is per policy version and resets on supersession', async () => {
+    const h = harness({ halCheck: async () => ({ verdict: 'PASS', method: 'm', votes: [], settled_by: null, grounded: true, same_domain: true }) });
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const receipts: KernelReceipt[] = [];
+    for (const [req, tool] of [
+      [spendRequest(), async () => 'a'],
+      [spendRequest({ payee: '0x00000000000000000000000000000000000beef1' }), async () => 'refused'],
+      [postRequest(), async () => 'b'],
+      [{ ...postRequest(), tool: { name: 'fs.read', class: 'read' } }, async () => 'c'],
+    ] as const) {
+      const out = await runUnderKernel(req, tool, h.deps);
+      receipts.push(out.decision_receipt!);
+      if (out.final_receipt) receipts.push(out.final_receipt);
+    }
+    expect(receipts.length).toBeGreaterThanOrEqual(5);
+    for (const r of receipts) {
+      expect(r.decision.does_not_attest).toContain(CUMULATIVE_TOTAL_NOTE);
+      expect(r.decision.does_not_attest).toContain(TOTAL_CAP_SCOPE_NOTE);
+    }
+    expect(TOTAL_CAP_SCOPE_NOTE).toMatch(/per policy version/);
+    expect(TOTAL_CAP_SCOPE_NOTE).toMatch(/resets when a policy is superseded/);
+  });
+
+  it('and the claim is TRUE: the total is keyed to the policy hash, so a superseding policy starts from zero', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '1', per_tx_raw: '600', daily_raw: '100000', total_raw: '1000' }), iso);
+    expect((await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps)).verdict).toBe('ALLOW');
+    expect((await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps)).decision_receipt!.decision.limits.binding_term).toBe('total');
+    await h.ledger.appendPolicy(await signedPolicy(h.owner, { nonce: '2', per_tx_raw: '600', daily_raw: '100000', total_raw: '1000' }), iso);
+    const afterSupersession = await runUnderKernel(spendRequest({ amount_raw: 600 }), async () => 'ok', h.deps);
+    expect(afterSupersession.verdict).toBe('ALLOW'); // the same 1000 total, spent again: it reset
   });
 });
 
@@ -613,7 +748,7 @@ describe('(d) non-vacuity: a default-allow decide must make the refusal demo FAI
     executed: false,
     reasons: [],
     checks: [],
-    does_not_attest: ['cumulative_total (no atomic reservation)'],
+    does_not_attest: [CUMULATIVE_TOTAL_NOTE],
     policy: { policy_hash: null, signer: null, signature: 'NOT_CHECKED', expires_at: null, revocation: 'NOT_CHECKED' },
     limits: { per_tx_raw: '0', daily_raw: '0', total_raw: '0', effective_per_tx_raw: '0', binding_term: 'default_zero' },
     laya: { lane: null, mode: 'shadow', consulted: false },
@@ -622,6 +757,7 @@ describe('(d) non-vacuity: a default-allow decide must make the refusal demo FAI
   /** A decide() that approves everything AND forges a clean-looking trail, to get past the ledger. */
   const forgedAllow = (): DecisionLeg => ({
     ...lazyAllow(),
+    does_not_attest: [CUMULATIVE_TOTAL_NOTE, TOTAL_CAP_SCOPE_NOTE],
     checks: allCheckNames('spend'),
     policy: { policy_hash: null, signer: null, signature: 'VERIFIED', expires_at: null, revocation: 'VERIFIED' },
     limits: { per_tx_raw: '1000000000', daily_raw: '1000000000', total_raw: '1000000000', effective_per_tx_raw: '1000000000', binding_term: 'per_tx' },

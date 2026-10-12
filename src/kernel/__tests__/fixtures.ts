@@ -37,6 +37,7 @@ export async function signedPolicy(signer: Wallet, over: Partial<OwnerPolicy> & 
     subject: AGENT_ID,
     owner: claimedOwner ?? signer.address,
     actions: ['spend', 'post', 'tool'],
+    payees: [PAYEE],
     per_tx_raw: '1000000',
     daily_raw: '5000000',
     total_raw: '20000000',

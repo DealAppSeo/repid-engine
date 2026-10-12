@@ -251,6 +251,12 @@ describe('honesty clauses', () => {
     expect(codesOf(reseal(r))).toEqual(['does_not_attest_missing_cumulative_total']);
   });
 
+  it('a spend receipt must say the total cap is per policy version', async () => {
+    const r = await denied();
+    r.decision.does_not_attest = r.decision.does_not_attest.filter((s) => !s.startsWith('total_cap_scope'));
+    expect(codesOf(reseal(r))).toEqual(['does_not_attest_missing_total_scope']);
+  });
+
   it('a DENY or NOT_CHECKED with no reason is invalid', async () => {
     const r = await denied();
     r.decision.reasons = [];
@@ -401,11 +407,11 @@ describe('the signed policy', () => {
 
   it('MISSING limits are "0" and are reported as defaulted', () => {
     const p = parsePolicy(base);
-    expect(p.ok && p.policy).toMatchObject({ per_tx_raw: '0', daily_raw: '0', total_raw: '0' });
-    expect(p.ok && p.defaulted).toEqual(['per_tx_raw', 'daily_raw', 'total_raw']);
+    expect(p.ok && p.policy).toMatchObject({ per_tx_raw: '0', daily_raw: '0', total_raw: '0', payees: [] });
+    expect(p.ok && p.defaulted).toEqual(['payees', 'per_tx_raw', 'daily_raw', 'total_raw']);
     const some = parsePolicy({ ...base, per_tx_raw: '500' });
     expect(some.ok && some.policy).toMatchObject({ per_tx_raw: '500', daily_raw: '0', total_raw: '0' });
-    expect(some.ok && some.defaulted).toEqual(['daily_raw', 'total_raw']);
+    expect(some.ok && some.defaulted).toEqual(['payees', 'daily_raw', 'total_raw']);
   });
 
   it('a PRESENT but malformed limit is an error — never quietly 0, never quietly accepted', () => {
@@ -428,11 +434,24 @@ describe('the signed policy', () => {
     expect(parseSignedPolicy({ policy: base, signature: '0x' + 'ab'.repeat(65) }).ok).toBe(true);
   });
 
+  it('payees: normalised to checksum form, strict about shape, and omitted means none', () => {
+    const lower = '0x000000000000000000000000000000000000dead';
+    const ok = parsePolicy({ ...base, payees: [lower] });
+    expect(ok.ok && ok.policy.payees).toEqual(['0x000000000000000000000000000000000000dEaD']);
+    expect(ok.ok && ok.defaulted).not.toContain('payees');
+    expect(parsePolicy({ ...base, payees: [] }).ok).toBe(true);
+    expect(parsePolicy({ ...base, payees: null }).ok && (parsePolicy({ ...base, payees: null }) as { defaulted: string[] }).defaulted).toContain('payees');
+    for (const bad of ['0xabc', 'a payee', 5, null, {}, [lower, lower.toUpperCase().replace('0X', '0x')], [5], ['not-an-address']]) {
+      if (bad === null) continue;
+      expect({ bad, ok: parsePolicy({ ...base, payees: bad }).ok }).toEqual({ bad, ok: false });
+    }
+  });
+
   it('policyHash changes when any signed field changes', () => {
     const p = parsePolicy({ ...base, per_tx_raw: '1' });
     if (!p.ok) throw new Error('unreachable');
     const h0 = policyHash(p.policy);
-    const variants: Partial<OwnerPolicy>[] = [{ per_tx_raw: '2' }, { daily_raw: '1' }, { total_raw: '1' }, { expires_at: 1_800_003_601 }, { nonce: '2' }, { actions: ['post'] }, { subject: 'other' }];
+    const variants: Partial<OwnerPolicy>[] = [{ payees: ['0x000000000000000000000000000000000000dEaD'] }, { per_tx_raw: '2' }, { daily_raw: '1' }, { total_raw: '1' }, { expires_at: 1_800_003_601 }, { nonce: '2' }, { actions: ['post'] }, { subject: 'other' }];
     for (const v of variants) expect(policyHash({ ...p.policy, ...v })).not.toBe(h0);
   });
 
@@ -458,12 +477,12 @@ describe('the signed policy', () => {
  * vector in tests/owner-authorization.test.ts.)
  */
 const SCHEMA_SHA256 = '9519068e49073f2d5de094e5acbbe157af41555bb5a9bcb56d03c94cdd1ac5d9';
-const VECTOR_HASH = '0x228b214a84c41fcd1a56f49e4e82c0b5c596f894badc149be8cc48412417da9e';
+const VECTOR_HASH = '0x5110abfef0a7ba2685214b1873bf22eac5a823aa367dc60a872691639571b88f';
 const VECTOR_ARGS_HASH = '0xd82cf87614b294f236e7d71bdbc831d606503ec1f6446013321450df46425440';
 const VECTOR_OWNER = '0x1111111111111111111111111111111111111111';
 
 function vectorReceipt(): KernelReceipt {
-  const policy: OwnerPolicy = { subject: AGENT_ID, owner: VECTOR_OWNER, actions: ['spend'], per_tx_raw: '0', daily_raw: '5000000', total_raw: '20000000', expires_at: 1_800_003_600, nonce: '1' };
+  const policy: OwnerPolicy = { subject: AGENT_ID, owner: VECTOR_OWNER, actions: ['spend'], payees: ['0x000000000000000000000000000000000000dEaD'], per_tx_raw: '0', daily_raw: '5000000', total_raw: '20000000', expires_at: 1_800_003_600, nonce: '1' };
   const request = {
     agent: { agent_id: AGENT_ID, agent_name: 'kernel-demo-agent' },
     tool: { name: 'x402.pay', class: 'spend' as const },

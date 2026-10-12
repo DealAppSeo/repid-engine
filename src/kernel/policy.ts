@@ -11,6 +11,7 @@
  *     omits `per_tx_raw` permits a per-transaction spend of nothing.
  *   - There are three limits (per-transaction, daily, total) and the one that binds is the smallest.
  *   - It lists ACTIONS (`spend`, `post`, `tool`, `tool:<name>`); anything unlisted is denied.
+ *   - It lists the PAYEES a spend may pay. Omitted is empty, and empty allows nobody.
  *   - It is verified against the agent's ACCOUNTABLE ROOT (accountable-root.ts), not against
  *     whoever claims to be the owner: the signature must be the root's, or the policy is void.
  *
@@ -45,6 +46,7 @@ export const POLICY_TYPES: Record<string, Array<{ name: string; type: string }>>
     { name: 'subject', type: 'string' },
     { name: 'owner', type: 'address' },
     { name: 'actions', type: 'string[]' },
+    { name: 'payees', type: 'address[]' },
     { name: 'perTxRaw', type: 'uint256' },
     { name: 'dailyRaw', type: 'uint256' },
     { name: 'totalRaw', type: 'uint256' },
@@ -59,6 +61,7 @@ export function policyTypedValue(p: OwnerPolicy): Record<string, unknown> {
     subject: p.subject,
     owner: p.owner,
     actions: p.actions,
+    payees: p.payees ?? [],
     perTxRaw: p.per_tx_raw,
     dailyRaw: p.daily_raw,
     totalRaw: p.total_raw,
@@ -74,7 +77,7 @@ export function policyHash(p: OwnerPolicy): string {
 
 // ── parsing ─────────────────────────────────────────────────────────────────────────────────────
 
-const POLICY_KEYS = new Set(['subject', 'owner', 'actions', 'per_tx_raw', 'daily_raw', 'total_raw', 'expires_at', 'nonce']);
+const POLICY_KEYS = new Set(['subject', 'owner', 'actions', 'payees', 'per_tx_raw', 'daily_raw', 'total_raw', 'expires_at', 'nonce']);
 const ACTION = /^(spend|post|tool|tool:[A-Za-z0-9_.:-]{1,128})$/;
 const SIGNATURE = /^0x(?:[0-9a-fA-F]{2}){2,10000}$/;
 const MAX_ACTIONS = 64;
@@ -121,6 +124,22 @@ export function parsePolicy(input: unknown): PolicyParse {
   }
 
   const defaulted: string[] = [];
+
+  // The payee allow-list. Omitted is EMPTY, and empty allows nobody: reported, never silently ignored.
+  const payeesRaw = input['payees'];
+  const payees: string[] = [];
+  if (payeesRaw === undefined || payeesRaw === null) {
+    defaulted.push('payees');
+  } else if (!Array.isArray(payeesRaw) || payeesRaw.length > MAX_ACTIONS) {
+    errors.push('payees must be a list of wallet addresses');
+  } else {
+    for (const a of payeesRaw) {
+      if (typeof a !== 'string' || !isAddress(a)) errors.push('payees holds an entry that is not a wallet address');
+      else if (payees.some((x) => x.toLowerCase() === a.toLowerCase())) errors.push('payees lists an address twice');
+      else payees.push(getAddress(a));
+    }
+  }
+
   const limit = (key: 'per_tx_raw' | 'daily_raw' | 'total_raw'): string => {
     const v = input[key];
     if (v === undefined || v === null) {
@@ -155,6 +174,7 @@ export function parsePolicy(input: unknown): PolicyParse {
       subject: subject as string,
       owner: ownerAddr,
       actions,
+      payees,
       per_tx_raw: perTx,
       daily_raw: daily,
       total_raw: total,

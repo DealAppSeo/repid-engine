@@ -192,14 +192,23 @@ const COMMON_CHECKS = [
 export const REQUIRED_CHECKS: Readonly<Record<ToolClass, readonly string[]>> = {
   read: COMMON_CHECKS,
   other: COMMON_CHECKS,
-  spend: [...COMMON_CHECKS, 'amount_valid', 'spend_totals', 'spend_limit'],
+  spend: [...COMMON_CHECKS, 'amount_valid', 'payee_allowed', 'spend_totals', 'spend_limit'],
   post: [...COMMON_CHECKS, 'hal_verdict'],
 };
 
 /** Standing statements about what no kernel decision establishes in the MVP. */
 export const CUMULATIVE_TOTAL_NOTE = 'cumulative_total (no atomic reservation)';
+/**
+ * The total limit is summed over spends recorded under ONE policy hash, and the hash includes the
+ * nonce. A higher-nonce policy therefore starts a fresh total. Whether the total should instead be
+ * per agent for its lifetime is the owner-of-the-decision's call (Sean's); until it is made, the
+ * receipt must not let a cap that resets read as one that does not.
+ */
+export const TOTAL_CAP_SCOPE_NOTE =
+  'total_cap_scope (the total limit is per policy version, not lifetime: it is keyed to the policy hash, which includes the nonce, so it resets when a policy is superseded)';
 const STANDING_DOES_NOT_ATTEST = [
   CUMULATIVE_TOTAL_NOTE,
+  TOTAL_CAP_SCOPE_NOTE,
   'tool_class (caller-asserted; there is no tool registry in the MVP)',
   'explicit_revocation (revocation is supersession by a higher nonce inside this ledger only)',
   'laya (shadow mode; not consulted)',
@@ -368,6 +377,23 @@ export function decide(input: DecideInput): DecisionLeg {
       record('amount_valid', 'PASS', 'kernel/decide');
     }
 
+    // The payee must be on the owner's list. An omitted list is an EMPTY list: nobody is allowed.
+    if (!verified || policy.state !== 'loaded') {
+      skip('payee_allowed', 'policy not verified');
+    } else {
+      const payee = typeof request.payee === 'string' ? request.payee.trim().toLowerCase() : '';
+      const listed = (policy.policy.payees ?? []).map((a) => a.toLowerCase());
+      if (payee === '') {
+        record('payee_allowed', 'FAIL', 'kernel/decide', { code: 'payee_not_allowed', detail: 'a spend must name its payee' });
+      } else if (listed.length === 0) {
+        record('payee_allowed', 'FAIL', 'kernel/decide', { code: 'payee_not_allowed', detail: 'the owner policy lists no payees (an unset list allows none)' });
+      } else if (!listed.includes(payee)) {
+        record('payee_allowed', 'FAIL', 'kernel/decide', { code: 'payee_not_allowed', detail: 'the payee is not on the owner policy\'s list' });
+      } else {
+        record('payee_allowed', 'PASS', 'kernel/decide');
+      }
+    }
+
     if (!verified) {
       skip('spend_totals', 'policy not verified');
     } else if (spent.state === 'ok') {
@@ -436,6 +462,12 @@ export function decide(input: DecideInput): DecisionLeg {
   if (cls === 'post') {
     if (hal.state !== 'consulted' || hal.evidence.verdict === 'ABSTAIN') doesNotAttest.push('hal_content_verdict (HAL did not answer)');
     else if (hal.evidence.settled_by === null) doesNotAttest.push('verification_settled (votes alone are PROVISIONAL; no holdout, known answer or person settled it)');
+  }
+  if (cls === 'spend') {
+    doesNotAttest.push('asset_and_chain (the owner policy does not constrain which asset or chain a spend uses)');
+    // The payee gate checks the payee the CALLER DECLARED. The tool is a closure the kernel never sees
+    // into, so what it then actually pays is not observed here.
+    doesNotAttest.push('declared_payment_fields (amount and payee are as the caller declared them; the kernel does not observe what the tool then pays)');
   }
   if (cls === 'spend' && verdict === 'ALLOW') doesNotAttest.push('settlement (this is an authorisation, not an observed payment)');
 

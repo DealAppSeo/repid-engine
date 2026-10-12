@@ -67,6 +67,7 @@ export type ReasonCode =
   | 'policy_revocation_not_checked'
   | 'action_not_permitted'
   // spend
+  | 'payee_not_allowed'
   | 'spend_limit_zero'
   | 'spend_limit_exceeded'
   | 'spend_totals_not_checked'
@@ -134,6 +135,13 @@ export interface OwnerPolicy {
   owner: string;
   /** `spend` | `post` | `tool` | `tool:<name>`. Anything not listed is denied. */
   actions: string[];
+  /**
+   * The wallets a spend may pay. DEFAULT DENY, like the limits: omitted (or empty) means NO payee is
+   * allowed, so an un-provisioned spend is refused, never allowed. Optional on the wire and in this
+   * type; `parsePolicy` always fills it. Matched case-insensitively. Only a `spend` consults it.
+   * It is an EIP-712 field: a policy signed before it existed does not verify under these types.
+   */
+  payees?: string[];
   per_tx_raw: string;
   daily_raw: string;
   total_raw: string;

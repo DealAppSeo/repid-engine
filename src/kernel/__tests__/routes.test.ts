@@ -81,6 +81,7 @@ describe('POST /api/v1/kernel/policy', () => {
     const res = await request(appWith(h.deps)).post('/api/v1/kernel/policy').send({ policy: noLimits, signature });
     expect(res.status).toBe(201);
     expect(res.body.limits_defaulted_to_zero).toEqual(['per_tx_raw', 'daily_raw', 'total_raw']);
+    expect(res.body.payees_defaulted_to_none).toBe(false); // the fixture policy lists a payee
     expect(policyCount(h)).toBe(1);
   });
 
@@ -132,6 +133,31 @@ describe('POST /api/v1/kernel/policy', () => {
     expect((await request(app).post('/api/v1/kernel/policy').send(await body(h, { nonce: '4' }))).status).toBe(409); // older
     expect((await request(app).post('/api/v1/kernel/policy').send(await body(h, { nonce: '6', per_tx_raw: '0' }))).status).toBe(201);
     expect(policyCount(h)).toBe(2);
+  });
+
+  it('a payee list left out is reported back as "none allowed"; a list that is there gates the dry decision', async () => {
+    const h = harness();
+    const app = appWith(h.deps);
+    const signed = await body(h, { nonce: '1', payees: ['0x000000000000000000000000000000000000dEaD'] });
+    const res = await request(app).post('/api/v1/kernel/policy').send(signed);
+    expect(res.status).toBe(201);
+    expect(res.body.payees_defaulted_to_none).toBe(false);
+    const onList = await request(app).post('/api/v1/kernel/decide').send(spendRequest({ payee: '0x000000000000000000000000000000000000dEaD' }));
+    expect(onList.body.verdict).toBe('ALLOW');
+    const offList = await request(app).post('/api/v1/kernel/decide').send(spendRequest({ payee: '0x00000000000000000000000000000000000beef1' }));
+    expect(offList.body.verdict).toBe('DENY');
+    expect(offList.body.reasons.map((r: { code: string }) => r.code)).toEqual(['payee_not_allowed']);
+    expect(offList.body.persisted).toBe(false);
+
+    // Same owner, the field omitted: accepted, and said back to them as an empty list.
+    const { payees: _p, ...noPayees } = (await body(h, { nonce: '2' })).policy;
+    const signature = await h.owner.signTypedData(POLICY_DOMAIN, POLICY_TYPES, policyTypedValue({ ...noPayees, payees: [] }));
+    const omitted = await request(app).post('/api/v1/kernel/policy').send({ policy: noPayees, signature });
+    expect(omitted.status).toBe(201);
+    expect(omitted.body.payees_defaulted_to_none).toBe(true);
+    const nobody = await request(app).post('/api/v1/kernel/decide').send(spendRequest());
+    expect(nobody.body.verdict).toBe('DENY');
+    expect(nobody.body.reasons.map((r: { code: string }) => r.code)).toEqual(['payee_not_allowed']);
   });
 
   it('end to end: set a zero-limit policy over HTTP, then the dry decision refuses a spend', async () => {

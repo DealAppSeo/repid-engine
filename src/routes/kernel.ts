@@ -158,8 +158,10 @@ export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Route
       subject: signed.policy.subject,
       nonce: signed.policy.nonce,
       expires_at: signed.policy.expires_at,
-      // Limits the owner left out are "0". Said back so an omission is never a surprise.
-      limits_defaulted_to_zero: defaulted,
+      // Limits the owner left out are "0", and a payee list left out allows nobody. Said back so an
+      // omission is never a surprise.
+      limits_defaulted_to_zero: defaulted.filter((k) => k.endsWith('_raw')),
+      payees_defaulted_to_none: defaulted.includes('payees'),
     });
   });
 

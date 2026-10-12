@@ -19,7 +19,7 @@
  */
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { canonicalJson } from '../services/owner-authorization';
-import { CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, parseAmountRaw } from './decide';
+import { CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, parseAmountRaw } from './decide';
 import type {
   ChainTip,
   DecisionLeg,
@@ -249,6 +249,7 @@ export type InvariantCode =
   | 'secret_shaped_material' // (8)
   | 'forbidden_key' // (8)
   | 'does_not_attest_missing_cumulative_total'
+  | 'does_not_attest_missing_total_scope'
   | 'simulation_mismatch'
   | 'settlement_unmeasured';
 
@@ -456,6 +457,11 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
   // honesty about what is not attested
   if (!d.does_not_attest.includes(CUMULATIVE_TOTAL_NOTE)) {
     add('does_not_attest_missing_cumulative_total', 'decision.does_not_attest', `must name "${CUMULATIVE_TOTAL_NOTE}"`);
+  }
+
+  // A cap that silently resets must not read as a lifetime guarantee: any spend record says so.
+  if (r.request.tool.class === 'spend' && !d.does_not_attest.includes(TOTAL_CAP_SCOPE_NOTE)) {
+    add('does_not_attest_missing_total_scope', 'decision.does_not_attest', 'a spend receipt must say the total cap is per policy version');
   }
 
   // the legs agree with the environment, and "settled" means something was measured
