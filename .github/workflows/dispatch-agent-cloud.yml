@@ -120,7 +120,7 @@ jobs:
       # Token is the App's when B11 is configured, else the PAT (unchanged behaviour).
       # Either way it is NOT github-actions[bot], so the pushed branch still triggers CI.
       - name: Checkout (App token or PAT so any PR opened here actually triggers CI)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ steps.app_token.outputs.token || secrets.LOOP_GH_PAT }}
@@ -145,7 +145,7 @@ jobs:
       # If this step fails, the dispatch never runs, which is the honest outcome: an inbox
       # asking about trustshell must not be answered by an agent that could not read it.
       - name: Checkout DealAppSeo/trustshell at ./trustshell (read-only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: DealAppSeo/trustshell
           ref: ${{ inputs.trustshell_ref || 'main' }}

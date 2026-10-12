@@ -99,7 +99,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout (PAT so anything pushed here still triggers CI)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.LOOP_GH_PAT }}
