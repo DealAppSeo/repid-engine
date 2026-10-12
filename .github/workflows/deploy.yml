@@ -34,7 +34,7 @@ jobs:
       DEPLOY_TARGET: ${{ github.event.inputs.deploy_target || vars.DEPLOY_TARGET || 'railway' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # --- RAILWAY PATH (default) ---
       # Railway auto-deploys from main via its own integration; nothing to do here.
