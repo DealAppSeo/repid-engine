@@ -126,12 +126,37 @@ always two distinct families.
 
 | role | count | how it is used |
 |---|---|---|
-| `seed` | 8 | **Calibrate.** Used to tune / sanity-check the verification leg: thresholds, the two-family agreement rule, prompt wiring. A seed row MAY be looked at while tuning. |
-| `canary` | 8 | **Detect drift, continuously.** Re-run on every build / on a schedule. A canary that flips its verdict (or a checker that starts disagreeing with a settled benchmark) is an alarm that a model, a provider, or a prompt changed under us. Canaries are stable benchmarks whose answer should never move. |
-| `holdout` | 6 | **Final eval only. NEVER used for tuning.** The holdout is the honest score: it is never consulted while calibrating, so a good holdout number cannot have been fitted. It carries the hardest trick questions and the `UNVERIFIABLE` rows. If a holdout row is ever used to tune, it is burned and must be replaced. |
+| `seed` | 18 | **Calibrate.** Used to tune / sanity-check the verification leg: thresholds, the two-family agreement rule, prompt wiring. A seed row MAY be looked at while tuning. |
+| `canary` | 18 | **Detect drift, continuously.** Re-run on every build / on a schedule. A canary that flips its verdict (or a checker that starts disagreeing with a settled benchmark) is an alarm that a model, a provider, or a prompt changed under us. Canaries are stable benchmarks whose answer should never move. |
+| `holdout` | 18 | **Final eval only. NEVER used for tuning.** The holdout is the honest score: it is never consulted while calibrating, so a good holdout number cannot have been fitted. It carries the hardest trick questions and the `UNVERIFIABLE` rows. If a holdout row is ever used to tune, it is burned and must be replaced. |
 
 The split follows Sean's "seed, canary, holdout" naming and the standard discipline:
 seed may be fit, canary watches for drift, holdout is the untouched final measure.
+
+## Night-sprint extension (2026-10-12): the stranger-path surface
+
+The first 22 rows are general trivia. The extension (+32, now 54) pins the claim shapes a
+stranger actually types into `check` and that the kernel's fail-closed invariants depend on.
+At the level of categories only, because the claims themselves are never committed:
+
+- **Arithmetic, float and unit traps** — the shapes behind a spend limit: floating-point
+  comparison semantics (including NaN), integer-precision limits, token base-unit and chain-id
+  facts, percent round-trips, near-miss products.
+- **Input-shape traps** — a claim that begins with `-` (a CLI parser can mistake it for a flag);
+  a claim that is an instruction rather than a proposition (prompt-injection shaped).
+- **`UNVERIFIABLE` (must read `NOT_CHECKED`, which blocks a spend and a post)** — future events,
+  facts about a private wallet or a counterparty's future behaviour, and a self-referential
+  statement. 9 of the 54 rows (the first 22 hold 3 of them).
+
+**What a row cannot express.** A secret-shaped input is *refused before it is checked*, so it has
+no ground-truth label and no row; the `label` enum has no `REFUSE`. That behaviour is exercised by
+the red-team probes, not by this table, and adding a fourth label would be a contract change
+(the kernel mapping above, and the integrity test's enum, would both move). Recorded here so the
+absence is a stated decision rather than a silent gap.
+
+**One pepper for the whole table.** The 32 new digests are keyed with the same off-repo pepper as
+the first 22 (checked by regenerating the original 22 and confirming they are byte-identical to
+what was merged). Rotating the pepper re-keys every row; there is no per-batch key.
 
 ## Content: trick questions and pinned benchmarks only
 

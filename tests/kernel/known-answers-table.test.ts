@@ -166,6 +166,36 @@ describe('policy-kernel known-answer table', () => {
     }
   });
 
+  // ── DOC-DRIFT GUARD: the README states per-role row counts; they must equal the table ───────
+  // The README's roles table said 8 / 8 / 6 until the table grew. A count in prose that nothing
+  // checks is the stale-number shape this repo keeps retracting.
+  describe('README role counts match the table', () => {
+    const README_PATH = resolve(__dirname, '../../eval/kernel/README.md');
+    function readmeRoleCounts(md: string): Record<string, number> {
+      const out: Record<string, number> = {};
+      for (const m of md.matchAll(/^\|\s*`(seed|canary|holdout)`\s*\|\s*(\d+)\s*\|/gm)) {
+        out[m[1] as string] = Number(m[2]);
+      }
+      return out;
+    }
+    function tableRoleCounts(rs: Row[]): Record<string, number> {
+      const out: Record<string, number> = {};
+      for (const r of rs) out[r['role'] as string] = (out[r['role'] as string] ?? 0) + 1;
+      return out;
+    }
+
+    it('the README roles table equals the actual per-role counts', () => {
+      const md = readFileSync(README_PATH, 'utf8');
+      expect(readmeRoleCounts(md)).toEqual(tableRoleCounts(rows));
+    });
+
+    it('non-vacuity: a README that states a stale count would be caught', () => {
+      const md = readFileSync(README_PATH, 'utf8');
+      const stale = md.replace(/(\|\s*`holdout`\s*\|\s*)\d+/, '$1999');
+      expect(readmeRoleCounts(stale)).not.toEqual(tableRoleCounts(rows));
+    });
+  });
+
   // ── NON-VACUITY: prove the validator REJECTS bad tables ─────────────────────────────────────
   describe('non-vacuity: the validator rejects deliberately-bad rows', () => {
     // A known-good baseline row the mutants are derived from (not from the committed file, so the
