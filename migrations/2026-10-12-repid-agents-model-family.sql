@@ -3,8 +3,9 @@
 -- ISSUE: #1338 follow-up ("one column, not a new scorer. model_family on the agent.")
 --
 -- ==========================================================================================
--- PROMOTION-GATED — NOT APPLIED TO PROD (R7, Sean-gated). FILE ONLY.
--- The orchestrator holds DDL against qnnpjhlxljtqyigedwkb for Sean. This lane applied NOTHING.
+-- APPLIED TO PROD 2026-10-12 (Sean-authorized), via Supabase MCP apply_migration against
+-- qnnpjhlxljtqyigedwkb. Applied by the ORCHESTRATOR, not by the build lane — this lane
+-- authored the file and applied nothing. The supabase_migration claim was taken and released.
 -- ==========================================================================================
 --
 -- PURPOSE. The counterparty independence check (rule 4 of src/scoring/confirmed-outcome.ts)
@@ -43,13 +44,19 @@ COMMENT ON COLUMN repid_agents.model_family IS
   'confirmation). PRIMARY source; capabilities.model_family jsonb is the fallback. '
   'No default/backfill: a family is recorded, never guessed.';
 
--- POST-APPLY VERIFY:
+-- POST-APPLY VERIFY [VERIFIED 2026-10-12 by the orchestrator, against information_schema.columns]:
 -- SELECT column_name, data_type, is_nullable, column_default
 --   FROM information_schema.columns
 --  WHERE table_schema='public' AND table_name='repid_agents' AND column_name='model_family';
---   -- expect: model_family | text | YES | (null)
--- SELECT count(*) AS agents, count(model_family) AS with_family FROM repid_agents;
---   -- immediately after apply: with_family = 0 (every agent still fails closed, as intended)
+--   -- RESULT: model_family | text | YES | NULL
+--   -- i.e. additive, nullable, no default, no backfill — exactly as authored.
+--
+-- SCORING IMPACT: every existing row is NULL, so readModelFamily returns null for every agent,
+-- the rule-4 counterparty independence check FAILS CLOSED for all of them, and NO score moves.
+-- Applying this column ARMED NOTHING: CONFIRMED_OUTCOME_SCORING_ENABLED is unchanged (default
+-- OFF) and the server-side confirmation verifier is still unwired. The counterparty settler
+-- only begins to confirm once (a) a family is recorded on both agents AND they differ, (b) the
+-- server verifier is wired, and (c) the flag is armed — each a separate, Sean-gated decision.
 
 -- ROLLBACK (also in migrations/rollback/DOWN_2026-10-12-repid-agents-model-family.sql):
 -- ALTER TABLE repid_agents DROP COLUMN IF EXISTS model_family;
