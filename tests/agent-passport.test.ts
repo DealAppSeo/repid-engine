@@ -334,7 +334,14 @@ describe('buildAgentPassport', () => {
     const flat = JSON.stringify(p);
     expect(flat).not.toContain('conservator_bonded');
     expect(flat).not.toContain('identity_hash');
-    expect(flat).not.toContain('"verified"');
+    // There is now an honest `onchain.verified` boolean. It is chain-gated: with no reader
+    // injected (and nothing minted) it is false, with the recorded state shown — NOT the old
+    // fabricated verified=true. The ban on the literal string is replaced by the semantic check,
+    // because the honest field is the opposite of the fabrication the ban was guarding against.
+    expect(p!.onchain.verified).toBe(false);
+    expect(p!.onchain.state).toBe('NOT_MINTED');
+    expect(p!.onchain.owner).toBeNull();
+    expect(p!.onchain.verified_at).toBeNull();
   });
 
   test('a stub/HMAC proof row is NOT labeled cryptographically verifiable', async () => {
@@ -415,6 +422,117 @@ describe('buildAgentPassport', () => {
     await expect(
       buildAgentPassport(makeDb(script), MINTED_AGENT.id)
     ).rejects.toThrow(PassportQueryError);
+  });
+
+  /* ---- the onchain object: the live read folded into the one call (trustshell #523) ---- */
+
+  const CANONICAL_REGISTRY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
+  const AN_OWNER = '0xdf6b82150000000000000000000000000000271d';
+
+  test('VERIFIED_ONCHAIN: a canonical-registry token whose read returns a non-zero owner', async () => {
+    // The whole point of the feature: the client gets verified=true, the owner, the block and the
+    // timestamp in THIS call, with no second /onchain call.
+    const read = jest.fn(async () => ({
+      check: 'OWNER_FOUND' as const,
+      owner: AN_OWNER,
+      block: 21_500_123,
+      registry: CANONICAL_REGISTRY,
+      chainId: 84532,
+      verified_at: '2026-10-12T09:00:00.000Z',
+    }));
+    const p = await buildAgentPassport(makeDb(happyScript()), MINTED_AGENT.id, { onchainRead: read });
+    expect(read).toHaveBeenCalledWith(MINTED_AGENT.id);
+    expect(p!.onchain).toEqual({
+      state: 'VERIFIED_ONCHAIN',
+      verified: true,
+      owner: AN_OWNER,
+      registry: CANONICAL_REGISTRY,
+      chainId: 84532,
+      block: 21_500_123,
+      verified_at: '2026-10-12T09:00:00.000Z',
+      check: 'OWNER_FOUND',
+    });
+    // The recorded identity block is unchanged by the live read.
+    expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');
+  });
+
+  test('MINTED (not verified): a corrupt / non-canonical registry read keeps the recorded state, verified=false', async () => {
+    // A read that returns an owner but against a registry that is NOT the canonical IdentityRegistry
+    // must NOT be trusted as a verification. The recorded MINTED state still shows.
+    const corruptRegistry = CANONICAL_REGISTRY.slice(0, -1) + (CANONICAL_REGISTRY.slice(-1) === 'e' ? 'f' : 'e');
+    const read = jest.fn(async () => ({
+      check: 'OWNER_FOUND' as const,
+      owner: AN_OWNER,
+      block: 21_500_200,
+      registry: corruptRegistry,
+      chainId: 84532,
+      verified_at: '2026-10-12T09:05:00.000Z',
+    }));
+    const p = await buildAgentPassport(makeDb(happyScript()), MINTED_AGENT.id, { onchainRead: read });
+    expect(p!.onchain.verified).toBe(false);
+    expect(p!.onchain.state).toBe('MINTED');
+    expect(p!.onchain.check).toBe('OWNER_FOUND');
+    // The recorded mint is neither invented nor withdrawn by the failed verification.
+    expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');
+  });
+
+  test('MINTED (not verified): a read with no owner (REVERTED) is verified=false with recorded state shown', async () => {
+    const read = jest.fn(async () => ({
+      check: 'REVERTED' as const,
+      owner: null,
+      block: 21_500_300,
+      registry: CANONICAL_REGISTRY,
+      chainId: 84532,
+      verified_at: '2026-10-12T09:10:00.000Z',
+    }));
+    const p = await buildAgentPassport(makeDb(happyScript()), MINTED_AGENT.id, { onchainRead: read });
+    expect(p!.onchain.verified).toBe(false);
+    expect(p!.onchain.state).toBe('MINTED');
+    expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');
+  });
+
+  test('MINTED (not verified): a NOT_CHECKED read never flips to a verdict — verified=false, recorded state intact', async () => {
+    // A chain outage must never downgrade a recorded mint or read as a pass.
+    const read = jest.fn(async () => ({
+      check: 'NOT_CHECKED' as const,
+      owner: null,
+      block: null,
+      registry: CANONICAL_REGISTRY,
+      chainId: 84532,
+      verified_at: '2026-10-12T09:15:00.000Z',
+    }));
+    const p = await buildAgentPassport(makeDb(happyScript()), MINTED_AGENT.id, { onchainRead: read });
+    expect(p!.onchain.verified).toBe(false);
+    expect(p!.onchain.state).toBe('MINTED');
+    expect(p!.onchain.check).toBe('NOT_CHECKED');
+    expect(p!.identity_erc8004.registered_onchain).toBe('MINTED');
+  });
+
+  test('NOT_MINTED: an unminted agent is never read and reads NOT_MINTED even with a reader present', async () => {
+    const unminted = {
+      ...MINTED_AGENT,
+      erc8004_token_id: null,
+      erc8004_address: null,
+      mint_tx_hash: null,
+      mint_chain_id: null,
+      minted_at: null,
+      conservator_address: null,
+    };
+    const script = {
+      repid_agents: [{ data: unminted, error: null }],
+      x402_settlements: [{ count: 0, error: null }, { count: 0, error: null }, { data: null, error: null }],
+      erc8004_reputation_writes: [{ count: 0, error: null }, { data: null, error: null }],
+      repid_zkp_proofs: [{ data: null, error: null }],
+    };
+    const read = jest.fn(async () => ({
+      check: 'OWNER_FOUND' as const, owner: AN_OWNER, block: 1, registry: CANONICAL_REGISTRY, chainId: 84532, verified_at: 'x',
+    }));
+    const p = await buildAgentPassport(makeDb(script), MINTED_AGENT.id, { onchainRead: read });
+    // Nothing recorded → no chain read at all, and NOT_MINTED stands.
+    expect(read).not.toHaveBeenCalled();
+    expect(p!.onchain.state).toBe('NOT_MINTED');
+    expect(p!.onchain.verified).toBe(false);
+    expect(p!.onchain.block).toBeNull();
   });
 });
 

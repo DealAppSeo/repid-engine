@@ -29,6 +29,7 @@ const REPUTATION_REGISTRY_BASE_SEPOLIA =
 
 import { deriveIdentityState } from './identity-state';
 import { guardRegistryAddress, type RegistryRejection } from '../identity/registry-address';
+import { buildPassportOnchain, type PassportOnchain, type OnchainReader } from './passport-onchain';
 import { deriveAnchorStatus, ANCHOR_NOTES, type AnchorStatus } from './anchor-status';
 import { vestingBlock, type VestingBlock } from './vesting-status';
 import { proofClaim, type ProofClaim } from './proof-claim';
@@ -118,6 +119,13 @@ export interface AgentPassport {
     // A LIVE ownerOf() cross-check exists; we link it instead of claiming it.
     live_verification_endpoint: string;
   };
+  /**
+   * The LIVE ownership read, folded in so a client verifies in this ONE call instead of a second
+   * call to `live_verification_endpoint` per record. Three distinct states (NOT_MINTED / MINTED /
+   * VERIFIED_ONCHAIN); `verified` is true only for VERIFIED_ONCHAIN. Populated from the same read
+   * as GET /api/v1/agents/:id/onchain, bounded and cached. See services/passport-onchain.ts.
+   */
+  onchain: PassportOnchain;
   payments_x402: {
     real_settlements: number;
     simulated_settlements: number;
@@ -208,7 +216,16 @@ async function fetchAgentRow(
  */
 export async function buildAgentPassport(
   db: SupabaseClient,
-  rawAgentId: string
+  rawAgentId: string,
+  opts?: {
+    /**
+     * Live ownership reader for the `onchain` object. Injected (never constructed here) so the
+     * DB-first composition stays testable and hermetic without a chain. When absent, `onchain`
+     * reflects DB state alone with verified=false — honest, not a pass. The passport route wires
+     * the real, bounded+cached reader (src/routes/v1/agent-passport.ts); tests pass a fake or none.
+     */
+    onchainRead?: OnchainReader;
+  }
 ): Promise<AgentPassport | null> {
   const agent = await fetchAgentRow(db, rawAgentId);
   if (!agent) return null;
@@ -307,6 +324,19 @@ export async function buildAgentPassport(
   // a reason. Never repeat a value we cannot recognise. See identity/registry-address.ts.
   const registry = guardRegistryAddress(agent.erc8004_address, { state: identityState, chainId: mintChainId });
 
+  // The live ownership read, folded into the one call. DB-first stays intact: this is the only
+  // chain reach, it is bounded + cached + fail-safe in the injected reader, and it never throws —
+  // a NOT_CHECKED read yields verified=false with the recorded state shown, never a downgrade.
+  const onchain = await buildPassportOnchain(
+    {
+      id: agentId,
+      erc8004_token_id: agent.erc8004_token_id ?? null,
+      mint_tx_hash: agent.mint_tx_hash ?? null,
+      mint_chain_id: mintChainId,
+    },
+    opts?.onchainRead,
+  );
+
   return {
     passport_version: '1',
     as_of: new Date().toISOString(),
@@ -345,6 +375,7 @@ export async function buildAgentPassport(
       conservator_address: agent.conservator_address ?? null,
       live_verification_endpoint: `/api/v1/agents/${agentId}/onchain`,
     },
+    onchain,
     payments_x402: {
       real_settlements: realCount ?? 0,
       simulated_settlements: simCount ?? 0,
