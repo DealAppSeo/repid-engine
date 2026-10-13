@@ -110,6 +110,13 @@ export interface VerifiedConfirmation {
   source: ConfirmedVerifiedSource;
   /** The settler the server source establishes (never 'vote'). Authoritative over `settledBy`. */
   settledBy: ConfirmedSettler;
+  /**
+   * The result the SERVER established (right/wrong). CWE-345: the caller does NOT get to say whether
+   * it was right — the server source does. A caller-asserted `input.result` that disagrees with this
+   * is a forgery attempt and fails closed (`result_mismatch`). The verifier only ever sets this from
+   * authoritative evidence (e.g. a VERIFIED kernel receipt → 'right', a FAILED one → 'wrong').
+   */
+  result: ConfirmedResultKind;
 }
 
 // ── the input ────────────────────────────────────────────────────────────────────────
@@ -536,9 +543,11 @@ async function resolveInner(
   const serverSettler = vc.settledBy;
 
   // RULE 2 (heaviest) — a rubber-stamp of a KNOWN-WRONG answer, established by the
-  // known-answer record (the server source), not a caller flag alone.
+  // known-answer record (the server source), not a caller flag alone. The server source must
+  // ALSO establish the result as 'wrong' (`vc.result === 'wrong'`): the heaviest penalty cannot be
+  // inflicted off a server confirmation that did not itself find the answer wrong. Fail closed otherwise.
   if (input.rubberStampKnownWrong === true) {
-    if (serverSettler !== 'known_answer') {
+    if (serverSettler !== 'known_answer' || vc.result !== 'wrong') {
       return unconfirmed('rubber_stamp_requires_known_answer_source', null, input, true);
     }
     return settled('known_answer', p.rubberStampPenalty, 'rubber_stamp_known_wrong', {
@@ -553,9 +562,12 @@ async function resolveInner(
   }
 
   // RULE 3 (second half) — a PASS the receipt does not support is a confident wrong,
-  // confirmed by the receipt (the server source). Full confident-wrong penalty.
+  // confirmed by the receipt (the server source). Full confident-wrong penalty. The server source
+  // must ALSO establish the result as 'wrong' (`vc.result === 'wrong'`) — here the caller claimed
+  // PASS (`input.result` is typically 'right'), so this is the one branch where caller and server
+  // DISAGREE legitimately, and the server's 'wrong' is what the penalty rests on. Fail closed otherwise.
   if (input.passUnsupportedByReceipt === true) {
-    if (serverSettler !== 'holdout') {
+    if (serverSettler !== 'holdout' || vc.result !== 'wrong') {
       return unconfirmed('unsupported_pass_requires_receipt_source', null, input, true);
     }
     const loss = p.lossBase - Math.round(1 * p.confidenceLossWeight);
@@ -568,6 +580,14 @@ async function resolveInner(
       rubberStampKnownWrong: false,
       passUnsupportedByReceipt: true,
     });
+  }
+
+  // CWE-345 (result) — the SERVER establishes right/wrong. For the ORDINARY confirmed paths (the
+  // two heavy-penalty special branches above have already returned), the caller's asserted
+  // `input.result` MUST equal the server's `vc.result`, or it is a forgery attempt → fail closed.
+  // Abstain never reaches here (handled before the vc gate), so `input.result` is 'right' or 'wrong'.
+  if (input.result !== vc.result) {
+    return unconfirmed('result_mismatch', null, input, true);
   }
 
   // RULE 1 + RULE 4 — the SERVER source establishes the settler. A caller-asserted

@@ -22,6 +22,7 @@ import {
   loadConfirmedParams,
   type ConfirmedOutcomeDeps,
   type ConfirmedOutcomeInput,
+  type ConfirmedResultKind,
   type ConfirmedSettler,
   type ConfirmedVerifiedSource,
   type VerifiedConfirmation,
@@ -54,22 +55,35 @@ const SOURCE: Record<ConfirmedSettler, ConfirmedVerifiedSource> = {
   person: 'signed_attestation',
   counterparty: 'independent_counterparty',
 };
-/** A SERVER-DERIVED confirmation, as a verifier would produce (tests stand in for the verifier). */
-const vc = (s: ConfirmedSettler): VerifiedConfirmation => ({ source: SOURCE[s], settledBy: s });
+/**
+ * A SERVER-DERIVED confirmation, as the verifier would produce (tests stand in for the verifier).
+ * `result` defaults to 'right' and is the result the SERVER establishes — it must match the caller's
+ * asserted `input.result` for the ordinary paths, and must be 'wrong' for the heavy-penalty branches.
+ */
+const vc = (s: ConfirmedSettler, result: ConfirmedResultKind = 'right'): VerifiedConfirmation => ({
+  source: SOURCE[s],
+  settledBy: s,
+  result,
+});
 
 /**
- * base() attaches a server-verified confirmation matching `settledBy` — the "a verifier has
- * already confirmed this" world the rule blocks describe. Gate tests override with
- * `verifiedConfirmation: undefined` to simulate a raw caller-asserted payload.
+ * base() attaches a server-verified confirmation matching `settledBy` AND the final `input.result`
+ * — the "a verifier has already confirmed this" world the rule blocks describe. Gate tests override
+ * with `verifiedConfirmation: undefined` to simulate a raw caller-asserted payload; the two
+ * heavy-penalty branches override with an explicit `vc(..., 'wrong')`.
  */
 const base = (over: Partial<ConfirmedOutcomeInput>): ConfirmedOutcomeInput => {
   const settledBy = over.settledBy ?? 'holdout';
+  const result = over.result ?? 'right';
   const realSettler = settledBy === 'holdout' || settledBy === 'known_answer' || settledBy === 'person' || settledBy === 'counterparty';
+  // The server never establishes 'abstain' (that path returns before the vc gate); coerce to 'right'
+  // so the synthetic vc is a valid right/wrong — the abstain tests never consult it.
+  const serverResult: ConfirmedResultKind = result === 'abstain' ? 'right' : result;
   return {
     actorAgentId: ACTOR,
     settledBy,
-    result: 'right',
-    ...(realSettler ? { verifiedConfirmation: vc(settledBy as ConfirmedSettler) } : {}),
+    result,
+    ...(realSettler ? { verifiedConfirmation: vc(settledBy as ConfirmedSettler, serverResult) } : {}),
     ...over,
   };
 };
@@ -140,8 +154,9 @@ describe('CWE-345 SERVER-VERIFICATION GATE — a caller-asserted confirmation se
   });
 
   it('a server source that disagrees with the caller settledBy fails closed (settler_mismatch)', async () => {
+    // result agrees ('right'==='right') so the result check passes and the SETTLER mismatch is what fails it.
     const r = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'right', verifiedConfirmation: vc('person') }),
+      base({ settledBy: 'holdout', result: 'right', verifiedConfirmation: vc('person', 'right') }),
     );
     expect(r.confirmed).toBe(false);
     expect(r.reason).toBe('settler_mismatch');
@@ -204,7 +219,7 @@ describe('RULE 2 — asymmetric gain/loss, confidence-weighted, rubber-stamp hea
   it('a rubber-stamp of a known-wrong costs MORE than the last ten confirmed rights combined', async () => {
     const right = await resolveConfirmedOutcome(base({ result: 'right' }));
     const rubber = await resolveConfirmedOutcome(
-      base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('known_answer') }),
+      base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('known_answer', 'wrong') }),
     );
     expect(rubber.appliedDelta).toBe(-120);
     expect(rubber.settledBy).toBe('known_answer');
@@ -223,8 +238,10 @@ describe('RULE 3 — abstain is free; an unsupported PASS pays the confident-wro
   });
 
   it('a server-verified unsupported PASS is a confident wrong (full penalty), confirmed by the receipt', async () => {
+    // The caller claimed PASS (result:'right') but the RECEIPT (server source) establishes 'wrong' —
+    // the one legitimate caller/server disagreement, priced as a confident wrong.
     const r = await resolveConfirmedOutcome(
-      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout') }),
+      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout', 'wrong') }),
     );
     expect(r.appliedDelta).toBe(-55);
     expect(r.confirmed).toBe(true);
@@ -411,5 +428,71 @@ describe('RULE 6 — per-domain need multiplier raises gains, capped, never a lo
       deps,
     );
     expect(r.appliedDelta).toBe(-15);
+  });
+});
+
+describe('CWE-345 RESULT CONTRACT — the SERVER establishes right/wrong, the caller must agree', () => {
+  it('NON-VACUITY GUARD: a caller asserting RIGHT against a server WRONG fails closed (result_mismatch)', async () => {
+    // If the result cross-check were dropped, this caller "right" would ride the server's confirmation
+    // and earn a GAIN off an outcome the server found wrong → it would score +5 and go RED.
+    const r = await resolveConfirmedOutcome(
+      base({ settledBy: 'holdout', result: 'right', verifiedConfirmation: vc('holdout', 'wrong') }),
+    );
+    expect(r.confirmed).toBe(false);
+    expect(r.scoreMoves).toBe(false);
+    expect(r.appliedDelta).toBe(0);
+    expect(r.reason).toBe('result_mismatch');
+    expect(r.detail.serverVerified).toBe(true); // a server source WAS present — it just disagreed
+  });
+
+  it('a caller asserting WRONG against a server RIGHT fails closed (result_mismatch), no self-inflicted loss', async () => {
+    const r = await resolveConfirmedOutcome(
+      base({ settledBy: 'holdout', result: 'wrong', confidence: 1, verifiedConfirmation: vc('holdout', 'right') }),
+    );
+    expect(r.confirmed).toBe(false);
+    expect(r.scoreMoves).toBe(false);
+    expect(r.reason).toBe('result_mismatch');
+  });
+
+  it('rubber-stamp REQUIRES the server to establish WRONG (known_answer + result wrong)', async () => {
+    // The server source is known_answer but it established RIGHT → the heaviest penalty must NOT fire.
+    const r = await resolveConfirmedOutcome(
+      base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('known_answer', 'right') }),
+    );
+    expect(r.confirmed).toBe(false);
+    expect(r.scoreMoves).toBe(false);
+    expect(r.reason).toBe('rubber_stamp_requires_known_answer_source');
+
+    // Positive control: known_answer + server WRONG → the heavy penalty does fire.
+    const ok = await resolveConfirmedOutcome(
+      base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('known_answer', 'wrong') }),
+    );
+    expect(ok.confirmed).toBe(true);
+    expect(ok.appliedDelta).toBe(-120);
+  });
+
+  it('unsupported-PASS REQUIRES the server to establish WRONG via a holdout receipt', async () => {
+    // holdout but the server established RIGHT → the confident-wrong penalty must NOT fire.
+    const r = await resolveConfirmedOutcome(
+      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout', 'right') }),
+    );
+    expect(r.confirmed).toBe(false);
+    expect(r.scoreMoves).toBe(false);
+    expect(r.reason).toBe('unsupported_pass_requires_receipt_source');
+
+    // Positive control: holdout + server WRONG → confident-wrong penalty fires.
+    const ok = await resolveConfirmedOutcome(
+      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout', 'wrong') }),
+    );
+    expect(ok.confirmed).toBe(true);
+    expect(ok.appliedDelta).toBe(-55);
+  });
+
+  it('an unsupported-PASS with a KNOWN_ANSWER server source (not holdout) still fails closed', async () => {
+    const r = await resolveConfirmedOutcome(
+      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('known_answer', 'wrong') }),
+    );
+    expect(r.confirmed).toBe(false);
+    expect(r.reason).toBe('unsupported_pass_requires_receipt_source');
   });
 });

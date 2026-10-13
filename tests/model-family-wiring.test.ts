@@ -110,7 +110,8 @@ describe('(A) modelFamilyOf — column-first, jsonb fallback, null when both abs
 
 // ── (B) the wiring, end-to-end through the real resolver ─────────────────────────────────────
 
-const COUNTERPARTY_VC: VerifiedConfirmation = { source: 'independent_counterparty', settledBy: 'counterparty' };
+// result:'right' matches cpInput().result — the server establishes the same result the caller asserts.
+const COUNTERPARTY_VC: VerifiedConfirmation = { source: 'independent_counterparty', settledBy: 'counterparty', result: 'right' };
 
 /** A confirmed-right counterparty outcome, server-verified, actor vs cp. */
 function cpInput(): ConfirmedOutcomeInput {

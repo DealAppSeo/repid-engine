@@ -31,6 +31,7 @@ import { dryDecision } from '../kernel/gate';
 import { makeKernelHalCheck } from '../kernel/hal-adapter';
 import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy } from '../kernel/policy';
 import { PolicyNonceError, StoreLedger, createJsonlStore } from '../kernel/store';
+import { indexKernelReceiptToDb } from '../kernel/receipt-db-index';
 import type { GateDeps, OwnerResolver } from '../kernel/types';
 
 export type KernelRouteDeps = Pick<GateDeps, 'ledger' | 'resolveOwner'> & Partial<Omit<GateDeps, 'ledger' | 'resolveOwner'>>;
@@ -62,7 +63,11 @@ function kernelHalEnabled(): boolean {
 export function defaultDeps(): KernelRouteDeps {
   let built: KernelRouteDeps | null = null;
   const get = (): KernelRouteDeps =>
-    (built ??= { ledger: new StoreLedger(createJsonlStore(join(tmpdir(), 'hyperdag-kernel', 'ledger.jsonl'))), resolveOwner: accountableRootOwner });
+    // The JSONL ledger is authoritative; indexKernelReceiptToDb is a BEST-EFFORT mirror into
+    // public.kernel_receipts for the confirmed-outcome verifier to look receipts up by id. Its
+    // errors never reach the decision path (StoreLedger guards + the indexer swallows), so a prod
+    // deployment where the table is absent behaves exactly as before.
+    (built ??= { ledger: new StoreLedger(createJsonlStore(join(tmpdir(), 'hyperdag-kernel', 'ledger.jsonl')), indexKernelReceiptToDb), resolveOwner: accountableRootOwner });
   return {
     get ledger() {
       return get().ledger;

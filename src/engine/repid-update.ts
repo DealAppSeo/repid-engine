@@ -28,6 +28,7 @@ import {
   type ConfirmedOutcomeInput,
   type ConfirmedOutcomeDeps,
   type ConfirmedOutcomeResult,
+  type ConfirmedResultKind,
   type VerifiedConfirmation,
 } from '../scoring/confirmed-outcome';
 import { resolveOwner as resolveAgentOwner } from '../services/agent-owner-resolver';
@@ -112,9 +113,18 @@ export interface RepIdUpdateInput {
    * CWE-345: a caller can NEVER supply a `verifiedConfirmation` — it is omitted from this
    * type, and the pipeline builds it only from a server-side verifier. So this payload is
    * CALLER-ASSERTED and, on its own, moves NOTHING: it is recorded for audit and held inert
-   * until a server-derived confirmation backs it. No such verifier is wired yet.
+   * until a server-derived confirmation backs it.
+   *
+   * `confirmationReceiptId` is a PIPELINE-ONLY POINTER (not part of the resolver's contract): the
+   * caller names WHICH kernel receipt it claims confirms the outcome, and the server reads the
+   * AUTHORITATIVE row for that id (binding it to the actor) via `resolveServerConfirmation`. The id
+   * is a lookup key only — it carries no verdict and no settler; the server establishes both. An
+   * absent/empty id, or one that does not resolve to a server-authoritative, actor-bound, SETTLED
+   * row, fails closed (no move). The resolver (`resolveConfirmedOutcome`) ignores this field.
    */
-  confirmedOutcome?: Omit<ConfirmedOutcomeInput, 'actorAgentId' | 'verifiedConfirmation'>;
+  confirmedOutcome?: Omit<ConfirmedOutcomeInput, 'actorAgentId' | 'verifiedConfirmation'> & {
+    confirmationReceiptId?: string;
+  };
   /** Test seam. Production builds the deps from the db-backed owner resolver + domain readers. */
   confirmedOutcomeDeps?: ConfirmedOutcomeDeps;
 }
@@ -460,15 +470,33 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   if (confirmedOutcomeScoringEnabled() && input.confirmedOutcome) {
     // CWE-345 — the confirmedOutcome payload is CALLER-ASSERTED. It must never move the
     // official score on its own. A confirmation may settle ONLY from a SERVER-DERIVED
-    // verified source (a kernel receipt / signed attestation / known-answer record). That
-    // verifier is NOT wired yet, so `resolveServerConfirmation` returns undefined, the
-    // resolver fails closed, and every caller-asserted outcome is RECORDED (for audit)
-    // but held INERT. The explicit `serverVerified && scoreMoves` guard below is a second,
-    // independent barrier: even a future resolver regression cannot move the score from a
-    // caller payload unless a server verification is present.
-    const serverVerified: VerifiedConfirmation | undefined = resolveServerConfirmation();
+    // verified source. `resolveServerConfirmation` reads the AUTHORITATIVE kernel receipt row
+    // by the caller's `confirmationReceiptId`, BINDS it to the actor (subject_agent_id ===
+    // input.agentId), and only returns a VerifiedConfirmation for a SETTLED / VERIFIED|FAILED /
+    // non-simulated / holdout|known_answer row — everything else (no id, no row, wrong subject,
+    // simulated, PROVISIONAL, NOT_CHECKED, person/null settler, any thrown DB error) fails closed
+    // to undefined. The caller supplies only a lookup key; it cannot forge the verdict. The
+    // explicit `serverVerified && scoreMoves` guard below is a second, independent barrier: even a
+    // resolver regression cannot move the score from a caller payload without a server verification.
+    // With the table absent (prod today) every id resolves to undefined — and the flag is OFF
+    // regardless, so this branch is not even entered in production.
+    const serverVerified: VerifiedConfirmation | undefined = await resolveServerConfirmation(
+      input.agentId,
+      input.confirmedOutcome.confirmationReceiptId,
+    );
+    // CWE-345 — STRIP any caller-smuggled `verifiedConfirmation` before it reaches the resolver.
+    // POST /api/v1/score passes the raw request body straight to updateRepId (routes/score.ts), so a
+    // caller can put a `verifiedConfirmation` key in the body even though the TYPE omits it. The
+    // resolver's `verifiedConfirmation` must come ONLY from the server verifier above — never the
+    // body. We remove it at runtime here so a forged one cannot even be processed (it would otherwise
+    // be held inert by the `serverVerified && scoreMoves` barrier below, but it would still write a
+    // dishonest "confirmed" audit row). `confirmationReceiptId` is a lookup key the resolver ignores;
+    // it is harmless either way and kept for the audit trail.
+    const { verifiedConfirmation: _callerVcStripped, ...callerAssertedOutcome } =
+      input.confirmedOutcome as typeof input.confirmedOutcome & { verifiedConfirmation?: unknown };
+    void _callerVcStripped;
     confirmedOutcomeResult = await resolveConfirmedOutcome(
-      { ...input.confirmedOutcome, actorAgentId: input.agentId, ...(serverVerified ? { verifiedConfirmation: serverVerified } : {}) },
+      { ...callerAssertedOutcome, actorAgentId: input.agentId, ...(serverVerified ? { verifiedConfirmation: serverVerified } : {}) },
       input.confirmedOutcomeDeps ?? confirmedOutcomeDepsFor(agent),
     );
     if (serverVerified && confirmedOutcomeResult.scoreMoves) {
@@ -852,20 +880,65 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *                        ecosystem weight, now applied ONLY here, per-domain, gains-only.
  */
 /**
- * The server-side confirmation verifier seam (CWE-345). Returns a VerifiedConfirmation
- * ONLY when the server has independently established the confirmation from a verified
- * source (a kernel receipt, a signed attestation, a known-answer record). It deliberately
- * reads NOTHING caller-controllable — a confirmation a caller could influence is not a
- * confirmation.
+ * The server-side confirmation verifier (CWE-345). Returns a VerifiedConfirmation ONLY when the
+ * server has independently established the confirmation from a SERVER-AUTHORITATIVE, ACTOR-BOUND
+ * source: a kernel receipt mirrored into `public.kernel_receipts` (written off the kernel's
+ * append-only JSONL ledger; see src/kernel/receipt-db-index.ts). It reads NOTHING caller-controllable
+ * except a LOOKUP KEY (`receiptId`) — the caller names which receipt, the SERVER reads its verdict.
  *
- * NOT WIRED YET. There is no such verifier today, so this returns undefined and every
- * caller-asserted confirmedOutcome is held inert. Arming the feature requires BOTH this
- * verifier (so a confirmation is server-derived) AND the repid_agents.model_family column
- * (so the counterparty settler can establish independence). Until then, flipping
- * CONFIRMED_OUTCOME_SCORING_ENABLED moves no score.
+ * FAIL CLOSED on everything. It returns a confirmation ONLY when ALL hold, else `undefined`:
+ *   - `receiptId` is present and non-empty, and a row exists for it;
+ *   - ACTOR BINDING: `subject_agent_id` (trimmed) === `actorAgentId` (trimmed) — a caller must not
+ *     point at another agent's receipt to confirm its own outcome;
+ *   - `verdict_label === 'SETTLED'` (a PROVISIONAL vote never settles a score move);
+ *   - `verification_status` is 'VERIFIED' or 'FAILED' (NOT_CHECKED / NOT_APPLICABLE → undefined:
+ *     "we did not look" is not a verdict);
+ *   - `is_simulated === false` (a simulated record can never move a real score);
+ *   - `settled_by` is 'holdout' or 'known_answer' — 'person', null and anything else stay FAIL-CLOSED
+ *     (person and counterparty are deliberately NOT settling sources here, per Sean).
+ * The SERVER then establishes the result: VERIFIED → 'right', FAILED → 'wrong'. A thrown DB error
+ * (table absent in prod, store down) → undefined. It NEVER throws into the score path.
+ *
+ * Only ever called inside the `confirmedOutcomeScoringEnabled()` branch, so with the flag OFF (the
+ * production default) it is never invoked — the absent table cannot affect prod scoring.
  */
-function resolveServerConfirmation(): VerifiedConfirmation | undefined {
-  return undefined;
+export async function resolveServerConfirmation(
+  actorAgentId: string,
+  receiptId: string | undefined,
+): Promise<VerifiedConfirmation | undefined> {
+  try {
+    const id = (receiptId ?? '').trim();
+    if (id === '') return undefined; // no pointer → nothing to verify → fail closed
+    const { data, error } = await db
+      .from('kernel_receipts')
+      .select('subject_agent_id, settled_by, verdict_label, verification_status, is_simulated')
+      .eq('receipt_id', id)
+      .maybeSingle();
+    if (error || !data) return undefined; // no row (or a read error) → fail closed
+    const row = data as {
+      subject_agent_id?: unknown;
+      settled_by?: unknown;
+      verdict_label?: unknown;
+      verification_status?: unknown;
+      is_simulated?: unknown;
+    };
+    // ACTOR BINDING (CWE-345): the receipt must be ABOUT the acting agent. A caller cannot borrow
+    // another agent's receipt. Positively established by equality; anything non-string fails closed.
+    const subject = typeof row.subject_agent_id === 'string' ? row.subject_agent_id.trim() : '';
+    if (subject === '' || subject !== actorAgentId.trim()) return undefined;
+    if (row.verdict_label !== 'SETTLED') return undefined; // a vote (PROVISIONAL) never settles
+    const status = row.verification_status;
+    if (status !== 'VERIFIED' && status !== 'FAILED') return undefined; // NOT_CHECKED/NOT_APPLICABLE → undefined
+    if (row.is_simulated !== false) return undefined; // must be EXPLICITLY false (null/true → undefined)
+    const settledBy = row.settled_by;
+    // 'person', null, 'counterparty', anything else → fail closed. Only objective record settlers.
+    if (settledBy !== 'holdout' && settledBy !== 'known_answer') return undefined;
+    // The SERVER establishes right/wrong — the caller does not get to say which.
+    const result: ConfirmedResultKind = status === 'VERIFIED' ? 'right' : 'wrong';
+    return { source: 'kernel_receipt', settledBy, result };
+  } catch {
+    return undefined; // never throw into the score path
+  }
 }
 
 export function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {

@@ -128,7 +128,17 @@ export class StoreLedger implements KernelLedger {
   private readonly spendRows: SpendRow[] = [];
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly sink: KernelSink) {}
+  /**
+   * `receiptIndexer` is an OPTIONAL best-effort secondary sink, invoked once per appended receipt
+   * AFTER the authoritative JSONL append + validate + chain-link succeed. It is injected only by the
+   * production wiring (routes/kernel.ts → indexKernelReceiptToDb) so the generic ledger stays DB-free
+   * and every test that constructs `new StoreLedger(sink)` is unaffected. Its errors can NEVER reach
+   * the decision path: appendReceipt guards the call and swallows anything it throws.
+   */
+  constructor(
+    private readonly sink: KernelSink,
+    private readonly receiptIndexer?: (receipt: KernelReceipt) => void | Promise<void>,
+  ) {}
 
   /** Run `fn` after everything queued before it, whether that succeeded or not. */
   private locked<T>(fn: () => Promise<T>): Promise<T> {
@@ -200,6 +210,18 @@ export class StoreLedger implements KernelLedger {
       if (receipt.header.prev_hash !== expectedPrev) throw new ReceiptInvalidError(['broken_link']);
       await this.sink.append({ kind: 'receipt', receipt });
       this.indexReceipt(receipt);
+      // BEST-EFFORT secondary index. The JSONL record above is authoritative and already durable;
+      // this runs after it and can NEVER throw into the decision path. A missing table or any DB
+      // error here is swallowed — fail-open for the index only (the ledger and the verdict stand).
+      if (this.receiptIndexer) {
+        try {
+          await this.receiptIndexer(receipt);
+        } catch (e) {
+          console.warn(
+            `[kernel] receipt index-write failed (ledger unaffected): ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
       return receipt;
     });
   }
