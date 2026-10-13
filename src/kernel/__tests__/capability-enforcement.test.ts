@@ -16,7 +16,7 @@ import {
   POLICY_TYPES_V2,
   policyTypedValueV2,
 } from '../policy';
-import { createCapabilityRegistry } from '../capability-registry';
+import { classifyProhibitedCapability, createCapabilityRegistry } from '../capability-registry';
 import { hashArgs, validateReceipt } from '../receipt';
 import type { CapabilityDecision, CapabilityState, DecideInput, KernelReceipt, OwnerPolicy } from '../types';
 import { AGENT_ID, NOW_S, harness, iso, signedPolicy } from './fixtures';
@@ -105,6 +105,17 @@ describe('enforcement ON — the formatter bypass and the evasion list are DENIE
     expect(out.verdict).toBe('DENY');
     expect(tool).toHaveBeenCalledTimes(0);
     expect(codes(out)).toContain('prohibited_capability');
+  });
+
+  it('#8: an unregistered tool with a BENIGN name (no prohibition-regex match) is DENIED, never allowed', async () => {
+    // The verdict comes from the positively-established registered capability — NOT from "the
+    // prohibition regex did not match → allow". 'formatter' matches no pattern yet is still DENIED.
+    expect(classifyProhibitedCapability('formatter')).toBeNull();
+    const h = harness({ capabilityRegistry: registry() });
+    await h.ledger.appendPolicy(await signedPolicyV2(h.owner), iso);
+    const out = await runUnderKernel(toolRequest('formatter'), jest.fn(async () => 'x'), h.deps);
+    expect(out.verdict).toBe('DENY');
+    expect(codes(out)).toContain('unregistered_tool');
   });
 });
 
@@ -218,5 +229,11 @@ describe('decide() unit — the capability check gates the verdict (XC1 #4), fai
     expect(absent.checks.some((c) => c.name === 'capability')).toBe(false);
     expect(off.verdict).toBe(absent.verdict); // identical
     expect(off.verdict).toBe('ALLOW'); // the blanket tool action permits it, as before
+  });
+
+  it('#7c: under enforcement capability is a required check — an ALLOW read carries a PASS capability row', () => {
+    const pass = decide({ ...base, capability: enforced('PASS', null) });
+    expect(pass.verdict).toBe('ALLOW');
+    expect(pass.checks.find((c) => c.name === 'capability')?.outcome).toBe('PASS');
   });
 });

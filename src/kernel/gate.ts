@@ -111,7 +111,11 @@ async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolea
  */
 function gatherCapability(deps: GateDeps, req: KernelRequest, policy: PolicyEvidence): CapabilityState {
   if (!deps.capabilityRegistry) return { state: 'not_enforced' };
-  if (req.tool.class !== 'read' && req.tool.class !== 'other') return { state: 'not_enforced' };
+  // spend and post have their own gates and are not registry tools; their running closure is covered
+  // at the Draft 3 call site. EVERY other class that reaches decide() — read, other, or an UNKNOWN
+  // class — is screened under enforcement, so no enforced decide() path is left without a recorded
+  // capability outcome (XC1 #7a). An unknown/unregistered reference fails closed to FAIL.
+  if (req.tool.class === 'spend' || req.tool.class === 'post') return { state: 'not_enforced' };
   try {
     const authorized =
       policy.state === 'loaded' && policy.signature === 'VERIFIED'

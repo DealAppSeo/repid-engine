@@ -471,7 +471,18 @@ export function decide(input: DecideInput): DecisionLeg {
   // 7. the verdict: starts at DENY, ALLOW has to be earned ---------------------------------------
   const anyFail = checks.some((c) => c.outcome === 'FAIL');
   const anyNotChecked = checks.some((c) => c.outcome === 'NOT_CHECKED');
-  const required = classKnown ? REQUIRED_CHECKS[cls] : [];
+  // Under enforcement the capability check is REQUIRED for a tool call (XC1 #7c): an ALLOW read/other
+  // must rest on a PASS capability row, so a missing or non-PASS one cannot earn an ALLOW. OFF
+  // (not_enforced / absent): the row is never recorded and never required, so OFF receipts stay
+  // byte-unchanged. The STATIC REQUIRED_CHECKS table and receipt.ts are deliberately NOT changed —
+  // that would force a capability row onto OFF receipts too; decide() is the sole verdict producer,
+  // and receipt.ts rule 4 (an ALLOW rests only on PASS checks) already rejects a present non-PASS one.
+  const capabilityRequired = input.capability?.state === 'enforced' && (cls === 'read' || cls === 'other');
+  const required: readonly string[] = classKnown
+    ? capabilityRequired
+      ? [...REQUIRED_CHECKS[cls], 'capability']
+      : REQUIRED_CHECKS[cls]
+    : [];
   const everyRequiredPassed =
     classKnown && wellformed && required.every((name) => checks.find((c) => c.name === name)?.outcome === 'PASS');
 
