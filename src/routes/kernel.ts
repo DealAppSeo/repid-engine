@@ -32,12 +32,22 @@ import { makeKernelHalCheck } from '../kernel/hal-adapter';
 import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy } from '../kernel/policy';
 import { PolicyNonceError, StoreLedger, createJsonlStore } from '../kernel/store';
 import { indexKernelReceiptToDb } from '../kernel/receipt-db-index';
-import type { GateDeps, OwnerResolver } from '../kernel/types';
+import type { GateDeps, KernelReceipt, OwnerResolver } from '../kernel/types';
 import { createCapabilityRegistry, type CapabilityRegistry } from '../kernel/capability-registry';
+import { toSixClaimStatement, type InTotoStatement } from '../kernel/six-claims';
 
 export type KernelRouteDeps = Pick<GateDeps, 'ledger' | 'resolveOwner'> & Partial<Omit<GateDeps, 'ledger' | 'resolveOwner'>>;
 
 const accountableRootOwner: OwnerResolver = async (agent) => ownerEvidenceFromRoot(await resolveAccountableRoot(agent.agent_id));
+
+/** A ledger row that does not read into the envelope gets no claims (null), never a guessed one. */
+function sixClaimsOrNull(r: KernelReceipt): InTotoStatement | null {
+  try {
+    return toSixClaimStatement(r);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * KERNEL_HAL_ENABLED — the switch that joins the real HAL quorum to the kernel post-gate.
@@ -290,10 +300,15 @@ export function createKernelRouter(deps: KernelRouteDeps = defaultDeps()): Route
         res.status(403).json({ error: 'agent_not_bound_to_key', detail: 'this API key is bound to a different agent' });
         return;
       }
+      const latest = entries[entries.length - 1]!;
       res.status(200).json({
         receipt_id: id,
-        receipt: entries[entries.length - 1],
+        receipt: latest,
         entries: entries.map((e) => ({ receipt_hash: e.header.receipt_hash, executed: e.decision.executed, created_at: e.header.created_at })),
+        // The six-claim in-toto envelope for the latest entry (Mission 1 test #7), so trustshell's
+        // SixClaimReceipt renders it without recomputing it. null when the entry does not read into
+        // one: a reader then shows no claims, never a pass.
+        six_claims: sixClaimsOrNull(latest),
       });
     } catch {
       // Could not read the ledger: that is not "no such receipt".
