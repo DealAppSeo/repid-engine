@@ -67,6 +67,18 @@ jest.mock('../src/db', () => ({
               },
             }),
           }),
+          // ONE-TIME USE (2026-10-13): a would-move now claims the receipt via a conditional
+          // UPDATE before the score moves. This suite exercises single moves (no replay), so the
+          // claim simply succeeds when the seeded row exists — preserving every assertion below.
+          // Replay / fail-closed semantics are proven in confirmed-outcome-one-time-use.test.ts.
+          update: () => {
+            const chain: any = {
+              eq: () => chain,
+              is: () => chain,
+              select: async () => ({ data: kr.row ? [{ receipt_id: kr.row['receipt_id'] }] : [], error: null }),
+            };
+            return chain;
+          },
         };
       }
       return { insert: async (row: any) => { inserted.push(row); return { error: null }; } };

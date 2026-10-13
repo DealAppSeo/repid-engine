@@ -32,6 +32,13 @@
 --   is_simulated        a simulated record can never settle a real score move.
 --   receipt_hash        keccak of the receipt (audit; the JSONL chain remains authoritative).
 --   receipt             the full kernel-receipt/1 JSON.
+--   consumed_at         ONE-TIME USE (replay-inert). NULL until a server-verified confirmation
+--                       first MOVES a score; the engine then claims the receipt with a conditional
+--                       `UPDATE ... SET consumed_at = now() WHERE receipt_id = $1 AND consumed_at
+--                       IS NULL RETURNING receipt_id` (repid-update.ts::claimConfirmationReceipt).
+--                       A second attempt with the same receipt_id matches ZERO rows and is held
+--                       inert — no second move. A NULL here means "not yet spent", NEVER "verified":
+--                       the verification checks (settled/verdict/simulated/settled_by) are separate.
 --
 -- ACCESS. RLS on; every privilege revoked from anon and authenticated — only the engine's
 -- secret key (service_role) reads or writes. Mirrors supabase/migrations/20261006160000_
@@ -46,6 +53,7 @@ create table if not exists public.kernel_receipts (
   is_simulated        boolean     not null,
   receipt_hash        text,
   receipt             jsonb       not null,
+  consumed_at         timestamptz,
   created_at          timestamptz not null default now()
 );
 
