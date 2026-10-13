@@ -15,8 +15,10 @@ process.env['SUPABASE_SERVICE_KEY'] = process.env['SUPABASE_SERVICE_KEY'] || 'du
 
 jest.mock('../src/db', () => ({ db: { from: jest.fn() } }));
 
+import { Wallet } from 'ethers';
 import { db } from '../src/db';
 import { checkTransactionAuthority } from '../src/services/x402-gate';
+import { durableCapGrantMessage } from '../src/services/durable-caps';
 
 const fromCalls: string[] = [];
 
@@ -35,8 +37,31 @@ function builder(result: any) {
 }
 
 /** An AUTONOMOUS agent (requires_stake false → stake_available = repid), so decideAuthority AUTHORIZES
- *  a small amount and the durable cap is the only thing that can then deny it. */
-const AUTONOMOUS_AGENT = { tier: 'AUTONOMOUS', current_repid: 6000, conservator_address: null };
+ *  a small amount and the durable cap is the only thing that can then deny it. `id` is present because
+ *  the domain-RepID lookup now resolves the slug → repid_agents.id → repid_score_events.agent_id. */
+const AUTONOMOUS_AGENT = {
+  id: '00000000-0000-0000-0000-0000000000a0',
+  tier: 'AUTONOMOUS',
+  current_repid: 6000,
+  conservator_address: null,
+};
+
+/** Build a genuinely signed durable_spend_caps row for (trinity-auto, coding). The wire-in now
+ *  verifies the signature cryptographically, so a real EOA signature over the canonical grant
+ *  message is required — a placeholder like '0xdeadbeef' fails closed. */
+async function signedCapsRow(ownerCeilingUsdc: number) {
+  const wallet = Wallet.createRandom();
+  const grant_nonce = 'wire-nonce-1';
+  const message = durableCapGrantMessage({
+    agentId: 'trinity-auto',
+    domain: 'coding',
+    ownerCeilingUsdc,
+    ownerAddress: wallet.address,
+    grantNonce: grant_nonce,
+  });
+  const owner_signature = await wallet.signMessage(message);
+  return { owner_ceiling_usdc: ownerCeilingUsdc, owner_address: wallet.address, owner_signature, grant_nonce, active: true };
+}
 
 function installDb(capsResult: any, scoreEventsResult: any = { data: { repid_after: 6000, created_at: '2026-10-01T00:00:00Z' }, error: null }) {
   fromCalls.length = 0;
@@ -67,7 +92,9 @@ describe('durable caps wire-in — flag OFF is inert', () => {
     const r = await checkTransactionAuthority({ agent: 'trinity-auto', transaction_type: 'coding', amount: 50 });
     expect(r.authorized).toBe(true);
     expect(r.denial_reason).toBeNull();
+    // Inert, not merely quiet: NONE of the durable-cap reads run when the flag is off.
     expect(fromCalls).not.toContain('durable_spend_caps');
+    expect(fromCalls).not.toContain('repid_score_events');
   });
 });
 
@@ -90,17 +117,29 @@ describe('durable caps wire-in — flag ON fails closed', () => {
     expect(r.denial_reason).toContain('caps_table_absent');
   });
 
-  it('DENIES an amount over a present, signed owner ceiling', async () => {
+  it('DENIES an amount over a present, CRYPTOGRAPHICALLY VERIFIED owner ceiling', async () => {
     process.env['DURABLE_CAPS_ENABLED'] = 'true';
-    installDb({ data: { owner_ceiling_usdc: 10, owner_signature: '0xdeadbeef', active: true }, error: null });
+    installDb({ data: await signedCapsRow(10), error: null });
     const r = await checkTransactionAuthority({ agent: 'trinity-auto', transaction_type: 'coding', amount: 50 });
     expect(r.authorized).toBe(false);
     expect(r.denial_reason).toContain('exceeds_durable_cap');
   });
 
-  it('still AUTHORIZES an amount under a present, signed owner ceiling (cap permits — decision untouched)', async () => {
+  it('DENIES a present but INVALID signature (verification is load-bearing end-to-end, fail closed)', async () => {
     process.env['DURABLE_CAPS_ENABLED'] = 'true';
-    installDb({ data: { owner_ceiling_usdc: 100, owner_signature: '0xdeadbeef', active: true }, error: null });
+    // A real owner_address, but a garbage signature that does not recover to it: not a grant.
+    const row = await signedCapsRow(100);
+    row.owner_signature = '0xdeadbeef';
+    installDb({ data: row, error: null });
+    const r = await checkTransactionAuthority({ agent: 'trinity-auto', transaction_type: 'coding', amount: 50 });
+    expect(r.authorized).toBe(false);
+    expect(r.denial_reason).toContain('durable_cap_refused');
+    expect(r.denial_reason).toContain('cap_row_sig_');
+  });
+
+  it('still AUTHORIZES an amount under a present, verified owner ceiling (cap permits — decision untouched)', async () => {
+    process.env['DURABLE_CAPS_ENABLED'] = 'true';
+    installDb({ data: await signedCapsRow(100), error: null });
     const r = await checkTransactionAuthority({ agent: 'trinity-auto', transaction_type: 'coding', amount: 50 });
     expect(r.authorized).toBe(true);
     expect(r.denial_reason).toBeNull();

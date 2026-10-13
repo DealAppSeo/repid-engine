@@ -31,8 +31,8 @@ create table if not exists public.durable_spend_caps (
   agent_id           text        not null,               -- agent slug / name, e.g. 'trinity-xyz'
   domain             text        not null,               -- spend domain this ceiling governs, e.g. 'coding' | 'trade'
   owner_ceiling_usdc numeric     not null check (owner_ceiling_usdc >= 0),
-  owner_address      text,                                -- the owner identity that signed the grant (public)
-  owner_signature    text        not null,               -- signature over the signed grant; a ceiling with no signature is not a grant
+  owner_address      text,                                -- the owner identity that signed the grant (public); REQUIRED by the reader — a row with no owner_address cannot be verified and is refused
+  owner_signature    text        not null,               -- signature over the canonical grant message (durableCapGrantMessage); verified cryptographically, must recover to owner_address
   grant_nonce        text,                                -- optional replay guard for the signed grant
   active             boolean     not null default true,  -- a revoked grant is kept for audit, not read
   created_at         timestamptz not null default now(),
@@ -57,6 +57,10 @@ comment on table public.durable_spend_caps is
   'unreadable input. Service-role only (RLS on, no policies).';
 
 comment on column public.durable_spend_caps.owner_signature is
-  'Signature over the signed grant. Presence is required (NOT NULL): a ceiling with no signature is '
-  'not a grant. NOTE: the reader checks presence only — cryptographic verification of this signature '
-  'is NOT CHECKED here and is a separate concern to wire before enabling enforcement in production.';
+  'Signature over the canonical grant message (src/services/durable-caps.ts#durableCapGrantMessage, '
+  'EIP-191 personal_sign binding agent, domain, ceiling, owner_address and nonce). Presence is '
+  'required (NOT NULL): a ceiling with no signature is not a grant. The reader '
+  '(resolveEffectiveCap -> ownerCeiling) VERIFIES it cryptographically — it must recover to '
+  'owner_address — and fails closed on a bad, mismatched, or unverifiable signature or a missing '
+  'owner_address. When arming, consider making owner_address NOT NULL so an unverifiable row cannot '
+  'be inserted at all.';
