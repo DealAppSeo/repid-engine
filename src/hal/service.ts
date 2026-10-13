@@ -12,7 +12,7 @@ import { evaluate } from './lib/evaluate';
 import { markDegraded } from '../lib/degraded';
 import { applyExecutionFloor, type FloorReport } from './execution-floor';
 import { jevPrefilter } from './jev-prefilter';
-import { ministralPrescreen } from './ministral-prescreen';
+import { ministralPrescreen, ministralPrescreenEnforceEnabled } from './ministral-prescreen';
 
 export type Product = 'trustshell' | 'trusttrader' | 'trustcre' | 'default';
 
@@ -382,7 +382,11 @@ export class HalService {
         };
       }
       const mini = await ministralPrescreen(req.text);
-      if (mini.skipHal) {
+      const miniSignals =
+        mini.reason === 'flag_off' ? {} : { ministral_prescreen: mini.reason };
+      // ENABLED is shadow: record the hop, still run the quorum.
+      // Skip only when HAL_MINISTRAL_PRESCREEN_ENFORCE is the string 'true'.
+      if (mini.skipHal && ministralPrescreenEnforceEnabled()) {
         return {
           hal_score: 0,
           decision: 'abstain',
@@ -390,7 +394,7 @@ export class HalService {
           mode: 'fact-check',
           strictness,
           product,
-          signals: { ministral_prescreen: mini.reason },
+          signals: { ...miniSignals },
           latency_ms: Date.now() - start,
         };
       }
@@ -428,6 +432,7 @@ export class HalService {
               // CC1 2026-05-23 provider-failure hardening: surface quorum + per-provider health.
               quorum: fc.quorum, provider_health: fc.provider_health,
               ...(fc.quorum_note ? { quorum_note: fc.quorum_note } : {}),
+              ...miniSignals,
             },
             provider_responses: fc.verdicts, latency_ms: Date.now() - start,
             ...(fc.sbfa ? { sbfa: fc.sbfa } : {}),
@@ -445,7 +450,7 @@ export class HalService {
       return markDegraded(
         applyProviderEvidenceGuard({
           hal_score: r.hal_score, decision: deriveDecision(r.hal_score, r.vetoed, (r.signals as any)?.comma_severity ?? null),
-          mode: 'extractor-fallback' as const, strictness, product, signals: r.signals as any, latency_ms: Date.now() - start,
+          mode: 'extractor-fallback' as const, strictness, product, signals: { ...(r.signals as any), ...miniSignals }, latency_ms: Date.now() - start,
         }, 0),
         `strictness-2 requested but fact-check quorum unavailable (${providerCount} provider(s) configured, none produced a usable verdict) — scored with the non-discriminative style-extractor, NOT a real cross-LLM fact-check`,
         'hal',

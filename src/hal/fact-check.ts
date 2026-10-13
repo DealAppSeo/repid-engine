@@ -1905,6 +1905,15 @@ export function resolveModelFor(
   });
 }
 
+/** Dated checkpoint, live on api.mistral.ai/v1/models 2026-10-13 (no mistral-large id). */
+export const MISTRAL_LARGE_MODEL_DEFAULT = 'mistral-medium-2604';
+export function mistralLargeModel(): string {
+  return process.env.HAL_S2_MISTRAL_LARGE_MODEL?.trim() || MISTRAL_LARGE_MODEL_DEFAULT;
+}
+export function mistralSmallModel(): string {
+  return process.env.HAL_S2_MISTRAL_MODEL?.trim() || 'mistral-small-latest';
+}
+
 export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): FactCheckProviderCfg[] {
   const out: FactCheckProviderCfg[] = [];
   /**
@@ -2093,14 +2102,17 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     }
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
-  // BFT family slot: Mistral-Large-4 is opt-in, default OFF. When on, it occupies
-  // the mistral family (one vote). Small remains the autobackfill/ENABLE_MISTRAL path.
+  // Opt-in Mistral BFT family slot, default OFF. Occupies the mistral family
+  // (one vote). Small remains the autobackfill/ENABLE_MISTRAL path.
+  // Default is the dated medium checkpoint verified live on GET /v1/models
+  // 2026-10-13 — the catalog had no mistral-large / Large-4 id. Override with
+  // HAL_S2_MISTRAL_LARGE_MODEL.
   const mistralLargeOn = process.env.HAL_S2_ENABLE_MISTRAL_LARGE === 'true';
   if (ms && mistralLargeOn) {
     add(
       { name: 'mistral-large', endpoint: PROVIDER_URLS.mistralChatCompletions, apiKey: ms, family: 'mistral' },
       'HAL_S2_MISTRAL_LARGE_MODEL',
-      'mistral-large-latest',
+      MISTRAL_LARGE_MODEL_DEFAULT,
     );
   } else if (ms && (enabled.mistral || ab)) {
     add({ name: 'mistral', endpoint: PROVIDER_URLS.mistralChatCompletions, apiKey: ms, family: 'mistral' }, 'HAL_S2_MISTRAL_MODEL', 'mistral-small-latest');
