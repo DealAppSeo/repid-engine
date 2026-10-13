@@ -29,6 +29,7 @@ import type {
   ToolClass,
 } from './types';
 import { TOOL_CLASSES } from './types';
+import { screenProhibited } from './prohibited';
 
 // ── amounts ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -269,6 +270,17 @@ export function decide(input: DecideInput): DecisionLeg {
     record('request_wellformed', 'FAIL', 'kernel/decide', { code: 'malformed_request', detail: 'money fields (amount, payee, asset) on a call that is not a spend' });
   } else {
     record('request_wellformed', 'PASS', 'kernel/decide');
+  }
+
+  // 1.5 hard-prohibited capabilities — the floor UNDER the owner policy. A secret export or a
+  // trusted-memory write is refused regardless of policy, trust tier or stake ("stake is bounded
+  // exposure, never a bypass of a prohibited action"). Screened on the REQUEST before any
+  // policy/limit/HAL evidence, so a fully-permissive, VERIFIED signed policy cannot allow it; the
+  // FAIL forces DENY (anyFail), and the reason is written into the receipt. Recorded only when it
+  // fires, so an ordinary decision's receipt is byte-unchanged.
+  const prohibition = screenProhibited(request);
+  if (prohibition.prohibited && prohibition.reason) {
+    record('not_prohibited', 'FAIL', 'kernel/decide', prohibition.reason);
   }
 
   // 2. who answers for this agent --------------------------------------------------------------

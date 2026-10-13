@@ -77,6 +77,7 @@ export type ReasonCode =
   | 'hal_abstained'
   | 'hal_not_checked'
   // gate
+  | 'prohibited_action'
   | 'default_deny'
   | 'receipt_write_failed'
   | 'tool_error';
