@@ -207,6 +207,40 @@ describe('GET /api/v1/kernel/receipt/:id', () => {
     expect(res.body.entries.map((e: { executed: boolean }) => e.executed)).toEqual([false, true]);
   });
 
+  it('carries the six-claim envelope of the latest entry: six separate claims, subject = its receipt_hash, no rollup', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const out = await runUnderKernel(spendRequest(), async () => 'ok', h.deps);
+    const id = out.decision_receipt!.header.receipt_id;
+    const res = await request(appWith(h.deps)).get(`/api/v1/kernel/receipt/${id}`);
+    const env = res.body.six_claims;
+    expect(env._type).toBe('https://in-toto.io/Statement/v1');
+    expect(env.predicateType).toBe('https://hyperdag.dev/predicates/trust-receipt-six-claims/v1');
+    expect(Object.keys(env.predicate.claims)).toEqual(['integrity', 'authenticity', 'observation', 'correctness', 'authorization', 'containment']);
+    expect(env.subject[0].digest.keccak256).toBe(res.body.receipt.header.receipt_hash.replace(/^0x/, ''));
+    expect(env.predicate.what_this_does_not_establish.length).toBeGreaterThan(0);
+    expect(env).not.toHaveProperty('verified');
+    expect(env.predicate).not.toHaveProperty('verdict');
+  });
+
+  it('an entry that does not read into the envelope gets six_claims null, never a guessed pass', async () => {
+    const h = harness();
+    await h.ledger.appendPolicy(await signedPolicy(h.owner), iso);
+    const out = await runUnderKernel(spendRequest(), async () => 'ok', h.deps);
+    const id = out.decision_receipt!.header.receipt_id;
+    const real = await h.ledger.findReceipts(id);
+    const malformed: KernelLedger = {
+      appendReceipt: (b) => h.ledger.appendReceipt(b),
+      appendPolicy: (p, t) => h.ledger.appendPolicy(p, t),
+      latestPolicy: (s) => h.ledger.latestPolicy(s),
+      spentTotals: (q) => h.ledger.spentTotals(q),
+      findReceipts: async () => real.map((e) => ({ ...e, payment: undefined }) as unknown as typeof e),
+    };
+    const res = await request(appWith({ ...h.deps, ledger: malformed })).get(`/api/v1/kernel/receipt/${id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.six_claims).toBeNull();
+  });
+
   it('a ledger that cannot be read is 503, not 404: unreadable is not absent', async () => {
     const h = harness();
     const broken: KernelLedger = {
