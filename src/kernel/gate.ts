@@ -22,7 +22,7 @@
 import { randomUUID } from 'node:crypto';
 import { decide, parseKernelRequest } from './decide';
 import { loadPolicyEvidence } from './policy';
-import { screenCapability } from './capability-registry';
+import { screenCapability, type ToolImplementation } from './capability-registry';
 import { DEFAULT_ENV, buildReceipt, validateReceipt } from './receipt';
 import type {
   CapabilityState,
@@ -51,6 +51,13 @@ export interface Assessment {
   policy: PolicyEvidence;
   hal: HalState;
   capability: CapabilityState;
+  /**
+   * Under capability enforcement, the REGISTERED implementation the screen resolved and the gate must
+   * run — reference-equal to the caller's declared closure, verified in `assess` (Draft 3). Null when
+   * enforcement is off/not-applicable or the screen did not PASS. It is NOT serialised: it carries a
+   * function object and never reaches a receipt.
+   */
+  capabilityRun: ToolImplementation | null;
   decision: DecisionLeg;
   now: number;
 }
@@ -104,44 +111,67 @@ async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolea
  * The capability decision (poisoned-repo control). Present ONLY when the registry dep is wired, which
  * the route does only under the KERNEL_CAPABILITY_REGISTRY_ENABLED flag — so OFF this is always
  * `not_enforced` and decide() records nothing. Scoped to the tool-execution classes the `tool` action
- * governs (read / other); spend and post keep their own gates, and the running closure for every class
- * is covered at the call site by Draft 3's registered-implementation swap. The authorized set is read
- * ONLY from a VERIFIED signed policy's bindings — the blanket `tool` action is never consulted — so an
- * unverified or binding-less policy authorizes no implementation and the screen fails closed.
+ * governs (read / other); spend and post keep their own gates. The authorized set is read ONLY from a
+ * VERIFIED signed policy's bindings — the blanket `tool` action is never consulted — so an unverified
+ * or binding-less policy authorizes no implementation and the screen fails closed.
+ *
+ * DRAFT 3 — the executing closure is threaded in as `candidate`, so the screen verifies BY REFERENCE
+ * EQUALITY that the function the gate will actually run IS the boot-registered implementation (via the
+ * registry's `isRegisteredImplementation`). A caller that declares an authorized implId but supplies a
+ * DIFFERENT closure fails closed here with `impl_reference_mismatch` BEFORE anything runs — closing the
+ * "closure swap" (CWE-863). `screen.run` is returned so `runUnderKernel` runs the REGISTERED
+ * implementation, never the caller-supplied closure. A dry decision passes no candidate (there is no
+ * closure to run); the reference check is then skipped and the result must be read as NOT-RUNNABLE.
  */
-function gatherCapability(deps: GateDeps, req: KernelRequest, policy: PolicyEvidence): CapabilityState {
-  if (!deps.capabilityRegistry) return { state: 'not_enforced' };
-  // spend and post have their own gates and are not registry tools; their running closure is covered
-  // at the Draft 3 call site. EVERY other class that reaches decide() — read, other, or an UNKNOWN
+function gatherCapability(
+  deps: GateDeps,
+  req: KernelRequest,
+  policy: PolicyEvidence,
+  candidate: unknown,
+): { capability: CapabilityState; run: ToolImplementation | null } {
+  if (!deps.capabilityRegistry) return { capability: { state: 'not_enforced' }, run: null };
+  // spend and post have their own gates and are not registry tools; their closure is governed by those
+  // gates, not the registry. EVERY other class that reaches decide() — read, other, or an UNKNOWN
   // class — is screened under enforcement, so no enforced decide() path is left without a recorded
   // capability outcome (XC1 #7a). An unknown/unregistered reference fails closed to FAIL.
-  if (req.tool.class === 'spend' || req.tool.class === 'post') return { state: 'not_enforced' };
+  if (req.tool.class === 'spend' || req.tool.class === 'post') return { capability: { state: 'not_enforced' }, run: null };
   try {
     const authorized =
       policy.state === 'loaded' && policy.signature === 'VERIFIED'
         ? new Set(policy.policy.authorized_impl_hashes ?? [])
         : new Set<string>();
-    // Draft 2 passes NO candidate: the running-function reference-equality is enforced at the call site
-    // in Draft 3. Here the request's declared tool name is the referenced implementation id.
-    const screen = screenCapability({ implRef: req.tool.name }, deps.capabilityRegistry, authorized);
+    const screen = screenCapability({ implRef: req.tool.name, candidate }, deps.capabilityRegistry, authorized);
     return {
-      state: 'enforced',
-      decision: {
-        outcome: screen.outcome,
-        capability_id: screen.capabilityId,
-        impl_id: screen.implId,
-        code: screen.code,
-        detail: screen.detail,
+      capability: {
+        state: 'enforced',
+        decision: {
+          outcome: screen.outcome,
+          capability_id: screen.capabilityId,
+          impl_id: screen.implId,
+          code: screen.code,
+          detail: screen.detail,
+        },
       },
+      // The REGISTERED implementation to run on an ALLOW (screen PASS). Null on any non-PASS, so the
+      // gate never has a caller-supplied closure to fall back to under enforcement.
+      run: screen.run,
     };
   } catch {
     // Fail closed: an un-screenable registry blocks rather than passes.
-    return { state: 'not_checked', detail: 'the capability registry could not be screened' };
+    return { capability: { state: 'not_checked', detail: 'the capability registry could not be screened' }, run: null };
   }
 }
 
-/** Everything up to and including decide(). No writes, no tool. Shared by the gate and the dry route. */
-export async function assess(request: KernelRequest, deps: GateDeps): Promise<Assessment> {
+/**
+ * Everything up to and including decide(). No writes, no tool. Shared by the gate and the dry route.
+ *
+ * `candidate` is the EXECUTING closure, threaded through so the capability screen can verify, by
+ * reference equality, that the function the gate will run is the boot-registered implementation
+ * (Draft 3). The gate (`runUnderKernel`) passes the caller's `tool`; the dry route passes nothing,
+ * because a dry decision runs nothing — its capability outcome is a policy-level would-allow, NOT an
+ * enforced ALLOW of execution.
+ */
+export async function assess(request: KernelRequest, deps: GateDeps, candidate?: unknown): Promise<Assessment> {
   const now = (deps.now ?? Date.now)();
 
   // Independent reads. Each one's failure is its own NOT_CHECKED, never another one's.
@@ -152,10 +182,10 @@ export async function assess(request: KernelRequest, deps: GateDeps): Promise<As
   const spent = await gatherSpent(deps, request, policy, now);
   const worthAsking = owner.status === 'resolved' && policy.state === 'loaded' && policy.signature === 'VERIFIED';
   const hal = await gatherHal(deps, request, worthAsking);
-  const capability = gatherCapability(deps, request, policy);
+  const { capability, run: capabilityRun } = gatherCapability(deps, request, policy, candidate);
 
   const decision = decide({ request, now_s: Math.floor(now / 1000), owner, policy, spent, hal, capability });
-  return { request, owner, policy, hal, capability, decision, now };
+  return { request, owner, policy, hal, capability, capabilityRun, decision, now };
 }
 
 function refused<T>(verdict: 'DENY' | 'NOT_CHECKED', reasons: Reason[]): GateResult<T> {
@@ -190,7 +220,9 @@ export async function runUnderKernel<T>(
     return refused('DENY', parsed.reasons);
   }
 
-  const a = await assess(parsed.request, deps);
+  // The EXECUTING closure is threaded into the screen so the capability check verifies, by reference
+  // equality, that the function we will run IS the boot-registered implementation (Draft 3).
+  const a = await assess(parsed.request, deps, tool);
   const env = deps.env ?? DEFAULT_ENV;
   const newId = deps.newId ?? randomUUID;
   const receiptId = newId();
@@ -233,10 +265,21 @@ export async function runUnderKernel<T>(
   }
 
   // 3. ALLOW: run, then record what happened. A throw is data, not an escape.
+  //
+  // Under capability enforcement the gate runs the REGISTERED implementation the screen resolved
+  // (`a.capabilityRun`) — reference-equal to the caller's declared closure, already verified in
+  // assess — and NEVER a caller-supplied closure under an authorized name. There is no delegation or
+  // passthrough hole: a reference mismatch is a FAIL in assess, which makes the verdict DENY and never
+  // reaches here. OFF / not-enforced classes (spend, post, and every call with the flag unset) run the
+  // caller's `tool` exactly as before — byte-identical. If enforcement somehow yielded no registered
+  // implementation on an ALLOW (it cannot: screen PASS always returns `run`), `executing` is null and
+  // the call throws — recorded as a tool error, with the caller's closure still never run (fail closed).
+  const executing: KernelTool<T> =
+    a.capability.state === 'enforced' ? ((a.capabilityRun as unknown) as KernelTool<T>) : tool;
   let result: T | undefined;
   let toolError: string | undefined;
   try {
-    result = await tool();
+    result = await executing();
   } catch (e) {
     toolError = e instanceof Error ? e.name : 'Error'; // the class of failure, never its message
   }
@@ -287,8 +330,14 @@ export async function runUnderKernel<T>(
     final_receipt: outcomeRow,
     outcome_unrecorded: outcomeRow === null,
   };
-  if (toolError === undefined) out.result = result as T;
-  else out.tool_error = toolError;
+  // FAIL-CLOSED OUTPUT GATE (Draft 3, defence-in-depth). The tool's return value enters the gate
+  // result ONLY when the tool returned AND its outcome row was recorded. On ANY output-gate failure —
+  // the tool threw, or the outcome row could not be written (`outcome_unrecorded`) — the value is
+  // withheld: it never enters the gate result, and it never entered the receipt (a receipt carries no
+  // return value, only an args_hash). So a consumer that ignores `outcome_unrecorded` still cannot act
+  // on a result whose authorisation record is incomplete.
+  if (toolError === undefined && outcomeRow !== null) out.result = result as T;
+  else if (toolError !== undefined) out.tool_error = toolError;
   return out;
 }
 
@@ -297,6 +346,15 @@ export interface DryDecision {
   blocking: boolean;
   /** Always false: a dry decision writes nothing and runs nothing. */
   persisted: false;
+  /**
+   * ALWAYS false (Draft 3). A dry decision runs no tool, so its verdict must NEVER be read as an
+   * enforced ALLOW of execution: an ALLOW here means only that the owner's signed policy WOULD permit
+   * the call. Under the capability registry a dry decide verifies the policy binding but NOT the
+   * executing closure (there is none to check by reference equality), so even a capability-PASS dry
+   * ALLOW is a would-allow, not a run. `runUnderKernel` is the only path that runs anything, and it is
+   * where the executing closure is pinned to the registered implementation.
+   */
+  runnable: false;
   decision: DecisionLeg;
   /** A well-formed, validated kernel-receipt/1 for this decision. NOT chained and NOT in the ledger. */
   receipt_preview: KernelReceipt | null;
@@ -307,6 +365,9 @@ export interface DryDecision {
 export async function dryDecision(rawRequest: unknown, deps: GateDeps): Promise<DryDecision | { malformed: Reason[] }> {
   const parsed = parseKernelRequest(rawRequest);
   if (!parsed.ok) return { malformed: parsed.reasons };
+  // NO candidate: a dry decision runs nothing, so there is no executing closure to verify by reference
+  // equality. The capability screen therefore resolves + authorizes + prohibits only, and the result
+  // is marked `runnable: false` below so it can never be read as an enforced ALLOW of execution.
   const a = await assess(parsed.request, deps);
   const env = deps.env ?? DEFAULT_ENV;
   let preview: KernelReceipt | null = null;
@@ -331,6 +392,8 @@ export async function dryDecision(rawRequest: unknown, deps: GateDeps): Promise<
     verdict: a.decision.verdict,
     blocking: a.decision.verdict !== 'ALLOW',
     persisted: false,
+    // A dry decision never runs a tool. ALLOW here is a policy-level would-allow, not an enforced run.
+    runnable: false,
     decision: a.decision,
     receipt_preview: preview,
     reasons: a.decision.reasons,

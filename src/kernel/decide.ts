@@ -448,9 +448,11 @@ export function decide(input: DecideInput): DecisionLeg {
   // PASS/FAIL/NOT_CHECKED; a non-PASS forces DENY/NOT_CHECKED through the verdict math below, so an
   // ALLOW receipt can never exist for an unregistered, unauthorized or prohibited call. This is the
   // check that gates the PERSISTED decision BEFORE the tool runs (gate.ts calls the tool only on
-  // ALLOW). The full execution swap — runUnderKernel running the REGISTERED implementation instead of
-  // the caller's closure — is Draft 3; until then this closes the DECISION (resolve + authorize +
-  // prohibit by the owner-signed binding), not yet the closure swap.
+  // ALLOW). As of Draft 3 the execution swap is wired too: the gate threads the executing closure in
+  // as the screen's `candidate`, so a declared-but-mismatched closure fails closed here, and
+  // runUnderKernel runs the REGISTERED implementation rather than the caller's closure. This decision
+  // (resolve + authorize + prohibit by the owner-signed binding) and that call-site reference-equality
+  // together close the closure swap.
   const cap = input.capability;
   if (cap && cap.state === 'enforced') {
     if (cap.decision.outcome === 'PASS') {
