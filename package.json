@@ -107,7 +107,8 @@
     "probe:hal-shape": "ts-node scripts/liveness-probes/probe-hal-response-shape.ts",
     "verify:vesting": "ts-node scripts/verify/vesting-not-stranded.ts",
     "verify:quality-hook": "ts-node scripts/verify/quality-hook-can-fire.ts",
-    "dispatch:deliver-inbox": "node scripts/dispatch/deliver-inbox.mjs"
+    "dispatch:deliver-inbox": "node scripts/dispatch/deliver-inbox.mjs",
+    "search:index": "zg index . --embedding local/potion-retrieval-32m --ignore-file .zvec-grep-ignore"
   },
   "keywords": [],
   "author": "",
