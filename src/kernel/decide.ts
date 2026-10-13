@@ -442,10 +442,47 @@ export function decide(input: DecideInput): DecisionLeg {
     }
   }
 
+  // 6.5 capability (poisoned-repo control) — present ONLY under enforcement (flag ON). OFF: the
+  // capability state is `not_enforced` (or absent) and NOTHING is recorded here, so the receipt is
+  // byte-identical to today and the shadow would-deny is logged out of band. ON: ALWAYS records
+  // PASS/FAIL/NOT_CHECKED; a non-PASS forces DENY/NOT_CHECKED through the verdict math below, so an
+  // ALLOW receipt can never exist for an unregistered, unauthorized or prohibited call. This is the
+  // check that gates the PERSISTED decision BEFORE the tool runs (gate.ts calls the tool only on
+  // ALLOW). The full execution swap — runUnderKernel running the REGISTERED implementation instead of
+  // the caller's closure — is Draft 3; until then this closes the DECISION (resolve + authorize +
+  // prohibit by the owner-signed binding), not yet the closure swap.
+  const cap = input.capability;
+  if (cap && cap.state === 'enforced') {
+    if (cap.decision.outcome === 'PASS') {
+      record('capability', 'PASS', 'kernel/capability-registry');
+    } else {
+      record('capability', 'FAIL', 'kernel/capability-registry', {
+        code: cap.decision.code ?? 'prohibited_capability',
+        detail: cap.decision.detail,
+      });
+    }
+  } else if (cap && cap.state === 'not_checked') {
+    record('capability', 'NOT_CHECKED', 'kernel/capability-registry', {
+      code: 'capability_not_checked',
+      detail: cap.detail,
+    });
+  }
+
   // 7. the verdict: starts at DENY, ALLOW has to be earned ---------------------------------------
   const anyFail = checks.some((c) => c.outcome === 'FAIL');
   const anyNotChecked = checks.some((c) => c.outcome === 'NOT_CHECKED');
-  const required = classKnown ? REQUIRED_CHECKS[cls] : [];
+  // Under enforcement the capability check is REQUIRED for a tool call (XC1 #7c): an ALLOW read/other
+  // must rest on a PASS capability row, so a missing or non-PASS one cannot earn an ALLOW. OFF
+  // (not_enforced / absent): the row is never recorded and never required, so OFF receipts stay
+  // byte-unchanged. The STATIC REQUIRED_CHECKS table and receipt.ts are deliberately NOT changed —
+  // that would force a capability row onto OFF receipts too; decide() is the sole verdict producer,
+  // and receipt.ts rule 4 (an ALLOW rests only on PASS checks) already rejects a present non-PASS one.
+  const capabilityRequired = input.capability?.state === 'enforced' && (cls === 'read' || cls === 'other');
+  const required: readonly string[] = classKnown
+    ? capabilityRequired
+      ? [...REQUIRED_CHECKS[cls], 'capability']
+      : REQUIRED_CHECKS[cls]
+    : [];
   const everyRequiredPassed =
     classKnown && wellformed && required.every((name) => checks.find((c) => c.name === name)?.outcome === 'PASS');
 

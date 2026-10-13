@@ -70,14 +70,54 @@ export function policyTypedValue(p: OwnerPolicy): Record<string, unknown> {
   };
 }
 
-/** The digest the owner signs. It doubles as the policy's identity in receipts. */
+/**
+ * V2 of the signed policy — v1 plus the capability-registry bindings. A policy that authorizes any
+ * implementation MUST be signed under v2 so the signature COVERS the bindings (XC1 #3); a v1 policy
+ * (no bindings) is signed and verified under v1, exactly as before, so arming the registry breaks no
+ * existing policy. The scheme is chosen by presence of bindings; the distinct `version` keeps the two
+ * EIP-712 type hashes from colliding.
+ */
+export const POLICY_DOMAIN_V2 = { name: 'HyperDAG Kernel Owner Policy', version: '2', chainId: 84532 } as const;
+
+export const POLICY_TYPES_V2: Record<string, Array<{ name: string; type: string }>> = {
+  OwnerPolicy: [
+    { name: 'subject', type: 'string' },
+    { name: 'owner', type: 'address' },
+    { name: 'actions', type: 'string[]' },
+    { name: 'payees', type: 'address[]' },
+    { name: 'perTxRaw', type: 'uint256' },
+    { name: 'dailyRaw', type: 'uint256' },
+    { name: 'totalRaw', type: 'uint256' },
+    { name: 'expiresAt', type: 'uint64' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'authorizedImplHashes', type: 'string[]' },
+  ],
+};
+
+/** The v2 EIP-712 message — v1 plus the authorized implementation bindings. */
+export function policyTypedValueV2(p: OwnerPolicy): Record<string, unknown> {
+  return { ...policyTypedValue(p), authorizedImplHashes: p.authorized_impl_hashes ?? [] };
+}
+
+/**
+ * A policy authorizes a closure ONLY through explicit bindings. A non-empty `authorized_impl_hashes`
+ * selects the v2 signing scheme; absence keeps v1 untouched (and authorizes no implementation).
+ */
+export function policyHasBindings(p: OwnerPolicy): boolean {
+  return Array.isArray(p.authorized_impl_hashes) && p.authorized_impl_hashes.length > 0;
+}
+
+/** The digest the owner signs. It doubles as the policy's identity in receipts. v2 when it binds. */
 export function policyHash(p: OwnerPolicy): string {
-  return TypedDataEncoder.hash(POLICY_DOMAIN, POLICY_TYPES, policyTypedValue(p));
+  return policyHasBindings(p)
+    ? TypedDataEncoder.hash(POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2(p))
+    : TypedDataEncoder.hash(POLICY_DOMAIN, POLICY_TYPES, policyTypedValue(p));
 }
 
 // ── parsing ─────────────────────────────────────────────────────────────────────────────────────
 
-const POLICY_KEYS = new Set(['subject', 'owner', 'actions', 'payees', 'per_tx_raw', 'daily_raw', 'total_raw', 'expires_at', 'nonce']);
+const POLICY_KEYS = new Set(['subject', 'owner', 'actions', 'payees', 'per_tx_raw', 'daily_raw', 'total_raw', 'expires_at', 'nonce', 'authorized_impl_hashes']);
+const IMPL_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const ACTION = /^(spend|post|tool|tool:[A-Za-z0-9_.:-]{1,128})$/;
 const SIGNATURE = /^0x(?:[0-9a-fA-F]{2}){2,10000}$/;
 const MAX_ACTIONS = 64;
@@ -166,6 +206,29 @@ export function parsePolicy(input: unknown): PolicyParse {
   if (!n.ok) errors.push('nonce must be a non-negative decimal integer');
   else nonce = n.canonical;
 
+  // Optional capability-registry bindings (poisoned-repo control). ABSENT authorizes NOTHING, and is
+  // NOT reported in `defaulted`: it is not a zeroed limit, and adding it would change the parse output
+  // of every existing policy (the flag-OFF path must stay byte-identical). The capability screen fails
+  // closed on an empty authorized set, so absence is already handled. When PRESENT, each entry is a
+  // registered implementation id the owner authorizes; these are SIGNED under the v2 policy type, so a
+  // stored policy carrying them only VERIFIES if the owner signed over them. A v1 policy omits the
+  // field entirely, so its parsed shape and its signature are unchanged.
+  const authRaw = input['authorized_impl_hashes'];
+  let authImpl: string[] | undefined;
+  if (authRaw !== undefined && authRaw !== null) {
+    if (!Array.isArray(authRaw) || authRaw.length > MAX_ACTIONS) {
+      errors.push('authorized_impl_hashes must be a list of registered implementation ids');
+    } else {
+      const acc: string[] = [];
+      for (const h of authRaw) {
+        if (typeof h !== 'string' || !IMPL_ID.test(h)) errors.push('authorized_impl_hashes holds an entry that is not a valid implementation id');
+        else if (acc.includes(h)) errors.push('authorized_impl_hashes lists an id twice');
+        else acc.push(h);
+      }
+      authImpl = acc;
+    }
+  }
+
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
@@ -180,6 +243,7 @@ export function parsePolicy(input: unknown): PolicyParse {
       total_raw: total,
       expires_at: exp as number,
       nonce,
+      ...(authImpl !== undefined ? { authorized_impl_hashes: authImpl } : {}),
     },
   };
 }
@@ -213,7 +277,12 @@ export interface PolicyVerification {
  */
 export async function verifyOwnerPolicy(policy: OwnerPolicy, signature: string, chain?: SignatureChain): Promise<PolicyVerification> {
   try {
-    const r = await verifyWalletTypedData(policy.owner, POLICY_DOMAIN, POLICY_TYPES, policyTypedValue(policy), signature, chain);
+    // A policy that binds implementations is signed under v2 (so the signature covers the bindings);
+    // a v1 policy verifies under v1, byte-for-byte as before.
+    const [domain, types, value] = policyHasBindings(policy)
+      ? ([POLICY_DOMAIN_V2, POLICY_TYPES_V2, policyTypedValueV2(policy)] as const)
+      : ([POLICY_DOMAIN, POLICY_TYPES, policyTypedValue(policy)] as const);
+    const r = await verifyWalletTypedData(policy.owner, domain, types, value, signature, chain);
     if (r.ok) return { status: 'VERIFIED', detail: 'the owner signed this policy', kind: r.kind };
     return r.reason === 'not_checked'
       ? { status: 'NOT_CHECKED', detail: r.detail }
