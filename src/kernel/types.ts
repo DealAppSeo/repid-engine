@@ -27,6 +27,8 @@
  * NO BEHAVIOUR LIVES HERE: every import is a type, erased at compile time.
  */
 
+import type { CapabilityReasonCode, ReadonlyCapabilityRegistry } from './capability-registry';
+
 // ── schema constants ────────────────────────────────────────────────────────────────────────────
 
 export const KERNEL_RECEIPT_SCHEMA = 'kernel-receipt/1' as const;
@@ -79,7 +81,13 @@ export type ReasonCode =
   // gate
   | 'default_deny'
   | 'receipt_write_failed'
-  | 'tool_error';
+  | 'tool_error'
+  // capability registry (poisoned-repo control; enforcement only, flag-gated — see capability-registry.ts)
+  | 'unregistered_tool'
+  | 'impl_unauthorized'
+  | 'prohibited_capability'
+  | 'impl_reference_mismatch'
+  | 'capability_not_checked';
 
 export interface Reason {
   code: ReasonCode;
@@ -149,6 +157,15 @@ export interface OwnerPolicy {
   expires_at: number;
   /** Decimal string. A policy supersedes another for the same subject only with a higher nonce. */
   nonce: string;
+  /**
+   * Owner-signed authorization for the capability registry (poisoned-repo control). Each entry is a
+   * REGISTERED implementation identity (`implId`) the owner permits this agent to invoke. ABSENT or
+   * EMPTY authorizes NO implementation — the blanket `tool` action grants nothing until the owner
+   * re-signs with explicit bindings. These bindings are part of the SIGNED bytes under the v2 policy
+   * type (policy.ts), so the signature covers them; a v1 policy (field absent) verifies exactly as
+   * before, which is why arming the registry does not break an existing signed policy.
+   */
+  authorized_impl_hashes?: string[];
 }
 
 export interface SignedOwnerPolicy {
@@ -212,6 +229,33 @@ export type HalState =
   | { state: 'not_checked'; detail: string }
   | { state: 'not_needed' };
 
+/**
+ * The capability decision (poisoned-repo control), computed by the gate from the KERNEL-OWNED
+ * capability registry and the owner's SIGNED authorized bindings — never from the caller's tool
+ * name/class. decide() records it as a `capability` check so a non-PASS forces DENY/NOT_CHECKED via
+ * the existing verdict math, which means an ALLOW receipt can never exist for an unregistered,
+ * unauthorized or prohibited call (the check gates the PERSISTED decision, before the tool runs).
+ */
+export interface CapabilityDecision {
+  outcome: 'PASS' | 'FAIL';
+  /** The resolved KERNEL-OWNED capability id, or null. Never derived from the caller's reference. */
+  capability_id: string | null;
+  impl_id: string | null;
+  code: CapabilityReasonCode | null;
+  detail: string;
+}
+
+/**
+ * `not_enforced` is the flag-OFF default (KERNEL_CAPABILITY_REGISTRY_ENABLED unset): decide() records
+ * NOTHING, so the receipt is byte-identical to today and the shadow would-deny is logged out of band.
+ * `enforced` carries the screen result (ON). `not_checked` is ON but the registry/screen could not be
+ * run — it records NOT_CHECKED, which blocks (fail closed), never a pass.
+ */
+export type CapabilityState =
+  | { state: 'enforced'; decision: CapabilityDecision }
+  | { state: 'not_checked'; detail: string }
+  | { state: 'not_enforced' };
+
 export interface DecideInput {
   request: KernelRequest;
   /** Unix seconds. Injected so the decision is reproducible. */
@@ -220,6 +264,11 @@ export interface DecideInput {
   policy: PolicyEvidence;
   spent: SpentEvidence;
   hal: HalState;
+  /**
+   * The capability decision, when the registry is armed. Optional and defaulting to `not_enforced`
+   * so every existing caller and the flag-OFF path are byte-unchanged.
+   */
+  capability?: CapabilityState;
 }
 
 // ── the receipt: kernel-receipt/1 ───────────────────────────────────────────────────────────────
@@ -404,6 +453,13 @@ export interface GateDeps {
   policySource?: PolicySource;
   /** Required for a `post` to be allowed. Absent → HAL is NOT_CHECKED → the post is blocked. */
   halCheck?: HalCheck;
+  /**
+   * The kernel-owned capability registry (poisoned-repo control). Wired ONLY under the
+   * KERNEL_CAPABILITY_REGISTRY_ENABLED flag (routes/kernel.ts). Absent → capability is `not_enforced`
+   * and the receipt is byte-identical to today. A ReadonlyCapabilityRegistry: the gate can resolve and
+   * check, never register — registration is boot-only.
+   */
+  capabilityRegistry?: ReadonlyCapabilityRegistry;
   /** Chain reads for ERC-1271 / ERC-6492 smart-wallet owners. Absent → the default Base Sepolia client. */
   chain?: import('../services/wallet-signature').SignatureChain;
   env?: ReceiptEnv;

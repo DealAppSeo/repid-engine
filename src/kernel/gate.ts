@@ -22,8 +22,10 @@
 import { randomUUID } from 'node:crypto';
 import { decide, parseKernelRequest } from './decide';
 import { loadPolicyEvidence } from './policy';
+import { screenCapability } from './capability-registry';
 import { DEFAULT_ENV, buildReceipt, validateReceipt } from './receipt';
 import type {
+  CapabilityState,
   DecisionLeg,
   GateDeps,
   GateResult,
@@ -48,6 +50,7 @@ export interface Assessment {
   owner: OwnerEvidence;
   policy: PolicyEvidence;
   hal: HalState;
+  capability: CapabilityState;
   decision: DecisionLeg;
   now: number;
 }
@@ -97,6 +100,42 @@ async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolea
   }
 }
 
+/**
+ * The capability decision (poisoned-repo control). Present ONLY when the registry dep is wired, which
+ * the route does only under the KERNEL_CAPABILITY_REGISTRY_ENABLED flag — so OFF this is always
+ * `not_enforced` and decide() records nothing. Scoped to the tool-execution classes the `tool` action
+ * governs (read / other); spend and post keep their own gates, and the running closure for every class
+ * is covered at the call site by Draft 3's registered-implementation swap. The authorized set is read
+ * ONLY from a VERIFIED signed policy's bindings — the blanket `tool` action is never consulted — so an
+ * unverified or binding-less policy authorizes no implementation and the screen fails closed.
+ */
+function gatherCapability(deps: GateDeps, req: KernelRequest, policy: PolicyEvidence): CapabilityState {
+  if (!deps.capabilityRegistry) return { state: 'not_enforced' };
+  if (req.tool.class !== 'read' && req.tool.class !== 'other') return { state: 'not_enforced' };
+  try {
+    const authorized =
+      policy.state === 'loaded' && policy.signature === 'VERIFIED'
+        ? new Set(policy.policy.authorized_impl_hashes ?? [])
+        : new Set<string>();
+    // Draft 2 passes NO candidate: the running-function reference-equality is enforced at the call site
+    // in Draft 3. Here the request's declared tool name is the referenced implementation id.
+    const screen = screenCapability({ implRef: req.tool.name }, deps.capabilityRegistry, authorized);
+    return {
+      state: 'enforced',
+      decision: {
+        outcome: screen.outcome,
+        capability_id: screen.capabilityId,
+        impl_id: screen.implId,
+        code: screen.code,
+        detail: screen.detail,
+      },
+    };
+  } catch {
+    // Fail closed: an un-screenable registry blocks rather than passes.
+    return { state: 'not_checked', detail: 'the capability registry could not be screened' };
+  }
+}
+
 /** Everything up to and including decide(). No writes, no tool. Shared by the gate and the dry route. */
 export async function assess(request: KernelRequest, deps: GateDeps): Promise<Assessment> {
   const now = (deps.now ?? Date.now)();
@@ -109,9 +148,10 @@ export async function assess(request: KernelRequest, deps: GateDeps): Promise<As
   const spent = await gatherSpent(deps, request, policy, now);
   const worthAsking = owner.status === 'resolved' && policy.state === 'loaded' && policy.signature === 'VERIFIED';
   const hal = await gatherHal(deps, request, worthAsking);
+  const capability = gatherCapability(deps, request, policy);
 
-  const decision = decide({ request, now_s: Math.floor(now / 1000), owner, policy, spent, hal });
-  return { request, owner, policy, hal, decision, now };
+  const decision = decide({ request, now_s: Math.floor(now / 1000), owner, policy, spent, hal, capability });
+  return { request, owner, policy, hal, capability, decision, now };
 }
 
 function refused<T>(verdict: 'DENY' | 'NOT_CHECKED', reasons: Reason[]): GateResult<T> {

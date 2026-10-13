@@ -33,6 +33,7 @@ import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy
 import { PolicyNonceError, StoreLedger, createJsonlStore } from '../kernel/store';
 import { indexKernelReceiptToDb } from '../kernel/receipt-db-index';
 import type { GateDeps, OwnerResolver } from '../kernel/types';
+import { createCapabilityRegistry, type CapabilityRegistry } from '../kernel/capability-registry';
 
 export type KernelRouteDeps = Pick<GateDeps, 'ledger' | 'resolveOwner'> & Partial<Omit<GateDeps, 'ledger' | 'resolveOwner'>>;
 
@@ -53,6 +54,29 @@ const accountableRootOwner: OwnerResolver = async (agent) => ownerEvidenceFromRo
  */
 function kernelHalEnabled(): boolean {
   return (process.env['KERNEL_HAL_ENABLED'] ?? '').trim().toLowerCase() === 'true';
+}
+
+/**
+ * KERNEL_CAPABILITY_REGISTRY_ENABLED — arms the poisoned-repo capability control.
+ *
+ * DEFAULT OFF, and off is byte-identical to today: `capabilityRegistry` is simply NOT set, so the
+ * gate records no `capability` check and the receipt is unchanged. ON wires the kernel's boot
+ * registry; until Draft 3 registers the real implementations that registry is EMPTY, so arming the
+ * flag DENIES every read/other tool call (fail closed) rather than authorizing anything. Flipping it
+ * is a decision for whoever owns production (Sean). Read as a literal `process.env['NAME']` so the
+ * env-registry scan (known-env-vars.generated.ts) picks it up.
+ */
+function kernelCapabilityRegistryEnabled(): boolean {
+  return (process.env['KERNEL_CAPABILITY_REGISTRY_ENABLED'] ?? '').trim().toLowerCase() === 'true';
+}
+
+/**
+ * The kernel's boot capability registry — a module-scoped singleton so one process shares one
+ * registry. Registration is boot-only and lands here in Draft 3; until then it is empty.
+ */
+let CAP_REGISTRY: CapabilityRegistry | null = null;
+function kernelCapabilityRegistry(): CapabilityRegistry {
+  return (CAP_REGISTRY ??= createCapabilityRegistry());
 }
 
 /**
@@ -78,6 +102,9 @@ export function defaultDeps(): KernelRouteDeps {
     // Flag OFF ⇒ key absent ⇒ gate reads `hal_not_checked` (today's behavior, unchanged).
     // Flag ON ⇒ the real HAL adapter is consulted for a post. See kernelHalEnabled() above.
     ...(kernelHalEnabled() ? { halCheck: makeKernelHalCheck() } : {}),
+    // Flag OFF ⇒ key absent ⇒ no `capability` check, receipt byte-unchanged.
+    // Flag ON ⇒ the kernel capability registry governs read/other tool calls (fail-closed).
+    ...(kernelCapabilityRegistryEnabled() ? { capabilityRegistry: kernelCapabilityRegistry() } : {}),
   };
 }
 
