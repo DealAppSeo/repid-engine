@@ -90,8 +90,11 @@ router.get('/squads', async (_req, res) => {
   });
 });
 
-// POST /leads — capture emails for waitlist/prompts (gated to viewer).
-router.post('/leads', async (req, res) => {
+// POST /leads — capture emails for waitlist/prompts. [F-18] This is a WRITE, so it requires
+// operator, not the base viewer gate. An SBT named in a header resolves to viewer (F-15) and SBT
+// token ids / wallets are public on chain, so a viewer gate let anyone insert a lead row; the write
+// now sits behind operator, like /directives and /requests/:id/decide.
+router.post('/leads', requireRole('operator'), async (req, res) => {
   const { email } = req.body || {};
   if (typeof email !== 'string' || !email.includes('@') || email.length < 3 || email.length > 255) {
     return res.status(400).json({ error: 'Valid email between 3 and 255 characters is required' });

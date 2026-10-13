@@ -324,3 +324,52 @@ describe('[F-15] the controller accepts no credential anyone can construct', () 
     expect(decide.status).toBe(403);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [F-18] POST /leads is a WRITE, so it must require operator — not the base viewer
+// gate. An SBT named in a header resolves to viewer (F-15), and SBT token ids and
+// wallets are public on chain, so a viewer gate let anyone insert a lead row. The
+// write must sit behind operator, like /directives and /requests/:id/decide.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('[F-18] POST /leads requires operator — a public SBT (viewer) must not write a lead', () => {
+  const LEAD = { email: 'stranger@example.com' };
+
+  test('a viewer (SBT named in a header) cannot write a lead → 403, nothing inserted', async () => {
+    const inserts: any[] = [];
+    setMock({
+      human_sbt_registry: { await: { data: [SBT_ROW] } },
+      trinity_leads: { _insert: (v: any) => inserts.push(v) },
+    });
+    const r = await request(app).post('/api/v1/controller/leads').set('x-sbt-token', 't1').send(LEAD);
+    expect(r.status).toBe(403);
+    expect(inserts).toHaveLength(0); // the refusal is a refusal, not a 403 after the row landed
+  });
+
+  test('no credential at all → 401 (unchanged base gate)', async () => {
+    setMock({ human_sbt_registry: { await: { data: [] } } });
+    const r = await request(app).post('/api/v1/controller/leads').send(LEAD);
+    expect(r.status).toBe(401);
+  });
+
+  test('an operator token can still write a lead → 200', async () => {
+    process.env.CONTROLLER_QR_SECRET = TEST_QR_SECRET;
+    const operator = mintQrToken('operator');
+    const inserts: any[] = [];
+    setMock({
+      human_sbt_registry: { await: { data: [] } },
+      trinity_leads: { _insert: (v: any) => inserts.push(v) },
+    });
+    const r = await request(app).post('/api/v1/controller/leads').set('x-controller-token', operator).send(LEAD);
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(inserts[0].email).toBe('stranger@example.com');
+  });
+
+  test('a bad email is still rejected for an operator → 400 (validation unchanged behind the gate)', async () => {
+    process.env.CONTROLLER_QR_SECRET = TEST_QR_SECRET;
+    const operator = mintQrToken('operator');
+    setMock({ human_sbt_registry: { await: { data: [] } }, trinity_leads: {} });
+    const r = await request(app).post('/api/v1/controller/leads').set('x-controller-token', operator).send({ email: 'not-an-email' });
+    expect(r.status).toBe(400);
+  });
+});
