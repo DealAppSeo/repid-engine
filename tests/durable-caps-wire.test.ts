@@ -39,21 +39,22 @@ function builder(result: any) {
 /** An AUTONOMOUS agent (requires_stake false → stake_available = repid), so decideAuthority AUTHORIZES
  *  a small amount and the durable cap is the only thing that can then deny it. `id` is present because
  *  the domain-RepID lookup now resolves the slug → repid_agents.id → repid_score_events.agent_id. */
+const AUTONOMOUS_ID = '00000000-0000-0000-0000-0000000000a0';
 const AUTONOMOUS_AGENT = {
-  id: '00000000-0000-0000-0000-0000000000a0',
+  id: AUTONOMOUS_ID,
   tier: 'AUTONOMOUS',
   current_repid: 6000,
   conservator_address: null,
 };
 
-/** Build a genuinely signed durable_spend_caps row for (trinity-auto, coding). The wire-in now
- *  verifies the signature cryptographically, so a real EOA signature over the canonical grant
- *  message is required — a placeholder like '0xdeadbeef' fails closed. */
+/** Build a genuinely signed durable_spend_caps row for (trinity-auto → AUTONOMOUS_ID, coding). The
+ *  wire-in verifies the signature cryptographically and binds the agent UUID (not the slug), so a
+ *  real EOA signature over the canonical v2 grant message is required — '0xdeadbeef' fails closed. */
 async function signedCapsRow(ownerCeilingUsdc: number) {
   const wallet = Wallet.createRandom();
   const grant_nonce = 'wire-nonce-1';
   const message = durableCapGrantMessage({
-    agentId: 'trinity-auto',
+    agentUuid: AUTONOMOUS_ID,
     domain: 'coding',
     ownerCeilingUsdc,
     ownerAddress: wallet.address,

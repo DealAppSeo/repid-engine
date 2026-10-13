@@ -5,10 +5,12 @@
  * limits, so that no single input can ever WIDEN it:
  *
  *   1. owner_ceiling   — the owner's SIGNED ceiling for this (agent, domain). Durable: a row in
- *                        `durable_spend_caps`, carrying a signature. A ceiling with no signature is
- *                        not a grant, and the signature is VERIFIED CRYPTOGRAPHICALLY: it must
- *                        recover to the row's `owner_address` over the canonical grant message
- *                        (`durableCapGrantMessage`). Presence alone is not enough — see below.
+ *                        `durable_spend_caps`, keyed by the agent's UNIQUE uuid (never the
+ *                        non-unique slug). A ceiling with no signature is not a grant, and the
+ *                        signature is VERIFIED CRYPTOGRAPHICALLY: it must recover to the row's
+ *                        `owner_address` over the canonical v2 grant message
+ *                        (`durableCapGrantMessage`), which binds the agent uuid, domain and ceiling.
+ *                        Presence alone is not enough — see below.
  *   2. stake           — the agent's posted stake, in USDC. Read live.
  *   3. repid_in_domain — the RepID tier ceiling IN THAT DOMAIN. Domain-scoped on purpose: a coding
  *                        score must never buy a trade. The domain RepID is looked up by (agent,
@@ -237,23 +239,32 @@ function isMissingRelation(err: unknown): boolean {
 
 /**
  * The canonical message an OWNER signs to grant a durable per-(agent, domain) spend ceiling.
- * EIP-191 personal_sign over this exact UTF-8 string. The field order is fixed, and the ceiling,
- * the (agent, domain) pair, the owner address and an optional nonce are ALL bound in — so a
- * signature for one grant cannot be replayed for a larger ceiling, a different domain, or another
- * agent. A future signer MUST build the message identically (same fields, same order, checksummed
- * owner address via getAddress) or verification fails closed. Kept here beside the verifier
- * (`supabaseCapDataSource.ownerCeiling`) so the two can never drift — LESSONS rule 10.
+ * EIP-191 personal_sign over this exact UTF-8 string. The field order is fixed, and the agent's
+ * UNIQUE uuid (`repid_agents.id`), the domain, the ceiling, the owner address and an optional nonce
+ * are ALL bound in — so a signature for one grant cannot be replayed for a larger ceiling, a
+ * different domain, or ANOTHER AGENT.
+ *
+ * SECURITY (CWE-863): the agent is bound by its uuid, NOT its slug (`agent_name`). agent_name is
+ * NON-UNIQUE in production (many rows can share one slug), so a slug-bound signature would authorize
+ * EVERY agent sharing that slug. Binding the uuid makes one grant name exactly one agent. The
+ * message version (`v2`) is part of the signed bytes: an old `v1` slug-bound signature cannot verify
+ * under v2 and therefore fails closed (three outcomes — an unverifiable signature authorizes
+ * nothing). Bump the version whenever the signed shape changes.
+ *
+ * A future signer MUST build the message identically (same fields, same order, checksummed owner
+ * address via getAddress, the agent's uuid) or verification fails closed. Kept here beside the
+ * verifier (`supabaseCapDataSource.ownerCeiling`) so the two can never drift — LESSONS rule 10.
  */
 export function durableCapGrantMessage(g: {
-  agentId: string;
+  agentUuid: string;
   domain: string;
   ownerCeilingUsdc: number;
   ownerAddress: string;
   grantNonce?: string | null;
 }): string {
   return [
-    'HyperDAG durable spend cap grant v1',
-    `agent=${g.agentId}`,
+    'HyperDAG durable spend cap grant v2',
+    `agent_uuid=${g.agentUuid}`,
     `domain=${g.domain}`,
     `ceiling_usdc=${g.ownerCeilingUsdc}`,
     `owner=${getAddress(g.ownerAddress)}`,
@@ -262,15 +273,46 @@ export function durableCapGrantMessage(g: {
 }
 
 /**
+ * Resolve an agent SLUG (`repid_agents.agent_name`) to its UNIQUE uuid (`repid_agents.id`), failing
+ * closed. Used by both `ownerCeiling` (to key the signed grant) and `domainRepid` (to key the score
+ * ledger) so the two can never key on different things. A slug is non-unique, so `.maybeSingle()`
+ * ERRORS when a slug maps to more than one agent — which this reports as `agent_slug_ambiguous` and
+ * every caller treats as a refusal, the safe direction.
+ */
+async function resolveAgentUuid(
+  client: typeof db,
+  slug: string,
+): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
+  const { data, error } = await client
+    .from('repid_agents')
+    .select('id')
+    .eq('agent_name', slug)
+    .maybeSingle();
+  if (error) {
+    if (isMissingRelation(error)) return { ok: false, reason: 'agents_table_absent' };
+    // PGRST116 = "JSON object requested, multiple (or no) rows returned" → an ambiguous slug.
+    if (String((error as any).code) === 'PGRST116') return { ok: false, reason: 'agent_slug_ambiguous' };
+    return { ok: false, reason: `agent_lookup_error:${(error as any).code ?? 'unknown'}` };
+  }
+  const id = data && (data as any).id;
+  if (typeof id !== 'string' || id.trim() === '') return { ok: false, reason: 'agent_not_found' };
+  return { ok: true, id };
+}
+
+/**
  * The real, Supabase-backed source. Owner ceiling comes from `durable_spend_caps`; stake is read from
  * the agent's active stake rows; domain RepID is the agent's most recent `repid_after` among score
  * events tagged with this `task_domain`.
  *
  * NOTE (honest scope, not a claim of completeness):
- *  - Signature: `owner_signature` is now VERIFIED cryptographically (not merely present) — it must
- *    recover to `owner_address` over `durableCapGrantMessage`, via wallet-signature.ts (EOA /
- *    ERC-1271 / ERC-6492). A bad, mismatched, replayed-for-another-ceiling, absent, or unverifiable
- *    signature fails closed. `owner_address` must be a valid address or the row is not a grant.
+ *  - Signature: `owner_signature` is VERIFIED cryptographically (not merely present) — it must
+ *    recover to `owner_address` over the v2 `durableCapGrantMessage`, via wallet-signature.ts (EOA /
+ *    ERC-1271 / ERC-6492). The message binds the agent's UNIQUE uuid (CWE-863: a slug-bound
+ *    signature would authorize every agent sharing that non-unique slug), the ceiling and the
+ *    (agent, domain) pair. A bad, mismatched, replayed-for-another-ceiling-or-agent, old-v1,
+ *    absent, or unverifiable signature fails closed. `owner_address` must be a valid address or the
+ *    row is not a grant. The caps row itself is keyed by the uuid (`agent_uuid`), resolved from the
+ *    slug before the lookup.
  *  - Domain RepID approximation: `repid_after` is the agent's GLOBAL score at the time of a domain
  *    event, not a domain-isolated ledger (none exists in this schema). The DOMAIN SCOPING is exact —
  *    only events with `task_domain = domain` are considered, so a coding-only agent has no trade-
@@ -287,10 +329,19 @@ export function supabaseCapDataSource(client: typeof db = db): CapDataSource {
   return {
     async ownerCeiling(agentId, domain): Promise<CapInput> {
       try {
+        // KEY ON THE UNIQUE UUID, NOT THE SLUG (CWE-863). Resolve slug -> repid_agents.id FIRST and
+        // fail closed if it cannot be resolved: a grant we cannot tie to exactly one agent is no
+        // grant. Both the table lookup AND the signed message are then keyed by this uuid, so one
+        // owner signature authorizes exactly one agent — never every agent that happens to share a
+        // (non-unique) slug.
+        const resolved = await resolveAgentUuid(client, agentId);
+        if (!resolved.ok) return { readable: false, reason: `cap_agent_unresolved:${resolved.reason}` };
+        const agentUuid = resolved.id;
+
         const { data, error } = await client
           .from('durable_spend_caps')
           .select('owner_ceiling_usdc, owner_signature, owner_address, grant_nonce, active')
-          .eq('agent_id', agentId)
+          .eq('agent_uuid', agentUuid)
           .eq('domain', domain)
           .eq('active', true)
           .maybeSingle();
@@ -318,15 +369,16 @@ export function supabaseCapDataSource(client: typeof db = db): CapDataSource {
           return { readable: false, reason: 'cap_row_no_owner_address' };
         }
 
-        // CRYPTOGRAPHIC VERIFICATION (not presence). Rebuild the canonical grant message and confirm
-        // the signature recovers to owner_address — EIP-191 personal_sign, covering EOA / ERC-1271 /
-        // ERC-6492 via wallet-signature.ts. The ceiling and (agent, domain) are bound into the
-        // message, so a signature cannot be replayed for a different ceiling or pair. Both `invalid`
-        // AND `not_checked` FAIL CLOSED: an unverified signature authorizes nothing, and we never
-        // collapse "could not check" into "valid" (three outcomes, never two).
+        // CRYPTOGRAPHIC VERIFICATION (not presence). Rebuild the canonical v2 grant message — bound
+        // to the AGENT UUID, the ceiling and (agent, domain) — and confirm the signature recovers to
+        // owner_address (EIP-191 personal_sign; EOA / ERC-1271 / ERC-6492 via wallet-signature.ts).
+        // Binding the uuid means a signature cannot be reused for a colliding slug; binding the
+        // ceiling means it cannot be replayed for a larger amount. Both `invalid` AND `not_checked`
+        // FAIL CLOSED: an unverified signature authorizes nothing, and we never collapse "could not
+        // check" into "valid" (three outcomes, never two).
         const grantNonce = (data as any).grant_nonce ?? null;
         const message = durableCapGrantMessage({
-          agentId,
+          agentUuid,
           domain,
           ownerCeilingUsdc: ceiling.usdc,
           ownerAddress,
@@ -365,27 +417,19 @@ export function supabaseCapDataSource(client: typeof db = db): CapDataSource {
       try {
         // KEY NORMALIZATION (the before-arming fix). `repid_score_events.agent_id` is a uuid FK to
         // `repid_agents.id`, but this resolver is handed the agent SLUG (`agent_name`). Resolve the
-        // slug to its uuid FIRST: querying `agent_id` by the slug matches nothing — and in Postgres
-        // errors as an invalid-uuid cast — so EVERY domain-RepID read failed closed and the cap
-        // refused EVERY spend. An agent we cannot resolve has no domain reputation → fail closed.
-        const { data: agentRow, error: agentErr } = await client
-          .from('repid_agents')
-          .select('id')
-          .eq('agent_name', agentId)
-          .maybeSingle();
-        if (agentErr) {
-          if (isMissingRelation(agentErr)) return { readable: false, reason: 'agents_table_absent' };
-          return { readable: false, reason: `agent_lookup_error:${agentErr.code ?? 'unknown'}` };
-        }
-        const resolvedId = agentRow && (agentRow as any).id;
-        if (typeof resolvedId !== 'string' || resolvedId.trim() === '') {
-          return { readable: false, reason: 'no_domain_repid' };
+        // slug to its uuid FIRST (shared with ownerCeiling so the two never key differently):
+        // querying `agent_id` by the slug matches nothing — and in Postgres errors as an invalid-uuid
+        // cast — so EVERY domain-RepID read failed closed and the cap refused EVERY spend. An agent we
+        // cannot resolve has no domain reputation → fail closed as no_domain_repid.
+        const resolved = await resolveAgentUuid(client, agentId);
+        if (!resolved.ok) {
+          return { readable: false, reason: resolved.reason === 'agent_not_found' ? 'no_domain_repid' : resolved.reason };
         }
 
         const { data, error } = await client
           .from('repid_score_events')
           .select('repid_after, created_at')
-          .eq('agent_id', resolvedId)
+          .eq('agent_id', resolved.id)
           .eq('task_domain', domain)
           .order('created_at', { ascending: false })
           .limit(1)

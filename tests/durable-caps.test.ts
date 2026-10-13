@@ -181,9 +181,13 @@ describe('fail closed — missing row, missing table, unreadable input', () => {
     expect(nan.refusalReason).toContain('stake_malformed');
   });
 
+  // The agent slug resolves to a uuid first (resolveAgentUuid), so these caps-table stubs serve
+  // repid_agents too; the durable_spend_caps lookup is what returns the error / unsigned row.
+  const resolvesAgent = { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: 'aaaaaaaa-0000-0000-0000-00000000000a' }, error: null }) }) }) };
+
   it('supabaseCapDataSource reports a missing TABLE as unreadable (safe before the migration applies)', async () => {
     const fakeDb: any = {
-      from: () => ({
+      from: (t: string) => t === 'repid_agents' ? resolvesAgent : ({
         select: () => ({
           eq: () => ({
             eq: () => ({
@@ -203,7 +207,7 @@ describe('fail closed — missing row, missing table, unreadable input', () => {
 
   it('supabaseCapDataSource reports an unsigned caps row as unreadable (a ceiling with no signature is not a grant)', async () => {
     const fakeDb: any = {
-      from: () => ({
+      from: (t: string) => t === 'repid_agents' ? resolvesAgent : ({
         select: () => ({
           eq: () => ({
             eq: () => ({
@@ -422,54 +426,124 @@ describe('FIX 1 — domainRepid resolves the agent slug to its uuid before readi
 });
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
-// BEFORE-ARMING FIX (2): owner_signature is VERIFIED cryptographically, not merely present.
+// BEFORE-ARMING FIX (2): owner_signature is VERIFIED cryptographically, not merely present — AND the
+// grant is bound to the agent's UNIQUE uuid, not the non-unique slug (CWE-863).
 //
-// A ceiling row's signature is recovered (EIP-191 personal_sign, via wallet-signature.ts) and the
-// signer must equal owner_address over the canonical grant message. A bad, mismatched, absent, or
-// replayed-for-a-different-ceiling signature fails CLOSED. The offline jest signature chain treats
-// every address as a plain EOA, so these run with no network.
+// ownerCeiling resolves the slug (agent_name) -> repid_agents.id, keys durable_spend_caps by that
+// uuid, and rebuilds the canonical v2 grant message (binding the uuid, domain and ceiling). The
+// signature must recover to owner_address. A bad, mismatched, replayed-for-a-different-ceiling,
+// OLD-V1-SLUG-BOUND, or cross-agent-reused signature fails CLOSED. The offline jest signature chain
+// treats every address as a plain EOA, so these run with no network.
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
-/** A caps-table stub returning one row from durable_spend_caps. */
-function capsDb(row: any): any {
+const AGENT_SLUG = 'trinity-x';
+const AGENT_UUID = 'aaaaaaaa-1111-2222-3333-444444444444';
+const DOMAIN = 'coding';
+const CEILING = 500;
+
+/** Multi-table stub: repid_agents resolves the slug -> uuid; durable_spend_caps returns one row.
+ *  Records every .eq(col,val) so a test can prove the caps lookup keyed on the UUID, not the slug. */
+function capsDbWithAgent(
+  cfg: { agentUuid: string | null; capsRow: any },
+  eqCalls: Record<string, Array<[string, unknown]>> = {},
+): any {
   return {
-    from: () => {
+    from: (table: string) => {
       const b: any = {};
-      for (const m of ['select', 'eq']) b[m] = () => b;
-      b.maybeSingle = async () => ({ data: row, error: null });
+      for (const m of ['select', 'order', 'limit']) b[m] = () => b;
+      b.eq = (col: string, val: unknown) => { (eqCalls[table] ??= []).push([col, val]); return b; };
+      if (table === 'repid_agents') {
+        b.maybeSingle = async () => ({ data: cfg.agentUuid ? { id: cfg.agentUuid } : null, error: null });
+      } else {
+        b.maybeSingle = async () => ({ data: cfg.capsRow, error: null });
+      }
       return b;
     },
   };
 }
 
-describe('FIX 2 — ownerCeiling verifies the signature cryptographically (fail closed)', () => {
-  const AGENT = 'trinity-x';
-  const DOMAIN = 'coding';
-  const CEILING = 500;
+/** A durable_spend_caps row, signed over the v2 (uuid-bound) grant message. */
+async function signedRow(
+  wallet: Wallet,
+  overrides: { ceiling?: number; nonce?: string | null; agentUuid?: string } = {},
+) {
+  const ceiling = overrides.ceiling ?? CEILING;
+  const nonce = overrides.nonce ?? 'nonce-1';
+  const message = durableCapGrantMessage({
+    agentUuid: overrides.agentUuid ?? AGENT_UUID,
+    domain: DOMAIN,
+    ownerCeilingUsdc: ceiling,
+    ownerAddress: wallet.address,
+    grantNonce: nonce,
+  });
+  const signature = await wallet.signMessage(message);
+  return { owner_ceiling_usdc: ceiling, owner_address: wallet.address, owner_signature: signature, grant_nonce: nonce, active: true };
+}
 
-  async function signedRow(
-    wallet: Wallet,
-    overrides: { ceiling?: number; nonce?: string | null } = {},
-  ) {
-    const ceiling = overrides.ceiling ?? CEILING;
-    const nonce = overrides.nonce ?? 'nonce-1';
-    const message = durableCapGrantMessage({
-      agentId: AGENT,
-      domain: DOMAIN,
-      ownerCeilingUsdc: ceiling,
-      ownerAddress: wallet.address,
-      grantNonce: nonce,
-    });
-    const signature = await wallet.signMessage(message);
-    return { owner_ceiling_usdc: ceiling, owner_address: wallet.address, owner_signature: signature, grant_nonce: nonce, active: true };
-  }
-
-  it('accepts a genuinely signed ceiling (signer == owner_address over the canonical message)', async () => {
+describe('FIX 2 — ownerCeiling verifies the signature cryptographically and binds the agent uuid', () => {
+  it('accepts a genuinely signed ceiling and KEYS the caps lookup on the uuid, not the slug', async () => {
+    const eqCalls: Record<string, Array<[string, unknown]>> = {};
     const wallet = Wallet.createRandom() as unknown as Wallet;
     const row = await signedRow(wallet);
-    const owner = await supabaseCapDataSource(capsDb(row)).ownerCeiling(AGENT, DOMAIN);
+    const owner = await supabaseCapDataSource(
+      capsDbWithAgent({ agentUuid: AGENT_UUID, capsRow: row }, eqCalls),
+    ).ownerCeiling(AGENT_SLUG, DOMAIN);
     expect(owner.readable).toBe(true);
     expect((owner as any).usdc).toBe(CEILING);
+
+    // The slug resolved the agent row; the caps lookup used the RESOLVED UUID, never the slug.
+    expect(eqCalls['repid_agents']).toContainEqual(['agent_name', AGENT_SLUG]);
+    expect(eqCalls['durable_spend_caps']).toContainEqual(['agent_uuid', AGENT_UUID]);
+    expect(eqCalls['durable_spend_caps']).not.toContainEqual(['agent_uuid', AGENT_SLUG]);
+    expect(eqCalls['durable_spend_caps']).not.toContainEqual(['agent_id', AGENT_SLUG]);
+  });
+
+  it('REFUSES reuse of a signature across a COLLIDING SLUG (CWE-863): a grant bound to uuid-A does not authorize uuid-B', async () => {
+    // The owner signed a grant for agent uuid-A. An attacker agent shares the same slug but maps to
+    // a DIFFERENT uuid-B. The reader resolves the slug to uuid-B, rebuilds the message with uuid-B,
+    // and the uuid-A signature no longer verifies — so one owner signature cannot cover both agents.
+    const UUID_A = 'aaaaaaaa-0000-0000-0000-00000000000a';
+    const UUID_B = 'bbbbbbbb-0000-0000-0000-00000000000b';
+    const owner = Wallet.createRandom() as unknown as Wallet;
+    const row = await signedRow(owner, { agentUuid: UUID_A }); // signed for A
+    const result = await supabaseCapDataSource(
+      capsDbWithAgent({ agentUuid: UUID_B, capsRow: row }), // but read for a slug that resolves to B
+    ).ownerCeiling('shared-slug', DOMAIN);
+    expect(result.readable).toBe(false);
+    expect((result as any).reason).toContain('cap_row_sig_invalid');
+  });
+
+  it('REFUSES an OLD v1 (slug-bound) signature — the message version bump fails it closed', async () => {
+    const wallet = Wallet.createRandom() as unknown as Wallet;
+    // Reconstruct the retired v1 message shape (header v1, agent=slug) and sign it.
+    const v1Message = [
+      'HyperDAG durable spend cap grant v1',
+      `agent=${AGENT_SLUG}`,
+      `domain=${DOMAIN}`,
+      `ceiling_usdc=${CEILING}`,
+      `owner=${wallet.address}`,
+      `nonce=nonce-1`,
+    ].join('\n');
+    const v1Signature = await wallet.signMessage(v1Message);
+    const row = { owner_ceiling_usdc: CEILING, owner_address: wallet.address, owner_signature: v1Signature, grant_nonce: 'nonce-1', active: true };
+    const result = await supabaseCapDataSource(
+      capsDbWithAgent({ agentUuid: AGENT_UUID, capsRow: row }),
+    ).ownerCeiling(AGENT_SLUG, DOMAIN);
+    expect(result.readable).toBe(false);
+    expect((result as any).reason).toContain('cap_row_sig_invalid');
+  });
+
+  it('fail-closes when the agent slug cannot be resolved (no caps lookup, no grant)', async () => {
+    const eqCalls: Record<string, Array<[string, unknown]>> = {};
+    const wallet = Wallet.createRandom() as unknown as Wallet;
+    const row = await signedRow(wallet);
+    const result = await supabaseCapDataSource(
+      capsDbWithAgent({ agentUuid: null, capsRow: row }, eqCalls),
+    ).ownerCeiling('trinity-ghost', DOMAIN);
+    expect(result.readable).toBe(false);
+    expect((result as any).reason).toContain('cap_agent_unresolved');
+    // Never reaches the caps table when the agent cannot be resolved to a single uuid.
+    expect(eqCalls['durable_spend_caps']).toBeUndefined();
   });
 
   it('REFUSES a signature from a different key (signer != owner_address)', async () => {
@@ -477,7 +551,7 @@ describe('FIX 2 — ownerCeiling verifies the signature cryptographically (fail 
     const impostor = Wallet.createRandom() as unknown as Wallet;
     const row = await signedRow(owner);
     row.owner_address = impostor.address; // signed by `owner`, but the row claims `impostor` signed it
-    const result = await supabaseCapDataSource(capsDb(row)).ownerCeiling(AGENT, DOMAIN);
+    const result = await supabaseCapDataSource(capsDbWithAgent({ agentUuid: AGENT_UUID, capsRow: row })).ownerCeiling(AGENT_SLUG, DOMAIN);
     expect(result.readable).toBe(false);
     expect((result as any).reason).toContain('cap_row_sig_invalid');
   });
@@ -486,7 +560,7 @@ describe('FIX 2 — ownerCeiling verifies the signature cryptographically (fail 
     const wallet = Wallet.createRandom() as unknown as Wallet;
     const row = await signedRow(wallet, { ceiling: 500 });
     row.owner_ceiling_usdc = 5000; // raise the ceiling the row claims, keeping the 500-ceiling signature
-    const result = await supabaseCapDataSource(capsDb(row)).ownerCeiling(AGENT, DOMAIN);
+    const result = await supabaseCapDataSource(capsDbWithAgent({ agentUuid: AGENT_UUID, capsRow: row })).ownerCeiling(AGENT_SLUG, DOMAIN);
     expect(result.readable).toBe(false);
     expect((result as any).reason).toContain('cap_row_sig_invalid');
   });
@@ -495,7 +569,7 @@ describe('FIX 2 — ownerCeiling verifies the signature cryptographically (fail 
     const wallet = Wallet.createRandom() as unknown as Wallet;
     const row = await signedRow(wallet);
     row.owner_signature = '0xdeadbeef';
-    const result = await supabaseCapDataSource(capsDb(row)).ownerCeiling(AGENT, DOMAIN);
+    const result = await supabaseCapDataSource(capsDbWithAgent({ agentUuid: AGENT_UUID, capsRow: row })).ownerCeiling(AGENT_SLUG, DOMAIN);
     expect(result.readable).toBe(false);
     expect((result as any).reason).toContain('cap_row_sig_');
   });
@@ -504,7 +578,7 @@ describe('FIX 2 — ownerCeiling verifies the signature cryptographically (fail 
     const wallet = Wallet.createRandom() as unknown as Wallet;
     const row = await signedRow(wallet);
     delete (row as any).owner_address;
-    const result = await supabaseCapDataSource(capsDb(row)).ownerCeiling(AGENT, DOMAIN);
+    const result = await supabaseCapDataSource(capsDbWithAgent({ agentUuid: AGENT_UUID, capsRow: row })).ownerCeiling(AGENT_SLUG, DOMAIN);
     expect(result.readable).toBe(false);
     expect((result as any).reason).toBe('cap_row_no_owner_address');
   });
@@ -513,7 +587,7 @@ describe('FIX 2 — ownerCeiling verifies the signature cryptographically (fail 
     const wallet = Wallet.createRandom() as unknown as Wallet;
     const row = await signedRow(wallet);
     row.owner_signature = '';
-    const result = await supabaseCapDataSource(capsDb(row)).ownerCeiling(AGENT, DOMAIN);
+    const result = await supabaseCapDataSource(capsDbWithAgent({ agentUuid: AGENT_UUID, capsRow: row })).ownerCeiling(AGENT_SLUG, DOMAIN);
     expect(result.readable).toBe(false);
     expect((result as any).reason).toBe('cap_row_unsigned');
   });
