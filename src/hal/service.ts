@@ -12,6 +12,7 @@ import { evaluate } from './lib/evaluate';
 import { markDegraded } from '../lib/degraded';
 import { applyExecutionFloor, type FloorReport } from './execution-floor';
 import { jevPrefilter } from './jev-prefilter';
+import { ministralPrescreen } from './ministral-prescreen';
 
 export type Product = 'trustshell' | 'trusttrader' | 'trustcre' | 'default';
 
@@ -377,6 +378,19 @@ export class HalService {
           strictness,
           product,
           signals: { jev_prefilter: jev.reason },
+          latency_ms: Date.now() - start,
+        };
+      }
+      const mini = await ministralPrescreen(req.text);
+      if (mini.skipHal) {
+        return {
+          hal_score: 0,
+          decision: 'abstain',
+          decision_reason: mini.reason,
+          mode: 'fact-check',
+          strictness,
+          product,
+          signals: { ministral_prescreen: mini.reason },
           latency_ms: Date.now() - start,
         };
       }

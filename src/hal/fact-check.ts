@@ -2093,7 +2093,16 @@ export function buildFactCheckProvidersWith(enabled: FactCheckProviderEnable): F
     }
   }
   const ms = process.env.MISTRAL_API_KEY?.trim();
-  if (ms && (enabled.mistral || ab)) {
+  // BFT family slot: Mistral-Large-4 is opt-in, default OFF. When on, it occupies
+  // the mistral family (one vote). Small remains the autobackfill/ENABLE_MISTRAL path.
+  const mistralLargeOn = process.env.HAL_S2_ENABLE_MISTRAL_LARGE === 'true';
+  if (ms && mistralLargeOn) {
+    add(
+      { name: 'mistral-large', endpoint: PROVIDER_URLS.mistralChatCompletions, apiKey: ms, family: 'mistral' },
+      'HAL_S2_MISTRAL_LARGE_MODEL',
+      'mistral-large-latest',
+    );
+  } else if (ms && (enabled.mistral || ab)) {
     add({ name: 'mistral', endpoint: PROVIDER_URLS.mistralChatCompletions, apiKey: ms, family: 'mistral' }, 'HAL_S2_MISTRAL_MODEL', 'mistral-small-latest');
   }
   // Z.AI DIRECT — the `glm` family bought from the vendor instead of a reseller.
