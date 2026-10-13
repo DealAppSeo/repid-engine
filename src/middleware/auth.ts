@@ -338,7 +338,18 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     // request naming two different agents is refused, whichever order they
     // appear in. Verified before changing: no route in src/routes reads two
     // different agent-id fields from one body, so nothing legitimate sends two.
-    const IDENTITY_FIELDS = ['agent_id', 'buyer_agent_id', 'requestor_agent_id', 'provider_agent_id', 'agent'] as const;
+    //
+    // SECURITY FIX 2026-10-13 (CWE-862, Strix #1341) — `agentId` (camelCase) was MISSING here
+    // while POST /api/v1/score forwards req.body to updateRepId and uses `agentId` as the
+    // scoring actor, so a key bound to agent A could POST { agentId: B, ... } and move B's
+    // score. Acutely: the confirmed-outcome verifier binds the authoritative kernel receipt to
+    // this caller-supplied `agentId`, not the authenticated principal — the "actor-bound"
+    // guarantee was bound to a caller-controlled field. Adding `agentId` closes the camelCase
+    // hole for every /score-style route. This block runs ONLY for per-agent (dbAgentId) keys;
+    // the routes where such a key legitimately carries a body/query `agentId` (score, mcp-call,
+    // mirror-test) send the caller's OWN id. The numeric `agentId` on GET /api/v1/receipts is an
+    // erc8004 token id read by env/operator keys, which never reach this block.
+    const IDENTITY_FIELDS = ['agent_id', 'buyer_agent_id', 'requestor_agent_id', 'provider_agent_id', 'agent', 'agentId'] as const;
     const claimedIdentities: Array<{ field: string; source: 'body' | 'query'; value: string }> = [];
     for (const field of IDENTITY_FIELDS) {
       const fromBody = (req.body as Record<string, unknown> | undefined)?.[field];

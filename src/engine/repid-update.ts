@@ -467,6 +467,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // OFF this branch is never entered, so scoring is EXACTLY as today.
   let confirmedOutcomeResult: ConfirmedOutcomeResult | null = null;
   let isUnconfirmedHold = false;
+  // ONE-TIME USE accounting for a server-verified confirmation receipt (fix 2026-10-13):
+  //   null  → no claim was attempted (not server-verified, or the outcome would not move);
+  //   true  → this request claimed the receipt and the score moved;
+  //   false → a would-move was held INERT because the receipt was already consumed (replay)
+  //           or the conditional claim failed. Recorded honestly in the audit row below.
+  let confirmationReceiptConsumed: boolean | null = null;
   if (confirmedOutcomeScoringEnabled() && input.confirmedOutcome) {
     // CWE-345 — the confirmedOutcome payload is CALLER-ASSERTED. It must never move the
     // official score on its own. A confirmation may settle ONLY from a SERVER-DERIVED
@@ -500,7 +506,23 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       input.confirmedOutcomeDeps ?? confirmedOutcomeDepsFor(agent),
     );
     if (serverVerified && confirmedOutcomeResult.scoreMoves) {
-      rawDelta = confirmedOutcomeResult.appliedDelta;
+      // ONE-TIME USE (replay-inert). A server-verified confirmation may move the official score
+      // AT MOST ONCE. Claim the receipt with a CONDITIONAL, atomic write
+      // (UPDATE ... WHERE receipt_id=$1 AND consumed_at IS NULL) so exactly one request can win:
+      // if this call takes the row the score moves; if the row is already consumed (zero rows)
+      // or the write errors, the confirmation is held INERT — a replay of the same
+      // confirmationReceiptId cannot move the score a second time. Fail-closed by construction.
+      // Reached ONLY inside this flag-gated, server-verified, scoreMoves branch, so with
+      // CONFIRMED_OUTCOME_SCORING_ENABLED OFF (prod default) and the table absent, it never runs.
+      confirmationReceiptConsumed = await claimConfirmationReceipt(
+        input.confirmedOutcome.confirmationReceiptId,
+      );
+      if (confirmationReceiptConsumed) {
+        rawDelta = confirmedOutcomeResult.appliedDelta;
+      } else {
+        rawDelta = 0;
+        isUnconfirmedHold = true; // already-consumed replay / failed claim → no move (fail closed)
+      }
     } else {
       rawDelta = 0;
       isUnconfirmedHold = true; // caller-asserted / PROVISIONAL / abstain / unconfirmed → no move
@@ -772,6 +794,12 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
             band_tightened: confirmedOutcomeResult.bandTightened,
             need_multiplier_applied: confirmedOutcomeResult.needMultiplierApplied,
             reason: confirmedOutcomeResult.reason,
+            // ONE-TIME USE (fix 2026-10-13): true when this request claimed the receipt and the
+            // score moved; false when a server-verified would-move was held INERT because the
+            // receipt was already consumed (replay) or the claim failed; null when no claim was
+            // attempted (not server-verified, or no move). A false here with score_moves:true is
+            // honest: the outcome WOULD move, but this receipt was already spent.
+            receipt_consumed: confirmationReceiptConsumed,
             detail: confirmedOutcomeResult.detail,
           }
         : null,
@@ -938,6 +966,43 @@ export async function resolveServerConfirmation(
     return { source: 'kernel_receipt', settledBy, result };
   } catch {
     return undefined; // never throw into the score path
+  }
+}
+
+/**
+ * ONE-TIME USE claim for a server-verified confirmation receipt (replay-inert, CWE-345 follow-up).
+ *
+ * A confirmation that moves the official score must be spendable EXACTLY ONCE. This performs a
+ * CONDITIONAL, atomic claim at the DB layer:
+ *
+ *     UPDATE kernel_receipts SET consumed_at = now()
+ *     WHERE receipt_id = $1 AND consumed_at IS NULL
+ *     RETURNING receipt_id
+ *
+ * Postgres evaluates the predicate and the write in ONE statement, so under concurrency exactly
+ * one caller observes a freshly-claimed row; every later attempt matches zero rows. Returns:
+ *   - true  → this call claimed the row (first use): the score MAY move.
+ *   - false → zero rows (already consumed / absent id) OR any DB error: the confirmation is INERT.
+ * It NEVER throws into the score path. Invoked ONLY inside the flag-gated, server-verified,
+ * scoreMoves branch, so with CONFIRMED_OUTCOME_SCORING_ENABLED OFF (prod default) and the table
+ * absent it is never run — exactly like resolveServerConfirmation above.
+ */
+export async function claimConfirmationReceipt(
+  receiptId: string | undefined,
+): Promise<boolean> {
+  try {
+    const id = (receiptId ?? '').trim();
+    if (id === '') return false; // no pointer → nothing to claim → fail closed
+    const { data, error } = await db
+      .from('kernel_receipts')
+      .update({ consumed_at: new Date().toISOString() })
+      .eq('receipt_id', id)
+      .is('consumed_at', null)
+      .select('receipt_id');
+    if (error) return false; // write error → fail closed, no move
+    return Array.isArray(data) && data.length > 0; // claimed exactly one row → may move
+  } catch {
+    return false; // never throw into the score path
   }
 }
 
