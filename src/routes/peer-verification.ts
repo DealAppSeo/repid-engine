@@ -231,6 +231,7 @@ router.post('/respond', async (req: Request, res: Response) => {
       // below prevents a double-score across concurrent final votes).
       const contractId = String(q.source_response_id); // uuid — repid_score_events.contract_id
       const resolveResult = await resolvePanel({
+        queueId: queue_id,
         sourceResponseId: q.source_response_id,
         producerAgentId: q.source_agent_id,
         contractId,
@@ -285,6 +286,7 @@ router.post('/respond', async (req: Request, res: Response) => {
 
       // We won the finalization race → emit the honest score events now.
       const scored = await resolvePanel({
+        queueId: queue_id,
         sourceResponseId: q.source_response_id,
         producerAgentId: q.source_agent_id,
         contractId,

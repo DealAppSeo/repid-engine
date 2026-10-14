@@ -77,6 +77,8 @@ export interface ConsensusResult {
   votes: PanelVote[];
   tally: Record<string, number>;
   reason: 'reached' | 'insufficient_votes' | 'no_majority' | 'all_timeout';
+  /** how many distinct verifiers the reader ASSIGNED to this queue row (set by resolvePanel) */
+  assigned?: number;
 }
 
 /**
@@ -153,9 +155,40 @@ export function panelNoMajorityMode(): 'shadow' | 'enforce' {
   return (process.env.PANEL_CLOSE_NO_MAJORITY || '').trim().toLowerCase() === 'enforce' ? 'enforce' : 'shadow';
 }
 
-/** All PANEL_SIZE ballots are in and none reached 2-of-3. Fewer ballots = still waiting. */
+/**
+ * The panel is the verifiers the reader ASSIGNED to this queue row — not every identity whose
+ * ballot the insert accepted. XC1 (PR #1366 review): POST /respond takes a ballot from any
+ * repid_agents row that passes the HMAC, so counting every row under the claim lets an extra
+ * identity complete (or swing) a panel. The reader writes one trinity_tasks row per assigned
+ * verifier, carrying metadata.peer_verification_queue_id; that is the authority.
+ *
+ * Bounded so it stays on indexes (agent_assigned + created_at BitmapAnd, ~43 ms measured on prod
+ * for queue 142077, vs a statement timeout without the bounds): panel tasks are created after
+ * their queue row, and the reader only assigns names from PANEL_VERIFIER_POOL. A name outside the
+ * pool would be missed — which can only keep a row OPEN, never close it.
+ *
+ * Params: $1 = queue id, $2 = PANEL_VERIFIER_POOL.
+ */
+const ASSIGNED_PANEL_CTE = `
+  assigned AS (
+    SELECT DISTINCT t.agent_assigned::text AS name
+      FROM peer_verification_queue pq
+      JOIN trinity_tasks t
+        ON t.created_at >= pq.created_at
+       AND t.agent_assigned = ANY($2::text[])
+       AND t.task_type = 'peer_verify'
+       AND t.metadata->>'panel' = 'blind_2of3'
+       AND t.metadata->>'peer_verification_queue_id' = pq.id::text
+     WHERE pq.id = $1
+  )`;
+
+/**
+ * All PANEL_SIZE assigned verifiers have a ballot in and none reached 2-of-3. Fewer = still waiting.
+ * A panel the reader assigned fewer than PANEL_SIZE verifiers is never closed here.
+ */
 export function isNoMajorityFinal(c: ConsensusResult): boolean {
-  return !c.reached && c.votes.length >= PANEL_SIZE;
+  const assigned = c.assigned ?? 0;
+  return !c.reached && assigned >= PANEL_SIZE && c.votes.length >= assigned;
 }
 
 export function noMajorityClosureReason(c: ConsensusResult): string {
@@ -164,17 +197,39 @@ export function noMajorityClosureReason(c: ConsensusResult): string {
   return `panel_no_majority(${c.reason}) ${tally} | ${ballots}`;
 }
 
+/** Ballot COUNTS only. Safe to return over HTTP: no verifier names, no per-verifier verdicts. */
+export interface PanelTally {
+  verified: number;
+  disputed: number;
+  timeout: number;
+}
+
 export interface NoMajorityCloseResult {
   mode: 'shadow' | 'enforce';
   /** true only when enforce mode actually moved the row out of pending/in_review */
   closed: boolean;
   status: typeof NO_MAJORITY_CLOSE_STATUS;
-  closure_reason: string;
+  tally: PanelTally;
 }
+
+const countsOf = (c: ConsensusResult): PanelTally => ({
+  verified: c.tally.verified ?? 0,
+  disputed: c.tally.disputed ?? 0,
+  timeout: c.tally.timeout ?? 0,
+});
 
 /**
  * Close (enforce) or report (shadow) a finished no-majority panel. NEVER scores. Returns null
- * when the panel is not a finished no-majority panel, so a caller cannot close a live one.
+ * when the snapshot is not a finished no-majority panel, so a caller cannot close a live one.
+ *
+ * Enforce is ONE statement that re-reads the assigned ballots and changes status only if, at that
+ * moment, every assigned verifier is in and none of the verdicts is a 2-of-3 majority. The
+ * caller's snapshot is never trusted for the write, and closure_reason is built from the re-read.
+ * A row another path already finished (panel_resolved, verified, ...) is not touched, so a
+ * majority that closed first wins.
+ *
+ * closure_reason (DB) keeps verifier names. The return value — which the route sends over HTTP —
+ * carries counts only.
  */
 export async function closeNoMajorityPanel(
   queueId: number | string,
@@ -182,54 +237,103 @@ export async function closeNoMajorityPanel(
 ): Promise<NoMajorityCloseResult | null> {
   if (!isNoMajorityFinal(c)) return null;
   const mode = panelNoMajorityMode();
-  const closure_reason = noMajorityClosureReason(c);
 
   if (mode !== 'enforce') {
     console.warn(
-      `[peer-verify/panel] SHADOW (PANEL_CLOSE_NO_MAJORITY unset): queue ${queueId} WOULD close as ` +
-        `'${NO_MAJORITY_CLOSE_STATUS}' — ${closure_reason}. Left in_review; set PANEL_CLOSE_NO_MAJORITY=enforce to close.`,
+      `[peer-verify/panel] SHADOW (PANEL_CLOSE_NO_MAJORITY is not 'enforce'): queue ${queueId} WOULD close as ` +
+        `'${NO_MAJORITY_CLOSE_STATUS}' — ${noMajorityClosureReason(c)}. Left in_review; set PANEL_CLOSE_NO_MAJORITY=enforce to close.`,
     );
-    return { mode, closed: false, status: NO_MAJORITY_CLOSE_STATUS, closure_reason };
+    return { mode, closed: false, status: NO_MAJORITY_CLOSE_STATUS, tally: countsOf(c) };
   }
 
-  const rows = await pgQuery<{ id: number | string }>(
-    `UPDATE peer_verification_queue
-        SET verification_status = $2,
+  const rows = await pgQuery<{ id: number | string; verified: number; disputed: number; timeout: number; closure_reason: string }>(
+    `WITH ${ASSIGNED_PANEL_CTE},
+     ballots AS (
+       SELECT DISTINCT ON (a.name) a.name, v.verdict
+         FROM assigned a
+         JOIN peer_verification_votes v
+           ON v.queue_id = $1
+          AND v.verifier_agent_name = a.name
+        ORDER BY a.name, v.created_at ASC
+     ),
+     t AS (
+       SELECT (SELECT count(*) FROM assigned)                  AS n_assigned,
+              count(*)                                         AS n_in,
+              count(*) FILTER (WHERE verdict = 'verified')     AS ver,
+              count(*) FILTER (WHERE verdict = 'disputed')     AS dis,
+              count(*) FILTER (WHERE verdict = 'timeout')      AS tmo,
+              string_agg(name || ':' || verdict, ', ' ORDER BY name) AS who
+         FROM ballots
+     )
+     UPDATE peer_verification_queue q
+        SET verification_status = $3,
             completed_at = now(),
-            closure_reason = $3
-      WHERE id = $1
-        AND verification_status IN ('pending','in_review')
-      RETURNING id`,
-    [queueId, NO_MAJORITY_CLOSE_STATUS, closure_reason],
+            closure_reason = format('panel_no_majority(%s) verified=%s disputed=%s timeout=%s | %s',
+                                    CASE WHEN t.ver + t.dis = 0 THEN 'all_timeout' ELSE 'no_majority' END,
+                                    t.ver, t.dis, t.tmo, t.who)
+       FROM t
+      WHERE q.id = $1
+        AND q.verification_status IN ('pending','in_review')
+        AND t.n_assigned >= $4
+        AND t.n_in = t.n_assigned
+        AND NOT ((t.ver >= $5 AND t.ver > t.dis) OR (t.dis >= $5 AND t.dis > t.ver))
+      RETURNING q.id, t.ver::int AS verified, t.dis::int AS disputed, t.tmo::int AS timeout, q.closure_reason`,
+    [queueId, [...PANEL_VERIFIER_POOL], NO_MAJORITY_CLOSE_STATUS, PANEL_SIZE, CONSENSUS_QUORUM],
     { label: 'panel-close-no-majority' },
   );
-  const closed = rows.length > 0;
+  const row = rows[0];
   console.warn(
-    `[peer-verify/panel] queue ${queueId} ${closed ? `CLOSED as '${NO_MAJORITY_CLOSE_STATUS}'` : 'already closed (no-op)'} ` +
-      `— ${closure_reason}. Not scored.`,
+    row
+      ? `[peer-verify/panel] queue ${queueId} CLOSED as '${NO_MAJORITY_CLOSE_STATUS}' — ${row.closure_reason}. Not scored.`
+      : `[peer-verify/panel] queue ${queueId} NOT closed: already finished, or the assigned ballots no longer show a ` +
+          'full no-majority panel (re-read at write time). Not scored.',
   );
-  return { mode, closed, status: NO_MAJORITY_CLOSE_STATUS, closure_reason };
+  return {
+    mode,
+    closed: !!row,
+    status: NO_MAJORITY_CLOSE_STATUS,
+    tally: row ? { verified: row.verified, disputed: row.disputed, timeout: row.timeout } : countsOf(c),
+  };
 }
 
-/** Fetch all votes cast for a claim from peer_verification_votes. */
-export async function fetchVotes(sourceResponseId: string): Promise<PanelVote[]> {
-  const rows = await pgQuery<{
-    verifier_agent_id: string;
-    verifier_agent_name: string | null;
-    provider: string | null;
-    verdict: PanelVerdict;
-  }>(
-    `SELECT verifier_agent_id, verifier_agent_name, provider, verdict
-       FROM peer_verification_votes
-      WHERE source_response_id = $1::uuid
-      ORDER BY created_at ASC`,
-    [sourceResponseId],
+/** Keep only ballots from assigned verifiers, first ballot per verifier. Extra identities are ignored. */
+export function assignedBallots(assigned: readonly string[], ballots: PanelVote[]): PanelVote[] {
+  const seen = new Set<string>();
+  const out: PanelVote[] = [];
+  for (const b of ballots) {
+    const name = b.verifier_agent_name ?? '';
+    if (!assigned.includes(name) || seen.has(name)) continue;
+    seen.add(name);
+    out.push(b);
+  }
+  return out;
+}
+
+/**
+ * The assigned panel for a queue row, and that panel's ballots. Keyed by queue_id — not by
+ * source_response_id, which two queue rows could share.
+ */
+export async function fetchPanelVotes(queueId: number | string): Promise<{ assigned: string[]; votes: PanelVote[] }> {
+  const rows = await pgQuery<{ assigned: string[] | null; ballots: PanelVote[] | null }>(
+    `WITH ${ASSIGNED_PANEL_CTE}
+     SELECT (SELECT coalesce(array_agg(name ORDER BY name), '{}') FROM assigned) AS assigned,
+            (SELECT coalesce(json_agg(json_build_object(
+                       'verifier_agent_id', v.verifier_agent_id,
+                       'verifier_agent_name', v.verifier_agent_name,
+                       'provider', v.provider,
+                       'verdict', v.verdict) ORDER BY v.created_at), '[]'::json)
+               FROM peer_verification_votes v
+              WHERE v.queue_id = $1) AS ballots`,
+    [queueId, [...PANEL_VERIFIER_POOL]],
     { label: 'panel-fetch-votes' }
   );
-  return rows;
+  const assigned = rows[0]?.assigned ?? [];
+  return { assigned, votes: assignedBallots(assigned, rows[0]?.ballots ?? []) };
 }
 
 export interface ResolveInput {
+  /** the peer_verification_queue row; the panel and its ballots are keyed by it */
+  queueId: number | string;
   sourceResponseId: string;
   producerAgentId: string;
   /** valid uuid — used for repid_score_events.contract_id (a uuid column) */
@@ -264,8 +368,8 @@ export interface ResolveResult {
  * No consensus / tie / all-timeout → nobody is scored (score 0).
  */
 export async function resolvePanel(input: ResolveInput): Promise<ResolveResult> {
-  const votes = await fetchVotes(input.sourceResponseId);
-  const consensus = computeConsensus(votes);
+  const { assigned, votes } = await fetchPanelVotes(input.queueId);
+  const consensus: ConsensusResult = { ...computeConsensus(votes), assigned: assigned.length };
 
   const scoreEvents: ResolveResult['scoreEvents'] = [];
 
