@@ -43,8 +43,9 @@ export function validateFederationRegister(
     typeof body.license_tier === 'string' && body.license_tier.trim() ? body.license_tier.trim() : 'free_federated';
   const federated_optin = body.federated_optin === true || body.federated_optin === 'true';
 
-  if (!owner_email || !EMAIL_RE.test(owner_email)) return { ok: false, error: 'valid owner_email required' };
+  // Length before the regex: EMAIL_RE is polynomial on long input (CodeQL js/polynomial-redos).
   if (owner_email.length > 254) return { ok: false, error: 'owner_email too long' };
+  if (!owner_email || !EMAIL_RE.test(owner_email)) return { ok: false, error: 'valid owner_email required' };
   if (!node_url || !URL_RE.test(node_url)) return { ok: false, error: 'valid node_url required (http/https)' };
   if (node_url.length > 2048) return { ok: false, error: 'node_url too long' };
   if (!(LICENSE_TIERS as readonly string[]).includes(license_tier_raw)) {

@@ -2,8 +2,24 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { updateRepId } from '../engine/repid-update';
 import { authorizeBountyVerification } from '../services/bounty-authorization';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 
 const router = Router();
+
+// /bounties is mounted at '/' (src/index.ts), so the global token bucket — which gates only
+// /api/v1/* — never sees it, and it sits ahead of authMiddleware. Every caller here is
+// unauthenticated until a handler says otherwise, so the client IP is the only key there is
+// (trustedClientIp, not req.ip). CodeQL js/missing-rate-limiting #45.
+export const BOUNTIES_LIMIT_PER_MIN = 60;
+router.use('/bounties', rateLimit({
+  windowMs: 60_000,
+  limit: BOUNTIES_LIMIT_PER_MIN,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too_many_requests' },
+}));
 
 // GET /bounties — list bounties with optional filter/sort
 //   ?status=OPEN|CLAIMED|COMPLETED|VERIFIED  (default OPEN, 'all' = no filter)
