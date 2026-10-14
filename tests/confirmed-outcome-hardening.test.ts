@@ -56,6 +56,8 @@ const st = {
   krReads: 0,
   claimAttempts: 0,
   eventReads: 0,
+  budget: new Map<string, number>(),
+  rpcCalls: 0,
 };
 
 /** PostgREST-style column path: `a->b->>c` walks jsonb; `->>` yields text. */
@@ -67,6 +69,12 @@ function col(row: Row, path: string): unknown {
 
 jest.mock('../src/db', () => ({
   db: {
+    // public.claim_confirmed_gain, modelled in tests/helpers/fake-claim-confirmed-gain.ts: the atomic
+    // receipt claim + day/domain budget reservation every confirmed GAIN now goes through.
+    rpc: (fn: string, args: any) => {
+      st.rpcCalls++;
+      return require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => st.receipts, st.budget)(fn, args);
+    },
     from: (table: string) => {
       if (table === 'repid_agents') {
         return {
@@ -139,6 +147,7 @@ import { updateRepId } from '../src/engine/repid-update';
 import { __resetConfirmedParamsCache } from '../src/scoring/confirmed-outcome';
 import { __resetSmallGainCapParamsCache } from '../src/scoring/small-gain-cap';
 import { indexKernelReceiptToDb } from '../src/kernel/receipt-db-index';
+import { sealedRow } from './helpers/sealed-gate-receipt';
 import type { KernelReceipt } from '../src/kernel/types';
 
 const PINNED: Record<string, string> = {
@@ -162,19 +171,9 @@ const WRONG = -55; // lossBase - confidenceLossWeight: the receipt-backed confid
 let now = Date.parse('2026-10-14T12:00:00.000Z');
 const H = (n: number): string => '0x' + n.toString(16).padStart(64, '0');
 
-function receipt(id: string, over: Row = {}): Row {
-  const r: Row = {
-    receipt_id: id,
-    subject_agent_id: AGENT,
-    settled_by: 'holdout',
-    verdict_label: 'SETTLED',
-    verification_status: 'VERIFIED',
-    is_simulated: false,
-    args_hash: H(1),
-    created_at: new Date(now - 60_000).toISOString(),
-    consumed_at: null,
-    ...over,
-  };
+/** A kernel_receipts row SEALED BY THE REAL GATE (tests/helpers/sealed-gate-receipt.ts); `over` tampers columns. */
+async function receipt(id: string, over: Row = {}): Promise<Row> {
+  const r = await sealedRow(id, AGENT, { args_hash: H(1), ...over }, new Date(now - 60_000).toISOString());
   st.receipts.push(r);
   return r;
 }
@@ -198,6 +197,8 @@ beforeEach(() => {
   st.krReads = 0;
   st.claimAttempts = 0;
   st.eventReads = 0;
+  st.budget = new Map();
+  st.rpcCalls = 0;
 });
 afterEach(() => {
   jest.restoreAllMocks();
@@ -220,7 +221,7 @@ describe('(A) SERVER RESULT WINS — a FAILED receipt cannot be skipped or shrun
     ['selfReportedMiss + low confidence + a fresh domain', { settledBy: 'holdout', result: 'wrong', selfReportedMiss: true, confidence: 0.05, domain: 'never-seen-before' }, {}],
     ['confidence: 0', { settledBy: 'holdout', result: 'wrong', confidence: 0 }, {}],
   ])('%s → the server wrong is applied in full and the receipt consumed', async (_label, payload, over) => {
-    const r = receipt('fail-1', { verification_status: 'FAILED', args_hash: H(9), ...over });
+    const r = await receipt('fail-1', { verification_status: 'FAILED', args_hash: H(9), ...over });
     const out = await score({ ...payload, confirmationReceiptId: 'fail-1' });
     expect(out.delta).toBe(WRONG);
     expect(out.repIdAfter).toBe(1000 + WRONG);
@@ -230,13 +231,13 @@ describe('(A) SERVER RESULT WINS — a FAILED receipt cannot be skipped or shrun
   });
 
   it('a known-answer FAILED receipt the caller flagged as a rubber-stamp takes the heaviest penalty', async () => {
-    receipt('ka-1', { verification_status: 'FAILED', settled_by: 'known_answer', args_hash: H(9) });
+    await receipt('ka-1', { verification_status: 'FAILED', settled_by: 'known_answer', args_hash: H(9) });
     const out = await score({ settledBy: 'known_answer', result: 'wrong', rubberStampKnownWrong: true, confirmationReceiptId: 'ka-1' });
     expect(out.delta).toBe(-120);
   });
 
   it('a FAILED receipt is spent once: the replay moves nothing', async () => {
-    receipt('fail-1', { verification_status: 'FAILED', args_hash: H(9) });
+    await receipt('fail-1', { verification_status: 'FAILED', args_hash: H(9) });
     expect((await score({ abstained: true, confirmationReceiptId: 'fail-1' })).delta).toBe(WRONG);
     const replay = await score({ settledBy: 'holdout', result: 'wrong', confirmationReceiptId: 'fail-1' });
     expect(replay.delta).toBe(0);
@@ -244,7 +245,7 @@ describe('(A) SERVER RESULT WINS — a FAILED receipt cannot be skipped or shrun
   });
 
   it('a VERIFIED receipt also wins over a caller abstain (abstain is free only with NO receipt)', async () => {
-    receipt('ok-1');
+    await receipt('ok-1');
     const out = await score({ abstained: true, domain: 'law', confirmationReceiptId: 'ok-1' });
     expect(out.delta).toBe(5);
   });
@@ -259,8 +260,8 @@ describe('(A) SERVER RESULT WINS — a FAILED receipt cannot be skipped or shrun
 
 describe('(B) CONTENT KEY — the same work under fresh receipt ids pays ONCE', () => {
   it('3 receipts, same subject + args_hash, different ids → one gain; new content still pays', async () => {
-    for (const id of ['same-1', 'same-2', 'same-3']) receipt(id, { args_hash: H(7) });
-    receipt('other-1', { args_hash: H(8) });
+    for (const id of ['same-1', 'same-2', 'same-3']) await receipt(id, { args_hash: H(7) });
+    await receipt('other-1', { args_hash: H(8) });
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     // Distinct domains so the per-domain cap is not what stops the 2nd and 3rd.
@@ -277,14 +278,14 @@ describe('(B) CONTENT KEY — the same work under fresh receipt ids pays ONCE', 
   });
 
   it('a FAILED run of already-paid content is still its own wrong (FAILED rows are outside the index)', async () => {
-    receipt('ok-1', { args_hash: H(7) });
-    receipt('fail-1', { args_hash: H(7), verification_status: 'FAILED' });
+    await receipt('ok-1', { args_hash: H(7) });
+    await receipt('fail-1', { args_hash: H(7), verification_status: 'FAILED' });
     expect((await score({ result: 'right', settledBy: 'holdout', domain: 'law', confirmationReceiptId: 'ok-1' })).delta).toBe(5);
     expect((await score({ abstained: true, confirmationReceiptId: 'fail-1' })).delta).toBe(WRONG);
   });
 
   it('a receipt with no args_hash cannot be de-duplicated, so it confirms nothing', async () => {
-    const r = receipt('nohash', { args_hash: null });
+    const r = await receipt('nohash', { args_hash: null });
     const out = await score({ settledBy: 'holdout', result: 'right', domain: 'law', confirmationReceiptId: 'nohash' });
     expect(out.delta).toBe(0);
     expect(r['consumed_at']).toBeNull();
@@ -308,7 +309,7 @@ describe('(C) the small-gain cap is ON the score path, per calendar UTC day', ()
 
   it('per-day cap binds across domains; a gain capped to zero claims nothing; the UTC day boundary resets it', async () => {
     now = Date.parse('2026-10-14T23:59:00.000Z');
-    for (let i = 1; i <= 4; i++) receipt(`r${i}`, { args_hash: H(100 + i) });
+    for (let i = 1; i <= 4; i++) await receipt(`r${i}`, { args_hash: H(100 + i) });
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     expect((await right('r1', 'a')).delta).toBe(5);
@@ -333,7 +334,7 @@ describe('(C) the small-gain cap is ON the score path, per calendar UTC day', ()
   });
 
   it('per-domain cap binds inside one domain, and the domain budget is keyed by domain', async () => {
-    for (let i = 1; i <= 3; i++) receipt(`r${i}`, { args_hash: H(200 + i) });
+    for (let i = 1; i <= 3; i++) await receipt(`r${i}`, { args_hash: H(200 + i) });
     expect((await right('r1', 'law')).delta).toBe(5);
     expect((await right('r2', 'law')).delta).toBe(3); // per-domain 8
     expect((await right('r3', 'law')).delta).toBe(0);
@@ -341,7 +342,7 @@ describe('(C) the small-gain cap is ON the score path, per calendar UTC day', ()
   });
 
   it('a gain with no domain earns nothing (the cap refuses a cross-domain gain) and is not consumed', async () => {
-    receipt('r1');
+    await receipt('r1');
     jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect((await right('r1', null)).delta).toBe(0);
     expect(lastCo()['small_gain_cap']['reason']).toBe('no_domain_no_gain');
@@ -349,8 +350,8 @@ describe('(C) the small-gain cap is ON the score path, per calendar UTC day', ()
   });
 
   it('a wrong is not capped and does not consume day budget', async () => {
-    receipt('f1', { verification_status: 'FAILED', args_hash: H(300) });
-    receipt('r1', { args_hash: H(301) });
+    await receipt('f1', { verification_status: 'FAILED', args_hash: H(300) });
+    await receipt('r1', { args_hash: H(301) });
     expect((await score({ abstained: true, confirmationReceiptId: 'f1' })).delta).toBe(WRONG);
     expect(lastCo()['small_gain_cap']).toBeNull();
     expect((await right('r1', 'law')).delta).toBe(5);
@@ -360,7 +361,7 @@ describe('(C) the small-gain cap is ON the score path, per calendar UTC day', ()
 describe('(D) EXPIRY — a stale receipt moves nothing and stays unspent', () => {
   it('past the default 72h TTL → no move, no claim attempted', async () => {
     jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const r = receipt('old', { verification_status: 'FAILED', created_at: new Date(now - 73 * 3_600_000).toISOString() });
+    const r = await receipt('old', { verification_status: 'FAILED', created_at: new Date(now - 73 * 3_600_000).toISOString() });
     const out = await score({ settledBy: 'holdout', result: 'wrong', confirmationReceiptId: 'old' });
     expect(out.delta).toBe(0);
     expect(st.claimAttempts).toBe(0);
@@ -368,27 +369,27 @@ describe('(D) EXPIRY — a stale receipt moves nothing and stays unspent', () =>
   });
 
   it('just inside the TTL still confirms (control)', async () => {
-    receipt('young', { verification_status: 'FAILED', created_at: new Date(now - 71 * 3_600_000).toISOString() });
+    await receipt('young', { verification_status: 'FAILED', created_at: new Date(now - 71 * 3_600_000).toISOString() });
     expect((await score({ abstained: true, confirmationReceiptId: 'young' })).delta).toBe(WRONG);
   });
 
   it('REPID_CONFIRMED_RECEIPT_TTL_HOURS is read: 1h expires a 2h-old receipt', async () => {
     jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     process.env.REPID_CONFIRMED_RECEIPT_TTL_HOURS = '1';
-    receipt('2h', { verification_status: 'FAILED', created_at: new Date(now - 2 * 3_600_000).toISOString() });
+    await receipt('2h', { verification_status: 'FAILED', created_at: new Date(now - 2 * 3_600_000).toISOString() });
     expect((await score({ abstained: true, confirmationReceiptId: '2h' })).delta).toBe(0);
   });
 
   it('a garbage TTL fails closed, loudly', async () => {
     const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     process.env.REPID_CONFIRMED_RECEIPT_TTL_HOURS = 'forever';
-    receipt('x', { verification_status: 'FAILED' });
+    await receipt('x', { verification_status: 'FAILED' });
     expect((await score({ abstained: true, confirmationReceiptId: 'x' })).delta).toBe(0);
     expect(err.mock.calls.some((c) => String(c[0]).includes('REPID_CONFIRMED_RECEIPT_TTL_HOURS'))).toBe(true);
   });
 
   it('an undatable receipt confirms nothing', async () => {
-    receipt('nodate', { verification_status: 'FAILED', created_at: null });
+    await receipt('nodate', { verification_status: 'FAILED', created_at: null });
     expect((await score({ abstained: true, confirmationReceiptId: 'nodate' })).delta).toBe(0);
   });
 });
@@ -396,12 +397,13 @@ describe('(D) EXPIRY — a stale receipt moves nothing and stays unspent', () =>
 describe('(E) FLAG OFF is today', () => {
   it('a FAILED receipt in the body is ignored: -8 for UNSUPPORTED_CLAIM, no receipt or cap read', async () => {
     delete process.env.CONFIRMED_OUTCOME_SCORING_ENABLED;
-    receipt('fail-1', { verification_status: 'FAILED' });
+    await receipt('fail-1', { verification_status: 'FAILED' });
     const out = await score({ abstained: true, confirmationReceiptId: 'fail-1' });
     expect(out.delta).toBe(-8);
     expect(out.confirmedOutcome ?? null).toBeNull();
     expect(st.krReads).toBe(0);
     expect(st.eventReads).toBe(0);
+    expect(st.rpcCalls).toBe(0);
     expect(st.events[0]!['metadata']['confirmed_outcome']).toBeNull();
   });
 });
@@ -409,8 +411,8 @@ describe('(E) FLAG OFF is today', () => {
 describe('(F) GROUNDING_MODE=enforce cannot zero a spent server-settled wrong', () => {
   it('the wrong applies with no groundingEvidence; a gain is still zeroed (grounding is live here)', async () => {
     process.env.GROUNDING_MODE = 'enforce';
-    receipt('f1', { verification_status: 'FAILED', args_hash: H(400) });
-    receipt('r1', { args_hash: H(401) });
+    await receipt('f1', { verification_status: 'FAILED', args_hash: H(400) });
+    await receipt('r1', { args_hash: H(401) });
     expect((await score({ abstained: true, confirmationReceiptId: 'f1' })).delta).toBe(WRONG);
     expect((await score({ settledBy: 'holdout', result: 'right', domain: 'law', confirmationReceiptId: 'r1' })).delta).toBe(0);
   });

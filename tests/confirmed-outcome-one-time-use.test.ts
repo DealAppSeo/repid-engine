@@ -2,7 +2,10 @@
  * confirmed-outcome ONE-TIME USE (replay-inert) — the server-verified confirmation receipt may
  * move the official score AT MOST ONCE (fix 2026-10-13, CWE-345 follow-up to Strix #1341).
  *
- * The move is gated by a CONDITIONAL, atomic claim in repid-update.ts::claimConfirmationReceipt:
+ * The move is gated by a CONDITIONAL, atomic claim. For a GAIN (every case below) that claim runs inside
+ * public.claim_confirmed_gain (repid-update.ts::reserveConfirmedGain, modelled by
+ * tests/helpers/fake-claim-confirmed-gain.ts) together with the day/domain budget reservation; a WRONG
+ * keeps repid-update.ts::claimConfirmationReceipt:
  *   UPDATE kernel_receipts SET consumed_at = now() WHERE receipt_id = $1 AND consumed_at IS NULL
  * If this request claims the row the score moves; if the row is already consumed (zero rows) or the
  * write errors, the confirmation is held INERT. Fail-closed by construction.
@@ -13,8 +16,8 @@
  *                    audit records score_moves:true but receipt_consumed:false (honest).
  *   (3) FAIL-CLOSED→ the claim write errors → INERT (no move), receipt_consumed:false.
  *
- * NON-VACUITY: make the claim UNCONDITIONAL in src/engine/repid-update.ts (drop
- * `.is('consumed_at', null)`) and case (2) goes RED — the replay would move the score again.
+ * NON-VACUITY: drop the `consumed_at IS NULL` predicate from the claim (the fake's `consumed_at == null`)
+ * and case (2) goes RED — the replay would move the score again.
  *
  * Mock topology extends tests/confirmed-outcome-verifier-wiring.test.ts with the claim path.
  */
@@ -51,8 +54,16 @@ const kr: {
   failClaim: boolean;
 } = { row: null, reads: 0, claimAttempts: 0, failClaim: false };
 
+const mockBudget = new Map<string, number>();
+
 jest.mock('../src/db', () => ({
   db: {
+    // A GAIN's claim: public.claim_confirmed_gain (claim + budget reservation in one transaction).
+    rpc: async (fn: string, args: any) => {
+      kr.claimAttempts++;
+      if (kr.failClaim) return { data: null, error: { message: 'claim write failed' } };
+      return require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => (kr.row ? [kr.row] : []), mockBudget)(fn, args);
+    },
     from: jest.fn((table: string) => {
       if (table === 'repid_agents') {
         return {
@@ -107,6 +118,7 @@ jest.mock('../src/db', () => ({
 }));
 
 import { updateRepId } from '../src/engine/repid-update';
+import { sealedRow } from './helpers/sealed-gate-receipt';
 import { __resetConfirmedParamsCache } from '../src/scoring/confirmed-outcome';
 import { updateSupplyRate } from '../src/layers/ecosystem-need';
 const updateSupplyRateMock = updateSupplyRate as jest.Mock;
@@ -124,21 +136,10 @@ const SAVED: Record<string, string | undefined> = {};
 const SAVED_FLAG = process.env.CONFIRMED_OUTCOME_SCORING_ENABLED;
 
 /** A valid, actor-bound, SETTLED, VERIFIED (→ right), non-simulated, UNCONSUMED holdout receipt. */
-function receiptRow(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    receipt_id: 'rcpt-1',
-    subject_agent_id: AGENT_ID,
-    settled_by: 'holdout',
-    verdict_label: 'SETTLED',
-    verification_status: 'VERIFIED',
-    is_simulated: false,
-    args_hash: '0x' + 'ab'.repeat(32),
-    created_at: new Date(Date.now() - 60_000).toISOString(),
-    consumed_at: null,
-    ...over,
-  };
+async function receiptRow(over: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  // SEALED BY THE REAL GATE (tests/helpers/sealed-gate-receipt.ts); `over` tampers columns.
+  return sealedRow('rcpt-1', AGENT_ID, { args_hash: '0x' + 'ab'.repeat(32), ...over }, new Date(Date.now() - 60_000).toISOString());
 }
-
 // A domain is required since 2026-10-14: every confirmed gain goes through the small-gain cap, which pays
 // nothing on a domain-less gain (a gain must not cross domains).
 const moveOnce = { settledBy: 'holdout' as const, result: 'right' as const, domain: 'law', confirmationReceiptId: 'rcpt-1' };
@@ -152,6 +153,7 @@ beforeEach(() => {
   kr.reads = 0;
   kr.claimAttempts = 0;
   kr.failClaim = false;
+  mockBudget.clear();
   process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true';
 });
 afterEach(() => {
@@ -165,7 +167,7 @@ afterEach(() => {
 
 describe('(1) FIRST use claims the receipt and moves the score', () => {
   it('a server-verified holdout/right receipt → +5, writes, and marks receipt_consumed:true', async () => {
-    kr.row = receiptRow();
+    kr.row = await receiptRow();
     const r = await updateRepId({ agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM', confirmedOutcome: moveOnce });
     expect(kr.reads).toBe(1);
     expect(kr.claimAttempts).toBe(1); // the claim was actually attempted (non-vacuity)
@@ -183,7 +185,7 @@ describe('(1) FIRST use claims the receipt and moves the score', () => {
 
 describe('(2) REPLAY of the same receiptId is INERT', () => {
   it('second use with the same confirmationReceiptId does not move the score', async () => {
-    kr.row = receiptRow();
+    kr.row = await receiptRow();
 
     const first = await updateRepId({ agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM', confirmedOutcome: moveOnce });
     expect(first.delta).toBe(5); // baseline: first use moved
@@ -203,7 +205,7 @@ describe('(2) REPLAY of the same receiptId is INERT', () => {
 
 describe('(3) a FAILED claim write is INERT (fail closed)', () => {
   it('a DB error on the conditional claim does not move the score', async () => {
-    kr.row = receiptRow();
+    kr.row = await receiptRow();
     kr.failClaim = true;
     const r = await updateRepId({ agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM', confirmedOutcome: moveOnce });
     expect(kr.claimAttempts).toBe(1);

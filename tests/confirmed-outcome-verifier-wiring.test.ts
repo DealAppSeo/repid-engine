@@ -45,8 +45,14 @@ const agentState = { id: AGENT_ID, agent_name: 'TESTAGENT', current_repid: 1000,
 // A single controllable kernel_receipts row + a counter proving whether the verifier read it at all.
 const kr: { row: Record<string, unknown> | null; reads: number } = { row: null, reads: 0 };
 
+const mockBudget = new Map<string, number>();
+
 jest.mock('../src/db', () => ({
   db: {
+    // A GAIN's claim + day/domain reservation: public.claim_confirmed_gain, modelled in
+    // tests/helpers/fake-claim-confirmed-gain.ts. Single moves only here (replay: one-time-use suite).
+    rpc: (fn: string, args: any) =>
+      require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => (kr.row ? [kr.row] : []), mockBudget)(fn, args),
     from: jest.fn((table: string) => {
       if (table === 'repid_agents') {
         return {
@@ -91,6 +97,7 @@ jest.mock('../src/db', () => ({
 }));
 
 import { updateRepId } from '../src/engine/repid-update';
+import { sealedRow } from './helpers/sealed-gate-receipt';
 import { __resetConfirmedParamsCache } from '../src/scoring/confirmed-outcome';
 import { updateSupplyRate } from '../src/layers/ecosystem-need';
 const updateSupplyRateMock = updateSupplyRate as jest.Mock;
@@ -108,7 +115,12 @@ const SAVED: Record<string, string | undefined> = {};
 const SAVED_FLAG = process.env.CONFIRMED_OUTCOME_SCORING_ENABLED;
 
 /** A valid, actor-bound, SETTLED, VERIFIED (→ right), non-simulated holdout receipt. */
-function receiptRow(over: Record<string, unknown> = {}): Record<string, unknown> {
+async function receiptRow(over: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  // SEALED BY THE REAL GATE (tests/helpers/sealed-gate-receipt.ts); `over` tampers columns.
+  return sealedRow('rcpt-1', AGENT_ID, { args_hash: '0x' + 'ab'.repeat(32), ...over }, new Date(Date.now() - 60_000).toISOString());
+}
+/** The pre-2026-10-14 HAND-BUILT row: every column right, but no sealed gate receipt behind it. */
+function legacyReceiptRow(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     receipt_id: 'rcpt-1',
     subject_agent_id: AGENT_ID,
@@ -129,6 +141,7 @@ beforeEach(() => {
   agentState.activity_30d = 5;
   kr.row = null;
   kr.reads = 0;
+  mockBudget.clear();
 });
 afterEach(() => {
   jest.clearAllMocks();
@@ -143,7 +156,7 @@ describe('(1) flag ON + server-verified receipt + agreeing caller result → sco
   beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
 
   it('holdout/VERIFIED (server result right) + caller result right → +gainBase, writes, side-effects run', async () => {
-    kr.row = receiptRow();
+    kr.row = await receiptRow();
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'holdout', result: 'right', domain: 'law', confirmationReceiptId: 'rcpt-1' },
@@ -161,7 +174,7 @@ describe('(1) flag ON + server-verified receipt + agreeing caller result → sco
   });
 
   it('known_answer/FAILED (server result wrong) + caller result wrong → confirmed loss moves', async () => {
-    kr.row = receiptRow({ settled_by: 'known_answer', verification_status: 'FAILED' });
+    kr.row = await receiptRow({ settled_by: 'known_answer', verification_status: 'FAILED' });
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'known_answer', result: 'wrong', confidence: 0, confirmationReceiptId: 'rcpt-1' },
@@ -178,7 +191,7 @@ describe('(2) flag ON + caller result DISAGREES with the server → the SERVER r
   beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
 
   it('server says right (VERIFIED) but caller asserts wrong → the server right scores', async () => {
-    kr.row = receiptRow({ verification_status: 'VERIFIED' }); // server → right
+    kr.row = await receiptRow({ verification_status: 'VERIFIED' }); // server → right
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'holdout', result: 'wrong', confidence: 1, domain: 'law', confirmationReceiptId: 'rcpt-1' },
@@ -192,7 +205,7 @@ describe('(2) flag ON + caller result DISAGREES with the server → the SERVER r
   });
 
   it('server says wrong (FAILED) but caller asserts right → the server wrong scores (no dodge)', async () => {
-    kr.row = receiptRow({ verification_status: 'FAILED' }); // server → wrong
+    kr.row = await receiptRow({ verification_status: 'FAILED' }); // server → wrong
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'holdout', result: 'right', confirmationReceiptId: 'rcpt-1' },
@@ -205,11 +218,29 @@ describe('(2) flag ON + caller result DISAGREES with the server → the SERVER r
   });
 });
 
+describe('(2b) flag ON + a row with the right COLUMNS but no sealed gate receipt → INERT (XC1 finding 2)', () => {
+  beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
+
+  it('a hand-built SETTLED/VERIFIED/holdout row with a valid-shaped args_hash no longer moves the score', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    kr.row = legacyReceiptRow(); // exactly what every suite used to seed, and what moved +5 before the binding
+    const r = await updateRepId({
+      agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
+      confirmedOutcome: { settledBy: 'holdout', result: 'right', domain: 'law', confirmationReceiptId: 'rcpt-1' },
+    });
+    expect(kr.reads).toBe(1);
+    expect(r.delta).toBe(0);
+    expect(r.repIdAfter).toBe(1000);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('not a sealed gate-run receipt (no_sealed_receipt)'))).toBe(true);
+    warn.mockRestore();
+  });
+});
+
 describe('(3) flag ON + a receipt the actor does NOT own → actor binding fails → INERT', () => {
   beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
 
   it('subject_agent_id is a DIFFERENT agent → verifier returns undefined → no move', async () => {
-    kr.row = receiptRow({ subject_agent_id: 'some-other-agent' });
+    kr.row = await receiptRow({ subject_agent_id: 'some-other-agent' });
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'holdout', result: 'right', confirmationReceiptId: 'rcpt-1' },
@@ -227,7 +258,7 @@ describe('(4) flag ON + NO receiptId → verifier returns undefined → INERT', 
   beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
 
   it('a confirmedOutcome with no confirmationReceiptId does not move the score', async () => {
-    kr.row = receiptRow(); // a valid row exists, but the caller names no id
+    kr.row = await receiptRow(); // a valid row exists, but the caller names no id
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'holdout', result: 'right' },
@@ -272,7 +303,7 @@ describe('(6) CWE-345 — a caller-SMUGGLED verifiedConfirmation in the body is 
 describe('(5) flag OFF → the verifier is NEVER consulted and scoring is as today', () => {
   it('UNSUPPORTED_CLAIM with a valid receiptId + a valid row still scores -8 and never reads kernel_receipts', async () => {
     delete process.env.CONFIRMED_OUTCOME_SCORING_ENABLED;
-    kr.row = receiptRow();
+    kr.row = await receiptRow();
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'holdout', result: 'right', confirmationReceiptId: 'rcpt-1' },

@@ -32,8 +32,14 @@ import {
   type ConfirmedResultKind,
   type VerifiedConfirmation,
 } from '../scoring/confirmed-outcome';
-import { capSmallGain, type BudgetReading, type SmallGainCapResult, type SmallGainDeps } from '../scoring/small-gain-cap';
+import {
+  capSmallGain,
+  smallGainCapParams,
+  type SmallGainCapResult,
+  type SmallGainDeps,
+} from '../scoring/small-gain-cap';
 import { resolveOwner as resolveAgentOwner } from '../services/agent-owner-resolver';
+import { gateReceiptProblem, type KernelReceiptIndexRow } from '../kernel/receipt-db-index';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -513,34 +519,49 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
     );
     if (serverVerified && confirmedOutcomeResult.scoreMoves) {
       let moveBy = confirmedOutcomeResult.appliedDelta;
-      // SMALL-GAIN CAP (2026-10-14, XC1 finding 1). Every positive confirmed delta goes through
-      // capSmallGain, with readers that sum the confirmed gains ALREADY APPLIED to this agent in
-      // the current UTC day (all domains, and this domain) from repid_score_events. Until this the
-      // cap had 26 passing tests and no caller: a day paid one full gain per receipt. A budget we
-      // cannot read caps the gain to ZERO (fail closed), and a gain capped to zero claims nothing,
-      // so the receipt stays spendable on a later day (until its TTL).
+      // SMALL-GAIN CAP, ATOMIC (2026-10-14, XC1 re-attack finding 1). A gain is bounded twice:
+      //   1. capSmallGain with the budget treated as unspent → the CAP-ONLY bound: the closed paths,
+      //      the normalized domain (finding 5), and min(gain, perDayCap, perDomainCap).
+      //   2. reserveConfirmedGain → public.claim_confirmed_gain, which in ONE transaction takes a row
+      //      lock on this agent's UTC-day budget, grants min(bound, day left, domain left), claims the
+      //      receipt, and books the spend. The budget is never read outside that lock.
+      // Before this, the engine read today's sum from repid_score_events, then claimed, then inserted,
+      // so N parallel calls that all read before any insert each took a full gain. A gain capped to
+      // zero claims nothing, so the receipt stays spendable on a later day (until its TTL). With the
+      // function absent the gain is ZERO and the error is loud (fail closed); wrongs are unaffected.
       if (moveBy > 0) {
-        const d = callerAssertedOutcome.domain;
-        smallGainCapResult = await capSmallGain(
-          { actorAgentId: input.agentId, domain: typeof d === 'string' ? d.trim() : null, computedGain: moveBy },
-          smallGainCapDepsFor(),
+        const bound = await capSmallGain(
+          // RAW domain: capSmallGain normalizes it (normalizeCapDomain) and can then tell "no domain" from
+          // "a domain whose key was refused" in the recorded reason.
+          { actorAgentId: input.agentId, domain: typeof callerAssertedOutcome.domain === 'string' ? callerAssertedOutcome.domain : null, computedGain: moveBy },
+          CAP_ONLY_UNSPENT_BUDGET,
         );
-        moveBy = smallGainCapResult.cappedGain;
-        if (moveBy === 0) {
+        if (bound.cappedGain === 0 || bound.detail.domain === null) {
+          smallGainCapResult = bound;
+          moveBy = 0;
+        } else {
+          const reserved = await reserveConfirmedGain(
+            input.confirmedOutcome.confirmationReceiptId,
+            input.agentId,
+            bound.detail.domain,
+            bound,
+          );
+          smallGainCapResult = reserved.cap;
+          confirmationReceiptConsumed = reserved.consumed;
+          moveBy = reserved.consumed === true ? reserved.cap.cappedGain : 0;
+        }
+        if (smallGainCapResult.cappedGain === 0) {
           console.warn(
             `[confirmed-outcome] confirmed gain HELD at 0 by the small-gain cap for agent ${input.agentId}: ` +
               `${smallGainCapResult.reason} (receipt not consumed)`,
           );
         }
-      }
-      if (moveBy !== 0) {
-        // ONE-TIME USE (replay-inert). Claim the receipt with a CONDITIONAL, atomic write
+      } else if (moveBy < 0) {
+        // ONE-TIME USE (replay-inert) for a WRONG. Claim the receipt with a CONDITIONAL, atomic write
         // (UPDATE ... WHERE receipt_id=$1 AND consumed_at IS NULL): if this call takes the row the
-        // score moves; if it is already consumed (zero rows), the same content was already paid
-        // (unique violation, see claimConfirmationReceipt), or the write errors, the confirmation
-        // is held INERT. A WRONG is claimed too, so a FAILED receipt is spent exactly once.
-        // Reached ONLY inside this flag-gated, server-verified branch, so with
-        // CONFIRMED_OUTCOME_SCORING_ENABLED OFF (prod default) and the table absent, it never runs.
+        // score moves; if it is already consumed (zero rows) or the write errors, the confirmation is
+        // held INERT. A FAILED receipt is spent exactly once. Wrongs are not capped, so they need no
+        // budget reservation. Reached ONLY inside this flag-gated, server-verified branch.
         confirmationReceiptConsumed = await claimConfirmationReceipt(
           input.confirmedOutcome.confirmationReceiptId,
         );
@@ -635,7 +656,13 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
 
   // 6 — Redemption modifier (Micah 6:8 as math)
   const redemptionMod = await computeRedemptionModifier(input.agentId);
-  const redemptionApplied = redemptionMod < 1.0 && rawDelta < 0;
+  // A RECEIPT-SETTLED WRONG IS NOT REDEEMABLE (2026-10-14, XC1 re-attack finding 4). Its price is set
+  // by confirmed-outcome (lossBase - confidence weight), and small-gain-cap's load-time invariant
+  // "a full day of small rights < one confirmed wrong" is checked against that FULL price. Scaling
+  // the wrong here (x0.5 on the dev ruler) would quietly break that invariant for exactly the agents
+  // with a violation history. Redemption still applies to every other penalty, as before.
+  const redemptionExempt = confirmationReceiptConsumed === true && rawDelta < 0;
+  const redemptionApplied = redemptionMod < 1.0 && rawDelta < 0 && !redemptionExempt;
   const computedDelta = redemptionApplied ? Math.round(rawDelta * redemptionMod) : rawDelta;
 
   // 6b — SHADOW-FIRST gate (M1). For a deception event in shadow mode, the
@@ -789,6 +816,8 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       decayApplied: isInertHold ? 0 : agent.current_repid - decayedRepId,
       redemptionModifier: redemptionMod,
       redemptionModifierApplied: redemptionApplied,
+      // Only on a spent receipt-settled wrong (flag ON), so every other row's shape is unchanged.
+      ...(redemptionExempt ? { redemptionExemptReason: 'receipt_settled_wrong' } : {}),
       constitutionalAudit: {
         // RULE-4: when the audit is a disabled stub, record it as not-measured —
         // never persist the placeholder pass/1.0 as if it were a real audit result.
@@ -834,8 +863,8 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
             // attempted (not server-verified, or no move). A false here with score_moves:true is
             // honest: the outcome WOULD move, but this receipt was already spent.
             receipt_consumed: confirmationReceiptConsumed,
-            // The cap decision for a confirmed gain (null otherwise). `domain` here is the key the
-            // per-domain budget reader filters on (smallGainCapDepsFor), so it is written by the cap.
+            // The cap decision for a confirmed gain (null otherwise). `domain` is the NORMALIZED key the
+            // atomic reservation (claim_confirmed_gain) budgets on; the remainders are read under its lock.
             small_gain_cap: smallGainCapResult
               ? {
                   capped_gain: smallGainCapResult.cappedGain,
@@ -977,6 +1006,11 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *     under a fresh receipt_id" pay once (claimConfirmationReceipt + the unique index in
  *     migrations/2026-10-14-kernel-receipts-content-claim.sql). A row without one cannot be
  *     de-duplicated, so it fails closed; so does a table without the column (the select errors).
+ *   - GATE PROVENANCE (2026-10-14, XC1 re-attack finding 2): the row's sealed receipt must be one the
+ *     kernel gate's own run wrote, and its columns must equal that sealed body (gateReceiptProblem in
+ *     kernel/receipt-db-index.ts). args_hash is client-chosen and the server cannot recompute it, so
+ *     the binding is to the GATE RUN, not to the hash. runUnderKernel has no production caller today,
+ *     so in production nothing passes this: every confirmation fails closed until one exists.
  * The SERVER then establishes the result: VERIFIED → 'right', FAILED → 'wrong'. A thrown DB error
  * (table absent in prod, store down) → undefined. It NEVER throws into the score path.
  *
@@ -995,19 +1029,11 @@ export async function resolveServerConfirmation(
     if (id === '') return undefined; // no pointer → nothing to verify → fail closed
     const { data, error } = await db
       .from('kernel_receipts')
-      .select('subject_agent_id, settled_by, verdict_label, verification_status, is_simulated, args_hash, created_at')
+      .select('receipt_id, subject_agent_id, settled_by, verdict_label, verification_status, is_simulated, args_hash, receipt_hash, receipt, created_at')
       .eq('receipt_id', id)
       .maybeSingle();
     if (error || !data) return undefined; // no row (or a read error) → fail closed
-    const row = data as {
-      subject_agent_id?: unknown;
-      settled_by?: unknown;
-      verdict_label?: unknown;
-      verification_status?: unknown;
-      is_simulated?: unknown;
-      args_hash?: unknown;
-      created_at?: unknown;
-    };
+    const row = data as KernelReceiptIndexRow & { created_at?: unknown };
     // ACTOR BINDING (CWE-345): the receipt must be ABOUT the acting agent. A caller cannot borrow
     // another agent's receipt. Positively established by equality; anything non-string fails closed.
     const subject = typeof row.subject_agent_id === 'string' ? row.subject_agent_id.trim() : '';
@@ -1021,6 +1047,12 @@ export async function resolveServerConfirmation(
     if (settledBy !== 'holdout' && settledBy !== 'known_answer') return undefined;
     // CONTENT KEY — no hash, no de-duplication, no confirmation.
     if (typeof row.args_hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(row.args_hash)) return undefined;
+    // GATE PROVENANCE — only a receipt the kernel gate's own run wrote, unedited, confirms anything.
+    const notAGateRun = gateReceiptProblem(row);
+    if (notAGateRun !== null) {
+      console.warn(`[confirmed-outcome] receipt ${id} confirms nothing: not a sealed gate-run receipt (${notAGateRun})`);
+      return undefined;
+    }
     // EXPIRY — an undatable or stale receipt confirms nothing (and so is never claimed).
     const createdMs = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN;
     if (!Number.isFinite(createdMs)) return undefined;
@@ -1090,45 +1122,114 @@ export async function claimConfirmationReceipt(
 }
 
 /**
- * The small-gain cap's budget readers (2026-10-14), from data that already exists: the confirmed
- * gains this engine wrote to repid_score_events (`delta > 0` and
- * `metadata.confirmed_outcome.receipt_consumed = true`) since 00:00:00Z of the current UTC day.
- * The per-domain reader also filters on `metadata.confirmed_outcome.small_gain_cap.domain`, the key
- * the cap itself records, so writer and reader cannot disagree. The audit row is inserted BEFORE the
- * score moves, so a row whose score update then failed still counts: over-counting spent budget, the
- * safe direction. Any read error or unreadable sum → `checked:false` → capSmallGain caps to ZERO.
- *
- * Both budgets are per UTC day. "Per domain" is read as per-domain-per-day: a lifetime cap of a few
- * points per domain would end the gain path, and nothing in the cap decision asks for one.
- *
- * ponytail: read-then-claim is not atomic, so N concurrent requests can overshoot the day cap by up
- * to N-1 gains. A DB-side reservation (an RPC, or a per-agent row lock) closes it; that needs DDL.
+ * The cap-only bound: capSmallGain with the budget treated as UNSPENT, so it applies the closed
+ * paths, the domain key and min(gain, perDayCap, perDomainCap) and nothing else. The real budget is
+ * spent only inside public.claim_confirmed_gain (reserveConfirmedGain below), under a row lock.
  */
-export function smallGainCapDepsFor(): SmallGainDeps {
-  const sumToday = async (agentId: string, domain: string | null): Promise<BudgetReading> => {
-    try {
-      const dayStart = new Date(Date.now());
-      dayStart.setUTCHours(0, 0, 0, 0);
-      let q = db
-        .from('repid_score_events')
-        .select('delta')
-        .eq('agent_id', agentId)
-        .gte('created_at', dayStart.toISOString())
-        .gt('delta', 0)
-        .eq('metadata->confirmed_outcome->>receipt_consumed', 'true');
-      if (domain !== null) q = q.eq('metadata->confirmed_outcome->small_gain_cap->>domain', domain);
-      const { data, error } = await q;
-      if (error || !Array.isArray(data)) return { checked: false, total: 0 };
-      const total = data.reduce((s: number, r: { delta?: unknown }) => s + Number(r.delta ?? 0), 0);
-      return Number.isFinite(total) ? { checked: true, total } : { checked: false, total: 0 };
-    } catch {
-      return { checked: false, total: 0 };
+const CAP_ONLY_UNSPENT_BUDGET: SmallGainDeps = {
+  accumulatedTodaySmallGain: async () => ({ checked: true, total: 0 }),
+  accumulatedDomainSmallGain: async () => ({ checked: true, total: 0 }),
+};
+
+type ClaimGainRow = { outcome?: unknown; granted?: unknown; day_spent?: unknown; domain_spent?: unknown };
+
+/**
+ * ATOMIC RECEIPT CLAIM + DAY/DOMAIN BUDGET RESERVATION (2026-10-14, XC1 re-attack finding 1).
+ *
+ * One call to `public.claim_confirmed_gain` (migrations/2026-10-14-confirmed-gain-atomic-reservation.sql,
+ * REVIEW-ONLY until Sean applies it). In ONE transaction it:
+ *   1. locks this agent's whole-UTC-day budget row (SELECT … FOR UPDATE), so every gain for one
+ *      agent-day is serialized: a parallel burst cannot read a stale sum;
+ *   2. grants min(bound, dayCap - daySpent, domainCap - domainSpent);
+ *   3. claims the receipt (UPDATE … WHERE receipt_id AND subject AND consumed_at IS NULL; the content
+ *      index's 23505 is caught as `content_already_claimed`);
+ *   4. books the grant on the day row and the domain row.
+ * Any failure before (4) books nothing. The caps are passed in, because their magnitudes live in env,
+ * not in this public repo or the database.
+ *
+ * Returns `consumed`: true (claimed, the score may move by cap.cappedGain), false (the claim did not
+ * happen: receipt already spent, content already paid, or the reservation could not run), null (no
+ * claim attempted: the budget was exhausted). FAIL CLOSED: any error, including the function not
+ * existing yet, is no gain, and it is logged LOUDLY because it would otherwise silently disable
+ * every gain.
+ */
+export async function reserveConfirmedGain(
+  receiptId: string | undefined,
+  agentId: string,
+  domain: string,
+  bound: SmallGainCapResult,
+): Promise<{ consumed: boolean | null; cap: SmallGainCapResult }> {
+  const unavailable = (why: string) => {
+    console.error(
+      `[confirmed-outcome] confirmed gain HELD at 0: atomic cap reservation unavailable (claim_confirmed_gain): ${why}. ` +
+        'Gains stay at zero until migrations/2026-10-14-confirmed-gain-atomic-reservation.sql is applied.',
+    );
+    return {
+      consumed: false,
+      cap: {
+        ...bound,
+        cappedGain: 0,
+        wouldMoveScore: false,
+        reason: 'reservation_unavailable' as const,
+        detail: { ...bound.detail, dayBudgetChecked: false, domainBudgetChecked: false, perDayRemaining: null, perDomainRemaining: null },
+      },
+    };
+  };
+  try {
+    const id = (receiptId ?? '').trim();
+    if (id === '') return { consumed: false, cap: bound };
+    const p = smallGainCapParams();
+    const { data, error } = await db.rpc('claim_confirmed_gain', {
+      p_receipt_id: id,
+      p_agent_id: agentId,
+      p_domain: domain,
+      p_gain: bound.cappedGain,
+      p_day_cap: p.perDayCap,
+      p_domain_cap: p.perDomainCap,
+    });
+    if (error) return unavailable(String((error as { message?: unknown }).message ?? error));
+    const row = (Array.isArray(data) ? data[0] : data) as ClaimGainRow | null | undefined;
+    // STRICT (XC1 review of #1369, residual a): Number(null) is 0, so a NULL spent would read as "nothing
+    // spent" and pass the finite check. Only a real number (or numeric string) counts as read.
+    const spentOf = (v: unknown): number =>
+      typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+    const daySpent = spentOf(row?.day_spent);
+    const domainSpent = spentOf(row?.domain_spent);
+    if (!row || !Number.isFinite(daySpent) || !Number.isFinite(domainSpent)) return unavailable(`unreadable result ${JSON.stringify(data)}`);
+
+    const perDayRemaining = Math.max(0, p.perDayCap - daySpent);
+    const perDomainRemaining = Math.max(0, p.perDomainCap - domainSpent);
+    const allowed = Math.max(0, Math.min(bound.cappedGain, perDayRemaining, perDomainRemaining));
+    const detail = { ...bound.detail, dayBudgetChecked: true, domainBudgetChecked: true, perDayRemaining, perDomainRemaining };
+    const cap = (gain: number): SmallGainCapResult => ({
+      ...bound,
+      cappedGain: gain,
+      wouldMoveScore: bound.armed && gain > 0,
+      reason: gain === 0 ? 'capped_to_zero_budget_exhausted' : gain < bound.detail.computedGain ? 'capped_by_budget' : 'within_caps',
+      detail,
+    });
+
+    switch (row.outcome) {
+      case 'granted': {
+        const granted = Number(row.granted);
+        if (!Number.isInteger(granted) || granted <= 0 || granted > bound.cappedGain) {
+          return unavailable(`granted ${String(row.granted)} outside (0, ${bound.cappedGain}]`);
+        }
+        return { consumed: true, cap: cap(granted) };
+      }
+      case 'capped_to_zero':
+        return { consumed: null, cap: cap(0) };
+      case 'content_already_claimed':
+        console.warn(`[confirmed-outcome] receipt ${id} held: content_already_claimed (same subject + args_hash already paid)`);
+        return { consumed: false, cap: cap(allowed) };
+      case 'receipt_not_claimable':
+        return { consumed: false, cap: cap(allowed) };
+      default:
+        return unavailable(`outcome ${String(row.outcome)}`);
     }
-  };
-  return {
-    accumulatedTodaySmallGain: (agentId) => sumToday(agentId, null),
-    accumulatedDomainSmallGain: (agentId, domain) => sumToday(agentId, domain),
-  };
+  } catch (e) {
+    return unavailable(e instanceof Error ? e.message : String(e));
+  }
 }
 
 export function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {
