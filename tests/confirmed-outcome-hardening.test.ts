@@ -430,4 +430,30 @@ describe('(G) the kernel receipt indexer writes the content key', () => {
     expect(st.upserts[0]).toMatchObject({ receipt_id: 'k-1', subject_agent_id: AGENT, args_hash: H(42) });
     expect(st.upserts[0]).not.toHaveProperty('consumed_at'); // a re-index must never clear a spend
   });
+
+  it('signs what it indexes at seal time: a DETACHED engine signature that verifies; the receipt itself is untouched', async () => {
+    const { verifyReceiptSignature } = require('../src/services/receipt-signer');
+    const rcpt = (await sealedRow('k-2', AGENT, { verification_status: 'FAILED', args_hash: H(43) }))['receipt'] as KernelReceipt;
+    const before = JSON.stringify(rcpt);
+    await indexKernelReceiptToDb(rcpt);
+    const row = st.upserts[st.upserts.length - 1]!;
+    expect(row['engine_signature']).toBeTruthy();
+    expect(verifyReceiptSignature(row['receipt'], row['engine_signature']).status).toBe('VERIFIED');
+    expect(JSON.stringify(row['receipt'])).toBe(before); // kernel-receipt/1 stays byte-identical (header.signer null)
+    expect(row['receipt']['header']['signer']).toBeNull();
+  });
+
+  it('with no engine key it indexes the row UNSIGNED, and says so', async () => {
+    const rcpt = (await sealedRow('k-3', AGENT, { args_hash: H(44) }))['receipt'] as KernelReceipt;
+    const key = process.env.RECEIPT_SIGNING_KEY;
+    delete process.env.RECEIPT_SIGNING_KEY;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await indexKernelReceiptToDb(rcpt);
+    } finally {
+      process.env.RECEIPT_SIGNING_KEY = key;
+    }
+    expect(st.upserts[st.upserts.length - 1]!['engine_signature']).toBeNull();
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('indexed UNSIGNED'))).toBe(true);
+  });
 });

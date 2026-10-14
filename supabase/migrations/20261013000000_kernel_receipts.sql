@@ -20,8 +20,12 @@
 -- (src/engine/repid-update.ts::resolveServerConfirmation) reads a row here BY receipt_id and
 -- binds it to the ACTOR: `subject_agent_id` must equal the acting agent, the verdict must be
 -- SETTLED, verification VERIFIED/FAILED, NOT simulated, and settled_by holdout/known_answer.
--- A caller supplies only a receipt id; the authoritative row is read here. A caller cannot
--- forge a row because RLS + GRANTs below make this service-role-only (a `sb_secret_…` key).
+-- A caller supplies only a receipt id; the authoritative row is read here. RLS + GRANTs below
+-- keep anon/authenticated out, but RLS is NOT the anti-forgery control: the service role (the
+-- indexer's own `sb_secret_…` key) bypasses RLS and could write a self-consistent re-sealed row.
+-- The control is the ENGINE SIGNATURE: the indexer signs each receipt at seal time with
+-- RECEIPT_SIGNING_KEY and the verifier refuses any row whose engine_signature does not verify
+-- (migrations/2026-10-14-kernel-receipts-engine-signature.sql; XC1 review of #1371).
 --
 --   receipt_id          the call's id (minted before the tool runs). PRIMARY KEY, so the
 --                       executed:true outcome row UPSERTs over the earlier decision row.

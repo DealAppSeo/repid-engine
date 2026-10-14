@@ -52,6 +52,8 @@ jest.mock('../src/db', () => ({
               eq: (c: string, v: unknown) => { where.push((r) => r[c] === v); return chain; },
               is: (c: string, v: unknown) => { where.push((r) => (v === null ? r[c] == null : r[c] === v)); return chain; },
               in: (c: string, vs: unknown[]) => { where.push((r) => vs.includes(r[c])); return chain; },
+              // .not(col, 'is', null): the settler's "content already settled" probe
+              not: (c: string, _op: string, _v: unknown) => { where.push((r) => r[c] != null); return chain; },
               lt: (c: string, v: string) => { where.push((r) => Date.parse(r[c]) < Date.parse(v)); return chain; },
               gt: (c: string, v: string) => { where.push((r) => Date.parse(r[c]) > Date.parse(v)); return chain; },
               order: () => chain,
@@ -200,6 +202,30 @@ describe('the actor never presents its FAILED receipt', () => {
   });
 });
 
+describe('ONE WRONG PER CONTENT (XC1 review of #1371)', () => {
+  it('two FAILED receipts for the same work are ONE wrong: the duplicate is skipped and left unspent', async () => {
+    await failed('dup-1', 40, { args_hash: H(500) });
+    await failed('dup-2', 35, { args_hash: H(500) });
+    const first = await settleFailedReceiptsOnce();
+    expect(first.applied.map((a) => a.receiptId)).toEqual(['dup-1']);
+    expect(first.held).toEqual([{ receiptId: 'dup-2', agentId: AGENT, why: 'duplicate_content_in_run' }]);
+    expect(st.agent['current_repid']).toBe(1000 + WRONG);
+
+    // the next run sees the duplicate again, and refuses it because that content is already settled
+    const second = await settleFailedReceiptsOnce();
+    expect(second.applied).toEqual([]);
+    expect(second.held).toEqual([{ receiptId: 'dup-2', agentId: AGENT, why: 'content_already_settled' }]);
+    expect(st.agent['current_repid']).toBe(1000 + WRONG);
+    expect(spent('dup-2')).toBe(false);
+  });
+
+  it('different work is still its own wrong', async () => {
+    await failed('w-1', 40, { args_hash: H(600) });
+    await failed('w-2', 35, { args_hash: H(601) });
+    expect((await settleFailedReceiptsOnce()).applied.map((a) => a.receiptId)).toEqual(['w-1', 'w-2']);
+  });
+});
+
 describe('what the worker leaves alone', () => {
   it('inside the grace window (the actor still has its turn)', async () => {
     await failed('young', 2);
@@ -262,6 +288,20 @@ describe('modes and refusals', () => {
     expect(st.settleQueries).toBe(0);
     expect(spent('f1')).toBe(false);
     expect(st.agent['current_repid']).toBe(1000);
+  });
+
+  it('SHADOW runs the same gate: a row the verifier would refuse is NOT logged as would-apply', async () => {
+    process.env.CONFIRMED_FAILED_SETTLE_MODE = 'shadow';
+    st.receipts.push({
+      receipt_id: 'hand', subject_agent_id: AGENT, settled_by: 'holdout', verdict_label: 'SETTLED',
+      verification_status: 'FAILED', is_simulated: false, args_hash: H(98), consumed_at: null,
+      created_at: new Date(now - 30 * HOUR).toISOString(),
+    });
+    const out = await settleFailedReceiptsOnce();
+    expect(out.held).toEqual([{ receiptId: 'hand', agentId: AGENT, why: 'shadow_verifier_refuses' }]);
+    expect(warn.mock.calls.some((c) => /SHADOW: WOULD apply FAILED receipt hand/.test(String(c[0])))).toBe(false);
+    expect(warn.mock.calls.some((c) => /SHADOW: would NOT apply receipt hand/.test(String(c[0])))).toBe(true);
+    expect(spent('hand')).toBe(false);
   });
 
   it('SHADOW logs what it WOULD apply and moves nothing', async () => {

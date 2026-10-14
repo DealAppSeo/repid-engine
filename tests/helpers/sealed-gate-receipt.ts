@@ -16,6 +16,13 @@ import { runUnderKernel } from '../../src/kernel/gate';
 import { DEFAULT_ENV } from '../../src/kernel/receipt';
 import type { KernelReceipt } from '../../src/kernel/types';
 import { harness, iso, postRequest, signedPolicy } from '../../src/kernel/__tests__/fixtures';
+import { Wallet } from 'ethers';
+import { signReceipt } from '../../src/services/receipt-signer';
+
+// THE ENGINE RECEIPT KEY FOR TESTS. Since 2026-10-14 a row confirms only if the engine signed it
+// (RECEIPT_SIGNING_KEY, the #1333 signer). A random in-memory key, generated per test process and
+// never written anywhere, unless a test set one. A test that needs "no signer configured" deletes it.
+if (!process.env.RECEIPT_SIGNING_KEY) process.env.RECEIPT_SIGNING_KEY = Wallet.createRandom().privateKey;
 
 type Row = Record<string, any>;
 
@@ -58,9 +65,13 @@ export async function sealGateReceipt(o: SealOptions): Promise<KernelReceipt> {
   return out.final_receipt;
 }
 
-/** The row indexKernelReceiptToDb would write for this receipt, plus index-time columns. */
-export function rowFor(r: KernelReceipt, extra: Row = {}): Row {
+/**
+ * The row indexKernelReceiptToDb would write for this receipt, plus index-time columns, including the
+ * engine's DETACHED signature made with the same signer the indexer uses (null if it refuses).
+ */
+export async function rowFor(r: KernelReceipt, extra: Row = {}): Promise<Row> {
   const v = r.verification;
+  const signed = await signReceipt(r);
   return {
     receipt_id: r.header.receipt_id,
     subject_agent_id: r.subject.agent.agent_id,
@@ -71,6 +82,7 @@ export function rowFor(r: KernelReceipt, extra: Row = {}): Row {
     receipt_hash: r.header.receipt_hash,
     args_hash: r.request.args_hash,
     receipt: r,
+    engine_signature: signed.ok ? signed.signature : null,
     consumed_at: null,
     ...extra,
   };
@@ -88,5 +100,5 @@ export async function sealedRow(id: string, agentId: string, over: Row = {}, cre
     argsHash: typeof over['args_hash'] === 'string' && /^0x[0-9a-fA-F]{64}$/.test(over['args_hash']) ? over['args_hash'] : undefined,
     simulated: over['is_simulated'] === true,
   });
-  return rowFor(r, { created_at: createdAt ?? new Date(Date.now() - 60_000).toISOString(), ...over });
+  return await rowFor(r, { created_at: createdAt ?? new Date(Date.now() - 60_000).toISOString(), ...over });
 }
