@@ -38,16 +38,16 @@ describe('agent table — codex lanes', () => {
     `({AGENTS}) => Object.fromEntries(Object.entries(AGENTS).map(([k, a]) => [k, { cli: a.cli, mode: a.mode, keyVars: a.keyVars, lane: a.lane, capabilities: a.capabilities, envRequired: a.envRequired ?? [], parses: typeof a.parse === 'function' }]))`,
   );
 
-  it('registers codex as an L6 red-team lane with reasoning + repo_read only', () => {
+  it('registers codex as an L6 red-team lane with reasoning + supplied_evidence, NOT repo_read (it cannot open a file)', () => {
     expect(table.codex).toMatchObject({ cli: 'codex', mode: 'stdin', parses: true });
     expect(table.codex.lane).toMatch(/^L6 RED-TEAM — no write scope$/);
-    expect(table.codex.capabilities).toEqual(['reasoning', 'repo_read']);
+    expect(table.codex.capabilities).toEqual(['reasoning', 'supplied_evidence']);
     expect(table.codex.keyVars[0]).toBe('OPENAI_API_KEY');
   });
 
-  it('registers codex-oss as keyless, reasoning-only, and gated on CODEX_OSS_MODEL', () => {
+  it('registers codex-oss as keyless, reasoning over supplied text only, and gated on CODEX_OSS_MODEL', () => {
     expect(table['codex-oss']).toMatchObject({ cli: 'codex', mode: 'stdin', keyVars: [], parses: true });
-    expect(table['codex-oss'].capabilities).toEqual(['reasoning']);
+    expect(table['codex-oss'].capabilities).toEqual(['reasoning', 'supplied_evidence']);
     expect(table['codex-oss'].envRequired).toEqual(['CODEX_OSS_MODEL']);
   });
 

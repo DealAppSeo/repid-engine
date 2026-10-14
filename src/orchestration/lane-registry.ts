@@ -83,6 +83,16 @@ export type Capability =
   | 'chain_send'
   /** Can change infrastructure: Railway, Vercel, DNS, secrets. */
   | 'infra'
+  /**
+   * Reads code ONLY as text the harness built and quoted into its prompt; it cannot open a file.
+   *
+   * Added 2026-10-14 for the codex dispatch lane (scripts/dispatch/run-agent.mjs). A real codex
+   * dispatch said it had no file-reading tools: it reads files only through its shell, and the
+   * dispatch forbids shell. So it is NOT `repo_read`. The harness supplies the code instead
+   * (`--evidence-pack <base>...<head>`), and this names that honestly: the reviewer saw exactly
+   * the files it was given and nothing else.
+   */
+  | 'supplied_evidence'
   /** Reasoning over text supplied in the prompt. The floor — every lane has it. */
   | 'reasoning';
 

@@ -38,10 +38,18 @@ describe('dispatch runner — capability model parity with lane-registry', () =>
     const runnerCaps = m![1]!.split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
     expect(runnerCaps.length).toBeGreaterThan(0);
 
-    // The registry's own capability vocabulary, taken from the lanes themselves so
-    // this cannot drift by editing a list in two places.
-    const registryCaps = new Set(LANES.flatMap((l) => [...l.capabilities]));
-    const unknown = runnerCaps.filter((c) => !registryCaps.has(c as never) && c !== 'cross_repo_read');
+    // The registry's own capability vocabulary: the members of its `Capability` union, read from
+    // the source so this cannot drift by editing a list in two places. (Until 2026-10-14 this was
+    // the set the LANES happen to use, which made a real Capability that no LANE holds yet, like
+    // supplied_evidence, unrepresentable in the runner.)
+    const registrySrc = readFileSync(join(__dirname, '..', 'src', 'orchestration', 'lane-registry.ts'), 'utf8');
+    // Ends at the closing `'last';` (a doc comment inside the union may itself contain a `;`).
+    const union = registrySrc.match(/export type Capability =([\s\S]*?'\s*;)/);
+    expect(union).not.toBeNull();
+    const registryCaps = new Set([...union![1]!.matchAll(/\|\s*'(\w+)'/g)].map((x) => x[1]));
+    // Every capability a lane holds is in the union (non-vacuity of the parse above).
+    for (const c of LANES.flatMap((l) => [...l.capabilities])) expect(registryCaps.has(c)).toBe(true);
+    const unknown = runnerCaps.filter((c) => !registryCaps.has(c));
     expect(unknown).toEqual([]);
   });
 
