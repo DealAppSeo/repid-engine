@@ -125,19 +125,45 @@ export type SmallGainReason =
   | 'within_caps'
   | 'resolver_error'
   /** The atomic DB reservation (claim_confirmed_gain) could not run: no gain, fail closed. */
-  | 'reservation_unavailable';
+  | 'reservation_unavailable'
+  /** A domain was given, but its key is not printable ASCII after normalization: no gain. */
+  | 'domain_key_refused';
+
+/**
+ * Invisible code points that render as nothing and must not make a new key. \p{Cf} covers zero-width
+ * space/joiners, BOM, soft hyphen and bidi marks. The rest are NOT Cf, so they are listed (XC1 review of
+ * #1369): the combining grapheme joiner U+034F and the variation selectors U+FE00–FE0F and
+ * U+E0100–E01EF (category Mn), the Hangul fillers U+115F, U+1160, U+3164, U+FFA0 (category Lo), and the
+ * Mongolian free variation selectors U+180B–180F.
+ */
+const INVISIBLE = /[\p{Cf}͏︀-️\u{E0100}-\u{E01EF}ᅟᅠㅤﾠ᠋-᠏]/gu;
+
+/** Printable ASCII, no leading or trailing space. The same shape claim_confirmed_gain re-checks in SQL. */
+const ASCII_KEY = /^[\x21-\x7e]([\x20-\x7e]*[\x21-\x7e])?$/;
 
 /**
  * The per-domain budget KEY. XC1 finding 5 (2026-10-14): the key was only trimmed, so `Law`,
  * `law`, `l<ZWSP>aw` and fullwidth `ｌａｗ` were four separate per-domain budgets for one domain.
- * NFKC first (folds fullwidth and compatibility forms), then strip every Unicode format character
- * (\p{Cf}: zero-width space/joiners, BOM, soft hyphen, bidi marks), collapse whitespace, trim,
- * lower-case (locale-independent). Not a string, or nothing left → null, which earns no gain.
+ *
+ * NFKC (folds fullwidth and compatibility forms), strip INVISIBLE, collapse whitespace, trim,
+ * lower-case. Then the key must be PRINTABLE ASCII, or it is refused (null, which earns no gain).
+ *
+ * WHY ASCII-ONLY rather than a script-mixing rule (XC1 review of #1369). Cyrillic `а` in `lаw` is a
+ * new key that NFKC does not fold. A mixed-script refusal closes that one, but not a WHOLE-script
+ * look-alike (`ѕсоре` in Cyrillic beside `scope`), and a confusables skeleton (UTS #39) needs a data
+ * table this repo does not carry. ASCII-only closes every homoglyph mint with one regex. The cost is
+ * stated: a domain named in a non-Latin script, `straße` (ß survives lower-casing) or `İ` (which
+ * lower-cases to i + U+0307) earns NO confirmed small gain until a skeleton map is built. That is
+ * the fail-closed direction.
+ *
+ * ACCEPTED NFKC MERGES (one budget for two spellings, on purpose; each is a compatibility form of
+ * the same text): `ﬁle`→`file`, `m²`→`m2`, Roman `Ⅰ`→`i`, circled `Ⓐ`→`a`, Kelvin `K`→`k`. The Greek
+ * results of NFKC (ohm `Ω`→`ω`, micro `µ`→`μ`) are not ASCII, so they are refused, not merged.
  */
 export function normalizeCapDomain(domain: unknown): string | null {
   if (typeof domain !== 'string') return null;
-  const key = domain.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
-  return key === '' ? null : key;
+  const key = domain.normalize('NFKC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return ASCII_KEY.test(key) ? key : null;
 }
 
 export interface SmallGainCapResult {
@@ -382,7 +408,8 @@ export async function capSmallGain(
     // DOMAIN ISOLATION — a gain with no domain would cross domains; it earns nothing.
     const domain = normalizedDomain;
     if (domain === null) {
-      return result(0, 'no_domain_no_gain', base);
+      const given = typeof input.domain === 'string' && input.domain.normalize('NFKC').replace(INVISIBLE, '').trim() !== '';
+      return result(0, given ? 'domain_key_refused' : 'no_domain_no_gain', base);
     }
 
     // Only a positive confirmed gain is this module's business.

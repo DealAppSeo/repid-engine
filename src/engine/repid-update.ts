@@ -34,7 +34,6 @@ import {
 } from '../scoring/confirmed-outcome';
 import {
   capSmallGain,
-  normalizeCapDomain,
   smallGainCapParams,
   type SmallGainCapResult,
   type SmallGainDeps,
@@ -531,7 +530,9 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       // function absent the gain is ZERO and the error is loud (fail closed); wrongs are unaffected.
       if (moveBy > 0) {
         const bound = await capSmallGain(
-          { actorAgentId: input.agentId, domain: normalizeCapDomain(callerAssertedOutcome.domain), computedGain: moveBy },
+          // RAW domain: capSmallGain normalizes it (normalizeCapDomain) and can then tell "no domain" from
+          // "a domain whose key was refused" in the recorded reason.
+          { actorAgentId: input.agentId, domain: typeof callerAssertedOutcome.domain === 'string' ? callerAssertedOutcome.domain : null, computedGain: moveBy },
           CAP_ONLY_UNSPENT_BUDGET,
         );
         if (bound.cappedGain === 0 || bound.detail.domain === null) {
@@ -1184,8 +1185,12 @@ export async function reserveConfirmedGain(
     });
     if (error) return unavailable(String((error as { message?: unknown }).message ?? error));
     const row = (Array.isArray(data) ? data[0] : data) as ClaimGainRow | null | undefined;
-    const daySpent = Number(row?.day_spent);
-    const domainSpent = Number(row?.domain_spent);
+    // STRICT (XC1 review of #1369, residual a): Number(null) is 0, so a NULL spent would read as "nothing
+    // spent" and pass the finite check. Only a real number (or numeric string) counts as read.
+    const spentOf = (v: unknown): number =>
+      typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+    const daySpent = spentOf(row?.day_spent);
+    const domainSpent = spentOf(row?.domain_spent);
     if (!row || !Number.isFinite(daySpent) || !Number.isFinite(domainSpent)) return unavailable(`unreadable result ${JSON.stringify(data)}`);
 
     const perDayRemaining = Math.max(0, p.perDayCap - daySpent);

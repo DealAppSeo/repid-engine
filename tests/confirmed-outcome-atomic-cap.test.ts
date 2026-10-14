@@ -48,6 +48,10 @@ const st = {
   budget: new Map<string, number>(),
   rpcArgs: [] as Row[],
   rpcDown: false,
+  // the server ceiling row (confirmed_gain_cap_config); null = no row → the function RAISES
+  ceiling: { perDayCap: 1_000_000, perDomainCap: 1_000_000 } as { perDayCap: number; perDomainCap: number } | null,
+  // a canned function result, to test what the ENGINE does with a malformed one
+  rpcCanned: null as Row | null,
   sumReads: 0, // non-count reads of repid_score_events: the old stale-sum budget reader
   violations: 0,
   prosocial: 0,
@@ -63,7 +67,8 @@ jest.mock('../src/db', () => ({
   db: {
     rpc: async (fn: string, args: any) => {
       if (st.rpcDown) return { data: null, error: { code: 'PGRST202', message: 'Could not find the function public.claim_confirmed_gain' } };
-      return require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => st.receipts, st.budget, (a: Row) => st.rpcArgs.push(a))(fn, args);
+      if (st.rpcCanned) return { data: [st.rpcCanned], error: null };
+      return require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => st.receipts, st.budget, (a: Row) => st.rpcArgs.push(a), () => st.ceiling)(fn, args);
     },
     from: (table: string) => {
       if (table === 'repid_agents') {
@@ -202,6 +207,8 @@ beforeEach(() => {
   st.budget = new Map();
   st.rpcArgs = [];
   st.rpcDown = false;
+  st.ceiling = { perDayCap: 1_000_000, perDomainCap: 1_000_000 };
+  st.rpcCanned = null;
   st.sumReads = 0;
   st.violations = 0;
   st.prosocial = 0;
@@ -295,6 +302,24 @@ describe('(2) DOMAIN KEY — spelling variants share one per-domain budget', () 
     ['​‌', null],
     ['   ', null],
     [42, null],
+    // XC1 review of #1369: invisible code points that are NOT \p{Cf} are stripped too
+    ['law\uFE0F', 'law'], // variation selector 16
+    ['la\u034Fw', 'law'], // combining grapheme joiner
+    ['law\u3164', 'law'], // Hangul filler
+    ['\u115F\u1160\uFFA0', null], // only Hangul fillers → nothing left
+    // homoglyphs and other non-ASCII keys are REFUSED, not given a budget of their own
+    ['l\u0430w', null], // Cyrillic а in a Latin word
+    ['\u0455\u0441\u043E\u0440\u0435', null], // whole-script Cyrillic look-alike of "scope"
+    ['stra\u00DFe', null], // ß survives lower-casing
+    ['\u0130stanbul', null], // İ lower-cases to i + U+0307
+    ['\u2126', null], // ohm sign → Greek ω: not ASCII
+    ['\u0001law', null], // a control character
+    // accepted NFKC merges (compatibility forms of the same text), pinned so a change is deliberate
+    ['\uFB01le', 'file'],
+    ['m\u00B2', 'm2'],
+    ['\u2160', 'i'],
+    ['\u24B6', 'a'],
+    ['\u212A', 'k'], // Kelvin sign
   ])('normalizeCapDomain(%j) → %j', (raw, key) => {
     expect(normalizeCapDomain(raw)).toBe(key);
   });
@@ -307,6 +332,72 @@ describe('(2) DOMAIN KEY — spelling variants share one per-domain budget', () 
     expect((await right('v4', 'ＬＡＷ')).delta).toBe(0);
     expect(co(1)['small_gain_cap']['domain']).toBe('law');
     expect((await right('v5', 'tax')).delta).toBe(4); // the day has 12 - 8 left
+  });
+});
+
+describe('(4) XC1 review of #1369 — residuals a, b, c', () => {
+  it('(a) a `granted` result with a NULL spent is refused, not read as nothing spent', async () => {
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = receipt('r1');
+    st.rpcCanned = { outcome: 'granted', granted: 5, day_spent: null, domain_spent: null };
+    const out = await right('r1', 'law');
+    expect(out.delta).toBe(0);
+    expect(co(0)['small_gain_cap']['reason']).toBe('reservation_unavailable');
+    expect(err.mock.calls.some((c) => String(c[0]).includes('unreadable result'))).toBe(true);
+    expect(r['consumed_at']).toBeNull();
+  });
+
+  it('(a) the SQL raises instead of granting when a budget row is not readable, and checks the booking', () => {
+    const body = readFileSync(join(__dirname, '..', 'migrations', '2026-10-14-confirmed-gain-atomic-reservation.sql'), 'utf8')
+      .replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase();
+    expect(body).toContain('if not found or v_day_spent is null then raise exception');
+    expect(body).toContain('if not found or v_dom_spent is null then raise exception');
+    expect(body).toContain('get diagnostics v_booked = row_count; if v_booked <> 2 then raise exception');
+  });
+
+  it('(b) the SERVER ceiling binds even when the caller sends higher caps', async () => {
+    process.env.REPID_SMALL_GAIN_PER_DAY_CAP = '14'; // the highest the env invariants allow here (< |lossBase| 15)
+    process.env.REPID_SMALL_GAIN_PER_DOMAIN_CAP = '13';
+    __resetSmallGainCapParamsCache();
+    st.ceiling = { perDayCap: DAY_CAP, perDomainCap: DOMAIN_CAP };
+    for (let i = 0; i < 10; i++) receipt(`s${i}`, { args_hash: H(800 + i) });
+    const out = await Promise.all(Array.from({ length: 10 }, (_, i) => right(`s${i}`, `d${i}`)));
+    expect(st.rpcArgs[0]).toMatchObject({ p_day_cap: 14, p_domain_cap: 13 }); // what the caller asked for
+    expect(out.reduce((s, r) => s + r.delta, 0)).toBe(DAY_CAP); // what the server allowed
+  });
+
+  it('(b) no ceiling row → the function raises → no gain, loudly, receipt unspent', async () => {
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    st.ceiling = null;
+    const r = receipt('r1');
+    expect((await right('r1', 'law')).delta).toBe(0);
+    expect(r['consumed_at']).toBeNull();
+    expect(err.mock.calls.some((c) => String(c[0]).includes('confirmed_gain_cap_config has no row'))).toBe(true);
+  });
+
+  it('(b) the migration carries no cap magnitude: the ceiling INSERT exists only as a comment', () => {
+    const sql = readFileSync(join(__dirname, '..', 'migrations', '2026-10-14-confirmed-gain-atomic-reservation.sql'), 'utf8');
+    const live = sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join('\n').toLowerCase();
+    expect(live).toContain('create table if not exists public.confirmed_gain_cap_config');
+    expect(live).toContain('v_day_cap := least(p_day_cap, v_day_cap)');
+    expect(live).not.toContain('insert into public.confirmed_gain_cap_config');
+    expect(sql).toMatch(/^-- INSERT INTO public\.confirmed_gain_cap_config \(per_day_cap, per_domain_cap\) VALUES \(<per-day>, <per-domain>\);/m);
+  });
+
+  it('(c) a Cyrillic look-alike domain earns nothing, is recorded as refused, and never reaches the function', async () => {
+    const r = receipt('r1');
+    expect((await right('r1', 'l\u0430w')).delta).toBe(0);
+    expect(co(0)['small_gain_cap']['reason']).toBe('domain_key_refused');
+    expect(st.rpcArgs).toHaveLength(0);
+    expect(r['consumed_at']).toBeNull();
+  });
+
+  it('(c) the function model refuses a key that is not normalized printable ASCII, as the SQL does', () => {
+    const { fakeClaimConfirmedGain } = require('./helpers/fake-claim-confirmed-gain');
+    const args = { p_receipt_id: 'x', p_agent_id: AGENT, p_gain: 5, p_day_cap: 12, p_domain_cap: 8 };
+    for (const d of ['l\u0430w', 'Law', ' law', 'law ']) {
+      expect(fakeClaimConfirmedGain([], new Map(), { ...args, p_domain: d }).outcome).toBe('invalid_input');
+    }
   });
 });
 
