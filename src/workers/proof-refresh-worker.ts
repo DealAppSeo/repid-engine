@@ -89,6 +89,13 @@ export function readConfig(): RefreshConfig {
  * plonky3_range_check with proof bytes), stale past `maxAgeDays`, and no proof-queue job for the
  * agent inside the dedupe window. The latest score event rides along so the decision below can
  * bind the job to it. LIMIT is the bound; `decide` enforces it again.
+ *
+ * Rows the job could never bind (no score event, or the latest event's `repid_after` is not
+ * `current_repid`) are excluded HERE, before the LIMIT, not only skipped in `decide`. They are
+ * never refreshed, so they stay the oldest forever: filtered after the LIMIT they took a slot on
+ * every tick, and once 25 of them existed the worker would refresh nobody while reporting a full
+ * page of candidates. MEASURED 2026-10-14, read-only on production: the first page held 5 of them
+ * (none of the core 12). `decide` keeps both checks as a backstop.
  */
 export const SELECT_CANDIDATES_SQL = `
 SELECT a.id AS agent_id, a.agent_name, a.current_repid,
@@ -110,6 +117,8 @@ SELECT a.id AS agent_id, a.agent_name, a.current_repid,
      LIMIT 1
   ) e ON true
  WHERE p.last_proof_at < now() - make_interval(secs => $1)
+   AND e.id IS NOT NULL
+   AND e.repid_after = a.current_repid
    AND NOT EXISTS (
      SELECT 1 FROM repid_proof_queue q
       WHERE q.agent_id = a.id

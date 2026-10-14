@@ -147,6 +147,14 @@ describe('selection logic', () => {
     expect(SELECT_CANDIDATES_SQL).toMatch(/NOT EXISTS[\s\S]*repid_proof_queue/);
   });
 
+  it('rows the job can never bind are excluded BEFORE the LIMIT, so they cannot starve the bound', () => {
+    // Skipped only in decide(), an unbindable agent is never refreshed, stays the oldest, and takes a
+    // LIMIT slot on every tick; 25 of them and the worker refreshes nobody. Measured: 5 on page one.
+    const where = SELECT_CANDIDATES_SQL.slice(SELECT_CANDIDATES_SQL.lastIndexOf('\n WHERE '), SELECT_CANDIDATES_SQL.indexOf('ORDER BY p.last_proof_at'));
+    expect(where).toMatch(/e\.id IS NOT NULL/);
+    expect(where).toMatch(/e\.repid_after = a\.current_repid/);
+  });
+
   it('passes maxAgeDays, maxAgents and the dedupe window as bound parameters', async () => {
     process.env.PROOF_REFRESH_ENABLED = 'true';
     const { deps } = makeDeps([]);
