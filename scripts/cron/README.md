@@ -28,10 +28,14 @@ add a cron service on the `repid-engine` project (or a schedule on a lightweight
 
 Requires (all already set on repid-engine): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (or
 `SUPABASE_SECRET_KEY`), `BASE_SEPOLIA_PRIVATE_KEY` (funded), and the server flags `X402_REAL_RPC=true`
-+ `X402_ENFORCEMENT_ENABLED=true`. Optional: `ENGINE_BASE_URL`, `BASE_SEPOLIA_RPC`, `MINT_BUYER_AGENT`.
++ `X402_ENFORCEMENT_ENABLED=true`. Optional: `ENGINE_BASE_URL`, `BASE_SEPOLIA_RPC`, `MINT_BUYER_AGENT`,
+`MINT_FRESHNESS_TARGET_DAYS` (default 4), `MINT_MAX_PROVIDERS_PER_RUN` (default 4).
 
 The minter rotates across eligible providers (least-recently-attested first), so the on-chain proof
-spreads across the roster instead of hammering one agent.
+spreads across the roster instead of hammering one agent. **It attests ceil(eligible / 4) providers per
+run, not one** (`rotation.mjs`). One per run was an 11-day cycle for 11 providers, and trustshell's
+acceptance gate fails a served proof older than 7 days, so its probe agent read stale ~4 days in 11
+[MEASURED 2026-10-14].
 
 ## Config-as-code (schedule lives in git)
 `railway.cron.json` (repo root) defines the cron service: start command

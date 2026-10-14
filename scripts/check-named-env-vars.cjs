@@ -195,6 +195,7 @@ const ALLOWLIST = {
   WARN_ONLY: 'scripts/verify suite demotion list; generator scans src/.',
   FLOOR_PEAK_RATIO: 'scripts/verify/checks/repid-floor.ts only; generator scans src/.',
   ENGINE_BASE_URL: 'scripts/cron + demos; generator scans src/.',
+  MINT_FRESHNESS_TARGET_DAYS: 'scripts/cron/mint-attestation.mjs (rotation sizing, rotation.mjs); generator scans src/.',
   BASE_SEPOLIA_PRIVATE_KEY: 'scripts/ on-chain operators; generator scans src/.',
   ERC8004_REPUTATION_CHAIN_ID: 'scripts/erc8004-reputation-*; generator scans src/.',
   ERC8004_REPUTATION_WRITER_KEY: 'scripts/erc8004-reputation-*; generator scans src/.',

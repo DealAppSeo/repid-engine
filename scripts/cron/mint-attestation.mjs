@@ -5,7 +5,8 @@
  * One self-contained cycle that produces a FRESH, independently-verifiable on-chain
  * ERC-8004 reputation attestation on Base Sepolia, end to end and for real:
  *
- *   1. pick an eligible provider (repid >= 1000, minted erc8004 token, has a wallet)
+ *   1. pick the stalest eligible providers (repid >= 1000, minted erc8004 token, has a wallet),
+ *      enough per run to renew each within MINT_FRESHNESS_TARGET_DAYS (rotation.mjs); steps 2-5 run per provider
  *   2. mint EPHEMERAL buyer + provider agent keys (service-role) — revoked in finally
  *   3. buyer buys the provider's verification service: create -> escrow (real x402 USDC)
  *      -> deliver (registered handler / cascade) -> satisfy -> settled
@@ -25,12 +26,15 @@
  *   ENGINE_BASE_URL            — default https://repid-engine-production.up.railway.app
  *   BASE_SEPOLIA_RPC(_URL)     — default https://sepolia.base.org
  *   MINT_BUYER_AGENT           — buyer agent name (default trinity-nexus; must not be the provider)
+ *   MINT_FRESHNESS_TARGET_DAYS — renew every provider at least this often (default 4)
+ *   MINT_MAX_PROVIDERS_PER_RUN — cost ceiling: providers attested per run (default 4)
  *
  * Schedule (Railway cron, recommended — server-side, has all the env above):
  *   node scripts/cron/mint-attestation.mjs        # once per run; set a daily cron
  *
  * The server must have X402_REAL_RPC=true + X402_ENFORCEMENT_ENABLED=true for a real
- * settlement (already set). Cost: ~0.05-0.1 test-USDC per run from the buyer wallet.
+ * settlement (already set). Cost: ~0.05-0.1 test-USDC per PROVIDER from the buyer wallet (3 per run
+ * at 11 eligible providers and the 4-day default).
  */
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
@@ -42,6 +46,7 @@ import {
   ACCEPTANCE_CRITERIA,
   CLAIM_TEXT,
 } from './rate-deliverable.mjs';
+import { pickStalest, providersPerRun } from './rotation.mjs';
 
 const BASE = (process.env.ENGINE_BASE_URL || 'https://repid-engine-production.up.railway.app').replace(/\/+$/, '');
 const RPC = process.env.BASE_SEPOLIA_RPC || process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
@@ -49,6 +54,11 @@ const USDC = '0x036cbd53842c5426634e7929541ec2318f3dcf7e';
 const CHAIN = 84532;
 const REG = '0x8004b663056a597dffe9eccc1965a193b7388713'; // ERC-8004 ReputationRegistry
 const BUYER_NAME = process.env.MINT_BUYER_AGENT || 'trinity-nexus';
+// Every eligible provider should get a fresh write at least this often. trustshell's acceptance gate
+// fails a served proof older than 7 days; 4 leaves a missed run or two of slack.
+const TARGET_DAYS = Number(process.env.MINT_FRESHNESS_TARGET_DAYS || 4);
+// Cost ceiling per run (each provider is one real test-USDC escrow + one on-chain write).
+const MAX_PER_RUN = Number(process.env.MINT_MAX_PROVIDERS_PER_RUN || 4);
 
 const url = process.env.SUPABASE_URL;
 const svcKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
@@ -116,14 +126,32 @@ async function main() {
     .map((s) => ({ svc: s, prov: provById.get(s.provider_agent_id) }))
     .filter((x) => x.prov && x.prov.current_repid >= 1000 && x.prov.erc8004_token_id && x.prov.wallet_address && x.prov.id !== buyer.id);
   if (!eligible.length) die('no eligible verification provider (repid>=1000 + minted + wallet)');
-  // rotate: pick the provider whose last on-chain write is oldest, to spread across the roster.
+  // rotate: the providers whose last on-chain write is oldest, as many per run as keep every one
+  // renewed within TARGET_DAYS. One per run was an 11-day cycle against a 7-day freshness gate
+  // (rotation.mjs has the measurement).
   const provIds = [...new Set(eligible.map((e) => e.prov.id))];
   const { data: lastWrites } = await supa.from('erc8004_reputation_writes').select('agent_id, created_at').in('agent_id', provIds).order('created_at', { ascending: false });
   const lastByAgent = new Map();
   for (const w of lastWrites || []) if (!lastByAgent.has(w.agent_id)) lastByAgent.set(w.agent_id, w.created_at);
-  eligible.sort((a, b) => (lastByAgent.get(a.prov.id) || '').localeCompare(lastByAgent.get(b.prov.id) || ''));
-  const svc = eligible[0].svc;
-  const prov = eligible[0].prov;
+  const picks = pickStalest(eligible, lastByAgent, providersPerRun(provIds.length, TARGET_DAYS, MAX_PER_RUN));
+  console.log(`[mint-attestation] ${provIds.length} eligible providers, freshness target ${TARGET_DAYS}d -> attesting ${picks.length} this run`);
+
+  // Sequential, and one provider failing does not skip the rest: each cycle revokes its own keys.
+  let failed = 0;
+  for (const { svc, prov } of picks) {
+    try {
+      await attestOne(buyer, svc, prov);
+    } catch (e) {
+      failed++;
+      console.error(`[mint-attestation] FAIL provider=${prov.agent_name}: ${e?.message ?? e}`);
+    }
+  }
+  if (failed) die(`${failed} of ${picks.length} providers did not produce a verified write`);
+  process.exitCode = 0;
+}
+
+/** One full cycle for one provider: create -> escrow -> deliver -> satisfy -> settled -> verified write. */
+async function attestOne(buyer, svc, prov) {
   console.log(`[mint-attestation] buyer=${buyer.agent_name} provider=${prov.agent_name} (repid ${prov.current_repid}, token ${prov.erc8004_token_id}) price=${Number(svc.base_price_usdc_raw) / 1e6} USDC`);
 
   const keys = [];
@@ -285,7 +313,6 @@ async function main() {
     if (!ok) throw new Error('on-chain verify failed for ' + write.tx_hash + ' (status ' + (rcpt?.status) + ', to ' + rcpt?.to + ')');
     console.log(`[mint-attestation] VERIFIED ✓ provider=${prov.agent_name} repid=${write.repid_value} block=${rcpt.blockNumber}`);
     console.log(`[mint-attestation] https://sepolia.basescan.org/tx/${write.tx_hash}`);
-    process.exitCode = 0;
   } finally {
     if (keys.length) {
       const { error } = await supa.from('agent_api_keys').update({ revoked_at: new Date().toISOString() }).in('id', keys);
