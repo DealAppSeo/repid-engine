@@ -46,7 +46,7 @@ specific past mistake recurring. Answer from `BUILDERS.md`; if it does not cover
 question, that is a gap in `BUILDERS.md` to fix.
 
 [`LESSONS.md`](LESSONS.md) at the repo root holds the operating rules every agent on this
-system works under. It is **injected verbatim** into every XC/GA dispatch by
+system works under. It is **injected verbatim** into every XC/GA/Codex dispatch by
 `scripts/dispatch/run-agent.mjs`, and it is the one place a lesson is durable across
 *all* of them.
 

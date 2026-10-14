@@ -6,6 +6,10 @@ Workflow: `.github/workflows/dispatch-agent-cloud.yml`. Sibling to
 "test with workflow_dispatch before trusting it" discipline. Design this
 implements: `docs/AGENT-DISPATCH-ENGINE-DESIGN.md`, rollout step 3.
 
+Lanes `codex` / `codex-oss` (OpenAI Codex CLI, added 2026-10-14) run **locally only** via
+`run-agent.mjs --agent codex`; they are not wired into this workflow. The lane list is in
+`run-agent.mjs`'s header.
+
 ## Why
 
 XC and GA were never actually unreachable by GitHub — they were never reachable
