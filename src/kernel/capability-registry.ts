@@ -63,11 +63,16 @@ export type ProhibitedCapability = 'secret_export' | 'trusted_memory_write';
  */
 function normalizeForScreen(raw: unknown): string {
   const s = typeof raw === 'string' ? raw : '';
-  return s
-    .normalize('NFKC')
-    .replace(/[​-‍﻿­]/g, '') // zero-width space/joiner/BOM, soft hyphen → removed
-    .replace(/\s+/g, '_') // any whitespace (NBSP folds to space under NFKC) → separator
-    .toLowerCase();
+  // Case is still intact here so camelCase can be split. `exportAllSecrets` becomes
+  // `export_all_secrets` before the separator patterns run. Matching only — never stored.
+  const folded = s.normalize('NFKC').replace(/[​-‍﻿­]/g, ''); // zero-width space/joiner/BOM, soft hyphen
+  const split = folded.replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2');
+  return split.replace(/\s+/g, '_').toLowerCase(); // NBSP folds to space under NFKC
+}
+
+/** Separators removed, so `exportallsecrets` and `secrets_export` share one compact form. */
+function squeezeForScreen(normalized: string): string {
+  return normalized.replace(/[._/:-]/g, '');
 }
 
 const SEP = '[._/:-]';
@@ -79,10 +84,14 @@ const TRUSTED_MEM = '(?:trusted|canonical|root|verified)';
 // verb-then-secret: export/leak/send … the secret (from #1347). No trailing \b — the prohibition is a
 // FLOOR, so a verb immediately followed by more (`export_all`, `api_keys_now`) must still match; a strict
 // word boundary there is exactly how `secrets.export_all` slipped. Over-matching only ever refuses more.
+const SECRET_VERB =
+  '(?:export|exfiltrate|exfil|reveal|dump|leak|disclose|send|post|upload|share|print|get|read|fetch|retrieve|load|copy|cat|show|list)';
 const SECRET_EXPORT = new RegExp(
-  `(?:^|${SEP})(?:export|exfiltrate|reveal|dump|leak|disclose|send|post|upload|share|print)${SEP}?(?:the${SEP}?)?${SECRET_NOUN}`,
+  `(?:^|${SEP})(?:export|exfiltrate|exfil|reveal|dump|leak|disclose|send|post|upload|share|print)${SEP}?(?:the${SEP}?)?${SECRET_NOUN}`,
   'i',
 );
+// Verb, then one or more tokens, then the noun: `export_all_secrets` after camelCase splitting.
+const SECRET_EXPORT_INFIX = new RegExp(`(?:^|${SEP})${SECRET_VERB}(?:${SEP}[a-z0-9]+)+${SEP}?${SECRET_NOUN}`, 'i');
 // verb-then-secret for READ-ish verbs: get_secret, read_private_key, fetch_token (NEW — XC1's list).
 const SECRET_READ = new RegExp(
   `(?:^|${SEP})(?:get|read|fetch|retrieve|load|copy|cat|show|list)${SEP}?(?:the${SEP}?)?${SECRET_NOUN}`,
@@ -110,17 +119,47 @@ const WRITE_TRUSTED_MEMORY = new RegExp(
 );
 
 /**
+ * Separator-free form. CamelCase splitting does nothing to `exportallsecrets`. The noun and the verb
+ * have to be present as whole stems, in either order. Short stems (`env`, `token`) stay on the
+ * separator patterns above so they do not fire inside a longer benign word.
+ */
+function compactSecretExport(squeezed: string): boolean {
+  const verb =
+    '(?:export|exfiltrate|exfil|reveal|dump|leak|disclose|upload|share|print|get|read|fetch|retrieve|load|copy|cat|show|list|send)';
+  const noun = '(?:secrets|secret|credentials|credential|privatekey|privkey|apikey|apikeys|keyring|keystore|mnemonic|seedphrase|dotenv)';
+  const namespace = '(?:secrets|secret|credentials|credential|keyring|keystore|vault|dotenv)';
+  const namespaceVerb =
+    '(?:export|exfiltrate|exfil|reveal|dump|leak|disclose|upload|share|print|get|read|fetch|retrieve|load|copy|show|list|all|send)';
+  return new RegExp(`${verb}(?:all|the)?${noun}`, 'i').test(squeezed) || new RegExp(`${namespace}${namespaceVerb}`, 'i').test(squeezed);
+}
+
+/**
  * Classify a KERNEL-OWNED capability id as a hard-prohibited capability, or null. PURE. Applied to the
  * registry entry's capability — never to a caller-asserted tool name (that is the lie #1347 fell for).
  */
 export function classifyProhibitedCapability(capabilityId: unknown): ProhibitedCapability | null {
   const n = normalizeForScreen(capabilityId);
   if (n === '') return null;
-  if (SECRET_EXPORT.test(n) || SECRET_READ.test(n) || SECRET_NAMESPACE.test(n)) return 'secret_export';
+  if (
+    SECRET_EXPORT.test(n) ||
+    SECRET_READ.test(n) ||
+    SECRET_NAMESPACE.test(n) ||
+    SECRET_EXPORT_INFIX.test(n) ||
+    compactSecretExport(squeezeForScreen(n))
+  ) {
+    return 'secret_export';
+  }
   if (TRUSTED_MEMORY_WRITE.test(n) || MEMORY_WRITE_TRUSTED.test(n) || WRITE_TRUSTED_MEMORY.test(n)) {
     return 'trusted_memory_write';
   }
   return null;
+}
+
+/** Boot and per-decision signal that the flag is on and the registry has nothing in it. */
+export function logCapabilityRegistryEmpty(site: 'boot' | 'decision'): void {
+  console.error(
+    `[kernel] LOUD capability registry is empty at ${site}. KERNEL_CAPABILITY_REGISTRY_ENABLED is on and no implementation is registered; decisions DENY with registry_empty.`,
+  );
 }
 
 // ── the registry ─────────────────────────────────────────────────────────────────────────────────────
@@ -231,7 +270,8 @@ export type CapabilityReasonCode =
   | 'unregistered_tool'
   | 'impl_reference_mismatch'
   | 'impl_unauthorized'
-  | 'prohibited_capability';
+  | 'prohibited_capability'
+  | 'registry_empty';
 
 export interface CapabilityScreen {
   outcome: CapabilityOutcome;
@@ -261,6 +301,11 @@ export function screenCapability(
   registry: ReadonlyCapabilityRegistry,
   authorizedImplIds: ReadonlySet<string>,
 ): CapabilityScreen {
+  // An empty boot registry is not "this one tool is unregistered". Every name would fail that way,
+  // including the deliberate exceptions, and the operator would not see why.
+  if (registry.size === 0) {
+    return fail('registry_empty', 'the capability registry is empty; enforcement is on and nothing is registered');
+  }
   const ref = typeof query?.implRef === 'string' ? query.implRef.trim() : '';
   if (ref === '') {
     return fail('unregistered_tool', 'no registered implementation was referenced; fail closed');

@@ -87,7 +87,8 @@ export type ReasonCode =
   | 'impl_unauthorized'
   | 'prohibited_capability'
   | 'impl_reference_mismatch'
-  | 'capability_not_checked';
+  | 'capability_not_checked'
+  | 'registry_empty';
 
 export interface Reason {
   code: ReasonCode;
@@ -503,7 +504,7 @@ export interface GateResult<T> {
   outcome_unrecorded: boolean;
   /** Present only when the tool ran and returned. */
   result?: T;
-  /** Present only when the tool ran and threw: the error's class name, never its message. */
+  /** Present when the tool threw, or returned an opaque value that was withheld. Class name only, never the message or the value. */
   tool_error?: string;
 }
 

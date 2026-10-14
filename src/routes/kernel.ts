@@ -33,7 +33,7 @@ import { ownerEvidenceFromRoot, parseSignedPolicy, policyHash, verifyOwnerPolicy
 import { PolicyNonceError, StoreLedger, createJsonlStore } from '../kernel/store';
 import { indexKernelReceiptToDb } from '../kernel/receipt-db-index';
 import type { GateDeps, KernelReceipt, OwnerResolver } from '../kernel/types';
-import { createCapabilityRegistry, type CapabilityRegistry } from '../kernel/capability-registry';
+import { createCapabilityRegistry, logCapabilityRegistryEmpty, type CapabilityRegistry } from '../kernel/capability-registry';
 import { toSixClaimStatement, type InTotoStatement } from '../kernel/six-claims';
 
 export type KernelRouteDeps = Pick<GateDeps, 'ledger' | 'resolveOwner'> & Partial<Omit<GateDeps, 'ledger' | 'resolveOwner'>>;
@@ -71,10 +71,11 @@ function kernelHalEnabled(): boolean {
  *
  * DEFAULT OFF, and off is byte-identical to today: `capabilityRegistry` is simply NOT set, so the
  * gate records no `capability` check and the receipt is unchanged. ON wires the kernel's boot
- * registry; until Draft 3 registers the real implementations that registry is EMPTY, so arming the
- * flag DENIES every read/other tool call (fail closed) rather than authorizing anything. Flipping it
- * is a decision for whoever owns production (Sean). Read as a literal `process.env['NAME']` so the
- * env-registry scan (known-env-vars.generated.ts) picks it up.
+ * registry. No production implementation is registered in this process: arming the flag on an empty
+ * registry DENIES with `registry_empty` and logs LOUD at boot and on each decision, rather than
+ * looking like every tool is individually unregistered. Flipping the flag is a decision for whoever
+ * owns production (Sean). Read as a literal `process.env['NAME']` so the env-registry scan
+ * (known-env-vars.generated.ts) picks it up.
  */
 function kernelCapabilityRegistryEnabled(): boolean {
   return (process.env['KERNEL_CAPABILITY_REGISTRY_ENABLED'] ?? '').trim().toLowerCase() === 'true';
@@ -82,11 +83,14 @@ function kernelCapabilityRegistryEnabled(): boolean {
 
 /**
  * The kernel's boot capability registry — a module-scoped singleton so one process shares one
- * registry. Registration is boot-only and lands here in Draft 3; until then it is empty.
+ * registry. Nothing in src/ registers an implementation: the real tools are not in this process.
+ * Draft 4 does not invent stubs. An empty registry under the flag is a loud `registry_empty`.
  */
 let CAP_REGISTRY: CapabilityRegistry | null = null;
 function kernelCapabilityRegistry(): CapabilityRegistry {
-  return (CAP_REGISTRY ??= createCapabilityRegistry());
+  CAP_REGISTRY ??= createCapabilityRegistry();
+  if (CAP_REGISTRY.size === 0) logCapabilityRegistryEmpty('boot');
+  return CAP_REGISTRY;
 }
 
 /**
@@ -113,7 +117,7 @@ export function defaultDeps(): KernelRouteDeps {
     // Flag ON ⇒ the real HAL adapter is consulted for a post. See kernelHalEnabled() above.
     ...(kernelHalEnabled() ? { halCheck: makeKernelHalCheck() } : {}),
     // Flag OFF ⇒ key absent ⇒ no `capability` check, receipt byte-unchanged.
-    // Flag ON ⇒ the kernel capability registry governs read/other tool calls (fail-closed).
+    // Flag ON ⇒ the kernel capability registry governs every class (fail-closed). Empty ⇒ registry_empty.
     ...(kernelCapabilityRegistryEnabled() ? { capabilityRegistry: kernelCapabilityRegistry() } : {}),
   };
 }

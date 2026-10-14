@@ -196,6 +196,14 @@ export const REQUIRED_CHECKS: Readonly<Record<ToolClass, readonly string[]>> = {
   post: [...COMMON_CHECKS, 'hal_verdict'],
 };
 
+/**
+ * Present on a decision only when the capability registry is wired (flag ON). Receipt validation
+ * treats an ALLOW that carries this check and lacks a PASS `capability` row as invalid. Flag-OFF
+ * decisions omit it, so their bytes stay identical to the frozen golden. It is not in
+ * `REQUIRED_CHECKS`: adding it there would force the row onto OFF receipts.
+ */
+export const CAPABILITY_ENFORCED_CHECK = 'capability_enforced';
+
 /** Standing statements about what no kernel decision establishes in the MVP. */
 export const CUMULATIVE_TOTAL_NOTE = 'cumulative_total (no atomic reservation)';
 /**
@@ -454,6 +462,10 @@ export function decide(input: DecideInput): DecisionLeg {
   // (resolve + authorize + prohibit by the owner-signed binding) and that call-site reference-equality
   // together close the closure swap.
   const cap = input.capability;
+  const enforcementOn = !!cap && (cap.state === 'enforced' || cap.state === 'not_checked');
+  // Marker first, then the outcome row. Stripping the outcome row leaves the marker, and
+  // validateReceipt then refuses the ALLOW. OFF (not_enforced / absent) records neither.
+  if (enforcementOn) record(CAPABILITY_ENFORCED_CHECK, 'PASS', 'kernel/capability-registry');
   if (cap && cap.state === 'enforced') {
     if (cap.decision.outcome === 'PASS') {
       record('capability', 'PASS', 'kernel/capability-registry');
@@ -473,13 +485,12 @@ export function decide(input: DecideInput): DecisionLeg {
   // 7. the verdict: starts at DENY, ALLOW has to be earned ---------------------------------------
   const anyFail = checks.some((c) => c.outcome === 'FAIL');
   const anyNotChecked = checks.some((c) => c.outcome === 'NOT_CHECKED');
-  // Under enforcement the capability check is REQUIRED for a tool call (XC1 #7c): an ALLOW read/other
-  // must rest on a PASS capability row, so a missing or non-PASS one cannot earn an ALLOW. OFF
-  // (not_enforced / absent): the row is never recorded and never required, so OFF receipts stay
-  // byte-unchanged. The STATIC REQUIRED_CHECKS table and receipt.ts are deliberately NOT changed —
-  // that would force a capability row onto OFF receipts too; decide() is the sole verdict producer,
-  // and receipt.ts rule 4 (an ALLOW rests only on PASS checks) already rejects a present non-PASS one.
-  const capabilityRequired = input.capability?.state === 'enforced' && (cls === 'read' || cls === 'other');
+  // Under enforcement the capability check is REQUIRED for every class (Draft 4). Spend and post keep
+  // their own gates as well. OFF (not_enforced / absent): the row is never recorded and never required,
+  // so OFF receipts stay byte-unchanged. The static REQUIRED_CHECKS table stays without `capability` —
+  // adding it there would force the row onto OFF receipts. The enforcement marker above is what lets
+  // receipt.ts tell an enforced ALLOW from a shadow one without a schema change.
+  const capabilityRequired = input.capability?.state === 'enforced';
   const required: readonly string[] = classKnown
     ? capabilityRequired
       ? [...REQUIRED_CHECKS[cls], 'capability']

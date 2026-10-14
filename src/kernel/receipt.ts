@@ -19,7 +19,7 @@
  */
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { canonicalJson } from '../services/owner-authorization';
-import { CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, parseAmountRaw } from './decide';
+import { CAPABILITY_ENFORCED_CHECK, CUMULATIVE_TOTAL_NOTE, REQUIRED_CHECKS, TOTAL_CAP_SCOPE_NOTE, parseAmountRaw } from './decide';
 import type {
   ChainTip,
   DecisionLeg,
@@ -432,6 +432,14 @@ export function validateReceipt(receipt: unknown, ctx: ValidateContext = {}): Re
     }
     for (const name of REQUIRED_CHECKS[r.request.tool.class]) {
       if (d.checks.find((c) => c.name === name)?.outcome !== 'PASS') add('allow_missing_required_check', `decision.checks.${name}`, 'ALLOW without a passing required check');
+    }
+    // Draft 4. The marker is recorded only when enforcement is on. An ALLOW that still carries it
+    // must also carry a PASS capability row. Flag-OFF receipts have neither, and still validate.
+    // Removing the marker as well, then resealing, produces a different hash that claims enforcement
+    // was off. The original hash no longer matches.
+    const enforced = d.checks.some((c) => c.name === CAPABILITY_ENFORCED_CHECK);
+    if (enforced && d.checks.find((c) => c.name === 'capability')?.outcome !== 'PASS') {
+      add('allow_missing_required_check', 'decision.checks.capability', 'an enforced ALLOW must rest on a PASS capability check');
     }
   } else if (d.reasons.length === 0) {
     add('refusal_without_reason', 'decision.reasons', 'a DENY or NOT_CHECKED must say why');
