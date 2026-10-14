@@ -283,8 +283,9 @@ export const openApiSpec = {
       post: {
         tags: ["Bounties"],
         summary: "Post a new bounty",
+        security: [{ bearerAuth: [] }],
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/Bounty" } } } },
-        responses: { "201": { description: "Bounty created" } }
+        responses: { "201": { description: "Bounty created" }, "401": { description: "API key required" }, "403": { description: "Invalid API key" } }
       }
     },
     "/bounties/{id}": {
@@ -299,8 +300,9 @@ export const openApiSpec = {
       post: {
         tags: ["Bounties"],
         summary: "Claim a bounty",
+        security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        responses: { "200": { description: "Claimed" } }
+        responses: { "200": { description: "Claimed" }, "401": { description: "API key required" }, "403": { description: "Invalid API key, or agentId is not the key's agent" } }
       }
     },
     "/api/v1/audit/verify": {

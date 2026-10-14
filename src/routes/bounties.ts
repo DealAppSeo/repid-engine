@@ -4,6 +4,7 @@ import { updateRepId } from '../engine/repid-update';
 import { authorizeBountyVerification } from '../services/bounty-authorization';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
+import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
@@ -53,8 +54,15 @@ router.get('/bounties/:id', async (req: Request, res: Response) => {
   return res.json(data);
 });
 
+// WRITES REQUIRE AN API KEY. This router is mounted at '/', ahead of the global
+// `app.use(authMiddleware)` in src/index.ts, so before this change POST /bounties,
+// /claim and /complete accepted anyone. Each write now runs authMiddleware itself: no key
+// -> 401, invalid key -> 403, and for an agent-bound key its f2-authz check rejects a body
+// `agentId` naming a different agent. /verify keeps its own stricter scope check below.
+// GET routes stay public.
+
 // POST /bounties — post a new bounty
-router.post('/bounties', async (req: Request, res: Response) => {
+router.post('/bounties', authMiddleware, async (req: Request, res: Response) => {
   const { title, description, bountyRepid, bountyUsdc, repo,
           acceptanceCriteria, postedByAgentId } = req.body ?? {};
   if (!title || !description)
@@ -66,14 +74,15 @@ router.post('/bounties', async (req: Request, res: Response) => {
     bounty_usdc: bountyUsdc ?? 0,
     repo,
     acceptance_criteria: acceptanceCriteria,
-    posted_by_agent_id: postedByAgentId ?? null,
+    // An agent-bound key posts as itself; the body field is only honoured for operator keys.
+    posted_by_agent_id: (req as any).agent_id ?? postedByAgentId ?? null,
   }).select('id').single();
   if (error || !data) return res.status(500).json({ error: error?.message });
   return res.status(201).json({ bountyId: data.id });
 });
 
 // POST /bounties/:id/claim — claim a bounty
-router.post('/bounties/:id/claim', async (req: Request, res: Response) => {
+router.post('/bounties/:id/claim', authMiddleware, async (req: Request, res: Response) => {
   const { agentId } = req.body ?? {};
   if (!agentId) return res.status(400).json({ error: 'agentId required' });
   const { data: bounty } = await db.from('repid_bounties')
@@ -90,7 +99,7 @@ router.post('/bounties/:id/claim', async (req: Request, res: Response) => {
 });
 
 // POST /bounties/:id/complete — submit completion proof
-router.post('/bounties/:id/complete', async (req: Request, res: Response) => {
+router.post('/bounties/:id/complete', authMiddleware, async (req: Request, res: Response) => {
   const { agentId, zkpProof } = req.body ?? {};
   if (!agentId) return res.status(400).json({ error: 'agentId required' });
   await db.from('repid_bounties').update({
