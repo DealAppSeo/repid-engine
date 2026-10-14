@@ -134,7 +134,7 @@ export async function recordAlerts(
           o.threshold,
           JSON.stringify({ population_n: o.population_n }),
         ],
-        { label: `inflation-alert-insert` },
+        { label: `inflation-alert-insert`, idempotent: true }, // ON CONFLICT DO NOTHING
       );
     } catch (err) {
       console.error(`[repid-inflation] failed to insert alert for ${o.agent_id}:`, err);

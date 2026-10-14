@@ -135,7 +135,7 @@ export async function handleHitlCallback(req: Request, res: Response): Promise<v
              WHERE id::text = $1 AND status='pending'
              RETURNING id::text AS id`,
             [matches[0].id],
-            { label: 'v16-click-expired' },
+            { label: 'v16-click-expired', idempotent: true },
           );
           if (marked.length > 1) {
             console.error(`[HitlCallbackHandler] expected at most 1 expired row, got ${marked.length}`);

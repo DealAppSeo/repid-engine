@@ -184,7 +184,8 @@ async function setProviderHealth(providerName: string, verified: boolean): Promi
     if (rows.length > 0) {
       await pgQuery(
         'UPDATE provider_trust_scores SET verified = $2, last_updated = NOW() WHERE provider_name = $1',
-        [mappedName, verified]
+        [mappedName, verified],
+        { idempotent: true } // set-to-value
       );
     } else {
       await pgQuery(

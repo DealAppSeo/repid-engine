@@ -54,7 +54,7 @@ export async function pollOnce(): Promise<void> {
        )
        RETURNING id::text AS id`,
       [BATCH_LIMIT],
-      { label: 'hitl-expiry-sweep' },
+      { label: 'hitl-expiry-sweep', idempotent: true } // re-expiring an expired row is a no-op,
     );
     if (expired.length > 0) {
       console.log(`[HitlExpirySweeper] expired ${expired.length} request(s)`);

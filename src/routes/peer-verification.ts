@@ -7,7 +7,10 @@ import {
   resolvePanel,
   closeNoMajorityPanel,
   applyPanelScoreEvents,
-  PanelScoreError,
+  newPanelCloseToken,
+  closePanelWithToken,
+  panelScoreEventsWritten,
+  reopenOwnPanelClose,
   PANEL_PROVIDER_HINTS,
 } from '../services/peer-verify-consensus';
 import crypto from 'crypto';
@@ -255,7 +258,7 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
           signature,
           verifier_response_id,
         ],
-        { label: 'panel-insert-vote' }
+        { label: 'panel-insert-vote', idempotent: true } // ON CONFLICT DO NOTHING; vote_accepted is cosmetic
       );
       const voteAccepted = inserted.length > 0;
 
@@ -290,23 +293,14 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
         });
       }
 
-      // Consensus reached. Atomically close the queue row so exactly one request performs the
-      // scoring (idempotent finalization). The assigned-ballot lookup has ALREADY succeeded above
-      // (it throws -> 500 with the row untouched); nothing below reads it again. XC1 round 2: the
-      // old code re-ran the lookup AFTER this close, so a lookup throw left the row panel_resolved
-      // and unscored for good (a retry hit already_finalized).
-      const closed = await pgQuery<{ id: number | string }>(
-        `UPDATE peer_verification_queue
-            SET verification_status = 'panel_resolved',
-                completed_at = now()
-          WHERE id = $1
-            AND verification_status IN ('pending','in_review')
-          RETURNING id`,
-        [queue_id],
-        { label: 'panel-close-queue' }
-      );
+      // Consensus reached. Close the queue row so exactly one request scores it. The assigned-ballot
+      // lookup has ALREADY succeeded above; nothing below reads it again. The close carries a token
+      // unique to this request: one attempt, and if it throws the row is re-read for that token, so a
+      // close that committed while the client timed out is still recognised as ours (XC1, #1375).
+      const closeToken = newPanelCloseToken();
+      const outcome = await closePanelWithToken(queue_id, closeToken);
 
-      if (closed.length === 0) {
+      if (outcome === 'lost') {
         // Another vote already finalized + scored this claim. Report the verdict,
         // do NOT re-score.
         return res.json({
@@ -320,38 +314,51 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
         });
       }
 
-      // We won the finalization race. Apply the score events computed from that same read.
+      // We won the finalization race. Apply the score events computed from that same read,
+      // stamped with the close token so what was actually written can be counted from the DB.
       const scoreEvents = resolveResult.scoreEvents;
       try {
         await applyPanelScoreEvents(
           { contractId, sourceResponseId: q.source_response_id, claimText: q.claim_text, certaintyAtClaim: q.certainty_at_claim },
           resolveResult.consensus,
           scoreEvents,
+          closeToken,
         );
       } catch (e: any) {
-        const applied = e instanceof PanelScoreError ? e.applied : 0;
-        if (applied === 0) {
-          // Nothing was scored: reopen so the next ballot (or the reader's re-issue) retries cleanly.
-          await pgQuery(
-            `UPDATE peer_verification_queue
-                SET verification_status = 'in_review',
-                    completed_at = NULL
-              WHERE id = $1
-                AND verification_status = 'panel_resolved'`,
-            [queue_id],
-            { label: 'panel-reopen-unscored' }
-          );
-          console.error(
-            `[peer-verify/respond] PANEL scoring failed before any event was written — queue ${queue_id} ` +
-              `REOPENED (in_review, unscored, retryable): ${e?.message ?? e}`
-          );
-          return res.status(503).json({ error: 'panel scoring failed; queue row reopened for retry', retryable: true });
+        // Decide from the DB, not from a counter: a score-event insert can commit before the
+        // agent update that follows it throws.
+        let written: number | null = null;
+        try {
+          written = await panelScoreEventsWritten(contractId, closeToken);
+        } catch (readErr: any) {
+          console.error(`[peer-verify/respond] PANEL could not count written score events for queue ${queue_id}: ${readErr?.message ?? readErr}`);
         }
-        // Part of the score was written. Reopening would double-score on retry, so the row stays
-        // closed and this is reported loudly for reconciliation.
+        if (written === 0) {
+          // Nothing was scored: reopen THIS request's close only, so a retry starts clean.
+          let reopened: 'reopened' | 'not-ours' | 'failed' = 'failed';
+          try {
+            reopened = await reopenOwnPanelClose(queue_id, closeToken);
+          } catch (reopenErr: any) {
+            console.error(`[peer-verify/respond] PANEL reopen failed for queue ${queue_id}: ${reopenErr?.message ?? reopenErr}`);
+          }
+          if (reopened === 'reopened') {
+            console.error(
+              `[peer-verify/respond] PANEL scoring failed before any event was written — queue ${queue_id} ` +
+                `REOPENED (in_review, unscored, retryable): ${e?.message ?? e}`
+            );
+            return res.status(503).json({ error: 'panel scoring failed; queue row reopened for retry', retryable: true });
+          }
+          console.error(
+            `[peer-verify/respond] PANEL scoring failed and the reopen did not land (${reopened}) — queue ${queue_id} ` +
+              `is panel_resolved with 0 score events under ${closeToken}; reconcile by hand. planned=${JSON.stringify(scoreEvents)}`
+          );
+          return res.status(500).json({ error: 'panel scoring failed; queue row needs reconciliation', retryable: false });
+        }
+        // Part (or an unknown amount) of the score was written. Reopening would double-score on
+        // retry, so the row stays closed and this is reported loudly for reconciliation.
         console.error(
-          `[peer-verify/respond] PANEL scoring PARTIAL — queue ${queue_id}: ${applied}/${scoreEvents.length} events written, ` +
-            `then: ${e?.message ?? e}. Row left panel_resolved; reconcile the missing events by hand. ` +
+          `[peer-verify/respond] PANEL scoring PARTIAL — queue ${queue_id}: ${written ?? 'unknown'}/${scoreEvents.length} events in the DB ` +
+            `under ${closeToken}, then: ${e?.message ?? e}. Row left panel_resolved; reconcile the missing events by hand. ` +
             `planned=${JSON.stringify(scoreEvents)}`
         );
         return res.status(500).json({ error: 'panel scoring partially failed', retryable: false });
@@ -382,7 +389,12 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
     // Single statement: claim-and-write, only if still in a takeable state and
     // verifier is not the original claimant. RETURNING is the source of truth
     // for "did we win the race." No fetch-then-update window.
-    const updated = await pgQuery<RespondRow>(
+    const RESPOND_COLUMNS = `id, source_agent_id, verifier_agent_id, verifier_response_id,
+                  verifier_signature, verification_status, completed_at,
+                  claim_text, certainty_at_claim, threshold_used`;
+    let updated: RespondRow[];
+    try {
+    updated = await pgQuery<RespondRow>(
       `UPDATE peer_verification_queue
           SET verification_status = $1,
               verifier_agent_id   = $2,
@@ -398,6 +410,16 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
       [verdict, verifierUuid, verifier_response_id, signature, queue_id],
       { label: 'peer-verify-respond' }
     );
+    } catch (writeErr) {
+      // One attempt: a timeout may still have committed. Our verifier_response_id on the row means it did.
+      const mine = await pgQuery<RespondRow>(
+        `SELECT ${RESPOND_COLUMNS} FROM peer_verification_queue WHERE id = $1 AND verifier_response_id = $2::uuid`,
+        [queue_id, verifier_response_id],
+        { label: 'peer-verify-respond-reread', retries: 1, timeoutMs: 2000 }
+      );
+      if (mine.length === 0) throw writeErr;
+      updated = mine;
+    }
 
     if (updated.length === 0) {
       // ----- Disambiguate why the atomic UPDATE matched 0 rows ---------------
