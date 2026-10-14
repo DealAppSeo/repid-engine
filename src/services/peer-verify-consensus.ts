@@ -180,7 +180,15 @@ const ASSIGNED_PANEL_CTE = `
        AND t.metadata->>'panel' = 'blind_2of3'
        AND t.metadata->>'peer_verification_queue_id' = pq.id::text
      WHERE pq.id = $1
+     LIMIT 10
   )`;
+
+/**
+ * Fast-fail options for the panel lookups. direct-pg's default is five attempts at 10 s each with
+ * backoff up to 256 s (XC1 round 2); a ballot request must not hang on that. One attempt, 2 s.
+ * A failure throws, and every caller leaves the queue row untouched and unscored.
+ */
+export const PANEL_LOOKUP_OPTS = { retries: 1, timeoutMs: 2000 } as const;
 
 /**
  * All PANEL_SIZE assigned verifiers have a ballot in and none reached 2-of-3. Fewer = still waiting.
@@ -279,7 +287,7 @@ export async function closeNoMajorityPanel(
         AND NOT ((t.ver >= $5 AND t.ver > t.dis) OR (t.dis >= $5 AND t.dis > t.ver))
       RETURNING q.id, t.ver::int AS verified, t.dis::int AS disputed, t.tmo::int AS timeout, q.closure_reason`,
     [queueId, [...PANEL_VERIFIER_POOL], NO_MAJORITY_CLOSE_STATUS, PANEL_SIZE, CONSENSUS_QUORUM],
-    { label: 'panel-close-no-majority' },
+    { label: 'panel-close-no-majority', ...PANEL_LOOKUP_OPTS },
   );
   const row = rows[0];
   console.warn(
@@ -294,6 +302,25 @@ export async function closeNoMajorityPanel(
     status: NO_MAJORITY_CLOSE_STATUS,
     tally: row ? { verified: row.verified, disputed: row.disputed, timeout: row.timeout } : countsOf(c),
   };
+}
+
+/**
+ * PEER_VERIFY_ASSIGNED_ONLY — which ballots the MAJORITY (scoring) path counts.
+ *   'enforce' (default, = what #1366 deployed): only the verifiers the reader assigned.
+ *   'off': every verifier's first ballot on the queue row (the rollback lever).
+ * The no-majority close is assigned-only in both modes: its single statement re-reads the
+ * assigned panel in SQL, which is what makes that write safe.
+ */
+export function peerVerifyAssignedOnlyMode(): 'enforce' | 'off' {
+  return (process.env.PEER_VERIFY_ASSIGNED_ONLY || '').trim().toLowerCase() === 'off' ? 'off' : 'enforce';
+}
+
+/** One line for boot: every panel switch and its resolved value. */
+export function panelModesBootLine(): string {
+  return (
+    `[peer-verify/panel] PEER_VERIFY_PANEL_ENABLED=${peerVerifyPanelEnabled()} ` +
+    `PEER_VERIFY_ASSIGNED_ONLY=${peerVerifyAssignedOnlyMode()} PANEL_CLOSE_NO_MAJORITY=${panelNoMajorityMode()}`
+  );
 }
 
 /** Keep only ballots from assigned verifiers, first ballot per verifier. Extra identities are ignored. */
@@ -313,7 +340,9 @@ export function assignedBallots(assigned: readonly string[], ballots: PanelVote[
  * The assigned panel for a queue row, and that panel's ballots. Keyed by queue_id — not by
  * source_response_id, which two queue rows could share.
  */
-export async function fetchPanelVotes(queueId: number | string): Promise<{ assigned: string[]; votes: PanelVote[] }> {
+export async function fetchPanelVotes(
+  queueId: number | string,
+): Promise<{ assigned: string[]; votes: PanelVote[]; allBallots: PanelVote[] }> {
   const rows = await pgQuery<{ assigned: string[] | null; ballots: PanelVote[] | null }>(
     `WITH ${ASSIGNED_PANEL_CTE}
      SELECT (SELECT coalesce(array_agg(name ORDER BY name), '{}') FROM assigned) AS assigned,
@@ -322,13 +351,16 @@ export async function fetchPanelVotes(queueId: number | string): Promise<{ assig
                        'verifier_agent_name', v.verifier_agent_name,
                        'provider', v.provider,
                        'verdict', v.verdict) ORDER BY v.created_at), '[]'::json)
-               FROM peer_verification_votes v
-              WHERE v.queue_id = $1) AS ballots`,
+               FROM (SELECT * FROM peer_verification_votes
+                      WHERE queue_id = $1
+                      ORDER BY created_at ASC
+                      LIMIT 50) v) AS ballots`,
     [queueId, [...PANEL_VERIFIER_POOL]],
-    { label: 'panel-fetch-votes' }
+    { label: 'panel-fetch-votes', ...PANEL_LOOKUP_OPTS }
   );
   const assigned = rows[0]?.assigned ?? [];
-  return { assigned, votes: assignedBallots(assigned, rows[0]?.ballots ?? []) };
+  const allBallots = rows[0]?.ballots ?? [];
+  return { assigned, votes: assignedBallots(assigned, allBallots), allBallots };
 }
 
 export interface ResolveInput {
@@ -368,7 +400,11 @@ export interface ResolveResult {
  * No consensus / tie / all-timeout → nobody is scored (score 0).
  */
 export async function resolvePanel(input: ResolveInput): Promise<ResolveResult> {
-  const { assigned, votes } = await fetchPanelVotes(input.queueId);
+  const fetched = await fetchPanelVotes(input.queueId);
+  const assigned = fetched.assigned;
+  const votes = peerVerifyAssignedOnlyMode() === 'off'
+    ? assignedBallots([...new Set(fetched.allBallots.map((b) => b.verifier_agent_name ?? ''))], fetched.allBallots)
+    : fetched.votes;
   const consensus: ConsensusResult = { ...computeConsensus(votes), assigned: assigned.length };
 
   const scoreEvents: ResolveResult['scoreEvents'] = [];
@@ -413,26 +449,50 @@ export async function resolvePanel(input: ResolveInput): Promise<ResolveResult> 
     return { consensus, scored: false, scoreEvents };
   }
 
-  // ----- Emit honestly via applyValidationEvent ----------------------------
-  // metadata.contract_id MUST be a valid uuid (repid_score_events.contract_id
-  // is a uuid column). Caller passes a real/synthetic uuid.
+  await applyPanelScoreEvents(input, consensus, scoreEvents);
+  return { consensus, scored: true, scoreEvents };
+}
+
+/** Thrown when scoring stops part-way; `applied` says how many events were written first. */
+export class PanelScoreError extends Error {
+  constructor(message: string, readonly applied: number, readonly total: number) {
+    super(message);
+    this.name = 'PanelScoreError';
+  }
+}
+
+/**
+ * Apply already-computed panel score events, in order, through applyValidationEvent. Does NO
+ * lookup: the caller passes the events it computed from the same assigned-ballot read it
+ * resolved consensus on. Throws PanelScoreError with the count applied before the failure.
+ */
+export async function applyPanelScoreEvents(
+  input: Pick<ResolveInput, 'contractId' | 'sourceResponseId' | 'claimText' | 'certaintyAtClaim'>,
+  consensus: ConsensusResult,
+  scoreEvents: ResolveResult['scoreEvents'],
+): Promise<number> {
+  // metadata.contract_id MUST be a valid uuid (repid_score_events.contract_id is a uuid column).
   const baseMeta = {
     contract_id: input.contractId,
     source_response_id: input.sourceResponseId,
     panel: 'blind_2of3',
-    consensus_verdict: consensusVerdict,
+    consensus_verdict: consensus.verdict,
     tally: consensus.tally,
     claim: input.claimText ?? null,
     certainty_at_claim: input.certaintyAtClaim ?? null,
   };
-
+  let applied = 0;
   for (const ev of scoreEvents) {
-    await applyValidationEvent(ev.agent_id, ev.event_type, ev.delta, {
-      ...baseMeta,
-      role: ev.role,
-      agreed_with_consensus: ev.role === 'verifier' ? ev.agreed : undefined,
-    });
+    try {
+      await applyValidationEvent(ev.agent_id, ev.event_type, ev.delta, {
+        ...baseMeta,
+        role: ev.role,
+        agreed_with_consensus: ev.role === 'verifier' ? ev.agreed : undefined,
+      });
+    } catch (e: any) {
+      throw new PanelScoreError(String(e?.message ?? e), applied, scoreEvents.length);
+    }
+    applied++;
   }
-
-  return { consensus, scored: true, scoreEvents };
+  return applied;
 }

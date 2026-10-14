@@ -6,6 +6,8 @@ import {
   peerVerifyPanelEnabled,
   resolvePanel,
   closeNoMajorityPanel,
+  applyPanelScoreEvents,
+  PanelScoreError,
   PANEL_PROVIDER_HINTS,
 } from '../services/peer-verify-consensus';
 import crypto from 'crypto';
@@ -288,8 +290,11 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
         });
       }
 
-      // Consensus reached. Atomically close the queue row so exactly one request
-      // performs the scoring (idempotent finalization).
+      // Consensus reached. Atomically close the queue row so exactly one request performs the
+      // scoring (idempotent finalization). The assigned-ballot lookup has ALREADY succeeded above
+      // (it throws -> 500 with the row untouched); nothing below reads it again. XC1 round 2: the
+      // old code re-ran the lookup AFTER this close, so a lookup throw left the row panel_resolved
+      // and unscored for good (a retry hit already_finalized).
       const closed = await pgQuery<{ id: number | string }>(
         `UPDATE peer_verification_queue
             SET verification_status = 'panel_resolved',
@@ -315,21 +320,49 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
         });
       }
 
-      // We won the finalization race → emit the honest score events now.
-      const scored = await resolvePanel({
-        queueId: queue_id,
-        sourceResponseId: q.source_response_id,
-        producerAgentId: q.source_agent_id,
-        contractId,
-        claimText: q.claim_text,
-        certaintyAtClaim: q.certainty_at_claim,
-        dryRun: false,
-      });
+      // We won the finalization race. Apply the score events computed from that same read.
+      const scoreEvents = resolveResult.scoreEvents;
+      try {
+        await applyPanelScoreEvents(
+          { contractId, sourceResponseId: q.source_response_id, claimText: q.claim_text, certaintyAtClaim: q.certainty_at_claim },
+          resolveResult.consensus,
+          scoreEvents,
+        );
+      } catch (e: any) {
+        const applied = e instanceof PanelScoreError ? e.applied : 0;
+        if (applied === 0) {
+          // Nothing was scored: reopen so the next ballot (or the reader's re-issue) retries cleanly.
+          await pgQuery(
+            `UPDATE peer_verification_queue
+                SET verification_status = 'in_review',
+                    completed_at = NULL
+              WHERE id = $1
+                AND verification_status = 'panel_resolved'`,
+            [queue_id],
+            { label: 'panel-reopen-unscored' }
+          );
+          console.error(
+            `[peer-verify/respond] PANEL scoring failed before any event was written — queue ${queue_id} ` +
+              `REOPENED (in_review, unscored, retryable): ${e?.message ?? e}`
+          );
+          return res.status(503).json({ error: 'panel scoring failed; queue row reopened for retry', retryable: true });
+        }
+        // Part of the score was written. Reopening would double-score on retry, so the row stays
+        // closed and this is reported loudly for reconciliation.
+        console.error(
+          `[peer-verify/respond] PANEL scoring PARTIAL — queue ${queue_id}: ${applied}/${scoreEvents.length} events written, ` +
+            `then: ${e?.message ?? e}. Row left panel_resolved; reconcile the missing events by hand. ` +
+            `planned=${JSON.stringify(scoreEvents)}`
+        );
+        return res.status(500).json({ error: 'panel scoring partially failed', retryable: false });
+      }
 
+      // Per-verifier events stay in the server log and repid_score_events; the HTTP body carries
+      // counts only, so the last voter cannot reconstruct anyone else's ballot (XC1 round 2).
       console.log(
-        `[peer-verify/respond] PANEL consensus=${scored.consensus.verdict} ` +
-          `queue=${queue_id} tally=${JSON.stringify(scored.consensus.tally)} ` +
-          `events=${scored.scoreEvents.length}`
+        `[peer-verify/respond] PANEL consensus=${resolveResult.consensus.verdict} ` +
+          `queue=${queue_id} tally=${JSON.stringify(resolveResult.consensus.tally)} ` +
+          `events=${JSON.stringify(scoreEvents)}`
       );
 
       return res.json({
@@ -337,10 +370,10 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
         mode: 'panel',
         vote_accepted: voteAccepted,
         consensus_reached: true,
-        consensus_verdict: scored.consensus.verdict,
-        tally: scored.consensus.tally,
-        scored: scored.scored,
-        score_events: scored.scoreEvents,
+        consensus_verdict: resolveResult.consensus.verdict,
+        tally: resolveResult.consensus.tally,
+        scored: true,
+        score_events_count: scoreEvents.length,
       });
     }
     // ===================== END PANEL PATH ====================================
