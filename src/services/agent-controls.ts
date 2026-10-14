@@ -75,7 +75,7 @@ export async function setAgentEnabled(
            updated_at = now()
      RETURNING agent_name, enabled, updated_by, reason, updated_at`,
     [controlName, enabled, updatedBy, reason ?? null],
-    { label: 'agent-controls-upsert' }
+    { label: 'agent-controls-upsert', idempotent: true } // upsert to fixed values
   );
 
   await bustCache(controlName);

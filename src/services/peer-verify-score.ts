@@ -130,7 +130,7 @@ async function insertScoreEventLegacy(params: InsertParams): Promise<ScoreEventR
       JSON.stringify(params.metadata),
       params.certaintyAtClaim ?? null,
     ],
-    { label: 'peer-verify-score-insert' }
+    { label: 'peer-verify-score-insert', idempotent: true } // ON CONFLICT (idempotency_key) DO NOTHING
   );
   return rows[0] ?? null;
 }

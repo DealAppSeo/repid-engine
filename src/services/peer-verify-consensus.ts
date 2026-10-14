@@ -26,6 +26,7 @@
  *     → penalty)
  *   - no-consensus / tie / timeout → score 0 for everyone
  */
+import { randomUUID } from 'crypto';
 import { pgQuery } from '../db/direct-pg';
 import { applyValidationEvent } from '../scoring/pipeline';
 
@@ -470,6 +471,7 @@ export async function applyPanelScoreEvents(
   input: Pick<ResolveInput, 'contractId' | 'sourceResponseId' | 'claimText' | 'certaintyAtClaim'>,
   consensus: ConsensusResult,
   scoreEvents: ResolveResult['scoreEvents'],
+  closeToken?: string,
 ): Promise<number> {
   // metadata.contract_id MUST be a valid uuid (repid_score_events.contract_id is a uuid column).
   const baseMeta = {
@@ -480,6 +482,8 @@ export async function applyPanelScoreEvents(
     tally: consensus.tally,
     claim: input.claimText ?? null,
     certainty_at_claim: input.certaintyAtClaim ?? null,
+    // Lets panelScoreEventsWritten() count what THIS close wrote, from the DB, after a failure.
+    ...(closeToken ? { panel_close_token: closeToken } : {}),
   };
   let applied = 0;
   for (const ev of scoreEvents) {
@@ -495,4 +499,97 @@ export async function applyPanelScoreEvents(
     applied++;
   }
   return applied;
+}
+
+// ============================================================================
+// MAJORITY CLOSE WITH A TOKEN (XC1, PR #1375 review)
+// ----------------------------------------------------------------------------
+// pgQuery's timeout does not cancel the statement, and a write that "timed out" may have
+// committed. So: every write below runs ONCE (pgQuery's default for writes), carries a token
+// unique to this request in closure_reason, and when it throws we RE-READ the row to learn
+// whether our token landed. A 0-row result is never read as success, and the reopen can only
+// revert the close that carries its own token — never a later, legitimately scored one.
+// ============================================================================
+
+const CLOSE_TOKEN_PREFIX = 'panel_resolved close_token=';
+
+export function newPanelCloseToken(): string {
+  return `${CLOSE_TOKEN_PREFIX}${randomUUID()}`;
+}
+
+async function closureReasonOf(queueId: number | string): Promise<{ status: string; closure_reason: string | null } | null> {
+  const rows = await pgQuery<{ verification_status: string; closure_reason: string | null }>(
+    `SELECT verification_status, closure_reason FROM peer_verification_queue WHERE id = $1`,
+    [queueId],
+    { label: 'panel-close-reread', ...PANEL_LOOKUP_OPTS },
+  );
+  return rows[0] ? { status: rows[0].verification_status, closure_reason: rows[0].closure_reason } : null;
+}
+
+/**
+ * Close the row as panel_resolved, stamped with `token`. 'won' = this request closed it; 'lost' =
+ * someone else had. If the UPDATE throws, the row is re-read: our token there means it committed.
+ * If even the re-read fails, this throws — the outcome is unknown and the caller must not score.
+ */
+export async function closePanelWithToken(queueId: number | string, token: string): Promise<'won' | 'lost'> {
+  try {
+    const rows = await pgQuery<{ id: number | string }>(
+      `UPDATE peer_verification_queue
+          SET verification_status = 'panel_resolved',
+              completed_at = now(),
+              closure_reason = $2
+        WHERE id = $1
+          AND verification_status IN ('pending','in_review')
+        RETURNING id`,
+      [queueId, token],
+      { label: 'panel-close-queue' },
+    );
+    return rows.length > 0 ? 'won' : 'lost';
+  } catch (e) {
+    const now = await closureReasonOf(queueId);
+    if (now && now.closure_reason === token) return 'won';
+    if (now && !['pending', 'in_review'].includes(now.status)) return 'lost';
+    throw e; // still open and not ours: the close did not happen; surface the error
+  }
+}
+
+/** How many repid_score_events this close actually wrote (by the token stamped in their metadata). */
+export async function panelScoreEventsWritten(contractId: string, token: string): Promise<number> {
+  const rows = await pgQuery<{ n: number }>(
+    `SELECT count(*)::int AS n
+       FROM repid_score_events
+      WHERE contract_id = $1::uuid
+        AND metadata->>'panel_close_token' = $2`,
+    [contractId, token],
+    { label: 'panel-score-events-written', ...PANEL_LOOKUP_OPTS },
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Reopen ONLY the close this request made (its token), back to in_review. One attempt; if it
+ * throws, re-read. 'reopened' | 'not-ours' (the row no longer carries our token).
+ */
+export async function reopenOwnPanelClose(queueId: number | string, token: string): Promise<'reopened' | 'not-ours'> {
+  try {
+    const rows = await pgQuery<{ id: number | string }>(
+      `UPDATE peer_verification_queue
+          SET verification_status = 'in_review',
+              completed_at = NULL,
+              closure_reason = NULL
+        WHERE id = $1
+          AND verification_status = 'panel_resolved'
+          AND closure_reason = $2
+        RETURNING id`,
+      [queueId, token],
+      { label: 'panel-reopen-unscored' },
+    );
+    return rows.length > 0 ? 'reopened' : 'not-ours';
+  } catch (e) {
+    // Ambiguous: the reopen may have committed. Only this request ever clears its own token,
+    // so the token gone + the row back in_review means it did.
+    const now = await closureReasonOf(queueId);
+    if (now && now.closure_reason === token) throw e;
+    return now && now.status === 'in_review' && now.closure_reason === null ? 'reopened' : 'not-ours';
+  }
 }

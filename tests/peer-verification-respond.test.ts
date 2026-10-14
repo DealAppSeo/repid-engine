@@ -28,7 +28,11 @@ import crypto from 'crypto';
 // that consults the test-controlled globals based on the `label` opt.
 const pgQueryMock = jest.fn(async (_sql: string, _params: any[], opts?: any) => {
   const label = opts?.label ?? '';
-  if (label === 'peer-verify-respond') return (global as any).__pvUpdateRows;
+  if (label === 'peer-verify-respond') {
+    if ((global as any).__pvUpdateThrows) throw new Error('[direct-pg] query timeout after 10000ms: peer-verify-respond');
+    return (global as any).__pvUpdateRows;
+  }
+  if (label === 'peer-verify-respond-reread') return (global as any).__pvRereadRows ?? [];
   if (label === 'peer-verify-probe') return (global as any).__pvProbeRows;
   return [];
 });
@@ -310,6 +314,38 @@ describe('POST /api/v1/peer-verify/respond — atomic UPDATE outcomes', () => {
   });
   afterEach(() => {
     delete process.env.PEER_VERIFY_HMAC_SECRET;
+    delete (global as any).__pvUpdateThrows;
+    delete (global as any).__pvRereadRows;
+  });
+
+  test('the UPDATE commits but the client times out → re-read finds OUR response → 200 and scored, not an error', async () => {
+    const sig = sign('test-global-secret', QUEUE_ID, RESPONSE_UUID, 'verified');
+    (global as any).__pvUpdateThrows = true;
+    (global as any).__pvRereadRows = [{
+      id: QUEUE_ID, source_agent_id: SOURCE_UUID, verifier_agent_id: AGENT_UUID,
+      verifier_response_id: RESPONSE_UUID, verifier_signature: sig, verification_status: 'verified',
+      completed_at: '2026-10-14T00:00:00Z', claim_text: 'c', certainty_at_claim: 0.8, threshold_used: 0.85,
+    }];
+    const res = await request(freshApp()).post('/api/v1/peer-verify/respond').send({
+      queue_id: QUEUE_ID, verifier_agent_id: AGENT_NAME, verifier_response_id: RESPONSE_UUID, verdict: 'verified', signature: sig,
+    });
+    expect(res.status).toBe(200);
+    const updates = pgQueryMock.mock.calls.filter((c) => c[2]?.label === 'peer-verify-respond');
+    expect(updates).toHaveLength(1); // one attempt: never re-run blind
+    const reread = pgQueryMock.mock.calls.find((c) => c[2]?.label === 'peer-verify-respond-reread')!;
+    expect(reread[1]).toEqual([QUEUE_ID, RESPONSE_UUID]);
+    expect(emitScoreMock).toHaveBeenCalled();
+  });
+
+  test('the UPDATE throws and the re-read does not find our response → the error surfaces (500)', async () => {
+    const sig = sign('test-global-secret', QUEUE_ID, RESPONSE_UUID, 'verified');
+    (global as any).__pvUpdateThrows = true;
+    (global as any).__pvRereadRows = [];
+    const res = await request(freshApp()).post('/api/v1/peer-verify/respond').send({
+      queue_id: QUEUE_ID, verifier_agent_id: AGENT_NAME, verifier_response_id: RESPONSE_UUID, verdict: 'verified', signature: sig,
+    });
+    expect(res.status).toBe(500);
+    expect(emitScoreMock).not.toHaveBeenCalled();
   });
 
   test('idempotency: row already verified → 409 Conflict (not 200, not 400)', async () => {

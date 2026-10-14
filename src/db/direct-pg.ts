@@ -138,25 +138,49 @@ function timeoutReject<T>(ms: number, label: string): Promise<T> {
 }
 
 /**
+ * Does this statement write? INSERT / UPDATE / DELETE / MERGE anywhere in it (a CTE that writes
+ * counts), ignoring comments and `FOR UPDATE` row locks. Errs toward "write": a read misclassified
+ * as a write only loses its retries, while a write misclassified as a read can be applied twice.
+ */
+export function isWriteStatement(sql: string): boolean {
+  const stripped = sql
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\bFOR\s+(NO\s+KEY\s+)?UPDATE\b/gi, ' ');
+  return /\b(INSERT\s+INTO|UPDATE\s+[\w."]+\s+(AS\s+\w+\s+)?SET|UPDATE\s+[\w."]+\s+\w+\s+SET|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(stripped);
+}
+
+/**
  * Run a parameterized query and return rows. Throws on failure (after retries)
  * or when the circuit is open. Mirrors the supabase-js return convention by
  * giving callers the rows array directly.
  *
  * @param text   SQL with $1,$2,... placeholders
  * @param params bound parameters
- * @param opts   timeoutMs (default 10s), retries (default 5; hot-path callers pass 1)
+ * @param opts   timeoutMs (default 10s), retries (default 5 for reads; hot-path callers pass 1),
+ *               idempotent (writes only — see below), label
+ *
+ * WRITES GET ONE ATTEMPT BY DEFAULT. The timeout below is a Promise.race: it does not cancel the
+ * statement, and on the transaction pooler a statement that finishes commits. So a write that
+ * "timed out" may have committed, and retrying it applies it again — a conditional UPDATE then
+ * returns 0 rows and the caller reads its own success as someone else's (XC1, PR #1375 review).
+ * A statement isWriteStatement() recognises therefore runs once unless the caller passes
+ * `idempotent: true` (running it twice has the same effect as once) or an explicit `retries`.
+ * A caller that needs to know what happened after a write throws must re-read the row.
  */
 export async function pgQuery<T extends QueryResultRow = any>(
   text: string,
   params: any[] = [],
-  opts: { timeoutMs?: number; retries?: number; label?: string } = {}
+  opts: { timeoutMs?: number; retries?: number; label?: string; idempotent?: boolean } = {}
 ): Promise<T[]> {
   if (Date.now() < circuitOpenUntil) {
     throw new Error(`[direct-pg] circuit open until ${new Date(circuitOpenUntil).toISOString()}`);
   }
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
-  const maxAttempts = Math.max(1, opts.retries ?? BACKOFF_SCHEDULE_MS.length);
+  const write = isWriteStatement(text);
+  const defaultAttempts = write && !opts.idempotent ? 1 : BACKOFF_SCHEDULE_MS.length;
+  const maxAttempts = Math.max(1, opts.retries ?? defaultAttempts);
   const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
   const callStart = Date.now();
 
@@ -189,7 +213,10 @@ export async function pgQuery<T extends QueryResultRow = any>(
     try {
       const queryPromise = getPgPool().query<T>(text, params);
       const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`[direct-pg] query timeout after ${timeoutMs}ms: ${label}`)), timeoutMs);
+        timer = setTimeout(() => reject(new Error(
+          `[direct-pg] query timeout after ${timeoutMs}ms: ${label}` +
+            (write ? ' (write: the statement may still have committed — re-read before deciding)' : ''),
+        )), timeoutMs);
       });
 
       const result = await Promise.race([queryPromise, timeoutPromise]);
