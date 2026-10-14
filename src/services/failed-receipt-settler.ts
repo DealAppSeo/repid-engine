@@ -28,7 +28,7 @@
  * refuses the run rather than guessing: this job only ever subtracts reputation.
  */
 import { db } from '../db';
-import { updateRepId } from '../engine/repid-update';
+import { resolveServerConfirmation, updateRepId } from '../engine/repid-update';
 import { shouldParkForHalt } from './emergency-halt';
 import { confirmedOutcomeScoringEnabled, confirmedReceiptTtlMs } from '../scoring/confirmed-outcome';
 import type { RepIdEventType } from '../scoring/repid-deltas';
@@ -120,7 +120,7 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
     const now = Date.now();
     const { data, error } = await db
       .from('kernel_receipts')
-      .select('receipt_id, subject_agent_id, settled_by, created_at')
+      .select('receipt_id, subject_agent_id, settled_by, args_hash, created_at')
       .eq('verification_status', 'FAILED')
       .eq('verdict_label', 'SETTLED')
       .eq('is_simulated', false)
@@ -136,12 +136,49 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
     }
     summary.found = data.length;
 
-    for (const row of data as Array<{ receipt_id: string; subject_agent_id: string; settled_by: 'holdout' | 'known_answer' }>) {
+    // ONE WRONG PER CONTENT (XC1 review of #1371): two FAILED receipts for the same work (same subject +
+    // args_hash) are one wrong. A duplicate inside this batch, or of content already settled, is skipped
+    // here and left unspent; the partial unique index kernel_receipts_one_wrong_per_content
+    // (migrations/2026-10-14-kernel-receipts-engine-signature.sql) is the atomic, cross-process backstop.
+    const seenContent = new Set<string>();
+    for (const row of data as Array<{ receipt_id: string; subject_agent_id: string; settled_by: 'holdout' | 'known_answer'; args_hash: string | null }>) {
       const receiptId = row.receipt_id;
       const agentId = row.subject_agent_id;
+      const contentKey = typeof row.args_hash === 'string' ? `${agentId}|${row.args_hash}` : null;
+      if (contentKey !== null) {
+        if (seenContent.has(contentKey)) {
+          summary.held.push({ receiptId, agentId, why: 'duplicate_content_in_run' });
+          continue;
+        }
+        seenContent.add(contentKey);
+        const prior = await db
+          .from('kernel_receipts')
+          .select('receipt_id')
+          .eq('subject_agent_id', agentId)
+          .eq('args_hash', row.args_hash)
+          .eq('verification_status', 'FAILED')
+          .not('consumed_at', 'is', null)
+          .limit(1);
+        if (prior.error || !Array.isArray(prior.data)) {
+          summary.held.push({ receiptId, agentId, why: 'content_check_unreadable' }); // fail closed: never risk a second wrong
+          continue;
+        }
+        if (prior.data.length > 0) {
+          summary.held.push({ receiptId, agentId, why: 'content_already_settled' });
+          continue;
+        }
+      }
       if (mode === 'shadow') {
-        console.warn(`[failed-settle] SHADOW: WOULD apply FAILED receipt ${receiptId} (settled_by ${row.settled_by}) to agent ${agentId}`);
-        summary.held.push({ receiptId, agentId, why: 'shadow' });
+        // SHADOW RUNS THE SAME GATE (read-only): it logs WOULD apply only for a receipt the verifier would
+        // actually confirm as a wrong, so the shadow count is what enforce would do.
+        const vc = await resolveServerConfirmation(agentId, receiptId);
+        if (vc?.result === 'wrong') {
+          console.warn(`[failed-settle] SHADOW: WOULD apply FAILED receipt ${receiptId} (settled_by ${row.settled_by}) to agent ${agentId}`);
+          summary.held.push({ receiptId, agentId, why: 'shadow_would_apply' });
+        } else {
+          console.warn(`[failed-settle] SHADOW: would NOT apply receipt ${receiptId} to agent ${agentId}: the verifier does not confirm it`);
+          summary.held.push({ receiptId, agentId, why: 'shadow_verifier_refuses' });
+        }
         continue;
       }
       try {

@@ -1007,9 +1007,11 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *     migrations/2026-10-14-kernel-receipts-content-claim.sql). A row without one cannot be
  *     de-duplicated, so it fails closed; so does a table without the column (the select errors).
  *   - GATE PROVENANCE (2026-10-14, XC1 re-attack finding 2): the row's sealed receipt must be one the
- *     kernel gate's own run wrote, and its columns must equal that sealed body (gateReceiptProblem in
- *     kernel/receipt-db-index.ts). args_hash is client-chosen and the server cannot recompute it, so
- *     the binding is to the GATE RUN, not to the hash. runUnderKernel has no production caller today,
+ *     kernel gate's own run wrote, SIGNED by the engine's receipt key at seal time (engine_signature,
+ *     verified against RECEIPT_SIGNING_KEY's address), and its columns must equal that sealed body
+ *     (gateReceiptProblem in kernel/receipt-db-index.ts). args_hash is client-chosen and the server
+ *     cannot recompute it, so the binding is to the SIGNED GATE RUN, not to the hash. RLS is not the
+ *     control: the service role bypasses it; a re-sealed row has no valid engine signature. runUnderKernel has no production caller today,
  *     so in production nothing passes this: every confirmation fails closed until one exists.
  * The SERVER then establishes the result: VERIFIED → 'right', FAILED → 'wrong'. A thrown DB error
  * (table absent in prod, store down) → undefined. It NEVER throws into the score path.
@@ -1029,7 +1031,7 @@ export async function resolveServerConfirmation(
     if (id === '') return undefined; // no pointer → nothing to verify → fail closed
     const { data, error } = await db
       .from('kernel_receipts')
-      .select('receipt_id, subject_agent_id, settled_by, verdict_label, verification_status, is_simulated, args_hash, receipt_hash, receipt, created_at')
+      .select('receipt_id, subject_agent_id, settled_by, verdict_label, verification_status, is_simulated, args_hash, receipt_hash, receipt, engine_signature, created_at')
       .eq('receipt_id', id)
       .maybeSingle();
     if (error || !data) return undefined; // no row (or a read error) → fail closed

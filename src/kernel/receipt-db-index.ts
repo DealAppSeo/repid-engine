@@ -15,6 +15,7 @@ import { db } from '../db';
 import { DRY_PREVIEW_DOES_NOT_ATTEST } from './gate';
 import { validateReceipt } from './receipt';
 import type { KernelReceipt } from './types';
+import { signReceipt, verifyReceiptSignature, type ReceiptSignature } from '../services/receipt-signer';
 
 /** The kernel_receipts columns the confirmed-outcome verifier reads, as they come back from the DB. */
 export interface KernelReceiptIndexRow {
@@ -27,22 +28,27 @@ export interface KernelReceiptIndexRow {
   receipt_hash?: unknown;
   args_hash?: unknown;
   receipt?: unknown;
+  /** The engine's DETACHED signature over the sealed receipt (see indexKernelReceiptToDb). */
+  engine_signature?: unknown;
 }
 
 /**
  * WAS THIS ROW WRITTEN BY THE KERNEL GATE'S OWN RUN? Returns null when yes, else the reason it was not.
- * (2026-10-14, XC1's re-attack of #1364, finding 2.)
+ * (2026-10-14, XC1's re-attacks of #1364 finding 2 and of #1371.)
  *
  * The problem. `args_hash` is whatever 32-byte hex the client sends: the kernel deliberately never sees
  * the arguments ("hash the arguments; never send them"), and `hashArgs` has no non-test caller. The
- * server cannot recompute it, so it cannot BIND it. What it can bind is WHERE the row came from.
+ * server cannot recompute it, so it cannot BIND it. What it can bind is WHO produced the row.
  *
- * The provenance chain, each link [V] in code on 2026-10-14:
- *   kernel_receipts is service-role only (RLS on, anon/authenticated revoked: its migration) ←
- *   written only by indexKernelReceiptToDb ← the StoreLedger receipt hook ← StoreLedger.appendReceipt ←
- *   called ONLY by gate.ts::runUnderKernel (the decision row, then the outcome row).
- * POST /decide (dryDecision) appends nothing. So a row is a gate run's receipt, and this checks that
- * the row still IS one:
+ * THE CONTROL IS THE ENGINE SIGNATURE, NOT RLS. RLS on kernel_receipts stops anon/authenticated, but the
+ * service role (the indexer's own key) bypasses RLS, so a service-role writer could insert a
+ * self-consistent re-sealed receipt (receipt_hash is an unsigned keccak). The indexer therefore signs
+ * every receipt it indexes with the engine's receipt-only key (RECEIPT_SIGNING_KEY, the #1333 signer:
+ * EIP-191 over a domain-separated content hash, never a payment signature), and this check requires that
+ * signature to VERIFY against the engine signer. Without the signing key, nothing can forge a pass.
+ * NOT_CHECKED (no engine signer configured) is a refusal, never a pass.
+ *
+ * Then that the row still IS the gate's receipt:
  *   - the sealed body validates (schema + invariants + receiptHash(body) === header.receipt_hash) and
  *     is the row's own receipt (id and hash);
  *   - it is not a dry preview;
@@ -52,11 +58,10 @@ export interface KernelReceiptIndexRow {
  *     its outcome row was recorded. FAILED (a wrong) needs `executed: false`: a HAL FLAG/VETO DENYs
  *     the post, so a FAILED verification only ever exists on a refused, unexecuted decision row.
  *
- * WHAT THIS DOES NOT PROVE. The receipt is hashed, not signed, so anyone holding the service-role key
- * could insert a self-consistent forgery; a server signature over receipt_hash is the stronger
- * follow-up. And because the arguments never reach the kernel, the args_hash in a gate receipt is the
- * one its in-process caller supplied. TODAY runUnderKernel HAS NO PRODUCTION CALLER, so no production
- * row can pass this and every confirmation fails closed. A future caller must compute args_hash with
+ * WHAT THIS DOES NOT PROVE. Whoever holds RECEIPT_SIGNING_KEY can sign anything; that key is the trust
+ * root. And because the arguments never reach the kernel, the args_hash in a gate receipt is the one
+ * its in-process caller supplied. TODAY runUnderKernel HAS NO PRODUCTION CALLER, so no production row
+ * exists to pass this and every confirmation fails closed. A future caller must compute args_hash with
  * hashArgs() over the arguments its closure actually uses.
  */
 export function gateReceiptProblem(row: KernelReceiptIndexRow): string | null {
@@ -69,6 +74,10 @@ export function gateReceiptProblem(row: KernelReceiptIndexRow): string | null {
   if (!v.ok) return `receipt_invalid:${v.errors[0]?.code ?? 'unknown'}`;
   if (r.header.receipt_id !== id) return 'receipt_id_mismatch';
   if (r.header.receipt_hash !== row.receipt_hash) return 'receipt_hash_mismatch';
+  // THE ENGINE SIGNED THIS EXACT BODY. A re-seal, a copied signature or another key all fail here.
+  const sig = verifyReceiptSignature(r, (row.engine_signature ?? null) as ReceiptSignature | null);
+  if (sig.status === 'NOT_CHECKED') return 'signature_not_checked';
+  if (sig.status !== 'VERIFIED') return 'signature_failed';
   if (r.decision.does_not_attest.includes(DRY_PREVIEW_DOES_NOT_ATTEST)) return 'dry_preview';
   if (r.subject.agent.agent_id !== row.subject_agent_id) return 'subject_mismatch';
   if (r.request.args_hash !== row.args_hash) return 'args_hash_mismatch';
@@ -86,15 +95,28 @@ export function gateReceiptProblem(row: KernelReceiptIndexRow): string | null {
   return null;
 }
 
+let warnedUnsigned = false;
+
 /**
  * Upsert a receipt into public.kernel_receipts, keyed by receipt_id. The decision row (executed:false)
  * is written first and the outcome row (executed:true) UPSERTs over it under the same id, so the index
  * ends on the final state of each call. All confirmation-relevant fields come from the VERIFICATION LEG
  * (status / verdict_label / settled_by / is_simulated), which is what the verifier gates on, plus the
  * request's args_hash (the content key the one-gain-per-content claim is unique on).
+ *
+ * SIGNED AT SEAL TIME (2026-10-14). The indexer is the production hook that runs right after the gate
+ * appends (seals) a receipt, so this is where the engine signs it: a DETACHED signature in its own
+ * column, so the receipt itself stays byte-identical to kernel-receipt/1 (whose schema pins
+ * `header.signer: null` and is byte-pinned in trustshell). With no usable key the row is indexed
+ * UNSIGNED (logged once), and an unsigned row can never confirm a score: fail closed.
  */
 export async function indexKernelReceiptToDb(receipt: KernelReceipt): Promise<void> {
   try {
+    const signed = await signReceipt(receipt);
+    if (!signed.ok && !warnedUnsigned) {
+      warnedUnsigned = true;
+      console.warn(`[kernel] kernel receipts are being indexed UNSIGNED (${signed.reason}); they can never confirm a score`);
+    }
     const v = receipt.verification;
     const { error } = await db.from('kernel_receipts').upsert(
       {
@@ -109,6 +131,8 @@ export async function indexKernelReceiptToDb(receipt: KernelReceipt): Promise<vo
         // pays once. Needs migrations/2026-10-14-kernel-receipts-content-claim.sql; until it is applied,
         // PostgREST rejects this upsert (unknown column), nothing is indexed and nothing confirms (fail closed).
         args_hash: receipt.request.args_hash,
+        // Needs migrations/2026-10-14-kernel-receipts-engine-signature.sql; same fail-closed shape.
+        engine_signature: signed.ok ? signed.signature : null,
         receipt,
       },
       { onConflict: 'receipt_id' },
