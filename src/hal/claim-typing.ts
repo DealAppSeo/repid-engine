@@ -100,12 +100,26 @@ export function segmentClaims(output: string): string[] {
  * on the '='). Only when NO symbolic relation is present do we fall back to the
  * word operators ("equals" / "is"), which are prose-ambiguous.
  */
-// Symbolic: match the LAST relation so "2 + 2 = 5" splits at '=', not a stray '<'.
-const ARITH_RELATION_SYMBOLIC =
-  /^(.*?)\s*(==|<=|>=|!=|≠|≈|=|<|>)\s*([^=<>≠≈]+)$/;
-// Word operators (fallback only): "X equals Y", "X is Y".
-const ARITH_RELATION_WORD =
-  /(.+?)\s+(equals|is equal to|is|approximately)\s+(.+)/i;
+// Both regexes run on every request to the public POST /api/v1/hal/evaluate (the floor runs in
+// shadow too). The old forms let adjacent quantifiers share the same whitespace, so a failing
+// input backtracked super-linearly: SYMBOLIC `^(.*?)\s*(op)\s*(...)$` was quadratic, WORD
+// `(.+?)\s+(op)\s+(.+)` cubic ('a' + 7998 spaces + 'b' blocked the event loop for minutes).
+// Here every quantifier has a disjoint job. For a trimmed input (typeClaim and segmentClaims
+// both trim) they give the same null-ness and the same trimmed captures, which is all
+// recognizeArithmetic reads; tests/hal-floor-redos.test.ts proves it against the old forms.
+//
+// Symbolic: the relation ends at the LAST relation character, so "2 + 2 = 5" splits at '='.
+// Group 1 = no line terminator, then optionally one line terminator + whitespace: exactly what
+// the old `(.*?)\s*` could span (`.` stops at a line terminator, `\s` does not). The `\s*`
+// around the operator is dropped because the caller trims both sides.
+export const ARITH_RELATION_SYMBOLIC =
+  /^([^\n\r\u2028\u2029]*?(?:[\n\r\u2028\u2029]\s*)?)(==|<=|>=|!=|≠|≈|=|<|>)([^=<>≠≈]+)$/;
+// Word operators (fallback only): "X equals Y", "X is Y". The old form's first match always
+// starts at 0 or right after a line terminator (an earlier start on that line also matches),
+// and for a trimmed input its lazy group 1 ends in a non-space, hence the pinned start and
+// `.*?\S`.
+export const ARITH_RELATION_WORD =
+  /(?:^|(?<=[\n\r\u2028\u2029]))(.*?\S)\s+(equals|is equal to|is|approximately)\s+(.+)/i;
 
 function matchArithRelation(content: string): RegExpMatchArray | null {
   return content.match(ARITH_RELATION_SYMBOLIC) ?? content.match(ARITH_RELATION_WORD);
