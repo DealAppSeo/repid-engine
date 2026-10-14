@@ -22,7 +22,7 @@
 import { randomUUID } from 'node:crypto';
 import { decide, parseKernelRequest } from './decide';
 import { loadPolicyEvidence } from './policy';
-import { screenCapability, type ToolImplementation } from './capability-registry';
+import { logCapabilityRegistryEmpty, screenCapability, type ToolImplementation } from './capability-registry';
 import { DEFAULT_ENV, buildReceipt, validateReceipt } from './receipt';
 import type {
   CapabilityState,
@@ -110,10 +110,12 @@ async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolea
 /**
  * The capability decision (poisoned-repo control). Present ONLY when the registry dep is wired, which
  * the route does only under the KERNEL_CAPABILITY_REGISTRY_ENABLED flag — so OFF this is always
- * `not_enforced` and decide() records nothing. Scoped to the tool-execution classes the `tool` action
- * governs (read / other); spend and post keep their own gates. The authorized set is read ONLY from a
- * VERIFIED signed policy's bindings — the blanket `tool` action is never consulted — so an unverified
- * or binding-less policy authorizes no implementation and the screen fails closed.
+ * `not_enforced` and decide() records nothing. Draft 4 screens EVERY class, including spend and post.
+ * Those classes keep their own gates (limits, payee, HAL) in addition to the registry, not instead of
+ * it. `tool.class` is caller-asserted, so it must not decide whether the registry applies. The
+ * authorized set is read ONLY from a VERIFIED signed policy's bindings — the blanket `tool` action is
+ * never consulted — so an unverified or binding-less policy authorizes no implementation and the
+ * screen fails closed.
  *
  * DRAFT 3 — the executing closure is threaded in as `candidate`, so the screen verifies BY REFERENCE
  * EQUALITY that the function the gate will actually run IS the boot-registered implementation (via the
@@ -130,12 +132,10 @@ function gatherCapability(
   candidate: unknown,
 ): { capability: CapabilityState; run: ToolImplementation | null } {
   if (!deps.capabilityRegistry) return { capability: { state: 'not_enforced' }, run: null };
-  // spend and post have their own gates and are not registry tools; their closure is governed by those
-  // gates, not the registry. EVERY other class that reaches decide() — read, other, or an UNKNOWN
-  // class — is screened under enforcement, so no enforced decide() path is left without a recorded
-  // capability outcome (XC1 #7a). An unknown/unregistered reference fails closed to FAIL.
-  if (req.tool.class === 'spend' || req.tool.class === 'post') return { capability: { state: 'not_enforced' }, run: null };
+  // Every class that reaches decide() is screened. Spend and post still have their own gates; those
+  // run as well. An unknown or unregistered reference fails closed to FAIL (XC1 #7a, Draft 4).
   try {
+    if (deps.capabilityRegistry.size === 0) logCapabilityRegistryEmpty('decision');
     const authorized =
       policy.state === 'loaded' && policy.signature === 'VERIFIED'
         ? new Set(policy.policy.authorized_impl_hashes ?? [])
@@ -186,6 +186,12 @@ export async function assess(request: KernelRequest, deps: GateDeps, candidate?:
 
   const decision = decide({ request, now_s: Math.floor(now / 1000), owner, policy, spent, hal, capability });
   return { request, owner, policy, hal, capability, capabilityRun, decision, now };
+}
+
+/** Objects, arrays, and functions. Null and scalars are not opaque. */
+function isOpaqueReturn(result: unknown): boolean {
+  if (typeof result === 'function') return true;
+  return typeof result === 'object' && result !== null;
 }
 
 function refused<T>(verdict: 'DENY' | 'NOT_CHECKED', reasons: Reason[]): GateResult<T> {
@@ -270,8 +276,8 @@ export async function runUnderKernel<T>(
   // (`a.capabilityRun`) — reference-equal to the caller's declared closure, already verified in
   // assess — and NEVER a caller-supplied closure under an authorized name. There is no delegation or
   // passthrough hole: a reference mismatch is a FAIL in assess, which makes the verdict DENY and never
-  // reaches here. OFF / not-enforced classes (spend, post, and every call with the flag unset) run the
-  // caller's `tool` exactly as before — byte-identical. If enforcement somehow yielded no registered
+  // reaches here. OFF (the flag unset, no registry dep) runs the caller's `tool` exactly as before —
+  // byte-identical. If enforcement somehow yielded no registered
   // implementation on an ALLOW (it cannot: screen PASS always returns `run`), `executing` is null and
   // the call throws — recorded as a tool error, with the caller's closure still never run (fail closed).
   const executing: KernelTool<T> =
@@ -282,6 +288,13 @@ export async function runUnderKernel<T>(
     result = await executing();
   } catch (e) {
     toolError = e instanceof Error ? e.name : 'Error'; // the class of failure, never its message
+  }
+  // Opaque returns (objects, arrays, functions) are withheld. Scalars stay: the kernel suite's
+  // positive control returns the number 42, and GateResult<T> is generic. A receipt never carries
+  // the value either way. Strings, numbers, and booleans are handed back unchanged.
+  if (toolError === undefined && isOpaqueReturn(result)) {
+    toolError = 'OpaqueReturn';
+    result = undefined;
   }
 
   let observation: ReturnType<NonNullable<RunOptions<T>['observePayment']>>;
@@ -296,7 +309,15 @@ export async function runUnderKernel<T>(
   const outcomeDecision: DecisionLeg =
     toolError === undefined
       ? a.decision
-      : { ...a.decision, reasons: [...a.decision.reasons, { code: 'tool_error', detail: `the tool ran and threw (${toolError})` }] };
+      : {
+          ...a.decision,
+          reasons: [
+            ...a.decision.reasons,
+            toolError === 'OpaqueReturn'
+              ? { code: 'tool_error', detail: 'the tool returned an opaque value; the value was withheld' }
+              : { code: 'tool_error', detail: `the tool ran and threw (${toolError})` },
+          ],
+        };
 
   let outcomeRow: KernelReceipt | null = null;
   try {
@@ -330,16 +351,17 @@ export async function runUnderKernel<T>(
     final_receipt: outcomeRow,
     outcome_unrecorded: outcomeRow === null,
   };
-  // FAIL-CLOSED OUTPUT GATE (Draft 3, defence-in-depth). The tool's return value enters the gate
-  // result ONLY when the tool returned AND its outcome row was recorded. On ANY output-gate failure —
-  // the tool threw, or the outcome row could not be written (`outcome_unrecorded`) — the value is
-  // withheld: it never enters the gate result, and it never entered the receipt (a receipt carries no
-  // return value, only an args_hash). So a consumer that ignores `outcome_unrecorded` still cannot act
-  // on a result whose authorisation record is incomplete.
+  // FAIL-CLOSED OUTPUT GATE. The tool's return value enters the gate result only when the tool
+  // returned a scalar (string, number, or boolean) AND its outcome row was recorded. On a throw, an
+  // opaque return, or a failed outcome write (`outcome_unrecorded`), the value is withheld. A receipt
+  // never carries a return value, only an args_hash.
   if (toolError === undefined && outcomeRow !== null) out.result = result as T;
   else if (toolError !== undefined) out.tool_error = toolError;
   return out;
 }
+
+/** Inside a dry preview receipt. Persisted execution receipts do not carry this line. */
+export const DRY_PREVIEW_DOES_NOT_ATTEST = 'dry_preview (this receipt is not an authorization to execute)';
 
 export interface DryDecision {
   verdict: DecisionLeg['verdict'];
@@ -372,6 +394,13 @@ export async function dryDecision(rawRequest: unknown, deps: GateDeps): Promise<
   const env = deps.env ?? DEFAULT_ENV;
   let preview: KernelReceipt | null = null;
   try {
+    // The schema has no `runnable` field. The preview is told apart from a persisted decision row by
+    // this line inside the hashed decision. `decision.executed: false` is not enough: a real run writes
+    // a decision row with executed false before the tool runs.
+    const previewDecision = {
+      ...a.decision,
+      does_not_attest: [...a.decision.does_not_attest, DRY_PREVIEW_DOES_NOT_ATTEST],
+    };
     const candidate = buildReceipt({
       receipt_id: (deps.newId ?? randomUUID)(),
       prev: null,
@@ -379,7 +408,7 @@ export async function dryDecision(rawRequest: unknown, deps: GateDeps): Promise<
       env,
       request: a.request,
       owner: a.owner,
-      decision: a.decision,
+      decision: previewDecision,
       executed: false,
       phase: 'decision',
       hal: a.hal,

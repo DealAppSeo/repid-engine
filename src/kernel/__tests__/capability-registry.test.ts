@@ -174,6 +174,13 @@ describe("classifyProhibitedCapability — XC1's evasion list no longer slips (v
     expect(classifyProhibitedCapability('export﻿api_key')).toBe('secret_export'); // BOM
   });
 
+  it('classifies separator-free spellings of a prohibited capability id (Draft 4)', () => {
+    for (const id of ['exportAllSecrets', 'secretsExport', 'exportallsecrets', 'ExportAllSecrets']) {
+      expect(classifyProhibitedCapability(id)).toBe('secret_export');
+    }
+    expect(classifyProhibitedCapability('writeTrustedMemory')).toBe('trusted_memory_write');
+  });
+
   it('does not over-classify benign capabilities or the deliberate exceptions', () => {
     for (const id of ['format.markdown', 'repid.read', 'http.get', 'memory.read_trusted', 'secrets.rotate', '']) {
       expect(classifyProhibitedCapability(id)).toBeNull();

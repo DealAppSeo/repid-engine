@@ -421,5 +421,7 @@ describe('Draft 3 — flag-OFF receipt is byte-identical to pre-Draft-3 (frozen 
     expect(out.final_receipt!.header.receipt_hash).toBe(GOLDEN_OUTCOME_HASH);
     expect(out.decision_receipt!.decision.checks.some((c) => c.name === 'capability')).toBe(false);
     expect(out.final_receipt!.decision.checks.some((c) => c.name === 'capability')).toBe(false);
+    expect(out.decision_receipt!.decision.checks.some((c) => c.name === 'capability_enforced')).toBe(false);
+    expect(out.final_receipt!.decision.checks.some((c) => c.name === 'capability_enforced')).toBe(false);
   });
 });
