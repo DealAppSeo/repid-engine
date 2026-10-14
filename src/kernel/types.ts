@@ -88,7 +88,8 @@ export type ReasonCode =
   | 'prohibited_capability'
   | 'impl_reference_mismatch'
   | 'capability_not_checked'
-  | 'registry_empty';
+  | 'registry_empty'
+  | 'impl_class_mismatch';
 
 export interface Reason {
   code: ReasonCode;

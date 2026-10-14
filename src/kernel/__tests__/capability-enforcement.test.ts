@@ -44,10 +44,10 @@ function registry() {
     readtrusted: jest.fn(async () => 'read'),
   };
   const reg = createCapabilityRegistry();
-  reg.register({ implId: 'impl.formatter', capability: { id: 'format.markdown' }, run: impls.formatter });
-  reg.register({ implId: 'impl.secret', capability: { id: 'secrets.export_all' }, run: impls.secret });
-  reg.register({ implId: 'impl.rotate', capability: { id: 'secrets.rotate' }, run: impls.rotate });
-  reg.register({ implId: 'impl.readtrusted', capability: { id: 'memory.read_trusted' }, run: impls.readtrusted });
+  reg.register({ implId: 'impl.formatter', capability: { id: 'format.markdown', toolClass: 'read' }, run: impls.formatter });
+  reg.register({ implId: 'impl.secret', capability: { id: 'secrets.export_all', toolClass: 'read' }, run: impls.secret });
+  reg.register({ implId: 'impl.rotate', capability: { id: 'secrets.rotate', toolClass: 'read' }, run: impls.rotate });
+  reg.register({ implId: 'impl.readtrusted', capability: { id: 'memory.read_trusted', toolClass: 'read' }, run: impls.readtrusted });
   return { reg, impls };
 }
 
@@ -276,13 +276,13 @@ describe('Draft 3 #1 — reference-equality at the call site closes the closure 
     // This is the hole. The screen, asked ONLY the declared name (no candidate), says allow — even
     // though the gate would then run whatever closure the caller supplied. Draft 2 called it this way.
     const { reg } = registry();
-    const screenNoCandidate = screenCapability({ implRef: 'impl.formatter' }, reg, new Set(['impl.formatter']));
+    const screenNoCandidate = screenCapability({ toolClass: 'read', implRef: 'impl.formatter' }, reg, new Set(['impl.formatter']));
     expect(screenNoCandidate.allow).toBe(true);
     expect(screenNoCandidate.outcome).toBe('PASS');
     // Draft 3 threads the EXECUTING closure in as the candidate: a look-alike (different object) fails
     // closed BEFORE anything runs.
     const evil = async () => 'EXFILTRATED';
-    const screenWithCandidate = screenCapability({ implRef: 'impl.formatter', candidate: evil }, reg, new Set(['impl.formatter']));
+    const screenWithCandidate = screenCapability({ toolClass: 'read', implRef: 'impl.formatter', candidate: evil }, reg, new Set(['impl.formatter']));
     expect(screenWithCandidate.allow).toBe(false);
     expect(screenWithCandidate.code).toBe('impl_reference_mismatch');
   });

@@ -44,6 +44,8 @@
  * wires it into decide(); Draft 3 supplies the real `candidate` and runs the registered implementation.
  */
 
+import { TOOL_CLASSES, type ToolClass } from './types';
+
 // ── prohibited capabilities (a FLOOR under the registry, not the load-bearing control) ───────────────
 //
 // The registry identity (above) is what actually stops the formatter bypass. This prohibition list is
@@ -168,6 +170,12 @@ export function logCapabilityRegistryEmpty(site: 'boot' | 'decision'): void {
 export interface Capability {
   /** Kernel-owned capability id, e.g. `format.markdown`. The prohibition floor screens THIS, not a name. */
   id: string;
+  /**
+   * The ONE tool class this implementation may run under, fixed at registration. A request asserting
+   * any other class is refused (`impl_class_mismatch`). Without it, a registered payment impl called as
+   * `other` skipped every spend check, and a post impl called as `read` skipped HAL (re-attack of #1358).
+   */
+  toolClass: ToolClass;
   /** Optional human label for the audit trail. */
   label?: string;
 }
@@ -214,6 +222,9 @@ export class CapabilityRegistry implements ReadonlyCapabilityRegistry {
     if (implId === '') throw new Error('[capability-registry] implId must be a non-empty string');
     if (!entry.capability || typeof entry.capability.id !== 'string' || entry.capability.id.trim() === '') {
       throw new Error('[capability-registry] a registered implementation must carry a non-empty capability.id');
+    }
+    if (!TOOL_CLASSES.includes(entry.capability.toolClass)) {
+      throw new Error(`[capability-registry] capability.toolClass must be one of ${TOOL_CLASSES.join(', ')}`);
     }
     if (typeof entry.run !== 'function') {
       throw new Error('[capability-registry] run must be a function (the boot-loaded implementation)');
@@ -262,6 +273,11 @@ export interface CapabilityQuery {
    * a caller-chosen reference safe (a mismatch is denied BEFORE the call).
    */
   candidate?: unknown;
+  /**
+   * The class the request asserts. Caller-supplied, so it is only ever COMPARED to the registered class,
+   * never trusted. Required: an absent class matches nothing and fails closed.
+   */
+  toolClass: unknown;
 }
 
 export type CapabilityOutcome = 'PASS' | 'FAIL';
@@ -271,11 +287,15 @@ export type CapabilityReasonCode =
   | 'impl_reference_mismatch'
   | 'impl_unauthorized'
   | 'prohibited_capability'
-  | 'registry_empty';
+  | 'registry_empty'
+  | 'impl_class_mismatch';
 
 export interface CapabilityScreen {
   outcome: CapabilityOutcome;
-  /** True only when registered AND authorized AND not prohibited AND (if given) the candidate matches. */
+  /**
+   * True only when registered AND authorized AND not prohibited AND the request's class is the registered
+   * class AND (if given) the candidate matches.
+   */
   allow: boolean;
   /** The resolved KERNEL-OWNED capability id, or null. Never derived from the caller's reference string. */
   capabilityId: string | null;
@@ -341,6 +361,12 @@ export function screenCapability(
     return fail('prohibited_capability', `the registered capability is hard-prohibited (${prohibited}); refused regardless of policy, trust or stake`);
   }
 
+  // Class binding: the class decides which gates run (spend limits, HAL), so the caller must not pick a
+  // weaker one for a registered impl. Exact match, so 'read' and 'other' are not interchangeable either.
+  if (query.toolClass !== entry.capability.toolClass) {
+    return fail('impl_class_mismatch', `the request's tool class is not the class this implementation is registered for (${entry.capability.toolClass}); fail closed`);
+  }
+
   return {
     outcome: 'PASS',
     allow: true,
@@ -348,6 +374,6 @@ export function screenCapability(
     implId: entry.implId,
     run: entry.run,
     code: null,
-    detail: 'registered, authorized, and not prohibited',
+    detail: 'registered, authorized, not prohibited, and called under its registered class',
   };
 }

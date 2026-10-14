@@ -22,8 +22,8 @@ function registry() {
     secret: jest.fn(async () => 'x'),
   };
   const reg = createCapabilityRegistry();
-  reg.register({ implId: 'impl.formatter', capability: { id: 'format.markdown' }, run: impls.formatter });
-  reg.register({ implId: 'impl.secret', capability: { id: 'secrets.export_all' }, run: impls.secret });
+  reg.register({ implId: 'impl.formatter', capability: { id: 'format.markdown', toolClass: 'read' }, run: impls.formatter });
+  reg.register({ implId: 'impl.secret', capability: { id: 'secrets.export_all', toolClass: 'read' }, run: impls.secret });
   return { reg, impls };
 }
 
@@ -146,7 +146,7 @@ describe('Draft 4 F1 — spend/post relabel cannot skip the capability screen', 
     const payment = jest.fn(async () => 'paid');
     const caller = jest.fn(async () => SENTINEL);
     const reg = createCapabilityRegistry();
-    reg.register({ implId: 'impl.payment', capability: { id: 'payment.transfer' }, run: payment });
+    reg.register({ implId: 'impl.payment', capability: { id: 'payment.transfer', toolClass: 'spend' }, run: payment });
     const h = harness({ capabilityRegistry: reg });
     await h.ledger.appendPolicy(
       await signedPolicyV2(h.owner, {
@@ -254,7 +254,7 @@ describe('Draft 4 residuals — non-string return and the dry preview', () => {
   it('a non-string return is withheld from the gate result and the receipt', async () => {
     const impl = jest.fn(async () => ({ leaked: SENTINEL }));
     const reg = createCapabilityRegistry();
-    reg.register({ implId: 'impl.formatter', capability: { id: 'format.markdown' }, run: impl });
+    reg.register({ implId: 'impl.formatter', capability: { id: 'format.markdown', toolClass: 'read' }, run: impl });
     const h = harness({ capabilityRegistry: reg });
     await h.ledger.appendPolicy(await signedPolicyV2(h.owner), iso);
     const out = await runUnderKernel(toolRequest('impl.formatter'), impl, h.deps);
