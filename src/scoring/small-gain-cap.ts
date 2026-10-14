@@ -22,13 +22,15 @@
  * ════════════════════════════════════════════════════════════════════════════════
  * ONE FLAG, SHADOW WHILE OFF
  * ════════════════════════════════════════════════════════════════════════════════
- * This lane shares the confirmed-outcome flag — there is no second switch. While
- * `confirmedOutcomeScoringEnabled()` is OFF (the default, and prod today), the engine
- * RECORDS the cap decision this module returns and applies ZERO to the score: the
- * computation is shadow — recorded, never moved. Arming is a deploy-time decision this
- * lane takes nowhere. The resolver itself is PURE (no flag read, no I/O), so it is the
- * caller that decides apply-vs-shadow; `smallGainScoringArmed()` is the one flag read,
- * kept tiny and separate exactly as confirmed-outcome keeps `confirmedOutcomeScoringEnabled`.
+ * This lane shares the confirmed-outcome flag — there is no second switch. The CALLER is
+ * `engine/repid-update.ts::updateRepId`, inside the flag-ON confirmed-outcome branch: every
+ * positive confirmed delta goes through `capSmallGain` there, with budget readers
+ * (`smallGainCapDepsFor`) that sum today's applied confirmed gains from repid_score_events, and
+ * the decision is recorded in the audit row (`metadata.confirmed_outcome.small_gain_cap`).
+ * While the flag is OFF (the default, and prod today) that branch is never entered, so this
+ * module is not called and NOTHING is recorded. (Until 2026-10-14 this paragraph said an OFF
+ * engine records the decision in shadow; no caller existed at all, so nothing was recorded and
+ * nothing was capped.) The resolver itself is PURE apart from the flag read in `result`.
  *
  * ════════════════════════════════════════════════════════════════════════════════
  * FAIL CLOSED — "we could not read the budget" is never "the budget is free"
@@ -55,8 +57,8 @@ import { confirmedOutcomeScoringEnabled, loadConfirmedParams } from './confirmed
 // ── the flag (shared with confirmed-outcome; shadow while OFF) ──────────────────────────
 //
 // Deliberately the SAME switch as the confirmed-outcome lane — this is the cap on that
-// lane's gains, not a new feature with its own toggle. While OFF the engine records the cap
-// decision and moves the score by zero (shadow). Read through the confirmed-outcome helper
+// lane's gains, not a new feature with its own toggle. While OFF the engine never calls the cap
+// (the confirmed branch is not entered). Read through the confirmed-outcome helper
 // so there is exactly one definition of "is confirmed scoring armed".
 export function smallGainScoringArmed(): boolean {
   return confirmedOutcomeScoringEnabled();
@@ -333,8 +335,8 @@ function result(
 /**
  * Cap a confirmed small learning gain. Pure over its inputs and the injected budget readers
  * (the flag is the only ambient read, isolated in `result`/`smallGainScoringArmed`). Returns a
- * fully-recordable decision; the engine applies `cappedGain` only when `armed`, and records it
- * (shadow) either way.
+ * fully-recordable decision. The engine calls it only from the flag-ON branch (so `armed` is true
+ * there), applies `cappedGain`, and records the decision in the audit row.
  */
 export async function capSmallGain(
   input: SmallGainInput,

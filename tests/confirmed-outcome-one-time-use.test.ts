@@ -99,7 +99,9 @@ jest.mock('../src/db', () => ({
           },
         };
       }
-      return { insert: async (row: any) => { inserted.push(row); return { error: null }; } };
+      // repid_score_events: the audit insert, and the small-gain cap's budget reads (nothing spent today).
+      const noRows: any = { eq: () => noRows, gte: () => noRows, gt: () => noRows, then: (ok: any) => Promise.resolve({ data: [], error: null }).then(ok) };
+      return { insert: async (row: any) => { inserted.push(row); return { error: null }; }, select: () => noRows };
     }),
   },
 }));
@@ -130,12 +132,16 @@ function receiptRow(over: Record<string, unknown> = {}): Record<string, unknown>
     verdict_label: 'SETTLED',
     verification_status: 'VERIFIED',
     is_simulated: false,
+    args_hash: '0x' + 'ab'.repeat(32),
+    created_at: new Date(Date.now() - 60_000).toISOString(),
     consumed_at: null,
     ...over,
   };
 }
 
-const moveOnce = { settledBy: 'holdout' as const, result: 'right' as const, confirmationReceiptId: 'rcpt-1' };
+// A domain is required since 2026-10-14: every confirmed gain goes through the small-gain cap, which pays
+// nothing on a domain-less gain (a gain must not cross domains).
+const moveOnce = { settledBy: 'holdout' as const, result: 'right' as const, domain: 'law', confirmationReceiptId: 'rcpt-1' };
 
 beforeEach(() => {
   for (const k of Object.keys(PINNED)) { SAVED[k] = process.env[k]; process.env[k] = PINNED[k]; }

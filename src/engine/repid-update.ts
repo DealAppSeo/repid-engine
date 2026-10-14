@@ -24,6 +24,7 @@ import {
 import { scoreLaneFromGrounding } from '../scoring/score-lane';
 import {
   confirmedOutcomeScoringEnabled,
+  confirmedReceiptTtlMs,
   resolveConfirmedOutcome,
   type ConfirmedOutcomeInput,
   type ConfirmedOutcomeDeps,
@@ -31,6 +32,7 @@ import {
   type ConfirmedResultKind,
   type VerifiedConfirmation,
 } from '../scoring/confirmed-outcome';
+import { capSmallGain, type BudgetReading, type SmallGainCapResult, type SmallGainDeps } from '../scoring/small-gain-cap';
 import { resolveOwner as resolveAgentOwner } from '../services/agent-owner-resolver';
 
 export interface RepIdUpdateInput {
@@ -461,8 +463,9 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // --- CONFIRMED-OUTCOME SCORING (flag-gated, default OFF) ---------------------
   // When CONFIRMED_OUTCOME_SCORING_ENABLED is ON and this event carries a
   // confirmedOutcome payload, the official score moves ONLY on a CONFIRMED outcome.
-  // A NOT-CONFIRMED outcome (a 2-1 vote, an abstain, a counterparty that cannot be
-  // shown independent) is held INERT — exactly like a shadow-deception event: no
+  // A NOT-CONFIRMED outcome (no server-settled receipt — so a caller-asserted 2-1 vote or
+  // abstain — an expired receipt, a counterparty that cannot be shown independent, a gain
+  // the small-gain cap holds at zero) is held INERT — exactly like a shadow-deception event: no
   // delta, no decay, no activity bump, no operational side-effects. With the flag
   // OFF this branch is never entered, so scoring is EXACTLY as today.
   let confirmedOutcomeResult: ConfirmedOutcomeResult | null = null;
@@ -473,6 +476,9 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   //   false → a would-move was held INERT because the receipt was already consumed (replay)
   //           or the conditional claim failed. Recorded honestly in the audit row below.
   let confirmationReceiptConsumed: boolean | null = null;
+  // The small-gain cap decision for a confirmed GAIN (null for wrongs and for anything that did
+  // not settle). Recorded in the audit row; the cap's own readers sum these rows back.
+  let smallGainCapResult: SmallGainCapResult | null = null;
   if (confirmedOutcomeScoringEnabled() && input.confirmedOutcome) {
     // CWE-345 — the confirmedOutcome payload is CALLER-ASSERTED. It must never move the
     // official score on its own. A confirmation may settle ONLY from a SERVER-DERIVED
@@ -506,22 +512,44 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       input.confirmedOutcomeDeps ?? confirmedOutcomeDepsFor(agent),
     );
     if (serverVerified && confirmedOutcomeResult.scoreMoves) {
-      // ONE-TIME USE (replay-inert). A server-verified confirmation may move the official score
-      // AT MOST ONCE. Claim the receipt with a CONDITIONAL, atomic write
-      // (UPDATE ... WHERE receipt_id=$1 AND consumed_at IS NULL) so exactly one request can win:
-      // if this call takes the row the score moves; if the row is already consumed (zero rows)
-      // or the write errors, the confirmation is held INERT — a replay of the same
-      // confirmationReceiptId cannot move the score a second time. Fail-closed by construction.
-      // Reached ONLY inside this flag-gated, server-verified, scoreMoves branch, so with
-      // CONFIRMED_OUTCOME_SCORING_ENABLED OFF (prod default) and the table absent, it never runs.
-      confirmationReceiptConsumed = await claimConfirmationReceipt(
-        input.confirmedOutcome.confirmationReceiptId,
-      );
+      let moveBy = confirmedOutcomeResult.appliedDelta;
+      // SMALL-GAIN CAP (2026-10-14, XC1 finding 1). Every positive confirmed delta goes through
+      // capSmallGain, with readers that sum the confirmed gains ALREADY APPLIED to this agent in
+      // the current UTC day (all domains, and this domain) from repid_score_events. Until this the
+      // cap had 26 passing tests and no caller: a day paid one full gain per receipt. A budget we
+      // cannot read caps the gain to ZERO (fail closed), and a gain capped to zero claims nothing,
+      // so the receipt stays spendable on a later day (until its TTL).
+      if (moveBy > 0) {
+        const d = callerAssertedOutcome.domain;
+        smallGainCapResult = await capSmallGain(
+          { actorAgentId: input.agentId, domain: typeof d === 'string' ? d.trim() : null, computedGain: moveBy },
+          smallGainCapDepsFor(),
+        );
+        moveBy = smallGainCapResult.cappedGain;
+        if (moveBy === 0) {
+          console.warn(
+            `[confirmed-outcome] confirmed gain HELD at 0 by the small-gain cap for agent ${input.agentId}: ` +
+              `${smallGainCapResult.reason} (receipt not consumed)`,
+          );
+        }
+      }
+      if (moveBy !== 0) {
+        // ONE-TIME USE (replay-inert). Claim the receipt with a CONDITIONAL, atomic write
+        // (UPDATE ... WHERE receipt_id=$1 AND consumed_at IS NULL): if this call takes the row the
+        // score moves; if it is already consumed (zero rows), the same content was already paid
+        // (unique violation, see claimConfirmationReceipt), or the write errors, the confirmation
+        // is held INERT. A WRONG is claimed too, so a FAILED receipt is spent exactly once.
+        // Reached ONLY inside this flag-gated, server-verified branch, so with
+        // CONFIRMED_OUTCOME_SCORING_ENABLED OFF (prod default) and the table absent, it never runs.
+        confirmationReceiptConsumed = await claimConfirmationReceipt(
+          input.confirmedOutcome.confirmationReceiptId,
+        );
+      }
       if (confirmationReceiptConsumed) {
-        rawDelta = confirmedOutcomeResult.appliedDelta;
+        rawDelta = moveBy;
       } else {
         rawDelta = 0;
-        isUnconfirmedHold = true; // already-consumed replay / failed claim → no move (fail closed)
+        isUnconfirmedHold = true; // capped to zero / replay / content already paid / failed claim → no move
       }
     } else {
       rawDelta = 0;
@@ -670,7 +698,13 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
       validationLookup: input.groundingDeps?.validationLookup,
       protocolLookup: input.groundingDeps?.protocolLookup,
     });
-    const gated = enforceGroundedDelta(finalDelta, groundingMeta.g_verified, groundingMode());
+    // A server-settled WRONG whose receipt was just spent is grounded BY that receipt. Without this,
+    // GROUNDING_MODE=enforce would zero it whenever the caller simply omitted groundingEvidence —
+    // the same dodge the resolver now refuses. Gains stay subject to grounding (it can only lower them).
+    const settledWrongSpent = confirmationReceiptConsumed === true && finalDelta < 0;
+    const gated = settledWrongSpent
+      ? finalDelta
+      : enforceGroundedDelta(finalDelta, groundingMeta.g_verified, groundingMode());
     if (gated !== finalDelta) {
       finalDelta = gated;
       newRepId = isInertHold
@@ -800,6 +834,17 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
             // attempted (not server-verified, or no move). A false here with score_moves:true is
             // honest: the outcome WOULD move, but this receipt was already spent.
             receipt_consumed: confirmationReceiptConsumed,
+            // The cap decision for a confirmed gain (null otherwise). `domain` here is the key the
+            // per-domain budget reader filters on (smallGainCapDepsFor), so it is written by the cap.
+            small_gain_cap: smallGainCapResult
+              ? {
+                  capped_gain: smallGainCapResult.cappedGain,
+                  reason: smallGainCapResult.reason,
+                  domain: smallGainCapResult.detail.domain,
+                  per_day_remaining: smallGainCapResult.detail.perDayRemaining,
+                  per_domain_remaining: smallGainCapResult.detail.perDomainRemaining,
+                }
+              : null,
             detail: confirmedOutcomeResult.detail,
           }
         : null,
@@ -903,7 +948,9 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *                        row is NULL). Until a family is recorded on both agents AND they differ,
  *                        the counterparty settler stays REFUSED — a NULL read fails closed, never
  *                        open. (The flag is unchanged/OFF; the column armed nothing.)
- *  - domainTrackRecord → from the actor's `repid_agents.domain_accuracy` jsonb.
+ *  - domainTrackRecord → from the actor's `repid_agents.domain_accuracy` jsonb. DORMANT since
+ *                        2026-10-14: the resolver no longer reads it (a caller-chosen domain must
+ *                        not shrink a server-settled wrong; see confirmed-outcome.ts header).
  *  - domainNeedWeight  → getEcosystemNeedWeight(domain) — the computed-but-never-applied
  *                        ecosystem weight, now applied ONLY here, per-domain, gains-only.
  */
@@ -923,9 +970,18 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *     "we did not look" is not a verdict);
  *   - `is_simulated === false` (a simulated record can never move a real score);
  *   - `settled_by` is 'holdout' or 'known_answer' — 'person', null and anything else stay FAIL-CLOSED
- *     (person and counterparty are deliberately NOT settling sources here, per Sean).
+ *     (person and counterparty are deliberately NOT settling sources here, per Sean);
+ *   - EXPIRY (2026-10-14): `created_at` is readable and no older than REPID_CONFIRMED_RECEIPT_TTL_HOURS
+ *     (default 72h). An expired receipt confirms nothing and is NOT consumed;
+ *   - CONTENT KEY (2026-10-14): `args_hash` is a 0x+32-byte hash. It is what makes "the same work
+ *     under a fresh receipt_id" pay once (claimConfirmationReceipt + the unique index in
+ *     migrations/2026-10-14-kernel-receipts-content-claim.sql). A row without one cannot be
+ *     de-duplicated, so it fails closed; so does a table without the column (the select errors).
  * The SERVER then establishes the result: VERIFIED → 'right', FAILED → 'wrong'. A thrown DB error
  * (table absent in prod, store down) → undefined. It NEVER throws into the score path.
+ *
+ * ponytail: `created_at` is the INDEX time, which equals mint time because the indexer runs at mint.
+ * A backfill of old JSONL receipts would stamp them fresh; read receipt.header.created_at if one is built.
  *
  * Only ever called inside the `confirmedOutcomeScoringEnabled()` branch, so with the flag OFF (the
  * production default) it is never invoked — the absent table cannot affect prod scoring.
@@ -939,7 +995,7 @@ export async function resolveServerConfirmation(
     if (id === '') return undefined; // no pointer → nothing to verify → fail closed
     const { data, error } = await db
       .from('kernel_receipts')
-      .select('subject_agent_id, settled_by, verdict_label, verification_status, is_simulated')
+      .select('subject_agent_id, settled_by, verdict_label, verification_status, is_simulated, args_hash, created_at')
       .eq('receipt_id', id)
       .maybeSingle();
     if (error || !data) return undefined; // no row (or a read error) → fail closed
@@ -949,6 +1005,8 @@ export async function resolveServerConfirmation(
       verdict_label?: unknown;
       verification_status?: unknown;
       is_simulated?: unknown;
+      args_hash?: unknown;
+      created_at?: unknown;
     };
     // ACTOR BINDING (CWE-345): the receipt must be ABOUT the acting agent. A caller cannot borrow
     // another agent's receipt. Positively established by equality; anything non-string fails closed.
@@ -961,11 +1019,22 @@ export async function resolveServerConfirmation(
     const settledBy = row.settled_by;
     // 'person', null, 'counterparty', anything else → fail closed. Only objective record settlers.
     if (settledBy !== 'holdout' && settledBy !== 'known_answer') return undefined;
+    // CONTENT KEY — no hash, no de-duplication, no confirmation.
+    if (typeof row.args_hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(row.args_hash)) return undefined;
+    // EXPIRY — an undatable or stale receipt confirms nothing (and so is never claimed).
+    const createdMs = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN;
+    if (!Number.isFinite(createdMs)) return undefined;
+    if (Date.now() - createdMs > confirmedReceiptTtlMs()) {
+      console.warn(`[confirmed-outcome] receipt ${id} is past its TTL; it confirms nothing and is not consumed`);
+      return undefined;
+    }
     // The SERVER establishes right/wrong — the caller does not get to say which.
     const result: ConfirmedResultKind = status === 'VERIFIED' ? 'right' : 'wrong';
     return { source: 'kernel_receipt', settledBy, result };
-  } catch {
-    return undefined; // never throw into the score path
+  } catch (e) {
+    // Never throw into the score path — but say so: a bad TTL knob must not fail closed silently.
+    console.error(`[confirmed-outcome] server confirmation FAILED CLOSED: ${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
   }
 }
 
@@ -980,9 +1049,18 @@ export async function resolveServerConfirmation(
  *     RETURNING receipt_id
  *
  * Postgres evaluates the predicate and the write in ONE statement, so under concurrency exactly
- * one caller observes a freshly-claimed row; every later attempt matches zero rows. Returns:
+ * one caller observes a freshly-claimed row; every later attempt matches zero rows.
+ *
+ * CONTENT KEY (2026-10-14, XC1 finding 1). Keyed on receipt_id alone, every freshly minted id for
+ * the SAME work was a fresh full gain. The partial unique index
+ * `kernel_receipts_one_gain_per_content (subject_agent_id, args_hash) WHERE consumed_at IS NOT NULL
+ * AND verification_status = 'VERIFIED'` (migrations/2026-10-14-kernel-receipts-content-claim.sql)
+ * makes this same UPDATE fail with 23505 when that subject's same args_hash was already paid as a
+ * gain — atomically, under concurrency, inside the one statement. FAILED rows are outside the index:
+ * each failed run is its own wrong, spent once by receipt_id. Returns:
  *   - true  → this call claimed the row (first use): the score MAY move.
- *   - false → zero rows (already consumed / absent id) OR any DB error: the confirmation is INERT.
+ *   - false → zero rows (already consumed / absent id), 23505 (content already paid), or any DB
+ *             error: the confirmation is INERT.
  * It NEVER throws into the score path. Invoked ONLY inside the flag-gated, server-verified,
  * scoreMoves branch, so with CONFIRMED_OUTCOME_SCORING_ENABLED OFF (prod default) and the table
  * absent it is never run — exactly like resolveServerConfirmation above.
@@ -999,11 +1077,58 @@ export async function claimConfirmationReceipt(
       .eq('receipt_id', id)
       .is('consumed_at', null)
       .select('receipt_id');
-    if (error) return false; // write error → fail closed, no move
+    if (error) {
+      if (String((error as { code?: unknown }).code) === '23505') {
+        console.warn(`[confirmed-outcome] receipt ${id} held: content_already_claimed (same subject + args_hash already paid)`);
+      }
+      return false; // write error / content already paid → fail closed, no move
+    }
     return Array.isArray(data) && data.length > 0; // claimed exactly one row → may move
   } catch {
     return false; // never throw into the score path
   }
+}
+
+/**
+ * The small-gain cap's budget readers (2026-10-14), from data that already exists: the confirmed
+ * gains this engine wrote to repid_score_events (`delta > 0` and
+ * `metadata.confirmed_outcome.receipt_consumed = true`) since 00:00:00Z of the current UTC day.
+ * The per-domain reader also filters on `metadata.confirmed_outcome.small_gain_cap.domain`, the key
+ * the cap itself records, so writer and reader cannot disagree. The audit row is inserted BEFORE the
+ * score moves, so a row whose score update then failed still counts: over-counting spent budget, the
+ * safe direction. Any read error or unreadable sum → `checked:false` → capSmallGain caps to ZERO.
+ *
+ * Both budgets are per UTC day. "Per domain" is read as per-domain-per-day: a lifetime cap of a few
+ * points per domain would end the gain path, and nothing in the cap decision asks for one.
+ *
+ * ponytail: read-then-claim is not atomic, so N concurrent requests can overshoot the day cap by up
+ * to N-1 gains. A DB-side reservation (an RPC, or a per-agent row lock) closes it; that needs DDL.
+ */
+export function smallGainCapDepsFor(): SmallGainDeps {
+  const sumToday = async (agentId: string, domain: string | null): Promise<BudgetReading> => {
+    try {
+      const dayStart = new Date(Date.now());
+      dayStart.setUTCHours(0, 0, 0, 0);
+      let q = db
+        .from('repid_score_events')
+        .select('delta')
+        .eq('agent_id', agentId)
+        .gte('created_at', dayStart.toISOString())
+        .gt('delta', 0)
+        .eq('metadata->confirmed_outcome->>receipt_consumed', 'true');
+      if (domain !== null) q = q.eq('metadata->confirmed_outcome->small_gain_cap->>domain', domain);
+      const { data, error } = await q;
+      if (error || !Array.isArray(data)) return { checked: false, total: 0 };
+      const total = data.reduce((s: number, r: { delta?: unknown }) => s + Number(r.delta ?? 0), 0);
+      return Number.isFinite(total) ? { checked: true, total } : { checked: false, total: 0 };
+    } catch {
+      return { checked: false, total: 0 };
+    }
+  };
+  return {
+    accumulatedTodaySmallGain: (agentId) => sumToday(agentId, null),
+    accumulatedDomainSmallGain: (agentId, domain) => sumToday(agentId, domain),
+  };
 }
 
 export function confirmedOutcomeDepsFor(actor: any): ConfirmedOutcomeDeps {

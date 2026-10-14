@@ -18,12 +18,13 @@ import type { KernelReceipt } from './types';
  * Upsert a receipt into public.kernel_receipts, keyed by receipt_id. The decision row (executed:false)
  * is written first and the outcome row (executed:true) UPSERTs over it under the same id, so the index
  * ends on the final state of each call. All confirmation-relevant fields come from the VERIFICATION LEG
- * (status / verdict_label / settled_by / is_simulated), which is what the verifier gates on.
+ * (status / verdict_label / settled_by / is_simulated), which is what the verifier gates on, plus the
+ * request's args_hash (the content key the one-gain-per-content claim is unique on).
  */
 export async function indexKernelReceiptToDb(receipt: KernelReceipt): Promise<void> {
   try {
     const v = receipt.verification;
-    await db.from('kernel_receipts').upsert(
+    const { error } = await db.from('kernel_receipts').upsert(
       {
         receipt_id: receipt.header.receipt_id,
         subject_agent_id: receipt.subject.agent.agent_id,
@@ -32,10 +33,16 @@ export async function indexKernelReceiptToDb(receipt: KernelReceipt): Promise<vo
         verification_status: v.status,
         is_simulated: v.is_simulated,
         receipt_hash: receipt.header.receipt_hash,
+        // CONTENT KEY for the confirmed-outcome claim (2026-10-14): the same work under a new receipt_id
+        // pays once. Needs migrations/2026-10-14-kernel-receipts-content-claim.sql; until it is applied,
+        // PostgREST rejects this upsert (unknown column), nothing is indexed and nothing confirms (fail closed).
+        args_hash: receipt.request.args_hash,
         receipt,
       },
       { onConflict: 'receipt_id' },
     );
+    // supabase-js RETURNS a write error rather than throwing it; until 2026-10-14 this one went unread.
+    if (error) console.warn(`[kernel] kernel_receipts index upsert failed (ledger unaffected): ${error.message}`);
   } catch (e) {
     // Fail-open: the JSONL ledger is authoritative and already committed. Never rethrow.
     console.warn(
