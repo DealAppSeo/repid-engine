@@ -1,6 +1,6 @@
 import { enqueueVerification } from '../src/services/peer-verification-writer';
 import { processPeerVerificationQueue } from '../src/services/peer-verification-reader';
-import { getAgentPrivateKey } from '../src/routes/peer-verification';
+import { verifyPeerSignature } from '../src/routes/peer-verification';
 import crypto from 'crypto';
 
 describe('HAL Peer Verification Unit Tests', () => {
@@ -294,42 +294,33 @@ describe('HAL Peer Verification Unit Tests', () => {
     });
   });
 
-  describe('Agent Generalized HMAC Pattern', () => {
-    beforeEach(() => {
-      process.env.MEL_PRIVATE_KEY = 'mel-secret-key-123';
-      process.env.SOPHIA_PRIVATE_KEY = 'sophia-secret-key-456';
-      process.env.TRUSTRAILS_HMAC_SECRET = 'global-secret-key-789';
-    });
+  describe('Peer-verify HMAC: PEER_VERIFY_HMAC_SECRET only (no wallet-key fallback)', () => {
+    const data = '123:response-uuid-abc:verified';
+    const sig = (secret: string) => crypto.createHmac('sha256', secret).update(data).digest('hex');
 
+    beforeEach(() => {
+      process.env.MEL_PRIVATE_KEY = 'mel-wallet-key';
+      process.env.TRUSTRAILS_HMAC_SECRET = 'trustrails-secret';
+    });
     afterEach(() => {
+      delete process.env.PEER_VERIFY_HMAC_SECRET;
       delete process.env.MEL_PRIVATE_KEY;
-      delete process.env.SOPHIA_PRIVATE_KEY;
       delete process.env.TRUSTRAILS_HMAC_SECRET;
     });
 
-    test('retrieves specific private keys for agents', () => {
-      expect(getAgentPrivateKey('trinity-mel')).toBe('mel-secret-key-123');
-      expect(getAgentPrivateKey('trinity-sophia')).toBe('sophia-secret-key-456');
+    test('shared-secret signature is accepted', () => {
+      process.env.PEER_VERIFY_HMAC_SECRET = 'shared-secret';
+      expect(verifyPeerSignature(data, sig('shared-secret'))).toEqual({ valid: true, configured: true, matched_via: 'global' });
     });
 
-    test('falls back to TRUSTRAILS_HMAC_SECRET for other agents', () => {
-      const originalKey = process.env.VERITAS_PRIVATE_KEY;
-      delete process.env.VERITAS_PRIVATE_KEY;
-      try {
-        expect(getAgentPrivateKey('trinity-veritas')).toBe('global-secret-key-789');
-      } finally {
-        process.env.VERITAS_PRIVATE_KEY = originalKey;
-      }
+    test('a ballot signed with the wallet key or TRUSTRAILS is rejected', () => {
+      process.env.PEER_VERIFY_HMAC_SECRET = 'shared-secret';
+      expect(verifyPeerSignature(data, sig('mel-wallet-key')).valid).toBe(false);
+      expect(verifyPeerSignature(data, sig('trustrails-secret')).valid).toBe(false);
     });
 
-    test('signature validation verifies authentic verifier payload', () => {
-      const secret = getAgentPrivateKey('trinity-mel');
-      const dataToSign = '123:response-uuid-abc:verified';
-      const sig = crypto.createHmac('sha256', secret).update(dataToSign).digest('hex');
-
-      // Verify signature
-      const expected = crypto.createHmac('sha256', secret).update(dataToSign).digest('hex');
-      expect(sig).toBe(expected);
+    test('secret unset: not configured, so every ballot is refused — even one signed with a fallback', () => {
+      expect(verifyPeerSignature(data, sig('mel-wallet-key'))).toEqual({ valid: false, configured: false });
     });
   });
 });

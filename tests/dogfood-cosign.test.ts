@@ -8,11 +8,11 @@
  * The actual award/slash is in routes/peer-verification.ts (behind DOGFOOD_REPID_FROM_COSIGN=false default).
  * These are smoke + doc tests; full integration would set env + mock pgQuery/db + call /respond.
  */
-import { getAgentPrivateKey } from '../src/routes/peer-verification';
+import { verifyPeerSignature } from '../src/routes/peer-verification';
 
 describe('dogfood cosign RepID wiring (gated on DOGFOOD_REPID_FROM_COSIGN)', () => {
   it('module loads and flag default is OFF (no scoring on pre-merge scorer)', () => {
-    expect(typeof getAgentPrivateKey).toBe('function');
+    expect(typeof verifyPeerSignature).toBe('function');
     const flag = (process.env.DOGFOOD_REPID_FROM_COSIGN || 'false').toLowerCase();
     expect(flag).not.toBe('true');
     // When flag OFF, respond for 'verified' hits the explicit no-op log path (see peer-verification.ts: ~260)
