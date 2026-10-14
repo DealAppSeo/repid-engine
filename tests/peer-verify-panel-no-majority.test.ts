@@ -182,7 +182,7 @@ describe('panel with all assigned ballots in and no 2-of-3 majority', () => {
     await castLastVote('disputed');
 
     const [sql, params] = callFor('panel-fetch-votes')!;
-    expect(sql).toMatch(/WHERE v\.queue_id = \$1/);
+    expect(sql).toMatch(/WHERE queue_id = \$1/);
     expect(sql).not.toMatch(/source_response_id = \$1/);
     expect(sql).toMatch(/assigned AS/);
     expect(params).toEqual([142077, [...PANEL_VERIFIER_POOL]]);

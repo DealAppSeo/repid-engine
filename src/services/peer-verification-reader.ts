@@ -2,6 +2,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { PeerVerificationQueueEntry } from '../types/peer-verification';
 import {
   peerVerifyPanelEnabled,
+  panelModesBootLine,
   PANEL_VERIFIER_POOL,
   PANEL_PROVIDER_HINTS,
 } from './peer-verify-consensus';
@@ -380,6 +381,7 @@ export function startPeerVerificationReader(db: SupabaseClient): void {
     clearInterval(readerInterval);
   }
   console.log('[PeerVerificationReader] Starting polling loop');
+  console.log(panelModesBootLine()); // boot: every panel switch and its resolved value
   readerInterval = setInterval(() => processPeerVerificationQueue(db), POLL_INTERVAL_MS);
 }
 
