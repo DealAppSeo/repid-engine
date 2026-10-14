@@ -53,6 +53,15 @@
  *   node scripts/dispatch/run-agent.mjs --agent ga --inbox            # newest INBOX entry
  *   node scripts/dispatch/run-agent.mjs --agent xc --inbox ./IN.md    # from an explicit file
  *   node scripts/dispatch/run-agent.mjs --agent xc --inbox --dry-run  # show, don't run
+ *   node scripts/dispatch/run-agent.mjs --agent codex --task "…"      # OpenAI Codex CLI
+ *
+ * LANES — one line each; capabilities and how each was measured live in AGENTS below:
+ *   xc         grok   (xAI)     L6 RED-TEAM    prompt on argv (-p)   key XAI_API_KEY | GROK_API_KEY
+ *   ga         gemini (Google)  L7 MEASUREMENT prompt on stdin       key GEMINI_API_KEY | GEMINI_API_KEY_2
+ *   codex      codex  (OpenAI)  L6 RED-TEAM    `codex exec -s read-only --ephemeral --json`, prompt on stdin,
+ *                                              final agent message kept; key OPENAI_API_KEY (CODEX_API_KEY alias)
+ *   codex-oss  codex + ollama   L6 RED-TEAM    same flags + `--oss --local-provider ollama -m $CODEX_OSS_MODEL`;
+ *                                              no cloud key; refuses if CODEX_OSS_MODEL is unset
  *
  * PATHS THIS READS, and how to move them off one machine:
  *   .env.master     TRUSTKEYS_ENV_MASTER   (default C:/Users/Cash4/repos/.env.master)
@@ -146,7 +155,98 @@ const AGENTS = {
     //   web_fetch          -> "not available to this agent"      => no `http`
     capabilities: ['reasoning', 'repo_read'],
   },
+  codex: {
+    cli: 'codex',
+    // `codex` is an npm .cmd shim on Windows (where codex -> codex.cmd [V 2026-10-14]), so it
+    // MUST be stdin — see resolveBin. `-` tells `codex exec` to read the prompt from stdin.
+    mode: 'stdin',
+    args: (_p, { root }) => codexArgs(root),
+    // OPENAI_API_KEY is the name in .env.master [V 2026-10-14, name only]. The codex binary
+    // reads both OPENAI_API_KEY and CODEX_API_KEY (strings in codex.exe 0.162.1 [V]); the same
+    // single value is exported under both so headless auth does not hinge on which one
+    // `exec` prefers. Every OTHER inventory secret is still pruned by buildChildEnv.
+    keyVars: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+    inboxFile: 'INBOX_CODEX.md',
+    lane: 'L6 RED-TEAM — no write scope',
+    // [R 2026-10-14] per Sean's lane approval: reasoning + repo_read. Call path and auth are
+    // measured by the smoke run recorded in the PR; repo_read rests on codex's documented
+    // read-only sandbox and is NOT yet measured by a dispatch. `shell` is NOT listed: codex
+    // runs its own commands inside `-s read-only`, which the harness cannot see into, so its
+    // execution claims are audited exactly like xc/ga (see shellNote and parseCodexJsonl).
+    capabilities: ['reasoning', 'repo_read'],
+    shellNote: '**sandboxed** — codex runs its own commands under `-s read-only`; they are NOT harness evidence (listed under stderr)',
+    parse: parseCodexJsonl,
+  },
+  'codex-oss': {
+    cli: 'codex',
+    mode: 'stdin',
+    args: (_p, { root, env }) => [...codexArgs(root), '--oss', '--local-provider', 'ollama', '-m', env.CODEX_OSS_MODEL],
+    // A local model: no cloud key, so the child gets NO inventory secret at all.
+    keyVars: [],
+    // Refused when unset. Picking a model silently means an unmeasured reviewer nobody chose.
+    envRequired: ['CODEX_OSS_MODEL'],
+    inboxFile: 'INBOX_CODEX.md',
+    lane: 'L6 RED-TEAM — no write scope',
+    // [R 2026-10-14] never run. Reasoning only until a local model is measured reading the
+    // repo — small local models are exactly where tool use fails into plausible prose.
+    capabilities: ['reasoning'],
+    shellNote: '**sandboxed** — codex runs its own commands under `-s read-only`; they are NOT harness evidence (listed under stderr)',
+    parse: parseCodexJsonl,
+  },
 };
+
+/**
+ * The one place codex's flags are spelled. Read-only sandbox, no session files, no user config
+ * or execpolicy rules (so ~/.codex cannot widen this lane), JSONL events on stdout, prompt on
+ * stdin (`-`). FORBIDDEN_ARGS below is checked against this before every spawn.
+ */
+function codexArgs(root) {
+  return ['exec', '--json', '--color', 'never', '-s', 'read-only', '--ephemeral', '--skip-git-repo-check',
+    '--ignore-user-config', '--ignore-rules', '-C', root, '-'];
+}
+
+/**
+ * Flags that would give an agent write scope or switch its sandbox off. Matched against every
+ * agent's argv before spawn and refused — a fence, not a convention. Covers codex's
+ * bypass flags, its writable sandbox modes, auto-approval and extra writable dirs.
+ */
+const FORBIDDEN_ARGS = [/^--dangerously-/, /^danger-full-access$/, /^workspace-write$/, /^--full-auto$/, /^--approve-for-me$/, /^--add-dir$/];
+
+/**
+ * With `shell: true` the argv is concatenated onto a cmd.exe line UNESCAPED. The prompt never
+ * goes there (stdin), but codex's argv carries a path and a model name. Anything outside this
+ * set is refused rather than quoted — quoting rules for cmd.exe are where injections live.
+ */
+const SHELL_SAFE_ARG = /^[\w.:/\\-]+$/;
+
+/**
+ * `codex exec --json` prints one JSON event per line. The reviewer reads the FINAL agent
+ * message; the rest is plumbing. What is kept besides it goes to the stderr section, never
+ * dropped silently: error / turn.failed events, any non-JSON line, and one line per command
+ * codex ran in its sandbox — so a reviewer can see it executed something the harness did not.
+ *
+ * Accepts `item.type` and the older `item.item_type` (both strings are in codex.exe 0.162.1).
+ * No agent message -> empty text -> the NO REVIEW WAS PRODUCED path, never a blank "pass".
+ */
+function parseCodexJsonl(stdout) {
+  let text = '';
+  const diag = [];
+  for (const line of String(stdout || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let ev;
+    try { ev = JSON.parse(line); } catch { diag.push(line); continue; }
+    const item = (ev && ev.item) || {};
+    const kind = item.type || item.item_type;
+    if (ev.type === 'item.completed' && (kind === 'agent_message' || kind === 'assistant_message')) {
+      text = String(item.text ?? '');
+    } else if (ev.type === 'item.completed' && kind === 'command_execution') {
+      diag.push(`[codex ran, sandboxed] ${item.command} (exit ${item.exit_code ?? '?'})`);
+    } else if (ev.type === 'error' || ev.type === 'turn.failed') {
+      diag.push(`[codex ${ev.type}] ${ev.message || (ev.error && ev.error.message) || line}`);
+    }
+  }
+  return { text, diag: diag.join('\n') };
+}
 
 /** Capabilities a task may require. Unknown names are refused, not ignored. */
 const KNOWN_CAPABILITIES = ['reasoning', 'repo_read', 'cross_repo_read', 'shell', 'http', 'db_read'];
@@ -758,6 +858,14 @@ function main() {
     console.error(`usage: --agent <${Object.keys(AGENTS).join('|')}> [--task "..." | --inbox [path]] [--dry-run]`);
     process.exit(64);
   }
+  const missingEnv = (agent.envRequired || []).filter((n) => !process.env[n]);
+  if (missingEnv.length) {
+    console.error(
+      `[dispatch] ✗ REFUSED — ${agentKey} needs ${missingEnv.join(', ')} set (e.g. a model from \`ollama list\`).\n` +
+        '           Not picking one silently: a guessed model is a reviewer nobody chose or measured.',
+    );
+    process.exit(2);
+  }
 
   // `arg('inbox')` is `true` for a bare flag and the path string when one follows.
   const inboxArg = arg('inbox');
@@ -792,8 +900,9 @@ function main() {
   // reference file) is visible rather than silently disabling both protections.
   const secrets = readAllSecrets();
 
-  const resolved = readKey(agent.keyVars);
-  if (!resolved) {
+  // A keyless agent (a local model) gets no credential at all — not an empty one.
+  const resolved = agent.keyVars.length ? readKey(agent.keyVars) : null;
+  if (agent.keyVars.length && !resolved) {
     console.error(
       `none of [${agent.keyVars.join(', ')}] found in ${ENV_MASTER} — cannot authenticate ${agent.cli}.
 ` +
@@ -801,12 +910,19 @@ function main() {
     );
     process.exit(2);
   }
-  const key = resolved.value;
-  if (resolved.name !== agent.keyVars[0]) {
+  const key = resolved ? resolved.value : null;
+  if (resolved && resolved.name !== agent.keyVars[0]) {
     console.warn(`[dispatch] note: authenticating via fallback ${resolved.name} (preferred ${agent.keyVars[0]} absent)`);
   }
 
   const branch = assertSafeRepoState();
+  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  const argvFor = (prompt) => agent.args(prompt, { root, env: process.env });
+  // Checked on the TEMPLATE argv, so a prompt that happens to start with `--` is not misread.
+  const forbidden = argvFor('<prompt>').filter((a) => FORBIDDEN_ARGS.some((re) => re.test(a)));
+  if (forbidden.length) {
+    throw new Error(`${agentKey} argv contains forbidden flag(s) ${forbidden.join(' ')} — this lane has no write scope.`);
+  }
 
   // SEAM 2 — the harness runs it, so the agent cannot claim it ran without it.
   // Each command is fenced, executed here, and its REAL output injected below.
@@ -972,7 +1088,10 @@ function main() {
   );
 
   if (arg('dry-run')) {
-    console.log(`[dry-run] would run: ${agent.cli} -p <prompt>  (${preamble.length} chars)`);
+    console.log(
+      `[dry-run] would run: ${agent.cli} ${argvFor('<prompt>').join(' ')}${agent.mode === 'stdin' ? '  (prompt on stdin)' : ''}  (${preamble.length} chars)`,
+    );
+    console.log(`[dry-run] key: ${resolved ? `${resolved.name} resolved (value never printed)` : 'none — keyless agent'}`);
     console.log(`[dry-run] branch=${branch} timeout=${TIMEOUT_MS}ms`);
     console.log('---\n' + preamble.slice(0, 600) + (preamble.length > 600 ? '\n…' : ''));
     return;
@@ -987,10 +1106,18 @@ function main() {
         `Putting an LLM-authored prompt on a shell command line is an injection hole. Use mode:'stdin'.`,
     );
   }
+  const argv = argvFor(preamble);
+  const unsafe = bin.shell ? argv.filter((a) => !SHELL_SAFE_ARG.test(a)) : [];
+  if (unsafe.length) {
+    throw new Error(
+      `${agent.cli} runs through a shell shim and its argv has characters cmd.exe would interpret: ${unsafe.join(' ')}. ` +
+        'Refusing rather than quoting — move the worktree / rename the model to plain characters.',
+    );
+  }
 
   console.log(`[dispatch] ${agentKey} via ${bin.cmd}${bin.shell ? ' (shim, prompt on stdin)' : ''} on branch ${branch} (timeout ${TIMEOUT_MS / 1000}s)`);
   const started = Date.now();
-  const res = spawnSync(bin.cmd, agent.args(preamble), {
+  const res = spawnSync(bin.cmd, argv, {
     encoding: 'utf8',
     timeout: TIMEOUT_MS,
     env: buildChildEnv(process.env, secrets.keys(), agent.keyVars, key),
@@ -1006,8 +1133,11 @@ function main() {
   // pruned of the others, but the operator's shell, a setup script or the agent's own
   // repo reads can still surface one — and `reports/` is committed to a public repo.
   const scrub = makeScrubber([key, ...secrets.values()]);
-  const out = scrub(res.stdout);
-  const err = scrub(res.stderr);
+  // An agent with a `parse` (codex --json) hands the reviewer its final message, not raw events;
+  // the leftovers worth seeing ride along in stderr. Scrubbed AFTER parsing, so both halves are.
+  const parsed = agent.parse ? agent.parse(res.stdout) : { text: res.stdout, diag: '' };
+  const out = scrub(parsed.text);
+  const err = scrub([parsed.diag, res.stderr].filter((s) => String(s || '').trim()).join('\n'));
 
   // SEAM 3 — the manifest goes FIRST in the file, before the agent's prose.
   // A reviewer must meet "this agent could not run anything" before meeting its
@@ -1034,7 +1164,7 @@ function main() {
     `| lane | ${agent.lane} |`,
     `| capabilities held | ${agent.capabilities.join(', ')} |`,
     `| capabilities required by task | ${required.join(', ')} |`,
-    `| shell | **no** — the harness holds it, the agent never does |`,
+    `| shell | ${agent.shellNote || '**no** — the harness holds it, the agent never does'} |`,
     `| evidence commands run FOR it | ${evidence.length === 0 ? '**none**' : evidenceCmds.map((c) => `\`${c}\``).join(', ')} |`,
     `| repo / branch / HEAD | ${branch} @ ${headSha} |`,
     `| duration · exit | ${secs}s · ${res.status} |`,
@@ -1160,7 +1290,7 @@ function main() {
  * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
  * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
  */
-export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS, scopeForTask, scopedLessonBlock, extractLessons, LESSON_SCOPES, SCOPED_CONTEXT_MAX };
+export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS, scopeForTask, scopedLessonBlock, extractLessons, LESSON_SCOPES, SCOPED_CONTEXT_MAX, parseCodexJsonl, FORBIDDEN_ARGS, SHELL_SAFE_ARG };
 
 const INVOKED_DIRECTLY =
   Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
