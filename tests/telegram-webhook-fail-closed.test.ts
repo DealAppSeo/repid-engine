@@ -6,8 +6,12 @@
  *   - right secret, no admin chat configured → control commands refused, nothing written
  *   - right secret, matching admin chat → control commands work
  *   - read-only commands behave as before once the update is authenticated
- *   - /set-webhook never registers a webhook without a secret_token
+ *   - /set-webhook is POST-only, needs the secret header, never registers without a secret_token,
+ *     and returns only { ok, description }
+ *   - callback_query (HITL decisions) also needs the admin chat
+ *   - the secret compare hashes both sides, so a length mismatch still runs timingSafeEqual
  */
+import crypto from 'crypto';
 import express from 'express';
 import request from 'supertest';
 
@@ -119,12 +123,46 @@ describe('webhook secret — fail closed', () => {
     expect(mockHandleHitlCallback).not.toHaveBeenCalled();
   });
 
-  it('right secret → callback_query reaches the HITL handler', async () => {
+  it('right secret + admin chat → callback_query reaches the HITL handler', async () => {
     process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
+    process.env.TELEGRAM_ADMIN_CHAT_ID = ADMIN;
     const r = await request(app()).post('/api/v1/telegram/webhook')
       .set('X-Telegram-Bot-Api-Secret-Token', SECRET).send(cb());
     expect(r.status).toBe(200);
     expect(mockHandleHitlCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('right secret + no admin chat configured → callback_query is NOT handled', async () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
+    const r = await request(app()).post('/api/v1/telegram/webhook')
+      .set('X-Telegram-Bot-Api-Secret-Token', SECRET).send(cb());
+    expect(r.status).toBe(200);
+    expect(mockHandleHitlCallback).not.toHaveBeenCalled();
+  });
+
+  it('right secret + a different chat → callback_query is NOT handled', async () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
+    process.env.TELEGRAM_ADMIN_CHAT_ID = '444555666';
+    const r = await request(app()).post('/api/v1/telegram/webhook')
+      .set('X-Telegram-Bot-Api-Secret-Token', SECRET).send(cb());
+    expect(r.status).toBe(200);
+    expect(mockHandleHitlCallback).not.toHaveBeenCalled();
+  });
+
+  it('secret compare runs timingSafeEqual on fixed-size digests, even when lengths differ', () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
+    const spy = jest.spyOn(crypto, 'timingSafeEqual');
+    try {
+      expect(telegram.webhookSecretMatches('x')).toBe(false);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [a, b] = spy.mock.calls[0]! as [Buffer, Buffer];
+      expect(a.length).toBe(32);
+      expect(b.length).toBe(32);
+      expect(telegram.webhookSecretMatches(SECRET)).toBe(true);
+      expect(telegram.webhookSecretMatches(SECRET + ' ')).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -178,19 +216,37 @@ describe('admin chat — fail closed', () => {
   });
 });
 
-describe('/set-webhook never registers without a secret', () => {
+describe('/set-webhook: POST only, secret-gated, minimal reply', () => {
+  const hook = () => request(app()).post('/api/v1/telegram/set-webhook');
+
+  it('GET no longer reaches Telegram', async () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
+    const r = await request(app()).get('/api/v1/telegram/set-webhook').set('X-Telegram-Bot-Api-Secret-Token', SECRET);
+    expect(r.status).toBe(404);
+    expect(sent).toHaveLength(0);
+  });
+
   it('unset secret → 409 and Telegram is not called', async () => {
-    const r = await request(app()).get('/api/v1/telegram/set-webhook');
+    const r = await hook();
     expect(r.status).toBe(409);
     expect(sent).toHaveLength(0);
   });
 
-  it('configured secret → registers with secret_token', async () => {
+  it('missing or wrong secret header → 401 and Telegram is not called', async () => {
     process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
-    const r = await request(app()).get('/api/v1/telegram/set-webhook');
+    expect((await hook()).status).toBe(401);
+    expect((await hook().set('X-Telegram-Bot-Api-Secret-Token', SECRET + 'x')).status).toBe(401);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('right header → registers with secret_token and returns only { ok, description }', async () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
+    const r = await hook().set('X-Telegram-Bot-Api-Secret-Token', SECRET);
     expect(r.status).toBe(200);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.url).toContain('/setWebhook');
     expect(sent[0]!.body.secret_token).toBe(SECRET);
+    expect(Object.keys(r.body).sort()).toEqual(['description', 'ok']);
+    expect(r.body.ok).toBe(true);
   });
 });

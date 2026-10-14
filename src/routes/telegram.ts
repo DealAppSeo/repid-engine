@@ -70,8 +70,8 @@ export async function sendTelegramMessage(
 
 export const WEBHOOK_SECRET_MISSING =
   '[telegram] TELEGRAM_WEBHOOK_SECRET is not set, so /api/v1/telegram/webhook refuses every update (401). '
-  + 'To enable: set TELEGRAM_WEBHOOK_SECRET on this service, then call GET /api/v1/telegram/set-webhook '
-  + 'so Telegram sends it as X-Telegram-Bot-Api-Secret-Token.';
+  + 'To enable: set TELEGRAM_WEBHOOK_SECRET on this service, then POST /api/v1/telegram/set-webhook '
+  + '(with that secret in X-Telegram-Bot-Api-Secret-Token) so Telegram sends it on every update.';
 export const ADMIN_CHAT_MISSING =
   '⛔ Control commands are disabled: no admin chat is configured (set TELEGRAM_ADMIN_CHAT_ID).';
 
@@ -79,13 +79,17 @@ function webhookSecret(): string {
   return (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
 }
 
-/** True only when a secret is configured AND the header matches it (constant-time). */
+/**
+ * True only when a secret is configured AND the header matches it. Both sides are hashed first,
+ * so timingSafeEqual always compares two 32-byte digests: no early return on a length mismatch,
+ * and the comparison time says nothing about the secret's length.
+ */
 export function webhookSecretMatches(provided: unknown): boolean {
   const expected = webhookSecret();
   if (!expected || typeof provided !== 'string') return false;
-  const a = Buffer.from(provided, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  const a = crypto.createHash('sha256').update(provided, 'utf8').digest();
+  const b = crypto.createHash('sha256').update(expected, 'utf8').digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 /** True only when an admin chat is configured AND this chat is it. Unset never matches. */
@@ -114,9 +118,14 @@ router.post('/webhook', async (req, res) => {
   }
 
   // V1.6: callback_query branch (additive) — handles HITL approve/deny button taps.
-  // Now behind the secret check above. handleHitlCallback also fails closed on its own:
-  // without HITL_CALLBACK_HMAC_SECRET every payload is rejected.
+  // Behind the secret check above AND the admin-chat check: only the operator chat can decide.
+  // handleHitlCallback adds its own HMAC check and expected_chat_id binding on top.
   if ((req.body as any)?.callback_query) {
+    const cbChatId = (req.body as any).callback_query?.message?.chat?.id;
+    if (!isAdminChat(cbChatId)) {
+      console.warn('[telegram] callback_query refused: not the admin chat, or no admin chat is configured');
+      return res.sendStatus(200); // 200 so Telegram does not retry; nothing was decided
+    }
     return handleHitlCallback(req, res);
   }
 
@@ -273,13 +282,17 @@ router.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-router.get('/set-webhook', async (req, res) => {
+// POST, and only for a caller who presents the webhook secret: re-registering the bot's webhook
+// changes Telegram-side state, so it is not a GET and it is not open. No secret configured = 409
+// and Telegram is not called. The reply carries only { ok, description }, not Telegram's body.
+router.post('/set-webhook', async (req, res) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  // Never register a webhook without a secret_token. No secret configured = refuse,
-  // and Telegram is not called.
   const secret = webhookSecret();
   if (!secret) {
     return res.status(409).json({ ok: false, error: WEBHOOK_SECRET_MISSING });
+  }
+  if (!webhookSecretMatches(req.headers['x-telegram-bot-api-secret-token'])) {
+    return res.sendStatus(401);
   }
   try {
     const body: Record<string, any> = {
@@ -292,10 +305,13 @@ router.get('/set-webhook', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    const d = await r.json();
-    res.json({ ...d, with_secret_token: true });
-  } catch (e: any) {
-    res.json({ error: e.message });
+    const d: any = await r.json().catch(() => ({}));
+    res.status(d?.ok === true ? 200 : 502).json({
+      ok: d?.ok === true,
+      description: typeof d?.description === 'string' ? d.description.slice(0, 200) : null,
+    });
+  } catch {
+    res.status(502).json({ ok: false, description: 'Telegram could not be reached' });
   }
 });
 
