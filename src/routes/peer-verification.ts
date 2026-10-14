@@ -8,6 +8,28 @@ import {
   PANEL_PROVIDER_HINTS,
 } from '../services/peer-verify-consensus';
 import crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
+
+// /respond rate limit, keyed on the AUTHENTICATED principal (authMiddleware sets
+// req.agent_id for a DB agent key, req.apiKey for every valid key) — never on IP:
+// the 12 T12 agents can share Railway egress IPs, and an IP is caller-writable
+// behind a proxy. 120/min per principal is far above 12 agents × a few ballots.
+export const RESPOND_LIMIT_PER_MIN = 120;
+export function respondPrincipalKey(req: Request): string {
+  const agentId = (req as any).agent_id;
+  if (agentId) return `agent:${agentId}`;
+  const key = (req as any).apiKey?.key;
+  if (key) return `key:${crypto.createHash('sha256').update(String(key)).digest('hex').slice(0, 32)}`;
+  return 'unauthenticated'; // unreachable behind authMiddleware; one shared bucket if it ever is
+}
+const respondLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: RESPOND_LIMIT_PER_MIN,
+  keyGenerator: respondPrincipalKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too_many_requests' },
+});
 
 // CC2 2026-05-27: HMAC-gated POST /respond for Gemini's peer_verify task handler.
 //
@@ -105,7 +127,7 @@ interface RespondRow {
   threshold_used: number;
 }
 
-router.post('/respond', async (req: Request, res: Response) => {
+router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
   const { queue_id, verifier_agent_id, verifier_response_id, verdict, signature } = req.body ?? {};
 
   // ----- Body shape ----------------------------------------------------------
