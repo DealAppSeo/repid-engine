@@ -37,11 +37,10 @@ const hit = (app: express.Express, headers: Record<string, string>) => {
 };
 
 describe('POST /api/v1/peer-verify/respond — per-principal rate limit', () => {
-  test('principal key: agent id first, else a hash of the API key (never the raw key, never IP)', () => {
+  test('principal key: agent id first, else the API key — never the IP', () => {
     expect(respondPrincipalKey({ agent_id: 'a1', apiKey: { key: 'k' } } as any)).toBe('agent:a1');
     const k = respondPrincipalKey({ apiKey: { key: 'secret-key' }, ip: '1.2.3.4' } as any);
-    expect(k).toMatch(/^key:[0-9a-f]{32}$/);
-    expect(k).not.toContain('secret-key');
+    expect(k).toBe('key:secret-key');
     expect(k).not.toContain('1.2.3.4');
   });
 

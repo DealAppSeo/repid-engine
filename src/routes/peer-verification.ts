@@ -19,7 +19,9 @@ export function respondPrincipalKey(req: Request): string {
   const agentId = (req as any).agent_id;
   if (agentId) return `agent:${agentId}`;
   const key = (req as any).apiKey?.key;
-  if (key) return `key:${crypto.createHash('sha256').update(String(key)).digest('hex').slice(0, 32)}`;
+  // The key itself is the bucket id. The default MemoryStore is process-local and never logged or
+  // persisted; if a shared store (Redis) is ever configured here, derive a key id first.
+  if (key) return `key:${String(key)}`;
   return 'unauthenticated'; // unreachable behind authMiddleware; one shared bucket if it ever is
 }
 const respondLimiter = rateLimit({
