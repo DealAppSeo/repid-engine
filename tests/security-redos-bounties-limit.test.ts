@@ -81,3 +81,18 @@ describe('/bounties is rate-limited even though it sits outside /api/v1', () => 
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
   });
 });
+
+describe('HAL extractor: the specific-number regex is linear (CodeQL #2)', () => {
+  // Imported lazily so the mocks above do not matter to it.
+  const { extractHALSignals, SPECIFIC_NUMBER_RE } = require('../src/hal/lib/extract');
+
+  test('8,000 digits with no unit (the /hal/evaluate cap) returns fast', () => {
+    const { ms } = timed(() => extractHALSignals({ text: '1'.repeat(8000), domain: 'finance', certainty: 0.9 }));
+    expect(ms).toBeLessThan(250); // the old regex took ~14 s at 1,500 digits
+  });
+
+  test('still finds the same specific numbers in ordinary text', () => {
+    const s = 'revenue grew 12.5% to 3 billion, up 40 bps; a .5% fee and 7 percent';
+    expect(s.match(SPECIFIC_NUMBER_RE)).toEqual(['12.5%', '3 billion', '40 bps', '5%', '7 percent']);
+  });
+});

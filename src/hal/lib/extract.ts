@@ -32,6 +32,13 @@ import {
 } from './constants';
 import type { ExtractInput, HALSignals } from './types';
 
+// Linear form of /\d+\.?\d*\s*(%|...)/g, which was CUBIC on a digit run with no unit (CodeQL
+// js/polynomial-redos #2): 1,500 digits took ~14 s locally, and POST /api/v1/hal/evaluate is public
+// (before authMiddleware) with an 8,000-char cap and a caller-chosen strictness. `(?<!\d)` starts
+// only at the first digit of a number and the decimal part needs a digit after the point, so each
+// digit run is scanned once. Same matches, except a bare trailing point ("1.%") no longer counts.
+export const SPECIFIC_NUMBER_RE = /(?<!\d)\d+(?:\.\d+)?\s*(?:%|percent|basis|bps|billion|million)/g;
+
 export function extractHALSignals(input: ExtractInput): HALSignals {
   const { text: claimText, domain, certainty } = input;
   const ontologies = input.domainOntologies
@@ -48,7 +55,7 @@ export function extractHALSignals(input: ExtractInput): HALSignals {
   const overconfidenceCount = OVERCONFIDENCE_MARKERS
     .filter(k => text.includes(k)).length;
   const specificNumbers = (
-    text.match(/\d+\.?\d*\s*(%|percent|basis|bps|billion|million)/g) || []
+    text.match(SPECIFIC_NUMBER_RE) || []
   ).length;
   const injectionCount = INJECTION_MARKERS
     .filter(k => text.includes(k)).length;
