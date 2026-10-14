@@ -39,6 +39,7 @@ import {
   type SmallGainDeps,
 } from '../scoring/small-gain-cap';
 import { resolveOwner as resolveAgentOwner } from '../services/agent-owner-resolver';
+import { gateReceiptProblem, type KernelReceiptIndexRow } from '../kernel/receipt-db-index';
 
 export interface RepIdUpdateInput {
   agentId: string;
@@ -1005,6 +1006,11 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *     under a fresh receipt_id" pay once (claimConfirmationReceipt + the unique index in
  *     migrations/2026-10-14-kernel-receipts-content-claim.sql). A row without one cannot be
  *     de-duplicated, so it fails closed; so does a table without the column (the select errors).
+ *   - GATE PROVENANCE (2026-10-14, XC1 re-attack finding 2): the row's sealed receipt must be one the
+ *     kernel gate's own run wrote, and its columns must equal that sealed body (gateReceiptProblem in
+ *     kernel/receipt-db-index.ts). args_hash is client-chosen and the server cannot recompute it, so
+ *     the binding is to the GATE RUN, not to the hash. runUnderKernel has no production caller today,
+ *     so in production nothing passes this: every confirmation fails closed until one exists.
  * The SERVER then establishes the result: VERIFIED → 'right', FAILED → 'wrong'. A thrown DB error
  * (table absent in prod, store down) → undefined. It NEVER throws into the score path.
  *
@@ -1023,19 +1029,11 @@ export async function resolveServerConfirmation(
     if (id === '') return undefined; // no pointer → nothing to verify → fail closed
     const { data, error } = await db
       .from('kernel_receipts')
-      .select('subject_agent_id, settled_by, verdict_label, verification_status, is_simulated, args_hash, created_at')
+      .select('receipt_id, subject_agent_id, settled_by, verdict_label, verification_status, is_simulated, args_hash, receipt_hash, receipt, created_at')
       .eq('receipt_id', id)
       .maybeSingle();
     if (error || !data) return undefined; // no row (or a read error) → fail closed
-    const row = data as {
-      subject_agent_id?: unknown;
-      settled_by?: unknown;
-      verdict_label?: unknown;
-      verification_status?: unknown;
-      is_simulated?: unknown;
-      args_hash?: unknown;
-      created_at?: unknown;
-    };
+    const row = data as KernelReceiptIndexRow & { created_at?: unknown };
     // ACTOR BINDING (CWE-345): the receipt must be ABOUT the acting agent. A caller cannot borrow
     // another agent's receipt. Positively established by equality; anything non-string fails closed.
     const subject = typeof row.subject_agent_id === 'string' ? row.subject_agent_id.trim() : '';
@@ -1049,6 +1047,12 @@ export async function resolveServerConfirmation(
     if (settledBy !== 'holdout' && settledBy !== 'known_answer') return undefined;
     // CONTENT KEY — no hash, no de-duplication, no confirmation.
     if (typeof row.args_hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(row.args_hash)) return undefined;
+    // GATE PROVENANCE — only a receipt the kernel gate's own run wrote, unedited, confirms anything.
+    const notAGateRun = gateReceiptProblem(row);
+    if (notAGateRun !== null) {
+      console.warn(`[confirmed-outcome] receipt ${id} confirms nothing: not a sealed gate-run receipt (${notAGateRun})`);
+      return undefined;
+    }
     // EXPIRY — an undatable or stale receipt confirms nothing (and so is never claimed).
     const createdMs = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN;
     if (!Number.isFinite(createdMs)) return undefined;
