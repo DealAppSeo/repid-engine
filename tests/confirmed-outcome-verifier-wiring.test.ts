@@ -45,8 +45,14 @@ const agentState = { id: AGENT_ID, agent_name: 'TESTAGENT', current_repid: 1000,
 // A single controllable kernel_receipts row + a counter proving whether the verifier read it at all.
 const kr: { row: Record<string, unknown> | null; reads: number } = { row: null, reads: 0 };
 
+const mockBudget = new Map<string, number>();
+
 jest.mock('../src/db', () => ({
   db: {
+    // A GAIN's claim + day/domain reservation: public.claim_confirmed_gain, modelled in
+    // tests/helpers/fake-claim-confirmed-gain.ts. Single moves only here (replay: one-time-use suite).
+    rpc: (fn: string, args: any) =>
+      require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => (kr.row ? [kr.row] : []), mockBudget)(fn, args),
     from: jest.fn((table: string) => {
       if (table === 'repid_agents') {
         return {
@@ -129,6 +135,7 @@ beforeEach(() => {
   agentState.activity_30d = 5;
   kr.row = null;
   kr.reads = 0;
+  mockBudget.clear();
 });
 afterEach(() => {
   jest.clearAllMocks();

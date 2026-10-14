@@ -24,9 +24,13 @@
  * ════════════════════════════════════════════════════════════════════════════════
  * This lane shares the confirmed-outcome flag — there is no second switch. The CALLER is
  * `engine/repid-update.ts::updateRepId`, inside the flag-ON confirmed-outcome branch: every
- * positive confirmed delta goes through `capSmallGain` there, with budget readers
- * (`smallGainCapDepsFor`) that sum today's applied confirmed gains from repid_score_events, and
- * the decision is recorded in the audit row (`metadata.confirmed_outcome.small_gain_cap`).
+ * positive confirmed delta goes through `capSmallGain` there for the cap-only bound (closed paths,
+ * domain, the per-event ceiling). The BUDGET is then spent atomically in the database, by
+ * `public.claim_confirmed_gain` (engine/repid-update.ts::reserveConfirmedGain): the receipt claim
+ * and the day/domain reservation happen under one row lock, so a parallel burst cannot read a
+ * stale sum. Until 2026-10-14 (XC1 finding 1) the engine read today's sum, then claimed, then
+ * inserted, and N parallel calls each took a full gain. The decision is recorded in the audit
+ * row (`metadata.confirmed_outcome.small_gain_cap`).
  * While the flag is OFF (the default, and prod today) that branch is never entered, so this
  * module is not called and NOTHING is recorded. (Until 2026-10-14 this paragraph said an OFF
  * engine records the decision in shadow; no caller existed at all, so nothing was recorded and
@@ -119,7 +123,22 @@ export type SmallGainReason =
   | 'capped_to_zero_budget_exhausted'
   | 'capped_by_budget'
   | 'within_caps'
-  | 'resolver_error';
+  | 'resolver_error'
+  /** The atomic DB reservation (claim_confirmed_gain) could not run: no gain, fail closed. */
+  | 'reservation_unavailable';
+
+/**
+ * The per-domain budget KEY. XC1 finding 5 (2026-10-14): the key was only trimmed, so `Law`,
+ * `law`, `l<ZWSP>aw` and fullwidth `ｌａｗ` were four separate per-domain budgets for one domain.
+ * NFKC first (folds fullwidth and compatibility forms), then strip every Unicode format character
+ * (\p{Cf}: zero-width space/joiners, BOM, soft hyphen, bidi marks), collapse whitespace, trim,
+ * lower-case (locale-independent). Not a string, or nothing left → null, which earns no gain.
+ */
+export function normalizeCapDomain(domain: unknown): string | null {
+  if (typeof domain !== 'string') return null;
+  const key = domain.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return key === '' ? null : key;
+}
 
 export interface SmallGainCapResult {
   /** The gain after every cap, >= 0. This is what the engine would move the score by WHEN ARMED. */
@@ -342,8 +361,9 @@ export async function capSmallGain(
   input: SmallGainInput,
   deps: SmallGainDeps = {},
 ): Promise<SmallGainCapResult> {
+  const normalizedDomain = normalizeCapDomain(input.domain);
   const base: SmallGainCapResult['detail'] = {
-    domain: input.domain ?? null,
+    domain: normalizedDomain,
     computedGain: input.computedGain,
     afterTheFactSelfRating: input.afterTheFactSelfRating === true,
     perDayRemaining: null,
@@ -360,8 +380,8 @@ export async function capSmallGain(
     }
 
     // DOMAIN ISOLATION — a gain with no domain would cross domains; it earns nothing.
-    const domain = (input.domain ?? '').trim();
-    if (domain === '') {
+    const domain = normalizedDomain;
+    if (domain === null) {
       return result(0, 'no_domain_no_gain', base);
     }
 

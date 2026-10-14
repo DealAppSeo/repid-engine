@@ -2,7 +2,10 @@
  * confirmed-outcome ONE-TIME USE (replay-inert) — the server-verified confirmation receipt may
  * move the official score AT MOST ONCE (fix 2026-10-13, CWE-345 follow-up to Strix #1341).
  *
- * The move is gated by a CONDITIONAL, atomic claim in repid-update.ts::claimConfirmationReceipt:
+ * The move is gated by a CONDITIONAL, atomic claim. For a GAIN (every case below) that claim runs inside
+ * public.claim_confirmed_gain (repid-update.ts::reserveConfirmedGain, modelled by
+ * tests/helpers/fake-claim-confirmed-gain.ts) together with the day/domain budget reservation; a WRONG
+ * keeps repid-update.ts::claimConfirmationReceipt:
  *   UPDATE kernel_receipts SET consumed_at = now() WHERE receipt_id = $1 AND consumed_at IS NULL
  * If this request claims the row the score moves; if the row is already consumed (zero rows) or the
  * write errors, the confirmation is held INERT. Fail-closed by construction.
@@ -13,8 +16,8 @@
  *                    audit records score_moves:true but receipt_consumed:false (honest).
  *   (3) FAIL-CLOSED→ the claim write errors → INERT (no move), receipt_consumed:false.
  *
- * NON-VACUITY: make the claim UNCONDITIONAL in src/engine/repid-update.ts (drop
- * `.is('consumed_at', null)`) and case (2) goes RED — the replay would move the score again.
+ * NON-VACUITY: drop the `consumed_at IS NULL` predicate from the claim (the fake's `consumed_at == null`)
+ * and case (2) goes RED — the replay would move the score again.
  *
  * Mock topology extends tests/confirmed-outcome-verifier-wiring.test.ts with the claim path.
  */
@@ -51,8 +54,16 @@ const kr: {
   failClaim: boolean;
 } = { row: null, reads: 0, claimAttempts: 0, failClaim: false };
 
+const mockBudget = new Map<string, number>();
+
 jest.mock('../src/db', () => ({
   db: {
+    // A GAIN's claim: public.claim_confirmed_gain (claim + budget reservation in one transaction).
+    rpc: async (fn: string, args: any) => {
+      kr.claimAttempts++;
+      if (kr.failClaim) return { data: null, error: { message: 'claim write failed' } };
+      return require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => (kr.row ? [kr.row] : []), mockBudget)(fn, args);
+    },
     from: jest.fn((table: string) => {
       if (table === 'repid_agents') {
         return {
@@ -152,6 +163,7 @@ beforeEach(() => {
   kr.reads = 0;
   kr.claimAttempts = 0;
   kr.failClaim = false;
+  mockBudget.clear();
   process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true';
 });
 afterEach(() => {

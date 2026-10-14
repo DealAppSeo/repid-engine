@@ -56,6 +56,8 @@ const st = {
   krReads: 0,
   claimAttempts: 0,
   eventReads: 0,
+  budget: new Map<string, number>(),
+  rpcCalls: 0,
 };
 
 /** PostgREST-style column path: `a->b->>c` walks jsonb; `->>` yields text. */
@@ -67,6 +69,12 @@ function col(row: Row, path: string): unknown {
 
 jest.mock('../src/db', () => ({
   db: {
+    // public.claim_confirmed_gain, modelled in tests/helpers/fake-claim-confirmed-gain.ts: the atomic
+    // receipt claim + day/domain budget reservation every confirmed GAIN now goes through.
+    rpc: (fn: string, args: any) => {
+      st.rpcCalls++;
+      return require('./helpers/fake-claim-confirmed-gain').fakeRpc(() => st.receipts, st.budget)(fn, args);
+    },
     from: (table: string) => {
       if (table === 'repid_agents') {
         return {
@@ -198,6 +206,8 @@ beforeEach(() => {
   st.krReads = 0;
   st.claimAttempts = 0;
   st.eventReads = 0;
+  st.budget = new Map();
+  st.rpcCalls = 0;
 });
 afterEach(() => {
   jest.restoreAllMocks();
@@ -402,6 +412,7 @@ describe('(E) FLAG OFF is today', () => {
     expect(out.confirmedOutcome ?? null).toBeNull();
     expect(st.krReads).toBe(0);
     expect(st.eventReads).toBe(0);
+    expect(st.rpcCalls).toBe(0);
     expect(st.events[0]!['metadata']['confirmed_outcome']).toBeNull();
   });
 });
