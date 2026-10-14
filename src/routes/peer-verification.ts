@@ -5,6 +5,7 @@ import { emitPeerVerifyScoreEvents } from '../services/peer-verify-score';
 import {
   peerVerifyPanelEnabled,
   resolvePanel,
+  closeNoMajorityPanel,
   PANEL_PROVIDER_HINTS,
 } from '../services/peer-verify-consensus';
 import crypto from 'crypto';
@@ -256,6 +257,7 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
       // below prevents a double-score across concurrent final votes).
       const contractId = String(q.source_response_id); // uuid — repid_score_events.contract_id
       const resolveResult = await resolvePanel({
+        queueId: queue_id,
         sourceResponseId: q.source_response_id,
         producerAgentId: q.source_agent_id,
         contractId,
@@ -265,6 +267,10 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
       });
 
       if (!resolveResult.consensus.reached) {
+        // All ballots in and still no 2-of-3: no further vote can arrive, so "wait" would strand
+        // the row in_review for good (4 of 7 real panels, 2026-10-14). Shadow-logs by default;
+        // closes as 'timeout', never scored, under PANEL_CLOSE_NO_MAJORITY=enforce.
+        const noMajority = await closeNoMajorityPanel(queue_id, resolveResult.consensus);
         return res.status(voteAccepted ? 202 : 200).json({
           success: true,
           mode: 'panel',
@@ -273,6 +279,7 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
           reason: resolveResult.consensus.reason,
           votes_in: resolveResult.consensus.votes.length,
           panel_size: 3,
+          ...(noMajority ? { no_majority_close: noMajority } : {}),
         });
       }
 
@@ -305,6 +312,7 @@ router.post('/respond', respondLimiter, async (req: Request, res: Response) => {
 
       // We won the finalization race → emit the honest score events now.
       const scored = await resolvePanel({
+        queueId: queue_id,
         sourceResponseId: q.source_response_id,
         producerAgentId: q.source_agent_id,
         contractId,
