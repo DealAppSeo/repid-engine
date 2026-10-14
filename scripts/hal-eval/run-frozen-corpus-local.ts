@@ -31,16 +31,28 @@
  * families that answered each item in eval/holdout/manifest.jsonl, and is `incomplete` when any
  * item was answered by fewer than two families.
  *
+ * BUDGET MODE (2026-10-14). `--max-calls N` caps outbound provider calls, because the free-tier
+ * quota a run spends is the one live HAL and the swarm also spend. Every non-Supabase `fetch` this
+ * process makes is counted (provider calls, 429 retries, the prefilter and catalog lookups all hit
+ * the same quotas). It forces concurrency 1 so each row's calls are attributable, and stops before a
+ * row once `calls so far + the costliest row so far` would pass N; the first row always runs. Rows
+ * are taken in evalOrder() (class-interleaved sha256(id)), and so is `--limit`, so a capped run is
+ * the first k rows of a content-defined order and its ruler says "first k of N".
+ *
+ * NOT_CHECKED. An abstain, an extractor fallback or an error is HAL not judging the row. The legacy
+ * F1 (kept for comparison with earlier runs) scores an abstain as a pass; the run also prints F1
+ * over checked rows only, per class, with the NOT_CHECKED rate beside it.
+ *
  * Usage:
  *   npx ts-node scripts/hal-eval/run-frozen-corpus-local.ts [--split holdout|retired-holdout|train|all]
- *        [--corpus rigorous-v1] [--limit N] [--concurrency 4]
+ *        [--corpus rigorous-v1] [--limit N] [--max-calls N] [--concurrency 4]
  */
 import 'dotenv/config';
 import * as dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { isHallucination, confusionMatrix, prf1, rocAuc } from './metrics';
+import { isHallucination, confusionMatrix, prf1, rocAuc, isNotChecked, perClass, evalOrder } from './metrics';
 import {
   exitCodeFor,
   familiesRecord,
@@ -67,7 +79,8 @@ const flag = (n: string, d: string) => {
 const corpusName = flag('corpus', 'rigorous-v1');
 const split = flag('split', 'holdout');
 const limit = Number(flag('limit', '0'));
-const concurrency = Math.max(1, Number(flag('concurrency', '4')));
+const maxCalls = Number(flag('max-calls', '0'));
+const concurrency = maxCalls > 0 ? 1 : Math.max(1, Number(flag('concurrency', '4')));
 const MIN_COVERAGE = Number(process.env.HAL_EVAL_MIN_COVERAGE ?? '0.8');
 const PUBLIC_SPLITS = ['retired-holdout', 'train', 'all'];
 const isPrivate = split === 'holdout';
@@ -160,6 +173,9 @@ interface Scored {
       process.exit(exitCodeFor(e));
     }
   }
+  // Content-defined order, so `--limit k` and a --max-calls stop both name "the first k rows".
+  const splitRows = rows.length;
+  rows = evalOrder(rows);
   if (limit > 0) rows = rows.slice(0, limit);
   const measuredAt = new Date().toISOString();
   const runId = `local-${measuredAt}`;
@@ -170,7 +186,26 @@ interface Scored {
   console.log(`rows       : ${rows.length}`);
   console.log(`transport  : IN-PROCESS halService (no HTTP, no public rate cap)`);
   console.log(`answer_mode: ${entry ? entry.answer_mode : 'claim-as-answer'}`);
+  console.log(`max-calls  : ${maxCalls > 0 ? `${maxCalls} (concurrency forced to 1)` : 'none'}`);
   console.log('');
+
+  // BUDGET COUNTER — installed before the HAL modules load, so nothing they fetch escapes it.
+  // Our own database is not a provider quota; everything else is counted.
+  let calls = 0;
+  const hostOf = (u: string) => {
+    try {
+      return new URL(u).host;
+    } catch {
+      return '';
+    }
+  };
+  const dbHost = hostOf(process.env.SUPABASE_URL ?? '');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const u = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (!dbHost || hostOf(u) !== dbHost) calls++;
+    return realFetch(input, init);
+  }) as typeof fetch;
 
   // Required (not `await import`) AFTER dotenv, for two reasons:
   //   - this repo is "type": "commonjs"; ts-node resolves a dynamic import as
@@ -179,15 +214,26 @@ interface Scored {
   //     init — halService reads them when it is constructed, not per call.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { halService } = require('../../src/hal/service') as { halService: { evaluate: (i: unknown) => Promise<unknown> } };
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { buildFactCheckProviders } = require('../../src/hal/fact-check') as {
+    buildFactCheckProviders: () => Array<{ name: string; model?: string }>;
+  };
+  // CONFIGURED width (names and models, no keys). Who actually ANSWERED is printed after the run.
+  const providersConfigured = buildFactCheckProviders().map((p) => `${p.name}:${p.model ?? '?'}`);
+  console.log(`providers configured: [${providersConfigured.join(', ')}]`);
 
   const results: Scored[] = [];
   const queue = [...rows];
   let done = 0;
+  let costliestRow = 0;
 
   await Promise.all(
     Array.from({ length: concurrency }, async () => {
       while (queue.length) {
+        // Budget mode runs at concurrency 1, so calls - before is exactly this row's cost.
+        if (maxCalls > 0 && calls + costliestRow > maxCalls) break;
         const row = queue.shift()!;
+        const before = calls;
         try {
           const r: any = await halService.evaluate({
             text: row.candidate_answer,
@@ -210,6 +256,7 @@ interface Scored {
           // key as a math regression.
           results.push({ id: row.id, truth: row.label, error: String(e?.message ?? e).slice(0, 90) });
         }
+        costliestRow = Math.max(costliestRow, calls - before);
         done++;
         if (done % 5 === 0 || done === rows.length) process.stdout.write(`\r  evaluated ${done}/${rows.length}`);
       }
@@ -219,10 +266,18 @@ interface Scored {
 
   const errors = results.filter((r) => r.error);
   const scored = results.filter((r) => !r.error && r.verdict);
+  const attempted = results.length;
+  const sample = attempted < splitRows ? ` first ${attempted} of ${splitRows} (evalOrder)` : '';
+  const notCheckedN = results.filter(isNotChecked).length;
+  const notCheckedRate = attempted ? notCheckedN / attempted : 0;
+  const checkedConfusion = confusionMatrix(scored.filter((r) => !isNotChecked(r)));
+  const checked = { confusion: checkedConfusion, ...prf1(checkedConfusion), per_class: perClass(checkedConfusion) };
+  const budget = { max_calls: maxCalls || null, provider_calls: calls, costliest_row_calls: concurrency === 1 ? costliestRow : null, not_run: rows.length - attempted };
 
   const { tp, fp, tn, fn } = confusionMatrix(scored);
   const { precision, recall, f1, accuracy } = prf1({ tp, fp, tn, fn });
-  const coverage = rows.length ? scored.length / rows.length : 0;
+  // Over rows attempted: a budget stop is not a transport failure (it is reported as not_run).
+  const coverage = attempted ? scored.length / attempted : 0;
 
   // ROC AUC over the continuous halScore (rows with a numeric score only).
   const aucPoints = scored
@@ -258,7 +313,8 @@ interface Scored {
   console.log(`  precision ${precision.toFixed(4)}`);
   console.log(`  recall    ${recall.toFixed(4)}`);
   console.log(`  accuracy  ${accuracy.toFixed(4)}`);
-  console.log(`  scored ${scored.length}/${rows.length}   errors ${errors.length}`);
+  console.log(`  scored ${scored.length}/${attempted} attempted   errors ${errors.length}   not run (budget) ${budget.not_run}`);
+  console.log(`  provider calls ${calls}${maxCalls > 0 ? ` of max ${maxCalls}; costliest row ${costliestRow}` : ''}`);
   const verdicts = scored.reduce<Record<string, number>>(
     (a, r) => ((a[String(r.verdict)] = (a[String(r.verdict)] ?? 0) + 1), a),
     {},
@@ -278,23 +334,29 @@ interface Scored {
 
   console.log('======================================================================');
   if (coverage < MIN_COVERAGE) {
-    console.log(`  NO F1 REPORTED — coverage ${(coverage * 100).toFixed(1)}% (${scored.length}/${rows.length}) below the ${(MIN_COVERAGE * 100).toFixed(0)}% floor.`);
+    console.log(`  NO F1 REPORTED — coverage ${(coverage * 100).toFixed(1)}% (${scored.length}/${attempted}) below the ${(MIN_COVERAGE * 100).toFixed(0)}% floor.`);
     const kinds = errors.reduce<Record<string, number>>((a, e) => ((a[e.error!] = (a[e.error!] ?? 0) + 1), a), {});
     for (const [k, n] of Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 6)) console.log(`     ${n}x  ${k}`);
     console.log('  This is NOT a HAL quality measurement and must not be quoted as one.');
     console.log('======================================================================');
     fs.writeFileSync(
       path.join(outDir, `${isPrivate ? stem : `${stem}-${split}`}-${hashed.slice(0, 12)}.LOCAL.INCOMPLETE.json`),
-      JSON.stringify({ ruler: RULER, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, errors: errors.length, error_kinds: kinds, f1: null }, null, 2),
+      JSON.stringify({ ruler: RULER, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, attempted, errors: errors.length, error_kinds: kinds, budget, f1: null }, null, 2),
     );
     process.exit(3);
   }
 
-  console.log(`  F1 = ${f1.toFixed(4)} on ${RULER} [${split}] — in-process, strictness 2`);
+  const pc = checked.per_class;
+  const cls = (n: string, c: typeof pc.hallucination) =>
+    `${n} P ${c.precision.toFixed(4)} R ${c.recall.toFixed(4)} F1 ${c.f1.toFixed(4)} (n=${c.support})`;
+  console.log(`  F1 = ${checked.f1.toFixed(4)} on ${RULER}${sample} [${split}] at ${Object.keys(familyParticipation).length} families, strictness 2 — checked rows only`);
+  console.log(`  NOT_CHECKED ${notCheckedN}/${attempted} (${(notCheckedRate * 100).toFixed(1)}%): errors, abstains and extractor fallbacks — left out of the F1 above`);
+  console.log(`  per class: ${cls('hallucination', pc.hallucination)} | ${cls('supported', pc.supported)}`);
+  console.log(`  legacy F1 (abstain/fallback scored as a pass, as in earlier runs) = ${f1.toFixed(4)}`);
   if (!isPrivate) console.log(`  ${retiredLine(`${stem} [${split}]`)}`);
   else console.log(`  PRIVATE HOLDOUT. checker families [${checkerPair.families.join(', ')}]: ${checkerPair.status}`);
   console.log(`  precision ${precision.toFixed(4)}  recall ${recall.toFixed(4)}  AUC ${auc == null ? 'n/a' : auc.toFixed(4)}`);
-  console.log(`  coverage ${(coverage * 100).toFixed(1)}% (${scored.length}/${rows.length})`);
+  console.log(`  coverage ${(coverage * 100).toFixed(1)}% (${scored.length}/${attempted})`);
   console.log(`  families that answered: [${Object.keys(familyParticipation).join(', ')}]`);
   console.log('======================================================================');
 
@@ -303,8 +365,13 @@ interface Scored {
     path.join(outDir, outName),
     JSON.stringify(
       {
-        ruler: RULER,
+        ruler: `${RULER}${sample}`,
         corpus_sha256: hashed,
+        sample: { order: 'evalOrder: class-interleaved sha256(id)', attempted, of: splitRows },
+        budget,
+        providers_configured: providersConfigured,
+        not_checked: { count: notCheckedN, rate: notCheckedRate },
+        checked,
         split,
         ...(isPrivate ? { holdout: 'private' } : retiredStamp()),
         checker_pair: checkerPair,

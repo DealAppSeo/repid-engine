@@ -7,6 +7,7 @@
   "retired_copies": [
     "data/hal_corpus_v1/rigorous-v1.jsonl",
     "data/hal_corpus_v1/canary-v1.jsonl",
+    "data/hal_corpus_v1/hal-v1-frozen.jsonl",
     "eval/rigorous/rigorous-corpus-v1.jsonl",
     "eval/canary/canary-corpus-v1.jsonl",
     "eval/canary/canary-corpus-v1.1.jsonl",
@@ -38,6 +39,28 @@
       "derived_from": "eval/canary/canary-corpus-v1.jsonl",
       "upstream_sources": { "wikipedia": 50 },
       "dropped_rows": 0
+    },
+    {
+      "name": "hal-v1-frozen",
+      "path": "data/hal_corpus_v1/hal-v1-frozen.jsonl",
+      "sha256": "1a3ef7ac5c370c5ddf13a6310f33c07f0d75afe9538b1be82d0ce0b95b2c98f8",
+      "frozen_at": "2026-10-14",
+      "rows": 284,
+      "labels": { "TRUE": 142, "FALSE": 142 },
+      "splits": { "train": 202, "holdout": 82 },
+      "answer_mode": "claim-as-answer",
+      "derived_from": "data/hal_corpus_v1/rigorous-v1.jsonl",
+      "selection": "every rigorous-v1@596f10de18d0 row whose notes name a published third-party benchmark (source=halueval|fever|truthfulqa), byte-identical to its rigorous-v1 line. Nothing relabelled, nothing added.",
+      "upstream_sources": { "halueval": 100, "fever": 100, "truthfulqa": 84 },
+      "provenance": "284/284 rows (100%) carry source dataset + source_id + absolute source_url, assigned mechanically by scripts/eval/build-rigorous-corpus.py (seed 42) from the upstream files. Upstream content was NOT re-fetched and re-matched in this change.",
+      "excluded": [
+        { "what": "rigorous-v1 rows with source=canary", "rows": 47, "reason": "claims written in-repo (eval/canary, commit 9ccc91a1) with a Wikipedia citation: no third-party dataset and no item id, label assigned by us. Rule 19: self-authored, not provenanced." },
+        { "what": "canary-v1", "rows": 50, "reason": "same canary claims; same reason." },
+        { "what": "rigorous build drops", "rows": 6, "reason": "already dropped from rigorous-v1 (see its dropped_reason)." },
+        { "what": "Supabase hal_test_cases", "rows": 2517, "reason": "mutable and unhashed (relabels recorded in notes), duplicate texts, and the population the validation runs and threshold work were taken on. Most rows are swarm-written with no source URL; one benchmark import has no item ids. The id-carrying benchmark imports could seed a separate, separately-hashed corpus; they are not merged into this ruler." }
+      ],
+      "holdout": "NONE. Every row is public in git (retired as a holdout 2026-10-07), and the rigorous-v1 holdout split was used to fit reports/hal-eval/hal-calibrator-rigorous-v1.json (fittedOn 99). The split field is kept from rigorous-v1 for regression only: a score on any split of this corpus is holdout: retired-public, never a holdout score.",
+      "run_plan": "reports/2026-10-14/HAL_CORPUS_V1_FROZEN_RUN_PLAN.md"
     }
   ],
   "_open_decision": "answer_mode is 'claim-as-answer' for both: prompt is a fixed verification instruction, candidate_answer is the claim. 190 of the 337 rigorous rows were built 'qa->statement' and could have their Q/A recovered instead, but the other 197 have no question to recover — mixing both inside one corpus would put two different measurements under one F1, which is the ruler-mixing this rack exists to end. Use --answer-mode recover-qa only to build a SEPARATE, separately-named, separately-hashed corpus. Not ratified by Sean."

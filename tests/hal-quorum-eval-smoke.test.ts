@@ -24,7 +24,16 @@
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { isHallucination, predictedHallucination, confusionMatrix, prf1, rocAuc } from '../scripts/hal-eval/metrics';
+import {
+  isHallucination,
+  predictedHallucination,
+  confusionMatrix,
+  prf1,
+  rocAuc,
+  isNotChecked,
+  perClass,
+  evalOrder,
+} from '../scripts/hal-eval/metrics';
 
 describe('HAL quorum eval — harness machinery (deterministic, no provider calls)', () => {
   it('the reproducible runner and its metrics module are present on disk', () => {
@@ -122,6 +131,38 @@ describe('HAL quorum eval — harness machinery (deterministic, no provider call
     it('a single-class set has undefined AUC (null, not a fabricated number)', () => {
       expect(rocAuc([{ score: 0.9, positive: true }, { score: 0.8, positive: true }])).toBeNull();
       expect(rocAuc([{ score: 0.1, positive: false }])).toBeNull();
+    });
+  });
+
+  describe('NOT_CHECKED, per-class scores and the budget order', () => {
+    it('an error, an abstain, a missing verdict or a non-fact-check mode is NOT_CHECKED', () => {
+      expect(isNotChecked({ error: 'HTTP 429' })).toBe(true);
+      expect(isNotChecked({ verdict: 'abstain', mode: 'fact-check' })).toBe(true);
+      expect(isNotChecked({ verdict: 'clean', mode: 'extractor-fallback' })).toBe(true);
+      expect(isNotChecked({})).toBe(true);
+      expect(isNotChecked({ verdict: 'clean', mode: 'fact-check' })).toBe(false);
+      expect(isNotChecked({ verdict: 'vetoed', mode: 'fact-check' })).toBe(false);
+    });
+
+    it('scores both classes from one confusion matrix', () => {
+      // hallucination: 3 caught, 1 missed, 2 true claims wrongly vetoed. supported: the mirror.
+      const { hallucination, supported } = perClass({ tp: 3, fn: 1, fp: 2, tn: 4 });
+      expect(hallucination).toEqual({ precision: 3 / 5, recall: 3 / 4, f1: expect.any(Number), support: 4 });
+      expect(hallucination.f1).toBeCloseTo((2 * 0.6 * 0.75) / 1.35, 12);
+      expect(supported).toEqual({ precision: 4 / 5, recall: 4 / 6, f1: expect.any(Number), support: 6 });
+      expect(perClass({ tp: 0, fp: 0, tn: 0, fn: 0 }).supported).toEqual({ precision: 0, recall: 0, f1: 0, support: 0 });
+    });
+
+    it('evalOrder is content-defined and keeps every prefix within one row of class balance', () => {
+      const rows = Array.from({ length: 40 }, (_, i) => ({ id: `r${i}`, label: i % 4 === 0 ? 'FALSE' : 'TRUE' }));
+      const a = evalOrder(rows);
+      expect(evalOrder([...rows].reverse())).toEqual(a); // file order cannot move it
+      expect(a).toHaveLength(40);
+      expect(new Set(a.map((r) => r.id)).size).toBe(40);
+      for (let k = 1; k <= 20; k++) {
+        const pos = a.slice(0, k).filter((r) => r.label === 'FALSE').length;
+        expect(Math.abs(pos - (k - pos))).toBeLessThanOrEqual(1); // 10 FALSE rows: balanced until they run out
+      }
     });
   });
 });
