@@ -151,6 +151,7 @@ import { updateRepId } from '../src/engine/repid-update';
 import { __resetConfirmedParamsCache } from '../src/scoring/confirmed-outcome';
 import { __resetSmallGainCapParamsCache, normalizeCapDomain } from '../src/scoring/small-gain-cap';
 import { __resetScoringParamsCache } from '../src/config/scoring-params';
+import { sealedRow } from './helpers/sealed-gate-receipt';
 
 const PINNED: Record<string, string> = {
   REPID_CONFIRMED_GAIN_BASE: '5',
@@ -178,12 +179,9 @@ const DOMAIN_CAP = 8;
 let now = Date.parse('2026-10-14T12:00:00.000Z');
 const H = (n: number): string => '0x' + n.toString(16).padStart(64, '0');
 
-function receipt(id: string, over: Row = {}): Row {
-  const r: Row = {
-    receipt_id: id, subject_agent_id: AGENT, settled_by: 'holdout', verdict_label: 'SETTLED',
-    verification_status: 'VERIFIED', is_simulated: false, args_hash: H(1),
-    created_at: new Date(now - 60_000).toISOString(), consumed_at: null, ...over,
-  };
+/** A kernel_receipts row SEALED BY THE REAL GATE (tests/helpers/sealed-gate-receipt.ts); `over` tampers columns. */
+async function receipt(id: string, over: Row = {}): Promise<Row> {
+  const r = await sealedRow(id, AGENT, { args_hash: H(1), ...over }, new Date(now - 60_000).toISOString());
   st.receipts.push(r);
   return r;
 }
@@ -223,7 +221,7 @@ afterEach(() => {
 
 describe('(1) ATOMIC CAP — a parallel burst cannot outrun the day or domain budget', () => {
   it('10 parallel gains, 10 receipts, 10 domains → at most the day cap in total', async () => {
-    for (let i = 0; i < 10; i++) receipt(`p${i}`, { args_hash: H(500 + i) });
+    for (let i = 0; i < 10; i++) await receipt(`p${i}`, { args_hash: H(500 + i) });
     const out = await Promise.all(Array.from({ length: 10 }, (_, i) => right(`p${i}`, `d${i}`)));
     const paid = out.reduce((s, r) => s + r.delta, 0);
     expect(paid).toBeLessThanOrEqual(DAY_CAP);
@@ -233,13 +231,13 @@ describe('(1) ATOMIC CAP — a parallel burst cannot outrun the day or domain bu
   });
 
   it('10 parallel gains in ONE domain → at most the domain cap', async () => {
-    for (let i = 0; i < 10; i++) receipt(`q${i}`, { args_hash: H(600 + i) });
+    for (let i = 0; i < 10; i++) await receipt(`q${i}`, { args_hash: H(600 + i) });
     const out = await Promise.all(Array.from({ length: 10 }, (_, i) => right(`q${i}`, 'law')));
     expect(out.reduce((s, r) => s + r.delta, 0)).toBe(DOMAIN_CAP);
   });
 
   it('the gain path never reads a budget sum outside the reservation', async () => {
-    receipt('r1');
+    await receipt('r1');
     expect((await right('r1', 'law')).delta).toBe(5);
     expect(st.sumReads).toBe(0);
     expect(st.rpcArgs).toHaveLength(1);
@@ -248,8 +246,8 @@ describe('(1) ATOMIC CAP — a parallel burst cannot outrun the day or domain bu
   it('function absent → a gain is ZERO, the receipt is NOT spent, and it says so loudly; a wrong still applies', async () => {
     st.rpcDown = true;
     const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    const ok = receipt('r1');
-    receipt('f1', { verification_status: 'FAILED', args_hash: H(9) });
+    const ok = await receipt('r1');
+    await receipt('f1', { verification_status: 'FAILED', args_hash: H(9) });
 
     const gain = await right('r1', 'law');
     expect(gain.delta).toBe(0);
@@ -263,7 +261,7 @@ describe('(1) ATOMIC CAP — a parallel burst cannot outrun the day or domain bu
   });
 
   it('the engine calls the function with exactly the parameters the migration declares', async () => {
-    receipt('r1');
+    await receipt('r1');
     await right('r1', 'law');
     const sql = readFileSync(join(__dirname, '..', 'migrations', '2026-10-14-confirmed-gain-atomic-reservation.sql'), 'utf8');
     const sig = sql.match(/CREATE OR REPLACE FUNCTION public\.claim_confirmed_gain\(([\s\S]*?)\)\s*RETURNS/)![1]!;
@@ -325,7 +323,7 @@ describe('(2) DOMAIN KEY — spelling variants share one per-domain budget', () 
   });
 
   it('law, Law, l<ZWSP>aw and ＬＡＷ draw on ONE budget; a real second domain still gets its share', async () => {
-    for (let i = 1; i <= 5; i++) receipt(`v${i}`, { args_hash: H(700 + i) });
+    for (let i = 1; i <= 5; i++) await receipt(`v${i}`, { args_hash: H(700 + i) });
     expect((await right('v1', 'law')).delta).toBe(5);
     expect((await right('v2', 'Law')).delta).toBe(3); // 8 - 5, not a fresh budget of 8
     expect((await right('v3', 'l​aw')).delta).toBe(0);
@@ -338,7 +336,7 @@ describe('(2) DOMAIN KEY — spelling variants share one per-domain budget', () 
 describe('(4) XC1 review of #1369 — residuals a, b, c', () => {
   it('(a) a `granted` result with a NULL spent is refused, not read as nothing spent', async () => {
     const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    const r = receipt('r1');
+    const r = await receipt('r1');
     st.rpcCanned = { outcome: 'granted', granted: 5, day_spent: null, domain_spent: null };
     const out = await right('r1', 'law');
     expect(out.delta).toBe(0);
@@ -360,7 +358,7 @@ describe('(4) XC1 review of #1369 — residuals a, b, c', () => {
     process.env.REPID_SMALL_GAIN_PER_DOMAIN_CAP = '13';
     __resetSmallGainCapParamsCache();
     st.ceiling = { perDayCap: DAY_CAP, perDomainCap: DOMAIN_CAP };
-    for (let i = 0; i < 10; i++) receipt(`s${i}`, { args_hash: H(800 + i) });
+    for (let i = 0; i < 10; i++) await receipt(`s${i}`, { args_hash: H(800 + i) });
     const out = await Promise.all(Array.from({ length: 10 }, (_, i) => right(`s${i}`, `d${i}`)));
     expect(st.rpcArgs[0]).toMatchObject({ p_day_cap: 14, p_domain_cap: 13 }); // what the caller asked for
     expect(out.reduce((s, r) => s + r.delta, 0)).toBe(DAY_CAP); // what the server allowed
@@ -369,7 +367,7 @@ describe('(4) XC1 review of #1369 — residuals a, b, c', () => {
   it('(b) no ceiling row → the function raises → no gain, loudly, receipt unspent', async () => {
     const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     st.ceiling = null;
-    const r = receipt('r1');
+    const r = await receipt('r1');
     expect((await right('r1', 'law')).delta).toBe(0);
     expect(r['consumed_at']).toBeNull();
     expect(err.mock.calls.some((c) => String(c[0]).includes('confirmed_gain_cap_config has no row'))).toBe(true);
@@ -385,7 +383,7 @@ describe('(4) XC1 review of #1369 — residuals a, b, c', () => {
   });
 
   it('(c) a Cyrillic look-alike domain earns nothing, is recorded as refused, and never reaches the function', async () => {
-    const r = receipt('r1');
+    const r = await receipt('r1');
     expect((await right('r1', 'l\u0430w')).delta).toBe(0);
     expect(co(0)['small_gain_cap']['reason']).toBe('domain_key_refused');
     expect(st.rpcArgs).toHaveLength(0);
@@ -412,7 +410,7 @@ describe('(3) REDEMPTION — a receipt-settled wrong is not redeemable', () => {
   });
 
   it('the same agent pays the FULL server-settled wrong: -55, not -27', async () => {
-    receipt('f1', { verification_status: 'FAILED', args_hash: H(9) });
+    await receipt('f1', { verification_status: 'FAILED', args_hash: H(9) });
     const out = await updateRepId({ agentId: AGENT, eventType: 'UNSUPPORTED_CLAIM', confirmedOutcome: { abstained: true, confirmationReceiptId: 'f1' } } as any);
     expect(out.delta).toBe(WRONG);
     expect(out.repIdAfter).toBe(1000 + WRONG);
@@ -424,7 +422,7 @@ describe('(3) REDEMPTION — a receipt-settled wrong is not redeemable', () => {
 
   it('a fresh agent (no violations) pays the same -55: the exemption changes nothing for it', async () => {
     st.violations = 0;
-    receipt('f1', { verification_status: 'FAILED', args_hash: H(9) });
+    await receipt('f1', { verification_status: 'FAILED', args_hash: H(9) });
     const out = await updateRepId({ agentId: AGENT, eventType: 'UNSUPPORTED_CLAIM', confirmedOutcome: { abstained: true, confirmationReceiptId: 'f1' } } as any);
     expect(out.delta).toBe(WRONG);
     expect(st.events[0]!['metadata']['redemptionModifier']).toBe(1);

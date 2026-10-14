@@ -12,7 +12,79 @@
  * this is belt-and-suspenders. A write failing changes nothing about the JSONL ledger or the verdict.
  */
 import { db } from '../db';
+import { DRY_PREVIEW_DOES_NOT_ATTEST } from './gate';
+import { validateReceipt } from './receipt';
 import type { KernelReceipt } from './types';
+
+/** The kernel_receipts columns the confirmed-outcome verifier reads, as they come back from the DB. */
+export interface KernelReceiptIndexRow {
+  receipt_id?: unknown;
+  subject_agent_id?: unknown;
+  settled_by?: unknown;
+  verdict_label?: unknown;
+  verification_status?: unknown;
+  is_simulated?: unknown;
+  receipt_hash?: unknown;
+  args_hash?: unknown;
+  receipt?: unknown;
+}
+
+/**
+ * WAS THIS ROW WRITTEN BY THE KERNEL GATE'S OWN RUN? Returns null when yes, else the reason it was not.
+ * (2026-10-14, XC1's re-attack of #1364, finding 2.)
+ *
+ * The problem. `args_hash` is whatever 32-byte hex the client sends: the kernel deliberately never sees
+ * the arguments ("hash the arguments; never send them"), and `hashArgs` has no non-test caller. The
+ * server cannot recompute it, so it cannot BIND it. What it can bind is WHERE the row came from.
+ *
+ * The provenance chain, each link [V] in code on 2026-10-14:
+ *   kernel_receipts is service-role only (RLS on, anon/authenticated revoked: its migration) ←
+ *   written only by indexKernelReceiptToDb ← the StoreLedger receipt hook ← StoreLedger.appendReceipt ←
+ *   called ONLY by gate.ts::runUnderKernel (the decision row, then the outcome row).
+ * POST /decide (dryDecision) appends nothing. So a row is a gate run's receipt, and this checks that
+ * the row still IS one:
+ *   - the sealed body validates (schema + invariants + receiptHash(body) === header.receipt_hash) and
+ *     is the row's own receipt (id and hash);
+ *   - it is not a dry preview;
+ *   - every column the verifier gates on equals the sealed body's value (subject, args_hash and the
+ *     verification leg), so a column edited without the body does not confirm;
+ *   - VERIFIED (a gain) needs `executed: true` under ALLOW: the post actually ran under the gate and
+ *     its outcome row was recorded. FAILED (a wrong) needs `executed: false`: a HAL FLAG/VETO DENYs
+ *     the post, so a FAILED verification only ever exists on a refused, unexecuted decision row.
+ *
+ * WHAT THIS DOES NOT PROVE. The receipt is hashed, not signed, so anyone holding the service-role key
+ * could insert a self-consistent forgery; a server signature over receipt_hash is the stronger
+ * follow-up. And because the arguments never reach the kernel, the args_hash in a gate receipt is the
+ * one its in-process caller supplied. TODAY runUnderKernel HAS NO PRODUCTION CALLER, so no production
+ * row can pass this and every confirmation fails closed. A future caller must compute args_hash with
+ * hashArgs() over the arguments its closure actually uses.
+ */
+export function gateReceiptProblem(row: KernelReceiptIndexRow): string | null {
+  const r = row.receipt as KernelReceipt | null | undefined;
+  if (!r || typeof r !== 'object') return 'no_sealed_receipt';
+  const id = typeof row.receipt_id === 'string' ? row.receipt_id : '';
+  // The index keeps ONE row per call: the outcome row upserts over its decision row under the same id,
+  // so invariant (7) — an executed record needs its decision row first — is satisfied by the id itself.
+  const v = validateReceipt(r, { persisted_decision_ids: new Set([id]) });
+  if (!v.ok) return `receipt_invalid:${v.errors[0]?.code ?? 'unknown'}`;
+  if (r.header.receipt_id !== id) return 'receipt_id_mismatch';
+  if (r.header.receipt_hash !== row.receipt_hash) return 'receipt_hash_mismatch';
+  if (r.decision.does_not_attest.includes(DRY_PREVIEW_DOES_NOT_ATTEST)) return 'dry_preview';
+  if (r.subject.agent.agent_id !== row.subject_agent_id) return 'subject_mismatch';
+  if (r.request.args_hash !== row.args_hash) return 'args_hash_mismatch';
+  const ver = r.verification;
+  if (
+    ver.status !== row.verification_status ||
+    ver.verdict_label !== row.verdict_label ||
+    ver.settled_by !== row.settled_by ||
+    ver.is_simulated !== row.is_simulated
+  ) {
+    return 'verification_mismatch';
+  }
+  if (ver.status === 'VERIFIED' && !(r.decision.executed === true && r.decision.verdict === 'ALLOW')) return 'verified_but_not_run';
+  if (ver.status === 'FAILED' && r.decision.executed !== false) return 'failed_but_executed';
+  return null;
+}
 
 /**
  * Upsert a receipt into public.kernel_receipts, keyed by receipt_id. The decision row (executed:false)

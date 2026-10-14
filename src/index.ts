@@ -1505,6 +1505,7 @@ if (!IS_TEST) {
 
 import { startHitlExpirationJob } from './services/hitl-expiration-job';
 import { startHitlReconciliationJob } from './services/hitl-reconciliation-job';
+import { startFailedReceiptSettler } from './services/failed-receipt-settler';
 import { DisputeResolutionWorker } from './workers/dispute-resolution-worker';
 
 startValidationWorker();
@@ -1518,6 +1519,8 @@ if (!IS_TEST) startHitlReconciliationJob();
 if (!IS_TEST && process.env.ENGINE_WORKERS_ENABLED !== 'false') {
   startTrinityTaskBridge();
   startPeerVerificationReader(db);
+  // Server-side settle of FAILED receipts the actor never presents. CONFIRMED_FAILED_SETTLE_MODE, default off.
+  startFailedReceiptSettler();
 }
 
 // Phase 2.11 — Dispute Resolution Worker
