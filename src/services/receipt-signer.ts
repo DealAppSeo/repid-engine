@@ -38,6 +38,29 @@
  * hash (not the whole receipt) keeps the signed message small and lets a verifier recompute identical
  * bytes from the stored receipt. canonicalize here is identical to receipt-issuer.ts's, and
  * `tests/receipt-signer.test.ts` pins that the two never drift.
+ *
+ * KEY ID + ROTATION (2026-10-14, XC1 review of #1374). Every signature block carries `key_id`: the
+ * checksummed PUBLIC address of the key that signed it. It is not in the signed bytes and does not need
+ * to be: the verifier RECOVERS the signer from the signature and requires key_id to equal it, so a block
+ * cannot name a key it was not signed by. Blocks from before key_id verify exactly as before.
+ * The verifier accepts the CURRENT key (RECEIPT_SIGNING_KEY's address) plus the RETIRED addresses in
+ * RECEIPT_SIGNING_PREVIOUS_ADDRESSES (comma-separated, PUBLIC addresses only: a retired private key is
+ * never kept). One malformed entry voids the whole list (logged): fail closed means accepting fewer
+ * keys, never guessing. No current key = NOT_CHECKED even with a previous list (a deployment that cannot
+ * sign is misconfigured, and it must not keep confirming).
+ *
+ * ROTATION STEPS (RECEIPT_SIGNING_KEY is Sean-only env):
+ *   1. Generate the new key. Note the OLD key's public address (GET the signer, or a recent key_id).
+ *   2. In ONE deploy: append the old address to RECEIPT_SIGNING_PREVIOUS_ADDRESSES, then set
+ *      RECEIPT_SIGNING_KEY to the new key. Old receipts keep verifying (their key_id is the old address);
+ *      new ones are signed by the new key.
+ *   3. Keep the old address listed for as long as an old signature must verify: for the kernel gate that
+ *      is REPID_CONFIRMED_RECEIPT_TTL_HOURS (default 72h; an older receipt confirms nothing anyway); for an
+ *      issued Trust Receipt a third party may check, keep it. Then remove it.
+ *   COMPROMISED KEY: do NOT list its address. Every receipt it signed then FAILS (that is the point); its
+ *   unconsumed confirmations are lost, which is the accepted cost.
+ *   KNOWN GAP: receipt-attestation.ts (signed-job receipts) reads the same RECEIPT_SIGNING_KEY with its
+ *   own loader and has no previous set; rotating breaks its verification of older signed-job receipts.
  */
 import { Wallet, getAddress, verifyMessage, keccak256, toUtf8Bytes } from 'ethers';
 
@@ -125,12 +148,37 @@ export function receiptSignerAddress(): string | null {
   return wallet ? getAddress(wallet.address) : null;
 }
 
+/**
+ * RETIRED signer addresses that still verify (see KEY ID + ROTATION above). Public data, so the bad entry
+ * count may be logged. Any malformed entry (bad shape or bad EIP-55 checksum) voids the WHOLE list.
+ */
+export function previousReceiptSignerAddresses(): string[] {
+  const raw = process.env['RECEIPT_SIGNING_PREVIOUS_ADDRESSES'];
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+  const out: string[] = [];
+  for (const entry of raw.split(',').map((s) => s.trim()).filter((s) => s !== '')) {
+    try {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(entry)) throw new Error('shape');
+      out.push(getAddress(entry));
+    } catch {
+      console.error('[receipt-signer] RECEIPT_SIGNING_PREVIOUS_ADDRESSES has a malformed entry; ignoring the whole list (only the current key verifies).');
+      return [];
+    }
+  }
+  return out;
+}
+
 /** The detached signature block attached to a signed receipt. Every field is non-secret. */
 export interface ReceiptSignature {
   scheme: typeof RECEIPT_SIGNATURE_SCHEME;
   type: typeof RECEIPT_SIGNATURE_TYPE;
   /** The engine's PUBLIC signer address (checksummed). */
   signer: string;
+  /**
+   * Which key signed: its checksummed PUBLIC address. The verifier requires it to equal the recovered
+   * signer. Optional only so blocks signed before 2026-10-14 still verify.
+   */
+  key_id?: string;
   /** The detached signature bytes (hex). */
   signature: string;
   /** keccak256 of the canonical receipt (minus this signature) — what the signature commits to. */
@@ -170,6 +218,7 @@ export async function signReceipt(receipt: unknown): Promise<SignReceiptResult> 
         scheme: RECEIPT_SIGNATURE_SCHEME,
         type: RECEIPT_SIGNATURE_TYPE,
         signer: getAddress(wallet.address),
+        key_id: getAddress(wallet.address),
         signature,
         content_hash: contentHash,
         signed_at: new Date().toISOString(),
@@ -184,7 +233,8 @@ export async function signReceipt(receipt: unknown): Promise<SignReceiptResult> 
 }
 
 export type VerifyReceiptSignatureResult =
-  | { status: 'VERIFIED'; signer: string }
+  /** `signer` is the key that signed it; `retired` when that is a RECEIPT_SIGNING_PREVIOUS_ADDRESSES key. */
+  | { status: 'VERIFIED'; signer: string; retired: boolean }
   | { status: 'FAILED'; reason: string; signer: string | null }
   | { status: 'NOT_CHECKED'; reason: string };
 
@@ -228,17 +278,31 @@ export function verifyReceiptSignature(
     return { status: 'FAILED', reason: 'receipt content does not match the signed content hash (tampered).', signer: engine };
   }
 
-  // 2. Recover the signer over the exact domain-separated bytes and confirm it is the engine signer.
+  // 2. Recover the signer over the exact domain-separated bytes and confirm it is an engine key: the
+  //    current one, or a retired one still listed (KEY ID + ROTATION in the header).
   let recovered: string;
   try {
     recovered = getAddress(verifyMessage(canonicalize(signingObject(b.content_hash)), b.signature));
   } catch {
     return { status: 'FAILED', reason: 'signature did not recover to an address.', signer: engine };
   }
-  if (recovered !== engine) {
+  const retired = recovered !== engine;
+  if (retired && !previousReceiptSignerAddresses().includes(recovered)) {
     return { status: 'FAILED', reason: 'signature did not recover to the engine receipt signer.', signer: engine };
   }
-  return { status: 'VERIFIED', signer: engine };
+  // 3. A key_id, when present, must name the key that actually signed.
+  if (b.key_id !== undefined) {
+    let named: string | null = null;
+    try {
+      named = typeof b.key_id === 'string' ? getAddress(b.key_id) : null;
+    } catch {
+      named = null;
+    }
+    if (named !== recovered) {
+      return { status: 'FAILED', reason: 'key_id does not name the key that signed.', signer: engine };
+    }
+  }
+  return { status: 'VERIFIED', signer: recovered, retired };
 }
 
 /**

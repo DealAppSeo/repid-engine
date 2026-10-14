@@ -146,6 +146,7 @@ beforeEach(() => {
   (globalThis as any).__RS_FAIL__ = null;
   unsetKey();
   disableFlag();
+  delete process.env.RECEIPT_SIGNING_PREVIOUS_ADDRESSES;
 });
 
 // ───────────────────────────── service: pure crypto ─────────────────────────────
@@ -162,10 +163,10 @@ describe('receipt-signer service — sign / verify', () => {
     expect(sig.scheme).toBe('eip191-personal-sign');
     expect(receiptSignerAddress()).toBe(ENGINE_ADDR);
 
-    expect(verifyReceiptSignature(receipt, sig)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR });
+    expect(verifyReceiptSignature(receipt, sig)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR, retired: false });
     // and it reads the signature off the attached field too
     const attached = { ...receipt, [RECEIPT_SIGNATURE_FIELD]: sig };
-    expect(verifyReceiptSignature(attached)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR });
+    expect(verifyReceiptSignature(attached)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR, retired: false });
   });
 
   it('key SET: a TAMPERED receipt → FAILED (content hash no longer matches)', async () => {
@@ -199,6 +200,73 @@ describe('receipt-signer service — sign / verify', () => {
       signature: foreign, content_hash: hash, signed_at: new Date().toISOString(),
     };
     expect(verifyReceiptSignature(receipt, block).status).toBe('FAILED');
+  });
+
+  describe('KEY ID + ROTATION (XC1 review of #1374): rotating the key must not silently void every receipt', () => {
+    const OLD = Wallet.createRandom();
+    /** Sign with the OLD key, then rotate: RECEIPT_SIGNING_KEY becomes ENGINE. */
+    async function signedThenRotated(receipt: Record<string, unknown>): Promise<ReceiptSignature> {
+      process.env.RECEIPT_SIGNING_KEY = OLD.privateKey;
+      const sig = ((await signReceipt(receipt)) as { ok: true; signature: ReceiptSignature }).signature;
+      setKey();
+      return sig;
+    }
+
+    it('every new block names its key: key_id is the signing address', async () => {
+      setKey();
+      const sig = ((await signReceipt(sampleReceipt())) as { ok: true; signature: ReceiptSignature }).signature;
+      expect(sig.key_id).toBe(ENGINE_ADDR);
+    });
+
+    it('after rotation, an old receipt still verifies while the old address is listed (retired: true)', async () => {
+      const receipt = sampleReceipt();
+      const sig = await signedThenRotated(receipt);
+      expect(sig.key_id).toBe(OLD.address);
+      process.env.RECEIPT_SIGNING_PREVIOUS_ADDRESSES = `0x${'1'.repeat(40)}, ${OLD.address.toLowerCase()}`;
+      expect(verifyReceiptSignature(receipt, sig)).toEqual({ status: 'VERIFIED', signer: OLD.address, retired: true });
+    });
+
+    it('a retired key that is NOT listed (the compromised-key path) fails', async () => {
+      const receipt = sampleReceipt();
+      const sig = await signedThenRotated(receipt);
+      expect(verifyReceiptSignature(receipt, sig).status).toBe('FAILED');
+    });
+
+    it('a key_id naming a different key than the one that signed fails, even when that key is listed', async () => {
+      setKey();
+      const receipt = sampleReceipt();
+      const sig = ((await signReceipt(receipt)) as { ok: true; signature: ReceiptSignature }).signature;
+      process.env.RECEIPT_SIGNING_PREVIOUS_ADDRESSES = OLD.address;
+      const v = verifyReceiptSignature(receipt, { ...sig, key_id: OLD.address });
+      expect(v.status).toBe('FAILED');
+      expect((v as { reason: string }).reason).toMatch(/key_id/);
+    });
+
+    it('one malformed entry voids the whole previous list (fail closed: fewer keys), loudly', async () => {
+      const receipt = sampleReceipt();
+      const sig = await signedThenRotated(receipt);
+      const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      process.env.RECEIPT_SIGNING_PREVIOUS_ADDRESSES = `${OLD.address},not-an-address`;
+      expect(verifyReceiptSignature(receipt, sig).status).toBe('FAILED');
+      expect(err.mock.calls.some((c) => /PREVIOUS_ADDRESSES has a malformed entry/.test(String(c[0])))).toBe(true);
+      err.mockRestore();
+    });
+
+    it('a previous list with no current key is NOT_CHECKED, never a pass', async () => {
+      const receipt = sampleReceipt();
+      const sig = await signedThenRotated(receipt);
+      unsetKey();
+      process.env.RECEIPT_SIGNING_PREVIOUS_ADDRESSES = OLD.address;
+      expect(verifyReceiptSignature(receipt, sig).status).toBe('NOT_CHECKED');
+    });
+
+    it('a block signed before key_id existed still verifies', async () => {
+      setKey();
+      const receipt = sampleReceipt();
+      const { key_id: _dropped, ...legacy } = ((await signReceipt(receipt)) as { ok: true; signature: ReceiptSignature }).signature;
+      void _dropped;
+      expect(verifyReceiptSignature(receipt, legacy as ReceiptSignature)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR, retired: false });
+    });
   });
 
   it('key UNSET: signReceipt FAILS CLOSED (ok:false no_signing_key, never throws); verify → NOT_CHECKED', async () => {
@@ -324,10 +392,10 @@ describe('write path — issueReceipt wiring (fail-closed, flag-gated)', () => {
     const sig = (out.receiptJson as any)[RECEIPT_SIGNATURE_FIELD] as ReceiptSignature;
     expect(sig).toBeDefined();
     expect(sig.signer).toBe(ENGINE_ADDR);
-    expect(verifyReceiptSignature(out.receiptJson)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR });
+    expect(verifyReceiptSignature(out.receiptJson)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR, retired: false });
     // persisted on the row and still verifies from storage
     const row = store().hyperdag_receipts[0];
-    expect(verifyReceiptSignature(row.receipt_json)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR });
+    expect(verifyReceiptSignature(row.receipt_json)).toEqual({ status: 'VERIFIED', signer: ENGINE_ADDR, retired: false });
     // the private key never reached the stored row
     expect(JSON.stringify(row)).not.toContain(ENGINE_KEY);
   });
