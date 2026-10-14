@@ -18,11 +18,16 @@ export const RESPOND_LIMIT_PER_MIN = 120;
 export function respondPrincipalKey(req: Request): string {
   const agentId = (req as any).agent_id;
   if (agentId) return `agent:${agentId}`;
-  const key = (req as any).apiKey?.key;
-  // The key itself is the bucket id. The default MemoryStore is process-local and never logged or
-  // persisted; if a shared store (Redis) is ever configured here, derive a key id first.
-  if (key) return `key:${String(key)}`;
-  return 'unauthenticated'; // unreachable behind authMiddleware; one shared bucket if it ever is
+  // An env-allowlist key (REPID_API_KEYS) has no agent id. Its bucket is WHICH allowlist entry matched
+  // (authMiddleware's envIndex), never the key: the bucket id is the MemoryStore key, it sits on the
+  // enumerable req.rateLimit.key for the whole request, and the library interpolates it into its
+  // double-count error (XC1 review of #1368). An index is not a secret and needs no hash, so there is
+  // nothing for CodeQL's password-hash rule to flag (the reason the bare-sha256 bucket was dropped).
+  const envIndex = (req as any).apiKey?.envIndex;
+  if (Number.isInteger(envIndex)) return `envkey:#${envIndex}`;
+  // A DB-issued key always carries an agent id (above). Anything else is not reachable behind
+  // authMiddleware; it gets one shared bucket rather than a bucket named after a credential.
+  return 'unauthenticated';
 }
 const respondLimiter = rateLimit({
   windowMs: 60_000,
