@@ -34,6 +34,8 @@ jest.mock('../src/db/direct-pg', () => ({
   pgQuery: jest.fn(async (text: string) => {
     const fixtures = (global as any).__v16Pg || {};
     if (text.includes('SELECT r.id::text AS request_id')) return fixtures.resolve ?? [];
+    if (text.includes('SELECT id::text AS id FROM trinity_hitl_requests WHERE id::text LIKE')) return fixtures.expiredResolve ?? [];
+    if (text.includes('click-after-expiry')) return fixtures.expiredMarked ?? [];
     if (text.includes("SET status = $1") && text.includes('decision_metadata')) return fixtures.atomicUpdate ?? [];
     if (text.includes("SELECT status FROM trinity_hitl_requests WHERE id::text =")) return fixtures.finalStatus ?? [{ status: 'unknown' }];
     if (text.includes('current_repid::text AS r FROM repid_agents')) return fixtures.agentRepid ?? [];
@@ -151,6 +153,44 @@ describe('handleHitlCallback', () => {
     const tgBody = JSON.parse(((global as any).fetch as jest.Mock).mock.calls[0][1].body);
     expect(tgBody.text).toMatch(/expired/i);
     expect(tgBody.show_alert).toBe(true);
+  });
+
+  describe('expired payload: marks at most the ONE exactly-matched row', () => {
+    const FULL = 'deadbeef-1111-2222-3333-444455556666';
+    const expiryUpdates = () => pgMock.mock.calls.filter((c: any[]) => /click-after-expiry/.test(c[0]));
+
+    test('one match → UPDATE by exact id (no LIKE), RETURNING', async () => {
+      (global as any).__v16Pg = { expiredResolve: [{ id: FULL }], expiredMarked: [{ id: FULL }] };
+      await handleHitlCallback(mkReq('a', 'deadbeef', pastExp(2)), makeRes());
+      const ups = expiryUpdates();
+      expect(ups).toHaveLength(1);
+      expect(ups[0][0]).toContain("WHERE id::text = $1 AND status='pending'");
+      expect(ups[0][0]).not.toMatch(/LIKE/);
+      expect(ups[0][0]).toMatch(/RETURNING/);
+      expect(ups[0][1]).toEqual([FULL]);
+    });
+
+    test('two prefix matches → no write at all', async () => {
+      (global as any).__v16Pg = { expiredResolve: [{ id: FULL }, { id: 'deadbeef-9999-0000-0000-000000000000' }] };
+      await handleHitlCallback(mkReq('a', 'deadbeef', pastExp(2)), makeRes());
+      expect(expiryUpdates()).toHaveLength(0);
+    });
+
+    test('no match → no write', async () => {
+      (global as any).__v16Pg = { expiredResolve: [] };
+      await handleHitlCallback(mkReq('d', 'deadbeef', pastExp(2)), makeRes());
+      expect(expiryUpdates()).toHaveLength(0);
+    });
+
+    test('expired path never runs the decide UPDATE or inserts a decision', async () => {
+      const inserts: any[] = [];
+      (global as any).__v16Mock = { trinity_hitl_decisions: { _insert: (v: any) => inserts.push(v) } };
+      (global as any).__v16Pg = { expiredResolve: [{ id: FULL }], expiredMarked: [{ id: FULL }] };
+      await handleHitlCallback(mkReq('a', 'deadbeef', pastExp(2)), makeRes());
+      const decides = pgMock.mock.calls.filter((c: any[]) => String(c[0]).includes('SET status = $1'));
+      expect(decides).toHaveLength(0);
+      expect(inserts).toHaveLength(0);
+    });
   });
 
   test('happy path APPROVE → atomic UPDATE + decisions audit row + ack', async () => {

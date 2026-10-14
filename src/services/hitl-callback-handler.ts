@@ -119,16 +119,28 @@ export async function handleHitlCallback(req: Request, res: Response): Promise<v
     // 2. expiry check (do BEFORE the DB hop; cheap)
     if (Math.floor(Date.now() / 1000) > exp) {
       await answerCallback(callbackId, 'This request expired (24h TTL). See the controller for batch triage.', true);
-      // Best-effort: flip pending→expired in DB so the sweeper doesn't have to.
-      // Resolve short_id first (the row may not exist if the request was deleted).
+      // Best-effort: flip pending→expired in DB so the sweeper doesn't have to. The payload only
+      // carries an 8-hex prefix, so resolve it first and write ONLY when it names exactly one row,
+      // then update that row by its exact id. Zero or several matches = no write at all.
       try {
-        await pgQuery(
-          `UPDATE trinity_hitl_requests
-             SET status='expired', resolved_at=now(), resolved_by='system:click-after-expiry'
-           WHERE id::text LIKE $1 AND status='pending'`,
+        const matches = await pgQuery<{ id: string }>(
+          `SELECT id::text AS id FROM trinity_hitl_requests WHERE id::text LIKE $1 LIMIT 2`,
           [requestIdShort + '%'],
-          { label: 'v16-click-expired' },
+          { label: 'v16-click-expired-resolve' },
         );
+        if (matches.length === 1 && matches[0]?.id) {
+          const marked = await pgQuery<{ id: string }>(
+            `UPDATE trinity_hitl_requests
+               SET status='expired', resolved_at=now(), resolved_by='system:click-after-expiry'
+             WHERE id::text = $1 AND status='pending'
+             RETURNING id::text AS id`,
+            [matches[0].id],
+            { label: 'v16-click-expired' },
+          );
+          if (marked.length > 1) {
+            console.error(`[HitlCallbackHandler] expected at most 1 expired row, got ${marked.length}`);
+          }
+        }
       } catch { /* best-effort */ }
       res.sendStatus(200);
       return;
