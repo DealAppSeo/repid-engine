@@ -1,9 +1,11 @@
 # HAL Corpus (v1)
 
 This directory contains the RACK (container format) for the hallucination-detection ground-truth corpus,
-and two corpora in it: `rigorous-v1` and `canary-v1` (`MANIFEST.json`). This README used to say the corpus
-was EMPTY; both have been here since 2026-08-06. A corpus cannot be synthesised: a generated corpus
-measures the generator, not HAL.
+and three corpora in it (`MANIFEST.json`): `rigorous-v1` and `canary-v1` (since 2026-08-06), and
+`hal-v1-frozen` (2026-10-14): the 284 rigorous-v1 rows taken from published benchmarks (HaluEval,
+FEVER, TruthfulQA), each with dataset, item id and URL. The 47 canary rows are left out because we
+wrote those claims ourselves. A corpus cannot be synthesised: a generated corpus measures the
+generator, not HAL. Run plan for the first measurement on it: `reports/2026-10-14/HAL_CORPUS_V1_FROZEN_RUN_PLAN.md`.
 
 **Their `holdout` splits are RETIRED as a holdout (S60, 2026-10-07).** The sentences have been public in
 git since July, so these are training, regression and practice sets. `MANIFEST.json` records the

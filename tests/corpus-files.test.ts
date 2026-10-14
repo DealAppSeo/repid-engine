@@ -102,4 +102,20 @@ describe('HAL corpus manifest', () => {
       expect(new Set(holdout.map((r) => r.label)).size).toBeGreaterThan(1);
     },
   );
+
+  it('hal-v1-frozen: every row is a third-party benchmark row of rigorous-v1, unchanged', () => {
+    // The manifest says this corpus is rigorous-v1 minus the self-authored canary rows, with
+    // nothing relabelled. The hash check above cannot see that: a row edited here AND re-hashed
+    // into the manifest passes it. Checking each row against the parent's own rows can.
+    const read = (p: string) =>
+      readFileSync(join(ROOT, p), 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+    const parent = new Set(read('data/hal_corpus_v1/rigorous-v1.jsonl').map((l) => JSON.stringify(JSON.parse(l))));
+    const rows = read('data/hal_corpus_v1/hal-v1-frozen.jsonl').map((l) => JSON.parse(l) as { id: string; notes: string });
+    expect(rows.length).toBeGreaterThan(0);
+    const notInParent = rows.filter((r) => !parent.has(JSON.stringify(r))).map((r) => r.id);
+    const notThirdParty = rows
+      .filter((r) => !/^source=(halueval|fever|truthfulqa); source_id=[\w.-]+;/.test(r.notes))
+      .map((r) => r.id);
+    expect({ notInParent, notThirdParty }).toEqual({ notInParent: [], notThirdParty: [] });
+  });
 });
