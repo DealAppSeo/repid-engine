@@ -21,14 +21,14 @@ import crypto from 'crypto';
 // see tests/peer-verification.test.ts line 226–234) and the per-agent secret
 // scheme (so an in-flight Gemini caller is not broken).
 //
-// HMAC SECRET RESOLUTION (in order):
-//   1. PEER_VERIFY_HMAC_SECRET  ← sprint-spec primary
-//   2. <AGENT>_PRIVATE_KEY      ← existing per-agent scheme (back-compat)
-//   3. TRUSTRAILS_HMAC_SECRET   ← existing global fallback (back-compat)
-//   Each candidate that exists is tried in turn. If none verify the signature →
-//   401. There is NO hardcoded literal fallback — the function returns
-//   undefined if all three env candidates are unset, which is the right failure
-//   mode (no silent forgery vector).
+// HMAC SECRET: PEER_VERIFY_HMAC_SECRET ONLY (CC1 2026-10-14). This used to fall back
+//   to <AGENT>_PRIVATE_KEY (the agent's WALLET signing key) and then
+//   TRUSTRAILS_HMAC_SECRET. A signing key must never double as an HMAC secret, so
+//   both fallbacks are gone: a ballot signed with anything else is rejected (401),
+//   and with the secret unset every ballot is refused (503) — fail closed, logged
+//   loudly once per process. The engine held neither fallback name in prod and all
+//   12 T12 agents sign with PEER_VERIFY_HMAC_SECRET [V Railway names 2026-10-14],
+//   so no live ballot depended on them.
 //
 // dataToSign (UNCHANGED for Gemini back-compat):
 //   `${queue_id}:${verifier_response_id}:${verdict}`
@@ -37,15 +37,19 @@ import crypto from 'crypto';
 
 const router = Router();
 
-// Helper to get agent private key from env (per-agent scheme).
-// Returns undefined when no per-agent or global env secret is set.
-// Sprint 2026-05-27: removed the hardcoded literal fallback
-// ('trinity-default-sbt-secret') — it was a forge-anyone-with-source vector.
-export function getAgentPrivateKey(agentName: string): string | undefined {
-  // Map "trinity-mel" to "MEL", "trinity-sophia" to "SOPHIA", etc.
-  const cleanName = agentName.replace('trinity-', '').toUpperCase().trim();
-  const envKey = `${cleanName}_PRIVATE_KEY`;
-  return process.env[envKey] || process.env.TRUSTRAILS_HMAC_SECRET || undefined;
+let secretUnsetLogged = false;
+
+// The one HMAC secret. Undefined when unset; the first such call per process logs loudly.
+function peerVerifyHmacSecret(): string | undefined {
+  const secret = process.env.PEER_VERIFY_HMAC_SECRET;
+  if (!secret && !secretUnsetLogged) {
+    secretUnsetLogged = true;
+    console.error(
+      '[peer-verify/respond] PEER_VERIFY_HMAC_SECRET is not set — every peer verdict is REFUSED ' +
+        '(fail closed; no per-agent *_PRIVATE_KEY or other fallback).'
+    );
+  }
+  return secret || undefined;
 }
 
 // Single-direction HMAC compare. Returns true only when:
@@ -70,25 +74,18 @@ function constantTimeVerify(secret: string, dataToSign: string, signature: strin
   }
 }
 
-// Tries all configured secret sources in priority order. Returns true on the
-// first match. Caller passes the resolved verifier agent NAME (for the per-agent
-// candidate lookup); UUIDs would not map back to the canonical env key.
+// Verifies against PEER_VERIFY_HMAC_SECRET only. `configured: false` means the secret
+// is unset and the caller must refuse the ballot outright, not report a bad signature.
 export function verifyPeerSignature(
-  verifierAgentName: string,
   dataToSign: string,
   signature: string
-): { valid: boolean; matched_via?: 'global' | 'per_agent' } {
-  // 1. PEER_VERIFY_HMAC_SECRET (sprint-spec primary)
-  const globalSecret = process.env.PEER_VERIFY_HMAC_SECRET;
-  if (globalSecret && constantTimeVerify(globalSecret, dataToSign, signature)) {
-    return { valid: true, matched_via: 'global' };
+): { valid: boolean; configured: boolean; matched_via?: 'global' } {
+  const secret = peerVerifyHmacSecret();
+  if (!secret) return { valid: false, configured: false };
+  if (constantTimeVerify(secret, dataToSign, signature)) {
+    return { valid: true, configured: true, matched_via: 'global' };
   }
-  // 2/3. Per-agent or TRUSTRAILS_HMAC_SECRET (back-compat)
-  const perAgent = getAgentPrivateKey(verifierAgentName);
-  if (perAgent && constantTimeVerify(perAgent, dataToSign, signature)) {
-    return { valid: true, matched_via: 'per_agent' };
-  }
-  return { valid: false };
+  return { valid: false, configured: true };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -152,7 +149,12 @@ router.post('/respond', async (req: Request, res: Response) => {
 
     // ----- HMAC verify (no DB hit) -------------------------------------------
     const dataToSign = `${queue_id}:${verifier_response_id}:${verdict}`;
-    const check = verifyPeerSignature(verifierName, dataToSign, signature);
+    const check = verifyPeerSignature(dataToSign, signature);
+    if (!check.configured) {
+      return res.status(503).json({
+        error: 'PEER_VERIFY_HMAC_SECRET is not configured on the engine; peer verdicts are refused (fail closed)',
+      });
+    }
     if (!check.valid) {
       console.warn(
         `[peer-verify/respond] HMAC reject queue_id=${queue_id} verifier=${verifierName}`

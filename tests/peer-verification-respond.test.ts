@@ -4,8 +4,8 @@
  * Covers the rewritten POST /respond:
  *   * body-shape validation (5 required fields, allowlist verdict, hex signature)
  *   * agent resolution failure → 404
- *   * HMAC validation against both secret schemes (PEER_VERIFY_HMAC_SECRET and
- *     the per-agent <NAME>_PRIVATE_KEY scheme)
+ *   * HMAC validation against PEER_VERIFY_HMAC_SECRET only: a wallet-key-signed
+ *     ballot is rejected, and an unset secret refuses every ballot (503)
  *   * idempotency: an UPDATE that matches 0 rows due to a prior `verified` row
  *     → 409 Conflict (not 400 as the pre-rewrite endpoint returned)
  *   * self-verification guard (verifier == source)
@@ -242,36 +242,43 @@ describe('POST /api/v1/peer-verify/respond — HMAC validation', () => {
     );
   });
 
-  test('good HMAC via per-agent SHOFET_PRIVATE_KEY (back-compat path) → 200', async () => {
-    // No global secret set; verifier-name-derived per-agent secret must work.
-    process.env.SHOFET_PRIVATE_KEY = 'shofet-only-secret';
-    const sig = sign('shofet-only-secret', QUEUE_ID, RESPONSE_UUID, 'disputed');
-    (global as any).__pvUpdateRows = [
-      {
-        id: QUEUE_ID,
-        source_agent_id: SOURCE_UUID,
-        verifier_agent_id: AGENT_UUID,
+  test('wallet-key-signed ballot (SHOFET_PRIVATE_KEY / TRUSTRAILS) → 401, no DB write', async () => {
+    // The old per-agent "back-compat" path accepted this. A wallet signing key is never an HMAC secret.
+    process.env.PEER_VERIFY_HMAC_SECRET = 'test-global-secret';
+    process.env.SHOFET_PRIVATE_KEY = 'shofet-wallet-key';
+    process.env.TRUSTRAILS_HMAC_SECRET = 'trustrails-secret';
+    for (const secret of ['shofet-wallet-key', 'trustrails-secret']) {
+      const app = freshApp();
+      const res = await request(app).post('/api/v1/peer-verify/respond').send({
+        queue_id: QUEUE_ID,
+        verifier_agent_id: AGENT_NAME,
         verifier_response_id: RESPONSE_UUID,
-        verifier_signature: sig,
-        verification_status: 'disputed',
-        completed_at: '2026-05-27T03:01:00Z',
-        claim_text: 'TEST CLAIM',
-        certainty_at_claim: 0.8,
-        threshold_used: 0.85,
-      },
-    ];
-    const app = freshApp();
-    const res = await request(app).post('/api/v1/peer-verify/respond').send({
-      queue_id: QUEUE_ID,
-      verifier_agent_id: AGENT_NAME,
-      verifier_response_id: RESPONSE_UUID,
-      verdict: 'disputed',
-      signature: sig,
-    });
-    expect(res.status).toBe(200);
-    expect(res.body.matched_via).toBe('per_agent');
-    expect(res.body.verdict).toBe('disputed');
-    expect(res.body.agreement_score).toBe(0.0); // disputed = 0
+        verdict: 'disputed',
+        signature: sign(secret, QUEUE_ID, RESPONSE_UUID, 'disputed'),
+      });
+      expect(res.status).toBe(401);
+    }
+    expect(pgQueryMock).not.toHaveBeenCalled();
+  });
+
+  test('PEER_VERIFY_HMAC_SECRET unset → 503 refused (fail closed), even for a fallback-signed ballot', async () => {
+    process.env.SHOFET_PRIVATE_KEY = 'shofet-wallet-key';
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const app = freshApp();
+      const res = await request(app).post('/api/v1/peer-verify/respond').send({
+        queue_id: QUEUE_ID,
+        verifier_agent_id: AGENT_NAME,
+        verifier_response_id: RESPONSE_UUID,
+        verdict: 'verified',
+        signature: sign('shofet-wallet-key', QUEUE_ID, RESPONSE_UUID, 'verified'),
+      });
+      expect(res.status).toBe(503);
+      expect(res.body.error).toMatch(/PEER_VERIFY_HMAC_SECRET is not configured/);
+      expect(pgQueryMock).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   test('global secret set but signed with wrong secret → 401 (no silent fall-through to plain ==)', async () => {
