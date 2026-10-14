@@ -124,39 +124,121 @@ describe('forbidden flags — no lane can be handed write scope or an unsandboxe
   });
 });
 
-describe('child env pruning covers codex', () => {
-  const INVENTORY = [
-    'OPENAI_API_KEY=sk-openai-this-agents-own-key',
-    'ANTHROPIC_API_KEY=sk-ant-some-other-credential',
-    'XAI_API_KEY=xai-some-other-credential',
-    '',
-  ].join('\n');
-  const inventory = () => {
-    const file = path.join(mkdtempSync(path.join(tmpdir(), 'dispatch-codex-')), '.env.master');
-    writeFileSync(file, INVENTORY, 'utf8');
-    return file;
+describe('child env is an ALLOW-LIST (the CLAUDE_CODE_MESSAGING_TOKEN leak, 2026-10-14)', () => {
+  // The prune copied the parent env and deleted only names found in .env.master, so a
+  // secret the inventory does not list (a Claude Code session token, a stray FOO_API_KEY)
+  // reached every child. These pin the replacement.
+  const INVENTORY: Record<string, string> = {
+    OPENAI_API_KEY: 'sk-openai-lane-key-value',
+    XAI_API_KEY: 'xai-lane-key-value-0001',
+    GEMINI_API_KEY: 'gemini-lane-key-value-01',
+    ANTHROPIC_API_KEY: 'sk-ant-some-other-credential',
+    AGENT_KEY_MASTER: 'master-that-decrypts-every-agent-wallet',
+    SUPABASE_URL: 'https://inventory-host.example.co',
   };
-  const built = (agent: string, key: string | null) =>
+  // Mixed case on purpose: Windows hands these over as Path / SystemRoot / windir / ComSpec.
+  const ESSENTIALS: Record<string, string> = {
+    Path: 'C:/Windows/system32;C:/node',
+    PATHEXT: '.COM;.EXE;.CMD',
+    SystemRoot: 'C:/Windows',
+    windir: 'C:/Windows',
+    ComSpec: 'C:/Windows/system32/cmd.exe',
+    TEMP: 'C:/Users/x/AppData/Local/Temp',
+    TMP: 'C:/Users/x/AppData/Local/Temp',
+    HOME: '/home/x',
+    USERPROFILE: 'C:/Users/x',
+    APPDATA: 'C:/Users/x/AppData/Roaming',
+    LOCALAPPDATA: 'C:/Users/x/AppData/Local',
+    HOMEDRIVE: 'C:',
+    HOMEPATH: '/Users/x',
+    LANG: 'en_US.UTF-8',
+    TERM: 'xterm-256color',
+  };
+  const LEAKS: Record<string, string> = {
+    CLAUDE_CODE_MESSAGING_TOKEN: 'cc-session-token-must-not-leak',
+    FOO_API_KEY: 'foo-key-not-in-inventory-123',
+    GITHUB_PAT: 'ghp-not-in-inventory-either',
+    UNRELATED_SETTING: 'just-some-unrelated-value',
+    NODE_OPTIONS: '--require ./not-for-the-child.js',
+  };
+  const PARENT = { ...ESSENTIALS, ...INVENTORY, ...LEAKS };
+  const LANE_KEY: Record<string, string | null> = {
+    xc: INVENTORY.XAI_API_KEY!,
+    ga: INVENTORY.GEMINI_API_KEY!,
+    codex: INVENTORY.OPENAI_API_KEY!,
+    'codex-oss': null,
+  };
+  const AGENT_KEYS = Object.keys(LANE_KEY);
+
+  const childOf = (agent: string, parent: Record<string, string> = PARENT): Record<string, string> =>
     call(
-      `({buildChildEnv, readAllSecrets, AGENTS}) => buildChildEnv({ PATH: '/usr/bin', OPENAI_API_KEY: 'sk-openai-this-agents-own-key', ANTHROPIC_API_KEY: 'sk-ant-some-other-credential', XAI_API_KEY: 'xai-some-other-credential' }, readAllSecrets().keys(), AGENTS[${JSON.stringify(agent)}].keyVars, ${JSON.stringify(key)})`,
-      { TRUSTKEYS_ENV_MASTER: inventory() },
+      `({buildChildEnv, AGENTS}) => { const a = AGENTS[${JSON.stringify(agent)}]; return buildChildEnv(${JSON.stringify(parent)}, a.keyVars, ${JSON.stringify(LANE_KEY[agent])}, a.envPassthrough || []); }`,
     );
 
-  it('codex gets its own OpenAI key (under both names codex reads) and no other secret', () => {
-    const env = built('codex', 'sk-openai-this-agents-own-key');
-    expect(env.OPENAI_API_KEY).toBe('sk-openai-this-agents-own-key');
-    expect(env.CODEX_API_KEY).toBe('sk-openai-this-agents-own-key');
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.XAI_API_KEY).toBeUndefined();
-    expect(env.PATH).toBe('/usr/bin');
+  it('covers every agent in the table (a new lane cannot skip these cases)', () => {
+    expect(call(`({AGENTS}) => Object.keys(AGENTS).sort()`)).toEqual([...AGENT_KEYS].sort());
   });
 
-  it('codex-oss (local model) gets no inventory secret at all, not even the OpenAI key', () => {
-    const env = built('codex-oss', null);
-    expect(env.OPENAI_API_KEY).toBeUndefined();
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.XAI_API_KEY).toBeUndefined();
-    expect(env.PATH).toBe('/usr/bin');
+  it.each(AGENT_KEYS)('%s: the session token, a non-inventory key and an unrelated var do not reach the child', (agent) => {
+    const env = childOf(agent);
+    for (const name of Object.keys(LEAKS)) expect(env[name]).toBeUndefined();
+    expect(Object.values(env)).not.toContain(LEAKS.CLAUDE_CODE_MESSAGING_TOKEN);
+  });
+
+  it.each(AGENT_KEYS)('%s: OS essentials pass through with their original casing', (agent) => {
+    expect(childOf(agent)).toMatchObject(ESSENTIALS);
+  });
+
+  it.each(['xc', 'ga', 'codex'])("%s: the lane's own key reaches the child under every alias", (agent) => {
+    const env = childOf(agent);
+    const keyVars: string[] = call(`({AGENTS}) => AGENTS[${JSON.stringify(agent)}].keyVars`);
+    for (const name of keyVars) expect(env[name]).toBe(LANE_KEY[agent]);
+  });
+
+  it.each(AGENT_KEYS)('%s: no child value equals any inventory value other than the lane key', (agent) => {
+    // Read the inventory through the real parser, as main() does.
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'dispatch-allow-')), '.env.master');
+    writeFileSync(file, Object.entries(INVENTORY).map(([k, v]) => `${k}=${v}`).join('\n'), 'utf8');
+    const inventoryValues: string[] = call(`({readAllSecrets}) => [...readAllSecrets().values()]`, {
+      TRUSTKEYS_ENV_MASTER: file,
+    });
+    expect(inventoryValues).toHaveLength(Object.keys(INVENTORY).length);
+    const forbidden = inventoryValues.filter((v) => v !== LANE_KEY[agent]);
+    const leaked = Object.entries(childOf(agent)).filter(([, v]) => forbidden.includes(v));
+    expect(leaked).toEqual([]);
+  });
+
+  it('passthrough is per lane: codex-oss gets its model/config, xc does not', () => {
+    const parent = { ...PARENT, CODEX_HOME: 'C:/Users/x/.codex', CODEX_OSS_MODEL: 'gpt-oss:20b' };
+    expect(childOf('codex-oss', parent)).toMatchObject({ CODEX_HOME: 'C:/Users/x/.codex', CODEX_OSS_MODEL: 'gpt-oss:20b' });
+    expect(childOf('codex', parent).CODEX_HOME).toBe('C:/Users/x/.codex');
+    expect(childOf('codex', parent).CODEX_OSS_MODEL).toBeUndefined();
+    expect(childOf('xc', parent).CODEX_HOME).toBeUndefined();
+  });
+
+  it('codex-oss (local model) carries no credential at all', () => {
+    const env = childOf('codex-oss');
+    for (const name of ['OPENAI_API_KEY', 'CODEX_API_KEY', ...Object.keys(INVENTORY)]) expect(env[name]).toBeUndefined();
+  });
+
+  it('every key-like parent value joins the scrub set, and the session token is redacted', () => {
+    const values: string[] = call(`({secretishEnvValues}) => secretishEnvValues(${JSON.stringify(PARENT)})`);
+    for (const v of [LEAKS.CLAUDE_CODE_MESSAGING_TOKEN, LEAKS.FOO_API_KEY, LEAKS.GITHUB_PAT, INVENTORY.OPENAI_API_KEY]) {
+      expect(values).toContain(v);
+    }
+    for (const v of [ESSENTIALS.Path, ESSENTIALS.HOMEPATH, LEAKS.UNRELATED_SETTING]) expect(values).not.toContain(v);
+    const out = call(
+      `({makeScrubber, secretishEnvValues}) => makeScrubber(secretishEnvValues(${JSON.stringify(PARENT)}))('echo: cc-session-token-must-not-leak and foo-key-not-in-inventory-123')`,
+    );
+    expect(out).toBe('echo: <redacted> and <redacted>');
+  });
+
+  it('main() spawns with the allow-listed env and scrubs with the env-derived values', () => {
+    const src = readFileSync(RUNNER_PATH, 'utf8');
+    expect(src).toMatch(/spawnSync\(bin\.cmd, argv, \{[\s\S]{0,200}env: childEnv,/);
+    expect(src).toMatch(/secretishEnvValues\(process\.env\)/);
+    expect(src).toMatch(/makeScrubber\(scrubValues\)/);
+    expect(src).not.toMatch(/env\s*=\s*\{\s*\.\.\.parentEnv\s*\}/);
   });
 });
 

@@ -45,9 +45,10 @@
  *   - `scrub` redacted the resolved key alone, so any OTHER secret echoed back landed
  *     verbatim in `reports/`, which is committed to a repo CLAUDE.md states is PUBLIC.
  *
- * Both halves now cover every value in the reference file: the child env is PRUNED of
- * the other secrets before spawn, and the scrubber redacts all of them on the way out.
- * See buildChildEnv and makeScrubber.
+ * Both halves now go further than the reference file. The child env is an ALLOW-LIST
+ * (OS essentials, the lane's own key, named lane config), so a secret the inventory does
+ * not list cannot reach the child either. The scrubber redacts every inventory value and
+ * every key-like value in the parent env on the way out. See buildChildEnv and makeScrubber.
  *
  *   node scripts/dispatch/run-agent.mjs --agent xc --task "…"         # inline
  *   node scripts/dispatch/run-agent.mjs --agent ga --inbox            # newest INBOX entry
@@ -164,7 +165,7 @@ const AGENTS = {
     // OPENAI_API_KEY is the name in .env.master [V 2026-10-14, name only]. The codex binary
     // reads both OPENAI_API_KEY and CODEX_API_KEY (strings in codex.exe 0.162.1 [V]); the same
     // single value is exported under both so headless auth does not hinge on which one
-    // `exec` prefers. Every OTHER inventory secret is still pruned by buildChildEnv.
+    // `exec` prefers. buildChildEnv's allow-list drops everything else.
     keyVars: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
     inboxFile: 'INBOX_CODEX.md',
     lane: 'L6 RED-TEAM — no write scope',
@@ -176,6 +177,9 @@ const AGENTS = {
     capabilities: ['reasoning', 'repo_read'],
     shellNote: '**sandboxed** — codex runs its own commands under `-s read-only`; they are NOT harness evidence (listed under stderr)',
     parse: parseCodexJsonl,
+    // Non-secret config let through the child-env allow-list. CODEX_HOME is where codex
+    // looks for auth/state (it defaults to ~/.codex when unset).
+    envPassthrough: ['CODEX_HOME'],
   },
   'codex-oss': {
     cli: 'codex',
@@ -192,6 +196,9 @@ const AGENTS = {
     capabilities: ['reasoning'],
     shellNote: '**sandboxed** — codex runs its own commands under `-s read-only`; they are NOT harness evidence (listed under stderr)',
     parse: parseCodexJsonl,
+    // CODEX_OSS_BASE_URL / CODEX_OSS_PORT point codex at a non-default ollama (both names
+    // are in codex.exe 0.162.1 [V]). Non-secret.
+    envPassthrough: ['CODEX_HOME', 'CODEX_OSS_MODEL', 'CODEX_OSS_BASE_URL', 'CODEX_OSS_PORT'],
   },
 };
 
@@ -733,19 +740,49 @@ function readAllSecrets(path = ENV_MASTER) {
  * platform variables — it has no use for the other 43 credentials, and handing them over
  * means a prompt-injected or merely chatty agent can surface one.
  *
- * So every name present in the reference file is removed, and only this agent's key is
- * put back (under each accepted alias, as before). Note what is NOT done: this is a
- * targeted prune, not an allow-list. An allow-list of "variables a CLI needs" is a guess,
- * and a wrong guess breaks dispatch on a machine I cannot test — HOME, APPDATA,
- * USERPROFILE, TEMP, SystemRoot, LANG, NODE_OPTIONS and PATHEXT are all load-bearing
- * somewhere. Pruning known-secret NAMES cannot break a CLI that only needs its own key,
- * and it is the part that carries the risk.
+ * 2026-08-14 to 2026-10-14 it was a PRUNE: copy the parent, delete the names found in
+ * .env.master. That fails open on every secret the inventory does not list. [V 2026-10-14]
+ * the dispatching Claude Code process held CLAUDE_CODE_MESSAGING_TOKEN, a name not in
+ * .env.master, so every grok/gemini/codex child inherited a live session token. Any
+ * key-like variable from the operator's shell leaked the same way.
+ *
+ * So it is now an ALLOW-LIST: the OS essentials below, this agent's own key (under each
+ * alias it accepts), and the named non-secret config the lane declares in `envPassthrough`.
+ * Everything else is dropped. The old objection to an allow-list was "a wrong guess breaks
+ * dispatch". That is now answered by measurement: grok, gemini and codex all ran
+ * `--version`, and codex ran a real dispatch, under exactly this env (PR #1365). A CLI
+ * that breaks fails loudly, through the NO REVIEW path. A leak never announces itself.
+ *
+ * Matched case-insensitively, because Windows hands these over as `Path`, `SystemRoot`,
+ * `windir` or `ComSpec` depending on the parent process.
  */
-function buildChildEnv(parentEnv, secretNames, keyVars, key) {
-  const env = { ...parentEnv };
-  for (const name of secretNames) delete env[name];
-  for (const name of keyVars) env[name] = key;
+const CHILD_ENV_ALLOW = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR',
+  'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH',
+  'LANG', 'TERM',
+]);
+
+function buildChildEnv(parentEnv, keyVars, key, passthrough = []) {
+  const allow = new Set([...CHILD_ENV_ALLOW, ...passthrough.map((n) => n.toUpperCase())]);
+  const env = {};
+  for (const [name, value] of Object.entries(parentEnv)) {
+    if (allow.has(name.toUpperCase()) && value !== undefined) env[name] = value;
+  }
+  if (key) for (const name of keyVars) env[name] = key;
   return env;
+}
+
+/**
+ * Values of every parent-env variable whose NAME looks like a credential. They go into the
+ * scrub set alongside the inventory: a secret that is not in .env.master was never in the
+ * child, but the operator's shell or a setup script can still surface one into the output.
+ * Taken over the whole parent env. The only allow-listed names that match are the lane's own
+ * key vars, and those are scrubbed anyway, so this is exactly "every dropped key-like value"
+ * plus the lane key.
+ */
+const SECRETISH_NAME = /KEY|TOKEN|SECRET|PASSWORD|PAT$/i;
+function secretishEnvValues(parentEnv) {
+  return Object.entries(parentEnv).filter(([n, v]) => SECRETISH_NAME.test(n) && v).map(([, v]) => v);
 }
 
 /**
@@ -1083,8 +1120,12 @@ function main() {
   // the same file and has already exited if it was missing or held nothing, so reaching
   // here with an empty inventory is not a state this can be in. A defensive branch for it
   // would be unreachable code implying a check that never runs.
+  const childEnv = buildChildEnv(process.env, agent.keyVars, key, agent.envPassthrough || []);
+  const scrubValues = [key, ...secrets.values(), ...secretishEnvValues(process.env)];
   console.log(
-    `[dispatch] child env pruned of ${secrets.size} inventory secret(s); transcript scrubbed against all of them`,
+    `[dispatch] child env = allow-list only: ${Object.keys(childEnv).sort().join(', ')} ` +
+      `(${Object.keys(process.env).length - Object.keys(childEnv).length} parent var(s) dropped); ` +
+      `transcript scrubbed against ${secrets.size} inventory + ${secretishEnvValues(process.env).length} key-like env value(s)`,
   );
 
   if (arg('dry-run')) {
@@ -1120,7 +1161,7 @@ function main() {
   const res = spawnSync(bin.cmd, argv, {
     encoding: 'utf8',
     timeout: TIMEOUT_MS,
-    env: buildChildEnv(process.env, secrets.keys(), agent.keyVars, key),
+    env: childEnv,
     maxBuffer: 32 * 1024 * 1024,
     shell: bin.shell,
     ...(agent.mode === 'stdin' ? { input: preamble } : {}),
@@ -1132,7 +1173,7 @@ function main() {
   // Every known secret, not just the one this agent authenticates with. The child was
   // pruned of the others, but the operator's shell, a setup script or the agent's own
   // repo reads can still surface one — and `reports/` is committed to a public repo.
-  const scrub = makeScrubber([key, ...secrets.values()]);
+  const scrub = makeScrubber(scrubValues);
   // An agent with a `parse` (codex --json) hands the reviewer its final message, not raw events;
   // the leftovers worth seeing ride along in stderr. Scrubbed AFTER parsing, so both halves are.
   const parsed = agent.parse ? agent.parse(res.stdout) : { text: res.stdout, diag: '' };
@@ -1290,7 +1331,7 @@ function main() {
  * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
  * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
  */
-export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS, scopeForTask, scopedLessonBlock, extractLessons, LESSON_SCOPES, SCOPED_CONTEXT_MAX, parseCodexJsonl, FORBIDDEN_ARGS, SHELL_SAFE_ARG };
+export { auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS, scopeForTask, scopedLessonBlock, extractLessons, LESSON_SCOPES, SCOPED_CONTEXT_MAX, parseCodexJsonl, FORBIDDEN_ARGS, SHELL_SAFE_ARG, CHILD_ENV_ALLOW, secretishEnvValues };
 
 const INVOKED_DIRECTLY =
   Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

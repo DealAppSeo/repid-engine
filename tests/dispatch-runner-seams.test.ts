@@ -230,7 +230,7 @@ describe('secret containment — the child env and the transcript', () => {
   describe('buildChildEnv', () => {
     const built = (parent: Record<string, string>) =>
       call(
-        `({buildChildEnv, readAllSecrets}) => buildChildEnv(${JSON.stringify(parent)}, readAllSecrets().keys(), ['XAI_API_KEY','GROK_API_KEY'], 'xai-this-agents-own-key')`,
+        `({buildChildEnv}) => buildChildEnv(${JSON.stringify(parent)}, ['XAI_API_KEY','GROK_API_KEY'], 'xai-this-agents-own-key')`,
         { TRUSTKEYS_ENV_MASTER: withInventory() },
       );
 
@@ -251,8 +251,8 @@ describe('secret containment — the child env and the transcript', () => {
     });
 
     it('preserves the platform variables the CLI needs to run at all', () => {
-      // A prune that breaks dispatch is not a security win. This is why the prune is
-      // keyed on known-secret NAMES rather than an allow-list of "what a CLI needs".
+      // An env that breaks dispatch is not a security win. Since 2026-10-14 the child env is
+      // an allow-list (see dispatch-codex-lane.test.ts), and these essentials are on it.
       const env = built({ PATH: '/usr/bin', HOME: '/home/x', LANG: 'en_US.UTF-8', TEMP: '/tmp' });
       expect(env).toMatchObject({ PATH: '/usr/bin', HOME: '/home/x', LANG: 'en_US.UTF-8', TEMP: '/tmp' });
     });
