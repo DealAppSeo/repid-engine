@@ -5,6 +5,7 @@ import { emitPeerVerifyScoreEvents } from '../services/peer-verify-score';
 import {
   peerVerifyPanelEnabled,
   resolvePanel,
+  closeNoMajorityPanel,
   PANEL_PROVIDER_HINTS,
 } from '../services/peer-verify-consensus';
 import crypto from 'crypto';
@@ -239,6 +240,10 @@ router.post('/respond', async (req: Request, res: Response) => {
       });
 
       if (!resolveResult.consensus.reached) {
+        // All ballots in and still no 2-of-3: no further vote can arrive, so "wait" would strand
+        // the row in_review for good (4 of 7 real panels, 2026-10-14). Shadow-logs by default;
+        // closes as 'timeout', never scored, under PANEL_CLOSE_NO_MAJORITY=enforce.
+        const noMajority = await closeNoMajorityPanel(queue_id, resolveResult.consensus);
         return res.status(voteAccepted ? 202 : 200).json({
           success: true,
           mode: 'panel',
@@ -247,6 +252,7 @@ router.post('/respond', async (req: Request, res: Response) => {
           reason: resolveResult.consensus.reason,
           votes_in: resolveResult.consensus.votes.length,
           panel_size: 3,
+          ...(noMajority ? { no_majority_close: noMajority } : {}),
         });
       }
 

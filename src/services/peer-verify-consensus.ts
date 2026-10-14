@@ -122,6 +122,95 @@ export function computeConsensus(votes: PanelVote[]): ConsensusResult {
   };
 }
 
+/**
+ * NO-MAJORITY CLOSE — a full panel that cannot reach 2-of-3 is FINISHED, not pending.
+ *
+ * [V 2026-10-14] 4 of the 7 real panels (queue 142077, 142080, 142081, 142083) received all
+ * three ballots with no majority (3x timeout, or disputed + 2x timeout) and sat in `in_review`
+ * for good. The route answered the last voter "202, wait for more votes", but no further vote
+ * can arrive: one ballot per verifier (UNIQUE + ON CONFLICT DO NOTHING), and the reader stops
+ * re-issuing ballots after PEER_VERIFY_RECLAIM_CAP. Nothing else ever closed them.
+ *
+ * STATUS 'timeout', NOT 'disputed' — deliberately. `compute_self_certainty()` (prod, read
+ * 2026-10-14) computes the PRODUCER's peer_rate as verified / (verified + disputed) over its
+ * queue rows, and `peer_verify_reward_multiplier()` counts the same two statuses. Closing a
+ * no-majority row as 'disputed' would book it as a LOSS against the producer, which is a
+ * correctness signal this panel did not produce. 'timeout' is CHECK-allowed and terminal. It
+ * already means "the verifiers could not settle it" (41,495 rows), and neither function counts
+ * it. No score event is emitted on this path either: no consensus means score 0 for everyone,
+ * and it is never a pass.
+ *
+ * The tally and every ballot go into `closure_reason`, the queue's only free-text column (it has
+ * no result/metadata column). The ballots themselves stay in peer_verification_votes.
+ *
+ * FLAG PANEL_CLOSE_NO_MAJORITY: 'enforce' closes the row. Anything else, including unset, is
+ * SHADOW: it logs what WOULD close and writes nothing, so deploying this changes nothing until
+ * the flag is set.
+ */
+export const NO_MAJORITY_CLOSE_STATUS = 'timeout';
+
+export function panelNoMajorityMode(): 'shadow' | 'enforce' {
+  return (process.env.PANEL_CLOSE_NO_MAJORITY || '').trim().toLowerCase() === 'enforce' ? 'enforce' : 'shadow';
+}
+
+/** All PANEL_SIZE ballots are in and none reached 2-of-3. Fewer ballots = still waiting. */
+export function isNoMajorityFinal(c: ConsensusResult): boolean {
+  return !c.reached && c.votes.length >= PANEL_SIZE;
+}
+
+export function noMajorityClosureReason(c: ConsensusResult): string {
+  const tally = `verified=${c.tally.verified ?? 0} disputed=${c.tally.disputed ?? 0} timeout=${c.tally.timeout ?? 0}`;
+  const ballots = c.votes.map((v) => `${v.verifier_agent_name ?? v.verifier_agent_id}:${v.verdict}`).join(', ');
+  return `panel_no_majority(${c.reason}) ${tally} | ${ballots}`;
+}
+
+export interface NoMajorityCloseResult {
+  mode: 'shadow' | 'enforce';
+  /** true only when enforce mode actually moved the row out of pending/in_review */
+  closed: boolean;
+  status: typeof NO_MAJORITY_CLOSE_STATUS;
+  closure_reason: string;
+}
+
+/**
+ * Close (enforce) or report (shadow) a finished no-majority panel. NEVER scores. Returns null
+ * when the panel is not a finished no-majority panel, so a caller cannot close a live one.
+ */
+export async function closeNoMajorityPanel(
+  queueId: number | string,
+  c: ConsensusResult,
+): Promise<NoMajorityCloseResult | null> {
+  if (!isNoMajorityFinal(c)) return null;
+  const mode = panelNoMajorityMode();
+  const closure_reason = noMajorityClosureReason(c);
+
+  if (mode !== 'enforce') {
+    console.warn(
+      `[peer-verify/panel] SHADOW (PANEL_CLOSE_NO_MAJORITY unset): queue ${queueId} WOULD close as ` +
+        `'${NO_MAJORITY_CLOSE_STATUS}' — ${closure_reason}. Left in_review; set PANEL_CLOSE_NO_MAJORITY=enforce to close.`,
+    );
+    return { mode, closed: false, status: NO_MAJORITY_CLOSE_STATUS, closure_reason };
+  }
+
+  const rows = await pgQuery<{ id: number | string }>(
+    `UPDATE peer_verification_queue
+        SET verification_status = $2,
+            completed_at = now(),
+            closure_reason = $3
+      WHERE id = $1
+        AND verification_status IN ('pending','in_review')
+      RETURNING id`,
+    [queueId, NO_MAJORITY_CLOSE_STATUS, closure_reason],
+    { label: 'panel-close-no-majority' },
+  );
+  const closed = rows.length > 0;
+  console.warn(
+    `[peer-verify/panel] queue ${queueId} ${closed ? `CLOSED as '${NO_MAJORITY_CLOSE_STATUS}'` : 'already closed (no-op)'} ` +
+      `— ${closure_reason}. Not scored.`,
+  );
+  return { mode, closed, status: NO_MAJORITY_CLOSE_STATUS, closure_reason };
+}
+
 /** Fetch all votes cast for a claim from peer_verification_votes. */
 export async function fetchVotes(sourceResponseId: string): Promise<PanelVote[]> {
   const rows = await pgQuery<{
