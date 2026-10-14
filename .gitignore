@@ -127,3 +127,6 @@ pvq_results.json
 # not ignore, and tests/holdout-leak-guard.test.ts fails if a registered sentence appears anywhere.
 *.holdout.private.jsonl
 eval/holdout/private/
+
+# zvec-grep local semantic index (rebuild: npm run search:index)
+.zvec-grep/
