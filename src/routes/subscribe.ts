@@ -23,7 +23,9 @@ router.post('/subscribe', async (req: Request, res: Response) => {
   const source = SOURCES.has(sourceRaw) ? sourceRaw : 'other';
   const ref_code = req.body?.ref_code ? String(req.body.ref_code).slice(0, 200) : null;
 
-  if (!EMAIL_RE.test(email) || email.length > 254) {
+  // Length FIRST: EMAIL_RE is polynomial on long input (CodeQL js/polynomial-redos; 80 KB blocked the
+  // event loop ~15 s locally), and express.json accepts 1 MB. 254 is the RFC 5321 path limit.
+  if (email.length > 254 || !EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'invalid_email' });
   }
   try {

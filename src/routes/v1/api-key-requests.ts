@@ -25,8 +25,9 @@ export function validateApiKeyRequestBody(
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const use_case = typeof body.use_case === 'string' ? body.use_case.trim() : '';
   const organization = typeof body.organization === 'string' && body.organization.trim() ? body.organization.trim() : null;
-  if (!email || !EMAIL_RE.test(email)) return { ok: false, error: 'valid email required' };
+  // Length before the regex: EMAIL_RE is polynomial on long input (CodeQL js/polynomial-redos).
   if (email.length > 254) return { ok: false, error: 'email too long' };
+  if (!email || !EMAIL_RE.test(email)) return { ok: false, error: 'valid email required' };
   if (use_case.length < 10) return { ok: false, error: 'use_case required (min 10 chars)' };
   if (use_case.length > 2000) return { ok: false, error: 'use_case too long (max 2000 chars)' };
   return { ok: true, email, use_case, organization };
