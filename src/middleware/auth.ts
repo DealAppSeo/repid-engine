@@ -260,13 +260,17 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   
   let valid = false;
   let tier = 'free';
+  // WHICH allowlist entry matched. A non-secret handle for an env key, so per-key state (the
+  // /peer-verify/respond limiter bucket) never has to be keyed on the key itself.
+  let envIndex: number | undefined;
 
-  for (const k of keyList) {
+  for (const [i, k] of keyList.entries()) {
     // allow key:tier or just key format
     const [key, keyTier] = k.split(':');
     if (key === apiKey) {
       valid = true;
       if (keyTier) tier = keyTier;
+      envIndex = i;
       break;
     }
   }
@@ -314,7 +318,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     return res.status(403).json({ error: 'Forbidden: Invalid API key' });
   }
 
-  (req as any).apiKey = { key: apiKey, tier };
+  (req as any).apiKey = { key: apiKey, tier, ...(envIndex !== undefined ? { envIndex } : {}) };
   if (dbAgentId) {
     (req as any).agent_id = dbAgentId;
 
