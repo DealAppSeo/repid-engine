@@ -25,10 +25,22 @@ import { execSync } from 'child_process';
 dotenv.config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+// Same precedence as the engine (src/config.ts): the new-format sb_secret_… key first. Legacy JWT keys
+// are disabled on Trinity prod, so a legacy-only environment now fails every count — say so loudly
+// instead of emitting a digest full of nulls.
+const SUPABASE_KEY =
+  process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 let sb: any = null;
 if (SUPABASE_URL && SUPABASE_KEY) {
   sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+} else {
+  console.error(
+    '[state] FAILED: no DB client. Set SUPABASE_URL and SUPABASE_SECRET_KEY (sb_secret_…); every count below will be null.',
+  );
+  process.exitCode = 1;
+}
+if (SUPABASE_KEY && !SUPABASE_KEY.startsWith('sb_secret_')) {
+  console.error('[state] WARNING: using a legacy JWT key. Legacy API keys are disabled on Trinity prod; set SUPABASE_SECRET_KEY.');
 }
 const DRY = process.argv.includes('--dry-run');
 const LOG_PATH = 'E:\\dev\\living-docs\\STATE_OF_THE_ECOSYSTEM_LOG.md'; // append-only canonical for GA evidence + cross-agent; also emit local copy if needed
