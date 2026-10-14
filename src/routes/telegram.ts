@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleHitlCallback } from '../services/hitl-callback-handler';
 import { listAgentControls, setAgentEnabled } from '../services/agent-controls';
@@ -61,24 +62,60 @@ export async function sendTelegramMessage(
   }
 }
 
+// ─── Fail closed when unset (2026-10-14) ─────────────────────────────────────────────────────
+// Both checks below used to pass when their variable was UNSET: the webhook skipped the
+// X-Telegram-Bot-Api-Secret-Token check without TELEGRAM_WEBHOOK_SECRET, and every chat counted
+// as the admin chat without TELEGRAM_ADMIN_CHAT_ID / TELEGRAM_CHAT_ID. An unconfigured service
+// is the common case, so "unset" has to mean "refuse", not "allow".
+
+export const WEBHOOK_SECRET_MISSING =
+  '[telegram] TELEGRAM_WEBHOOK_SECRET is not set, so /api/v1/telegram/webhook refuses every update (401). '
+  + 'To enable: set TELEGRAM_WEBHOOK_SECRET on this service, then call GET /api/v1/telegram/set-webhook '
+  + 'so Telegram sends it as X-Telegram-Bot-Api-Secret-Token.';
+export const ADMIN_CHAT_MISSING =
+  '⛔ Control commands are disabled: no admin chat is configured (set TELEGRAM_ADMIN_CHAT_ID).';
+
+function webhookSecret(): string {
+  return (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+}
+
+/** True only when a secret is configured AND the header matches it (constant-time). */
+export function webhookSecretMatches(provided: unknown): boolean {
+  const expected = webhookSecret();
+  if (!expected || typeof provided !== 'string') return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** True only when an admin chat is configured AND this chat is it. Unset never matches. */
+export function isAdminChat(chatId: unknown): boolean {
+  const admin = (process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_CHAT_ID || '').trim();
+  return admin !== '' && String(chatId) === admin;
+}
+
+let missingSecretLogged = false;
+function logMissingSecretOnce(): void {
+  if (missingSecretLogged) return;
+  missingSecretLogged = true;
+  console.error(WEBHOOK_SECRET_MISSING);
+}
+// Loud at boot, not only on the first update.
+if (!webhookSecret()) logMissingSecretOnce();
+
 router.post('/webhook', async (req, res) => {
-  // V1.6 (CC2 2026-05-27): X-Telegram-Bot-Api-Secret-Token check — applies to ALL
-  // update types. If TELEGRAM_WEBHOOK_SECRET is set, Telegram must echo the same
-  // string in this header (configured via setWebhook → secret_token). Unset env =
-  // backwards-compatible (skip check) so existing message commands keep working
-  // until Sean opts in. When Sean SETS the env, he must ALSO re-run /set-webhook
-  // so Telegram starts sending the header (the GET handler picks it up automatically).
-  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (expectedSecret) {
-    const provided = req.headers['x-telegram-bot-api-secret-token'];
-    if (provided !== expectedSecret) {
-      return res.sendStatus(401);
-    }
+  // Applies to ALL update types, including callback_query. No secret configured = refuse.
+  if (!webhookSecret()) {
+    logMissingSecretOnce();
+    return res.sendStatus(401);
+  }
+  if (!webhookSecretMatches(req.headers['x-telegram-bot-api-secret-token'])) {
+    return res.sendStatus(401);
   }
 
   // V1.6: callback_query branch (additive) — handles HITL approve/deny button taps.
-  // Slice-1 dispatcher only attaches inline keyboards when HITL_CALLBACK_ENABLED='true'
-  // AND HITL_CALLBACK_HMAC_SECRET is set, so this branch is dormant by default.
+  // Now behind the secret check above. handleHitlCallback also fails closed on its own:
+  // without HITL_CALLBACK_HMAC_SECRET every payload is rejected.
   if ((req.body as any)?.callback_query) {
     return handleHitlCallback(req, res);
   }
@@ -90,15 +127,16 @@ router.post('/webhook', async (req, res) => {
   const rawText = message.text.trim();
   let reply = '';
 
-  const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
-  const isAdminChat = !adminChat || String(chatId) === String(adminChat);
+  const adminConfigured = (process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_CHAT_ID || '').trim() !== '';
 
   try {
     const sleepMatch = rawText.match(/^\/sleep\s+(\S+)/i);
     const wakeMatch = rawText.match(/^\/wake\s+(\S+)/i);
 
     if (sleepMatch || wakeMatch) {
-      if (!isAdminChat) {
+      if (!adminConfigured) {
+        reply = ADMIN_CHAT_MISSING;
+      } else if (!isAdminChat(chatId)) {
         reply = '⛔ Control commands restricted to admin chat.';
       } else {
         const agentArg = (sleepMatch?.[1] || wakeMatch?.[1])!;
@@ -237,23 +275,25 @@ router.post('/webhook', async (req, res) => {
 
 router.get('/set-webhook', async (req, res) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  // V1.6: include secret_token if TELEGRAM_WEBHOOK_SECRET is set so Telegram
-  // echoes it in the X-Telegram-Bot-Api-Secret-Token header. Backwards-compatible:
-  // if env unset, setWebhook omits secret_token (existing behavior).
-  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  // Never register a webhook without a secret_token. No secret configured = refuse,
+  // and Telegram is not called.
+  const secret = webhookSecret();
+  if (!secret) {
+    return res.status(409).json({ ok: false, error: WEBHOOK_SECRET_MISSING });
+  }
   try {
     const body: Record<string, any> = {
       url: 'https://repid-engine-production.up.railway.app/api/v1/telegram/webhook',
       allowed_updates: ['message', 'callback_query'],
+      secret_token: secret,
     };
-    if (webhookSecret) body.secret_token = webhookSecret;
     const r = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
     const d = await r.json();
-    res.json({ ...d, with_secret_token: !!webhookSecret });
+    res.json({ ...d, with_secret_token: true });
   } catch (e: any) {
     res.json({ error: e.message });
   }
