@@ -7,14 +7,16 @@
  *       carries a confirmedOutcome payload scores EXACTLY as the same event without it.
  *   (2) CALLER-ASSERTED NEVER MOVES (CWE-345). With the flag ON, a confirmedOutcome from
  *       the request body moves NOTHING — for every settler kind — because the pipeline
- *       supplies no server-derived verifiedConfirmation (none is wired yet). The outcome
+ *       supplies no server-derived verifiedConfirmation (no confirmationReceiptId is sent, so the
+ *       wired verifier, resolveServerConfirmation, has nothing to read). The outcome
  *       is RECORDED for audit and held INERT (no delta, no activity bump, no side-effects).
  *   (3) The inert-hold is SPECIFIC: a normal event still scores with the flag ON.
  *
  * The positive policy (a server-verified confirmation DOES move the score by the rule
  * deltas) is proven at the unit level in confirmed-outcome.test.ts; it cannot be driven
- * from this pipeline because the server verifier is deliberately not reachable from a
- * caller. Non-vacuity for the boundary is a mutation check (see the report).
+ * from this pipeline: it needs a kernel_receipts row, which confirmed-outcome-verifier-wiring,
+ * -one-time-use and -hardening serve from a mocked table. Non-vacuity for the boundary is a
+ * mutation check (see the report).
  *
  * Mirrors tests/trust-keystone-deception.test.ts's mock topology.
  */

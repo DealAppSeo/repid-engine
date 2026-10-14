@@ -47,6 +47,8 @@ function row(over: Record<string, unknown> = {}): Record<string, unknown> {
     verdict_label: 'SETTLED',
     verification_status: 'VERIFIED',
     is_simulated: false,
+    args_hash: '0x' + 'ab'.repeat(32),
+    created_at: new Date(Date.now() - 60_000).toISOString(),
     ...over,
   };
 }
@@ -139,6 +141,30 @@ describe('REJECT — every gate fails closed to undefined', () => {
     expect(await resolveServerConfirmation(ACTOR, '')).toBeUndefined();
     expect(await resolveServerConfirmation(ACTOR, '   ')).toBeUndefined();
     expect(await resolveServerConfirmation(ACTOR, undefined)).toBeUndefined();
+  });
+
+  it('CONTENT KEY: a missing or malformed args_hash → undefined (cannot be de-duplicated)', async () => {
+    // NON-VACUITY: drop the args_hash gate and these return a confirmation → RED.
+    for (const args_hash of [null, '', '0x1234', 'ab'.repeat(32), '0x' + 'zz'.repeat(32)]) {
+      ctl.row = row({ args_hash });
+      expect(await resolveServerConfirmation(ACTOR, 'rcpt-1')).toBeUndefined();
+    }
+  });
+
+  it('EXPIRY: a receipt older than the 72h default TTL → undefined; just inside → confirms', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    ctl.row = row({ created_at: new Date(Date.now() - 73 * 3_600_000).toISOString() });
+    expect(await resolveServerConfirmation(ACTOR, 'rcpt-1')).toBeUndefined();
+    ctl.row = row({ created_at: new Date(Date.now() - 71 * 3_600_000).toISOString() });
+    expect((await resolveServerConfirmation(ACTOR, 'rcpt-1'))?.settledBy).toBe('holdout');
+    warn.mockRestore();
+  });
+
+  it('EXPIRY: an undatable receipt (null / garbage created_at) → undefined', async () => {
+    for (const created_at of [null, 'not-a-date']) {
+      ctl.row = row({ created_at });
+      expect(await resolveServerConfirmation(ACTOR, 'rcpt-1')).toBeUndefined();
+    }
   });
 
   it('a thrown DB read → undefined (never throws into the score path)', async () => {

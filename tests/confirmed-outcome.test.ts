@@ -12,9 +12,10 @@
  * a verifier has confirmed the outcome". The SERVER-VERIFICATION GATE block proves the
  * other half: a caller-asserted confirmation with NO `verifiedConfirmation` settles NOTHING.
  *
- * Three assertions are marked NON-VACUITY GUARD: they go RED if the code is mutated to let
- * a 2-1 vote settle, to let a same-family counterparty confirm, or to trust a caller-asserted
- * confirmation with no server verification.
+ * Assertions marked NON-VACUITY GUARD go RED if the code is mutated to let a 2-1 vote settle,
+ * to let a same-family counterparty confirm, to trust a caller-asserted confirmation with no
+ * server verification, or (since 2026-10-14) to let any caller field skip or shrink a
+ * server-settled wrong (SERVER RESULT WINS).
  */
 import {
   resolveConfirmedOutcome,
@@ -57,8 +58,8 @@ const SOURCE: Record<ConfirmedSettler, ConfirmedVerifiedSource> = {
 };
 /**
  * A SERVER-DERIVED confirmation, as the verifier would produce (tests stand in for the verifier).
- * `result` defaults to 'right' and is the result the SERVER establishes — it must match the caller's
- * asserted `input.result` for the ordinary paths, and must be 'wrong' for the heavy-penalty branches.
+ * `result` defaults to 'right' and is the result the SERVER establishes. Since 2026-10-14 it is what
+ * scores whatever the caller asserts (SERVER RESULT WINS); base() keeps them equal for the rule blocks.
  */
 const vc = (s: ConfirmedSettler, result: ConfirmedResultKind = 'right'): VerifiedConfirmation => ({
   source: SOURCE[s],
@@ -153,13 +154,12 @@ describe('CWE-345 SERVER-VERIFICATION GATE — a caller-asserted confirmation se
     expect(r.reason).toBe('confirmation_not_server_verified');
   });
 
-  it('a server source that disagrees with the caller settledBy fails closed (settler_mismatch)', async () => {
-    // result agrees ('right'==='right') so the result check passes and the SETTLER mismatch is what fails it.
+  it('the SERVER settler wins over a disagreeing caller settledBy (was settler_mismatch → a dodge)', async () => {
     const r = await resolveConfirmedOutcome(
       base({ settledBy: 'holdout', result: 'right', verifiedConfirmation: vc('person', 'right') }),
     );
-    expect(r.confirmed).toBe(false);
-    expect(r.reason).toBe('settler_mismatch');
+    expect(r.confirmed).toBe(true);
+    expect(r.settledBy).toBe('person');
   });
 });
 
@@ -178,7 +178,8 @@ describe('RULE 1 — the official score moves ONLY on a confirmed outcome', () =
   );
 
   it('NON-VACUITY GUARD: a 2-1 vote is PROVISIONAL and does NOT move the score', async () => {
-    // Even if a verifiedConfirmation were present, a vote is never a server settler.
+    // A caller-asserted vote, no server receipt. (With a receipt, the receipt decides — see
+    // SERVER RESULT WINS below: a caller 'vote' cannot skip a server-settled outcome.)
     const r = await resolveConfirmedOutcome(base({ settledBy: 'vote', result: 'right' }));
     expect(r.confirmed).toBe(false);
     expect(r.verdictLabel).toBe('PROVISIONAL');
@@ -194,26 +195,24 @@ describe('RULE 1 — the official score moves ONLY on a confirmed outcome', () =
   });
 });
 
-describe('RULE 2 — asymmetric gain/loss, confidence-weighted, rubber-stamp heaviest', () => {
+describe('RULE 2 — asymmetric gain/loss, rubber-stamp heaviest', () => {
   it('a confirmed right earns a SMALL gain', async () => {
     const r = await resolveConfirmedOutcome(base({ result: 'right' }));
     expect(r.appliedDelta).toBe(5);
   });
 
-  it('a confirmed wrong costs MORE than a confirmed right (even at zero confidence)', async () => {
-    const wrong = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 0 }));
-    expect(wrong.appliedDelta).toBe(-15);
+  it('a server-settled wrong costs MORE than a confirmed right: the receipt-backed confident wrong', async () => {
+    const wrong = await resolveConfirmedOutcome(base({ result: 'wrong' }));
+    expect(wrong.appliedDelta).toBe(-55); // lossBase - confidenceLossWeight
     expect(Math.abs(wrong.appliedDelta)).toBeGreaterThan(5);
   });
 
-  it('a confident wrong costs MORE still (loss scales with confidence, monotonic)', async () => {
-    const hedged = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 0 }));
-    const mid = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 0.5 }));
-    const confident = await resolveConfirmedOutcome(base({ result: 'wrong', confidence: 1 }));
-    expect(confident.appliedDelta).toBe(-55);
-    expect(mid.appliedDelta).toBe(-35);
-    expect(confident.appliedDelta).toBeLessThan(mid.appliedDelta);
-    expect(mid.appliedDelta).toBeLessThan(hedged.appliedDelta);
+  it('NON-VACUITY GUARD: the caller confidence cannot shrink a server-settled wrong (0, 0.5 and 1 all cost the same)', async () => {
+    // Before 2026-10-14 confidence 0 priced this at -15: a caller number shrinking a server verdict.
+    for (const confidence of [0, 0.5, 1]) {
+      const r = await resolveConfirmedOutcome(base({ result: 'wrong', confidence }));
+      expect(r.appliedDelta).toBe(-55);
+    }
   });
 
   it('a rubber-stamp of a known-wrong costs MORE than the last ten confirmed rights combined', async () => {
@@ -229,17 +228,24 @@ describe('RULE 2 — asymmetric gain/loss, confidence-weighted, rubber-stamp hea
   });
 });
 
-describe('RULE 3 — abstain is free; an unsupported PASS pays the confident-wrong penalty', () => {
-  it('abstain → zero delta, no move (free)', async () => {
-    const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'abstain' }));
+describe('RULE 3 — abstain is free ONLY without a receipt; a receipt-backed wrong is a confident wrong', () => {
+  it('abstain with NO server receipt → zero delta, no move (free)', async () => {
+    const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'abstain', verifiedConfirmation: undefined }));
     expect(r.appliedDelta).toBe(0);
     expect(r.scoreMoves).toBe(false);
     expect(r.reason).toBe('abstain_free');
   });
 
+  it('NON-VACUITY GUARD: abstain cannot skip a server-settled WRONG', async () => {
+    for (const over of [{ abstained: true }, { result: 'abstain' as const }]) {
+      const r = await resolveConfirmedOutcome(base({ ...over, verifiedConfirmation: vc('holdout', 'wrong') }));
+      expect(r.confirmed).toBe(true);
+      expect(r.appliedDelta).toBe(-55);
+      expect(r.reason).toBe('confirmed_wrong');
+    }
+  });
+
   it('a server-verified unsupported PASS is a confident wrong (full penalty), confirmed by the receipt', async () => {
-    // The caller claimed PASS (result:'right') but the RECEIPT (server source) establishes 'wrong' —
-    // the one legitimate caller/server disagreement, priced as a confident wrong.
     const r = await resolveConfirmedOutcome(
       base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout', 'wrong') }),
     );
@@ -247,7 +253,6 @@ describe('RULE 3 — abstain is free; an unsupported PASS pays the confident-wro
     expect(r.confirmed).toBe(true);
     expect(r.settledBy).toBe('holdout');
     expect(r.scoreMoves).toBe(true);
-    expect(r.reason).toBe('pass_unsupported_by_receipt');
   });
 });
 
@@ -348,54 +353,23 @@ describe('RULE 4 — counterparty independence / no self-deal (fail closed)', ()
   });
 });
 
-describe('RULE 5 — first miss in a NEW domain tightens the band, does not wipe', () => {
+describe('RULE 5 is DORMANT for a server-settled wrong — a caller-chosen domain or self-report cannot shrink it', () => {
+  // The receipt carries no domain and no self-report: both are caller inputs. Before 2026-10-14 a
+  // never-seen domain string turned -55 into -8, and selfReportedMiss halved it again.
   const newDomainDeps: ConfirmedOutcomeDeps = { domainTrackRecord: async () => ({ checked: true, hasRecord: false }) };
-  const establishedDeps: ConfirmedOutcomeDeps = { domainTrackRecord: async () => ({ checked: true, hasRecord: true }) };
 
-  it('a first confirmed miss in a NEW domain band-tightens (bounded), not a full wipe', async () => {
+  it('NON-VACUITY GUARD: a fresh domain + selfReportedMiss + low confidence still costs the full wrong', async () => {
     const r = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'wrong', confidence: 1, domain: 'law' }),
+      base({ settledBy: 'holdout', result: 'wrong', confidence: 0.05, domain: 'never-seen', selfReportedMiss: true }),
       newDomainDeps,
     );
-    expect(r.bandTightened).toBe(true);
-    expect(r.appliedDelta).toBe(-8);
-    expect(Math.abs(r.appliedDelta)).toBeLessThan(55);
-  });
-
-  it('a confirmed miss in an ESTABLISHED domain takes the full confident loss', async () => {
-    const r = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'wrong', confidence: 1, domain: 'law' }),
-      establishedDeps,
-    );
-    expect(r.bandTightened).toBe(false);
     expect(r.appliedDelta).toBe(-55);
+    expect(r.bandTightened).toBe(false);
   });
 
-  it('a self-reported miss costs LESS than one found later', async () => {
-    const found = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'wrong', confidence: 1, domain: 'law' }),
-      establishedDeps,
-    );
-    const selfReported = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'wrong', confidence: 1, domain: 'law', selfReportedMiss: true }),
-      establishedDeps,
-    );
-    expect(Math.abs(selfReported.appliedDelta)).toBeLessThan(Math.abs(found.appliedDelta));
-  });
-
-  it('restoration: a confirmed RIGHT in the tightened domain is a positive delta', async () => {
+  it('restoration: a confirmed RIGHT in any domain is a positive delta', async () => {
     const r = await resolveConfirmedOutcome(base({ settledBy: 'holdout', result: 'right', domain: 'law' }), newDomainDeps);
     expect(r.appliedDelta).toBeGreaterThan(0);
-  });
-
-  it('history unreadable → treated as new domain (do not over-penalize on uncertainty)', async () => {
-    const unreadable: ConfirmedOutcomeDeps = { domainTrackRecord: async () => ({ checked: false, hasRecord: false }) };
-    const r = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'wrong', confidence: 1, domain: 'law' }),
-      unreadable,
-    );
-    expect(r.bandTightened).toBe(true);
-    expect(r.appliedDelta).toBe(-8);
   });
 });
 
@@ -422,48 +396,46 @@ describe('RULE 6 — per-domain need multiplier raises gains, capped, never a lo
   });
 
   it('need is NOT applied to a loss', async () => {
-    const deps: ConfirmedOutcomeDeps = { domainNeedWeight: async () => 2, domainTrackRecord: async () => ({ checked: true, hasRecord: true }) };
+    const deps: ConfirmedOutcomeDeps = { domainNeedWeight: async () => 2 };
     const r = await resolveConfirmedOutcome(
-      base({ settledBy: 'holdout', result: 'wrong', confidence: 0, domain: 'law' }),
+      base({ settledBy: 'holdout', result: 'wrong', domain: 'law' }),
       deps,
     );
-    expect(r.appliedDelta).toBe(-15);
+    expect(r.appliedDelta).toBe(-55);
   });
 });
 
-describe('CWE-345 RESULT CONTRACT — the SERVER establishes right/wrong, the caller must agree', () => {
-  it('NON-VACUITY GUARD: a caller asserting RIGHT against a server WRONG fails closed (result_mismatch)', async () => {
-    // If the result cross-check were dropped, this caller "right" would ride the server's confirmation
-    // and earn a GAIN off an outcome the server found wrong → it would score +5 and go RED.
+describe('SERVER RESULT WINS — a presented receipt decides right/wrong; caller fields cannot skip or shrink it', () => {
+  it('NON-VACUITY GUARD: a caller asserting RIGHT against a server WRONG takes the wrong (was result_mismatch → 0)', async () => {
     const r = await resolveConfirmedOutcome(
       base({ settledBy: 'holdout', result: 'right', verifiedConfirmation: vc('holdout', 'wrong') }),
     );
-    expect(r.confirmed).toBe(false);
-    expect(r.scoreMoves).toBe(false);
-    expect(r.appliedDelta).toBe(0);
-    expect(r.reason).toBe('result_mismatch');
-    expect(r.detail.serverVerified).toBe(true); // a server source WAS present — it just disagreed
+    expect(r.confirmed).toBe(true);
+    expect(r.scoreMoves).toBe(true);
+    expect(r.appliedDelta).toBe(-55);
+    expect(r.reason).toBe('confirmed_wrong');
+    expect(r.detail.serverVerified).toBe(true);
   });
 
-  it('a caller asserting WRONG against a server RIGHT fails closed (result_mismatch), no self-inflicted loss', async () => {
+  it("NON-VACUITY GUARD: a caller 'vote' cannot skip a server-settled wrong (was vote_is_provisional → 0)", async () => {
+    const r = await resolveConfirmedOutcome(base({ settledBy: 'vote', result: 'wrong', verifiedConfirmation: vc('holdout', 'wrong') }));
+    expect(r.appliedDelta).toBe(-55);
+  });
+
+  it('a caller asserting WRONG against a server RIGHT gets the right (the caller cannot hurt itself either)', async () => {
     const r = await resolveConfirmedOutcome(
       base({ settledBy: 'holdout', result: 'wrong', confidence: 1, verifiedConfirmation: vc('holdout', 'right') }),
     );
-    expect(r.confirmed).toBe(false);
-    expect(r.scoreMoves).toBe(false);
-    expect(r.reason).toBe('result_mismatch');
+    expect(r.confirmed).toBe(true);
+    expect(r.appliedDelta).toBe(5);
   });
 
-  it('rubber-stamp REQUIRES the server to establish WRONG (known_answer + result wrong)', async () => {
-    // The server source is known_answer but it established RIGHT → the heaviest penalty must NOT fire.
+  it('the rubber-stamp penalty needs a known-answer WRONG; on a server RIGHT the flag is ignored', async () => {
     const r = await resolveConfirmedOutcome(
       base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('known_answer', 'right') }),
     );
-    expect(r.confirmed).toBe(false);
-    expect(r.scoreMoves).toBe(false);
-    expect(r.reason).toBe('rubber_stamp_requires_known_answer_source');
+    expect(r.appliedDelta).toBe(5);
 
-    // Positive control: known_answer + server WRONG → the heavy penalty does fire.
     const ok = await resolveConfirmedOutcome(
       base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('known_answer', 'wrong') }),
     );
@@ -471,28 +443,21 @@ describe('CWE-345 RESULT CONTRACT — the SERVER establishes right/wrong, the ca
     expect(ok.appliedDelta).toBe(-120);
   });
 
-  it('unsupported-PASS REQUIRES the server to establish WRONG via a holdout receipt', async () => {
-    // holdout but the server established RIGHT → the confident-wrong penalty must NOT fire.
+  it('NON-VACUITY GUARD: a misplaced penalty flag cannot dodge a server wrong (was *_requires_*_source → 0)', async () => {
+    const holdoutRubber = await resolveConfirmedOutcome(
+      base({ result: 'wrong', rubberStampKnownWrong: true, verifiedConfirmation: vc('holdout', 'wrong') }),
+    );
+    expect(holdoutRubber.appliedDelta).toBe(-55);
+    const knownAnswerUnsupported = await resolveConfirmedOutcome(
+      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('known_answer', 'wrong') }),
+    );
+    expect(knownAnswerUnsupported.appliedDelta).toBe(-55);
+  });
+
+  it('an unsupported-PASS flag on a server RIGHT does not inflict a penalty', async () => {
     const r = await resolveConfirmedOutcome(
       base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout', 'right') }),
     );
-    expect(r.confirmed).toBe(false);
-    expect(r.scoreMoves).toBe(false);
-    expect(r.reason).toBe('unsupported_pass_requires_receipt_source');
-
-    // Positive control: holdout + server WRONG → confident-wrong penalty fires.
-    const ok = await resolveConfirmedOutcome(
-      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('holdout', 'wrong') }),
-    );
-    expect(ok.confirmed).toBe(true);
-    expect(ok.appliedDelta).toBe(-55);
-  });
-
-  it('an unsupported-PASS with a KNOWN_ANSWER server source (not holdout) still fails closed', async () => {
-    const r = await resolveConfirmedOutcome(
-      base({ result: 'right', passUnsupportedByReceipt: true, verifiedConfirmation: vc('known_answer', 'wrong') }),
-    );
-    expect(r.confirmed).toBe(false);
-    expect(r.reason).toBe('unsupported_pass_requires_receipt_source');
+    expect(r.appliedDelta).toBe(5);
   });
 });

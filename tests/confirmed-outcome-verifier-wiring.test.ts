@@ -9,8 +9,10 @@
  *
  * Proves:
  *   (1) flag ON + a server-verified holdout/VERIFIED receipt + an AGREEING caller result → score MOVES
- *       with the server's result (+gainBase).
- *   (2) flag ON + the caller's result DISAGREES with the server's → result_mismatch → INERT.
+ *       with the server's result (+gainBase, through the small-gain cap).
+ *   (2) flag ON + the caller's result DISAGREES with the server's → the SERVER's result applies. (Until
+ *       2026-10-14 this was result_mismatch → INERT, which let an actor dodge a FAILED receipt by
+ *       asserting 'right'; see tests/confirmed-outcome-hardening.test.ts.)
  *   (3) flag ON + a receiptId that the actor does NOT own (subject is another agent) → INERT (actor binding).
  *   (4) flag ON + NO receiptId → verifier returns undefined → INERT.
  *   (5) flag OFF → the verifier is NEVER consulted (kernel_receipts is not read) and scoring is as today,
@@ -81,7 +83,9 @@ jest.mock('../src/db', () => ({
           },
         };
       }
-      return { insert: async (row: any) => { inserted.push(row); return { error: null }; } };
+      // repid_score_events: the audit insert, and the small-gain cap's budget reads (nothing spent today).
+      const noRows: any = { eq: () => noRows, gte: () => noRows, gt: () => noRows, then: (ok: any) => Promise.resolve({ data: [], error: null }).then(ok) };
+      return { insert: async (row: any) => { inserted.push(row); return { error: null }; }, select: () => noRows };
     }),
   },
 }));
@@ -112,6 +116,8 @@ function receiptRow(over: Record<string, unknown> = {}): Record<string, unknown>
     verdict_label: 'SETTLED',
     verification_status: 'VERIFIED',
     is_simulated: false,
+    args_hash: '0x' + 'ab'.repeat(32),
+    created_at: new Date(Date.now() - 60_000).toISOString(),
     ...over,
   };
 }
@@ -140,7 +146,7 @@ describe('(1) flag ON + server-verified receipt + agreeing caller result → sco
     kr.row = receiptRow();
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: { settledBy: 'holdout', result: 'right', confirmationReceiptId: 'rcpt-1' },
+      confirmedOutcome: { settledBy: 'holdout', result: 'right', domain: 'law', confirmationReceiptId: 'rcpt-1' },
     });
     expect(kr.reads).toBe(1); // the verifier consulted the authoritative row
     expect(r.delta).toBe(5); // gainBase — the SERVER result (right) scored, not a caller string
@@ -160,29 +166,42 @@ describe('(1) flag ON + server-verified receipt + agreeing caller result → sco
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
       confirmedOutcome: { settledBy: 'known_answer', result: 'wrong', confidence: 0, confirmationReceiptId: 'rcpt-1' },
     });
-    expect(r.delta).toBe(-15); // lossBase at zero confidence
-    expect(r.repIdAfter).toBe(985);
+    // The receipt-backed confident wrong: lossBase - confidenceLossWeight. The caller's confidence 0 is
+    // NOT read (it used to price this at -15; a caller number must not shrink a server-settled wrong).
+    expect(r.delta).toBe(-55);
+    expect(r.repIdAfter).toBe(945);
     expect(updated.length).toBe(1);
   });
 });
 
-describe('(2) flag ON + caller result DISAGREES with the server → result_mismatch → INERT', () => {
+describe('(2) flag ON + caller result DISAGREES with the server → the SERVER result applies', () => {
   beforeEach(() => { process.env.CONFIRMED_OUTCOME_SCORING_ENABLED = 'true'; });
 
-  it('server says right (VERIFIED) but caller asserts wrong → no move', async () => {
+  it('server says right (VERIFIED) but caller asserts wrong → the server right scores', async () => {
     kr.row = receiptRow({ verification_status: 'VERIFIED' }); // server → right
     const r = await updateRepId({
       agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
-      confirmedOutcome: { settledBy: 'holdout', result: 'wrong', confidence: 1, confirmationReceiptId: 'rcpt-1' },
+      confirmedOutcome: { settledBy: 'holdout', result: 'wrong', confidence: 1, domain: 'law', confirmationReceiptId: 'rcpt-1' },
     });
     expect(kr.reads).toBe(1);
-    expect(r.delta).toBe(0);
-    expect(r.repIdAfter).toBe(1000);
-    expect(updated.length).toBe(0);
-    expect(updateSupplyRateMock).not.toHaveBeenCalled();
+    expect(r.delta).toBe(5);
+    expect(r.repIdAfter).toBe(1005);
     const row = inserted.find((i) => i.metadata?.confirmed_outcome);
-    expect(row.metadata.confirmed_outcome.reason).toBe('result_mismatch');
-    expect(row.metadata.confirmed_outcome.score_moves).toBe(false);
+    expect(row.metadata.confirmed_outcome.reason).toBe('confirmed_right');
+    expect(row.metadata.confirmed_outcome.score_moves).toBe(true);
+  });
+
+  it('server says wrong (FAILED) but caller asserts right → the server wrong scores (no dodge)', async () => {
+    kr.row = receiptRow({ verification_status: 'FAILED' }); // server → wrong
+    const r = await updateRepId({
+      agentId: AGENT_ID, eventType: 'UNSUPPORTED_CLAIM',
+      confirmedOutcome: { settledBy: 'holdout', result: 'right', confirmationReceiptId: 'rcpt-1' },
+    });
+    expect(r.delta).toBe(-55);
+    expect(r.repIdAfter).toBe(945);
+    const row = inserted.find((i) => i.metadata?.confirmed_outcome);
+    expect(row.metadata.confirmed_outcome.reason).toBe('confirmed_wrong');
+    expect(row.metadata.confirmed_outcome.receipt_consumed).toBe(true);
   });
 });
 

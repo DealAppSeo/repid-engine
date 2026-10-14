@@ -47,8 +47,25 @@
  * outcome is caller-asserted and FAILS CLOSED (PROVISIONAL, no move) whatever `settledBy`
  * claims. This is the fix for the rubber-stamp the model exists to prevent: a caller
  * could otherwise fake a confirmed-right for gain, or a known-answer rubber-stamp for the
- * heaviest penalty against a victim. NO server-side verifier is wired yet, so the pipeline
- * supplies no `verifiedConfirmation` and every caller-asserted confirmation is held inert.
+ * heaviest penalty against a victim. The server-side verifier IS wired:
+ * `engine/repid-update.ts::resolveServerConfirmation` reads the kernel receipt the caller names
+ * (`confirmationReceiptId`) and is the only source of a `verifiedConfirmation`. (This header
+ * said "no verifier is wired yet" until 2026-10-14, a day after it was wired.)
+ *
+ * ════════════════════════════════════════════════════════════════════════════════
+ * THE SERVER RESULT WINS (2026-10-14, XC1 red-team finding 2)
+ * ════════════════════════════════════════════════════════════════════════════════
+ * Once a server-settled receipt is presented, the receipt decides right/wrong and the
+ * settler. Caller `result`, `abstained`, `settledBy` (incl. 'vote'), `confidence`,
+ * `selfReportedMiss` and `domain` cannot skip or shrink a server-settled WRONG. Before this,
+ * an actor holding a FAILED receipt could post `abstained: true` or `settledBy: 'vote'` and
+ * take zero, leaving the receipt unspent. Abstain is free only when NO receipt is presented.
+ * A server-settled wrong is priced at the receipt-backed confident-wrong
+ * (`lossBase - confidenceLossWeight`), or the rubber-stamp penalty for a known-answer wrong
+ * the caller flagged. The receipt carries no confidence and no domain, so the confidence
+ * weighting and the rule-5 discounts (new-domain band tighten, self-reported miss) are
+ * DORMANT: their only input would be a caller value, and a caller value cannot shrink a
+ * server-settled wrong. Their parameters stay validated so the deploy contract is unchanged.
  *
  * ════════════════════════════════════════════════════════════════════════════════
  * THREE OUTCOMES, FAIL CLOSED
@@ -102,9 +119,8 @@ export type ConfirmedVerifiedSource =
  * assembled ONLY by a server-side verifier (a kernel receipt, a known-answer record, a
  * signed attestation) and NEVER from a request body. Its absence means the confirmation
  * is caller-asserted, and the resolver then FAILS CLOSED — a caller-asserted settledBy
- * string never settles, never moves the official score. See the pipeline wiring note:
- * no server-side verifier is wired yet, so the pipeline never supplies one and every
- * caller-asserted confirmation is held inert.
+ * string never settles, never moves the official score. The pipeline builds one ONLY from
+ * `resolveServerConfirmation` (engine/repid-update.ts) and strips any caller-smuggled copy.
  */
 export interface VerifiedConfirmation {
   source: ConfirmedVerifiedSource;
@@ -151,7 +167,10 @@ export interface ConfirmedOutcomeInput {
   domain?: string | null;
   /** The miss was self-reported by the agent — it costs LESS than one found later (rule 5). */
   selfReportedMiss?: boolean;
-  /** Abstention shortcut; equivalent to result==='abstain'. Abstain is free (rule 3). */
+  /**
+   * Abstention shortcut; equivalent to result==='abstain'. Abstain is free (rule 3) ONLY when no
+   * server-settled receipt is presented — it cannot skip a receipt the server settled.
+   */
   abstained?: boolean;
   /**
    * SERVER-DERIVED confirmation proof (CWE-345 fix). Present ONLY when a server-side
@@ -185,6 +204,9 @@ export interface ConfirmedOutcomeDeps {
   /**
    * Positively establish whether the agent has a prior confirmed track record in a
    * domain (rule 5). `checked:false` means the history could not be read.
+   * DORMANT since 2026-10-14: the resolver no longer reads it. The domain it would be asked
+   * about is caller-asserted, and a caller-chosen new domain must not shrink a server-settled
+   * wrong (see the header). Revive it only with a server-established domain.
    */
   domainTrackRecord?: (agentId: string, domain: string) => Promise<{ checked: boolean; hasRecord: boolean }>;
   /**
@@ -391,6 +413,28 @@ export function __resetConfirmedParamsCache(): void {
   cached = null;
 }
 
+/** Default receipt TTL: long enough for a settle to reach /score, short enough that a stockpile goes stale. */
+export const DEFAULT_CONFIRMED_RECEIPT_TTL_HOURS = 72;
+
+/**
+ * How old (by its index `created_at`) a kernel receipt may be and still confirm an outcome.
+ * `REPID_CONFIRMED_RECEIPT_TTL_HOURS`, string-parsed like the magnitudes above: unset/blank →
+ * the default; anything not a finite number in (0, 8760] THROWS (a typo must not silently become
+ * "receipts never expire"). The verifier catches the throw and fails closed, loudly.
+ */
+export function confirmedReceiptTtlMs(): number {
+  const raw = process.env['REPID_CONFIRMED_RECEIPT_TTL_HOURS']; // literal read: the env registry captures it
+  if (raw === undefined || raw.trim() === '') return DEFAULT_CONFIRMED_RECEIPT_TTL_HOURS * 3_600_000;
+  const h = Number(raw.trim());
+  if (!Number.isFinite(h) || h <= 0 || h > 8760) {
+    throw new Error(
+      `[confirmed-outcome] REPID_CONFIRMED_RECEIPT_TTL_HOURS='${raw}' is not a finite number of hours ` +
+        `in (0, 8760]. Refusing to verify receipts against an incoherent TTL.`,
+    );
+  }
+  return h * 3_600_000;
+}
+
 // ── the resolver ─────────────────────────────────────────────────────────────────────
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -498,181 +542,107 @@ async function resolveInner(
   deps: ConfirmedOutcomeDeps,
 ): Promise<ConfirmedOutcomeResult> {
   const p = confirmedParams();
-
-  // RULE 3 (first half): abstain is FREE — zero delta, fully inert, regardless of settler.
-  if (input.abstained === true || input.result === 'abstain') {
-    return {
-      confirmed: false,
-      verdictLabel: 'PROVISIONAL',
-      settledBy: null,
-      appliedDelta: 0,
-      scoreMoves: false,
-      bandTightened: false,
-      needMultiplierApplied: 1,
-      reason: 'abstain_free',
-      detail: {
-        outcome: 'abstain',
-        serverVerified: false,
-        independence: null,
-        domain: input.domain ?? null,
-        newDomain: null,
-        selfReportedMiss: input.selfReportedMiss === true,
-        rubberStampKnownWrong: false,
-        passUnsupportedByReceipt: false,
-      },
-    };
-  }
-
-  // RULE 1 — a 'vote' (incl. a 2-1) never settles, verified or not. Kept as a distinct,
-  // legible outcome so the rule reads clearly in the audit trail.
-  if (input.settledBy === 'vote') {
-    return unconfirmed('vote_is_provisional', null, input, false);
-  }
-
-  // SECURITY GATE (CWE-345) — the official score moves ONLY on a SERVER-DERIVED verified
-  // confirmation. The caller-asserted settledBy / rubberStampKnownWrong /
-  // passUnsupportedByReceipt fields are NEVER trusted on their own. Without a
-  // verifiedConfirmation (assembled server-side from a kernel receipt / known-answer
-  // record / signed attestation — never from a request body) the outcome is
-  // caller-asserted and FAILS CLOSED. No server-side verifier is wired yet, so the
-  // pipeline supplies none and every caller-asserted confirmation is held inert.
   const vc = input.verifiedConfirmation;
+
+  // ── NO server-settled receipt: the payload is caller-asserted and settles NOTHING (CWE-345).
+  // The three reasons below differ only in the audit label.
   if (!vc) {
+    // RULE 3 (first half): abstain is FREE — but only here, where no receipt was presented.
+    if (input.abstained === true || input.result === 'abstain') {
+      return {
+        confirmed: false,
+        verdictLabel: 'PROVISIONAL',
+        settledBy: null,
+        appliedDelta: 0,
+        scoreMoves: false,
+        bandTightened: false,
+        needMultiplierApplied: 1,
+        reason: 'abstain_free',
+        detail: {
+          outcome: 'abstain',
+          serverVerified: false,
+          independence: null,
+          domain: input.domain ?? null,
+          newDomain: null,
+          selfReportedMiss: input.selfReportedMiss === true,
+          rubberStampKnownWrong: false,
+          passUnsupportedByReceipt: false,
+        },
+      };
+    }
+    // RULE 1 — a caller-asserted 'vote' (incl. a 2-1) never settles.
+    if (input.settledBy === 'vote') return unconfirmed('vote_is_provisional', null, input, false);
     return unconfirmed('confirmation_not_server_verified', null, input, false);
   }
-  const serverSettler = vc.settledBy;
 
-  // RULE 2 (heaviest) — a rubber-stamp of a KNOWN-WRONG answer, established by the
-  // known-answer record (the server source), not a caller flag alone. The server source must
-  // ALSO establish the result as 'wrong' (`vc.result === 'wrong'`): the heaviest penalty cannot be
-  // inflicted off a server confirmation that did not itself find the answer wrong. Fail closed otherwise.
-  if (input.rubberStampKnownWrong === true) {
-    if (serverSettler !== 'known_answer' || vc.result !== 'wrong') {
-      return unconfirmed('rubber_stamp_requires_known_answer_source', null, input, true);
-    }
-    return settled('known_answer', p.rubberStampPenalty, 'rubber_stamp_known_wrong', {
-      outcome: 'wrong',
-      independence: null,
-      domain: input.domain ?? null,
-      newDomain: null,
-      selfReportedMiss: false,
-      rubberStampKnownWrong: true,
-      passUnsupportedByReceipt: false,
-    });
-  }
-
-  // RULE 3 (second half) — a PASS the receipt does not support is a confident wrong,
-  // confirmed by the receipt (the server source). Full confident-wrong penalty. The server source
-  // must ALSO establish the result as 'wrong' (`vc.result === 'wrong'`) — here the caller claimed
-  // PASS (`input.result` is typically 'right'), so this is the one branch where caller and server
-  // DISAGREE legitimately, and the server's 'wrong' is what the penalty rests on. Fail closed otherwise.
-  if (input.passUnsupportedByReceipt === true) {
-    if (serverSettler !== 'holdout' || vc.result !== 'wrong') {
-      return unconfirmed('unsupported_pass_requires_receipt_source', null, input, true);
-    }
-    const loss = p.lossBase - Math.round(1 * p.confidenceLossWeight);
-    return settled('holdout', loss, 'pass_unsupported_by_receipt', {
-      outcome: 'wrong',
-      independence: null,
-      domain: input.domain ?? null,
-      newDomain: null,
-      selfReportedMiss: false,
-      rubberStampKnownWrong: false,
-      passUnsupportedByReceipt: true,
-    });
-  }
-
-  // CWE-345 (result) — the SERVER establishes right/wrong. For the ORDINARY confirmed paths (the
-  // two heavy-penalty special branches above have already returned), the caller's asserted
-  // `input.result` MUST equal the server's `vc.result`, or it is a forgery attempt → fail closed.
-  // Abstain never reaches here (handled before the vc gate), so `input.result` is 'right' or 'wrong'.
-  if (input.result !== vc.result) {
-    return unconfirmed('result_mismatch', null, input, true);
-  }
-
-  // RULE 1 + RULE 4 — the SERVER source establishes the settler. A caller-asserted
-  // `settledBy` must AGREE with it (a mismatch is a forgery attempt → fail closed).
-  let settler: ConfirmedSettler | null = null;
+  // ── A server-settled receipt IS presented: THE SERVER RESULT WINS (see the header).
+  // Caller result / abstained / settledBy / confidence / selfReportedMiss / domain are not read
+  // to decide WHETHER or HOW MUCH a wrong costs. Before 2026-10-14 each of those returned before
+  // (or shrank) the server's verdict, so a FAILED receipt could be dodged and left unspent.
+  const settler = vc.settledBy;
   let independence: IndependenceCheck | null = null;
-  if (serverSettler === 'holdout' || serverSettler === 'known_answer' || serverSettler === 'person') {
-    if (input.settledBy !== serverSettler) return unconfirmed('settler_mismatch', null, input, true);
-    settler = serverSettler;
-  } else {
-    // serverSettler === 'counterparty' — ALSO requires the independence check to pass
-    // (server-side owner + model-family), on top of the server-verified confirmation.
-    if (input.settledBy !== 'counterparty') return unconfirmed('settler_mismatch', null, input, true);
+  if (settler === 'counterparty') {
+    // RULE 4 — a counterparty is a settler ONLY if positively independent. One that is not is no
+    // settlement at all (right OR wrong), so this is not a dodge of a server-settled outcome.
     independence = await establishIndependence(input, deps);
-    settler = independence.independent ? 'counterparty' : null;
-  }
-
-  if (settler === null) {
-    return unconfirmed(`counterparty_not_independent:${independence?.reason ?? 'unknown'}`, independence, input, true);
-  }
-
-  // Confirmed. Compute the delta (rules 2, 5, 6).
-  if (input.result === 'right') {
-    // RULE 6 — per-domain need multiplier, GAINS ONLY, clamped to [1, needWeightCap] so
-    // need can only RAISE a gain (never shrink it, never raise the authority ceiling:
-    // the pipeline still clamps the score to [10, 10000]).
-    let needM = 1;
-    if (input.domain && deps.domainNeedWeight) {
-      try {
-        needM = clamp(await deps.domainNeedWeight(input.domain), 1, p.needWeightCap);
-      } catch {
-        needM = 1; // fail closed to no boost
-      }
+    if (!independence.independent) {
+      return unconfirmed(`counterparty_not_independent:${independence.reason}`, independence, input, true);
     }
-    const gain = Math.round(p.gainBase * needM);
-    return settled(settler, gain, needM > 1 ? 'confirmed_right_need_boosted' : 'confirmed_right', {
-      outcome: 'right',
+  }
+
+  if (vc.result === 'wrong') {
+    // RULE 2 — the heaviest penalty when the caller flagged a rubber-stamp AND the server's
+    // known-answer record found it wrong. The flag can only ADD weight: on any other settler it is
+    // ignored and the ordinary server-settled wrong applies (it used to fail closed — a dodge).
+    if (input.rubberStampKnownWrong === true && settler === 'known_answer') {
+      return settled(settler, p.rubberStampPenalty, 'rubber_stamp_known_wrong', {
+        outcome: 'wrong',
+        independence,
+        domain: input.domain ?? null,
+        newDomain: null,
+        selfReportedMiss: false,
+        rubberStampKnownWrong: true,
+        passUnsupportedByReceipt: false,
+      });
+    }
+    // The receipt-backed confident wrong (the price rule 3 already gave an unsupported PASS). The
+    // receipt carries no confidence, so the caller's number is not read: it could only shrink this.
+    return settled(settler, p.lossBase - Math.round(p.confidenceLossWeight), 'confirmed_wrong', {
+      outcome: 'wrong',
       independence,
       domain: input.domain ?? null,
       newDomain: null,
       selfReportedMiss: false,
       rubberStampKnownWrong: false,
       passUnsupportedByReceipt: false,
-    }, needM);
+    });
   }
 
-  // result === 'wrong' — confirmed wrong.
-  const conf = clamp(input.confidence ?? 0, 0, 1);
-  let loss = p.lossBase - Math.round(conf * p.confidenceLossWeight); // more negative with confidence
+  if (vc.result !== 'right') {
+    return unconfirmed('server_result_not_settling', independence, input, true);
+  }
 
-  // RULE 5 — a first confirmed miss in a NEW domain tightens the band (bounded), it does
-  // not wipe. New domain = positively no prior record, OR history unreadable (don't
-  // over-penalize an agent on uncertainty — the trust-product safe direction).
-  let newDomain: boolean | null = null;
-  let bandTightened = false;
-  if (input.domain) {
-    let tr = { checked: false, hasRecord: false };
-    if (deps.domainTrackRecord) {
-      try {
-        tr = await deps.domainTrackRecord(input.actorAgentId, input.domain);
-      } catch {
-        tr = { checked: false, hasRecord: false };
-      }
-    }
-    newDomain = tr.checked ? !tr.hasRecord : true;
-    if (newDomain) {
-      loss = p.bandTightenBase; // bounded; invariant-guaranteed smaller than a full loss
-      bandTightened = true;
+  // Confirmed RIGHT. RULE 6 — per-domain need multiplier, GAINS ONLY, clamped to [1, needWeightCap]
+  // so need can only RAISE a gain (never shrink it, never raise the authority ceiling: the pipeline
+  // still clamps the score to [10, 10000], and caps the gain through small-gain-cap).
+  let needM = 1;
+  if (input.domain && deps.domainNeedWeight) {
+    try {
+      needM = clamp(await deps.domainNeedWeight(input.domain), 1, p.needWeightCap);
+    } catch {
+      needM = 1; // fail closed to no boost
     }
   }
-
-  // RULE 5 (last line) — a self-reported miss costs LESS than one found later.
-  if (input.selfReportedMiss === true) {
-    loss = Math.round(loss * p.selfReportMissFactor);
-  }
-
-  return settled(settler, loss, bandTightened ? 'confirmed_miss_new_domain_band_tighten' : 'confirmed_wrong', {
-    outcome: 'wrong',
+  const gain = Math.round(p.gainBase * needM);
+  return settled(settler, gain, needM > 1 ? 'confirmed_right_need_boosted' : 'confirmed_right', {
+    outcome: 'right',
     independence,
     domain: input.domain ?? null,
-    newDomain,
-    selfReportedMiss: input.selfReportedMiss === true,
+    newDomain: null,
+    selfReportedMiss: false,
     rubberStampKnownWrong: false,
     passUnsupportedByReceipt: false,
-  });
+  }, needM);
 }
 
 function settled(
