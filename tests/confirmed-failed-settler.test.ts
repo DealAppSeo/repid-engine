@@ -163,7 +163,7 @@ describe('the actor never presents its FAILED receipt', () => {
     expect(ev['event_type']).toBe(SETTLE_EVENT_TYPE);
     expect(ev['metadata']['confirmed_outcome']['reason']).toBe('confirmed_wrong');
     expect(ev['metadata']['confirmed_outcome']['receipt_consumed']).toBe(true);
-    expect(warn.mock.calls.some((c) => /\[failed-settle\] enforce: found 1, applied 1, held 0/.test(String(c[0])))).toBe(true);
+    expect(warn.mock.calls.some((c) => /\[failed-settle\] enforce: found 1, accepted 1, refused 0, applied 1, held 0/.test(String(c[0])))).toBe(true);
   });
 
   it('IDEMPOTENT: a second run finds nothing and moves nothing', async () => {
@@ -202,27 +202,105 @@ describe('the actor never presents its FAILED receipt', () => {
   });
 });
 
-describe('ONE WRONG PER CONTENT (XC1 review of #1371)', () => {
-  it('two FAILED receipts for the same work are ONE wrong: the duplicate is skipped and left unspent', async () => {
-    await failed('dup-1', 40, { args_hash: H(500) });
-    await failed('dup-2', 35, { args_hash: H(500) });
-    const first = await settleFailedReceiptsOnce();
-    expect(first.applied.map((a) => a.receiptId)).toEqual(['dup-1']);
-    expect(first.held).toEqual([{ receiptId: 'dup-2', agentId: AGENT, why: 'duplicate_content_in_run' }]);
-    expect(st.agent['current_repid']).toBe(1000 + WRONG);
+describe('ONE WRONG PER SIGNED RECEIPT, VERIFIER FIRST (XC1 review of #1374)', () => {
+  /** A FAILED row the verifier must refuse, older than the real one, sharing the victim's content key. */
+  async function decoy(id: string, ageHours: number, kind: 'unsigned' | 'copied_signature', over: Row = {}): Promise<Row> {
+    const donor = await sealedRow(`${id}-donor`, AGENT, { verification_status: 'FAILED', args_hash: H(900) });
+    const r = await sealedRow(id, AGENT, { verification_status: 'FAILED', args_hash: H(500), ...over }, new Date(now - ageHours * HOUR).toISOString());
+    r['engine_signature'] = kind === 'unsigned' ? null : donor['engine_signature']; // a real signature, of other bytes
+    st.receipts.push(r);
+    return r;
+  }
 
-    // the next run sees the duplicate again, and refuses it because that content is already settled
-    const second = await settleFailedReceiptsOnce();
-    expect(second.applied).toEqual([]);
-    expect(second.held).toEqual([{ receiptId: 'dup-2', agentId: AGENT, why: 'content_already_settled' }]);
-    expect(st.agent['current_repid']).toBe(1000 + WRONG);
-    expect(spent('dup-2')).toBe(false);
+  it.each(['unsigned', 'copied_signature'] as const)(
+    'a %s decoy in front of a signed wrong with the same subject + args_hash: the signed wrong still applies',
+    async (kind) => {
+      await decoy('decoy', 40, kind);
+      await failed('real', 35, { args_hash: H(500) });
+      const out = await settleFailedReceiptsOnce();
+      expect(out.applied).toEqual([{ receiptId: 'real', agentId: AGENT, delta: WRONG }]);
+      expect(out.held).toEqual([{ receiptId: 'decoy', agentId: AGENT, why: expect.stringMatching(/^verifier_refuses:/) }]);
+      expect(spent('real')).toBe(true);
+      expect(spent('decoy')).toBe(false);
+      expect(st.agent['current_repid']).toBe(1000 + WRONG);
+      // A refused row writes no audit row: only the real wrong did.
+      expect(st.events).toHaveLength(1);
+    },
+  );
+
+  it('a PRE-CONSUMED decoy with the victim\'s content suppresses nothing (settler and actor alike)', async () => {
+    await decoy('decoy', 40, 'unsigned', { consumed_at: new Date(now - 39 * HOUR).toISOString() });
+    await failed('real', 35, { args_hash: H(500) });
+    await failed('real-2', 34, { args_hash: H(500) });
+    const own = await updateRepId({ agentId: AGENT, eventType: 'CHALLENGE_LOSS', confirmedOutcome: { settledBy: 'holdout', result: 'wrong', confirmationReceiptId: 'real-2' } });
+    expect(own.delta).toBe(WRONG);
+    const out = await settleFailedReceiptsOnce();
+    expect(out.applied.map((a) => a.receiptId)).toEqual(['real']);
+    expect(st.agent['current_repid']).toBe(1000 + 2 * WRONG);
   });
 
-  it('different work is still its own wrong', async () => {
+  it('two SIGNED FAILED receipts with the same args_hash are two wrongs: each is its own kernel decision', async () => {
     await failed('w-1', 40, { args_hash: H(600) });
-    await failed('w-2', 35, { args_hash: H(601) });
-    expect((await settleFailedReceiptsOnce()).applied.map((a) => a.receiptId)).toEqual(['w-1', 'w-2']);
+    await failed('w-2', 35, { args_hash: H(600) });
+    const out = await settleFailedReceiptsOnce();
+    expect(out.applied.map((a) => a.receiptId)).toEqual(['w-1', 'w-2']);
+    expect(st.agent['current_repid']).toBe(1000 + 2 * WRONG);
+  });
+
+  it('a batch FULL of decoys in front cannot starve it: MAX_PER_RUN counts accepted rows, not rows read', async () => {
+    process.env.CONFIRMED_FAILED_SETTLE_MAX_PER_RUN = '2';
+    for (let i = 0; i < 5; i++) await decoy(`decoy-${i}`, 40 + i, 'unsigned');
+    await failed('real', 30, { args_hash: H(500) });
+    const out = await settleFailedReceiptsOnce();
+    expect(out.found).toBe(6);
+    expect(out.accepted).toBe(1);
+    expect(out.applied.map((a) => a.receiptId)).toEqual(['real']);
+    expect(out.scanCeiling).toBeUndefined();
+  });
+
+  it('past the scan ceiling (SCAN_FACTOR x MAX_PER_RUN refused rows) it says so LOUDLY instead of passing quietly', async () => {
+    process.env.CONFIRMED_FAILED_SETTLE_MAX_PER_RUN = '1';
+    for (let i = 0; i < 20; i++) await decoy(`decoy-${i}`, 40 + i * 0.1, 'unsigned');
+    await failed('real', 30, { args_hash: H(500) });
+    const out = await settleFailedReceiptsOnce();
+    expect(out.found).toBe(20);
+    expect(out.applied).toEqual([]);
+    expect(out.scanCeiling).toBe(true);
+    expect(err.mock.calls.some((c) => /SCAN CEILING: read 20 candidate FAILED receipts, 20 refused/.test(String(c[0])))).toBe(true);
+  });
+
+  it('SHADOW = ENFORCE: on the same rows, what shadow would apply is exactly what enforce applies', async () => {
+    await decoy('decoy', 45, 'unsigned');
+    await decoy('decoy-copy', 44, 'copied_signature');
+    await failed('a', 40, { args_hash: H(500) });
+    await failed('b', 38, { args_hash: H(500) }); // same content: its own wrong
+    await failed('c', 34);
+    process.env.CONFIRMED_FAILED_SETTLE_MODE = 'shadow';
+    const shadow = await settleFailedReceiptsOnce();
+    const would = shadow.held.filter((h) => h.why === 'shadow_would_apply').map((h) => h.receiptId);
+    expect(st.events).toHaveLength(0);
+    process.env.CONFIRMED_FAILED_SETTLE_MODE = 'enforce';
+    const enforce = await settleFailedReceiptsOnce();
+    expect(enforce.applied.map((a) => a.receiptId)).toEqual(would);
+    expect(would).toEqual(['a', 'b', 'c']);
+    expect(shadow.accepted).toBe(enforce.accepted);
+    const refused = (s: typeof shadow) => s.held.filter((h) => h.why.startsWith('verifier_refuses:')).map((h) => h.receiptId);
+    expect(refused(enforce)).toEqual(refused(shadow));
+    expect(refused(shadow)).toEqual(['decoy', 'decoy-copy']);
+  });
+
+  it('no migration puts a UNIQUE index over FAILED rows (Postgres cannot check the signature that would make it safe)', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const root = path.join(__dirname, '..');
+    const offenders: string[] = [];
+    for (const dir of ['migrations', path.join('supabase', 'migrations')]) {
+      for (const f of fs.readdirSync(path.join(root, dir)).filter((n: string) => n.endsWith('.sql'))) {
+        const sql = fs.readFileSync(path.join(root, dir, f), 'utf8').split(/\r?\n/).filter((l: string) => !l.trim().startsWith('--')).join('\n');
+        if (/create\s+unique\s+index[^;]*verification_status\s*=\s*'FAILED'/i.test(sql)) offenders.push(`${dir}/${f}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
 
@@ -253,7 +331,7 @@ describe('what the worker leaves alone', () => {
     const out = await settleFailedReceiptsOnce();
     expect(out.found).toBe(1);
     expect(out.applied).toEqual([]);
-    expect(out.held[0]!.why).toMatch(/^held_inert:/);
+    expect(out.held[0]!.why).toMatch(/^verifier_refuses:/);
     expect(st.agent['current_repid']).toBe(1000);
     expect(spent('hand')).toBe(false);
   });
@@ -298,9 +376,9 @@ describe('modes and refusals', () => {
       created_at: new Date(now - 30 * HOUR).toISOString(),
     });
     const out = await settleFailedReceiptsOnce();
-    expect(out.held).toEqual([{ receiptId: 'hand', agentId: AGENT, why: 'shadow_verifier_refuses' }]);
+    expect(out.held).toEqual([{ receiptId: 'hand', agentId: AGENT, why: expect.stringMatching(/^verifier_refuses:/) }]);
     expect(warn.mock.calls.some((c) => /SHADOW: WOULD apply FAILED receipt hand/.test(String(c[0])))).toBe(false);
-    expect(warn.mock.calls.some((c) => /SHADOW: would NOT apply receipt hand/.test(String(c[0])))).toBe(true);
+    expect(out.accepted).toBe(0);
     expect(spent('hand')).toBe(false);
   });
 

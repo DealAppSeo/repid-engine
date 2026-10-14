@@ -486,37 +486,13 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
   // not settle). Recorded in the audit row; the cap's own readers sum these rows back.
   let smallGainCapResult: SmallGainCapResult | null = null;
   if (confirmedOutcomeScoringEnabled() && input.confirmedOutcome) {
-    // CWE-345 — the confirmedOutcome payload is CALLER-ASSERTED. It must never move the
-    // official score on its own. A confirmation may settle ONLY from a SERVER-DERIVED
-    // verified source. `resolveServerConfirmation` reads the AUTHORITATIVE kernel receipt row
-    // by the caller's `confirmationReceiptId`, BINDS it to the actor (subject_agent_id ===
-    // input.agentId), and only returns a VerifiedConfirmation for a SETTLED / VERIFIED|FAILED /
-    // non-simulated / holdout|known_answer row — everything else (no id, no row, wrong subject,
-    // simulated, PROVISIONAL, NOT_CHECKED, person/null settler, any thrown DB error) fails closed
-    // to undefined. The caller supplies only a lookup key; it cannot forge the verdict. The
-    // explicit `serverVerified && scoreMoves` guard below is a second, independent barrier: even a
+    // The read-only decision (server verification + resolver), shared with the FAILED-receipt
+    // settler's shadow so that shadow counts exactly what this applies. See decideConfirmedOutcome.
+    const decided = await decideConfirmedOutcome(input.agentId, agent, input.confirmedOutcome, input.confirmedOutcomeDeps);
+    const { serverVerified, callerAssertedOutcome } = decided;
+    confirmedOutcomeResult = decided.result;
+    // The explicit `serverVerified && scoreMoves` guard is a second, independent barrier: even a
     // resolver regression cannot move the score from a caller payload without a server verification.
-    // With the table absent (prod today) every id resolves to undefined — and the flag is OFF
-    // regardless, so this branch is not even entered in production.
-    const serverVerified: VerifiedConfirmation | undefined = await resolveServerConfirmation(
-      input.agentId,
-      input.confirmedOutcome.confirmationReceiptId,
-    );
-    // CWE-345 — STRIP any caller-smuggled `verifiedConfirmation` before it reaches the resolver.
-    // POST /api/v1/score passes the raw request body straight to updateRepId (routes/score.ts), so a
-    // caller can put a `verifiedConfirmation` key in the body even though the TYPE omits it. The
-    // resolver's `verifiedConfirmation` must come ONLY from the server verifier above — never the
-    // body. We remove it at runtime here so a forged one cannot even be processed (it would otherwise
-    // be held inert by the `serverVerified && scoreMoves` barrier below, but it would still write a
-    // dishonest "confirmed" audit row). `confirmationReceiptId` is a lookup key the resolver ignores;
-    // it is harmless either way and kept for the audit trail.
-    const { verifiedConfirmation: _callerVcStripped, ...callerAssertedOutcome } =
-      input.confirmedOutcome as typeof input.confirmedOutcome & { verifiedConfirmation?: unknown };
-    void _callerVcStripped;
-    confirmedOutcomeResult = await resolveConfirmedOutcome(
-      { ...callerAssertedOutcome, actorAgentId: input.agentId, ...(serverVerified ? { verifiedConfirmation: serverVerified } : {}) },
-      input.confirmedOutcomeDeps ?? confirmedOutcomeDepsFor(agent),
-    );
     if (serverVerified && confirmedOutcomeResult.scoreMoves) {
       let moveBy = confirmedOutcomeResult.appliedDelta;
       // SMALL-GAIN CAP, ATOMIC (2026-10-14, XC1 re-attack finding 1). A gain is bounded twice:
@@ -983,6 +959,68 @@ export async function updateRepId(input: RepIdUpdateInput): Promise<RepIdUpdateR
  *  - domainNeedWeight  → getEcosystemNeedWeight(domain) — the computed-but-never-applied
  *                        ecosystem weight, now applied ONLY here, per-domain, gains-only.
  */
+/**
+ * THE CONFIRMED-OUTCOME DECISION, read-only: no claim, no write. updateRepId runs exactly this before it
+ * claims, and the FAILED-receipt settler runs it (via previewSettledWrong) to decide what it would apply,
+ * so a shadow count is what enforce does (XC1 review of #1374).
+ *
+ * CWE-345 — the confirmedOutcome payload is CALLER-ASSERTED. It must never move the official score on
+ * its own. `resolveServerConfirmation` reads the AUTHORITATIVE kernel receipt row by the caller's
+ * `confirmationReceiptId`, BINDS it to the actor, VERIFIES the engine signature, and only returns a
+ * VerifiedConfirmation for a SETTLED / VERIFIED|FAILED / non-simulated / holdout|known_answer gate run;
+ * everything else fails closed to undefined. The caller supplies only a lookup key.
+ *
+ * It also STRIPS any caller-smuggled `verifiedConfirmation`: POST /api/v1/score passes the raw body to
+ * updateRepId, so a caller can add that key even though the TYPE omits it. Removed at runtime, a forged
+ * one is never processed (it would be held inert anyway, but it would write a dishonest audit row).
+ */
+export async function decideConfirmedOutcome(
+  agentId: string,
+  agent: any,
+  confirmedOutcome: NonNullable<RepIdUpdateInput['confirmedOutcome']>,
+  deps?: ConfirmedOutcomeDeps,
+): Promise<{
+  serverVerified: VerifiedConfirmation | undefined;
+  callerAssertedOutcome: NonNullable<RepIdUpdateInput['confirmedOutcome']>;
+  result: ConfirmedOutcomeResult;
+}> {
+  const serverVerified = await resolveServerConfirmation(agentId, confirmedOutcome.confirmationReceiptId);
+  const { verifiedConfirmation: _callerVcStripped, ...callerAssertedOutcome } =
+    confirmedOutcome as typeof confirmedOutcome & { verifiedConfirmation?: unknown };
+  void _callerVcStripped;
+  const result = await resolveConfirmedOutcome(
+    { ...callerAssertedOutcome, actorAgentId: agentId, ...(serverVerified ? { verifiedConfirmation: serverVerified } : {}) },
+    deps ?? confirmedOutcomeDepsFor(agent),
+  );
+  return { serverVerified, callerAssertedOutcome, result };
+}
+
+/**
+ * Would updateRepId apply this FAILED receipt as a wrong right now? The settler's shadow AND its enforce
+ * pre-check. Same agent read, same decision, same "moves the score down" rule as updateRepId's wrong
+ * branch; the one step it does not take is the claim (UPDATE … WHERE consumed_at IS NULL), which only a
+ * concurrent spend of the same receipt_id can lose. Never throws.
+ */
+export async function previewSettledWrong(
+  agentId: string,
+  receiptId: string,
+  settledBy: 'holdout' | 'known_answer',
+): Promise<{ wouldApply: boolean; delta: number; reason: string }> {
+  try {
+    const { data: agent, error } = await db.from('repid_agents').select('*').eq('id', agentId).single();
+    if (error || !agent) return { wouldApply: false, delta: 0, reason: 'agent_not_found' };
+    const { serverVerified, result } = await decideConfirmedOutcome(agentId, agent, {
+      settledBy,
+      result: 'wrong',
+      confirmationReceiptId: receiptId,
+    });
+    const wouldApply = serverVerified !== undefined && result.scoreMoves && result.appliedDelta < 0;
+    return { wouldApply, delta: wouldApply ? result.appliedDelta : 0, reason: result.reason };
+  } catch (e) {
+    return { wouldApply: false, delta: 0, reason: `error:${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 /**
  * The server-side confirmation verifier (CWE-345). Returns a VerifiedConfirmation ONLY when the
  * server has independently established the confirmation from a SERVER-AUTHORITATIVE, ACTOR-BOUND

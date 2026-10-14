@@ -17,6 +17,22 @@
  * a concurrent run, or an actor presenting it at the same moment cannot apply it twice: exactly one
  * conditional claim wins, and the loser is an inert hold.
  *
+ * ONE WRONG PER SIGNED RECEIPT, VERIFIER FIRST (2026-10-14, XC1 review of #1374). Each row is first run
+ * through the same read-only decision updateRepId makes (previewSettledWrong: actor binding, engine
+ * signature, sealed body, TTL, price). Only a row that passes is applied or counted; a row that fails
+ * neither applies nor blocks anything. There is NO content-level dedupe for wrongs any more: it keyed on
+ * unsigned columns (subject|args_hash) before the signature was checked, so a service-role decoy row
+ * (unsigned, or pre-consumed) suppressed a real signed wrong, and args_hash is client-chosen, so "one
+ * wrong per content" never meant one wrong per piece of work. Each signed FAILED receipt is a distinct
+ * kernel decision and is spent once, by receipt_id. The MAX_PER_RUN cap counts ACCEPTED rows, and the
+ * scan reads past refused ones (up to SCAN_FACTOR × the cap), so a batch of decoys cannot starve it.
+ * Shadow and enforce make the same decision on the same rows: the shadow count is what enforce applies.
+ *
+ * RESIDUAL (stated, not closed here): a writer that can UPDATE kernel_receipts can still mark the real
+ * receipt consumed, or delete it, and the settler never sees it. The signature makes a forgery fail;
+ * it cannot make a row exist. Detecting that needs an audit of consumed FAILED receipts against the
+ * repid_score_events row that spent each one.
+ *
  * MODE — CONFIRMED_FAILED_SETTLE_MODE (default off):
  *   off     nothing is scheduled and nothing is read.
  *   shadow  the query runs and every receipt that WOULD be applied is logged. Nothing is scored or consumed.
@@ -28,7 +44,7 @@
  * refuses the run rather than guessing: this job only ever subtracts reputation.
  */
 import { db } from '../db';
-import { resolveServerConfirmation, updateRepId } from '../engine/repid-update';
+import { previewSettledWrong, updateRepId } from '../engine/repid-update';
 import { shouldParkForHalt } from './emergency-halt';
 import { confirmedOutcomeScoringEnabled, confirmedReceiptTtlMs } from '../scoring/confirmed-outcome';
 import type { RepIdEventType } from '../scoring/repid-deltas';
@@ -52,6 +68,12 @@ export type FailedSettleMode = 'off' | 'shadow' | 'enforce';
  */
 export const SETTLE_EVENT_TYPE: RepIdEventType = 'CHALLENGE_LOSS';
 const INTERVAL_MS = 15 * 60 * 1000;
+/**
+ * Rows read per run = SCAN_FACTOR × MAX_PER_RUN, so refused rows in front cannot starve a signed wrong.
+ * ponytail: one bounded read, not pagination. A window holding more refused rows than this is logged
+ * LOUDLY every run (scan_ceiling); page by (created_at, receipt_id) if that ever fires for real.
+ */
+const SCAN_FACTOR = 20;
 
 export function failedSettleMode(): FailedSettleMode {
   const m = (process.env['CONFIRMED_FAILED_SETTLE_MODE'] ?? '').trim().toLowerCase();
@@ -70,8 +92,12 @@ export interface SettleSummary {
   /** Set when the run did nothing on purpose (off, bad knob, scoring flag off, read error). */
   refused?: string;
   found: number;
+  /** Rows the verifier would apply (enforce attempts them; shadow logs them). Capped at MAX_PER_RUN. */
+  accepted: number;
   applied: Array<{ receiptId: string; agentId: string; delta: number }>;
   held: Array<{ receiptId: string; agentId: string; why: string }>;
+  /** True when the scan read its whole SCAN_FACTOR × MAX_PER_RUN budget without filling the cap (logged loudly). */
+  scanCeiling?: true;
 }
 
 let running = false;
@@ -79,7 +105,7 @@ let running = false;
 /** One pass. Exported for tests and for an operator one-shot; never throws. */
 export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
   const mode = failedSettleMode();
-  const summary: SettleSummary = { mode, found: 0, applied: [], held: [] };
+  const summary: SettleSummary = { mode, found: 0, accepted: 0, applied: [], held: [] };
   if (mode === 'off') return { ...summary, refused: 'mode_off' };
   if (running) return { ...summary, refused: 'already_running' };
   running = true;
@@ -118,9 +144,10 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
     }
 
     const now = Date.now();
+    const scanLimit = maxPerRun * SCAN_FACTOR;
     const { data, error } = await db
       .from('kernel_receipts')
-      .select('receipt_id, subject_agent_id, settled_by, args_hash, created_at')
+      .select('receipt_id, subject_agent_id, settled_by, created_at')
       .eq('verification_status', 'FAILED')
       .eq('verdict_label', 'SETTLED')
       .eq('is_simulated', false)
@@ -129,56 +156,28 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
       .lt('created_at', new Date(now - graceMs).toISOString())
       .gt('created_at', new Date(now - ttlMs).toISOString())
       .order('created_at', { ascending: true })
-      .limit(maxPerRun);
+      .limit(scanLimit);
     if (error || !Array.isArray(data)) {
       console.error(`[failed-settle] read failed, nothing applied: ${error?.message ?? 'no data'}`);
       return { ...summary, refused: 'read_failed' };
     }
     summary.found = data.length;
 
-    // ONE WRONG PER CONTENT (XC1 review of #1371): two FAILED receipts for the same work (same subject +
-    // args_hash) are one wrong. A duplicate inside this batch, or of content already settled, is skipped
-    // here and left unspent; the partial unique index kernel_receipts_one_wrong_per_content
-    // (migrations/2026-10-14-kernel-receipts-engine-signature.sql) is the atomic, cross-process backstop.
-    const seenContent = new Set<string>();
-    for (const row of data as Array<{ receipt_id: string; subject_agent_id: string; settled_by: 'holdout' | 'known_answer'; args_hash: string | null }>) {
+    // VERIFIER FIRST, ONE WRONG PER SIGNED RECEIPT (see the header). Nothing is keyed on an unsigned
+    // column: a row either passes the same decision updateRepId makes, or it is refused and blocks nothing.
+    for (const row of data as Array<{ receipt_id: string; subject_agent_id: string; settled_by: 'holdout' | 'known_answer' }>) {
+      if (summary.accepted >= maxPerRun) break;
       const receiptId = row.receipt_id;
       const agentId = row.subject_agent_id;
-      const contentKey = typeof row.args_hash === 'string' ? `${agentId}|${row.args_hash}` : null;
-      if (contentKey !== null) {
-        if (seenContent.has(contentKey)) {
-          summary.held.push({ receiptId, agentId, why: 'duplicate_content_in_run' });
-          continue;
-        }
-        seenContent.add(contentKey);
-        const prior = await db
-          .from('kernel_receipts')
-          .select('receipt_id')
-          .eq('subject_agent_id', agentId)
-          .eq('args_hash', row.args_hash)
-          .eq('verification_status', 'FAILED')
-          .not('consumed_at', 'is', null)
-          .limit(1);
-        if (prior.error || !Array.isArray(prior.data)) {
-          summary.held.push({ receiptId, agentId, why: 'content_check_unreadable' }); // fail closed: never risk a second wrong
-          continue;
-        }
-        if (prior.data.length > 0) {
-          summary.held.push({ receiptId, agentId, why: 'content_already_settled' });
-          continue;
-        }
+      const decision = await previewSettledWrong(agentId, receiptId, row.settled_by);
+      if (!decision.wouldApply) {
+        summary.held.push({ receiptId, agentId, why: `verifier_refuses:${decision.reason}` });
+        continue;
       }
+      summary.accepted++;
       if (mode === 'shadow') {
-        // SHADOW RUNS THE SAME GATE (read-only): it logs WOULD apply only for a receipt the verifier would
-        // actually confirm as a wrong, so the shadow count is what enforce would do.
-        const vc = await resolveServerConfirmation(agentId, receiptId);
-        if (vc?.result === 'wrong') {
-          console.warn(`[failed-settle] SHADOW: WOULD apply FAILED receipt ${receiptId} (settled_by ${row.settled_by}) to agent ${agentId}`);
-          summary.held.push({ receiptId, agentId, why: 'shadow_would_apply' });
-        } else {
-          console.warn(`[failed-settle] SHADOW: would NOT apply receipt ${receiptId} to agent ${agentId}: the verifier does not confirm it`);
-          summary.held.push({ receiptId, agentId, why: 'shadow_verifier_refuses' });
-        }
+        console.warn(`[failed-settle] SHADOW: WOULD apply FAILED receipt ${receiptId} (settled_by ${row.settled_by}) to agent ${agentId}: ${decision.delta}`);
+        summary.held.push({ receiptId, agentId, why: 'shadow_would_apply' });
         continue;
       }
       try {
@@ -190,16 +189,25 @@ export async function settleFailedReceiptsOnce(): Promise<SettleSummary> {
         if (out.delta < 0) {
           summary.applied.push({ receiptId, agentId, delta: out.delta });
         } else {
-          // The verifier or the claim refused it (already consumed by the actor or another run, not a gate
-          // receipt, expired between the query and the call, …). The audit row records which.
+          // Lost the claim to a concurrent spend of this receipt_id (the actor, another run), or the row
+          // changed between the preview and the call. The audit row records which.
           summary.held.push({ receiptId, agentId, why: `held_inert:${out.confirmedOutcome?.reason ?? 'no_confirmed_outcome'}` });
         }
       } catch (e) {
         summary.held.push({ receiptId, agentId, why: `error: ${e instanceof Error ? e.message : String(e)}` });
       }
     }
+    const refusedRows = summary.held.filter((h) => h.why.startsWith('verifier_refuses:')).length;
+    if (data.length === scanLimit && summary.accepted < maxPerRun) {
+      summary.scanCeiling = true;
+      console.error(
+        `[failed-settle] SCAN CEILING: read ${scanLimit} candidate FAILED receipts, ${refusedRows} refused by the verifier; ` +
+          'signed wrongs may be waiting behind them. Investigate the refused rows (decoys?).',
+      );
+    }
     console.warn(
-      `[failed-settle] ${mode}: found ${summary.found}, applied ${summary.applied.length}, held ${summary.held.length}` +
+      `[failed-settle] ${mode}: found ${summary.found}, accepted ${summary.accepted}, refused ${refusedRows}, ` +
+        `applied ${summary.applied.length}, held ${summary.held.length}` +
         (summary.applied.length ? ` — ${summary.applied.map((a) => `${a.receiptId}→${a.agentId} ${a.delta}`).join(', ')}` : ''),
     );
     return summary;

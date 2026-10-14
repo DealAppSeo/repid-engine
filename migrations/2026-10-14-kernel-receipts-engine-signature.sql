@@ -1,4 +1,4 @@
--- KERNEL RECEIPTS: ENGINE SIGNATURE + ONE WRONG PER CONTENT — review-only DDL (2026-10-14)
+-- KERNEL RECEIPTS: ENGINE SIGNATURE (no wrong-per-content index) — review-only DDL (2026-10-14)
 --
 -- ╔══════════════════════════════════════════════════════════════════════════════════════════╗
 -- ║  NOT APPLIED. REVIEW-ONLY. Sean applies prod DDL; no agent lane does.                         ║
@@ -18,32 +18,31 @@
 --                     engine signer. The receipt JSON itself is unchanged (kernel-receipt/1 pins
 --                     header.signer null). Until this column exists the indexer's upsert is rejected
 --                     (unknown column), nothing is indexed and nothing confirms: fail closed.
---   one wrong / content  Two FAILED receipts for the same work (same subject + args_hash) are ONE wrong.
---                     The engine's claim is `UPDATE … SET consumed_at = now() WHERE receipt_id = $1 AND
---                     consumed_at IS NULL`. With this partial unique index a second FAILED claim of the
---                     same content fails with 23505 inside that one statement and is held inert, also
---                     across processes. The settler (services/failed-receipt-settler.ts) additionally
---                     skips such duplicates before calling, so this index is the atomic backstop, and the
---                     VERIFIED gain index (content-claim migration) is unaffected: a wrong after a paid
---                     right of the same content still applies.
+--
+-- NO WRONG-PER-CONTENT INDEX (XC1's review of #1374). An earlier draft of this file created
+--   kernel_receipts_one_wrong_per_content (subject_agent_id, args_hash) WHERE consumed_at IS NOT NULL
+--   AND verification_status = 'FAILED'. Postgres cannot check a secp256k1 signature, so that index
+--   counted ANY consumed FAILED row, signed or not: one service-role decoy with the victim's args_hash
+--   made every later real, signed wrong fail its claim with 23505, forever. Scoping it to
+--   `engine_signature IS NOT NULL` does not help (a garbage signature is not null). And args_hash is
+--   client-chosen, so "one wrong per content" never meant one wrong per piece of work. A FAILED receipt
+--   is spent once by its receipt_id (the claim's own WHERE consumed_at IS NULL), as the content-claim
+--   migration says, and that is the only key. The DROP INDEX below removes the index if the earlier
+--   draft was ever applied; otherwise it is a no-op.
 
 BEGIN;
 
 ALTER TABLE public.kernel_receipts ADD COLUMN IF NOT EXISTS engine_signature jsonb;
 
-CREATE UNIQUE INDEX IF NOT EXISTS kernel_receipts_one_wrong_per_content
-  ON public.kernel_receipts (subject_agent_id, args_hash)
-  WHERE consumed_at IS NOT NULL AND verification_status = 'FAILED';
+DROP INDEX IF EXISTS public.kernel_receipts_one_wrong_per_content;
 
 ROLLBACK;  -- REVIEW-ONLY. Change to COMMIT only on a logged decision.
 
 -- ── POST-APPLY CHECKS (read-only) ─────────────────────────────────────────────────────────────
 -- SELECT column_name, data_type FROM information_schema.columns
 --  WHERE table_schema = 'public' AND table_name = 'kernel_receipts' AND column_name = 'engine_signature'; -- 1 row, jsonb
--- SELECT indexname FROM pg_indexes WHERE indexname = 'kernel_receipts_one_wrong_per_content';            -- 1 row
+-- SELECT indexname FROM pg_indexes WHERE indexname = 'kernel_receipts_one_wrong_per_content';            -- 0 rows
 
 -- ── DOWN ──────────────────────────────────────────────────────────────────────────────────────
--- Without the column the indexer's upsert fails and nothing is indexed (fail closed); without the index
--- a duplicate FAILED claim is only stopped by the settler's own skip.
--- DROP INDEX IF EXISTS public.kernel_receipts_one_wrong_per_content;
+-- Without the column the indexer's upsert fails and nothing is indexed (fail closed).
 -- ALTER TABLE public.kernel_receipts DROP COLUMN IF EXISTS engine_signature;
