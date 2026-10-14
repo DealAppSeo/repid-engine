@@ -173,7 +173,30 @@ export function createAgentsOnchainRouter(supabase: SupabaseClient): Router {
    * Public — no auth.
    */
   router.get('/:id/onchain', async (req: Request, res: Response) => {
-    const id = String(req.params.id);
+    const ref = String(req.params.id);
+    // A name is resolved to its uuid first, as GET /repid/:id and /passport/:id already accept one.
+    // Passing "trinity-sophia" straight to verifyOnChain made Postgres raise 22P02 (uuid cast) and
+    // this public route answered 500 with the raw database error. Names are not unique, so more
+    // than one match is a 409 and the caller must use the id. Same rule as boundOwnerOfRef.
+    let id = ref;
+    if (agentRefColumn(ref) === 'agent_name') {
+      const { data, error } = await supabase.from('repid_agents').select('id').eq('agent_name', ref);
+      if (error) {
+        console.error(`[agents-onchain] agent lookup failed for "${ref}": ${error.message}`);
+        res.status(503).json({ error: 'not_checked', message: 'Could not look up that agent, so nothing was read on-chain.' });
+        return;
+      }
+      const rows = (data ?? []) as Array<{ id: string }>;
+      if (rows.length === 0) {
+        res.status(404).json({ error: 'agent_not_found', message: `No agent has the id or name "${ref}".` });
+        return;
+      }
+      if (rows.length > 1) {
+        res.status(409).json({ error: 'ambiguous_name', message: `More than one agent is named "${ref}". Use its id.` });
+        return;
+      }
+      id = rows[0]!.id;
+    }
     try {
       const minter = process.env.ERC8004_MINTER_PRIVATE_KEY
         ? getMinter()

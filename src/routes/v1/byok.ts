@@ -625,16 +625,30 @@ router.get('/human/agents', async (req: Request, res: Response) => {
  * when it printed pay-on-delivery for exchanges that paid up front.
  */
 router.get('/agents/:agentId/owner', async (req: Request, res: Response) => {
-  const agentId = String(req.params.agentId);
+  const ref = String(req.params.agentId);
+  let agentId = ref;
   let owner: Awaited<ReturnType<typeof ownerOfAgent>>;
   let link: Awaited<ReturnType<typeof linkedButUnbound>>;
   try {
+    // A name is resolved to its uuid first, as the preflight above does. Both helpers query by uuid,
+    // so "trinity-sophia" used to raise 22P02 and come back as a 503 owner_not_checked carrying the
+    // raw database error: malformed input reported as "we could not look". Names are not unique, so
+    // more than one match is a 409 (same rule as boundOwnerOfRef).
+    if (!UUID_RE.test(ref)) {
+      const { data, error } = await db.from('repid_agents').select('id').eq('agent_name', ref);
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as Array<{ id: string }>;
+      if (rows.length === 0) return res.status(404).json({ error: 'agent_not_found', message: `No agent has the id or name "${ref}".` });
+      if (rows.length > 1) return res.status(409).json({ error: 'ambiguous_name', message: `More than one agent is named "${ref}". Use its id.` });
+      agentId = rows[0]!.id;
+    }
     owner = await ownerOfAgent(agentId);
     link = await linkedButUnbound(agentId);
   } catch (e: any) {
     // Not "unowned": we could not look. Saying "No owner" here would be the overclaim this route
-    // exists to avoid.
-    return res.status(503).json({ error: 'owner_not_checked', message: `Could not read who owns this agent. ${e?.message ?? ''}`.trim() });
+    // exists to avoid. The raw error is logged, never returned: this is a public surface.
+    console.error(`[owner] read failed for "${ref}": ${e?.message ?? e}`);
+    return res.status(503).json({ error: 'owner_not_checked', message: 'Could not read who owns this agent.' });
   }
 
   if (!owner) {
