@@ -204,3 +204,27 @@ describe('the decision path receives a READ-ONLY registry view (no mutator on th
     expect(ro.size).toBe(4);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+describe('look-alike ids cannot be registered (XC1 on #1358: Cyrillic ѕ passed the floor)', () => {
+  const run = () => 'x';
+  const reg = (implId: string, id: string) => () =>
+    createCapabilityRegistry().register({ implId, capability: { id, toolClass: 'read' }, run });
+
+  it('NFKC does not fold the Cyrillic look-alike, so the floor alone misses it', () => {
+    expect(classifyProhibitedCapability('\u0455ecrets.export')).toBeNull();
+    expect(classifyProhibitedCapability('secrets.export')).toBe('secret_export');
+  });
+
+  it('refuses a capability id or implId with any non-ASCII character', () => {
+    expect(reg('impl.x', '\u0455ecrets.export')).toThrow(/plain ASCII/); // Cyrillic dze
+    expect(reg('impl.x', 'secrets.exp\u043Ert')).toThrow(/plain ASCII/); // Cyrillic o
+    expect(reg('impl.x', 'format.markdown\u00A0')).toThrow(/plain ASCII/); // NBSP
+    expect(reg('impl.p\u0430yment', 'payment.transfer')).toThrow(/plain ASCII/); // implId, Cyrillic a
+  });
+
+  it('still registers ordinary ids', () => {
+    expect(reg('impl.formatter', 'format.markdown')).not.toThrow();
+    expect(reg('impl.a-b_c', 'ns:sub/x.y-z_1')).not.toThrow();
+  });
+});

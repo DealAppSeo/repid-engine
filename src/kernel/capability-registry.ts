@@ -182,6 +182,9 @@ export interface Capability {
 
 export type ToolImplementation = (...args: never[]) => unknown;
 
+/** The only characters a registered implId or capability id may contain. */
+const SAFE_ID = /^[A-Za-z0-9._:/-]+$/;
+
 /** A registered implementation: the actual boot-loaded function plus its kernel-minted identity. */
 export interface RegisteredImplementation {
   /**
@@ -222,6 +225,12 @@ export class CapabilityRegistry implements ReadonlyCapabilityRegistry {
     if (implId === '') throw new Error('[capability-registry] implId must be a non-empty string');
     if (!entry.capability || typeof entry.capability.id !== 'string' || entry.capability.id.trim() === '') {
       throw new Error('[capability-registry] a registered implementation must carry a non-empty capability.id');
+    }
+    // Plain ASCII identifiers only. NFKC does not fold look-alikes (Cyrillic `ѕ` in `ѕecrets.export`
+    // passed the prohibition floor, XC1 on #1358), and no confusables table is complete. Both ids are
+    // kernel-owned and the implId is what an owner reads in a signed policy, so refuse instead of fold.
+    if (!SAFE_ID.test(implId) || !SAFE_ID.test(entry.capability.id)) {
+      throw new Error('[capability-registry] implId and capability.id must be plain ASCII: letters, digits and . _ : / -');
     }
     if (!TOOL_CLASSES.includes(entry.capability.toolClass)) {
       throw new Error(`[capability-registry] capability.toolClass must be one of ${TOOL_CLASSES.join(', ')}`);
