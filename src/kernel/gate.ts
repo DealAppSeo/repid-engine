@@ -112,7 +112,10 @@ async function gatherHal(deps: GateDeps, req: KernelRequest, worthAsking: boolea
  * the route does only under the KERNEL_CAPABILITY_REGISTRY_ENABLED flag — so OFF this is always
  * `not_enforced` and decide() records nothing. Draft 4 screens EVERY class, including spend and post.
  * Those classes keep their own gates (limits, payee, HAL) in addition to the registry, not instead of
- * it. `tool.class` is caller-asserted, so it must not decide whether the registry applies. The
+ * it. `tool.class` is caller-asserted, so it must not decide whether the registry applies, nor pick a
+ * weaker class for a registered impl: the screen requires the request's class to equal the class the
+ * impl was registered under (`impl_class_mismatch`). Draft 4 alone let a payment impl run as `other`
+ * with no spend checks, and a post impl run as `read` without HAL. The
  * authorized set is read ONLY from a VERIFIED signed policy's bindings — the blanket `tool` action is
  * never consulted — so an unverified or binding-less policy authorizes no implementation and the
  * screen fails closed.
@@ -140,7 +143,7 @@ function gatherCapability(
       policy.state === 'loaded' && policy.signature === 'VERIFIED'
         ? new Set(policy.policy.authorized_impl_hashes ?? [])
         : new Set<string>();
-    const screen = screenCapability({ implRef: req.tool.name, candidate }, deps.capabilityRegistry, authorized);
+    const screen = screenCapability({ implRef: req.tool.name, candidate, toolClass: req.tool.class }, deps.capabilityRegistry, authorized);
     return {
       capability: {
         state: 'enforced',
