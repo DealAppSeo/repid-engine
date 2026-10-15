@@ -79,6 +79,29 @@ export async function validateAgentApiKey(key: string): Promise<{agent_id: strin
   return { agent_id: data.agent_id, scopes: data.scopes || [] };
 }
 
+/**
+ * The legacy registration token (`constitution.api_key`, a UUID v4) as auth, for the two legacy
+ * paths (key-management requireAdminAuth, agents-external). Accepts the plaintext old rows carry and
+ * `api_key_sha256`, which replaces it (reports/2026-10-15 CONSTITUTION_SECRETS SQL): `constitution`
+ * is readable by the anon role, so the plaintext there was a credential anyone could read.
+ */
+export function legacyTokenMatches(constitution: unknown, token: string): boolean {
+  const c = constitution as Record<string, unknown> | null;
+  if (!token || !c || typeof c !== 'object') return false;
+  if (typeof c.api_key === 'string' && c.api_key === token) return true;
+  return typeof c.api_key_sha256 === 'string' &&
+    c.api_key_sha256 === crypto.createHash('sha256').update(token).digest('hex');
+}
+
+/** Constitution field names never serialized to a client: credentials and their hashes. */
+const CONSTITUTION_SECRET_FIELD = /key|token|secret|password|private|seed|mnemonic|credential/i;
+
+/** `constitution` minus every credential-shaped top-level field (api_key, privateId, their hashes). */
+export function publicConstitution(constitution: unknown): unknown {
+  if (!constitution || typeof constitution !== 'object' || Array.isArray(constitution)) return constitution ?? null;
+  return Object.fromEntries(Object.entries(constitution).filter(([k]) => !CONSTITUTION_SECRET_FIELD.test(k)));
+}
+
 export async function revokeAgentApiKey(keyId: string): Promise<void> {
   await db.from('agent_api_keys')
     .update({ revoked_at: new Date().toISOString() })

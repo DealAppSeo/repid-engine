@@ -20,7 +20,7 @@ import { deriveHalDecision } from '../scoring/pipeline';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { isDeliverableDomain } from '../scoring/task-purpose';
 import { scoreEventGuardEnforced } from './score-event-guard';
-import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
+import { issueAgentApiKey, validateAgentApiKey, legacyTokenMatches } from '../auth/api-keys';
 import { SELF_SERVE_SCOPES } from '../services/agent-self-serve-key';
 import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
@@ -96,8 +96,7 @@ async function authAgent(req: Request, res: Response, agentId: string): Promise<
     res.status(404).json({ error: 'Agent not found' });
     return null;
   }
-  const storedKey = (agent as any)?.constitution?.api_key;
-  if (storedKey && storedKey === token) {
+  if (legacyTokenMatches((agent as any)?.constitution, token)) {
     console.warn(`[DEPRECATION WARNING] Legacy api_key used for agent: ${agentId}. Please transition to modern scoped API keys.`);
     return agent;
   }

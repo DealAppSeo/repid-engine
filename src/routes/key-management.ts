@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
-import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey, RESERVED_SCOPES } from '../auth/api-keys';
+import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey, RESERVED_SCOPES, legacyTokenMatches } from '../auth/api-keys';
 import { SELF_SERVE_SCOPES } from '../services/agent-self-serve-key';
 import { resolveAccountableRoot, rootRefusalStatus } from '../services/accountable-root';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
@@ -49,8 +49,7 @@ async function requireAdminAuth(req: Request, res: Response, next: any) {
     return res.status(404).json({ error: 'Agent not found' });
   }
 
-  const legacyKey = (agent as any).constitution?.api_key;
-  if (legacyKey && legacyKey === token) {
+  if (legacyTokenMatches((agent as any).constitution, token)) {
     console.warn(`[DEPRECATION WARNING] Legacy api_key used for agent: ${agentId} in key management. Please transition to modern scoped API keys.`);
     (req as any).callerScopes = [];
     return next();
