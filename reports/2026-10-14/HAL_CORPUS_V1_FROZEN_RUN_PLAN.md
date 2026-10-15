@@ -71,7 +71,7 @@ Step 2 is the measurement:
   row, so 400 calls cover roughly 80 to 130 rows.~~ **Corrected 2026-10-15 [measured]:** the operator's
   key file configures 7 providers. In the smoke the free wave was rate-limited, and the first row
   cost **9** calls. So 400 calls cover about **44** rows, and the paid slots (deepseek, anthropic) are
-  called whenever the free wave fails (E:\deveports6-10-15\CC1_HAL_SMOKE_2026-10-15.md). `--max-calls`
+  called whenever the free wave fails (`E:/dev/reports/2026-10-15/CC1_HAL_SMOKE_2026-10-15.md`). `--max-calls`
   counts every outbound call that is not to Supabase. The overshoot is at most one row. The first row
   always runs.
 - **Isolation (2026-10-15):** a run writes nothing to production by default (`measure-isolation.ts`):
