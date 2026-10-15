@@ -4,6 +4,8 @@
  */
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost:54321';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy';
+// The staging bind (a body naming a wallet) needs an API key; an operator key may bind a named agent.
+process.env.REPID_API_KEYS = 'test-operator-key:ops';
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -185,12 +187,12 @@ describe('v1 engine path', () => {
 
   it('returns 409 for the same wallet and agent, and 410 leaves the set empty', async () => {
     const server = app();
-    const blocked = await request(server).post('/api/v1/human/bind').send(PAIR);
+    const blocked = await request(server).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send(PAIR);
     expect(blocked.status).toBe(410);
     expect(state.binds.size).toBe(0);
     process.env.HUMAN_AGENT_BIND_ENABLED = 'true';
-    const first = await request(server).post('/api/v1/human/bind').send(PAIR);
-    const second = await request(server).post('/api/v1/human/bind').send(PAIR);
+    const first = await request(server).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send(PAIR);
+    const second = await request(server).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send(PAIR);
     expect(first.status).toBe(201);
     expect(second.status).toBe(409);
     expect(state.binds.size).toBe(1);

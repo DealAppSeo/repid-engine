@@ -15,6 +15,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { db } from '../../db';
+import { authMiddleware, isOperatorKey } from '../../middleware/auth';
 
 // V2 substrate: settlement is intentionally disabled. Even if the env var is set true, this router
 // never moves money or writes on-chain — the settlement path is deferred to a later phase. The flag
@@ -85,9 +86,26 @@ export function validateCreateListing(
 
 const router = Router();
 
+// This router is mounted ahead of the global authMiddleware (src/index.ts), so its writes ran no
+// auth of their own. Each now runs authMiddleware (no key -> 401, invalid key -> 403), and THE KEY
+// NAMES THE ACTOR, not the body:
+//   POST /listings      an agent key lists its own agent (body agent_id ignored); otherwise an operator key.
+//   PATCH /listings/:id an agent key edits only its own agent's listings; otherwise an operator key.
+//   POST /rentals       operator key only: the renter is an SBT, and no credential here proves one.
+// A plain env key (no agent, not tier 'ops') is refused on all three: it could act as anyone.
+
 /** POST /listings — create a listing. */
-router.post('/listings', async (req: Request, res: Response) => {
-  const v = validateCreateListing(req.body ?? {});
+router.post('/listings', authMiddleware, async (req: Request, res: Response) => {
+  const boundAgent = (req as any).agent_id as string | undefined;
+  if (!boundAgent && !isOperatorKey(req)) {
+    return res.status(403).json({ error: 'Forbidden: an agent key, or an operator key, is required' });
+  }
+  const raw = { ...(req.body ?? {}) } as Record<string, unknown>;
+  if (raw.agent_id !== undefined && typeof raw.agent_id !== 'string') {
+    return res.status(400).json({ error: 'agent_id must be a string' });
+  }
+  if (boundAgent) raw.agent_id = boundAgent;
+  const v = validateCreateListing(raw);
   if (!v.ok) return res.status(400).json({ error: v.error });
 
   const { data, error } = await db
@@ -129,13 +147,26 @@ router.get('/listings', async (_req: Request, res: Response) => {
 });
 
 /** PATCH /listings/:id — update status (active|paused|sold|rented_out). */
-router.patch('/listings/:id', async (req: Request, res: Response) => {
+router.patch('/listings/:id', authMiddleware, async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'valid listing id required' });
 
   const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
   if (!(LISTING_STATUSES as readonly string[]).includes(status)) {
     return res.status(400).json({ error: "status must be one of 'active','paused','sold','rented_out'" });
+  }
+
+  // An agent-bound key may change only its own agent's listing; an unbound key must be an operator.
+  const boundAgent = (req as any).agent_id as string | undefined;
+  if (!boundAgent && !isOperatorKey(req)) {
+    return res.status(403).json({ error: 'Forbidden: an agent key, or an operator key, is required' });
+  }
+  if (boundAgent) {
+    const { data: listing } = await db.from('agent_listings').select('agent_id').eq('id', id).maybeSingle();
+    if (!listing) return res.status(404).json({ error: 'listing not found' });
+    if (String((listing as any).agent_id).toLowerCase() !== String(boundAgent).toLowerCase()) {
+      return res.status(403).json({ error: 'Forbidden: listing belongs to a different agent' });
+    }
   }
 
   const { data, error } = await db
@@ -159,7 +190,10 @@ router.patch('/listings/:id', async (req: Request, res: Response) => {
  * ⚠️ EXPLICITLY NO SETTLEMENT: no money moves, nothing on-chain. The record captures intent +
  * window only. RepID earned during the rental attributes to the AGENT, not the renter.
  */
-router.post('/rentals', async (req: Request, res: Response) => {
+router.post('/rentals', authMiddleware, async (req: Request, res: Response) => {
+  if (!isOperatorKey(req)) {
+    return res.status(403).json({ error: 'Forbidden: rentals need an operator key (no credential here proves the renter SBT)' });
+  }
   const body = (req.body ?? {}) as {
     listing_id?: unknown;
     renter_sbt_id?: unknown;

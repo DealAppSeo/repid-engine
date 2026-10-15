@@ -9,6 +9,10 @@ const state: { rows: Row[]; keys: Set<string>; failCode: string | null } = {
   failCode: null,
 };
 
+// These routes now require an API key (authMiddleware). An env-allowlist operator key keeps these
+// tests about the route's own behaviour; tests/preauth-writes-auth.test.ts covers the auth itself.
+process.env.REPID_API_KEYS = 'test-operator-key:ops'; // an operator key: it may act for a named agent
+jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../src/db', () => ({
   db: {
     from(table: string) {
@@ -62,8 +66,8 @@ describe('POST /api/v1/human/bind staging row', () => {
   });
 
   it('a wallet without an agent is rejected; an agent without a wallet is not this route\'s', async () => {
-    const walletOnly = await request(app()).post('/api/v1/human/bind').send({ wallet: '0xabc' });
-    const agentOnly = await request(app()).post('/api/v1/human/bind').send({ agent_id: AGENT });
+    const walletOnly = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ wallet: '0xabc' });
+    const agentOnly = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ agent_id: AGENT });
     expect(walletOnly.status).toBe(400);
     expect(walletOnly.body).toEqual({ error: 'rejected' });
     // { agent_id } with no wallet is the signed bind's body (routes/v1/byok.ts). It used to get
@@ -74,26 +78,26 @@ describe('POST /api/v1/human/bind staging row', () => {
   });
 
   it('returns 410 and inserts nothing unless the flag is the exact string true', async () => {
-    const unset = await request(app()).post('/api/v1/human/bind').send(PAIR);
+    const unset = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send(PAIR);
     expect(unset.status).toBe(410);
     expect(unset.body).toEqual({ error: 'disabled' });
     expect(state.rows).toHaveLength(0);
     expect(state.keys.size).toBe(0);
 
     process.env.HUMAN_AGENT_BIND_ENABLED = 'TRUE';
-    const folded = await request(app()).post('/api/v1/human/bind').send(PAIR);
+    const folded = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send(PAIR);
     expect(folded.status).toBe(410);
     expect(state.rows).toHaveLength(0);
   });
 
   it('inserts one row and returns 409 for the same pair', async () => {
     process.env.HUMAN_AGENT_BIND_ENABLED = 'true';
-    const first = await request(app()).post('/api/v1/human/bind').send(PAIR);
+    const first = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send(PAIR);
     expect(first.status).toBe(201);
     expect(first.body).toEqual({ ok: true });
     expect(state.rows).toEqual([PAIR]);
 
-    const second = await request(app()).post('/api/v1/human/bind').send({ ...PAIR, agent: AGENT });
+    const second = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ ...PAIR, agent: AGENT });
     expect(second.status).toBe(409);
     expect(second.body).toEqual({ error: 'conflict' });
     expect(state.rows).toHaveLength(1);
@@ -101,7 +105,7 @@ describe('POST /api/v1/human/bind staging row', () => {
   });
 
   it('leaves an empty body to the existing bind route', async () => {
-    const res = await request(app()).post('/api/v1/human/bind').send({});
+    const res = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({});
     expect(res.status).toBe(401);
     expect(state.rows).toHaveLength(0);
   });

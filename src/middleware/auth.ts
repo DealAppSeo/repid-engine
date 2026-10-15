@@ -11,6 +11,16 @@ import {
   unboundServiceRefusalBody,
 } from './contract-party-guard';
 
+/**
+ * An OPERATOR key: a REPID_API_KEYS entry with tier 'ops' (`key:ops`, the tier
+ * /observability/x402-metrics already requires). It carries no agent identity. Use after
+ * authMiddleware: a route that lets a caller act for a party the key does not name should accept
+ * only this, never a plain env key, which could otherwise act as anyone.
+ */
+export function isOperatorKey(req: Request): boolean {
+  return !(req as any).agent_id && (req as any).apiKey?.tier === 'ops';
+}
+
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   if (req.method === 'OPTIONS') return next();
   const publicPaths = ['/health', '/healthz', '/', '/api/v1/health'];
