@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { createHash, randomBytes } from 'crypto';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
@@ -36,13 +37,14 @@ router.post('/agents', async (req: Request, res: Response) => {
 });
 
 // POST /agents/human — anonymous human DBT registration
-// ZKP-anonymous: no name, no real address stored
-// Returns a private UUID the human keeps — their only credential
-// The system stores only a ZKP commitment, never their identity
+// No name, no real address stored. Returns a privateId the human keeps (shown once).
+// [D-108 2026-10-15] Only its sha256 is stored (constitution.privateId_sha256); nothing in src reads it.
+// 128 random bits, so that sha256 cannot be walked back: the old `human-<ms>-<6 base36>` was ~31 bits
+// next to a timestamp the row itself records, in a column the anon role can read.
 router.post('/agents/human', async (req: Request, res: Response) => {
   const { commitment, constitution } = req.body ?? {};
 
-  const anonymousId = `human-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const anonymousId = `human-${randomBytes(16).toString('hex')}`;
   const zkpCommitment = commitment ||
     `zkp-commitment-${Date.now()}-${Math.random().toString(36).slice(2, 16)}`;
 
@@ -72,7 +74,7 @@ router.post('/agents/human', async (req: Request, res: Response) => {
           ...humanConstitution,
           type: 'HUMAN',
           anonymous: true,
-          privateId: anonymousId,
+          privateId_sha256: createHash('sha256').update(anonymousId).digest('hex'),
         },
       })
       .select('id')
@@ -141,9 +143,9 @@ router.post('/agents/human', async (req: Request, res: Response) => {
       tier: 'PROBATIONARY',
       badges: ['Genesis'],
       suggestedRules,
-      message: 'Save your privateId. This route also writes it into constitution on the new row.',
+      message: 'Save your privateId now: it is shown once. Only its sha256 is stored, so it cannot be recovered.',
       zkpCommitment,
-      warning: 'This is not a zero-knowledge registration. privateId is stored in constitution.privateId. The wallet human path is GET /api/v1/human/path and it applies nothing.',
+      warning: 'This is not a zero-knowledge registration: the row is public and keeps the sha256 of your privateId (constitution.privateId_sha256). The wallet human path is GET /api/v1/human/path and it applies nothing.',
       nextStep: `Visit repid.dev/check?id=${newAgent.id} to see your profile.`,
     });
   } catch (err: any) {

@@ -6,11 +6,12 @@
  * GET /agents and GET /agents/:id returned the constitution whole to ANY key, and the public
  * register hands out keys. The anon role can read the column too (that is the SQL half, see
  * E:\dev\reports\2026-10-15\CONSTITUTION_SECRETS_2026-10-15.sql). These pin the code half: the
- * routes strip credential fields, and the legacy check accepts the sha256 that replaces the plaintext.
+ * routes strip credential fields. The legacy token check itself is gone (D-108): see
+ * tests/legacy-token-retired.test.ts.
  */
 import express from 'express';
 import request from 'supertest';
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 
 jest.mock('../src/db', () => ({ db: { from: jest.fn(), rpc: jest.fn() } }));
 
@@ -19,7 +20,7 @@ const { db } = require('../src/db');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const agentsRouter = require('../src/routes/agents').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { legacyTokenMatches, publicConstitution } = require('../src/auth/api-keys');
+const { publicConstitution } = require('../src/auth/api-keys');
 
 const TOKEN = randomUUID();
 const PRIVATE_ID = randomUUID();
@@ -92,24 +93,5 @@ describe('routes never serve a credential', () => {
     expect(publicConstitution(null)).toBeNull();
     expect(publicConstitution(undefined)).toBeNull();
     expect(publicConstitution(['x'])).toBeNull();
-  });
-});
-
-describe('legacyTokenMatches: the plaintext today, its sha256 after the SQL', () => {
-  const sha = createHash('sha256').update(TOKEN).digest('hex');
-
-  it('accepts the plaintext token', () => expect(legacyTokenMatches({ api_key: TOKEN }, TOKEN)).toBe(true));
-  it('accepts the token against its stored sha256', () => expect(legacyTokenMatches({ api_key_sha256: sha }, TOKEN)).toBe(true));
-  it('refuses a wrong token, the hash itself presented as a token, and empty input', () => {
-    expect(legacyTokenMatches({ api_key_sha256: sha }, randomUUID())).toBe(false);
-    expect(legacyTokenMatches({ api_key_sha256: sha }, sha)).toBe(false);
-    expect(legacyTokenMatches({ api_key: '' }, '')).toBe(false);
-    expect(legacyTokenMatches(null, TOKEN)).toBe(false);
-    expect(legacyTokenMatches({}, TOKEN)).toBe(false);
-  });
-  it('a malformed stored hash refuses instead of throwing (timingSafeEqual needs equal lengths)', () => {
-    expect(legacyTokenMatches({ api_key_sha256: 'abc' }, TOKEN)).toBe(false);
-    expect(legacyTokenMatches({ api_key_sha256: 'z'.repeat(64) }, TOKEN)).toBe(false);
-    expect(legacyTokenMatches({ api_key: TOKEN }, undefined as unknown as string)).toBe(false);
   });
 });

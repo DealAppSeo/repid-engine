@@ -80,31 +80,6 @@ export async function validateAgentApiKey(key: string): Promise<{agent_id: strin
 }
 
 /**
- * The legacy registration token (`constitution.api_key`, a UUID v4) as auth, for the two legacy
- * paths (key-management requireAdminAuth, agents-external). Accepts the plaintext old rows carry and
- * `api_key_sha256`, which replaces it (reports/2026-10-15 CONSTITUTION_SECRETS SQL): `constitution`
- * is readable by the anon role, so the plaintext there was a credential anyone could read.
- */
-export function legacyTokenMatches(constitution: unknown, token: string): boolean {
-  const c = constitution as Record<string, unknown> | null;
-  if (typeof token !== 'string' || !token || !c || typeof c !== 'object') return false;
-  // Constant-time either way (XC1 on #1397).
-  if (typeof c.api_key === 'string' && c.api_key) {
-    // Plaintext rows, until the hashing SQL runs: equal-length byte buffers. The length is not a
-    // secret (every legacy token is a 36-char UUID). The stored credential is compared, never hashed:
-    // hashing it read to CodeQL as a password stored with a fast hash (js/insufficient-password-hash).
-    const a = Buffer.from(token, 'utf8');
-    const b = Buffer.from(c.api_key, 'utf8');
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  }
-  if (typeof c.api_key_sha256 === 'string' && /^[0-9a-f]{64}$/i.test(c.api_key_sha256)) {
-    // Hashed rows: the presented token's 32-byte sha256 against the stored one.
-    return crypto.timingSafeEqual(crypto.createHash('sha256').update(token).digest(), Buffer.from(c.api_key_sha256, 'hex'));
-  }
-  return false;
-}
-
-/**
  * The constitution fields a client is ever shown, and only when the value is a scalar.
  * ALLOWLIST (XC1 on #1397): the first version dropped credential-looking names, which missed nested
  * keys (`rules.api_key`) and any name nobody thought of (`pin`, `passphrase`, `bearer`). These are the

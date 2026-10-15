@@ -20,7 +20,7 @@ import { deriveHalDecision } from '../scoring/pipeline';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { isDeliverableDomain } from '../scoring/task-purpose';
 import { scoreEventGuardEnforced } from './score-event-guard';
-import { issueAgentApiKey, validateAgentApiKey, legacyTokenMatches } from '../auth/api-keys';
+import { issueAgentApiKey } from '../auth/api-keys';
 import { SELF_SERVE_SCOPES } from '../services/agent-self-serve-key';
 import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
@@ -63,46 +63,6 @@ async function getConfigNumber(key: string, fallback: number): Promise<number> {
   if (value === null || value === undefined) return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
-}
-
-async function authAgent(req: Request, res: Response, agentId: string): Promise<any | null> {
-  const header = req.headers['authorization'];
-  const token = typeof header === 'string' ? header.replace(/^Bearer\s+/i, '').trim() : '';
-  if (!token) {
-    res.status(401).json({ error: 'Unauthorized: Bearer token required' });
-    return null;
-  }
-
-  // 1. Prioritize modern scoped API key validation
-  const validApiKey = await validateAgentApiKey(token);
-  if (validApiKey) {
-    if (validApiKey.agent_id !== agentId) {
-      res.status(403).json({ error: 'API key agent_id mismatch' });
-      return null;
-    }
-    const { data: agent, error } = await db
-      .from('repid_agents').select('*').eq('id', agentId).single();
-    if (error || !agent) {
-      res.status(404).json({ error: 'Agent not found' });
-      return null;
-    }
-    return agent;
-  }
-
-  // 2. Fallback to legacy constitution.api_key validation with deprecation warning
-  const { data: agent, error } = await db
-    .from('repid_agents').select('*').eq('id', agentId).single();
-  if (error || !agent) {
-    res.status(404).json({ error: 'Agent not found' });
-    return null;
-  }
-  if (legacyTokenMatches((agent as any)?.constitution, token)) {
-    console.warn(`[DEPRECATION WARNING] Legacy api_key used for agent: ${agentId}. Please transition to modern scoped API keys.`);
-    return agent;
-  }
-
-  res.status(401).json({ error: 'Unauthorized: invalid api_key for agent' });
-  return null;
 }
 
 // Sprint A5: sanitize free-form text — strip script/javascript/data URIs, null bytes.
