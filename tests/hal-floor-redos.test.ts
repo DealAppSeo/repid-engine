@@ -180,10 +180,23 @@ describe('3. route depth: scanForInjection + HalService.evaluate on 8,000-char h
     expect(ms).toBeLessThan(BUDGET_MS);
   });
 
-  test('the budget has teeth: the OLD word regex alone exceeds it at 1/8 of the cap', () => {
-    // Cubic: ~1.9 s locally at 1,000 chars (14 s at 2,000, 123 s at 4,000).
-    const t = performance.now();
-    expect(('a' + ' '.repeat(998) + 'b').match(OLD_WORD)).toBeNull();
-    expect(performance.now() - t).toBeGreaterThan(BUDGET_MS);
+  test('the budget has teeth: the OLD word regex is super-linear, the new one is not', () => {
+    // Ratios on one machine, not wall-clock. CI's runner did the OLD regex at 1,000 chars in 189 ms
+    // against ~1.9 s on the dev box, so "OLD takes > 300 ms" was a fact about the box and went red
+    // on main. Cubic grows ~8x per doubling; a linear OLD (the test lost its teeth) grows ~2x.
+    const input = (n: number) => 'a' + ' '.repeat(n - 2) + 'b';
+    const fastest = (re: RegExp, s: string) =>
+      Math.min(
+        ...[0, 1, 2].map(() => {
+          const t = performance.now();
+          expect(s.match(re)).toBeNull();
+          return performance.now() - t;
+        }),
+      );
+    const old400 = fastest(OLD_WORD, input(400));
+    const old800 = fastest(OLD_WORD, input(800));
+    const new800 = fastest(ARITH_RELATION_WORD, input(800));
+    expect(old800 / old400).toBeGreaterThanOrEqual(4);
+    expect(old800 / Math.max(new800, 0.01)).toBeGreaterThanOrEqual(50);
   });
 });
