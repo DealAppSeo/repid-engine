@@ -59,7 +59,9 @@ function stubCompletedBounty() {
     }),
     update: jest.fn((payload: Record<string, unknown>) => {
       updates.push(payload);
-      return { eq: jest.fn().mockResolvedValue({ error: null }) };
+      // The route guards the move (.eq('status','COMPLETED')) and reads back the moved row.
+      const u: any = { eq: jest.fn(() => u), select: jest.fn().mockResolvedValue({ data: [{ id: 'bounty-1' }], error: null }) };
+      return u;
     }),
   }));
   return updates;

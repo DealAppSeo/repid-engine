@@ -488,6 +488,13 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       return next();
     }
 
+    // 2026-10-14: /bounties/<uuid>/(claim|complete) carry a BOUNTY id (repid_bounties.id is a
+    // uuid), so the path-UUID check below 403'd every agent-bound key on both. The router takes
+    // the actor from the key, never the body, and guards each status move (routes/bounties.ts).
+    if (/^(?:\/api\/v1)?\/bounties\/[0-9a-f-]{36}\/(?:claim|complete)$/i.test(req.path)) {
+      return next();
+    }
+
     // Check for UUID or name in URL path
     const pathParts = req.path.split('/');
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
