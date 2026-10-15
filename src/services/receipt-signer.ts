@@ -57,10 +57,22 @@
  *   3. Keep the old address listed for as long as an old signature must verify: for the kernel gate that
  *      is REPID_CONFIRMED_RECEIPT_TTL_HOURS (default 72h; an older receipt confirms nothing anyway); for an
  *      issued Trust Receipt a third party may check, keep it. Then remove it.
+ *   A LISTED PREVIOUS KEY HAS NO NOT-AFTER. It verifies anything it ever signed, including anything signed
+ *   with it after it was retired, for as long as it stays listed. So remove it as soon as its receipts
+ *   have expired (step 3); the list is a grace period, not an archive.
  *   COMPROMISED KEY: do NOT list its address. Every receipt it signed then FAILS (that is the point); its
  *   unconsumed confirmations are lost, which is the accepted cost.
  *   KNOWN GAP: receipt-attestation.ts (signed-job receipts) reads the same RECEIPT_SIGNING_KEY with its
  *   own loader and has no previous set; rotating breaks its verification of older signed-job receipts.
+ *
+ * KNOWN GAP — NO DEPLOYMENT ID (documented, not built; XC1 re-attack of #1378). The signed bytes bind
+ * the receipt's content, not WHICH deployment indexed it. Another database that trusts the same signer
+ * address (a staging copy, a restored backup, a second deployment sharing the key) accepts the same row.
+ * The sealed receipt does carry header.env = { network, chain_id, is_simulated }, and nothing checks it
+ * against the running deployment today. Checking chain_id against the engine's configured network
+ * (and refusing is_simulated receipts in a production deployment) would stop a testnet receipt from
+ * confirming on mainnet. It would not tell two deployments on the same chain apart; that needs a
+ * per-deployment id inside the signed bytes. Neither is built.
  */
 import { Wallet, getAddress, verifyMessage, keccak256, toUtf8Bytes } from 'ethers';
 
@@ -150,7 +162,8 @@ export function receiptSignerAddress(): string | null {
 
 /**
  * RETIRED signer addresses that still verify (see KEY ID + ROTATION above). Public data, so the bad entry
- * count may be logged. Any malformed entry (bad shape or bad EIP-55 checksum) voids the WHOLE list.
+ * count may be logged. Any malformed entry (bad shape, bad EIP-55 checksum, or the zero address, which no
+ * key signs for) voids the WHOLE list.
  */
 export function previousReceiptSignerAddresses(): string[] {
   const raw = process.env['RECEIPT_SIGNING_PREVIOUS_ADDRESSES'];
@@ -158,7 +171,7 @@ export function previousReceiptSignerAddresses(): string[] {
   const out: string[] = [];
   for (const entry of raw.split(',').map((s) => s.trim()).filter((s) => s !== '')) {
     try {
-      if (!/^0x[0-9a-fA-F]{40}$/.test(entry)) throw new Error('shape');
+      if (!/^0x[0-9a-fA-F]{40}$/.test(entry) || /^0x0{40}$/.test(entry)) throw new Error('shape');
       out.push(getAddress(entry));
     } catch {
       console.error('[receipt-signer] RECEIPT_SIGNING_PREVIOUS_ADDRESSES has a malformed entry; ignoring the whole list (only the current key verifies).');
@@ -238,6 +251,20 @@ export type VerifyReceiptSignatureResult =
   | { status: 'FAILED'; reason: string; signer: string | null }
   | { status: 'NOT_CHECKED'; reason: string };
 
+/** secp256k1 group order n, and n/2: the EIP-2 bound on a canonical (low) s. */
+const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+const SECP256K1_HALF_N = SECP256K1_N >> 1n;
+
+/** null when `sig` is a canonical 65-byte EIP-191 signature, else why not. Pure, never throws. */
+export function signatureShapeProblem(sig: string): string | null {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(sig)) return 'signature is not 65 bytes of hex.';
+  const v = parseInt(sig.slice(130, 132), 16);
+  if (v !== 27 && v !== 28) return 'signature v is not 27 or 28.';
+  const s = BigInt(`0x${sig.slice(66, 130)}`);
+  if (s === 0n || s > SECP256K1_HALF_N) return 'signature s is zero or high (EIP-2 malleable form).';
+  return null;
+}
+
 /**
  * Verify a receipt's detached signature. Three outcomes:
  *   VERIFIED    — the content hash matches the receipt AND the signature recovers to the engine signer.
@@ -278,7 +305,16 @@ export function verifyReceiptSignature(
     return { status: 'FAILED', reason: 'receipt content does not match the signed content hash (tampered).', signer: engine };
   }
 
-  // 2. Recover the signer over the exact domain-separated bytes and confirm it is an engine key: the
+  // 2. The signature's own shape, checked here rather than left to the library: exactly 65 bytes,
+  //    v 27/28, and a LOW s (EIP-2). A high-s signature is the same signature malleated: it recovers the
+  //    same signer, so accepting it would give one receipt two valid signature strings. ethers 6 throws
+  //    on high-s and short input today [V 2026-10-14]; this keeps the rule if the library changes.
+  const sigProblem = signatureShapeProblem(b.signature);
+  if (sigProblem !== null) {
+    return { status: 'FAILED', reason: sigProblem, signer: engine };
+  }
+
+  // 3. Recover the signer over the exact domain-separated bytes and confirm it is an engine key: the
   //    current one, or a retired one still listed (KEY ID + ROTATION in the header).
   let recovered: string;
   try {
@@ -290,7 +326,7 @@ export function verifyReceiptSignature(
   if (retired && !previousReceiptSignerAddresses().includes(recovered)) {
     return { status: 'FAILED', reason: 'signature did not recover to the engine receipt signer.', signer: engine };
   }
-  // 3. A key_id, when present, must name the key that actually signed.
+  // 4. A key_id, when present, must name the key that actually signed.
   if (b.key_id !== undefined) {
     let named: string | null = null;
     try {

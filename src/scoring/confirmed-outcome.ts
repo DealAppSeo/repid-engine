@@ -417,7 +417,8 @@ export function __resetConfirmedParamsCache(): void {
 export const DEFAULT_CONFIRMED_RECEIPT_TTL_HOURS = 72;
 
 /**
- * How old (by its index `created_at`) a kernel receipt may be and still confirm an outcome.
+ * How old (by its SIGNED `header.created_at`, read by resolveServerConfirmation after the gate verified
+ * the signature; never the index column) a kernel receipt may be and still confirm an outcome.
  * `REPID_CONFIRMED_RECEIPT_TTL_HOURS`, string-parsed like the magnitudes above: unset/blank →
  * the default; anything not a finite number in (0, 8760] THROWS (a typo must not silently become
  * "receipts never expire"). The verifier catches the throw and fails closed, loudly.

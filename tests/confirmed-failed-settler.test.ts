@@ -28,6 +28,7 @@ const st = {
   receipts: [] as Row[],
   events: [] as Row[],
   settleQueries: 0,
+  keysetReads: 0,
   halt: false,
 };
 
@@ -56,11 +57,21 @@ jest.mock('../src/db', () => ({
               not: (c: string, _op: string, _v: unknown) => { where.push((r) => r[c] != null); return chain; },
               lt: (c: string, v: string) => { where.push((r) => Date.parse(r[c]) < Date.parse(v)); return chain; },
               gt: (c: string, v: string) => { where.push((r) => Date.parse(r[c]) > Date.parse(v)); return chain; },
+              // The settler's keyset: created_at.gt."C",and(created_at.eq."C",receipt_id.gt."ID"). Parsed
+              // strictly: any other shape throws, so the test fails rather than silently matching all.
+              or: (expr: string) => {
+                const m = /^created_at\.gt\."([^"]+)",and\(created_at\.eq\."([^"]+)",receipt_id\.gt\."([^"]+)"\)$/.exec(expr);
+                if (!m || m[1] !== m[2]) throw new Error(`mock: unexpected or() ${expr}`);
+                const t = Date.parse(m[1]!);
+                where.push((r) => Date.parse(r['created_at']) > t || (Date.parse(r['created_at']) === t && String(r['receipt_id']) > m[3]!));
+                st.keysetReads++;
+                return chain;
+              },
               order: () => chain,
               limit: async (n: number) => {
                 st.settleQueries++;
                 const hits = st.receipts.filter((r) => where.every((w) => w(r)))
-                  .sort((a, b) => Date.parse(a['created_at']) - Date.parse(b['created_at']));
+                  .sort((a, b) => Date.parse(a['created_at']) - Date.parse(b['created_at']) || (String(a['receipt_id']) < String(b['receipt_id']) ? -1 : String(a['receipt_id']) > String(b['receipt_id']) ? 1 : 0));
                 return { data: hits.slice(0, n).map((r) => ({ ...r })), error: null };
               },
               maybeSingle: async () => {
@@ -95,7 +106,7 @@ jest.mock('../src/db', () => ({
   },
 }));
 
-import { settleFailedReceiptsOnce, SETTLE_EVENT_TYPE } from '../src/services/failed-receipt-settler';
+import { settleFailedReceiptsOnce, SETTLE_EVENT_TYPE, __resetSettleCursor } from '../src/services/failed-receipt-settler';
 import { updateRepId } from '../src/engine/repid-update';
 import { __resetConfirmedParamsCache } from '../src/scoring/confirmed-outcome';
 import { sealedRow } from './helpers/sealed-gate-receipt';
@@ -143,8 +154,10 @@ beforeEach(() => {
   st.receipts = [];
   st.events = [];
   st.settleQueries = 0;
+  st.keysetReads = 0;
   st.halt = false;
   __resetEmergencyHaltState();
+  __resetSettleCursor();
 });
 afterEach(() => {
   jest.restoreAllMocks();
@@ -219,7 +232,8 @@ describe('ONE WRONG PER SIGNED RECEIPT, VERIFIER FIRST (XC1 review of #1374)', (
       await failed('real', 35, { args_hash: H(500) });
       const out = await settleFailedReceiptsOnce();
       expect(out.applied).toEqual([{ receiptId: 'real', agentId: AGENT, delta: WRONG }]);
-      expect(out.held).toEqual([{ receiptId: 'decoy', agentId: AGENT, why: expect.stringMatching(/^verifier_refuses:/) }]);
+      // an unsigned row never enters the scan; a signed-but-wrong one is read and refused
+      expect(out.held).toEqual(kind === 'unsigned' ? [] : [{ receiptId: 'decoy', agentId: AGENT, why: expect.stringMatching(/^verifier_refuses:/) }]);
       expect(spent('real')).toBe(true);
       expect(spent('decoy')).toBe(false);
       expect(st.agent['current_repid']).toBe(1000 + WRONG);
@@ -249,24 +263,76 @@ describe('ONE WRONG PER SIGNED RECEIPT, VERIFIER FIRST (XC1 review of #1374)', (
 
   it('a batch FULL of decoys in front cannot starve it: MAX_PER_RUN counts accepted rows, not rows read', async () => {
     process.env.CONFIRMED_FAILED_SETTLE_MAX_PER_RUN = '2';
-    for (let i = 0; i < 5; i++) await decoy(`decoy-${i}`, 40 + i, 'unsigned');
+    for (let i = 0; i < 5; i++) await decoy(`decoy-${i}`, 40 + i, 'copied_signature');
     await failed('real', 30, { args_hash: H(500) });
     const out = await settleFailedReceiptsOnce();
     expect(out.found).toBe(6);
     expect(out.accepted).toBe(1);
     expect(out.applied.map((a) => a.receiptId)).toEqual(['real']);
-    expect(out.scanCeiling).toBeUndefined();
+    expect(out.scanBudgetSpent).toBeUndefined();
   });
 
-  it('past the scan ceiling (SCAN_FACTOR x MAX_PER_RUN refused rows) it says so LOUDLY instead of passing quietly', async () => {
-    process.env.CONFIRMED_FAILED_SETTLE_MAX_PER_RUN = '1';
+  it('UNSIGNED decoys never enter the scan: 20 of them stamped oldest cannot fill it (XC1 re-attack of #1378)', async () => {
+    process.env.CONFIRMED_FAILED_SETTLE_MAX_PER_RUN = '1'; // scan budget = 20 rows
     for (let i = 0; i < 20; i++) await decoy(`decoy-${i}`, 40 + i * 0.1, 'unsigned');
     await failed('real', 30, { args_hash: H(500) });
     const out = await settleFailedReceiptsOnce();
-    expect(out.found).toBe(20);
+    expect(out.found).toBe(1);
+    expect(out.applied.map((a) => a.receiptId)).toEqual(['real']);
+    expect(out.scanBudgetSpent).toBeUndefined();
+  });
+
+  /** Runs ticks until `real` is applied or `max` ticks pass; returns the 1-based tick it landed on, or null. */
+  async function ticksUntilApplied(id: string, max: number): Promise<{ tick: number | null; runs: Awaited<ReturnType<typeof settleFailedReceiptsOnce>>[] }> {
+    const runs = [];
+    for (let t = 1; t <= max; t++) {
+      const out = await settleFailedReceiptsOnce();
+      runs.push(out);
+      if (out.applied.some((a) => a.receiptId === id)) return { tick: t, runs };
+    }
+    return { tick: null, runs };
+  }
+
+  it('N garbage-signed rows older than a valid wrong cannot pin the window: it is applied within K = ceil(N / budget) ticks (XC1 re-attack of #1384)', async () => {
+    process.env.CONFIRMED_FAILED_SETTLE_MAX_PER_RUN = '1'; // budget = 20 rows per tick
+    for (let i = 0; i < 50; i++) await decoy(`decoy-${String(i).padStart(2, '0')}`, 40 + i * 0.1, 'copied_signature');
+    await failed('real', 30, { args_hash: H(500) });
+    const { tick, runs } = await ticksUntilApplied('real', 5);
+    expect(tick).toBe(3); // 20 + 20 refused, then 10 refused + the real wrong
+    expect(runs.map((r) => r.found)).toEqual([20, 20, 11]);
+    expect(runs[0]!.scanBudgetSpent).toBe(true);
+    expect(st.keysetReads).toBe(2); // ticks 2 and 3 read AFTER the cursor
+    expect(err.mock.calls.some((c) => /SCAN BUDGET SPENT: read 20 candidate FAILED receipts, 20 refused .* the next tick continues after/.test(String(c[0])))).toBe(true);
+    expect(st.agent['current_repid']).toBe(1000 + WRONG);
+  });
+
+  it('garbage rows sharing ONE timestamp cannot stall the cursor: (created_at, receipt_id) breaks the tie', async () => {
+    process.env.CONFIRMED_FAILED_SETTLE_MAX_PER_RUN = '1';
+    for (let i = 0; i < 45; i++) await decoy(`decoy-${String(i).padStart(2, '0')}`, 40, 'copied_signature'); // all at one instant
+    await failed('real', 30, { args_hash: H(500) });
+    expect((await ticksUntilApplied('real', 5)).tick).toBe(3);
+  });
+
+  it('once the window is read to its end the cursor wraps, so a refused row is reconsidered later', async () => {
+    await decoy('decoy', 40, 'copied_signature');
+    await failed('real', 30, { args_hash: H(500) });
+    const out = await settleFailedReceiptsOnce();
+    expect(out.applied.map((a) => a.receiptId)).toEqual(['real']);
+    expect(out.nextCursor).toBeNull(); // a short page read to its end: next tick starts from the oldest row
+  });
+
+  it.each([
+    ['an EXPIRED signed wrong stamped fresh', 80, 30],
+    ['a signed wrong still inside its grace stamped old', 2, 30],
+  ])('the created_at COLUMN is not the clock: %s is refused (XC1 re-attack of #1378)', async (_why, signedAgeH, columnAgeH) => {
+    const r = await failed('restamped', signedAgeH);
+    r['created_at'] = new Date(now - columnAgeH * HOUR).toISOString(); // the service-role edit
+    const out = await settleFailedReceiptsOnce();
+    expect(out.found).toBe(1);
     expect(out.applied).toEqual([]);
-    expect(out.scanCeiling).toBe(true);
-    expect(err.mock.calls.some((c) => /SCAN CEILING: read 20 candidate FAILED receipts, 20 refused/.test(String(c[0])))).toBe(true);
+    expect(out.held).toEqual([{ receiptId: 'restamped', agentId: AGENT, why: expect.stringMatching(/^verifier_refuses:/) }]);
+    expect(spent('restamped')).toBe(false);
+    expect(st.agent['current_repid']).toBe(1000);
   });
 
   it('SHADOW = ENFORCE: on the same rows, what shadow would apply is exactly what enforce applies', async () => {
@@ -286,7 +352,7 @@ describe('ONE WRONG PER SIGNED RECEIPT, VERIFIER FIRST (XC1 review of #1374)', (
     expect(shadow.accepted).toBe(enforce.accepted);
     const refused = (s: typeof shadow) => s.held.filter((h) => h.why.startsWith('verifier_refuses:')).map((h) => h.receiptId);
     expect(refused(enforce)).toEqual(refused(shadow));
-    expect(refused(shadow)).toEqual(['decoy', 'decoy-copy']);
+    expect(refused(shadow)).toEqual(['decoy-copy']); // the unsigned decoy never entered either scan
   });
 
   it('no migration puts a UNIQUE index over FAILED rows (Postgres cannot check the signature that would make it safe)', () => {
@@ -327,6 +393,7 @@ describe('what the worker leaves alone', () => {
       receipt_id: 'hand', subject_agent_id: AGENT, settled_by: 'holdout', verdict_label: 'SETTLED',
       verification_status: 'FAILED', is_simulated: false, args_hash: H(99), consumed_at: null,
       created_at: new Date(now - 30 * HOUR).toISOString(),
+      engine_signature: { forged: true }, // non-null, so it reaches the verifier (unsigned rows never enter the scan)
     });
     const out = await settleFailedReceiptsOnce();
     expect(out.found).toBe(1);
@@ -374,6 +441,7 @@ describe('modes and refusals', () => {
       receipt_id: 'hand', subject_agent_id: AGENT, settled_by: 'holdout', verdict_label: 'SETTLED',
       verification_status: 'FAILED', is_simulated: false, args_hash: H(98), consumed_at: null,
       created_at: new Date(now - 30 * HOUR).toISOString(),
+      engine_signature: { forged: true }, // non-null, so it reaches the verifier (unsigned rows never enter the scan)
     });
     const out = await settleFailedReceiptsOnce();
     expect(out.held).toEqual([{ receiptId: 'hand', agentId: AGENT, why: expect.stringMatching(/^verifier_refuses:/) }]);

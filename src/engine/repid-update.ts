@@ -1054,8 +1054,8 @@ export async function previewSettledWrong(
  * The SERVER then establishes the result: VERIFIED → 'right', FAILED → 'wrong'. A thrown DB error
  * (table absent in prod, store down) → undefined. It NEVER throws into the score path.
  *
- * ponytail: `created_at` is the INDEX time, which equals mint time because the indexer runs at mint.
- * A backfill of old JSONL receipts would stamp them fresh; read receipt.header.created_at if one is built.
+ * TIME IS THE SIGNED TIME (2026-10-14, XC1 re-attack of #1378): the TTL reads the sealed, engine-signed
+ * header.created_at, never the created_at column (which the gate also requires to match it).
  *
  * Only ever called inside the `confirmedOutcomeScoringEnabled()` branch, so with the flag OFF (the
  * production default) it is never invoked — the absent table cannot affect prod scoring.
@@ -1073,7 +1073,7 @@ export async function resolveServerConfirmation(
       .eq('receipt_id', id)
       .maybeSingle();
     if (error || !data) return undefined; // no row (or a read error) → fail closed
-    const row = data as KernelReceiptIndexRow & { created_at?: unknown };
+    const row = data as KernelReceiptIndexRow;
     // ACTOR BINDING (CWE-345): the receipt must be ABOUT the acting agent. A caller cannot borrow
     // another agent's receipt. Positively established by equality; anything non-string fails closed.
     const subject = typeof row.subject_agent_id === 'string' ? row.subject_agent_id.trim() : '';
@@ -1093,8 +1093,9 @@ export async function resolveServerConfirmation(
       console.warn(`[confirmed-outcome] receipt ${id} confirms nothing: not a sealed gate-run receipt (${notAGateRun})`);
       return undefined;
     }
-    // EXPIRY — an undatable or stale receipt confirms nothing (and so is never claimed).
-    const createdMs = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN;
+    // EXPIRY — dated by the SIGNED header (the gate above verified it and matched the column to it).
+    // An undatable or stale receipt confirms nothing (and so is never claimed).
+    const createdMs = Date.parse(String((row.receipt as { header?: { created_at?: unknown } }).header?.created_at));
     if (!Number.isFinite(createdMs)) return undefined;
     if (Date.now() - createdMs > confirmedReceiptTtlMs()) {
       console.warn(`[confirmed-outcome] receipt ${id} is past its TTL; it confirms nothing and is not consumed`);

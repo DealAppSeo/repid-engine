@@ -12,7 +12,7 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { dryDecision, runUnderKernel } from '../src/kernel/gate';
 import { DEFAULT_ENV, receiptHash } from '../src/kernel/receipt';
-import { gateReceiptProblem } from '../src/kernel/receipt-db-index';
+import { CREATED_AT_SKEW_MS, gateReceiptProblem } from '../src/kernel/receipt-db-index';
 import type { KernelReceipt } from '../src/kernel/types';
 import { harness, iso, postRequest, signedPolicy } from '../src/kernel/__tests__/fixtures';
 import { rowFor, sealGateReceipt } from './helpers/sealed-gate-receipt';
@@ -62,9 +62,19 @@ describe('gateReceiptProblem — only a sealed gate-run receipt, unedited, passe
     ['subject_agent_id', 'someone-else', 'subject_mismatch'],
     ['receipt_hash', H(8), 'receipt_hash_mismatch'],
     ['receipt_id', 'another-id', 'receipt_invalid:executed_without_persisted_decision'],
+    // XC1 re-attack of #1378: TTL, grace and the settler's scan read created_at; the signature does not cover it.
+    ['created_at', '2020-01-01T00:00:00.000Z', 'created_at_mismatch'],
+    ['created_at', null, 'created_at_mismatch'],
   ])('a %s column that disagrees with the sealed body fails', async (col, value, why) => {
     const r = await sealGateReceipt({ receiptId: 'g-col', agentId: AGENT, argsHash: H(9) });
     expect(gateReceiptProblem(await rowFor(r, { [col]: value }))).toBe(why);
+  });
+
+  it('created_at within CREATED_AT_SKEW_MS of the signed header still binds; one ms past it does not', async () => {
+    const r = await sealGateReceipt({ receiptId: 'g-skew', agentId: AGENT, argsHash: H(10) });
+    const at = (dMs: number) => new Date(Date.parse(r.header.created_at) + dMs).toISOString();
+    expect(gateReceiptProblem(await rowFor(r, { created_at: at(CREATED_AT_SKEW_MS) }))).toBeNull();
+    expect(gateReceiptProblem(await rowFor(r, { created_at: at(-CREATED_AT_SKEW_MS - 1) }))).toBe('created_at_mismatch');
   });
 
   it('a VERIFIED decision row whose post never ran (no outcome row) pays no gain', async () => {
