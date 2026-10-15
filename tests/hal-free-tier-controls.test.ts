@@ -61,6 +61,7 @@ function run(headers: Record<string, string> = {}) {
 beforeEach(() => {
   jest.clearAllMocks();
   delete process.env.HAL_PUBLIC_GLOBAL_DAILY;
+  delete process.env.HAL_PUBLIC_GLOBAL_PER_MIN;
   delete process.env.HAL_PUBLIC_GLOBAL_FAIL_OPEN;
   delete process.env.HAL_BYOK_DAILY;
   hasValidEnvApiKey.mockReturnValue(false);
@@ -166,7 +167,8 @@ describe('the global ceiling bounds total free-tier spend', () => {
     process.env.HAL_PUBLIC_GLOBAL_DAILY = '2000';
     checkRateLimit
       .mockResolvedValueOnce(counted(true, 9))   // per-IP: fine
-      .mockResolvedValueOnce(counted(false, 0)); // global: spent
+      .mockResolvedValueOnce(counted(true, 20))  // global per-minute: fine
+      .mockResolvedValueOnce(counted(false, 0)); // global daily: spent
     const { req, res, next, served } = run();
     await ipRateLimit(10, 86400)(req, res, next);
 
@@ -190,7 +192,9 @@ describe('the global ceiling bounds total free-tier spend', () => {
     const { req, res, next, served } = run();
     await ipRateLimit(10, 86400)(req, res, next);
     expect(served()).toBe(true);
-    expect(checkRateLimit).toHaveBeenCalledTimes(1); // per-IP only
+    // The daily key is never consulted. (The per-minute ceiling is its own knob,
+    // HAL_PUBLIC_GLOBAL_PER_MIN, and stays on — see llm-cost-hal-budget.test.ts.)
+    expect(checkRateLimit.mock.calls.map((c) => c[0])).not.toContain('hal:free:global');
   });
 });
 

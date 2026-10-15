@@ -21,7 +21,7 @@ import hashkeyRouter from './routes/hashkey';
 import mirrorTestRouter from './routes/mirror-test';
 import challengeRouter from './routes/challenge';
 import halStatsRouter from './routes/hal-stats';
-import halEvaluateRouter from './routes/hal-evaluate';
+import halEvaluateRouter, { halCacheFirst } from './routes/hal-evaluate';
 import honestyARouter from './routes/honesty-a';
 import stampReadRouter, { getStamp } from './routes/stamp-read';
 import halReceiptRouter from './routes/hal-receipt';
@@ -423,7 +423,8 @@ app.use('/api/v1/audit', auditRouter);
 // path is /hal/signals (not throttled); the user-facing /chat lives in trustchat-backend.
 const halPublicLimit = Number(process.env.HAL_PUBLIC_RATE_LIMIT) > 0 ? Number(process.env.HAL_PUBLIC_RATE_LIMIT) : 10;
 const halPublicWindow = Number(process.env.HAL_PUBLIC_RATE_WINDOW_SEC) > 0 ? Number(process.env.HAL_PUBLIC_RATE_WINDOW_SEC) : 86400;
-app.use('/api/v1/hal/evaluate', ipRateLimit(halPublicLimit, halPublicWindow));
+// halCacheFirst ahead of the limiter: a cached verdict spends neither the per-IP nor the global budget.
+app.use('/api/v1/hal/evaluate', halCacheFirst, ipRateLimit(halPublicLimit, halPublicWindow));
 app.use('/api/v1/hal', halEvaluateRouter);
 // Honesty A is a keyless read. It does not score and it does not write.
 app.use('/api/v1/hal', honestyARouter);

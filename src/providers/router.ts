@@ -289,6 +289,18 @@ export function keylessProviders(userPaidKeys?: Record<string, string> | undefin
   return [...new Set(out)];
 }
 
+/**
+ * The Tier-1 adapters a caller did NOT bring its own key for: resolveTier1Key would fall back to OUR
+ * env key (<NAME>_API_KEY) for each, i.e. a paid call on our account. /llm/complete seeds these into
+ * excludeProviders for a keyless caller, so an anonymous BYOK run can spend only the key it sent
+ * (2026-10-14: `tier1_only` + a junk `openai` key otherwise fell through to our Anthropic key, unmetered).
+ */
+export function envKeyedTier1(userPaidKeys?: Record<string, string> | undefined): string[] {
+  return tier1Adapters
+    .filter((a) => !(userPaidKeys && typeof (userPaidKeys as Record<string, unknown>)[a.name] === 'string' && (userPaidKeys as Record<string, string>)[a.name]))
+    .map((a) => a.name);
+}
+
 export function isLowComplexity(prompt: string, taskHint?: string): boolean {
   const p = prompt.toLowerCase();
   

@@ -15,7 +15,7 @@
  * production classifier's pure sink) and is NEVER merged with it — it grows honestly from the
  * public/eval/user surface so it can be blended with tunable weights later.
  */
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { createHash } from 'crypto';
 import { halService } from '../hal/service';
 import { scanForInjection } from '../hal/injection-guard';
@@ -70,6 +70,54 @@ function recordPublicFactCheck(
   }
 }
 
+/**
+ * THE CACHE KEY'S "provider" PART: strictness, the early-return switch, and, when the caller sent one,
+ * the CONTEXT fields HalService reads (product, domain, certainty).
+ *
+ * WHY CONTEXT (2026-10-14). `context.product` picks the HAL profile (thresholds, default strictness)
+ * and domain/certainty feed the evaluation, but the key held only (text, strictness). So one caller's
+ * text + a lenient context filled the cache entry that the next caller, sending the same text with no
+ * context, was served for the TTL: one user setting another's verdict. A request with no context keeps
+ * the old key (sdefault:er1), so existing entries and their tests are unchanged.
+ */
+function cacheProviderFor(s: 1 | 2 | undefined, factCheckEarlyReturn: boolean, context: unknown): string {
+  const base = `s${s ?? 'default'}:${factCheckEarlyReturn ? 'er1' : 'er0'}`;
+  if (context === undefined || context === null) return base;
+  const c = (typeof context === 'object' ? context : {}) as Record<string, unknown>;
+  const fp = createHash('sha256').update(JSON.stringify([c.product ?? null, c.domain ?? null, c.certainty ?? null])).digest('hex').slice(0, 16);
+  return `${base}:c${fp}`;
+}
+
+function earlyReturnOn(): boolean {
+  const raw = String(process.env.HAL_FACTCHECK_EARLY_RETURN ?? '').trim().toLowerCase();
+  return !(raw === 'false' || raw === '0');
+}
+
+/**
+ * CACHE FIRST, BEFORE THE BUDGET (2026-10-14). index.ts mounts this ahead of the public per-IP limit
+ * and the global ceiling, so a cached verdict is served without spending either: only an evaluation
+ * that will reach the providers is counted. Anything it cannot serve (no hit, invalid body, an
+ * injection the route would block) passes through untouched to the limiter and the route, which
+ * validates and answers exactly as before. Never throws; a cache error is a miss.
+ */
+export async function halCacheFirst(req: Request, res: Response, next: NextFunction): Promise<void> {
+  if (req.method !== 'POST') return next();
+  const { text, context, strictness } = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof text !== 'string' || text.trim().length === 0 || text.length > 8000) return next();
+  const injection = scanForInjection(text);
+  if (process.env.HAL_INJECTION_BLOCK === 'true' && injection.decision === 'block') return next();
+  const s = strictness === 2 || strictness === '2' ? 2 : strictness === 1 || strictness === '1' ? 1 : undefined;
+  try {
+    const cached = await getCachedHalResult(text, cacheProviderFor(s, earlyReturnOn(), context));
+    if (cached) {
+      res.setHeader('X-HAL-Cache', 'hit');
+      res.json({ ...cached, cached: true, injection });
+      return;
+    }
+  } catch { /* a cache error is a miss */ }
+  next();
+}
+
 router.post('/evaluate', async (req: Request, res: Response) => {
   const { text, context, strictness, source } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof text !== 'string' || text.trim().length === 0) {
@@ -93,9 +141,8 @@ router.post('/evaluate', async (req: Request, res: Response) => {
   try {
     // S-CACHE Phase 2 — return a cached verdict for the same (text, strictness) within the TTL,
     // skipping the LLM/extractor work. The cache key folds strictness in as the "provider".
-    const earlyReturnRaw = String(process.env.HAL_FACTCHECK_EARLY_RETURN ?? '').trim().toLowerCase();
-    const factCheckEarlyReturn = !(earlyReturnRaw === 'false' || earlyReturnRaw === '0');
-    const cacheProvider = `s${s ?? 'default'}:${factCheckEarlyReturn ? 'er1' : 'er0'}`;
+    const factCheckEarlyReturn = earlyReturnOn();
+    const cacheProvider = cacheProviderFor(s, factCheckEarlyReturn, context);
     const cached = await getCachedHalResult(text, cacheProvider);
     // Cached hits are NOT re-counted: the underlying evaluation was already recorded on its first
     // (fresh) run, so counting the cache-serve would double-count the same (text, strictness).

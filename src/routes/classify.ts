@@ -121,6 +121,7 @@ import { Router, json, type NextFunction, type Request, type Response } from 'ex
 import cors from 'cors';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
+import { budgetLimitFrom, createSharedBudget, type BudgetRefusal } from '../middleware/shared-budget';
 import { safeEvalArithmetic, safeEvalExact, type ExactRational } from '../hal/safe-arithmetic';
 import {
   activeVoters,
@@ -242,8 +243,12 @@ export const CLASSIFY_PATHS: readonly ClassifyPath[] = ['arithmetic', 'arithmeti
 
 /** The label and the path that produced it. 'deadline' is the route's to say, never a classifier's. */
 export type ClassifyOutcome =
-  | { label: ClassifyLabel; by: 'arithmetic' | 'arithmetic-approx' | 'skipped' }
+  | { label: ClassifyLabel; by: 'arithmetic' | 'arithmetic-approx' | 'skipped'; reason?: BudgetRefusal }
   | { label: ClassifyLabel; by: 'votes'; voters: VoterProvider[]; deciders?: VoterProvider[]; votes?: VoteReading[]; question?: string };
+
+/** Why a check was not sent to any voter: the SHARED budget was spent (see takeGlobalBudget). */
+export type { BudgetRefusal };
+const BUDGET_REFUSALS: ReadonlySet<string> = new Set(['global_minute_budget_spent', 'global_daily_budget_spent']);
 
 /** One decider's answer (the contract's `votes`). Names and verdict words only. */
 export interface VoteReading {
@@ -267,6 +272,8 @@ export interface ClassifyResult {
   votes?: VoteReading[];
   /** Present only when label === 'not-checked', by === 'votes' and a question parsed. */
   question?: string;
+  /** Present only on a not-checked by 'skipped' that the shared public budget refused. */
+  reason?: BudgetRefusal;
 }
 
 type Answer = Omit<ClassifyResult, 'latency_ms'>;
@@ -290,17 +297,21 @@ function isLabel(value: unknown): value is ClassifyLabel {
  */
 function answerOf(value: unknown): Answer | null {
   if (!value || typeof value !== 'object') return null;
-  const { label, by, voters, deciders, votes, question } = value as {
+  const { label, by, voters, deciders, votes, question, reason } = value as {
     label?: unknown;
     by?: unknown;
     voters?: unknown;
     deciders?: unknown;
     votes?: unknown;
     question?: unknown;
+    reason?: unknown;
   };
   if (!isLabel(label)) return null;
   if (by === 'arithmetic' || by === 'arithmetic-approx') return { label, by };
-  if (by === 'skipped') return label === NOT_CHECKED ? { label, by } : null;
+  if (by === 'skipped') {
+    if (label !== NOT_CHECKED) return null;
+    return typeof reason === 'string' && BUDGET_REFUSALS.has(reason) ? { label, by, reason: reason as BudgetRefusal } : { label, by };
+  }
   if (by !== 'votes') return null;
   if (!Array.isArray(voters) || voters.length === 0 || !voters.every((v) => typeof v === 'string')) return null;
   const answer: Answer = { label, by, voters: [...(voters as string[])] };
@@ -357,7 +368,11 @@ export async function classifyWithDeadline(
     const latency_ms = Math.max(0, Math.round(now() - started));
     if (answer === DEADLINE || latency_ms > deadlineMs) return { label: NOT_CHECKED, latency_ms, by: 'deadline' };
     // voters only ever rides with 'votes'; question only with 'votes' too (answerOf checked it).
-    if (answer.by !== 'votes') return { label: answer.label, latency_ms, by: answer.by };
+    if (answer.by !== 'votes') {
+      return answer.reason !== undefined
+        ? { label: answer.label, latency_ms, by: answer.by, reason: answer.reason }
+        : { label: answer.label, latency_ms, by: answer.by };
+    }
     const out: ClassifyResult = { label: answer.label, latency_ms, by: 'votes', voters: answer.voters };
     if (answer.deciders !== undefined) out.deciders = answer.deciders;
     if (answer.votes !== undefined) out.votes = answer.votes;
@@ -482,6 +497,52 @@ export const CLASSIFY_DEFAULT_WINDOW_MS = 60 * 1000;
  * `deciders`. An older extension still shows Not checked past its own 3 seconds, as it did before.
  */
 export const CLASSIFY_DEFAULT_DEADLINE_MS = 5000;
+
+/**
+ * THE SHARED BUDGET (2026-10-14: public LLM-cost abuse, the money twin of the ReDoS fixes).
+ *
+ * The per-IP minute limit and the per-IP daily cap bound ONE caller. They do not bound a crowd: a
+ * script rotating IPs stays under both and every check it sends is a paid or quota-limited provider
+ * call. BUDGET_PER_MIN in free-votes caps each VOTER per minute; nothing capped the DAY for the paid
+ * hosts (only Workers AI has a daily count), and nothing said so to the caller. So every check that
+ * would reach a voter (after the arithmetic path and the skips, which send nothing, so they spend
+ * nothing) takes one unit of a process-wide budget, shared by both doors that run this (the /classify
+ * route and the phone bot):
+ *
+ *   CLASSIFY_GLOBAL_PER_MIN  checks per minute, all callers   (default 120; 'off' or 0 disables)
+ *   CLASSIFY_GLOBAL_DAILY    checks per UTC day, all callers  (default 5000; 'off' or 0 disables)
+ *
+ * Spent is FAIL-CLOSED and honest: not-checked by 'skipped' (nothing was sent) with a named `reason`,
+ * never a pass and never a 500; the extension already shows that as Not checked. The first refusal
+ * in each window is logged at error level, once, so an attack (or a launch) is visible without a log
+ * line per refused request.
+ *
+ * WHY THESE DEFAULTS. Live: 20 checks in the ~3 h after the 2026-10-15T00:18Z restart [V,
+ * /api/v1/classify/stats]. 5000 a day is ~250x that, and 50 visitors each using their whole per-IP
+ * cap (100). 120 a minute is four visitors at their per-IP minute limit (30) at once. At the cost the
+ * daily-cap note uses (~$0.0003 a check on paid tiers), 5000 is at most ~$1.50 a day. Counted per
+ * process, in memory, like the per-IP daily cap (production runs one replica); a restart forgets it.
+ */
+export const CLASSIFY_DEFAULT_GLOBAL_PER_MIN = 120;
+export const CLASSIFY_DEFAULT_GLOBAL_DAILY = 5000;
+
+const classifyBudget = createSharedBudget('classify');
+
+/** Test seam: forget the shared budget's counts. */
+export function __resetClassifyGlobalBudget(): void {
+  classifyBudget.reset();
+}
+
+/** One unit of the shared budget, or why there is none. Counts only, never the text. */
+function takeGlobalBudget(env: NodeJS.ProcessEnv, nowMs: number): BudgetRefusal | null {
+  // An injected env that names a knob wins; otherwise the literal process.env read (which is also how
+  // the build-time env registry learns these names, so a deployed value is not flagged as a typo).
+  return classifyBudget.take(
+    budgetLimitFrom(env['CLASSIFY_GLOBAL_PER_MIN'] ?? process.env['CLASSIFY_GLOBAL_PER_MIN'], CLASSIFY_DEFAULT_GLOBAL_PER_MIN),
+    budgetLimitFrom(env['CLASSIFY_GLOBAL_DAILY'] ?? process.env['CLASSIFY_GLOBAL_DAILY'], CLASSIFY_DEFAULT_GLOBAL_DAILY),
+    nowMs,
+  );
+}
 /** One voter's own time. A voter that has not answered by then hands its slot on. */
 export const CLASSIFY_VOTE_TIMEOUT_MS = 2500;
 /**
@@ -572,6 +633,12 @@ export async function classifyTextWithPath(
   if (!freeVotesEnabled(env) || !trimmed || trimmed.length > maxProseChars(env)) {
     recordLabel(NOT_CHECKED, 'skipped');
     return { label: NOT_CHECKED, by: 'skipped' };
+  }
+  // THE SHARED BUDGET: only a check that is about to reach a voter spends it (see takeGlobalBudget).
+  const refused = takeGlobalBudget(env, Date.now());
+  if (refused) {
+    recordLabel(NOT_CHECKED, 'skipped');
+    return { label: NOT_CHECKED, by: 'skipped', reason: refused };
   }
   const budgetMs = Math.max(100, deadlineMs - VOTE_HEADROOM_MS);
   const timeoutMs = Math.min(CLASSIFY_VOTE_TIMEOUT_MS, budgetMs);
