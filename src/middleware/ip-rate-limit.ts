@@ -88,6 +88,7 @@
  *   HAL_PUBLIC_RATE_LIMIT        per-IP requests per window   (default 10)
  *   HAL_PUBLIC_RATE_WINDOW_SEC   that window                  (default 86400)
  *   HAL_PUBLIC_GLOBAL_DAILY      free-tier calls/day, ALL IPs (default 2000; 0 disables)
+ *   HAL_PUBLIC_GLOBAL_PER_MIN    free-tier calls/minute, ALL IPs (default 30; 0 disables)
  *   HAL_PUBLIC_GLOBAL_FAIL_OPEN  'true' to serve when uncountable (default: refuse)
  *   HAL_BYOK_DAILY               evaluations/day PER TOKEN    (default 500; 0 = unmetered)
  *
@@ -106,6 +107,37 @@ function globalDailyCeiling(): number {
   const raw = Number(process.env.HAL_PUBLIC_GLOBAL_DAILY);
   if (Number.isFinite(raw) && raw >= 0) return raw;
   return 2000;
+}
+
+/**
+ * Free-tier calls per MINUTE across every anonymous caller. 0 disables it.
+ *
+ * WHY (2026-10-14). The daily ceiling bounds a day's spend, not its shape: rotating IPs (each under
+ * the per-IP cap) could spend all 2000 in a few minutes, hitting every provider's own rate limit at
+ * once and leaving the rest of the day Not checked for everyone. 30 a minute spreads the daily
+ * budget over at least ~67 minutes; each evaluation can fan out to the whole provider quorum, so this
+ * is a ceiling on provider calls too. Generous against real use: HAL's public surface is a demo door.
+ */
+function globalPerMinuteCeiling(): number {
+  const raw = Number(process.env.HAL_PUBLIC_GLOBAL_PER_MIN);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return 30;
+}
+
+/**
+ * LOUD, ONCE PER WINDOW: a spent shared budget is an operator event (an attack, or a launch), so it is
+ * logged at error level the first time each window trips, not once per refused request (which would
+ * flood the log for exactly as long as the attack runs).
+ */
+const lastTripLogged = new Map<string, number>();
+function logTripOnce(scope: 'minute' | 'day', windowSeconds: number, limit: number): void {
+  const window = Math.floor(Date.now() / (windowSeconds * 1000));
+  if (lastTripLogged.get(scope) === window) return;
+  lastTripLogged.set(scope, window);
+  console.error(
+    `[hal/evaluate] GLOBAL ${scope.toUpperCase()} BUDGET SPENT: ${limit} free-tier evaluations this ${scope}. ` +
+      'Keyless callers get NOT_CHECKED (429) until it resets. An attack or a launch: check the per-IP spread.',
+  );
 }
 
 /** Serve free traffic when the counter is unreachable? Default NO — see header. */
@@ -234,6 +266,37 @@ export function ipRateLimit(limit = 10, windowSeconds = 86400) {
       // to being refused. The cost is that a request rejected by the ceiling has
       // still spent one unit of its own per-IP budget — bounded, and the fairer
       // direction of the two.
+      // PER MINUTE first: a request refused for the minute does not spend the day.
+      const perMinute = globalPerMinuteCeiling();
+      if (perMinute > 0) {
+        const m = await checkRateLimit('hal:free:global:minute', perMinute, 60);
+        if (m.backend === 'fail-open' && !ceilingFailsOpen()) {
+          res.setHeader('X-RateLimit-Global-State', 'uncountable');
+          res.status(503).json({
+            error: 'FREE_TIER_UNAVAILABLE',
+            label: 'not-checked',
+            message:
+              'The free-tier usage counter is unavailable, so free capacity cannot be granted right now. ' +
+              'Bring your own key to continue without the shared budget.',
+            reason: 'usage_counter_unreachable',
+          });
+          return;
+        }
+        if (m.backend !== 'fail-open' && !m.allowed) {
+          logTripOnce('minute', 60, perMinute);
+          res.setHeader('X-RateLimit-Global-State', 'exhausted-minute');
+          res.setHeader('Retry-After', String(Math.max(1, Number(m.resetIn) || 60)));
+          res.status(429).json({
+            error: 'FREE_TIER_BUSY',
+            label: 'not-checked',
+            reason: 'global_minute_budget_spent',
+            message: `The shared free-tier budget of ${perMinute} evaluations a minute is spent. Retry in a minute, or bring your own key.`,
+            resetIn: m.resetIn,
+          });
+          return;
+        }
+      }
+
       const ceiling = globalDailyCeiling();
       if (ceiling > 0) {
         const g = await checkRateLimit('hal:free:global', ceiling, GLOBAL_WINDOW_SECONDS);
@@ -256,9 +319,12 @@ export function ipRateLimit(limit = 10, windowSeconds = 86400) {
           return;
         }
         if (!uncountable && !g.allowed) {
+          logTripOnce('day', GLOBAL_WINDOW_SECONDS, ceiling);
           res.setHeader('X-RateLimit-Global-State', 'exhausted');
           res.status(429).json({
             error: 'FREE_TIER_EXHAUSTED',
+            label: 'not-checked',
+            reason: 'global_daily_budget_spent',
             message:
               'The shared free-tier budget for today is spent. It resets daily. ' +
               'Bring your own key for unmetered access.',

@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
-import { routeRequest, RouteRequest, resolveTier1Key, keylessProviders, resolveAdapterKey} from '../providers/router';
+import { routeRequest, RouteRequest, resolveTier1Key, keylessProviders, resolveAdapterKey, envKeyedTier1 } from '../providers/router';
+import { hasValidEnvApiKey } from '../middleware/env-api-key';
+import { budgetLimitFrom, createSharedBudget } from '../middleware/shared-budget';
 import { logToolCall } from '../utils/tool-call-logger';
 import { markFailure, markSuccess, markRateLimit, getAllHealthStates } from '../providers/health';
 import { RateLimitError, AuthError, defaultModelFor } from '../providers/types';
@@ -24,6 +26,37 @@ const llmLimiter = rateLimit({
   keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
   message: { error: 'Too many requests' }
 });
+
+/**
+ * KEYLESS CALLERS OF /llm/complete (2026-10-14: public LLM-cost abuse). auth.ts lets this route through
+ * without a key on the stated premise that "anonymous callers only ever reach the free tier0 pool". The
+ * code did not hold it: tier_preference came straight from the body (default 'auto'), and the router
+ * falls back to OUR env key for every Tier-1 adapter (resolveTier1Key), so a keyless caller could reach
+ * paid providers on our account, bounded per IP only (meterRun 5 runs/day, 30/min), i.e. not at all
+ * for a crowd of rotating IPs. And `tier1_only` + any `user_paid_keys` skipped the meter entirely, while
+ * the router still fell back to our key for the providers the caller did NOT bring.
+ *
+ * Now, for a caller this route did not verify a key for:
+ *   - no own keys: routed `tier0_only` (the premise, enforced), and each run takes one unit of a shared
+ *     budget across all keyless callers. Spent → 429 with a named `reason`, never a silent pass.
+ *   - own keys (BYOK): every Tier-1 adapter it did not bring a key for is excluded, so it can spend only
+ *     its own key. Not budgeted: that is its own money.
+ *
+ *   LLM_ANON_GLOBAL_PER_MIN  keyless runs per minute, all callers   (default 30; 'off' or 0 disables)
+ *   LLM_ANON_GLOBAL_DAILY    keyless runs per UTC day, all callers  (default 500; 'off' or 0 disables)
+ *
+ * WHY THESE DEFAULTS. A keyless visitor gets 5 runs a day (meterRun), so 500 a day is 100 visitors using
+ * the whole taste; 30 a minute equals one visitor's per-IP minute limit, so a single real user is never
+ * slowed by it. Tier 0 is free but quota-limited: this keeps one crowd from spending the quota the
+ * onboarding flow ("Try it, no code") needs.
+ */
+const anonLlmBudget = createSharedBudget('llm/complete');
+export const LLM_ANON_DEFAULT_PER_MIN = 30;
+export const LLM_ANON_DEFAULT_DAILY = 500;
+/** Test seam. */
+export function __resetAnonLlmBudget(): void {
+  anonLlmBudget.reset();
+}
 
 llmRouter.get('/v1/llm/providers', (req: Request, res: Response) => {
   const healths = getAllHealthStates();
@@ -248,9 +281,37 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
       }
     }
 
+    // KEYLESS CALLERS (see anonLlmBudget above). Keyed = an agent key validated in the block above
+    // (resolvedAgentId), or a shared env key. Anything else is anonymous.
+    const keyed = Boolean(resolvedAgentId) || hasValidEnvApiKey(req.headers);
+    let effectiveTier = tier_preference;
+    let anonExclusions: string[] = [];
+    if (!keyed) {
+      if (bringsOwnKeys) {
+        anonExclusions = envKeyedTier1(user_paid_keys as Record<string, string> | undefined);
+      } else {
+        effectiveTier = 'tier0_only';
+        const refused = anonLlmBudget.take(
+          budgetLimitFrom(process.env['LLM_ANON_GLOBAL_PER_MIN'], LLM_ANON_DEFAULT_PER_MIN),
+          budgetLimitFrom(process.env['LLM_ANON_GLOBAL_DAILY'], LLM_ANON_DEFAULT_DAILY),
+        );
+        if (refused) {
+          res.status(429).json({
+            error: refused === 'global_daily_budget_spent' ? 'free_tier_exhausted' : 'free_tier_busy',
+            reason: refused,
+            message:
+              refused === 'global_daily_budget_spent'
+                ? 'The shared free budget for keyless runs is spent for today (UTC). It resets at midnight UTC; bring your own key for unmetered runs.'
+                : 'The shared free budget for keyless runs is spent for this minute. Retry in a minute, or bring your own key.',
+          });
+          return;
+        }
+      }
+    }
+
     const routeReq: RouteRequest = {
       prompt,
-      tier_preference,
+      tier_preference: effectiveTier,
       task_hint,
       user_paid_keys,
       maxTokens: max_tokens,
@@ -269,7 +330,7 @@ llmRouter.post('/v1/llm/complete', llmLimiter, async (req: Request, res: Respons
     // one of three attempts — a live smoke call 503'd having made exactly ONE
     // real provider call. Seeding the exclusion list makes maxAttempts mean
     // that many genuine attempts.
-    let excludeProviders: string[] = keylessProviders(user_paid_keys as Record<string, string> | undefined);
+    let excludeProviders: string[] = [...new Set([...keylessProviders(user_paid_keys as Record<string, string> | undefined), ...anonExclusions])];
     if (excludeProviders.length) {
       console.warn(
         `[llm/complete] ${excludeProviders.length} provider(s) have NO key and were excluded before selection: ` +
