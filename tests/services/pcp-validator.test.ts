@@ -6,11 +6,11 @@ jest.mock('../../src/db', () => ({
     from: jest.fn().mockReturnThis(),
     select: jest.fn().mockResolvedValue({
       data: [
-        { agent_name: 'Alpha', current_repid: 1000 },
-        { agent_name: 'Beta', current_repid: 800 },
-        { agent_name: 'Gamma', current_repid: 600 },
-        { agent_name: 'Delta', current_repid: 200 }, // too low repid
-        { agent_name: 'ClaimerBot', current_repid: 900 } // claimer
+        { agent_name: 'Alpha', current_repid: 1000, lifecycle_status: 'active' },
+        { agent_name: 'Beta', current_repid: 800, lifecycle_status: 'active' },
+        { agent_name: 'Gamma', current_repid: 600, lifecycle_status: 'active' },
+        { agent_name: 'Delta', current_repid: 200, lifecycle_status: 'active' }, // too low repid
+        { agent_name: 'ClaimerBot', current_repid: 900, lifecycle_status: 'active' } // claimer
       ],
       error: null
     })
@@ -106,6 +106,25 @@ describe('pcp-validator', () => {
       expect(res.attemptedCount).toBeGreaterThan(0);
     });
 
+    it('a failed agent fetch is checked:false with a named reason, logged loud, never a quiet zero', async () => {
+      const loud = jest.spyOn(console, 'error').mockImplementation(() => {});
+      (db as any).select.mockResolvedValueOnce({ data: null, error: { message: 'connection reset' } });
+      const res = await runPCP({ claimed_by: 'ClaimerBot', title: 'T', description: 'D', result: 'R' });
+      expect(res).toMatchObject({ checked: false, reason: 'validator_fetch_failed', score: 0, validators: [], attemptedCount: 0 });
+      expect(loud).toHaveBeenCalledWith(expect.stringMatching(/NOT_CHECKED \(validator_fetch_failed\): could not read repid_agents: connection reset/));
+      loud.mockRestore();
+    });
+
+    it('an empty eligible pool is checked:false with a named reason, logged loud', async () => {
+      const loud = jest.spyOn(console, 'error').mockImplementation(() => {});
+      (db as any).select.mockResolvedValueOnce({ data: [{ agent_name: 'Solo', current_repid: 900, lifecycle_status: 'test_only' }], error: null });
+      const res = await runPCP({ claimed_by: 'ClaimerBot', title: 'T', description: 'D', result: 'R' });
+      expect(res).toMatchObject({ checked: false, reason: 'no_eligible_validators', score: 0, validators: [] });
+      expect(loud).toHaveBeenCalledWith(expect.stringMatching(/NOT_CHECKED \(no_eligible_validators\): 0 of 1 agent/));
+      expect(global.fetch).not.toHaveBeenCalled();
+      loud.mockRestore();
+    });
+
     it('aggregates scores correctly based on confidence weighting', async () => {
       // Mock fetch to return specific scores depending on the prompt or just cycle them
       let callCount = 0;
@@ -166,7 +185,19 @@ describe('eligibleValidators: who may be named as a validator', () => {
     expect(eligibleValidators([ok], 'a1')).toEqual([]);
     expect(eligibleValidators([{ ...ok, current_repid: 499 }], 'x')).toEqual([]);
     expect(eligibleValidators([{ ...ok, lifecycle_status: 'test_only' }], 'x')).toEqual([]);
-    expect(eligibleValidators([{ ...ok, lifecycle_status: undefined }], 'x')).toHaveLength(1);
+  });
+
+  it('lifecycle must be exactly active: deprecated, archived, null and missing are all out (XC1 on #1396)', () => {
+    for (const lifecycle_status of ['deprecated', 'archived', null, undefined, 'ACTIVE']) {
+      expect(eligibleValidators([{ ...ok, lifecycle_status }], 'x')).toEqual([]);
+    }
+  });
+
+  it('drops a harness fixture by its enforced name even when the JSON mark was omitted', () => {
+    expect(eligibleValidators([{ ...ok, agent_name: 'trinity-mock-it-seller-9' }], 'x')).toEqual([]);
+    expect(eligibleValidators([{ ...ok, agent_name: 'mock-buyer-2' }], 'x')).toEqual([]);
+    // Not a prefix match on any "mock" substring: a real agent may carry the word.
+    expect(eligibleValidators([{ ...ok, agent_name: 'trinity-mockingbird-auditor' }], 'x')).toHaveLength(1);
   });
 
   it('a row with no is_human / mock fields (older selects) is not excluded by them', () => {

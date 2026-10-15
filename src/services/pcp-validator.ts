@@ -37,8 +37,7 @@ export async function runPCP(taskData: any) {
     .select('id, agent_name, current_repid, lifecycle_status, is_human, mock:constitution->mock');
 
   if (error || !agents) {
-    console.error('[runPCP] Failed to fetch agents:', error);
-    return { score: 0, confidence: 0, validators: [] };
+    return notChecked('validator_fetch_failed', `could not read repid_agents: ${error?.message ?? 'no rows returned'}`);
   }
 
   // Filter: exclude claimer, exclude repid < 500, exclude non-active lifecycle.
@@ -61,8 +60,7 @@ export async function runPCP(taskData: any) {
   // Random sample weighted by RepID. Diversity logic is a plus.
   const selectedValidators = selectWeightedValidators(eligible, 3);
   if (selectedValidators.length === 0) {
-    console.log('[runPCP] No eligible validators found.');
-    return { score: 0, confidence: 0, validators: [] };
+    return notChecked('no_eligible_validators', `0 of ${agents.length} agent(s) are eligible validators`);
   }
 
   // 2. Call LLMs
@@ -196,8 +194,8 @@ ${taskData.result}`;
   const avgConfidence = checked ? sumConfidence / responded.length : 0;
 
   if (!checked) {
-    console.warn(
-      `[runPCP] NOT_CHECKED: 0 of ${results.length} validator(s) answered ` +
+    console.error(
+      `[runPCP] ✗ NOT_CHECKED (no_validator_answered): 0 of ${results.length} validator(s) answered ` +
       `(${results.map(r => r.name).join(', ')}). Returning checked:false — a score of 0 ` +
       `here would blame a provider for work nobody assessed.`
     );
@@ -207,6 +205,7 @@ ${taskData.result}`;
     score: finalScore,
     confidence: avgConfidence,
     checked,
+    ...(checked ? {} : { reason: 'no_validator_answered' as const }),
     respondedCount: responded.length,
     attemptedCount: results.length,
     validators: responded.map(r => r.name),
@@ -230,9 +229,29 @@ export function eligibleValidators(agents: any[], claimer: unknown): any[] {
     a.agent_name !== claimer &&
     a.id !== claimer &&
     a.current_repid >= 500 &&
-    (a.lifecycle_status ?? 'active') === 'active' &&
+    // Exactly 'active'. test_only / deprecated / archived are out, and so is a missing value: the
+    // column is nullable, and a row nobody labelled is not one anybody vouched for (XC1 on #1396).
+    a.lifecycle_status === 'active' &&
     a.is_human !== true &&
-    a.mock !== true && a.mock !== 'true');
+    a.mock !== true && a.mock !== 'true' &&
+    // The harness's other mark, which it enforces (MockAgent throws without it) and so cannot omit
+    // the way it can omit the JSON flag: names start 'mock-', stored as 'trinity-mock-' by
+    // trg_normalize_repid_agent_name. Measured 2026-10-15: 49 such rows, all also JSON-marked.
+    !MOCK_HARNESS_NAME.test(String(a.agent_name ?? '')));
+}
+
+const MOCK_HARNESS_NAME = /^(trinity-)?mock-/;
+
+/** PCP's verdict, with no validator having assessed anything. Callers must retry, never score it. */
+type NotCheckedReason = 'validator_fetch_failed' | 'no_eligible_validators' | 'no_validator_answered';
+function notChecked(reason: NotCheckedReason, detail: string) {
+  // Loud: an unchecked task stalls a contract until someone looks, and a quiet log line is how it
+  // sat unnoticed before (validation queue, 2026-09-10 to 2026-10-15).
+  console.error(`[runPCP] ✗ NOT_CHECKED (${reason}): ${detail}. Returning checked:false — no validator assessed this task.`);
+  return {
+    score: 0, confidence: 0, checked: false as const, reason,
+    respondedCount: 0, attemptedCount: 0, validators: [] as string[], attemptedValidators: [] as string[], validatorBeliefs: [] as number[],
+  };
 }
 
 export function selectWeightedValidators(agents: any[], count: number) {
