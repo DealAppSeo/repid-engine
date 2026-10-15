@@ -57,8 +57,11 @@ function paidStep(r: TrustReceipt): string {
     ? `<p><a href="${esc(r.settlement_url)}">${esc(r.settlement_tx)}</a></p>`
     : '<p class="muted">No settlement on record.</p>';
   const sim = `<p class="muted">simulated: <code>${r.is_simulated}</code> — if this said true, none of it counted.</p>`;
+  const wallets = r.payer_wallet && r.payee_wallet
+    ? `<p>From <code>${esc(r.payer_wallet)}</code> (${esc(r.buyer)}) to <code>${esc(r.payee_wallet)}</code> (${esc(r.provider)}).</p>`
+    : '';
   const title = r.paid_before_delivery === false ? 'Only then was it paid' : 'The payment';
-  return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${tx}${sim}`);
+  return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${wallets}${tx}${sim}`);
 }
 
 function render(r: TrustReceipt): string {

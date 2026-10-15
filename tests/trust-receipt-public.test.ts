@@ -94,6 +94,14 @@ describe('public trust receipt', () => {
       // The derived score itself, so the derivation has something to be checked
       // against. Alone it would be one more number to trust.
       'buyer_satisfaction_score',
+
+      // ── ADDED 2026-10-14: who paid whom ─────────────────────────────────────
+      // The payer and payee wallets of the settlement. Already world-readable as
+      // the settlement tx's USDC Transfer from/to; published so an outsider can
+      // check the transfer went between the parties this receipt names (the
+      // trustshell acceptance gate could not, with no keyless route naming them).
+      // The signed authorization they are read from is NOT published (below).
+      'payer_wallet', 'payee_wallet',
     ]);
     // A new field is not automatically safe to publish — this fails until
     // someone decides it is, which is the point.
@@ -183,5 +191,66 @@ describe('public trust receipt', () => {
     Object.assign(dbMock.__rows, { service_contracts: null });
     expect(await buildTrustReceipt('nope')).toBeNull();
     Object.assign(dbMock.__rows, rows);
+  });
+
+  /**
+   * WHO PAID WHOM (2026-10-14). The wallets come from the settlement row: payer_address, and the `to` of
+   * the x402 authorization the payer signed. The live row's header is the flat shape
+   * {to, from, nonce, value, signature, validAfter, validBefore}, base64 [V prod 2026-10-14, keys only].
+   */
+  describe('payer and payee wallets', () => {
+    const PAYER = '0xdf6b8215d193b11b4903d223729c3cf7a6de271d'; // lower-case in, checksummed out
+    const PAYEE = '0x7b84cce5502d393daa6533285ef3e2f8d3a13261';
+    const SIGNATURE_SENTINEL = '0x' + 'ab'.repeat(65);
+    const header = (to: string) => Buffer.from(JSON.stringify({
+      to, from: PAYER, nonce: '0x' + '01'.repeat(32), value: '100000', signature: SIGNATURE_SENTINEL, validAfter: '0', validBefore: '9999999999',
+    })).toString('base64');
+    const withSettlement = (s: Record<string, unknown>) =>
+      Object.assign(dbMock.__rows, { x402_settlements: { tx_hash: '0x' + 'cb'.repeat(32), is_simulated: false, status: 'settled', ...s } });
+    afterEach(() => Object.assign(dbMock.__rows, rows));
+
+    it('publishes both, checksummed, from the settlement row', async () => {
+      withSettlement({ payer_address: PAYER, x_payment_header: header(PAYEE) });
+      const r = await buildTrustReceipt('c1');
+      expect(r!.payer_wallet).toBe('0xdf6b8215D193b11B4903d223729c3CF7A6de271d');
+      expect(r!.payee_wallet).toBe('0x7b84CCE5502d393DAa6533285eF3e2f8D3A13261');
+    });
+
+    it('never publishes the signed authorization it reads them from', async () => {
+      const h = header(PAYEE);
+      withSettlement({ payer_address: PAYER, x_payment_header: h });
+      const serialised = JSON.stringify(await buildTrustReceipt('c1'));
+      expect(serialised).not.toContain(h);
+      expect(serialised).not.toContain('ab'.repeat(65)); // the signature
+      expect(serialised).not.toContain('x_payment_header');
+    });
+
+    it('a simulated settlement names no wallets', async () => {
+      withSettlement({ is_simulated: true, payer_address: PAYER, x_payment_header: header(PAYEE) });
+      const r = await buildTrustReceipt('c1');
+      expect([r!.payer_wallet, r!.payee_wallet]).toEqual([null, null]);
+    });
+
+    it('a legacy row missing the payee says so instead of guessing', async () => {
+      withSettlement({ payer_address: PAYER, x_payment_header: null });
+      const r = await buildTrustReceipt('c1');
+      expect([r!.payer_wallet, r!.payee_wallet]).toEqual([null, null]);
+      expect(r!.caveats.some((c) => /does not name both the payer and the payee wallet/.test(c))).toBe(true);
+    });
+
+    it('the public page shows them next to the named parties', async () => {
+      withSettlement({ payer_address: PAYER, x_payment_header: header(PAYEE) });
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const express = require('express');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const request = require('supertest');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const router = require('../src/routes/v1/receipt-public').default;
+      const app = express().use('/api/v1', router);
+      const res = await request(app).get('/api/v1/receipt/c1');
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('From <code>0xdf6b8215D193b11B4903d223729c3CF7A6de271d</code> (trinity-test) to <code>0x7b84CCE5502d393DAa6533285eF3e2f8D3A13261</code> (trinity-test)');
+      expect(res.text).not.toContain('ab'.repeat(65));
+    });
   });
 });
