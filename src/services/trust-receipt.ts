@@ -38,16 +38,24 @@ export interface TrustReceipt {
   settlement_url: string | null;
   is_simulated: boolean | null;
   /**
-   * WHO PAID WHOM, as the settlement row records it (2026-10-14): `payer_address`, and the payee
-   * (`to`) of the x402 authorization the payer signed, read through the same proofOfPaymentFrom the
-   * ERC-8004 feedback file uses. Checksummed. Both are ALREADY PUBLIC on-chain, as the settlement tx's
-   * USDC Transfer from/to; publishing them lets a reader check that transfer went between the wallets
-   * of the parties this receipt names, without trusting us. `null` (both) when the row does not show a
-   * real payment from a named payer to a named payee (simulated, no tx, or a legacy row missing either
-   * field): never guessed. The signed authorization itself (`x_payment_header`) is NOT published.
+   * WHO PAID WHOM, AS THE SETTLEMENT RECORD SAYS (2026-10-14): `payer_address`, and the payee (`to`) of
+   * the x402 authorization the payer signed, read through the same proofOfPaymentFrom the ERC-8004
+   * feedback file uses. Checksummed.
+   *
+   * WHAT THIS IS NOT (XC1 review of #1386): this route does NOT re-read the chain. The engine's own
+   * Transfer-log check (assessPayment, erc8004-feedback-verify.ts) is not run here, so these are the
+   * engine's RECORD of who paid whom, not a proof that the settlement tx moved USDC between them.
+   * `wallets_source: 'settlement_record'` says so in the data. The check is external by design: the
+   * trustshell acceptance gate reads the settlement tx's USDC Transfer from/to on chain and requires
+   * them to equal these. The addresses are not secret: if the record is true they are already public as
+   * that Transfer's from/to. `null` (both) when the row does not name a real payment from a named payer
+   * to a named payee (no settlement, simulated, no tx, or a legacy row missing either field): never
+   * guessed, and a caveat says so. The signed authorization itself (`x_payment_header`) is NOT published.
    */
   payer_wallet: string | null;
   payee_wallet: string | null;
+  /** Where the two wallets come from: always the settlement record, never a chain read on this route. */
+  wallets_source: 'settlement_record' | null;
   /**
    * Did the money move BEFORE the work was delivered?
    *
@@ -162,8 +170,10 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
   // chainId only labels proofOfPaymentFrom's result, which is not published; the receipt is Base
   // Sepolia throughout (see scan()).
   const paid = proofOfPaymentFrom(settlement, 84532);
-  if (settlement && settlement.is_simulated === false && settlement.tx_hash && !paid) {
-    caveats.push('The settlement record does not name both the payer and the payee wallet, so who paid whom is not shown.');
+  // Whenever the wallets are not shown, say so (XC1 review of #1386: a non-simulated row with no tx
+  // hash used to publish null wallets with no caveat).
+  if (!paid) {
+    caveats.push('The settlement record does not name both the payer and the payee wallet of a real payment, so who paid whom is not shown.');
   }
 
   // Read the pay-vs-deliver ordering from the row instead of letting the template
@@ -255,6 +265,7 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     // Lower-cased first: a stored address with a bad mixed-case checksum must not throw the route.
     payer_wallet: paid ? getAddress(paid.fromAddress.toLowerCase()) : null,
     payee_wallet: paid ? getAddress(paid.toAddress.toLowerCase()) : null,
+    wallets_source: paid ? 'settlement_record' : null,
     paid_before_delivery,
     reputation_events: (events ?? []).map((e) => {
       // `decayApplied` ABSENT and `decayApplied: 0` are different facts and are

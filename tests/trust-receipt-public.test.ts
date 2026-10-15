@@ -102,6 +102,8 @@ describe('public trust receipt', () => {
       // trustshell acceptance gate could not, with no keyless route naming them).
       // The signed authorization they are read from is NOT published (below).
       'payer_wallet', 'payee_wallet',
+      // Where those come from: 'settlement_record' (this route does not re-read the chain), or null.
+      'wallets_source',
     ]);
     // A new field is not automatically safe to publish — this fails until
     // someone decides it is, which is the point.
@@ -201,45 +203,60 @@ describe('public trust receipt', () => {
   describe('payer and payee wallets', () => {
     const PAYER = '0xdf6b8215d193b11b4903d223729c3cf7a6de271d'; // lower-case in, checksummed out
     const PAYEE = '0x7b84cce5502d393daa6533285ef3e2f8d3a13261';
+    // Every field of the signed authorization that is NOT a wallet gets a sentinel, so a leak of any one
+    // of them (or of the whole base64 header) is caught, in the JSON and in the HTML page alike.
     const SIGNATURE_SENTINEL = '0x' + 'ab'.repeat(65);
+    const NONCE_SENTINEL = '0x' + 'ce'.repeat(32);
+    const VALID_AFTER_SENTINEL = '1234567891';
+    const VALID_BEFORE_SENTINEL = '1987654321';
     const header = (to: string) => Buffer.from(JSON.stringify({
-      to, from: PAYER, nonce: '0x' + '01'.repeat(32), value: '100000', signature: SIGNATURE_SENTINEL, validAfter: '0', validBefore: '9999999999',
+      to, from: PAYER, nonce: NONCE_SENTINEL, value: '100000', signature: SIGNATURE_SENTINEL,
+      validAfter: VALID_AFTER_SENTINEL, validBefore: VALID_BEFORE_SENTINEL,
     })).toString('base64');
+    const NEVER_PUBLISHED = (h: string) => [h, SIGNATURE_SENTINEL.slice(2), NONCE_SENTINEL.slice(2), VALID_AFTER_SENTINEL, VALID_BEFORE_SENTINEL, 'x_payment_header'];
     const withSettlement = (s: Record<string, unknown>) =>
       Object.assign(dbMock.__rows, { x402_settlements: { tx_hash: '0x' + 'cb'.repeat(32), is_simulated: false, status: 'settled', ...s } });
+    const CAVEAT = /does not name both the payer and the payee wallet/;
     afterEach(() => Object.assign(dbMock.__rows, rows));
 
-    it('publishes both, checksummed, from the settlement row', async () => {
+    it('publishes both, checksummed, labelled as the settlement record (no chain re-read on this route)', async () => {
       withSettlement({ payer_address: PAYER, x_payment_header: header(PAYEE) });
       const r = await buildTrustReceipt('c1');
       expect(r!.payer_wallet).toBe('0xdf6b8215D193b11B4903d223729c3CF7A6de271d');
       expect(r!.payee_wallet).toBe('0x7b84CCE5502d393DAa6533285eF3e2f8D3A13261');
+      expect(r!.wallets_source).toBe('settlement_record');
+      expect(r!.caveats.some((c) => CAVEAT.test(c))).toBe(false);
     });
 
-    it('never publishes the signed authorization it reads them from', async () => {
+    it('never publishes the signed authorization it reads them from: no header, signature, nonce or validity window', async () => {
       const h = header(PAYEE);
       withSettlement({ payer_address: PAYER, x_payment_header: h });
       const serialised = JSON.stringify(await buildTrustReceipt('c1'));
-      expect(serialised).not.toContain(h);
-      expect(serialised).not.toContain('ab'.repeat(65)); // the signature
-      expect(serialised).not.toContain('x_payment_header');
+      for (const secret of NEVER_PUBLISHED(h)) expect(serialised).not.toContain(secret);
     });
 
-    it('a simulated settlement names no wallets', async () => {
-      withSettlement({ is_simulated: true, payer_address: PAYER, x_payment_header: header(PAYEE) });
+    it.each([
+      ['a simulated settlement', { is_simulated: true, payer_address: PAYER, x_payment_header: header(PAYEE) }],
+      ['a legacy row missing the payee', { payer_address: PAYER, x_payment_header: null }],
+      ['a legacy row missing the payer', { payer_address: null, x_payment_header: header(PAYEE) }],
+      ['a NON-simulated row with no tx hash (XC1: used to publish null wallets with no caveat)', { tx_hash: null, payer_address: PAYER, x_payment_header: header(PAYEE) }],
+    ])('%s: no wallets, no source, and a caveat says so instead of guessing', async (_why, row) => {
+      withSettlement(row);
+      const r = await buildTrustReceipt('c1');
+      expect([r!.payer_wallet, r!.payee_wallet, r!.wallets_source]).toEqual([null, null, null]);
+      expect(r!.caveats.some((c) => CAVEAT.test(c))).toBe(true);
+    });
+
+    it('no settlement at all: no wallets, and the caveat too', async () => {
+      Object.assign(dbMock.__rows, { x402_settlements: null });
       const r = await buildTrustReceipt('c1');
       expect([r!.payer_wallet, r!.payee_wallet]).toEqual([null, null]);
+      expect(r!.caveats.some((c) => CAVEAT.test(c))).toBe(true);
     });
 
-    it('a legacy row missing the payee says so instead of guessing', async () => {
-      withSettlement({ payer_address: PAYER, x_payment_header: null });
-      const r = await buildTrustReceipt('c1');
-      expect([r!.payer_wallet, r!.payee_wallet]).toEqual([null, null]);
-      expect(r!.caveats.some((c) => /does not name both the payer and the payee wallet/.test(c))).toBe(true);
-    });
-
-    it('the public page shows them next to the named parties', async () => {
-      withSettlement({ payer_address: PAYER, x_payment_header: header(PAYEE) });
+    it('the public page labels them as the settlement RECORD, and leaks nothing of the authorization (raw or base64)', async () => {
+      const h = header(PAYEE);
+      withSettlement({ payer_address: PAYER, x_payment_header: h });
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const express = require('express');
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -249,8 +266,9 @@ describe('public trust receipt', () => {
       const app = express().use('/api/v1', router);
       const res = await request(app).get('/api/v1/receipt/c1');
       expect(res.status).toBe(200);
-      expect(res.text).toContain('From <code>0xdf6b8215D193b11B4903d223729c3CF7A6de271d</code> (trinity-test) to <code>0x7b84CCE5502d393DAa6533285eF3e2f8D3A13261</code> (trinity-test)');
-      expect(res.text).not.toContain('ab'.repeat(65));
+      expect(res.text).toContain('Recorded payer <code>0xdf6b8215D193b11B4903d223729c3CF7A6de271d</code> (trinity-test) and payee <code>0x7b84CCE5502d393DAa6533285eF3e2f8D3A13261</code> (trinity-test)');
+      expect(res.text).toContain('This page does not re-read the transfer on chain');
+      for (const secret of NEVER_PUBLISHED(h)) expect(res.text).not.toContain(secret);
     });
   });
 });
