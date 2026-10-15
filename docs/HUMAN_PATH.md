@@ -26,7 +26,7 @@ The walk a person takes:
 
 `GET /api/v1/human/path` records that sequence and performs none of it. Every step comes back `mode: "shadow"`, `applied: false`, `persisted: false`. The module is `src/services/human-path-shadow.ts`. Its import graph cannot reach the database client; `tests/human-path-shadow.test.ts` fails if that changes.
 
-This is not `POST /agents/human`. That route inserts a `repid_agents` row named `HUMAN` and writes the returned `privateId` into `constitution`. It is not a zero-knowledge registration. The shadow does not call it.
+This is not `POST /agents/human`. That route inserts a `repid_agents` row named `HUMAN` and stores only the sha256 of the `privateId` it returns (`constitution.privateId_sha256`; the privateId itself is shown once). It is not a zero-knowledge registration. The shadow does not call it.
 
 | # | Step | Live handler | What the live handler does | What the shadow does |
 |---|------|--------------|----------------------------|----------------------|

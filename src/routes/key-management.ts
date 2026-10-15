@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
-import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey, RESERVED_SCOPES, legacyTokenMatches } from '../auth/api-keys';
+import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey, RESERVED_SCOPES } from '../auth/api-keys';
 import { SELF_SERVE_SCOPES } from '../services/agent-self-serve-key';
 import { resolveAccountableRoot, rootRefusalStatus } from '../services/accountable-root';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
@@ -19,11 +19,13 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 
-// [S1 2026-10-14] SELF auth: a key bound to THIS agent, or its legacy registration token. This
-// used to require an 'admin' scope, but keyless registration handed 'admin' to everyone, so the
-// scope proved nothing and the controller read it as admin. What a self caller may then do is
-// bounded where it matters: creating a key needs the accountable root's signature (below) and
-// cannot widen scopes beyond the self-serve set plus what the calling key already holds.
+// [S1 2026-10-14] SELF auth: a key bound to THIS agent. This used to require an 'admin' scope, but
+// keyless registration handed 'admin' to everyone, so the scope proved nothing and the controller read
+// it as admin. What a self caller may then do is bounded where it matters: creating a key needs the
+// accountable root's signature (below) and cannot widen scopes beyond the self-serve set plus what the
+// calling key already holds.
+// [D-108 2026-10-15] agent_api_keys only. The legacy registration token (constitution.api_key) no
+// longer authenticates here; it gets the same answer as any unrecognized key.
 async function requireAdminAuth(req: Request, res: Response, next: any) {
   const agentId = String(req.params.id);
   const header = req.headers['authorization'];
@@ -33,30 +35,18 @@ async function requireAdminAuth(req: Request, res: Response, next: any) {
     return res.status(401).json({ error: 'Missing API key' });
   }
 
-  // 1. Try to validate as a scoped Agent API Key
   const validKey = await validateAgentApiKey(token);
-  if (validKey) {
-    if (validKey.agent_id !== agentId) {
-      return res.status(403).json({ error: 'API key agent_id mismatch' });
-    }
-    (req as any).callerScopes = validKey.scopes;
-    return next();
+  if (!validKey) {
+    return res.status(401).json({
+      error: 'Invalid or revoked API key',
+      message: 'Only agent API keys authenticate here; registration tokens were retired (D-108). GET /api/v1/agent-keys explains how to get one.',
+    });
   }
-
-  // 2. Try to validate as original registration token (legacy)
-  const { data: agent, error } = await db.from('repid_agents').select('constitution').eq('id', agentId).single();
-  if (error || !agent) {
-    return res.status(404).json({ error: 'Agent not found' });
+  if (validKey.agent_id !== agentId) {
+    return res.status(403).json({ error: 'API key agent_id mismatch' });
   }
-
-  if (legacyTokenMatches((agent as any).constitution, token)) {
-    console.warn(`[DEPRECATION WARNING] Legacy api_key used for agent: ${agentId} in key management. Please transition to modern scoped API keys.`);
-    (req as any).callerScopes = [];
-    return next();
-  }
-
-  // If we reach here, we failed both checks
-  return res.status(403).json({ error: 'Insufficient permissions (requires a key bound to this agent or its registration token)' });
+  (req as any).callerScopes = validKey.scopes;
+  return next();
 }
 
 router.get('/:id/keys', limiter, requireAdminAuth, async (req: Request, res: Response) => {

@@ -10,8 +10,8 @@
  * tests/human-path-shadow.test.ts. This file imports the ceiling algebra and
  * the signup posture, both of which reach no database client.
  *
- * This is not POST /agents/human. That route inserts a row and stores the
- * privateId it returns. The shadow does not call it.
+ * This is not POST /agents/human. That route inserts a row and stores the sha256
+ * of the privateId it returns. The shadow does not call it.
  */
 
 import { attenuateCeiling } from './attenuate-ceiling';

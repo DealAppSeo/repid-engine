@@ -110,7 +110,7 @@ curl -X POST https://repid-engine-production.up.railway.app/api/v1/agents-extern
 The `agent_id` is public (others look up your reputation with it); the `api_key` is secret (you sign
 your own score-events with it).
 
-### 2b. `POST /agents/human` stores the privateId it returns
+### 2b. `POST /agents/human` returns a privateId once and stores only its hash
 
 ```bash
 curl -X POST https://repid-engine-production.up.railway.app/agents/human \
@@ -118,8 +118,8 @@ curl -X POST https://repid-engine-production.up.railway.app/agents/human \
   -d '{}'
 ```
 
-This inserts a `repid_agents` row named `HUMAN` and writes the returned `privateId` into that
-row's `constitution`. It is not a zero-knowledge registration. The wallet walk below is a
+This inserts a `repid_agents` row named `HUMAN` and stores only the sha256 of the returned
+`privateId` (`constitution.privateId_sha256`). Save the privateId: it cannot be recovered. It is not a zero-knowledge registration. The wallet walk below is a
 different path.
 
 ### The wallet human path (shadow)
