@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { STARTING_REPID } from '../scoring/repid-constants';
 import { db } from '../db';
 import { registerAgent, computeTier } from '../engine/repid-update';
-import { matchEnvOperatorKey } from '../auth/api-keys';
+import { matchEnvOperatorKey, publicConstitution } from '../auth/api-keys';
 import { computeEthics, suggestConstitutionalRules } from '../engine/badges';
 import { computeDefensibilitySpec } from '../services/reliability';
 import { todayPT } from '../lib/time';
@@ -217,7 +217,8 @@ router.get('/agents', async (req: Request, res: Response) => {
     activity_30d: a.activity_30d,
     last_updated: a.last_updated,
     erc8004_address: a.erc8004_address,
-    constitution: a.constitution,
+    // Any API key can list every agent: never hand out another agent's legacy token or privateId.
+    constitution: publicConstitution(a.constitution),
     bio: a.constitution?.bio ?? null,
     personality: a.constitution?.personality ?? null,
     isHuman: a.constitution?.type === 'HUMAN' || a.agent_name === 'HUMAN',
@@ -230,7 +231,10 @@ router.get('/agents/:id', async (req: Request, res: Response) => {
   const { data, error } = await db.from('repid_agents')
     .select('*').eq('id', req.params.id).single();
   if (error || !data) return res.status(404).json({ error: 'Agent not found' });
-  return res.json(data);
+  // The whole row, minus what signs or authenticates: webhook_secret (HMAC for this agent's
+  // webhooks, services/notify.ts) and the constitution's credential fields.
+  const { webhook_secret: _secret, ...row } = data as Record<string, any>;
+  return res.json({ ...row, constitution: publicConstitution(row.constitution) });
 });
 
 router.get('/agents/:id/history', async (req: Request, res: Response) => {
