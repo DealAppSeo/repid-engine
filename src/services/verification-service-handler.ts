@@ -52,6 +52,13 @@ export class VerificationServiceHandler extends ServiceHandlerBase {
     }
 
     return {
+      // WHAT WAS VERIFIED. A verdict that does not name its subject cannot be reproduced: "PASS"
+      // about what? Without this field the deliverable named validators and a score, never the
+      // claim, so the daily living-proof buyer's criterion 2 ("names the chain id it verified
+      // against") found nothing to check and every rated run from 2026-09-11 to 2026-10-14 scored
+      // 0.5 [V prod]. The claim is the buyer's own payload, stored in the same row; `result` is not
+      // published on the public receipt (trust-receipt.ts).
+      claim: payload.content,
       verdict: pcpResult.confidence >= 0.5 ? 'PASS' : 'FAIL',
       score: pcpResult.score,
       confidence: pcpResult.confidence,
