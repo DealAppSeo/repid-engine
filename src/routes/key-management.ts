@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { trustedClientIp } from '../middleware/client-ip';
 import { db } from '../db';
 import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey, RESERVED_SCOPES } from '../auth/api-keys';
 import { SELF_SERVE_SCOPES } from '../services/agent-self-serve-key';
@@ -6,6 +8,16 @@ import { resolveAccountableRoot, rootRefusalStatus } from '../services/accountab
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 
 const router = Router();
+
+// Per-IP brake on a credential surface (list, mint, revoke). The real gates are the agent-bound key
+// and, for minting, the accountable root's signature; this only stops someone spraying it.
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  keyGenerator: (req): string => ipKeyGenerator(trustedClientIp(req)),
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // [S1 2026-10-14] SELF auth: a key bound to THIS agent, or its legacy registration token. This
 // used to require an 'admin' scope, but keyless registration handed 'admin' to everyone, so the
@@ -48,7 +60,7 @@ async function requireAdminAuth(req: Request, res: Response, next: any) {
   return res.status(403).json({ error: 'Insufficient permissions (requires a key bound to this agent or its registration token)' });
 }
 
-router.get('/:id/keys', requireAdminAuth, async (req: Request, res: Response) => {
+router.get('/:id/keys', limiter, requireAdminAuth, async (req: Request, res: Response) => {
   const agentId = String(req.params.id);
   const { data, error } = await db.from('agent_api_keys')
     .select('id, name, key_prefix, created_at, last_used_at, scopes')
@@ -62,7 +74,7 @@ router.get('/:id/keys', requireAdminAuth, async (req: Request, res: Response) =>
   return res.json({ keys: data });
 });
 
-router.post('/:id/keys', requireAdminAuth, async (req: Request, res: Response) => {
+router.post('/:id/keys', limiter, requireAdminAuth, async (req: Request, res: Response) => {
   const agentId = String(req.params.id);
   const { name = 'new_key', scopes = [] } = req.body;
 
@@ -124,7 +136,7 @@ router.post('/:id/keys', requireAdminAuth, async (req: Request, res: Response) =
   }
 });
 
-router.delete('/:id/keys/:keyId', requireAdminAuth, async (req: Request, res: Response) => {
+router.delete('/:id/keys/:keyId', limiter, requireAdminAuth, async (req: Request, res: Response) => {
   const agentId = String(req.params.id);
   const keyId = String(req.params.keyId);
 
