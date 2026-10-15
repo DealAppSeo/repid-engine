@@ -168,6 +168,19 @@ describe('POST /api/v1/agents/register — Maya-shape (Sprint A5 additive)', () 
       .find((r: any) => r.table === 'repid_agents');
     expect(lastAgentRow.row.constitution_text).not.toMatch(/javascript:/);
   });
+
+  // [S1 2026-10-14] This route is keyless. The key it issued carried 'admin', which the controller
+  // read as admin: one unauthenticated POST could sleep/wake agents and decide HITL requests.
+  it('issues the new agent a key WITHOUT admin: only what it can safely hold as itself', async () => {
+    const res = await request(app)
+      .post('/api/v1/agents/register').set('x-enterprise-key', ENTERPRISE_KEY)
+      .send({ name: 'S1NoAdminScope', description: 'tester' });
+    expect(res.status).toBe(201);
+    const inserted = (require('../src/db').db as any).__insertedRows;
+    const keyRow = [...inserted].reverse().find((r: any) => r.table === 'agent_api_keys');
+    expect(keyRow.row.scopes).toEqual(['score_event', 'llm_complete', 'read_card']);
+    expect(keyRow.row.scopes).not.toContain('admin');
+  });
 });
 
 describe('POST /api/v1/agents/register — legacy v11 contract (no regression)', () => {

@@ -21,6 +21,7 @@ import { STARTING_REPID } from '../scoring/repid-constants';
 import { isDeliverableDomain } from '../scoring/task-purpose';
 import { scoreEventGuardEnforced } from './score-event-guard';
 import { issueAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
+import { SELF_SERVE_SCOPES } from '../services/agent-self-serve-key';
 import { requireApiKey } from '../middleware/auth-api-key';
 import { writeDecisionMemory } from '../services/graph-rag/hal-memory-hook';
 import { provisionWallet, persistProvisionedWallet } from '../services/agent-wallet-manager';
@@ -249,7 +250,10 @@ router.post('/register', async (req: Request, res: Response) => {
       await db.from('repid_agents').update({ wallet_address }).eq('id', agentId);
     }
 
-    const { key: rawKey } = await issueAgentApiKey(agentId, 'default', ['score_event', 'llm_complete', 'read_card', 'admin']);
+    // [S1 2026-10-14] No 'admin'. This route is keyless, and the controller read an 'admin' scope as
+    // admin, so registering was enough to sleep/wake any agent and decide HITL requests. A new agent
+    // gets what it can safely hold as itself: the same scopes the wallet-signed self-serve path grants.
+    const { key: rawKey } = await issueAgentApiKey(agentId, 'default', [...SELF_SERVE_SCOPES]);
 
     await db.from('repid_verified_decisions').insert({
       agent_id: agentId, vdr_count: 0,
