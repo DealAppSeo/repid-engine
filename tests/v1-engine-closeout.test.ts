@@ -3,6 +3,8 @@
  */
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost:54321';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'dummy';
+// The staging bind (a body naming a wallet) needs an API key; an operator key may bind a named agent.
+process.env.REPID_API_KEYS = 'test-operator-key:ops';
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -190,13 +192,13 @@ describe('v1 engine closeout', () => {
   });
 
   it('returns 410 and leaves the bind store empty unless the flag is the exact string true', async () => {
-    const unset = await request(app()).post('/api/v1/human/bind').send({ wallet: '0xabc', agent_id: AGENT });
+    const unset = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ wallet: '0xabc', agent_id: AGENT });
     expect(unset.status).toBe(410);
     expect(unset.body).toEqual({ error: 'disabled' });
     expect(bindStore.size).toBe(0);
 
     process.env.HUMAN_AGENT_BIND_ENABLED = 'TRUE';
-    const folded = await request(app()).post('/api/v1/human/bind').send({ wallet: '0xabc', agent_id: AGENT });
+    const folded = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ wallet: '0xabc', agent_id: AGENT });
     expect(folded.status).toBe(410);
     expect(bindStore.size).toBe(0);
   });

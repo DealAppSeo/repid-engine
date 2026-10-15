@@ -8,6 +8,10 @@
  * and are exercised end-to-end after the orchestrator applies it.
  */
 
+// These routes now require an API key (authMiddleware). An env-allowlist operator key keeps these
+// tests about the route's own behaviour; tests/preauth-writes-auth.test.ts covers the auth itself.
+process.env.REPID_API_KEYS = 'test-operator-key:ops'; // an operator key: it may act for a named agent
+jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../src/db', () => ({
   get db() {
     return (global as any).__mktDb;
@@ -103,7 +107,7 @@ describe('POST /listings', () => {
       }),
     };
     const res = await request(makeApp())
-      .post('/api/v1/marketplace/listings')
+      .post('/api/v1/marketplace/listings').set('Authorization', 'Bearer test-operator-key')
       .send({ agent_id: VALID_UUID, owner_sbt_id: 'sbt-1', listing_type: 'rent', price_usdc: 10, rep_id_at_listing: 1200, rental_duration_hours: 24 });
     expect(res.status).toBe(201);
     expect(res.body.listing_id).toBe(5);
@@ -112,7 +116,7 @@ describe('POST /listings', () => {
 
   test('400 on invalid body', async () => {
     const res = await request(makeApp())
-      .post('/api/v1/marketplace/listings')
+      .post('/api/v1/marketplace/listings').set('Authorization', 'Bearer test-operator-key')
       .send({ agent_id: 'bad', owner_sbt_id: 'sbt-1', listing_type: 'rent', price_usdc: 10, rep_id_at_listing: 1200 });
     expect(res.status).toBe(400);
   });
@@ -130,7 +134,7 @@ describe('POST /rentals — settlement disabled', () => {
       }),
     };
     const res = await request(makeApp())
-      .post('/api/v1/marketplace/rentals')
+      .post('/api/v1/marketplace/rentals').set('Authorization', 'Bearer test-operator-key')
       .send({ listing_id: 5, renter_sbt_id: 'renter-sbt', target_squad_id: 'squad-9' });
     expect(res.status).toBe(200);
     expect(res.body.rental_id).toBe(88);
@@ -142,7 +146,7 @@ describe('POST /rentals — settlement disabled', () => {
 
   test('400 when renter_sbt_id missing', async () => {
     const res = await request(makeApp())
-      .post('/api/v1/marketplace/rentals')
+      .post('/api/v1/marketplace/rentals').set('Authorization', 'Bearer test-operator-key')
       .send({ listing_id: 5 });
     expect(res.status).toBe(400);
   });

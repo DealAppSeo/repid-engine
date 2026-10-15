@@ -14,6 +14,7 @@
  * Depends on tables: developer_nodes, federation_events.
  */
 import { Router, Request, Response } from 'express';
+import { authMiddleware, isOperatorKey } from '../../middleware/auth';
 import crypto from 'crypto';
 import { db } from '../../db';
 
@@ -107,7 +108,20 @@ router.post('/register', async (req: Request, res: Response) => {
  * Body: { node_id, sbt_id? }
  * Updates last_heartbeat_at (and sbt_id if provided). Returns ok + current status.
  */
-router.post('/heartbeat', async (req: Request, res: Response) => {
+// POST /heartbeat and /event-stream sit ahead of the global authMiddleware (src/index.ts) and ran
+// no auth of their own. Each now runs authMiddleware (no key -> 401, invalid key -> 403) and then
+// accepts only an OPERATOR key: developer_nodes has no agent link and no per-node credential, so
+// no agent key can show it speaks for a node. A node token issued at /register is the follow-up.
+// /register stays public intake. No caller exists today (0 rows; none in the five repos).
+const operatorOnly = (req: Request, res: Response, next: () => void) => {
+  if (!isOperatorKey(req)) {
+    res.status(403).json({ error: 'Forbidden: node reports need an operator key until nodes have their own credential' });
+    return;
+  }
+  next();
+};
+
+router.post('/heartbeat', authMiddleware, operatorOnly, async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { node_id?: unknown; sbt_id?: unknown };
   const nodeId = Number(body.node_id);
   if (!Number.isInteger(nodeId) || nodeId <= 0) {
@@ -140,7 +154,7 @@ router.post('/heartbeat', async (req: Request, res: Response) => {
  * ONLY accepts when the node has federated_optin=true AND status='verified'; otherwise 403.
  * Inserts a federation_events row. No federated learning runs here (V2 substrate).
  */
-router.post('/event-stream', async (req: Request, res: Response) => {
+router.post('/event-stream', authMiddleware, operatorOnly, async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { node_id?: unknown; event_type?: unknown; payload?: unknown };
   const nodeId = Number(body.node_id);
   if (!Number.isInteger(nodeId) || nodeId <= 0) {

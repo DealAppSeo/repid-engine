@@ -11,6 +11,10 @@
 
 // Call-time global mock: the factory reads (global as any).__fedDb at invocation, so each test
 // can swap the db behavior without re-importing (avoids TDZ on module-scope consts in the factory).
+// These routes now require an API key (authMiddleware). An env-allowlist operator key keeps these
+// tests about the route's own behaviour; tests/preauth-writes-auth.test.ts covers the auth itself.
+process.env.REPID_API_KEYS = 'test-operator-key:ops'; // an operator key: it may act for a named agent
+jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../src/db', () => ({
   get db() {
     return (global as any).__fedDb;
@@ -100,7 +104,7 @@ describe('POST /event-stream — gating', () => {
   test('403 when node not opted-in', async () => {
     (global as any).__fedDb = makeFromForNode({ id: 1, federated_optin: false, status: 'verified' });
     const res = await request(makeApp())
-      .post('/api/v1/federation/event-stream')
+      .post('/api/v1/federation/event-stream').set('Authorization', 'Bearer test-operator-key')
       .send({ node_id: 1, event_type: 'gradient_update', payload: { layer: 1 } });
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('federation opt-in + verification required');
@@ -109,7 +113,7 @@ describe('POST /event-stream — gating', () => {
   test('403 when node opted-in but not verified', async () => {
     (global as any).__fedDb = makeFromForNode({ id: 1, federated_optin: true, status: 'pending' });
     const res = await request(makeApp())
-      .post('/api/v1/federation/event-stream')
+      .post('/api/v1/federation/event-stream').set('Authorization', 'Bearer test-operator-key')
       .send({ node_id: 1, event_type: 'gradient_update', payload: {} });
     expect(res.status).toBe(403);
   });
@@ -117,7 +121,7 @@ describe('POST /event-stream — gating', () => {
   test('404 when node missing', async () => {
     (global as any).__fedDb = makeFromForNode(null);
     const res = await request(makeApp())
-      .post('/api/v1/federation/event-stream')
+      .post('/api/v1/federation/event-stream').set('Authorization', 'Bearer test-operator-key')
       .send({ node_id: 999, event_type: 'gradient_update', payload: {} });
     expect(res.status).toBe(404);
   });
@@ -125,7 +129,7 @@ describe('POST /event-stream — gating', () => {
   test('201 when opted-in AND verified', async () => {
     (global as any).__fedDb = makeFromForNode({ id: 1, federated_optin: true, status: 'verified' });
     const res = await request(makeApp())
-      .post('/api/v1/federation/event-stream')
+      .post('/api/v1/federation/event-stream').set('Authorization', 'Bearer test-operator-key')
       .send({ node_id: 1, event_type: 'gradient_update', payload: { layer: 1 } });
     expect(res.status).toBe(201);
     expect(res.body.ok).toBe(true);
@@ -135,7 +139,7 @@ describe('POST /event-stream — gating', () => {
   test('400 when event_type missing', async () => {
     (global as any).__fedDb = makeFromForNode({ id: 1, federated_optin: true, status: 'verified' });
     const res = await request(makeApp())
-      .post('/api/v1/federation/event-stream')
+      .post('/api/v1/federation/event-stream').set('Authorization', 'Bearer test-operator-key')
       .send({ node_id: 1 });
     expect(res.status).toBe(400);
   });

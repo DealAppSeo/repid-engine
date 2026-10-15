@@ -14,6 +14,9 @@ import request from 'supertest';
 
 const insert = jest.fn(async () => ({ error: null }));
 jest.mock('../src/db', () => ({ db: { from: () => ({ insert }) } }));
+// The staging shape (a wallet in the body) now requires an API key; the signed-bind shape does not.
+process.env.REPID_API_KEYS = 'test-operator-key:ops'; // an operator key: it may act for a named agent
+jest.mock('../src/engine/agent-log', () => ({ logAgentEvent: jest.fn().mockResolvedValue(undefined) }));
 
 import humanBindStagingRouter from '../src/routes/human-bind-staging';
 
@@ -51,14 +54,14 @@ describe('the staging bind never swallows the signed bind', () => {
   });
 
   it('a body naming a wallet is still the staging route\'s (unchanged)', async () => {
-    const res = await request(app()).post('/api/v1/human/bind').send({ wallet: '0x1111111111111111111111111111111111111111', agent_id: AGENT });
+    const res = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ wallet: '0x1111111111111111111111111111111111111111', agent_id: AGENT });
     expect(res.status).toBe(201);
     expect(insert).toHaveBeenCalledTimes(1);
   });
 
   it('flag off: a wallet body is 410 and inserts nothing (unchanged)', async () => {
     process.env.HUMAN_AGENT_BIND_ENABLED = 'false';
-    const res = await request(app()).post('/api/v1/human/bind').send({ wallet: '0x1111111111111111111111111111111111111111', agent_id: AGENT });
+    const res = await request(app()).post('/api/v1/human/bind').set('Authorization', 'Bearer test-operator-key').send({ wallet: '0x1111111111111111111111111111111111111111', agent_id: AGENT });
     expect(res.status).toBe(410);
     expect(insert).not.toHaveBeenCalled();
   });
