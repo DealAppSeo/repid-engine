@@ -57,8 +57,14 @@ function paidStep(r: TrustReceipt): string {
     ? `<p><a href="${esc(r.settlement_url)}">${esc(r.settlement_tx)}</a></p>`
     : '<p class="muted">No settlement on record.</p>';
   const sim = `<p class="muted">simulated: <code>${r.is_simulated}</code> — if this said true, none of it counted.</p>`;
+  // The settlement RECORD's wallets, labelled as such: this page does not re-read the on-chain transfer
+  // (XC1 review of #1386). The settlement tx link below is where anyone can check them.
+  const wallets = r.payer_wallet && r.payee_wallet
+    ? `<p>Recorded payer <code>${esc(r.payer_wallet)}</code> (${esc(r.buyer)}) and payee <code>${esc(r.payee_wallet)}</code> (${esc(r.provider)}).</p>` +
+      '<p class="muted">As the settlement record names them. This page does not re-read the transfer on chain: check the transaction below.</p>'
+    : '';
   const title = r.paid_before_delivery === false ? 'Only then was it paid' : 'The payment';
-  return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${tx}${sim}`);
+  return step(4, title, `<p><strong>${esc(r.price_usdc)} USDC</strong> on Base Sepolia.</p>${wallets}${tx}${sim}`);
 }
 
 function render(r: TrustReceipt): string {

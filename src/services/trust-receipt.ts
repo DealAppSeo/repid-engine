@@ -17,7 +17,9 @@
  * Every claim is either backed by a row or reported as unknown. Nothing is
  * inferred from proximity in time.
  */
+import { getAddress } from 'ethers';
 import { db } from '../db';
+import { proofOfPaymentFrom } from './erc8004-feedback-file';
 
 export interface TrustReceipt {
   contract_id: string;
@@ -35,6 +37,25 @@ export interface TrustReceipt {
   settlement_tx: string | null;
   settlement_url: string | null;
   is_simulated: boolean | null;
+  /**
+   * WHO PAID WHOM, AS THE SETTLEMENT RECORD SAYS (2026-10-14): `payer_address`, and the payee (`to`) of
+   * the x402 authorization the payer signed, read through the same proofOfPaymentFrom the ERC-8004
+   * feedback file uses. Checksummed.
+   *
+   * WHAT THIS IS NOT (XC1 review of #1386): this route does NOT re-read the chain. The engine's own
+   * Transfer-log check (assessPayment, erc8004-feedback-verify.ts) is not run here, so these are the
+   * engine's RECORD of who paid whom, not a proof that the settlement tx moved USDC between them.
+   * `wallets_source: 'settlement_record'` says so in the data. The check is external by design: the
+   * trustshell acceptance gate reads the settlement tx's USDC Transfer from/to on chain and requires
+   * them to equal these. The addresses are not secret: if the record is true they are already public as
+   * that Transfer's from/to. `null` (both) when the row does not name a real payment from a named payer
+   * to a named payee (no settlement, simulated, no tx, or a legacy row missing either field): never
+   * guessed, and a caveat says so. The signed authorization itself (`x_payment_header`) is NOT published.
+   */
+  payer_wallet: string | null;
+  payee_wallet: string | null;
+  /** Where the two wallets come from: always the settlement record, never a chain read on this route. */
+  wallets_source: 'settlement_record' | null;
   /**
    * Did the money move BEFORE the work was delivered?
    *
@@ -137,13 +158,23 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
 
   const { data: settlement } = await db
     .from('x402_settlements')
-    .select('tx_hash, is_simulated, status, created_at, delivered_at')
+    // payer_address + x_payment_header are read ONLY to derive the two wallets below; the header (it
+    // carries the payer's signature) is never copied into the receipt.
+    .select('tx_hash, is_simulated, status, created_at, delivered_at, payer_address, x_payment_header')
     .eq('idempotency_key', contractId)
     .maybeSingle();
   if (settlement && settlement.is_simulated) {
     caveats.push('This settlement was SIMULATED — no money actually moved.');
   }
   if (!settlement) caveats.push('No x402 settlement is on record for this contract.');
+  // chainId only labels proofOfPaymentFrom's result, which is not published; the receipt is Base
+  // Sepolia throughout (see scan()).
+  const paid = proofOfPaymentFrom(settlement, 84532);
+  // Whenever the wallets are not shown, say so (XC1 review of #1386: a non-simulated row with no tx
+  // hash used to publish null wallets with no caveat).
+  if (!paid) {
+    caveats.push('The settlement record does not name both the payer and the payee wallet of a real payment, so who paid whom is not shown.');
+  }
 
   // Read the pay-vs-deliver ordering from the row instead of letting the template
   // assert it. See TrustReceipt.paid_before_delivery.
@@ -231,6 +262,10 @@ export async function buildTrustReceipt(contractId: string): Promise<TrustReceip
     settlement_tx: settlement?.tx_hash ?? null,
     settlement_url: settlement?.tx_hash ? scan(settlement.tx_hash) : null,
     is_simulated: settlement?.is_simulated ?? null,
+    // Lower-cased first: a stored address with a bad mixed-case checksum must not throw the route.
+    payer_wallet: paid ? getAddress(paid.fromAddress.toLowerCase()) : null,
+    payee_wallet: paid ? getAddress(paid.toAddress.toLowerCase()) : null,
+    wallets_source: paid ? 'settlement_record' : null,
     paid_before_delivery,
     reputation_events: (events ?? []).map((e) => {
       // `decayApplied` ABSENT and `decayApplied: 0` are different facts and are
