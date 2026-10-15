@@ -55,6 +55,27 @@ describe('pgQuery write semantics', () => {
     expect(isWriteStatement('SELECT updated_at FROM t -- UPDATE t SET x = 1')).toBe(false);
   });
 
+  test('only a PROVABLY read-only statement is a read: anything not SELECT/WITH-without-DML is a write', () => {
+    const { isWriteStatement } = mod;
+    // The old detector looked for known write shapes and called everything else a read.
+    expect(isWriteStatement('TRUNCATE repid_proof_queue')).toBe(true);
+    expect(isWriteStatement('SELECT * INTO backup_t FROM t')).toBe(true);
+    expect(isWriteStatement('CALL settle_batch($1)')).toBe(true);
+    expect(isWriteStatement('UPDATE "quoted table" SET a = 1')).toBe(true);
+    expect(isWriteStatement('REFRESH MATERIALIZED VIEW v_repid_leaderboard_by_vertical')).toBe(true);
+    expect(isWriteStatement('WITH x AS (DELETE FROM t RETURNING id) SELECT count(*) FROM x')).toBe(true);
+    // Still reads: keywords inside string literals, row locks, a read-only CTE.
+    expect(isWriteStatement("SELECT id FROM trinity_agent_logs WHERE action = 'update' OR action = 'insert into'")).toBe(false);
+    expect(isWriteStatement('SELECT * FROM t WHERE id = $1 FOR SHARE')).toBe(false);
+    expect(isWriteStatement('WITH a AS (SELECT 1 AS n) SELECT n FROM a')).toBe(false);
+  });
+
+  test('a statement the old detector missed (TRUNCATE) now runs once', async () => {
+    queryImpl.mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce({ rows: [] });
+    await expect(mod.pgQuery('TRUNCATE t', [], { label: 'tr' })).rejects.toThrow('blip');
+    expect(queryImpl).toHaveBeenCalledTimes(1);
+  });
+
   test('a write that commits and then times out is NOT retried', async () => {
     let applied = 0;
     queryImpl.mockImplementation(async () => {
@@ -82,10 +103,17 @@ describe('pgQuery write semantics', () => {
     expect(queryImpl).toHaveBeenCalledTimes(2);
   });
 
-  test('an explicit retries on a write is the caller\'s choice and is honoured', async () => {
-    queryImpl.mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce({ rows: [{ id: 1 }] });
-    await expect(mod.pgQuery('UPDATE t SET a = 1 WHERE id = $1 RETURNING id', [1], { label: 'e', retries: 2 })).resolves.toEqual([{ id: 1 }]);
-    expect(queryImpl).toHaveBeenCalledTimes(2);
+  test('retries > 1 on a write without idempotent: true throws before touching the database', async () => {
+    // The escape hatch XC1 found: run-repid-decay.ts inserted repid_vesting_events with
+    // retries: 2 and no ON CONFLICT, so a commit-then-timeout logged one decay twice.
+    queryImpl.mockResolvedValue({ rows: [] });
+    await expect(
+      mod.pgQuery('INSERT INTO repid_vesting_events (agent_id) VALUES ($1)', ['a'], { label: 'decay-log', retries: 2 }),
+    ).rejects.toThrow(/retries=2 on a statement that is not provably read-only/);
+    expect(queryImpl).not.toHaveBeenCalled();
+    // retries: 1 on a write is still fine, and so is retries on a read.
+    await expect(mod.pgQuery('UPDATE t SET a = 1 WHERE id = $1', [1], { label: 'e', retries: 1 })).resolves.toEqual([]);
+    await expect(mod.pgQuery('SELECT 1', [], { label: 'r', retries: 3 })).resolves.toEqual([]);
   });
 
   test('a write timeout says the statement may have committed', async () => {

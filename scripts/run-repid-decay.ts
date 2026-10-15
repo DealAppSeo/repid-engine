@@ -61,6 +61,57 @@ export function shouldApply(
   return env.REPID_DECAY_APPLY === 'true';
 }
 
+/**
+ * APPLY: write current_repid (tier auto-re-derives via trg_sync_tier), then log it.
+ *
+ * Each write runs ONCE (pgQuery write-once). The INSERT has no ON CONFLICT, so the old
+ * `retries: 2` could log one decay twice. The UPDATE is a compare-and-set on the value this run
+ * read (`AND current_repid = $3`): a score event landing in between is not clobbered, and the
+ * log row is written only when the decay actually applied. A failure is per agent: logged
+ * loudly, and the run moves on; the next run recomputes from fresh state. Exported for test.
+ */
+export async function applyDecays(
+  decays: Array<{ row: Row; r: ReturnType<typeof decayRepid> }>,
+  query: typeof pgQuery = pgQuery,
+): Promise<{ applied: number; changed: number; failed: string[] }> {
+  let applied = 0;
+  let changed = 0;
+  const failed: string[] = [];
+  for (const { row, r } of decays) {
+    if (r.decay_amount <= 0) continue;
+    try {
+      const hit = await query<{ id: string }>(
+        `UPDATE repid_agents SET current_repid = $1
+          WHERE id = $2 AND lifecycle_status = 'active' AND current_repid = $3
+        RETURNING id`,
+        [r.repid_after, row.id, row.current_repid],
+        { label: 'repid-decay-apply-update' },
+      );
+      if (hit.length === 0) {
+        changed++;
+        console.warn(`[repid-decay] ${row.agent_name} (${row.id}): score or status changed since the read — skipped, next run recomputes`);
+        continue;
+      }
+      // Log to repid_vesting_events (reused): earned=before, vested=after, cliff=now.
+      await query(
+        `INSERT INTO repid_vesting_events (agent_id, repid_earned, repid_vested, cliff_ends_at, vesting_complete)
+         VALUES ($1, $2, $3, now(), false)`,
+        [row.id, r.repid_before, r.repid_after],
+        { label: 'repid-decay-log-event' },
+      );
+      applied++;
+    } catch (e) {
+      failed.push(row.agent_name ?? row.id);
+      console.error(
+        `[repid-decay] FAILED for ${row.agent_name} (${row.id}): ${(e as Error).message} ` +
+          '(a timed-out write may still have committed; if the UPDATE did, its log row is missing)',
+      );
+    }
+  }
+  if (changed > 0) console.warn(`[repid-decay] ${changed} agent(s) skipped: changed since the read`);
+  return { applied, changed, failed };
+}
+
 async function main() {
   const apply = shouldApply();
   const nowMs = Date.now();
@@ -125,25 +176,12 @@ async function main() {
     return;
   }
 
-  // APPLY: write current_repid (tier auto-re-derives via trg_sync_tier) + log.
-  let applied = 0;
-  for (const { row, r } of decays) {
-    if (r.decay_amount <= 0) continue;
-    await pgQuery(
-      `UPDATE repid_agents SET current_repid = $1 WHERE id = $2 AND lifecycle_status = 'active'`,
-      [r.repid_after, row.id],
-      { retries: 2, label: 'repid-decay-apply-update' },
-    );
-    // Log to repid_vesting_events (reused): earned=before, vested=after, cliff=now.
-    await pgQuery(
-      `INSERT INTO repid_vesting_events (agent_id, repid_earned, repid_vested, cliff_ends_at, vesting_complete)
-       VALUES ($1, $2, $3, now(), false)`,
-      [row.id, r.repid_before, r.repid_after],
-      { retries: 2, label: 'repid-decay-log-event' },
-    );
-    applied++;
-  }
+  const { applied, failed } = await applyDecays(decays);
   console.log(`\n[repid-decay] APPLIED decay to ${applied} agents; ${anomalies.length} skipped/flagged.`);
+  if (failed.length > 0) {
+    // Non-zero exit so the cron run reads as failed, after every other agent was attempted.
+    throw new Error(`[repid-decay] ${failed.length} agent(s) failed to apply: ${failed.join(', ')}`);
+  }
 }
 
 // Run only when executed directly. Without this guard the script executes — and

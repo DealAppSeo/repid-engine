@@ -41,14 +41,26 @@ const pgQueryMock = jest.fn(async (_sql: string, _params: any[], opts?: any) => 
         g.__rowReason = _params[1]; // the statement committed...
         throw new Error('[direct-pg] query timeout after 10000ms: panel-close-queue (write: the statement may still have committed — re-read before deciding)');
       }
+      if (g.__closeInFlight) {
+        // Still running server-side: it commits only AFTER the re-read below has looked.
+        g.__lateCommit = () => { g.__rowReason = _params[1]; };
+        throw new Error('[direct-pg] query timeout after 10000ms: panel-close-queue (write: the statement may still have committed — re-read before deciding)');
+      }
       if (g.__closeLost) return [];
       g.__rowReason = _params[1];
       return [{ id: 142077 }];
-    case 'panel-close-reread':
-      return [{ verification_status: g.__rowReason ? 'panel_resolved' : 'in_review', closure_reason: g.__rowReason ?? null }];
+    case 'panel-close-reread': {
+      const seen = [{ verification_status: g.__rowReason ? 'panel_resolved' : 'in_review', closure_reason: g.__rowReason ?? null }];
+      if (g.__lateCommit) { g.__lateCommit(); g.__lateCommit = undefined; } // lands after the re-read
+      return seen;
+    }
     case 'panel-score-events-written':
       return [{ n: g.__written ?? 0 }];
     case 'panel-reopen-unscored':
+      if (g.__reopenInFlight) {
+        g.__lateCommit = () => { g.__rowReason = null; };
+        throw new Error('[direct-pg] query timeout after 10000ms: panel-reopen-unscored (write: the statement may still have committed — re-read before deciding)');
+      }
       if (_params[1] !== g.__rowReason) return []; // someone else's close: never reverted
       g.__rowReason = null;
       return [{ id: 142077 }];
@@ -134,6 +146,9 @@ describe('panel majority path fails closed', () => {
     g.__fetchFailOnCall = 0;
     g.__scoreFailOnCall = 0;
     g.__closeCommitsThenThrows = false;
+    g.__closeInFlight = false;
+    g.__reopenInFlight = false;
+    g.__lateCommit = undefined;
     g.__closeLost = false;
     g.__rowReason = null;
     g.__written = 0;
@@ -250,6 +265,31 @@ describe('panel majority path fails closed', () => {
     expect(callsFor('panel-close-queue')).toHaveLength(1); // one attempt, no blind retry
     expect(callsFor('panel-close-reread')).toHaveLength(1);
     expect(applyValidationEventMock).toHaveBeenCalled();
+  });
+
+  it('close commits only AFTER the re-read: outcome unknown, 503 retryable, nothing scored', async () => {
+    g.__votes = ballots('verified', 'verified', 'disputed');
+    g.__closeInFlight = true;
+    const res = await castVote('verified');
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ outcome: 'unknown', retryable: true });
+    expect(applyValidationEventMock).not.toHaveBeenCalled();
+    expect(g.__rowReason).toBe(g.__closeToken); // the close DID land, after we looked
+    expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`close outcome UNKNOWN for queue 142077 under ${g.__closeToken}`)));
+  });
+
+  it('reopen commits only AFTER the re-read: outcome unknown and retryable, never "did not land"', async () => {
+    g.__votes = ballots('verified', 'verified', 'disputed');
+    g.__scoreFailOnCall = 1;
+    g.__written = 0;
+    g.__reopenInFlight = true;
+    const res = await castVote('verified');
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ outcome: 'unknown', retryable: true });
+    expect(g.__rowReason).toBeNull(); // the reopen DID land, after we looked
+    expect(errSpy).not.toHaveBeenCalledWith(expect.stringMatching(/did not land/));
   });
 
   it('score events carry the close token, so a failure is judged from the DB', async () => {

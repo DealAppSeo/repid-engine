@@ -138,16 +138,30 @@ function timeoutReject<T>(ms: number, label: string): Promise<T> {
 }
 
 /**
- * Does this statement write? INSERT / UPDATE / DELETE / MERGE anywhere in it (a CTE that writes
- * counts), ignoring comments and `FOR UPDATE` row locks. Errs toward "write": a read misclassified
- * as a write only loses its retries, while a write misclassified as a read can be applied twice.
+ * Is this statement PROVABLY read-only? It must start with SELECT or WITH and contain no
+ * data-changing keyword anywhere outside comments and string literals (a WITH whose CTE writes
+ * is a write; so is SELECT … INTO). Anything not proven read-only is treated as a write — a read
+ * misclassified as a write only loses its retries, while a write misclassified as a read can be
+ * applied twice. `FOR UPDATE` / `FOR SHARE` row locks are reads.
+ *
+ * ponytail: a SELECT that calls a data-modifying FUNCTION (`SELECT claim_job()`) reads as
+ * read-only here. No pgQuery call site does that today (enumerated 2026-10-14); one that does
+ * must pass `retries: 1`.
  */
-export function isWriteStatement(sql: string): boolean {
-  const stripped = sql
+export function isReadOnlyStatement(sql: string): boolean {
+  const s = sql
     .replace(/--[^\n]*/g, ' ')
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/\bFOR\s+(NO\s+KEY\s+)?UPDATE\b/gi, ' ');
-  return /\b(INSERT\s+INTO|UPDATE\s+[\w."]+\s+(AS\s+\w+\s+)?SET|UPDATE\s+[\w."]+\s+\w+\s+SET|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(stripped);
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/\bFOR\s+(?:NO\s+KEY\s+|KEY\s+)?(?:UPDATE|SHARE)\b/gi, ' ')
+    .trim();
+  if (!/^\(*\s*(?:SELECT|WITH)\b/i.test(s)) return false;
+  return !/\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|INTO|CALL|COPY|CREATE|DROP|ALTER|GRANT|REVOKE|LOCK|NOTIFY|REFRESH)\b/i.test(s);
+}
+
+/** The complement, kept for callers that ask the question the other way round. */
+export function isWriteStatement(sql: string): boolean {
+  return !isReadOnlyStatement(sql);
 }
 
 /**
@@ -164,8 +178,10 @@ export function isWriteStatement(sql: string): boolean {
  * statement, and on the transaction pooler a statement that finishes commits. So a write that
  * "timed out" may have committed, and retrying it applies it again — a conditional UPDATE then
  * returns 0 rows and the caller reads its own success as someone else's (XC1, PR #1375 review).
- * A statement isWriteStatement() recognises therefore runs once unless the caller passes
- * `idempotent: true` (running it twice has the same effect as once) or an explicit `retries`.
+ * Only a statement isReadOnlyStatement() proves read-only gets the default retries. Anything
+ * else runs once unless the caller passes `idempotent: true` (running it twice has the same
+ * effect AND the same result as once). `retries > 1` on a non-read without `idempotent: true`
+ * throws before touching the database: an explicit retry count is not a way around this rule.
  * A caller that needs to know what happened after a write throws must re-read the row.
  */
 export async function pgQuery<T extends QueryResultRow = any>(
@@ -178,10 +194,16 @@ export async function pgQuery<T extends QueryResultRow = any>(
   }
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
-  const write = isWriteStatement(text);
+  const write = !isReadOnlyStatement(text);
+  const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
+  if (write && !opts.idempotent && (opts.retries ?? 1) > 1) {
+    throw new Error(
+      `[direct-pg] ${label}: retries=${opts.retries} on a statement that is not provably read-only. ` +
+        'Pass idempotent: true only if running it twice has the same effect and result as once; otherwise drop retries.',
+    );
+  }
   const defaultAttempts = write && !opts.idempotent ? 1 : BACKOFF_SCHEDULE_MS.length;
   const maxAttempts = Math.max(1, opts.retries ?? defaultAttempts);
-  const label = opts.label ?? text.slice(0, 48).replace(/\s+/g, ' ');
   const callStart = Date.now();
 
   // 2026-07-31 — CONFIG ERRORS ARE NOT TRANSIENT, and retrying one is fatal in a

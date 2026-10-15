@@ -970,7 +970,7 @@ export async function applyValidationEvent(
   // watermark, so this SERVICE_FULFILLED path can't double-count after the flip. Mirrors runScoreEvent.
   const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
   if (WRITER_DIRECT_APPLY) {
-    await db
+    const { error: applyErr } = await db
       .from('repid_agents')
       .update({
         current_repid: Math.round(new_repid),
@@ -978,6 +978,31 @@ export async function applyValidationEvent(
         last_updated: new Date().toISOString(),
       })
       .eq('id', agent_id);
+    if (applyErr) {
+      // The event row above carries repid_delta_applied, so apply_repid_score_event skipped it:
+      // this UPDATE was the ONLY applier, and the ledger now says "applied" while the score did
+      // not move. Not rethrown — the event is persisted, and every caller would retry the whole
+      // call and insert it twice. Instead: loud, plus a marker on the event row a reconciler can
+      // select (metadata ? 'direct_apply_failed') to apply repid_delta_applied later.
+      console.error(
+        `[applyValidationEvent] DIRECT-APPLY FAILED score_event=${score_event_id} agent=${agent_id} ` +
+          `${old_repid}->${Math.round(new_repid)}: event persisted, repid_agents NOT updated: ${applyErr.message}`,
+      );
+      const { error: markErr } = await db
+        .from('repid_score_events')
+        .update({
+          metadata: {
+            ...insertPayload.metadata,
+            direct_apply_failed: { at: new Date().toISOString(), error: applyErr.message },
+          },
+        })
+        .eq('id', score_event_id);
+      if (markErr) {
+        console.error(
+          `[applyValidationEvent] marker write ALSO failed for score_event=${score_event_id}: ${markErr.message}`,
+        );
+      }
+    }
   }
 
   // Audit anchor for service-contract fulfilment. The

@@ -231,7 +231,9 @@ export async function aggregateEpoch(epoch: EpochSpec, opts: { persist?: boolean
         WHERE id = ANY($2::bigint[])
       RETURNING id`,
       [r.root, r.ids],
-      { retries: 2, label: 'zkp-epoch-aggregate-update' },
+      // Idempotent: an absolute SET of the epoch's deterministic root, no state predicate, so a
+      // replay changes nothing and RETURNING yields the same ids.
+      { retries: 2, idempotent: true, label: 'zkp-epoch-aggregate-update' },
     );
     rows_updated = updated.length;
   }
@@ -415,7 +417,9 @@ export async function recordEpochAnchorUid(epoch: EpochSpec, uid: string): Promi
         AND created_at >= $3 AND created_at < $4
     RETURNING id`,
     [uid, EAS_SCHEMA_LABEL, epoch.start, epoch.end],
-    { retries: 2, label: 'zkp-epoch-anchor-uid-update' },
+    // Idempotent: absolute SET, no state predicate, so a replay changes nothing and RETURNING
+    // yields the same rows.
+    { retries: 2, idempotent: true, label: 'zkp-epoch-anchor-uid-update' },
   );
   return updated.length;
 }
