@@ -407,6 +407,18 @@ describe('none_why: why a question came back unusable, as counts', () => {
 describe('time: the question fits inside the deadline or does not happen', () => {
   const DEADLINE = 800;
 
+  // Let each case's abandoned calls settle before the next case's beforeEach resets vote state.
+  // 'slower than the time left' answers at the question's 'late' timer, but the question's own
+  // abort timer (same duration, armed a moment later) is still pending. When it fires, dialVoter's
+  // catch cools voter A for FAILURE_COOL_MS [V: castVote on voter A right after that response
+  // returns 'cooling']. On a fast runner it can fire AFTER the next case's reset and before its
+  // votes, so 'hung' finds voter A cooling: voters ['groq'], no deciders, no question. That is the
+  // CI failure on main (run 38196394271) and on #1383 (run 38659061596). Timers fire in due order,
+  // so a timer armed after the case ends fires after that abort.
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
   // The last column is the none_why the stats must show. A slow reply races the route's deadline
   // against the call's own abort, which fire at the same moment, so either name is the right one.
   it.each([
