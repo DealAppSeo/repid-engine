@@ -419,8 +419,21 @@ describe('time: the question fits inside the deadline or does not happen', () =>
       const rec = recordHost(unsure, () => reply);
       try {
         const res = await request(classifyApp({ deadlineMs: DEADLINE })).post('/api/v1/classify').send({ text: CLAIM });
-        expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'], votes: expect.any(Array) });
-        expect(res.body.latency_ms).toBeLessThan(DEADLINE);
+        if (res.body.by === 'deadline') {
+          // The question's own 'late' timer fires VOTE_HEADROOM_MS (200 ms) before the route's
+          // deadline, so a stall of that size between them lets the route's deadline answer
+          // instead. That answer is honest too: same label, no question, labelled 'deadline'.
+          // Measured locally: 1 run in 25 of this block, at latency_ms 803.
+          expect(res.body).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'deadline' });
+        } else {
+          // A voter missing here was refused BEFORE its request (CI shape: voters ['groq'], no
+          // deciders, main 2026-10-12 and #1383 2026-10-15). The abstains name the refusal.
+          const abstains = Object.fromEntries(
+            (classifyStats(ON).voters ?? []).filter((v) => Object.keys(v.abstains).length > 0).map((v) => [v.voter, v.abstains]),
+          );
+          expect({ ...res.body, abstains }).toEqual({ label: 'not-checked', latency_ms: expect.any(Number), by: 'votes', voters: ['groq', 'groq'], deciders: ['groq', 'groq'], votes: expect.any(Array), abstains: {} });
+          expect(res.body.latency_ms).toBeLessThan(DEADLINE);
+        }
         expect(rec.questionCalls()).toHaveLength(1);
         const q = classifyStats(ON).questions!;
         expect({ asked: q.asked, given: q.given, none: q.none }).toEqual({ asked: 1, given: 0, none: 1 });
