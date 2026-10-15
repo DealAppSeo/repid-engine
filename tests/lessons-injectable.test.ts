@@ -33,7 +33,8 @@ describe('LESSONS.md stays injectable', () => {
   });
 
   it(`is under the ${MAX}-char cap — over it, the mechanism dies quietly`, () => {
-    const size = readFileSync(LESSONS, 'utf8').length;
+    // LF, as the repo stores it and as the runner measures it: a Windows checkout's CRs are not content.
+    const size = readFileSync(LESSONS, 'utf8').replace(/\r\n/g, '\n').length;
     // If this fails, CONSOLIDATE. Do not raise the cap: raising it is the first
     // step of the exact decay this file exists to prevent, and the second step is
     // someone deciding the preamble is too long and dropping the injection.

@@ -1149,7 +1149,8 @@ function main() {
       console.error(`[dispatch] ⚠ ${LESSONS_PATH} MISSING — dispatching without shared lessons.`);
       return null;
     }
-    const text = readFileSync(LESSONS_PATH, 'utf8');
+    // A Windows checkout (core.autocrlf) adds a CR per line: 5993 chars read as 6054. Measured as the repo stores it.
+    const text = readFileSync(LESSONS_PATH, 'utf8').replace(/\r\n/g, '\n');
     if (text.length > LESSONS_MAX) {
       console.error(
         `[dispatch] ⚠ LESSONS.md is ${text.length} chars, over the ${LESSONS_MAX} cap. ` +
