@@ -34,7 +34,7 @@ export async function runPCP(taskData: any) {
   // 1. Select Validators
   const { data: agents, error } = await db
     .from('repid_agents')
-    .select('id, agent_name, current_repid, lifecycle_status');
+    .select('id, agent_name, current_repid, lifecycle_status, is_human, mock:constitution->mock');
 
   if (error || !agents) {
     console.error('[runPCP] Failed to fetch agents:', error);
@@ -56,12 +56,7 @@ export async function runPCP(taskData: any) {
   // a name-only comparison that never matched, so the buyer stayed eligible to validate
   // its own purchase. Self-validation is exactly what a peer-validation claim must not
   // permit, so the exclusion now covers both shapes.
-  const claimer = taskData.claimed_by;
-  const eligible = agents.filter(a =>
-    a.agent_name !== claimer &&
-    a.id !== claimer &&
-    a.current_repid >= 500 &&
-    (a.lifecycle_status ?? 'active') === 'active');
+  const eligible = eligibleValidators(agents, taskData.claimed_by);
 
   // Random sample weighted by RepID. Diversity logic is a plus.
   const selectedValidators = selectWeightedValidators(eligible, 3);
@@ -218,6 +213,26 @@ ${taskData.result}`;
     attemptedValidators: results.map(r => r.name),
     validatorBeliefs: responded.map(r => r.confidence)
   };
+}
+
+/**
+ * Who may be named as a PCP validator. Every "validator" is the same PCP_MODEL call with the same
+ * prompt; the agent drawn here is the name the verdict is recorded under and the agent that earns
+ * VALIDATOR_REWARD. So a row that cannot have made that call must not be drawn:
+ *   - is_human: a person did not give this LLM verdict, and must not be recorded or paid as if they had.
+ *   - constitution.mock === true: written by scripts/mock-harness/mock-agent.ts, the harness's own
+ *     mark (evidence, not a name guess). Measured 2026-10-15: 47 such rows sat 'active' at repid
+ *     500-545, and two were paid VALIDATOR_REWARD (+40) for validations they never ran.
+ * Plus the original rules: not the claimer (by id or name), repid >= 500, lifecycle 'active'.
+ */
+export function eligibleValidators(agents: any[], claimer: unknown): any[] {
+  return agents.filter((a) =>
+    a.agent_name !== claimer &&
+    a.id !== claimer &&
+    a.current_repid >= 500 &&
+    (a.lifecycle_status ?? 'active') === 'active' &&
+    a.is_human !== true &&
+    a.mock !== true && a.mock !== 'true');
 }
 
 export function selectWeightedValidators(agents: any[], count: number) {

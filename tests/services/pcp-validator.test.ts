@@ -1,4 +1,4 @@
-import { runPCP, selectWeightedValidators } from '../../src/services/pcp-validator';
+import { runPCP, selectWeightedValidators, eligibleValidators } from '../../src/services/pcp-validator';
 import { db } from '../../src/db';
 
 jest.mock('../../src/db', () => ({
@@ -140,5 +140,36 @@ describe('pcp-validator', () => {
       expect(res.score).toBeCloseTo(1.64 / 2.3);
       expect(res.confidence).toBeCloseTo(2.3 / 3);
     });
+  });
+});
+
+// Every PCP "validator" is the same model call; the drawn agent is who it is recorded under and paid
+// (VALIDATOR_REWARD). Measured 2026-10-15: mock fixtures and human rows were being drawn.
+describe('eligibleValidators: who may be named as a validator', () => {
+  const ok = { id: 'a1', agent_name: 'trinity-veritas', current_repid: 1800, lifecycle_status: 'active' };
+
+  it('keeps an active agent with enough RepID', () => {
+    expect(eligibleValidators([ok], 'someone-else')).toEqual([ok]);
+  });
+
+  it('drops a human row: a person did not give this LLM verdict', () => {
+    expect(eligibleValidators([{ ...ok, agent_name: 'SEAN', is_human: true }], 'x')).toEqual([]);
+  });
+
+  it('drops a mock-harness fixture by its own mark (JSON true or text "true")', () => {
+    expect(eligibleValidators([{ ...ok, agent_name: 'trinity-mock-it-seller-1', mock: true }], 'x')).toEqual([]);
+    expect(eligibleValidators([{ ...ok, agent_name: 'trinity-mock-it-buyer-1', mock: 'true' }], 'x')).toEqual([]);
+  });
+
+  it('keeps the original rules: not the claimer by id or name, repid >= 500, lifecycle active', () => {
+    expect(eligibleValidators([ok], 'trinity-veritas')).toEqual([]);
+    expect(eligibleValidators([ok], 'a1')).toEqual([]);
+    expect(eligibleValidators([{ ...ok, current_repid: 499 }], 'x')).toEqual([]);
+    expect(eligibleValidators([{ ...ok, lifecycle_status: 'test_only' }], 'x')).toEqual([]);
+    expect(eligibleValidators([{ ...ok, lifecycle_status: undefined }], 'x')).toHaveLength(1);
+  });
+
+  it('a row with no is_human / mock fields (older selects) is not excluded by them', () => {
+    expect(eligibleValidators([{ ...ok, is_human: false, mock: null }], 'x')).toHaveLength(1);
   });
 });
