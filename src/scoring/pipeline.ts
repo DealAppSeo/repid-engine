@@ -761,7 +761,7 @@ export async function runScoreEvent(
   // When false: insert event only (with full audit fields + idempotency_key); aggregator becomes sole applier.
   const WRITER_DIRECT_APPLY = process.env.WRITER_DIRECT_APPLY !== 'false';
   if (WRITER_DIRECT_APPLY) {
-    await db
+    const { error: applyErr } = await db
       .from('repid_agents')
       .update({
         current_repid: Math.round(new_repid),
@@ -769,6 +769,9 @@ export async function runScoreEvent(
         last_updated: new Date().toISOString(),
       })
       .eq('id', input.agent_id);
+    if (applyErr) {
+      await reportDirectApplyFailure('runScoreEvent', score_event_id, input.agent_id, old_repid, Math.round(new_repid), insertPayload.metadata, applyErr);
+    }
   } else {
     // Event already written above with repid_before/after + delta. Aggregator will apply from watermark.
   }
@@ -825,6 +828,43 @@ export async function runScoreEvent(
       ? `${delta.reason} (S-DRAIN: penalty suppressed — no hallucination_caught)`
       : delta.reason,
   };
+}
+
+/**
+ * The repid_agents UPDATE after a score event failed. The event row carries repid_delta_applied, so
+ * apply_repid_score_event skipped it: that UPDATE was the ONLY applier, and the ledger now says
+ * "applied" while the score did not move. Not rethrown — the event is persisted, and every caller
+ * would retry the whole call and insert it twice. Instead: loud, plus a marker on the event row a
+ * reconciler can select (metadata ? 'direct_apply_failed') to apply repid_delta_applied later. A
+ * marker that cannot be written is loud too, returned error or thrown.
+ */
+async function reportDirectApplyFailure(
+  site: string,
+  scoreEventId: unknown,
+  agentId: unknown,
+  from: number,
+  to: number,
+  metadata: unknown,
+  applyErr: { message: string },
+): Promise<void> {
+  console.error(
+    `[${site}] DIRECT-APPLY FAILED score_event=${scoreEventId} agent=${agentId} ${from}->${to}: ` +
+      `event persisted, repid_agents NOT updated: ${applyErr.message}`,
+  );
+  try {
+    const { error: markErr } = await db
+      .from('repid_score_events')
+      .update({
+        metadata: {
+          ...((metadata as Record<string, unknown>) ?? {}),
+          direct_apply_failed: { at: new Date().toISOString(), error: applyErr.message },
+        },
+      })
+      .eq('id', scoreEventId);
+    if (markErr) console.error(`[${site}] marker write ALSO failed for score_event=${scoreEventId}: ${markErr.message}`);
+  } catch (e) {
+    console.error(`[${site}] marker write ALSO failed (threw) for score_event=${scoreEventId}: ${(e as Error)?.message ?? e}`);
+  }
 }
 
 export async function applyValidationEvent(
@@ -979,29 +1019,7 @@ export async function applyValidationEvent(
       })
       .eq('id', agent_id);
     if (applyErr) {
-      // The event row above carries repid_delta_applied, so apply_repid_score_event skipped it:
-      // this UPDATE was the ONLY applier, and the ledger now says "applied" while the score did
-      // not move. Not rethrown — the event is persisted, and every caller would retry the whole
-      // call and insert it twice. Instead: loud, plus a marker on the event row a reconciler can
-      // select (metadata ? 'direct_apply_failed') to apply repid_delta_applied later.
-      console.error(
-        `[applyValidationEvent] DIRECT-APPLY FAILED score_event=${score_event_id} agent=${agent_id} ` +
-          `${old_repid}->${Math.round(new_repid)}: event persisted, repid_agents NOT updated: ${applyErr.message}`,
-      );
-      const { error: markErr } = await db
-        .from('repid_score_events')
-        .update({
-          metadata: {
-            ...insertPayload.metadata,
-            direct_apply_failed: { at: new Date().toISOString(), error: applyErr.message },
-          },
-        })
-        .eq('id', score_event_id);
-      if (markErr) {
-        console.error(
-          `[applyValidationEvent] marker write ALSO failed for score_event=${score_event_id}: ${markErr.message}`,
-        );
-      }
+      await reportDirectApplyFailure('applyValidationEvent', score_event_id, agent_id, old_repid, Math.round(new_repid), insertPayload.metadata, applyErr);
     }
   }
 

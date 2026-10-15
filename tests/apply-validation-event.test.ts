@@ -41,6 +41,7 @@ jest.mock('../src/db', () => ({
         return {
           update: (payload: any) => ({
             eq: (_col: string, id: unknown) => {
+              if ((global as any).__avMarkerThrows) throw new Error('socket hang up');
               (global as any).__avEventUpdates.push({ payload, id });
               return Promise.resolve({ data: null, error: null });
             },
@@ -98,6 +99,7 @@ beforeEach(() => {
   (global as any).__avAnchorCalls = [];
   (global as any).__avEventUpdates = [];
   (global as any).__avAgentUpdateError = null;
+  (global as any).__avMarkerThrows = false;
 });
 
 describe('applyValidationEvent — halOverride', () => {
@@ -169,6 +171,18 @@ describe('applyValidationEvent — halOverride', () => {
       expect(marks[0].id).toBe(4242);
       expect(marks[0].payload.metadata.direct_apply_failed).toMatchObject({ error: 'canceling statement due to statement timeout' });
       expect(marks[0].payload.metadata.role).toBe('validator'); // the original metadata is kept
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test('7. a marker write that THROWS is loud, and the persisted event does not become a thrown call', async () => {
+    (global as any).__avAgentUpdateError = { message: 'canceling statement due to statement timeout' };
+    (global as any).__avMarkerThrows = true;
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(applyValidationEvent(AGENT_ID, 'VALIDATOR_REWARD', 10, { role: 'validator' })).resolves.toBeDefined();
+      expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/marker write ALSO failed \(threw\) for score_event=4242: socket hang up/));
     } finally {
       errSpy.mockRestore();
     }

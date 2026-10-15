@@ -70,6 +70,43 @@ describe('pgQuery write semantics', () => {
     expect(isWriteStatement('WITH a AS (SELECT 1 AS n) SELECT n FROM a')).toBe(false);
   });
 
+  // XC1 on #1387: the classifier stripped comments BEFORE literals, so a comment opener inside a
+  // string swallowed the DML after it. Each case below read as a read on dbac892d.
+  test.each([
+    ['-- inside a literal', "WITH x AS (SELECT 'a --') UPDATE t SET b = 1"],
+    ['/* in one literal, */ in a later one', "WITH x AS (SELECT '/*' AS a), y AS (UPDATE t SET b = 1 RETURNING 1) SELECT '*/' FROM x"],
+    ['a quote inside a dollar-quoted body', "SELECT $x$'$x$ AS a; UPDATE t SET b = 1 WHERE c = '1'"],
+    ['a dollar-quoted DO behind a SELECT', 'SELECT 1 AS a; DO $$ BEGIN PERFORM 1; END $$'],
+    ['two statements, both harmless-looking', 'SELECT 1; SELECT 2'],
+    ['a second statement the keyword list never knew', 'SELECT 1; VACUUM t'],
+    ['a function call that writes', 'SELECT claim_job($1)'],
+    ['a set-returning function that writes', 'SELECT * FROM claim_next_job($1)'],
+    ['a sequence advance', "SELECT nextval('repid_seq')"],
+    ['a schema-qualified call', 'SELECT public.count_and_mark($1)'],
+    ['an unterminated literal', "SELECT 'abc"],
+  ])('not provably read-only → write: %s', (_why, sql) => {
+    expect(mod.isWriteStatement(sql)).toBe(true);
+  });
+
+  test('literals, identifiers and casts are lexed, not guessed: these stay reads', () => {
+    const reads = [
+      "SELECT 'it''s -- not a comment' AS a, '/* nor this */' AS b",
+      "SELECT E'\\' -- still inside' AS a",
+      'SELECT $tag$ UPDATE t SET b = 1 $tag$ AS quoted_body',
+      'SELECT "update" FROM t /* UPDATE t SET b = 1 */',
+      'SELECT count(*)::int AS n, coalesce(max(x), 0) AS m FROM t WHERE y = ANY($1::text[]) FOR UPDATE',
+      'SELECT x::numeric(10,2), CAST(y AS varchar(20)) FROM t',
+      'WITH c AS (SELECT lag(h) OVER (ORDER BY id) AS p FROM t) SELECT count(*) FILTER (WHERE p IS NULL) FROM c',
+    ];
+    for (const sql of reads) expect([sql, mod.isWriteStatement(sql)]).toEqual([sql, false]);
+  });
+
+  test('a SELECT that calls a non-allowlisted function runs once', async () => {
+    queryImpl.mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce({ rows: [] });
+    await expect(mod.pgQuery('SELECT claim_job($1)', ['a'], { label: 'claim' })).rejects.toThrow('blip');
+    expect(queryImpl).toHaveBeenCalledTimes(1);
+  });
+
   test('a statement the old detector missed (TRUNCATE) now runs once', async () => {
     queryImpl.mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce({ rows: [] });
     await expect(mod.pgQuery('TRUNCATE t', [], { label: 'tr' })).rejects.toThrow('blip');
