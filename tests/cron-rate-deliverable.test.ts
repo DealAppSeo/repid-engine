@@ -23,8 +23,11 @@
  */
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { isSoundDeliverable } from '../src/services/verdict';
 
-const MODULE = join(__dirname, '..', 'scripts', 'cron', 'rate-deliverable.mjs');
+// A file:// URL, not a bare path: ESM rejects `C:\...` on Windows.
+const MODULE = pathToFileURL(join(__dirname, '..', 'scripts', 'cron', 'rate-deliverable.mjs')).href;
 
 interface Rating { n: number; met: boolean }
 
@@ -35,14 +38,13 @@ function rate(result: unknown): { ratings: Rating[]; score: number; releases: bo
     const result = ${JSON.stringify(result)};
     const ratings = rateDeliverable(result);
     const score = scoreOf(ratings);
-    // The server's own gate, transcribed from routes/v1/contracts.ts:
-    //   const passed = verdict === 'PASS' && derived.score > 0;
-    const verdict = String(result?.verdict ?? '').toUpperCase();
-    const releases = verdict === 'PASS' && score > 0;
-    console.log(JSON.stringify({ ratings, score, releases }));
+    console.log(JSON.stringify({ ratings, score }));
   `;
   const out = execFileSync('node', ['--input-type=module', '-e', src], { encoding: 'utf8' });
-  return JSON.parse(out.trim());
+  const { ratings, score } = JSON.parse(out.trim());
+  // The server's own gate, imported rather than transcribed (routes/v1/contracts.ts /satisfy):
+  //   const passed = isSoundDeliverable(pre.result) && derived.score > 0;
+  return { ratings, score, releases: isSoundDeliverable(result as any) && score > 0 };
 }
 
 /**
@@ -84,9 +86,22 @@ describe('the cron rates what it was actually sent', () => {
 
   it('a FAIL verdict does NOT release payment, however the criteria rate', () => {
     // The buyer rating and the delivery verdict are separate gates and both bind.
+    // A FAIL with no `confident` is the legacy meaning: the validators were not sure.
     const { score, releases } = rate({ verdict: 'FAIL', note: 'chain 84532' });
     expect(score).toBe(1);
     expect(releases).toBe(false);
+  });
+
+  // Since 2026-10-15 verdict states the claim's truth. A confident FAIL is "the claim is false":
+  // an answered verification, paid exactly as it was when it was mislabelled PASS. UNDETERMINED
+  // is the hedge criterion 1 forbids, and it never pays.
+  it('a confident FAIL ("the claim is false") is explicit and releases; UNDETERMINED is neither', () => {
+    const answered = rate({ verdict: 'FAIL', confident: true, note: 'chain 84532' });
+    expect(answered.ratings[0]).toEqual({ n: 1, met: true });
+    expect(answered.releases).toBe(true);
+    const unsure = rate({ verdict: 'UNDETERMINED', confident: false, note: 'chain 84532' });
+    expect(unsure.ratings[0]).toEqual({ n: 1, met: false });
+    expect(unsure.releases).toBe(false);
   });
 
   it('refuses to call a hedged verdict explicit', () => {

@@ -213,7 +213,7 @@ export function describeNextStep(facts: ExchangeFacts): NextStep {
           { code: 'not_the_buyer', when: 'the caller is not the buyer named on the contract' },
           {
             code: 'deliverable_rejected',
-            when: `the result verdict is not PASS or satisfaction_score is not positive (verdict here: ${
+            when: `the deliverable is not a confident answer (PASS, or FAIL with confident: true; UNDETERMINED never pays) or satisfaction_score is not positive (verdict here: ${
               facts.resultVerdict ?? 'NONE'
             })`,
           },

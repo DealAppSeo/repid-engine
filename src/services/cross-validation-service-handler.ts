@@ -79,10 +79,16 @@ export class CrossValidationServiceHandler extends ServiceHandlerBase {
     }
 
     // Composite verdict. VETO only when the comma layer is active and fired.
+    // PASS must mean the content was judged TRUE (src/services/verdict.ts), so the validators'
+    // own validity (pcp_score) must agree too: confident validators with score < 0.5 judged it
+    // FALSE, and a judge APPROVE does not turn that into a PASS. [V prod 2026-10-15: 0 of the 2
+    // P-003 PASS rows had pcp_score < 0.5; the service has written nothing since 2026-05-28.]
+    // FAIL here still means "did not pass cross-validation" (unsure OR judged false) and still
+    // routes to dispute: this handler does not emit `confident`, so its FAIL is read as before.
     const verdict =
       comma_veto === true
         ? 'VETO'
-        : pcpResult.confidence >= 0.5 && judgeResult.verdict === 'APPROVE'
+        : pcpResult.confidence >= 0.5 && pcpResult.score >= 0.5 && judgeResult.verdict === 'APPROVE'
         ? 'PASS'
         : 'FAIL';
 

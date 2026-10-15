@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { VerificationServiceHandler } from '../../src/services/verification-service-handler';
+import { isSoundDeliverable, routesToDispute } from '../../src/services/verdict';
 
 // The living-proof buyer's own rating module, run in a real node, unchanged. A file:// URL, not a
 // bare path: ESM rejects `C:\...` on Windows.
@@ -71,13 +72,13 @@ describe('VerificationServiceHandler', () => {
     const h = new VerificationServiceHandler() as any;
     runPCP.mockResolvedValue({ ...pcpOk, score: 0.9, confidence: 0.8 });
     expect(await h.fulfill(contract)).toMatchObject({ verdict: 'PASS', claim_is: 'TRUE', verified_against: null });
-    // Validators sure the claim is wrong: still PASS (a sound deliverable), and the claim is FALSE.
+    // Validators sure the claim is wrong: FAIL, the claim is FALSE, and the answer was confident.
     runPCP.mockResolvedValue({ ...pcpOk, score: 0, confidence: 1 });
     expect(await h.fulfill({ ...contract, payload: { content: 'The chemical symbol for gold is Pb.' } }))
-      .toMatchObject({ verdict: 'PASS', claim_is: 'FALSE', verified_against: null });
+      .toMatchObject({ verdict: 'FAIL', claim_is: 'FALSE', confident: true, verified_against: null });
     // Validators unsure: no truth value is claimed.
     runPCP.mockResolvedValue({ ...pcpOk, score: 0.1, confidence: 0.2 });
-    expect(await h.fulfill(contract)).toMatchObject({ verdict: 'FAIL', claim_is: 'UNDETERMINED' });
+    expect(await h.fulfill(contract)).toMatchObject({ verdict: 'UNDETERMINED', claim_is: 'UNDETERMINED', confident: false });
     expect(rpcCall).not.toHaveBeenCalled(); // not a chain-id claim: nothing is read
   });
 
@@ -97,10 +98,10 @@ describe('VerificationServiceHandler', () => {
     expect(Number.isNaN(Date.parse(out.verified_against.at))).toBe(false);
     expect(out.verified_against.error).toBeUndefined();
 
-    // A node answering another id makes the claim FALSE. That is a correct verification, so PASS.
+    // A node answering another id makes the claim FALSE: verdict FAIL, and a confident answer.
     rpcCall.mockImplementation(node(async () => '0x2105')); // 8453, Base mainnet
     expect(await (new VerificationServiceHandler() as any).fulfill(daily)).toMatchObject({
-      claim_is: 'FALSE', verdict: 'PASS', verified_against: { returned_chain_id: 8453 },
+      claim_is: 'FALSE', verdict: 'FAIL', confident: true, verified_against: { returned_chain_id: 8453 },
     });
   });
 
@@ -111,7 +112,8 @@ describe('VerificationServiceHandler', () => {
     const down = await h.fulfill(daily);
     expect(down).toMatchObject({
       claim_is: 'UNDETERMINED',
-      verdict: 'UNDETERMINED', // not PASS (pays for an unverified claim), not FAIL (blames the provider)
+      verdict: 'UNDETERMINED', // nothing was determined: /satisfy does not pay, and it is not disputed
+      confident: false,
       verified_against: { method: 'eth_chainId', rpc_host: null, returned_chain_id: null },
     });
     expect(down.verified_against.error).toMatch(/ECONNREFUSED/);
@@ -149,14 +151,15 @@ describe('VerificationServiceHandler', () => {
     expect(rate(await h.fulfill(daily))).toEqual([{ n: 1, met: false }, { n: 2, met: true }]);
   });
 
-  it('confidence < 0.5 → FAIL (honest verdict, no escalation)', async () => {
+  it('confidence < 0.5 → UNDETERMINED (no truth value claimed, no escalation)', async () => {
     // The validators list is non-empty on purpose. This case previously passed
     // `validators: []` with confidence 0.2 — a shape runPCP can no longer produce,
     // because confidence is now averaged over RESPONDERS. A real FAIL means peers
     // answered and were unconvinced; that is what this asserts.
     runPCP.mockResolvedValue({ score: 0.1, confidence: 0.2, checked: true, validators: ['a', 'b'], attemptedValidators: ['a', 'b', 'c'], attemptedCount: 3, respondedCount: 2 });
     const out = await (new VerificationServiceHandler() as any).fulfill(contract);
-    expect(out.verdict).toBe('FAIL');
+    expect(out.verdict).toBe('UNDETERMINED');
+    expect(out.confident).toBe(false);
     expect(out.patent_marker).toBe('P-001');
   });
 
@@ -185,5 +188,71 @@ describe('VerificationServiceHandler', () => {
     expect(err).toBeDefined();
     expect(err!.message).toMatch(/not the provider's fault/);
     expect(err!.message).not.toMatch(/FAIL/);
+  });
+});
+
+// WHAT `verdict` MEANS (2026-10-15). Before: `confidence >= 0.5 ? PASS : FAIL`, so PASS meant "the
+// validators were sure", in either direction. In prod, "The chemical symbol for gold is Pb." was
+// filed PASS at score 0, confidence 1; 18 of 158 P-001 PASS rows have score < 0.5 [V prod]. A reader,
+// the buyer's rater and every gate read PASS as "true". Now verdict states the claim's truth and the
+// old meaning is `confident`. Settlement asks `confident`, so who is paid or disputed does not move.
+describe('verdict states the claim, confident states the old meaning', () => {
+  const h = () => new VerificationServiceHandler() as any;
+  const gold = { ...contract, payload: { content: 'The chemical symbol for gold is Pb.' } };
+  beforeEach(() => rpcCall.mockReset());
+
+  it('a FALSE claim judged with confidence 1 and score 0 is FAIL, not PASS', async () => {
+    runPCP.mockResolvedValue({ ...pcpOk, score: 0, confidence: 1 });
+    const out = await h().fulfill(gold);
+    expect(out.verdict).toBe('FAIL');
+    expect(out.confident).toBe(true);
+    expect(out.score).toBe(0); // score and confidence are kept as they were
+    expect(out.confidence).toBe(1);
+  });
+
+  it('a TRUE claim is PASS', async () => {
+    runPCP.mockResolvedValue({ ...pcpOk, score: 0.9, confidence: 0.9 });
+    expect(await h().fulfill(contract)).toMatchObject({ verdict: 'PASS', confident: true });
+  });
+
+  it('low confidence is UNDETERMINED, whatever the score', async () => {
+    runPCP.mockResolvedValue({ ...pcpOk, score: 1, confidence: 0.3 });
+    expect(await h().fulfill(contract)).toMatchObject({ verdict: 'UNDETERMINED', confident: false });
+  });
+
+  it("the buyer's rater is unchanged for a true claim: both criteria met", async () => {
+    runPCP.mockResolvedValue(pcpOk);
+    rpcCall.mockImplementation(node(async () => '0x14a34')); // 84532: the daily claim is true
+    const out = await h().fulfill(daily);
+    expect(out).toMatchObject({ verdict: 'PASS', confident: true });
+    expect(rate(out)).toEqual([{ n: 1, met: true }, { n: 2, met: true }]);
+  });
+
+  // The money path does not move. A confident FALSE used to be PASS: delivered and payable. It is
+  // still delivered and payable, now under its real name. Only a FAIL without `confident: true`
+  // (cross_validation's, and every row written before this change) still goes to dispute.
+  it('settlement reads confident, not the claim: a correct "false" is delivered and payable', async () => {
+    runPCP.mockResolvedValue({ ...pcpOk, score: 0, confidence: 1 });
+    const falseClaim = await h().fulfill(gold);
+    expect(routesToDispute(falseClaim)).toBe(false);
+    expect(isSoundDeliverable(falseClaim)).toBe(true);
+
+    runPCP.mockResolvedValue({ ...pcpOk, score: 0.9, confidence: 0.9 });
+    expect(isSoundDeliverable(await h().fulfill(contract))).toBe(true);
+
+    runPCP.mockResolvedValue({ ...pcpOk, score: 1, confidence: 0.3 });
+    const unsure = await h().fulfill(contract);
+    expect(isSoundDeliverable(unsure)).toBe(false); // never paid
+    expect(routesToDispute(unsure)).toBe(false); // filed as delivered, the #1406 rule for UNDETERMINED
+
+    // Rows written before this change carry no `confident`, and read exactly as the gates did.
+    expect(isSoundDeliverable({ verdict: 'PASS' })).toBe(true);
+    expect(routesToDispute({ verdict: 'PASS' })).toBe(false);
+    expect(routesToDispute({ verdict: 'FAIL' })).toBe(true);
+    expect(isSoundDeliverable({ verdict: 'FAIL' })).toBe(false);
+    expect(routesToDispute({ verdict: 'VETO', confident: true })).toBe(true);
+    expect(isSoundDeliverable({ verdict: 'pass' })).toBe(true);
+    expect(isSoundDeliverable(null)).toBe(false);
+    expect(routesToDispute(undefined)).toBe(false); // verdict-less handlers are filed as delivered
   });
 });
