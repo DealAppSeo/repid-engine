@@ -61,6 +61,9 @@ export class MockAgent {
       agent_type: 'external',
       constitution: { mock: true, profile: this.state.behavior_profile, version: 'cc-sprint-9' },
       is_human: false,
+      // A fixture, never a live participant: if teardown is skipped (a failed run), the row must
+      // not sit 'active' in the validator pool, the leaderboard or anything else that reads it.
+      lifecycle_status: 'test_only',
       // erc8004_address is NOT NULL — use a tagged synthetic value for mock agents
       // (real agents get a real wallet; mocks get a clearly-identifiable placeholder)
       erc8004_address: `mock:${this.state.agent_id}`,
