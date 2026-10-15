@@ -49,8 +49,12 @@ export function verifyQrToken(tokenStr: string): { role: 'viewer' | 'operator' |
 
     const payloadStr = Buffer.from(base64Payload, 'base64url').toString('utf8');
     const payload = JSON.parse(payloadStr);
+    // Allowlist, not pass-through: an unknown role must be no role, and a token with no numeric
+    // expiry must not live forever (`Date.now() > undefined` is false). Forging needs
+    // CONTROLLER_QR_SECRET, so this is defence in depth.
+    if (!isRole(payload?.role) || typeof payload.expiresAt !== 'number') return null;
     if (Date.now() > payload.expiresAt) return null; // Expired
-    return payload;
+    return { role: payload.role, expiresAt: payload.expiresAt };
   } catch (e) {
     return null;
   }
@@ -80,9 +84,9 @@ export async function resolveSbt(req: Request): Promise<SbtContext | null> {
 function isMasterKey(key: string): boolean {
   const master = (process.env.CONTROLLER_MASTER_KEY || '').trim();
   if (!master) return false;
-  const a = Buffer.from(key, 'utf8');
-  const b = Buffer.from(master, 'utf8');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  // Hash both sides so the compare is fixed-length: no early return that leaks the key's length.
+  const digest = (v: string) => crypto.createHash('sha256').update(v, 'utf8').digest();
+  return crypto.timingSafeEqual(digest(key), digest(master));
 }
 
 export async function resolveControllerRole(req: Request): Promise<'viewer' | 'operator' | 'admin' | null> {
@@ -155,6 +159,11 @@ export async function resolveControllerRole(req: Request): Promise<'viewer' | 'o
   return null;
 }
 
+type ControllerRole = 'viewer' | 'operator' | 'admin';
+function isRole(v: unknown): v is ControllerRole {
+  return v === 'viewer' || v === 'operator' || v === 'admin';
+}
+
 const roleHierarchy = {
   viewer: 1,
   operator: 2,
@@ -164,7 +173,9 @@ const roleHierarchy = {
 export function requireRole(requiredRole: 'viewer' | 'operator' | 'admin') {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const role = await resolveControllerRole(req);
-    if (!role) {
+    // isRole: anything outside the allowlist is no role. `roleHierarchy[unknown] < n` is
+    // `undefined < n`, which is false, so an unknown role used to be ADMITTED at every level.
+    if (!role || !isRole(role)) {
       res.status(401).json({ error: 'Unauthorized: Valid SBT, API key, or scoped QR token required' });
       return;
     }
