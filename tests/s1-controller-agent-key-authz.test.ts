@@ -147,3 +147,42 @@ describe('issueAgentApiKey refuses reserved scopes', () => {
     await expect(issueAgentApiKey(AGENT_A, 'k', ['read_card', scope])).rejects.toThrow(/reserved scope/);
   });
 });
+
+describe('[S1 follow-up] a signed token is only as good as its role allowlist and expiry', () => {
+  // Signed with the real secret, so these isolate the payload checks. `roleHierarchy[unknown] < n`
+  // is `undefined < n` (false), so an unknown role was admitted at every level; and
+  // `Date.now() > undefined` is false, so a token with no expiry never expired.
+  const forge = (payload: object): string => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const crypto = require('crypto');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    return `${body}.${crypto.createHmac('sha256', QR_SECRET).update(body).digest('hex')}`;
+  };
+  const future = () => Date.now() + 60_000;
+
+  it.each(['superadmin', 'constructor', 'toString', '', 3])('role %p is no role → 401', async (role) => {
+    process.env.CONTROLLER_QR_SECRET = QR_SECRET;
+    const token = forge({ role, expiresAt: future() });
+    const write = await request(app).post('/api/v1/controller/wake/trinity-mel').set('x-controller-token', token).send({});
+    expect(write.status).toBe(401);
+    const read = await request(app).get('/api/v1/controller/agent-grid').set('x-controller-token', token);
+    expect(read.status).toBe(401);
+    expect(setAgentEnabled).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '9999999999999', null])('an admin token whose expiresAt is %p → 401', async (expiresAt) => {
+    process.env.CONTROLLER_QR_SECRET = QR_SECRET;
+    const res = await request(app).post('/api/v1/controller/wake/trinity-mel')
+      .set('x-controller-token', forge({ role: 'admin', expiresAt })).send({});
+    expect(res.status).toBe(401);
+  });
+
+  it('the master key matches exactly: a prefix or an extension of it is not master', async () => {
+    process.env.CONTROLLER_MASTER_KEY = MASTER;
+    for (const k of [MASTER.slice(0, -1), `${MASTER}x`, MASTER.toUpperCase(), 'x'.repeat(300)]) {
+      const res = await request(app).post('/api/v1/controller/sleep/trinity-mel').set('x-api-key', k).send({});
+      expect(res.status).toBe(401);
+    }
+    expect((await request(app).post('/api/v1/controller/sleep/trinity-mel').set('x-api-key', MASTER).send({})).status).toBe(200);
+  });
+});
