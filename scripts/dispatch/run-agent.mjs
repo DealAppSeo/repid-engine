@@ -61,10 +61,11 @@
  * LANES — one line each; capabilities and how each was measured live in AGENTS below:
  *   xc         grok   (xAI)     L6 RED-TEAM    prompt on argv (-p)   key XAI_API_KEY | GROK_API_KEY
  *   ga         gemini (Google)  L7 MEASUREMENT prompt on stdin       key GEMINI_API_KEY | GEMINI_API_KEY_2
- *   codex      codex  (OpenAI)  L6 RED-TEAM    `codex exec -s read-only --ephemeral --json`, prompt on stdin,
- *                                              final agent message kept; key OPENAI_API_KEY (CODEX_API_KEY alias)
- *   codex-oss  codex + ollama   L6 RED-TEAM    same flags + `--oss --local-provider ollama -m $CODEX_OSS_MODEL`;
- *                                              no cloud key; refuses if CODEX_OSS_MODEL is unset
+ *   codex      codex  (OpenAI)  L6 RED-TEAM    `codex exec -s read-only --ephemeral --json` + every tool feature
+ *                                              disabled (CODEX_DISABLED_FEATURES), prompt on stdin, final agent
+ *                                              message kept; key OPENAI_API_KEY (CODEX_API_KEY alias); refused
+ *                                              (exit 67) on a codex version the canary has not passed
+ *   codex-oss  codex + ollama   L6 RED-TEAM    REFUSED (exit 67): no canary has run against the --oss provider
  *
  * PATHS THIS READS, and how to move them off one machine:
  *   .env.master     TRUSTKEYS_ENV_MASTER   (default C:/Users/Cash4/repos/.env.master)
@@ -176,11 +177,11 @@ const AGENTS = {
     // Codex reads files only through its shell, and the preamble forbids shell, so it never
     // held repo_read. It holds `supplied_evidence`: the harness builds the code context
     // (--evidence-pack base...head, see buildEvidencePack) and quotes it into the prompt; the
-    // agent gets no file access. `shell` is NOT listed: codex runs its own commands inside
-    // `-s read-only`, which the harness cannot see into, so its execution claims are audited
-    // exactly like xc/ga (see shellNote and parseCodexJsonl).
+    // agent gets no file access. `shell` is NOT listed, and [V 2026-10-15] codex holds no tool at
+    // all: every tool feature is disabled by flag and a canary proved it (CODEX_DISABLED_FEATURES).
+    // Any tool event in its output is a broken gate and voids the run (parseCodexJsonl).
     capabilities: ['reasoning', 'supplied_evidence'],
-    shellNote: '**sandboxed** — codex runs its own commands under `-s read-only`; they are NOT harness evidence (listed under stderr)',
+    shellNote: '**none** — every codex tool feature is disabled by flag; canary [V] on codex-cli 0.162.1 (a tool event voids the run)',
     parse: parseCodexJsonl,
     // Non-secret config let through the child-env allow-list. CODEX_HOME is where codex
     // looks for auth/state (it defaults to ~/.codex when unset).
@@ -199,8 +200,10 @@ const AGENTS = {
     // [R 2026-10-14] never run. Reasoning over supplied text only: the same harness-built
     // evidence pack as codex (no tool use is needed to read it, which is exactly where small
     // local models fail into plausible prose). Never repo_read.
+    // REFUSED (exit 67) until a canary runs against the --oss provider: the tools-off flags are the
+    // same, but "provably off" was measured on the OpenAI provider only (CODEX_CANARY_PROVEN).
     capabilities: ['reasoning', 'supplied_evidence'],
-    shellNote: '**sandboxed** — codex runs its own commands under `-s read-only`; they are NOT harness evidence (listed under stderr)',
+    shellNote: '**none, unproven** — same disabled tool features as codex, but REFUSED until a canary runs against the --oss provider',
     parse: parseCodexJsonl,
     // CODEX_OSS_BASE_URL / CODEX_OSS_PORT point codex at a non-default ollama (both names
     // are in codex.exe 0.162.1 [V]). Non-secret.
@@ -209,13 +212,66 @@ const AGENTS = {
 };
 
 /**
+ * EVERY codex feature that carries a tool able to reach a file, a process or the network.
+ *
+ * `-s read-only` is a sandbox for model-run commands, not their absence: read-only still reads
+ * the whole disk. The evidence pack is attacker-controllable text (a PR diff on a public repo), so
+ * a prompt injection in it could have codex read `.env.master` into its own context, which is
+ * OpenAI's, before any scrubber runs. A "no shell" line in the preamble is a request, not a fence.
+ *
+ * [V 2026-10-15, codex-cli 0.162.1, tests/dispatch-codex-canary.test.ts with RUN_CODEX_CANARY=1]
+ *   positive control: `-s danger-full-access`, no flags -> codex ran PowerShell Get-Content on a
+ *     canary file outside its workspace and printed the token.
+ *   these flags, same open sandbox -> no command ran; shell, MCP and sub-agent attempts all failed
+ *     ("code-mode host is disabled"); the token appeared nowhere in output or events.
+ *   the lane's own argv (read-only + these flags) -> the same.
+ * `functions.exec` (code mode) is the host that carries the shell, file, image, web and MCP tools;
+ * with `code_mode_host` off it fails closed. The rest are off as well, so that turning code mode
+ * back on later cannot silently restore them. A codex version the canary has not passed is refused.
+ */
+const CODEX_DISABLED_FEATURES = [
+  'code_mode_host', 'shell_tool', 'unified_exec', 'view_image', 'apps', 'plugins', 'remote_plugin',
+  'multi_agent', 'browser_use', 'browser_use_external', 'computer_use', 'in_app_browser',
+  'image_generation', 'tool_suggest', 'hooks',
+];
+/** Lane -> codex versions a canary has passed on. A lane with no entry is refused. */
+const CODEX_CANARY_PROVEN = { codex: ['0.162.1'] };
+/** Named exit code: a codex lane whose tools are not provably off. */
+const EXIT_CODEX_TOOLS_NOT_OFF = 67;
+
+/**
  * The one place codex's flags are spelled. Read-only sandbox, no session files, no user config
- * or execpolicy rules (so ~/.codex cannot widen this lane), JSONL events on stdout, prompt on
- * stdin (`-`). FORBIDDEN_ARGS below is checked against this before every spawn.
+ * or execpolicy rules (so ~/.codex cannot widen this lane), every tool feature disabled, JSONL
+ * events on stdout, prompt on stdin (`-`). FORBIDDEN_ARGS and codexToolsRefusal are checked
+ * against this before every spawn.
  */
 function codexArgs(root) {
   return ['exec', '--json', '--color', 'never', '-s', 'read-only', '--ephemeral', '--skip-git-repo-check',
-    '--ignore-user-config', '--ignore-rules', '-C', root, '-'];
+    '--ignore-user-config', '--ignore-rules', ...CODEX_DISABLED_FEATURES.flatMap((f) => ['--disable', f]),
+    '-C', root, '-'];
+}
+
+/**
+ * Null when a codex lane may run; otherwise why it may not. Fails closed on each: a tool feature
+ * the argv leaves on, a lane no canary has covered, and a version the canary has not passed or
+ * that cannot be read. Not a codex lane: null.
+ */
+function codexToolsRefusal(agentKey, argv, versionText) {
+  if (!AGENTS[agentKey] || AGENTS[agentKey].cli !== 'codex') return null;
+  const off = new Set(argv.flatMap((a, i) => (a === '--disable' && argv[i + 1] ? [argv[i + 1]] : [])));
+  const on = CODEX_DISABLED_FEATURES.filter((f) => !off.has(f));
+  if (on.length) return `its argv leaves ${on.join(', ')} enabled`;
+  const proven = CODEX_CANARY_PROVEN[agentKey] || [];
+  if (!proven.length) {
+    return `no canary has shown command execution off for the ${agentKey} lane ` +
+      '(run tests/dispatch-codex-canary.test.ts for it, then list the version in CODEX_CANARY_PROVEN)';
+  }
+  const v = /codex-cli\s+(\S+)/.exec(String(versionText || ''));
+  if (!v) return `could not read the codex version (got: ${String(versionText || '').trim().slice(0, 80) || 'nothing'})`;
+  if (!proven.includes(v[1])) {
+    return `codex ${v[1]} has not passed the canary (proven: ${proven.join(', ')}); rerun it before listing the version`;
+  }
+  return null;
 }
 
 /**
@@ -240,16 +296,22 @@ const SHELL_SAFE_ARG = /^[\w.:/\\-]+$/;
  *
  * Accepts `item.type` and the older `item.item_type` (both strings are in codex.exe 0.162.1).
  * No agent message -> empty text -> the NO REVIEW WAS PRODUCED path, never a blank "pass".
+ *
+ * `toolUse` is the tripwire behind CODEX_DISABLED_FEATURES: every tool is off, so any item that is
+ * not a message, reasoning, a plan or an error means the gate broke. main() voids such a run.
  */
+const CODEX_NON_TOOL_ITEMS = new Set(['agent_message', 'assistant_message', 'reasoning', 'error', 'todo_list']);
 function parseCodexJsonl(stdout) {
   let text = '';
   const diag = [];
+  const toolUse = [];
   for (const line of String(stdout || '').split(/\r?\n/)) {
     if (!line.trim()) continue;
     let ev;
     try { ev = JSON.parse(line); } catch { diag.push(line); continue; }
     const item = (ev && ev.item) || {};
     const kind = item.type || item.item_type;
+    if (ev.type === 'item.started' && kind && !CODEX_NON_TOOL_ITEMS.has(kind)) toolUse.push(kind);
     if (ev.type === 'item.completed' && (kind === 'agent_message' || kind === 'assistant_message')) {
       text = String(item.text ?? '');
     } else if (ev.type === 'item.completed' && kind === 'command_execution') {
@@ -257,8 +319,9 @@ function parseCodexJsonl(stdout) {
     } else if (ev.type === 'error' || ev.type === 'turn.failed') {
       diag.push(`[codex ${ev.type}] ${ev.message || (ev.error && ev.error.message) || line}`);
     }
+    if (ev.type === 'item.completed' && kind && !CODEX_NON_TOOL_ITEMS.has(kind) && !toolUse.includes(kind)) toolUse.push(kind);
   }
-  return { text, diag: diag.join('\n') };
+  return { text, diag: diag.join('\n'), toolUse };
 }
 
 /** Capabilities a task may require. Unknown names are refused, not ignored. */
@@ -323,11 +386,15 @@ function evidenceRefusal(cmd) {
  *   - `git log -5` of head (hash, date, subject; no author emails),
  *   - `git diff base...head`,
  *   - the FULL head content of every changed file, line-numbered so the agent can cite path:line.
- * Excluded, by name and from the diff alike: .env* at any depth and key material (*.pem, *.key,
- * *.p12, *.pfx, id_rsa*). Binary files are listed, not inlined. Each file is capped at
- * fileMaxChars and the whole pack at totalMaxChars; what did not fit is LISTED as omitted, never
- * dropped silently. The caller scrubs the result with the transcript scrubber before it is sent.
- * Refs are fenced to plain ref characters, and git runs without a shell. Throws on a bad range.
+ * INCLUDED, by name and in the diff alike, only files on PACK_ALLOWED (source, test and doc
+ * extensions). Everything else is listed by name and not shown; .env* and key material are listed
+ * as secret-shaped. Every inlined file and the diff then go through `clean` (the caller's exact-value
+ * scrubber, then screenSecrets) BEFORE any truncation, so a value sliced at a cap cannot slip past
+ * the exact match, and a secret renamed into an allowed name is still caught by its content.
+ * Binary files are listed, not inlined. Each file is capped at fileMaxChars and the whole pack at
+ * totalMaxChars; what did not fit is LISTED as omitted, never dropped silently. `shownLines` is
+ * how many whole lines of a truncated file the agent actually saw. Refs are fenced to plain ref
+ * characters, and git runs without a shell. Throws on a bad range or a missing `clean`.
  */
 const PACK_RANGE = /^([\w][\w./~^-]*)\.\.\.([\w][\w./~^-]*)$/;
 const PACK_SECRET_FILE = /(^|\/)(\.env[^/]*|id_rsa[^/]*|[^/]+\.(pem|key|p12|pfx))$/i;
@@ -338,24 +405,86 @@ const PACK_EXCLUDE_PATHSPEC = [
 const PACK_FILE_MAX_CHARS = 40_000;
 const PACK_TOTAL_MAX_CHARS = 300_000;
 
-function buildEvidencePack(range, { cwd = process.cwd(), fileMaxChars = PACK_FILE_MAX_CHARS, totalMaxChars = PACK_TOTAL_MAX_CHARS } = {}) {
+/**
+ * What a pack may inline: source, test and doc extensions, plus two named JSON files.
+ * `.json` in general is OUT: here it is mostly lockfiles and fixtures, and it is the usual home of
+ * credentials (service-account keys, CLI auth stores, *.local.json settings). package.json and
+ * tsconfig*.json are let in by exact name because a review of a dependency or compiler change
+ * needs them, and their content is screened like everything else.
+ */
+const PACK_ALLOWED_EXT = /\.(ts|tsx|js|mjs|cjs|md|sql|ya?ml)$/i;
+const PACK_ALLOWED_NAME = /(^|\/)(package\.json|tsconfig(\.[\w-]+)?\.json)$/;
+const packAllowed = (path) => PACK_ALLOWED_EXT.test(path) || PACK_ALLOWED_NAME.test(path);
+
+/**
+ * Content screen, line by line, for text about to enter a prompt. The exact-value scrubber only
+ * knows values it was told about; this catches the SHAPE of one it was not. A matching line is
+ * replaced whole, with the reason, so the agent sees that something was there.
+ */
+const SECRET_SHAPES = [
+  ['pem', /-----BEGIN/],
+  ['export-assignment', /^\s*export\s+[A-Za-z_][A-Za-z0-9_]*=/],
+  ['credential-assignment', /\w*(key|token|secret|password|passwd|pwd)=[A-Za-z0-9+/_-]{6,}/i],
+  ['key-prefix', /\b(sk-[A-Za-z0-9_-]{16,}|sk_(live|test)_[A-Za-z0-9]{16,}|xai-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sb_secret_[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[abposr]-[A-Za-z0-9-]{10,}|hf_[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ)/],
+  // 32+ hex except exactly 40: that is an EVM address or a git sha1, public and needed in a review.
+  // 64 is a tx hash OR a private key, and the two look identical, so it is screened.
+  ['hex-32+', /\b(0x)?([0-9a-fA-F]{32,39}|[0-9a-fA-F]{41,})\b/],
+];
+// Mixed-case + digit runs of 32+ with high entropy: base64 and base64url keys. Measured: random
+// base64 at 40 chars ~4.5 bits/char; a long path or camelCase identifier ~4.2-4.3.
+const ENTROPY_TOKEN = /[A-Za-z0-9+/=_-]{32,}/g;
+const ENTROPY_MIN = 4.4;
+function shannon(s) {
+  const n = {};
+  for (const c of s) n[c] = (n[c] || 0) + 1;
+  return Object.values(n).reduce((h, k) => h - (k / s.length) * Math.log2(k / s.length), 0);
+}
+function secretShape(line) {
+  for (const [name, re] of SECRET_SHAPES) if (re.test(line)) return name;
+  for (const t of line.match(ENTROPY_TOKEN) || []) {
+    if (/\d/.test(t) && /[a-z]/.test(t) && /[A-Z]/.test(t) && shannon(t) >= ENTROPY_MIN) return 'high-entropy';
+  }
+  return null;
+}
+// After a PEM header, the base64 body lines (and the END line) go too. Bounded to base64-shaped
+// lines, so a regex literal that merely MENTIONS a PEM header does not blank the rest of a file.
+const PEM_BODY = /^[+ -]?([A-Za-z0-9+/=]{16,}|-----END[^-]*-----)\s*$/;
+function screenSecrets(text) {
+  let screened = 0;
+  let inPem = false;
+  const out = String(text || '').split('\n').map((line) => {
+    const why = inPem && PEM_BODY.test(line) ? 'pem' : secretShape(line);
+    inPem = why === 'pem' && !/-----END/.test(line);
+    if (!why) return line;
+    screened++;
+    return `<line screened: ${why}>`;
+  }).join('\n');
+  return { text: out, screened };
+}
+
+function buildEvidencePack(range, { cwd = process.cwd(), clean, fileMaxChars = PACK_FILE_MAX_CHARS, totalMaxChars = PACK_TOTAL_MAX_CHARS } = {}) {
+  // Required, so dropping the scrub from the call site breaks loudly instead of shipping raw text.
+  if (typeof clean !== 'function') throw new Error('buildEvidencePack needs `clean` (scrub + screen): an uncleaned pack is never built');
   const m = PACK_RANGE.exec(String(range || ''));
   if (!m) throw new Error(`--evidence-pack wants <base>...<head> with plain ref characters, got: ${range}`);
   const [, base, head] = m;
   const git = (args) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   for (const ref of [base, head]) git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]); // throws on an unknown ref
 
-  const log = git(['log', '-5', '--date=short', '--format=%h %ad %s', head]).trim();
-  let diff = git(['diff', `${base}...${head}`, '--', '.', ...PACK_EXCLUDE_PATHSPEC]);
+  const log = clean(git(['log', '-5', '--date=short', '--format=%h %ad %s', head]).trim());
   const names = git(['diff', '--name-only', '-z', `${base}...${head}`]).split('\0').filter(Boolean);
+  const shown = names.filter((p) => !PACK_SECRET_FILE.test(p) && packAllowed(p));
+  // Cleaned BEFORE the cap, so a value cut in half by the slice was already redacted whole.
+  let diff = shown.length ? clean(git(['diff', `${base}...${head}`, '--', ...shown, ...PACK_EXCLUDE_PATHSPEC])) : '';
 
-  const files = []; // { path, status, lines?, chars? }
+  const files = []; // { path, status, lines?, shownLines? }
   const parts = [];
   let used = log.length;
   if (diff.length > totalMaxChars / 2) diff = `${diff.slice(0, totalMaxChars / 2)}\n… [diff TRUNCATED at ${totalMaxChars / 2} chars]`;
   used += diff.length;
   for (const path of names) {
     if (PACK_SECRET_FILE.test(path)) { files.push({ path, status: 'excluded (secret-shaped name)' }); continue; }
+    if (!packAllowed(path)) { files.push({ path, status: 'not inlined (not a source, test or doc file)' }); continue; }
     let body;
     try {
       body = git(['show', `${head}:${path}`]);
@@ -364,26 +493,35 @@ function buildEvidencePack(range, { cwd = process.cwd(), fileMaxChars = PACK_FIL
       continue;
     }
     if (body.includes('\0')) { files.push({ path, status: 'binary, not inlined' }); continue; }
-    const lines = body.replace(/\r?\n$/, '').split(/\r?\n/);
+    const lines = clean(body.replace(/\r?\n$/, '')).split(/\r?\n/);
     let text = lines.map((l, i) => `${String(i + 1).padStart(5)}| ${l}`).join('\n');
-    let status = 'included';
+    const file = { path, status: 'included', lines: lines.length };
     if (text.length > fileMaxChars) {
-      text = `${text.slice(0, fileMaxChars)}\n… [file TRUNCATED at ${fileMaxChars} chars of ${text.length}]`;
-      status = 'included, truncated';
+      const kept = text.slice(0, fileMaxChars);
+      // Whole lines only: a line the slice cut is not a line the agent can cite.
+      file.shownLines = kept.split('\n').length - 1;
+      file.status = 'included, truncated';
+      text = `${kept}\n… [file TRUNCATED at ${fileMaxChars} chars of ${text.length}]`;
     }
     if (used + text.length > totalMaxChars) { files.push({ path, status: `omitted: the pack is at its ${totalMaxChars}-char cap` }); continue; }
     used += text.length;
     parts.push(`──── ${path} (head ${head}, ${lines.length} lines) ────\n${text}`);
-    files.push({ path, status, lines: lines.length });
+    files.push(file);
   }
 
   const text = [
     `git log -5 ${head}:`, log, '',
-    `git diff ${base}...${head} (secret-shaped files excluded):`, diff.trimEnd(), '',
+    `git diff ${base}...${head} (only the files inlined below):`, diff.trimEnd(), '',
     'Changed files:', ...files.map((f) => `  ${f.path} — ${f.status}`), '',
     ...parts,
   ].join('\n');
   return { range: `${base}...${head}`, text, files, chars: text.length };
+}
+
+/** Exact known values first, then the shape screen: what every pack and evidence block passes through. */
+function makePromptCleaner(scrubValues) {
+  const scrub = makeScrubber(scrubValues);
+  return (s) => screenSecrets(scrub(s)).text;
 }
 
 /**
@@ -1069,12 +1207,30 @@ function main() {
   if (forbidden.length) {
     throw new Error(`${agentKey} argv contains forbidden flag(s) ${forbidden.join(' ')} — this lane has no write scope.`);
   }
+  // A codex lane runs only when every tool is provably off for THIS binary (see CODEX_DISABLED_FEATURES).
+  if (agent.cli === 'codex') {
+    const cbin = resolveBin(agent.cli);
+    const ver = spawnSync(cbin.cmd, ['--version'], { encoding: 'utf8', shell: cbin.shell, env: buildChildEnv(process.env, [], null), timeout: 30_000 });
+    const why = codexToolsRefusal(agentKey, argvFor('<prompt>'), `${ver.stdout || ''}${ver.stderr || ''}${ver.error ? ` [${ver.error.code}]` : ''}`);
+    if (why) {
+      console.error(
+        `[dispatch] ✗ REFUSED (CODEX_TOOLS_NOT_PROVABLY_OFF) — ${agentKey}: ${why}.\n` +
+          '           codex can run shell commands and read files unless every tool is switched off and a canary proved it.',
+      );
+      process.exit(EXIT_CODEX_TOOLS_NOT_OFF);
+    }
+  }
 
   // SEAM 2 — the harness runs it, so the agent cannot claim it ran without it.
   // Each command is fenced, executed here, and its REAL output injected below.
   // A failing command is injected too: "the suite is red and here is how" is a
   // finding, not an error, and hiding it would recreate the fabrication problem
   // from the other direction.
+  // The scrub set, built once: it cleans the evidence and the pack BEFORE they are sent, and the
+  // transcript after.
+  const scrubValues = [key, ...secrets.values(), ...secretishEnvValues(process.env)];
+  const cleanForPrompt = makePromptCleaner(scrubValues);
+
   const evidenceCmds = argAll('evidence');
   const evidence = [];
   for (const cmd of evidenceCmds) {
@@ -1093,30 +1249,26 @@ function main() {
     });
     const tail = (s) => String(s || '').split(/\r?\n/).slice(-60).join('\n');
     evidence.push(
-      `$ ${cmd}\n[exit ${r.status ?? 'null'}${r.error ? ` — ${r.error.code}` : ''}]\n${tail(r.stdout)}\n${tail(r.stderr)}`.trim(),
+      cleanForPrompt(`$ ${cmd}\n[exit ${r.status ?? 'null'}${r.error ? ` — ${r.error.code}` : ''}]\n${tail(r.stdout)}\n${tail(r.stderr)}`.trim()),
     );
     console.log(`[dispatch]   -> exit ${r.status}`);
   }
-
-  // The scrub set, built once: it cleans the evidence pack BEFORE it is sent, and the transcript after.
-  const scrubValues = [key, ...secrets.values(), ...secretishEnvValues(process.env)];
 
   // EVIDENCE PACK — the code under review, read by the harness (see buildEvidencePack).
   let pack = null;
   if (packArg) {
     try {
-      pack = buildEvidencePack(packArg, { cwd: root });
+      pack = buildEvidencePack(packArg, { cwd: root, clean: cleanForPrompt });
     } catch (e) {
       console.error(`[dispatch] ✗ REFUSED evidence pack — ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       process.exit(66);
     }
-    const before = pack.text;
-    pack.text = makeScrubber(scrubValues)(before);
-    const redactions = pack.text.split('<redacted>').length - before.split('<redacted>').length;
+    const redactions = pack.text.split('<redacted>').length - 1;
+    const screened = pack.text.split('<line screened: ').length - 1;
     const inlined = pack.files.filter((f) => f.lines !== undefined).length;
     console.log(
       `[dispatch] evidence pack ${pack.range}: ${inlined}/${pack.files.length} changed file(s) inlined, ${pack.text.length} chars` +
-        `, scrubbed (${redactions} redaction(s))`,
+        `, scrubbed (${redactions} redaction(s), ${screened} line(s) screened)`,
     );
     for (const f of pack.files.filter((x) => x.lines === undefined)) console.log(`[dispatch]   pack: ${f.path} — ${f.status}`);
   } else if (agent.capabilities.includes('supplied_evidence') && !agent.capabilities.includes('repo_read')) {
@@ -1340,7 +1492,8 @@ function main() {
     // artifact it could only have invented is caught even when evidence WAS supplied.
     evidenceText: [...evidence, pack ? pack.text : ''].join('\n'),
     // A path:line citation into the pack is reading, not running (see auditClaims).
-    packFiles: pack ? Object.fromEntries(pack.files.filter((f) => f.lines !== undefined).map((f) => [f.path, f.lines])) : {},
+    // Lines SHOWN, not lines at head: a truncated file's tail was never in front of the agent.
+    packFiles: pack ? Object.fromEntries(pack.files.filter((f) => f.lines !== undefined).map((f) => [f.path, f.shownLines ?? f.lines])) : {},
   });
   const headSha = (() => {
     try { return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); }
@@ -1439,6 +1592,15 @@ function main() {
   // a transcript file that existed and therefore looked like a result. An absent
   // review is far more dangerous than a negative one, because the PR then carries
   // a cross-family signature it never earned.
+  // Every codex tool is off, so a tool event means the gate broke: void the run, whatever it says.
+  const toolUse = parsed.toolUse || [];
+  if (toolUse.length) {
+    console.error(
+      `\n[dispatch] ✗ NO REVIEW — ${agentKey} used a tool (${toolUse.join(', ')}) although every tool was switched off.\n` +
+        '           Treat the tools-off gate as broken: do not use this output, and rerun the canary.',
+    );
+    process.exit(1);
+  }
   if (res.error || res.status !== 0 || !out.trim()) {
     console.error(
       `\n[dispatch] ✗ NO REVIEW WAS PRODUCED — do not treat this as a pass.\n` +
@@ -1486,7 +1648,7 @@ function main() {
  * them in a real Node process — the same idiom as `demo-leaf-bin.test.ts`, and the same
  * lesson as `resolveBin` itself: test the CALL PATH, not the thing beside it.
  */
-export { buildEvidencePack, PACK_FILE_MAX_CHARS, PACK_TOTAL_MAX_CHARS, auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS, scopeForTask, scopedLessonBlock, extractLessons, LESSON_SCOPES, SCOPED_CONTEXT_MAX, parseCodexJsonl, FORBIDDEN_ARGS, SHELL_SAFE_ARG, CHILD_ENV_ALLOW, secretishEnvValues };
+export { buildEvidencePack, PACK_FILE_MAX_CHARS, PACK_TOTAL_MAX_CHARS, auditClaims, evidenceRefusal, readKey, readAllSecrets, buildChildEnv, makeScrubber, resolveBin, argAll, capabilityRefusal, inboxPathFor, newestInboxEntry, EXECUTION_ARTIFACT, EVIDENCE_ALLOWED, LESSONS_PATH, HANDOFF_DIR, AGENTS, scopeForTask, scopedLessonBlock, extractLessons, LESSON_SCOPES, SCOPED_CONTEXT_MAX, parseCodexJsonl, FORBIDDEN_ARGS, SHELL_SAFE_ARG, CHILD_ENV_ALLOW, secretishEnvValues, CODEX_DISABLED_FEATURES, CODEX_CANARY_PROVEN, EXIT_CODEX_TOOLS_NOT_OFF, codexToolsRefusal, codexArgs, screenSecrets, packAllowed, makePromptCleaner };
 
 const INVOKED_DIRECTLY =
   Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

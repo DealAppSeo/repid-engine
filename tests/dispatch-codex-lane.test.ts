@@ -237,7 +237,8 @@ describe('child env is an ALLOW-LIST (the CLAUDE_CODE_MESSAGING_TOKEN leak, 2026
     const src = readFileSync(RUNNER_PATH, 'utf8');
     expect(src).toMatch(/spawnSync\(bin\.cmd, argv, \{[\s\S]{0,200}env: childEnv,/);
     expect(src).toMatch(/secretishEnvValues\(process\.env\)/);
-    expect(src).toMatch(/makeScrubber\(scrubValues\)/);
+    // The pack and evidence scrub is pinned by BEHAVIOUR, not by grep: dispatch-codex-tools-off.test.ts
+    // runs main() against a fake codex and asserts what actually arrived on its stdin.
     expect(src).not.toMatch(/env\s*=\s*\{\s*\.\.\.parentEnv\s*\}/);
   });
 });
