@@ -8,6 +8,7 @@
  * — DB-issued keys (agent_api_keys) require an async DB lookup and are out of
  * scope for a synchronous, fail-open rate-limit bypass.
  */
+import { secretEquals } from '../auth/api-keys';
 
 /** Extract the presented key from `Authorization: Bearer <k>` or `x-api-key`. */
 export function presentedApiKey(headers: {
@@ -48,5 +49,6 @@ export function hasValidEnvApiKey(
       return (idx >= 0 ? entry.slice(0, idx) : entry).trim();
     })
     .filter(Boolean);
-  return keys.includes(presented);
+  // Constant time per entry (r32): `keys.includes` is a `===` per element.
+  return keys.some((k) => secretEquals(k, presented));
 }

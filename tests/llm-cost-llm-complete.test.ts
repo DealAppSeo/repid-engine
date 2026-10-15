@@ -41,7 +41,7 @@ jest.mock('../src/services/email-otp', () => ({
   meterRun: jest.fn(() => ({ allowed: true, remaining: 99, verified: true, limit: 100 })),
 }));
 jest.mock('../src/scoring/pipeline', () => ({ runScoreEvent: jest.fn(), NotFoundError: class NotFoundError extends Error {} }));
-jest.mock('../src/auth/api-keys', () => ({ validateAgentApiKey: jest.fn() }));
+jest.mock('../src/auth/api-keys', () => ({ ...jest.requireActual('../src/auth/api-keys'), validateAgentApiKey: jest.fn() }));
 
 import request from 'supertest';
 import express from 'express';

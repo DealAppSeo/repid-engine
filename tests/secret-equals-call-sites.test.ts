@@ -3,7 +3,8 @@
  *
  * #1408's architecture test allowlisted four operator/admin key compares as known debt (plain `===` /
  * `!==`). They now route through ONE compare, `secretEquals` in src/auth/api-keys.ts: sha256 both
- * sides, then crypto.timingSafeEqual.
+ * sides, then crypto.timingSafeEqual. So does the rate-limit bypass check in middleware/env-api-key.ts,
+ * which used `keys.includes(presented)` (a `===` per element) and which the `===` grep could not see.
  *
  * Per site: the right key is accepted, and a wrong key, a key of a different length (a prefix of the
  * right one) and a non-string are rejected, exactly as before. The `timingSafeEqual` assertions are
@@ -15,6 +16,7 @@ import express, { Router } from 'express';
 import request from 'supertest';
 import { secretEquals } from '../src/auth/api-keys';
 import { authMiddleware } from '../src/middleware/auth';
+import { hasValidEnvApiKey } from '../src/middleware/env-api-key';
 import { llmRouter } from '../src/routes/route';
 import { adminCapsRouter } from '../src/routes/admin-caps';
 import { adminFlagsRouter } from '../src/routes/admin-flags';
@@ -179,5 +181,25 @@ describe.each<[string, Router]>([
     expectConstantTimeCompare();
     expect((await probe(NON_STRING)).status).toBe(401);
     expect((await probe(undefined)).status).toBe(401);
+  });
+});
+
+describe('src/middleware/env-api-key.ts: hasValidEnvApiKey (rate-limit bypass)', () => {
+  const env = { REPID_API_KEYS: `other-key:free, ${RIGHT}:ops` } as NodeJS.ProcessEnv;
+
+  it('accepts the right key', () => {
+    expect(hasValidEnvApiKey({ authorization: `Bearer ${RIGHT}` }, env)).toBe(true);
+    expectConstantTimeCompare();
+  });
+
+  it('rejects a wrong key, comparing in constant time', () => {
+    expect(hasValidEnvApiKey({ 'x-api-key': WRONG }, env)).toBe(false);
+    expectConstantTimeCompare();
+  });
+
+  it('rejects a key of a different length (still a constant-time compare) and a non-string', () => {
+    expect(hasValidEnvApiKey({ authorization: `Bearer ${SHORT}` }, env)).toBe(false);
+    expectConstantTimeCompare();
+    expect(hasValidEnvApiKey({ 'x-api-key': 12345 as unknown as string }, env)).toBe(false);
   });
 });

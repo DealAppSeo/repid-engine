@@ -31,7 +31,7 @@ description: >
 | Layer | Where |
 |---|---|
 | The one agent-key verifier | `src/auth/api-keys.ts` (`validateAgentApiKey`; keys hashed in `agent_api_keys.key_hash`) |
-| The one secret compare | `src/auth/api-keys.ts` (`secretEquals`: sha256 both sides, `timingSafeEqual`; false on non-string/empty). `matchEnvOperatorKey` (REPID_API_KEYS) and the `x-admin-key` guards call it |
+| The one secret compare | `src/auth/api-keys.ts` (`secretEquals`: sha256 both sides, `timingSafeEqual`; false on non-string/empty). `matchEnvOperatorKey` (REPID_API_KEYS), `hasValidEnvApiKey` and the `x-admin-key` guards call it |
 | Public constitution allowlist | `src/auth/api-keys.ts` (`publicConstitution`) |
 | Architecture test (CI `test` job) | `tests/credential-safety-architecture.test.ts`: fails if any other `src/` file reads `constitution.api_key`, `->>'api_key'`, `privateId`, or compares a secret with `===`. Allowlist is per snippet; DEBT entries are paid by deleting them |
 | Retired legacy token | `tests/legacy-token-retired.test.ts`: `constitution.api_key` no longer authenticates anywhere |
@@ -40,10 +40,10 @@ description: >
 
 ## Known debt
 
-None allowlisted. The four operator/admin `===` compares #1408 listed now go through `secretEquals`.
-The architecture test's grep only sees `===`/`!==` on a secret-named operand, so it does not catch
-`keys.includes(presented)` in `src/middleware/env-api-key.ts` (the rate-limit bypass check). That
-compare is not constant-time yet.
+None allowlisted. The four operator/admin `===` compares #1408 listed, and the rate-limit bypass
+check's `keys.includes(presented)` (`src/middleware/env-api-key.ts`), now go through `secretEquals`.
+The architecture test also bans `.includes(` / `.indexOf(` on a key or token array in `src/auth` and
+`src/middleware`: use `keys.some((k) => secretEquals(k, presented))`.
 
 ## Before you claim it is done
 
