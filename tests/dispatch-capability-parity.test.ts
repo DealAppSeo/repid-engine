@@ -86,12 +86,14 @@ describe('dispatch runner — the refusal that would have prevented the fabricat
     // A warning that still runs the agent produces the transcript that gets cited.
     expect(src).toMatch(/REFUSED/);
     expect(src).toMatch(/process\.exit\(65\)/);
-    // And the refusal must fire BEFORE the key is read / the agent is spawned.
-    const refuseAt = src.indexOf('capabilityRefusal(agentKey');
-    const spawnAt = src.indexOf('spawnSync(bin.cmd');
+    // And the refusal must fire BEFORE the key is read / anything is spawned. Measured inside main():
+    // helpers defined above it (codexGate, codexCanary) spawn too, but only when main() calls them.
+    const main = src.slice(src.indexOf('function main()'));
+    const refuseAt = main.indexOf('capabilityRefusal(agentKey');
     expect(refuseAt).toBeGreaterThan(-1);
-    expect(spawnAt).toBeGreaterThan(-1);
-    expect(refuseAt).toBeLessThan(spawnAt);
+    for (const spawn of ['codexGate(agentKey', 'codexCanary(bin', 'spawnSync(bin.cmd']) {
+      expect(main.indexOf(spawn)).toBeGreaterThan(refuseAt);
+    }
   });
 
   it('an empty or failed run can never read as a passing review', () => {

@@ -28,9 +28,14 @@ function call(fnBody: string): any {
   return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', src], { encoding: 'utf8' }));
 }
 
-/** Calls buildEvidencePack; a throw comes back as { error }. */
+/**
+ * Calls buildEvidencePack with the cleaner main() uses (exact `scrubValues`, then the shape screen);
+ * a throw comes back as { error }. `noClean: true` omits the cleaner, to prove that is refused.
+ */
 function pack(range: string, opts: Record<string, unknown>): any {
-  return call(`({buildEvidencePack}) => { try { return buildEvidencePack(${JSON.stringify(range)}, ${JSON.stringify(opts)}); } catch (e) { return { error: String(e.message) }; } }`);
+  const { scrubValues = [], noClean = false, ...rest } = opts as { scrubValues?: string[]; noClean?: boolean };
+  const clean = noClean ? '' : `, clean: makePromptCleaner(${JSON.stringify(scrubValues)})`;
+  return call(`({buildEvidencePack, makePromptCleaner}) => { try { return buildEvidencePack(${JSON.stringify(range)}, { ...${JSON.stringify(rest)}${clean} }); } catch (e) { return { error: String(e.message) }; } }`);
 }
 
 const ENV_MARKER = 'marker-from-an-env-file-that-must-never-ship';
@@ -53,7 +58,9 @@ beforeAll(() => {
   put('.env', `PLACEHOLDER=${ENV_MARKER}\n`);
   put('config/.env.production', `PLACEHOLDER=${ENV_MARKER}\n`);
   put('keys/server.pem', `${PEM_MARKER}\n`);
-  put('big.txt', 'x'.repeat(5000) + '\n');
+  put('big.md', 'x'.repeat(5000) + '\n');
+  put('notes.txt', 'not a source file\n');
+  put('config/creds.json', '{"client_secret": "json-marker-never-ships"}\n');
   // -f: a machine-wide gitignore commonly skips .env / *.pem, which would make this fixture vacuous.
   git('add', '-A', '-f');
   git('commit', '-q', '-m', 'the change under review');
@@ -85,7 +92,8 @@ describe('buildEvidencePack — what the codex lane is shown', () => {
 
   it('respects the per-file cap (truncated, and says so)', () => {
     const p = pack('HEAD~1...HEAD', { cwd: repo, fileMaxChars: 1000 });
-    expect(p.files).toContainEqual({ path: 'big.txt', status: 'included, truncated', lines: 1 });
+    // Its one line was cut, so the agent saw zero whole lines of it.
+    expect(p.files).toContainEqual({ path: 'big.md', status: 'included, truncated', lines: 1, shownLines: 0 });
     expect(p.text).toMatch(/\[file TRUNCATED at 1000 chars of \d+\]/);
   });
 
@@ -93,11 +101,46 @@ describe('buildEvidencePack — what the codex lane is shown', () => {
     const totalMaxChars = 3000;
     const p = pack('HEAD~1...HEAD', { cwd: repo, totalMaxChars });
     const omitted = p.files.filter((f: any) => /^omitted: the pack is at its 3000-char cap$/.test(f.status));
-    expect(omitted.map((f: any) => f.path)).toContain('big.txt');
+    expect(omitted.map((f: any) => f.path)).toContain('big.md');
     // The inlined parts stay within the cap; only the header/file list sits on top of it.
     const inlined = p.text.split('──── ').slice(1).join('');
     expect(inlined.length).toBeLessThanOrEqual(totalMaxChars);
-    expect(p.text).toContain('big.txt — omitted');
+    expect(p.text).toContain('big.md — omitted');
+  });
+
+  it('inlines only source/test/doc files (and package.json / tsconfig*.json); the rest are listed, not shown', () => {
+    const p = pack('HEAD~1...HEAD', { cwd: repo });
+    expect(p.files).toContainEqual({ path: 'notes.txt', status: 'not inlined (not a source, test or doc file)' });
+    expect(p.files).toContainEqual({ path: 'config/creds.json', status: 'not inlined (not a source, test or doc file)' });
+    expect(p.text).not.toContain('json-marker-never-ships'); // not inlined, and not in the diff either
+    expect(p.text).not.toContain('not a source file');
+    const allowed = (f: string) => call(`({packAllowed}) => packAllowed(${JSON.stringify(f)})`);
+    for (const f of ['a.ts', 'b.tsx', 'c.js', 'd.mjs', 'e.cjs', 'f.md', 'g.sql', 'h.yml', 'i.yaml', 'package.json', 'x/tsconfig.build.json']) {
+      expect(allowed(f)).toBe(true);
+    }
+    for (const f of ['creds.json', 'a.txt', 'key.pem', '.env', 'Dockerfile', 'settings.local.json']) expect(allowed(f)).toBe(false);
+  });
+
+  it('is never built without a cleaner', () => {
+    expect(pack('HEAD~1...HEAD', { cwd: repo, noClean: true }).error).toMatch(/needs `clean`/);
+  });
+
+  it('scrubs BEFORE truncation: a known value cut by the file cap leaves no prefix behind', () => {
+    const local = mkdtempSync(path.join(tmpdir(), 'evidence-pack-straddle-'));
+    const g = (...a: string[]) => execFileSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...a], { cwd: local, encoding: 'utf8' });
+    g('init', '-q');
+    writeFileSync(path.join(local, 'a.md'), 'base\n');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'base');
+    // "    1| " is 7 chars, so the secret runs from char 47 across the 60-char file cap.
+    const secret = 'zq-straddling-secret-value-0001';
+    writeFileSync(path.join(local, 'a.md'), 'y'.repeat(40) + secret + 'z'.repeat(40) + '\n');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'change');
+    const p = pack('HEAD~1...HEAD', { cwd: local, fileMaxChars: 60, scrubValues: [secret] });
+    expect(p.error).toBeUndefined();
+    expect(p.files).toContainEqual(expect.objectContaining({ path: 'a.md', status: 'included, truncated' }));
+    expect(p.text).not.toContain(secret.slice(0, 12)); // what a scrub AFTER the cut would have missed
   });
 
   it.each([

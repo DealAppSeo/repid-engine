@@ -154,6 +154,7 @@ const ALLOWLIST = {
     'Client/caller env name (scripts, demos, agent runtime). Engine src reads REPID_API_KEYS (plural).',
   RUN_INTEGRATION: 'Test harness opt-in; consumed under tests/, not src/.',
   RUN_ZKP_SMOKE: 'Test harness opt-in; consumed under tests/, not src/.',
+  RUN_CODEX_CANARY: 'Test harness opt-in (tests/dispatch-codex-canary.test.ts); live codex + OpenAI calls, never in CI.',
   RUN_AUDIT_CHAIN_INTEGRATION: 'Test harness opt-in; consumed under tests/, not src/.',
   INTEGRATION_SCHEMA_PRESENT: 'Test harness signal; consumed under tests/, not src/.',
   E2E_API_KEY: 'E2E harness; consumed under tests/e2e/, not src/.',
