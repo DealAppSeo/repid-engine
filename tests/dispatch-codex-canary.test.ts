@@ -55,22 +55,27 @@ function call(fnBody: string): any {
     expect(r.sawToken).toBe(true);
   }, 360_000);
 
-  it('the lane: codexGate passes and codexCanary (hostile workspace config included) finds no way to the token', () => {
-    const r = call(`async ({ resolveBin, readKey, buildChildEnv, AGENTS, codexGate, codexCanary }) => {
+  it('the lane: codexGate passes and codexCanary (run-shaped, hostile config, refusal required) finds no way to the token', () => {
+    const r = call(`async ({ resolveBin, readKey, buildChildEnv, AGENTS, codexGate, codexCanary, hashCodexInstall }) => {
       const { mkdtempSync, rmSync } = await import('node:fs');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
       const key = readKey(AGENTS.codex.keyVars);
       if (!key) return { error: 'no OPENAI_API_KEY in the inventory' };
       const bin = resolveBin('codex');
+      // The same env main() uses for the gate, the canary and the task: the lane's key included.
+      const env = buildChildEnv(process.env, AGENTS.codex.keyVars, key.value, AGENTS.codex.envPassthrough || []);
       const runDir = mkdtempSync(join(tmpdir(), 'codex-run-'));
-      const gate = codexGate('codex', bin, buildChildEnv(process.env, [], null, AGENTS.codex.envPassthrough || []), runDir);
+      const gate = codexGate('codex', bin, env, runDir);
       rmSync(runDir, { recursive: true, force: true });
       if (gate.why) return { why: 'gate: ' + gate.why };
-      const env = buildChildEnv(process.env, AGENTS.codex.keyVars, key.value, AGENTS.codex.envPassthrough || []);
-      return { why: codexCanary(bin, (dir) => AGENTS.codex.args('<p>', { root: dir, env: {}, disable: gate.disable }), env), disabled: gate.disable.length };
+      const hash = hashCodexInstall(bin);
+      const why = codexCanary(bin, (dir) => AGENTS.codex.args('<p>', { root: dir, env: {}, disable: gate.disable }), env);
+      return { why, disabled: gate.disable.length, hashed: Boolean(hash), sameAfter: hashCodexInstall(bin) === hash };
     }`);
-    console.log(`[canary] disabled ${r.disabled} feature(s); refusal: ${r.why}`);
+    console.log(`[canary] disabled ${r.disabled} feature(s); refusal: ${r.why}; install hashed=${r.hashed} unchanged=${r.sameAfter}`);
+    expect(r.hashed).toBe(true);
+    expect(r.sameAfter).toBe(true);
     expect(r.error).toBeUndefined();
     expect(r.why).toBeNull();
   }, 360_000);
