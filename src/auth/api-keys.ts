@@ -1,16 +1,27 @@
 import crypto from 'crypto';
 import { db } from '../db';
 
+/** Width of the secretEquals compare. A longer secret is never accepted (fail closed). */
+export const SECRET_COMPARE_BYTES = 1024;
+
 /**
  * r32: THE secret compare. Every operator / admin key check routes through here, never `===`.
- * Both sides are sha256'd first, so timingSafeEqual always sees two 32-byte digests: no early
- * exit on a length mismatch, and the secret's length does not leak. A non-string or empty input
- * is false, never a throw (a repeated header arrives as string[]).
+ * Both sides are zero-padded to SECRET_COMPARE_BYTES, so timingSafeEqual always runs over the same
+ * width: no early exit on a length mismatch, and the time never depends on either length. The real
+ * lengths are compared after. Not hashed: CodeQL reads a fast hash of an API key as weak password
+ * hashing (the same choice as middleware/controller-auth.ts). A non-string or empty input is false,
+ * never a throw (a repeated header arrives as string[]).
  */
 export function secretEquals(a: unknown, b: unknown): boolean {
   if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
-  const digest = (s: string) => crypto.createHash('sha256').update(s).digest();
-  return crypto.timingSafeEqual(digest(a), digest(b));
+  const ba = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  if (ba.length > SECRET_COMPARE_BYTES || bb.length > SECRET_COMPARE_BYTES) return false;
+  const pa = Buffer.alloc(SECRET_COMPARE_BYTES);
+  const pb = Buffer.alloc(SECRET_COMPARE_BYTES);
+  ba.copy(pa);
+  bb.copy(pb);
+  return crypto.timingSafeEqual(pa, pb) && ba.length === bb.length;
 }
 
 /**

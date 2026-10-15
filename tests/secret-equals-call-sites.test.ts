@@ -2,19 +2,19 @@
  * CLAUDE_RULES r32 "one verifier, constant-time" (follow-up to #1408 / D-108).
  *
  * #1408's architecture test allowlisted four operator/admin key compares as known debt (plain `===` /
- * `!==`). They now route through ONE compare, `secretEquals` in src/auth/api-keys.ts: sha256 both
- * sides, then crypto.timingSafeEqual. So does the rate-limit bypass check in middleware/env-api-key.ts,
+ * `!==`). They now route through ONE compare, `secretEquals` in src/auth/api-keys.ts: both sides
+ * zero-padded to a fixed width, then crypto.timingSafeEqual. So does the rate-limit bypass check in middleware/env-api-key.ts,
  * which used `keys.includes(presented)` (a `===` per element) and which the `===` grep could not see.
  *
  * Per site: the right key is accepted, and a wrong key, a key of a different length (a prefix of the
  * right one) and a non-string are rejected, exactly as before. The `timingSafeEqual` assertions are
- * what the old `===` code fails: they prove the compare ran in constant time on two 32-byte digests,
- * including when the lengths differ.
+ * what the old `===` code fails: they prove the compare ran in constant time over the same fixed
+ * width, including when the lengths differ.
  */
 import crypto from 'crypto';
 import express, { Router } from 'express';
 import request from 'supertest';
-import { secretEquals } from '../src/auth/api-keys';
+import { secretEquals, SECRET_COMPARE_BYTES } from '../src/auth/api-keys';
 import { authMiddleware } from '../src/middleware/auth';
 import { hasValidEnvApiKey } from '../src/middleware/env-api-key';
 import { llmRouter } from '../src/routes/route';
@@ -58,11 +58,11 @@ afterAll(() => {
   process.env = prevEnv;
 });
 
-/** Every compare ran through timingSafeEqual on two sha256 digests: no length short-circuit. */
+/** Every compare ran through timingSafeEqual over the same fixed width: no length short-circuit. */
 function expectConstantTimeCompare() {
   expect(tse).toHaveBeenCalled();
   for (const [a, b] of tse.mock.calls) {
-    expect([(a as Buffer).length, (b as Buffer).length]).toEqual([32, 32]);
+    expect([(a as Buffer).length, (b as Buffer).length]).toEqual([SECRET_COMPARE_BYTES, SECRET_COMPARE_BYTES]);
   }
 }
 
@@ -96,9 +96,16 @@ describe('secretEquals', () => {
     expect(secretEquals('', '')).toBe(false);
   });
 
-  it('compares two 32-byte digests even when the lengths differ', () => {
+  it('compares over the same fixed width even when the lengths differ', () => {
     secretEquals(RIGHT, SHORT);
     expectConstantTimeCompare();
+  });
+
+  it('zero padding cannot make a shorter key equal; an over-width secret fails closed', () => {
+    expect(secretEquals(RIGHT, `${RIGHT}\0`)).toBe(false);
+    const huge = 'k'.repeat(SECRET_COMPARE_BYTES + 1);
+    expect(secretEquals(huge, huge)).toBe(false);
+    expect(secretEquals('k'.repeat(SECRET_COMPARE_BYTES), 'k'.repeat(SECRET_COMPARE_BYTES))).toBe(true);
   });
 });
 

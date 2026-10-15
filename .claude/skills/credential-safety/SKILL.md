@@ -31,7 +31,7 @@ description: >
 | Layer | Where |
 |---|---|
 | The one agent-key verifier | `src/auth/api-keys.ts` (`validateAgentApiKey`; keys hashed in `agent_api_keys.key_hash`) |
-| The one secret compare | `src/auth/api-keys.ts` (`secretEquals`: sha256 both sides, `timingSafeEqual`; false on non-string/empty). `matchEnvOperatorKey` (REPID_API_KEYS), `hasValidEnvApiKey` and the `x-admin-key` guards call it |
+| The one secret compare | `src/auth/api-keys.ts` (`secretEquals`: both sides zero-padded to a fixed 1024 bytes, `timingSafeEqual`, then the lengths; not hashed, since CodeQL flags a fast hash of an API key; false on non-string/empty/over-width). `matchEnvOperatorKey` (REPID_API_KEYS), `hasValidEnvApiKey` and the `x-admin-key` guards call it |
 | Public constitution allowlist | `src/auth/api-keys.ts` (`publicConstitution`) |
 | Architecture test (CI `test` job) | `tests/credential-safety-architecture.test.ts`: fails if any other `src/` file reads `constitution.api_key`, `->>'api_key'`, `privateId`, or compares a secret with `===`. Allowlist is per snippet; DEBT entries are paid by deleting them |
 | Retired legacy token | `tests/legacy-token-retired.test.ts`: `constitution.api_key` no longer authenticates anywhere |
