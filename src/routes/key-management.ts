@@ -1,12 +1,17 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
-import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey } from '../auth/api-keys';
+import { issueAgentApiKey, revokeAgentApiKey, validateAgentApiKey, RESERVED_SCOPES } from '../auth/api-keys';
+import { SELF_SERVE_SCOPES } from '../services/agent-self-serve-key';
 import { resolveAccountableRoot, rootRefusalStatus } from '../services/accountable-root';
 import { checkOwnerAuthorization, readOwnerAuthorization } from '../services/owner-authorization';
 
 const router = Router();
 
-// Middleware to check admin scope OR legacy registration api_key
+// [S1 2026-10-14] SELF auth: a key bound to THIS agent, or its legacy registration token. This
+// used to require an 'admin' scope, but keyless registration handed 'admin' to everyone, so the
+// scope proved nothing and the controller read it as admin. What a self caller may then do is
+// bounded where it matters: creating a key needs the accountable root's signature (below) and
+// cannot widen scopes beyond the self-serve set plus what the calling key already holds.
 async function requireAdminAuth(req: Request, res: Response, next: any) {
   const agentId = String(req.params.id);
   const header = req.headers['authorization'];
@@ -22,14 +27,8 @@ async function requireAdminAuth(req: Request, res: Response, next: any) {
     if (validKey.agent_id !== agentId) {
       return res.status(403).json({ error: 'API key agent_id mismatch' });
     }
-    // For now, ANY valid key counts as admin or we require 'admin' scope? 
-    // Wait, the prompt says "requires API key with 'admin' scope OR original registration token"
-    // Since we don't have an 'admin' scope implemented at registration explicitly, 
-    // actually, we didn't issue an 'admin' scope during registration. But wait, we can just say "if it has 'admin' scope". 
-    // If they hold the original registration token, that's checked next.
-    if (validKey.scopes.includes('admin')) {
-      return next();
-    }
+    (req as any).callerScopes = validKey.scopes;
+    return next();
   }
 
   // 2. Try to validate as original registration token (legacy)
@@ -41,11 +40,12 @@ async function requireAdminAuth(req: Request, res: Response, next: any) {
   const legacyKey = (agent as any).constitution?.api_key;
   if (legacyKey && legacyKey === token) {
     console.warn(`[DEPRECATION WARNING] Legacy api_key used for agent: ${agentId} in key management. Please transition to modern scoped API keys.`);
+    (req as any).callerScopes = [];
     return next();
   }
 
   // If we reach here, we failed both checks
-  return res.status(403).json({ error: 'Insufficient permissions (requires admin scope or registration token)' });
+  return res.status(403).json({ error: 'Insufficient permissions (requires a key bound to this agent or its registration token)' });
 }
 
 router.get('/:id/keys', requireAdminAuth, async (req: Request, res: Response) => {
@@ -66,11 +66,27 @@ router.post('/:id/keys', requireAdminAuth, async (req: Request, res: Response) =
   const agentId = String(req.params.id);
   const { name = 'new_key', scopes = [] } = req.body;
 
+  // [S1 2026-10-14] No escalation through self-service. Reserved scopes are never issued here, and
+  // anything else must be a self-serve scope or one the calling key already holds (so `bounty_verify`
+  // stays operator-granted). Checked before anything is read or signed.
+  if (!Array.isArray(scopes) || !scopes.every((s) => typeof s === 'string')) {
+    return res.status(400).json({ error: 'scopes must be an array of strings' });
+  }
+  const callerScopes: string[] = (req as any).callerScopes ?? [];
+  const refused = scopes.filter(
+    (s: string) => RESERVED_SCOPES.includes(s) || !((SELF_SERVE_SCOPES as readonly string[]).includes(s) || callerScopes.includes(s)),
+  );
+  if (refused.length) {
+    return res.status(403).json({ error: 'scope_not_grantable', scopes: refused, message: `This key cannot grant: ${refused.join(', ')}` });
+  }
+
   // OWNER [2026-10-07] + ACCOUNTABLE ROOT [F1]. A new key is a new way to act as this agent.
   //  - Owned by a person: a key alone cannot mint another key (a leaked key would make itself
   //    permanent); only the owner's wallet can (services/owner-authorization.ts).
-  //  - Held by the operator's custodian (the house fleet): the admin credential this route already
-  //    requires is the operator's, so it stands.
+  //  - Held by the operator's custodian (the house fleet): [S1 2026-10-14] the custodian's signature,
+  //    exactly as for an owner. This used to stand on "the admin credential this route requires is the
+  //    operator's", which was never true (registration issued 'admin' to everyone) and no longer applies
+  //    now that the route takes any key bound to the agent.
   //  - Nobody answers for it: refused. Before F1 an unclaimed agent's key could mint more keys for
   //    itself with no one behind any of them; claiming the agent is now the way to get a second key.
   // Revoking a key never needs any of this.
@@ -86,17 +102,15 @@ router.post('/:id/keys', requireAdminAuth, async (req: Request, res: Response) =
             : `Nobody answers for this agent yet, so it cannot be given another key. Claim it on /bind first. ${root.message}`,
       });
     }
-    if (root.root.kind === 'owner') {
-      const check = await checkOwnerAuthorization({
-        subject: agentId,
-        action: 'keys.create',
-        params: { agent_id: agentId, name: String(name), scopes: Array.isArray(scopes) ? [...scopes].map(String).sort() : [] },
-        auth: readOwnerAuthorization(req.body),
-        expectedSigner: root.root.wallet,
-      });
-      if (!check.ok) {
-        return res.status(check.code === 'not_checked' ? 503 : 403).json({ error: check.code, message: check.message });
-      }
+    const check = await checkOwnerAuthorization({
+      subject: agentId,
+      action: 'keys.create',
+      params: { agent_id: agentId, name: String(name), scopes: Array.isArray(scopes) ? [...scopes].map(String).sort() : [] },
+      auth: readOwnerAuthorization(req.body),
+      expectedSigner: root.root.wallet,
+    });
+    if (!check.ok) {
+      return res.status(check.code === 'not_checked' ? 503 : 403).json({ error: check.code, message: check.message });
     }
   } catch (e: any) {
     return res.status(500).json({ error: e?.message ?? 'owner check failed' });

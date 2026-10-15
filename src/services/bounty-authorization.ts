@@ -26,9 +26,13 @@
  * the code reads as fixed. That is precisely the failure this codebase is built
  * against — a system reporting success it has not earned.
  *
+ * [S1 2026-10-14] Registration no longer issues 'admin', and no agent key is ever
+ * issued it (RESERVED_SCOPES in auth/api-keys.ts). The reasoning below still holds
+ * for every key minted before that fix.
+ *
  * So this requires a scope that registration does NOT hand out. `bounty_verify`
- * is granted deliberately, per key, through `POST /agents/:id/keys`
- * (routes/key-management.ts, itself admin-gated) and by nothing else.
+ * is granted deliberately by an operator. `POST /agents/:id/keys` cannot mint it
+ * for a key that does not already hold it (routes/key-management.ts).
  *
  * WHY NO NEW ENVIRONMENT SECRET. #445 proposed a `CONTROLLER_MASTER_KEY` bearer
  * secret alongside the scope check. Declined, for two reasons that are worth

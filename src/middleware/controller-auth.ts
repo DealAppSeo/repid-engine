@@ -77,6 +77,14 @@ export async function resolveSbt(req: Request): Promise<SbtContext | null> {
   return { tokenId: row.token_id, wallet: row.wallet_address ?? undefined, tier: row.qualification_tier ?? undefined, isMaster };
 }
 
+function isMasterKey(key: string): boolean {
+  const master = (process.env.CONTROLLER_MASTER_KEY || '').trim();
+  if (!master) return false;
+  const a = Buffer.from(key, 'utf8');
+  const b = Buffer.from(master, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export async function resolveControllerRole(req: Request): Promise<'viewer' | 'operator' | 'admin' | null> {
   // 1. Check for scoped QR token in Authorization header, x-controller-token header, or query param
   let tokenStr = '';
@@ -114,15 +122,17 @@ export async function resolveControllerRole(req: Request): Promise<'viewer' | 'o
     }
   }
 
+  // [S1 2026-10-14] An agent API key is never admin or operator from its scopes. Registration is
+  // keyless and handed every new agent an 'admin' scope, so `scopes.includes('admin')` here meant
+  // "anyone who can POST /agents/register" could sleep/wake agents, dispatch sprints, mint controller
+  // tokens and decide HITL requests. Admin and operator now come only from CONTROLLER_MASTER_KEY or a
+  // token signed with CONTROLLER_QR_SECRET (above). An agent key reads, pinned to its own agent.
+  // The master key no longer has to be a DB key as well; unset means no key is master (fail closed).
   if (apiKey) {
+    if (isMasterKey(apiKey)) return 'admin';
     const validated = await validateAgentApiKey(apiKey);
     if (validated) {
-      if (validated.scopes.includes('admin') || apiKey === process.env.CONTROLLER_MASTER_KEY) {
-        return 'admin';
-      }
-      if (validated.scopes.includes('operator')) {
-        return 'operator';
-      }
+      (req as any).dbAgentId = validated.agent_id;
       return 'viewer';
     }
   }
@@ -130,8 +140,9 @@ export async function resolveControllerRole(req: Request): Promise<'viewer' | 'o
   // 3. Check for SBT (x-sbt-token or x-sbt-wallet). [F-15, 2026-10-08] A header that names a token
   // id or a wallet is a claim, not a proof: both are public on chain, and nothing here checks a
   // signature. So an SBT named in a header reads (viewer) and never writes. It used to grant
-  // operator or admin by tier or by matching CONTROLLER_MASTER_SBT. Operator and admin now need an
-  // API key with that scope, or a QR token signed with CONTROLLER_QR_SECRET.
+  // operator or admin by tier or by matching CONTROLLER_MASTER_SBT. Operator and admin now need
+  // CONTROLLER_MASTER_KEY or a QR token signed with CONTROLLER_QR_SECRET (an agent key's scopes no
+  // longer count, see above).
   try {
     const sbt = await resolveSbt(req);
     if (sbt) {
@@ -168,7 +179,9 @@ export function requireRole(requiredRole: 'viewer' | 'operator' | 'admin') {
     // f2-authz check for controller routes when authenticated via API Key
     const dbAgentId = (req as any).dbAgentId;
     if (dbAgentId) {
-      const targetAgentId = req.body?.agent_id || 
+      // req.params.agent_id first: /wake, /sleep and /sprint name their target in the path.
+      const targetAgentId = req.params?.agent_id ||
+                            req.body?.agent_id || 
                             req.body?.buyer_agent_id || 
                             req.body?.requestor_agent_id || 
                             req.body?.provider_agent_id ||

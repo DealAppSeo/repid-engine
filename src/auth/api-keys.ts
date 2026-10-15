@@ -23,7 +23,20 @@ export function matchEnvOperatorKey(key: string): { tier: string } | null {
   return null;
 }
 
+/**
+ * [S1 2026-10-14] Scopes no HTTP path may put on an agent key. Registration is keyless and used to
+ * hand every new agent `admin`, which the controller read as admin (sleep/wake/sprint, HITL decide,
+ * token minting). Operator credentials are CONTROLLER_MASTER_KEY or a signed controller token
+ * (middleware/controller-auth.ts); an operator script that needs a special key writes it with the
+ * service role, not through here.
+ */
+export const RESERVED_SCOPES: readonly string[] = ['admin', 'operator'];
+
 export async function issueAgentApiKey(agentId: string, name: string = 'default', scopes: string[] = []): Promise<{key: string, key_prefix: string}> {
+  const reserved = scopes.filter((s) => RESERVED_SCOPES.includes(s));
+  if (reserved.length) {
+    throw new Error(`Refusing to issue reserved scope(s) on an agent key: ${reserved.join(', ')}`);
+  }
   const rawKey = "ts_live_" + crypto.randomBytes(16).toString('hex');
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
   const keyPrefix = rawKey.substring(0, 16);

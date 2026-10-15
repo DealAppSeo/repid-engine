@@ -160,7 +160,13 @@ jest.mock('../src/services/principal-grants', () => ({
 }));
 jest.mock('../src/auth/api-keys', () => ({
   ...jest.requireActual('../src/auth/api-keys'),
-  validateAgentApiKey: jest.fn(async (k: string) => (k === 'admin-key' ? { agent_id: AGENT, scopes: ['admin'] } : null)),
+  validateAgentApiKey: jest.fn(async (k: string) => {
+    if (k === 'admin-key') return { agent_id: AGENT, scopes: ['admin'] };
+    // [S1] What registration issues now, and what a self-registered agent holds: no 'admin'.
+    if (k === 'self-key') return { agent_id: AGENT, scopes: ['score_event', 'llm_complete', 'read_card'] };
+    if (k === 'other-key') return { agent_id: OTHER, scopes: ['score_event', 'llm_complete', 'read_card'] };
+    return null;
+  }),
   issueAgentApiKey: jest.fn(async (...a: unknown[]) => { mockIssued.push(a); return { key: 'ts_live_new', key_prefix: 'ts_live_' }; }),
 }));
 jest.mock('../src/services/stake-vault', () => ({
@@ -285,9 +291,17 @@ describe('POST /agents/:id/keys', () => {
     expect(mockIssued).toHaveLength(0);
   });
 
-  it("[F1] a house agent held by the operator's custodian: the operator's admin credential issues", async () => {
-    mockState.root = custodianRoot(Wallet.createRandom().address);
-    expect((await post({ name: 'k' })).status).toBe(201);
+  it("[S1] a house agent held by the operator's custodian: the custodian's signature issues, a key alone does not", async () => {
+    // Before S1 the key alone issued, on the premise that an 'admin' key was the operator's. Keyless
+    // registration handed 'admin' to everyone, so the premise was false.
+    const custodian = Wallet.createRandom();
+    mockState.root = custodianRoot(custodian.address);
+    const denied = await post({ name: 'k' });
+    expect(denied.status).toBe(403);
+    expect(mockIssued).toHaveLength(0);
+    const now = Math.floor(Date.now() / 1000);
+    const owner_authorization = await approve(custodian, AGENT, 'keys.create', { agent_id: AGENT, name: 'k', scopes: [] }, { expires_at: now + 300 });
+    expect((await post({ name: 'k', owner_authorization })).status).toBe(201);
     expect(mockIssued).toHaveLength(1);
   });
 
@@ -308,10 +322,56 @@ describe('POST /agents/:id/keys', () => {
   it("an OWNED agent: with the owner's approval it issues", async () => {
     mockState.root = ownerRoot(owner.address);
     const now = Math.floor(Date.now() / 1000);
-    const owner_authorization = await approve(owner, AGENT, 'keys.create', { agent_id: AGENT, name: 'k', scopes: ['admin'] }, { expires_at: now + 300 });
-    const res = await post({ name: 'k', scopes: ['admin'], owner_authorization });
+    const owner_authorization = await approve(owner, AGENT, 'keys.create', { agent_id: AGENT, name: 'k', scopes: ['read_card'] }, { expires_at: now + 300 });
+    const res = await post({ name: 'k', scopes: ['read_card'], owner_authorization });
     expect(res.status).toBe(201);
     expect(mockIssued).toHaveLength(1);
+  });
+
+  it("[S1] 'admin' and 'operator' are never issued, even with the owner's approval", async () => {
+    mockState.root = ownerRoot(owner.address);
+    const now = Math.floor(Date.now() / 1000);
+    for (const scope of ['admin', 'operator']) {
+      const owner_authorization = await approve(owner, AGENT, 'keys.create', { agent_id: AGENT, name: 'k', scopes: [scope] }, { expires_at: now + 300 });
+      const res = await post({ name: 'k', scopes: [scope], owner_authorization });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('scope_not_grantable');
+    }
+    expect(mockIssued).toHaveLength(0);
+  });
+});
+
+describe('[S1] key management is SELF-auth: any key bound to the agent, no admin scope needed', () => {
+  const owner = Wallet.createRandom();
+  const call = (method: 'get' | 'post', key: string, agent = AGENT) =>
+    request(app(keysRouter, '/api/v1/agents'))[method](`/api/v1/agents/${agent}/keys`).set('authorization', `Bearer ${key}`);
+  beforeEach(() => { mockIssued.length = 0; mockState.root = ownerRoot(owner.address); });
+
+  it("the agent's own non-admin key lists its keys", async () => {
+    expect((await call('get', 'self-key')).status).toBe(200);
+  });
+
+  it("the agent's own non-admin key issues a self-serve key with the owner's approval", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const owner_authorization = await approve(owner, AGENT, 'keys.create', { agent_id: AGENT, name: 'k', scopes: ['score_event'] }, { expires_at: now + 300 });
+    const res = await call('post', 'self-key').send({ name: 'k', scopes: ['score_event'], owner_authorization });
+    expect(res.status).toBe(201);
+    expect(mockIssued).toHaveLength(1);
+  });
+
+  it("a key cannot grant a scope it does not hold (bounty_verify stays operator-granted)", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const owner_authorization = await approve(owner, AGENT, 'keys.create', { agent_id: AGENT, name: 'k', scopes: ['bounty_verify'] }, { expires_at: now + 300 });
+    const res = await call('post', 'self-key').send({ name: 'k', scopes: ['bounty_verify'], owner_authorization });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: 'scope_not_grantable', scopes: ['bounty_verify'] });
+    expect(mockIssued).toHaveLength(0);
+  });
+
+  it("another agent's key is refused", async () => {
+    expect((await call('get', 'other-key')).status).toBe(403);
+    expect((await call('post', 'other-key').send({ name: 'k' })).status).toBe(403);
+    expect(mockIssued).toHaveLength(0);
   });
 });
 
