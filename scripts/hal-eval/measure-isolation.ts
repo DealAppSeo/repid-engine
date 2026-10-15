@@ -20,8 +20,11 @@
  *                        Windows, and a failure to open must not send writes anywhere else.
  *   REDIS_URL=''         Dragonfly is a no-op (src/cache/dragonfly.ts cacheEnabled)
  *   TELEGRAM_*=''        the pager is not armed and cannot push
- *   DATABASE_URL='', SUPABASE_DB_URL=''
- *                        no direct Postgres connection string survives from the shell (XC1 on #1389)
+ *   DATABASE_URL='', SUPABASE_DB_URL='', PGHOST='', PGPASSWORD='', PGUSER='', PGDATABASE=''
+ *                        no Postgres connection string or libpq default survives from the shell. A
+ *                        native client would bypass any socket probe, so the inputs are removed.
+ *   SUPABASE_URL=''      no hosted Supabase URL at all. `db` is local anyway; this also turns off the
+ *                        private holdout's ledger READ (use HOLDOUT_FILE, or --write-prod).
  * dotenv never overrides a variable that is already set, so the key file loaded afterwards cannot
  * undo any of this.
  *
@@ -58,8 +61,7 @@ export function applyIsolation(argv: readonly string[] = process.argv.slice(2), 
   env.REDIS_URL = '';
   env.TELEGRAM_BOT_TOKEN = '';
   env.TELEGRAM_OWNER_CHAT_ID = '';
-  env.DATABASE_URL = '';
-  env.SUPABASE_DB_URL = '';
+  for (const name of ['DATABASE_URL', 'SUPABASE_DB_URL', 'PGHOST', 'PGPASSWORD', 'PGUSER', 'PGDATABASE', 'SUPABASE_URL']) env[name] = '';
   return { mode: 'local', store, redis: 'off', pg: 'off', telegram: 'off', ground_truth: 'local-store (empty)' };
 }
 
@@ -67,7 +69,7 @@ export function applyIsolation(argv: readonly string[] = process.argv.slice(2), 
 export function isolationBanner(i: Isolation): string {
   return i.mode === 'local'
     ? `ISOLATION  : LOCAL (default). DB writes (llm_call_log, ops_alerts, audit) -> ${i.store} on this machine. ` +
-        `Dragonfly counters OFF. Direct Postgres URLs cleared. Telegram pages OFF. Ground-truth gate sees an empty local store. ` +
+        `Dragonfly counters OFF. Postgres URLs, PG* and SUPABASE_URL cleared. Telegram pages OFF. Ground-truth gate sees an empty local store. ` +
         `Pass ${WRITE_PROD_FLAG} to write to production.`
     : `ISOLATION  : PROD (${WRITE_PROD_FLAG}). llm_call_log, ops_alerts, provider-health counters and Telegram pages ` +
         `go to PRODUCTION exactly as live HAL traffic does.`;

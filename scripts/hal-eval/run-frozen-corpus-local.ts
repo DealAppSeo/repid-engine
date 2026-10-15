@@ -374,7 +374,7 @@ interface Scored {
     console.log('======================================================================');
     fs.writeFileSync(
       path.join(outDir, `${isPrivate ? stem : `${stem}-${split}`}-${hashed.slice(0, 12)}.LOCAL.INCOMPLETE.json`),
-      JSON.stringify({ ruler: RULER, scoring: SCORING, isolation: ISOLATION, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, attempted, errors: errors.length, error_kinds: kinds, budget, f1: null }, null, 2),
+      JSON.stringify({ ruler: RULER, scoring: SCORING, never_compare: 'No F1: coverage (rows with any verdict, abstain and fallback included / attempted) is below the floor. This is a transport result, not a quality result.', isolation: ISOLATION, split, ...(isPrivate ? { holdout: 'private' } : retiredStamp()), coverage, scored: scored.length, rows: rows.length, attempted, errors: errors.length, error_kinds: kinds, budget, f1: null }, null, 2),
     );
     process.exit(3);
   }
@@ -401,6 +401,17 @@ interface Scored {
         ruler: `${RULER}${sample}`,
         corpus_sha256: hashed,
         scoring: SCORING,
+        // Which ruler each number in this file is on (XC1 on #1389).
+        never_compare:
+          'The headline metrics (confusion, precision, recall, f1, accuracy, auc, per_class) are ' + SCORING + ' over checked rows only. ' +
+          'legacy_all_scored is a different ruler. scored and coverage count every row with any verdict, abstain and extractor fallback included: ' +
+          'they measure transport, not quality. Never compare numbers across these rulers.',
+        counts: {
+          attempted,
+          scored_any_verdict: scored.length,
+          checked_v2: checkedRows.length,
+          not_checked_v2: notCheckedN,
+        },
         isolation: ISOLATION,
         sample: { order: 'evalOrder: class-interleaved sha256(id)', attempted, of: splitRows },
         budget,

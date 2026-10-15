@@ -142,13 +142,64 @@ describe('the runner, spawned, opens no TCP connection by default', () => {
     return { status: out.status, stdout: `${out.stdout}\n${out.stderr}`, lines };
   }
 
-  it('default: the runner and its child process load the probe, and not one connection is attempted', () => {
+  /** What the probe saw. `probed` is true only when every process that ran had the probe inside it. */
+  function verdict(lines: string[]) {
+    const of = (tag: string) => lines.filter((l) => l.startsWith(`${tag} `));
+    const loaded = of('LOADED').length;
+    const spawnNode = of('SPAWN-NODE').length;
+    const spawnOther = of('SPAWN-OTHER');
+    return {
+      loaded,
+      spawnNode,
+      spawnOther,
+      connects: of('CONNECT'),
+      dns: of('DNS'),
+      probed: loaded > 0 && loaded === 1 + spawnNode && spawnOther.length === 0,
+    };
+  }
+
+  it('default: every process the runner starts carries the probe, and none connects or resolves', () => {
     const r = run([]);
+    const v = verdict(r.lines);
     expect(r.stdout).toContain('ISOLATION  : LOCAL (default)');
-    expect(r.lines.filter((l) => l.startsWith('LOADED')).length).toBeGreaterThanOrEqual(2); // runner + hash child
-    expect(r.lines.filter((l) => l.startsWith('CONNECT'))).toEqual([]);
+    expect(v.spawnNode).toBeGreaterThanOrEqual(1); // the hash child
+    expect({ probed: v.probed, loaded: v.loaded, spawnNode: v.spawnNode, spawnOther: v.spawnOther }).toEqual({
+      probed: true,
+      loaded: 1 + v.spawnNode,
+      spawnNode: v.spawnNode,
+      spawnOther: [],
+    });
+    expect(v.connects).toEqual([]);
+    expect(v.dns).toEqual([]);
     expect(r.status).toBe(0);
   }, 300_000);
+
+  // The probe's own controls, so an empty list above can only mean "nothing happened".
+  function probeSelf(code: string, extraEnv: NodeJS.ProcessEnv = {}): string[] {
+    const dir = mkdtempSync(join(tmpdir(), 'hal-probe-'));
+    const probeOut = join(dir, 'net.txt');
+    spawnSync(process.execPath, ['-e', code], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, NET_PROBE_OUT: probeOut, NODE_OPTIONS: `--require ${JSON.stringify(PROBE)}`, ...extraEnv },
+    });
+    return exists(probeOut) ? readFileSync(probeOut, 'utf8').split('\n').filter(Boolean) : [];
+  }
+
+  it('probe control: a DNS lookup is recorded', () => {
+    const v = verdict(probeSelf("require('dns').lookup('prod-db.invalid', () => {})"));
+    expect(v.dns).toEqual(['DNS prod-db.invalid']);
+  }, 120_000);
+
+  it('probe control: a child started with a fresh env, or with --no-node-options, is caught as unprobed', () => {
+    const fresh = verdict(probeSelf("require('child_process').spawnSync(process.execPath, ['-e', '1'], { env: {} })"));
+    expect(fresh).toMatchObject({ loaded: 1, spawnNode: 1, probed: false });
+    const noOpts = verdict(probeSelf("require('child_process').spawnSync(process.execPath, ['--no-node-options', '-e', '1'])"));
+    expect(noOpts).toMatchObject({ loaded: 1, spawnNode: 1, probed: false });
+    const other = verdict(probeSelf("require('child_process').spawnSync('git', ['--version'])"));
+    expect(other.probed).toBe(false);
+    expect(other.spawnOther.length).toBe(1);
+  }, 120_000);
 
   it('--write-prod (positive control): the same probe catches the attempts to the prod DB and Telegram', () => {
     const r = run(['--write-prod']);
