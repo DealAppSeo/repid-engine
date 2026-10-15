@@ -51,15 +51,62 @@ async function safeCount(table: string, build: (q: any) => any): Promise<number 
     return error ? null : (count ?? 0);
   } catch { return null; }
 }
-async function latestTelemetry(family: string): Promise<any | null> {
+/**
+ * A cron result older than this is labelled stale on the public status. Both probes cover a 24h
+ * window, so two days without a fresh run means the field is history, not state. [2026-10-15: the
+ * public status showed a single audit run from 2026-05-25 as the current "audit_status".]
+ */
+export const STATUS_STALE_AFTER_DAYS = 2;
+
+type TelemetryRead =
+  | { kind: 'row'; at: string; value: any }
+  | { kind: 'none' }
+  | { kind: 'error' };
+
+async function latestTelemetry(family: string): Promise<TelemetryRead> {
   try {
     const { data, error } = await db.from('repid_telemetry_snapshots')
       .select('metric_name,metric_value,snapshot_at').eq('metric_family', family)
       .order('snapshot_at', { ascending: false }).limit(1);
+    if (error) return { kind: 'error' };
     const row = data?.[0];
-    if (error || !row) return null;
-    return { at: row.snapshot_at, name: row.metric_name, value: row.metric_value };
-  } catch { return null; }
+    return row ? { kind: 'row', at: row.snapshot_at, value: row.metric_value } : { kind: 'none' };
+  } catch { return { kind: 'error' }; }
+}
+
+/** Age in days (one decimal) and whether it is past STATUS_STALE_AFTER_DAYS. An unreadable time is stale. */
+export function ageOf(at: string, now: number = Date.now()): { age_days: number | null; stale: boolean } {
+  const days = (now - Date.parse(at)) / 86_400_000;
+  if (!Number.isFinite(days)) return { age_days: null, stale: true };
+  return { age_days: Math.round(days * 10) / 10, stale: days > STATUS_STALE_AFTER_DAYS };
+}
+
+/**
+ * The public last_heartbeat. This is the economic-loop smoke (scripts/heartbeat/run-heartbeat.ts,
+ * metric_family 'heartbeat'), not agent presence. Never a bare null: a reader cannot tell "never
+ * ran" from "could not read" from "fine".
+ */
+export function describeHeartbeat(read: TelemetryRead, now: number = Date.now()) {
+  if (read.kind === 'error') return { at: null, state: 'unknown', reason: 'the telemetry read failed' };
+  if (read.kind === 'none') {
+    return { at: null, state: 'not_reported', reason: 'no economic-loop heartbeat has been recorded (repid_telemetry_snapshots, metric_family heartbeat)' };
+  }
+  const { age_days, stale } = ageOf(read.at, now);
+  return {
+    at: read.at, result: read.value, age_days, state: stale ? 'stale' : 'current',
+    ...(stale ? { note: `last recorded ${age_days ?? '?'} days ago; this is history, not the current state` } : {}),
+  };
+}
+
+/** The public audit_status. `at` and `overall` keep their old meaning; a stale run says so. */
+export function describeAudit(read: TelemetryRead, now: number = Date.now()) {
+  if (read.kind === 'error') return { at: null, overall: null, state: 'unknown', reason: 'the telemetry read failed' };
+  if (read.kind === 'none') return { at: null, overall: null, state: 'not_reported', reason: 'no audit probe has been recorded' };
+  const { age_days, stale } = ageOf(read.at, now);
+  return {
+    at: read.at, overall: read.value?.overall ?? null, age_days, state: stale ? 'stale' : 'current',
+    ...(stale ? { note: `the result of one probe run ${age_days ?? '?'} days ago; none has run since, so this is not the current state` } : {}),
+  };
 }
 
 // PR-2 (CC1, 2026-05-26): summarize last-24h Firecrawl rollout activity from
@@ -126,8 +173,8 @@ router.get('/status', async (_req: Request, res: Response) => {
       score_events: scoreEvents,
       firecrawl, // PR-2: rollout visibility — see firecrawl24h() above
     },
-    last_heartbeat: heartbeat ? { at: heartbeat.at, result: heartbeat.value } : null,
-    audit_status: audit ? { at: audit.at, overall: audit.value?.overall ?? null } : null,
+    last_heartbeat: describeHeartbeat(heartbeat),
+    audit_status: describeAudit(audit),
     hero_receipt: `/api/v1/receipts/hero`,
   });
 });
