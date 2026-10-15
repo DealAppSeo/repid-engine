@@ -271,4 +271,53 @@ describe('public trust receipt', () => {
       for (const secret of NEVER_PUBLISHED(h)) expect(res.text).not.toContain(secret);
     });
   });
+
+  /**
+   * The work statement is an OBJECT (the 2026-10-14 daily run's, verbatim). The JSON receipt must carry
+   * it as one, and the HTML page must render its text, never "[object Object]". Before 2026-10-15 the
+   * page showed only the hash, so "recompute it yourself" pointed at nothing on the page.
+   */
+  describe('work statement is readable', () => {
+    const WS = {
+      deadline: '2026-10-15T12:02:06.906Z',
+      deliverable: 'A cross-provider factual verification verdict on the claim: "The Base Sepolia chain id is 84532."',
+      agreed_price: { currency: 'USDC', amount_usdc_raw: 100000 },
+      acceptance_criteria: [
+        { n: 1, text: 'The verdict states explicitly whether the claim is true or false, without hedging.' },
+        { n: 2, text: 'The verdict names the chain id it verified against, so the check is reproducible.' },
+      ],
+    };
+    beforeEach(() => Object.assign(dbMock.__rows, {
+      service_contracts: {
+        ...(rows.service_contracts as object), work_statement_hash: '0x' + 'd9'.repeat(32), work_statement: WS,
+        criterion_ratings: [{ n: 1, met: true }, { n: 2, met: false }], buyer_satisfaction_score: '0.5000',
+      },
+    }));
+    afterEach(() => Object.assign(dbMock.__rows, rows));
+    const get = (path: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const express = require('express');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const request = require('supertest');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const router = require('../src/routes/v1/receipt-public').default;
+      return request(express().use('/api/v1', router)).get(path);
+    };
+
+    it('JSON: the statement is a structured object, not a string', async () => {
+      const res = await get('/api/v1/receipt/c1.json');
+      expect(res.status).toBe(200);
+      expect(res.body.work_statement).toEqual(WS);
+      expect(res.text).not.toContain('[object Object]');
+    });
+
+    it('HTML: renders the deliverable and each criterion with its rating', async () => {
+      const res = await get('/api/v1/receipt/c1');
+      expect(res.status).toBe(200);
+      expect(res.text).not.toContain('[object Object]');
+      expect(res.text).toContain('A cross-provider factual verification verdict on the claim: &quot;The Base Sepolia chain id is 84532.&quot;');
+      expect(res.text).toContain('The verdict states explicitly whether the claim is true or false, without hedging. <span class="muted">— met</span>');
+      expect(res.text).toContain('so the check is reproducible. <span class="muted">— not met</span>');
+    });
+  });
 });
