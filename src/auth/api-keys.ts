@@ -87,19 +87,41 @@ export async function validateAgentApiKey(key: string): Promise<{agent_id: strin
  */
 export function legacyTokenMatches(constitution: unknown, token: string): boolean {
   const c = constitution as Record<string, unknown> | null;
-  if (!token || !c || typeof c !== 'object') return false;
-  if (typeof c.api_key === 'string' && c.api_key === token) return true;
-  return typeof c.api_key_sha256 === 'string' &&
-    c.api_key_sha256 === crypto.createHash('sha256').update(token).digest('hex');
+  if (typeof token !== 'string' || !token || !c || typeof c !== 'object') return false;
+  // Constant-time either way (XC1 on #1397).
+  if (typeof c.api_key === 'string' && c.api_key) {
+    // Plaintext rows, until the hashing SQL runs: equal-length byte buffers. The length is not a
+    // secret (every legacy token is a 36-char UUID). The stored credential is compared, never hashed:
+    // hashing it read to CodeQL as a password stored with a fast hash (js/insufficient-password-hash).
+    const a = Buffer.from(token, 'utf8');
+    const b = Buffer.from(c.api_key, 'utf8');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+  if (typeof c.api_key_sha256 === 'string' && /^[0-9a-f]{64}$/i.test(c.api_key_sha256)) {
+    // Hashed rows: the presented token's 32-byte sha256 against the stored one.
+    return crypto.timingSafeEqual(crypto.createHash('sha256').update(token).digest(), Buffer.from(c.api_key_sha256, 'hex'));
+  }
+  return false;
 }
 
-/** Constitution field names never serialized to a client: credentials and their hashes. */
-const CONSTITUTION_SECRET_FIELD = /key|token|secret|password|private|seed|mnemonic|credential/i;
+/**
+ * The constitution fields a client is ever shown, and only when the value is a scalar.
+ * ALLOWLIST (XC1 on #1397): the first version dropped credential-looking names, which missed nested
+ * keys (`rules.api_key`) and any name nobody thought of (`pin`, `passphrase`, `bearer`). These are the
+ * fields the engine's routes and the repid site actually read [V 2026-10-15 grep]; `rules` is served
+ * as the routes' `ruleCount`, never as its contents.
+ */
+const PUBLIC_CONSTITUTION_FIELDS = ['type', 'version', 'version_date', 'bio', 'personality', 'anonymous', 'eas_schema'];
 
-/** `constitution` minus every credential-shaped top-level field (api_key, privateId, their hashes). */
-export function publicConstitution(constitution: unknown): unknown {
-  if (!constitution || typeof constitution !== 'object' || Array.isArray(constitution)) return constitution ?? null;
-  return Object.fromEntries(Object.entries(constitution).filter(([k]) => !CONSTITUTION_SECRET_FIELD.test(k)));
+export function publicConstitution(constitution: unknown): Record<string, string | number | boolean | null> | null {
+  if (!constitution || typeof constitution !== 'object' || Array.isArray(constitution)) return null;
+  const c = constitution as Record<string, unknown>;
+  const out: Record<string, string | number | boolean | null> = {};
+  for (const k of PUBLIC_CONSTITUTION_FIELDS) {
+    const v = c[k];
+    if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) out[k] = v as string | number | boolean | null;
+  }
+  return out;
 }
 
 export async function revokeAgentApiKey(keyId: string): Promise<void> {

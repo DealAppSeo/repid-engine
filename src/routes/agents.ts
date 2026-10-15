@@ -227,13 +227,24 @@ router.get('/agents', async (req: Request, res: Response) => {
   return res.json(agents);
 });
 
+/**
+ * The repid_agents columns GET /agents/:id serves. ALLOWLIST (XC1 on #1397): `select('*')` minus
+ * webhook_secret still served constitution_text (free text from the registrant), webhook_url,
+ * wallet / signing / conservator addresses, BYOK and enterprise settings, and any column added later.
+ */
+const PUBLIC_AGENT_COLUMNS = [
+  'id', 'agent_id', 'canonical_agent_id', 'agent_name', 'display_name', 'description', 'agent_type', 'is_human',
+  'current_repid', 'peak_repid', 'tier', 'activity_30d', 'vdr_count', 'wisdom_score', 'character_score',
+  'competence_score', 'integrity_score', 'lifecycle_status', 'squad_id', 'squad_role', 'model_family', 'capabilities',
+  'erc8004_address', 'erc8004_token_id', 'erc8004_identity_status', 'mint_tx_hash', 'minted_at', 'mint_chain_id',
+  'last_reputation_tx_hash', 'reputation_write_count', 'created_at', 'last_updated', 'last_active_at', 'constitution',
+].join(',');
+
 router.get('/agents/:id', async (req: Request, res: Response) => {
   const { data, error } = await db.from('repid_agents')
-    .select('*').eq('id', req.params.id).single();
+    .select(PUBLIC_AGENT_COLUMNS).eq('id', req.params.id).single();
   if (error || !data) return res.status(404).json({ error: 'Agent not found' });
-  // The whole row, minus what signs or authenticates: webhook_secret (HMAC for this agent's
-  // webhooks, services/notify.ts) and the constitution's credential fields.
-  const { webhook_secret: _secret, ...row } = data as Record<string, any>;
+  const row = data as unknown as Record<string, unknown>;
   return res.json({ ...row, constitution: publicConstitution(row.constitution) });
 });
 
